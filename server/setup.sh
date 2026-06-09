@@ -5,6 +5,11 @@
 set -euo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"
 
+if [ "$(id -u)" -ne 0 ]; then
+  echo "[huginn] run as root (or with sudo):  sudo bash server/setup.sh" >&2
+  exit 1
+fi
+
 echo "[huginn] installing base packages..."
 export DEBIAN_FRONTEND=noninteractive
 apt-get update -q

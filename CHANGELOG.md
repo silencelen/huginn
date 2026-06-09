@@ -5,6 +5,17 @@ All notable changes to this project are documented here. Format loosely follows
 
 ## [Unreleased]
 
+### Fixed
+- `huginn.sh` `-p`/`-y` now single-quote-escape the prompt (parity with the PowerShell
+  client) — prompts containing `'` no longer break the remote command.
+
+### Changed
+- Usage guards on `-p`/`-y`/`rename`/`kill` print a clear message instead of issuing a
+  malformed remote command; `-p`/`-y` are folded into one branch in both clients.
+- `setup.sh` now requires root and says so clearly.
+- Installers accept a configurable SSH user (`-User` / `HUGINN_USER`, default `root`)
+  to support running the node as a non-root user.
+
 ## [0.1.0] - 2026-06-08
 
 Initial public release.

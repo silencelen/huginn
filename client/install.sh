@@ -6,6 +6,7 @@ HHOST="${1:-}"
 [ -z "$HHOST" ] && read -rp "Huginn host (IP or DNS name reachable over SSH): " HHOST
 HERE="$(cd "$(dirname "$0")" && pwd)"
 KEY="$HOME/.ssh/id_ed25519"
+HUSER="${HUGINN_USER:-root}"   # SSH user on the host; override: HUGINN_USER=huginn ./install.sh <host>
 mkdir -p "$HOME/.ssh"; chmod 700 "$HOME/.ssh"
 
 # 1. SSH key
@@ -18,7 +19,7 @@ echo
 # 2. `Host huginn` SSH alias (idempotent)
 CFG="$HOME/.ssh/config"; touch "$CFG"; chmod 600 "$CFG"
 if ! grep -qE '^[[:space:]]*Host[[:space:]]+huginn[[:space:]]*$' "$CFG"; then
-  printf '\nHost huginn\n  HostName %s\n  User root\n  IdentityFile %s\n  IdentitiesOnly yes\n  RequestTTY yes\n  ServerAliveInterval 30\n' "$HHOST" "$KEY" >> "$CFG"
+  printf '\nHost huginn\n  HostName %s\n  User %s\n  IdentityFile %s\n  IdentitiesOnly yes\n  RequestTTY yes\n  ServerAliveInterval 30\n' "$HHOST" "$HUSER" "$KEY" >> "$CFG"
   echo "Added 'Host huginn' -> $HHOST to $CFG"
 fi
 
