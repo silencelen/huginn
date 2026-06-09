@@ -2,7 +2,8 @@
 # Run from the cloned repo:   .\client\install.ps1 -HuginnHost my-host-or-ip
 param(
   [string]$HuginnHost,
-  [string]$Key = "$HOME\.ssh\id_ed25519"
+  [string]$User = "root",
+  [string]$Key  = "$HOME\.ssh\id_ed25519"
 )
 $ErrorActionPreference = "Stop"
 if (-not $HuginnHost) { $HuginnHost = Read-Host "Huginn host (IP or DNS name reachable over SSH)" }
@@ -18,7 +19,7 @@ Write-Host "    $(Get-Content "$Key.pub")`n"
 $cfg = "$HOME\.ssh\config"
 if (-not (Test-Path $cfg)) { New-Item -ItemType File -Force $cfg | Out-Null }
 if (-not (Select-String -Path $cfg -Pattern '^\s*Host\s+huginn\s*$' -Quiet)) {
-  Add-Content $cfg "`nHost huginn`n  HostName $HuginnHost`n  User root`n  IdentityFile $Key`n  IdentitiesOnly yes`n  RequestTTY yes`n  ServerAliveInterval 30"
+  Add-Content $cfg "`nHost huginn`n  HostName $HuginnHost`n  User $User`n  IdentityFile $Key`n  IdentitiesOnly yes`n  RequestTTY yes`n  ServerAliveInterval 30"
   Write-Host "Added 'Host huginn' -> $HuginnHost to $cfg"
 }
 

@@ -36,15 +36,16 @@ huginn - remote Claude Code node.  alias: rclaude
     $name = if ($args.Count -gt 1) { $args[1] } else { 'main' }
     ssh -t $H "cc solo $name"
   } elseif ($args[0] -eq 'rename' -or $args[0] -eq 'mv') {
+    if ($args.Count -lt 3) { Write-Host "usage: huginn rename <old> <new>"; return }
     ssh -T $H "tmux rename-session -t '$($args[1])' '$($args[2])' && echo 'renamed: $($args[1]) -> $($args[2])'"
   } elseif ($args[0] -eq 'kill') {
+    if ($args.Count -lt 2) { Write-Host "usage: huginn kill <name>"; return }
     ssh -T $H "tmux kill-session -t '$($args[1])' && echo 'killed: $($args[1])'"
-  } elseif ($args[0] -eq '-p') {
-    $q = ($args[1..($args.Count - 1)] -join ' '); $esc = $q -replace "'", "'\''"
-    ssh -T $H "echo '$esc' | claude -p"
-  } elseif ($args[0] -eq '-y') {
-    $q = ($args[1..($args.Count - 1)] -join ' '); $esc = $q -replace "'", "'\''"
-    ssh -T $H "echo '$esc' | claude -p --allowedTools 'Bash Read Edit Write Glob Grep WebFetch'"
+  } elseif ($args[0] -eq '-p' -or $args[0] -eq '-y') {
+    if ($args.Count -lt 2) { Write-Host "usage: huginn $($args[0]) ""your prompt"""; return }
+    $q     = ($args[1..($args.Count - 1)] -join ' '); $esc = $q -replace "'", "'\''"  # POSIX single-quote escape
+    $tools = if ($args[0] -eq '-y') { " --allowedTools 'Bash Read Edit Write Glob Grep WebFetch'" } else { "" }
+    ssh -T $H "echo '$esc' | claude -p$tools"
   } else {
     ssh -t $H "cc $($args[0])"
   }

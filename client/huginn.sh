@@ -1,3 +1,4 @@
+# shellcheck shell=bash
 # huginn (bash) — talk to your remote Claude Code node.
 # Install: source from your ~/.bashrc:
 #     [ -f ~/.huginn/huginn.sh ] && source ~/.huginn/huginn.sh
@@ -34,10 +35,19 @@ EOF
     list|ls)   ssh -T "$H" "tmux ls 2>/dev/null || echo '(no sessions running)'" ;;
     status|st) ssh -T "$H" huginn-status ;;
     solo)      ssh -t "$H" "cc solo ${2:-main}" ;;
-    rename|mv) ssh -T "$H" "tmux rename-session -t '$2' '$3' && echo 'renamed: $2 -> $3'" ;;
-    kill)      ssh -T "$H" "tmux kill-session -t '$2' && echo 'killed: $2'" ;;
-    -p)        shift; ssh -T "$H" "echo '$*' | claude -p" ;;
-    -y)        shift; ssh -T "$H" "echo '$*' | claude -p --allowedTools 'Bash Read Edit Write Glob Grep WebFetch'" ;;
+    rename|mv)
+      [ -n "$2" ] && [ -n "$3" ] || { echo "usage: huginn rename <old> <new>" >&2; return 1; }
+      ssh -T "$H" "tmux rename-session -t '$2' '$3' && echo 'renamed: $2 -> $3'" ;;
+    kill)
+      [ -n "$2" ] || { echo "usage: huginn kill <name>" >&2; return 1; }
+      ssh -T "$H" "tmux kill-session -t '$2' && echo 'killed: $2'" ;;
+    -p|-y)
+      local mode="$1"; shift
+      [ "$#" -gt 0 ] || { echo "usage: huginn $mode \"your prompt\"" >&2; return 1; }
+      local q="$*"; q=${q//\'/\'\\\'\'}            # POSIX single-quote escape
+      local tools=""
+      [ "$mode" = "-y" ] && tools=" --allowedTools 'Bash Read Edit Write Glob Grep WebFetch'"
+      ssh -T "$H" "echo '$q' | claude -p$tools" ;;
     *)         ssh -t "$H" "cc $1" ;;
   esac
 }
@@ -46,6 +56,6 @@ rclaude() { huginn "$@"; }
 
 # tab completion
 _huginn_complete() {
-  COMPREPLY=($(compgen -W "list ls status st solo rename mv kill -p -y help" -- "${COMP_WORDS[COMP_CWORD]}"))
+  mapfile -t COMPREPLY < <(compgen -W "list ls status st solo rename mv kill -p -y help" -- "${COMP_WORDS[COMP_CWORD]}")
 }
 complete -F _huginn_complete huginn rclaude 2>/dev/null
