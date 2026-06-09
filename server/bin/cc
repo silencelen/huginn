@@ -1,0 +1,16 @@
+#!/bin/bash
+# cc [session] [solo] — attach to (or create) a persistent, reattachable Claude Code tmux session.
+#   default : attach/create; if other devices are attached, the view mirrors (smallest screen wins)
+#   solo    : attach detaching ALL other clients -> resume as the sole client, full size
+# Detach with Alt-d (or Ctrl-b d); reattach from any device. Run `claude` inside.
+# Working directory: $HUGINN_WORKDIR (default: $HOME)
+WORKDIR="${HUGINN_WORKDIR:-$HOME}"
+SESSION=main
+SOLO=
+for a in "$@"; do
+  if [ "$a" = solo ]; then SOLO=1; else SESSION="$a"; fi
+done
+if [ -n "$SOLO" ] && tmux has-session -t "$SESSION" 2>/dev/null; then
+  exec tmux attach -d -t "$SESSION"
+fi
+exec tmux new-session -A -s "$SESSION" -c "$WORKDIR"

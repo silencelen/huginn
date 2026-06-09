@@ -1,0 +1,6 @@
+# Default everything to LF so shell scripts, configs and the extensionless
+# server binaries work when cloned on Linux (the Huginn host).
+* text=auto eol=lf
+
+# Windows-only scripts keep CRLF
+*.ps1 text eol=crlf

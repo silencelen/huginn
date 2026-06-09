@@ -1,0 +1,13 @@
+#!/bin/bash
+# huginn-status — quick health summary of the Huginn node. Invoked by `huginn status`.
+C=$(printf '\033[36m'); G=$(printf '\033[32m'); Z=$(printf '\033[0m')
+echo "${C}Huginn${Z} - $(hostname)"
+echo "  uptime    : $(uptime -p 2>/dev/null | sed 's/^up //')"
+echo "  claude    : $(claude --version 2>/dev/null | head -1)"
+SUB=$(jq -r '.claudeAiOauth.subscriptionType // empty' "$HOME/.claude/.credentials.json" 2>/dev/null)
+if [ -n "$SUB" ]; then echo "  auth      : ${G}${SUB} subscription${Z}"; else echo "  auth      : api key / unknown"; fi
+N=$(tmux ls 2>/dev/null | wc -l)
+echo "  sessions  : ${N} running"
+tmux ls 2>/dev/null | sed 's/^/              - /'
+echo "  disk /    : $(df -h / | awk 'NR==2{print $5" used, "$4" free"}')"
+[ -n "${HUGINN_WORKDIR:-}" ] && echo "  workdir   : $HUGINN_WORKDIR"
