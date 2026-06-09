@@ -1,0 +1,8 @@
+blank_issues_enabled: true
+contact_links:
+  - name: 📖 Docs (Setup · Usage · Architecture · FAQ)
+    url: https://github.com/silencelen/huginn/tree/main/docs
+    about: Most questions are answered here first.
+  - name: 🔒 Report a security issue
+    url: https://github.com/silencelen/huginn/security/advisories/new
+    about: Please report vulnerabilities privately, not as a public issue.

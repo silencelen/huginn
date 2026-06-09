@@ -1,0 +1,26 @@
+name: 💡 Feature request
+description: Suggest an idea for Huginn
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: What's the need?
+      description: What are you trying to do that Huginn doesn't make easy yet?
+    validations:
+      required: true
+  - type: textarea
+    id: idea
+    attributes:
+      label: Proposed solution
+      description: How might it work? (Remember Huginn stays tiny — bash/tmux/PowerShell, no daemons.)
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+  - type: checkboxes
+    id: scope
+    attributes:
+      label: Keeps it lean?
+      options:
+        - label: This fits Huginn's "small, portable, no-dependencies" philosophy

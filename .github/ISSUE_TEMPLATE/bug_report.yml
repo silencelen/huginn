@@ -1,0 +1,44 @@
+name: 🐞 Bug report
+description: Something in Huginn isn't working as expected
+labels: [bug]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened?
+      description: What did you expect, and what happened instead?
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. On the host: ...
+        2. On the client: huginn ...
+        3. ...
+    validations:
+      required: true
+  - type: dropdown
+    id: client
+    attributes:
+      label: Client
+      options: [Windows PowerShell, bash (Linux/macOS), Termux (Android), other]
+    validations:
+      required: true
+  - type: input
+    id: host
+    attributes:
+      label: Host OS / type
+      placeholder: "Debian 13 LXC / Ubuntu 24.04 VM / Raspberry Pi OS / ..."
+  - type: textarea
+    id: versions
+    attributes:
+      label: Versions
+      description: Output of `huginn status`, plus `tmux -V` and `claude --version` on the host.
+      render: shell
+  - type: textarea
+    id: extra
+    attributes:
+      label: Anything else?
+      description: Logs, screenshots, your SSH alias (redact hosts/keys).
