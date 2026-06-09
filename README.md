@@ -46,6 +46,8 @@ PS C:\> huginn solo
 
 ## ✨ Why
 
+> I found myself driving all my Claude Code sessions from my laptop, instead of from where I was actually working. It let me centralize my knowledge and session store in one place — but it bound me to that one machine. **Huginn is my solution.**
+
 |   |   |
 |---|---|
 | ♾️ **Always there** | Long/agentic tasks keep running when you close the lid. Reconnect — exactly where you left off. |
