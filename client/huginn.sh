@@ -3,27 +3,34 @@
 # Install: source from your ~/.bashrc:
 #     [ -f ~/.huginn/huginn.sh ] && source ~/.huginn/huginn.sh
 # Targets the `huginn` SSH alias by default; override per-device with:  export HUGINN_HOST=my-host
+# Self-update with:  huginn update   (pulls this file from the repo; gh -> scp fallback)
+# Version: 2026-06-13
+
+HUGINN_VERSION='2026-06-13'
+HUGINN_REPO='silencelen/huginn'
 
 huginn() {
   local H="${HUGINN_HOST:-huginn}"
   case "$1" in
     "")
-      ssh -t "$H" cc
+      ssh -tt "$H" cc
       ;;
     '?'|help|/help|-h|--help)
-      cat <<'EOF'
+      cat <<EOF
 
-huginn - remote Claude Code node.  alias: rclaude
+huginn - remote Claude Code node.  aliases: rclaude, rcc
 
   huginn                      attach/create the live 'main' session (run claude inside)
   huginn <name>               a separate named session
   huginn solo [name]          attach + detach all OTHER clients (resume solo / full screen)
-  huginn list | ls            list sessions
+  huginn list | ls            list sessions + attach status
   huginn status | st          health: uptime, auth, sessions, disk
   huginn rename <old> <new>   rename a session (alias: mv)
   huginn kill <name>          end a session
-  huginn -p "question"        one-shot headless query (reasoning only)
-  huginn -y "task"            one-shot that may use tools (bash/files/web)
+  huginn -p "question"        one-shot headless query (reasoning + memory, read-only)
+  huginn -y "task"            one-shot that may use tools (bash/files/web + memory)
+  huginn update               self-update this client from the repo ($HUGINN_REPO)
+  huginn version              show client version
   huginn help | ? | /help     this help
 
   In a session: run claude / claude --resume.  Detach: Alt-d (or Ctrl-b d).
@@ -32,9 +39,31 @@ huginn - remote Claude Code node.  alias: rclaude
 
 EOF
       ;;
+    version|--version|-v)
+      echo "huginn-cli $HUGINN_VERSION  (host: $H)" ;;
+    update)
+      local dest="${BASH_SOURCE[0]:-$HOME/.huginn/huginn.sh}" tmp got=
+      tmp="$dest.tmp"
+      echo "huginn: updating client -> $dest"
+      if command -v gh >/dev/null 2>&1; then
+        if gh api "repos/$HUGINN_REPO/contents/client/huginn.sh" -H "Accept: application/vnd.github.raw" >"$tmp" 2>/dev/null && [ -s "$tmp" ]; then
+          mv -f "$tmp" "$dest"; got=1; echo "  pulled from GitHub ($HUGINN_REPO) via gh"
+        fi
+      fi
+      if [ -z "$got" ]; then
+        if scp "$H:/usr/local/share/huginn-cli/huginn.sh" "$dest"; then got=1; echo "  pulled from $H mirror via scp"; fi
+      fi
+      rm -f "$tmp" 2>/dev/null
+      if [ -n "$got" ]; then
+        # shellcheck disable=SC1090
+        source "$dest"; huginn version
+      else
+        echo "huginn: update failed (no gh, scp failed)" >&2; return 1
+      fi
+      ;;
     list|ls)   ssh -T "$H" "tmux ls 2>/dev/null || echo '(no sessions running)'" ;;
     status|st) ssh -T "$H" huginn-status ;;
-    solo)      ssh -t "$H" "cc solo ${2:-main}" ;;
+    solo)      ssh -tt "$H" "cc solo ${2:-main}" ;;
     rename|mv)
       [ -n "$2" ] && [ -n "$3" ] || { echo "usage: huginn rename <old> <new>" >&2; return 1; }
       ssh -T "$H" "tmux rename-session -t '$2' '$3' && echo 'renamed: $2 -> $3'" ;;
@@ -45,17 +74,19 @@ EOF
       local mode="$1"; shift
       [ "$#" -gt 0 ] || { echo "usage: huginn $mode \"your prompt\"" >&2; return 1; }
       local q="$*"; q=${q//\'/\'\\\'\'}            # POSIX single-quote escape
-      local tools=""
-      [ "$mode" = "-y" ] && tools=" --allowedTools 'Bash Read Edit Write Glob Grep WebFetch'"
-      ssh -T "$H" "echo '$q' | claude -p$tools" ;;
-    *)         ssh -t "$H" "cc $1" ;;
+      local tools="mcp__mempalace"
+      [ "$mode" = "-y" ] && tools="Bash Read Edit Write Glob Grep WebFetch mcp__mempalace"
+      # Persona-aware: if the host carries persona.md, inject it + memory tools; else plain headless query.
+      ssh -T "$H" "cd ~/netplan 2>/dev/null || cd \"\$HOME\"; P=\"\$(cat /usr/local/share/huginn-cli/persona.md 2>/dev/null)\"; if [ -n \"\$P\" ]; then echo '$q' | claude -p --append-system-prompt \"\$P\" --allowedTools '$tools'; else echo '$q' | claude -p; fi" ;;
+    *)         ssh -tt "$H" "cc $1" ;;
   esac
 }
 
 rclaude() { huginn "$@"; }
+rcc()     { huginn "$@"; }
 
 # tab completion
 _huginn_complete() {
-  mapfile -t COMPREPLY < <(compgen -W "list ls status st solo rename mv kill -p -y help" -- "${COMP_WORDS[COMP_CWORD]}")
+  mapfile -t COMPREPLY < <(compgen -W "list ls status st solo rename mv kill -p -y update version help" -- "${COMP_WORDS[COMP_CWORD]}")
 }
-complete -F _huginn_complete huginn rclaude 2>/dev/null
+complete -F _huginn_complete huginn rclaude rcc 2>/dev/null

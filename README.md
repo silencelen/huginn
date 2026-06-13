@@ -83,6 +83,7 @@ huginn solo          attach + detach other clients (full-screen resume)
 huginn work          a separate named session
 huginn -p "..."      one-shot headless query
 huginn status        health at a glance
+huginn update        self-update this client from the repo
 huginn help          full reference
 ```
 
