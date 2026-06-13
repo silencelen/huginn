@@ -5,11 +5,25 @@ All notable changes to this project are documented here. Format loosely follows
 
 ## [Unreleased]
 
+### Added
+- **`huginn update`** — self-update the client in place from the repo. Pulls
+  `client/huginn.{ps1,sh}` via `gh` (works for a private repo) and falls back to
+  `scp` from the host's `/usr/local/share/huginn-cli/` mirror, then re-sources itself.
+- **`huginn version`** — print the installed client version (and target host).
+- **`rcc` alias** in both clients (parity with `rclaude`).
+
 ### Fixed
+- **Attach now forces a PTY** (`ssh -t` → `ssh -tt`) for `huginn`, `huginn <name>`,
+  and `huginn solo`. Without it, some clients (notably Windows OpenSSH) failed to
+  allocate a pseudo-terminal and tmux aborted with `open terminal failed: not a terminal`.
 - `huginn.sh` `-p`/`-y` now single-quote-escape the prompt (parity with the PowerShell
   client) — prompts containing `'` no longer break the remote command.
 
 ### Changed
+- `-p`/`-y` are **persona-aware**: when the host carries
+  `/usr/local/share/huginn-cli/persona.md`, one-shots inject it via
+  `--append-system-prompt` and enable memory tools; on a generic host they degrade
+  to a plain `claude -p` headless query.
 - Usage guards on `-p`/`-y`/`rename`/`kill` print a clear message instead of issuing a
   malformed remote command; `-p`/`-y` are folded into one branch in both clients.
 - `setup.sh` now requires root and says so clearly.
