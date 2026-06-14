@@ -4,6 +4,9 @@
 #   solo    : attach detaching ALL other clients -> resume as the sole client, full size
 # Detach with Alt-d (or Ctrl-b d); reattach from any device. Run `claude` inside.
 # Working directory: $HUGINN_WORKDIR (default: $HOME)
+# Default TERM when the SSH client didn't send one (Windows OpenSSH has no $TERM):
+# without this, tmux aborts with "open terminal failed: not a terminal".
+export TERM="${TERM:-xterm-256color}"
 WORKDIR="${HUGINN_WORKDIR:-$HOME}"
 SESSION=main
 SOLO=
