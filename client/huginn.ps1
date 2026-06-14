@@ -3,9 +3,9 @@
 #     if (Test-Path "$HOME\.huginn\huginn.ps1") { . "$HOME\.huginn\huginn.ps1" }
 # Targets the `huginn` SSH alias by default; override per-device with:  $env:HUGINN_HOST = 'my-host'
 # Self-update with:  huginn update   (pulls this file from the repo; gh -> scp fallback)
-# Version: 2026-06-13
+# Version: 2026-06-14
 
-$script:HUGINN_VERSION = '2026-06-13'
+$script:HUGINN_VERSION = '2026-06-14'
 $script:HUGINN_REPO    = 'silencelen/huginn'
 
 function huginn {
@@ -26,6 +26,8 @@ huginn - remote Claude Code node.  aliases: rclaude, rcc
   huginn kill <name>          end a session
   huginn -p "question"        one-shot headless query (reasoning + memory, read-only)
   huginn -y "task"            one-shot that may use tools (bash/files/web + memory)
+  huginn usage [args]         Claude Code token/cost report (ccusage; default: daily)
+                                e.g. huginn usage monthly | session | blocks | blocks --live
   huginn update               self-update this client from the repo ($script:HUGINN_REPO)
   huginn version              show client version
   huginn help | ? | /help     this help
@@ -60,6 +62,9 @@ huginn - remote Claude Code node.  aliases: rclaude, rcc
     ssh -T $H "tmux ls 2>/dev/null || echo '(no sessions running)'"
   } elseif ($args[0] -eq 'status' -or $args[0] -eq 'st') {
     ssh -T $H huginn-status
+  } elseif ($args[0] -eq 'usage' -or $args[0] -eq 'cost' -or $args[0] -eq 'ccusage') {
+    $sub = if ($args.Count -gt 1) { $args[1..($args.Count - 1)] -join ' ' } else { 'daily' }
+    ssh -tt $H "ccusage $sub"   # ccusage report; default 'daily'. -tt for tables + --live.
   } elseif ($args[0] -eq 'solo') {
     $name = if ($args.Count -gt 1) { $args[1] } else { 'main' }
     ssh -tt $H "cc solo $name"
@@ -84,7 +89,7 @@ Set-Alias rcc huginn
 
 Register-ArgumentCompleter -CommandName huginn, rclaude, rcc -ScriptBlock {
   param($word, $ast, $pos)
-  'list', 'status', 'solo', 'rename', 'kill', '-p', '-y', 'update', 'version', 'help' |
+  'list', 'status', 'solo', 'rename', 'kill', '-p', '-y', 'usage', 'cost', 'update', 'version', 'help' |
     Where-Object { $_ -like "$word*" } |
     ForEach-Object { [System.Management.Automation.CompletionResult]::new($_, $_, 'ParameterValue', $_) }
 }

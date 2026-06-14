@@ -4,9 +4,9 @@
 #     [ -f ~/.huginn/huginn.sh ] && source ~/.huginn/huginn.sh
 # Targets the `huginn` SSH alias by default; override per-device with:  export HUGINN_HOST=my-host
 # Self-update with:  huginn update   (pulls this file from the repo; gh -> scp fallback)
-# Version: 2026-06-13
+# Version: 2026-06-14
 
-HUGINN_VERSION='2026-06-13'
+HUGINN_VERSION='2026-06-14'
 HUGINN_REPO='silencelen/huginn'
 
 huginn() {
@@ -29,6 +29,8 @@ huginn - remote Claude Code node.  aliases: rclaude, rcc
   huginn kill <name>          end a session
   huginn -p "question"        one-shot headless query (reasoning + memory, read-only)
   huginn -y "task"            one-shot that may use tools (bash/files/web + memory)
+  huginn usage [args]         Claude Code token/cost report (ccusage; default: daily)
+                                e.g. huginn usage monthly | session | blocks | blocks --live
   huginn update               self-update this client from the repo ($HUGINN_REPO)
   huginn version              show client version
   huginn help | ? | /help     this help
@@ -63,6 +65,9 @@ EOF
       ;;
     list|ls)   ssh -T "$H" "tmux ls 2>/dev/null || echo '(no sessions running)'" ;;
     status|st) ssh -T "$H" huginn-status ;;
+    usage|cost|ccusage)
+      shift                                         # ccusage report; default 'daily'. -tt for tables + --live.
+      ssh -tt "$H" "ccusage ${*:-daily}" ;;
     solo)      ssh -tt "$H" "cc solo ${2:-main}" ;;
     rename|mv)
       [ -n "$2" ] && [ -n "$3" ] || { echo "usage: huginn rename <old> <new>" >&2; return 1; }
@@ -87,6 +92,6 @@ rcc()     { huginn "$@"; }
 
 # tab completion
 _huginn_complete() {
-  mapfile -t COMPREPLY < <(compgen -W "list ls status st solo rename mv kill -p -y update version help" -- "${COMP_WORDS[COMP_CWORD]}")
+  mapfile -t COMPREPLY < <(compgen -W "list ls status st solo rename mv kill -p -y usage cost update version help" -- "${COMP_WORDS[COMP_CWORD]}")
 }
 complete -F _huginn_complete huginn rclaude rcc 2>/dev/null
