@@ -57,15 +57,19 @@ huginn - remote Claude Code node.  aliases: rclaude, rcc
       if ($LASTEXITCODE -eq 0) { $got = $true; Write-Host "  pulled from $H mirror via scp" -ForegroundColor Green }
     }
     if (Test-Path $tmp) { Remove-Item -Force $tmp -ErrorAction SilentlyContinue }
-    if ($got) { . $dest; huginn version } else { Write-Host "huginn: update failed (no gh, scp failed)" -ForegroundColor Red }
+    # NOTE: dot-sourcing here would only update this function's local scope, not the global
+    # session — so we don't pretend to hot-reload. Tell the user to reload.
+    if ($got) {
+      Write-Host "  client file updated. Open a new PowerShell (or run '. `$PROFILE') to load it into this session." -ForegroundColor Yellow
+    } else { Write-Host "huginn: update failed (no gh, scp failed)" -ForegroundColor Red }
   } elseif ($args[0] -eq 'list' -or $args[0] -eq 'ls') {
     ssh -T $H "tmux ls 2>/dev/null || echo '(no sessions running)'"
   } elseif ($args[0] -eq 'status' -or $args[0] -eq 'st') {
     ssh -T $H huginn-status
   } elseif ($args[0] -eq 'usage' -or $args[0] -eq 'cost' -or $args[0] -eq 'ccusage') {
     $sub = if ($args.Count -gt 1) { $args[1..($args.Count - 1)] -join ' ' } else { 'daily' }
-    # CLAUDE_CONFIG_DIR layers the backfilled multi-machine archive over live data (full history). Scoped to ccusage only.
-    ssh -tt $H "CLAUDE_CONFIG_DIR='/root/.claude,/root/.claude-history' ccusage $sub"   # default 'daily'. -tt for tables + --live.
+    # Full history is layered server-side by the /usr/local/bin/ccusage wrapper on huginn — keep this bare.
+    ssh -tt $H "ccusage $sub"   # default 'daily'. -tt for tables + --live.
   } elseif ($args[0] -eq 'solo') {
     $name = if ($args.Count -gt 1) { $args[1] } else { 'main' }
     ssh -tt $H "cc solo $name"
