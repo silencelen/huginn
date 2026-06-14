@@ -64,7 +64,8 @@ huginn - remote Claude Code node.  aliases: rclaude, rcc
     ssh -T $H huginn-status
   } elseif ($args[0] -eq 'usage' -or $args[0] -eq 'cost' -or $args[0] -eq 'ccusage') {
     $sub = if ($args.Count -gt 1) { $args[1..($args.Count - 1)] -join ' ' } else { 'daily' }
-    ssh -tt $H "ccusage $sub"   # ccusage report; default 'daily'. -tt for tables + --live.
+    # CLAUDE_CONFIG_DIR layers the backfilled multi-machine archive over live data (full history). Scoped to ccusage only.
+    ssh -tt $H "CLAUDE_CONFIG_DIR='/root/.claude,/root/.claude-history' ccusage $sub"   # default 'daily'. -tt for tables + --live.
   } elseif ($args[0] -eq 'solo') {
     $name = if ($args.Count -gt 1) { $args[1] } else { 'main' }
     ssh -tt $H "cc solo $name"

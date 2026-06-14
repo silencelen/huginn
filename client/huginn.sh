@@ -67,7 +67,9 @@ EOF
     status|st) ssh -T "$H" huginn-status ;;
     usage|cost|ccusage)
       shift                                         # ccusage report; default 'daily'. -tt for tables + --live.
-      ssh -tt "$H" "ccusage ${*:-daily}" ;;
+      # CLAUDE_CONFIG_DIR layers the backfilled multi-machine archive (/root/.claude-history)
+      # over live data so usage reflects full history (back to 2026-02). Scoped to ccusage only.
+      ssh -tt "$H" "CLAUDE_CONFIG_DIR='/root/.claude,/root/.claude-history' ccusage ${*:-daily}" ;;
     solo)      ssh -tt "$H" "cc solo ${2:-main}" ;;
     rename|mv)
       [ -n "$2" ] && [ -n "$3" ] || { echo "usage: huginn rename <old> <new>" >&2; return 1; }
