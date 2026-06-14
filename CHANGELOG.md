@@ -13,9 +13,12 @@ All notable changes to this project are documented here. Format loosely follows
 - **`rcc` alias** in both clients (parity with `rclaude`).
 
 ### Fixed
-- **Attach now forces a PTY** (`ssh -t` → `ssh -tt`) for `huginn`, `huginn <name>`,
-  and `huginn solo`. Without it, some clients (notably Windows OpenSSH) failed to
-  allocate a pseudo-terminal and tmux aborted with `open terminal failed: not a terminal`.
+- **`cc` defaults `TERM`** (`export TERM="${TERM:-xterm-256color}"`). Windows OpenSSH
+  has no `TERM` env var, so it opens the session with `TERM` unset and tmux aborts with
+  `open terminal failed: not a terminal` — even though the PTY is allocated correctly.
+  Defaulting it server-side fixes every Windows client at once, with no per-device config.
+- **Attach forces a PTY** (`ssh -t` → `ssh -tt`) for `huginn`, `huginn <name>`, and
+  `huginn solo` — belt-and-suspenders for clients that don't allocate a PTY by default.
 - `huginn.sh` `-p`/`-y` now single-quote-escape the prompt (parity with the PowerShell
   client) — prompts containing `'` no longer break the remote command.
 
