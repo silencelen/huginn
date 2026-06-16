@@ -1,4 +1,4 @@
-# huginn (PowerShell) — talk to your remote Claude Code node.
+# huginn (PowerShell) - talk to your remote Claude Code node.
 # Install: source from your $PROFILE:
 #     if (Test-Path "$HOME\.huginn\huginn.ps1") { . "$HOME\.huginn\huginn.ps1" }
 # Targets the `huginn` SSH alias by default; override per-device with:  $env:HUGINN_HOST = 'my-host'
@@ -8,9 +8,9 @@
 $script:HUGINN_VERSION = '2026-06-16'
 $script:HUGINN_REPO    = 'silencelen/huginn'
 
-# ── auto-reconnecting attach ─────────────────────────────────────────────────
+# --- auto-reconnecting attach ---
 # The session lives in tmux ON the host, so a dropped link (laptop sleep, wifi
-# flap) only severs the ssh client — the work keeps running. We re-run the attach
+# flap) only severs the ssh client - the work keeps running. We re-run the attach
 # whenever ssh dies with a TRANSPORT failure (exit 255); a clean tmux detach
 # (Alt-d / Ctrl-b d) or shell exit passes its own code through and ends the loop.
 # ServerAlive* makes a half-open socket (post-sleep) die in ~45s instead of
@@ -27,7 +27,7 @@ function _Huginn-Attach {
     ssh -tt -o ServerAliveInterval=15 -o ServerAliveCountMax=3 $H $remote
     $rc = $LASTEXITCODE
     if ($rc -ne 255 -or $env:HUGINN_NO_RECONNECT) { return }
-    Write-Host "`nhuginn: link to $H dropped — reconnecting in ${delay}s (Ctrl-C to stop)…" -ForegroundColor Yellow
+    Write-Host "`nhuginn: link to $H dropped - reconnecting in ${delay}s (Ctrl-C to stop)..." -ForegroundColor Yellow
     Start-Sleep -Seconds $delay
     # mirror if another client is still attached, else solo (evicts the ghost).
     # Single-quoted bash so $(...) is evaluated on the host, not by PowerShell.
@@ -88,7 +88,7 @@ huginn - remote Claude Code node.  aliases: rclaude, rcc
     }
     if (Test-Path $tmp) { Remove-Item -Force $tmp -ErrorAction SilentlyContinue }
     # NOTE: dot-sourcing here would only update this function's local scope, not the global
-    # session — so we don't pretend to hot-reload. Tell the user to reload.
+    # session - so we don't pretend to hot-reload. Tell the user to reload.
     if ($got) {
       Write-Host "  client file updated. Open a new PowerShell (or run '. `$PROFILE') to load it into this session." -ForegroundColor Yellow
     } else { Write-Host "huginn: update failed (no gh, scp failed)" -ForegroundColor Red }
@@ -98,7 +98,7 @@ huginn - remote Claude Code node.  aliases: rclaude, rcc
     ssh -T $H huginn-status
   } elseif ($args[0] -eq 'usage' -or $args[0] -eq 'cost' -or $args[0] -eq 'ccusage') {
     $sub = if ($args.Count -gt 1) { $args[1..($args.Count - 1)] -join ' ' } else { 'daily' }
-    # Full history is layered server-side by the /usr/local/bin/ccusage wrapper on huginn — keep this bare.
+    # Full history is layered server-side by the /usr/local/bin/ccusage wrapper on huginn - keep this bare.
     ssh -tt $H "ccusage $sub"   # default 'daily'. -tt for tables + --live.
   } elseif ($args[0] -eq 'solo') {
     $name = if ($args.Count -gt 1) { $args[1] } else { 'main' }
