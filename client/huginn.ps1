@@ -3,15 +3,38 @@
 #     if (Test-Path "$HOME\.huginn\huginn.ps1") { . "$HOME\.huginn\huginn.ps1" }
 # Targets the `huginn` SSH alias by default; override per-device with:  $env:HUGINN_HOST = 'my-host'
 # Self-update with:  huginn update   (pulls this file from the repo; gh -> scp fallback)
-# Version: 2026-06-14
+# Version: 2026-06-16
 
-$script:HUGINN_VERSION = '2026-06-14'
+$script:HUGINN_VERSION = '2026-06-16'
 $script:HUGINN_REPO    = 'silencelen/huginn'
+
+# ── auto-reconnecting attach ─────────────────────────────────────────────────
+# The session lives in tmux ON the host, so a dropped link (laptop sleep, wifi
+# flap) only severs the ssh client — the work keeps running. We re-run the attach
+# whenever ssh dies with a TRANSPORT failure (exit 255); a clean tmux detach
+# (Alt-d / Ctrl-b d) or shell exit passes its own code through and ends the loop.
+# ServerAlive* makes a half-open socket (post-sleep) die in ~45s instead of
+# hanging. On reconnect we take the session over 'solo' to evict the stale ghost
+# client the dead link left attached. Opt out: $env:HUGINN_NO_RECONNECT = '1'
+function _Huginn-Attach {
+  param([string]$H, [string]$Session = 'main', [switch]$Solo)
+  $delay  = 2
+  $remote = "cc $Session" + $(if ($Solo) { ' solo' } else { '' })
+  while ($true) {
+    ssh -tt -o ServerAliveInterval=15 -o ServerAliveCountMax=3 $H $remote
+    $rc = $LASTEXITCODE
+    if ($rc -ne 255 -or $env:HUGINN_NO_RECONNECT) { return }
+    Write-Host "`nhuginn: link to $H dropped — reconnecting in ${delay}s (Ctrl-C to stop)…" -ForegroundColor Yellow
+    Start-Sleep -Seconds $delay
+    $remote = "cc $Session solo"                    # evict the ghost client on reconnect
+    if ($delay -lt 15) { $delay = [Math]::Min($delay * 2, 15) }
+  }
+}
 
 function huginn {
   $H = if ($env:HUGINN_HOST) { $env:HUGINN_HOST } else { 'huginn' }
   if ($args.Count -eq 0) {
-    ssh -tt $H cc
+    _Huginn-Attach -H $H
   } elseif ($args[0] -in '?','help','/help','-h','--help') {
     Write-Host @"
 
@@ -35,6 +58,8 @@ huginn - remote Claude Code node.  aliases: rclaude, rcc
   In a session: run claude / claude --resume.  Detach: Alt-d (or Ctrl-b d).
   Alt-o = detach all OTHER clients (full screen).  Ctrl-b [ = scroll.  Reattach from any device.
   Host via the 'huginn' SSH alias; override with `$env:HUGINN_HOST.
+  Attach auto-reconnects after a dropped link (laptop sleep); Ctrl-C during the
+  wait to stop. Disable with `$env:HUGINN_NO_RECONNECT = '1'.
 
 "@
   } elseif ($args[0] -eq 'version' -or $args[0] -eq '--version' -or $args[0] -eq '-v') {
@@ -72,7 +97,7 @@ huginn - remote Claude Code node.  aliases: rclaude, rcc
     ssh -tt $H "ccusage $sub"   # default 'daily'. -tt for tables + --live.
   } elseif ($args[0] -eq 'solo') {
     $name = if ($args.Count -gt 1) { $args[1] } else { 'main' }
-    ssh -tt $H "cc solo $name"
+    _Huginn-Attach -H $H -Session $name -Solo
   } elseif ($args[0] -eq 'rename' -or $args[0] -eq 'mv') {
     if ($args.Count -lt 3) { Write-Host "usage: huginn rename <old> <new>"; return }
     ssh -T $H "tmux rename-session -t '$($args[1])' '$($args[2])' && echo 'renamed: $($args[1]) -> $($args[2])'"
@@ -86,7 +111,7 @@ huginn - remote Claude Code node.  aliases: rclaude, rcc
     # Persona-aware: if the host carries persona.md, inject it + memory tools; else plain headless query.
     ssh -T $H "cd ~/netplan 2>/dev/null || cd `"`$HOME`"; P=`"`$(cat /usr/local/share/huginn-cli/persona.md 2>/dev/null)`"; if [ -n `"`$P`" ]; then echo '$esc' | claude -p --append-system-prompt `"`$P`" --allowedTools '$tools'; else echo '$esc' | claude -p; fi"
   } else {
-    ssh -tt $H "cc $($args[0])"
+    _Huginn-Attach -H $H -Session $args[0]
   }
 }
 Set-Alias rclaude huginn
