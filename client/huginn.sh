@@ -1,5 +1,5 @@
 # shellcheck shell=bash
-# huginn (bash) — talk to your remote Claude Code node.
+# huginn (bash) - talk to your remote Claude Code node.
 # Install: source from your ~/.bashrc:
 #     [ -f ~/.huginn/huginn.sh ] && source ~/.huginn/huginn.sh
 # Targets the `huginn` SSH alias by default; override per-device with:  export HUGINN_HOST=my-host
@@ -9,9 +9,9 @@
 HUGINN_VERSION='2026-06-16'
 HUGINN_REPO='silencelen/huginn'
 
-# ── auto-reconnecting attach ─────────────────────────────────────────────────
+# --- auto-reconnecting attach ---
 # The session lives in tmux ON the host, so a dropped link (laptop sleep, wifi
-# flap) only severs the ssh client — the work keeps running. We re-run the attach
+# flap) only severs the ssh client - the work keeps running. We re-run the attach
 # whenever ssh dies with a TRANSPORT failure (exit 255); a clean tmux detach
 # (Alt-d / Ctrl-b d) or shell exit passes its own code straight through and ends
 # the loop. ServerAlive* makes a half-open socket (post-sleep) die in ~45s
@@ -29,7 +29,7 @@ _huginn_attach() {
     ssh -tt -o ServerAliveInterval=15 -o ServerAliveCountMax=3 "$H" "$remote"
     rc=$?
     { [ "$rc" -ne 255 ] || [ -n "$HUGINN_NO_RECONNECT" ]; } && return "$rc"
-    printf '\nhuginn: link to %s dropped — reconnecting in %ss (Ctrl-C to stop)…\n' "$H" "$delay" >&2
+    printf '\nhuginn: link to %s dropped - reconnecting in %ss (Ctrl-C to stop)...\n' "$H" "$delay" >&2
     sleep "$delay" || { echo 'huginn: reconnect cancelled.' >&2; return 130; }
     # mirror if another client is still attached, else solo (evicts the ghost)
     remote="if [ \"\$(tmux list-clients -t $session 2>/dev/null | wc -l)\" -ge 2 ]; then cc $session; else cc $session solo; fi"
@@ -98,7 +98,7 @@ EOF
     usage|cost|ccusage)
       shift                                         # ccusage report; default 'daily'. -tt for tables + --live.
       # Full history (back to 2026-01) is layered server-side by the /usr/local/bin/ccusage
-      # wrapper on huginn — keep this call bare so client-side quoting can't break it.
+      # wrapper on huginn - keep this call bare so client-side quoting can't break it.
       ssh -tt "$H" "ccusage ${*:-daily}" ;;
     solo)      _huginn_attach "$H" "${2:-main}" solo ;;
     rename|mv)
