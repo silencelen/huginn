@@ -14,8 +14,11 @@ $script:HUGINN_REPO    = 'silencelen/huginn'
 # whenever ssh dies with a TRANSPORT failure (exit 255); a clean tmux detach
 # (Alt-d / Ctrl-b d) or shell exit passes its own code through and ends the loop.
 # ServerAlive* makes a half-open socket (post-sleep) die in ~45s instead of
-# hanging. On reconnect we take the session over 'solo' to evict the stale ghost
-# client the dead link left attached. Opt out: $env:HUGINN_NO_RECONNECT = '1'
+# hanging. Reconnect is dynamic: mirror if another device is still attached, else
+# take it solo (full screen). Our own dead client (the ghost the dropped link
+# left attached) still counts server-side, so the test is >=2 clients (ghost + a
+# real other) -> mirror, just the ghost (or none) -> solo; the count + attach run
+# in ONE remote command. Opt out: $env:HUGINN_NO_RECONNECT = '1'
 function _Huginn-Attach {
   param([string]$H, [string]$Session = 'main', [switch]$Solo)
   $delay  = 2
@@ -26,7 +29,9 @@ function _Huginn-Attach {
     if ($rc -ne 255 -or $env:HUGINN_NO_RECONNECT) { return }
     Write-Host "`nhuginn: link to $H dropped — reconnecting in ${delay}s (Ctrl-C to stop)…" -ForegroundColor Yellow
     Start-Sleep -Seconds $delay
-    $remote = "cc $Session solo"                    # evict the ghost client on reconnect
+    # mirror if another client is still attached, else solo (evicts the ghost).
+    # Single-quoted bash so $(...) is evaluated on the host, not by PowerShell.
+    $remote = 'if [ "$(tmux list-clients -t ' + $Session + ' 2>/dev/null | wc -l)" -ge 2 ]; then cc ' + $Session + '; else cc ' + $Session + ' solo; fi'
     if ($delay -lt 15) { $delay = [Math]::Min($delay * 2, 15) }
   }
 }
