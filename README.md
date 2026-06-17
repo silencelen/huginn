@@ -31,7 +31,8 @@ Named for **Huginn**, one of Odin's two ravens — *thought* (his brother **Muni
 ```console
 # at your desk
 PS C:\> huginn                  # attach the live session; run: claude
-…working on a long task… then you close the lid. it keeps running.
+…working on a long task… then you close the lid. it keeps running —
+and when you wake the laptop, huginn auto-reconnects you right back in.
 
 # later, from your phone (Termux) — same session, right where you left it
 ~ $ huginn
@@ -50,9 +51,10 @@ PS C:\> huginn solo
 
 |   |   |
 |---|---|
-| ♾️ **Always there** | Long/agentic tasks keep running when you close the lid. Reconnect — exactly where you left off. |
+| ♾️ **Always there** | Long/agentic tasks keep running when you close the lid. Wake the machine and huginn **auto-reconnects** you — exactly where you left off. |
 | 📱 **Any device, one session** | `huginn` from laptop, desktop, or phone attaches the *same* live session. |
-| 🪞 **Mirror or solo** | Two devices mirror each other (fit the smaller screen); one keystroke (`Alt-o`) detaches the rest to go full-screen. |
+| 🪞 **Mirror or solo** | Two devices mirror each other (fit the smaller screen); one keystroke (`Alt-o`) detaches the rest to go full-screen. An auto-reconnect picks the right mode for you. |
+| 🏷️ **Named tabs** | `huginn costtracking` labels the terminal tab `huginn:costtracking` (Windows Terminal / iTerm / Termux), restored when you leave. |
 | 💸 **Subscription, not metered** | Log Claude Code into your **Max/Pro** plan — flat cost, no per-token billing. (API key works too.) |
 | 🔌 **No daemon, no ports** | Just SSH. Add Tailscale/WireGuard and it works from anywhere. |
 | 🪶 **Tiny** | A few shell scripts + a tmux config. The value is the *pattern*. |
@@ -83,6 +85,7 @@ huginn solo          attach + detach other clients (full-screen resume)
 huginn work          a separate named session
 huginn -p "..."      one-shot headless query
 huginn status        health at a glance
+huginn usage         Claude Code token/cost report
 huginn update        self-update this client from the repo
 huginn help          full reference
 ```

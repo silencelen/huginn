@@ -5,7 +5,25 @@ All notable changes to this project are documented here. Format loosely follows
 
 ## [Unreleased]
 
+> The client self-reports version `2026-06-16c`.
+
 ### Added
+- **Auto-reconnecting attach.** When the link drops (laptop sleep, Wi-Fi flap) the
+  client transparently re-attaches the still-running session — the work lives in
+  tmux on the host, so only the ssh client died, not the session. It reconnects on
+  any non-zero ssh exit (a clean `Alt-d` detach or normal exit returns `0` and
+  stops the loop) and uses SSH keepalives so a half-open socket after sleep dies in
+  ~45s instead of hanging. On reconnect it chooses **mirror vs solo dynamically** —
+  mirror if another device is still attached, otherwise solo (full-screen, evicting
+  the stale "ghost" client the dead link left behind). Opt out: `HUGINN_NO_RECONNECT=1`.
+- **Named terminal tabs.** The attach renames the terminal tab/window to
+  `huginn:<session>` — so `huginn costtracking` gives you a `huginn:costtracking`
+  tab in Windows Terminal (and iTerm/Termux) — and restores the previous title on
+  exit. Works because tmux's default `set-titles off` shields the outer terminal
+  from the inner TUI's own title escapes. Opt out: `HUGINN_NO_TITLE=1`.
+- **`huginn usage`** (aliases `cost`, `ccusage`) — Claude Code token/cost report via
+  [ccusage](https://github.com/ryoppippi/ccusage); e.g. `huginn usage monthly`,
+  `session`, `blocks --live`.
 - **`huginn update`** — self-update the client in place from the repo. Pulls
   `client/huginn.{ps1,sh}` via `gh` (works for a private repo) and falls back to
   `scp` from the host's `/usr/local/share/huginn-cli/` mirror, then re-sources itself.
@@ -13,6 +31,11 @@ All notable changes to this project are documented here. Format loosely follows
 - **`rcc` alias** in both clients (parity with `rclaude`).
 
 ### Fixed
+- **Clients are pure ASCII.** The `huginn update` `scp` fallback delivers the file
+  with no BOM; Windows PowerShell 5.1 then decodes it as the system ANSI code page,
+  which mangled the old box-drawing/em-dash characters and desynced the parser
+  (the help here-string was read as code). Both clients are ASCII-only now, so they
+  parse identically regardless of transport (`gh` vs `scp`) or PowerShell version.
 - **`cc` defaults `TERM`** (`export TERM="${TERM:-xterm-256color}"`). Windows OpenSSH
   has no `TERM` env var, so it opens the session with `TERM` unset and tmux aborts with
   `open terminal failed: not a terminal` — even though the PTY is allocated correctly.
