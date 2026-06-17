@@ -4,17 +4,17 @@
 #     [ -f ~/.huginn/huginn.sh ] && source ~/.huginn/huginn.sh
 # Targets the `huginn` SSH alias by default; override per-device with:  export HUGINN_HOST=my-host
 # Self-update with:  huginn update   (pulls this file from the repo; gh -> scp fallback)
-# Version: 2026-06-16
+# Version: 2026-06-16b
 
-HUGINN_VERSION='2026-06-16'
+HUGINN_VERSION='2026-06-16b'
 HUGINN_REPO='silencelen/huginn'
 
 # --- auto-reconnecting attach ---
 # The session lives in tmux ON the host, so a dropped link (laptop sleep, wifi
 # flap) only severs the ssh client - the work keeps running. We re-run the attach
-# whenever ssh dies with a TRANSPORT failure (exit 255); a clean tmux detach
-# (Alt-d / Ctrl-b d) or shell exit passes its own code straight through and ends
-# the loop. ServerAlive* makes a half-open socket (post-sleep) die in ~45s
+# whenever ssh exits non-zero (dropped link / transport failure - code varies by
+# OS, e.g. 255); a clean tmux detach (Alt-d / Ctrl-b d) or normal shell exit
+# returns 0 and ends the loop. ServerAlive* makes a half-open socket die in ~45s
 # instead of hanging. Reconnect is dynamic: mirror if another device is still
 # attached, else take it solo (full screen). Our own dead client (the ghost the
 # dropped link left attached) still counts server-side, so the test is >=2
@@ -28,8 +28,8 @@ _huginn_attach() {
   while :; do
     ssh -tt -o ServerAliveInterval=15 -o ServerAliveCountMax=3 "$H" "$remote"
     rc=$?
-    { [ "$rc" -ne 255 ] || [ -n "$HUGINN_NO_RECONNECT" ]; } && return "$rc"
-    printf '\nhuginn: link to %s dropped - reconnecting in %ss (Ctrl-C to stop)...\n' "$H" "$delay" >&2
+    { [ "$rc" -eq 0 ] || [ -n "$HUGINN_NO_RECONNECT" ]; } && return "$rc"
+    printf '\nhuginn: link to %s dropped (ssh exit %s) - reconnecting in %ss (Ctrl-C to stop)...\n' "$H" "$rc" "$delay" >&2
     sleep "$delay" || { echo 'huginn: reconnect cancelled.' >&2; return 130; }
     # mirror if another client is still attached, else solo (evicts the ghost)
     remote="if [ \"\$(tmux list-clients -t $session 2>/dev/null | wc -l)\" -ge 2 ]; then cc $session; else cc $session solo; fi"
