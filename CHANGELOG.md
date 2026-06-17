@@ -5,6 +5,24 @@ All notable changes to this project are documented here. Format loosely follows
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-06-17
+
+### Added
+- **Session-name tab completion.** Completing the first word now offers live session
+  names (from `tmux ls` on the host) alongside the subcommands, so a bare
+  `huginn <Tab>` lists everything you can attach to; `huginn kill`, `solo`, `rename`,
+  and `mv` complete to existing session names for their argument. The session list is
+  cached in-memory for ~5s so repeated `<Tab>` doesn't `ssh` on every keystroke
+  (`BatchMode`/`ConnectTimeout` keep a missing key or slow link from hanging the
+  prompt). Both clients.
+
+### Fixed
+- **Reject malformed session names.** A session name must be letters, digits, and
+  underscore only (no `-`, `*`, spaces, etc.). This stops a typo'd flag like
+  `huginn --hlp` from falling through to the attach path and spawning a junk tmux
+  session. Enforced client-side (immediate, friendly error) and again server-side in
+  `cc` (defense in depth for older clients).
+
 ## [0.2.0] - 2026-06-17
 
 ### Added

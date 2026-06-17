@@ -13,6 +13,12 @@ SOLO=
 for a in "$@"; do
   if [ "$a" = solo ]; then SOLO=1; else SESSION="$a"; fi
 done
+# Reject malformed names so a typo'd flag (e.g. 'huginn --hlp') can't spawn a junk
+# session. Allowed: letters, digits, underscore - matches the client-side check.
+if ! [[ "$SESSION" =~ ^[A-Za-z0-9_]+$ ]]; then
+  echo "cc: invalid session name '$SESSION' (allowed: letters, digits, underscore)" >&2
+  exit 2
+fi
 if [ -n "$SOLO" ] && tmux has-session -t "$SESSION" 2>/dev/null; then
   exec tmux attach -d -t "$SESSION"
 fi
