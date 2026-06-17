@@ -4,9 +4,9 @@
 #     [ -f ~/.huginn/huginn.sh ] && source ~/.huginn/huginn.sh
 # Targets the `huginn` SSH alias by default; override per-device with:  export HUGINN_HOST=my-host
 # Self-update with:  huginn update   (pulls this file from the repo; gh -> scp fallback)
-# Version: 2026-06-16b
+# Version: 2026-06-16c
 
-HUGINN_VERSION='2026-06-16b'
+HUGINN_VERSION='2026-06-16c'
 HUGINN_REPO='silencelen/huginn'
 
 # --- auto-reconnecting attach ---
@@ -21,20 +21,29 @@ HUGINN_REPO='silencelen/huginn'
 # clients (ghost + a real other) -> mirror, just the ghost (or none) -> solo.
 # The count + attach run in ONE remote command, so the decision is atomic.
 # Opt out: export HUGINN_NO_RECONNECT=1
+#
+# Tab naming: the terminal tab/window is renamed to the session ("huginn:<name>")
+# so 'huginn costtracking' labels the tab 'huginn:costtracking' (Windows Terminal /
+# iTerm / Termux). tmux set-titles defaults OFF, so the inner Claude TUI's title
+# sequences are absorbed by tmux and never reach this terminal -> our title sticks
+# for the whole session; reset on exit. Opt out: export HUGINN_NO_TITLE=1
 _huginn_attach() {
   # $1=host  $2=session (default main)  $3=non-empty => start in solo
   local H="$1" session="${2:-main}" solo="$3" delay=2 rc remote
+  [ -z "$HUGINN_NO_TITLE" ] && printf '\033]0;huginn:%s\007' "$session"
   remote="cc $session${solo:+ solo}"
   while :; do
     ssh -tt -o ServerAliveInterval=15 -o ServerAliveCountMax=3 "$H" "$remote"
     rc=$?
-    { [ "$rc" -eq 0 ] || [ -n "$HUGINN_NO_RECONNECT" ]; } && return "$rc"
+    { [ "$rc" -eq 0 ] || [ -n "$HUGINN_NO_RECONNECT" ]; } && break
     printf '\nhuginn: link to %s dropped (ssh exit %s) - reconnecting in %ss (Ctrl-C to stop)...\n' "$H" "$rc" "$delay" >&2
-    sleep "$delay" || { echo 'huginn: reconnect cancelled.' >&2; return 130; }
+    sleep "$delay" || { rc=130; break; }
     # mirror if another client is still attached, else solo (evicts the ghost)
     remote="if [ \"\$(tmux list-clients -t $session 2>/dev/null | wc -l)\" -ge 2 ]; then cc $session; else cc $session solo; fi"
     delay=$(( delay < 15 ? delay * 2 : 15 ))
   done
+  [ -z "$HUGINN_NO_TITLE" ] && printf '\033]0;%s\007' "${HOSTNAME:-shell}"   # reset tab on leaving
+  return "$rc"
 }
 
 huginn() {
@@ -68,6 +77,7 @@ huginn - remote Claude Code node.  aliases: rclaude, rcc
   Host via the 'huginn' SSH alias; override with HUGINN_HOST.
   Attach auto-reconnects after a dropped link (laptop sleep); Ctrl-C during the
   wait to stop. Disable with HUGINN_NO_RECONNECT=1.
+  The terminal tab is named after the session (huginn:<name>); HUGINN_NO_TITLE=1 off.
 
 EOF
       ;;
