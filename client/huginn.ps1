@@ -3,9 +3,9 @@
 #     if (Test-Path "$HOME\.huginn\huginn.ps1") { . "$HOME\.huginn\huginn.ps1" }
 # Targets the `huginn` SSH alias by default; override per-device with:  $env:HUGINN_HOST = 'my-host'
 # Self-update with:  huginn update   (pulls this file from the repo; gh -> scp fallback)
-# Version: 2026-06-16c
+# Version: 0.2.0
 
-$script:HUGINN_VERSION = '2026-06-16c'
+$script:HUGINN_VERSION = '0.2.0'
 $script:HUGINN_REPO    = 'silencelen/huginn'
 
 # --- auto-reconnecting attach ---

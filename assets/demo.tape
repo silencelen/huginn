@@ -4,6 +4,10 @@
 # Prereq: the `huginn` command installed and a reachable host (edit nothing if your
 # `Host huginn` SSH alias is set up; otherwise set HUGINN_HOST first).
 # This drives real commands, so it shows your actual node. Tweak freely.
+#
+# Note: a real link drop (laptop sleep / Wi-Fi flap) can't be scripted here, so the
+# auto-reconnect beat below is narrated. Live, the attach re-runs itself and drops
+# you back into the same session within ~45s of waking.
 
 Output docs/demo.gif
 
@@ -23,8 +27,12 @@ Type "# one command, from any device" Enter Sleep 800ms
 Type "huginn status" Sleep 400ms Enter Sleep 2.5s
 
 Type "" Enter
-Type "# list your live sessions" Enter Sleep 600ms
+Type "# a named session -> the terminal tab becomes 'huginn:costtracking'" Enter Sleep 800ms
 Type "huginn list" Sleep 400ms Enter Sleep 2s
+
+Type "" Enter
+Type "# close the lid mid-task? it keeps running on the host." Enter Sleep 700ms
+Type "# wake the laptop and huginn auto-reconnects you, right where you left off." Enter Sleep 1.8s
 
 Type "" Enter
 Type "# resume full-screen, detaching other devices" Enter Sleep 600ms
