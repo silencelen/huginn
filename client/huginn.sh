@@ -4,10 +4,16 @@
 #     [ -f ~/.huginn/huginn.sh ] && source ~/.huginn/huginn.sh
 # Targets the `huginn` SSH alias by default; override per-device with:  export HUGINN_HOST=my-host
 # Self-update with:  huginn update   (pulls this file from the repo; gh -> scp fallback)
-# Version: 0.2.0
+# Version: 0.3.0
 
-HUGINN_VERSION='0.2.0'
+HUGINN_VERSION='0.3.0'
 HUGINN_REPO='silencelen/huginn'
+
+# A session name is letters, digits, and underscore only - no '-', '*', spaces or
+# other shell-special characters. This keeps a typo'd flag (e.g. 'huginn --hlp')
+# from falling through to the attach path and spawning a junk tmux session, and
+# keeps names safe to pass through the remote shell. Enforced again server-side in cc.
+_huginn_valid_name() { [[ "$1" =~ ^[A-Za-z0-9_]+$ ]]; }
 
 # --- auto-reconnecting attach ---
 # The session lives in tmux ON the host, so a dropped link (laptop sleep, wifi
@@ -72,6 +78,7 @@ huginn - remote Claude Code node.  aliases: rclaude, rcc
   huginn version              show client version
   huginn help | ? | /help     this help
 
+  Session names are letters/digits/underscore only (no - or *).
   In a session: run claude / claude --resume.  Detach: Alt-d (or Ctrl-b d).
   Alt-o = detach all OTHER clients (full screen).  Ctrl-b [ = scroll.  Reattach from any device.
   Host via the 'huginn' SSH alias; override with HUGINN_HOST.
@@ -110,9 +117,13 @@ EOF
       # Full history (back to 2026-01) is layered server-side by the /usr/local/bin/ccusage
       # wrapper on huginn - keep this call bare so client-side quoting can't break it.
       ssh -tt "$H" "ccusage ${*:-daily}" ;;
-    solo)      _huginn_attach "$H" "${2:-main}" solo ;;
+    solo)
+      local s="${2:-main}"
+      _huginn_valid_name "$s" || { echo "huginn: invalid session name '$s' (use letters, digits, underscore; no - or *)" >&2; return 1; }
+      _huginn_attach "$H" "$s" solo ;;
     rename|mv)
       [ -n "$2" ] && [ -n "$3" ] || { echo "usage: huginn rename <old> <new>" >&2; return 1; }
+      _huginn_valid_name "$3" || { echo "huginn: invalid new name '$3' (use letters, digits, underscore; no - or *)" >&2; return 1; }
       ssh -T "$H" "tmux rename-session -t '$2' '$3' && echo 'renamed: $2 -> $3'" ;;
     kill)
       [ -n "$2" ] || { echo "usage: huginn kill <name>" >&2; return 1; }
@@ -125,7 +136,9 @@ EOF
       [ "$mode" = "-y" ] && tools="Bash Read Edit Write Glob Grep WebFetch mcp__mempalace"
       # Persona-aware: if the host carries persona.md, inject it + memory tools; else plain headless query.
       ssh -T "$H" "cd ~/netplan 2>/dev/null || cd \"\$HOME\"; P=\"\$(cat /usr/local/share/huginn-cli/persona.md 2>/dev/null)\"; if [ -n \"\$P\" ]; then echo '$q' | claude -p --append-system-prompt \"\$P\" --allowedTools '$tools'; else echo '$q' | claude -p; fi" ;;
-    *)         _huginn_attach "$H" "$1" ;;
+    *)
+      _huginn_valid_name "$1" || { echo "huginn: invalid session name '$1' (use letters, digits, underscore; no - or *). Did you mean a subcommand? Try 'huginn help'." >&2; return 1; }
+      _huginn_attach "$H" "$1" ;;
   esac
 }
 
@@ -133,7 +146,34 @@ rclaude() { huginn "$@"; }
 rcc()     { huginn "$@"; }
 
 # tab completion
+# Live session names come from the host (tmux ls). We cache them in-memory for a
+# few seconds so repeated <Tab> doesn't ssh on every keystroke; BatchMode keeps a
+# missing key/agent from hanging the prompt, ConnectTimeout bounds a slow link.
+_HUGINN_SESS_CACHE=
+_HUGINN_SESS_TS=0
+_huginn_sessions() {
+  local H="${HUGINN_HOST:-huginn}" now
+  now=$(date +%s 2>/dev/null || echo 0)
+  if [ -z "$_HUGINN_SESS_CACHE" ] || [ "$(( now - _HUGINN_SESS_TS ))" -ge 5 ]; then
+    _HUGINN_SESS_CACHE=$(ssh -T -o BatchMode=yes -o ConnectTimeout=2 "$H" "tmux ls -F '#S' 2>/dev/null" 2>/dev/null)
+    _HUGINN_SESS_TS=$now
+  fi
+  printf '%s\n' "$_HUGINN_SESS_CACHE"
+}
 _huginn_complete() {
-  mapfile -t COMPREPLY < <(compgen -W "list ls status st solo rename mv kill -p -y usage cost update version help" -- "${COMP_WORDS[COMP_CWORD]}")
+  local cur prev cmds
+  cur="${COMP_WORDS[COMP_CWORD]}"
+  prev="${COMP_WORDS[COMP_CWORD-1]}"
+  cmds="list ls status st solo rename mv kill -p -y usage cost update version help"
+  if [ "$COMP_CWORD" -eq 1 ]; then
+    # first word: subcommands + live session names (bare name attaches to it)
+    mapfile -t COMPREPLY < <(compgen -W "$cmds $(_huginn_sessions)" -- "$cur")
+  else
+    case "$prev" in
+      kill|solo|rename|mv)   # these take an existing session name
+        mapfile -t COMPREPLY < <(compgen -W "$(_huginn_sessions)" -- "$cur") ;;
+      *) COMPREPLY=() ;;
+    esac
+  fi
 }
 complete -F _huginn_complete huginn rclaude rcc 2>/dev/null

@@ -3,10 +3,16 @@
 #     if (Test-Path "$HOME\.huginn\huginn.ps1") { . "$HOME\.huginn\huginn.ps1" }
 # Targets the `huginn` SSH alias by default; override per-device with:  $env:HUGINN_HOST = 'my-host'
 # Self-update with:  huginn update   (pulls this file from the repo; gh -> scp fallback)
-# Version: 0.2.0
+# Version: 0.3.0
 
-$script:HUGINN_VERSION = '0.2.0'
+$script:HUGINN_VERSION = '0.3.0'
 $script:HUGINN_REPO    = 'silencelen/huginn'
+
+# A session name is letters, digits, and underscore only - no '-', '*', spaces or
+# other shell-special characters. This keeps a typo'd flag (e.g. 'huginn --hlp')
+# from falling through to the attach path and spawning a junk tmux session, and
+# keeps names safe to pass through the remote shell. Enforced again server-side in cc.
+function _Huginn-ValidName { param([string]$Name) return ($Name -match '^[A-Za-z0-9_]+$') }
 
 # --- auto-reconnecting attach ---
 # The session lives in tmux ON the host, so a dropped link (laptop sleep, wifi
@@ -75,6 +81,7 @@ huginn - remote Claude Code node.  aliases: rclaude, rcc
   huginn version              show client version
   huginn help | ? | /help     this help
 
+  Session names are letters/digits/underscore only (no - or *).
   In a session: run claude / claude --resume.  Detach: Alt-d (or Ctrl-b d).
   Alt-o = detach all OTHER clients (full screen).  Ctrl-b [ = scroll.  Reattach from any device.
   Host via the 'huginn' SSH alias; override with `$env:HUGINN_HOST.
@@ -118,9 +125,11 @@ huginn - remote Claude Code node.  aliases: rclaude, rcc
     ssh -tt $H "ccusage $sub"   # default 'daily'. -tt for tables + --live.
   } elseif ($args[0] -eq 'solo') {
     $name = if ($args.Count -gt 1) { $args[1] } else { 'main' }
+    if (-not (_Huginn-ValidName $name)) { Write-Host "huginn: invalid session name '$name' (use letters, digits, underscore; no - or *)" -ForegroundColor Red; return }
     _Huginn-Attach -H $H -Session $name -Solo
   } elseif ($args[0] -eq 'rename' -or $args[0] -eq 'mv') {
     if ($args.Count -lt 3) { Write-Host "usage: huginn rename <old> <new>"; return }
+    if (-not (_Huginn-ValidName $args[2])) { Write-Host "huginn: invalid new name '$($args[2])' (use letters, digits, underscore; no - or *)" -ForegroundColor Red; return }
     ssh -T $H "tmux rename-session -t '$($args[1])' '$($args[2])' && echo 'renamed: $($args[1]) -> $($args[2])'"
   } elseif ($args[0] -eq 'kill') {
     if ($args.Count -lt 2) { Write-Host "usage: huginn kill <name>"; return }
@@ -132,15 +141,40 @@ huginn - remote Claude Code node.  aliases: rclaude, rcc
     # Persona-aware: if the host carries persona.md, inject it + memory tools; else plain headless query.
     ssh -T $H "cd ~/netplan 2>/dev/null || cd `"`$HOME`"; P=`"`$(cat /usr/local/share/huginn-cli/persona.md 2>/dev/null)`"; if [ -n `"`$P`" ]; then echo '$esc' | claude -p --append-system-prompt `"`$P`" --allowedTools '$tools'; else echo '$esc' | claude -p; fi"
   } else {
+    if (-not (_Huginn-ValidName $args[0])) { Write-Host "huginn: invalid session name '$($args[0])' (use letters, digits, underscore; no - or *). Did you mean a subcommand? Try 'huginn help'." -ForegroundColor Red; return }
     _Huginn-Attach -H $H -Session $args[0]
   }
 }
 Set-Alias rclaude huginn
 Set-Alias rcc huginn
 
+# Live session names from the host (tmux ls), cached in-memory for a few seconds so
+# repeated Tab doesn't ssh every keystroke. BatchMode stops a missing key from hanging
+# the prompt; ConnectTimeout bounds a slow link.
+$script:HUGINN_SESS_CACHE = @()
+$script:HUGINN_SESS_TS    = [datetime]::MinValue
+function _Huginn-Sessions {
+  $H = if ($env:HUGINN_HOST) { $env:HUGINN_HOST } else { 'huginn' }
+  if (((Get-Date) - $script:HUGINN_SESS_TS).TotalSeconds -ge 5) {
+    $script:HUGINN_SESS_CACHE = @(ssh -T -o BatchMode=yes -o ConnectTimeout=2 $H "tmux ls -F '#S' 2>/dev/null" 2>$null)
+    $script:HUGINN_SESS_TS    = Get-Date
+  }
+  return $script:HUGINN_SESS_CACHE
+}
 Register-ArgumentCompleter -CommandName huginn, rclaude, rcc -ScriptBlock {
   param($word, $ast, $pos)
-  'list', 'status', 'solo', 'rename', 'kill', '-p', '-y', 'usage', 'cost', 'update', 'version', 'help' |
-    Where-Object { $_ -like "$word*" } |
+  $cmds = 'list', 'status', 'solo', 'rename', 'kill', '-p', '-y', 'usage', 'cost', 'update', 'version', 'help'
+  # tokens already typed after the command name, excluding the partial word being completed
+  $typed = @($ast.CommandElements | Select-Object -Skip 1 | ForEach-Object { $_.ToString() })
+  if ($word -and $typed.Count -ge 1) { $typed = @($typed | Select-Object -SkipLast 1) }
+  $prev = if ($typed.Count -ge 1) { $typed[-1] } else { '' }
+  if ($typed.Count -eq 0) {
+    $candidates = $cmds + @(_Huginn-Sessions)          # first word: subcommands + sessions
+  } elseif ($prev -in 'kill', 'solo', 'rename', 'mv') {
+    $candidates = @(_Huginn-Sessions)                  # these take an existing session name
+  } else {
+    $candidates = @()
+  }
+  $candidates | Where-Object { $_ -like "$word*" } |
     ForEach-Object { [System.Management.Automation.CompletionResult]::new($_, $_, 'ParameterValue', $_) }
 }
