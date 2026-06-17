@@ -15,6 +15,12 @@ Install [Termux](https://termux.dev) + OpenSSH on the phone, run `client/install
 ### Two devices are attached and the screen is tiny — why?
 That's the **mirror**: tmux sizes a shared session to the *smallest* attached screen so both clients see the full content. To go full-screen on one device: `huginn solo` (kicks the others on attach) or press **`Alt-o`** while attached. Use different session **names** (`huginn work`) to avoid mirroring entirely.
 
+### My laptop slept / Wi-Fi dropped — do I lose the session?
+No. The session runs in tmux **on the host**, so a dropped link only kills the local `ssh` client, not the work. The attach **auto-reconnects** you within ~45s of waking, right where you left off — mirror if another device is attached, otherwise full-screen. Press `Ctrl-C` during the retry to stop it, or set `HUGINN_NO_RECONNECT=1` to turn it off. (PowerShell note: a session you opened *before* updating still runs the old client — open a fresh window so the new auto-reconnect loop is the one driving the attach.)
+
+### Can I name my terminal tabs?
+They name themselves — the attach labels the tab `huginn:<session>`, so `huginn costtracking` gives a `huginn:costtracking` tab (Windows Terminal / iTerm / Termux), restored when you leave. Disable with `HUGINN_NO_TITLE=1`. If a tab won't rename, your terminal is likely set to suppress application title changes, or has a pinned tab title.
+
 ### How do I scroll back?
 `Ctrl-b [` enters scroll mode (then `PageUp`/arrows, `q` to quit). For touch-scroll on mobile, uncomment `set -g mouse on` in `server/tmux.conf` (trade-off: desktop drag-select then needs Shift).
 

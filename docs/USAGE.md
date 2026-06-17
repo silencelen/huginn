@@ -13,10 +13,15 @@
 | `huginn kill <name>` | end a session |
 | `huginn -p "question"` | one-shot **headless** query — reasoning only (no tools) |
 | `huginn -y "task"` | one-shot that **may use tools** (bash / files / web) |
+| `huginn usage [args]` / `cost` | Claude Code token/cost report ([ccusage]) — e.g. `usage monthly`, `session`, `blocks --live` |
+| `huginn update` | self-update the client from the repo (`gh` → `scp` fallback) |
+| `huginn version` | print the client version + target host |
 | `huginn help` / `?` / `/help` | this reference |
-| `rclaude` | alias for `huginn` |
+| `rclaude` / `rcc` | aliases for `huginn` |
 
 `<Tab>` completes subcommands. Override the target host per-device with `HUGINN_HOST` (PowerShell: `$env:HUGINN_HOST`, bash: `export HUGINN_HOST`).
+
+[ccusage]: https://github.com/ryoppippi/ccusage
 
 ## Inside a session (tmux keys)
 
@@ -39,6 +44,28 @@ When you only want one device full-screen:
 - already attached in mirror → press **`Alt-o`**.
 
 Different session **names** are fully independent (no mirroring) — use them to keep separate work apart: `huginn`, `huginn work`, `huginn scratch`.
+
+## Staying connected (auto-reconnect)
+
+Your session lives in tmux **on the host**, so a dropped link — laptop sleep, Wi-Fi flap, a sketchy tunnel — only kills the local `ssh` client, not the work. The attach transparently re-runs and drops you back in:
+
+- It reconnects on **any non-zero `ssh` exit** (the dropped-link signal). A clean detach (`Alt-d`) or normal exit returns `0` and ends cleanly — those don't reconnect.
+- SSH keepalives (`ServerAliveInterval`/`CountMax`) make a half-open socket after sleep die in ~45s instead of hanging, then it retries with a short backoff.
+- On reconnect it picks **mirror vs solo dynamically**: mirror if another device is still attached, otherwise solo (full-screen) — which also evicts the stale "ghost" client the dead link left behind.
+- During the retry wait, press **`Ctrl-C`** to stop. To turn the whole behavior off, set **`HUGINN_NO_RECONNECT=1`** (`$env:HUGINN_NO_RECONNECT='1'`).
+
+## Named terminal tabs
+
+The attach renames your terminal tab/window to **`huginn:<session>`** — so `huginn costtracking` shows a `huginn:costtracking` tab in Windows Terminal (and iTerm/Termux) — and restores the previous title when you leave. Disable with **`HUGINN_NO_TITLE=1`** (`$env:HUGINN_NO_TITLE='1'`). If a tab won't rename, check your terminal isn't configured to suppress application title changes (or has a pinned tab title).
+
+## Environment variables
+
+| Variable | Effect |
+|---|---|
+| `HUGINN_HOST` | target host / SSH alias (default `huginn`) |
+| `HUGINN_NO_RECONNECT` | set to `1` to disable auto-reconnect |
+| `HUGINN_NO_TITLE` | set to `1` to disable terminal-tab naming |
+| `HUGINN_WORKDIR` *(host)* | working directory new sessions open in (default `$HOME`) |
 
 ## Headless one-shots
 

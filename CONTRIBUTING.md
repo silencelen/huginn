@@ -18,6 +18,7 @@ Thanks for your interest! Huginn is intentionally small — a few shell scripts 
 
 ## Dev notes
 
+- **Clients are ASCII-only.** `client/huginn.ps1` and `client/huginn.sh` must contain **no non-ASCII characters** — no box-drawing, em-dashes (`—`), ellipses (`…`), or smart quotes. `huginn update`'s `scp` path delivers the file without a BOM, and Windows PowerShell 5.1 then mis-decodes any non-ASCII as the ANSI code page and fails to parse the whole file. Use `-`, `--`, `...`, and straight quotes. (READMEs and `docs/` are exempt — they're render targets, not parsed by a shell.)
 - **Line endings matter.** Shell scripts must be **LF** (enforced by [`.gitattributes`](.gitattributes)); PowerShell stays CRLF. Don't commit CRLF shell scripts — they break on the Linux host.
 - **Executable bits:** server `bin/*`, `setup.sh`, and the `*.sh` installers are tracked `+x`. If you add a runnable script, set it: `git update-index --chmod=+x path`.
 - **tmux specifics:** the `Alt-o` binding relies on `##{client_tty}` (deferred format expansion). If you touch it, test with two attached clients.
