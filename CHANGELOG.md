@@ -5,7 +5,7 @@ All notable changes to this project are documented here. Format loosely follows
 
 ## [Unreleased]
 
-> The client self-reports version `2026-06-16c`.
+## [0.2.0] - 2026-06-17
 
 ### Added
 - **Auto-reconnecting attach.** When the link drops (laptop sleep, Wi-Fi flap) the
@@ -74,5 +74,6 @@ Initial public release.
 - **Provisioning**: Proxmox LXC template + a generic "any Debian/Ubuntu host" guide.
 - **Docs**: README, Setup, Usage, Architecture, FAQ, Security model, Contributing.
 
-[Unreleased]: https://github.com/silencelen/huginn/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/silencelen/huginn/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/silencelen/huginn/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/silencelen/huginn/releases/tag/v0.1.0
