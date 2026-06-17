@@ -3,16 +3,17 @@
 #     if (Test-Path "$HOME\.huginn\huginn.ps1") { . "$HOME\.huginn\huginn.ps1" }
 # Targets the `huginn` SSH alias by default; override per-device with:  $env:HUGINN_HOST = 'my-host'
 # Self-update with:  huginn update   (pulls this file from the repo; gh -> scp fallback)
-# Version: 2026-06-16
+# Version: 2026-06-16b
 
-$script:HUGINN_VERSION = '2026-06-16'
+$script:HUGINN_VERSION = '2026-06-16b'
 $script:HUGINN_REPO    = 'silencelen/huginn'
 
 # --- auto-reconnecting attach ---
 # The session lives in tmux ON the host, so a dropped link (laptop sleep, wifi
 # flap) only severs the ssh client - the work keeps running. We re-run the attach
-# whenever ssh dies with a TRANSPORT failure (exit 255); a clean tmux detach
-# (Alt-d / Ctrl-b d) or shell exit passes its own code through and ends the loop.
+# whenever ssh exits non-zero (dropped link / transport failure - code varies by
+# OS, e.g. 255); a clean tmux detach (Alt-d / Ctrl-b d) or normal shell exit
+# returns 0 and ends the loop.
 # ServerAlive* makes a half-open socket (post-sleep) die in ~45s instead of
 # hanging. Reconnect is dynamic: mirror if another device is still attached, else
 # take it solo (full screen). Our own dead client (the ghost the dropped link
@@ -26,8 +27,8 @@ function _Huginn-Attach {
   while ($true) {
     ssh -tt -o ServerAliveInterval=15 -o ServerAliveCountMax=3 $H $remote
     $rc = $LASTEXITCODE
-    if ($rc -ne 255 -or $env:HUGINN_NO_RECONNECT) { return }
-    Write-Host "`nhuginn: link to $H dropped - reconnecting in ${delay}s (Ctrl-C to stop)..." -ForegroundColor Yellow
+    if ($rc -eq 0 -or $env:HUGINN_NO_RECONNECT) { return }
+    Write-Host "`nhuginn: link to $H dropped (ssh exit $rc) - reconnecting in ${delay}s (Ctrl-C to stop)..." -ForegroundColor Yellow
     Start-Sleep -Seconds $delay
     # mirror if another client is still attached, else solo (evicts the ghost).
     # Single-quoted bash so $(...) is evaluated on the host, not by PowerShell.
