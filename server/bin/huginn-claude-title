@@ -1,0 +1,70 @@
+#!/bin/bash
+# huginn-claude-title — reflect Claude Code's state in the terminal tab title.
+#
+# Driven by Claude Code hooks (see server/claude-hooks.json). Each hook invokes this
+# with the event name as $1 and the event JSON on stdin. It maps the event to a state
+# and pushes "<icon> <session>" to the terminal tab:
+#
+#     🔄  running   — Claude is working (a prompt is being processed / a tool is running)
+#     ✋  needs you  — stopped for a permission or input request
+#     ✅  waiting    — turn finished (or just launched), waiting for your next prompt
+#
+# Propagation: the session runs in tmux on the host, and the outer terminal swallows
+# inner title escapes (set-titles off), so we wrap the OSC-2 title in tmux's passthrough
+# DCS — tmux forwards it verbatim to every attached client. Requires `allow-passthrough on`
+# (set in tmux.conf). Hooks run with NO controlling tty, so /dev/tty is unavailable; we
+# resolve the pane's tty via tmux ($TMUX_PANE) and write there instead.
+#
+# Contract: stays SILENT on stdout (UserPromptSubmit would inject stdout into the prompt)
+# and always exits 0 (a non-zero exit on UserPromptSubmit/Stop can block the turn). It
+# no-ops outside tmux, so headless `claude -p` / cron runs are unaffected.
+#
+# Icons are overridable via env (HUGINN_ICON_RUN / _NEEDYOU / _IDLE).
+
+set -u
+
+# Interactive tmux session only — headless runs have no $TMUX/$TMUX_PANE.
+[ -n "${TMUX:-}" ] && [ -n "${TMUX_PANE:-}" ] || exit 0
+command -v tmux >/dev/null 2>&1 || exit 0
+
+ICON_RUN="${HUGINN_ICON_RUN:-🔄}"
+ICON_NEEDYOU="${HUGINN_ICON_NEEDYOU:-✋}"
+ICON_IDLE="${HUGINN_ICON_IDLE:-✅}"
+
+event="${1:-}"
+payload="$(cat 2>/dev/null)"            # hook JSON on stdin (may be empty)
+# Fall back to the JSON event name if no arg was passed.
+if [ -z "$event" ] && [ -n "$payload" ] && command -v jq >/dev/null 2>&1; then
+  event="$(printf '%s' "$payload" | jq -r '.hook_event_name // empty' 2>/dev/null)"
+fi
+
+icon=
+case "$event" in
+  UserPromptSubmit|PreToolUse|PostToolUse|SubagentStop) icon="$ICON_RUN" ;;
+  Stop|SessionStart)                                    icon="$ICON_IDLE" ;;
+  Notification)
+    # permission/input request -> needs you; post-turn idle nudge -> waiting; else attention.
+    ntype=
+    if [ -n "$payload" ] && command -v jq >/dev/null 2>&1; then
+      ntype="$(printf '%s' "$payload" | jq -r '.notification_type // empty' 2>/dev/null)"
+    fi
+    case "$ntype" in
+      idle_prompt) icon="$ICON_IDLE" ;;
+      *)           icon="$ICON_NEEDYOU" ;;
+    esac ;;
+  SessionEnd) icon="" ;;                # Claude exited to the shell -> drop the indicator
+  *) exit 0 ;;
+esac
+
+# One tmux call for both the pane tty and the session name.
+info="$(tmux display-message -p -t "$TMUX_PANE" '#{pane_tty}|#{session_name}' 2>/dev/null)" || exit 0
+tty="${info%%|*}"
+sess="${info#*|}"
+[ -n "$tty" ] && [ -w "$tty" ] || exit 0
+[ -n "$sess" ] || sess="claude"
+
+if [ -n "$icon" ]; then title="$icon $sess"; else title="$sess"; fi
+
+# OSC-2 set-title wrapped in tmux passthrough (the ESC before the OSC is doubled).
+printf '\033Ptmux;\033\033]2;%s\007\033\\' "$title" > "$tty" 2>/dev/null
+exit 0
