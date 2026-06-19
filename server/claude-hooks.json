@@ -1,0 +1,24 @@
+{
+  "_comment": "Huginn terminal-title hooks. Merge this into ~/.claude/settings.json's \"hooks\" object (setup.sh does this for you). Drives huginn-claude-title, which shows Claude's state in the tab title. All async so they never add latency to a turn; they no-op outside tmux.",
+  "UserPromptSubmit": [
+    { "hooks": [ { "type": "command", "command": "huginn-claude-title UserPromptSubmit", "async": true, "timeout": 10 } ] }
+  ],
+  "PreToolUse": [
+    { "matcher": ".*", "hooks": [ { "type": "command", "command": "huginn-claude-title PreToolUse", "async": true, "timeout": 10 } ] }
+  ],
+  "PostToolUse": [
+    { "matcher": ".*", "hooks": [ { "type": "command", "command": "huginn-claude-title PostToolUse", "async": true, "timeout": 10 } ] }
+  ],
+  "Notification": [
+    { "hooks": [ { "type": "command", "command": "huginn-claude-title Notification", "async": true, "timeout": 10 } ] }
+  ],
+  "Stop": [
+    { "hooks": [ { "type": "command", "command": "huginn-claude-title Stop", "async": true, "timeout": 10 } ] }
+  ],
+  "SessionStart": [
+    { "hooks": [ { "type": "command", "command": "huginn-claude-title SessionStart", "async": true, "timeout": 10 } ] }
+  ],
+  "SessionEnd": [
+    { "hooks": [ { "type": "command", "command": "huginn-claude-title SessionEnd", "async": true, "timeout": 10 } ] }
+  ]
+}

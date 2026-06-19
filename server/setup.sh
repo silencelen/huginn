@@ -35,13 +35,39 @@ if ! command -v claude >/dev/null 2>&1; then
 fi
 
 # server scripts
-install -m 0755 "$HERE/bin/cc"            /usr/local/bin/cc
-install -m 0755 "$HERE/bin/huginn-status" /usr/local/bin/huginn-status
+install -m 0755 "$HERE/bin/cc"                 /usr/local/bin/cc
+install -m 0755 "$HERE/bin/huginn-status"      /usr/local/bin/huginn-status
+install -m 0755 "$HERE/bin/huginn-claude-title" /usr/local/bin/huginn-claude-title
 
 # tmux config — installed for root by default; for a non-root login user, copy
-# server/tmux.conf to that user's ~/.tmux.conf instead.
+# server/tmux.conf to that user's ~/.tmux.conf instead. (Ships allow-passthrough on,
+# which the tab-title hook needs to push state out through tmux.)
 TARGET_HOME="${HUGINN_HOME:-/root}"
 cp "$HERE/tmux.conf" "$TARGET_HOME/.tmux.conf"
+
+# Terminal-title hooks — merge server/claude-hooks.json into the target user's
+# ~/.claude/settings.json so the tab title reflects Claude's state (running / needs
+# you / waiting). Idempotent: strips any prior huginn-claude-title hooks first, and
+# preserves every other hook already configured. Skipped if jq is unavailable.
+if command -v jq >/dev/null 2>&1; then
+  echo "[huginn] wiring terminal-title hooks into $TARGET_HOME/.claude/settings.json ..."
+  mkdir -p "$TARGET_HOME/.claude"
+  SETTINGS="$TARGET_HOME/.claude/settings.json"
+  [ -s "$SETTINGS" ] || echo '{}' > "$SETTINGS"
+  jq 'del(._comment) | with_entries(.value |= map(.hooks |= map(.command |= ("/usr/local/bin/" + .))))' \
+     "$HERE/claude-hooks.json" > "$SETTINGS.huginn-add"
+  jq --slurpfile add "$SETTINGS.huginn-add" '
+    .hooks = ( (.hooks // {})
+      | with_entries( .value |= ( map( .hooks |= map(select((.command // "") | test("huginn-claude-title") | not)) )
+                                  | map(select((.hooks | length) > 0)) ) )
+      | with_entries(select((.value | length) > 0)) )
+    | reduce ($add[0] | to_entries[]) as $e (.;
+        .hooks[$e.key] = ((.hooks[$e.key] // []) + $e.value) )
+  ' "$SETTINGS" > "$SETTINGS.huginn-new" && mv "$SETTINGS.huginn-new" "$SETTINGS"
+  rm -f "$SETTINGS.huginn-add"
+else
+  echo "[huginn] jq not found — skipping terminal-title hooks (install jq + re-run, or merge server/claude-hooks.json by hand)." >&2
+fi
 
 echo
 echo "[huginn] done."

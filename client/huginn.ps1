@@ -3,9 +3,9 @@
 #     if (Test-Path "$HOME\.huginn\huginn.ps1") { . "$HOME\.huginn\huginn.ps1" }
 # Targets the `huginn` SSH alias by default; override per-device with:  $env:HUGINN_HOST = 'my-host'
 # Self-update with:  huginn update   (pulls this file from the repo; gh -> scp fallback)
-# Version: 0.3.0
+# Version: 0.4.0
 
-$script:HUGINN_VERSION = '0.3.0'
+$script:HUGINN_VERSION = '0.4.0'
 $script:HUGINN_REPO    = 'silencelen/huginn'
 
 # A session name is letters, digits, and underscore only - no '-', '*', spaces or
@@ -27,8 +27,8 @@ function _Huginn-ValidName { param([string]$Name) return ($Name -match '^[A-Za-z
 # real other) -> mirror, just the ghost (or none) -> solo; the count + attach run
 # in ONE remote command. Opt out: $env:HUGINN_NO_RECONNECT = '1'
 #
-# Tab naming: the terminal tab/window is renamed to the session ("huginn:<name>")
-# so 'huginn costtracking' gives you a 'huginn:costtracking' tab in Windows
+# Tab naming: the terminal tab/window is renamed to the session name, so
+# 'huginn costtracking' gives you a 'costtracking' tab in Windows
 # Terminal. tmux's set-titles defaults OFF, so the inner Claude TUI's own title
 # sequences are absorbed by tmux and never reach this terminal -> the title we set
 # here survives the whole session. Previous title restored on exit. Opt out:
@@ -38,7 +38,7 @@ function _Huginn-Attach {
   $prevTitle = $null
   try { $prevTitle = $Host.UI.RawUI.WindowTitle } catch {}
   try {
-    if (-not $env:HUGINN_NO_TITLE) { try { $Host.UI.RawUI.WindowTitle = "huginn:$Session" } catch {} }
+    if (-not $env:HUGINN_NO_TITLE) { try { $Host.UI.RawUI.WindowTitle = "$Session" } catch {} }
     $delay  = 2
     $remote = "cc $Session" + $(if ($Solo) { ' solo' } else { '' })
     while ($true) {
@@ -87,7 +87,9 @@ huginn - remote Claude Code node.  aliases: rclaude, rcc
   Host via the 'huginn' SSH alias; override with `$env:HUGINN_HOST.
   Attach auto-reconnects after a dropped link (laptop sleep); Ctrl-C during the
   wait to stop. Disable with `$env:HUGINN_NO_RECONNECT = '1'.
-  The terminal tab is named after the session (huginn:<name>); `$env:HUGINN_NO_TITLE='1' off.
+  The terminal tab is named after the session (<name>); `$env:HUGINN_NO_TITLE='1' off.
+  A state icon leads the tab title while Claude runs: working / needs-you / waiting
+  (set host-side by the claude hooks; needs the server's title hook installed).
 
 "@
   } elseif ($args[0] -eq 'version' -or $args[0] -eq '--version' -or $args[0] -eq '-v') {

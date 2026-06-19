@@ -5,6 +5,31 @@ All notable changes to this project are documented here. Format loosely follows
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-06-18
+
+### Added
+- **Live session-state in the tab title.** The terminal tab now shows a state icon in
+  front of the session name that tracks what Claude is doing, so across many tabs you
+  can see at a glance which session needs you:
+  - 🔄 **working** — a prompt is being processed / a tool is running
+  - ✋ **needs you** — stopped for a permission or input request
+  - ✅ **waiting** — turn finished (or just launched), waiting for your next prompt
+
+  Driven entirely host-side by Claude Code hooks (`server/claude-hooks.json` →
+  `huginn-claude-title`). State is pushed to the tab by wrapping an OSC-2 title in tmux's
+  passthrough escape (needs `allow-passthrough on`, now shipped in `tmux.conf`), which
+  tmux forwards to every attached client — so a mirrored phone and desktop both update.
+  `setup.sh` installs the hook script and merges the hooks into `~/.claude/settings.json`
+  (idempotently, preserving any hooks you already have). Headless `claude -p` and cron
+  runs are unaffected — the hook no-ops when there's no tmux. Clients are untouched; this
+  is a server-side feature (the client-version bump to 0.4.0 is just to keep `huginn
+  version` aligned with the release).
+
+### Changed
+- **Dropped the `huginn:` tab-title prefix.** Tabs now read `<session>` (and `<icon>
+  <session>` while Claude runs) instead of `huginn:<session>` — the state icon already
+  signals it's a huginn session, so the prefix was redundant.
+
 ## [0.3.0] - 2026-06-17
 
 ### Added
