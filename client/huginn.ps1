@@ -3,9 +3,9 @@
 #     if (Test-Path "$HOME\.huginn\huginn.ps1") { . "$HOME\.huginn\huginn.ps1" }
 # Targets the `huginn` SSH alias by default; override per-device with:  $env:HUGINN_HOST = 'my-host'
 # Self-update with:  huginn update   (pulls this file from the repo; gh -> scp fallback)
-# Version: 0.4.0
+# Version: 0.4.1
 
-$script:HUGINN_VERSION = '0.4.0'
+$script:HUGINN_VERSION = '0.4.1'
 $script:HUGINN_REPO    = 'silencelen/huginn'
 
 # A session name is letters, digits, and underscore only - no '-', '*', spaces or
@@ -13,6 +13,10 @@ $script:HUGINN_REPO    = 'silencelen/huginn'
 # from falling through to the attach path and spawning a junk tmux session, and
 # keeps names safe to pass through the remote shell. Enforced again server-side in cc.
 function _Huginn-ValidName { param([string]$Name) return ($Name -match '^[A-Za-z0-9_]+$') }
+# Session names are case-INSENSITIVE: lowercase before touching tmux so 'Test' and
+# 'test' resolve to the same session (tmux itself is case-sensitive). Canonicalized
+# here for every tmux-facing path AND again server-side in cc as the backstop.
+function _Huginn-CanonName { param([string]$Name) return $Name.ToLower() }
 
 # --- auto-reconnecting attach ---
 # The session lives in tmux ON the host, so a dropped link (laptop sleep, wifi
@@ -35,6 +39,7 @@ function _Huginn-ValidName { param([string]$Name) return ($Name -match '^[A-Za-z
 # $env:HUGINN_NO_TITLE = '1'
 function _Huginn-Attach {
   param([string]$H, [string]$Session = 'main', [switch]$Solo)
+  $Session = _Huginn-CanonName $Session   # case-insensitive: 'Test' -> 'test'
   $prevTitle = $null
   try { $prevTitle = $Host.UI.RawUI.WindowTitle } catch {}
   try {
@@ -81,7 +86,8 @@ huginn - remote Claude Code node.  aliases: rclaude, rcc
   huginn version              show client version
   huginn help | ? | /help     this help
 
-  Session names are letters/digits/underscore only (no - or *).
+  Session names are letters/digits/underscore only (no - or *) and case-insensitive
+  ('Test' and 'test' are the same session).
   In a session: run claude / claude --resume.  Detach: Alt-d (or Ctrl-b d).
   Alt-o = detach all OTHER clients (full screen).  Ctrl-b [ = scroll.  Reattach from any device.
   Host via the 'huginn' SSH alias; override with `$env:HUGINN_HOST.
@@ -132,10 +138,12 @@ huginn - remote Claude Code node.  aliases: rclaude, rcc
   } elseif ($args[0] -eq 'rename' -or $args[0] -eq 'mv') {
     if ($args.Count -lt 3) { Write-Host "usage: huginn rename <old> <new>"; return }
     if (-not (_Huginn-ValidName $args[2])) { Write-Host "huginn: invalid new name '$($args[2])' (use letters, digits, underscore; no - or *)" -ForegroundColor Red; return }
-    ssh -T $H "tmux rename-session -t '$($args[1])' '$($args[2])' && echo 'renamed: $($args[1]) -> $($args[2])'"
+    $ro = _Huginn-CanonName $args[1]; $rn = _Huginn-CanonName $args[2]
+    ssh -T $H "tmux rename-session -t '$ro' '$rn' && echo 'renamed: $ro -> $rn'"
   } elseif ($args[0] -eq 'kill') {
     if ($args.Count -lt 2) { Write-Host "usage: huginn kill <name>"; return }
-    ssh -T $H "tmux kill-session -t '$($args[1])' && echo 'killed: $($args[1])'"
+    $kn = _Huginn-CanonName $args[1]
+    ssh -T $H "tmux kill-session -t '$kn' && echo 'killed: $kn'"
   } elseif ($args[0] -eq '-p' -or $args[0] -eq '-y') {
     if ($args.Count -lt 2) { Write-Host "usage: huginn $($args[0]) ""your prompt"""; return }
     $q = ($args[1..($args.Count - 1)] -join ' '); $esc = $q -replace "'", "'\''"  # POSIX single-quote escape

@@ -4,9 +4,9 @@
 #     [ -f ~/.huginn/huginn.sh ] && source ~/.huginn/huginn.sh
 # Targets the `huginn` SSH alias by default; override per-device with:  export HUGINN_HOST=my-host
 # Self-update with:  huginn update   (pulls this file from the repo; gh -> scp fallback)
-# Version: 0.4.0
+# Version: 0.4.1
 
-HUGINN_VERSION='0.4.0'
+HUGINN_VERSION='0.4.1'
 HUGINN_REPO='silencelen/huginn'
 
 # A session name is letters, digits, and underscore only - no '-', '*', spaces or
@@ -14,6 +14,10 @@ HUGINN_REPO='silencelen/huginn'
 # from falling through to the attach path and spawning a junk tmux session, and
 # keeps names safe to pass through the remote shell. Enforced again server-side in cc.
 _huginn_valid_name() { [[ "$1" =~ ^[A-Za-z0-9_]+$ ]]; }
+# Session names are case-INSENSITIVE: we lowercase before touching tmux so 'Test'
+# and 'test' resolve to the same session (tmux itself is case-sensitive). Canonicalized
+# here for every tmux-facing path AND again server-side in cc as the backstop.
+_huginn_canon_name() { printf '%s' "${1,,}"; }
 
 # --- auto-reconnecting attach ---
 # The session lives in tmux ON the host, so a dropped link (laptop sleep, wifi
@@ -36,6 +40,7 @@ _huginn_valid_name() { [[ "$1" =~ ^[A-Za-z0-9_]+$ ]]; }
 _huginn_attach() {
   # $1=host  $2=session (default main)  $3=non-empty => start in solo
   local H="$1" session="${2:-main}" solo="$3" delay=2 rc remote
+  session="$(_huginn_canon_name "$session")"   # case-insensitive: 'Test' -> 'test'
   [ -z "$HUGINN_NO_TITLE" ] && printf '\033]0;%s\007' "$session"
   remote="cc $session${solo:+ solo}"
   while :; do
@@ -78,7 +83,8 @@ huginn - remote Claude Code node.  aliases: rclaude, rcc
   huginn version              show client version
   huginn help | ? | /help     this help
 
-  Session names are letters/digits/underscore only (no - or *).
+  Session names are letters/digits/underscore only (no - or *) and case-insensitive
+  ('Test' and 'test' are the same session).
   In a session: run claude / claude --resume.  Detach: Alt-d (or Ctrl-b d).
   Alt-o = detach all OTHER clients (full screen).  Ctrl-b [ = scroll.  Reattach from any device.
   Host via the 'huginn' SSH alias; override with HUGINN_HOST.
@@ -126,10 +132,12 @@ EOF
     rename|mv)
       [ -n "$2" ] && [ -n "$3" ] || { echo "usage: huginn rename <old> <new>" >&2; return 1; }
       _huginn_valid_name "$3" || { echo "huginn: invalid new name '$3' (use letters, digits, underscore; no - or *)" >&2; return 1; }
-      ssh -T "$H" "tmux rename-session -t '$2' '$3' && echo 'renamed: $2 -> $3'" ;;
+      local ro rn; ro="$(_huginn_canon_name "$2")"; rn="$(_huginn_canon_name "$3")"
+      ssh -T "$H" "tmux rename-session -t '$ro' '$rn' && echo 'renamed: $ro -> $rn'" ;;
     kill)
       [ -n "$2" ] || { echo "usage: huginn kill <name>" >&2; return 1; }
-      ssh -T "$H" "tmux kill-session -t '$2' && echo 'killed: $2'" ;;
+      local kn; kn="$(_huginn_canon_name "$2")"
+      ssh -T "$H" "tmux kill-session -t '$kn' && echo 'killed: $kn'" ;;
     -p|-y)
       local mode="$1"; shift
       [ "$#" -gt 0 ] || { echo "usage: huginn $mode \"your prompt\"" >&2; return 1; }
