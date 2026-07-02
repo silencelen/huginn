@@ -4,9 +4,9 @@
 #     [ -f ~/.huginn/huginn.sh ] && source ~/.huginn/huginn.sh
 # Targets the `huginn` SSH alias by default; override per-device with:  export HUGINN_HOST=my-host
 # Self-update with:  huginn update   (pulls this file from the repo; gh -> scp fallback)
-# Version: 0.4.1
+# Version: 0.5.0
 
-HUGINN_VERSION='0.4.1'
+HUGINN_VERSION='0.5.0'
 HUGINN_REPO='silencelen/huginn'
 
 # A session name is letters, digits, and underscore only - no '-', '*', spaces or
@@ -79,6 +79,8 @@ huginn - remote Claude Code node.  aliases: rclaude, rcc
   huginn -y "task"            one-shot that may use tools (bash/files/web + memory)
   huginn usage [args]         Claude Code token/cost report (ccusage; default: daily)
                                 e.g. huginn usage monthly | session | blocks | blocks --live
+  huginn usage <when>         shortcut date range: today | yesterday | week | month
+                                e.g. huginn usage today | huginn usage week session
   huginn update               self-update this client from the repo ($HUGINN_REPO)
   huginn version              show client version
   huginn help | ? | /help     this help
@@ -124,7 +126,26 @@ EOF
       shift                                         # ccusage report; default 'daily'. -tt for tables + --live.
       # Full history (back to 2026-01) is layered server-side by the /usr/local/bin/ccusage
       # wrapper on huginn - keep this call bare so client-side quoting can't break it.
-      ssh -tt "$H" "ccusage ${*:-daily}" ;;
+      case "$1" in
+        today|yesterday|week|month)
+          local kw="$1"; shift
+          local report="daily"
+          case "$1" in
+            daily|monthly|weekly|session|blocks|statusline) report="$1"; shift ;;
+          esac
+          # Date math runs server-side (guaranteed GNU date on the host) so this
+          # works the same regardless of the client OS's date flavor (GNU/BSD).
+          local dates
+          case "$kw" in
+            today)     dates='since=$(date +%Y%m%d); until=$since' ;;
+            yesterday) dates='since=$(date -d yesterday +%Y%m%d); until=$since' ;;
+            week)      dates='since=$(date -d "7 days ago" +%Y%m%d); until=$(date +%Y%m%d)' ;;
+            month)     dates='since=$(date +%Y%m01); until=$(date +%Y%m%d)' ;;
+          esac
+          ssh -tt "$H" "$dates; ccusage $report -s \$since -u \$until $*" ;;
+        *)
+          ssh -tt "$H" "ccusage ${*:-daily}" ;;
+      esac ;;
     solo)
       local s="${2:-main}"
       _huginn_valid_name "$s" || { echo "huginn: invalid session name '$s' (use letters, digits, underscore; no - or *)" >&2; return 1; }
@@ -182,6 +203,10 @@ _huginn_complete() {
     case "$prev" in
       kill|solo|rename|mv)   # these take an existing session name
         mapfile -t COMPREPLY < <(compgen -W "$(_huginn_sessions)" -- "$cur") ;;
+      usage|cost|ccusage)    # date shortcuts + raw report names
+        mapfile -t COMPREPLY < <(compgen -W "today yesterday week month daily monthly weekly session blocks statusline" -- "$cur") ;;
+      today|yesterday|week|month)   # optional report-type override after a date shortcut
+        mapfile -t COMPREPLY < <(compgen -W "daily monthly weekly session blocks statusline" -- "$cur") ;;
       *) COMPREPLY=() ;;
     esac
   fi

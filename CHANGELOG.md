@@ -5,6 +5,18 @@ All notable changes to this project are documented here. Format loosely follows
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-07-01
+
+### Added
+- **Date-shortcut keywords for `huginn usage`.** `huginn usage today | yesterday | week | month`
+  expand to the right `ccusage -s/-u` date range without hand-typing `YYYYMMDD` — e.g.
+  `huginn usage today` instead of `huginn usage -s 20260701`. `week` is a rolling 7 days,
+  `month` is month-to-date. An optional report-type word after the keyword switches the
+  grouping (`huginn usage week session`, `huginn usage month blocks`); default is `daily`.
+  Date math runs server-side via GNU `date`, so behavior is identical regardless of the
+  client OS/date flavor. Tab completion (bash + PowerShell) offers the new keywords after
+  `usage`/`cost`/`ccusage`.
+
 ## [0.4.0] - 2026-06-18
 
 ### Added
