@@ -3,9 +3,9 @@
 #     if (Test-Path "$HOME\.huginn\huginn.ps1") { . "$HOME\.huginn\huginn.ps1" }
 # Targets the `huginn` SSH alias by default; override per-device with:  $env:HUGINN_HOST = 'my-host'
 # Self-update with:  huginn update   (pulls this file from the repo; gh -> scp fallback)
-# Version: 0.4.1
+# Version: 0.5.0
 
-$script:HUGINN_VERSION = '0.4.1'
+$script:HUGINN_VERSION = '0.5.0'
 $script:HUGINN_REPO    = 'silencelen/huginn'
 
 # A session name is letters, digits, and underscore only - no '-', '*', spaces or
@@ -82,6 +82,8 @@ huginn - remote Claude Code node.  aliases: rclaude, rcc
   huginn -y "task"            one-shot that may use tools (bash/files/web + memory)
   huginn usage [args]         Claude Code token/cost report (ccusage; default: daily)
                                 e.g. huginn usage monthly | session | blocks | blocks --live
+  huginn usage <when>         shortcut date range: today | yesterday | week | month
+                                e.g. huginn usage today | huginn usage week session
   huginn update               self-update this client from the repo ($script:HUGINN_REPO)
   huginn version              show client version
   huginn help | ? | /help     this help
@@ -128,9 +130,28 @@ huginn - remote Claude Code node.  aliases: rclaude, rcc
   } elseif ($args[0] -eq 'status' -or $args[0] -eq 'st') {
     ssh -T $H huginn-status
   } elseif ($args[0] -eq 'usage' -or $args[0] -eq 'cost' -or $args[0] -eq 'ccusage') {
-    $sub = if ($args.Count -gt 1) { $args[1..($args.Count - 1)] -join ' ' } else { 'daily' }
     # Full history is layered server-side by the /usr/local/bin/ccusage wrapper on huginn - keep this bare.
-    ssh -tt $H "ccusage $sub"   # default 'daily'. -tt for tables + --live.
+    $kw = if ($args.Count -gt 1) { $args[1] } else { $null }
+    if ($kw -in @('today', 'yesterday', 'week', 'month')) {
+      $idx = 2
+      $report = 'daily'
+      if ($args.Count -gt 2 -and ($args[2] -in @('daily', 'monthly', 'weekly', 'session', 'blocks', 'statusline'))) {
+        $report = $args[2]; $idx = 3
+      }
+      $rest = if ($args.Count -gt $idx) { $args[$idx..($args.Count - 1)] -join ' ' } else { '' }
+      # Date math runs server-side (guaranteed GNU date on the host) so this works
+      # the same regardless of client OS.
+      $dates = switch ($kw) {
+        'today'     { 'since=$(date +%Y%m%d); until=$since' }
+        'yesterday' { 'since=$(date -d yesterday +%Y%m%d); until=$since' }
+        'week'      { 'since=$(date -d "7 days ago" +%Y%m%d); until=$(date +%Y%m%d)' }
+        'month'     { 'since=$(date +%Y%m01); until=$(date +%Y%m%d)' }
+      }
+      ssh -tt $H "$dates; ccusage $report -s `$since -u `$until $rest"
+    } else {
+      $sub = if ($args.Count -gt 1) { $args[1..($args.Count - 1)] -join ' ' } else { 'daily' }
+      ssh -tt $H "ccusage $sub"   # default 'daily'. -tt for tables + --live.
+    }
   } elseif ($args[0] -eq 'solo') {
     $name = if ($args.Count -gt 1) { $args[1] } else { 'main' }
     if (-not (_Huginn-ValidName $name)) { Write-Host "huginn: invalid session name '$name' (use letters, digits, underscore; no - or *)" -ForegroundColor Red; return }
@@ -182,6 +203,10 @@ Register-ArgumentCompleter -CommandName huginn, rclaude, rcc -ScriptBlock {
     $candidates = $cmds + @(_Huginn-Sessions)          # first word: subcommands + sessions
   } elseif ($prev -in 'kill', 'solo', 'rename', 'mv') {
     $candidates = @(_Huginn-Sessions)                  # these take an existing session name
+  } elseif ($prev -in 'usage', 'cost', 'ccusage') {
+    $candidates = 'today', 'yesterday', 'week', 'month', 'daily', 'monthly', 'weekly', 'session', 'blocks', 'statusline'
+  } elseif ($prev -in 'today', 'yesterday', 'week', 'month') {
+    $candidates = 'daily', 'monthly', 'weekly', 'session', 'blocks', 'statusline'
   } else {
     $candidates = @()
   }
