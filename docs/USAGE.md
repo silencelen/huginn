@@ -14,6 +14,7 @@
 | `huginn -p "question"` | one-shot **headless** query — reasoning only (no tools) |
 | `huginn -y "task"` | one-shot that **may use tools** (bash / files / web) |
 | `huginn usage [args]` / `cost` | Claude Code token/cost report ([ccusage]) — e.g. `usage monthly`, `session`, `blocks --live` |
+| `huginn usage <when>` | shortcut date range: `today` \| `yesterday` \| `week` \| `month` — e.g. `usage today`, `usage week session` |
 | `huginn update` | self-update the client from the repo (`gh` → `scp` fallback) |
 | `huginn version` | print the client version + target host |
 | `huginn help` / `?` / `/help` | this reference |
