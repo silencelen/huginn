@@ -3,9 +3,9 @@
 #     if (Test-Path "$HOME\.huginn\huginn.ps1") { . "$HOME\.huginn\huginn.ps1" }
 # Targets the `huginn` SSH alias by default; override per-device with:  $env:HUGINN_HOST = 'my-host'
 # Self-update with:  huginn update   (pulls this file from the repo; gh -> scp fallback)
-# Version: 0.5.0
+# Version: 0.6.0
 
-$script:HUGINN_VERSION = '0.5.0'
+$script:HUGINN_VERSION = '0.6.0'
 $script:HUGINN_REPO    = 'silencelen/huginn'
 
 # A session name is letters, digits, and underscore only - no '-', '*', spaces or
@@ -17,6 +17,11 @@ function _Huginn-ValidName { param([string]$Name) return ($Name -match '^[A-Za-z
 # 'test' resolve to the same session (tmux itself is case-sensitive). Canonicalized
 # here for every tmux-facing path AND again server-side in cc as the backstop.
 function _Huginn-CanonName { param([string]$Name) return $Name.ToLower() }
+# tmux resolves -t targets by EXACT match, then PREFIX, then glob. A unique prefix
+# resolves silently, so 'huginn kill andvari' would destroy a session actually named
+# 'andvariautofill', and 'huginn solo jt' would evict the real client of 'jtyper'.
+# Anchoring with '=' forces exact match (tmux(1) "exact-match").
+function _Huginn-TmuxTarget { param([string]$Name) return "=$Name" }
 
 # --- auto-reconnecting attach ---
 # The session lives in tmux ON the host, so a dropped link (laptop sleep, wifi
@@ -45,16 +50,34 @@ function _Huginn-Attach {
   try {
     if (-not $env:HUGINN_NO_TITLE) { try { $Host.UI.RawUI.WindowTitle = "$Session" } catch {} }
     $delay  = 2
+    $quick  = 0
+    $tgt    = _Huginn-TmuxTarget $Session
     $remote = "cc $Session" + $(if ($Solo) { ' solo' } else { '' })
     while ($true) {
-      ssh -tt -o ServerAliveInterval=15 -o ServerAliveCountMax=3 $H $remote
+      $t0 = Get-Date
+      ssh -tt -o ConnectTimeout=10 -o ServerAliveInterval=15 -o ServerAliveCountMax=3 $H $remote
       $rc = $LASTEXITCODE
+      $elapsed = ((Get-Date) - $t0).TotalSeconds
       if ($rc -eq 0 -or $env:HUGINN_NO_RECONNECT) { return }
+      # Bound by DURATION, not exit code: real drops on Windows OpenSSH / Termux do
+      # not reliably return 255. Three sub-5s exits in a row means the remote is
+      # failing instantly (bad workdir, cc error) and retrying only hides the error.
+      if ($elapsed -lt 5) {
+        $quick++
+        if ($quick -ge 3) {
+          Write-Host "`nhuginn: $H is failing immediately ($quick attempts, last exit $rc) - giving up.`n  The remote error is printed above; fix it or run 'huginn $Session' again." -ForegroundColor Red
+          return
+        }
+      } else { $quick = 0 }
       Write-Host "`nhuginn: link to $H dropped (ssh exit $rc) - reconnecting in ${delay}s (Ctrl-C to stop)..." -ForegroundColor Yellow
-      Start-Sleep -Seconds $delay
-      # mirror if another client is still attached, else solo (evicts the ghost).
+      # Jitter: every tab shares one tunnel, so an unjittered backoff makes them all
+      # re-handshake on the identical second after a single relay flap.
+      Start-Sleep -Milliseconds ([int]($delay * 1000 * (0.75 + (Get-Random -Minimum 0.0 -Maximum 0.5))))
+      # Do NOT resurrect a session killed from another device (cc would fall through
+      # to new-session -A and spawn a second claude). Then: mirror if another client
+      # is attached, else solo (evicts the ghost).
       # Single-quoted bash so $(...) is evaluated on the host, not by PowerShell.
-      $remote = 'if [ "$(tmux list-clients -t ' + $Session + ' 2>/dev/null | wc -l)" -ge 2 ]; then cc ' + $Session + '; else cc ' + $Session + ' solo; fi'
+      $remote = 'tmux has-session -t ' + $tgt + ' 2>/dev/null || { echo "huginn: session ' + $Session + ' no longer exists on ' + $H + '"; exit 0; }; if [ "$(tmux list-clients -t ' + $tgt + ' 2>/dev/null | wc -l)" -ge 2 ]; then cc ' + $Session + '; else cc ' + $Session + ' solo; fi'
       if ($delay -lt 15) { $delay = [Math]::Min($delay * 2, 15) }
     }
   } finally {
@@ -109,15 +132,40 @@ huginn - remote Claude Code node.  aliases: rclaude, rcc
     Write-Host "huginn: updating client -> $dest"
     if (Get-Command gh -ErrorAction SilentlyContinue) {
       try {
-        gh api "repos/$script:HUGINN_REPO/contents/client/huginn.ps1" -H "Accept: application/vnd.github.raw" 2>$null | Out-File -FilePath $tmp -Encoding utf8
-        if ((Test-Path $tmp) -and (Get-Item $tmp).Length -gt 0) {
-          Move-Item -Force $tmp $dest; $got = $true; Write-Host "  pulled from GitHub ($script:HUGINN_REPO) via gh" -ForegroundColor Green
+        # Set-Content -Encoding ascii, NOT Out-File -Encoding utf8: on PS 5.1 the
+        # latter writes a UTF-8 BOM, which is exactly the parse failure commit
+        # 691d602 ("pure ASCII") was written to eliminate. The client is ASCII.
+        gh api "repos/$script:HUGINN_REPO/contents/client/huginn.ps1" -H "Accept: application/vnd.github.raw" 2>$null |
+          Set-Content -Path $tmp -Encoding ascii
+        # try/catch cannot catch a native command's failure, so check the code.
+        # A non-empty ERROR BODY is still non-empty - length alone is not a gate.
+        if ($LASTEXITCODE -eq 0 -and (Test-Path $tmp) -and (Get-Item $tmp).Length -gt 2000) {
+          $got = $true; Write-Host "  pulled from GitHub ($script:HUGINN_REPO) via gh" -ForegroundColor Green
+        } else {
+          Write-Host "  (gh fetch failed - falling back to the $H mirror)" -ForegroundColor DarkGray
         }
-      } catch {}
+      } catch { Write-Host "  (gh threw - falling back to the $H mirror)" -ForegroundColor DarkGray }
+    } else {
+      Write-Host "  (gh not installed - using the scp fallback)" -ForegroundColor DarkGray
     }
     if (-not $got) {
-      scp "${H}:/usr/local/share/huginn-cli/huginn.ps1" $dest
+      # BatchMode so a device without an authorized key fails instead of silently
+      # dropping into a password prompt mid-"update".
+      scp -o BatchMode=yes "${H}:/usr/local/share/huginn-cli/huginn.ps1" $tmp
       if ($LASTEXITCODE -eq 0) { $got = $true; Write-Host "  pulled from $H mirror via scp" -ForegroundColor Green }
+    }
+    # Validate before installing: a truncated download that overwrites the live
+    # client leaves every future shell broken, with no copy to fall back to.
+    if ($got) {
+      try {
+        $null = [ScriptBlock]::Create((Get-Content $tmp -Raw))
+        if (Test-Path $dest) { Copy-Item -Force $dest "$dest.bak" -ErrorAction SilentlyContinue }
+        Move-Item -Force $tmp $dest
+        Write-Host "  (previous version saved as $(Split-Path -Leaf $dest).bak)" -ForegroundColor DarkGray
+      } catch {
+        Write-Host "huginn: downloaded client failed its syntax check - keeping the current version" -ForegroundColor Red
+        $got = $false
+      }
     }
     if (Test-Path $tmp) { Remove-Item -Force $tmp -ErrorAction SilentlyContinue }
     # NOTE: dot-sourcing here would only update this function's local scope, not the global
@@ -159,18 +207,39 @@ huginn - remote Claude Code node.  aliases: rclaude, rcc
   } elseif ($args[0] -eq 'rename' -or $args[0] -eq 'mv') {
     if ($args.Count -lt 3) { Write-Host "usage: huginn rename <old> <new>"; return }
     if (-not (_Huginn-ValidName $args[2])) { Write-Host "huginn: invalid new name '$($args[2])' (use letters, digits, underscore; no - or *)" -ForegroundColor Red; return }
+    if (-not (_Huginn-ValidName $args[1])) { Write-Host "huginn: invalid session name '$($args[1])' (use letters, digits, underscore; no - or *)" -ForegroundColor Red; return }
     $ro = _Huginn-CanonName $args[1]; $rn = _Huginn-CanonName $args[2]
-    ssh -T $H "tmux rename-session -t '$ro' '$rn' && echo 'renamed: $ro -> $rn'"
+    ssh -T $H "tmux rename-session -t '$(_Huginn-TmuxTarget $ro)' '$rn' && echo 'renamed: $ro -> $rn'"
   } elseif ($args[0] -eq 'kill') {
     if ($args.Count -lt 2) { Write-Host "usage: huginn kill <name>"; return }
+    if (-not (_Huginn-ValidName $args[1])) { Write-Host "huginn: invalid session name '$($args[1])' (use letters, digits, underscore; no - or *)" -ForegroundColor Red; return }
     $kn = _Huginn-CanonName $args[1]
-    ssh -T $H "tmux kill-session -t '$kn' && echo 'killed: $kn'"
+    # '=' anchor: without it 'huginn kill andvari' kills 'andvariautofill'.
+    ssh -T $H "tmux kill-session -t '$(_Huginn-TmuxTarget $kn)' && echo 'killed: $kn'"
   } elseif ($args[0] -eq '-p' -or $args[0] -eq '-y') {
     if ($args.Count -lt 2) { Write-Host "usage: huginn $($args[0]) ""your prompt"""; return }
     $q = ($args[1..($args.Count - 1)] -join ' '); $esc = $q -replace "'", "'\''"  # POSIX single-quote escape
     $tools = if ($args[0] -eq '-y') { "Bash Read Edit Write Glob Grep WebFetch mcp__mempalace" } else { "mcp__mempalace" }
     # Persona-aware: if the host carries persona.md, inject it + memory tools; else plain headless query.
-    ssh -T $H "cd ~/netplan 2>/dev/null || cd `"`$HOME`"; P=`"`$(cat /usr/local/share/huginn-cli/persona.md 2>/dev/null)`"; if [ -n `"`$P`" ]; then echo '$esc' | claude -p --append-system-prompt `"`$P`" --allowedTools '$tools'; else echo '$esc' | claude -p; fi"
+    #
+    # The remote script is base64'd rather than passed as a quoted argument.
+    # Windows PowerShell 5.1 mangles embedded double quotes when marshalling
+    # arguments to a native executable, which silently corrupted P="$(cat ...)"
+    # into an unquoted assignment: the persona word-split, `[ -n $P ]` errored
+    # with "too many arguments", the else branch ran, and `huginn -y` degraded to
+    # a bare `claude -p` with NO persona and NO --allowedTools. Base64 puts only
+    # [A-Za-z0-9+/=] on the command line, so 5.1 and 7.x behave identically.
+    $remoteScript = @"
+cd ~/netplan 2>/dev/null || cd "`$HOME"
+P="`$(cat /usr/local/share/huginn-cli/persona.md 2>/dev/null)"
+if [ -n "`$P" ]; then
+  echo '$esc' | claude -p --append-system-prompt "`$P" --allowedTools '$tools'
+else
+  echo '$esc' | claude -p
+fi
+"@
+    $b64 = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes(($remoteScript -replace "`r`n", "`n")))
+    ssh -T $H "echo $b64 | base64 -d | bash -s"
   } else {
     if (-not (_Huginn-ValidName $args[0])) { Write-Host "huginn: invalid session name '$($args[0])' (use letters, digits, underscore; no - or *). Did you mean a subcommand? Try 'huginn help'." -ForegroundColor Red; return }
     _Huginn-Attach -H $H -Session $args[0]

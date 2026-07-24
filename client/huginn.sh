@@ -4,9 +4,9 @@
 #     [ -f ~/.huginn/huginn.sh ] && source ~/.huginn/huginn.sh
 # Targets the `huginn` SSH alias by default; override per-device with:  export HUGINN_HOST=my-host
 # Self-update with:  huginn update   (pulls this file from the repo; gh -> scp fallback)
-# Version: 0.5.0
+# Version: 0.6.0
 
-HUGINN_VERSION='0.5.0'
+HUGINN_VERSION='0.6.0'
 HUGINN_REPO='silencelen/huginn'
 
 # A session name is letters, digits, and underscore only - no '-', '*', spaces or
@@ -14,6 +14,12 @@ HUGINN_REPO='silencelen/huginn'
 # from falling through to the attach path and spawning a junk tmux session, and
 # keeps names safe to pass through the remote shell. Enforced again server-side in cc.
 _huginn_valid_name() { [[ "$1" =~ ^[A-Za-z0-9_]+$ ]]; }
+# tmux resolves -t targets by EXACT match, then PREFIX, then glob. A unique prefix
+# resolves silently, so 'huginn kill andvari' would destroy a session actually named
+# 'andvariautofill', and 'huginn solo jt' would evict the real client of 'jtyper'.
+# Anchoring with '=' forces exact match (tmux(1) "exact-match"), so a typo now fails
+# loudly with "can't find session" instead of hitting the wrong session.
+_huginn_tmux_target() { printf '=%s' "$1"; }
 # Session names are case-INSENSITIVE: we lowercase before touching tmux so 'Test'
 # and 'test' resolve to the same session (tmux itself is case-sensitive). Canonicalized
 # here for every tmux-facing path AND again server-side in cc as the backstop.
@@ -39,19 +45,42 @@ _huginn_canon_name() { printf '%s' "${1,,}"; }
 # for the whole session; reset on exit. Opt out: export HUGINN_NO_TITLE=1
 _huginn_attach() {
   # $1=host  $2=session (default main)  $3=non-empty => start in solo
-  local H="$1" session="${2:-main}" solo="$3" delay=2 rc remote
+  local H="$1" session="${2:-main}" solo="$3" delay=2 rc remote t0 elapsed quick=0 tgt
   session="$(_huginn_canon_name "$session")"   # case-insensitive: 'Test' -> 'test'
+  tgt="$(_huginn_tmux_target "$session")"
   [ -z "$HUGINN_NO_TITLE" ] && printf '\033]0;%s\007' "$session"
   remote="cc $session${solo:+ solo}"
   while :; do
-    ssh -tt -o ServerAliveInterval=15 -o ServerAliveCountMax=3 "$H" "$remote"
+    t0=$SECONDS
+    ssh -tt -o ConnectTimeout=10 -o ServerAliveInterval=15 -o ServerAliveCountMax=3 "$H" "$remote"
     rc=$?
+    elapsed=$(( SECONDS - t0 ))
     { [ "$rc" -eq 0 ] || [ -n "$HUGINN_NO_RECONNECT" ]; } && break
+    # Distinguish "the link died" from "the remote command fails instantly". We do
+    # NOT classify by exit code: real drops on Termux/Windows OpenSSH do not
+    # reliably return 255, which is why v2026-06-16b widened this to any non-zero.
+    # Duration is the honest signal — a session that lived 40 minutes dropped; one
+    # that died in 0.3s twenty times in a row is a server-side error we are hiding.
+    if [ "$elapsed" -lt 5 ]; then
+      quick=$(( quick + 1 ))
+      if [ "$quick" -ge 3 ]; then
+        printf '\nhuginn: %s is failing immediately (%s attempts, last exit %s) - giving up.\n  The remote error is printed above; fix it or run "huginn %s" again.\n' \
+          "$H" "$quick" "$rc" "$session" >&2
+        break
+      fi
+    else
+      quick=0
+    fi
     printf '\nhuginn: link to %s dropped (ssh exit %s) - reconnecting in %ss (Ctrl-C to stop)...\n' "$H" "$rc" "$delay" >&2
-    sleep "$delay" || { rc=130; break; }
-    # mirror if another client is still attached, else solo (evicts the ghost)
-    remote="if [ \"\$(tmux list-clients -t $session 2>/dev/null | wc -l)\" -ge 2 ]; then cc $session; else cc $session solo; fi"
-    delay=$(( delay < 15 ? delay * 2 : 15 ))
+    # Jittered sleep: every tab shares one tunnel, so an unjittered backoff makes
+    # all of them re-handshake on the identical second after a single relay flap.
+    sleep "$(awk -v d="$delay" 'BEGIN{srand();printf "%.1f", d*(0.75+rand()*0.5)}')" || { rc=130; break; }
+    # Reconnect must NOT resurrect a session that was deliberately killed from
+    # another device: cc falls through to `new-session -A`, which would spawn a
+    # brand-new claude (burning quota) for a session you just ended. Check first.
+    # Otherwise: mirror if another client is still attached, else solo (evicts the ghost).
+    remote="tmux has-session -t $tgt 2>/dev/null || { echo 'huginn: session $session no longer exists on $H'; exit 0; }; if [ \"\$(tmux list-clients -t $tgt 2>/dev/null | wc -l)\" -ge 2 ]; then cc $session; else cc $session solo; fi"
+    delay=$(( delay * 2 > 15 ? 15 : delay * 2 ))
   done
   [ -z "$HUGINN_NO_TITLE" ] && printf '\033]0;%s\007' "${HOSTNAME:-shell}"   # reset tab on leaving
   return "$rc"
@@ -105,19 +134,37 @@ EOF
       tmp="$dest.tmp"
       echo "huginn: updating client -> $dest"
       if command -v gh >/dev/null 2>&1; then
+        # Leave it at $tmp — the syntax check + backup below is the only install path.
         if gh api "repos/$HUGINN_REPO/contents/client/huginn.sh" -H "Accept: application/vnd.github.raw" >"$tmp" 2>/dev/null && [ -s "$tmp" ]; then
-          mv -f "$tmp" "$dest"; got=1; echo "  pulled from GitHub ($HUGINN_REPO) via gh"
+          got=1; echo "  pulled from GitHub ($HUGINN_REPO) via gh"
+        else
+          echo "  (gh fetch failed - falling back to the $H mirror)"
         fi
       fi
       if [ -z "$got" ]; then
-        if scp "$H:/usr/local/share/huginn-cli/huginn.sh" "$dest"; then got=1; echo "  pulled from $H mirror via scp"; fi
+        command -v gh >/dev/null 2>&1 || echo "  (gh not installed - using the scp fallback)"
+        # BatchMode: never drop into an interactive password prompt in the middle
+        # of what reads as a non-interactive update.
+        if scp -o BatchMode=yes "$H:/usr/local/share/huginn-cli/huginn.sh" "$tmp"; then
+          got=1; echo "  pulled from $H mirror via scp"
+        fi
       fi
-      rm -f "$tmp" 2>/dev/null
+      # Validate BEFORE installing. Sourcing a truncated download leaves the live
+      # shell with a half-defined huginn function AND overwrites the good copy on
+      # disk, so the next shell is broken too.
       if [ -n "$got" ]; then
+        if ! bash -n "$tmp" 2>/dev/null; then
+          echo "huginn: downloaded client failed its syntax check - keeping the current version" >&2
+          rm -f "$tmp"; return 1
+        fi
+        cp -f "$dest" "$dest.bak" 2>/dev/null
+        mv -f "$tmp" "$dest"
         # shellcheck disable=SC1090
         source "$dest"; huginn version
+        echo "  (previous version saved as $(basename "$dest").bak)"
       else
-        echo "huginn: update failed (no gh, scp failed)" >&2; return 1
+        rm -f "$tmp" 2>/dev/null
+        echo "huginn: update failed (gh unavailable or errored, and scp fallback failed)" >&2; return 1
       fi
       ;;
     list|ls)   ssh -T "$H" "tmux ls 2>/dev/null || echo '(no sessions running)'" ;;
@@ -152,13 +199,17 @@ EOF
       _huginn_attach "$H" "$s" solo ;;
     rename|mv)
       [ -n "$2" ] && [ -n "$3" ] || { echo "usage: huginn rename <old> <new>" >&2; return 1; }
+      # Validate BOTH names: the old one is interpolated into a remote root shell.
+      _huginn_valid_name "$2" || { echo "huginn: invalid session name '$2' (use letters, digits, underscore; no - or *)" >&2; return 1; }
       _huginn_valid_name "$3" || { echo "huginn: invalid new name '$3' (use letters, digits, underscore; no - or *)" >&2; return 1; }
       local ro rn; ro="$(_huginn_canon_name "$2")"; rn="$(_huginn_canon_name "$3")"
-      ssh -T "$H" "tmux rename-session -t '$ro' '$rn' && echo 'renamed: $ro -> $rn'" ;;
+      ssh -T "$H" "tmux rename-session -t '$(_huginn_tmux_target "$ro")' '$rn' && echo 'renamed: $ro -> $rn'" ;;
     kill)
       [ -n "$2" ] || { echo "usage: huginn kill <name>" >&2; return 1; }
+      _huginn_valid_name "$2" || { echo "huginn: invalid session name '$2' (use letters, digits, underscore; no - or *)" >&2; return 1; }
       local kn; kn="$(_huginn_canon_name "$2")"
-      ssh -T "$H" "tmux kill-session -t '$kn' && echo 'killed: $kn'" ;;
+      # '=' anchor: without it 'huginn kill andvari' kills 'andvariautofill'.
+      ssh -T "$H" "tmux kill-session -t '$(_huginn_tmux_target "$kn")' && echo 'killed: $kn'" ;;
     -p|-y)
       local mode="$1"; shift
       [ "$#" -gt 0 ] || { echo "usage: huginn $mode \"your prompt\"" >&2; return 1; }
