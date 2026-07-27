@@ -71,7 +71,9 @@ fun SessionControls(
                 onPick = { onCommand("/model $it") },
             )
             PickerChip(
-                label = effort?.replaceFirstChar { it.uppercase() } ?: "Effort",
+                // Reads as the current value, like the model and mode chips; the
+                // word "Effort" only appears when the session has not reported one.
+                label = prettyEffort(effort),
                 options = EFFORTS.map { it to it.replaceFirstChar { c -> c.uppercase() } },
                 onPick = { onCommand("/effort $it") },
             )
@@ -118,7 +120,7 @@ fun ChatOptionsBar(
                 onPick = onModel,
             )
             PickerChip(
-                label = effort?.replaceFirstChar { it.uppercase() } ?: "Default effort",
+                label = if (effort == null) "Default effort" else prettyEffort(effort),
                 options = EFFORTS.map { it to it.replaceFirstChar { c -> c.uppercase() } },
                 enabled = enabled,
                 onPick = onEffort,
@@ -165,6 +167,10 @@ private fun PickerChip(
         }
     }
 }
+
+/** `xhigh` reads as `Xhigh`; an unknown or missing level falls back to the word. */
+fun prettyEffort(effort: String?): String =
+    effort?.takeIf { it.isNotBlank() }?.replaceFirstChar { it.uppercase() } ?: "Effort"
 
 /**
  * Accepts either an API id (`claude-fable-5`) or the pane's display name
