@@ -52,6 +52,10 @@ fun SettingsScreen(
     connected: Boolean?,
     notifyEnabled: Boolean,
     onNotifyEnabled: (Boolean) -> Unit,
+    notificationsAllowed: Boolean,
+    onRequestNotifications: () -> Unit,
+    onOpenSystemNotificationSettings: () -> Unit,
+    onTestNotification: () -> Unit,
     account: Account?,
     savedAccounts: List<SavedAccount>,
     switching: Boolean,
@@ -232,6 +236,36 @@ fun SettingsScreen(
                 )
             }
             Switch(checked = notifyEnabled, onCheckedChange = onNotifyEnabled)
+        }
+
+        // Whether the system will actually deliver them is a separate question
+        // from whether this app wants to send them, and it is the one that
+        // silently makes notifications never arrive.
+        if (notifyEnabled) {
+            if (!notificationsAllowed) {
+                Text(
+                    "Android is blocking notifications for this app, so none will arrive.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.error,
+                )
+                Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Button(onClick = onRequestNotifications) { Text("Allow") }
+                    OutlinedButton(onClick = onOpenSystemNotificationSettings) { Text("System settings") }
+                }
+            } else {
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        "Allowed by Android.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.weight(1f),
+                    )
+                    OutlinedButton(onClick = onTestNotification) { Text("Send a test") }
+                }
+            }
         }
 
         Spacer(Modifier.height(8.dp))

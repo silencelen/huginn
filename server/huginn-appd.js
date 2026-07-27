@@ -24,13 +24,13 @@ const fs = require('node:fs');
 const path = require('node:path');
 const os = require('node:os');
 const { execFile, spawn } = require('node:child_process');
-const { screenHash, previewLines, detectPrompt, extractLoginUrl } = require('./lib/pane');
+const { screenHash, previewLines, detectPrompt, extractLoginUrl, parseStatusLine } = require('./lib/pane');
 const { readTranscript } = require('./lib/transcript');
 const { summarizeUsage } = require('./lib/usage');
 const { normalizePlan } = require('./lib/plan');
 const { AccountStore } = require('./lib/accounts');
 
-const VERSION = '2.4.0';
+const VERSION = '2.5.0';
 const PORT = Number(process.env.HUGINN_APPD_PORT || 8787);
 const DATA_DIR = process.env.HUGINN_APPD_DATA || '/var/lib/huginn-appd';
 const TOKEN_FILE = process.env.HUGINN_APPD_TOKEN_FILE || '/etc/huginn-appd/token';
@@ -173,7 +173,13 @@ async function listSessions({ preview = false } = {}) {
         } catch { /* transcript unreadable: not fatal for a list */ }
       }
       const cap = await run('tmux', ['capture-pane', '-p', '-t', `=${r.name}:`]);
-      if (!cap.err) r.preview = previewLines(cap.stdout.replace(/\n$/, '').split('\n'), 2);
+      if (!cap.err) {
+        const paneLines = cap.stdout.replace(/\n$/, '').split('\n');
+        r.preview = previewLines(paneLines, 2);
+        const st = parseStatusLine(paneLines);
+        r.liveModel = st.model;
+        r.liveMode = st.mode;
+      }
     }));
   }
 
@@ -368,6 +374,11 @@ async function captureScreen(name, { cols = null, rows = null, history = 0, forc
     scrollback,
     hash: screenHash(lines.join('\n') + `|${cx},${cy}`),
     prompt: detectPrompt(lines),
+    // The pane is the only CURRENT source for these; the transcript lags a turn.
+    ...(() => {
+      const st = parseStatusLine(lines);
+      return { liveModel: st.model, liveMode: st.mode, liveBranch: st.branch };
+    })(),
   };
 }
 

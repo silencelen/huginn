@@ -1,5 +1,31 @@
 # Huginn changelog
 
+## 2.5.0 — 2026-07-27
+
+### Fixed: slash commands looked like garbled messages you sent
+Running a command like `/model fable` writes three separate records: a caveat
+aimed at the model, the command wrapped in tags, and the command's output. All
+three were rendered as things you had said, tag markup and all. Now the caveat is
+dropped, the command shows as `/model fable`, and its output shows as a short
+note with terminal colour codes stripped. A record that mixes plumbing with real
+text keeps the real text, so a message can never be swallowed.
+
+### Fixed: the model button did nothing visible
+The model and mode came from the transcript, which reports what the **last
+completed turn** used — so after changing the model, the control kept showing the
+old one until the next turn happened. Both are now read from the session's status
+line, which is current, and the change also appears in the conversation as the
+command that ran.
+
+### Notifications you can actually verify
+- Settings now shows whether **Android** is allowing notifications, which is a
+  separate question from whether the app wants to send them and the usual reason
+  none arrive.
+- **Allow** requests the permission, **System settings** opens the right page, and
+  **Send a test** posts one through the same code path the real alerts use.
+- The permission state is re-checked whenever the app comes back to the
+  foreground, so turning it on in system settings is reflected immediately.
+
 ## 2.4.0 — 2026-07-27
 
 ### Multiple accounts, switchable when a plan runs out

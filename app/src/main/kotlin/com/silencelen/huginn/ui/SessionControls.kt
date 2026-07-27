@@ -120,10 +120,14 @@ private fun PickerChip(
     }
 }
 
-/** `claude-fable-5` reads better as `Fable`. */
+/**
+ * Accepts either an API id (`claude-fable-5`) or the pane's display name
+ * (`Fable 5`), since the two sources give different forms of the same thing.
+ */
 fun prettyModel(model: String?): String {
     if (model.isNullOrBlank()) return "Model"
-    val m = model.removePrefix("claude-")
-    return MODELS.firstOrNull { m.startsWith(it.first) }?.second
-        ?: m.substringBefore('-').replaceFirstChar { it.uppercase() }
+    val m = model.removePrefix("claude-").lowercase()
+    MODELS.firstOrNull { m.startsWith(it.first) }?.let { return it.second }
+    // A display name already reads well; keep it as-is, trimmed of a version tail.
+    return model.trim().takeIf { it.isNotEmpty() } ?: "Model"
 }
