@@ -105,3 +105,48 @@ test('detectPrompt reads through ANSI colouring', () => {
   assert.strictEqual(p.options.length, 2);
   assert.strictEqual(p.options[0].label, 'Yes');
 });
+
+test('detectPrompt REJECTS an assistant answer ending in a numbered list', () => {
+  // Regression: this matched every "strict" rule in 2.0.0 and produced fake
+  // buttons; tapping one types a digit into Claude's composer.
+  const lines = [
+    '● Here is what I would do next:',
+    '  1. Rotate the B2 keys',
+    '  2. Re-run the audit',
+    '  3. Push the mirror',
+    '',
+    '────────────────────────────────────────',
+    '❯ ',
+    '────────────────────────────────────────',
+    '  [andrev] Opus 5 · main',
+    '  ⏵⏵ auto mode on (shift+tab to cycle)',
+  ];
+  assert.strictEqual(detectPrompt(lines), null);
+});
+
+test('detectPrompt REJECTS a numbered list with no selection caret', () => {
+  assert.strictEqual(detectPrompt(['Options:', '  1. a', '  2. b']), null);
+});
+
+test('detectPrompt REJECTS a run with two carets (not a live single selection)', () => {
+  assert.strictEqual(detectPrompt(['Pick:', '❯ 1. a', '❯ 2. b']), null);
+});
+
+test('detectPrompt accepts the real captured prompt verbatim', () => {
+  // Verbatim from a live permission prompt on huginn, 2026-07-27.
+  const lines = [
+    ' Create file',
+    ' …/scratchpad/permtest.txt',
+    '   1 ok',
+    ' Do you want to create permtest.txt?',
+    ' ❯ 1. Yes',
+    '   2. Yes, allow all edits in scratchpad/ during this session (shift+tab)',
+    '   3. No',
+    ' Esc to cancel · Tab to amend',
+  ];
+  const p = detectPrompt(lines);
+  assert.ok(p, 'the real prompt must still be detected');
+  assert.strictEqual(p.question, 'Do you want to create permtest.txt?');
+  assert.strictEqual(p.options.length, 3);
+  assert.strictEqual(p.options[0].selected, true);
+});

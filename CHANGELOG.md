@@ -1,5 +1,36 @@
 # Huginn changelog
 
+## 2.0.1 — 2026-07-27
+
+Fixes from a review of the 2.0.0 changes, most of them in the pane-resize path.
+
+- **A leased pane could be stranded at phone size permanently.** `window-size`
+  is a per-window option, and the lease targeted "the session's current window".
+  Opening or switching to another window (prefix+c) after a lease was taken left
+  the original window at `manual` with every release path — expiry, leaving the
+  screen, shutdown, and the startup sweep — silently missing it, because
+  `list-sessions` only reports each session's *active* window. Leases now record
+  the concrete window id and act on it, and the sweep enumerates every window.
+  This was the exact failure the lease design existed to prevent.
+- **Opening any session resized it**, even when the Screen tab was never opened,
+  because the last session's geometry was never cleared.
+- **"Fit anyway" was sticky.** It kept re-sending on every poll, renewing the
+  lease indefinitely, so its 90-second expiry could never fire. It is now a
+  single shot.
+- **Polling no longer runs while the app is backgrounded**, so a backgrounded app
+  can no longer hold a laptop's window at phone geometry.
+- **Permission-prompt detection no longer fires on an ordinary numbered list.**
+  An assistant answer ending in "1. … 2. … 3. …" matched every rule and produced
+  fake buttons, and tapping one typed a digit into Claude's composer. Detection
+  now requires the live selection caret and refuses a run with the composer
+  below it.
+- **The parked long poll costs far less on huginn**: one tmux process per tick
+  instead of three, at a slower tick, measured against an idle baseline.
+- **A dead socket no longer freezes the screen forever** — screen polls have a
+  bounded read and call timeout, so the retry/backoff path can actually run.
+- Transcript events are capped in memory instead of growing without limit, and a
+  non-numeric `offset` is rejected rather than returning an undecodable response.
+
 ## 2.0.0 — 2026-07-27
 
 A development pass on how sessions are shown. v1 rendered a tmux session by
@@ -29,7 +60,7 @@ keeps the pane for the things only a live pane can do.
   output to fit the phone. The resize is a lease that expires and is released on
   exit, on a crash, and on daemon restart, so a laptop attaching later is never
   left with a shrunken window. If another client is attached the resize is
-  refused, with a "Fit anyway" override.
+  refused, with a "Fit anyway" override. (2.0.0 had a hole in this; see 2.0.1.)
 - Pinch to zoom; the column count follows the text size.
 - OSC 8 hyperlinks (which Claude Code wraps around file paths) are consumed
   instead of dumping raw URLs into the text.
