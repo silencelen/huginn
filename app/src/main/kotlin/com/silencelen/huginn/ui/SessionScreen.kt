@@ -73,6 +73,14 @@ fun SessionScreen(
             Tab(selected = tab == 0, onClick = { onTab(0) }, text = { Text("Conversation") })
             Tab(selected = tab == 1, onClick = { onTab(1) }, text = { Text("Screen") })
         }
+        SessionControls(
+            model = transcript?.model,
+            effort = transcript?.effort,
+            permissionMode = transcript?.permissionMode,
+            // Slash commands go in as a submitted line, exactly as typed by hand.
+            onCommand = { onSendText(it, true) },
+            onCycleMode = { onSendKeys(listOf("BTab")) },
+        )
         Box(Modifier.weight(1f)) {
             if (tab == 0) {
                 SessionConversation(

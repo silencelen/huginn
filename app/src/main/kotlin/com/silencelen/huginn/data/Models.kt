@@ -111,6 +111,8 @@ data class TranscriptEvent(
     val detail: String? = null,
     val result: String? = null,
     val ok: Boolean? = null,
+    /** Typed while Claude was busy: sitting in the queue, not yet delivered. */
+    val queued: Boolean = false,
 )
 
 @Serializable
@@ -123,6 +125,8 @@ data class TranscriptPage(
     val model: String? = null,
     val gitBranch: String? = null,
     val cwd: String? = null,
+    /** Effort level Claude Code stamped on the last assistant turn. */
+    val effort: String? = null,
     val lastActivityTs: Long? = null,
     val state: String? = null,
     val claudeSessionId: String? = null,
@@ -279,3 +283,20 @@ data class Plan(
     val fetchedAt: Long? = null,
     val error: String? = null,
 )
+
+/** A saved login this host can switch to. */
+@Serializable
+data class SavedAccount(
+    val slug: String,
+    val email: String? = null,
+    val orgName: String? = null,
+    val savedAt: Long? = null,
+    val isActive: Boolean = false,
+    val subscriptionType: String? = null,
+    /** Weekly all-models utilization, when it could be read for this account. */
+    val weeklyPercent: Double? = null,
+    val sessionPercent: Double? = null,
+)
+
+@Serializable
+data class SavedAccounts(val accounts: List<SavedAccount> = emptyList())
