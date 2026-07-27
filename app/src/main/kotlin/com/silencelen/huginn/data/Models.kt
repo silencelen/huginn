@@ -140,6 +140,7 @@ data class TranscriptPage(
     val claudeSessionId: String? = null,
     val running: Boolean = false,
     val mode: String? = null,
+    val pending: Int = 0,
 )
 
 @Serializable
@@ -155,6 +156,8 @@ data class Chat(
     val lastSnippet: String? = null,
     val turns: Int = 0,
     val running: Boolean = false,
+    /** Messages waiting for the current run to finish. */
+    val pending: Int = 0,
 )
 
 @Serializable

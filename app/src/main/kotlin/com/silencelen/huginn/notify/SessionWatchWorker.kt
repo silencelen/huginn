@@ -65,6 +65,22 @@ class SessionWatchWorker(
         if (fresh.isNotEmpty()) notify(fresh.toList(), sessions.size)
         if (needing != alreadyNotified) settings.setNotifiedSessions(needing)
 
+        // A chat that WAS running and is not any more has finished. Comparing
+        // against the previous observation is the only way to see that without a
+        // push channel, so the previous set is persisted rather than remembered.
+        val chats = runCatching { client.chats() }.getOrNull()
+        if (chats != null) {
+            val runningNow = chats.filter { it.running }.map { it.id }.toSet()
+            val wasRunning = settings.runningChats.first()
+            val finished = chats.filter { it.id in wasRunning && !it.running }
+            if (finished.isNotEmpty()) {
+                val title = if (finished.size == 1) "Chat finished" else "${finished.size} chats finished"
+                val text = finished.firstOrNull()?.title?.take(80) ?: "huginn has answered"
+                post(context, title, text, null)
+            }
+            if (runningNow != wasRunning) settings.setRunningChats(runningNow)
+        }
+
         return Result.success()
     }
 
