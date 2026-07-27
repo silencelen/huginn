@@ -7,6 +7,7 @@ import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.os.Build
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
 import androidx.core.content.ContextCompat
@@ -68,40 +69,9 @@ class SessionWatchWorker(
     }
 
     private fun notify(names: List<String>, total: Int) {
-        if (ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS)
-            != PackageManager.PERMISSION_GRANTED
-        ) return
-
-        val nm = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-        nm.createNotificationChannel(
-            NotificationChannel(CHANNEL, "Sessions needing you", NotificationManager.IMPORTANCE_DEFAULT).apply {
-                description = "A Claude Code session on huginn is waiting for an answer"
-            }
-        )
-
-        val intent = Intent(context, MainActivity::class.java).apply {
-            flags = Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
-            putExtra(EXTRA_SESSION, names.first())
-        }
-        val pending = PendingIntent.getActivity(
-            context, 0, intent,
-            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
-        )
-
         val title = if (names.size == 1) "${names.first()} needs you" else "${names.size} sessions need you"
-        val text = if (names.size == 1) "Waiting for your answer on huginn"
-        else names.joinToString(", ")
-
-        val n = NotificationCompat.Builder(context, CHANNEL)
-            .setSmallIcon(R.drawable.ic_stat_huginn)
-            .setContentTitle(title)
-            .setContentText(text)
-            .setAutoCancel(true)
-            .setContentIntent(pending)
-            .setPriority(NotificationCompat.PRIORITY_DEFAULT)
-            .build()
-
-        NotificationManagerCompat.from(context).notify(NOTIFY_ID, n)
+        val text = if (names.size == 1) "Waiting for your answer on huginn" else names.joinToString(", ")
+        post(context, title, text, names.first())
     }
 
     companion object {
@@ -125,6 +95,46 @@ class SessionWatchWorker(
 
         fun cancel(context: Context) {
             WorkManager.getInstance(context).cancelUniqueWork(WORK)
+        }
+
+        /** True when the system will actually deliver what we post. */
+        fun canNotify(context: Context): Boolean {
+            val granted = Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU ||
+                ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) ==
+                PackageManager.PERMISSION_GRANTED
+            return granted && NotificationManagerCompat.from(context).areNotificationsEnabled()
+        }
+
+        /**
+         * Posts a notification, creating the channel first. Shared by the poller
+         * and by the test button in Settings, so what you verify is the same path
+         * that fires for real.
+         */
+        fun post(context: Context, title: String, text: String, session: String?) {
+            if (!canNotify(context)) return
+            val nm = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+            nm.createNotificationChannel(
+                NotificationChannel(CHANNEL, "Sessions needing you", NotificationManager.IMPORTANCE_DEFAULT).apply {
+                    description = "A Claude Code session on huginn is waiting for an answer"
+                }
+            )
+            val intent = Intent(context, MainActivity::class.java).apply {
+                flags = Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
+                if (session != null) putExtra(EXTRA_SESSION, session)
+            }
+            val pending = PendingIntent.getActivity(
+                context, 0, intent,
+                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+            )
+            val n = NotificationCompat.Builder(context, CHANNEL)
+                .setSmallIcon(R.drawable.ic_stat_huginn)
+                .setContentTitle(title)
+                .setContentText(text)
+                .setAutoCancel(true)
+                .setContentIntent(pending)
+                .setPriority(NotificationCompat.PRIORITY_DEFAULT)
+                .build()
+            NotificationManagerCompat.from(context).notify(NOTIFY_ID, n)
         }
     }
 }

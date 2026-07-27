@@ -237,3 +237,77 @@ test('a user record duplicating an already-queued message is not shown twice', (
   ]);
   assert.strictEqual(readTranscript(p).events.length, 1);
 });
+
+test('a slash command renders as the command, not as three garbled messages', () => {
+  // Running /model writes THREE user records: a caveat, the tagged command, and
+  // its stdout. Shown verbatim they looked like messages the user never sent.
+  const p = writeFixture([
+    { type: 'user', timestamp: T, message: { content: '<local-command-caveat>Caveat: DO NOT respond to these.</local-command-caveat>' } },
+    { type: 'user', timestamp: T, message: { content: '<command-name>/model</command-name>\n  <command-message>model</command-message>\n  <command-args>fable</command-args>' } },
+    { type: 'user', timestamp: T, message: { content: '<local-command-stdout>Set model to \u001B[1mFable 5\u001B[22m and saved as your default</local-command-stdout>' } },
+  ]);
+  const r = readTranscript(p);
+  assert.deepStrictEqual(r.events.map((e) => e.kind), ['command', 'command_result']);
+  assert.strictEqual(r.events[0].text, '/model fable');
+  assert.strictEqual(
+    r.events[1].text,
+    'Set model to Fable 5 and saved as your default',
+    'ANSI must be stripped from command output',
+  );
+});
+
+test('a command with no arguments still renders', () => {
+  const p = writeFixture([
+    { type: 'user', timestamp: T, message: { content: '<command-name>/clear</command-name>' } },
+  ]);
+  assert.strictEqual(readTranscript(p).events[0].text, '/clear');
+});
+
+test('empty command stdout shows nothing at all', () => {
+  const p = writeFixture([
+    { type: 'user', timestamp: T, message: { content: '<local-command-stdout></local-command-stdout>' } },
+  ]);
+  assert.deepStrictEqual(readTranscript(p).events, []);
+});
+
+test('a queued slash command is described, not shown as a user bubble', () => {
+  const p = writeFixture([
+    { type: 'queue-operation', operation: 'enqueue', timestamp: T, content: '<command-name>/effort</command-name><command-args>max</command-args>' },
+  ]);
+  const r = readTranscript(p);
+  assert.strictEqual(r.events[0].kind, 'command');
+  assert.strictEqual(r.events[0].text, '/effort max');
+});
+
+test('a real message concatenated with command plumbing is never swallowed', () => {
+  // Defensive: if the caveat block and the user's own text ever arrive in one
+  // record, losing the message would be the worst outcome this reader can have.
+  const p = writeFixture([
+    {
+      type: 'user', timestamp: T,
+      message: {
+        content: '<local-command-caveat>Caveat: ignore this.</local-command-caveat>\n' +
+          'please also fix the notification permission prompt',
+      },
+    },
+  ]);
+  const r = readTranscript(p);
+  const user = r.events.filter((e) => e.kind === 'user');
+  assert.strictEqual(user.length, 1);
+  assert.strictEqual(user[0].text, 'please also fix the notification permission prompt');
+});
+
+test('tag debris alone does not become a message', () => {
+  const p = writeFixture([
+    { type: 'user', timestamp: T, message: { content: '<local-command-caveat>x</local-command-caveat>' } },
+  ]);
+  assert.deepStrictEqual(readTranscript(p).events, []);
+});
+
+test('a message that merely mentions a tag is left alone', () => {
+  const text = 'im seeing odd <local-command-caveat> messages in the conversation tab';
+  const p = writeFixture([{ type: 'user', timestamp: T, message: { content: text } }]);
+  const r = readTranscript(p);
+  assert.strictEqual(r.events[0].kind, 'user');
+  assert.strictEqual(r.events[0].text, text);
+});

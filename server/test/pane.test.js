@@ -6,7 +6,7 @@
 
 const { test } = require('node:test');
 const assert = require('node:assert');
-const { screenHash, stripAnsi, previewLines, detectPrompt, extractLoginUrl } = require('../lib/pane');
+const { screenHash, stripAnsi, previewLines, detectPrompt, extractLoginUrl, parseStatusLine } = require('../lib/pane');
 
 const ESC = '\u001B';
 const BEL = '\u0007';
@@ -182,4 +182,34 @@ test('extractLoginUrl rejoins a wrapped URL when there is no hyperlink', () => {
 
 test('extractLoginUrl returns null on a pane with no URL', () => {
   assert.strictEqual(extractLoginUrl(['just a shell prompt $ ', '']), null);
+});
+
+test('parseStatusLine reads the live model, branch and mode', () => {
+  // Verbatim status lines from live panes.
+  const lines = [
+    '\u25cf some output',
+    '\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500',
+    '\u276f ',
+    '  [andrev] Opus 5 \u00b7 main \u00b7 \u26a0 3 sessions in this tree',
+    '  \u23f5\u23f5 auto mode on (shift+tab to cycle) \u00b7 \u2190 for agents',
+  ];
+  const st = parseStatusLine(lines);
+  assert.strictEqual(st.model, 'Opus 5');
+  assert.strictEqual(st.branch, 'main');
+  assert.strictEqual(st.mode, 'auto');
+});
+
+test('parseStatusLine reads manual mode and a model with no extras', () => {
+  const st = parseStatusLine([
+    '  [promptprobe] Fable 5 \u00b7 main',
+    '  \u23f8 manual mode on \u00b7 \u2190 for agents',
+  ]);
+  assert.strictEqual(st.model, 'Fable 5');
+  assert.strictEqual(st.mode, 'manual');
+});
+
+test('parseStatusLine returns nulls rather than guessing on an unrelated pane', () => {
+  const st = parseStatusLine(['$ ls -la', 'total 4', '']);
+  assert.strictEqual(st.model, null);
+  assert.strictEqual(st.mode, null);
 });

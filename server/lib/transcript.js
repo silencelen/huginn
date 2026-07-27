@@ -34,14 +34,63 @@ function digestToolInput(input, limit = 400) {
  * rather than a message bubble.
  */
 function machineText(s) {
-  return /^\s*<(task-notification|system-reminder|command-name|local-command)/.test(s);
+  return /^\s*<(task-notification|system-reminder|command-name|command-message|command-args|local-command)/.test(s);
 }
 
-function machineLabel(s) {
-  if (/^\s*<task-notification/.test(s)) return 'background task reported back';
-  if (/^\s*<system-reminder/.test(s)) return 'system reminder';
-  return 'injected input';
+/**
+ * Turns Claude Code's slash-command bookkeeping into something worth reading, or
+ * into nothing.
+ *
+ * Running `/model fable` writes THREE separate `user` records: a caveat telling
+ * the model to ignore what follows, the command itself wrapped in tags, and the
+ * command's stdout. Rendered verbatim they look like three garbled messages the
+ * user never sent — which is exactly how it looked in the app.
+ *
+ * @returns {{kind: string, text: string}|null} null means "show nothing"
+ */
+function describeMachineText(s) {
+  // Pure plumbing aimed at the model, not at a reader.
+  if (/^\s*<local-command-caveat/.test(s)) return null;
+  if (/^\s*<system-reminder/.test(s)) return null;
+
+  const cmd = /<command-name>\s*([^<]+?)\s*<\/command-name>/.exec(s);
+  if (cmd) {
+    const args = /<command-args>\s*([^<]*?)\s*<\/command-args>/.exec(s);
+    const text = args && args[1] ? `${cmd[1]} ${args[1]}` : cmd[1];
+    return { kind: 'command', text: text.trim() };
+  }
+
+  const out = /<local-command-stdout>([\s\S]*?)<\/local-command-stdout>/.exec(s);
+  if (out) {
+    const body = stripAnsiText(out[1]).trim();
+    return body ? { kind: 'command_result', text: clip(body, 300) } : null;
+  }
+
+  if (/^\s*<task-notification/.test(s)) {
+    return { kind: 'system', text: 'background task reported back' };
+  }
+  return { kind: 'system', text: 'injected input' };
 }
+
+/**
+ * Whatever the user actually wrote in a record that also carries command
+ * plumbing. Dropping a record wholesale because it STARTS with a machine tag
+ * would silently swallow a real message if the two were ever concatenated —
+ * the worst failure this file can have, and cheap to rule out.
+ */
+function humanRemainder(s) {
+  const stripped = String(s)
+    .replace(/<local-command-caveat>[\s\S]*?<\/local-command-caveat>/g, '')
+    .replace(/<local-command-stdout>[\s\S]*?<\/local-command-stdout>/g, '')
+    .replace(/<command-(name|message|args)>[\s\S]*?<\/command-\1>/g, '')
+    .replace(/<\/?(task-notification|system-reminder)[^>]*>/g, '')
+    .trim();
+  // Short leftovers are tag debris, not prose.
+  return stripped.length >= 12 ? stripped : '';
+}
+
+const ESC_RE = /\u001B\[[0-9;?]*[a-zA-Z]/g;
+function stripAnsiText(s) { return String(s).replace(ESC_RE, ''); }
 
 function clip(s, n) {
   s = String(s);
@@ -147,9 +196,14 @@ function readTranscript(path, { offset = null, limit = 400 } = {}) {
         const content = typeof d.content === 'string' ? d.content : '';
         if (d.operation === 'enqueue') {
           if (!content.trim()) continue;
-          const ev = machineText(content)
-            ? { seq: ++seq, kind: 'system', ts, sidechain, text: machineLabel(content) }
-            : { seq: ++seq, kind: 'user', ts, sidechain, text: content, queued: true };
+          let ev;
+          if (machineText(content)) {
+            const d2 = describeMachineText(content);
+            if (!d2) continue;
+            ev = { seq: ++seq, kind: d2.kind, ts, sidechain, text: d2.text };
+          } else {
+            ev = { seq: ++seq, kind: 'user', ts, sidechain, text: content, queued: true };
+          }
           out.events.push(ev);
           if (ev.kind === 'user') queued.set(content, ev);
         } else if (d.operation === 'remove') {
@@ -193,9 +247,17 @@ function readTranscript(path, { offset = null, limit = 400 } = {}) {
           }
         }
         const t = textOf(c);
-        if (t.trim() && !queued.has(t)) {
-          out.events.push({ seq: ++seq, kind: 'user', ts, sidechain, text: t });
+        if (!t.trim() || queued.has(t)) continue;
+        if (machineText(t)) {
+          // Slash-command bookkeeping arrives as ordinary user records.
+          const d2 = describeMachineText(t);
+          if (d2) out.events.push({ seq: ++seq, kind: d2.kind, ts, sidechain, text: d2.text });
+          // ...and if a human wrote something in the same record, show that too.
+          const rest = humanRemainder(t);
+          if (rest) out.events.push({ seq: ++seq, kind: 'user', ts, sidechain, text: rest });
+          continue;
         }
+        out.events.push({ seq: ++seq, kind: 'user', ts, sidechain, text: t });
         continue;
       }
       case 'assistant': {

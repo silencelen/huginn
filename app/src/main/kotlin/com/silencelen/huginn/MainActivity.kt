@@ -3,6 +3,7 @@ package com.silencelen.huginn
 import android.Manifest
 import android.content.Intent
 import android.net.Uri
+import android.provider.Settings
 import android.os.Build
 import android.os.Bundle
 import androidx.activity.ComponentActivity
@@ -44,7 +45,10 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LifecycleStartEffect
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.silencelen.huginn.notify.SessionWatchWorker
 import com.silencelen.huginn.ui.ChatScreen
@@ -135,13 +139,29 @@ fun HuginnApp(
         }
     }
 
+    // Re-checked on every resume, because the answer can change in system
+    // settings while the app is in the background.
+    var notificationsAllowed by remember { mutableStateOf(SessionWatchWorker.canNotify(context)) }
     val notifPermission = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestPermission()
-    ) { /* declined simply means no notifications; nothing else changes */ }
-    LaunchedEffect(notifyEnabled) {
-        if (notifyEnabled && Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            notifPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
+    ) { notificationsAllowed = SessionWatchWorker.canNotify(context) }
+    val lifecycleOwner = LocalLifecycleOwner.current
+    DisposableEffect(lifecycleOwner) {
+        val obs = LifecycleEventObserver { _, e ->
+            if (e == Lifecycle.Event.ON_RESUME) notificationsAllowed = SessionWatchWorker.canNotify(context)
         }
+        lifecycleOwner.lifecycle.addObserver(obs)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(obs) }
+    }
+    val requestNotifications: () -> Unit = {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            notifPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
+        } else {
+            notificationsAllowed = SessionWatchWorker.canNotify(context)
+        }
+    }
+    LaunchedEffect(notifyEnabled) {
+        if (notifyEnabled && !SessionWatchWorker.canNotify(context)) requestNotifications()
     }
 
     val onTab: (Int) -> Unit = { i ->
@@ -327,6 +347,25 @@ fun HuginnApp(
                         connected = connected,
                         notifyEnabled = notifyEnabled,
                         onNotifyEnabled = { vm.setNotifyEnabled(it) },
+                        notificationsAllowed = notificationsAllowed,
+                        onRequestNotifications = requestNotifications,
+                        onOpenSystemNotificationSettings = {
+                            runCatching {
+                                context.startActivity(
+                                    Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS)
+                                        .putExtra(Settings.EXTRA_APP_PACKAGE, context.packageName)
+                                        .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                                )
+                            }
+                        },
+                        onTestNotification = {
+                            SessionWatchWorker.post(
+                                context,
+                                "Notifications are working",
+                                "This is what a session needing you will look like.",
+                                null,
+                            )
+                        },
                         account = account,
                         savedAccounts = savedAccounts,
                         switching = switching,
