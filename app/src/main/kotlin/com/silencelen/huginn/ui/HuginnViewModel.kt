@@ -695,13 +695,34 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
+    /**
+     * Sends, or queues if a run is already going: the server holds it and
+     * delivers when that run ends, so the composer never dead-ends the way it
+     * used to when a chat was busy.
+     */
     fun send(id: String, text: String) {
-        if (_sending.value) return
         clearDraft(chatDraftKey(id))
+        if (_sending.value) {
+            viewModelScope.launch {
+                runCatching { client.queueMessage(id, text) }
+                    .onSuccess { loadChatTranscript(id); refreshChats() }
+                    .onFailure { _toast.value = errText(it) }
+            }
+            return
+        }
         _sending.value = true
         _streamingText.value = ""
         _activeTool.value = null
         collect(id, client.sendMessage(id, text))
+    }
+
+    /** Interrupts a running session the way Esc does at the keyboard. */
+    fun interruptSession(name: String) {
+        viewModelScope.launch {
+            runCatching { client.sendKeys(name, keys = listOf("Escape")) }
+                .onSuccess { _toast.value = "Sent Esc to $name" }
+                .onFailure { _toast.value = errText(it) }
+        }
     }
 
     fun cancel(id: String) {

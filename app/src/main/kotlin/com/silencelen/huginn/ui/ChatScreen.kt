@@ -209,12 +209,19 @@ private fun Composer(
                 value = draft,
                 onValueChange = onDraft,
                 modifier = Modifier.weight(1f),
-                placeholder = { Text(if (mode == "act") "Ask huginn to do something" else "Ask huginn") },
+                placeholder = {
+                    Text(
+                        if (sending) "Send anyway, it will queue"
+                        else if (mode == "act") "Ask huginn to do something"
+                        else "Ask huginn"
+                    )
+                },
                 maxLines = 6,
                 shape = RoundedCornerShape(20.dp),
             )
             Spacer(Modifier.width(6.dp))
-            if (sending) {
+            if (sending && draft.isBlank()) {
+                // Nothing typed: the useful action on a running turn is to stop it.
                 IconButton(
                     onClick = onCancel,
                     modifier = Modifier

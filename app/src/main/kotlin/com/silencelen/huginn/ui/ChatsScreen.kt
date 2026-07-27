@@ -163,6 +163,13 @@ private fun ChatRow(chat: Chat, onOpen: () -> Unit, onDelete: () -> Unit) {
         Column(horizontalAlignment = Alignment.End) {
             if (chat.running) {
                 CircularProgressIndicator(modifier = Modifier.size(14.dp), strokeWidth = 2.dp)
+                if (chat.pending > 0) {
+                    Text(
+                        "+${chat.pending} queued",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
             } else {
                 Text(
                     relTime(chat.updatedAt),

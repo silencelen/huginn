@@ -17,6 +17,7 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.KeyboardReturn
+import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -73,7 +74,9 @@ fun SessionScreen(
     onSendKeys: (List<String>) -> Unit,
     onAnswerPrompt: (Int) -> Unit,
     onForceResize: () -> Unit,
+    onInterrupt: () -> Unit,
     onCopy: (String) -> Unit,
+    working: Boolean,
 ) {
     Column(Modifier.fillMaxSize()) {
         TabRow(selectedTabIndex = tab) {
@@ -104,6 +107,8 @@ fun SessionScreen(
                     onDraft = onDraft,
                     onSendText = onSendText,
                     onAnswerPrompt = onAnswerPrompt,
+                    onInterrupt = onInterrupt,
+                    working = working,
                     onCopy = onCopy,
                 )
             } else {
@@ -138,6 +143,8 @@ private fun SessionConversation(
     onDraft: (String) -> Unit,
     onSendText: (String, Boolean) -> Unit,
     onAnswerPrompt: (Int) -> Unit,
+    onInterrupt: () -> Unit,
+    working: Boolean,
     onCopy: (String) -> Unit,
 ) {
     val scope = rememberCoroutineScope()
@@ -220,6 +227,17 @@ private fun SessionConversation(
                     shape = RoundedCornerShape(20.dp),
                 )
                 Spacer(Modifier.width(6.dp))
+                // Esc is how you stop Claude at the keyboard; with nothing typed
+                // that is the action this composer should offer.
+                if (working && draft.isBlank()) {
+                    IconButton(onClick = onInterrupt, modifier = Modifier.size(46.dp)) {
+                        Icon(
+                            Icons.Filled.Stop,
+                            contentDescription = "Interrupt with Esc",
+                            tint = MaterialTheme.colorScheme.error,
+                        )
+                    }
+                }
                 IconButton(
                     onClick = { if (draft.isNotBlank()) onSendText(draft, true) },
                     enabled = draft.isNotBlank(),

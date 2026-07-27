@@ -35,7 +35,7 @@ android {
         // devstore fleet convention. HUGINN_VERSIONCODE overrides for pinned builds.
         versionCode   = System.getenv("HUGINN_VERSIONCODE")?.toIntOrNull()
             ?: (System.currentTimeMillis() / 1000L - 1_767_225_600L).toInt()
-        versionName   = "2.8.1"
+        versionName   = "2.9.0"
 
         // Single-ABI for smaller APK; phone is arm64-v8a.
         ndk { abiFilters += listOf("arm64-v8a") }
