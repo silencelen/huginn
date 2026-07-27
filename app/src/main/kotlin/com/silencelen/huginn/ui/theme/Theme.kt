@@ -6,6 +6,8 @@ import androidx.compose.material3.Typography
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
@@ -58,6 +60,47 @@ private val LightColors = lightColorScheme(
     error = Color(0xFFB3261E),
 )
 
+/**
+ * Syntax colours. Restrained on purpose: five hues that sit inside the app's warm
+ * palette rather than a rainbow, chosen so the classes that carry meaning
+ * (comment, string, keyword, number) separate at a glance without the code block
+ * turning into decoration.
+ */
+data class SyntaxColors(
+    val keyword: Color,
+    val string: Color,
+    val number: Color,
+    val comment: Color,
+    val function: Color,
+    val meta: Color,
+    val added: Color,
+    val removed: Color,
+)
+
+val DarkSyntax = SyntaxColors(
+    keyword = Color(0xFFC495DC),
+    string = Color(0xFF8CCB7B),
+    number = Color(0xFFE3C169),
+    comment = Color(0xFF8A8177),
+    function = Color(0xFF7DAFEA),
+    meta = Color(0xFF6FC4C7),
+    added = Color(0xFF8CCB7B),
+    removed = Color(0xFFE8736D),
+)
+
+val LightSyntax = SyntaxColors(
+    keyword = Color(0xFF7A3E96),
+    string = Color(0xFF2F6B33),
+    number = Color(0xFF8A5A00),
+    comment = Color(0xFF7A7168),
+    function = Color(0xFF1F5FA8),
+    meta = Color(0xFF10666A),
+    added = Color(0xFF2F6B33),
+    removed = Color(0xFFB3261E),
+)
+
+val LocalSyntaxColors = staticCompositionLocalOf { DarkSyntax }
+
 /** Terminal + code text. FontFamily.Monospace resolves to the device mono face. */
 val MonoStyle = TextStyle(fontFamily = FontFamily.Monospace, fontSize = 11.sp, lineHeight = 14.sp)
 
@@ -68,9 +111,11 @@ fun HuginnTheme(
     darkTheme: Boolean = isSystemInDarkTheme(),
     content: @Composable () -> Unit,
 ) {
-    MaterialTheme(
-        colorScheme = if (darkTheme) DarkColors else LightColors,
-        typography = HuginnTypography,
-        content = content,
-    )
+    CompositionLocalProvider(LocalSyntaxColors provides if (darkTheme) DarkSyntax else LightSyntax) {
+        MaterialTheme(
+            colorScheme = if (darkTheme) DarkColors else LightColors,
+            typography = HuginnTypography,
+            content = content,
+        )
+    }
 }

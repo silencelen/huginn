@@ -1,5 +1,28 @@
 # Huginn changelog
 
+## 2.2.0 — 2026-07-27
+
+### Code is coloured now
+- Code blocks in a conversation are syntax highlighted, and so are the commands
+  on tool cards, which is where most of the code you actually read lives.
+- Shell, Kotlin/Java/JS/Python-ish, JSON, config and **diffs** — a diff colours
+  whole lines by their sign, so an Edit's result reads at a glance.
+- Five restrained hues that sit inside the app's palette rather than a rainbow,
+  with separate light and dark sets. The highlighter is a lexer, so a missed
+  keyword only ever costs a colour: the text always renders whole.
+
+### Plan usage, the same numbers as `/usage`
+- Settings now shows the real plan utilization Claude reports, not just token
+  volume: **current session**, **current week (all models)** and **current week
+  (per model)**, each with a bar and a "resets in 3h 12m" countdown.
+- The bar colours by headroom, since this is the number that actually stops work.
+- Extra-usage credits appear only when that feature is switched on for the
+  account, so a disabled 100%-used counter cannot alarm you for no reason.
+- Read on the host with its own credentials; the app is handed percentages and
+  reset times only, never a token.
+- Token counts (exact) and the list-price dollar estimate (labelled) are still
+  there, below the plan limits, under "Tokens".
+
 ## 2.1.0 — 2026-07-27
 
 From using it: two fixes you asked for, and account + usage in Settings.

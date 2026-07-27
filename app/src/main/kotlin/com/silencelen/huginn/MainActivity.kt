@@ -113,6 +113,7 @@ fun HuginnApp(
     val drafts by vm.drafts.collectAsState()
     val account by vm.account.collectAsState()
     val usage by vm.usage.collectAsState()
+    val plan by vm.plan.collectAsState()
     val loginUrl by vm.loginUrl.collectAsState()
 
     val snackbar = remember { SnackbarHostState() }
@@ -310,6 +311,7 @@ fun HuginnApp(
                 is Dest.Settings -> {
                     DisposableEffect(Unit) {
                         vm.refreshAccount()
+                        vm.refreshPlan()
                         vm.refreshUsage()
                         onDispose { vm.stopUsagePolling() }
                     }
@@ -320,6 +322,7 @@ fun HuginnApp(
                         notifyEnabled = notifyEnabled,
                         onNotifyEnabled = { vm.setNotifyEnabled(it) },
                         account = account,
+                        plan = plan,
                         usage = usage,
                         onSignIn = {
                             // The sign-in flow is interactive, so it runs in a real
