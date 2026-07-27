@@ -109,6 +109,9 @@ class HuginnClient(
 
     suspend fun usage(): Usage = decode(call(builder("/v1/usage").get().build()))
 
+    /** Plan utilization: the same numbers Claude Code's /usage shows. */
+    suspend fun plan(): Plan = decode(call(builder("/v1/plan").get().build()))
+
     // ---------------------------------------------------------- sessions
 
     /** @param preview include per-session titles and activity previews (costlier). */

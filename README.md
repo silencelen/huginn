@@ -44,12 +44,23 @@ detected and offered as tappable options in both views. Detection requires the
 live selection caret, so an assistant answer that merely ends in a numbered list
 does not produce buttons.
 
+**Code is coloured.** Code blocks and the commands on tool cards are syntax
+highlighted — shell, C-family, JSON, config and diffs (whole-line by sign, so an
+Edit's result reads at a glance). The highlighter is a lexer, so a missed keyword
+costs a colour and never the text.
+
 **Account and usage** live in Settings: which account huginn is signed in as,
 sign in / switch (the interactive flow runs in a `login` session and the URL is
 handed to the browser), sign out behind a confirmation that says it signs out the
-whole host, and token usage for today and the last week. Token counts are exact;
-the dollar figures are list-price estimates that run high on a Max plan and are
-labelled as such.
+whole host, and two different usage readings:
+
+- **Plan usage** — the same rows `/usage` prints (current session, current week
+  all-models, current week per-model), each with a bar and a reset countdown,
+  read from `/api/oauth/usage` with the host's own credentials. The app is handed
+  percentages only; the token never leaves the daemon.
+- **Tokens** — volume for today and the last week from ccusage. Counts are exact;
+  the dollar figures are list-price estimates that run high on a Max plan and are
+  labelled as a trend, not a bill.
 
 **Drafts persist.** An unsent message stays in its composer across navigation and
 app restarts, per session and per chat.
@@ -83,6 +94,7 @@ bytes in `/etc/huginn-appd/token` (0600), generated on first deploy.
 | POST | `/v1/account/login` | starts interactive sign-in in a `login` session; returns the URL |
 | POST | `/v1/account/logout` | needs `{confirm:"logout"}`; signs out the whole host |
 | GET | `/v1/usage` | cached ccusage summary (today + 7 days) |
+| GET | `/v1/plan` | plan utilization, the numbers Claude Code's `/usage` shows |
 | GET | `/v1/status` | uptime, load, disk, Claude version, MemPalace reachability |
 | GET | `/v1/sessions` | tmux sessions + hook state; `?preview=1` adds titles and activity previews |
 | POST | `/v1/sessions` | `{name}`; letters/digits/underscore, canonically lowercase |
