@@ -12,6 +12,7 @@ import com.silencelen.huginn.data.Account
 import com.silencelen.huginn.data.Chat
 import com.silencelen.huginn.data.ChatEvent
 import com.silencelen.huginn.data.HuginnClient
+import com.silencelen.huginn.data.ModelChoice
 import com.silencelen.huginn.data.Screen
 import com.silencelen.huginn.data.Session
 import com.silencelen.huginn.data.SettingsStore
@@ -78,6 +79,17 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
     private val _notifyEnabled = MutableStateFlow(true)
     val notifyEnabled: StateFlow<Boolean> = _notifyEnabled.asStateFlow()
 
+    /** Discovered on the host, so a `claude update` changes the menu, not the app. */
+    private val _models = MutableStateFlow<List<ModelChoice>>(emptyList())
+    val models: StateFlow<List<ModelChoice>> = _models.asStateFlow()
+
+    fun refreshModels() {
+        if (_models.value.isNotEmpty()) return
+        viewModelScope.launch {
+            runCatching { client.models() }.onSuccess { _models.value = it }
+        }
+    }
+
     /**
      * Unsent composer text per target. Held here rather than in the composable so
      * it survives navigating away, and written through to storage (debounced) so
@@ -114,6 +126,7 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
             _drafts.value = settings.drafts.first()
             if (tokenNow.isNotBlank()) {
                 refreshAll()
+                refreshModels()
                 if (_notifyEnabled.value) SessionWatchWorker.schedule(getApplication())
             }
         }

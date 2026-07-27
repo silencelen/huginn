@@ -96,6 +96,10 @@ class HuginnClient(
 
     suspend fun status(): Status = decode(call(builder("/v1/status").get().build()))
 
+    /** Models the installed CLI offers, so the picker cannot go stale. */
+    suspend fun models(): List<ModelChoice> =
+        decode<ModelList>(call(builder("/v1/models").get().build())).models
+
     // ------------------------------------------------- account + usage
 
     suspend fun account(): Account = decode(call(builder("/v1/account").get().build()))

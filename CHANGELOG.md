@@ -1,5 +1,26 @@
 # Huginn changelog
 
+## 2.8.1 — 2026-07-27
+
+### The model control names the version
+"Opus" is no longer enough to know what you are talking to, since Claude Code can
+be running Opus 5 or Opus 4.8. The control now reads **Opus 5**, **Opus 4.8**,
+**Fable 5**, **Sonnet 4.6** and so on, everywhere the model appears.
+
+The version was never actually missing: the pane's status line already says
+"Opus 5" and the transcript carries a full model id. The label was collapsing both
+to a family name. Ids are now formatted with their version by the host, so there
+is one implementation of that rule rather than one per surface.
+
+### And you can pick a specific version
+The model menu is **discovered from the installed CLI** rather than hardcoded, so
+it lists what that copy of Claude Code actually offers — currently Fable 5,
+Opus 5, Opus 4.8, Sonnet 5, Sonnet 4.6, Haiku 4.5 — and follows a `claude update`
+instead of going stale. Dated snapshots, `-fast` and `-v1` variants are left out
+so the menu stays a menu, and a named variant cannot appear as a second,
+indistinguishable entry. If discovery ever finds nothing, the family aliases,
+which always work, are used instead.
+
 ## 2.8.0 — 2026-07-27
 
 ### Fixed: adding a second account could lose the first one

@@ -38,6 +38,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import com.silencelen.huginn.data.ModelChoice
 import com.silencelen.huginn.data.Screen
 import kotlinx.coroutines.launch
 import com.silencelen.huginn.data.TranscriptPage
@@ -65,6 +66,7 @@ fun SessionScreen(
     fontScale: Float,
     onFontScale: (Float) -> Unit,
     onGeometry: (Int, Int) -> Unit,
+    models: List<ModelChoice>,
     draft: String,
     onDraft: (String) -> Unit,
     onSendText: (String, Boolean) -> Unit,
@@ -82,9 +84,11 @@ fun SessionScreen(
             // The pane reports the CURRENT model and mode; the transcript only
             // knows what the last completed turn used, so a just-issued /model
             // change would otherwise leave the control showing the old value.
-            model = screen?.liveModel ?: transcript?.model,
+            // Both of these carry a version; neither is a bare family name.
+            model = screen?.liveModel ?: transcript?.modelDisplay,
             effort = transcript?.effort,
             permissionMode = screen?.liveMode ?: transcript?.permissionMode,
+            models = models,
             // Slash commands go in as a submitted line, exactly as typed by hand.
             onCommand = { onSendText(it, true) },
             onCycleMode = { onSendKeys(listOf("BTab")) },
@@ -237,7 +241,8 @@ private fun SessionConversation(
 @Composable
 fun SessionSubtitle(page: TranscriptPage?, screen: Screen?) {
     val bits = buildList {
-        page?.model?.let { add(it.removePrefix("claude-").substringBeforeLast('-')) }
+        // The readable form, which keeps the version: "Opus 4.8", not "opus".
+        (page?.modelDisplay ?: page?.model)?.let { add(it) }
         page?.gitBranch?.let { add(it) }
         page?.permissionMode?.let { add("$it mode") }
         screen?.let { add("${it.width}x${it.height}") }

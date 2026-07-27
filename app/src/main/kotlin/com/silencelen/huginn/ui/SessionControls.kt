@@ -28,6 +28,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
+import com.silencelen.huginn.data.ModelChoice
 
 /**
  * Model / effort / permission-mode controls for a live session.
@@ -39,7 +40,8 @@ import androidx.compose.ui.unit.dp
  * separate control channel — which is also why the current values are read back
  * from the session's own transcript and pane rather than tracked here.
  */
-private val MODELS = listOf(
+/** Used only until the host's own list arrives, and if discovery ever fails. */
+private val FALLBACK_MODELS = listOf(
     "fable" to "Fable",
     "opus" to "Opus",
     "sonnet" to "Sonnet",
@@ -53,6 +55,7 @@ fun SessionControls(
     model: String?,
     effort: String?,
     permissionMode: String?,
+    models: List<ModelChoice>,
     onCommand: (String) -> Unit,
     onCycleMode: () -> Unit,
 ) {
@@ -67,7 +70,7 @@ fun SessionControls(
         ) {
             PickerChip(
                 label = prettyModel(model),
-                options = MODELS.map { it.first to it.second },
+                options = modelOptions(models),
                 onPick = { onCommand("/model $it") },
             )
             PickerChip(
@@ -100,6 +103,7 @@ fun ChatOptionsBar(
     mode: String,
     model: String?,
     effort: String?,
+    models: List<ModelChoice>,
     enabled: Boolean,
     onModel: (String) -> Unit,
     onEffort: (String) -> Unit,
@@ -115,7 +119,7 @@ fun ChatOptionsBar(
         ) {
             PickerChip(
                 label = if (model == null) "Default model" else prettyModel(model),
-                options = MODELS.map { it.first to it.second },
+                options = modelOptions(models),
                 enabled = enabled,
                 onPick = onModel,
             )
@@ -172,14 +176,19 @@ private fun PickerChip(
 fun prettyEffort(effort: String?): String =
     effort?.takeIf { it.isNotBlank() }?.replaceFirstChar { it.uppercase() } ?: "Effort"
 
+fun modelOptions(models: List<ModelChoice>): List<Pair<String, String>> =
+    if (models.isEmpty()) FALLBACK_MODELS else models.map { it.id to it.display }
+
 /**
- * Accepts either an API id (`claude-fable-5`) or the pane's display name
- * (`Fable 5`), since the two sources give different forms of the same thing.
+ * The label for the model control.
+ *
+ * Both sources already carry the version — the pane writes "Opus 5" and the
+ * server formats ids into "Opus 4.8" — so this must NOT collapse them to a
+ * family name. It used to, which is why the control said "Opus" when Claude Code
+ * can be running Opus 5 or Opus 4.8 and the difference matters.
  */
 fun prettyModel(model: String?): String {
-    if (model.isNullOrBlank()) return "Model"
-    val m = model.removePrefix("claude-").lowercase()
-    MODELS.firstOrNull { m.startsWith(it.first) }?.let { return it.second }
-    // A display name already reads well; keep it as-is, trimmed of a version tail.
-    return model.trim().takeIf { it.isNotEmpty() } ?: "Model"
+    val m = model?.trim()
+    if (m.isNullOrEmpty()) return "Model"
+    return m
 }
