@@ -53,6 +53,8 @@ data class Session(
     val permissionMode: String? = null,
     /** Last couple of meaningful pane lines: what this session is doing now. */
     val preview: List<String> = emptyList(),
+    val liveModel: String? = null,
+    val liveMode: String? = null,
 )
 
 @Serializable
@@ -91,6 +93,10 @@ data class Screen(
     /** Set when a long poll expired with no change; `lines` is then empty. */
     val unchanged: Boolean = false,
     val prompt: PanePrompt? = null,
+    /** Model/mode as the pane reports them right now (the transcript lags a turn). */
+    val liveModel: String? = null,
+    val liveMode: String? = null,
+    val liveBranch: String? = null,
 )
 
 /**

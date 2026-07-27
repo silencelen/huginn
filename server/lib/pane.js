@@ -142,6 +142,41 @@ function detectPrompt(lines) {
 }
 
 /**
+ * Reads the live model, branch and permission mode off Claude Code's status
+ * line, e.g.
+ *
+ *     [huginnapp] Fable 5 · main · ⚠ 3 sessions in this tree
+ *     ⏵⏵ auto mode on (shift+tab to cycle) · ← for agents
+ *
+ * The pane is the only source that is current: the transcript reports the model
+ * of the LAST assistant turn, so after a `/model` change it keeps naming the old
+ * one until the next turn happens — which made the app's model control look like
+ * it had done nothing.
+ */
+function parseStatusLine(lines) {
+  const out = { model: null, branch: null, mode: null };
+  const plain = lines.map((l) => stripAnsi(l).replace(/\s+$/, ''));
+  for (let i = plain.length - 1; i >= 0 && i >= plain.length - 8; i--) {
+    const t = plain[i].trim();
+    if (!t) continue;
+    if (!out.mode) {
+      const m = /^[⏵⏴⏸⏹▶]{1,2}\s*(\w+)\s+mode\s+on/.exec(t);
+      if (m) { out.mode = m[1].toLowerCase(); continue; }
+    }
+    if (!out.model) {
+      // "[name] Model Name · branch · ..." — the model is the first field after
+      // the bracketed session name.
+      const m = /^\[[^\]]+\]\s+([^·]+?)(?:\s+·\s+([^·]+))?(?:\s+·|$)/.exec(t);
+      if (m) {
+        out.model = m[1].trim() || null;
+        out.branch = (m[2] || '').trim() || null;
+      }
+    }
+  }
+  return out;
+}
+
+/**
  * Pulls the sign-in URL out of a `claude auth login` pane.
  *
  * Claude Code wraps the URL in an OSC 8 hyperlink, whose target carries the
@@ -171,4 +206,4 @@ function extractLoginUrl(lines) {
   return null;
 }
 
-module.exports = { screenHash, stripAnsi, previewLines, detectPrompt, extractLoginUrl };
+module.exports = { screenHash, stripAnsi, previewLines, detectPrompt, extractLoginUrl, parseStatusLine };
