@@ -178,16 +178,15 @@ fun SettingsScreen(
         // Other logins saved on this host. The active one is snapshotted
         // automatically, so an account you have used is always here to come back
         // to when a plan runs out.
-        val others = savedAccounts.filter { !it.isActive }
-        if (others.isNotEmpty()) {
+        if (savedAccounts.isNotEmpty()) {
             Spacer(Modifier.height(4.dp))
             Text(
-                "Switch to",
+                "Accounts on this host",
                 style = MaterialTheme.typography.labelMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
             Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                others.forEach { a ->
+                savedAccounts.forEach { a ->
                     SavedAccountRow(
                         account = a,
                         enabled = !switching,
@@ -349,6 +348,7 @@ private fun SavedAccountRow(
                 val bits = buildList {
                     account.subscriptionType?.let { add("$it plan") }
                     account.weeklyPercent?.let { add("${it.toInt()}% of the week used") }
+                    if (account.isActive) add("active")
                 }
                 if (bits.isNotEmpty()) {
                     Text(
@@ -366,8 +366,17 @@ private fun SavedAccountRow(
                     )
                 }
             }
-            TextButton(onClick = onSwitch, enabled = enabled) { Text("Use") }
-            IconButton(onClick = onForget, enabled = enabled) {
+            if (account.isActive) {
+                Text(
+                    "in use",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.padding(horizontal = 10.dp),
+                )
+            } else {
+                TextButton(onClick = onSwitch, enabled = enabled) { Text("Use") }
+            }
+            IconButton(onClick = onForget, enabled = enabled && !account.isActive) {
                 Icon(
                     Icons.Filled.Delete,
                     contentDescription = "Forget this account",
