@@ -114,6 +114,8 @@ fun HuginnApp(
     val account by vm.account.collectAsState()
     val usage by vm.usage.collectAsState()
     val plan by vm.plan.collectAsState()
+    val savedAccounts by vm.savedAccounts.collectAsState()
+    val switching by vm.switching.collectAsState()
     val loginUrl by vm.loginUrl.collectAsState()
 
     val snackbar = remember { SnackbarHostState() }
@@ -301,20 +303,24 @@ fun HuginnApp(
                     )
                 }
 
-                is Dest.Status -> StatusScreen(
-                    status = status,
-                    error = statusError,
-                    sessions = sessions.size,
-                    chatsRunning = chats.count { it.running },
-                )
-
-                is Dest.Settings -> {
+                is Dest.Status -> {
                     DisposableEffect(Unit) {
-                        vm.refreshAccount()
                         vm.refreshPlan()
                         vm.refreshUsage()
                         onDispose { vm.stopUsagePolling() }
                     }
+                    StatusScreen(
+                        status = status,
+                        error = statusError,
+                        sessions = sessions.size,
+                        chatsRunning = chats.count { it.running },
+                        plan = plan,
+                        usage = usage,
+                    )
+                }
+
+                is Dest.Settings -> {
+                    LaunchedEffect(Unit) { vm.refreshAccount() }
                     SettingsScreen(
                         baseUrl = baseUrl,
                         token = token,
@@ -322,8 +328,10 @@ fun HuginnApp(
                         notifyEnabled = notifyEnabled,
                         onNotifyEnabled = { vm.setNotifyEnabled(it) },
                         account = account,
-                        plan = plan,
-                        usage = usage,
+                        savedAccounts = savedAccounts,
+                        switching = switching,
+                        onSwitchAccount = { vm.activateAccount(it) },
+                        onForgetAccount = { vm.forgetAccount(it) },
                         onSignIn = {
                             // The sign-in flow is interactive, so it runs in a real
                             // session and we drop the user into its Screen tab.

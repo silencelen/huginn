@@ -109,6 +109,17 @@ class HuginnClient(
 
     suspend fun usage(): Usage = decode(call(builder("/v1/usage").get().build()))
 
+    /** Saved logins on the host; `withPlan` also reads each one's headroom. */
+    suspend fun savedAccounts(withPlan: Boolean = false): List<SavedAccount> =
+        decode<SavedAccounts>(call(builder("/v1/accounts${if (withPlan) "?plan=1" else ""}").get().build())).accounts
+
+    suspend fun activateAccount(slug: String): Account =
+        decode(call(builder("/v1/accounts/$slug/activate").post(ByteArray(0).toRequestBody(null)).build()))
+
+    suspend fun forgetAccount(slug: String) {
+        call(builder("/v1/accounts/$slug").delete().build())
+    }
+
     /** Plan utilization: the same numbers Claude Code's /usage shows. */
     suspend fun plan(): Plan = decode(call(builder("/v1/plan").get().build()))
 

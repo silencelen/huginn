@@ -49,16 +49,28 @@ highlighted — shell, C-family, JSON, config and diffs (whole-line by sign, so 
 Edit's result reads at a glance). The highlighter is a lexer, so a missed keyword
 costs a colour and never the text.
 
+**Multiple accounts.** Settings lists every Claude login saved on the host and
+switches between them, showing how much of the week each has used. Switching is
+a credentials-file swap, which means a **running** session keeps the account it
+started with until it restarts — the app says so rather than pretending
+otherwise. The outgoing account is snapshotted before every switch so a refreshed
+token cannot strand it. Saved credentials stay on the host (0600 in a 0700 dir)
+and are never sent to the phone.
+
+**Model, effort and mode** can be changed from a session's control bar. These
+send the same `/model` and `/effort` commands and the same Shift+Tab a person
+would type, and the current values are read back from the transcript.
+
 **Account and usage** live in Settings: which account huginn is signed in as,
 sign in / switch (the interactive flow runs in a `login` session and the URL is
 handed to the browser), sign out behind a confirmation that says it signs out the
 whole host, and two different usage readings:
 
-- **Plan usage** — the same rows `/usage` prints (current session, current week
+- **Plan usage** (on the Status tab) — the same rows `/usage` prints (current session, current week
   all-models, current week per-model), each with a bar and a reset countdown,
   read from `/api/oauth/usage` with the host's own credentials. The app is handed
   percentages only; the token never leaves the daemon.
-- **Tokens** — volume for today and the last week from ccusage. Counts are exact;
+- **Tokens** (on the Status tab) — volume for today and the last week from ccusage. Counts are exact;
   the dollar figures are list-price estimates that run high on a Max plan and are
   labelled as a trend, not a bill.
 
@@ -95,6 +107,9 @@ bytes in `/etc/huginn-appd/token` (0600), generated on first deploy.
 | POST | `/v1/account/logout` | needs `{confirm:"logout"}`; signs out the whole host |
 | GET | `/v1/usage` | cached ccusage summary (today + 7 days) |
 | GET | `/v1/plan` | plan utilization, the numbers Claude Code's `/usage` shows |
+| GET | `/v1/accounts` | saved logins; `?plan=1` adds each one's headroom |
+| POST | `/v1/accounts/<slug>/activate` | make a saved login the active one |
+| DELETE | `/v1/accounts/<slug>` | forget a saved login |
 | GET | `/v1/status` | uptime, load, disk, Claude version, MemPalace reachability |
 | GET | `/v1/sessions` | tmux sessions + hook state; `?preview=1` adds titles and activity previews |
 | POST | `/v1/sessions` | `{name}`; letters/digits/underscore, canonically lowercase |
