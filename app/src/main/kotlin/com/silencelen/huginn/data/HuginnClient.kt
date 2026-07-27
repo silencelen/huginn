@@ -43,8 +43,19 @@ class HuginnClient(
         .readTimeout(30, TimeUnit.SECONDS)
         .build()
 
+    // SSE chat streams legitimately stay open for a whole Claude turn, so no
+    // read timeout applies to them.
     private val streamHttp = http.newBuilder()
         .readTimeout(0, TimeUnit.MILLISECONDS)
+        .build()
+
+    // Screen long polls are DIFFERENT: the server answers within its `wait`
+    // window, so a silent connection is a dead one. With no timeout at all a
+    // black-holed socket (network change, NAT expiry) blocked the poll forever —
+    // the screen froze with no error and no retry, and nothing rearmed it.
+    private val pollHttp = http.newBuilder()
+        .readTimeout(45, TimeUnit.SECONDS)
+        .callTimeout(60, TimeUnit.SECONDS)
         .build()
 
     private fun url(path: String): String {
@@ -64,9 +75,15 @@ class HuginnClient(
         return HuginnException(code, msg ?: "HTTP $code")
     }
 
-    /** @param stream use the no-read-timeout client (long polls outlive 30s). */
-    private suspend fun call(request: Request, stream: Boolean = false): String = withContext(Dispatchers.IO) {
-        (if (stream) streamHttp else http).newCall(request).execute().use { resp ->
+    private enum class Client { NORMAL, POLL, STREAM }
+
+    private suspend fun call(request: Request, via: Client = Client.NORMAL): String = withContext(Dispatchers.IO) {
+        val c = when (via) {
+            Client.NORMAL -> http
+            Client.POLL -> pollHttp
+            Client.STREAM -> streamHttp
+        }
+        c.newCall(request).execute().use { resp ->
             val body = resp.body?.string().orEmpty()
             if (!resp.isSuccessful) throw errorFrom(resp.code, body)
             body
@@ -122,8 +139,8 @@ class HuginnClient(
             if (force) add("force=1")
         }.joinToString("&")
         val path = "/v1/sessions/$name/screen" + if (q.isEmpty()) "" else "?$q"
-        // A long poll legitimately outlives the normal read timeout.
-        return decode(call(builder(path).get().build(), stream = waitMs > 0))
+        // A long poll outlives the normal read timeout but must still time out.
+        return decode(call(builder(path).get().build(), if (waitMs > 0) Client.POLL else Client.NORMAL))
     }
 
     /** Hands the pane size back to tmux so an attached laptop re-fits at once. */

@@ -41,6 +41,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.lifecycle.compose.LifecycleStartEffect
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.silencelen.huginn.notify.SessionWatchWorker
 import com.silencelen.huginn.ui.ChatScreen
@@ -245,10 +246,15 @@ fun HuginnApp(
                 )
 
                 is Dest.SessionView -> {
-                    DisposableEffect(d.name) {
+                    // Tied to the lifecycle, not just to composition: a
+                    // DisposableEffect does not dispose when the app is merely
+                    // backgrounded, so polling would keep running — and keep
+                    // renewing the server-side pane-size lease, pinning an
+                    // attached laptop at phone geometry indefinitely.
+                    LifecycleStartEffect(d.name) {
                         vm.startTranscriptPolling(d.name)
                         vm.startScreenPolling(d.name)
-                        onDispose { vm.stopScreenPolling(); vm.refreshSessions() }
+                        onStopOrDispose { vm.stopScreenPolling(); vm.refreshSessions() }
                     }
                     SessionScreen(
                         name = d.name,

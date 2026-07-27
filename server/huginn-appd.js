@@ -27,7 +27,7 @@ const { execFile, spawn } = require('node:child_process');
 const { screenHash, previewLines, detectPrompt } = require('./lib/pane');
 const { readTranscript } = require('./lib/transcript');
 
-const VERSION = '2.0.0';
+const VERSION = '2.0.1';
 const PORT = Number(process.env.HUGINN_APPD_PORT || 8787);
 const DATA_DIR = process.env.HUGINN_APPD_DATA || '/var/lib/huginn-appd';
 const TOKEN_FILE = process.env.HUGINN_APPD_TOKEN_FILE || '/etc/huginn-appd/token';
@@ -198,31 +198,66 @@ async function sessionExists(name) {
 // is released on every exit path including a crash (the startup sweep). The
 // laptop can therefore never be left with a shrunken window by an app that was
 // force-quit or a phone that went out of range.
-const leases = new Map(); // name -> {cols, rows, expiresAt}
+//
+// TARGETING: `window-size` is a per-WINDOW option, and the target `=name:` means
+// "session name, CURRENT window". Leasing by that target and later releasing by
+// it releases whichever window happens to be active THEN — so if the user opens
+// or switches to another window (prefix+c) after a lease is taken, the leased
+// window keeps `manual` forever and every release path misses it, including the
+// sweeps. Verified on tmux 3.6b. Leases therefore record the concrete
+// `#{window_id}` (`@14`) and operate on that.
+const leases = new Map(); // session name -> {windowId, cols, rows, expiresAt}
 const LEASE_MS = 90_000;
 const LEASE_SWEEP_MS = 15_000;
+
+async function currentWindowId(name) {
+  const { err, stdout } = await run('tmux', ['display-message', '-p', '-t', `=${name}:`, '#{window_id}']);
+  if (err) return null;
+  const id = stdout.trim();
+  return /^@\d+$/.test(id) ? id : null;
+}
 
 async function acquireSize(name, cols, rows) {
   cols = Math.max(20, Math.min(300, Math.floor(cols)));
   rows = Math.max(10, Math.min(200, Math.floor(rows)));
+  const windowId = await currentWindowId(name);
+  if (!windowId) return false;
+
   const cur = leases.get(name);
-  if (!cur || cur.cols !== cols || cur.rows !== rows) {
-    const a = await run('tmux', ['set-option', '-t', `=${name}:`, 'window-size', 'manual']);
-    if (a.err) return false;
-    const b = await run('tmux', ['resize-window', '-t', `=${name}:`, '-x', String(cols), '-y', String(rows)]);
-    if (b.err) { await releaseSize(name); return false; }
-    log(`lease ${name} -> ${cols}x${rows}`);
+  // A window switch makes the old lease stale: hand that window back before
+  // touching the new one, or it stays manual with nothing left to release it.
+  if (cur && cur.windowId !== windowId) {
+    await releaseWindow(cur.windowId, `${name} (window switched)`);
+    leases.delete(name);
   }
-  leases.set(name, { cols, rows, expiresAt: Date.now() + LEASE_MS });
+
+  const held = leases.get(name);
+  if (!held || held.cols !== cols || held.rows !== rows) {
+    const a = await run('tmux', ['set-option', '-t', windowId, 'window-size', 'manual']);
+    if (a.err) return false;
+    const b = await run('tmux', ['resize-window', '-t', windowId, '-x', String(cols), '-y', String(rows)]);
+    if (b.err) { await releaseWindow(windowId, name); leases.delete(name); return false; }
+    log(`lease ${name} ${windowId} -> ${cols}x${rows}`);
+  }
+  leases.set(name, { windowId, cols, rows, expiresAt: Date.now() + LEASE_MS });
   return true;
 }
 
+/** Unsetting restores the inherited default and tmux re-fits any client at once. */
+async function releaseWindow(windowId, label) {
+  await run('tmux', ['set-option', '-u', '-t', windowId, 'window-size']);
+  log(`lease released: ${label} ${windowId}`);
+}
+
 async function releaseSize(name) {
+  const l = leases.get(name);
   leases.delete(name);
-  // Unsetting the option restores the inherited default (`smallest` on this
-  // host) and tmux immediately re-fits the window to any attached client.
-  await run('tmux', ['set-option', '-u', '-t', `=${name}:`, 'window-size']);
-  log(`lease ${name} released`);
+  if (l) await releaseWindow(l.windowId, name);
+  else {
+    // No record (daemon restarted mid-view): fall back to the current window.
+    const id = await currentWindowId(name);
+    if (id) await releaseWindow(id, name);
+  }
 }
 
 setInterval(() => {
@@ -233,22 +268,45 @@ setInterval(() => {
 }, LEASE_SWEEP_MS).unref();
 
 /**
- * Releases every session left with a manual window size. Runs at startup so a
- * daemon that was killed mid-view cannot strand a laptop with a phone-sized
+ * Releases EVERY window left at a manual size, across all sessions. Runs at
+ * startup so a daemon killed mid-view cannot strand a laptop with a phone-sized
  * window, and on shutdown for the ordinary case.
+ *
+ * Enumerates windows, not sessions: `list-sessions -F '#{window-size}'` reports
+ * only each session's active window, so a stranded background window would be
+ * invisible to it.
  */
 async function sweepStrandedSizes(reason) {
-  const { err, stdout } = await run('tmux', ['list-sessions', '-F', '#{session_name}\t#{window-size}']);
+  const { err, stdout } = await run('tmux',
+    ['list-windows', '-a', '-F', '#{window_id}\t#{session_name}:#{window_index}\t#{window-size}']);
   if (err) return;
   for (const line of stdout.trim().split('\n')) {
     if (!line) continue;
-    const [name, wsize] = line.split('\t');
+    const [windowId, label, wsize] = line.split('\t');
     if (wsize === 'manual') {
-      log(`${reason}: releasing stranded manual size on ${name}`);
-      await run('tmux', ['set-option', '-u', '-t', `=${name}:`, 'window-size']);
+      log(`${reason}: releasing stranded manual size on ${label}`);
+      await run('tmux', ['set-option', '-u', '-t', windowId, 'window-size']);
     }
   }
   leases.clear();
+}
+
+/**
+ * The cheapest possible "did anything change?": ONE tmux process producing both
+ * the cursor position and the pane, chained with `;` so the parked long poll
+ * does not spawn three processes a tick. The hash must be computed exactly as
+ * captureScreen computes it or every poll would look like a change.
+ */
+async function peekHash(name) {
+  const r = await run('tmux', [
+    'display-message', '-p', '-t', `=${name}:`, '#{cursor_x},#{cursor_y}',
+    ';', 'capture-pane', '-p', '-e', '-t', `=${name}:`,
+  ]);
+  if (r.err) return null;
+  const out = r.stdout.replace(/\n$/, '').split('\n');
+  const [cx = '0', cy = '0'] = (out[0] || '0,0').split(',');
+  const lines = out.slice(1);
+  return { hash: screenHash(lines.join('\n') + `|${cx},${cy}`) };
 }
 
 /**
@@ -270,8 +328,14 @@ async function captureScreen(name, { cols = null, rows = null, history = 0, forc
     if (attached > 0 && !force) {
       resizeBlocked = true;
     } else if (await acquireSize(name, cols, rows)) {
-      dim = await run('tmux', ['display-message', '-p', '-t', `=${name}:`, fmt]);
-      if (dim.err) return null;
+      // Only re-read geometry when the resize actually changed something; a
+      // renewal of an identical lease issues no tmux command and cannot have
+      // moved the pane.
+      const held = leases.get(name);
+      if (!held || held.cols !== Number(dim.stdout.split('\t')[0]) ) {
+        dim = await run('tmux', ['display-message', '-p', '-t', `=${name}:`, fmt]);
+        if (dim.err) return null;
+      }
     }
   }
 
@@ -673,10 +737,19 @@ const server = http.createServer(async (req, res) => {
       const deadline = Date.now() + waitMs;
       let scr = await captureScreen(name, opts);
       if (!scr) return sendErr(res, 404, 'no such session');
+      // While parked, poll with ONE cheap capture-pane rather than a full
+      // captureScreen: the geometry cannot change without the content changing,
+      // and re-running the resize/geometry calls on every tick cost three tmux
+      // processes per iteration (~9/second per viewed session on an 8-core box).
       while (known && scr.hash === known && Date.now() < deadline && !req.destroyed) {
-        await sleep(300);
-        scr = await captureScreen(name, opts);
-        if (!scr) return sendErr(res, 404, 'no such session');
+        await sleep(700);
+        const peek = await peekHash(name);
+        if (peek === null) return sendErr(res, 404, 'no such session');
+        if (peek.hash !== known) {
+          scr = await captureScreen(name, opts);
+          if (!scr) return sendErr(res, 404, 'no such session');
+          break;
+        }
       }
       if (req.destroyed) return;
       if (known && scr.hash === known) {
@@ -710,8 +783,10 @@ const server = http.createServer(async (req, res) => {
       }
       if (!fs.existsSync(st.transcript)) return sendErr(res, 409, 'recorded transcript file is gone');
       const offsetParam = u.searchParams.get('offset');
+      const offsetNum = offsetParam == null ? null : Number(offsetParam);
+      if (offsetNum !== null && !Number.isFinite(offsetNum)) return sendErr(res, 400, 'offset must be a number');
       const t = readTranscript(st.transcript, {
-        offset: offsetParam == null ? null : Number(offsetParam),
+        offset: offsetNum,
         limit: Math.max(1, Math.min(800, Number(u.searchParams.get('limit')) || 400)),
       });
       return sendJson(res, 200, { ...t, state: st.state, claudeSessionId: st.sessionId });
@@ -824,8 +899,10 @@ const server = http.createServer(async (req, res) => {
         const file = findTranscriptFile(meta.claudeSessionId);
         if (!file) return sendErr(res, 409, 'transcript not found for this chat');
         const offsetParam = u.searchParams.get('offset');
+        const offsetNum = offsetParam == null ? null : Number(offsetParam);
+        if (offsetNum !== null && !Number.isFinite(offsetNum)) return sendErr(res, 400, 'offset must be a number');
         const t = readTranscript(file, {
-          offset: offsetParam == null ? null : Number(offsetParam),
+          offset: offsetNum,
           limit: Math.max(1, Math.min(800, Number(u.searchParams.get('limit')) || 400)),
         });
         return sendJson(res, 200, { ...t, running: meta.running, mode: meta.mode });
