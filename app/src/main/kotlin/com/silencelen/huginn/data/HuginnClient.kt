@@ -64,8 +64,9 @@ class HuginnClient(
         return HuginnException(code, msg ?: "HTTP $code")
     }
 
-    private suspend fun call(request: Request): String = withContext(Dispatchers.IO) {
-        http.newCall(request).execute().use { resp ->
+    /** @param stream use the no-read-timeout client (long polls outlive 30s). */
+    private suspend fun call(request: Request, stream: Boolean = false): String = withContext(Dispatchers.IO) {
+        (if (stream) streamHttp else http).newCall(request).execute().use { resp ->
             val body = resp.body?.string().orEmpty()
             if (!resp.isSuccessful) throw errorFrom(resp.code, body)
             body
@@ -80,8 +81,9 @@ class HuginnClient(
 
     // ---------------------------------------------------------- sessions
 
-    suspend fun sessions(): List<Session> =
-        decode<SessionList>(call(builder("/v1/sessions").get().build())).sessions
+    /** @param preview include per-session titles and activity previews (costlier). */
+    suspend fun sessions(preview: Boolean = false): List<Session> =
+        decode<SessionList>(call(builder("/v1/sessions${if (preview) "?preview=1" else ""}").get().build())).sessions
 
     suspend fun createSession(name: String) {
         call(builder("/v1/sessions").post(jsonBody("name" to name)).build())
@@ -91,8 +93,55 @@ class HuginnClient(
         call(builder("/v1/sessions/$name").delete().build())
     }
 
-    suspend fun screen(name: String): Screen =
-        decode(call(builder("/v1/sessions/$name/screen").get().build()))
+    suspend fun renameSession(from: String, to: String) {
+        call(builder("/v1/sessions/$from/rename").post(jsonBody("name" to to)).build())
+    }
+
+    /**
+     * @param cols/rows  the phone's real geometry; the server leases a tmux resize
+     *   so Claude Code re-wraps to fit instead of the phone showing a window of a
+     *   laptop-shaped layout.
+     * @param knownHash  long-poll: return only once the screen differs from this.
+     * @param waitMs     how long the server may hold the request.
+     * @param force      resize even though another client is attached.
+     */
+    suspend fun screen(
+        name: String,
+        cols: Int? = null,
+        rows: Int? = null,
+        history: Int = 0,
+        knownHash: String? = null,
+        waitMs: Int = 0,
+        force: Boolean = false,
+    ): Screen {
+        val q = buildList {
+            if (cols != null && rows != null) { add("cols=$cols"); add("rows=$rows") }
+            if (history > 0) add("history=$history")
+            if (knownHash != null) add("hash=$knownHash")
+            if (waitMs > 0) add("wait=$waitMs")
+            if (force) add("force=1")
+        }.joinToString("&")
+        val path = "/v1/sessions/$name/screen" + if (q.isEmpty()) "" else "?$q"
+        // A long poll legitimately outlives the normal read timeout.
+        return decode(call(builder(path).get().build(), stream = waitMs > 0))
+    }
+
+    /** Hands the pane size back to tmux so an attached laptop re-fits at once. */
+    suspend fun releaseSize(name: String) {
+        call(builder("/v1/sessions/$name/size").delete().build())
+    }
+
+    /** Structured conversation for a tmux session, from its Claude transcript. */
+    suspend fun sessionTranscript(name: String, offset: Long? = null, limit: Int = 400): TranscriptPage =
+        decode(call(builder(
+            "/v1/sessions/$name/transcript?limit=$limit" + (offset?.let { "&offset=$it" } ?: "")
+        ).get().build()))
+
+    /** The same, for a chat: a headless run writes an ordinary transcript too. */
+    suspend fun chatTranscript(id: String, offset: Long? = null, limit: Int = 400): TranscriptPage =
+        decode(call(builder(
+            "/v1/chats/$id/transcript?limit=$limit" + (offset?.let { "&offset=$it" } ?: "")
+        ).get().build()))
 
     /** Literal text, then named keys (tmux send-keys names, server-validated). */
     suspend fun sendKeys(name: String, text: String? = null, keys: List<String> = emptyList()) {

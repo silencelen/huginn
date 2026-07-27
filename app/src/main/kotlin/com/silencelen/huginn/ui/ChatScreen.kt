@@ -22,7 +22,6 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Build
 import androidx.compose.material.icons.filled.Send
 import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material3.CircularProgressIndicator
@@ -42,59 +41,66 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.text.font.FontFamily
-import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import com.silencelen.huginn.data.ChatDetail
-import com.silencelen.huginn.data.Message
+import com.silencelen.huginn.data.TranscriptEvent
+import com.silencelen.huginn.data.TranscriptPage
 
 /**
- * The conversation. Assistant text is plain body text on the page (no bubble) and
- * the user's lines are the ones that get a container, which keeps long answers
- * readable on a narrow screen and makes "who said what" obvious at a glance.
+ * A chat. The history is the session's real Claude Code transcript, rendered by
+ * the same code as a tmux session's conversation, so a chat shows thinking, tool
+ * results and subagent output rather than the flat digest v1 kept. The live SSE
+ * stream is still used while a turn is in flight, because the transcript is only
+ * written as blocks complete and a phone should see tokens as they arrive.
  */
 @Composable
 fun ChatScreen(
-    detail: ChatDetail?,
+    page: TranscriptPage?,
     streamingText: String?,
     activeTool: String?,
     sending: Boolean,
+    mode: String,
     onSend: (String) -> Unit,
     onCancel: () -> Unit,
+    onCopy: (String) -> Unit,
 ) {
     var draft by remember { mutableStateOf("") }
     val listState = rememberLazyListState()
-    val messages = detail?.messages ?: emptyList()
+    val events = page?.events ?: emptyList()
+    val streaming = streamingText != null || activeTool != null
 
-    // Follow the tail as tokens arrive, which is what a reader watching a live
-    // answer expects; scrolling up during a stream is fine because a new item or
-    // delta only nudges the list when it is already near the bottom.
-    LaunchedEffect(messages.size, streamingText, activeTool) {
-        val itemCount = messages.size + if (streamingText != null || activeTool != null) 1 else 0
-        if (itemCount > 0) {
+    LaunchedEffect(events.size, streamingText, activeTool) {
+        val count = events.size + if (streaming) 1 else 0
+        if (count > 0) {
             val last = listState.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: 0
-            if (last >= messages.size - 2) listState.animateScrollToItem(itemCount - 1)
+            if (last >= events.size - 3) listState.animateScrollToItem(count - 1)
         }
     }
 
     Column(Modifier.fillMaxSize()) {
-        if (detail == null) {
+        if (page == null) {
             Box(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
                 CircularProgressIndicator(strokeWidth = 2.dp)
+            }
+        } else if (events.isEmpty() && !streaming) {
+            Box(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
+                EmptyState(
+                    if (mode == "act") "Act mode" else "Ask mode",
+                    if (mode == "act") "Runs in ~/netplan with tools: files, commands, the web."
+                    else "Reasoning and memory, no tools.",
+                )
             }
         } else {
             LazyColumn(
                 state = listState,
                 modifier = Modifier.weight(1f).fillMaxWidth(),
                 contentPadding = androidx.compose.foundation.layout.PaddingValues(
-                    start = 16.dp, end = 16.dp, top = 8.dp, bottom = 12.dp,
+                    start = 14.dp, end = 14.dp, top = 8.dp, bottom = 10.dp,
                 ),
-                verticalArrangement = Arrangement.spacedBy(10.dp),
+                verticalArrangement = Arrangement.spacedBy(9.dp),
             ) {
-                items(messages.size) { i -> MessageItem(messages[i]) }
-                if (streamingText != null || activeTool != null) {
-                    item { StreamingItem(streamingText, activeTool) }
+                items(events.size) { i -> TranscriptEventItem(events[i], onCopy) }
+                if (streaming) {
+                    item { StreamingItem(streamingText, activeTool, onCopy) }
                 }
             }
         }
@@ -103,7 +109,7 @@ fun ChatScreen(
             draft = draft,
             onDraft = { draft = it },
             sending = sending,
-            mode = detail?.mode ?: "ask",
+            mode = mode,
             onSend = {
                 val t = draft.trim()
                 if (t.isNotEmpty()) { onSend(t); draft = "" }
@@ -113,108 +119,23 @@ fun ChatScreen(
     }
 }
 
+/**
+ * The turn currently arriving. Rendered as markdown like a finished answer so the
+ * text does not visibly reflow when the block completes and the transcript
+ * replaces it.
+ */
 @Composable
-private fun MessageItem(msg: Message) {
-    when (msg.type) {
-        "user" -> Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
-            Surface(
-                color = MaterialTheme.colorScheme.surfaceContainerHigh,
-                shape = RoundedCornerShape(16.dp, 16.dp, 4.dp, 16.dp),
-                modifier = Modifier.fillMaxWidth(0.88f),
-            ) {
-                Text(
-                    msg.text.orEmpty(),
-                    style = MaterialTheme.typography.bodyMedium,
-                    modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
-                )
-            }
-        }
-
-        "assistant" -> Text(
-            msg.text.orEmpty(),
-            style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSurface,
-        )
-
-        "tool" -> ToolChip(msg.name ?: "tool", msg.input)
-
-        "result" -> {
-            val bits = buildList {
-                msg.durationMs?.let { add("${it / 1000}s") }
-                msg.turns?.let { if (it > 1) add("$it turns") }
-                msg.costUsd?.let { add(String.format("$%.3f", it)) }
-            }
-            if (bits.isNotEmpty()) {
-                Text(
-                    bits.joinToString("  ·  "),
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
-        }
-
-        "error" -> Surface(
-            color = MaterialTheme.colorScheme.error.copy(alpha = 0.12f),
-            shape = RoundedCornerShape(10.dp),
-        ) {
-            Text(
-                msg.text.orEmpty(),
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.error,
-                modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
-            )
-        }
-    }
-}
-
-/** A tool the model ran, with the one field worth seeing (command, path, query). */
-@Composable
-private fun ToolChip(name: String, input: String?) {
-    Surface(
-        color = MaterialTheme.colorScheme.surfaceVariant,
-        shape = RoundedCornerShape(8.dp),
-    ) {
-        Row(
-            Modifier.padding(horizontal = 10.dp, vertical = 7.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Icon(
-                Icons.Filled.Build,
-                contentDescription = null,
-                modifier = Modifier.size(13.dp),
-                tint = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-            Spacer(Modifier.width(7.dp))
-            Text(
-                name,
-                style = MaterialTheme.typography.labelMedium,
-                fontWeight = FontWeight.SemiBold,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-            if (!input.isNullOrBlank()) {
-                Spacer(Modifier.width(8.dp))
-                Text(
-                    input,
-                    style = MaterialTheme.typography.labelSmall,
-                    fontFamily = FontFamily.Monospace,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    maxLines = 2,
-                    overflow = TextOverflow.Ellipsis,
-                )
-            }
-        }
-    }
-}
-
-@Composable
-private fun StreamingItem(text: String?, activeTool: String?) {
+private fun StreamingItem(text: String?, activeTool: String?, onCopy: (String) -> Unit) {
     Column {
         if (!text.isNullOrEmpty()) {
-            Text(text, style = MaterialTheme.typography.bodyMedium)
+            MarkdownText(text, onCopy)
         }
         if (activeTool != null) {
             Spacer(Modifier.size(6.dp))
-            ToolChip(activeTool, "running")
+            TranscriptEventItem(
+                TranscriptEvent(kind = "tool", name = activeTool, input = "running"),
+                onCopy,
+            )
         } else if (text.isNullOrEmpty()) {
             ThinkingLine()
         }
