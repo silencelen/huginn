@@ -1,0 +1,17 @@
+[Unit]
+Description=huginn-appd — backend for the Huginn Android app (chats + tmux sessions over the tailnet)
+After=network-online.target tailscaled.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/node /opt/huginn-appd/huginn-appd.js
+Restart=on-failure
+RestartSec=3
+# tailscale IP may not be assignable yet right after boot — keep retrying.
+StartLimitIntervalSec=0
+WorkingDirectory=/root/netplan
+Environment=NODE_ENV=production
+
+[Install]
+WantedBy=multi-user.target

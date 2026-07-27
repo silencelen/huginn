@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  huginn-appd is reached over the tailnet by IP or MagicDNS name on plain HTTP
+  (the tailnet is the trust boundary, and every request also carries a bearer
+  token). Cleartext is permitted app-wide on purpose rather than via a host
+  allowlist: devstore shipped an allowlist and a base URL the allowlist did not
+  cover became a permanent dead end for the user with no in-app way out
+  (see devstore 0.6.1). The server URL here is user-configurable, so any
+  allowlist would reproduce that trap.
+-->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="true" />
+</network-security-config>

@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Raven head in profile facing right: Huginn, Odin's thought-raven. One shape,
+     so nothing detaches at small sizes. Kept inside the 66dp adaptive-icon safe
+     zone (the launcher mask crops the outer 18dp on every side) so the bill tip
+     survives a circular mask. Mirrors assets/icon.svg, which is what the devstore
+     listing shows; change both together. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+        android:width="108dp"
+        android:height="108dp"
+        android:viewportWidth="108"
+        android:viewportHeight="108">
+    <path
+        android:fillColor="#E8E2DA"
+        android:pathData="M32,70
+                          C27,61 27,49 34,42
+                          C40,36 50,33 57,36
+                          L62,38
+                          L84,47
+                          C86,48 86,50 84,51
+                          L62,54
+                          C60,62 55,69 46,73
+                          C41,75 36,74 32,70
+                          Z" />
+    <path
+        android:fillColor="#12100F"
+        android:pathData="M52,45
+                          m-3.4,0
+                          a3.4,3.4 0 1,0 6.8,0
+                          a3.4,3.4 0 1,0 -6.8,0" />
+</vector>

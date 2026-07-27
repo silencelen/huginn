@@ -1,0 +1,1 @@
+{ "package": "com.silencelen.huginn", "displayName": "Huginn", "description": "Chat with huginn and drive its Claude Code sessions from your phone. Needs huginn-appd on the tailnet (LXC 117)." }
