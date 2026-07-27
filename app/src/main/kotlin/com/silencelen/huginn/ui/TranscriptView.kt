@@ -71,6 +71,8 @@ fun TranscriptEventItem(
             "thinking" -> ThinkingBlock(ev.text.orEmpty())
             "tool" -> ToolCard(ev)
             "tool_result" -> ToolResultOrphan(ev)
+            "command" -> CommandNote(ev.text.orEmpty(), isResult = false)
+            "command_result" -> CommandNote(ev.text.orEmpty(), isResult = true)
             "system" -> SystemNote(ev.text.orEmpty())
             else -> Unit
         }
@@ -294,6 +296,29 @@ private fun ToolResultOrphan(ev: TranscriptEvent) {
                 fontFamily = FontFamily.Monospace,
                 color = if (ev.ok == false) MaterialTheme.colorScheme.error
                 else MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+    }
+}
+
+/**
+ * A slash command and its output. Shown as a compact centred note because it is
+ * something that happened to the session, not something anyone said — which is
+ * exactly how the raw `<command-name>` records misread before.
+ */
+@Composable
+private fun CommandNote(text: String, isResult: Boolean) {
+    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.Center) {
+        Surface(
+            color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = if (isResult) 0.35f else 0.6f),
+            shape = RoundedCornerShape(8.dp),
+        ) {
+            Text(
+                text,
+                style = MaterialTheme.typography.labelSmall,
+                fontFamily = if (isResult) FontFamily.Default else FontFamily.Monospace,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
             )
         }
     }

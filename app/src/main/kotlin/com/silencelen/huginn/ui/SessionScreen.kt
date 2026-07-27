@@ -74,9 +74,12 @@ fun SessionScreen(
             Tab(selected = tab == 1, onClick = { onTab(1) }, text = { Text("Screen") })
         }
         SessionControls(
-            model = transcript?.model,
+            // The pane reports the CURRENT model and mode; the transcript only
+            // knows what the last completed turn used, so a just-issued /model
+            // change would otherwise leave the control showing the old value.
+            model = screen?.liveModel ?: transcript?.model,
             effort = transcript?.effort,
-            permissionMode = transcript?.permissionMode,
+            permissionMode = screen?.liveMode ?: transcript?.permissionMode,
             // Slash commands go in as a submitted line, exactly as typed by hand.
             onCommand = { onSendText(it, true) },
             onCycleMode = { onSendKeys(listOf("BTab")) },
