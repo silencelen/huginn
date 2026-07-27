@@ -61,6 +61,9 @@ fun ChatScreen(
     activeTool: String?,
     sending: Boolean,
     mode: String,
+    model: String?,
+    effort: String?,
+    onSetOptions: (String?, String?) -> Unit,
     chatId: String,
     draft: String,
     onDraft: (String) -> Unit,
@@ -84,6 +87,16 @@ fun ChatScreen(
     )
 
     Column(Modifier.fillMaxSize()) {
+        // Model and effort apply to the next turn; a run already in flight keeps
+        // what it started with, because the flags are fixed when it spawns.
+        ChatOptionsBar(
+            mode = mode,
+            model = model,
+            effort = effort,
+            enabled = !sending,
+            onModel = { onSetOptions(it, null) },
+            onEffort = { onSetOptions(null, it) },
+        )
         if (page == null) {
             Box(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
                 CircularProgressIndicator(strokeWidth = 2.dp)

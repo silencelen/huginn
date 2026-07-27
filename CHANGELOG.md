@@ -1,5 +1,25 @@
 # Huginn changelog
 
+## 2.7.0 — 2026-07-27
+
+Refinement pass.
+
+- **Chats pick a model and effort too**, not just sessions, from a bar at the top
+  of the chat. These apply to the next turn; a turn already running keeps what it
+  started with, because the flags are fixed when it launches. Values outside the
+  documented aliases and levels are rejected rather than passed to a spawn.
+- **Chats are named by Claude**, using the same generated title a session gets,
+  instead of the first sixty characters of whatever you typed.
+- **The sessions list stays live** while you are looking at it, rather than
+  waiting for a manual refresh.
+- **The Screen tab tells the truth about scrollback.** It can now load pane
+  history where history exists, and where it does not it says so: Claude Code
+  runs on the terminal's alternate screen, which keeps no scrollback at all
+  (every Claude pane reports zero history, while a shell pane reports hundreds).
+  A "load earlier output" button there would have been a button that does
+  nothing, so instead it points at the Conversation tab, which has the whole
+  session.
+
 ## 2.6.0 — 2026-07-27
 
 ### The conversation follows new messages
