@@ -116,6 +116,7 @@ fun HuginnApp(
     val loadingScrollback by vm.loadingScrollback.collectAsState()
     val chatModel by vm.chatModel.collectAsState()
     val chatEffort by vm.chatEffort.collectAsState()
+    val models by vm.models.collectAsState()
     val transcript by vm.transcript.collectAsState()
     val transcriptError by vm.transcriptError.collectAsState()
     val drafts by vm.drafts.collectAsState()
@@ -281,6 +282,7 @@ fun HuginnApp(
                         mode = chatMode,
                         model = chatModel,
                         effort = chatEffort,
+                        models = models,
                         onSetOptions = { m, e -> vm.setChatOptions(d.id, model = m, effort = e) },
                         chatId = d.id,
                         draft = drafts[HuginnViewModel.chatDraftKey(d.id)].orEmpty(),
@@ -330,6 +332,7 @@ fun HuginnApp(
                         fontScale = fontScale,
                         onFontScale = { vm.setFontScale(it) },
                         onGeometry = { c, r -> vm.setGeometry(c, r) },
+                        models = models,
                         draft = drafts[HuginnViewModel.sessionDraftKey(d.name)].orEmpty(),
                         onDraft = { vm.setDraft(HuginnViewModel.sessionDraftKey(d.name), it) },
                         onSendText = { text, enter -> vm.sendText(d.name, text, enter) },

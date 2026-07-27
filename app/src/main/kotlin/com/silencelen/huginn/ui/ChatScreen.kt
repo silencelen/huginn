@@ -43,6 +43,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.unit.dp
+import com.silencelen.huginn.data.ModelChoice
 import com.silencelen.huginn.data.TranscriptEvent
 import kotlinx.coroutines.launch
 import com.silencelen.huginn.data.TranscriptPage
@@ -63,6 +64,7 @@ fun ChatScreen(
     mode: String,
     model: String?,
     effort: String?,
+    models: List<ModelChoice>,
     onSetOptions: (String?, String?) -> Unit,
     chatId: String,
     draft: String,
@@ -93,6 +95,7 @@ fun ChatScreen(
             mode = mode,
             model = model,
             effort = effort,
+            models = models,
             enabled = !sending,
             onModel = { onSetOptions(it, null) },
             onEffort = { onSetOptions(null, it) },
