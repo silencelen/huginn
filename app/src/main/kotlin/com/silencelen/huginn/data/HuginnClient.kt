@@ -1,0 +1,215 @@
+package com.silencelen.huginn.data
+
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.channels.awaitClose
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.callbackFlow
+import kotlinx.coroutines.flow.flowOn
+import kotlinx.coroutines.withContext
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.jsonPrimitive
+import okhttp3.Call
+import okhttp3.Callback
+import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.OkHttpClient
+import okhttp3.Request
+import okhttp3.RequestBody.Companion.toRequestBody
+import okhttp3.Response
+import java.io.IOException
+import java.util.concurrent.TimeUnit
+
+/**
+ * Talks to huginn-appd. Every call carries the bearer token; a non-2xx response
+ * is surfaced as [HuginnException] carrying the server's own error text, because
+ * "unauthorized" vs "no such session" is exactly what the user needs to see.
+ */
+class HuginnClient(
+    private val baseUrlProvider: () -> String,
+    private val tokenProvider: () -> String,
+) {
+    class HuginnException(val code: Int, override val message: String) : Exception(message)
+
+    private val json = Json { ignoreUnknownKeys = true; explicitNulls = false }
+    private val jsonMedia = "application/json; charset=utf-8".toMediaType()
+
+    // Short timeouts for request/response, none for reads on the streaming client:
+    // an SSE body legitimately stays open for the length of a Claude turn.
+    private val http = OkHttpClient.Builder()
+        .connectTimeout(8, TimeUnit.SECONDS)
+        .readTimeout(30, TimeUnit.SECONDS)
+        .build()
+
+    private val streamHttp = http.newBuilder()
+        .readTimeout(0, TimeUnit.MILLISECONDS)
+        .build()
+
+    private fun url(path: String): String {
+        val base = baseUrlProvider().trim().trimEnd('/')
+        val withScheme = if (base.startsWith("http://") || base.startsWith("https://")) base else "http://$base"
+        return "$withScheme$path"
+    }
+
+    private fun builder(path: String) = Request.Builder()
+        .url(url(path))
+        .header("Authorization", "Bearer ${tokenProvider().trim()}")
+
+    private inline fun <reified T> decode(body: String): T = json.decodeFromString(body)
+
+    private fun errorFrom(code: Int, body: String): HuginnException {
+        val msg = runCatching { json.decodeFromString<ApiError>(body).error }.getOrNull()
+        return HuginnException(code, msg ?: "HTTP $code")
+    }
+
+    private suspend fun call(request: Request): String = withContext(Dispatchers.IO) {
+        http.newCall(request).execute().use { resp ->
+            val body = resp.body?.string().orEmpty()
+            if (!resp.isSuccessful) throw errorFrom(resp.code, body)
+            body
+        }
+    }
+
+    // ------------------------------------------------------------ status
+
+    suspend fun ping(): Ping = decode(call(builder("/v1/ping").get().build()))
+
+    suspend fun status(): Status = decode(call(builder("/v1/status").get().build()))
+
+    // ---------------------------------------------------------- sessions
+
+    suspend fun sessions(): List<Session> =
+        decode<SessionList>(call(builder("/v1/sessions").get().build())).sessions
+
+    suspend fun createSession(name: String) {
+        call(builder("/v1/sessions").post(jsonBody("name" to name)).build())
+    }
+
+    suspend fun killSession(name: String) {
+        call(builder("/v1/sessions/$name").delete().build())
+    }
+
+    suspend fun screen(name: String): Screen =
+        decode(call(builder("/v1/sessions/$name/screen").get().build()))
+
+    /** Literal text, then named keys (tmux send-keys names, server-validated). */
+    suspend fun sendKeys(name: String, text: String? = null, keys: List<String> = emptyList()) {
+        val payload = buildJsonObject {
+            if (text != null) put("text", JsonPrimitive(text))
+            if (keys.isNotEmpty()) put("keys", JsonArray(keys.map { JsonPrimitive(it) }))
+        }
+        call(builder("/v1/sessions/$name/keys").post(encode(payload)).build())
+    }
+
+    // ------------------------------------------------------------- chats
+
+    suspend fun chats(): List<Chat> =
+        decode<ChatList>(call(builder("/v1/chats").get().build())).chats
+
+    suspend fun createChat(mode: String): Chat =
+        decode(call(builder("/v1/chats").post(jsonBody("mode" to mode)).build()))
+
+    suspend fun chat(id: String): ChatDetail =
+        decode(call(builder("/v1/chats/$id").get().build()))
+
+    suspend fun deleteChat(id: String) {
+        call(builder("/v1/chats/$id").delete().build())
+    }
+
+    suspend fun cancelChat(id: String) {
+        call(builder("/v1/chats/$id/cancel").post(ByteArray(0).toRequestBody(null)).build())
+    }
+
+    /**
+     * Posts a message and streams the run. Emits until the run ends; collecting
+     * side cancellation aborts the HTTP call but NOT the server-side run, which
+     * is deliberate: locking the phone must not kill Claude mid-task. Reattach
+     * with [streamChat].
+     */
+    fun sendMessage(id: String, text: String): Flow<ChatEvent> =
+        sse(builder("/v1/chats/$id/messages?stream=1").post(jsonBody("text" to text)).build())
+
+    /** Reattaches to an in-flight run, replaying events after [since] (0 = all). */
+    fun streamChat(id: String, since: Long = 0): Flow<ChatEvent> =
+        sse(builder("/v1/chats/$id/stream?since=$since").get().build())
+
+    private fun jsonBody(vararg pairs: Pair<String, String>) =
+        encode(buildJsonObject { pairs.forEach { (k, v) -> put(k, JsonPrimitive(v)) } })
+
+    private fun encode(obj: JsonObject) =
+        json.encodeToString(JsonObject.serializer(), obj).toRequestBody(jsonMedia)
+
+    /**
+     * Minimal SSE reader. Frames are `event:`/`data:` lines terminated by a blank
+     * line; `: ping` comment frames (the server heartbeat) are skipped.
+     */
+    private fun sse(request: Request): Flow<ChatEvent> = callbackFlow {
+        val call = streamHttp.newCall(request)
+        call.enqueue(object : Callback {
+            override fun onFailure(c: Call, e: IOException) {
+                if (!c.isCanceled()) trySend(ChatEvent.Failure(e.message ?: "network error"))
+                close()
+            }
+
+            override fun onResponse(c: Call, response: Response) {
+                response.use { resp ->
+                    val body = resp.body
+                    if (!resp.isSuccessful || body == null) {
+                        val text = body?.string().orEmpty()
+                        trySend(ChatEvent.Failure(errorFrom(resp.code, text).message))
+                        close(); return
+                    }
+                    try {
+                        val source = body.source()
+                        var event: String? = null
+                        val data = StringBuilder()
+                        while (!source.exhausted()) {
+                            val line = source.readUtf8LineStrict()
+                            when {
+                                line.startsWith(":") -> Unit                 // heartbeat comment
+                                line.startsWith("event:") -> event = line.removePrefix("event:").trim()
+                                line.startsWith("data:") -> data.append(line.removePrefix("data:").trim())
+                                line.startsWith("id:") -> Unit
+                                line.isEmpty() -> {
+                                    if (event != null) {
+                                        parse(event, data.toString())?.let { trySend(it) }
+                                        if (event == "done") { close(); return }
+                                    }
+                                    event = null; data.setLength(0)
+                                }
+                            }
+                        }
+                    } catch (e: Exception) {
+                        if (!c.isCanceled()) trySend(ChatEvent.Failure(e.message ?: "stream ended"))
+                    }
+                    close()
+                }
+            }
+        })
+        awaitClose { call.cancel() }
+    }.flowOn(Dispatchers.IO)
+
+    private fun parse(event: String, data: String): ChatEvent? {
+        val obj = runCatching { json.decodeFromString<JsonObject>(data) }.getOrNull()
+        // `content` on a primitive gives the raw lexeme for numbers/booleans too,
+        // which is what the toLongOrNull/toDoubleOrNull conversions below want.
+        fun str(k: String) = runCatching { obj?.get(k)?.jsonPrimitive?.content }.getOrNull()
+        return when (event) {
+            "started" -> ChatEvent.Started(str("chatId") ?: "")
+            "delta" -> ChatEvent.Delta(str("text") ?: return null)
+            "assistant" -> ChatEvent.Assistant(str("text") ?: return null)
+            "tool_start" -> ChatEvent.ToolStart(str("name") ?: "tool")
+            "tool" -> ChatEvent.Tool(str("name") ?: "tool", str("input"))
+            "result" -> ChatEvent.Result(
+                ok = str("ok") != "false",
+                durationMs = str("durationMs")?.toLongOrNull(),
+                costUsd = str("costUsd")?.toDoubleOrNull(),
+            )
+            "error" -> ChatEvent.Failure(str("text") ?: "error")
+            "done" -> ChatEvent.Done
+            else -> null
+        }
+    }
+}
