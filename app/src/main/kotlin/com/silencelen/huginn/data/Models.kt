@@ -42,10 +42,35 @@ data class Session(
     /** running | attention | idle | null (no state recorded yet) */
     val state: String? = null,
     val stateSince: Long? = null,
+    val cols: Int = 0,
+    val rows: Int = 0,
+    val windowSize: String? = null,
+    val sizeLeased: Boolean = false,
+    val claudeSessionId: String? = null,
+    val hasTranscript: Boolean = false,
+    /** Claude Code's own generated session title, far better than the tmux name. */
+    val title: String? = null,
+    val permissionMode: String? = null,
+    /** Last couple of meaningful pane lines: what this session is doing now. */
+    val preview: List<String> = emptyList(),
 )
 
 @Serializable
 data class SessionList(val sessions: List<Session> = emptyList())
+
+/** A Claude Code choice prompt, lifted off the pane so it can become buttons. */
+@Serializable
+data class PromptOption(
+    val number: Int,
+    val label: String,
+    val selected: Boolean = false,
+)
+
+@Serializable
+data class PanePrompt(
+    val question: String = "",
+    val options: List<PromptOption> = emptyList(),
+)
 
 @Serializable
 data class Screen(
@@ -56,6 +81,53 @@ data class Screen(
     val attachedClients: Int = 0,
     val altScreen: Boolean = false,
     val lines: List<String> = emptyList(),
+    val scrollback: List<String> = emptyList(),
+    val historySize: Int = 0,
+    val windowSize: String? = null,
+    val sizeLeased: Boolean = false,
+    /** True when a resize was refused because another client is attached. */
+    val resizeBlocked: Boolean = false,
+    val hash: String? = null,
+    /** Set when a long poll expired with no change; `lines` is then empty. */
+    val unchanged: Boolean = false,
+    val prompt: PanePrompt? = null,
+)
+
+/**
+ * One normalized transcript event. The same shape serves a tmux session and a
+ * chat, because both read the same Claude Code transcript.
+ *
+ * kind: user | assistant | thinking | tool | tool_result | system
+ */
+@Serializable
+data class TranscriptEvent(
+    val seq: Int = 0,
+    val kind: String = "",
+    val ts: Long? = null,
+    val sidechain: Boolean = false,
+    val text: String? = null,
+    val name: String? = null,
+    val input: String? = null,
+    val detail: String? = null,
+    val result: String? = null,
+    val ok: Boolean? = null,
+)
+
+@Serializable
+data class TranscriptPage(
+    val events: List<TranscriptEvent> = emptyList(),
+    val nextOffset: Long = 0,
+    val truncated: Boolean = false,
+    val title: String? = null,
+    val permissionMode: String? = null,
+    val model: String? = null,
+    val gitBranch: String? = null,
+    val cwd: String? = null,
+    val lastActivityTs: Long? = null,
+    val state: String? = null,
+    val claudeSessionId: String? = null,
+    val running: Boolean = false,
+    val mode: String? = null,
 )
 
 @Serializable

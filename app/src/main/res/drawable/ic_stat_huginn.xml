@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Status-bar icon: silhouette only, single colour, as Android tints and
+     shrinks it to ~24dp. The raven head from the launcher, simplified. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+        android:width="24dp"
+        android:height="24dp"
+        android:viewportWidth="24"
+        android:viewportHeight="24">
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M6,15.5
+                          C4.7,13.6 4.7,10.6 6.5,9
+                          C8,7.6 10.4,6.9 12.1,7.6
+                          L13.3,8.1
+                          L20.5,11
+                          C21,11.2 21,11.7 20.5,11.9
+                          L13.3,13.1
+                          C12.9,15.2 11.6,16.9 9.5,17.8
+                          C8.3,18.3 7,18 6,15.5
+                          Z
+                          M11.5,10.6
+                          m-0.9,0
+                          a0.9,0.9 0 1,0 1.8,0
+                          a0.9,0.9 0 1,0 -1.8,0" />
+</vector>

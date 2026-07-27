@@ -1,20 +1,24 @@
 package com.silencelen.huginn.ui
 
 import android.app.Application
+import android.content.ClipData
+import android.content.ClipboardManager
+import android.content.Context
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import com.silencelen.huginn.data.Chat
-import com.silencelen.huginn.data.ChatDetail
 import com.silencelen.huginn.data.ChatEvent
 import com.silencelen.huginn.data.HuginnClient
-import com.silencelen.huginn.data.Message
 import com.silencelen.huginn.data.Screen
 import com.silencelen.huginn.data.Session
 import com.silencelen.huginn.data.SettingsStore
 import com.silencelen.huginn.data.Status
+import com.silencelen.huginn.data.TranscriptPage
+import com.silencelen.huginn.notify.SessionWatchWorker
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -22,17 +26,10 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 
-/**
- * Single ViewModel for the whole app: the surfaces share a client, a connection
- * banner, and a snackbar channel, and there are few enough of them that splitting
- * would add wiring without removing coupling.
- */
 class HuginnViewModel(app: Application) : AndroidViewModel(app) {
 
     private val settings = SettingsStore(app)
 
-    // Settings are read once into memory and kept current, so client calls need
-    // no suspension to learn the URL/token.
     private var baseUrlNow = SettingsStore.DEFAULT_BASE_URL
     private var tokenNow = ""
 
@@ -68,9 +65,14 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
     private val _loading = MutableStateFlow(false)
     val loading: StateFlow<Boolean> = _loading.asStateFlow()
 
-    /** Set once the token is known to be accepted, so Settings can say so plainly. */
     private val _connected = MutableStateFlow<Boolean?>(null)
     val connected: StateFlow<Boolean?> = _connected.asStateFlow()
+
+    private val _fontScale = MutableStateFlow(SettingsStore.DEFAULT_FONT_SCALE)
+    val fontScale: StateFlow<Float> = _fontScale.asStateFlow()
+
+    private val _notifyEnabled = MutableStateFlow(true)
+    val notifyEnabled: StateFlow<Boolean> = _notifyEnabled.asStateFlow()
 
     init {
         viewModelScope.launch {
@@ -78,8 +80,11 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
             tokenNow = settings.token.first()
             _baseUrl.value = baseUrlNow
             _token.value = tokenNow
+            _fontScale.value = settings.fontScale.first()
+            _notifyEnabled.value = settings.notifyEnabled.first()
             if (tokenNow.isNotBlank()) {
                 refreshAll()
+                if (_notifyEnabled.value) SessionWatchWorker.schedule(getApplication())
             }
         }
     }
@@ -88,6 +93,12 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
         is HuginnClient.HuginnException ->
             if (e.code == 401) "Rejected by huginn: check the token in Settings" else e.message
         else -> e.message ?: e::class.java.simpleName
+    }
+
+    fun copy(text: String, label: String = "huginn") {
+        val cm = getApplication<Application>().getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+        cm.setPrimaryClip(ClipData.newPlainText(label, text))
+        _toast.value = "Copied"
     }
 
     // ---------------------------------------------------------- settings
@@ -102,6 +113,20 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
             _token.value = tokenNow
             _connected.value = null
             testConnection()
+        }
+    }
+
+    fun setFontScale(v: Float) {
+        _fontScale.value = v.coerceIn(5.5f, 22f)
+        viewModelScope.launch { settings.setFontScale(v) }
+    }
+
+    fun setNotifyEnabled(on: Boolean) {
+        _notifyEnabled.value = on
+        viewModelScope.launch {
+            settings.setNotifyEnabled(on)
+            if (on) SessionWatchWorker.schedule(getApplication())
+            else SessionWatchWorker.cancel(getApplication())
         }
     }
 
@@ -127,8 +152,11 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
             _loading.value = true
             runCatching { client.status() }
                 .onSuccess { _status.value = it; _statusError.value = null; _connected.value = true }
-                .onFailure { _statusError.value = errText(it); if (it is HuginnClient.HuginnException && it.code == 401) _connected.value = false }
-            runCatching { client.sessions() }.onSuccess { _sessions.value = it }
+                .onFailure {
+                    _statusError.value = errText(it)
+                    if (it is HuginnClient.HuginnException && it.code == 401) _connected.value = false
+                }
+            runCatching { client.sessions(preview = true) }.onSuccess { _sessions.value = it }
             runCatching { client.chats() }.onSuccess { _chats.value = it }
             _loading.value = false
         }
@@ -136,7 +164,7 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
 
     fun refreshSessions() {
         viewModelScope.launch {
-            runCatching { client.sessions() }
+            runCatching { client.sessions(preview = true) }
                 .onSuccess { _sessions.value = it }
                 .onFailure { _toast.value = errText(it) }
         }
@@ -173,25 +201,105 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    // ------------------------------------------------------ terminal view
+    fun renameSession(from: String, to: String) {
+        val canon = to.trim().lowercase()
+        if (!canon.matches(Regex("^[a-z0-9_]{1,50}$"))) {
+            _toast.value = "Name can use letters, digits and underscore only"
+            return
+        }
+        viewModelScope.launch {
+            runCatching { client.renameSession(from, canon) }
+                .onSuccess { _toast.value = "Renamed to $canon"; refreshSessions() }
+                .onFailure { _toast.value = errText(it) }
+        }
+    }
+
+    // ------------------------------------------------------ session view
 
     private val _screen = MutableStateFlow<Screen?>(null)
     val screen: StateFlow<Screen?> = _screen.asStateFlow()
 
-    private var screenJob: Job? = null
+    private val _transcript = MutableStateFlow<TranscriptPage?>(null)
+    val transcript: StateFlow<TranscriptPage?> = _transcript.asStateFlow()
 
-    /** Polls capture-pane. tmux has no push channel, so this is the honest option. */
-    fun startScreenPolling(name: String, intervalMs: Long = 1200) {
+    private val _transcriptError = MutableStateFlow<String?>(null)
+    val transcriptError: StateFlow<String?> = _transcriptError.asStateFlow()
+
+    private var screenJob: Job? = null
+    private var transcriptJob: Job? = null
+
+    /** Geometry the phone can actually display, reported so tmux can match it. */
+    private var wantCols: Int? = null
+    private var wantRows: Int? = null
+    private var forceResize = false
+
+    fun setGeometry(cols: Int, rows: Int) {
+        val changed = wantCols != cols || wantRows != rows
+        wantCols = cols
+        wantRows = rows
+        // Re-poll immediately so the resize lands now rather than after the
+        // current long poll times out.
+        if (changed) screenJob?.let { restartScreenPolling() }
+    }
+
+    fun forceFit() {
+        forceResize = true
+        restartScreenPolling()
+    }
+
+    private var currentSession: String? = null
+
+    private fun restartScreenPolling() {
+        val name = currentSession ?: return
+        startScreenPolling(name)
+    }
+
+    /**
+     * Long-polls the pane. The server holds the request until the screen actually
+     * differs, so an idle session costs one parked connection instead of a capture
+     * every second, and a busy one updates as fast as it changes.
+     */
+    fun startScreenPolling(name: String) {
+        currentSession = name
         screenJob?.cancel()
         screenJob = viewModelScope.launch {
+            var known: String? = _screen.value?.hash
+            var backoff = 1000L
             while (isActive) {
-                runCatching { client.screen(name) }
-                    .onSuccess { _screen.value = it }
-                    .onFailure {
-                        _toast.value = errText(it)
-                        return@launch          // session gone or auth broke: stop hammering
+                val r = runCatching {
+                    client.screen(
+                        name = name,
+                        cols = wantCols,
+                        rows = wantRows,
+                        knownHash = known,
+                        waitMs = if (known == null) 0 else 25_000,
+                        force = forceResize,
+                    )
+                }
+                r.onSuccess { s ->
+                    backoff = 1000L
+                    if (s.unchanged) {
+                        known = s.hash
+                        // Keep the size/attachment flags fresh even with no repaint.
+                        _screen.value = _screen.value?.copy(
+                            attachedClients = s.attachedClients,
+                            sizeLeased = s.sizeLeased,
+                            resizeBlocked = s.resizeBlocked,
+                        )
+                    } else {
+                        _screen.value = s
+                        known = s.hash
                     }
-                kotlinx.coroutines.delay(intervalMs)
+                }.onFailure { e ->
+                    if (e is HuginnClient.HuginnException && e.code == 404) {
+                        _toast.value = "Session ended"
+                        return@launch
+                    }
+                    // Network blips are expected on a phone; back off instead of
+                    // spinning, and never drop the screen already on display.
+                    delay(backoff)
+                    backoff = (backoff * 2).coerceAtMost(15_000)
+                }
             }
         }
     }
@@ -199,7 +307,55 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
     fun stopScreenPolling() {
         screenJob?.cancel()
         screenJob = null
+        transcriptJob?.cancel()
+        transcriptJob = null
+        val name = currentSession
+        currentSession = null
+        forceResize = false
         _screen.value = null
+        _transcript.value = null
+        _transcriptError.value = null
+        // Hand the pane size back so an attached laptop re-fits immediately
+        // instead of waiting out the server-side lease.
+        if (name != null) {
+            viewModelScope.launch { runCatching { client.releaseSize(name) } }
+        }
+    }
+
+    /** Tails the session's Claude transcript: the structured conversation view. */
+    fun startTranscriptPolling(name: String) {
+        transcriptJob?.cancel()
+        _transcript.value = null
+        _transcriptError.value = null
+        transcriptJob = viewModelScope.launch {
+            var offset: Long? = null
+            while (isActive) {
+                val r = runCatching { client.sessionTranscript(name, offset) }
+                r.onSuccess { page ->
+                    _transcriptError.value = null
+                    offset = page.nextOffset
+                    val cur = _transcript.value
+                    _transcript.value = if (cur == null) page
+                    else page.copy(
+                        // Keep what the tail read no longer carries.
+                        events = cur.events + page.events,
+                        title = page.title ?: cur.title,
+                        model = page.model ?: cur.model,
+                        gitBranch = page.gitBranch ?: cur.gitBranch,
+                        permissionMode = page.permissionMode ?: cur.permissionMode,
+                        truncated = cur.truncated,
+                    )
+                }.onFailure { e ->
+                    if (_transcript.value == null) {
+                        _transcriptError.value = when {
+                            e is HuginnClient.HuginnException && e.code == 409 -> e.message
+                            else -> errText(e)
+                        }
+                    }
+                }
+                delay(2500)
+            }
+        }
     }
 
     fun sendText(name: String, text: String, thenEnter: Boolean) {
@@ -217,16 +373,28 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
+    /** Answers a detected choice prompt by sending its number. */
+    fun answerPrompt(name: String, number: Int) {
+        viewModelScope.launch {
+            runCatching { client.sendKeys(name, text = number.toString()) }
+                .onFailure { _toast.value = errText(it) }
+        }
+    }
+
     // --------------------------------------------------------------- chat
 
-    private val _chatDetail = MutableStateFlow<ChatDetail?>(null)
-    val chatDetail: StateFlow<ChatDetail?> = _chatDetail.asStateFlow()
+    private val _chatPage = MutableStateFlow<TranscriptPage?>(null)
+    val chatPage: StateFlow<TranscriptPage?> = _chatPage.asStateFlow()
 
-    /** Text of the turn currently streaming in, or null when nothing is streaming. */
+    private val _chatMode = MutableStateFlow("ask")
+    val chatMode: StateFlow<String> = _chatMode.asStateFlow()
+
+    private val _chatTitle = MutableStateFlow<String?>(null)
+    val chatTitle: StateFlow<String?> = _chatTitle.asStateFlow()
+
     private val _streamingText = MutableStateFlow<String?>(null)
     val streamingText: StateFlow<String?> = _streamingText.asStateFlow()
 
-    /** Tool the model is running right now, for the "working" line. */
     private val _activeTool = MutableStateFlow<String?>(null)
     val activeTool: StateFlow<String?> = _activeTool.asStateFlow()
 
@@ -234,24 +402,35 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
     val sending: StateFlow<Boolean> = _sending.asStateFlow()
 
     private var streamJob: Job? = null
+    private var chatPollJob: Job? = null
 
     fun openChat(id: String) {
-        _chatDetail.value = null
+        _chatPage.value = null
         _streamingText.value = null
         _activeTool.value = null
         viewModelScope.launch {
-            runCatching { client.chat(id) }
-                .onSuccess { detail ->
-                    _chatDetail.value = detail
-                    // A run that started before this screen opened (or survived a
-                    // phone lock) is still streaming server-side: reattach.
-                    if (detail.running) {
-                        _streamingText.value = detail.partialText ?: ""
-                        _sending.value = true
-                        collect(id, client.streamChat(id, since = 0))
-                    }
+            val meta = runCatching { client.chat(id) }.getOrNull()
+            _chatMode.value = meta?.mode ?: "ask"
+            _chatTitle.value = meta?.title
+            // A chat that has never run has no transcript yet; that is not an error.
+            loadChatTranscript(id)
+            if (meta?.running == true) {
+                _streamingText.value = meta.partialText ?: ""
+                _sending.value = true
+                collect(id, client.streamChat(id, since = 0))
+            }
+        }
+    }
+
+    private fun loadChatTranscript(id: String) {
+        chatPollJob?.cancel()
+        chatPollJob = viewModelScope.launch {
+            runCatching { client.chatTranscript(id) }
+                .onSuccess { _chatPage.value = it }
+                .onFailure {
+                    // 409 = has not run yet. Show the empty state, not an error.
+                    if (_chatPage.value == null) _chatPage.value = TranscriptPage()
                 }
-                .onFailure { _toast.value = errText(it) }
         }
     }
 
@@ -276,28 +455,25 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
         _sending.value = true
         _streamingText.value = ""
         _activeTool.value = null
-        // Show the user's line immediately; the server has it persisted either way.
-        appendLocal(Message(type = "user", text = text, ts = System.currentTimeMillis() / 1000))
         collect(id, client.sendMessage(id, text))
     }
 
     fun cancel(id: String) {
         viewModelScope.launch {
-            runCatching { client.cancelChat(id) }
-                .onFailure { _toast.value = errText(it) }
+            runCatching { client.cancelChat(id) }.onFailure { _toast.value = errText(it) }
         }
     }
 
-    /**
-     * Detaches the stream without cancelling the server-side run. Called when the
-     * chat screen leaves composition: locking the phone must never kill a turn.
-     */
+    /** Detaches the stream WITHOUT cancelling the server-side run. */
     fun detachStream() {
         streamJob?.cancel()
         streamJob = null
+        chatPollJob?.cancel()
+        chatPollJob = null
         _sending.value = false
         _streamingText.value = null
         _activeTool.value = null
+        _chatPage.value = null
     }
 
     private fun collect(id: String, flow: kotlinx.coroutines.flow.Flow<ChatEvent>) {
@@ -308,47 +484,36 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
                     is ChatEvent.Started -> Unit
                     is ChatEvent.Delta -> _streamingText.value = (_streamingText.value ?: "") + ev.text
                     is ChatEvent.Assistant -> {
-                        // The final block for this turn: promote streamed text to a
-                        // real message so it survives a later reload.
-                        appendLocal(Message(type = "assistant", text = ev.text, ts = now()))
+                        // The block is complete and now in the transcript, which is
+                        // the richer source: reload rather than keeping a second copy.
                         _streamingText.value = ""
                         _activeTool.value = null
+                        loadChatTranscript(id)
                     }
                     is ChatEvent.ToolStart -> _activeTool.value = ev.name
                     is ChatEvent.Tool -> {
-                        appendLocal(Message(type = "tool", name = ev.name, input = ev.input, ts = now()))
                         _activeTool.value = null
+                        loadChatTranscript(id)
                     }
                     is ChatEvent.Result -> {
-                        appendLocal(
-                            Message(
-                                type = "result", ok = ev.ok, durationMs = ev.durationMs,
-                                costUsd = ev.costUsd, ts = now(),
-                            )
-                        )
                         _streamingText.value = null
+                        loadChatTranscript(id)
                     }
                     is ChatEvent.Failure -> {
-                        appendLocal(Message(type = "error", text = ev.text, ts = now()))
+                        _toast.value = ev.text
                         _streamingText.value = null
                     }
                     ChatEvent.Done -> {
                         _sending.value = false
                         _streamingText.value = null
                         _activeTool.value = null
+                        loadChatTranscript(id)
                         refreshChats()
                     }
                 }
             }
             _sending.value = false
         }
-    }
-
-    private fun now() = System.currentTimeMillis() / 1000
-
-    private fun appendLocal(msg: Message) {
-        val cur = _chatDetail.value ?: return
-        _chatDetail.value = cur.copy(messages = cur.messages + msg)
     }
 
     companion object {

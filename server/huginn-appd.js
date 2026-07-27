@@ -24,8 +24,10 @@ const fs = require('node:fs');
 const path = require('node:path');
 const os = require('node:os');
 const { execFile, spawn } = require('node:child_process');
+const { screenHash, previewLines, detectPrompt } = require('./lib/pane');
+const { readTranscript } = require('./lib/transcript');
 
-const VERSION = '1.0.0';
+const VERSION = '2.0.0';
 const PORT = Number(process.env.HUGINN_APPD_PORT || 8787);
 const DATA_DIR = process.env.HUGINN_APPD_DATA || '/var/lib/huginn-appd';
 const TOKEN_FILE = process.env.HUGINN_APPD_TOKEN_FILE || '/etc/huginn-appd/token';
@@ -97,31 +99,83 @@ function canonName(raw) {
 
 // ------------------------------------------------------------ tmux sessions
 
-async function listSessions() {
-  const fmt = '#{session_name}\t#{session_created}\t#{session_attached}\t#{session_activity}\t#{session_windows}';
+/**
+ * Reads the per-session state the huginn-claude-title hook records. JSON since
+ * v2 (carrying the session id + transcript path, which is the only way to map a
+ * tmux session to its transcript); a bare state word from an older hook is still
+ * accepted so a half-updated host degrades instead of breaking.
+ */
+function readSessionState(name) {
+  let raw;
+  try { raw = fs.readFileSync(path.join(STATE_DIR, name), 'utf8').trim(); } catch { return null; }
+  if (!raw) return null;
+  let mtime = null;
+  try { mtime = Math.floor(fs.statSync(path.join(STATE_DIR, name)).mtimeMs / 1000); } catch { }
+  if (raw[0] === '{') {
+    try {
+      const o = JSON.parse(raw);
+      return {
+        state: o.state || null,
+        sessionId: o.sessionId || null,
+        transcript: o.transcript || null,
+        cwd: o.cwd || null,
+        stateSince: o.ts || mtime,
+      };
+    } catch { /* fall through to the bare-word path */ }
+  }
+  return { state: raw, sessionId: null, transcript: null, cwd: null, stateSince: mtime };
+}
+
+async function listSessions({ preview = false } = {}) {
+  const fmt = '#{session_name}\t#{session_created}\t#{session_attached}\t#{session_activity}\t' +
+    '#{session_windows}\t#{window_width}\t#{window_height}\t#{window-size}';
   const { err, stdout } = await run('tmux', ['list-sessions', '-F', fmt]);
   if (err) return []; // no server running -> no sessions
-  const out = [];
+  const rows = [];
   for (const line of stdout.trim().split('\n')) {
     if (!line) continue;
-    const [name, created, attached, activity, windows] = line.split('\t');
-    let state = null, stateSince = null;
-    try {
-      const p = path.join(STATE_DIR, name);
-      state = fs.readFileSync(p, 'utf8').trim() || null;
-      stateSince = Math.floor(fs.statSync(p).mtimeMs / 1000);
-    } catch { /* no state recorded — hook not fired yet or headless */ }
-    out.push({
+    const [name, created, attached, activity, windows, w, h, wsize] = line.split('\t');
+    const st = readSessionState(name) || {};
+    rows.push({
       name,
       createdAt: Number(created),
       activityAt: Number(activity),
       attachedClients: Number(attached),
       windows: Number(windows),
-      state, stateSince,
+      cols: Number(w),
+      rows: Number(h),
+      windowSize: wsize || null,
+      sizeLeased: leases.has(name),
+      state: st.state ?? null,
+      stateSince: st.stateSince ?? null,
+      claudeSessionId: st.sessionId ?? null,
+      hasTranscript: !!(st.transcript && fs.existsSync(st.transcript)),
+      title: null,
+      preview: [],
     });
   }
-  out.sort((a, b) => b.activityAt - a.activityAt);
-  return out;
+
+  if (preview) {
+    // Title comes from the transcript (Claude Code's own ai-title, which is a far
+    // better label than the tmux name); the preview lines come from the pane,
+    // because the spinner/progress state a user wants at a glance is drawn by the
+    // TUI and never lands in the transcript.
+    await Promise.all(rows.map(async (r) => {
+      const st = readSessionState(r.name);
+      if (st && st.transcript) {
+        try {
+          const t = readTranscript(st.transcript, { limit: 1 });
+          if (t.title) r.title = t.title;
+          if (t.permissionMode) r.permissionMode = t.permissionMode;
+        } catch { /* transcript unreadable: not fatal for a list */ }
+      }
+      const cap = await run('tmux', ['capture-pane', '-p', '-t', `=${r.name}:`]);
+      if (!cap.err) r.preview = previewLines(cap.stdout.replace(/\n$/, '').split('\n'), 2);
+    }));
+  }
+
+  rows.sort((a, b) => b.activityAt - a.activityAt);
+  return rows;
 }
 
 async function sessionExists(name) {
@@ -129,23 +183,124 @@ async function sessionExists(name) {
   return !err;
 }
 
-async function captureScreen(name) {
-  const fmt = '#{pane_width}\t#{pane_height}\t#{cursor_x}\t#{cursor_y}\t#{session_attached}\t#{alternate_on}';
-  const [dim, cap] = await Promise.all([
-    run('tmux', ['display-message', '-p', '-t', `=${name}:`, fmt]),
-    run('tmux', ['capture-pane', '-p', '-e', '-t', `=${name}:`]),
-  ]);
-  if (dim.err || cap.err) return null;
-  const [w, h, cx, cy, attached, altOn] = dim.stdout.trim().split('\t');
-  // capture-pane emits exactly pane_height lines (some empty); keep them so the
-  // client can render a stable screen without jumping.
-  const lines = cap.stdout.replace(/\n$/, '').split('\n');
+// ---- pane sizing, as an expiring lease -------------------------------------
+//
+// tmux sizes a window to its attached clients; with no client attached it keeps
+// whatever size it was created at (80x24 from `cc`). That makes the phone view a
+// cramped, truncated window of a layout drawn for a laptop. Resizing the window
+// to the phone's real geometry fixes it AND makes Claude Code re-wrap its own
+// output to fit, which is the actual goal.
+//
+// The hazard: resizing requires `window-size manual`, and a manual window does
+// NOT re-fit when a laptop later attaches — it would leave a 45x40 window inside
+// a 200x50 terminal (verified on tmux 3.6b). So a resize is a LEASE, never a
+// permanent change: it expires on its own, is renewed by continued viewing, and
+// is released on every exit path including a crash (the startup sweep). The
+// laptop can therefore never be left with a shrunken window by an app that was
+// force-quit or a phone that went out of range.
+const leases = new Map(); // name -> {cols, rows, expiresAt}
+const LEASE_MS = 90_000;
+const LEASE_SWEEP_MS = 15_000;
+
+async function acquireSize(name, cols, rows) {
+  cols = Math.max(20, Math.min(300, Math.floor(cols)));
+  rows = Math.max(10, Math.min(200, Math.floor(rows)));
+  const cur = leases.get(name);
+  if (!cur || cur.cols !== cols || cur.rows !== rows) {
+    const a = await run('tmux', ['set-option', '-t', `=${name}:`, 'window-size', 'manual']);
+    if (a.err) return false;
+    const b = await run('tmux', ['resize-window', '-t', `=${name}:`, '-x', String(cols), '-y', String(rows)]);
+    if (b.err) { await releaseSize(name); return false; }
+    log(`lease ${name} -> ${cols}x${rows}`);
+  }
+  leases.set(name, { cols, rows, expiresAt: Date.now() + LEASE_MS });
+  return true;
+}
+
+async function releaseSize(name) {
+  leases.delete(name);
+  // Unsetting the option restores the inherited default (`smallest` on this
+  // host) and tmux immediately re-fits the window to any attached client.
+  await run('tmux', ['set-option', '-u', '-t', `=${name}:`, 'window-size']);
+  log(`lease ${name} released`);
+}
+
+setInterval(() => {
+  const now = Date.now();
+  for (const [name, l] of leases) {
+    if (l.expiresAt <= now) releaseSize(name).catch(() => { });
+  }
+}, LEASE_SWEEP_MS).unref();
+
+/**
+ * Releases every session left with a manual window size. Runs at startup so a
+ * daemon that was killed mid-view cannot strand a laptop with a phone-sized
+ * window, and on shutdown for the ordinary case.
+ */
+async function sweepStrandedSizes(reason) {
+  const { err, stdout } = await run('tmux', ['list-sessions', '-F', '#{session_name}\t#{window-size}']);
+  if (err) return;
+  for (const line of stdout.trim().split('\n')) {
+    if (!line) continue;
+    const [name, wsize] = line.split('\t');
+    if (wsize === 'manual') {
+      log(`${reason}: releasing stranded manual size on ${name}`);
+      await run('tmux', ['set-option', '-u', '-t', `=${name}:`, 'window-size']);
+    }
+  }
+  leases.clear();
+}
+
+/**
+ * @param name    session
+ * @param opts.cols/rows  request this geometry (takes/renews a lease)
+ * @param opts.history    include this many scrollback lines above the screen
+ * @param opts.force      resize even though another client is attached
+ */
+async function captureScreen(name, { cols = null, rows = null, history = 0, force = false } = {}) {
+  const fmt = '#{pane_width}\t#{pane_height}\t#{cursor_x}\t#{cursor_y}\t#{session_attached}\t' +
+    '#{alternate_on}\t#{history_size}\t#{window-size}';
+  let dim = await run('tmux', ['display-message', '-p', '-t', `=${name}:`, fmt]);
+  if (dim.err) return null;
+  let attached = Number(dim.stdout.trim().split('\t')[4]);
+
+  // Refuse to shrink a window somebody is actually looking at unless told to.
+  let resizeBlocked = false;
+  if (cols && rows) {
+    if (attached > 0 && !force) {
+      resizeBlocked = true;
+    } else if (await acquireSize(name, cols, rows)) {
+      dim = await run('tmux', ['display-message', '-p', '-t', `=${name}:`, fmt]);
+      if (dim.err) return null;
+    }
+  }
+
+  const [w, h, cx, cy, att, altOn, hist, wsize] = dim.stdout.trim().split('\t');
+  const capArgs = ['capture-pane', '-p', '-e', '-t', `=${name}:`];
+  const histWant = Math.max(0, Math.min(2000, Math.floor(history)));
+  if (histWant > 0) capArgs.splice(2, 0, '-S', `-${histWant}`);
+  const cap = await run('tmux', capArgs);
+  if (cap.err) return null;
+
+  const all = cap.stdout.replace(/\n$/, '').split('\n');
+  const height = Number(h);
+  // With history, everything before the last `height` lines is scrollback.
+  const scrollback = histWant > 0 && all.length > height ? all.slice(0, all.length - height) : [];
+  const lines = histWant > 0 && all.length > height ? all.slice(-height) : all;
+
   return {
-    width: Number(w), height: Number(h),
+    width: Number(w), height,
     cursorX: Number(cx), cursorY: Number(cy),
-    attachedClients: Number(attached),
+    attachedClients: Number(att),
     altScreen: altOn === '1',
+    historySize: Number(hist),
+    windowSize: wsize,
+    sizeLeased: leases.has(name),
+    resizeBlocked,
     lines,
+    scrollback,
+    hash: screenHash(lines.join('\n') + `|${cx},${cy}`),
+    prompt: detectPrompt(lines),
   };
 }
 
@@ -386,6 +541,29 @@ function handleClaudeEvent(meta, run_, ev) {
   }
 }
 
+/**
+ * Locates a session's transcript by id. Chats run in WORKDIR, so the slug is
+ * predictable, but a chat resumed after a cwd change (or an older layout) can
+ * sit under a different project dir — so fall back to a scan rather than
+ * claiming there is no transcript.
+ */
+function findTranscriptFile(sessionId) {
+  if (!/^[0-9a-f-]{36}$/.test(sessionId)) return null;
+  const root = path.join(os.homedir(), '.claude', 'projects');
+  const slug = WORKDIR.replace(/\//g, '-');
+  const first = path.join(root, slug, `${sessionId}.jsonl`);
+  if (fs.existsSync(first)) return first;
+  let dirs = [];
+  try { dirs = fs.readdirSync(root); } catch { return null; }
+  for (const d of dirs) {
+    const c = path.join(root, d, `${sessionId}.jsonl`);
+    if (fs.existsSync(c)) return c;
+  }
+  return null;
+}
+
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
 // ---------------------------------------------------------------- status
 
 let cachedClaudeVersion = null;
@@ -450,7 +628,12 @@ const server = http.createServer(async (req, res) => {
     if (req.method === 'GET' && p === '/v1/status') return sendJson(res, 200, await statusPayload());
 
     // --- sessions
-    if (req.method === 'GET' && p === '/v1/sessions') return sendJson(res, 200, { sessions: await listSessions() });
+    if (req.method === 'GET' && p === '/v1/sessions') {
+      // preview=1 costs one capture-pane + one transcript head per session, so
+      // the list stays cheap for the notification poller that only needs state.
+      const preview = u.searchParams.get('preview') === '1';
+      return sendJson(res, 200, { sessions: await listSessions({ preview }) });
+    }
 
     if (req.method === 'POST' && p === '/v1/sessions') {
       const body = JSON.parse(await readBody(req) || '{}');
@@ -473,9 +656,79 @@ const server = http.createServer(async (req, res) => {
     }
 
     if ((m = p.match(/^\/v1\/sessions\/([a-z0-9_]{1,50})\/screen$/)) && req.method === 'GET') {
-      const scr = await captureScreen(m[1]);
+      const name = m[1];
+      const q = u.searchParams;
+      const opts = {
+        cols: Number(q.get('cols')) || null,
+        rows: Number(q.get('rows')) || null,
+        history: Number(q.get('history')) || 0,
+        force: q.get('force') === '1',
+      };
+      // Long poll: hold the request until the screen actually differs from what
+      // the phone already has. An idle session then costs one parked request
+      // instead of a capture every second, and a busy one updates as fast as it
+      // changes rather than on a fixed tick.
+      const known = q.get('hash');
+      const waitMs = Math.max(0, Math.min(30_000, Number(q.get('wait')) || 0));
+      const deadline = Date.now() + waitMs;
+      let scr = await captureScreen(name, opts);
       if (!scr) return sendErr(res, 404, 'no such session');
+      while (known && scr.hash === known && Date.now() < deadline && !req.destroyed) {
+        await sleep(300);
+        scr = await captureScreen(name, opts);
+        if (!scr) return sendErr(res, 404, 'no such session');
+      }
+      if (req.destroyed) return;
+      if (known && scr.hash === known) {
+        // Nothing changed within the window. Tell the client so, without
+        // re-sending a screen it already has.
+        return sendJson(res, 200, {
+          unchanged: true, hash: scr.hash, width: scr.width, height: scr.height,
+          attachedClients: scr.attachedClients, sizeLeased: scr.sizeLeased,
+          resizeBlocked: scr.resizeBlocked,
+        });
+      }
       return sendJson(res, 200, scr);
+    }
+
+    // Explicitly hand the pane size back to tmux (so an attached laptop re-fits
+    // immediately rather than waiting for the lease to lapse).
+    if ((m = p.match(/^\/v1\/sessions\/([a-z0-9_]{1,50})\/size$/)) && req.method === 'DELETE') {
+      await releaseSize(m[1]);
+      return sendJson(res, 200, { ok: true });
+    }
+
+    // Structured conversation for a tmux session, straight from its Claude Code
+    // transcript: thinking, tool calls, subagent output, workflow runs. This is
+    // the primary way the app shows a session; the pane is for interaction.
+    if ((m = p.match(/^\/v1\/sessions\/([a-z0-9_]{1,50})\/transcript$/)) && req.method === 'GET') {
+      const name = m[1];
+      if (!(await sessionExists(name))) return sendErr(res, 404, 'no such session');
+      const st = readSessionState(name);
+      if (!st || !st.transcript) {
+        return sendErr(res, 409, 'no transcript recorded for this session yet — the Claude hook fires on the first prompt');
+      }
+      if (!fs.existsSync(st.transcript)) return sendErr(res, 409, 'recorded transcript file is gone');
+      const offsetParam = u.searchParams.get('offset');
+      const t = readTranscript(st.transcript, {
+        offset: offsetParam == null ? null : Number(offsetParam),
+        limit: Math.max(1, Math.min(800, Number(u.searchParams.get('limit')) || 400)),
+      });
+      return sendJson(res, 200, { ...t, state: st.state, claudeSessionId: st.sessionId });
+    }
+
+    if ((m = p.match(/^\/v1\/sessions\/([a-z0-9_]{1,50})\/rename$/)) && req.method === 'POST') {
+      const from = m[1];
+      const body = JSON.parse(await readBody(req) || '{}');
+      const to = canonName(body.name);
+      if (!to) return sendErr(res, 400, 'invalid session name (letters, digits, underscore)');
+      if (to !== from && await sessionExists(to)) return sendErr(res, 409, `session '${to}' already exists`);
+      const r = await run('tmux', ['rename-session', '-t', `=${from}`, to]);
+      if (r.err) return sendErr(res, 404, `tmux: ${r.stderr.trim() || 'no such session'}`);
+      // The state file is keyed by name; move it so state/transcript survive.
+      try { fs.renameSync(path.join(STATE_DIR, from), path.join(STATE_DIR, to)); } catch { }
+      if (leases.has(from)) { leases.set(to, leases.get(from)); leases.delete(from); }
+      return sendJson(res, 200, { ok: true, name: to });
     }
 
     if ((m = p.match(/^\/v1\/sessions\/([a-z0-9_]{1,50})\/keys$/)) && req.method === 'POST') {
@@ -563,6 +816,21 @@ const server = http.createServer(async (req, res) => {
         }
         return sendJson(res, 202, { ok: true, running: true });
       }
+      // The same structured reader the sessions use. A headless run writes a
+      // normal Claude Code transcript, so a chat gets thinking and subagent
+      // output for free instead of only the digest this daemon persisted.
+      if (req.method === 'GET' && sub === '/transcript') {
+        if (!meta.claudeSessionId) return sendErr(res, 409, 'chat has not run yet');
+        const file = findTranscriptFile(meta.claudeSessionId);
+        if (!file) return sendErr(res, 409, 'transcript not found for this chat');
+        const offsetParam = u.searchParams.get('offset');
+        const t = readTranscript(file, {
+          offset: offsetParam == null ? null : Number(offsetParam),
+          limit: Math.max(1, Math.min(800, Number(u.searchParams.get('limit')) || 400)),
+        });
+        return sendJson(res, 200, { ...t, running: meta.running, mode: meta.mode });
+      }
+
       if (req.method === 'GET' && sub === '/stream') {
         const run_ = activeRuns.get(id);
         const since = Number(u.searchParams.get('since') || 0);
@@ -623,6 +891,22 @@ function resolveBind() {
   });
 }
 
-resolveBind().then((bind) => {
+resolveBind().then(async (bind) => {
+  // Recover from a previous crash BEFORE serving: a session left at `window-size
+  // manual` by a killed daemon would otherwise keep a laptop's window shrunken
+  // with nothing left to release it.
+  await sweepStrandedSizes('startup');
   server.listen(PORT, bind, () => log(`huginn-appd ${VERSION} listening on ${bind}:${PORT}`));
 }).catch((e) => { console.error('FATAL:', e.message); process.exit(1); });
+
+// Ordinary shutdown: hand every leased pane size back before exiting.
+let shuttingDown = false;
+for (const sig of ['SIGTERM', 'SIGINT']) {
+  process.on(sig, async () => {
+    if (shuttingDown) return;
+    shuttingDown = true;
+    log(`${sig}: releasing ${leases.size} pane size lease(s)`);
+    try { await sweepStrandedSizes('shutdown'); } catch { }
+    process.exit(0);
+  });
+}

@@ -27,6 +27,12 @@ LOCK=/tmp/huginn-app-gradle.lock
 
 echo "[build 1/3] unit tests"
 flock "$LOCK" ./gradlew :app:testDebugUnitTest
+# The daemon's pure logic (pane parsing, prompt detection, transcript reading)
+# is tested with node's own runner; it gates the APK because the app is useless
+# against a broken server.
+if command -v node >/dev/null 2>&1 && [ -d "$REPO_DIR/server/test" ]; then
+  node --test "$REPO_DIR"/server/test/*.test.js
+fi
 
 echo "[build 2/3] $VARIANT APK"
 flock "$LOCK" ./gradlew "$TASK"

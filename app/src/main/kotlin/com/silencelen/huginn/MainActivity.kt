@@ -1,10 +1,15 @@
 package com.silencelen.huginn
 
+import android.Manifest
+import android.os.Build
 import android.os.Bundle
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
@@ -17,7 +22,6 @@ import androidx.compose.material.icons.filled.Terminal
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
-import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.Scaffold
@@ -38,46 +42,49 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.lifecycle.viewmodel.compose.viewModel
+import com.silencelen.huginn.notify.SessionWatchWorker
 import com.silencelen.huginn.ui.ChatScreen
 import com.silencelen.huginn.ui.ChatsScreen
 import com.silencelen.huginn.ui.HuginnViewModel
+import com.silencelen.huginn.ui.SessionScreen
+import com.silencelen.huginn.ui.SessionSubtitle
 import com.silencelen.huginn.ui.SessionsScreen
 import com.silencelen.huginn.ui.SettingsScreen
 import com.silencelen.huginn.ui.StatusScreen
-import com.silencelen.huginn.ui.TerminalScreen
 import com.silencelen.huginn.ui.theme.HuginnTheme
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
+        // Tapping a "needs you" notification opens straight into that session.
+        val openSession = intent?.getStringExtra(SessionWatchWorker.EXTRA_SESSION)
         setContent {
-            HuginnTheme { HuginnApp() }
+            HuginnTheme { HuginnApp(openSession = openSession) }
         }
     }
 }
 
-/**
- * Navigation is a small sealed hierarchy held in saveable state rather than
- * navigation-compose: there are five destinations and two of them carry a single
- * string argument, so a nav graph would be more machinery than routing.
- */
 private sealed interface Dest {
     data object Chats : Dest
     data class Chat(val id: String) : Dest
     data object Sessions : Dest
-    data class Terminal(val name: String) : Dest
+    data class SessionView(val name: String) : Dest
     data object Status : Dest
     data object Settings : Dest
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun HuginnApp(vm: HuginnViewModel = viewModel(factory = HuginnViewModel.Factory)) {
-    // Tab identity survives configuration changes; the argument-carrying
-    // destinations are transient by design (reopening lands you on the tab).
+fun HuginnApp(
+    openSession: String? = null,
+    vm: HuginnViewModel = viewModel(factory = HuginnViewModel.Factory),
+) {
     var tab by rememberSaveable { mutableStateOf(0) }
-    var dest by remember { mutableStateOf<Dest>(Dest.Chats) }
+    var dest by remember {
+        mutableStateOf<Dest>(if (openSession != null) Dest.SessionView(openSession) else Dest.Chats)
+    }
+    var sessionTab by rememberSaveable { mutableStateOf(0) }
 
     val chats by vm.chats.collectAsState()
     val sessions by vm.sessions.collectAsState()
@@ -88,15 +95,28 @@ fun HuginnApp(vm: HuginnViewModel = viewModel(factory = HuginnViewModel.Factory)
     val toast by vm.toast.collectAsState()
     val baseUrl by vm.baseUrl.collectAsState()
     val token by vm.token.collectAsState()
-    val chatDetail by vm.chatDetail.collectAsState()
+    val fontScale by vm.fontScale.collectAsState()
+    val notifyEnabled by vm.notifyEnabled.collectAsState()
+    val chatPage by vm.chatPage.collectAsState()
+    val chatMode by vm.chatMode.collectAsState()
+    val chatTitle by vm.chatTitle.collectAsState()
     val streamingText by vm.streamingText.collectAsState()
     val activeTool by vm.activeTool.collectAsState()
     val sending by vm.sending.collectAsState()
     val screen by vm.screen.collectAsState()
+    val transcript by vm.transcript.collectAsState()
+    val transcriptError by vm.transcriptError.collectAsState()
 
     val snackbar = remember { SnackbarHostState() }
-    LaunchedEffect(toast) {
-        toast?.let { snackbar.showSnackbar(it); vm.toastShown() }
+    LaunchedEffect(toast) { toast?.let { snackbar.showSnackbar(it); vm.toastShown() } }
+
+    val notifPermission = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { /* declined simply means no notifications; nothing else changes */ }
+    LaunchedEffect(notifyEnabled) {
+        if (notifyEnabled && Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            notifPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
+        }
     }
 
     val onTab: (Int) -> Unit = { i ->
@@ -109,32 +129,35 @@ fun HuginnApp(vm: HuginnViewModel = viewModel(factory = HuginnViewModel.Factory)
         vm.refreshAll()
     }
 
+    val isChild = dest is Dest.Chat || dest is Dest.SessionView || dest is Dest.Settings
     val title = when (val d = dest) {
         is Dest.Chats -> "Huginn"
-        is Dest.Chat -> chatDetail?.title ?: "Chat"
+        is Dest.Chat -> chatTitle ?: "Chat"
         is Dest.Sessions -> "Sessions"
-        is Dest.Terminal -> d.name
+        is Dest.SessionView -> transcript?.title ?: d.name
         is Dest.Status -> "Status"
         is Dest.Settings -> "Settings"
     }
-    val isChild = dest is Dest.Chat || dest is Dest.Terminal || dest is Dest.Settings
 
     Scaffold(
         topBar = {
             TopAppBar(
                 title = {
-                    Text(
-                        title,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                        fontFamily = if (dest is Dest.Terminal) FontFamily.Monospace else null,
-                    )
+                    Column {
+                        Text(
+                            title,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            fontFamily = if (dest is Dest.SessionView && transcript?.title == null) FontFamily.Monospace else null,
+                        )
+                        if (dest is Dest.SessionView) SessionSubtitle(transcript, screen)
+                    }
                 },
                 navigationIcon = {
                     if (isChild) {
                         IconButton(onClick = {
                             dest = when (dest) {
-                                is Dest.Terminal -> Dest.Sessions
+                                is Dest.SessionView -> Dest.Sessions
                                 is Dest.Chat -> Dest.Chats
                                 else -> when (tab) {
                                     0 -> Dest.Chats
@@ -148,7 +171,7 @@ fun HuginnApp(vm: HuginnViewModel = viewModel(factory = HuginnViewModel.Factory)
                     }
                 },
                 actions = {
-                    if (dest !is Dest.Chat && dest !is Dest.Terminal) {
+                    if (dest !is Dest.Chat && dest !is Dest.SessionView) {
                         IconButton(onClick = { vm.refreshAll() }) {
                             Icon(Icons.Filled.Refresh, contentDescription = "Refresh")
                         }
@@ -162,8 +185,6 @@ fun HuginnApp(vm: HuginnViewModel = viewModel(factory = HuginnViewModel.Factory)
             )
         },
         bottomBar = {
-            // The terminal and chat composers own the bottom edge; a nav bar there
-            // would sit under the keyboard and steal the send button's reach.
             if (!isChild) {
                 NavigationBar {
                     NavigationBarItem(
@@ -202,36 +223,48 @@ fun HuginnApp(vm: HuginnViewModel = viewModel(factory = HuginnViewModel.Factory)
                 )
 
                 is Dest.Chat -> {
-                    // Leaving the screen detaches the SSE stream but never cancels the
-                    // server-side run: a locked phone must not kill a turn in progress.
                     DisposableEffect(d.id) { onDispose { vm.detachStream() } }
                     ChatScreen(
-                        detail = chatDetail,
+                        page = chatPage,
                         streamingText = streamingText,
                         activeTool = activeTool,
                         sending = sending,
+                        mode = chatMode,
                         onSend = { vm.send(d.id, it) },
                         onCancel = { vm.cancel(d.id) },
+                        onCopy = { vm.copy(it) },
                     )
                 }
 
                 is Dest.Sessions -> SessionsScreen(
                     sessions = sessions,
-                    onOpen = { name -> dest = Dest.Terminal(name) },
-                    onCreate = { name -> vm.createSession(name) { dest = Dest.Terminal(it) } },
+                    onOpen = { name -> dest = Dest.SessionView(name) },
+                    onCreate = { name -> vm.createSession(name) { dest = Dest.SessionView(it) } },
                     onKill = { vm.killSession(it) },
+                    onRename = { from, to -> vm.renameSession(from, to) },
                 )
 
-                is Dest.Terminal -> {
+                is Dest.SessionView -> {
                     DisposableEffect(d.name) {
+                        vm.startTranscriptPolling(d.name)
                         vm.startScreenPolling(d.name)
                         onDispose { vm.stopScreenPolling(); vm.refreshSessions() }
                     }
-                    TerminalScreen(
-                        session = d.name,
+                    SessionScreen(
+                        name = d.name,
+                        transcript = transcript,
+                        transcriptError = transcriptError,
                         screen = screen,
+                        tab = sessionTab,
+                        onTab = { sessionTab = it },
+                        fontScale = fontScale,
+                        onFontScale = { vm.setFontScale(it) },
+                        onGeometry = { c, r -> vm.setGeometry(c, r) },
                         onSendText = { text, enter -> vm.sendText(d.name, text, enter) },
                         onSendKeys = { vm.sendKeys(d.name, it) },
+                        onAnswerPrompt = { vm.answerPrompt(d.name, it) },
+                        onForceResize = { vm.forceFit() },
+                        onCopy = { vm.copy(it) },
                     )
                 }
 
@@ -246,6 +279,8 @@ fun HuginnApp(vm: HuginnViewModel = viewModel(factory = HuginnViewModel.Factory)
                     baseUrl = baseUrl,
                     token = token,
                     connected = connected,
+                    notifyEnabled = notifyEnabled,
+                    onNotifyEnabled = { vm.setNotifyEnabled(it) },
                     onSave = { u, t -> vm.saveSettings(u, t) },
                     onTest = { vm.testConnection() },
                 )

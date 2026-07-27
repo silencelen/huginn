@@ -35,7 +35,7 @@ android {
         // devstore fleet convention. HUGINN_VERSIONCODE overrides for pinned builds.
         versionCode   = System.getenv("HUGINN_VERSIONCODE")?.toIntOrNull()
             ?: (System.currentTimeMillis() / 1000L - 1_767_225_600L).toInt()
-        versionName   = "1.0.0"
+        versionName   = "2.0.0"
 
         // Single-ABI for smaller APK; phone is arm64-v8a.
         ndk { abiFilters += listOf("arm64-v8a") }
@@ -117,6 +117,8 @@ dependencies {
     implementation(libs.kotlinx.serialization.json)
     implementation(libs.okhttp)
     implementation(libs.androidx.datastore.preferences)
+    // Background poll that notices when a session starts waiting on you.
+    implementation(libs.androidx.work.runtime.ktx)
 
     debugImplementation(libs.compose.ui.tooling)
 

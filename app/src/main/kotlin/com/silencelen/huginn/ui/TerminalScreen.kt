@@ -1,6 +1,8 @@
 package com.silencelen.huginn.ui
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -17,6 +19,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowDownward
 import androidx.compose.material.icons.filled.ArrowUpward
@@ -24,7 +27,8 @@ import androidx.compose.material.icons.filled.KeyboardArrowLeft
 import androidx.compose.material.icons.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.KeyboardReturn
 import androidx.compose.material3.AssistChip
-import androidx.compose.material3.AssistChipDefaults
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -33,44 +37,104 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.silencelen.huginn.data.Screen
 
 /**
- * A read-and-poke view of one tmux pane: the rendered screen from capture-pane,
- * a key row for the things you cannot type on a phone keyboard, and a text field
- * that sends a whole line at once.
- *
- * It is deliberately NOT a terminal emulator. There is no PTY here, so there is
- * no cursor to place and no scrollback to page. What it does cover is the actual
- * job on a phone: read what Claude is asking, answer it, approve a tool, hit Esc.
+ * The live pane. Not a terminal emulator (there is no PTY here), but a real
+ * character grid: the screen is parsed into cells and drawn at exact cell
+ * metrics, and the phone reports the geometry it can actually display so the
+ * server can resize the tmux window to match. That last part is the difference
+ * between reading a laptop-shaped layout through a keyhole and reading a layout
+ * drawn for this screen.
  */
 @Composable
 fun TerminalScreen(
     session: String,
     screen: Screen?,
+    fontScale: Float,
+    onFontScale: (Float) -> Unit,
+    onGeometry: (Int, Int) -> Unit,
     onSendText: (String, Boolean) -> Unit,
     onSendKeys: (List<String>) -> Unit,
+    onAnswerPrompt: (Int) -> Unit,
+    onForceResize: () -> Unit,
 ) {
     var draft by remember { mutableStateOf("") }
+    val density = LocalDensity.current
+    val fg = MaterialTheme.colorScheme.onSurface
+    val bg = MaterialTheme.colorScheme.background
+    val metrics = remember(fontScale, density) {
+        CellMetrics(with(density) { fontScale.sp.toPx() })
+    }
 
     Column(Modifier.fillMaxSize()) {
-        Box(Modifier.weight(1f).fillMaxWidth().background(MaterialTheme.colorScheme.background)) {
+        if (screen?.resizeBlocked == true) {
+            AttachedBanner(screen.attachedClients, onForceResize)
+        }
+
+        BoxWithConstraints(
+            Modifier
+                .weight(1f)
+                .fillMaxWidth()
+                .background(bg)
+                // Pinch to zoom. Fewer columns at a bigger size is a real trade a
+                // reader wants to make per situation, and because the geometry is
+                // reported upstream the pane re-wraps instead of clipping.
+                .pointerInput(Unit) {
+                    detectTransformGestures { _, _, zoom, _ ->
+                        if (zoom != 1f) onFontScale((fontScale * zoom).coerceIn(5.5f, 22f))
+                    }
+                }
+        ) {
+            val cols = with(density) { (maxWidth.toPx() / metrics.cellWidth).toInt() }.coerceIn(20, 300)
+            val rows = with(density) { (maxHeight.toPx() / metrics.cellHeight).toInt() }.coerceIn(10, 200)
+            LaunchedEffect(cols, rows) { onGeometry(cols, rows) }
+
             if (screen == null) {
                 Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                     CircularProgressIndicator(strokeWidth = 2.dp)
                 }
             } else {
-                ScreenBody(screen)
+                val hScroll = rememberScrollState()
+                val vScroll = rememberScrollState()
+                val grid = remember(screen.lines, screen.width, fg, bg) {
+                    TerminalGrid.parse(screen.lines, screen.width, fg, bg)
+                }
+                Box(
+                    Modifier
+                        .fillMaxSize()
+                        .verticalScroll(vScroll)
+                        .horizontalScroll(hScroll)
+                ) {
+                    TerminalCanvas(
+                        grid = grid,
+                        metrics = metrics,
+                        cursor = screen.cursorX to screen.cursorY,
+                        cursorColor = MaterialTheme.colorScheme.primary,
+                    )
+                }
             }
+        }
+
+        // A detected choice prompt becomes buttons. This is the single biggest
+        // phone win over a terminal: answering "1/2/3" without hunting for digits
+        // on a soft keyboard while the TUI redraws under your thumb.
+        screen?.prompt?.let { prompt ->
+            PromptCard(prompt.question, prompt.options.map { it.number to it.label }, prompt.options.firstOrNull { it.selected }?.number, onAnswerPrompt)
         }
 
         KeyRow(onSendKeys)
@@ -93,8 +157,9 @@ fun TerminalScreen(
                     shape = RoundedCornerShape(20.dp),
                 )
                 Spacer(Modifier.width(6.dp))
-                // Send-without-newline exists because Claude Code's composer takes
-                // multi-line input: you often want the text in the box, not submitted.
+                // Send-without-newline: Claude Code's composer takes multi-line
+                // input, so putting text in the box is a distinct action from
+                // submitting it.
                 IconButton(
                     onClick = { if (draft.isNotEmpty()) { onSendText(draft, false); draft = "" } },
                     enabled = draft.isNotEmpty(),
@@ -120,48 +185,77 @@ fun TerminalScreen(
     }
 }
 
-/**
- * Sizes the monospace text so the pane's full column count fits the phone width,
- * clamped to a legible range; anything wider than the clamp scrolls sideways
- * instead of shrinking into unreadability.
- */
 @Composable
-private fun ScreenBody(screen: Screen) {
-    val fg = MaterialTheme.colorScheme.onSurface
-    val bg = MaterialTheme.colorScheme.background
-    val hScroll = rememberScrollState()
-
-    BoxWithConstraints(Modifier.fillMaxSize()) {
-        val cols = screen.width.coerceAtLeast(20)
-        // Monospace advance is ~0.6 em across the platform mono faces.
-        val raw = (maxWidth.value / cols) / 0.6f
-        val fontSize = raw.coerceIn(6.5f, 13f).sp
-        val lineHeight = (fontSize.value * 1.22f).sp
-
-        Column(
-            Modifier
-                .fillMaxSize()
-                .horizontalScroll(hScroll)
-                .padding(horizontal = 6.dp, vertical = 4.dp)
+private fun AttachedBanner(clients: Int, onForce: () -> Unit) {
+    Surface(color = MaterialTheme.colorScheme.surfaceVariant) {
+        Row(
+            Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
         ) {
-            screen.lines.forEach { line ->
-                Text(
-                    Ansi.render(line, defaultFg = fg, defaultBg = bg),
-                    fontFamily = FontFamily.Monospace,
-                    fontSize = fontSize,
-                    lineHeight = lineHeight,
-                    softWrap = false,
-                    maxLines = 1,
-                )
+            Text(
+                "Another client is attached, so the pane is still its size. Resizing would shrink their window.",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.weight(1f),
+            )
+            Spacer(Modifier.width(8.dp))
+            Text(
+                "Fit anyway",
+                style = MaterialTheme.typography.labelMedium,
+                fontWeight = FontWeight.SemiBold,
+                color = MaterialTheme.colorScheme.primary,
+                modifier = Modifier
+                    .clip(RoundedCornerShape(6.dp))
+                    .clickable(onClick = onForce)
+                    .background(MaterialTheme.colorScheme.surface)
+                    .padding(horizontal = 10.dp, vertical = 6.dp),
+            )
+        }
+    }
+}
+
+@Composable
+fun PromptCard(
+    question: String,
+    options: List<Pair<Int, String>>,
+    selected: Int?,
+    onAnswer: (Int) -> Unit,
+) {
+    Surface(
+        color = MaterialTheme.colorScheme.surfaceContainerHigh,
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        Column(Modifier.padding(horizontal = 12.dp, vertical = 10.dp)) {
+            Text(
+                question.ifBlank { "Claude is asking" },
+                style = MaterialTheme.typography.titleSmall,
+                fontWeight = FontWeight.SemiBold,
+            )
+            Spacer(Modifier.size(8.dp))
+            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                options.forEach { (n, label) ->
+                    Button(
+                        onClick = { onAnswer(n) },
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(10.dp),
+                        colors = if (n == selected) ButtonDefaults.buttonColors()
+                        else ButtonDefaults.outlinedButtonColors(
+                            contentColor = MaterialTheme.colorScheme.onSurface,
+                        ),
+                    ) {
+                        Text(
+                            "$n.  $label",
+                            style = MaterialTheme.typography.bodyMedium,
+                            modifier = Modifier.fillMaxWidth(),
+                        )
+                    }
+                }
             }
         }
     }
 }
 
-/**
- * The keys a phone keyboard cannot send. Shift+Tab is here because it is how
- * Claude Code cycles permission modes, and Esc because it is how you interrupt.
- */
+/** The keys a phone keyboard cannot send. */
 @Composable
 private fun KeyRow(onSendKeys: (List<String>) -> Unit) {
     val hScroll = rememberScrollState()
@@ -196,9 +290,6 @@ private fun KeyChip(label: String, onClick: () -> Unit) {
     AssistChip(
         onClick = onClick,
         label = { Text(label, fontFamily = FontFamily.Monospace, fontSize = 12.sp) },
-        colors = AssistChipDefaults.assistChipColors(
-            labelColor = MaterialTheme.colorScheme.onSurface,
-        ),
     )
 }
 
