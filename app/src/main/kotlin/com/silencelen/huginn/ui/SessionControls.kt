@@ -88,16 +88,62 @@ fun SessionControls(
     }
 }
 
+/**
+ * The same controls for a chat. A chat has no permission mode to cycle (its tool
+ * access is fixed by Ask/Act at creation), so that slot states the mode instead of
+ * offering to change it.
+ */
+@Composable
+fun ChatOptionsBar(
+    mode: String,
+    model: String?,
+    effort: String?,
+    enabled: Boolean,
+    onModel: (String) -> Unit,
+    onEffort: (String) -> Unit,
+) {
+    Surface(color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)) {
+        Row(
+            Modifier
+                .fillMaxWidth()
+                .horizontalScroll(rememberScrollState())
+                .padding(horizontal = 8.dp, vertical = 6.dp),
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            PickerChip(
+                label = if (model == null) "Default model" else prettyModel(model),
+                options = MODELS.map { it.first to it.second },
+                enabled = enabled,
+                onPick = onModel,
+            )
+            PickerChip(
+                label = effort?.replaceFirstChar { it.uppercase() } ?: "Default effort",
+                options = EFFORTS.map { it to it.replaceFirstChar { c -> c.uppercase() } },
+                enabled = enabled,
+                onPick = onEffort,
+            )
+            AssistChip(
+                onClick = { },
+                enabled = false,
+                label = { Text(if (mode == "act") "Act" else "Ask") },
+            )
+        }
+    }
+}
+
 @Composable
 private fun PickerChip(
     label: String,
     options: List<Pair<String, String>>,
+    enabled: Boolean = true,
     onPick: (String) -> Unit,
 ) {
     var open by remember { mutableStateOf(false) }
     Box {
         AssistChip(
             onClick = { open = true },
+            enabled = enabled,
             label = {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text(label)

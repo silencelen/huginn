@@ -317,6 +317,24 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
+    private var sessionsPollJob: Job? = null
+
+    /** Keeps the sessions list live while it is on screen. */
+    fun startSessionsPolling() {
+        sessionsPollJob?.cancel()
+        sessionsPollJob = viewModelScope.launch {
+            while (isActive) {
+                runCatching { client.sessions(preview = true) }.onSuccess { _sessions.value = it }
+                delay(5000)
+            }
+        }
+    }
+
+    fun stopSessionsPolling() {
+        sessionsPollJob?.cancel()
+        sessionsPollJob = null
+    }
+
     fun refreshSessions() {
         viewModelScope.launch {
             runCatching { client.sessions(preview = true) }
@@ -373,6 +391,28 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
 
     private val _screen = MutableStateFlow<Screen?>(null)
     val screen: StateFlow<Screen?> = _screen.asStateFlow()
+
+    /**
+     * Pane history above the live screen. Fetched on request rather than with
+     * every poll: it is tens of kilobytes and does not change while you read it,
+     * so putting it in the poll would pay for it once a second for nothing.
+     */
+    private val _scrollback = MutableStateFlow<List<String>>(emptyList())
+    val scrollback: StateFlow<List<String>> = _scrollback.asStateFlow()
+
+    private val _loadingScrollback = MutableStateFlow(false)
+    val loadingScrollback: StateFlow<Boolean> = _loadingScrollback.asStateFlow()
+
+    fun loadScrollback(name: String, lines: Int = 400) {
+        if (_loadingScrollback.value) return
+        _loadingScrollback.value = true
+        viewModelScope.launch {
+            runCatching { client.screen(name, history = lines) }
+                .onSuccess { _scrollback.value = it.scrollback }
+                .onFailure { _toast.value = errText(it) }
+            _loadingScrollback.value = false
+        }
+    }
 
     private val _transcript = MutableStateFlow<TranscriptPage?>(null)
     val transcript: StateFlow<TranscriptPage?> = _transcript.asStateFlow()
@@ -557,6 +597,12 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
     private val _chatMode = MutableStateFlow("ask")
     val chatMode: StateFlow<String> = _chatMode.asStateFlow()
 
+    private val _chatModel = MutableStateFlow<String?>(null)
+    val chatModel: StateFlow<String?> = _chatModel.asStateFlow()
+
+    private val _chatEffort = MutableStateFlow<String?>(null)
+    val chatEffort: StateFlow<String?> = _chatEffort.asStateFlow()
+
     private val _chatTitle = MutableStateFlow<String?>(null)
     val chatTitle: StateFlow<String?> = _chatTitle.asStateFlow()
 
@@ -579,6 +625,8 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch {
             val meta = runCatching { client.chat(id) }.getOrNull()
             _chatMode.value = meta?.mode ?: "ask"
+            _chatModel.value = meta?.model
+            _chatEffort.value = meta?.effort
             _chatTitle.value = meta?.title
             // A chat that has never run has no transcript yet; that is not an error.
             loadChatTranscript(id)
@@ -599,6 +647,14 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
                     // 409 = has not run yet. Show the empty state, not an error.
                     if (_chatPage.value == null) _chatPage.value = TranscriptPage()
                 }
+        }
+    }
+
+    fun setChatOptions(id: String, model: String? = null, effort: String? = null) {
+        viewModelScope.launch {
+            runCatching { client.updateChat(id, model = model, effort = effort) }
+                .onSuccess { _chatModel.value = it.model; _chatEffort.value = it.effort; refreshChats() }
+                .onFailure { _toast.value = errText(it) }
         }
     }
 
