@@ -383,6 +383,7 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
     private var screenJob: Job? = null
     private var transcriptJob: Job? = null
 
+
     /** Geometry the phone can actually display, reported so tmux can match it. */
     private var wantCols: Int? = null
     private var wantRows: Int? = null

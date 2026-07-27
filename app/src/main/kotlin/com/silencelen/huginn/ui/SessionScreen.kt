@@ -31,6 +31,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -38,6 +39,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.silencelen.huginn.data.Screen
+import kotlinx.coroutines.launch
 import com.silencelen.huginn.data.TranscriptPage
 
 /**
@@ -128,11 +130,20 @@ private fun SessionConversation(
     onAnswerPrompt: (Int) -> Unit,
     onCopy: (String) -> Unit,
 ) {
+    val scope = rememberCoroutineScope()
     val listState = rememberLazyListState()
     val events = page?.events ?: emptyList()
+    val headerItems = if (page?.truncated == true) 1 else 0
 
-    // Open on the newest message, then follow only while already at the bottom.
-    AutoScrollToNewest(listState, events.size, key = name)
+    // Revision keys on nextOffset, which strictly increases as transcript bytes
+    // arrive. Event COUNT is useless here: the retained window is capped, so on a
+    // long session it stops changing and following would silently stop with it.
+    val hasUnseen = AutoScrollToNewest(
+        listState = listState,
+        itemCount = events.size + headerItems,
+        revision = tailRevision(page?.nextOffset, events.size, events.lastOrNull()?.text?.length),
+        key = name,
+    )
 
     Column(Modifier.fillMaxSize()) {
         when {
@@ -166,6 +177,10 @@ private fun SessionConversation(
                 }
                 items(events.size) { i -> TranscriptEventItem(events[i], onCopy) }
             }
+        }
+
+        if (hasUnseen) {
+            JumpToNewest { scope.launch { listState.animateScrollToItem((events.size + headerItems - 1).coerceAtLeast(0)) } }
         }
 
         prompt?.let {
