@@ -6,7 +6,7 @@
 
 const { test } = require('node:test');
 const assert = require('node:assert');
-const { screenHash, stripAnsi, previewLines, detectPrompt } = require('../lib/pane');
+const { screenHash, stripAnsi, previewLines, detectPrompt, extractLoginUrl } = require('../lib/pane');
 
 const ESC = '\u001B';
 const BEL = '\u0007';
@@ -149,4 +149,37 @@ test('detectPrompt accepts the real captured prompt verbatim', () => {
   assert.strictEqual(p.question, 'Do you want to create permtest.txt?');
   assert.strictEqual(p.options.length, 3);
   assert.strictEqual(p.options[0].selected, true);
+});
+
+test('extractLoginUrl reads the whole URL from the OSC 8 target', () => {
+  // Verbatim shape from a live `claude auth login` pane: the visible label is
+  // hard-wrapped at the pane width, but the hyperlink target is intact.
+  const url = 'https://claude.com/cai/oauth/authorize?code=true&client_id=9d1c250a-e61b-44d9-88ed-5944d1962f5e' +
+    '&response_type=code&redirect_uri=https%3A%2F%2Fplatform.claude.com%2Foauth%2Fcode%2Fcallback' +
+    '&scope=org%3Acreate_api_key&code_challenge=PpVpb9rKFa&code_challenge_method=S256&state=rJSMX8ykeC0';
+  const lines = [
+    'Opening browser to sign in…',
+    `If the browser didn't open, visit: ${ESC}[94m${ESC}]8;;${url}${BEL}https://claude.com/cai/oauth/authorize?code=t`,
+    'rue&client_id=9d1c250a-e61b-44d9-88ed-5944d1962f5e&response_type=code&redirect_u',
+    `ri=https%3A%2F%2Fplatform.claude.com%2Foauth%2Fcode%2Fcallback${ESC}[39m`,
+    'Paste code here if prompted >',
+  ];
+  assert.strictEqual(extractLoginUrl(lines), url);
+});
+
+test('extractLoginUrl rejoins a wrapped URL when there is no hyperlink', () => {
+  const lines = [
+    "If the browser didn't open, visit: https://claude.com/cai/oauth/authorize?code=t",
+    'rue&client_id=abc&response_type=code',
+    '',
+    'Paste code here if prompted >',
+  ];
+  assert.strictEqual(
+    extractLoginUrl(lines),
+    'https://claude.com/cai/oauth/authorize?code=true&client_id=abc&response_type=code',
+  );
+});
+
+test('extractLoginUrl returns null on a pane with no URL', () => {
+  assert.strictEqual(extractLoginUrl(['just a shell prompt $ ', '']), null);
 });

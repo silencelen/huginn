@@ -1,5 +1,37 @@
 # Huginn changelog
 
+## 2.1.0 — 2026-07-27
+
+From using it: two fixes you asked for, and account + usage in Settings.
+
+### Fixed
+- **A conversation opens at the newest message.** It was landing at the very
+  first message of the session. The auto-follow rule could never fire on a cold
+  open, because with nothing laid out yet it read your position as "scrolled to
+  the top" and decided not to move. It now jumps to the newest message on open,
+  then follows new arrivals only while you are already at the bottom.
+- **An unsent message stays put.** Type into a session or chat, navigate away,
+  come back, and the text is still there — including after the app is killed.
+  Drafts are kept per session and per chat, and the session's Conversation and
+  Screen tabs share one draft, since they send to the same place.
+
+### Claude account, in Settings
+- Shows the account huginn is signed in as, its plan and org.
+- **Sign in / switch account** starts the real interactive flow in a session
+  called `login` and hands the sign-in URL straight to your browser (the pane
+  hard-wraps that 450-character URL, which is impossible to copy on a phone).
+  Paste the code back in the Screen tab.
+- **Sign out** is there too, behind a confirmation that says what it really
+  does: it signs out the whole host, so every session and every scheduled job
+  stops working until someone signs back in.
+
+### Usage, in Settings
+- Tokens for today and the last 7 days, with the cache-read share.
+- Token counts are exact. Dollar figures are list-price estimates that run high
+  on a Max plan, and are labelled as a trend rather than a bill.
+- Computed on the host and cached: it walks every transcript and takes about
+  half a minute, so the app shows the cached number and refreshes behind it.
+
 ## 2.0.1 — 2026-07-27
 
 Fixes from a review of the 2.0.0 changes, most of them in the pane-resize path.

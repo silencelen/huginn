@@ -15,6 +15,14 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Visibility
 import androidx.compose.material.icons.filled.VisibilityOff
 import androidx.compose.material3.Button
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.TextButton
+import androidx.compose.ui.text.font.FontWeight
+import com.silencelen.huginn.data.Account
+import com.silencelen.huginn.data.Usage
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -43,9 +51,14 @@ fun SettingsScreen(
     connected: Boolean?,
     notifyEnabled: Boolean,
     onNotifyEnabled: (Boolean) -> Unit,
+    account: Account?,
+    usage: Usage?,
+    onSignIn: () -> Unit,
+    onSignOut: () -> Unit,
     onSave: (String, String) -> Unit,
     onTest: () -> Unit,
 ) {
+    var confirmSignOut by remember { mutableStateOf(false) }
     var url by remember(baseUrl) { mutableStateOf(baseUrl) }
     var tok by remember(token) { mutableStateOf(token) }
     var reveal by remember { mutableStateOf(false) }
@@ -122,6 +135,51 @@ fun SettingsScreen(
         }
 
         Spacer(Modifier.height(8.dp))
+        Text("Claude account", style = MaterialTheme.typography.titleMedium)
+        when {
+            account == null -> Text(
+                "Loading…",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            account.loggedIn -> Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                Text(account.email ?: "signed in", style = MaterialTheme.typography.bodyMedium)
+                Text(
+                    listOfNotNull(
+                        account.subscriptionType?.let { "$it plan" },
+                        account.authMethod,
+                        account.orgName?.takeIf { it != account.email },
+                    ).joinToString("  ·  "),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            else -> Text(
+                account.error ?: "Not signed in. huginn cannot run until it is.",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.error,
+            )
+        }
+        Text(
+            "Signing in is an interactive flow, so it opens a session called \"login\" " +
+                "where you can read the URL and paste the code back.",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            Button(onClick = onSignIn) {
+                Text(if (account?.loggedIn == true) "Switch account" else "Sign in")
+            }
+            if (account?.loggedIn == true) {
+                OutlinedButton(onClick = { confirmSignOut = true }) { Text("Sign out") }
+            }
+        }
+
+        Spacer(Modifier.height(8.dp))
+        Text("Usage", style = MaterialTheme.typography.titleMedium)
+        UsageSection(usage)
+
+        Spacer(Modifier.height(8.dp))
         Text("Notifications", style = MaterialTheme.typography.titleMedium)
         Row(
             Modifier.fillMaxWidth(),
@@ -152,4 +210,100 @@ fun SettingsScreen(
         )
         Spacer(Modifier.height(24.dp))
     }
+
+    if (confirmSignOut) {
+        AlertDialog(
+            onDismissRequest = { confirmSignOut = false },
+            title = { Text("Sign out of Claude on huginn?") },
+            text = {
+                Text(
+                    "This signs out the whole host, not just this app. Every running " +
+                        "session stops working, and so do the scheduled jobs (briefings, " +
+                        "escalation, status-page investigation) until someone signs back in.",
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = { confirmSignOut = false; onSignOut() }) { Text("Sign out") }
+            },
+            dismissButton = { TextButton(onClick = { confirmSignOut = false }) { Text("Cancel") } },
+        )
+    }
 }
+
+/** Tokens are exact; the dollar figure is a list-price estimate, so it is labelled. */
+@Composable
+private fun UsageSection(usage: Usage?) {
+    val d = usage?.data
+    when {
+        usage == null -> Text(
+            "Loading…",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        usage.error != null -> Text(
+            usage.error,
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.error,
+        )
+        d == null -> Row(verticalAlignment = Alignment.CenterVertically) {
+            CircularProgressIndicator(modifier = Modifier.size(14.dp), strokeWidth = 2.dp)
+            Spacer(Modifier.width(8.dp))
+            Text(
+                "Counting tokens across every transcript, this takes about half a minute.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        else -> Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            d.today?.let { UsageRow("Today", it.totalTokens, it.costUsd) }
+            UsageRow("Last ${d.week.days} days", d.week.totalTokens, d.week.costUsd)
+            if (d.week.totalTokens > 0) {
+                Text(
+                    "Cache reads are ${pct(d.week.cacheReadTokens, d.week.totalTokens)} of the total.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            Text(
+                "Token counts are exact. The dollar figures are list-price estimates and " +
+                    "run high on a Max plan, so treat them as a trend, not a bill.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            if (usage.refreshing) {
+                Text(
+                    "Refreshing…",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.primary,
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun UsageRow(label: String, tokens: Long, cost: Double?) {
+    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+        Text(label, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f))
+        Column(horizontalAlignment = Alignment.End) {
+            Text(compactTokens(tokens), style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Medium)
+            if (cost != null) {
+                Text(
+                    "approx $" + String.format("%.0f", cost),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
+    }
+}
+
+private fun compactTokens(n: Long): String = when {
+    n >= 1_000_000_000 -> String.format("%.2fB tokens", n / 1_000_000_000.0)
+    n >= 1_000_000 -> String.format("%.1fM tokens", n / 1_000_000.0)
+    n >= 1_000 -> String.format("%.1fk tokens", n / 1_000.0)
+    else -> "$n tokens"
+}
+
+private fun pct(part: Long, whole: Long): String =
+    if (whole <= 0) "0%" else String.format("%.0f%%", part * 100.0 / whole)

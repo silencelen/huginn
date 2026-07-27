@@ -11,13 +11,54 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
+import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+
+/**
+ * Opens a conversation at the newest message, then follows new arrivals only
+ * while the reader is already near the bottom.
+ *
+ * The first jump is the point. Without it, the "follow only if near the bottom"
+ * rule can never fire on a cold open — the list has no laid-out items yet, so
+ * the check reads position 0, decides the reader is scrolled up, and leaves them
+ * staring at the oldest message of a long session.
+ *
+ * @param key changes when the conversation does, re-arming the initial jump.
+ */
+@Composable
+fun AutoScrollToNewest(
+    listState: LazyListState,
+    itemCount: Int,
+    key: Any?,
+    followWithin: Int = 3,
+) {
+    var jumped by remember(key) { mutableStateOf(false) }
+    LaunchedEffect(key, itemCount) {
+        if (itemCount <= 0) return@LaunchedEffect
+        if (!jumped) {
+            // Instant, not animated: the reader should never see the top of a
+            // long conversation fly past on open.
+            listState.scrollToItem(itemCount - 1)
+            jumped = true
+            return@LaunchedEffect
+        }
+        val lastVisible = listState.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: return@LaunchedEffect
+        if (lastVisible >= itemCount - 1 - followWithin) {
+            listState.animateScrollToItem(itemCount - 1)
+        }
+    }
+}
 
 /**
  * Session state marks. Deliberately a small filled dot plus a word rather than a
