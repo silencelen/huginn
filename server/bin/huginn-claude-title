@@ -63,8 +63,15 @@ sess="${info#*|}"
 [ -n "$sess" ] || sess="claude"
 
 # Record the same state for machine consumers (huginn-appd's sessions list —
-# the Huginn Android app): one word per session in /run/huginn-claude-state/.
+# the Huginn Android app): one file per session in /run/huginn-claude-state/.
 # Ephemeral by design (tmpfs, cleared on reboot); cleared on SessionEnd.
+#
+# The file is JSON when jq is available, carrying the hook's session_id and
+# transcript_path. That mapping is what lets a reader render this session's
+# conversation STRUCTURALLY (thinking, tool calls, subagents) from
+# ~/.claude/projects/*.jsonl instead of scraping the pane — there is no other
+# way to learn which transcript belongs to which tmux session. Without jq it
+# degrades to the bare state word, which readers still accept.
 STATE_DIR=/run/huginn-claude-state
 case "$icon" in
   "$ICON_RUN")     st=running ;;
@@ -73,9 +80,18 @@ case "$icon" in
   *)               st= ;;
 esac
 if [ -n "$st" ]; then
-  mkdir -p "$STATE_DIR" 2>/dev/null && printf '%s\n' "$st" > "$STATE_DIR/$sess" 2>/dev/null
+  mkdir -p "$STATE_DIR" 2>/dev/null
+  if [ -n "$payload" ] && command -v jq >/dev/null 2>&1; then
+    printf '%s' "$payload" | jq -c --arg st "$st" \
+      '{state:$st, sessionId:(.session_id // null), transcript:(.transcript_path // null), cwd:(.cwd // null), ts:now|floor}' \
+      > "$STATE_DIR/$sess.tmp" 2>/dev/null \
+      && mv -f "$STATE_DIR/$sess.tmp" "$STATE_DIR/$sess" 2>/dev/null \
+      || printf '%s\n' "$st" > "$STATE_DIR/$sess" 2>/dev/null
+  else
+    printf '%s\n' "$st" > "$STATE_DIR/$sess" 2>/dev/null
+  fi
 else
-  rm -f "$STATE_DIR/$sess" 2>/dev/null
+  rm -f "$STATE_DIR/$sess" "$STATE_DIR/$sess.tmp" 2>/dev/null
 fi
 
 [ -n "$tty" ] && [ -w "$tty" ] || exit 0
