@@ -40,7 +40,19 @@ screen as the primary source loses structure. So the transcript is the content
 and tmux is the interaction, and each does what it is good at.
 
 **Permission prompts become buttons.** A numbered question in the pane is
-detected and offered as tappable options in both views.
+detected and offered as tappable options in both views. Detection requires the
+live selection caret, so an assistant answer that merely ends in a numbered list
+does not produce buttons.
+
+**Account and usage** live in Settings: which account huginn is signed in as,
+sign in / switch (the interactive flow runs in a `login` session and the URL is
+handed to the browser), sign out behind a confirmation that says it signs out the
+whole host, and token usage for today and the last week. Token counts are exact;
+the dollar figures are list-price estimates that run high on a Max plan and are
+labelled as such.
+
+**Drafts persist.** An unsent message stays in its composer across navigation and
+app restarts, per session and per chat.
 
 **The pane is resized to the phone.** tmux keeps an unattached window at its
 creation size (80x24 from `cc`), so a phone would otherwise read a laptop-shaped
@@ -67,6 +79,10 @@ bytes in `/etc/huginn-appd/token` (0600), generated on first deploy.
 | Method | Path | Notes |
 |---|---|---|
 | GET | `/v1/ping` | liveness + version |
+| GET | `/v1/account` | signed-in account (`claude auth status`) |
+| POST | `/v1/account/login` | starts interactive sign-in in a `login` session; returns the URL |
+| POST | `/v1/account/logout` | needs `{confirm:"logout"}`; signs out the whole host |
+| GET | `/v1/usage` | cached ccusage summary (today + 7 days) |
 | GET | `/v1/status` | uptime, load, disk, Claude version, MemPalace reachability |
 | GET | `/v1/sessions` | tmux sessions + hook state; `?preview=1` adds titles and activity previews |
 | POST | `/v1/sessions` | `{name}`; letters/digits/underscore, canonically lowercase |
@@ -148,8 +164,9 @@ fed bytes captured from the real system rather than invented:
   content, shape intact), so a renamed server field fails here instead of
   silently showing an empty screen on a phone this host cannot run.
 - `server/test/` — the daemon's pure logic under `node --test`: pane parsing,
-  prompt detection, and the transcript reader (tailing, torn lines, garbage
-  lines, tool/result pairing).
+  prompt detection (including the numbered-list false positive), the transcript
+  reader (tailing, torn lines, garbage lines, tool/result pairing), sign-in URL
+  extraction, and the ccusage field mapping.
 
 `scripts/build.sh` runs both suites before every APK, so a regression cannot
 reach the phone unnoticed. Both suites have been mutation-checked: a deliberate

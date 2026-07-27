@@ -59,22 +59,19 @@ fun ChatScreen(
     activeTool: String?,
     sending: Boolean,
     mode: String,
+    chatId: String,
+    draft: String,
+    onDraft: (String) -> Unit,
     onSend: (String) -> Unit,
     onCancel: () -> Unit,
     onCopy: (String) -> Unit,
 ) {
-    var draft by remember { mutableStateOf("") }
     val listState = rememberLazyListState()
     val events = page?.events ?: emptyList()
     val streaming = streamingText != null || activeTool != null
 
-    LaunchedEffect(events.size, streamingText, activeTool) {
-        val count = events.size + if (streaming) 1 else 0
-        if (count > 0) {
-            val last = listState.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: 0
-            if (last >= events.size - 3) listState.animateScrollToItem(count - 1)
-        }
-    }
+    // Open on the newest message, then follow only while already at the bottom.
+    AutoScrollToNewest(listState, events.size + if (streaming) 1 else 0, key = chatId)
 
     Column(Modifier.fillMaxSize()) {
         if (page == null) {
@@ -107,12 +104,12 @@ fun ChatScreen(
 
         Composer(
             draft = draft,
-            onDraft = { draft = it },
+            onDraft = onDraft,
             sending = sending,
             mode = mode,
             onSend = {
                 val t = draft.trim()
-                if (t.isNotEmpty()) { onSend(t); draft = "" }
+                if (t.isNotEmpty()) onSend(t)
             },
             onCancel = onCancel,
         )

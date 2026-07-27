@@ -17,7 +17,7 @@ function screenHash(text) {
   return h.toString(16);
 }
 
-const ESC = '';
+const ESC = '\u001B';
 
 /** Strips CSI/OSC escapes. Mirrors the client's Ansi.strip. */
 function stripAnsi(line) {
@@ -31,8 +31,8 @@ function stripAnsi(line) {
         i = j < line.length ? j + 1 : line.length;
       } else if (line[i + 1] === ']') {
         let j = i + 2;
-        while (j < line.length && line[j] !== '' && line[j] !== ESC) j++;
-        i = j < line.length && line[j] === '' ? j + 1 : j;
+        while (j < line.length && line[j] !== '\u0007' && line[j] !== ESC) j++;
+        i = j < line.length && line[j] === '\u0007' ? j + 1 : j;
       } else i += 2;
     } else { out += line[i]; i++; }
   }
@@ -141,4 +141,34 @@ function detectPrompt(lines) {
   return { question, options: opts };
 }
 
-module.exports = { screenHash, stripAnsi, previewLines, detectPrompt };
+/**
+ * Pulls the sign-in URL out of a `claude auth login` pane.
+ *
+ * Claude Code wraps the URL in an OSC 8 hyperlink, whose target carries the
+ * whole 450-character URL on one line — the visible label is hard-wrapped at the
+ * pane width and is useless to copy on a phone. Prefer the OSC target; fall back
+ * to rejoining the wrapped label for a terminal that dropped the hyperlink.
+ */
+function extractLoginUrl(lines) {
+  for (const line of lines) {
+    const m = /\u001B\]8;;(https?:\/\/[^\u0007\u001B]+)/.exec(line);
+    if (m && m[1].length > 20) return m[1];
+  }
+  // Fallback: the label, rejoined. Continuation lines of a wrapped URL contain
+  // no spaces, so the first line with a space (or a blank) ends it.
+  const plain = lines.map(stripAnsi);
+  for (let i = 0; i < plain.length; i++) {
+    const at = plain[i].indexOf('https://');
+    if (at < 0) continue;
+    let url = plain[i].slice(at).trim();
+    for (let j = i + 1; j < plain.length; j++) {
+      const next = plain[j].replace(/\s+$/, '');
+      if (!next.trim() || /\s/.test(next.trim())) break;
+      url += next.trim();
+    }
+    if (url.length > 20) return url;
+  }
+  return null;
+}
+
+module.exports = { screenHash, stripAnsi, previewLines, detectPrompt, extractLoginUrl };

@@ -65,6 +65,8 @@ import com.silencelen.huginn.data.Screen
 fun TerminalScreen(
     session: String,
     screen: Screen?,
+    draft: String,
+    onDraft: (String) -> Unit,
     fontScale: Float,
     onFontScale: (Float) -> Unit,
     onGeometry: (Int, Int) -> Unit,
@@ -73,7 +75,6 @@ fun TerminalScreen(
     onAnswerPrompt: (Int) -> Unit,
     onForceResize: () -> Unit,
 ) {
-    var draft by remember { mutableStateOf("") }
     val density = LocalDensity.current
     val fg = MaterialTheme.colorScheme.onSurface
     val bg = MaterialTheme.colorScheme.background
@@ -150,7 +151,7 @@ fun TerminalScreen(
             ) {
                 OutlinedTextField(
                     value = draft,
-                    onValueChange = { draft = it },
+                    onValueChange = onDraft,
                     modifier = Modifier.weight(1f),
                     placeholder = { Text("Type into $session") },
                     maxLines = 5,
@@ -161,14 +162,14 @@ fun TerminalScreen(
                 // input, so putting text in the box is a distinct action from
                 // submitting it.
                 IconButton(
-                    onClick = { if (draft.isNotEmpty()) { onSendText(draft, false); draft = "" } },
+                    onClick = { if (draft.isNotEmpty()) onSendText(draft, false) },
                     enabled = draft.isNotEmpty(),
                 ) {
                     Text("↦", style = MaterialTheme.typography.titleLarge)
                 }
                 IconButton(
                     onClick = {
-                        if (draft.isNotEmpty()) { onSendText(draft, true); draft = "" } else onSendKeys(listOf("Enter"))
+                        if (draft.isNotEmpty()) onSendText(draft, true) else onSendKeys(listOf("Enter"))
                     },
                     modifier = Modifier
                         .size(46.dp)

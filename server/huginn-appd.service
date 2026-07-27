@@ -12,6 +12,9 @@ RestartSec=3
 StartLimitIntervalSec=0
 WorkingDirectory=/root/netplan
 Environment=NODE_ENV=production
+# ccusage (and anything else resolving ~/.claude) needs HOME; systemd does not
+# set it, and without it ccusage exits with 'home directory is not set'.
+Environment=HOME=/root
 
 [Install]
 WantedBy=multi-user.target
