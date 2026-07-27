@@ -30,8 +30,19 @@ flock "$LOCK" ./gradlew :app:testDebugUnitTest
 # The daemon's pure logic (pane parsing, prompt detection, transcript reading)
 # is tested with node's own runner; it gates the APK because the app is useless
 # against a broken server.
+#
+# The test COUNT is asserted, not just the exit code: `node --test` with a glob
+# that matches nothing exits 0 having run zero tests, so a moved or renamed test
+# directory would turn this gate green while testing nothing.
 if command -v node >/dev/null 2>&1 && [ -d "$REPO_DIR/server/test" ]; then
-  node --test "$REPO_DIR"/server/test/*.test.js
+  NODE_LOG="$(mktemp)"
+  node --test "$REPO_DIR"/server/test/*.test.js | tee "$NODE_LOG"
+  NODE_RC="${PIPESTATUS[0]}"
+  NODE_COUNT="$(grep -oE '^# tests [0-9]+' "$NODE_LOG" | grep -oE '[0-9]+' || echo 0)"
+  rm -f "$NODE_LOG"
+  [ "$NODE_RC" = 0 ] || { echo "[build] server tests failed" >&2; exit 1; }
+  [ "${NODE_COUNT:-0}" -gt 0 ] || { echo "[build] server tests ran ZERO tests — refusing." >&2; exit 1; }
+  echo "[build] server tests: $NODE_COUNT passed"
 fi
 
 echo "[build 2/3] $VARIANT APK"
