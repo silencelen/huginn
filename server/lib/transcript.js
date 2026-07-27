@@ -251,7 +251,19 @@ function readTranscript(path, { offset = null, limit = 400 } = {}) {
         if (machineText(t)) {
           // Slash-command bookkeeping arrives as ordinary user records.
           const d2 = describeMachineText(t);
-          if (d2) out.events.push({ seq: ++seq, kind: d2.kind, ts, sidechain, text: d2.text });
+          if (d2) {
+            out.events.push({ seq: ++seq, kind: d2.kind, ts, sidechain, text: d2.text });
+            // `/effort max` changes the setting NOW. Waiting for the next
+            // assistant record to stamp it would leave a control showing the
+            // previous value for as long as the turn takes.
+            if (d2.kind === 'command') {
+              const setting = /^\/(effort|model)\s+(\S+)$/.exec(d2.text);
+              if (setting) {
+                if (setting[1] === 'effort') out.effort = setting[2].toLowerCase();
+                else out.model = setting[2].toLowerCase();
+              }
+            }
+          }
           // ...and if a human wrote something in the same record, show that too.
           const rest = humanRemainder(t);
           if (rest) out.events.push({ seq: ++seq, kind: 'user', ts, sidechain, text: rest });

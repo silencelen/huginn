@@ -311,3 +311,38 @@ test('a message that merely mentions a tag is left alone', () => {
   assert.strictEqual(r.events[0].kind, 'user');
   assert.strictEqual(r.events[0].text, text);
 });
+
+test('an /effort command updates the reported effort immediately', () => {
+  // Otherwise the control shows the previous value until the next assistant
+  // record happens to stamp one, which can be a whole turn away.
+  const p = writeFixture([
+    { type: 'assistant', timestamp: T, effort: 'high', message: { content: [{ type: 'text', text: 'hi' }] } },
+    { type: 'user', timestamp: T, message: { content: '<command-name>/effort</command-name><command-args>max</command-args>' } },
+  ]);
+  assert.strictEqual(readTranscript(p).effort, 'max');
+});
+
+test('an /model command updates the reported model immediately', () => {
+  const p = writeFixture([
+    { type: 'assistant', timestamp: T, message: { model: 'claude-opus-5', content: [{ type: 'text', text: 'hi' }] } },
+    { type: 'user', timestamp: T, message: { content: '<command-name>/model</command-name><command-args>fable</command-args>' } },
+  ]);
+  assert.strictEqual(readTranscript(p).model, 'fable');
+});
+
+test('a later assistant record still wins over an earlier command', () => {
+  // Records are read in file order, so whichever happened last is current.
+  const p = writeFixture([
+    { type: 'user', timestamp: T, message: { content: '<command-name>/effort</command-name><command-args>low</command-args>' } },
+    { type: 'assistant', timestamp: T, effort: 'xhigh', message: { content: [{ type: 'text', text: 'hi' }] } },
+  ]);
+  assert.strictEqual(readTranscript(p).effort, 'xhigh');
+});
+
+test('a command that is not a setting does not touch model or effort', () => {
+  const p = writeFixture([
+    { type: 'assistant', timestamp: T, effort: 'high', message: { content: [{ type: 'text', text: 'hi' }] } },
+    { type: 'user', timestamp: T, message: { content: '<command-name>/clear</command-name>' } },
+  ]);
+  assert.strictEqual(readTranscript(p).effort, 'high');
+});
