@@ -100,11 +100,13 @@ function detectPrompt(lines) {
   const OPTION_RE = /^(\s*)(?:[❯>]\s*)?(\d{1,2})[.)]\s+(\S.*)$/;
   const opts = [];
   let firstIdx = -1;
+  let lastIdx = -1;
   for (let i = lastContent; i >= floor; i--) {
     const m = OPTION_RE.exec(plain[i]);
     if (m) {
       opts.unshift({ number: Number(m[2]), label: m[3].trim().slice(0, 120), selected: /[❯>]/.test(plain[i]) });
       firstIdx = i;
+      if (lastIdx < 0) lastIdx = i;
     } else if (opts.length) {
       // Run ended; the line above it is the question.
       break;
@@ -114,6 +116,19 @@ function detectPrompt(lines) {
   // Must be 1..n contiguous, else this is prose that happens to have numbers.
   for (let k = 0; k < opts.length; k++) {
     if (opts[k].number !== k + 1) return null;
+  }
+  // A LIVE prompt always has exactly one option marked with the selection
+  // caret. Without this, an assistant answer ending in a markdown numbered list
+  // matched every other rule — and a false positive is not benign here, because
+  // tapping the resulting button types a digit into Claude's composer.
+  if (opts.filter((o) => o.selected).length !== 1) return null;
+  // A composer below the run means the options are message content that has
+  // already scrolled behind the input box, not a question being asked now.
+  for (let i = lastIdx + 1; i <= lastContent; i++) {
+    const t = plain[i];
+    if (!t.trim()) continue;
+    if (RULE_RE.test(t) || MODE_HINT_RE.test(t) || STATUS_RE.test(t)) return null;
+    if (PROMPT_MARK_RE.test(t)) return null;
   }
   // Question: nearest non-empty line above the run that is not furniture.
   let question = '';

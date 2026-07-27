@@ -266,6 +266,7 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
             var known: String? = _screen.value?.hash
             var backoff = 1000L
             while (isActive) {
+                val useForce = forceResize
                 val r = runCatching {
                     client.screen(
                         name = name,
@@ -273,11 +274,14 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
                         rows = wantRows,
                         knownHash = known,
                         waitMs = if (known == null) 0 else 25_000,
-                        force = forceResize,
+                        force = useForce,
                     )
                 }
                 r.onSuccess { s ->
                     backoff = 1000L
+                    // One shot: a forced resize must not keep renewing the lease
+                    // on every subsequent poll, or its expiry can never fire.
+                    if (useForce) forceResize = false
                     if (s.unchanged) {
                         known = s.hash
                         // Keep the size/attachment flags fresh even with no repaint.
@@ -312,6 +316,11 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
         val name = currentSession
         currentSession = null
         forceResize = false
+        // Geometry belongs to the Screen tab of ONE session. Leaving it set
+        // meant the next session opened was resized to the previous one's
+        // grid even if its Screen tab was never opened.
+        wantCols = null
+        wantRows = null
         _screen.value = null
         _transcript.value = null
         _transcriptError.value = null
@@ -337,8 +346,10 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
                     val cur = _transcript.value
                     _transcript.value = if (cur == null) page
                     else page.copy(
-                        // Keep what the tail read no longer carries.
-                        events = cur.events + page.events,
+                        // Keep what the tail read no longer carries. Bounded:
+                        // a session left open on a busy day would otherwise grow
+                        // this list without limit, copying it whole every poll.
+                        events = (cur.events + page.events).takeLast(MAX_EVENTS),
                         title = page.title ?: cur.title,
                         model = page.model ?: cur.model,
                         gitBranch = page.gitBranch ?: cur.gitBranch,
@@ -517,6 +528,9 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     companion object {
+        /** Newest events kept in memory for one session view. */
+        private const val MAX_EVENTS = 600
+
         val Factory = object : ViewModelProvider.Factory {
             @Suppress("UNCHECKED_CAST")
             override fun <T : ViewModel> create(
