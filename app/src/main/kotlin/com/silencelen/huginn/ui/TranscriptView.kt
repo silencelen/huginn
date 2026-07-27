@@ -66,7 +66,7 @@ fun TranscriptEventItem(
     val indent = if (ev.sidechain) 14.dp else 0.dp
     Box(Modifier.padding(start = indent)) {
         when (ev.kind) {
-            "user" -> UserBubble(ev.text.orEmpty())
+            "user" -> UserBubble(ev.text.orEmpty(), ev.queued)
             "assistant" -> AssistantBlock(ev, onCopy)
             "thinking" -> ThinkingBlock(ev.text.orEmpty())
             "tool" -> ToolCard(ev)
@@ -78,18 +78,26 @@ fun TranscriptEventItem(
 }
 
 @Composable
-private fun UserBubble(text: String) {
+private fun UserBubble(text: String, queued: Boolean = false) {
     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
         Surface(
             color = MaterialTheme.colorScheme.surfaceContainerHigh,
             shape = RoundedCornerShape(16.dp, 16.dp, 4.dp, 16.dp),
             modifier = Modifier.fillMaxWidth(0.9f),
         ) {
-            Text(
-                text.trim(),
-                style = MaterialTheme.typography.bodyMedium,
-                modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
-            )
+            Column(Modifier.padding(horizontal = 14.dp, vertical = 10.dp)) {
+                Text(text.trim(), style = MaterialTheme.typography.bodyMedium)
+                // Sent while Claude was mid-turn: it is waiting its turn, which is
+                // worth saying so the message does not look ignored.
+                if (queued) {
+                    Spacer(Modifier.height(3.dp))
+                    Text(
+                        "queued",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
         }
     }
 }

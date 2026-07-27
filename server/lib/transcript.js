@@ -27,6 +27,22 @@ function digestToolInput(input, limit = 400) {
   try { return clip(JSON.stringify(input), limit); } catch { return ''; }
 }
 
+/**
+ * Machine-generated text that Claude Code injects into the conversation
+ * (background-task notifications, hook output). It is real input to the model
+ * but it is not something a person said, so it is shown as a one-line note
+ * rather than a message bubble.
+ */
+function machineText(s) {
+  return /^\s*<(task-notification|system-reminder|command-name|local-command)/.test(s);
+}
+
+function machineLabel(s) {
+  if (/^\s*<task-notification/.test(s)) return 'background task reported back';
+  if (/^\s*<system-reminder/.test(s)) return 'system reminder';
+  return 'injected input';
+}
+
 function clip(s, n) {
   s = String(s);
   return s.length > n ? s.slice(0, n) + '…' : s;
@@ -100,12 +116,16 @@ function readTranscript(path, { offset = null, limit = 400 } = {}) {
     model: null,
     gitBranch: null,
     cwd: null,
+    effort: null,
     lastActivityTs: null,
   };
 
   // tool_use id -> the event we appended, so a later tool_result can complete it
   // in place instead of arriving as a separate orphan card.
   const pendingTools = new Map();
+  // Queued messages by content, so a later `remove` can mark the same event
+  // delivered instead of adding a duplicate.
+  const queued = new Map();
   let seq = 0;
 
   for (const line of lines) {
@@ -118,6 +138,32 @@ function readTranscript(path, { offset = null, limit = 400 } = {}) {
     const sidechain = d.isSidechain === true;
 
     switch (d.type) {
+      case 'queue-operation': {
+        // A message typed while Claude is mid-turn is QUEUED, and a queued
+        // message is written ONLY as these records — it never becomes a `user`
+        // record, even after it is delivered. Dropping them (as v2.2.0 did) made
+        // every follow-up message invisible in the conversation while still
+        // being visible in the pane, which is exactly what a user notices.
+        const content = typeof d.content === 'string' ? d.content : '';
+        if (d.operation === 'enqueue') {
+          if (!content.trim()) continue;
+          const ev = machineText(content)
+            ? { seq: ++seq, kind: 'system', ts, sidechain, text: machineLabel(content) }
+            : { seq: ++seq, kind: 'user', ts, sidechain, text: content, queued: true };
+          out.events.push(ev);
+          if (ev.kind === 'user') queued.set(content, ev);
+        } else if (d.operation === 'remove') {
+          // Delivered into the turn: it is now an ordinary message.
+          const ev = queued.get(content);
+          if (ev) { delete ev.queued; queued.delete(content); }
+          else if (content.trim() && !machineText(content)) {
+            // The enqueue happened before the window we read.
+            out.events.push({ seq: ++seq, kind: 'user', ts, sidechain, text: content });
+          }
+        }
+        // `dequeue` carries no content and just means the queue drained.
+        continue;
+      }
       case 'ai-title':
         if (d.aiTitle) out.title = d.aiTitle;
         continue;
@@ -147,12 +193,17 @@ function readTranscript(path, { offset = null, limit = 400 } = {}) {
           }
         }
         const t = textOf(c);
-        if (t.trim()) out.events.push({ seq: ++seq, kind: 'user', ts, sidechain, text: t });
+        if (t.trim() && !queued.has(t)) {
+          out.events.push({ seq: ++seq, kind: 'user', ts, sidechain, text: t });
+        }
         continue;
       }
       case 'assistant': {
         const m = d.message || {};
         if (m.model) out.model = m.model;
+        // Claude Code stamps the effort level on each assistant record, so the
+        // app can show the session's current setting without asking for it.
+        if (d.effort) out.effort = d.effort;
         const c = m.content;
         if (!Array.isArray(c)) {
           const t = textOf(c);
@@ -215,7 +266,7 @@ function emptyResult(offset, truncated) {
   return {
     events: [], nextOffset: offset, truncated,
     title: null, permissionMode: null, model: null, gitBranch: null, cwd: null,
-    lastActivityTs: null,
+    effort: null, lastActivityTs: null,
   };
 }
 

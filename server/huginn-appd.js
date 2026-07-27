@@ -28,8 +28,9 @@ const { screenHash, previewLines, detectPrompt, extractLoginUrl } = require('./l
 const { readTranscript } = require('./lib/transcript');
 const { summarizeUsage } = require('./lib/usage');
 const { normalizePlan } = require('./lib/plan');
+const { AccountStore } = require('./lib/accounts');
 
-const VERSION = '2.2.0';
+const VERSION = '2.4.0';
 const PORT = Number(process.env.HUGINN_APPD_PORT || 8787);
 const DATA_DIR = process.env.HUGINN_APPD_DATA || '/var/lib/huginn-appd';
 const TOKEN_FILE = process.env.HUGINN_APPD_TOKEN_FILE || '/etc/huginn-appd/token';
@@ -630,6 +631,35 @@ function findTranscriptFile(sessionId) {
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
+const CREDENTIALS_PATH = path.join(os.homedir(), '.claude', '.credentials.json');
+const accounts = new AccountStore(path.join(DATA_DIR, 'accounts'), CREDENTIALS_PATH);
+
+/**
+ * Plan utilization for a SAVED account, so you can see which login has headroom
+ * before switching to it. Best effort: a stored access token expires, and this
+ * daemon deliberately does not implement the refresh flow — an expired one
+ * simply reports unknown, and refreshes itself once that account is active and
+ * Claude Code runs under it.
+ */
+async function planForCredentials(creds) {
+  const token = creds && creds.claudeAiOauth && creds.claudeAiOauth.accessToken;
+  if (!token) return null;
+  const ac = new AbortController();
+  const timer = setTimeout(() => ac.abort(), 10_000);
+  try {
+    const resp = await fetch('https://api.anthropic.com/api/oauth/usage', {
+      headers: {
+        Authorization: `Bearer ${token}`,
+        'Content-Type': 'application/json',
+        'anthropic-beta': 'oauth-2025-04-20',
+      },
+      signal: ac.signal,
+    });
+    if (!resp.ok) return null;
+    return normalizePlan(await resp.json());
+  } catch { return null; } finally { clearTimeout(timer); }
+}
+
 // ------------------------------------------------------- account + usage
 
 /** `claude auth status` already emits JSON; pass it through, minus nothing secret. */
@@ -806,12 +836,56 @@ const server = http.createServer(async (req, res) => {
   if (!authorized(req)) return sendErr(res, 401, 'unauthorized');
 
   try {
+    let m;   // shared by the path-matching routes below
     // --- ping / status
     if (req.method === 'GET' && p === '/v1/ping') return sendJson(res, 200, { ok: true, version: VERSION, host: os.hostname() });
     if (req.method === 'GET' && p === '/v1/status') return sendJson(res, 200, await statusPayload());
 
     // --- account
-    if (req.method === 'GET' && p === '/v1/account') return sendJson(res, 200, await accountStatus());
+    if (req.method === 'GET' && p === '/v1/account') {
+      const acct = await accountStatus();
+      // Snapshot whatever is signed in right now, so switching away is always
+      // reversible even if this account was never explicitly saved.
+      if (acct.loggedIn && acct.email) {
+        const cur = accounts.readActive();
+        if (cur) accounts.save(acct.email, cur, { orgName: acct.orgName ?? null });
+      }
+      return sendJson(res, 200, acct);
+    }
+
+    // --- saved accounts
+    if (req.method === 'GET' && p === '/v1/accounts') {
+      const withPlan = u.searchParams.get('plan') === '1';
+      const saved = accounts.list();
+      if (withPlan) {
+        await Promise.all(saved.map(async (a) => {
+          const rec = accounts.readProfile(a.slug);
+          const pl = rec && await planForCredentials(rec.credentials);
+          // The weekly all-models figure is the one that decides whether an
+          // account still has room.
+          const weekly = pl && pl.limits.find((l) => l.kind === 'weekly_all');
+          a.weeklyPercent = weekly ? weekly.percent : null;
+          a.sessionPercent = pl ? (pl.limits.find((l) => l.kind === 'session')?.percent ?? null) : null;
+        }));
+      }
+      return sendJson(res, 200, { accounts: saved });
+    }
+
+    if ((m = p.match(/^\/v1\/accounts\/([a-z0-9-]{1,60})$/)) && req.method === 'DELETE') {
+      if (!accounts.remove(m[1])) return sendErr(res, 404, 'no such saved account');
+      return sendJson(res, 200, { ok: true });
+    }
+
+    if ((m = p.match(/^\/v1\/accounts\/([a-z0-9-]{1,60})\/activate$/)) && req.method === 'POST') {
+      const before = await accountStatus();
+      const r = accounts.activate(m[1], before.email);
+      if (!r.ok) return sendErr(res, 404, r.error);
+      // Report what the host actually thinks it is now, not what we intended.
+      const after = await accountStatus();
+      planCache.at = 0; planCache.data = null;   // the old plan figures are not this account's
+      log(`account switched: ${before.email || 'unknown'} -> ${after.email || 'unknown'}`);
+      return sendJson(res, 200, { ok: true, ...after });
+    }
 
     if (req.method === 'POST' && p === '/v1/account/login') {
       // Signing in is an interactive OAuth flow: it prints a URL and waits for a
@@ -896,7 +970,6 @@ const server = http.createServer(async (req, res) => {
       return sendJson(res, 201, { ok: true, name });
     }
 
-    let m;
     if ((m = p.match(/^\/v1\/sessions\/([a-z0-9_]{1,50})$/)) && req.method === 'DELETE') {
       const name = m[1];
       const { err, stderr } = await run('tmux', ['kill-session', '-t', `=${name}`]);

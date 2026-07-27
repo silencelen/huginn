@@ -183,3 +183,57 @@ test('an Agent call is labelled with its description', () => {
   ]);
   assert.strictEqual(readTranscript(p).events[0].detail, 'Find flaky tests');
 });
+
+test('a message queued mid-turn is shown, not dropped', () => {
+  // Verified against a real transcript: a message typed while Claude is working
+  // is written ONLY as queue-operation records and never becomes a `user`
+  // record, so dropping these made every follow-up invisible in the app.
+  const p = writeFixture([
+    { type: 'user', message: { content: 'first' }, timestamp: T },
+    { type: 'queue-operation', operation: 'enqueue', content: 'second, sent while busy', timestamp: T },
+  ]);
+  const r = readTranscript(p);
+  assert.deepStrictEqual(r.events.map((e) => e.text), ['first', 'second, sent while busy']);
+  assert.strictEqual(r.events[1].queued, true, 'still pending, so marked queued');
+});
+
+test('a delivered queued message stops being marked queued and is not duplicated', () => {
+  const p = writeFixture([
+    { type: 'queue-operation', operation: 'enqueue', content: 'do the thing', timestamp: T },
+    { type: 'queue-operation', operation: 'remove', content: 'do the thing', timestamp: T },
+  ]);
+  const r = readTranscript(p);
+  assert.strictEqual(r.events.length, 1);
+  assert.strictEqual(r.events[0].kind, 'user');
+  assert.strictEqual(r.events[0].queued, undefined);
+});
+
+test('a remove seen without its enqueue still yields the message', () => {
+  // A tail read can start after the enqueue.
+  const p = writeFixture([
+    { type: 'queue-operation', operation: 'remove', content: 'earlier message', timestamp: T },
+  ]);
+  assert.deepStrictEqual(readTranscript(p).events.map((e) => e.text), ['earlier message']);
+});
+
+test('a dequeue carries no content and adds nothing', () => {
+  const p = writeFixture([{ type: 'queue-operation', operation: 'dequeue', timestamp: T }]);
+  assert.deepStrictEqual(readTranscript(p).events, []);
+});
+
+test('injected machine text is a note, not a user bubble', () => {
+  const p = writeFixture([
+    { type: 'queue-operation', operation: 'enqueue', content: '<task-notification>\n<task-id>x</task-id>\n', timestamp: T },
+  ]);
+  const r = readTranscript(p);
+  assert.strictEqual(r.events[0].kind, 'system');
+  assert.strictEqual(r.events[0].text, 'background task reported back');
+});
+
+test('a user record duplicating an already-queued message is not shown twice', () => {
+  const p = writeFixture([
+    { type: 'queue-operation', operation: 'enqueue', content: 'same text', timestamp: T },
+    { type: 'user', message: { content: 'same text' }, timestamp: T },
+  ]);
+  assert.strictEqual(readTranscript(p).events.length, 1);
+});

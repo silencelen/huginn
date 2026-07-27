@@ -1,5 +1,50 @@
 # Huginn changelog
 
+## 2.4.0 — 2026-07-27
+
+### Multiple accounts, switchable when a plan runs out
+- Settings lists every Claude login saved on huginn and switches between them
+  with one tap. Each row shows its plan and **how much of the week it has used**,
+  which is the thing you are actually deciding on.
+- The account currently signed in is saved automatically, so an account you have
+  used is always there to come back to. "Add account" runs the normal sign-in
+  flow; "Forget" removes a saved copy from huginn without signing it out anywhere.
+- Switching changes the login for the whole host. **Sessions already running keep
+  the old account until they restart**; new runs use the new one. The app says so
+  rather than implying otherwise, because Claude Code holds its token in memory
+  and there is no way to move a live session.
+- The account being left is snapshotted immediately before every switch, so a
+  token refreshed since it was last saved cannot strand it.
+- Saved credentials live beside the daemon's own data, 0600 inside a 0700
+  directory, and are never sent to the phone: the app receives emails, plans and
+  percentages only.
+
+## 2.3.0 — 2026-07-27
+
+### Fixed: follow-up messages vanished from a conversation
+Sending a second message while Claude was still working showed nothing in the
+Conversation tab, though it was plainly there in the Screen tab. A message typed
+mid-turn is **queued** by Claude Code, and a queued message is written to the
+transcript only as a queue record — it never becomes an ordinary message record,
+even after it is delivered. The reader dropped those, so every follow-up was
+invisible. They now appear, marked **queued** until they are picked up.
+
+Machine text that Claude Code injects (background-task notifications, system
+reminders) is shown as a one-line note instead of a message bubble, since it is
+input to the model but nobody said it.
+
+### Model, effort and mode, from the session
+- A control bar on both session tabs sets the **model** and **effort** level, and
+  cycles the **permission mode**.
+- The current values are read back from the session's own transcript, so the bar
+  shows what the session is actually on, not what the app last asked for.
+- These send the same `/model` and `/effort` commands and the same Shift+Tab you
+  would type by hand. It is a shortcut for keys, not a separate control channel.
+
+### Moved
+- **Plan usage and token counts now live on the Status tab**, with the rest of
+  huginn's live state. Settings keeps the account.
+
 ## 2.2.0 — 2026-07-27
 
 ### Code is coloured now
