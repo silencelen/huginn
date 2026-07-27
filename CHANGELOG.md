@@ -1,5 +1,37 @@
 # Huginn changelog
 
+## 2.8.0 — 2026-07-27
+
+### Fixed: adding a second account could lose the first one
+This one lost real data and is worth explaining. Saved logins were filed under
+the email that `claude auth status` reported, while the credentials themselves
+came from a separate read of the credentials file. Those are two different reads
+of two different things, and any skew between them filed one account's secrets
+under another account's name — which does not merely mislabel it, it **overwrites
+that account's saved copy**. On this host it happened within minutes: two saved
+profiles ended up holding the same login.
+
+A profile is now identified by a fingerprint of its own credentials, so a wrong
+label can only ever be a wrong label. Two logins cannot collide, and the label
+corrects itself the next time that account is made active, when the host can be
+asked authoritatively who it is. Existing profiles are migrated on startup and
+duplicates left by the old scheme are collapsed.
+
+**If an account has gone missing from your list, sign in to it once more** and it
+will come back. Its stored copy was overwritten before this fix; nothing else was
+affected, and the account itself was never touched.
+
+### Adding and switching accounts is smoother
+- The account you are using is snapshotted **before** a sign-in starts, so adding
+  an account can no longer cost you the one you were on.
+- Completing a sign-in retires the temporary `login` session by itself, instead of
+  leaving it in your sessions list waiting at a prompt. A sign-in still in
+  progress is left alone.
+- Settings lists every account with the one in use marked, rather than hiding it,
+  and the account in use cannot be forgotten out from under itself.
+- Each row still shows how much of the week that account has used, so the choice
+  is about headroom rather than guesswork.
+
 ## 2.7.1 — 2026-07-27
 
 ### Fixed: the effort control never showed the effort

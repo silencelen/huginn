@@ -28,9 +28,9 @@ const { screenHash, previewLines, detectPrompt, extractLoginUrl, parseStatusLine
 const { readTranscript } = require('./lib/transcript');
 const { summarizeUsage } = require('./lib/usage');
 const { normalizePlan } = require('./lib/plan');
-const { AccountStore } = require('./lib/accounts');
+const { AccountStore, fingerprint } = require('./lib/accounts');
 
-const VERSION = '2.7.1';
+const VERSION = '2.8.0';
 const PORT = Number(process.env.HUGINN_APPD_PORT || 8787);
 const DATA_DIR = process.env.HUGINN_APPD_DATA || '/var/lib/huginn-appd';
 const TOKEN_FILE = process.env.HUGINN_APPD_TOKEN_FILE || '/etc/huginn-appd/token';
@@ -669,6 +669,11 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const CREDENTIALS_PATH = path.join(os.homedir(), '.claude', '.credentials.json');
 const accounts = new AccountStore(path.join(DATA_DIR, 'accounts'), CREDENTIALS_PATH);
 
+// Fingerprint of the login that was active when a sign-in flow started. When the
+// live credentials no longer match it, the flow finished — which is how the
+// leftover `login` session gets cleaned up without the user having to notice it.
+let loginStartedFrom = null;
+
 /**
  * Plan utilization for a SAVED account, so you can see which login has headroom
  * before switching to it. Best effort: a stored access token expires, and this
@@ -877,20 +882,27 @@ const server = http.createServer(async (req, res) => {
     if (req.method === 'GET' && p === '/v1/status') return sendJson(res, 200, await statusPayload());
 
     // --- account
-    if (req.method === 'GET' && p === '/v1/account') {
-      const acct = await accountStatus();
-      // Snapshot whatever is signed in right now, so switching away is always
-      // reversible even if this account was never explicitly saved.
-      if (acct.loggedIn && acct.email) {
-        const cur = accounts.readActive();
-        if (cur) accounts.save(acct.email, cur, { orgName: acct.orgName ?? null });
-      }
-      return sendJson(res, 200, acct);
-    }
+    if (req.method === 'GET' && p === '/v1/account') return sendJson(res, 200, await accountStatus());
 
     // --- saved accounts
     if (req.method === 'GET' && p === '/v1/accounts') {
       const withPlan = u.searchParams.get('plan') === '1';
+      // Capture whatever is signed in right now. Keyed by its own fingerprint, so
+      // a stale email can mislabel but can never overwrite another account.
+      const acct = await accountStatus();
+      const live = accounts.readActive();
+      if (live) accounts.save(acct.loggedIn ? acct.email : null, live,
+        acct.orgName ? { orgName: acct.orgName } : {});
+      // A finished sign-in leaves a `login` session sitting at a prompt; retire it
+      // once the credentials have actually changed, so the sessions list is not
+      // littered with the mechanics of adding an account.
+      if (loginStartedFrom && fingerprint(live) && fingerprint(live) !== loginStartedFrom) {
+        if (await sessionExists('login')) {
+          await run('tmux', ['kill-session', '-t', '=login']);
+          log('sign-in completed; retired the login session');
+        }
+        loginStartedFrom = null;
+      }
       const saved = accounts.list();
       if (withPlan) {
         await Promise.all(saved.map(async (a) => {
@@ -917,6 +929,12 @@ const server = http.createServer(async (req, res) => {
       if (!r.ok) return sendErr(res, 404, r.error);
       // Report what the host actually thinks it is now, not what we intended.
       const after = await accountStatus();
+      // Fingerprint keying means a label can be stale; now that this login is
+      // live, `auth status` is authoritative for it, so correct the record.
+      const nowLive = accounts.readActive();
+      if (nowLive && after.loggedIn && after.email) {
+        accounts.save(after.email, nowLive, after.orgName ? { orgName: after.orgName } : {});
+      }
       planCache.at = 0; planCache.data = null;   // the old plan figures are not this account's
       log(`account switched: ${before.email || 'unknown'} -> ${after.email || 'unknown'}`);
       return sendJson(res, 200, { ok: true, ...after });
@@ -928,6 +946,13 @@ const server = http.createServer(async (req, res) => {
       // hand the app the session name — the Screen view can show the URL and
       // take the pasted code, which is exactly what that view is for.
       const name = 'login';
+      // Signing in REPLACES the credentials file, so capture what is there now or
+      // adding an account silently costs you the one you were using.
+      const before = await accountStatus();
+      const cur = accounts.readActive();
+      if (cur) accounts.save(before.loggedIn ? before.email : null, cur,
+        before.orgName ? { orgName: before.orgName } : {});
+      loginStartedFrom = fingerprint(cur);
       const existed = await sessionExists(name);
       if (!existed) {
         const r = await run('tmux',
@@ -1274,6 +1299,14 @@ resolveBind().then(async (bind) => {
   // manual` by a killed daemon would otherwise keep a laptop's window shrunken
   // with nothing left to release it.
   await sweepStrandedSizes('startup');
+  // Re-key any profile still stored under the old email-derived name, and clear
+  // the duplicates that scheme produced.
+  try {
+    const { migrated, duplicates } = accounts.migrate();
+    if (migrated || duplicates) {
+      log(`accounts: migrated ${migrated}, removed ${duplicates} duplicate(s) left by email-keyed storage`);
+    }
+  } catch (e) { log('accounts: migration failed', e.message); }
   server.listen(PORT, bind, () => log(`huginn-appd ${VERSION} listening on ${bind}:${PORT}`));
 }).catch((e) => { console.error('FATAL:', e.message); process.exit(1); });
 

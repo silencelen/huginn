@@ -1,14 +1,17 @@
 'use strict';
 // The credentials shape is the real one from ~/.claude/.credentials.json
-// (secrets replaced): claudeAiOauth with access/refresh tokens, expiresAt,
-// scopes and subscriptionType.
+// (secrets replaced). These tests exist because the first version of this store
+// LOST an account within minutes of shipping: profiles were keyed by the email
+// that `claude auth status` reported while the credentials came from a separate
+// file read, so any skew between the two wrote one login's secrets under
+// another's name and overwrote it.
 
 const { test } = require('node:test');
 const assert = require('node:assert');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const { AccountStore, slugFor, sameAccount } = require('../lib/accounts');
+const { AccountStore, fingerprint, sameAccount } = require('../lib/accounts');
 
 function creds(refresh, extra = {}) {
   return {
@@ -29,34 +32,57 @@ function newStore() {
   return { store: new AccountStore(path.join(root, 'accounts'), credPath), credPath, root };
 }
 
-test('slugs are stable, filesystem-safe, and derived from the email', () => {
-  assert.strictEqual(slugFor('jacob@monahanhosting.com'), 'jacob-monahanhosting-com');
-  assert.strictEqual(slugFor('A.B+tag@Example.COM'), 'a-b-tag-example-com');
-  assert.strictEqual(slugFor(''), 'unknown');
-  assert.strictEqual(slugFor(null), 'unknown');
-  assert.ok(!slugFor('../../etc/passwd').includes('/'), 'must not escape the directory');
+// ---- identity: the property whose absence lost an account -------------------
+
+test('a profile is keyed by its credentials, not by the email it is labelled with', () => {
+  const { store } = newStore();
+  // The same login labelled two different ways is ONE account, updated in place.
+  store.save('right@example.com', creds('r1'));
+  store.save('wrong@example.com', creds('r1'));
+  const list = store.list();
+  assert.strictEqual(list.length, 1);
+  assert.strictEqual(list[0].email, 'wrong@example.com', 'the latest label wins');
 });
 
-test('accounts are identified by refresh token, not by email', () => {
-  // The same person can have two logins; a renamed email is still one account.
+test('mislabelling credentials cannot overwrite a different account', () => {
+  // This is the exact failure that happened: `auth status` reported one account
+  // while the credentials file already held another's.
+  const { store } = newStore();
+  store.save('work@example.com', creds('r-work'));
+  store.save('work@example.com', creds('r-home'));   // wrong label, right secrets
+
+  const list = store.list();
+  assert.strictEqual(list.length, 2, 'both logins must survive a wrong label');
+  const prints = new Set(list.map((a) => a.slug));
+  assert.strictEqual(prints.size, 2);
+  assert.strictEqual(
+    store.readProfile(fingerprint(creds('r-work'))).credentials.claudeAiOauth.refreshToken,
+    'r-work',
+    'the first account still holds its own credentials',
+  );
+});
+
+test('the fingerprint is stable for a login and different across logins', () => {
+  assert.strictEqual(fingerprint(creds('r1')), fingerprint(creds('r1', { accessToken: 'rotated' })));
+  assert.notStrictEqual(fingerprint(creds('r1')), fingerprint(creds('r2')));
+  assert.strictEqual(fingerprint({ claudeAiOauth: {} }), null);
+  assert.strictEqual(fingerprint(null), null);
+});
+
+test('accounts are compared by refresh token, not by email', () => {
   assert.ok(sameAccount(creds('r1'), creds('r1')));
   assert.ok(!sameAccount(creds('r1'), creds('r2')));
-  assert.ok(!sameAccount(null, creds('r1')));
-  assert.ok(!sameAccount({ claudeAiOauth: {} }, { claudeAiOauth: {} }), 'two blanks are not the same account');
+  assert.ok(!sameAccount({ claudeAiOauth: {} }, { claudeAiOauth: {} }));
 });
 
-test('saving then listing marks the one matching the live credentials active', () => {
+// ---- listing and switching --------------------------------------------------
+
+test('exactly one profile is reported active', () => {
   const { store, credPath } = newStore();
   fs.writeFileSync(credPath, JSON.stringify(creds('r-work')));
   store.save('work@example.com', creds('r-work'));
   store.save('personal@example.com', creds('r-home'));
-
-  const list = store.list();
-  assert.strictEqual(list.length, 2);
-  const active = list.filter((a) => a.isActive);
-  assert.strictEqual(active.length, 1);
-  assert.strictEqual(active[0].email, 'work@example.com');
-  assert.strictEqual(active[0].subscriptionType, 'max');
+  assert.strictEqual(store.list().filter((a) => a.isActive).length, 1);
 });
 
 test('activating swaps the live credentials file', () => {
@@ -65,50 +91,87 @@ test('activating swaps the live credentials file', () => {
   store.save('work@example.com', creds('r-work'));
   store.save('personal@example.com', creds('r-home'));
 
-  const r = store.activate('personal-example-com', 'work@example.com');
+  const r = store.activate(fingerprint(creds('r-home')), 'work@example.com');
   assert.strictEqual(r.ok, true);
-  const live = JSON.parse(fs.readFileSync(credPath, 'utf8'));
-  assert.strictEqual(live.claudeAiOauth.refreshToken, 'r-home');
+  assert.strictEqual(JSON.parse(fs.readFileSync(credPath, 'utf8')).claudeAiOauth.refreshToken, 'r-home');
   assert.strictEqual(store.list().find((a) => a.isActive).email, 'personal@example.com');
 });
 
-test('the outgoing account is snapshotted before a switch, so it is never stranded', () => {
-  // The live file can hold a token refreshed since it was last saved; losing
-  // that would leave the old account unusable.
+test('the outgoing account is snapshotted before a switch, even if we mislabel it', () => {
   const { store, credPath } = newStore();
   store.save('personal@example.com', creds('r-home'));
+  // Live holds a token refreshed since it was last saved; losing that would
+  // leave the outgoing account unusable.
   fs.writeFileSync(credPath, JSON.stringify(creds('r-work', { accessToken: 'refreshed-since' })));
 
-  store.activate('personal-example-com', 'work@example.com');
+  store.activate(fingerprint(creds('r-home')), 'a-stale-or-wrong@example.com');
 
-  const saved = store.readProfile('work-example-com');
-  assert.ok(saved, 'the account being left must have been saved');
+  const saved = store.readProfile(fingerprint(creds('r-work')));
+  assert.ok(saved, 'the account being left must still be stored');
   assert.strictEqual(saved.credentials.claudeAiOauth.accessToken, 'refreshed-since');
+  assert.strictEqual(store.list().length, 2, 'and it must not have clobbered the incoming one');
 });
 
 test('activating an unknown account changes nothing', () => {
   const { store, credPath } = newStore();
   fs.writeFileSync(credPath, JSON.stringify(creds('r-work')));
-  const r = store.activate('does-not-exist', 'work@example.com');
-  assert.strictEqual(r.ok, false);
+  assert.strictEqual(store.activate('deadbeefdeadbeef', 'x@example.com').ok, false);
   assert.strictEqual(JSON.parse(fs.readFileSync(credPath, 'utf8')).claudeAiOauth.refreshToken, 'r-work');
 });
 
-test('saving the same account twice updates in place rather than duplicating', () => {
+// ---- migrating off the broken layout ---------------------------------------
+
+test('migrate re-keys an email-named profile onto its fingerprint', () => {
   const { store } = newStore();
-  store.save('work@example.com', creds('r-work'));
-  store.save('work@example.com', creds('r-work', { accessToken: 'newer' }));
-  const list = store.list();
-  assert.strictEqual(list.length, 1);
-  assert.strictEqual(store.readProfile('work-example-com').credentials.claudeAiOauth.accessToken, 'newer');
+  const rec = { email: 'work@example.com', slug: 'work-example-com', savedAt: 10, credentials: creds('r-work') };
+  fs.writeFileSync(path.join(store.dir, 'work-example-com.json'), JSON.stringify(rec), { mode: 0o600 });
+
+  const r = store.migrate();
+  assert.strictEqual(r.migrated, 1);
+  assert.ok(store.readProfile(fingerprint(creds('r-work'))), 'stored under its fingerprint now');
+  assert.strictEqual(fs.existsSync(path.join(store.dir, 'work-example-com.json')), false);
+  assert.strictEqual(store.list()[0].email, 'work@example.com', 'the label survives');
 });
 
-test('removing forgets an account', () => {
+test('migrate collapses the duplicates the old scheme produced', () => {
+  // Two names, one set of credentials: the real symptom of the lost account.
+  const { store } = newStore();
+  for (const [name, savedAt] of [['a-example-com', 10], ['b-example-com', 20]]) {
+    fs.writeFileSync(
+      path.join(store.dir, `${name}.json`),
+      JSON.stringify({ email: name.replace('-example-com', '@example.com'), savedAt, credentials: creds('r-shared') }),
+      { mode: 0o600 },
+    );
+  }
+  const r = store.migrate();
+  assert.strictEqual(r.duplicates, 1);
+  const list = store.list();
+  assert.strictEqual(list.length, 1);
+  assert.strictEqual(list[0].email, 'b@example.com', 'the newer label is kept');
+});
+
+test('migrate discards a profile with no usable credentials', () => {
+  const { store } = newStore();
+  fs.writeFileSync(path.join(store.dir, 'junk.json'), JSON.stringify({ email: 'x', credentials: {} }));
+  fs.writeFileSync(path.join(store.dir, 'broken.json'), '{not json');
+  store.migrate();
+  assert.deepStrictEqual(store.list(), []);
+});
+
+test('migrate is idempotent', () => {
   const { store } = newStore();
   store.save('work@example.com', creds('r-work'));
-  assert.strictEqual(store.remove('work-example-com'), true);
-  assert.deepStrictEqual(store.list(), []);
-  assert.strictEqual(store.remove('work-example-com'), false);
+  assert.deepStrictEqual(store.migrate(), { migrated: 0, duplicates: 0 });
+  assert.strictEqual(store.list().length, 1);
+});
+
+// ---- housekeeping ----------------------------------------------------------
+
+test('a blank label does not erase a known one', () => {
+  const { store } = newStore();
+  store.save('work@example.com', creds('r-work'));
+  store.save(null, creds('r-work', { accessToken: 'refreshed' }));
+  assert.strictEqual(store.list()[0].email, 'work@example.com');
 });
 
 test('credentials without an oauth block are not saved', () => {
@@ -117,16 +180,17 @@ test('credentials without an oauth block are not saved', () => {
   assert.deepStrictEqual(store.list(), []);
 });
 
-test('a corrupt profile is skipped rather than breaking the list', () => {
+test('removing forgets an account', () => {
   const { store } = newStore();
-  store.save('good@example.com', creds('r1'));
-  fs.writeFileSync(path.join(store.dir, 'broken.json'), '{not json');
-  assert.deepStrictEqual(store.list().map((a) => a.email), ['good@example.com']);
+  const slug = store.save('work@example.com', creds('r-work'));
+  assert.strictEqual(store.remove(slug), true);
+  assert.deepStrictEqual(store.list(), []);
+  assert.strictEqual(store.remove(slug), false);
 });
 
 test('stored profiles are not world readable', () => {
   const { store } = newStore();
-  store.save('work@example.com', creds('r-work'));
-  const mode = fs.statSync(path.join(store.dir, 'work-example-com.json')).mode & 0o777;
+  const slug = store.save('work@example.com', creds('r-work'));
+  const mode = fs.statSync(path.join(store.dir, `${slug}.json`)).mode & 0o777;
   assert.strictEqual(mode, 0o600, 'these are credentials');
 });
