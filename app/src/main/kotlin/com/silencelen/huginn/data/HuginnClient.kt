@@ -201,8 +201,24 @@ class HuginnClient(
     suspend fun chats(): List<Chat> =
         decode<ChatList>(call(builder("/v1/chats").get().build())).chats
 
-    suspend fun createChat(mode: String): Chat =
-        decode(call(builder("/v1/chats").post(jsonBody("mode" to mode)).build()))
+    suspend fun createChat(mode: String, model: String? = null, effort: String? = null): Chat {
+        val body = buildJsonObject {
+            put("mode", JsonPrimitive(mode))
+            if (model != null) put("model", JsonPrimitive(model))
+            if (effort != null) put("effort", JsonPrimitive(effort))
+        }
+        return decode(call(builder("/v1/chats").post(encode(body)).build()))
+    }
+
+    /** Model, effort and mode apply to the chat's NEXT turn. */
+    suspend fun updateChat(id: String, model: String? = null, effort: String? = null, mode: String? = null): ChatDetail {
+        val body = buildJsonObject {
+            if (model != null) put("model", JsonPrimitive(model))
+            if (effort != null) put("effort", JsonPrimitive(effort))
+            if (mode != null) put("mode", JsonPrimitive(mode))
+        }
+        return decode(call(builder("/v1/chats/$id").patch(encode(body)).build()))
+    }
 
     suspend fun chat(id: String): ChatDetail =
         decode(call(builder("/v1/chats/$id").get().build()))

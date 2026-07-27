@@ -112,6 +112,10 @@ fun HuginnApp(
     val activeTool by vm.activeTool.collectAsState()
     val sending by vm.sending.collectAsState()
     val screen by vm.screen.collectAsState()
+    val scrollback by vm.scrollback.collectAsState()
+    val loadingScrollback by vm.loadingScrollback.collectAsState()
+    val chatModel by vm.chatModel.collectAsState()
+    val chatEffort by vm.chatEffort.collectAsState()
     val transcript by vm.transcript.collectAsState()
     val transcriptError by vm.transcriptError.collectAsState()
     val drafts by vm.drafts.collectAsState()
@@ -275,6 +279,9 @@ fun HuginnApp(
                         activeTool = activeTool,
                         sending = sending,
                         mode = chatMode,
+                        model = chatModel,
+                        effort = chatEffort,
+                        onSetOptions = { m, e -> vm.setChatOptions(d.id, model = m, effort = e) },
                         chatId = d.id,
                         draft = drafts[HuginnViewModel.chatDraftKey(d.id)].orEmpty(),
                         onDraft = { vm.setDraft(HuginnViewModel.chatDraftKey(d.id), it) },
@@ -284,13 +291,20 @@ fun HuginnApp(
                     )
                 }
 
-                is Dest.Sessions -> SessionsScreen(
-                    sessions = sessions,
-                    onOpen = { name -> dest = Dest.SessionView(name) },
-                    onCreate = { name -> vm.createSession(name) { dest = Dest.SessionView(it) } },
-                    onKill = { vm.killSession(it) },
-                    onRename = { from, to -> vm.renameSession(from, to) },
-                )
+                is Dest.Sessions -> {
+                    // Keep the list live while it is the visible tab.
+                    LifecycleStartEffect(Unit) {
+                        vm.startSessionsPolling()
+                        onStopOrDispose { vm.stopSessionsPolling() }
+                    }
+                    SessionsScreen(
+                        sessions = sessions,
+                        onOpen = { name -> dest = Dest.SessionView(name) },
+                        onCreate = { name -> vm.createSession(name) { dest = Dest.SessionView(it) } },
+                        onKill = { vm.killSession(it) },
+                        onRename = { from, to -> vm.renameSession(from, to) },
+                    )
+                }
 
                 is Dest.SessionView -> {
                     // Tied to the lifecycle, not just to composition: a
@@ -308,6 +322,9 @@ fun HuginnApp(
                         transcript = transcript,
                         transcriptError = transcriptError,
                         screen = screen,
+                        scrollback = scrollback,
+                        loadingScrollback = loadingScrollback,
+                        onLoadScrollback = { vm.loadScrollback(d.name) },
                         tab = sessionTab,
                         onTab = { sessionTab = it },
                         fontScale = fontScale,
