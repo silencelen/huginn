@@ -133,6 +133,8 @@ data class TranscriptPage(
     val cwd: String? = null,
     /** Effort level Claude Code stamped on the last assistant turn. */
     val effort: String? = null,
+    /** The model as a person reads it, e.g. `Opus 4.8`, formatted by the server. */
+    val modelDisplay: String? = null,
     val lastActivityTs: Long? = null,
     val state: String? = null,
     val claudeSessionId: String? = null,
@@ -310,3 +312,14 @@ data class SavedAccount(
 
 @Serializable
 data class SavedAccounts(val accounts: List<SavedAccount> = emptyList())
+
+/** A model the installed CLI offers, discovered on the host. */
+@Serializable
+data class ModelChoice(
+    val id: String = "",
+    val display: String = "",
+    val family: String = "",
+)
+
+@Serializable
+data class ModelList(val models: List<ModelChoice> = emptyList())
