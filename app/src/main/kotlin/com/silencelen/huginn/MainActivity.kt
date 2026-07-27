@@ -58,6 +58,7 @@ import com.silencelen.huginn.ui.SessionScreen
 import com.silencelen.huginn.ui.SessionSubtitle
 import com.silencelen.huginn.ui.SessionsScreen
 import com.silencelen.huginn.ui.SettingsScreen
+import com.silencelen.huginn.ui.SignInDialog
 import com.silencelen.huginn.ui.StatusScreen
 import com.silencelen.huginn.ui.theme.HuginnTheme
 
@@ -126,6 +127,9 @@ fun HuginnApp(
     val savedAccounts by vm.savedAccounts.collectAsState()
     val switching by vm.switching.collectAsState()
     val loginUrl by vm.loginUrl.collectAsState()
+    val login by vm.login.collectAsState()
+    val loginBusy by vm.loginBusy.collectAsState()
+    val watchEnabled by vm.watchEnabled.collectAsState()
 
     val snackbar = remember { SnackbarHostState() }
     LaunchedEffect(toast) { toast?.let { snackbar.showSnackbar(it); vm.toastShown() } }
@@ -187,6 +191,22 @@ fun HuginnApp(
         is Dest.SessionView -> transcript?.title ?: d.name
         is Dest.Status -> "Status"
         is Dest.Settings -> "Settings"
+    }
+
+    login?.let { st ->
+        SignInDialog(
+            state = st,
+            busy = loginBusy,
+            onOpenUrl = { url ->
+                runCatching {
+                    context.startActivity(
+                        Intent(Intent.ACTION_VIEW, Uri.parse(url)).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                    )
+                }.onFailure { vm.copy(url, "sign-in URL") }
+            },
+            onSubmit = { vm.submitLoginCode(it) },
+            onDismiss = { vm.dismissLogin() },
+        )
     }
 
     Scaffold(
@@ -393,11 +413,9 @@ fun HuginnApp(
                         switching = switching,
                         onSwitchAccount = { vm.activateAccount(it) },
                         onForgetAccount = { vm.forgetAccount(it) },
-                        onSignIn = {
-                            // The sign-in flow is interactive, so it runs in a real
-                            // session and we drop the user into its Screen tab.
-                            vm.startLogin { session -> sessionTab = 1; dest = Dest.SessionView(session) }
-                        },
+                        onSignIn = { vm.startLogin() },
+                        watchEnabled = watchEnabled,
+                        onWatchEnabled = { vm.setWatchEnabled(it) },
                         onSignOut = { vm.logout() },
                         onSave = { u, t -> vm.saveSettings(u, t) },
                         onTest = { vm.testConnection() },

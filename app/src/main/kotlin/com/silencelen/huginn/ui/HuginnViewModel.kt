@@ -21,7 +21,9 @@ import com.silencelen.huginn.data.TranscriptPage
 import com.silencelen.huginn.data.Plan
 import com.silencelen.huginn.data.SavedAccount
 import com.silencelen.huginn.data.Usage
+import com.silencelen.huginn.data.LoginState
 import com.silencelen.huginn.notify.SessionWatchWorker
+import com.silencelen.huginn.notify.WatchService
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -79,6 +81,29 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
     private val _notifyEnabled = MutableStateFlow(true)
     val notifyEnabled: StateFlow<Boolean> = _notifyEnabled.asStateFlow()
 
+    private val _watchEnabled = MutableStateFlow(false)
+    val watchEnabled: StateFlow<Boolean> = _watchEnabled.asStateFlow()
+
+    /**
+     * Continuous watching versus the 15-minute periodic check. Only one should be
+     * running: the service makes the worker redundant, and two of them would
+     * race to claim the same transitions and double-notify.
+     */
+    fun setWatchEnabled(on: Boolean) {
+        _watchEnabled.value = on
+        val app = getApplication<Application>()
+        viewModelScope.launch {
+            settings.setWatchEnabled(on)
+            if (on) {
+                SessionWatchWorker.cancel(app)
+                WatchService.start(app)
+            } else {
+                WatchService.stop(app)
+                if (_notifyEnabled.value) SessionWatchWorker.schedule(app)
+            }
+        }
+    }
+
     /** Discovered on the host, so a `claude update` changes the menu, not the app. */
     private val _models = MutableStateFlow<List<ModelChoice>>(emptyList())
     val models: StateFlow<List<ModelChoice>> = _models.asStateFlow()
@@ -123,11 +148,13 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
             _token.value = tokenNow
             _fontScale.value = settings.fontScale.first()
             _notifyEnabled.value = settings.notifyEnabled.first()
+            _watchEnabled.value = settings.watchEnabled.first()
             _drafts.value = settings.drafts.first()
             if (tokenNow.isNotBlank()) {
                 refreshAll()
                 refreshModels()
-                if (_notifyEnabled.value) SessionWatchWorker.schedule(getApplication())
+                if (_watchEnabled.value) WatchService.start(getApplication())
+                else if (_notifyEnabled.value) SessionWatchWorker.schedule(getApplication())
             }
         }
     }
@@ -284,21 +311,73 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
     val loginUrl: StateFlow<String?> = _loginUrl.asStateFlow()
     fun loginUrlHandled() { _loginUrl.value = null }
 
+    /** Non-null while a sign-in is being run from inside the app. */
+    private val _login = MutableStateFlow<LoginState?>(null)
+    val login: StateFlow<LoginState?> = _login.asStateFlow()
+
+    private val _loginBusy = MutableStateFlow(false)
+    val loginBusy: StateFlow<Boolean> = _loginBusy.asStateFlow()
+
+    fun dismissLogin() {
+        _login.value = null
+        _loginBusy.value = false
+    }
+
+    /**
+     * Hands the pasted code to the waiting sign-in. Kept in the app because
+     * sending somebody into a terminal to paste a code is not a flow, it is an
+     * apology for not having one.
+     */
+    fun submitLoginCode(code: String) {
+        if (_loginBusy.value) return
+        _loginBusy.value = true
+        viewModelScope.launch {
+            runCatching { client.submitLoginCode(code.trim()) }
+                .onSuccess { st ->
+                    _login.value = st
+                    if (st.done) {
+                        _toast.value = "Signed in as ${st.email ?: "the new account"}"
+                        refreshAccount()
+                        refreshSavedAccounts()
+                        _login.value = null
+                    }
+                }
+                .onFailure { _toast.value = errText(it) }
+            _loginBusy.value = false
+        }
+    }
+
+    fun refreshLoginState() {
+        viewModelScope.launch {
+            runCatching { client.loginState() }.onSuccess { if (it.running) _login.value = it }
+        }
+    }
+
     /**
      * Opens an interactive `claude auth login` in a session and hands back both
      * the session (so the Screen tab can take the pasted code) and the sign-in
      * URL, which the pane hard-wraps and a phone cannot copy.
      */
-    fun startLogin(onSession: (String) -> Unit) {
-        _toast.value = "Starting sign-in…"
+    /**
+     * Starts sign-in and stays in the app: the URL goes to the browser, and the
+     * code comes back into a field here rather than into a tmux pane.
+     */
+    fun startLogin() {
+        if (_loginBusy.value) return
+        _loginBusy.value = true
+        _login.value = LoginState(running = true, message = "Starting sign-in…")
         viewModelScope.launch {
             runCatching { client.startLogin() }
                 .onSuccess {
+                    _loginUrl.value = it.url                     // opens the browser
+                    _login.value = LoginState(
+                        running = true, awaitingCode = true, url = it.url,
+                        message = "Paste the code from your browser",
+                    )
                     refreshSessions()
-                    _loginUrl.value = it.url
-                    onSession(it.session)
                 }
-                .onFailure { _toast.value = errText(it) }
+                .onFailure { _toast.value = errText(it); _login.value = null }
+            _loginBusy.value = false
         }
     }
 
