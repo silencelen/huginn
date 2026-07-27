@@ -30,6 +30,7 @@ class SettingsStore(private val context: Context) {
         private val NOTIFY = booleanPreferencesKey("notify_attention")
         private val NOTIFIED = stringSetPreferencesKey("notified_sessions")
         private val RUNNING_CHATS = stringSetPreferencesKey("running_chats")
+        private val WATCH = booleanPreferencesKey("watch_continuously")
         private val DRAFTS = stringPreferencesKey("drafts")
     }
 
@@ -40,6 +41,13 @@ class SettingsStore(private val context: Context) {
     val fontScale: Flow<Float> = context.dataStore.data.map { it[FONT_SCALE] ?: DEFAULT_FONT_SCALE }
 
     val notifyEnabled: Flow<Boolean> = context.dataStore.data.map { it[NOTIFY] ?: true }
+
+    /** Continuous watching via the foreground service, rather than a 15-minute poll. */
+    val watchEnabled: Flow<Boolean> = context.dataStore.data.map { it[WATCH] ?: false }
+
+    suspend fun setWatchEnabled(value: Boolean) {
+        context.dataStore.edit { it[WATCH] = value }
+    }
 
     /**
      * Sessions already notified about, so the background poll fires on the

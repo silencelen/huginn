@@ -311,6 +311,10 @@ data class SavedAccount(
     /** Weekly all-models utilization, when it could be read for this account. */
     val weeklyPercent: Double? = null,
     val sessionPercent: Double? = null,
+    /** The email was confirmed from this profile's own token, not inferred. */
+    val verified: Boolean = false,
+    /** Another saved profile is the same account, so switching changes nothing. */
+    val duplicateOf: Boolean = false,
 )
 
 @Serializable
@@ -326,3 +330,33 @@ data class ModelChoice(
 
 @Serializable
 data class ModelList(val models: List<ModelChoice> = emptyList())
+
+/** One chat's state in the watch digest. */
+@Serializable
+data class WatchChat(
+    val running: Boolean = false,
+    val pending: Int = 0,
+    val title: String? = null,
+)
+
+/** The change signal a watching client parks on. */
+@Serializable
+data class Watch(
+    val hash: String = "",
+    val sessions: Map<String, String?> = emptyMap(),
+    val chats: Map<String, WatchChat> = emptyMap(),
+    val changed: Boolean = false,
+    val serverTime: Long = 0,
+)
+
+/** State of an in-progress sign-in, read off the login session's pane. */
+@Serializable
+data class LoginState(
+    val session: String = "login",
+    val running: Boolean = false,
+    val awaitingCode: Boolean = false,
+    val done: Boolean = false,
+    val url: String? = null,
+    val message: String? = null,
+    val email: String? = null,
+)
