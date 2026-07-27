@@ -60,8 +60,25 @@ esac
 info="$(tmux display-message -p -t "$TMUX_PANE" '#{pane_tty}|#{session_name}' 2>/dev/null)" || exit 0
 tty="${info%%|*}"
 sess="${info#*|}"
-[ -n "$tty" ] && [ -w "$tty" ] || exit 0
 [ -n "$sess" ] || sess="claude"
+
+# Record the same state for machine consumers (huginn-appd's sessions list —
+# the Huginn Android app): one word per session in /run/huginn-claude-state/.
+# Ephemeral by design (tmpfs, cleared on reboot); cleared on SessionEnd.
+STATE_DIR=/run/huginn-claude-state
+case "$icon" in
+  "$ICON_RUN")     st=running ;;
+  "$ICON_NEEDYOU") st=attention ;;
+  "$ICON_IDLE")    st=idle ;;
+  *)               st= ;;
+esac
+if [ -n "$st" ]; then
+  mkdir -p "$STATE_DIR" 2>/dev/null && printf '%s\n' "$st" > "$STATE_DIR/$sess" 2>/dev/null
+else
+  rm -f "$STATE_DIR/$sess" 2>/dev/null
+fi
+
+[ -n "$tty" ] && [ -w "$tty" ] || exit 0
 
 if [ -n "$icon" ]; then title="$icon $sess"; else title="$sess"; fi
 
