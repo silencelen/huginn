@@ -1,5 +1,28 @@
 # Huginn changelog
 
+## 2.6.0 — 2026-07-27
+
+### The conversation follows new messages
+It opened on the newest message but then stopped following, for four separate
+reasons, all now fixed:
+
+- The retained event window is **capped**, so on a long session the event count
+  stops changing — and the follower was keyed on that count, so it went quiet
+  exactly where it was needed most. It now keys on the transcript's byte offset,
+  which keeps advancing.
+- A **streaming** answer grows without adding an item, so token-by-token arrival
+  moved nothing. It follows the text now.
+- The item count ignored the "showing the most recent part" header, so it always
+  aimed one item short of the end.
+- "Near the bottom" was judged by item index against stale layout, which counted
+  a message taller than the screen as at-the-bottom while you sat at its top.
+  It is now measured from real geometry, and following scrolls to the end of the
+  content rather than the top of the last message.
+
+Scrolling up to read something older still stops the follow, as it should — and a
+**New messages** button now appears when something arrives while you are up
+there, so "not following" can never be mistaken for "nothing happened".
+
 ## 2.5.0 — 2026-07-27
 
 ### Fixed: slash commands looked like garbled messages you sent

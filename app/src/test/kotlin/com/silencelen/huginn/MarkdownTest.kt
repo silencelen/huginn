@@ -2,6 +2,7 @@ package com.silencelen.huginn
 
 import com.silencelen.huginn.ui.MdBlock
 import com.silencelen.huginn.ui.Markdown
+import com.silencelen.huginn.ui.tailRevision
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -118,5 +119,35 @@ class MarkdownTest {
     fun `plain prose with no markup survives unchanged`() {
         val text = "Disk is at 62% and the daemon is healthy."
         assertEquals(text, (Markdown.parse(text).first() as MdBlock.Paragraph).text.text)
+    }
+}
+
+/**
+ * The follower's revision signal. Its whole job is to change when new content
+ * arrives, including in the case that broke the previous implementation: a long
+ * session whose retained event window is full, so the COUNT stops changing while
+ * content keeps arriving.
+ */
+class TailRevisionTest {
+
+    @Test
+    fun `revision changes when the transcript advances even though the count is pinned`() {
+        val cappedCount = 600
+        val before = tailRevision(4_939_818L, cappedCount, 120)
+        val after = tailRevision(4_945_610L, cappedCount, 120)
+        assertTrue("a new byte of transcript must move the follower", before != after)
+    }
+
+    @Test
+    fun `revision changes as a streaming answer grows without a new item`() {
+        val a = tailRevision(1000L, 12, 40)
+        val b = tailRevision(1000L, 12, 41)
+        assertTrue("each token must move the follower", a != b)
+    }
+
+    @Test
+    fun `revision is stable when nothing changed, so it cannot fight the reader`() {
+        assertEquals(tailRevision(1000L, 12, 40), tailRevision(1000L, 12, 40))
+        assertEquals(tailRevision(null, 0, null), tailRevision(null, 0, null))
     }
 }
