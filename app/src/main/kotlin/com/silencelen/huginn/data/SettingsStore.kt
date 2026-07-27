@@ -29,6 +29,7 @@ class SettingsStore(private val context: Context) {
         private val FONT_SCALE = floatPreferencesKey("terminal_font_sp")
         private val NOTIFY = booleanPreferencesKey("notify_attention")
         private val NOTIFIED = stringSetPreferencesKey("notified_sessions")
+        private val RUNNING_CHATS = stringSetPreferencesKey("running_chats")
         private val DRAFTS = stringPreferencesKey("drafts")
     }
 
@@ -64,6 +65,17 @@ class SettingsStore(private val context: Context) {
 
     suspend fun setNotifiedSessions(value: Set<String>) {
         context.dataStore.edit { it[NOTIFIED] = value }
+    }
+
+    /**
+     * Chats seen running at the last check. A chat that was running and no longer
+     * is has finished — which is the only way to notice completion without a push
+     * channel, and it needs the previous observation to compare against.
+     */
+    val runningChats: Flow<Set<String>> = context.dataStore.data.map { it[RUNNING_CHATS] ?: emptySet() }
+
+    suspend fun setRunningChats(value: Set<String>) {
+        context.dataStore.edit { it[RUNNING_CHATS] = value }
     }
 
     /**

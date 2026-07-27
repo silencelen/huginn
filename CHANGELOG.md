@@ -1,5 +1,33 @@
 # Huginn changelog
 
+## 2.9.0 — 2026-07-27
+
+### Sending to a busy chat queues instead of failing
+Typing into a chat that was still working used to dead-end with an error, while
+the same thing typed into a session simply queued. Chats now behave the same way:
+the message is held, shown in the conversation as **queued**, and delivered when
+the current turn ends. Several waiting messages are delivered together as one
+turn, which is what the interactive composer does. Pressing stop drops what is
+waiting, because stop should not launch the next thing.
+
+Messages queued before the daemon restarts are delivered on startup rather than
+sitting unanswered.
+
+### Sessions and chats are ordered by real recency
+Sessions were sorted on tmux's session activity, which does not move when a pane
+produces output — on sessions that had been busy for hours it read **eight hours
+stale**, so the order was effectively frozen. They now sort on window activity,
+which tracks output. Chats were already newest-first.
+
+### Interrupt a session from the conversation
+With nothing typed, a working session offers a stop button that sends Esc, the
+same interrupt as at the keyboard. Previously that meant switching to the Screen
+tab to find the key.
+
+### A notification when a chat finishes
+The background check now also notices a chat that was running and is not any
+more, so a long answer you walked away from tells you it is done.
+
 ## 2.8.1 — 2026-07-27
 
 ### The model control names the version

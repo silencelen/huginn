@@ -30,8 +30,9 @@ const { summarizeUsage } = require('./lib/usage');
 const { normalizePlan } = require('./lib/plan');
 const { AccountStore, fingerprint } = require('./lib/accounts');
 const { formatModel, discoverModels, parseModelId } = require('./lib/models');
+const { pushPending, takePending, clearPending, queuedEvents } = require('./lib/chatqueue');
 
-const VERSION = '2.8.1';
+const VERSION = '2.9.0';
 const PORT = Number(process.env.HUGINN_APPD_PORT || 8787);
 const DATA_DIR = process.env.HUGINN_APPD_DATA || '/var/lib/huginn-appd';
 const TOKEN_FILE = process.env.HUGINN_APPD_TOKEN_FILE || '/etc/huginn-appd/token';
@@ -150,19 +151,24 @@ function readSessionState(name) {
 }
 
 async function listSessions({ preview = false } = {}) {
-  const fmt = '#{session_name}\t#{session_created}\t#{session_attached}\t#{session_activity}\t' +
-    '#{session_windows}\t#{window_width}\t#{window_height}\t#{window-size}';
+  // window_activity, NOT session_activity: the latter does not move when a pane
+  // produces output, so it read ~8 hours stale on sessions that had been busy
+  // continuously and the list ordered by it was effectively frozen.
+  const fmt = '#{session_name}\t#{session_created}\t#{session_attached}\t#{window_activity}\t' +
+    '#{session_windows}\t#{window_width}\t#{window_height}\t#{window-size}\t#{session_activity}';
   const { err, stdout } = await run('tmux', ['list-sessions', '-F', fmt]);
   if (err) return []; // no server running -> no sessions
   const rows = [];
   for (const line of stdout.trim().split('\n')) {
     if (!line) continue;
-    const [name, created, attached, activity, windows, w, h, wsize] = line.split('\t');
+    const [name, created, attached, activity, windows, w, h, wsize, sessActivity] = line.split('\t');
     const st = readSessionState(name) || {};
     rows.push({
       name,
       createdAt: Number(created),
       activityAt: Number(activity),
+      // Kept for reference; it tracks client interaction, not output.
+      sessionActivityAt: Number(sessActivity),
       attachedClients: Number(attached),
       windows: Number(windows),
       cols: Number(w),
@@ -428,6 +434,22 @@ function saveMeta(meta) {
   fs.mkdirSync(chatDir(meta.id), { recursive: true });
   fs.writeFileSync(metaPath(meta.id), JSON.stringify(meta, null, 2));
 }
+/**
+ * Mutates the meta ON DISK: reload, change, save.
+ *
+ * Writing back a meta object captured earlier discards every field written since
+ * it was read. That is how a queued message vanished: the run's init event
+ * persisted the snapshot it started with, which had no queue in it. Anything
+ * changing meta during a run must go through here.
+ */
+function updateMeta(id, mutate) {
+  const m = loadMeta(id);
+  if (!m) return null;
+  mutate(m);
+  saveMeta(m);
+  return m;
+}
+
 function appendMsg(id, rec) {
   fs.appendFileSync(msgsPath(id), JSON.stringify(rec) + '\n');
 }
@@ -446,6 +468,8 @@ function listChats() {
     const m = loadMeta(id);
     if (m) {
       m.running = activeRuns.has(id);
+      // A count, not the texts: the list needs "2 waiting", not the messages.
+      m.pending = Array.isArray(m.pending) ? m.pending.length : 0;
       // Claude Code generates a real title for its own sessions; it reads far
       // better than the truncated first message this daemon falls back to.
       if (m.claudeSessionId) {
@@ -529,7 +553,7 @@ function startRun(meta, userText) {
   appendMsg(chatId, { type: 'user', text: userText, ts: now });
   meta.updatedAt = now;
   meta.lastSnippet = userText.slice(0, 120);
-  saveMeta(meta);
+  updateMeta(chatId, (m) => { m.updatedAt = now; m.lastSnippet = userText.slice(0, 120); });
 
   const args = ['-p', '--output-format', 'stream-json', '--verbose', '--include-partial-messages'];
   if (meta.model) args.push('--model', meta.model);
@@ -580,12 +604,28 @@ function startRun(meta, userText) {
       if (run_.assistantText) appendMsg(chatId, { type: 'assistant', text: run_.assistantText, ts, partial: true });
       appendMsg(chatId, { type: 'error', text: errText, ts });
       run_.emit('error', { text: errText });
-      const m = loadMeta(chatId);
-      if (m) { m.updatedAt = ts; m.lastSnippet = errText.slice(0, 120); saveMeta(m); }
+      updateMeta(chatId, (m) => { m.updatedAt = ts; m.lastSnippet = errText.slice(0, 120); });
     }
     run_.emit('done', { exitCode: code });
     run_.finish();
     log(`chat ${chatId} run finished (exit ${code})`);
+
+    const fresh = loadMeta(chatId);
+    if (fresh) {
+      if (run_.cancelled) {
+        // Cancel means stop. Respawning from the queue would make the stop
+        // button start the very thing it was pressed to end.
+        const dropped = clearPending(fresh);
+        if (dropped) { saveMeta(fresh); log(`chat ${chatId} dropped ${dropped} queued message(s) on cancel`); }
+      } else {
+        const next = takePending(fresh);
+        if (next) {
+          saveMeta(fresh);
+          log(`chat ${chatId} delivering queued message(s)`);
+          startRun(fresh, next);
+        }
+      }
+    }
   });
 
   log(`chat ${chatId} run started (mode=${meta.mode}, resume=${meta.claudeSessionId || 'new'})`);
@@ -598,8 +638,8 @@ function handleClaudeEvent(meta, run_, ev) {
   switch (ev.type) {
     case 'system': {
       if (ev.subtype === 'init' && ev.session_id && !meta.claudeSessionId) {
-        meta.claudeSessionId = ev.session_id;
-        saveMeta(meta);
+        meta.claudeSessionId = ev.session_id;           // for this run
+        updateMeta(chatId, (m) => { if (!m.claudeSessionId) m.claudeSessionId = ev.session_id; });
       }
       break;
     }
@@ -640,12 +680,12 @@ function handleClaudeEvent(meta, run_, ev) {
       };
       appendMsg(chatId, rec);
       run_.emit('result', rec);
-      const m = loadMeta(chatId) || meta;
-      m.updatedAt = ts;
       const finalText = typeof ev.result === 'string' ? ev.result : run_.assistantText;
-      if (finalText) m.lastSnippet = finalText.slice(0, 120);
-      m.turns = (m.turns || 0) + 1;
-      saveMeta(m);
+      updateMeta(chatId, (m) => {
+        m.updatedAt = ts;
+        if (finalText) m.lastSnippet = finalText.slice(0, 120);
+        m.turns = (m.turns || 0) + 1;
+      });
       break;
     }
     default: break;
@@ -674,6 +714,24 @@ function findTranscriptFile(sessionId) {
 }
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+/**
+ * Starts a run for any chat left holding queued messages with nothing running.
+ * Only reachable after a restart or a crash, since in normal operation the queue
+ * is drained by the closing run.
+ */
+function deliverOrphanedQueues() {
+  for (const meta of listChats()) {
+    if (!meta.pending || activeRuns.has(meta.id)) continue;
+    const full = loadMeta(meta.id);
+    if (!full) continue;
+    const next = takePending(full);
+    if (!next) continue;
+    saveMeta(full);
+    log(`chat ${meta.id}: delivering ${meta.pending} message(s) queued before restart`);
+    startRun(full, next);
+  }
+}
 
 const CREDENTIALS_PATH = path.join(os.homedir(), '.claude', '.credentials.json');
 const accounts = new AccountStore(path.join(DATA_DIR, 'accounts'), CREDENTIALS_PATH);
@@ -1201,6 +1259,7 @@ const server = http.createServer(async (req, res) => {
         const run_ = activeRuns.get(id);
         return sendJson(res, 200, {
           ...meta,
+          pending: (meta.pending || []).length,
           messages: loadMsgs(id),
           // partial text of an in-flight turn so a cold open shows progress
           partialText: run_ ? run_.assistantText : null,
@@ -1216,6 +1275,15 @@ const server = http.createServer(async (req, res) => {
         const text = typeof body.text === 'string' ? body.text.trim() : '';
         if (!text) return sendErr(res, 400, 'text required');
         if (text.length > 100_000) return sendErr(res, 400, 'text too long');
+        // Busy: hold it and deliver when this run ends, rather than refusing.
+        // A headless run cannot be fed mid-flight, and a dead end here would be
+        // the one place the app behaves worse than typing into the session.
+        if (activeRuns.has(id)) {
+          const q = pushPending(meta, text, Math.floor(Date.now() / 1000));
+          if (!q.ok) return sendErr(res, q.code, q.error);
+          saveMeta(meta);
+          return sendJson(res, 202, { ok: true, queued: true, position: q.position });
+        }
         const started = startRun(meta, text);
         if (started.error) return sendErr(res, started.code, started.error);
         // Auto-title from the first message.
@@ -1246,8 +1314,20 @@ const server = http.createServer(async (req, res) => {
           offset: offsetNum,
           limit: Math.max(1, Math.min(800, Number(u.searchParams.get('limit')) || 400)),
         });
+        // A headless run records its prompt as an enqueue with no matching
+        // removal, so the reader's "queued" marker sticks to messages that were
+        // in fact delivered. For a chat the daemon is authoritative: anything in
+        // the transcript was delivered (it only writes a prompt when it starts a
+        // run), and anything genuinely waiting is in meta.pending.
+        const delivered = t.events.map((e) => (e.queued ? { ...e, queued: false } : e));
+        const events = delivered.concat(queuedEvents(meta, delivered.length));
         return sendJson(res, 200, {
-          ...t, modelDisplay: formatModel(t.model), running: meta.running, mode: meta.mode,
+          ...t,
+          events,
+          modelDisplay: formatModel(t.model),
+          running: meta.running,
+          mode: meta.mode,
+          pending: (meta.pending || []).length,
         });
       }
 
@@ -1266,6 +1346,7 @@ const server = http.createServer(async (req, res) => {
       }
       if (req.method === 'POST' && sub === '/cancel') {
         const run_ = activeRuns.get(id);
+        if (clearPending(meta)) saveMeta(meta);
         if (!run_) return sendErr(res, 409, 'no active run');
         run_.cancelled = true;
         try { run_.proc.kill('SIGTERM'); } catch { }
@@ -1322,6 +1403,10 @@ resolveBind().then(async (bind) => {
   // manual` by a killed daemon would otherwise keep a laptop's window shrunken
   // with nothing left to release it.
   await sweepStrandedSizes('startup');
+  // A restart kills any run that was in flight, and delivery of a chat's queue is
+  // triggered by that run closing — so without this, messages queued before a
+  // restart would sit on disk unanswered forever.
+  deliverOrphanedQueues();
   // Re-key any profile still stored under the old email-derived name, and clear
   // the duplicates that scheme produced.
   try {
