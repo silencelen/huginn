@@ -546,10 +546,18 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
                         // a session left open on a busy day would otherwise grow
                         // this list without limit, copying it whole every poll.
                         events = (cur.events + page.events).takeLast(MAX_EVENTS),
+                        // A tail read only reports fields whose records happen to
+                        // fall inside it, so EVERY session-level field has to be
+                        // carried forward or it reverts to null seconds after the
+                        // screen opens. Missing `effort` here is exactly why the
+                        // effort control kept falling back to a placeholder.
                         title = page.title ?: cur.title,
                         model = page.model ?: cur.model,
+                        effort = page.effort ?: cur.effort,
                         gitBranch = page.gitBranch ?: cur.gitBranch,
                         permissionMode = page.permissionMode ?: cur.permissionMode,
+                        cwd = page.cwd ?: cur.cwd,
+                        lastActivityTs = page.lastActivityTs ?: cur.lastActivityTs,
                         truncated = cur.truncated,
                     )
                 }.onFailure { e ->

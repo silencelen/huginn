@@ -1,5 +1,21 @@
 # Huginn changelog
 
+## 2.7.1 — 2026-07-27
+
+### Fixed: the effort control never showed the effort
+It was meant to read as its current value all along, like the model and mode
+chips do. Two things stopped it:
+
+- A tail read of the transcript only reports fields whose records happen to fall
+  inside it, and the app carried forward the model, mode and title but **not the
+  effort** — so a couple of seconds after opening a session it reverted to null
+  and the chip fell back to the word "Effort". Every session-level field is now
+  carried forward, including cwd and last-activity.
+- Effort was only picked up when an assistant turn stamped it, so a change made
+  mid-turn would not show until that turn finished. `/effort` and `/model` are
+  now read from the command itself, so the control reflects the change straight
+  away, and a later turn still wins if it disagrees.
+
 ## 2.7.0 — 2026-07-27
 
 Refinement pass.
