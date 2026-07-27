@@ -8,15 +8,17 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.DriveFileRenameOutline
 import androidx.compose.material.icons.filled.MoreVert
-import androidx.compose.material.icons.filled.Terminal
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
@@ -37,13 +39,15 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.silencelen.huginn.data.Session
 
 /**
- * The live tmux sessions on huginn: the same list `huginn ls` prints, plus the
- * state the title hook records, so you can see which session wants you before
- * opening any of them.
+ * The live tmux sessions. Each row leads with what the session is actually doing
+ * (Claude Code's own generated title, plus the last couple of meaningful pane
+ * lines) rather than only its tmux name, because "which of my four sessions is
+ * this" is the question the list exists to answer.
  */
 @Composable
 fun SessionsScreen(
@@ -51,10 +55,13 @@ fun SessionsScreen(
     onOpen: (String) -> Unit,
     onCreate: (String) -> Unit,
     onKill: (String) -> Unit,
+    onRename: (String, String) -> Unit,
 ) {
     var showNew by remember { mutableStateOf(false) }
     var newName by remember { mutableStateOf("") }
     var confirmKill by remember { mutableStateOf<String?>(null) }
+    var renaming by remember { mutableStateOf<String?>(null) }
+    var renameTo by remember { mutableStateOf("") }
 
     Box(Modifier.fillMaxSize()) {
         if (sessions.isEmpty()) {
@@ -67,7 +74,12 @@ fun SessionsScreen(
                 contentPadding = androidx.compose.foundation.layout.PaddingValues(bottom = 88.dp),
             ) {
                 items(sessions, key = { it.name }) { s ->
-                    SessionRow(s, onOpen = { onOpen(s.name) }, onKill = { confirmKill = s.name })
+                    SessionRow(
+                        s,
+                        onOpen = { onOpen(s.name) },
+                        onKill = { confirmKill = s.name },
+                        onRename = { renaming = s.name; renameTo = s.name },
+                    )
                     HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
                 }
             }
@@ -93,7 +105,7 @@ fun SessionsScreen(
                         singleLine = true,
                         label = { Text("Name") },
                     )
-                    Spacer(Modifier.width(8.dp))
+                    Spacer(Modifier.height(8.dp))
                     Text(
                         "Letters, digits and underscore. Opens Claude Code in ~/netplan.",
                         style = MaterialTheme.typography.bodySmall,
@@ -102,12 +114,33 @@ fun SessionsScreen(
                 }
             },
             confirmButton = {
-                TextButton(
-                    onClick = { showNew = false; onCreate(newName) },
-                    enabled = newName.isNotBlank(),
-                ) { Text("Create") }
+                TextButton(onClick = { showNew = false; onCreate(newName) }, enabled = newName.isNotBlank()) {
+                    Text("Create")
+                }
             },
             dismissButton = { TextButton(onClick = { showNew = false }) { Text("Cancel") } },
+        )
+    }
+
+    renaming?.let { from ->
+        AlertDialog(
+            onDismissRequest = { renaming = null },
+            title = { Text("Rename $from") },
+            text = {
+                OutlinedTextField(
+                    value = renameTo,
+                    onValueChange = { renameTo = it },
+                    singleLine = true,
+                    label = { Text("New name") },
+                )
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = { renaming = null; onRename(from, renameTo) },
+                    enabled = renameTo.isNotBlank() && renameTo != from,
+                ) { Text("Rename") }
+            },
+            dismissButton = { TextButton(onClick = { renaming = null }) { Text("Cancel") } },
         )
     }
 
@@ -125,53 +158,97 @@ fun SessionsScreen(
 }
 
 @Composable
-private fun SessionRow(s: Session, onOpen: () -> Unit, onKill: () -> Unit) {
+private fun SessionRow(
+    s: Session,
+    onOpen: () -> Unit,
+    onKill: () -> Unit,
+    onRename: () -> Unit,
+) {
     var menu by remember { mutableStateOf(false) }
     Row(
-        Modifier.fillMaxWidth().clickable(onClick = onOpen).padding(start = 16.dp, end = 4.dp, top = 14.dp, bottom = 14.dp),
-        verticalAlignment = Alignment.CenterVertically,
+        Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onOpen)
+            .padding(start = 16.dp, end = 4.dp, top = 12.dp, bottom = 12.dp),
+        verticalAlignment = Alignment.Top,
     ) {
-        Icon(
-            Icons.Filled.Terminal,
-            contentDescription = null,
-            tint = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-        Spacer(Modifier.width(14.dp))
         Column(Modifier.weight(1f)) {
-            Text(
-                s.name,
-                style = MaterialTheme.typography.titleSmall,
-                fontFamily = FontFamily.Monospace,
-                fontWeight = FontWeight.SemiBold,
-            )
-            Spacer(Modifier.width(2.dp))
             Row(verticalAlignment = Alignment.CenterVertically) {
                 StateDot(s.state)
-                Spacer(Modifier.width(6.dp))
+                Spacer(Modifier.width(8.dp))
+                Text(
+                    s.name,
+                    style = MaterialTheme.typography.labelLarge,
+                    fontFamily = FontFamily.Monospace,
+                    fontWeight = FontWeight.SemiBold,
+                )
+                Spacer(Modifier.width(8.dp))
                 Text(
                     stateLabel(s.state),
-                    style = MaterialTheme.typography.bodySmall,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = when (s.state) {
+                        "attention" -> MaterialTheme.colorScheme.error
+                        "running" -> MaterialTheme.colorScheme.primary
+                        else -> MaterialTheme.colorScheme.onSurfaceVariant
+                    },
+                )
+                Spacer(Modifier.weight(1f))
+                Text(
+                    relTime(s.activityAt),
+                    style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
-                if (s.attachedClients > 0) {
+            }
+
+            if (!s.title.isNullOrBlank()) {
+                Spacer(Modifier.height(3.dp))
+                Text(
+                    s.title,
+                    style = MaterialTheme.typography.bodyMedium,
+                    fontWeight = FontWeight.Medium,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+
+            if (s.preview.isNotEmpty()) {
+                Spacer(Modifier.height(3.dp))
+                s.preview.takeLast(2).forEach { line ->
                     Text(
-                        "  ·  ${s.attachedClients} attached",
-                        style = MaterialTheme.typography.bodySmall,
+                        line,
+                        style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
                     )
                 }
             }
+
+            val meta = buildList {
+                if (s.cols > 0) add("${s.cols}x${s.rows}")
+                if (s.attachedClients > 0) add("${s.attachedClients} attached")
+                if (s.sizeLeased) add("fitted to phone")
+            }
+            if (meta.isNotEmpty()) {
+                Spacer(Modifier.height(3.dp))
+                Text(
+                    meta.joinToString("  ·  "),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.outline,
+                )
+            }
         }
-        Text(
-            relTime(s.activityAt),
-            style = MaterialTheme.typography.labelSmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
+
         Box {
             IconButton(onClick = { menu = true }) {
                 Icon(Icons.Filled.MoreVert, contentDescription = "Session actions")
             }
             DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
+                DropdownMenuItem(
+                    text = { Text("Rename") },
+                    leadingIcon = { Icon(Icons.Filled.DriveFileRenameOutline, contentDescription = null) },
+                    onClick = { menu = false; onRename() },
+                )
                 DropdownMenuItem(
                     text = { Text("End session") },
                     leadingIcon = { Icon(Icons.Filled.Delete, contentDescription = null) },

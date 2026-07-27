@@ -20,12 +20,14 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.input.ImeAction
@@ -39,6 +41,8 @@ fun SettingsScreen(
     baseUrl: String,
     token: String,
     connected: Boolean?,
+    notifyEnabled: Boolean,
+    onNotifyEnabled: (Boolean) -> Unit,
     onSave: (String, String) -> Unit,
     onTest: () -> Unit,
 ) {
@@ -118,11 +122,31 @@ fun SettingsScreen(
         }
 
         Spacer(Modifier.height(8.dp))
+        Text("Notifications", style = MaterialTheme.typography.titleMedium)
+        Row(
+            Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Column(Modifier.weight(1f)) {
+                Text("Tell me when a session needs me", style = MaterialTheme.typography.bodyMedium)
+                Text(
+                    "Checks every 15 minutes while the phone is on the tailnet, and notifies " +
+                        "when a session starts waiting for an answer.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            Switch(checked = notifyEnabled, onCheckedChange = onNotifyEnabled)
+        }
+
+        Spacer(Modifier.height(8.dp))
         Text("What this app can do", style = MaterialTheme.typography.titleMedium)
         Text(
             "Chats run on huginn as headless Claude Code turns in ~/netplan. Ask mode has memory " +
                 "and no tools; Act mode can read, write, run commands and fetch the web. Sessions are " +
-                "the real tmux sessions, so a session you open here is the same one your laptop attaches to.",
+                "the real tmux sessions, so a session you open here is the same one your laptop attaches " +
+                "to; its conversation is read from the session's own Claude Code transcript, and the " +
+                "Screen tab is the live pane for answering prompts and typing.",
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )

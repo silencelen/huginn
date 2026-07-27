@@ -1,0 +1,85 @@
+{
+ "events": [
+  {
+   "seq": 19,
+   "kind": "assistant",
+   "ts": 1785167260,
+   "sidechain": false,
+   "text": "<text scrubbed, 49 chars>"
+  },
+  {
+   "seq": 20,
+   "kind": "tool",
+   "ts": 1785167292,
+   "sidechain": false,
+   "name": "Edit",
+   "input": "<input scrubbed, 82 chars>",
+   "result": "<result scrubbed, 122 chars>",
+   "ok": true
+  },
+  {
+   "seq": 21,
+   "kind": "tool",
+   "ts": 1785167305,
+   "sidechain": false,
+   "name": "Edit",
+   "input": "<input scrubbed, 53 chars>",
+   "result": "<result scrubbed, 159 chars>",
+   "ok": true
+  },
+  {
+   "seq": 22,
+   "kind": "tool",
+   "ts": 1785167327,
+   "sidechain": false,
+   "name": "Bash",
+   "input": "<input scrubbed, 401 chars>",
+   "result": "<result scrubbed, 77 chars>",
+   "ok": true
+  },
+  {
+   "seq": 23,
+   "kind": "tool",
+   "ts": 1785167356,
+   "sidechain": false,
+   "name": "Bash",
+   "input": "<input scrubbed, 239 chars>",
+   "result": "<result scrubbed, 479 chars>",
+   "ok": false
+  },
+  {
+   "seq": 24,
+   "kind": "assistant",
+   "ts": 1785167366,
+   "sidechain": false,
+   "text": "<text scrubbed, 141 chars>"
+  },
+  {
+   "seq": 25,
+   "kind": "tool",
+   "ts": 1785167368,
+   "sidechain": false,
+   "name": "Bash",
+   "input": "<input scrubbed, 261 chars>",
+   "result": "<result scrubbed, 601 chars>",
+   "ok": true
+  },
+  {
+   "seq": 26,
+   "kind": "assistant",
+   "ts": 1785167393,
+   "sidechain": false,
+   "text": "<text scrubbed, 3984 chars>"
+  }
+ ],
+ "nextOffset": 1108213,
+ "truncated": true,
+ "title": "<title scrubbed, 58 chars>",
+ "permissionMode": "auto",
+ "model": "claude-opus-5",
+ "gitBranch": "main",
+ "cwd": "/root/netplan/pmanage",
+ "lastActivityTs": 1785167393,
+ "state": "idle",
+ "claudeSessionId": "<claudeSessionId scrubbed, 36 chars>"
+}

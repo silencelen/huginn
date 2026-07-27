@@ -1,8 +1,11 @@
 package com.silencelen.huginn.data
 
 import android.content.Context
+import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
+import androidx.datastore.preferences.core.floatPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
+import androidx.datastore.preferences.core.stringSetPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
@@ -17,12 +20,27 @@ private val Context.dataStore by preferencesDataStore(name = "huginn_settings")
 class SettingsStore(private val context: Context) {
     companion object {
         const val DEFAULT_BASE_URL = "http://100.97.198.90:8787"
+        const val DEFAULT_FONT_SCALE = 9f
         private val BASE_URL = stringPreferencesKey("base_url")
         private val TOKEN = stringPreferencesKey("token")
+        private val FONT_SCALE = floatPreferencesKey("terminal_font_sp")
+        private val NOTIFY = booleanPreferencesKey("notify_attention")
+        private val NOTIFIED = stringSetPreferencesKey("notified_sessions")
     }
 
     val baseUrl: Flow<String> = context.dataStore.data.map { it[BASE_URL] ?: DEFAULT_BASE_URL }
     val token: Flow<String> = context.dataStore.data.map { it[TOKEN] ?: "" }
+
+    /** Terminal text size in sp. Drives the column count reported to the server. */
+    val fontScale: Flow<Float> = context.dataStore.data.map { it[FONT_SCALE] ?: DEFAULT_FONT_SCALE }
+
+    val notifyEnabled: Flow<Boolean> = context.dataStore.data.map { it[NOTIFY] ?: true }
+
+    /**
+     * Sessions already notified about, so the background poll fires on the
+     * transition into needing-you rather than every 15 minutes forever.
+     */
+    val notifiedSessions: Flow<Set<String>> = context.dataStore.data.map { it[NOTIFIED] ?: emptySet() }
 
     suspend fun setBaseUrl(value: String) {
         context.dataStore.edit { it[BASE_URL] = value.trim() }
@@ -30,5 +48,17 @@ class SettingsStore(private val context: Context) {
 
     suspend fun setToken(value: String) {
         context.dataStore.edit { it[TOKEN] = value.trim() }
+    }
+
+    suspend fun setFontScale(value: Float) {
+        context.dataStore.edit { it[FONT_SCALE] = value.coerceIn(5.5f, 22f) }
+    }
+
+    suspend fun setNotifyEnabled(value: Boolean) {
+        context.dataStore.edit { it[NOTIFY] = value }
+    }
+
+    suspend fun setNotifiedSessions(value: Set<String>) {
+        context.dataStore.edit { it[NOTIFIED] = value }
     }
 }

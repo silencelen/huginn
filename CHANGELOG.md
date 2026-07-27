@@ -1,5 +1,72 @@
 # Huginn changelog
 
+## 2.0.0 — 2026-07-27
+
+A development pass on how sessions are shown. v1 rendered a tmux session by
+scraping its screen; v2 reads the session's actual Claude Code transcript, and
+keeps the pane for the things only a live pane can do.
+
+### Sessions are a conversation now, not a screenshot
+
+- Each session opens on **Conversation**, built from that session's own Claude
+  Code transcript: assistant text, **thinking** (collapsed, expandable),
+  tool calls folded together with their results, **subagent** output marked and
+  indented, and **workflow** runs labelled with the workflow's name.
+- The session list leads with Claude Code's **own generated title** for each
+  session, plus the last couple of meaningful pane lines, so you can tell four
+  sessions apart without opening any of them.
+- Sessions can be renamed from the app.
+
+### The Screen tab is a real character grid
+
+- The pane is parsed into cells and drawn at exact cell metrics, so the glyphs
+  Claude Code's interface is built from (box drawing, `●`, `❯`, `⏵⏵`, emoji) can
+  no longer shift the columns after them. Borders line up.
+- **The pane is resized to your phone.** With no client attached, tmux keeps a
+  window at the size it was created (80x24), so v1 showed a laptop-shaped layout
+  through a keyhole. The app now reports the geometry it can actually display and
+  the server resizes the tmux window to match, so Claude Code re-wraps its own
+  output to fit the phone. The resize is a lease that expires and is released on
+  exit, on a crash, and on daemon restart, so a laptop attaching later is never
+  left with a shrunken window. If another client is attached the resize is
+  refused, with a "Fit anyway" override.
+- Pinch to zoom; the column count follows the text size.
+- OSC 8 hyperlinks (which Claude Code wraps around file paths) are consumed
+  instead of dumping raw URLs into the text.
+- A block cursor, drawn hollow so it never hides the character under it.
+
+### Permission prompts are buttons
+
+- When a session asks a numbered question ("Do you want to proceed?"), the app
+  detects it and offers the options as **tappable buttons**, in both the
+  Conversation and Screen tabs. Answering no longer means hunting for a digit on
+  a soft keyboard while the interface redraws.
+
+### Notifications
+
+- An optional background check notices when a session starts **waiting on you**
+  and posts a notification; tapping it opens that session. It fires on the
+  transition, not repeatedly, and needs the phone to be on the tailnet.
+
+### Chats
+
+- Answers render as **markdown**: real code blocks with a copy button, inline
+  code, headings, lists and quotes, instead of one flat run of text.
+- Chat history now comes from the transcript too, so a chat also shows thinking
+  and tool results, not just the final answer.
+
+### Under the hood
+
+- The screen endpoint **long-polls**: the server holds the request until the
+  screen actually changes. An idle session costs one parked connection instead of
+  a capture every second, and a busy one updates as soon as it changes.
+- Session state files now carry the Claude session id and transcript path,
+  written by the `huginn-claude-title` hook.
+- 71 automated tests (47 Kotlin, 24 for the daemon), including tests that decode
+  real captured daemon responses so a wire-format change cannot pass unnoticed.
+
+Same signing key as 1.0.0, so this updates in place.
+
 ## 1.0.0 — 2026-07-27
 
 First release. Replaces driving huginn from a tmux session in Termux.
@@ -10,33 +77,24 @@ First release. Replaces driving huginn from a tmux session in Termux.
 - Two modes, chosen per chat: **Ask** has reasoning and MemPalace memory but no
   tools (the CLI's `huginn -p`), **Act** also reads and writes files, runs
   commands and fetches the web (`huginn -y`).
-- Tools appear inline as they run, with the one field worth seeing (the command,
-  the path, the query).
 - Transcripts and Claude session IDs live on the server, so a chat resumes with
   full context and survives the app being killed. Leaving a chat detaches the
-  stream but never cancels the turn: locking your phone does not stop the work.
+  stream but never cancels the turn.
 - Cost and duration are shown per turn.
 
 ### Sessions
-- The real tmux sessions on huginn, the same list `huginn ls` prints. A session
-  you open here is the one your laptop attaches to.
+- The real tmux sessions on huginn, the same list `huginn ls` prints.
 - Each row carries the live state the Claude hooks record: working, needs you, or
-  waiting. You can see which session wants you without opening any of them.
+  waiting.
 - Create a session (opens Claude Code in `~/netplan`, exactly like `cc`) or end one.
 
 ### Terminal
-- Renders the pane with real colour, sized so the full width fits your screen.
-- A key row for what a phone keyboard cannot send: Esc, Shift+Tab (permission
-  modes), arrows, Ctrl-C/D/L/R, PgUp/PgDn.
-- Send a line with or without Enter, because Claude Code's composer takes
-  multi-line input and you do not always want to submit.
+- Renders the pane with colour, and a key row for what a phone keyboard cannot
+  send: Esc, Shift+Tab, arrows, Ctrl-C/D/L/R, PgUp/PgDn.
 
 ### Status
-- Host health at a glance: uptime, load, disk, Claude Code version, MemPalace
-  reachability, sessions and running chats.
+- Host health: uptime, load, disk, Claude Code version, MemPalace reachability.
 
 ### Notes
 - Tailnet only. `huginn-appd` binds huginn's Tailscale address and every request
   needs the bearer token from `/etc/huginn-appd/token`.
-- Signed with a dedicated release key (`huginn-release`), so future versions
-  update in place.
