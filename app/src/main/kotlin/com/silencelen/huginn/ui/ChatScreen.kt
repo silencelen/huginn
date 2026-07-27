@@ -36,6 +36,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -43,6 +44,7 @@ import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.unit.dp
 import com.silencelen.huginn.data.TranscriptEvent
+import kotlinx.coroutines.launch
 import com.silencelen.huginn.data.TranscriptPage
 
 /**
@@ -66,12 +68,20 @@ fun ChatScreen(
     onCancel: () -> Unit,
     onCopy: (String) -> Unit,
 ) {
+    val scope = rememberCoroutineScope()
     val listState = rememberLazyListState()
     val events = page?.events ?: emptyList()
     val streaming = streamingText != null || activeTool != null
+    val itemCount = events.size + if (streaming) 1 else 0
 
-    // Open on the newest message, then follow only while already at the bottom.
-    AutoScrollToNewest(listState, events.size + if (streaming) 1 else 0, key = chatId)
+    // streamingText.length is what makes a live answer follow: the item count does
+    // not change while tokens arrive into the same block.
+    val hasUnseen = AutoScrollToNewest(
+        listState = listState,
+        itemCount = itemCount,
+        revision = tailRevision(page?.nextOffset, events.size, streamingText?.length, activeTool),
+        key = chatId,
+    )
 
     Column(Modifier.fillMaxSize()) {
         if (page == null) {
@@ -100,6 +110,10 @@ fun ChatScreen(
                     item { StreamingItem(streamingText, activeTool, onCopy) }
                 }
             }
+        }
+
+        if (hasUnseen) {
+            JumpToNewest { scope.launch { listState.animateScrollToItem((itemCount - 1).coerceAtLeast(0)) } }
         }
 
         Composer(
