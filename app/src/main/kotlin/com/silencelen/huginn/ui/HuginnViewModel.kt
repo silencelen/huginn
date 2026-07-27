@@ -8,6 +8,7 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
+import com.silencelen.huginn.data.Account
 import com.silencelen.huginn.data.Chat
 import com.silencelen.huginn.data.ChatEvent
 import com.silencelen.huginn.data.HuginnClient
@@ -16,6 +17,7 @@ import com.silencelen.huginn.data.Session
 import com.silencelen.huginn.data.SettingsStore
 import com.silencelen.huginn.data.Status
 import com.silencelen.huginn.data.TranscriptPage
+import com.silencelen.huginn.data.Usage
 import com.silencelen.huginn.notify.SessionWatchWorker
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -74,6 +76,31 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
     private val _notifyEnabled = MutableStateFlow(true)
     val notifyEnabled: StateFlow<Boolean> = _notifyEnabled.asStateFlow()
 
+    /**
+     * Unsent composer text per target. Held here rather than in the composable so
+     * it survives navigating away, and written through to storage (debounced) so
+     * it survives the process being killed.
+     */
+    private val _drafts = MutableStateFlow<Map<String, String>>(emptyMap())
+    val drafts: StateFlow<Map<String, String>> = _drafts.asStateFlow()
+    private var draftSaveJob: Job? = null
+
+    fun setDraft(key: String, text: String) {
+        _drafts.value = _drafts.value.toMutableMap().apply {
+            if (text.isEmpty()) remove(key) else put(key, text)
+        }
+        // Debounced: a write per keystroke would be a lot of disk for nothing.
+        draftSaveJob?.cancel()
+        draftSaveJob = viewModelScope.launch {
+            delay(400)
+            settings.setDrafts(_drafts.value)
+        }
+    }
+
+    private fun clearDraft(key: String) {
+        if (_drafts.value.containsKey(key)) setDraft(key, "")
+    }
+
     init {
         viewModelScope.launch {
             baseUrlNow = settings.baseUrl.first()
@@ -82,6 +109,7 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
             _token.value = tokenNow
             _fontScale.value = settings.fontScale.first()
             _notifyEnabled.value = settings.notifyEnabled.first()
+            _drafts.value = settings.drafts.first()
             if (tokenNow.isNotBlank()) {
                 refreshAll()
                 if (_notifyEnabled.value) SessionWatchWorker.schedule(getApplication())
@@ -142,6 +170,79 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
                     _connected.value = false
                     _toast.value = errText(it)
                 }
+        }
+    }
+
+    // -------------------------------------------------- account + usage
+
+    private val _account = MutableStateFlow<Account?>(null)
+    val account: StateFlow<Account?> = _account.asStateFlow()
+
+    private val _usage = MutableStateFlow<Usage?>(null)
+    val usage: StateFlow<Usage?> = _usage.asStateFlow()
+
+    private var usagePollJob: Job? = null
+
+    fun refreshAccount() {
+        viewModelScope.launch {
+            runCatching { client.account() }
+                .onSuccess { _account.value = it }
+                .onFailure { _toast.value = errText(it) }
+        }
+    }
+
+    /**
+     * Usage is computed by walking every transcript on the host and takes ~30 s,
+     * so the server serves a cache and recomputes in the background. Poll while
+     * it is refreshing so the number appears when it is ready.
+     */
+    fun refreshUsage() {
+        usagePollJob?.cancel()
+        usagePollJob = viewModelScope.launch {
+            repeat(30) {
+                val r = runCatching { client.usage() }.getOrNull()
+                if (r != null) _usage.value = r
+                if (r != null && !r.refreshing) return@launch
+                delay(4000)
+            }
+        }
+    }
+
+    fun stopUsagePolling() {
+        usagePollJob?.cancel()
+        usagePollJob = null
+    }
+
+    private val _loginUrl = MutableStateFlow<String?>(null)
+    val loginUrl: StateFlow<String?> = _loginUrl.asStateFlow()
+    fun loginUrlHandled() { _loginUrl.value = null }
+
+    /**
+     * Opens an interactive `claude auth login` in a session and hands back both
+     * the session (so the Screen tab can take the pasted code) and the sign-in
+     * URL, which the pane hard-wraps and a phone cannot copy.
+     */
+    fun startLogin(onSession: (String) -> Unit) {
+        _toast.value = "Starting sign-in…"
+        viewModelScope.launch {
+            runCatching { client.startLogin() }
+                .onSuccess {
+                    refreshSessions()
+                    _loginUrl.value = it.url
+                    onSession(it.session)
+                }
+                .onFailure { _toast.value = errText(it) }
+        }
+    }
+
+    fun logout() {
+        viewModelScope.launch {
+            runCatching { client.logout() }
+                .onSuccess {
+                    _account.value = it
+                    _toast.value = "Signed out. huginn cannot run until you sign in again."
+                }
+                .onFailure { _toast.value = errText(it) }
         }
     }
 
@@ -370,6 +471,7 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun sendText(name: String, text: String, thenEnter: Boolean) {
+        clearDraft(sessionDraftKey(name))
         viewModelScope.launch {
             runCatching {
                 client.sendKeys(name, text = text, keys = if (thenEnter) listOf("Enter") else emptyList())
@@ -463,6 +565,7 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
 
     fun send(id: String, text: String) {
         if (_sending.value) return
+        clearDraft(chatDraftKey(id))
         _sending.value = true
         _streamingText.value = ""
         _activeTool.value = null
@@ -530,6 +633,9 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
     companion object {
         /** Newest events kept in memory for one session view. */
         private const val MAX_EVENTS = 600
+
+        fun sessionDraftKey(name: String) = "sess:$name"
+        fun chatDraftKey(id: String) = "chat:$id"
 
         val Factory = object : ViewModelProvider.Factory {
             @Suppress("UNCHECKED_CAST")

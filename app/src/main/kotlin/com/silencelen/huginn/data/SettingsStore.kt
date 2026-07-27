@@ -9,6 +9,9 @@ import androidx.datastore.preferences.core.stringSetPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
+import kotlinx.serialization.builtins.MapSerializer
+import kotlinx.serialization.builtins.serializer
+import kotlinx.serialization.json.Json
 
 private val Context.dataStore by preferencesDataStore(name = "huginn_settings")
 
@@ -26,6 +29,7 @@ class SettingsStore(private val context: Context) {
         private val FONT_SCALE = floatPreferencesKey("terminal_font_sp")
         private val NOTIFY = booleanPreferencesKey("notify_attention")
         private val NOTIFIED = stringSetPreferencesKey("notified_sessions")
+        private val DRAFTS = stringPreferencesKey("drafts")
     }
 
     val baseUrl: Flow<String> = context.dataStore.data.map { it[BASE_URL] ?: DEFAULT_BASE_URL }
@@ -60,5 +64,25 @@ class SettingsStore(private val context: Context) {
 
     suspend fun setNotifiedSessions(value: Set<String>) {
         context.dataStore.edit { it[NOTIFIED] = value }
+    }
+
+    /**
+     * Unsent composer text, keyed by target ("sess:name" / "chat:id").
+     *
+     * Persisted rather than held in the composable: a half-written message must
+     * survive navigating away, and survive the process being killed while the
+     * phone is in your pocket, which is exactly when it happens.
+     */
+    val drafts: Flow<Map<String, String>> = context.dataStore.data.map { prefs ->
+        val raw = prefs[DRAFTS] ?: return@map emptyMap()
+        runCatching {
+            Json.decodeFromString(MapSerializer(String.serializer(), String.serializer()), raw)
+        }.getOrElse { emptyMap() }
+    }
+
+    suspend fun setDrafts(value: Map<String, String>) {
+        val trimmed = value.filterValues { it.isNotEmpty() }
+        val encoded = Json.encodeToString(MapSerializer(String.serializer(), String.serializer()), trimmed)
+        context.dataStore.edit { it[DRAFTS] = encoded }
     }
 }

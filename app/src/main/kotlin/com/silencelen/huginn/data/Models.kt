@@ -190,3 +190,63 @@ sealed interface ChatEvent {
     data class Failure(val text: String) : ChatEvent
     data object Done : ChatEvent
 }
+
+@Serializable
+data class Account(
+    val loggedIn: Boolean = false,
+    val email: String? = null,
+    val orgName: String? = null,
+    val subscriptionType: String? = null,
+    val authMethod: String? = null,
+    val apiProvider: String? = null,
+    val error: String? = null,
+)
+
+@Serializable
+data class UsageDay(
+    val date: String? = null,
+    val inputTokens: Long = 0,
+    val outputTokens: Long = 0,
+    val cacheCreationTokens: Long = 0,
+    val cacheReadTokens: Long = 0,
+    val totalTokens: Long = 0,
+    val costUsd: Double? = null,
+)
+
+@Serializable
+data class UsageWindow(
+    val days: Int = 0,
+    val totalTokens: Long = 0,
+    val inputTokens: Long = 0,
+    val outputTokens: Long = 0,
+    val cacheReadTokens: Long = 0,
+    val cacheCreationTokens: Long = 0,
+    val costUsd: Double? = null,
+)
+
+@Serializable
+data class UsageData(
+    val today: UsageDay? = null,
+    val week: UsageWindow = UsageWindow(),
+    val daily: List<UsageDay> = emptyList(),
+)
+
+@Serializable
+data class Usage(
+    val data: UsageData? = null,
+    val computedAt: Long? = null,
+    val stale: Boolean = false,
+    val refreshing: Boolean = false,
+    val error: String? = null,
+    /** ccusage prices at list rates; on a Max plan that overstates the real cost. */
+    val costIsEstimate: Boolean = true,
+)
+
+@Serializable
+data class LoginSession(
+    val ok: Boolean = false,
+    val session: String = "",
+    val existed: Boolean = false,
+    /** Full sign-in URL, lifted off the pane where it is hard-wrapped. */
+    val url: String? = null,
+)

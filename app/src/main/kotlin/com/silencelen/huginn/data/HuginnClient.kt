@@ -96,6 +96,19 @@ class HuginnClient(
 
     suspend fun status(): Status = decode(call(builder("/v1/status").get().build()))
 
+    // ------------------------------------------------- account + usage
+
+    suspend fun account(): Account = decode(call(builder("/v1/account").get().build()))
+
+    /** Starts an interactive sign-in in a tmux session; returns its name. */
+    suspend fun startLogin(): LoginSession =
+        decode(call(builder("/v1/account/login").post(ByteArray(0).toRequestBody(null)).build()))
+
+    suspend fun logout(): Account =
+        decode(call(builder("/v1/account/logout").post(jsonBody("confirm" to "logout")).build()))
+
+    suspend fun usage(): Usage = decode(call(builder("/v1/usage").get().build()))
+
     // ---------------------------------------------------------- sessions
 
     /** @param preview include per-session titles and activity previews (costlier). */

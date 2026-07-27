@@ -24,10 +24,11 @@ const fs = require('node:fs');
 const path = require('node:path');
 const os = require('node:os');
 const { execFile, spawn } = require('node:child_process');
-const { screenHash, previewLines, detectPrompt } = require('./lib/pane');
+const { screenHash, previewLines, detectPrompt, extractLoginUrl } = require('./lib/pane');
 const { readTranscript } = require('./lib/transcript');
+const { summarizeUsage } = require('./lib/usage');
 
-const VERSION = '2.0.1';
+const VERSION = '2.1.0';
 const PORT = Number(process.env.HUGINN_APPD_PORT || 8787);
 const DATA_DIR = process.env.HUGINN_APPD_DATA || '/var/lib/huginn-appd';
 const TOKEN_FILE = process.env.HUGINN_APPD_TOKEN_FILE || '/etc/huginn-appd/token';
@@ -628,6 +629,68 @@ function findTranscriptFile(sessionId) {
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
+// ------------------------------------------------------- account + usage
+
+/** `claude auth status` already emits JSON; pass it through, minus nothing secret. */
+async function accountStatus() {
+  const { err, stdout } = await run('claude', ['auth', 'status'], { timeout: 20_000 });
+  if (err) return { loggedIn: false, error: 'could not read auth status' };
+  try {
+    const o = JSON.parse(stdout);
+    return {
+      loggedIn: !!o.loggedIn,
+      email: o.email ?? null,
+      orgName: o.orgName ?? null,
+      subscriptionType: o.subscriptionType ?? null,
+      authMethod: o.authMethod ?? null,
+      apiProvider: o.apiProvider ?? null,
+    };
+  } catch {
+    return { loggedIn: false, error: 'unexpected auth status output' };
+  }
+}
+
+// ccusage walks every transcript on disk and takes ~20-30 s even for one day,
+// so it is computed in the background and served from cache. The phone gets an
+// immediate answer that says how old it is, rather than a 30 s spinner.
+const usageCache = { at: 0, data: null, running: false, error: null, failedAt: 0 };
+const USAGE_TTL_MS = 10 * 60 * 1000;
+// After a failure, wait before trying again: a 30 s job re-triggered by every
+// poll would pin a core for nothing.
+const USAGE_RETRY_MS = 2 * 60 * 1000;
+
+function ymd(d) {
+  return `${d.getFullYear()}${String(d.getMonth() + 1).padStart(2, '0')}${String(d.getDate()).padStart(2, '0')}`;
+}
+
+async function computeUsage() {
+  if (usageCache.running) return;
+  usageCache.running = true;
+  try {
+    const now = new Date();
+    const weekAgo = new Date(now.getTime() - 6 * 86_400_000);
+    const { err, stdout, stderr } = await run(
+      'ccusage', ['daily', '--json', '-s', ymd(weekAgo), '-u', ymd(now)],
+      { timeout: 180_000, maxBuffer: 32 * 1024 * 1024, env: { ...process.env, HOME: process.env.HOME || '/root' } },
+    );
+    if (err) {
+      usageCache.error = (stderr || err.message || 'ccusage failed').trim().slice(0, 200);
+      usageCache.failedAt = Date.now();
+      return;
+    }
+    const parsed = JSON.parse(stdout);
+    usageCache.data = summarizeUsage(parsed, ymd(now));
+    usageCache.at = Date.now();
+    usageCache.error = null;
+    log(`usage refreshed (${usageCache.data.daily.length} days)`);
+  } catch (e) {
+    usageCache.error = String(e.message || e).slice(0, 200);
+    usageCache.failedAt = Date.now();
+  } finally {
+    usageCache.running = false;
+  }
+}
+
 // ---------------------------------------------------------------- status
 
 let cachedClaudeVersion = null;
@@ -690,6 +753,62 @@ const server = http.createServer(async (req, res) => {
     // --- ping / status
     if (req.method === 'GET' && p === '/v1/ping') return sendJson(res, 200, { ok: true, version: VERSION, host: os.hostname() });
     if (req.method === 'GET' && p === '/v1/status') return sendJson(res, 200, await statusPayload());
+
+    // --- account
+    if (req.method === 'GET' && p === '/v1/account') return sendJson(res, 200, await accountStatus());
+
+    if (req.method === 'POST' && p === '/v1/account/login') {
+      // Signing in is an interactive OAuth flow: it prints a URL and waits for a
+      // code. There is no headless path, so put it in a real tmux session and
+      // hand the app the session name — the Screen view can show the URL and
+      // take the pasted code, which is exactly what that view is for.
+      const name = 'login';
+      const existed = await sessionExists(name);
+      if (!existed) {
+        const r = await run('tmux',
+          ['new-session', '-d', '-s', name, '-c', WORKDIR, 'claude auth login; echo; echo "[done] press enter"; read _']);
+        if (r.err) return sendErr(res, 500, `tmux: ${r.stderr.trim() || r.err.message}`);
+      }
+      // Wait briefly for the URL to appear and hand it back: the pane hard-wraps
+      // it across lines, which is impossible to copy on a phone, while the OSC 8
+      // hyperlink target holds it whole.
+      let url = null;
+      for (let i = 0; i < 12 && !url; i++) {
+        await sleep(700);
+        const cap = await run('tmux', ['capture-pane', '-p', '-e', '-t', `=${name}:`]);
+        if (!cap.err) url = extractLoginUrl(cap.stdout.replace(/\n$/, '').split('\n'));
+      }
+      return sendJson(res, existed ? 200 : 201, { ok: true, session: name, existed, url });
+    }
+
+    if (req.method === 'POST' && p === '/v1/account/logout') {
+      // Signing out breaks every running session AND every cron on this host
+      // (briefings, escalation, status-page investigation) until someone signs
+      // back in, so it takes an explicit confirmation rather than a stray tap.
+      const body = JSON.parse(await readBody(req) || '{}');
+      if (body.confirm !== 'logout') return sendErr(res, 400, 'confirmation required');
+      const r = await run('claude', ['auth', 'logout'], { timeout: 30_000 });
+      if (r.err) return sendErr(res, 500, (r.stderr || r.err.message).slice(0, 200));
+      return sendJson(res, 200, { ok: true, ...(await accountStatus()) });
+    }
+
+    // --- usage
+    if (req.method === 'GET' && p === '/v1/usage') {
+      const stale = Date.now() - usageCache.at > USAGE_TTL_MS;
+      const backingOff = usageCache.error && Date.now() - usageCache.failedAt < USAGE_RETRY_MS;
+      if ((stale || !usageCache.data) && !usageCache.running && !backingOff) computeUsage();
+      return sendJson(res, 200, {
+        data: usageCache.data,
+        computedAt: usageCache.at || null,
+        stale,
+        refreshing: usageCache.running,
+        error: usageCache.error,
+        // Tokens come straight from the transcripts and are exact; the dollar
+        // figures are ccusage's list-price estimate and run high for a Max
+        // subscription, so the app must not present them as a bill.
+        costIsEstimate: true,
+      });
+    }
 
     // --- sessions
     if (req.method === 'GET' && p === '/v1/sessions') {

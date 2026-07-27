@@ -1,6 +1,8 @@
 package com.silencelen.huginn
 
 import android.Manifest
+import android.content.Intent
+import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import androidx.activity.ComponentActivity
@@ -39,6 +41,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.lifecycle.compose.LifecycleStartEffect
@@ -107,9 +110,27 @@ fun HuginnApp(
     val screen by vm.screen.collectAsState()
     val transcript by vm.transcript.collectAsState()
     val transcriptError by vm.transcriptError.collectAsState()
+    val drafts by vm.drafts.collectAsState()
+    val account by vm.account.collectAsState()
+    val usage by vm.usage.collectAsState()
+    val loginUrl by vm.loginUrl.collectAsState()
 
     val snackbar = remember { SnackbarHostState() }
     LaunchedEffect(toast) { toast?.let { snackbar.showSnackbar(it); vm.toastShown() } }
+
+    // The sign-in URL is 450 characters and hard-wrapped in the pane, so hand it
+    // straight to a browser instead of asking anyone to copy it off a terminal.
+    val context = LocalContext.current
+    LaunchedEffect(loginUrl) {
+        loginUrl?.let { url ->
+            runCatching {
+                context.startActivity(
+                    Intent(Intent.ACTION_VIEW, Uri.parse(url)).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                )
+            }.onFailure { vm.copy(url, "sign-in URL") }
+            vm.loginUrlHandled()
+        }
+    }
 
     val notifPermission = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestPermission()
@@ -231,6 +252,9 @@ fun HuginnApp(
                         activeTool = activeTool,
                         sending = sending,
                         mode = chatMode,
+                        chatId = d.id,
+                        draft = drafts[HuginnViewModel.chatDraftKey(d.id)].orEmpty(),
+                        onDraft = { vm.setDraft(HuginnViewModel.chatDraftKey(d.id), it) },
                         onSend = { vm.send(d.id, it) },
                         onCancel = { vm.cancel(d.id) },
                         onCopy = { vm.copy(it) },
@@ -266,6 +290,8 @@ fun HuginnApp(
                         fontScale = fontScale,
                         onFontScale = { vm.setFontScale(it) },
                         onGeometry = { c, r -> vm.setGeometry(c, r) },
+                        draft = drafts[HuginnViewModel.sessionDraftKey(d.name)].orEmpty(),
+                        onDraft = { vm.setDraft(HuginnViewModel.sessionDraftKey(d.name), it) },
                         onSendText = { text, enter -> vm.sendText(d.name, text, enter) },
                         onSendKeys = { vm.sendKeys(d.name, it) },
                         onAnswerPrompt = { vm.answerPrompt(d.name, it) },
@@ -281,15 +307,30 @@ fun HuginnApp(
                     chatsRunning = chats.count { it.running },
                 )
 
-                is Dest.Settings -> SettingsScreen(
-                    baseUrl = baseUrl,
-                    token = token,
-                    connected = connected,
-                    notifyEnabled = notifyEnabled,
-                    onNotifyEnabled = { vm.setNotifyEnabled(it) },
-                    onSave = { u, t -> vm.saveSettings(u, t) },
-                    onTest = { vm.testConnection() },
-                )
+                is Dest.Settings -> {
+                    DisposableEffect(Unit) {
+                        vm.refreshAccount()
+                        vm.refreshUsage()
+                        onDispose { vm.stopUsagePolling() }
+                    }
+                    SettingsScreen(
+                        baseUrl = baseUrl,
+                        token = token,
+                        connected = connected,
+                        notifyEnabled = notifyEnabled,
+                        onNotifyEnabled = { vm.setNotifyEnabled(it) },
+                        account = account,
+                        usage = usage,
+                        onSignIn = {
+                            // The sign-in flow is interactive, so it runs in a real
+                            // session and we drop the user into its Screen tab.
+                            vm.startLogin { session -> sessionTab = 1; dest = Dest.SessionView(session) }
+                        },
+                        onSignOut = { vm.logout() },
+                        onSave = { u, t -> vm.saveSettings(u, t) },
+                        onTest = { vm.testConnection() },
+                    )
+                }
             }
         }
     }

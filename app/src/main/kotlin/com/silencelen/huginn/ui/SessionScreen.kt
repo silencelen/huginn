@@ -60,6 +60,8 @@ fun SessionScreen(
     fontScale: Float,
     onFontScale: (Float) -> Unit,
     onGeometry: (Int, Int) -> Unit,
+    draft: String,
+    onDraft: (String) -> Unit,
     onSendText: (String, Boolean) -> Unit,
     onSendKeys: (List<String>) -> Unit,
     onAnswerPrompt: (Int) -> Unit,
@@ -78,6 +80,8 @@ fun SessionScreen(
                     page = transcript,
                     error = transcriptError,
                     prompt = screen?.prompt,
+                    draft = draft,
+                    onDraft = onDraft,
                     onSendText = onSendText,
                     onAnswerPrompt = onAnswerPrompt,
                     onCopy = onCopy,
@@ -86,6 +90,8 @@ fun SessionScreen(
                 TerminalScreen(
                     session = name,
                     screen = screen,
+                    draft = draft,
+                    onDraft = onDraft,
                     fontScale = fontScale,
                     onFontScale = onFontScale,
                     onGeometry = onGeometry,
@@ -105,20 +111,17 @@ private fun SessionConversation(
     page: TranscriptPage?,
     error: String?,
     prompt: com.silencelen.huginn.data.PanePrompt?,
+    draft: String,
+    onDraft: (String) -> Unit,
     onSendText: (String, Boolean) -> Unit,
     onAnswerPrompt: (Int) -> Unit,
     onCopy: (String) -> Unit,
 ) {
-    var draft by remember { mutableStateOf("") }
     val listState = rememberLazyListState()
     val events = page?.events ?: emptyList()
 
-    LaunchedEffect(events.size) {
-        if (events.isNotEmpty()) {
-            val last = listState.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: 0
-            if (last >= events.size - 3) listState.animateScrollToItem(events.size - 1)
-        }
-    }
+    // Open on the newest message, then follow only while already at the bottom.
+    AutoScrollToNewest(listState, events.size, key = name)
 
     Column(Modifier.fillMaxSize()) {
         when {
@@ -174,7 +177,7 @@ private fun SessionConversation(
             ) {
                 OutlinedTextField(
                     value = draft,
-                    onValueChange = { draft = it },
+                    onValueChange = onDraft,
                     modifier = Modifier.weight(1f),
                     placeholder = { Text("Reply in $name") },
                     maxLines = 6,
@@ -182,7 +185,7 @@ private fun SessionConversation(
                 )
                 Spacer(Modifier.width(6.dp))
                 IconButton(
-                    onClick = { if (draft.isNotBlank()) { onSendText(draft, true); draft = "" } },
+                    onClick = { if (draft.isNotBlank()) onSendText(draft, true) },
                     enabled = draft.isNotBlank(),
                     modifier = Modifier.size(46.dp),
                 ) {
