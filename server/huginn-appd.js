@@ -29,8 +29,9 @@ const { readTranscript } = require('./lib/transcript');
 const { summarizeUsage } = require('./lib/usage');
 const { normalizePlan } = require('./lib/plan');
 const { AccountStore, fingerprint } = require('./lib/accounts');
+const { formatModel, discoverModels, parseModelId } = require('./lib/models');
 
-const VERSION = '2.8.0';
+const VERSION = '2.8.1';
 const PORT = Number(process.env.HUGINN_APPD_PORT || 8787);
 const DATA_DIR = process.env.HUGINN_APPD_DATA || '/var/lib/huginn-appd';
 const TOKEN_FILE = process.env.HUGINN_APPD_TOKEN_FILE || '/etc/huginn-appd/token';
@@ -97,8 +98,16 @@ function run(cmd, args, opts = {}) {
 // than passed through to a spawn.
 const MODEL_ALIASES = new Set(['fable', 'opus', 'sonnet', 'haiku']);
 const EFFORT_LEVELS = new Set(['low', 'medium', 'high', 'xhigh', 'max']);
+/**
+ * A family alias, or a full versioned id. Both reach an argv, so the shape is
+ * checked rather than the string trusted.
+ */
 function validModel(v) {
-  return typeof v === 'string' && MODEL_ALIASES.has(v.toLowerCase()) ? v.toLowerCase() : null;
+  if (typeof v !== 'string') return null;
+  const s = v.trim().toLowerCase();
+  if (!/^[a-z0-9-]{2,60}$/.test(s)) return null;
+  if (MODEL_ALIASES.has(s)) return s;
+  return parseModelId(s) ? s : null;
 }
 function validEffort(v) {
   return typeof v === 'string' && EFFORT_LEVELS.has(v.toLowerCase()) ? v.toLowerCase() : null;
@@ -881,6 +890,13 @@ const server = http.createServer(async (req, res) => {
     if (req.method === 'GET' && p === '/v1/ping') return sendJson(res, 200, { ok: true, version: VERSION, host: os.hostname() });
     if (req.method === 'GET' && p === '/v1/status') return sendJson(res, 200, await statusPayload());
 
+    // --- models the installed CLI actually offers
+    if (req.method === 'GET' && p === '/v1/models') {
+      const bin = process.env.HUGINN_CLAUDE_BIN ||
+        '/usr/lib/node_modules/@anthropic-ai/claude-code/bin/claude.exe';
+      return sendJson(res, 200, { models: await discoverModels(bin) });
+    }
+
     // --- account
     if (req.method === 'GET' && p === '/v1/account') return sendJson(res, 200, await accountStatus());
 
@@ -1107,7 +1123,12 @@ const server = http.createServer(async (req, res) => {
         offset: offsetNum,
         limit: Math.max(1, Math.min(800, Number(u.searchParams.get('limit')) || 400)),
       });
-      return sendJson(res, 200, { ...t, state: st.state, claudeSessionId: st.sessionId });
+      return sendJson(res, 200, {
+        ...t,
+        modelDisplay: formatModel(t.model),
+        state: st.state,
+        claudeSessionId: st.sessionId,
+      });
     }
 
     if ((m = p.match(/^\/v1\/sessions\/([a-z0-9_]{1,50})\/rename$/)) && req.method === 'POST') {
@@ -1225,7 +1246,9 @@ const server = http.createServer(async (req, res) => {
           offset: offsetNum,
           limit: Math.max(1, Math.min(800, Number(u.searchParams.get('limit')) || 400)),
         });
-        return sendJson(res, 200, { ...t, running: meta.running, mode: meta.mode });
+        return sendJson(res, 200, {
+          ...t, modelDisplay: formatModel(t.model), running: meta.running, mode: meta.mode,
+        });
       }
 
       if (req.method === 'GET' && sub === '/stream') {
