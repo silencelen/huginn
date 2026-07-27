@@ -206,4 +206,42 @@ function extractLoginUrl(lines) {
   return null;
 }
 
-module.exports = { screenHash, stripAnsi, previewLines, detectPrompt, extractLoginUrl, parseStatusLine };
+/**
+ * Where a `claude auth login` pane has got to, so the app can run the whole
+ * sign-in itself instead of sending the user into a terminal to type.
+ *
+ * Read from the pane because the flow is a TUI: there is no status file or exit
+ * code to consult while it waits.
+ */
+function loginPaneState(lines) {
+  const plain = lines.map((l) => stripAnsi(l).replace(/\s+$/, ''));
+  const tail = plain.slice(-25).join('\n');
+  const awaitingCode = /Paste code here/i.test(tail);
+  const done = /(Login successful|Logged in|You are logged in|Signed in as)/i.test(tail);
+
+  // Quote the line that SAYS something went wrong, not simply the last line: a
+  // pane wraps, so the last line is often a fragment like "opied." and showing
+  // that to somebody wondering why sign-in failed is worse than saying nothing.
+  const ERROR_RE = /(error|failed|invalid|expired|denied|not authorized)/i;
+  let failedLine = null;
+  for (let i = plain.length - 1; i >= 0 && i >= plain.length - 25; i--) {
+    const t = plain[i].trim();
+    if (t.length >= 12 && ERROR_RE.test(t)) { failedLine = t.slice(0, 200); break; }
+  }
+
+  let message = failedLine;
+  if (!message) {
+    for (let i = plain.length - 1; i >= 0; i--) {
+      const t = plain[i].trim();
+      // Skip blanks, our own shell epilogue, and wrap fragments.
+      if (t.length < 12 || /^\[done\]/.test(t)) continue;
+      message = t.slice(0, 200);
+      break;
+    }
+  }
+  return { awaitingCode, done, failed: !!failedLine, message };
+}
+
+module.exports = {
+  screenHash, stripAnsi, previewLines, detectPrompt, extractLoginUrl, parseStatusLine, loginPaneState,
+};

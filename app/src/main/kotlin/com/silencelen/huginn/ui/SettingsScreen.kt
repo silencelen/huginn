@@ -52,6 +52,8 @@ fun SettingsScreen(
     connected: Boolean?,
     notifyEnabled: Boolean,
     onNotifyEnabled: (Boolean) -> Unit,
+    watchEnabled: Boolean,
+    onWatchEnabled: (Boolean) -> Unit,
     notificationsAllowed: Boolean,
     onRequestNotifications: () -> Unit,
     onOpenSystemNotificationSettings: () -> Unit,
@@ -195,6 +197,15 @@ fun SettingsScreen(
                     )
                 }
             }
+            if (savedAccounts.any { it.duplicateOf }) {
+                Text(
+                    "Two of these are the same Claude account signed in twice, so they " +
+                        "share one usage limit and switching between them gains nothing. " +
+                        "Forget one, or add a different account.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.error,
+                )
+            }
             Text(
                 "Switching changes the login for the whole host. Sessions already " +
                     "running keep the old account until they restart; new runs use the new one.",
@@ -235,6 +246,25 @@ fun SettingsScreen(
                 )
             }
             Switch(checked = notifyEnabled, onCheckedChange = onNotifyEnabled)
+        }
+
+        if (notifyEnabled) {
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f)) {
+                    Text("Watch continuously", style = MaterialTheme.typography.bodyMedium)
+                    Text(
+                        if (watchEnabled)
+                            "Alerts arrive within seconds. Android requires a quiet ongoing " +
+                                "notification while this runs, and it shows what huginn is doing."
+                        else
+                            "Off, so the check runs every 15 minutes — Android's minimum for " +
+                                "periodic work. A session waiting on you can go unnoticed that long.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                Switch(checked = watchEnabled, onCheckedChange = onWatchEnabled)
+            }
         }
 
         // Whether the system will actually deliver them is a separate question
@@ -349,6 +379,7 @@ private fun SavedAccountRow(
                     account.subscriptionType?.let { add("$it plan") }
                     account.weeklyPercent?.let { add("${it.toInt()}% of the week used") }
                     if (account.isActive) add("active")
+                    if (!account.verified) add("name unconfirmed")
                 }
                 if (bits.isNotEmpty()) {
                     Text(

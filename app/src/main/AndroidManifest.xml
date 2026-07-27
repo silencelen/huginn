@@ -6,6 +6,14 @@
     <!-- Only to tell you a session is waiting on an answer; declined simply
          means the background poll notifies nothing. -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <!-- Continuous watching: a live connection so a "needs you" arrives in
+         seconds rather than on WorkManager's 15-minute floor. specialUse rather
+         than dataSync because dataSync is capped at 6 hours per day on Android 15
+         and this is meant to sit connected; the app is sideloaded via devstore, so
+         there is no store review to satisfy. -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
 
     <application
         android:allowBackup="false"
@@ -27,5 +35,22 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+        <service
+            android:name=".notify.WatchService"
+            android:exported="false"
+            android:foregroundServiceType="specialUse">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="Maintains a connection to the user's own huginn host to deliver alerts when a Claude Code session needs an answer" />
+        </service>
+
+        <receiver
+            android:name=".notify.BootReceiver"
+            android:exported="true"
+            android:enabled="true">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+            </intent-filter>
+        </receiver>
     </application>
 </manifest>
