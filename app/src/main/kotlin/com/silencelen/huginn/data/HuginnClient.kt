@@ -53,9 +53,12 @@ class HuginnClient(
     // window, so a silent connection is a dead one. With no timeout at all a
     // black-holed socket (network change, NAT expiry) blocked the poll forever —
     // the screen froze with no error and no retry, and nothing rearmed it.
+    // Sized for the longest server-side hold (the watch parks for up to two
+    // minutes) plus slack, so a live connection is never cut mid-wait — while a
+    // genuinely dead socket still fails instead of hanging forever.
     private val pollHttp = http.newBuilder()
-        .readTimeout(45, TimeUnit.SECONDS)
-        .callTimeout(60, TimeUnit.SECONDS)
+        .readTimeout(150, TimeUnit.SECONDS)
+        .callTimeout(180, TimeUnit.SECONDS)
         .build()
 
     private fun url(path: String): String {
@@ -95,6 +98,27 @@ class HuginnClient(
     suspend fun ping(): Ping = decode(call(builder("/v1/ping").get().build()))
 
     suspend fun status(): Status = decode(call(builder("/v1/status").get().build()))
+
+    /**
+     * Parks until something an alert depends on changes, or [waitMs] elapses.
+     * Uses the long-poll client: the server holds this open deliberately.
+     */
+    suspend fun watch(knownHash: String?, waitMs: Int): Watch {
+        val q = buildList {
+            if (knownHash != null) add("hash=$knownHash")
+            if (waitMs > 0) add("wait=$waitMs")
+        }.joinToString("&")
+        val path = "/v1/watch" + if (q.isEmpty()) "" else "?$q"
+        return decode(call(builder(path).get().build(), if (waitMs > 0) Client.POLL else Client.NORMAL))
+    }
+
+    /** Where an in-progress sign-in has got to. */
+    suspend fun loginState(): LoginState =
+        decode(call(builder("/v1/account/login/state").get().build()))
+
+    /** Hands the pasted code to the waiting sign-in and reports the outcome. */
+    suspend fun submitLoginCode(code: String): LoginState =
+        decode(call(builder("/v1/account/login/code").post(jsonBody("code" to code)).build(), Client.POLL))
 
     /** Models the installed CLI offers, so the picker cannot go stale. */
     suspend fun models(): List<ModelChoice> =

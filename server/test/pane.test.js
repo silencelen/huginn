@@ -6,7 +6,7 @@
 
 const { test } = require('node:test');
 const assert = require('node:assert');
-const { screenHash, stripAnsi, previewLines, detectPrompt, extractLoginUrl, parseStatusLine } = require('../lib/pane');
+const { screenHash, stripAnsi, previewLines, detectPrompt, extractLoginUrl, parseStatusLine, loginPaneState } = require('../lib/pane');
 
 const ESC = '\u001B';
 const BEL = '\u0007';
@@ -212,4 +212,41 @@ test('parseStatusLine returns nulls rather than guessing on an unrelated pane', 
   const st = parseStatusLine(['$ ls -la', 'total 4', '']);
   assert.strictEqual(st.model, null);
   assert.strictEqual(st.mode, null);
+});
+
+test('loginPaneState reports waiting for a code', () => {
+  const st = loginPaneState([
+    'Opening browser to sign in…',
+    "If the browser didn't open, visit: https://claude.com/cai/oauth/authorize?x=1",
+    'Paste code here if prompted >',
+  ]);
+  assert.strictEqual(st.awaitingCode, true);
+  assert.strictEqual(st.done, false);
+  assert.strictEqual(st.failed, false);
+});
+
+test('loginPaneState quotes the line that explains a failure, not a wrap fragment', () => {
+  // A pane wraps, so the LAST line is frequently a fragment ("opied.") which is
+  // useless to somebody asking why sign-in failed.
+  const st = loginPaneState([
+    'Paste code here if prompted > deadbeef',
+    'The code you entered is invalid or has expired.',
+    'Make sure the whole code was c',
+    'opied.',
+  ]);
+  assert.strictEqual(st.failed, true);
+  assert.strictEqual(st.message, 'The code you entered is invalid or has expired.');
+});
+
+test('loginPaneState reports success', () => {
+  const st = loginPaneState(['Login successful. You are logged in as someone@example.com']);
+  assert.strictEqual(st.done, true);
+  assert.strictEqual(st.failed, false);
+});
+
+test('loginPaneState on an empty pane says nothing rather than guessing', () => {
+  const st = loginPaneState(['', '   ']);
+  assert.strictEqual(st.awaitingCode, false);
+  assert.strictEqual(st.done, false);
+  assert.strictEqual(st.message, null);
 });

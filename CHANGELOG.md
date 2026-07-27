@@ -1,5 +1,49 @@
 # Huginn changelog
 
+## 2.10.1 — 2026-07-27
+
+### Accounts are named by their own credentials
+A saved account was labelled with whatever `claude auth status` reported at the
+time, which describes the login that is **active** — so a profile could be filed
+under the wrong person whenever those two reads disagreed. Nothing was lost (a
+profile is keyed by its credentials, since 2.8.0), but the name could be wrong,
+and a wrong name here is not cosmetic: it made the per-account headroom figures
+describe an account other than the one named.
+
+Each profile's name now comes from asking its own token who it belongs to, so it
+cannot disagree with the credentials it labels.
+
+That immediately surfaced something worth knowing on this host: **two saved
+profiles were the same Claude account signed in twice.** They share one usage
+limit, so switching between them gains nothing — which is the opposite of the
+point. Settings now says so plainly instead of showing two rows that look like
+two accounts, and marks any name it could not confirm.
+
+## 2.10.0 — 2026-07-27
+
+### Alerts in seconds, not fifteen minutes
+**Watch continuously** in Settings keeps a live connection to huginn, so a session
+waiting on an answer reaches you in seconds. Previously the only option was a
+periodic check on Android's fifteen-minute floor, which is fine for "the disk is
+filling" and useless for "Claude is asking you something".
+
+The connection is a single request the host holds open until something an alert
+depends on actually changes, so idling costs one parked connection rather than a
+poll loop. What counts as a change is deliberately narrow: a session's state, a
+chat starting or finishing, a message joining a queue. Panes repainting, token
+counts and titles do **not** wake your phone.
+
+Android requires an ongoing notification while this runs. That is the honest cost,
+so it is made to earn its place: it shows what huginn is doing right now, sits on
+the quietest channel the system allows, and carries a **Stop watching** action.
+Watching resumes after a reboot, and turning it off restores the periodic check.
+
+### Signing in happens in the app
+Adding an account no longer sends you into a terminal session to paste a code. The
+sign-in page opens in your browser and the code goes into a field in the app,
+which reports what happened — including quoting the reason if the code is refused,
+rather than whatever fragment the pane happened to end on.
+
 ## 2.9.0 — 2026-07-27
 
 ### Sending to a busy chat queues instead of failing

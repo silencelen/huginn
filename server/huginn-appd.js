@@ -24,15 +24,18 @@ const fs = require('node:fs');
 const path = require('node:path');
 const os = require('node:os');
 const { execFile, spawn } = require('node:child_process');
-const { screenHash, previewLines, detectPrompt, extractLoginUrl, parseStatusLine } = require('./lib/pane');
+const {
+  screenHash, previewLines, detectPrompt, extractLoginUrl, parseStatusLine, loginPaneState,
+} = require('./lib/pane');
 const { readTranscript } = require('./lib/transcript');
 const { summarizeUsage } = require('./lib/usage');
 const { normalizePlan } = require('./lib/plan');
 const { AccountStore, fingerprint } = require('./lib/accounts');
 const { formatModel, discoverModels, parseModelId } = require('./lib/models');
 const { pushPending, takePending, clearPending, queuedEvents } = require('./lib/chatqueue');
+const { digest } = require('./lib/watch');
 
-const VERSION = '2.9.0';
+const VERSION = '2.10.1';
 const PORT = Number(process.env.HUGINN_APPD_PORT || 8787);
 const DATA_DIR = process.env.HUGINN_APPD_DATA || '/var/lib/huginn-appd';
 const TOKEN_FILE = process.env.HUGINN_APPD_TOKEN_FILE || '/etc/huginn-appd/token';
@@ -460,6 +463,29 @@ function loadMsgs(id) {
     }).filter(Boolean);
   } catch { return []; }
 }
+/**
+ * Just enough about each chat to decide whether to wake a watching phone: no
+ * transcript reads, no titles beyond what meta already holds. The display list
+ * reads a transcript head per chat for Claude's own title, which is fine once a
+ * screen opens and far too expensive on a loop.
+ */
+function chatStates() {
+  let ids = [];
+  try { ids = fs.readdirSync(CHATS_DIR); } catch { return []; }
+  const out = [];
+  for (const id of ids) {
+    const m = loadMeta(id);
+    if (!m) continue;
+    out.push({
+      id: m.id,
+      title: m.title ?? null,
+      running: activeRuns.has(id),
+      pending: Array.isArray(m.pending) ? m.pending.length : 0,
+    });
+  }
+  return out;
+}
+
 function listChats() {
   let ids = [];
   try { ids = fs.readdirSync(CHATS_DIR); } catch { /* empty */ }
@@ -715,6 +741,25 @@ function findTranscriptFile(sessionId) {
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
+/** The sign-in flow's current state, read from its pane. */
+async function readLoginState() {
+  if (!(await sessionExists('login'))) {
+    return { session: 'login', running: false, awaitingCode: false, done: false, url: loginUrl };
+  }
+  const cap = await run('tmux', ['capture-pane', '-p', '-e', '-t', '=login:']);
+  const lines = cap.err ? [] : cap.stdout.replace(/\n$/, '').split('\n');
+  const st = loginPaneState(lines);
+  if (!loginUrl) loginUrl = extractLoginUrl(lines);
+  return {
+    session: 'login',
+    running: true,
+    awaitingCode: st.awaitingCode,
+    done: st.done,
+    url: loginUrl,
+    message: st.failed ? st.message : (st.awaitingCode ? 'Waiting for the code' : st.message),
+  };
+}
+
 /**
  * Starts a run for any chat left holding queued messages with nothing running.
  * Only reachable after a restart or a crash, since in normal operation the queue
@@ -740,6 +785,44 @@ const accounts = new AccountStore(path.join(DATA_DIR, 'accounts'), CREDENTIALS_P
 // live credentials no longer match it, the flow finished — which is how the
 // leftover `login` session gets cleaned up without the user having to notice it.
 let loginStartedFrom = null;
+let loginUrl = null;
+
+/**
+ * Who a stored credential set actually belongs to, asked of the credentials
+ * themselves.
+ *
+ * Labels used to come from `claude auth status`, which describes whatever is
+ * ACTIVE — so a profile could be filed under the wrong person whenever those two
+ * reads disagreed. That is how two profiles ended up labelled as different
+ * accounts while both tokens authenticated as the same one, which made the
+ * headroom shown per account misleading. Resolving from the token cannot be
+ * wrong. Cached by fingerprint, since it is a network round trip per account.
+ */
+const emailByPrint = new Map();
+async function resolveEmail(creds) {
+  const print = fingerprint(creds);
+  const token = creds && creds.claudeAiOauth && creds.claudeAiOauth.accessToken;
+  if (!print || !token) return null;
+  if (emailByPrint.has(print)) return emailByPrint.get(print);
+  const ac = new AbortController();
+  const timer = setTimeout(() => ac.abort(), 10_000);
+  try {
+    const resp = await fetch('https://api.anthropic.com/api/oauth/account', {
+      headers: {
+        Authorization: `Bearer ${token}`,
+        'Content-Type': 'application/json',
+        'anthropic-beta': 'oauth-2025-04-20',
+      },
+      signal: ac.signal,
+    });
+    if (!resp.ok) return null;                 // expired token: keep the stored label
+    const body = await resp.json();
+    const acct = body && (body.account || body);
+    const email = (acct && (acct.email_address || acct.email)) || null;
+    if (email) emailByPrint.set(print, email);
+    return email;
+  } catch { return null; } finally { clearTimeout(timer); }
+}
 
 /**
  * Plan utilization for a SAVED account, so you can see which login has headroom
@@ -948,6 +1031,26 @@ const server = http.createServer(async (req, res) => {
     if (req.method === 'GET' && p === '/v1/ping') return sendJson(res, 200, { ok: true, version: VERSION, host: os.hostname() });
     if (req.method === 'GET' && p === '/v1/status') return sendJson(res, 200, await statusPayload());
 
+    // --- the change signal a watching phone parks on
+    if (req.method === 'GET' && p === '/v1/watch') {
+      const known = u.searchParams.get('hash');
+      const waitMs = Math.max(0, Math.min(300_000, Number(u.searchParams.get('wait')) || 0));
+      const deadline = Date.now() + waitMs;
+      // Cheap inputs on purpose: no previews, no transcripts. This runs in a loop
+      // for as long as a phone is watching.
+      let d = digest(await listSessions(), chatStates());
+      while (known && d.hash === known && Date.now() < deadline && !req.destroyed) {
+        await sleep(3000);
+        d = digest(await listSessions(), chatStates());
+      }
+      if (req.destroyed) return;
+      return sendJson(res, 200, {
+        ...d,
+        changed: !known || d.hash !== known,
+        serverTime: Math.floor(Date.now() / 1000),
+      });
+    }
+
     // --- models the installed CLI actually offers
     if (req.method === 'GET' && p === '/v1/models') {
       const bin = process.env.HUGINN_CLAUDE_BIN ||
@@ -978,6 +1081,28 @@ const server = http.createServer(async (req, res) => {
         loginStartedFrom = null;
       }
       const saved = accounts.list();
+      // Label each profile from its OWN token rather than from whatever is active.
+      await Promise.all(saved.map(async (a) => {
+        const rec = accounts.readProfile(a.slug);
+        if (!rec) return;
+        const real = await resolveEmail(rec.credentials);
+        if (real) {
+          a.email = real;
+          a.verified = true;
+          if (rec.email !== real) accounts.save(real, rec.credentials, { orgName: rec.orgName ?? null });
+        } else {
+          a.verified = false;
+        }
+      }));
+      // Two profiles resolving to one account is worth saying: switching between
+      // them changes nothing, and their "headroom" is the same bucket twice.
+      const byEmail = new Map();
+      for (const a of saved) {
+        if (!a.email) continue;
+        byEmail.set(a.email, (byEmail.get(a.email) || 0) + 1);
+      }
+      for (const a of saved) a.duplicateOf = (byEmail.get(a.email) || 0) > 1;
+
       if (withPlan) {
         await Promise.all(saved.map(async (a) => {
           const rec = accounts.readProfile(a.slug);
@@ -1042,7 +1167,53 @@ const server = http.createServer(async (req, res) => {
         const cap = await run('tmux', ['capture-pane', '-p', '-e', '-t', `=${name}:`]);
         if (!cap.err) url = extractLoginUrl(cap.stdout.replace(/\n$/, '').split('\n'));
       }
-      return sendJson(res, existed ? 200 : 201, { ok: true, session: name, existed, url });
+      if (url) loginUrl = url;
+      return sendJson(res, existed ? 200 : 201, { ok: true, session: name, existed, url: url || loginUrl });
+    }
+
+    // Where the sign-in has got to, so the app can host the whole flow.
+    if (req.method === 'GET' && p === '/v1/account/login/state') {
+      return sendJson(res, 200, await readLoginState());
+    }
+
+    // The pasted code, handed to the waiting prompt.
+    if (req.method === 'POST' && p === '/v1/account/login/code') {
+      const body = JSON.parse(await readBody(req) || '{}');
+      const code = typeof body.code === 'string' ? body.code.trim() : '';
+      // Codes are opaque; accept a generous shape but nothing that could be a
+      // second command, since this is typed into a live terminal.
+      if (!/^[A-Za-z0-9#._~:/?=&%+-]{8,600}$/.test(code)) {
+        return sendErr(res, 400, 'that does not look like a sign-in code');
+      }
+      if (!(await sessionExists('login'))) return sendErr(res, 409, 'no sign-in is in progress');
+
+      const before = fingerprint(accounts.readActive());
+      const send = await run('tmux', ['send-keys', '-t', '=login:', '-l', '--', code]);
+      if (send.err) return sendErr(res, 500, `tmux: ${send.stderr.trim()}`);
+      await run('tmux', ['send-keys', '-t', '=login:', 'Enter']);
+
+      // Wait for the credentials to actually change, which is the only
+      // trustworthy signal that the sign-in took: the pane says plenty of
+      // encouraging things before it is finished.
+      for (let i = 0; i < 40; i++) {
+        await sleep(500);
+        if (fingerprint(accounts.readActive()) !== before) {
+          const acct = await accountStatus();
+          const live = accounts.readActive();
+          if (live) accounts.save(acct.loggedIn ? acct.email : null, live,
+            acct.orgName ? { orgName: acct.orgName } : {});
+          if (await sessionExists('login')) await run('tmux', ['kill-session', '-t', '=login']);
+          loginStartedFrom = null;
+          loginUrl = null;
+          log(`sign-in completed as ${acct.email || 'unknown'}`);
+          return sendJson(res, 200, {
+            session: 'login', running: false, awaitingCode: false, done: true,
+            email: acct.email ?? null, message: 'Signed in',
+          });
+        }
+      }
+      // Still nothing: hand back what the pane says rather than a bare timeout.
+      return sendJson(res, 200, { ...(await readLoginState()), done: false });
     }
 
     if (req.method === 'POST' && p === '/v1/account/logout') {
