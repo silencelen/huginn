@@ -250,3 +250,32 @@ data class LoginSession(
     /** Full sign-in URL, lifted off the pane where it is hard-wrapped. */
     val url: String? = null,
 )
+
+/** One row of Claude's plan utilization, as `/usage` shows it. */
+@Serializable
+data class PlanLimit(
+    val kind: String? = null,
+    val group: String? = null,
+    val label: String = "",
+    val percent: Double = 0.0,
+    val severity: String = "normal",
+    val resetsAt: String? = null,
+    val isActive: Boolean = false,
+)
+
+@Serializable
+data class ExtraUsage(
+    val utilization: Double? = null,
+    val usedCredits: Double? = null,
+    val monthlyLimit: Double? = null,
+    val currency: String = "USD",
+    val spendLimitReached: Boolean = false,
+)
+
+@Serializable
+data class Plan(
+    val limits: List<PlanLimit> = emptyList(),
+    val extraUsage: ExtraUsage? = null,
+    val fetchedAt: Long? = null,
+    val error: String? = null,
+)

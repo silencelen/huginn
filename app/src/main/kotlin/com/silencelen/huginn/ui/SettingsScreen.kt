@@ -9,6 +9,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
@@ -21,7 +22,13 @@ import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.TextButton
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.material3.LinearProgressIndicator
+import androidx.compose.ui.draw.clip
 import com.silencelen.huginn.data.Account
+import com.silencelen.huginn.data.Plan
+import com.silencelen.huginn.data.PlanLimit
+import java.time.Duration
+import java.time.OffsetDateTime
 import com.silencelen.huginn.data.Usage
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -52,6 +59,7 @@ fun SettingsScreen(
     notifyEnabled: Boolean,
     onNotifyEnabled: (Boolean) -> Unit,
     account: Account?,
+    plan: Plan?,
     usage: Usage?,
     onSignIn: () -> Unit,
     onSignOut: () -> Unit,
@@ -176,7 +184,11 @@ fun SettingsScreen(
         }
 
         Spacer(Modifier.height(8.dp))
-        Text("Usage", style = MaterialTheme.typography.titleMedium)
+        Text("Plan usage", style = MaterialTheme.typography.titleMedium)
+        PlanSection(plan)
+
+        Spacer(Modifier.height(8.dp))
+        Text("Tokens", style = MaterialTheme.typography.titleMedium)
         UsageSection(usage)
 
         Spacer(Modifier.height(8.dp))
@@ -227,6 +239,102 @@ fun SettingsScreen(
             },
             dismissButton = { TextButton(onClick = { confirmSignOut = false }) { Text("Cancel") } },
         )
+    }
+}
+
+/**
+ * Plan utilization — the same rows Claude Code's `/usage` prints. These are the
+ * limits that actually stop work, so they lead the section; token counts below
+ * are volume, which is a different question.
+ */
+@Composable
+private fun PlanSection(plan: Plan?) {
+    when {
+        plan == null -> Text(
+            "Loading…",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        plan.error != null && plan.limits.isEmpty() -> Text(
+            plan.error,
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.error,
+        )
+        plan.limits.isEmpty() -> Text(
+            "No limits reported for this account.",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        else -> Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            plan.limits.forEach { LimitBar(it) }
+            plan.extraUsage?.let { eu ->
+                Text(
+                    "Extra usage: ${eu.utilization?.toInt() ?: 0}% of " +
+                        "${eu.monthlyLimit?.toInt() ?: 0} ${eu.currency}" +
+                        if (eu.spendLimitReached) " (limit reached)" else "",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = if (eu.spendLimitReached) MaterialTheme.colorScheme.error
+                    else MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun LimitBar(l: PlanLimit) {
+    val pct = l.percent.coerceIn(0.0, 100.0)
+    // Colour by headroom, not decoration: this is the number that stops work.
+    val bar = when {
+        l.severity == "critical" || pct >= 90 -> MaterialTheme.colorScheme.error
+        l.severity == "warning" || pct >= 70 -> MaterialTheme.colorScheme.primary
+        else -> MaterialTheme.colorScheme.secondary
+    }
+    Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                l.label,
+                style = MaterialTheme.typography.bodyMedium,
+                fontWeight = if (l.isActive) FontWeight.SemiBold else FontWeight.Normal,
+                modifier = Modifier.weight(1f),
+            )
+            Text(
+                "${pct.toInt()}%",
+                style = MaterialTheme.typography.bodyMedium,
+                fontWeight = FontWeight.Medium,
+                color = bar,
+            )
+        }
+        LinearProgressIndicator(
+            progress = { (pct / 100.0).toFloat() },
+            modifier = Modifier.fillMaxWidth().height(5.dp).clip(RoundedCornerShape(3.dp)),
+            color = bar,
+            trackColor = MaterialTheme.colorScheme.surfaceVariant,
+            drawStopIndicator = {},
+        )
+        resetLabel(l.resetsAt)?.let {
+            Text(
+                it,
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+    }
+}
+
+/** "resets in 3h 12m" — a countdown is what you act on, not an ISO timestamp. */
+private fun resetLabel(iso: String?): String? {
+    if (iso.isNullOrBlank()) return null
+    val at = runCatching { OffsetDateTime.parse(iso) }.getOrNull() ?: return null
+    val secs = Duration.between(OffsetDateTime.now(), at).seconds
+    if (secs <= 0) return "resetting now"
+    val d = secs / 86_400
+    val h = (secs % 86_400) / 3600
+    val m = (secs % 3600) / 60
+    return when {
+        d > 0 -> "resets in ${d}d ${h}h"
+        h > 0 -> "resets in ${h}h ${m}m"
+        else -> "resets in ${m}m"
     }
 }
 

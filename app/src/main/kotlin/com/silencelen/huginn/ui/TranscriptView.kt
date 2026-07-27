@@ -38,6 +38,9 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
@@ -45,6 +48,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.silencelen.huginn.data.TranscriptEvent
+import com.silencelen.huginn.ui.theme.LocalSyntaxColors
 
 /**
  * Renders one normalized transcript event. Shared by the session view and the
@@ -239,7 +243,7 @@ private fun ToolCard(ev: TranscriptEvent) {
                 // A command must not wrap into ambiguity: scroll it instead.
                 Box(Modifier.horizontalScroll(rememberScrollState())) {
                     Text(
-                        ev.input,
+                        highlighted(ev.input, langForTool(ev.name)),
                         style = MaterialTheme.typography.labelSmall,
                         fontFamily = FontFamily.Monospace,
                         color = MaterialTheme.colorScheme.onSurface,
@@ -254,7 +258,7 @@ private fun ToolCard(ev: TranscriptEvent) {
                     Spacer(Modifier.height(6.dp))
                     Box(Modifier.horizontalScroll(rememberScrollState())) {
                         Text(
-                            ev.result.orEmpty(),
+                            highlighted(ev.result.orEmpty(), resultLang(ev.result.orEmpty())),
                             style = MaterialTheme.typography.labelSmall,
                             fontFamily = FontFamily.Monospace,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -296,6 +300,51 @@ private fun SystemNote(text: String) {
         modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp),
     )
 }
+
+/**
+ * Applies syntax colour to a code string. The tokenizer is a lexer, so a missed
+ * keyword costs a colour and nothing else; text is always rendered whole.
+ */
+@Composable
+fun highlighted(code: String, lang: String?): AnnotatedString {
+    val c = LocalSyntaxColors.current
+    return remember(code, lang, c) {
+        val spans = Syntax.highlight(code, lang)
+        if (spans.isEmpty()) return@remember AnnotatedString(code)
+        buildAnnotatedString {
+            append(code)
+            spans.forEach { s ->
+                val color = when (s.tok) {
+                    Syntax.Tok.KEYWORD -> c.keyword
+                    Syntax.Tok.STRING -> c.string
+                    Syntax.Tok.NUMBER -> c.number
+                    Syntax.Tok.COMMENT -> c.comment
+                    Syntax.Tok.FUNCTION -> c.function
+                    Syntax.Tok.META -> c.meta
+                    Syntax.Tok.ADDED -> c.added
+                    Syntax.Tok.REMOVED -> c.removed
+                    Syntax.Tok.PLAIN, Syntax.Tok.PUNCT -> null
+                } ?: return@forEach
+                // Defensive: a stale span from a race would crash the render.
+                if (s.start in 0..code.length && s.end in s.start..code.length) {
+                    addStyle(SpanStyle(color = color), s.start, s.end)
+                }
+            }
+        }
+    }
+}
+
+/** What a tool's input is written in, for colouring purposes. */
+fun langForTool(name: String?): String = when (name) {
+    "Bash", "BashOutput" -> "shell"
+    "Read", "Glob", "Grep", "Edit", "Write", "NotebookEdit" -> "plain"
+    else -> "plain"
+}
+
+/** Tool output that looks like a diff gets diff colouring; everything else plain. */
+fun resultLang(result: String): String =
+    if (result.lineSequence().take(6).any { it.startsWith("+") || it.startsWith("-") || it.startsWith("@@") })
+        "diff" else "plain"
 
 /** Markdown-rendered body text, with code fences as copyable scrollable cards. */
 @Composable
@@ -373,7 +422,7 @@ private fun CodeCard(b: MdBlock.Code, onCopy: (String) -> Unit) {
             }
             Box(Modifier.horizontalScroll(rememberScrollState()).padding(start = 10.dp, end = 10.dp, bottom = 8.dp)) {
                 Text(
-                    b.code,
+                    highlighted(b.code, b.lang),
                     fontFamily = FontFamily.Monospace,
                     fontSize = 11.sp,
                     lineHeight = 15.sp,

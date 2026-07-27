@@ -27,8 +27,9 @@ const { execFile, spawn } = require('node:child_process');
 const { screenHash, previewLines, detectPrompt, extractLoginUrl } = require('./lib/pane');
 const { readTranscript } = require('./lib/transcript');
 const { summarizeUsage } = require('./lib/usage');
+const { normalizePlan } = require('./lib/plan');
 
-const VERSION = '2.1.0';
+const VERSION = '2.2.0';
 const PORT = Number(process.env.HUGINN_APPD_PORT || 8787);
 const DATA_DIR = process.env.HUGINN_APPD_DATA || '/var/lib/huginn-appd';
 const TOKEN_FILE = process.env.HUGINN_APPD_TOKEN_FILE || '/etc/huginn-appd/token';
@@ -650,6 +651,61 @@ async function accountStatus() {
   }
 }
 
+/**
+ * Plan utilization — the numbers Claude Code's own `/usage` shows.
+ *
+ * Read from the same endpoint the CLI uses, with the OAuth access token from
+ * this host's credentials file. The token never leaves the daemon: the app is
+ * handed percentages and reset times only. Cached briefly because the phone
+ * polls the settings screen and this is a network round trip.
+ */
+const planCache = { at: 0, data: null, error: null, running: false };
+const PLAN_TTL_MS = 60_000;
+
+async function fetchPlan() {
+  if (planCache.running) return;
+  planCache.running = true;
+  try {
+    let creds;
+    try {
+      creds = JSON.parse(fs.readFileSync(path.join(os.homedir(), '.claude', '.credentials.json'), 'utf8'));
+    } catch {
+      planCache.error = 'no credentials on this host';
+      return;
+    }
+    const token = creds && creds.claudeAiOauth && creds.claudeAiOauth.accessToken;
+    if (!token) { planCache.error = 'not signed in with an OAuth account'; return; }
+
+    const ac = new AbortController();
+    const timer = setTimeout(() => ac.abort(), 15_000);
+    let resp;
+    try {
+      resp = await fetch('https://api.anthropic.com/api/oauth/usage', {
+        headers: {
+          Authorization: `Bearer ${token}`,
+          'Content-Type': 'application/json',
+          'anthropic-beta': 'oauth-2025-04-20',
+        },
+        signal: ac.signal,
+      });
+    } finally { clearTimeout(timer); }
+
+    if (resp.status === 401) {
+      // The CLI refreshes this token as it runs; a stale one is transient.
+      planCache.error = 'access token expired, refreshes on the next Claude run';
+      return;
+    }
+    if (!resp.ok) { planCache.error = `plan usage HTTP ${resp.status}`; return; }
+    planCache.data = normalizePlan(await resp.json());
+    planCache.at = Date.now();
+    planCache.error = null;
+  } catch (e) {
+    planCache.error = String((e && e.message) || e).slice(0, 200);
+  } finally {
+    planCache.running = false;
+  }
+}
+
 // ccusage walks every transcript on disk and takes ~20-30 s even for one day,
 // so it is computed in the background and served from cache. The phone gets an
 // immediate answer that says how old it is, rather than a 30 s spinner.
@@ -790,6 +846,16 @@ const server = http.createServer(async (req, res) => {
       const r = await run('claude', ['auth', 'logout'], { timeout: 30_000 });
       if (r.err) return sendErr(res, 500, (r.stderr || r.err.message).slice(0, 200));
       return sendJson(res, 200, { ok: true, ...(await accountStatus()) });
+    }
+
+    // --- plan utilization (what Claude Code's /usage shows)
+    if (req.method === 'GET' && p === '/v1/plan') {
+      if (Date.now() - planCache.at > PLAN_TTL_MS && !planCache.running) await fetchPlan();
+      return sendJson(res, 200, {
+        ...(planCache.data || { limits: [], extraUsage: null }),
+        fetchedAt: planCache.at || null,
+        error: planCache.error,
+      });
     }
 
     // --- usage

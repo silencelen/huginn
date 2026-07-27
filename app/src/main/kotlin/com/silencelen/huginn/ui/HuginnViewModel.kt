@@ -17,6 +17,7 @@ import com.silencelen.huginn.data.Session
 import com.silencelen.huginn.data.SettingsStore
 import com.silencelen.huginn.data.Status
 import com.silencelen.huginn.data.TranscriptPage
+import com.silencelen.huginn.data.Plan
 import com.silencelen.huginn.data.Usage
 import com.silencelen.huginn.notify.SessionWatchWorker
 import kotlinx.coroutines.Job
@@ -181,7 +182,18 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
     private val _usage = MutableStateFlow<Usage?>(null)
     val usage: StateFlow<Usage?> = _usage.asStateFlow()
 
+    private val _plan = MutableStateFlow<Plan?>(null)
+    val plan: StateFlow<Plan?> = _plan.asStateFlow()
+
     private var usagePollJob: Job? = null
+
+    fun refreshPlan() {
+        viewModelScope.launch {
+            runCatching { client.plan() }
+                .onSuccess { _plan.value = it }
+                .onFailure { /* the settings screen shows its own empty state */ }
+        }
+    }
 
     fun refreshAccount() {
         viewModelScope.launch {
