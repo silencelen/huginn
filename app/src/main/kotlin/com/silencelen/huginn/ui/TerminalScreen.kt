@@ -30,6 +30,7 @@ import androidx.compose.material3.AssistChip
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -37,6 +38,7 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -65,6 +67,9 @@ import com.silencelen.huginn.data.Screen
 fun TerminalScreen(
     session: String,
     screen: Screen?,
+    scrollback: List<String>,
+    loadingScrollback: Boolean,
+    onLoadScrollback: () -> Unit,
     draft: String,
     onDraft: (String) -> Unit,
     fontScale: Float,
@@ -115,12 +120,45 @@ fun TerminalScreen(
                 val grid = remember(screen.lines, screen.width, fg, bg) {
                     TerminalGrid.parse(screen.lines, screen.width, fg, bg)
                 }
-                Box(
+                val historyGrid = remember(scrollback, screen.width, fg, bg) {
+                    if (scrollback.isEmpty()) null
+                    else TerminalGrid.parse(scrollback, screen.width, fg, bg)
+                }
+                // Loading history grows the content ABOVE the viewport, which would
+                // otherwise leave the reader looking at old output; land them back
+                // on the live screen and let them scroll up into the history.
+                LaunchedEffect(scrollback.size) {
+                    if (scrollback.isNotEmpty()) vScroll.scrollTo(vScroll.maxValue)
+                }
+                Column(
                     Modifier
                         .fillMaxSize()
                         .verticalScroll(vScroll)
                         .horizontalScroll(hScroll)
                 ) {
+                    if (historyGrid == null) {
+                        // A full-screen program (which Claude Code is) runs on the
+                        // terminal's ALTERNATE screen, and that has no scrollback
+                        // at all — verified: every Claude pane reports
+                        // historySize 0, while a shell pane reports hundreds. So
+                        // offering to load history here would be a button that
+                        // silently does nothing; say where the history actually is.
+                        if (screen.historySize > 0) {
+                            LoadEarlierRow(loading = loadingScrollback, onClick = onLoadScrollback)
+                        } else {
+                            NoScrollbackNote(altScreen = screen.altScreen)
+                        }
+                    } else {
+                        TerminalCanvas(
+                            grid = historyGrid,
+                            metrics = metrics,
+                            cursor = null,
+                            cursorColor = MaterialTheme.colorScheme.primary,
+                        )
+                        // Marks where history ends and the live pane begins, which
+                        // is otherwise invisible: both are the same terminal text.
+                        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+                    }
                     TerminalCanvas(
                         grid = grid,
                         metrics = metrics,
@@ -184,6 +222,31 @@ fun TerminalScreen(
             }
         }
     }
+}
+
+@Composable
+private fun LoadEarlierRow(loading: Boolean, onClick: () -> Unit) {
+    Row(
+        Modifier.fillMaxWidth().padding(vertical = 6.dp),
+        horizontalArrangement = Arrangement.Center,
+    ) {
+        AssistChip(
+            onClick = { if (!loading) onClick() },
+            label = { Text(if (loading) "Loading…" else "Load earlier output") },
+        )
+    }
+}
+
+@Composable
+private fun NoScrollbackNote(altScreen: Boolean) {
+    Text(
+        if (altScreen) "This pane keeps no scrollback: a full-screen program only has the " +
+            "screen you see. The Conversation tab has the whole session."
+        else "Nothing scrolled off this pane yet.",
+        style = MaterialTheme.typography.labelSmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+        modifier = Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 6.dp),
+    )
 }
 
 @Composable

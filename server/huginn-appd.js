@@ -30,7 +30,7 @@ const { summarizeUsage } = require('./lib/usage');
 const { normalizePlan } = require('./lib/plan');
 const { AccountStore } = require('./lib/accounts');
 
-const VERSION = '2.6.0';
+const VERSION = '2.7.0';
 const PORT = Number(process.env.HUGINN_APPD_PORT || 8787);
 const DATA_DIR = process.env.HUGINN_APPD_DATA || '/var/lib/huginn-appd';
 const TOKEN_FILE = process.env.HUGINN_APPD_TOKEN_FILE || '/etc/huginn-appd/token';
@@ -91,6 +91,17 @@ function run(cmd, args, opts = {}) {
     execFile(cmd, args, { timeout: 10_000, maxBuffer: 4 * 1024 * 1024, ...opts },
       (err, stdout, stderr) => resolve({ err, stdout: stdout ?? '', stderr: stderr ?? '' }));
   });
+}
+
+// Only the aliases and levels the CLI documents; anything else is dropped rather
+// than passed through to a spawn.
+const MODEL_ALIASES = new Set(['fable', 'opus', 'sonnet', 'haiku']);
+const EFFORT_LEVELS = new Set(['low', 'medium', 'high', 'xhigh', 'max']);
+function validModel(v) {
+  return typeof v === 'string' && MODEL_ALIASES.has(v.toLowerCase()) ? v.toLowerCase() : null;
+}
+function validEffort(v) {
+  return typeof v === 'string' && EFFORT_LEVELS.has(v.toLowerCase()) ? v.toLowerCase() : null;
 }
 
 // Session names: the cc contract — letters/digits/underscore, canonically lowercase.
@@ -426,6 +437,17 @@ function listChats() {
     const m = loadMeta(id);
     if (m) {
       m.running = activeRuns.has(id);
+      // Claude Code generates a real title for its own sessions; it reads far
+      // better than the truncated first message this daemon falls back to.
+      if (m.claudeSessionId) {
+        const f = findTranscriptFile(m.claudeSessionId);
+        if (f) {
+          try {
+            const t = readTranscript(f, { limit: 1 });
+            if (t.title) m.title = t.title;
+          } catch { /* fall back to the stored title */ }
+        }
+      }
       metas.push(m);
     }
   }
@@ -501,6 +523,8 @@ function startRun(meta, userText) {
   saveMeta(meta);
 
   const args = ['-p', '--output-format', 'stream-json', '--verbose', '--include-partial-messages'];
+  if (meta.model) args.push('--model', meta.model);
+  if (meta.effort) args.push('--effort', meta.effort);
   if (meta.claudeSessionId) args.push('--resume', meta.claudeSessionId);
   let persona = '';
   try { persona = fs.readFileSync(PERSONA_FILE, 'utf8'); } catch { /* interactive-only host */ }
@@ -1108,6 +1132,8 @@ const server = http.createServer(async (req, res) => {
         id: crypto.randomUUID(),
         title: (typeof body.title === 'string' && body.title.trim().slice(0, 80)) || null,
         mode,
+        model: validModel(body.model),
+        effort: validEffort(body.effort),
         createdAt: now,
         updatedAt: now,
         claudeSessionId: null,
@@ -1200,10 +1226,16 @@ const server = http.createServer(async (req, res) => {
       }
       if (req.method === 'PATCH' && sub === '') {
         const body = JSON.parse(await readBody(req) || '{}');
+        let changed = false;
         if (typeof body.title === 'string' && body.title.trim()) {
-          meta.title = body.title.trim().slice(0, 80);
-          saveMeta(meta);
+          meta.title = body.title.trim().slice(0, 80); changed = true;
         }
+        // Model and effort apply to the NEXT turn; an in-flight run keeps what it
+        // started with, since the flags are fixed at spawn.
+        if ('model' in body) { meta.model = validModel(body.model); changed = true; }
+        if ('effort' in body) { meta.effort = validEffort(body.effort); changed = true; }
+        if ('mode' in body) { meta.mode = body.mode === 'act' ? 'act' : 'ask'; changed = true; }
+        if (changed) saveMeta(meta);
         return sendJson(res, 200, meta);
       }
     }
