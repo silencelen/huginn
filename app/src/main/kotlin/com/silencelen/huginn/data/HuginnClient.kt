@@ -244,6 +244,15 @@ class HuginnClient(
     fun sendMessage(id: String, text: String): Flow<ChatEvent> =
         sse(builder("/v1/chats/$id/messages?stream=1").post(jsonBody("text" to text)).build())
 
+    /**
+     * Posts a message to a chat that is already running. The server queues it and
+     * delivers it when the current run ends; there is no stream to follow because
+     * the reply belongs to a future run.
+     */
+    suspend fun queueMessage(id: String, text: String) {
+        call(builder("/v1/chats/$id/messages").post(jsonBody("text" to text)).build())
+    }
+
     /** Reattaches to an in-flight run, replaying events after [since] (0 = all). */
     fun streamChat(id: String, since: Long = 0): Flow<ChatEvent> =
         sse(builder("/v1/chats/$id/stream?since=$since").get().build())

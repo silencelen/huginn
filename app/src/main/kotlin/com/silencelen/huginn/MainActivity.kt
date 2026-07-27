@@ -339,6 +339,8 @@ fun HuginnApp(
                         onSendKeys = { vm.sendKeys(d.name, it) },
                         onAnswerPrompt = { vm.answerPrompt(d.name, it) },
                         onForceResize = { vm.forceFit() },
+                        onInterrupt = { vm.interruptSession(d.name) },
+                        working = sessions.firstOrNull { s -> s.name == d.name }?.state == "running",
                         onCopy = { vm.copy(it) },
                     )
                 }
