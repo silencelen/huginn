@@ -18,6 +18,7 @@ import com.silencelen.huginn.data.SettingsStore
 import com.silencelen.huginn.data.Status
 import com.silencelen.huginn.data.TranscriptPage
 import com.silencelen.huginn.data.Plan
+import com.silencelen.huginn.data.SavedAccount
 import com.silencelen.huginn.data.Usage
 import com.silencelen.huginn.notify.SessionWatchWorker
 import kotlinx.coroutines.Job
@@ -195,10 +196,51 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
+    private val _savedAccounts = MutableStateFlow<List<SavedAccount>>(emptyList())
+    val savedAccounts: StateFlow<List<SavedAccount>> = _savedAccounts.asStateFlow()
+
+    private val _switching = MutableStateFlow(false)
+    val switching: StateFlow<Boolean> = _switching.asStateFlow()
+
+    /** @param withPlan also read each saved account's headroom (a call per account). */
+    fun refreshSavedAccounts(withPlan: Boolean = true) {
+        viewModelScope.launch {
+            runCatching { client.savedAccounts(withPlan) }
+                .onSuccess { _savedAccounts.value = it }
+                .onFailure { /* settings shows its own empty state */ }
+        }
+    }
+
+    fun activateAccount(slug: String) {
+        if (_switching.value) return
+        _switching.value = true
+        viewModelScope.launch {
+            runCatching { client.activateAccount(slug) }
+                .onSuccess {
+                    _account.value = it
+                    _plan.value = null
+                    refreshPlan()
+                    refreshSavedAccounts()
+                    _toast.value = "Now signed in as ${it.email ?: "another account"}. " +
+                        "Running sessions keep the old one until they restart."
+                }
+                .onFailure { _toast.value = errText(it) }
+            _switching.value = false
+        }
+    }
+
+    fun forgetAccount(slug: String) {
+        viewModelScope.launch {
+            runCatching { client.forgetAccount(slug) }
+                .onSuccess { refreshSavedAccounts() }
+                .onFailure { _toast.value = errText(it) }
+        }
+    }
+
     fun refreshAccount() {
         viewModelScope.launch {
             runCatching { client.account() }
-                .onSuccess { _account.value = it }
+                .onSuccess { _account.value = it; refreshSavedAccounts() }
                 .onFailure { _toast.value = errText(it) }
         }
     }

@@ -9,7 +9,6 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
@@ -17,19 +16,15 @@ import androidx.compose.material.icons.filled.Visibility
 import androidx.compose.material.icons.filled.VisibilityOff
 import androidx.compose.material3.Button
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material3.Surface
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.TextButton
-import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.material3.LinearProgressIndicator
-import androidx.compose.ui.draw.clip
 import com.silencelen.huginn.data.Account
-import com.silencelen.huginn.data.Plan
-import com.silencelen.huginn.data.PlanLimit
-import java.time.Duration
-import java.time.OffsetDateTime
-import com.silencelen.huginn.data.Usage
+import com.silencelen.huginn.data.SavedAccount
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -42,7 +37,6 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.input.ImeAction
@@ -59,14 +53,17 @@ fun SettingsScreen(
     notifyEnabled: Boolean,
     onNotifyEnabled: (Boolean) -> Unit,
     account: Account?,
-    plan: Plan?,
-    usage: Usage?,
+    savedAccounts: List<SavedAccount>,
+    switching: Boolean,
+    onSwitchAccount: (String) -> Unit,
+    onForgetAccount: (String) -> Unit,
     onSignIn: () -> Unit,
     onSignOut: () -> Unit,
     onSave: (String, String) -> Unit,
     onTest: () -> Unit,
 ) {
     var confirmSignOut by remember { mutableStateOf(false) }
+    var forgetTarget by remember { mutableStateOf<SavedAccount?>(null) }
     var url by remember(baseUrl) { mutableStateOf(baseUrl) }
     var tok by remember(token) { mutableStateOf(token) }
     var reveal by remember { mutableStateOf(false) }
@@ -174,22 +171,50 @@ fun SettingsScreen(
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
+        // Other logins saved on this host. The active one is snapshotted
+        // automatically, so an account you have used is always here to come back
+        // to when a plan runs out.
+        val others = savedAccounts.filter { !it.isActive }
+        if (others.isNotEmpty()) {
+            Spacer(Modifier.height(4.dp))
+            Text(
+                "Switch to",
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                others.forEach { a ->
+                    SavedAccountRow(
+                        account = a,
+                        enabled = !switching,
+                        onSwitch = { onSwitchAccount(a.slug) },
+                        onForget = { forgetTarget = a },
+                    )
+                }
+            }
+            Text(
+                "Switching changes the login for the whole host. Sessions already " +
+                    "running keep the old account until they restart; new runs use the new one.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+
         Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-            Button(onClick = onSignIn) {
-                Text(if (account?.loggedIn == true) "Switch account" else "Sign in")
+            Button(onClick = onSignIn, enabled = !switching) {
+                Text(if (account?.loggedIn == true) "Add account" else "Sign in")
             }
             if (account?.loggedIn == true) {
-                OutlinedButton(onClick = { confirmSignOut = true }) { Text("Sign out") }
+                OutlinedButton(onClick = { confirmSignOut = true }, enabled = !switching) { Text("Sign out") }
             }
         }
 
-        Spacer(Modifier.height(8.dp))
-        Text("Plan usage", style = MaterialTheme.typography.titleMedium)
-        PlanSection(plan)
-
-        Spacer(Modifier.height(8.dp))
-        Text("Tokens", style = MaterialTheme.typography.titleMedium)
-        UsageSection(usage)
+        Text(
+            "Plan usage and token counts live on the Status tab, with the rest of " +
+                "huginn's live state.",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
 
         Spacer(Modifier.height(8.dp))
         Text("Notifications", style = MaterialTheme.typography.titleMedium)
@@ -223,6 +248,24 @@ fun SettingsScreen(
         Spacer(Modifier.height(24.dp))
     }
 
+    forgetTarget?.let { a ->
+        AlertDialog(
+            onDismissRequest = { forgetTarget = null },
+            title = { Text("Forget ${a.email ?: a.slug}?") },
+            text = {
+                Text(
+                    "Removes the saved credentials for this account from huginn. It does " +
+                        "not sign the account out anywhere; you would just have to sign in " +
+                        "again to use it here.",
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = { val s = a.slug; forgetTarget = null; onForgetAccount(s) }) { Text("Forget") }
+            },
+            dismissButton = { TextButton(onClick = { forgetTarget = null }) { Text("Cancel") } },
+        )
+    }
+
     if (confirmSignOut) {
         AlertDialog(
             onDismissRequest = { confirmSignOut = false },
@@ -243,175 +286,61 @@ fun SettingsScreen(
 }
 
 /**
- * Plan utilization — the same rows Claude Code's `/usage` prints. These are the
- * limits that actually stop work, so they lead the section; token counts below
- * are volume, which is a different question.
+ * One saved login. Leads with its headroom, because "which account still has
+ * room" is the question you are answering when you look at this list.
  */
 @Composable
-private fun PlanSection(plan: Plan?) {
-    when {
-        plan == null -> Text(
-            "Loading…",
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-        plan.error != null && plan.limits.isEmpty() -> Text(
-            plan.error,
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.error,
-        )
-        plan.limits.isEmpty() -> Text(
-            "No limits reported for this account.",
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-        else -> Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-            plan.limits.forEach { LimitBar(it) }
-            plan.extraUsage?.let { eu ->
+private fun SavedAccountRow(
+    account: SavedAccount,
+    enabled: Boolean,
+    onSwitch: () -> Unit,
+    onForget: () -> Unit,
+) {
+    Surface(
+        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+        shape = RoundedCornerShape(10.dp),
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        Row(
+            Modifier.padding(start = 12.dp, end = 4.dp, top = 8.dp, bottom = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Column(Modifier.weight(1f)) {
                 Text(
-                    "Extra usage: ${eu.utilization?.toInt() ?: 0}% of " +
-                        "${eu.monthlyLimit?.toInt() ?: 0} ${eu.currency}" +
-                        if (eu.spendLimitReached) " (limit reached)" else "",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = if (eu.spendLimitReached) MaterialTheme.colorScheme.error
-                    else MaterialTheme.colorScheme.onSurfaceVariant,
+                    account.email ?: account.slug,
+                    style = MaterialTheme.typography.bodyMedium,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                val bits = buildList {
+                    account.subscriptionType?.let { add("$it plan") }
+                    account.weeklyPercent?.let { add("${it.toInt()}% of the week used") }
+                }
+                if (bits.isNotEmpty()) {
+                    Text(
+                        bits.joinToString("  ·  "),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = if ((account.weeklyPercent ?: 0.0) >= 90) MaterialTheme.colorScheme.error
+                        else MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                } else {
+                    Text(
+                        // A stored token expires; it refreshes once that account is active.
+                        "headroom unknown until this account is active",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
+            TextButton(onClick = onSwitch, enabled = enabled) { Text("Use") }
+            IconButton(onClick = onForget, enabled = enabled) {
+                Icon(
+                    Icons.Filled.Delete,
+                    contentDescription = "Forget this account",
+                    modifier = Modifier.size(18.dp),
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
         }
     }
 }
-
-@Composable
-private fun LimitBar(l: PlanLimit) {
-    val pct = l.percent.coerceIn(0.0, 100.0)
-    // Colour by headroom, not decoration: this is the number that stops work.
-    val bar = when {
-        l.severity == "critical" || pct >= 90 -> MaterialTheme.colorScheme.error
-        l.severity == "warning" || pct >= 70 -> MaterialTheme.colorScheme.primary
-        else -> MaterialTheme.colorScheme.secondary
-    }
-    Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
-        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-            Text(
-                l.label,
-                style = MaterialTheme.typography.bodyMedium,
-                fontWeight = if (l.isActive) FontWeight.SemiBold else FontWeight.Normal,
-                modifier = Modifier.weight(1f),
-            )
-            Text(
-                "${pct.toInt()}%",
-                style = MaterialTheme.typography.bodyMedium,
-                fontWeight = FontWeight.Medium,
-                color = bar,
-            )
-        }
-        LinearProgressIndicator(
-            progress = { (pct / 100.0).toFloat() },
-            modifier = Modifier.fillMaxWidth().height(5.dp).clip(RoundedCornerShape(3.dp)),
-            color = bar,
-            trackColor = MaterialTheme.colorScheme.surfaceVariant,
-            drawStopIndicator = {},
-        )
-        resetLabel(l.resetsAt)?.let {
-            Text(
-                it,
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-        }
-    }
-}
-
-/** "resets in 3h 12m" — a countdown is what you act on, not an ISO timestamp. */
-private fun resetLabel(iso: String?): String? {
-    if (iso.isNullOrBlank()) return null
-    val at = runCatching { OffsetDateTime.parse(iso) }.getOrNull() ?: return null
-    val secs = Duration.between(OffsetDateTime.now(), at).seconds
-    if (secs <= 0) return "resetting now"
-    val d = secs / 86_400
-    val h = (secs % 86_400) / 3600
-    val m = (secs % 3600) / 60
-    return when {
-        d > 0 -> "resets in ${d}d ${h}h"
-        h > 0 -> "resets in ${h}h ${m}m"
-        else -> "resets in ${m}m"
-    }
-}
-
-/** Tokens are exact; the dollar figure is a list-price estimate, so it is labelled. */
-@Composable
-private fun UsageSection(usage: Usage?) {
-    val d = usage?.data
-    when {
-        usage == null -> Text(
-            "Loading…",
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-        usage.error != null -> Text(
-            usage.error,
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.error,
-        )
-        d == null -> Row(verticalAlignment = Alignment.CenterVertically) {
-            CircularProgressIndicator(modifier = Modifier.size(14.dp), strokeWidth = 2.dp)
-            Spacer(Modifier.width(8.dp))
-            Text(
-                "Counting tokens across every transcript, this takes about half a minute.",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-        }
-        else -> Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-            d.today?.let { UsageRow("Today", it.totalTokens, it.costUsd) }
-            UsageRow("Last ${d.week.days} days", d.week.totalTokens, d.week.costUsd)
-            if (d.week.totalTokens > 0) {
-                Text(
-                    "Cache reads are ${pct(d.week.cacheReadTokens, d.week.totalTokens)} of the total.",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
-            Text(
-                "Token counts are exact. The dollar figures are list-price estimates and " +
-                    "run high on a Max plan, so treat them as a trend, not a bill.",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-            if (usage.refreshing) {
-                Text(
-                    "Refreshing…",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.primary,
-                )
-            }
-        }
-    }
-}
-
-@Composable
-private fun UsageRow(label: String, tokens: Long, cost: Double?) {
-    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-        Text(label, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f))
-        Column(horizontalAlignment = Alignment.End) {
-            Text(compactTokens(tokens), style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Medium)
-            if (cost != null) {
-                Text(
-                    "approx $" + String.format("%.0f", cost),
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
-        }
-    }
-}
-
-private fun compactTokens(n: Long): String = when {
-    n >= 1_000_000_000 -> String.format("%.2fB tokens", n / 1_000_000_000.0)
-    n >= 1_000_000 -> String.format("%.1fM tokens", n / 1_000_000.0)
-    n >= 1_000 -> String.format("%.1fk tokens", n / 1_000.0)
-    else -> "$n tokens"
-}
-
-private fun pct(part: Long, whole: Long): String =
-    if (whole <= 0) "0%" else String.format("%.0f%%", part * 100.0 / whole)
