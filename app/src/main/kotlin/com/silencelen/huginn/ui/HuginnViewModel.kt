@@ -22,8 +22,10 @@ import com.silencelen.huginn.data.Plan
 import com.silencelen.huginn.data.SavedAccount
 import com.silencelen.huginn.data.Usage
 import com.silencelen.huginn.data.Alerts
+import com.silencelen.huginn.data.ClientsInfo
 import com.silencelen.huginn.data.LoginState
 import com.silencelen.huginn.notify.SessionWatchWorker
+import com.silencelen.huginn.notify.Heartbeat
 import com.silencelen.huginn.notify.WatchService
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -97,9 +99,67 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch { runCatching { client.alerts() }.onSuccess { _alerts.value = it } }
     }
 
+    /**
+     * What the host has seen of this phone — the evidence that background delivery
+     * is working, gathered by a machine that was awake while the phone was not.
+     */
+    private val _clients = MutableStateFlow<ClientsInfo?>(null)
+    val clients: StateFlow<ClientsInfo?> = _clients.asStateFlow()
+
+    fun refreshDelivery() {
+        viewModelScope.launch {
+            runCatching { client.alerts() }.onSuccess { _alerts.value = it }
+            runCatching { client.clients() }.onSuccess { _clients.value = it }
+            _health.value = readHealth()
+        }
+    }
+
+    /** The app's own side of the story: when it last reached huginn, and how. */
+    data class DeliveryHealth(
+        val lastContactAt: Long = 0,
+        val lastAlarmAt: Long = 0,
+        val lastError: String = "",
+        val lastErrorAt: Long = 0,
+        val dozeExempt: Boolean = false,
+    )
+
+    private val _health = MutableStateFlow(DeliveryHealth())
+    val health: StateFlow<DeliveryHealth> = _health.asStateFlow()
+
+    private suspend fun readHealth() = DeliveryHealth(
+        lastContactAt = settings.lastContactAt.first(),
+        lastAlarmAt = settings.lastAlarmAt.first(),
+        lastError = settings.lastWatchError.first(),
+        lastErrorAt = settings.lastWatchErrorAt.first(),
+        dozeExempt = Heartbeat.isExemptFromDoze(getApplication()),
+    )
+
+    /**
+     * Opens the system dialogue for the Doze allowlist. Nothing to persist: the
+     * answer lives with the system, and is re-read every time the screen is shown so
+     * a revoked exemption cannot keep reading as granted.
+     */
+    fun requestDozeExemption() {
+        Heartbeat.requestDozeExemption(getApplication())
+    }
+
+    /** `fallback` (only when the phone is out of contact) or `always`. */
+    fun setAlertsMode(mode: String) {
+        viewModelScope.launch {
+            runCatching { client.setAlerts(mode = mode) }
+                .onSuccess {
+                    _alerts.value = _alerts.value?.copy(mode = it.mode) ?: it
+                    _toast.value = if (it.mode == "always")
+                        "Telegram will carry every alert"
+                    else "Telegram only when the app is out of contact"
+                }
+                .onFailure { _toast.value = errText(it) }
+        }
+    }
+
     fun setAlertsEnabled(on: Boolean) {
         viewModelScope.launch {
-            runCatching { client.setAlerts(on) }
+            runCatching { client.setAlerts(enabled = on) }
                 .onSuccess {
                     _alerts.value = _alerts.value?.copy(enabled = it.enabled) ?: it
                     _toast.value = if (it.enabled)
@@ -119,22 +179,21 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     /**
-     * Continuous watching versus the 15-minute periodic check. Only one should be
-     * running: the service makes the worker redundant, and two of them would
-     * race to claim the same transitions and double-notify.
+     * The instant path, on top of the background ones.
+     *
+     * These used to be mutually exclusive — the service cancelled the worker —
+     * because two watchers racing on the same transition would notify twice. They
+     * can now coexist, and should: the comparison baseline moved into storage, so
+     * whichever mechanism sees a transition first consumes it and the others find
+     * nothing to announce. That matters because they fail in different conditions,
+     * and the one that survives a sleeping phone is not the fast one.
      */
     fun setWatchEnabled(on: Boolean) {
         _watchEnabled.value = on
         val app = getApplication<Application>()
         viewModelScope.launch {
             settings.setWatchEnabled(on)
-            if (on) {
-                SessionWatchWorker.cancel(app)
-                WatchService.start(app)
-            } else {
-                WatchService.stop(app)
-                if (_notifyEnabled.value) SessionWatchWorker.schedule(app)
-            }
+            if (on) WatchService.start(app) else WatchService.stop(app)
         }
     }
 
@@ -184,11 +243,12 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
             _notifyEnabled.value = settings.notifyEnabled.first()
             _watchEnabled.value = settings.watchEnabled.first()
             _drafts.value = settings.drafts.first()
+            _health.value = readHealth()
             if (tokenNow.isNotBlank()) {
                 refreshAll()
                 refreshModels()
+                if (_notifyEnabled.value) ensureBackgroundDelivery()
                 if (_watchEnabled.value) WatchService.start(getApplication())
-                else if (_notifyEnabled.value) SessionWatchWorker.schedule(getApplication())
             }
         }
     }
@@ -227,11 +287,28 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
 
     fun setNotifyEnabled(on: Boolean) {
         _notifyEnabled.value = on
+        val app = getApplication<Application>()
         viewModelScope.launch {
             settings.setNotifyEnabled(on)
-            if (on) SessionWatchWorker.schedule(getApplication())
-            else SessionWatchWorker.cancel(getApplication())
+            if (on) {
+                ensureBackgroundDelivery()
+            } else {
+                Heartbeat.cancel(app)
+                SessionWatchWorker.cancel(app)
+                WatchService.stop(app)
+            }
         }
+    }
+
+    /**
+     * Arms both background paths. Idempotent, and called on every app start rather
+     * than only when the switch is flipped: an app update cancels pending alarms, so
+     * a heartbeat armed once at install time would not survive the next release.
+     */
+    private fun ensureBackgroundDelivery() {
+        val app = getApplication<Application>()
+        Heartbeat.arm(app)
+        SessionWatchWorker.schedule(app)
     }
 
     fun testConnection() {

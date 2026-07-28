@@ -131,6 +131,8 @@ fun HuginnApp(
     val loginBusy by vm.loginBusy.collectAsState()
     val watchEnabled by vm.watchEnabled.collectAsState()
     val hostAlerts by vm.alerts.collectAsState()
+    val health by vm.health.collectAsState()
+    val clients by vm.clients.collectAsState()
 
     val snackbar = remember { SnackbarHostState() }
     LaunchedEffect(toast) { toast?.let { snackbar.showSnackbar(it); vm.toastShown() } }
@@ -384,13 +386,22 @@ fun HuginnApp(
                 }
 
                 is Dest.Settings -> {
-                    LaunchedEffect(Unit) { vm.refreshAccount(); vm.refreshAlerts() }
+                    // Re-read on every visit rather than once: the Doze exemption is
+                    // held by the system and can be revoked outside this app, so a
+                    // cached "granted" would keep reassuring long after it stopped
+                    // being true.
+                    LaunchedEffect(Unit) { vm.refreshAccount(); vm.refreshDelivery() }
                     SettingsScreen(
                         baseUrl = baseUrl,
                         token = token,
                         connected = connected,
                         notifyEnabled = notifyEnabled,
                         onNotifyEnabled = { vm.setNotifyEnabled(it) },
+                        health = health,
+                        clients = clients,
+                        onRequestDozeExemption = { vm.requestDozeExemption() },
+                        onRefreshDelivery = { vm.refreshDelivery() },
+                        onAlertsMode = { vm.setAlertsMode(it) },
                         notificationsAllowed = notificationsAllowed,
                         onRequestNotifications = requestNotifications,
                         onOpenSystemNotificationSettings = {

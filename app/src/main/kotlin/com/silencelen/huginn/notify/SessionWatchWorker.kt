@@ -26,14 +26,19 @@ import kotlinx.coroutines.flow.first
 import java.util.concurrent.TimeUnit
 
 /**
- * Polls the sessions list in the background and notifies when a session starts
- * waiting on you.
+ * The opportunistic check: whenever the system happens to give the app a moment,
+ * look and see.
  *
- * Polling rather than push on purpose: the daemon is tailnet-only and there is no
- * cloud component to hold a push token, so FCM would mean standing up an internet
- * -facing relay for one notification. A 15-minute WorkManager poll costs nothing
- * and cannot work when the phone is off the tailnet, which is exactly when the
- * notification would be useless anyway.
+ * Kept, but demoted, and it is worth recording why it cannot be the main mechanism.
+ * WorkManager work is DEFERRED BY DOZE — a periodic job does not run while the
+ * device is idle, it waits for a maintenance window or for the screen to come on.
+ * So this delivers promptly all day and then nothing at all overnight, which is
+ * exactly the symptom that prompted the rewrite. [Heartbeat] is the path that fires
+ * while the phone sleeps; this one still earns its place by costing nothing and by
+ * covering the case where the alarm has been dropped (an app update cancels pending
+ * alarms) but WorkManager's own persistence has not.
+ *
+ * Also home to [post] and [canNotify], which everything else notifies through.
  */
 class SessionWatchWorker(
     private val context: Context,
@@ -46,48 +51,26 @@ class SessionWatchWorker(
         if (token.isBlank()) return Result.success()
         if (!settings.notifyEnabled.first()) return Result.success()
         val base = settings.baseUrl.first()
+        val id = settings.clientId()
+        val canNotify = canNotify(context)
 
-        val client = HuginnClient({ base }, { token })
-        val sessions = try {
-            client.sessions()
+        val client = HuginnClient({ base }, { token }, { id }, { canNotify })
+        val watch = try {
+            client.watch(knownHash = null, waitMs = 0)
         } catch (e: Exception) {
             // Off the tailnet, asleep, daemon restarting: all ordinary. Retrying
             // would just burn battery for a notification that is not urgent.
+            settings.noteWatchError(e.message ?: "unreachable", System.currentTimeMillis())
             return Result.success()
         }
+        settings.noteContact(System.currentTimeMillis())
 
-        val needing = sessions.filter { it.state == "attention" }.map { it.name }.toSet()
-        val alreadyNotified = settings.notifiedSessions.first()
-
-        // Only notify on the TRANSITION into needing-you. Re-notifying every poll
-        // for a session that has been waiting an hour trains you to ignore it.
-        val fresh = needing - alreadyNotified
-        if (fresh.isNotEmpty()) notify(fresh.toList(), sessions.size)
-        if (needing != alreadyNotified) settings.setNotifiedSessions(needing)
-
-        // A chat that WAS running and is not any more has finished. Comparing
-        // against the previous observation is the only way to see that without a
-        // push channel, so the previous set is persisted rather than remembered.
-        val chats = runCatching { client.chats() }.getOrNull()
-        if (chats != null) {
-            val runningNow = chats.filter { it.running }.map { it.id }.toSet()
-            val wasRunning = settings.runningChats.first()
-            val finished = chats.filter { it.id in wasRunning && !it.running }
-            if (finished.isNotEmpty()) {
-                val title = if (finished.size == 1) "Chat finished" else "${finished.size} chats finished"
-                val text = finished.firstOrNull()?.title?.take(80) ?: "huginn has answered"
-                post(context, title, text, null)
-            }
-            if (runningNow != wasRunning) settings.setRunningChats(runningNow)
-        }
-
+        // The same cycle the stream and the alarm run. Sharing it is what makes three
+        // overlapping mechanisms safe: the comparison baseline is persisted, so
+        // whichever of them notices a transition first consumes it, and the others
+        // find nothing left to announce.
+        WatchCycle.apply(context, settings, watch)
         return Result.success()
-    }
-
-    private fun notify(names: List<String>, total: Int) {
-        val title = if (names.size == 1) "${names.first()} needs you" else "${names.size} sessions need you"
-        val text = if (names.size == 1) "Waiting for your answer on huginn" else names.joinToString(", ")
-        post(context, title, text, names.first())
     }
 
     companion object {

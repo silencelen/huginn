@@ -61,8 +61,17 @@ function decideAlerts(prev, next, sent, now) {
   for (const [id, cur] of Object.entries(next.chats || {})) {
     const before = (prev.chats || {})[id];
     if (!before) continue;                       // a chat that appeared mid-window
-    if (before.running && !cur.running) {
-      const key = `chat:${id}`;
+    // Two ways to notice, because the obvious one is lossy. `running` going false
+    // is an EDGE, and this runs on a timer: a chat that began and ended between two
+    // observations was never seen running, so its finish went unreported — measured,
+    // on a run that took five seconds against a ten-second tick. The run counter is
+    // a durable fact and catches exactly that case. The edge is kept as well, for
+    // chats whose meta predates the counter.
+    const ranAgain = (cur.finishedRuns || 0) > (before.finishedRuns || 0);
+    if (ranAgain || (before.running && !cur.running)) {
+      // Keyed by which run finished, so two genuine finishes both get through while
+      // a failed send of the SAME finish is still retried rather than duplicated.
+      const key = `chat:${id}:${cur.finishedRuns || 0}`;
       if (fresh(key)) {
         const label = cur.title || before.title || 'a chat';
         alerts.push({
@@ -80,6 +89,31 @@ function decideAlerts(prev, next, sent, now) {
   return { alerts, sentUpdates };
 }
 
+/**
+ * Chooses which of the decided alerts Telegram should actually carry.
+ *
+ * Kept apart from `decideAlerts` because these are two different questions and
+ * conflating them was tempting: "did something happen worth telling you about" is
+ * about huginn, whereas "should THIS channel carry it" is about which of your
+ * devices is currently reachable. Only the second one changes when a phone goes to
+ * sleep, and only the second one should be re-decided per delivery.
+ *
+ * `fallback` is the default because the alternative is both channels firing for
+ * every event, and two notifications for one thing teaches the reader to dismiss
+ * without looking — at which point the important one is lost too.
+ *
+ * @param mode      'off' | 'fallback' | 'always'
+ * @param appOnline whether a phone has checked in recently enough to have shown
+ *                  this itself, per lib/clients
+ * @returns {{deliver: Array, held: Array}} — `held` is reported, not discarded
+ *          silently, so "nothing arrived" can be told apart from "nothing happened"
+ */
+function routeAlerts(alerts, { mode = 'fallback', appOnline = false } = {}) {
+  if (mode === 'off') return { deliver: [], held: alerts.slice() };
+  if (mode === 'always') return { deliver: alerts.slice(), held: [] };
+  return appOnline ? { deliver: [], held: alerts.slice() } : { deliver: alerts.slice(), held: [] };
+}
+
 /** Drops entries old enough that they can never suppress anything again. */
 function pruneSent(sent, now) {
   const out = {};
@@ -89,4 +123,4 @@ function pruneSent(sent, now) {
   return out;
 }
 
-module.exports = { decideAlerts, pruneSent, REPEAT_MS };
+module.exports = { decideAlerts, routeAlerts, pruneSent, REPEAT_MS };
