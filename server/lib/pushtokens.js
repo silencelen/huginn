@@ -64,12 +64,22 @@ function list(state) {
       firstAt: Math.floor((t.firstAt || 0) / 1000),
       seenAt: Math.floor((t.seenAt || 0) / 1000),
       failures: t.failures || 0,
+      pushes: t.pushes || 0,
+      lastPushAt: Math.floor((t.lastPushAt || 0) / 1000),
     }))
     .sort((a, b) => b.seenAt - a.seenAt);
 }
 
 function count(state) {
   return Object.keys((state && state.tokens) || {}).length;
+}
+
+/** Aggregate delivery history, which survives a device being dropped. */
+function totals(state) {
+  return {
+    pushed: (state && state.pushed) || 0,
+    lastPushAt: Math.floor(((state && state.lastPushAt) || 0) / 1000),
+  };
 }
 
 /** Forgets a token FCM has declared dead. */
@@ -92,10 +102,24 @@ function noteFailure(state, installId) {
   t.failures = (t.failures || 0) + 1;
 }
 
-/** Clears the failure count after a delivery gets through. */
-function noteSuccess(state, installId) {
+/**
+ * Records a delivery that got through.
+ *
+ * Counted as well as cleared, because the original version only recorded FAILURES —
+ * so a working push left no trace at all and the only evidence it had happened was a
+ * 200 buried in the request log. For a feature whose whole selling point is arriving
+ * while you are not watching, "it worked" has to be as visible as "it did not".
+ */
+function noteSuccess(state, installId, now) {
   const t = ((state && state.tokens) || {})[installId];
-  if (t) t.failures = 0;
+  if (!t) return;
+  t.failures = 0;
+  t.pushes = (t.pushes || 0) + 1;
+  if (now) t.lastPushAt = now;
+  state.pushed = (state.pushed || 0) + 1;
+  if (now) state.lastPushAt = now;
 }
 
-module.exports = { emptyState, register, list, count, drop, noteFailure, noteSuccess, MAX_TOKENS };
+module.exports = {
+  emptyState, register, list, count, drop, noteFailure, noteSuccess, totals, MAX_TOKENS,
+};
