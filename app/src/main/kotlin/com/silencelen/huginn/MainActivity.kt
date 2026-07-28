@@ -197,6 +197,7 @@ fun HuginnApp(
         SignInDialog(
             state = st,
             busy = loginBusy,
+            onStart = { email -> vm.startLogin(email) },
             onOpenUrl = { url ->
                 runCatching {
                     context.startActivity(
@@ -413,7 +414,7 @@ fun HuginnApp(
                         switching = switching,
                         onSwitchAccount = { vm.activateAccount(it) },
                         onForgetAccount = { vm.forgetAccount(it) },
-                        onSignIn = { vm.startLogin() },
+                        onSignIn = { vm.beginAddAccount() },
                         watchEnabled = watchEnabled,
                         onWatchEnabled = { vm.setWatchEnabled(it) },
                         onSignOut = { vm.logout() },
