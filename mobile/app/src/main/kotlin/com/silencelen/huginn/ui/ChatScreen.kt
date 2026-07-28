@@ -251,31 +251,6 @@ private fun ThinkingLine() {
 }
 
 @Composable
-private fun AttachmentChip(label: String, onClear: () -> Unit, isError: Boolean = false) {
-    Row(
-        Modifier.fillMaxWidth().padding(start = 14.dp, end = 8.dp, top = 6.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Text(
-            label,
-            style = MaterialTheme.typography.labelMedium,
-            color = if (isError) MaterialTheme.colorScheme.error
-                else MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.weight(1f),
-            maxLines = 1,
-            overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
-        )
-        IconButton(onClick = onClear, modifier = Modifier.size(28.dp)) {
-            Icon(
-                Icons.Filled.Close,
-                contentDescription = "Remove attachment",
-                tint = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-        }
-    }
-}
-
-@Composable
 private fun Composer(
     draft: String,
     onDraft: (String) -> Unit,
@@ -290,24 +265,9 @@ private fun Composer(
     onAttach: (android.net.Uri) -> Unit = {},
     onClearAttachment: () -> Unit = {},
 ) {
-    // The photo picker needs no permission on any supported Android; it is the
-    // system's own UI handing back one grant-scoped Uri.
-    val pickImage = androidx.activity.compose.rememberLauncherForActivityResult(
-        androidx.activity.result.contract.ActivityResultContracts.PickVisualMedia()
-    ) { uri -> if (uri != null) onAttach(uri) }
-
     Surface(color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f)) {
       Column {
-        // The staged photo, visible and killable. State chips rather than silence:
-        // an upload that fails while the user types must say so BEFORE they send a
-        // message that would then arrive without the thing it talks about.
-        when (attachment) {
-            is HuginnViewModel.Attachment.Uploading -> AttachmentChip("Uploading photo…", onClearAttachment)
-            is HuginnViewModel.Attachment.Ready -> AttachmentChip("Photo attached", onClearAttachment)
-            is HuginnViewModel.Attachment.Failed -> AttachmentChip(
-                "Photo failed: ${attachment.why}", onClearAttachment, isError = true)
-            null -> {}
-        }
+        AttachmentBar(attachment, onClearAttachment)
         Row(
             Modifier
                 .fillMaxWidth()
@@ -331,22 +291,7 @@ private fun Composer(
                 shape = RoundedCornerShape(20.dp),
             )
             Spacer(Modifier.width(6.dp))
-            IconButton(
-                onClick = {
-                    pickImage.launch(
-                        androidx.activity.result.PickVisualMediaRequest(
-                            androidx.activity.result.contract.ActivityResultContracts.PickVisualMedia.ImageOnly
-                        )
-                    )
-                },
-                modifier = Modifier.size(46.dp),
-            ) {
-                Icon(
-                    Icons.Outlined.Image,
-                    contentDescription = "Attach a photo",
-                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
+            AttachPhotoButton(onPick = onAttach)
             DictationMicButton(
                 micGranted = micGranted,
                 onRequestMic = onRequestMic,
