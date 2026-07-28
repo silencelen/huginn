@@ -9,10 +9,13 @@
 //
 // Each agent file is an ordinary Claude transcript: its FIRST user record is the
 // task the parent wrote for it, and its tail is whatever it is doing right now.
-// The journal is thin ({type:"started"} lines) and carries no labels, so the
-// agent's own transcript is the whole story. Liveness is the file growing: an
-// agent leaves no completion marker, but one that has not written in a while has
-// either finished or died, and for a progress popup those are the same thing.
+// The workflow journal carries {type:"started"} lines AND — the useful part —
+// {type:"result", agentId, result:{summary}} once an agent settles: the agent's
+// own account of what it concluded, which beats "last tool: StructuredOutput"
+// as the epitaph on a settled row. Liveness is the transcript growing: an agent
+// leaves no completion marker in its OWN file, but one that has not written in
+// a while has either finished or died, and for a progress popup those are the
+// same thing.
 
 const fs = require('node:fs');
 const path = require('node:path');
@@ -83,6 +86,30 @@ function agentTask(file, fsImpl = fs) {
   }
 }
 
+/**
+ * Settled agents' outcomes, read from a workflow run's journal: agentId -> the
+ * first line of its result summary. Tolerant of every shape problem — a journal
+ * is another process's file mid-write.
+ */
+function journalSummaries(journalFile, fsImpl = fs) {
+  const out = new Map();
+  let text = '';
+  try { text = fsImpl.readFileSync(journalFile, 'utf8'); } catch { return out; }
+  for (const line of text.split('\n')) {
+    if (!line.trim()) continue;
+    try {
+      const d = JSON.parse(line);
+      if (d.type !== 'result' || !d.agentId) continue;
+      const r = d.result;
+      const summary = typeof r === 'string' ? r
+        : r && typeof r.summary === 'string' ? r.summary
+          : null;
+      if (summary) out.set(d.agentId, summary.replace(/\s+/g, ' ').trim().slice(0, 160));
+    } catch { /* half-written line */ }
+  }
+  return out;
+}
+
 /** What the agent is doing right now, from its transcript tail. */
 function agentLastLine(file) {
   try {
@@ -126,13 +153,25 @@ function listAgents(dir, nowSec, fsImpl = fs, max = 24) {
   }
   out.sort((a, b) => b.updatedAt - a.updatedAt);
   const kept = out.slice(0, max);
+  // Journal summaries, one read per workflow run represented in the kept rows.
+  const summaries = new Map();
+  for (const a of kept) {
+    if (!a.workflow || summaries.has(a.workflow)) continue;
+    summaries.set(a.workflow,
+      journalSummaries(path.join(dir, 'workflows', a.workflow, 'journal.jsonl'), fsImpl));
+  }
   // The transcript reads are the expensive part; only the kept rows pay them.
   for (const a of kept) {
     a.task = agentTask(a.file, fsImpl);
     a.lastLine = agentLastLine(a.file);
+    const j = a.workflow ? summaries.get(a.workflow) : null;
+    a.summary = (j && j.get(a.id)) || null;
     delete a.file;
   }
   return kept;
 }
 
-module.exports = { agentsDirFor, listAgentFiles, agentTask, agentLastLine, listAgents, ACTIVE_S, RECENT_S };
+module.exports = {
+  agentsDirFor, listAgentFiles, agentTask, agentLastLine, journalSummaries, listAgents,
+  ACTIVE_S, RECENT_S,
+};

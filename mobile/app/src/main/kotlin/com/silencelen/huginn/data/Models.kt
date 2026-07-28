@@ -217,6 +217,8 @@ data class AgentRun(
     val workflow: String? = null,
     val task: String? = null,
     val lastLine: String? = null,
+    /** The agent's own account of what it concluded, once settled. */
+    val summary: String? = null,
     val active: Boolean = false,
     val updatedAt: Long = 0,
     val startedAt: Long = 0,

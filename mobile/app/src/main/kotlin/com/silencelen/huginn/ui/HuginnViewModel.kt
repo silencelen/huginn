@@ -894,6 +894,30 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
+    /** The chat-side twin of [maybeSuggest]; same flow, same rules. */
+    fun maybeSuggestChat(id: String, page: TranscriptPage?, busy: Boolean) {
+        if (busy) {
+            if (_suggestions.value.isNotEmpty()) _suggestions.value = emptyList()
+            return
+        }
+        val offset = page?.nextOffset ?: return
+        if (offset == suggestedForOffset || suggestJob?.isActive == true) return
+        suggestedForOffset = offset
+        suggestJob = viewModelScope.launch {
+            runCatching { client.chatSuggestions(id) }
+                .onSuccess { _suggestions.value = it.suggestions }
+                .onFailure { /* suggestions are a nicety; silence is the right failure */ }
+        }
+    }
+
+    fun renameChat(id: String, title: String) {
+        viewModelScope.launch {
+            runCatching { client.renameChat(id, title.trim()) }
+                .onSuccess { refreshChats(); openChat(id) }
+                .onFailure { _toast.value = errText(it) }
+        }
+    }
+
     fun clearSuggestions() {
         suggestJob?.cancel()
         _suggestions.value = emptyList()

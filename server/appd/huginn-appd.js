@@ -45,7 +45,7 @@ const { decideSwitch, worstLimit } = require('./lib/autoswitch');
 const pushLib = require('./lib/pushtokens');
 const { trySender } = require('./lib/fcm');
 
-const VERSION = '2.24.0';
+const VERSION = '2.25.0';
 const PORT = Number(process.env.HUGINN_APPD_PORT || 8787);
 const DATA_DIR = process.env.HUGINN_APPD_DATA || '/var/lib/huginn-appd';
 const TOKEN_FILE = process.env.HUGINN_APPD_TOKEN_FILE || '/etc/huginn-appd/token';
@@ -1296,6 +1296,50 @@ async function deliverPush(alert) {
 const suggestCache = new Map();   // sessionId -> {size, suggestions, promise}
 
 /**
+ * Suggestions for one transcript, cached on its size, single-flight per id.
+ * Shared by the sessions route and the chats route so the two surfaces cannot
+ * drift: a chat and a session are the same transcript wearing different UIs.
+ */
+async function suggestionsFor(id, transcriptPath) {
+  let size = 0;
+  try { size = fs.statSync(transcriptPath).size; } catch {
+    return { suggestions: [], reason: 'no transcript' };
+  }
+  const hit = suggestCache.get(id);
+  if (hit && hit.size === size) {
+    if (hit.promise) await hit.promise;
+    const now2 = suggestCache.get(id);
+    return { suggestions: (now2 && now2.suggestions) || [], forSize: size };
+  }
+  const t = readTranscript(transcriptPath, { limit: 60 });
+  const context = suggestionContext(t.events);
+  if (!context) return { suggestions: [], reason: 'nothing to react to' };
+
+  const entry = { size, suggestions: [], promise: null };
+  entry.promise = (async () => {
+    const r = await run('claude', [
+      '-p',
+      // Caged: no CLAUDE.md (global or project), no tools, one turn, cheap
+      // model, scratch cwd. This call must never inherit huginn's persona.
+      '--setting-sources', '',
+      '--model', 'haiku',
+      '--max-turns', '1',
+      '--tools', '',
+      '--', buildPrompt(context),
+    ], { timeout: 45_000, cwd: DATA_DIR });
+    entry.suggestions = r.err ? [] : parseSuggestions(r.stdout);
+    entry.promise = null;
+    if (r.err) log(`suggest: ${id} failed: ${(r.stderr || r.err.message || '').slice(0, 120)}`);
+    else log(`suggest: ${id} -> ${entry.suggestions.length} for size ${size}`);
+  })();
+  suggestCache.set(id, entry);
+  if (suggestCache.size > 50) suggestCache.delete(suggestCache.keys().next().value);
+  await entry.promise;
+  return { suggestions: entry.suggestions, forSize: size };
+}
+
+
+/**
  * Makes a saved login the active one, everywhere it has to happen at once:
  * credentials + identity block (accounts.activate), the label correction once
  * `auth status` is authoritative for the new login, and the plan cache, whose
@@ -2050,51 +2094,10 @@ const server = http.createServer(async (req, res) => {
       const name = m[1];
       if (!(await sessionExists(name))) return sendErr(res, 404, 'no such session');
       const st = readSessionState(name);
-      // Mid-turn suggestions would be guesses about a reply that is still being
-      // written; the moment for them is the turn boundary.
       if (!st || st.state === 'running' || !st.transcript) {
         return sendJson(res, 200, { suggestions: [], reason: 'running' });
       }
-      let size = 0;
-      try { size = fs.statSync(st.transcript).size; } catch {
-        return sendJson(res, 200, { suggestions: [], reason: 'no transcript' });
-      }
-      const hit = suggestCache.get(st.sessionId);
-      if (hit && hit.size === size) {
-        if (hit.promise) { await hit.promise; }
-        const now2 = suggestCache.get(st.sessionId);
-        return sendJson(res, 200, { suggestions: (now2 && now2.suggestions) || [], forSize: size });
-      }
-      const t = readTranscript(st.transcript, { limit: 60 });
-      const context = suggestionContext(t.events);
-      if (!context) return sendJson(res, 200, { suggestions: [], reason: 'nothing to react to' });
-
-      // Single-flight per session: a phone polls, and two identical haiku calls
-      // for one turn boundary is one too many.
-      const entry = { size, suggestions: [], promise: null };
-      entry.promise = (async () => {
-        const r = await run('claude', [
-          '-p',
-          // Caged: no CLAUDE.md (global or project), no tools, one turn, cheap
-          // model, scratch cwd. This call must never inherit huginn's persona.
-          '--setting-sources', '',
-          '--model', 'haiku',
-          '--max-turns', '1',
-          '--tools', '',
-          '--', buildPrompt(context),
-        ], { timeout: 45_000, cwd: DATA_DIR });
-        entry.suggestions = r.err ? [] : parseSuggestions(r.stdout);
-        entry.promise = null;
-        if (r.err) log(`suggest: ${name} failed: ${(r.stderr || r.err.message || '').slice(0, 120)}`);
-        else log(`suggest: ${name} -> ${entry.suggestions.length} for size ${size}`);
-      })();
-      suggestCache.set(st.sessionId, entry);
-      if (suggestCache.size > 50) {
-        const oldest = suggestCache.keys().next().value;
-        suggestCache.delete(oldest);
-      }
-      await entry.promise;
-      return sendJson(res, 200, { suggestions: entry.suggestions, forSize: size });
+      return sendJson(res, 200, await suggestionsFor(st.sessionId, st.transcript));
     }
 
     // --- the individual agents behind "0/4 agents done"
@@ -2354,6 +2357,15 @@ const server = http.createServer(async (req, res) => {
           mode: meta.mode,
           pending: (meta.pending || []).length,
         });
+      }
+
+      if (req.method === 'GET' && sub === '/suggestions') {
+        // Mid-run suggestions would guess at a reply still being written.
+        if (meta.running || activeRuns.has(id)) return sendJson(res, 200, { suggestions: [], reason: 'running' });
+        if (!meta.claudeSessionId) return sendJson(res, 200, { suggestions: [], reason: 'no transcript' });
+        const file = findTranscriptFile(meta.claudeSessionId);
+        if (!file) return sendJson(res, 200, { suggestions: [], reason: 'no transcript' });
+        return sendJson(res, 200, await suggestionsFor(meta.claudeSessionId, file));
       }
 
       if (req.method === 'GET' && sub === '/stream') {
