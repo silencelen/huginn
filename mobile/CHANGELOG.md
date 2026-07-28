@@ -1,5 +1,13 @@
 # Huginn changelog
 
+## 2.39.2 — 2026-07-28
+
+### Sharing into a cold-started huginn works
+A share often arrives in a fresh process, and the new-chat call raced the
+settings load — it went out with a blank token, was refused, and the share died
+silently on the Sessions screen. It now waits for the credentials to load
+first.
+
 ## 2.39.1 — 2026-07-28
 
 ### Attaching a photo failed for every image — fixed

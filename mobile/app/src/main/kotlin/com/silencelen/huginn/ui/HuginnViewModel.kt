@@ -313,11 +313,21 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
      * time a first word is typed.
      */
     fun newChatForShare(text: String?, image: android.net.Uri?, onOpened: (String) -> Unit) {
-        newChat(_chatMode.value) { id ->
-            openChat(id)
-            if (!text.isNullOrBlank()) setDraft(chatDraftKey(id), text)
-            if (image != null) attachImage(image)
-            onOpened(id)
+        viewModelScope.launch {
+            // A share often arrives in a BRAND NEW activity with a brand new view
+            // model, and this used to fire on first composition — racing the
+            // settings load, so createChat left with a blank bearer and 401'd
+            // (measured: the share reached the daemon as POST /v1/chats 401 and
+            // died silently on the Sessions screen). Wait for the token first;
+            // the timeout means a genuinely unconfigured app still fails visibly
+            // in newChat rather than hanging the share forever.
+            kotlinx.coroutines.withTimeoutOrNull(5_000) { token.first { it.isNotBlank() } }
+            newChat(_chatMode.value) { id ->
+                openChat(id)
+                if (!text.isNullOrBlank()) setDraft(chatDraftKey(id), text)
+                if (image != null) attachImage(image)
+                onOpened(id)
+            }
         }
     }
 
