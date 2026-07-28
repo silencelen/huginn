@@ -45,7 +45,7 @@ const { decideSwitch, worstLimit } = require('./lib/autoswitch');
 const pushLib = require('./lib/pushtokens');
 const { trySender } = require('./lib/fcm');
 
-const VERSION = '2.32.0';
+const VERSION = '2.33.0';
 const PORT = Number(process.env.HUGINN_APPD_PORT || 8787);
 const DATA_DIR = process.env.HUGINN_APPD_DATA || '/var/lib/huginn-appd';
 const TOKEN_FILE = process.env.HUGINN_APPD_TOKEN_FILE || '/etc/huginn-appd/token';
@@ -1469,8 +1469,16 @@ async function alertTick() {
 
 async function alertTickInner(st) {
   const now = Date.now();
-  const d = digest(await listSessions(), chatStates());
-  const observation = { sessions: d.sessions, chats: d.chats };
+  const sessions = await listSessions();
+  const d = digest(sessions, chatStates());
+  // stateSince rides alongside the digest rather than inside it, on purpose. The
+  // digest is a change signal that parked phones hash — a timestamp that advances
+  // on every state change would make it churn. Here it is only read to answer one
+  // question: when a session goes idle, had it been running long enough for that
+  // to be worth saying?
+  const sessionsSince = {};
+  for (const s of sessions) if (s.stateSince) sessionsSince[s.name] = s.stateSince;
+  const observation = { sessions: d.sessions, sessionsSince, chats: d.chats };
 
   const { alerts, sentUpdates } = decideAlerts(st.prev, observation, st.sent, now, st.prevAt || 0);
 
