@@ -57,10 +57,22 @@ class HuginnMessagingService : FirebaseMessagingService() {
         // unlocking, finding the app and finding the session.
         val answers = parseAnswers(data["options"])
 
+        // Withheld when it would describe the very screen the reader has open — the
+        // answer is already streaming into the UI in front of them, and a buzz that
+        // carries nothing teaches that buzzes carry nothing. Everything AFTER the
+        // post still runs: the arrival is recorded, the session claimed, the state
+        // reconciled, so the suppressed notification cannot come back later through
+        // the alarm rediscovering the same transition.
+        val redundant = when (kind) {
+            "chat_finished" -> Foreground.showsChat(subject)
+            "session_attention", "session_finished" -> Foreground.showsSession(subject)
+            else -> false
+        }
+
         // Posted from the payload first, and without touching the network: the phone
         // may have been woken from Doze with a few seconds of grace, and an alert that
         // depends on a round trip to arrive is an alert that sometimes does not.
-        SessionWatchWorker.post(
+        if (!redundant) SessionWatchWorker.post(
             applicationContext,
             title,
             text,

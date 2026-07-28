@@ -95,7 +95,13 @@ object WatchCycle {
 
         val previouslyNeeding = settings.notifiedSessions.first()
         val fresh = needing - previouslyNeeding
-        if (fresh.isNotEmpty()) {
+        // Withheld when the one session in question is the screen the reader has
+        // open — its prompt is already rendered in front of them, buttons and all.
+        // The baseline update below still runs either way, so the suppressed alert
+        // is consumed rather than deferred: navigating away later must not make an
+        // already-seen question suddenly buzz.
+        val watching = fresh.size == 1 && Foreground.showsSession(fresh.first())
+        if (fresh.isNotEmpty() && !watching) {
             val only = fresh.singleOrNull()
             // Only for a single session: with several waiting there is no one question
             // to show, and guessing which to offer buttons for would be worse than
@@ -123,7 +129,9 @@ object WatchCycle {
 
         val finished = finishedSince(runsBefore, runsNow, previouslyRunning, running)
 
-        if (finished.isNotEmpty()) {
+        // Same rule for a chat whose finish the reader is already watching stream in.
+        val watchingChat = finished.size == 1 && Foreground.showsChat(finished.first())
+        if (finished.isNotEmpty() && !watchingChat) {
             // A chat that finished and was then deleted is no longer in the snapshot,
             // so a missing title is ordinary rather than a fault.
             val only = finished.singleOrNull()
