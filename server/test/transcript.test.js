@@ -346,3 +346,60 @@ test('a command that is not a setting does not touch model or effort', () => {
   ]);
   assert.strictEqual(readTranscript(p).effort, 'high');
 });
+
+
+// -------------------------------------------------------------- live activity
+//
+// What a session is in the middle of, judged from its transcript tail. Feeds the
+// conversation work strip; a wrong answer here claims work that is not happening.
+
+const { liveActivity } = require('../lib/transcript');
+const NOW = 1_700_000_000;
+
+test('an unresolved tool is in-flight work', () => {
+  const a = liveActivity([{ kind: 'tool', name: 'Bash', detail: 'npm test', ts: NOW - 30 }], NOW);
+  assert.equal(a.tool, 'Bash');
+  assert.equal(a.detail, 'npm test');
+  assert.equal(a.subagents, 0);
+});
+
+test('a tool with its result landed is finished, not activity', () => {
+  assert.equal(liveActivity([{ kind: 'tool', name: 'Bash', result: 'ok', ok: true, ts: NOW - 5 }], NOW), null);
+});
+
+test('a failed tool is finished too', () => {
+  assert.equal(liveActivity([{ kind: 'tool', name: 'Bash', result: 'boom', ok: false, ts: NOW - 5 }], NOW), null);
+});
+
+test('unresolved sidechain tools count as active subagents', () => {
+  const a = liveActivity([
+    { kind: 'tool', name: 'Workflow', detail: 'review-changes', ts: NOW - 60 },
+    { kind: 'tool', name: 'Bash', sidechain: true, ts: NOW - 10 },
+    { kind: 'tool', name: 'Read', sidechain: true, ts: NOW - 5 },
+  ], NOW);
+  assert.equal(a.tool, 'Workflow');
+  assert.equal(a.detail, 'review-changes');
+  assert.equal(a.subagents, 2);
+});
+
+test('subagents alone are still activity', () => {
+  const a = liveActivity([{ kind: 'tool', name: 'Grep', sidechain: true, ts: NOW - 3 }], NOW);
+  assert.equal(a.tool, undefined);
+  assert.equal(a.subagents, 1);
+});
+
+// A cancelled turn leaves its last call unresolved forever; claiming "running
+// npm test" about yesterday would be worse than nothing.
+test('a stale unresolved tool is not activity', () => {
+  assert.equal(liveActivity([{ kind: 'tool', name: 'Bash', ts: NOW - 7200 }], NOW), null);
+});
+
+test('text events are not activity', () => {
+  assert.equal(liveActivity([
+    { kind: 'user', ts: NOW - 10 }, { kind: 'assistant', ts: NOW - 5 },
+  ], NOW), null);
+});
+
+test('an empty transcript has no activity', () => {
+  assert.equal(liveActivity([], NOW), null);
+});

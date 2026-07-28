@@ -25,10 +25,10 @@ const path = require('node:path');
 const os = require('node:os');
 const { execFile, spawn } = require('node:child_process');
 const {
-  screenHash, previewLines, detectPrompt, promptFingerprint,
+  screenHash, previewLines, detectPrompt, promptFingerprint, parseSpinner,
   extractLoginUrl, parseStatusLine, loginPaneState,
 } = require('./lib/pane');
-const { readTranscript } = require('./lib/transcript');
+const { readTranscript, liveActivity } = require('./lib/transcript');
 const { summarizeUsage } = require('./lib/usage');
 const { normalizePlan } = require('./lib/plan');
 const { AccountStore, fingerprint } = require('./lib/accounts');
@@ -40,7 +40,7 @@ const clientsLib = require('./lib/clients');
 const pushLib = require('./lib/pushtokens');
 const { trySender } = require('./lib/fcm');
 
-const VERSION = '2.16.0';
+const VERSION = '2.17.0';
 const PORT = Number(process.env.HUGINN_APPD_PORT || 8787);
 const DATA_DIR = process.env.HUGINN_APPD_DATA || '/var/lib/huginn-appd';
 const TOKEN_FILE = process.env.HUGINN_APPD_TOKEN_FILE || '/etc/huginn-appd/token';
@@ -428,6 +428,10 @@ async function captureScreen(name, { cols = null, rows = null, history = 0, forc
       const pr = detectPrompt(lines);
       return pr ? { ...pr, fingerprint: promptFingerprint(pr) } : null;
     })(),
+    // The moment-to-moment status ("Gallivanting… · 3m 15s") exists only here:
+    // the transcript is silent until whole blocks complete, which left the
+    // conversation looking dead right after a message was sent.
+    spinner: parseSpinner(lines),
     // The pane is the only CURRENT source for these; the transcript lags a turn.
     ...(() => {
       const st = parseStatusLine(lines);
@@ -1786,8 +1790,14 @@ const server = http.createServer(async (req, res) => {
       // captureScreen: the geometry cannot change without the content changing,
       // and re-running the resize/geometry calls on every tick cost three tmux
       // processes per iteration (~9/second per viewed session on an 8-core box).
+      // Adaptive tick. Every keystroke echoed by the pane ends this request and
+      // the next one starts at the fast rate, so while somebody is TYPING the
+      // effective echo latency is the fast tick; a session nobody is touching
+      // decays to the slow one after a few seconds. 700ms flat was the largest
+      // single cause of live typing feeling laggy.
+      let tick = 0;
       while (known && scr.hash === known && Date.now() < deadline && !req.destroyed) {
-        await sleep(700);
+        await sleep(tick++ < 24 ? 130 : 450);
         const peek = await peekHash(name);
         if (peek === null) return sendErr(res, 404, 'no such session');
         if (peek.hash !== known) {
@@ -1839,6 +1849,10 @@ const server = http.createServer(async (req, res) => {
         modelDisplay: formatModel(t.model),
         state: st.state,
         claudeSessionId: st.sessionId,
+        // What the tail says is in flight — an unresolved tool, active subagents —
+        // so the conversation can show work happening rather than going silent
+        // between completed blocks.
+        activity: liveActivity(t.events, Math.floor(Date.now() / 1000)),
       });
     }
 

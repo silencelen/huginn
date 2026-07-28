@@ -204,7 +204,7 @@ private fun Composer(
                 .fillMaxWidth()
                 .imePadding()
                 .navigationBarsPadding()
-                .padding(start = 12.dp, end = 8.dp, top = 8.dp, bottom = 8.dp),
+                .padding(start = 12.dp, end = 8.dp, top = 6.dp, bottom = 2.dp),
             verticalAlignment = Alignment.Bottom,
         ) {
             OutlinedTextField(

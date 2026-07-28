@@ -1,5 +1,31 @@
 # Huginn changelog
 
+## 2.17.0 — 2026-07-27
+
+### The conversation shows what Claude is doing, live
+Right after sending a message the conversation went silent while Claude did its
+opening thinking — all the life was on the Screen tab. A **work strip** now sits
+above the composer showing exactly what Claude Code itself shows: "Gallivanting… ·
+3m 15s · ↓ 10.0k tokens", read live off the pane's own status line. When that line
+is not on screen, the strip falls back to what the transcript says is in flight —
+the running tool and its argument, plus "· N subagents" while a fan-out or workflow
+is underway. Tapping the strip jumps to the newest content.
+
+### Live typing is faster, and now provably in order
+Two changes. Keystrokes used to each ride their own request, fired independently —
+which was not just slow but unordered: typed fast enough, "ls" could arrive "sl".
+They now go through a single ordered queue that merges each burst into one request.
+And the screen poll re-checks the pane every 130ms right after activity (decaying
+to 450ms when idle) instead of a flat 700ms, so the echo of what you type comes
+back at roughly keystroke speed.
+
+### Unfolded, the open chat or session gets the width
+The list pane narrowed from 348dp to 292dp — it is a picker, not a reading
+surface — so the conversation or terminal alongside it takes the difference.
+
+### Less dead space under the composer
+The entry bubble's bottom padding no longer stacks on top of the system bar inset.
+
 ## 2.16.0 — 2026-07-27
 
 ### Following now locks on

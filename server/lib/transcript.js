@@ -344,4 +344,32 @@ function emptyResult(offset, truncated) {
   };
 }
 
-module.exports = { readTranscript, digestToolInput, workflowName, textOf };
+
+/**
+ * What a session is in the middle of, judged from its transcript tail.
+ *
+ * The transcript only speaks when a block completes, so "in the middle of" means
+ * an unresolved tool: a call whose result has not landed. Freshness-capped
+ * because a cancelled or crashed turn leaves its last call unresolved forever,
+ * and a strip claiming "running npm test" about yesterday would be worse than
+ * nothing. Subagents are counted the same way — their own unresolved tools —
+ * which approximates active agents well, since an agent runs one tool at a time.
+ */
+const ACTIVITY_FRESH_S = 3600;
+
+function liveActivity(events, nowSec) {
+  let tool = null;
+  let subagents = 0;
+  for (let i = events.length - 1; i >= 0; i--) {
+    const e = events[i];
+    if (e.kind !== 'tool' || e.result || e.ok !== undefined && e.ok !== null) continue;
+    if (e.ts && nowSec - e.ts > ACTIVITY_FRESH_S) break;   // older is only older
+    if (e.sidechain) subagents++;
+    else if (!tool) tool = { tool: e.name || 'tool', detail: e.detail || null, sinceTs: e.ts || null };
+  }
+  if (!tool && subagents === 0) return null;
+  return { ...(tool || {}), subagents };
+}
+
+module.exports = { readTranscript, digestToolInput, workflowName, textOf, liveActivity,
+};
