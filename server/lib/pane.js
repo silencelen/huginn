@@ -173,7 +173,46 @@ function parseSpinner(lines) {
       .filter((part) => part && !/esc to interrupt|ctrl\+|shift\+|tab to/i.test(part));
     return [verb, ...extra].join(' \u00B7 ').slice(0, 140);
   }
+  // No ellipsis form on screen. The TUI also uses the spinner glyph for waiting
+  // states with no ellipsis at all — captured live: "\u2727 Waiting for 1 dynamic
+  // workflow to finish" — which is exactly the workflow case, so missing it made
+  // workflows invisible in the status strip.
+  for (let i = lines.length - 1; i >= 0; i--) {
+    const m = GLYPH_STATUS_RE.exec(stripAnsi(lines[i]).trimEnd());
+    if (m && /waiting|running|finishing|spawning|workflow|agent|task/i.test(m[1])) {
+      return m[1].trim().slice(0, 140);
+    }
+  }
   return null;
+}
+
+const GLYPH_STATUS_RE = /^\s*[\u2722\u2733\u273D\u273B\u2736\u2738\u2739\u273A\u00B7\u2219\u2217*+]\s+(\S.*)$/;
+
+// The TUI's own progress furniture, captured live 2026-07-27:
+//   \u25EF andvari-polish-wave3  Wave 3   0/4 agents done \u00B7 7m 39s \u00B7 \u2193 562.4k tokens
+//   \u29C9  audit-board
+//   Running 1 shell command \u00B7 2s\u2026
+const PROGRESS_ROW_RE = /^\s*[\u25EF\u25CB\u25CF\u25D0\u25D1\u25D2\u25D3\u29C9\u25C9\u25CE]\s+(\S.*)$/;
+const RUNNING_ROW_RE = /^\s*(Running \d+ (?:agents?|shells?|shell commands?|tasks?|commands?)\b.*)$/i;
+
+/**
+ * The progress rows the TUI draws besides the spinner: workflow phase lines,
+ * "Running N agents/shells", board markers. These are how Claude Code itself
+ * shows fan-out work, so the phone's status strip shows the same rows rather
+ * than inventing its own vocabulary.
+ */
+function parseStatusExtras(lines, max = 3) {
+  const out = [];
+  for (const raw of lines) {
+    const t = stripAnsi(raw).trimEnd();
+    if (!t.trim() || /Tip:/.test(t)) continue;
+    let m = PROGRESS_ROW_RE.exec(t) || RUNNING_ROW_RE.exec(t);
+    if (!m) continue;
+    const text = m[1].replace(/\s{2,}/g, ' \u00B7 ').trim().slice(0, 120);
+    if (!out.includes(text)) out.push(text);
+    if (out.length >= max) break;
+  }
+  return out;
 }
 
 /**
@@ -302,6 +341,6 @@ function loginPaneState(lines) {
 }
 
 module.exports = {
-  screenHash, stripAnsi, previewLines, detectPrompt, promptFingerprint, parseSpinner,
+  screenHash, stripAnsi, previewLines, detectPrompt, promptFingerprint, parseSpinner, parseStatusExtras,
   extractLoginUrl, parseStatusLine, loginPaneState,
 };
