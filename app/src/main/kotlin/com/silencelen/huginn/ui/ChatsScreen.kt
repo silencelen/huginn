@@ -1,5 +1,6 @@
 package com.silencelen.huginn.ui
 
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -13,6 +14,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Bolt
@@ -37,6 +39,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -53,6 +56,7 @@ fun ChatsScreen(
     chats: List<Chat>,
     loading: Boolean,
     connected: Boolean?,
+    selectedId: String? = null,
     onOpen: (String) -> Unit,
     onNew: (String) -> Unit,
     onDelete: (String) -> Unit,
@@ -78,7 +82,12 @@ fun ChatsScreen(
         } else {
             LazyColumn(Modifier.fillMaxSize(), contentPadding = androidx.compose.foundation.layout.PaddingValues(bottom = 88.dp)) {
                 items(chats, key = { it.id }) { chat ->
-                    ChatRow(chat, onOpen = { onOpen(chat.id) }, onDelete = { onDelete(chat.id) })
+                    ChatRow(
+                        chat,
+                        selected = chat.id == selectedId,
+                        onOpen = { onOpen(chat.id) },
+                        onDelete = { onDelete(chat.id) },
+                    )
                     HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
                 }
             }
@@ -123,15 +132,37 @@ fun ChatsScreen(
     }
 }
 
+/**
+ * One chat's state, as a colour a glance can read: working (pulsing), waiting
+ * with queued messages (amber), or settled (quiet). The word next to the dot
+ * carries the same fact for anyone who does not carry the colour code around.
+ */
 @Composable
-private fun ChatRow(chat: Chat, onOpen: () -> Unit, onDelete: () -> Unit) {
+private fun ChatRow(chat: Chat, selected: Boolean, onOpen: () -> Unit, onDelete: () -> Unit) {
     var menu by remember { mutableStateOf(false) }
     Row(
-        Modifier.fillMaxWidth().clickable(onClick = onOpen).padding(start = 16.dp, end = 4.dp, top = 12.dp, bottom = 12.dp),
+        Modifier
+            .fillMaxWidth()
+            .then(
+                if (selected) Modifier.background(MaterialTheme.colorScheme.surfaceContainerHigh)
+                else Modifier
+            )
+            .clickable(onClick = onOpen)
+            .padding(start = 16.dp, end = 4.dp, top = 12.dp, bottom = 12.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Column(Modifier.weight(1f)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
+                if (chat.running) {
+                    PulsingDot(MaterialTheme.colorScheme.primary)
+                    Spacer(Modifier.width(7.dp))
+                } else if (chat.pending > 0) {
+                    Box(
+                        Modifier.size(8.dp).clip(CircleShape)
+                            .background(MaterialTheme.colorScheme.tertiary)
+                    )
+                    Spacer(Modifier.width(7.dp))
+                }
                 Text(
                     chat.title ?: "Untitled",
                     style = MaterialTheme.typography.titleSmall,
@@ -161,17 +192,28 @@ private fun ChatRow(chat: Chat, onOpen: () -> Unit, onDelete: () -> Unit) {
         }
         Spacer(Modifier.width(8.dp))
         Column(horizontalAlignment = Alignment.End) {
-            if (chat.running) {
-                CircularProgressIndicator(modifier = Modifier.size(14.dp), strokeWidth = 2.dp)
-                if (chat.pending > 0) {
+            when {
+                chat.running -> {
                     Text(
-                        "+${chat.pending} queued",
+                        "working",
                         style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        fontWeight = FontWeight.SemiBold,
+                        color = MaterialTheme.colorScheme.primary,
                     )
+                    if (chat.pending > 0) {
+                        Text(
+                            "+${chat.pending} queued",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.tertiary,
+                        )
+                    }
                 }
-            } else {
-                Text(
+                chat.pending > 0 -> Text(
+                    "+${chat.pending} queued",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.tertiary,
+                )
+                else -> Text(
                     relTime(chat.updatedAt),
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,

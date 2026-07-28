@@ -1,5 +1,59 @@
 # Huginn changelog
 
+## 2.16.0 — 2026-07-27
+
+### Following now locks on
+Auto-scroll was still failing in sessions: the "new messages" pill appeared where a
+scroll should have happened. The cause was structural — the app asked "are they at
+the bottom?" at the moment content arrived, but by then the new content was already
+laid out, so a reader who WAS at the bottom measured as scrolled-up. Following is now
+a **latch**: reaching the bottom by any route locks it on, and only your own finger
+dragging away breaks it. Scroll back down and it re-engages. Programmatic scrolling
+can never be mistaken for you leaving, because it never involves a finger.
+
+### Type straight into the terminal
+The Screen view has a **Live** toggle on the key bar: the keyboard types into the
+tmux pane keystroke by keystroke — backspace, Enter, pastes — instead of composing
+in a bubble below. Arrow keys, Tab and Esc from a hardware keyboard go through too.
+The compose bubble remains the default, because premeditated input is still most
+input.
+
+### Voice
+Every composer — chats, session conversation, terminal — has a mic. It uses the
+system speech dialog and appends what you said to the draft, so dictating a prompt
+while walking works the way it does in any messaging app.
+
+### Subagents and workflows are now visible units
+A fan-out used to drown the conversation in interleaved subagent chatter with no way
+to see any single delegated task as a whole. Consecutive subagent activity now folds
+into one **Subagent** card: closed, it shows the task (in the parent's own words) and
+a step count; open, the full play-by-play — thinking, tools, results — rendered like
+the main thread. Workflow tool calls keep their named cards. Both conversation
+surfaces, sessions and chats, share the rendering.
+
+### Unfolded, the app becomes two panes
+On a Z Fold's inner screen (or any window ≥700dp) the bottom bar becomes a rail and
+the list screens become list-plus-detail: chats on the left, the open chat on the
+right, same for sessions, with the selected row highlighted. Status and Settings keep
+a readable measure instead of stretching. Folded, everything is exactly as before.
+
+### Lock the app
+Settings → Security can require fingerprint, face or the device PIN to open the app
+after it has been away for a minute. Huginn is a hand on the homelab; an unlocked
+phone handed to someone should not include it. Quick hops to another app and back do
+not re-prompt. The toggle is disabled (and says why) on a phone with no screen lock.
+
+### Fixed: "Fit anyway" kept coming back
+Forcing a resize worked, and then the banner returned on the next poll anyway —
+huginn kept reporting "blocked" merely because a client was attached, even though the
+pane already fit. Blocked now means a resize is actually NEEDED and refused, so the
+banner stays gone until the geometry genuinely diverges again.
+
+### Chats wear their state
+Working chats pulse and say "working"; queued messages show amber with a count; idle
+chats show when they last spoke. The settings gear is gone from inside chats and
+sessions — that slot is reserved for per-session controls to come.
+
 ## 2.15.0 — 2026-07-27
 
 ### Answer a session from the notification

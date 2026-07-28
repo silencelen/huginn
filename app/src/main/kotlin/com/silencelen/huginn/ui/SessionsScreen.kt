@@ -1,5 +1,6 @@
 package com.silencelen.huginn.ui
 
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -52,6 +53,7 @@ import com.silencelen.huginn.data.Session
 @Composable
 fun SessionsScreen(
     sessions: List<Session>,
+    selectedName: String? = null,
     onOpen: (String) -> Unit,
     onCreate: (String) -> Unit,
     onKill: (String) -> Unit,
@@ -76,6 +78,7 @@ fun SessionsScreen(
                 items(sessions, key = { it.name }) { s ->
                     SessionRow(
                         s,
+                        selected = s.name == selectedName,
                         onOpen = { onOpen(s.name) },
                         onKill = { confirmKill = s.name },
                         onRename = { renaming = s.name; renameTo = s.name },
@@ -160,6 +163,7 @@ fun SessionsScreen(
 @Composable
 private fun SessionRow(
     s: Session,
+    selected: Boolean,
     onOpen: () -> Unit,
     onKill: () -> Unit,
     onRename: () -> Unit,
@@ -168,6 +172,10 @@ private fun SessionRow(
     Row(
         Modifier
             .fillMaxWidth()
+            .then(
+                if (selected) Modifier.background(MaterialTheme.colorScheme.surfaceContainerHigh)
+                else Modifier
+            )
             .clickable(onClick = onOpen)
             .padding(start = 16.dp, end = 4.dp, top = 12.dp, bottom = 12.dp),
         verticalAlignment = Alignment.Top,

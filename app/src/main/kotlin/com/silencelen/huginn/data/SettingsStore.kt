@@ -36,6 +36,7 @@ class SettingsStore(private val context: Context) {
         private val DRAFTS = stringPreferencesKey("drafts")
         private val CLIENT_ID = stringPreferencesKey("client_id")
         private val CHAT_RUNS = stringPreferencesKey("chat_runs")
+        private val APP_LOCK = booleanPreferencesKey("app_lock")
         private val PUSH_TOKEN = stringPreferencesKey("push_token")
         private val PUSH_TOKEN_AT = longPreferencesKey("push_token_at")
         private val SEEDED = booleanPreferencesKey("watch_seeded")
@@ -107,6 +108,13 @@ class SettingsStore(private val context: Context) {
 
     suspend fun notePushToken(token: String, atMs: Long) {
         context.dataStore.edit { it[PUSH_TOKEN] = token; it[PUSH_TOKEN_AT] = atMs }
+    }
+
+    /** Require the device credential to open the app. */
+    val appLock: Flow<Boolean> = context.dataStore.data.map { it[APP_LOCK] ?: false }
+
+    suspend fun setAppLock(value: Boolean) {
+        context.dataStore.edit { it[APP_LOCK] = value }
     }
 
     /** Delivery health, so "is this working?" is answerable without guessing. */
