@@ -51,6 +51,38 @@ object LiveInput {
         val isNothing: Boolean get() = backspaces == 0 && insert.isEmpty() && !enter
     }
 
+    /** One thing to deliver to the pane, in order. */
+    sealed interface Op {
+        data class Text(val text: String) : Op
+        data class Key(val keys: List<String>) : Op
+    }
+
+    /**
+     * Coalesces queued keystrokes into the fewest requests that preserve order.
+     *
+     * This queue exists for two reasons and the second is the important one.
+     * Fewer round trips make typing feel faster — a burst of six characters
+     * becomes one request. But the original path launched an independent
+     * coroutine per keystroke, and independent requests are not ordered: type
+     * "ls" fast enough and the pane could receive "sl". A single drainer sending
+     * merged ops sequentially makes ordering a property of the design instead of
+     * a property of network luck.
+     */
+    fun merge(ops: List<Op>): List<Op> {
+        val out = ArrayList<Op>(ops.size)
+        for (op in ops) {
+            val last = out.lastOrNull()
+            if (op is Op.Text && last is Op.Text) {
+                out[out.size - 1] = Op.Text(last.text + op.text)
+            } else if (op is Op.Key && last is Op.Key) {
+                out[out.size - 1] = Op.Key(last.keys + op.keys)
+            } else {
+                out.add(op)
+            }
+        }
+        return out
+    }
+
     /**
      * Diffs the field against the sentinel it was reset to.
      *

@@ -144,6 +144,39 @@ function detectPrompt(lines) {
 }
 
 /**
+ * The live "what is Claude doing right now" line, read off the pane.
+ *
+ * While a turn runs, Claude Code renders a spinner line like
+ *
+ *     ✽ Gallivanting… (3m 15s · ↓ 10.0k tokens)
+ *
+ * (captured verbatim from a live pane) and that line is the ONLY place the
+ * moment-to-moment status exists: the transcript stays silent until whole blocks
+ * complete, which is exactly why the conversation view felt dead right after
+ * sending a message. The glyph cycles and the verb is whimsical-random, so the
+ * match keys on the shape — glyph, a word ending in an ellipsis, an optional
+ * parenthetical — rather than any word list.
+ *
+ * Keyboard hints inside the parenthetical ("esc to interrupt", "ctrl+t …") are
+ * dropped: they are instructions for the terminal the reader is not at.
+ */
+const LIVE_STATUS_RE = /^\s*[\u2722\u2733\u273D\u273B\u2736\u2738\u2739\u273A\u00B7\u2219\u2217*+]\s+(\S[^(]*?\u2026)\s*(?:\((.*)\))?\s*$/;
+
+function parseSpinner(lines) {
+  for (let i = lines.length - 1; i >= 0; i--) {
+    const m = LIVE_STATUS_RE.exec(stripAnsi(lines[i]).trimEnd());
+    if (!m) continue;
+    const verb = m[1].trim();
+    const extra = (m[2] || '')
+      .split('\u00B7')
+      .map((part) => part.trim())
+      .filter((part) => part && !/esc to interrupt|ctrl\+|shift\+|tab to/i.test(part));
+    return [verb, ...extra].join(' \u00B7 ').slice(0, 140);
+  }
+  return null;
+}
+
+/**
  * The identity of a question, so an answer can be matched to what it answers.
  *
  * This exists to close a race with teeth. An alert can offer "1) Yes  2) No" on a
@@ -269,6 +302,6 @@ function loginPaneState(lines) {
 }
 
 module.exports = {
-  screenHash, stripAnsi, previewLines, detectPrompt, promptFingerprint,
+  screenHash, stripAnsi, previewLines, detectPrompt, promptFingerprint, parseSpinner,
   extractLoginUrl, parseStatusLine, loginPaneState,
 };

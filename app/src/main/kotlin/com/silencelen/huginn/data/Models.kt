@@ -100,6 +100,8 @@ data class Screen(
     /** Set when a long poll expired with no change; `lines` is then empty. */
     val unchanged: Boolean = false,
     val prompt: PanePrompt? = null,
+    /** The live status line ("Gallivanting… · 3m 15s"), the only moment-to-moment signal. */
+    val spinner: String? = null,
     /** Model/mode as the pane reports them right now (the transcript lags a turn). */
     val liveModel: String? = null,
     val liveMode: String? = null,
@@ -148,6 +150,17 @@ data class TranscriptPage(
     val running: Boolean = false,
     val mode: String? = null,
     val pending: Int = 0,
+    /** What the transcript tail says is in flight; null when nothing is. */
+    val activity: Activity? = null,
+)
+
+/** In-flight work: an unresolved tool call, and how many subagents are busy. */
+@Serializable
+data class Activity(
+    val tool: String? = null,
+    val detail: String? = null,
+    val sinceTs: Long? = null,
+    val subagents: Int = 0,
 )
 
 @Serializable
