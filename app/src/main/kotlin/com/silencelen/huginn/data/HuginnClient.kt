@@ -128,9 +128,15 @@ class HuginnClient(
 
     suspend fun account(): Account = decode(call(builder("/v1/account").get().build()))
 
-    /** Starts an interactive sign-in in a tmux session; returns its name. */
-    suspend fun startLogin(): LoginSession =
-        decode(call(builder("/v1/account/login").post(ByteArray(0).toRequestBody(null)).build()))
+    /**
+     * Starts a sign-in. Naming the account aims the authorize page at it, which
+     * matters because that page otherwise uses whatever session the browser is
+     * already carrying.
+     */
+    suspend fun startLogin(email: String? = null): LoginSession {
+        val body = buildJsonObject { if (!email.isNullOrBlank()) put("email", JsonPrimitive(email.trim())) }
+        return decode(call(builder("/v1/account/login").post(encode(body)).build(), Client.POLL))
+    }
 
     suspend fun logout(): Account =
         decode(call(builder("/v1/account/logout").post(jsonBody("confirm" to "logout")).build()))
