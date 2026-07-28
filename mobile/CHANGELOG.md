@@ -1,5 +1,14 @@
 # Huginn changelog
 
+## 2.40.0 — 2026-07-28
+
+### Photos in sessions, not just chats
+The attach button now lives in the session conversation composer too — same
+chip, same states, same photo-alone-is-a-message rule. Screenshot an error and
+send it to the session that is working on the problem; Claude in that session
+reads it like any file. One shared implementation for both composers, so
+"works in chats but not sessions" cannot happen by drift.
+
 ## 2.39.2 — 2026-07-28
 
 ### Sharing into a cold-started huginn works
