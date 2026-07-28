@@ -25,7 +25,8 @@ const path = require('node:path');
 const os = require('node:os');
 const { execFile, spawn } = require('node:child_process');
 const {
-  screenHash, previewLines, detectPrompt, promptFingerprint, parseSpinner, parseStatusExtras,
+  screenHash, previewLines, detectPrompt, promptFingerprint, multiToggleDigits,
+  parseSpinner, parseStatusExtras,
   extractLoginUrl, parseStatusLine, loginPaneState,
 } = require('./lib/pane');
 const { readTranscript, liveActivity } = require('./lib/transcript');
@@ -44,7 +45,7 @@ const { decideSwitch, worstLimit } = require('./lib/autoswitch');
 const pushLib = require('./lib/pushtokens');
 const { trySender } = require('./lib/fcm');
 
-const VERSION = '2.23.0';
+const VERSION = '2.24.0';
 const PORT = Number(process.env.HUGINN_APPD_PORT || 8787);
 const DATA_DIR = process.env.HUGINN_APPD_DATA || '/var/lib/huginn-appd';
 const TOKEN_FILE = process.env.HUGINN_APPD_TOKEN_FILE || '/etc/huginn-appd/token';
@@ -1423,7 +1424,9 @@ async function alertTick() {
     const prompt = screen ? detectPrompt(screen.lines) : null;
     if (!prompt) continue;                 // waiting on something unparsed; keep the plain text
     a.question = prompt.question || '';
-    a.options = prompt.options.map((o) => ({ number: o.number, label: o.label }));
+    // A notification button is one tap; a multi-select answer is a SET. Buttons
+    // are only offered when one tap can honestly answer.
+    a.options = prompt.multiSelect ? [] : prompt.options.map((o) => ({ number: o.number, label: o.label }));
     a.fingerprint = promptFingerprint(prompt);
     if (a.question) a.text = a.question;
   }
@@ -2165,8 +2168,13 @@ const server = http.createServer(async (req, res) => {
       if (!(await sessionExists(name))) return sendErr(res, 404, 'no such session');
       const body = JSON.parse(await readBody(req) || '{}');
       const option = Number(body.option);
-      if (!Number.isInteger(option) || option < 1 || option > 20) {
+      const isMulti = Array.isArray(body.options);
+      if (!isMulti && (!Number.isInteger(option) || option < 1 || option > 20)) {
         return sendErr(res, 400, 'option must be a small positive integer');
+      }
+      if (isMulti && (body.options.length > 20 ||
+        !body.options.every((n) => Number.isInteger(Number(n)) && n >= 1 && n <= 20))) {
+        return sendErr(res, 400, 'options must be small positive integers');
       }
 
       const screen = await captureScreen(name);
@@ -2185,6 +2193,44 @@ const server = http.createServer(async (req, res) => {
           prompt, fingerprint: live,
         });
       }
+      // A SET of options: the multi-select dialog. Digits toggle, Right opens
+      // the review tab, Enter submits — the whole sequence verified live before
+      // this was written. The digits are a DIFF against the current checkbox
+      // state, because the owner may have half-answered in tmux already and
+      // blindly pressing every desired digit would un-check those.
+      if (Array.isArray(body.options)) {
+        if (!prompt.multiSelect) {
+          return sendJson(res, 409, {
+            ok: false, reason: 'changed',
+            error: 'this question takes a single answer', prompt, fingerprint: live,
+          });
+        }
+        const desired = body.options.map(Number);
+        const valid = new Set(prompt.options
+          .filter((o) => typeof o.checked === 'boolean').map((o) => o.number));
+        if (!desired.every((n) => Number.isInteger(n) && valid.has(n))) {
+          return sendJson(res, 409, {
+            ok: false, reason: 'changed',
+            error: 'an option is not offered any more', prompt, fingerprint: live,
+          });
+        }
+        const digits = multiToggleDigits(prompt.options, desired);
+        for (const d of digits) {
+          const t = await run('tmux', ['send-keys', '-t', `=${name}:`, '-l', '--', d]);
+          if (t.err) return sendErr(res, 500, `tmux: ${t.stderr.trim()}`);
+          await sleep(120);                        // let the TUI apply each toggle
+        }
+        const right = await run('tmux', ['send-keys', '-t', `=${name}:`, 'Right']);
+        if (right.err) return sendErr(res, 500, `tmux: ${right.stderr.trim()}`);
+        await sleep(250);                          // the review tab needs a beat
+        const enter2 = await run('tmux', ['send-keys', '-t', `=${name}:`, 'Enter']);
+        if (enter2.err) return sendErr(res, 500, `tmux: ${enter2.stderr.trim()}`);
+        const labels = prompt.options
+          .filter((o) => desired.includes(o.number)).map((o) => o.label);
+        log(`answer: ${name} <- multi [${desired.join(',')}] (${labels.join(', ').slice(0, 80)})`);
+        return sendJson(res, 200, { ok: true, options: desired, labels });
+      }
+
       const chosen = prompt.options.find((o) => o.number === option);
       if (!chosen) {
         return sendJson(res, 409, {
