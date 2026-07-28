@@ -1,5 +1,40 @@
 # Huginn changelog
 
+## 2.15.0 — 2026-07-27
+
+### Answer a session from the notification
+A "needs you" alert used to say only that — something was waiting, with no hint what,
+so the only possible response was to unlock the phone, find the app, find the session
+and read it there. The question is right in the pane and the app already turns it into
+buttons once you are inside; now it travels with the alert.
+
+**The notification carries the question and its options as tappable buttons.** Tap
+"2. No, tell Claude what to do differently" on the lock screen and that is what the
+session receives. Both paths do it — a push, and the background check that finds a
+transition on its own — so what you see does not depend on which noticed first.
+
+### An answer cannot land on the wrong question
+Worth spelling out, because this is where the feature could have done real damage. By
+the time you tap, the session may have been answered in tmux, moved to a different
+question, or gone back to an idle composer. Sending the digit regardless would type it
+into whatever is there now, and in a Claude Code pane that is not a harmless
+keystroke — it could accept a **different** prompt you never saw.
+
+So each answer carries a fingerprint of the question it was offered for, and **huginn
+refuses it if the pane no longer shows that same question.** The check happens on the
+host in the same request, because nothing on the phone can hold the pane still between
+reading it and typing into it. Moving the selection highlight does *not* invalidate an
+answer — that changes nothing about what is being asked.
+
+A tap always tells you what happened: the answer that was sent, or why it was refused.
+An action button that silently does nothing is worse than no button.
+
+### Also
+Telegram now reports the question too, as a statement — "Asked: …" with the options
+listed — so the fallback channel is as informative as the push. Two sessions waiting at
+once no longer overwrite each other's notification, which previously meant the first
+one's buttons silently vanished.
+
 ## 2.14.1 — 2026-07-27 (server-side only)
 
 ### Fixed: a push that worked left no trace

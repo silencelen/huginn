@@ -147,7 +147,7 @@ class HeartbeatReceiver : BroadcastReceiver() {
             // something readable the next morning.
             val watch = client.watch(knownHash = null, waitMs = 0)
             settings.noteContact(System.currentTimeMillis())
-            WatchCycle.apply(app, settings, watch)
+            WatchCycle.apply(app, settings, watch, client)
             true
         } catch (e: Exception) {
             // Off the tailnet, host rebooting, radio not up yet: all ordinary at

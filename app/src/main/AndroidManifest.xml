@@ -76,6 +76,13 @@
             </intent-filter>
         </service>
 
+        <!-- Answers a session's question from the notification's action buttons. Not
+             exported: only this app's own notifications trigger it. -->
+        <receiver
+            android:name=".notify.AnswerReceiver"
+            android:exported="false"
+            android:enabled="true" />
+
         <!-- Woken by AlarmManager while the phone is idle. Not exported: it is
              triggered only by an alarm this app scheduled against its own component. -->
         <receiver

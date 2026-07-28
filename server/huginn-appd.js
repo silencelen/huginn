@@ -25,7 +25,8 @@ const path = require('node:path');
 const os = require('node:os');
 const { execFile, spawn } = require('node:child_process');
 const {
-  screenHash, previewLines, detectPrompt, extractLoginUrl, parseStatusLine, loginPaneState,
+  screenHash, previewLines, detectPrompt, promptFingerprint,
+  extractLoginUrl, parseStatusLine, loginPaneState,
 } = require('./lib/pane');
 const { readTranscript } = require('./lib/transcript');
 const { summarizeUsage } = require('./lib/usage');
@@ -34,12 +35,12 @@ const { AccountStore, fingerprint } = require('./lib/accounts');
 const { formatModel, discoverModels, parseModelId } = require('./lib/models');
 const { pushPending, takePending, clearPending, queuedEvents } = require('./lib/chatqueue');
 const { digest } = require('./lib/watch');
-const { decideAlerts, routeAlerts, pruneSent } = require('./lib/alerts');
+const { decideAlerts, routeAlerts, telegramText, pruneSent } = require('./lib/alerts');
 const clientsLib = require('./lib/clients');
 const pushLib = require('./lib/pushtokens');
 const { trySender } = require('./lib/fcm');
 
-const VERSION = '2.14.1';
+const VERSION = '2.15.0';
 const PORT = Number(process.env.HUGINN_APPD_PORT || 8787);
 const DATA_DIR = process.env.HUGINN_APPD_DATA || '/var/lib/huginn-appd';
 const TOKEN_FILE = process.env.HUGINN_APPD_TOKEN_FILE || '/etc/huginn-appd/token';
@@ -406,7 +407,14 @@ async function captureScreen(name, { cols = null, rows = null, history = 0, forc
     lines,
     scrollback,
     hash: screenHash(lines.join('\n') + `|${cx},${cy}`),
-    prompt: detectPrompt(lines),
+    // The fingerprint travels WITH the prompt so the app never computes it itself.
+    // One implementation of "which question is this" means an answer offered on a
+    // lock screen and the check that validates it can never disagree about the
+    // formatting; two implementations would eventually differ over a space.
+    prompt: (() => {
+      const pr = detectPrompt(lines);
+      return pr ? { ...pr, fingerprint: promptFingerprint(pr) } : null;
+    })(),
     // The pane is the only CURRENT source for these; the transcript lags a turn.
     ...(() => {
       const st = parseStatusLine(lines);
@@ -1214,6 +1222,27 @@ async function alertTick() {
 
   const { alerts, sentUpdates } = decideAlerts(st.prev, observation, st.sent, now);
 
+  // "A session needs you" is not much use on a lock screen — it says something is
+  // wrong without saying what, so the only possible response is to go and look.
+  // The question itself is right there in the pane, and the app already turns it
+  // into buttons once you are inside; carrying it into the alert is what lets it be
+  // answered without opening anything.
+  //
+  // Enriched HERE rather than inside the digest, deliberately. The digest runs every
+  // three seconds for every watching phone, and capturing panes at that rate to
+  // collect text that changes only on a transition would be pure waste. This runs
+  // once, when something actually happened.
+  for (const a of alerts) {
+    if (a.kind !== 'session_attention') continue;
+    const screen = await captureScreen(a.subject);
+    const prompt = screen ? detectPrompt(screen.lines) : null;
+    if (!prompt) continue;                 // waiting on something unparsed; keep the plain text
+    a.question = prompt.question || '';
+    a.options = prompt.options.map((o) => ({ number: o.number, label: o.label }));
+    a.fingerprint = promptFingerprint(prompt);
+    if (a.question) a.text = a.question;
+  }
+
   // Push first, because it is the route that actually reaches a sleeping phone, and
   // because its outcome is what decides whether Telegram is needed. FCM accepting a
   // message is far better evidence than "this phone checked in recently" — so when
@@ -1237,7 +1266,7 @@ async function alertTick() {
     delete sentUpdates[a.key];
   }
   for (const a of deliver) {
-    const ok = await deliverTelegram(`🔔 ${a.title}\n${a.text}`);
+    const ok = await deliverTelegram(telegramText(a));
     if (ok) {
       st.delivered = (st.delivered || 0) + 1;
       st.lastAt = Math.floor(now / 1000);
@@ -1834,6 +1863,60 @@ const server = http.createServer(async (req, res) => {
         }
       }
       return sendJson(res, 200, { ok: true });
+    }
+
+    // --- answering a question from a notification, without opening the app
+    //
+    // Check-and-act, on the host, in one request. The phone cannot do this safely:
+    // between reading the pane and sending the digit it would have to trust that
+    // nothing changed, and the whole point of this endpoint is that something might
+    // have. Answered in tmux meanwhile, moved on to a different question, back to an
+    // idle composer — in every one of those cases a bare digit lands somewhere it was
+    // never meant to, and in a Claude Code pane that can accept a prompt the owner
+    // never saw. So the fingerprint of the question being answered comes with the
+    // answer, and a mismatch is refused rather than delivered hopefully.
+    if ((m = p.match(/^\/v1\/sessions\/([a-z0-9_]{1,50})\/answer$/)) && req.method === 'POST') {
+      const name = m[1];
+      if (!(await sessionExists(name))) return sendErr(res, 404, 'no such session');
+      const body = JSON.parse(await readBody(req) || '{}');
+      const option = Number(body.option);
+      if (!Number.isInteger(option) || option < 1 || option > 20) {
+        return sendErr(res, 400, 'option must be a small positive integer');
+      }
+
+      const screen = await captureScreen(name);
+      const prompt = screen ? detectPrompt(screen.lines) : null;
+      if (!prompt) {
+        return sendJson(res, 409, {
+          ok: false, reason: 'gone',
+          error: 'that question is no longer on screen',
+        });
+      }
+      const live = promptFingerprint(prompt);
+      if (body.fingerprint && body.fingerprint !== live) {
+        return sendJson(res, 409, {
+          ok: false, reason: 'changed',
+          error: 'the session is asking something else now',
+          prompt, fingerprint: live,
+        });
+      }
+      const chosen = prompt.options.find((o) => o.number === option);
+      if (!chosen) {
+        return sendJson(res, 409, {
+          ok: false, reason: 'changed',
+          error: `option ${option} is not offered any more`,
+          prompt, fingerprint: live,
+        });
+      }
+
+      // The digit and Enter separately, literal digit first, so a multi-digit option
+      // cannot be split across a submit.
+      const typed = await run('tmux', ['send-keys', '-t', `=${name}:`, '-l', '--', String(option)]);
+      if (typed.err) return sendErr(res, 500, `tmux: ${typed.stderr.trim()}`);
+      const enter = await run('tmux', ['send-keys', '-t', `=${name}:`, 'Enter']);
+      if (enter.err) return sendErr(res, 500, `tmux: ${enter.stderr.trim()}`);
+      log(`answer: ${name} <- ${option} (${chosen.label.slice(0, 60)})`);
+      return sendJson(res, 200, { ok: true, option, label: chosen.label });
     }
 
     // --- chats

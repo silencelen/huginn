@@ -69,7 +69,7 @@ class SessionWatchWorker(
         // overlapping mechanisms safe: the comparison baseline is persisted, so
         // whichever of them notices a transition first consumes it, and the others
         // find nothing left to announce.
-        WatchCycle.apply(context, settings, watch)
+        WatchCycle.apply(context, settings, watch, client)
         return Result.success()
     }
 
@@ -104,12 +104,45 @@ class SessionWatchWorker(
             return granted && NotificationManagerCompat.from(context).areNotificationsEnabled()
         }
 
+        /** One tappable answer to a session's question. */
+        data class AnswerOption(val number: Int, val label: String)
+
+        /**
+         * Android renders at most three action buttons, so a longer question keeps its
+         * first two and is finished in the app. Two rather than three, so there is
+         * always room for the tap that opens the session — a four-option prompt whose
+         * buttons were all answers would offer no way to see the rest.
+         */
+        private const val MAX_ACTIONS = 3
+
+        /**
+         * A stable slot per session, so two sessions waiting at once do not overwrite
+         * each other's question — which, with a single shared id, meant the first was
+         * silently replaced and its answer buttons vanished.
+         *
+         * Nudged off the two fixed ids rather than assumed distinct from them: a
+         * collision with the ongoing foreground notification would replace the thing
+         * Android requires the watch service to keep showing.
+         */
+        fun notificationIdFor(session: String?): Int {
+            if (session == null) return NOTIFY_ID
+            val id = session.hashCode()
+            return if (id == NOTIFY_ID || id == 4712) id + 7 else id
+        }
+
         /**
          * Posts a notification, creating the channel first. Shared by the poller
          * and by the test button in Settings, so what you verify is the same path
          * that fires for real.
          */
-        fun post(context: Context, title: String, text: String, session: String?) {
+        fun post(
+            context: Context,
+            title: String,
+            text: String,
+            session: String?,
+            answers: List<AnswerOption> = emptyList(),
+            fingerprint: String? = null,
+        ) {
             if (!canNotify(context)) return
             val nm = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
             nm.createNotificationChannel(
@@ -125,15 +158,50 @@ class SessionWatchWorker(
                 context, 0, intent,
                 PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
             )
-            val n = NotificationCompat.Builder(context, CHANNEL)
+            val notificationId = notificationIdFor(session)
+            val builder = NotificationCompat.Builder(context, CHANNEL)
                 .setSmallIcon(R.drawable.ic_stat_huginn)
                 .setContentTitle(title)
                 .setContentText(text)
+                // The question is often longer than one line, and truncating it to
+                // "Do you want to create the fi…" defeats the purpose of sending it.
+                .setStyle(NotificationCompat.BigTextStyle().bigText(text))
                 .setAutoCancel(true)
                 .setContentIntent(pending)
                 .setPriority(NotificationCompat.PRIORITY_DEFAULT)
-                .build()
-            NotificationManagerCompat.from(context).notify(NOTIFY_ID, n)
+
+            if (session != null) {
+                for (a in answers.take(MAX_ACTIONS)) {
+                    val answerIntent = Intent(context, AnswerReceiver::class.java).apply {
+                        action = AnswerReceiver.ACTION
+                        putExtra(AnswerReceiver.EXTRA_SESSION, session)
+                        putExtra(AnswerReceiver.EXTRA_OPTION, a.number)
+                        putExtra(AnswerReceiver.EXTRA_LABEL, a.label)
+                        putExtra(AnswerReceiver.EXTRA_FINGERPRINT, fingerprint.orEmpty())
+                        putExtra(AnswerReceiver.EXTRA_NOTIFICATION_ID, notificationId)
+                    }
+                    builder.addAction(
+                        0,
+                        // Numbered as the pane numbers them, so what you tap on the lock
+                        // screen matches what you would have picked looking at the session.
+                        "${a.number}. ${a.label.take(28)}",
+                        PendingIntent.getBroadcast(
+                            context,
+                            // A DISTINCT request code per option. Sharing one would make
+                            // FLAG_UPDATE_CURRENT hand every button the same intent, so
+                            // all three would answer whichever was built last — a bug
+                            // that looks like the wrong option being chosen at random.
+                            requestCodeFor(session, a.number),
+                            answerIntent,
+                            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+                        ),
+                    )
+                }
+            }
+            NotificationManagerCompat.from(context).notify(notificationId, builder.build())
         }
+
+        private fun requestCodeFor(session: String, option: Int): Int =
+            session.hashCode() * 31 + option
     }
 }
