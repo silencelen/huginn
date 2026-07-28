@@ -82,6 +82,7 @@ fun TerminalScreen(
     onSendKeys: (List<String>) -> Unit,
     onLive: (LiveInput.Op) -> Unit,
     onAnswerPrompt: (Int) -> Unit,
+    onAnswerMulti: (List<Int>) -> Unit,
     onForceResize: () -> Unit,
 ) {
     val density = LocalDensity.current
@@ -181,7 +182,7 @@ fun TerminalScreen(
         // phone win over a terminal: answering "1/2/3" without hunting for digits
         // on a soft keyboard while the TUI redraws under your thumb.
         screen?.prompt?.let { prompt ->
-            PromptCard(prompt.question, prompt.options.map { it.number to it.label }, prompt.options.firstOrNull { it.selected }?.number, onAnswerPrompt)
+            PromptCard(prompt, onAnswerPrompt, onAnswerMulti)
         }
 
         KeyRow(onSendKeys, liveTyping, onToggleLive = { liveTyping = !liveTyping })
@@ -340,37 +341,83 @@ private fun AttachedBanner(clients: Int, onForce: () -> Unit) {
 
 @Composable
 fun PromptCard(
-    question: String,
-    options: List<Pair<Int, String>>,
-    selected: Int?,
+    prompt: com.silencelen.huginn.data.PanePrompt,
     onAnswer: (Int) -> Unit,
+    onAnswerMulti: (List<Int>) -> Unit,
 ) {
+    // Local checkbox state, seeded from what the dialog already shows — the
+    // question may have been half-answered in tmux, and starting from blank
+    // would silently discard those choices. The host receives the full desired
+    // set and diffs, so both sides agree about what "these ones" means.
+    val chosen = remember(prompt.question, prompt.options.size) {
+        androidx.compose.runtime.mutableStateListOf<Int>().apply {
+            prompt.options.filter { it.checked == true }.forEach { add(it.number) }
+        }
+    }
     Surface(
         color = MaterialTheme.colorScheme.surfaceContainerHigh,
         modifier = Modifier.fillMaxWidth(),
     ) {
         Column(Modifier.padding(horizontal = 12.dp, vertical = 10.dp)) {
             Text(
-                question.ifBlank { "Claude is asking" },
+                prompt.question.ifBlank { "Claude is asking" },
                 style = MaterialTheme.typography.titleSmall,
                 fontWeight = FontWeight.SemiBold,
             )
             Spacer(Modifier.size(8.dp))
             Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                options.forEach { (n, label) ->
+                prompt.options.forEach { o ->
+                    if (prompt.multiSelect && o.checked != null) {
+                        // A checkbox row: toggling is local; nothing reaches the
+                        // pane until Answer, so half-formed sets are never typed.
+                        val on = chosen.contains(o.number)
+                        Surface(
+                            onClick = { if (on) chosen.remove(o.number) else chosen.add(o.number) },
+                            shape = RoundedCornerShape(10.dp),
+                            color = if (on) MaterialTheme.colorScheme.secondaryContainer
+                            else MaterialTheme.colorScheme.surface,
+                            modifier = Modifier.fillMaxWidth(),
+                        ) {
+                            Row(
+                                Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                androidx.compose.material3.Checkbox(
+                                    checked = on,
+                                    onCheckedChange = { if (on) chosen.remove(o.number) else chosen.add(o.number) },
+                                    modifier = Modifier.size(20.dp),
+                                )
+                                Spacer(Modifier.width(10.dp))
+                                Text(o.label, style = MaterialTheme.typography.bodyMedium)
+                            }
+                        }
+                    } else {
+                        Button(
+                            onClick = { onAnswer(o.number) },
+                            modifier = Modifier.fillMaxWidth(),
+                            shape = RoundedCornerShape(10.dp),
+                            colors = if (o.selected && !prompt.multiSelect) ButtonDefaults.buttonColors()
+                            else ButtonDefaults.outlinedButtonColors(
+                                contentColor = MaterialTheme.colorScheme.onSurface,
+                            ),
+                        ) {
+                            Text(
+                                "${o.number}.  ${o.label}",
+                                style = MaterialTheme.typography.bodyMedium,
+                                modifier = Modifier.fillMaxWidth(),
+                            )
+                        }
+                    }
+                }
+                if (prompt.multiSelect) {
                     Button(
-                        onClick = { onAnswer(n) },
+                        onClick = { onAnswerMulti(chosen.toList().sorted()) },
                         modifier = Modifier.fillMaxWidth(),
                         shape = RoundedCornerShape(10.dp),
-                        colors = if (n == selected) ButtonDefaults.buttonColors()
-                        else ButtonDefaults.outlinedButtonColors(
-                            contentColor = MaterialTheme.colorScheme.onSurface,
-                        ),
                     ) {
                         Text(
-                            "$n.  $label",
-                            style = MaterialTheme.typography.bodyMedium,
-                            modifier = Modifier.fillMaxWidth(),
+                            if (chosen.isEmpty()) "Answer with none selected"
+                            else "Answer with ${chosen.size} selected",
                         )
                     }
                 }

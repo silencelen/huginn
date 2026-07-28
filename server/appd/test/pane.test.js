@@ -257,6 +257,7 @@ test('loginPaneState on an empty pane says nothing rather than guessing', () => 
 // since changed. These tests are about which differences must and must not matter.
 
 const { promptFingerprint } = require('../lib/pane');
+const { multiToggleDigits } = require('../lib/pane');
 
 const PROMPT_A = {
   question: 'Do you want to create jtyper.md?',
@@ -507,4 +508,69 @@ test('previews skip footer workflow rows and selector help', () => {
     'Enter to select \u00B7 \u2191/\u2193 to navigate',
   ]);
   assert.deepEqual(got, ['real content line']);
+});
+
+
+// ------------------------------------------------ multi-select AskUserQuestion
+//
+// Captured live: digits TOGGLE, Right opens a review tab, Enter submits.
+const MULTI_DIALOG = [
+  '\u2190  \u2610 Toppings  \u2714 Submit  \u2192',
+  'Which toppings do you want?',
+  '\u276F 1. [ ] Cheese',
+  '  Add cheese to your order',
+  '  2. [\u2714] Mushrooms',
+  '  Add mushrooms to your order',
+  '  3. [ ] Olives',
+  '  4. [ ] Type something',
+  '     Submit',
+  '\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500',
+  '  5. Chat about this',
+  'Enter to select \u00B7 \u2191/\u2193 to navigate \u00B7 Esc to cancel',
+];
+
+test('the multi-select dialog parses with checkbox state', () => {
+  const p = detectPrompt(MULTI_DIALOG);
+  assert.ok(p);
+  assert.equal(p.multiSelect, true);
+  assert.equal(p.question, 'Which toppings do you want?');
+  assert.deepEqual(
+    p.options.map((o) => [o.number, o.label, o.checked ?? null]),
+    [[1, 'Cheese', false], [2, 'Mushrooms', true], [3, 'Olives', false],
+     [4, 'Type something', false], [5, 'Chat about this', null]],
+  );
+});
+
+test('toggling a box does not change the fingerprint', () => {
+  const before = promptFingerprint(detectPrompt(MULTI_DIALOG));
+  const toggled = MULTI_DIALOG.map((l) => l.replace('2. [\u2714]', '2. [ ]'));
+  assert.equal(promptFingerprint(detectPrompt(toggled)), before,
+    'checkbox state is state, not identity');
+});
+
+test('a single-select dialog is not multiSelect', () => {
+  const p = detectPrompt(ASK_DIALOG);
+  assert.equal(p.multiSelect, false);
+});
+
+test('toggle digits are the diff between current and desired', () => {
+  const opts = detectPrompt(MULTI_DIALOG).options;
+  // 2 is already checked and wanted: no keystroke. 3 wanted: toggle. 1 not
+  // wanted and unchecked: nothing.
+  assert.deepEqual(multiToggleDigits(opts, [2, 3]), ['3']);
+  // Wanting nothing means UN-toggling 2.
+  assert.deepEqual(multiToggleDigits(opts, []), ['2']);
+  // A non-checkbox row can never be toggled.
+  assert.deepEqual(multiToggleDigits(opts, [2, 5]), []);
+});
+
+test('the review tab is an ordinary confirm prompt', () => {
+  const p = detectPrompt([
+    'Ready to submit your answers?',
+    '\u276F 1. Submit answers',
+    '  2. Cancel',
+  ]);
+  assert.ok(p);
+  assert.equal(p.multiSelect, false);
+  assert.deepEqual(p.options.map((o) => o.label), ['Submit answers', 'Cancel']);
 });

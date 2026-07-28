@@ -179,6 +179,19 @@ class HuginnClient(
         return decode(call(builder("/v1/sessions/$session/answer").post(encode(body)).build()))
     }
 
+    /**
+     * Answers a multi-select question with the full DESIRED set. The host diffs
+     * against the dialog's current checkboxes and does the toggle-review-submit
+     * dance, so a question half-answered in tmux still ends up exactly as asked.
+     */
+    suspend fun answerPromptMulti(session: String, options: List<Int>, fingerprint: String? = null): AnswerResult {
+        val body = buildJsonObject {
+            put("options", JsonArray(options.map { JsonPrimitive(it) }))
+            fingerprint?.let { put("fingerprint", JsonPrimitive(it)) }
+        }
+        return decode(call(builder("/v1/sessions/$session/answer").post(encode(body)).build()))
+    }
+
     suspend fun autoswitch(): Autoswitch = decode(call(builder("/v1/autoswitch").get().build()))
 
     suspend fun setAutoswitch(enabled: Boolean): Autoswitch {

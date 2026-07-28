@@ -109,7 +109,7 @@ function detectPrompt(lines) {
   // The selector's own help line, drawn under the options.
   const HINT_RE = /enter to select|to navigate|esc to cancel|tab\/arrows/i;
   // Multi-question tab headers above the question text.
-  const HEADER_RE = /^\s*[\u2610\u2611\u2612]\s/;
+  const HEADER_RE = /^\s*([\u2610\u2611\u2612]\s|\u2190\s)/;
 
   // Step 1: from the bottom, walk up past the dialog's own furniture to the
   // last option line. Anything else down there — a composer, a status line,
@@ -128,10 +128,26 @@ function detectPrompt(lines) {
   // trailing options. Everything else ends the run.
   const opts = [];
   let firstIdx = i;
+  // Multi-select options carry a checkbox after the number: "2. [\u2714] Mushrooms".
+  // The checkbox is STATE, not label — it is stripped so the label (and with it
+  // the fingerprint) stays stable while the user toggles.
+  const CHECK_RE = /^\[( |x|X|\u2714|\u2713)\]\s+/;
   for (let j = i; j >= floor; j--) {
     const m = OPTION_RE.exec(plain[j]);
     if (m) {
-      opts.unshift({ number: Number(m[2]), label: m[3].trim().slice(0, 120), selected: /[\u276F>]/.test(plain[j]) });
+      let label = m[3].trim();
+      let checked = null;
+      const cb = CHECK_RE.exec(label);
+      if (cb) {
+        checked = cb[1] !== ' ';
+        label = label.slice(cb[0].length).trim();
+      }
+      opts.unshift({
+        number: Number(m[2]),
+        label: label.slice(0, 120),
+        selected: /[\u276F>]/.test(plain[j]),
+        ...(checked === null ? {} : { checked }),
+      });
       firstIdx = j;
       continue;
     }
@@ -164,7 +180,30 @@ function detectPrompt(lines) {
     question = t.slice(0, 240);
     break;
   }
-  return { question, options: opts };
+  return {
+    question,
+    options: opts,
+    // Any checkbox present means the dialog wants a SET, and answering it takes
+    // the toggle-review-submit dance rather than digit-and-Enter.
+    multiSelect: opts.some((o) => typeof o.checked === 'boolean'),
+  };
+}
+
+/**
+ * The keystrokes that move a multi-select dialog from its CURRENT state to the
+ * DESIRED one: a digit per option whose state must flip (digits toggle,
+ * verified live), computed as a diff because the user may have half-answered in
+ * tmux already — blindly pressing every desired digit would UN-check those.
+ */
+function multiToggleDigits(options, desired) {
+  const want = new Set(desired);
+  const digits = [];
+  for (const o of options || []) {
+    if (typeof o.checked !== 'boolean') continue;      // not a checkbox row
+    const should = want.has(o.number);
+    if (should !== o.checked) digits.push(String(o.number));
+  }
+  return digits;
 }
 
 /**
@@ -286,6 +325,9 @@ function parseStatusExtras(lines, max = 3) {
  */
 function promptFingerprint(prompt) {
   if (!prompt || !Array.isArray(prompt.options) || !prompt.options.length) return null;
+  // Neither the caret nor a checkbox state is part of the question's identity:
+  // moving the highlight or half-toggling in tmux does not change what is asked,
+  // and labels arrive with checkbox markers already stripped.
   const stable = JSON.stringify([
     prompt.question || '',
     prompt.options.map((o) => [o.number, o.label]),
@@ -395,6 +437,7 @@ function loginPaneState(lines) {
 }
 
 module.exports = {
-  screenHash, stripAnsi, previewLines, detectPrompt, promptFingerprint, parseSpinner, parseStatusExtras,
+  screenHash, stripAnsi, previewLines, detectPrompt, promptFingerprint, multiToggleDigits,
+  parseSpinner, parseStatusExtras,
   extractLoginUrl, parseStatusLine, loginPaneState,
 };
