@@ -110,7 +110,9 @@ Yes — and that's the point. Huginn is `ssh` + `tmux` + `claude` with the sharp
 |---|---|
 | [`provision/`](provision/) | Container template (Proxmox LXC) + a generic "any Debian/Ubuntu host" path |
 | [`server/`](server/) | `setup.sh`, the `cc` launcher, `huginn-status`, a tuned `tmux.conf` |
+| [`server/appd/`](server/appd/) | the phone daemon: sessions, chats, push, prompts-as-buttons over the tailnet |
 | [`client/`](client/) | `huginn.ps1` + `huginn.sh` + installers + an optional Termux detach button |
+| [`mobile/`](mobile/) | the Huginn Android app — a native client for everything `appd` serves ([changelog](mobile/CHANGELOG.md)) |
 | [`docs/`](docs/) | [Setup](docs/SETUP.md) · [Usage](docs/USAGE.md) · [Architecture](docs/ARCHITECTURE.md) · [FAQ](docs/FAQ.md) · [Security](docs/SECURITY.md) |
 
 ## 🧠 Memory (the other raven)

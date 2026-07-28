@@ -34,9 +34,17 @@ flock "$LOCK" ./gradlew :app:testDebugUnitTest
 # The test COUNT is asserted, not just the exit code: `node --test` with a glob
 # that matches nothing exits 0 having run zero tests, so a moved or renamed test
 # directory would turn this gate green while testing nothing.
-if command -v node >/dev/null 2>&1 && [ -d "$REPO_DIR/server/test" ]; then
+# The daemon lives beside this tree now (../server/appd), and its absence is an
+# ERROR, not a skip: an -d guard here once meant a moved directory would turn
+# this gate green while testing nothing.
+APPD_DIR="$(cd "$REPO_DIR/../server/appd" 2>/dev/null && pwd || true)"
+if [ -z "$APPD_DIR" ] || [ ! -d "$APPD_DIR/test" ]; then
+  echo "[build] server/appd/test not found next to mobile/ — refusing." >&2
+  exit 1
+fi
+if command -v node >/dev/null 2>&1; then
   NODE_LOG="$(mktemp)"
-  node --test "$REPO_DIR"/server/test/*.test.js | tee "$NODE_LOG"
+  node --test "$APPD_DIR"/test/*.test.js | tee "$NODE_LOG"
   NODE_RC="${PIPESTATUS[0]}"
   NODE_COUNT="$(grep -oE '^# tests [0-9]+' "$NODE_LOG" | grep -oE '[0-9]+' || echo 0)"
   rm -f "$NODE_LOG"
