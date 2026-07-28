@@ -1,5 +1,25 @@
 # Huginn changelog
 
+## 2.22.0 — 2026-07-27
+
+### The app lock now actually locks
+The toggle was on and nothing ever happened — no lock, no prompt. Two compounding
+faults: the system-level prompt this was built on fails silently on this device,
+and the failure path "failed open", unlocking before the first frame drew. An
+invisible security feature is indistinguishable from a missing one. Rebuilt on the
+Android library made to absorb exactly these per-device differences, and failure
+now fails CLOSED: the lock screen stays, shows the reason, and offers retry.
+There is also a **Lock now** button under the toggle — proof on demand, since the
+normal trigger (a minute away) makes "is it even on?" unanswerable by looking.
+
+### Dead workflows exorcised, round two
+Ghost workflow rows survived in two more places: a finished workflow reporting
+"4/4 agents done" still mirrored into the strip as if running (done is done — those
+rows are dropped now), and the sessions list preview could headline a dead workflow
+forever, because the terminal keeps those rows in its footer and the preview read
+the footer. The work sheet also forgets settled agents after 45 minutes instead of
+six hours — it answers "what is happening", not "what has happened since lunch".
+
 ## 2.21.0 — 2026-07-27
 
 ### Question popups actually pop up

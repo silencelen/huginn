@@ -484,3 +484,27 @@ test('a scrolled-away dialog with a composer below is still not a prompt', () =>
   ]);
   assert.equal(detectPrompt(gone), null);
 });
+
+
+test('a finished workflow row is dropped: every agent done means done', () => {
+  const px = parseStatusExtras([
+    '  \u25EF wave-3  Verify   4/4 agents done \u00B7 12m \u00B7 \u2193 900k tokens',
+  ]);
+  assert.deepEqual(px.durable, []);
+});
+
+test('a workflow with agents still out stays', () => {
+  const px = parseStatusExtras([
+    '  \u25EF wave-3  Verify   2/4 agents done \u00B7 12m',
+  ]);
+  assert.equal(px.durable.length, 1);
+});
+
+test('previews skip footer workflow rows and selector help', () => {
+  const got = previewLines([
+    'real content line',
+    '  \u25EF dead-workflow  Wave 3   4/4 agents done',
+    'Enter to select \u00B7 \u2191/\u2193 to navigate',
+  ]);
+  assert.deepEqual(got, ['real content line']);
+});

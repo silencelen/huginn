@@ -1,12 +1,11 @@
 package com.silencelen.huginn.notify
 
-import android.app.Activity
 import android.app.KeyguardManager
 import android.content.Context
-import android.hardware.biometrics.BiometricManager
-import android.hardware.biometrics.BiometricPrompt
-import android.os.Build
-import android.os.CancellationSignal
+import androidx.biometric.BiometricManager
+import androidx.biometric.BiometricPrompt
+import androidx.core.content.ContextCompat
+import androidx.fragment.app.FragmentActivity
 
 /**
  * Locking the app behind the device's own credential.
@@ -17,11 +16,10 @@ import android.os.CancellationSignal
  * with a game — is an ordinary event, and this is not an ordinary app to leave
  * open in it.
  *
- * The FRAMEWORK BiometricPrompt rather than the androidx library, deliberately:
- * the androidx one requires the activity to be a FragmentActivity, and this app's
- * single activity is a plain ComponentActivity. minSdk is 29, where the framework
- * prompt already exists; the one API difference (how a credential fallback is
- * requested) is handled below.
+ * The androidx BiometricPrompt, and the history matters: the first version used
+ * the FRAMEWORK prompt to dodge the library's FragmentActivity requirement, and
+ * on the real device it silently failed — see [authenticate]. MainActivity is a
+ * FragmentActivity now; the requirement was cheaper than the bug.
  *
  * The prompt allows biometrics OR the device PIN/pattern — the same set of proofs
  * that unlock the phone. Inventing a separate app password would be strictly
@@ -68,51 +66,54 @@ object AppLock {
     }
 
     /**
-     * Shows the system unlock sheet. The callback fires exactly once.
+     * Shows the system unlock sheet via the androidx library.
      *
-     * Cancellation (back gesture, tapping outside) reports failure and the app
-     * simply stays locked — there is deliberately no attempt counting or lockout
-     * here, because the credential layer underneath already has its own.
+     * The FIRST version used the framework BiometricPrompt to avoid the library's
+     * FragmentActivity requirement — and on the actual device the lock never
+     * visibly engaged: the prompt failed somewhere silent, and the failure path
+     * "failed open", flipping the lock off before the first frame drew. Both
+     * halves of that are corrected. The androidx library exists precisely to
+     * absorb OEM prompt differences (MainActivity is a FragmentActivity now),
+     * and failure fails CLOSED with a reason the lock screen can show — an
+     * invisible security feature is indistinguishable from a missing one.
+     *
+     * @param onResult ok, plus a human reason when not ok (null for a plain
+     *   cancel, which needs no explaining).
      */
-    fun authenticate(activity: Activity, onResult: (Boolean) -> Unit) {
-        val builder = BiometricPrompt.Builder(activity)
+    fun authenticate(activity: FragmentActivity, onResult: (Boolean, String?) -> Unit) {
+        val prompt = BiometricPrompt(
+            activity,
+            ContextCompat.getMainExecutor(activity),
+            object : BiometricPrompt.AuthenticationCallback() {
+                override fun onAuthenticationSucceeded(result: BiometricPrompt.AuthenticationResult) =
+                    onResult(true, null)
+
+                override fun onAuthenticationError(errorCode: Int, errString: CharSequence) {
+                    val cancelled = errorCode == BiometricPrompt.ERROR_USER_CANCELED ||
+                        errorCode == BiometricPrompt.ERROR_NEGATIVE_BUTTON ||
+                        errorCode == BiometricPrompt.ERROR_CANCELED
+                    onResult(false, if (cancelled) null else "$errString ($errorCode)")
+                }
+
+                // A failed fingerprint read is not an outcome: the sheet stays up.
+                override fun onAuthenticationFailed() = Unit
+            },
+        )
+        val info = BiometricPrompt.PromptInfo.Builder()
             .setTitle("Huginn is locked")
             .setSubtitle("Unlock with the same screen lock as the phone")
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-            builder.setAllowedAuthenticators(
+            .setAllowedAuthenticators(
                 BiometricManager.Authenticators.BIOMETRIC_WEAK or
                     BiometricManager.Authenticators.DEVICE_CREDENTIAL
             )
-        } else {
-            @Suppress("DEPRECATION")
-            builder.setDeviceCredentialAllowed(true)
-        }
-
-        var done = false
-        fun finish(ok: Boolean) {
-            if (!done) { done = true; onResult(ok) }
-        }
-        runCatching {
-            builder.build().authenticate(
-                CancellationSignal(),
-                activity.mainExecutor,
-                object : BiometricPrompt.AuthenticationCallback() {
-                    override fun onAuthenticationSucceeded(result: BiometricPrompt.AuthenticationResult?) =
-                        finish(true)
-
-                    override fun onAuthenticationError(errorCode: Int, errString: CharSequence?) =
-                        finish(false)
-
-                    // A failed fingerprint read is not an outcome: the sheet stays up
-                    // and the user tries again, so nothing to report yet.
-                    override fun onAuthenticationFailed() = Unit
-                },
-            )
-        }.onFailure {
-            // No prompt could be shown at all (no hardware, mid-teardown activity).
-            // Failing CLOSED here would brick the app on such devices; the device
-            // lock itself is still in front of everything.
-            finish(true)
+            .build()
+        try {
+            prompt.authenticate(info)
+        } catch (e: Exception) {
+            // Fail CLOSED, visibly. The retry button and the reason are on the
+            // lock screen; unlocking because the prompt broke would be a lock
+            // that opens for whoever breaks it.
+            onResult(false, e.message ?: "could not show the unlock prompt")
         }
     }
 }
