@@ -136,6 +136,19 @@ data class TranscriptEvent(
     val ok: Boolean? = null,
     /** Typed while Claude was busy: sitting in the queue, not yet delivered. */
     val queued: Boolean = false,
+    /** Present on AskUserQuestion tool events: the structured question card. */
+    val ask: AskData? = null,
+)
+
+@Serializable
+data class AskData(val questions: List<AskQuestion> = emptyList())
+
+@Serializable
+data class AskQuestion(
+    val question: String = "",
+    val header: String? = null,
+    val multiSelect: Boolean = false,
+    val options: List<String> = emptyList(),
 )
 
 @Serializable
