@@ -26,6 +26,7 @@ import com.silencelen.huginn.data.ClientsInfo
 import com.silencelen.huginn.data.PushStatus
 import com.silencelen.huginn.data.LoginState
 import com.silencelen.huginn.notify.SessionWatchWorker
+import com.silencelen.huginn.notify.AppLock
 import com.silencelen.huginn.notify.Heartbeat
 import com.silencelen.huginn.notify.HuginnMessagingService
 import com.silencelen.huginn.notify.WatchService
@@ -107,6 +108,19 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
      */
     private val _clients = MutableStateFlow<ClientsInfo?>(null)
     val clients: StateFlow<ClientsInfo?> = _clients.asStateFlow()
+
+    /**
+     * The app-lock toggle. The cached copy in [AppLock] is what the activity's
+     * ON_START decision reads, because that decision cannot wait on DataStore.
+     */
+    private val _appLock = MutableStateFlow(false)
+    val appLock: StateFlow<Boolean> = _appLock.asStateFlow()
+
+    fun setAppLock(on: Boolean) {
+        _appLock.value = on
+        AppLock.enabledCache = on
+        viewModelScope.launch { settings.setAppLock(on) }
+    }
 
     /** Whether the host can push, and whether THIS phone has registered to receive it. */
     private val _push = MutableStateFlow<PushStatus?>(null)
@@ -269,6 +283,8 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
             _watchEnabled.value = settings.watchEnabled.first()
             _drafts.value = settings.drafts.first()
             _health.value = readHealth()
+            _appLock.value = settings.appLock.first()
+            AppLock.enabledCache = _appLock.value
             if (tokenNow.isNotBlank()) {
                 refreshAll()
                 refreshModels()

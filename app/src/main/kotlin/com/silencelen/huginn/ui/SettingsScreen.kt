@@ -64,6 +64,9 @@ fun SettingsScreen(
     onRequestDozeExemption: () -> Unit,
     onRefreshDelivery: () -> Unit,
     onTestPush: () -> Unit,
+    appLock: Boolean,
+    appLockAvailable: Boolean,
+    onAppLock: (Boolean) -> Unit,
     notificationsAllowed: Boolean,
     onRequestNotifications: () -> Unit,
     onOpenSystemNotificationSettings: () -> Unit,
@@ -212,6 +215,29 @@ fun SettingsScreen(
                 }
                 OutlinedButton(onClick = onTestAlert) { Text("Send a test") }
             }
+        }
+
+        Spacer(Modifier.height(8.dp))
+        Text("Security", style = MaterialTheme.typography.titleMedium)
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+            Column(Modifier.weight(1f)) {
+                Text("Lock the app", style = MaterialTheme.typography.bodyMedium)
+                Text(
+                    if (!appLockAvailable)
+                        "Needs a screen lock on this phone first — there is nothing to unlock with."
+                    else
+                        "Ask for fingerprint, face or the device PIN when opening the app after " +
+                            "it has been away for a minute. This app is a hand on huginn; an " +
+                            "unlocked phone passed to someone should not include it.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            Switch(
+                checked = appLock,
+                onCheckedChange = onAppLock,
+                enabled = appLockAvailable,
+            )
         }
 
         Spacer(Modifier.height(8.dp))

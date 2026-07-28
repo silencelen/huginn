@@ -79,6 +79,89 @@ fun TranscriptEventItem(
     }
 }
 
+/**
+ * Renders one grouped row: an ordinary event, or a run of subagent work as a
+ * single openable card. Both conversation surfaces (session and chat) render
+ * through this, so subagents and workflows read the same everywhere.
+ */
+@Composable
+fun TranscriptRowItem(row: TranscriptGroups.Row, onCopy: (String) -> Unit) {
+    when (row) {
+        is TranscriptGroups.Row.Single -> TranscriptEventItem(row.event, onCopy)
+        is TranscriptGroups.Row.Subagents -> SubagentsCard(row, onCopy)
+    }
+}
+
+/**
+ * Delegated work as one unit. Closed, it answers "what was farmed out and how
+ * much happened"; open, it is the full play-by-play — thinking, tools, results —
+ * rendered by the same code as the main thread. Closed by default because during
+ * a fan-out the sidechain outweighs the main thread, and the main thread is what
+ * is being followed.
+ */
+@Composable
+private fun SubagentsCard(group: TranscriptGroups.Row.Subagents, onCopy: (String) -> Unit) {
+    var open by rememberSaveable(group.key) { mutableStateOf(false) }
+    Surface(
+        color = MaterialTheme.colorScheme.surfaceContainerHigh.copy(alpha = 0.7f),
+        shape = RoundedCornerShape(10.dp),
+        modifier = Modifier.fillMaxWidth().clickable { open = !open },
+    ) {
+        Column(Modifier.padding(horizontal = 10.dp, vertical = 8.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(
+                    Icons.Filled.AccountTree,
+                    contentDescription = null,
+                    modifier = Modifier.size(14.dp),
+                    tint = MaterialTheme.colorScheme.primary,
+                )
+                Spacer(Modifier.width(6.dp))
+                Text(
+                    "Subagent",
+                    style = MaterialTheme.typography.labelMedium,
+                    fontWeight = FontWeight.SemiBold,
+                    color = MaterialTheme.colorScheme.primary,
+                )
+                Spacer(Modifier.width(8.dp))
+                Text(
+                    "${group.steps} step${if (group.steps == 1) "" else "s"}",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Spacer(Modifier.weight(1f))
+                Icon(
+                    if (open) Icons.Filled.ExpandLess else Icons.Filled.ExpandMore,
+                    contentDescription = if (open) "Collapse" else "Expand",
+                    modifier = Modifier.size(16.dp),
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            // The parent's own words for the task: the best one-line summary there is.
+            group.task?.let { task ->
+                Spacer(Modifier.height(3.dp))
+                Text(
+                    task,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = if (open) 4 else 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+            AnimatedVisibility(open) {
+                Column(
+                    Modifier.padding(top = 8.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    group.events.forEach { ev ->
+                        // Inside the card the sidechain indent is redundant.
+                        TranscriptEventItem(ev.copy(sidechain = false), onCopy)
+                    }
+                }
+            }
+        }
+    }
+}
+
 @Composable
 private fun UserBubble(text: String, queued: Boolean = false) {
     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
