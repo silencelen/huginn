@@ -179,6 +179,13 @@ class HuginnClient(
         return decode(call(builder("/v1/sessions/$session/answer").post(encode(body)).build()))
     }
 
+    suspend fun autoswitch(): Autoswitch = decode(call(builder("/v1/autoswitch").get().build()))
+
+    suspend fun setAutoswitch(enabled: Boolean): Autoswitch {
+        val body = buildJsonObject { put("enabled", JsonPrimitive(enabled)) }
+        return decode(call(builder("/v1/autoswitch").post(encode(body)).build()))
+    }
+
     /** Whether the HOST can push at all, and which devices it would reach. */
     suspend fun push(): PushStatus = decode(call(builder("/v1/push").get().build()))
 

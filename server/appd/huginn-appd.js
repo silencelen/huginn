@@ -40,10 +40,11 @@ const clientsLib = require('./lib/clients');
 const { taskDirFor, parsePs, scanTasks, extractBgIds } = require('./lib/tasks');
 const { agentsDirFor, listAgents } = require('./lib/agents');
 const { suggestionContext, buildPrompt, parseSuggestions } = require('./lib/suggest');
+const { decideSwitch, worstLimit } = require('./lib/autoswitch');
 const pushLib = require('./lib/pushtokens');
 const { trySender } = require('./lib/fcm');
 
-const VERSION = '2.22.0';
+const VERSION = '2.23.0';
 const PORT = Number(process.env.HUGINN_APPD_PORT || 8787);
 const DATA_DIR = process.env.HUGINN_APPD_DATA || '/var/lib/huginn-appd';
 const TOKEN_FILE = process.env.HUGINN_APPD_TOKEN_FILE || '/etc/huginn-appd/token';
@@ -1293,6 +1294,109 @@ async function deliverPush(alert) {
 
 const suggestCache = new Map();   // sessionId -> {size, suggestions, promise}
 
+/**
+ * Makes a saved login the active one, everywhere it has to happen at once:
+ * credentials + identity block (accounts.activate), the label correction once
+ * `auth status` is authoritative for the new login, and the plan cache, whose
+ * old figures belong to the account just left. One path for the button in
+ * Settings and for the auto-switcher, so they cannot drift.
+ */
+async function performSwitch(slug) {
+  const before = await accountStatus();
+  const r = accounts.activate(slug, before.email);
+  if (!r.ok) return { ok: false, error: r.error };
+  const after = await accountStatus();
+  const nowLive = accounts.readActive();
+  if (nowLive && after.loggedIn && after.email) {
+    accounts.save(after.email, nowLive, after.orgName ? { orgName: after.orgName } : {});
+  }
+  planCache.at = 0; planCache.data = null;
+  log(`account switched: ${before.email || 'unknown'} -> ${after.email || 'unknown'}`);
+  return { ok: true, before, after };
+}
+
+// ------------------------------------------------------- automatic switching
+//
+// The owner keeps three Max accounts so a hard limit is never a hard stop; the
+// rotation was manual, made at exactly the moment a limit-hit made everything
+// stall. The daemon can read every saved account's headroom, so it makes the
+// same move itself: when the active account's binding limit crosses the
+// threshold, switch to the freshest saved login. Decision rules (and their
+// anti-flap guards) live in lib/autoswitch, tested.
+const AUTOSWITCH_STATE = path.join(DATA_DIR, 'autoswitch.json');
+const AUTOSWITCH_POLL_MS = 5 * 60 * 1000;
+
+function loadAutoswitch() {
+  try { return JSON.parse(fs.readFileSync(AUTOSWITCH_STATE, 'utf8')); }
+  catch { return { enabled: false, lastSwitchAt: 0, switches: 0, last: null }; }
+}
+function saveAutoswitch(st) {
+  try {
+    fs.writeFileSync(`${AUTOSWITCH_STATE}.tmp`, JSON.stringify(st), { mode: 0o600 });
+    fs.renameSync(`${AUTOSWITCH_STATE}.tmp`, AUTOSWITCH_STATE);
+  } catch (e) { log('autoswitch: could not persist', e.message); }
+}
+
+let autoswitchBusy = false;
+async function autoswitchTick() {
+  if (autoswitchBusy) return;
+  const st = loadAutoswitch();
+  if (!st.enabled) return;
+  autoswitchBusy = true;
+  try {
+    const saved = accounts.list();
+    if (saved.length < 2) return;
+    const activeRec = saved.find((a) => a.isActive);
+    if (!activeRec) return;
+
+    // Cheap first look: only the active account's plan. Candidates are only
+    // priced once the active one is actually hot.
+    const activePlan = await planForCredentials(accounts.readActive());
+    const activeLimits = (activePlan && activePlan.limits) || [];
+    const w = worstLimit(activeLimits);
+    if (!w || w.percent < 95) return;
+
+    const candidates = [];
+    for (const a of saved) {
+      if (a.isActive) continue;
+      const rec = accounts.readProfile(a.slug);
+      const plan = rec && await planForCredentials(rec.credentials);
+      candidates.push({ slug: a.slug, email: a.email, limits: (plan && plan.limits) || [] });
+    }
+
+    const d = decideSwitch({
+      active: { slug: activeRec.slug, email: activeRec.email, limits: activeLimits },
+      candidates,
+      now: Date.now(),
+      lastSwitchAt: st.lastSwitchAt || 0,
+    });
+    if (!d) return;
+
+    const r = await performSwitch(d.to);
+    if (!r.ok) { log(`autoswitch: activate failed: ${r.error}`); return; }
+
+    st.lastSwitchAt = Date.now();
+    st.switches = (st.switches || 0) + 1;
+    st.last = { at: Math.floor(Date.now() / 1000), ...d };
+    saveAutoswitch(st);
+
+    // A silent identity change would be spooky: the phone and Telegram both
+    // hear about it, whatever the alert toggle says. Statement, not question.
+    const text = `${d.fromEmail || d.from} hit ${d.fromPercent}% (${d.fromLabel}) — ` +
+      `now on ${d.toEmail || d.to} at ${d.toPercent}%. Running sessions keep the ` +
+      `old account until they restart.`;
+    const push = await deliverPush({ kind: 'account_switch', title: 'Switched Claude account', text, subject: d.to });
+    if (!push.sent) await deliverTelegram(`\u{1F501} Switched Claude account\n${text}`);
+    log(`autoswitch: ${d.fromEmail} (${d.fromPercent}%) -> ${d.toEmail} (${d.toPercent}%)`);
+  } catch (e) {
+    log('autoswitch: tick failed', e.message);
+  } finally {
+    autoswitchBusy = false;
+  }
+}
+setInterval(() => { autoswitchTick().catch(() => { }); }, AUTOSWITCH_POLL_MS).unref();
+
+
 let alertTimer = null;
 async function alertTick() {
   const st = loadAlertState();
@@ -1454,6 +1558,28 @@ const server = http.createServer(async (req, res) => {
         error: r.sent > 0 ? undefined
           : (r.dead ? 'the registered token was rejected as dead' : 'no device accepted the push'),
       });
+    }
+
+    // --- automatic account switching
+    if (req.method === 'GET' && p === '/v1/autoswitch') {
+      const st = loadAutoswitch();
+      return sendJson(res, 200, {
+        enabled: !!st.enabled,
+        switches: st.switches || 0,
+        last: st.last || null,
+        accounts: accounts.list().length,
+      });
+    }
+    if (req.method === 'POST' && p === '/v1/autoswitch') {
+      const body = JSON.parse(await readBody(req) || '{}');
+      const st = loadAutoswitch();
+      if (typeof body.enabled === 'boolean') st.enabled = body.enabled;
+      saveAutoswitch(st);
+      log(`autoswitch: ${st.enabled ? 'enabled' : 'disabled'}`);
+      // An immediate look, so enabling it against an already-dry account acts
+      // now rather than in five minutes.
+      if (st.enabled) autoswitchTick().catch(() => { });
+      return sendJson(res, 200, { enabled: !!st.enabled });
     }
 
     // --- has the phone actually been checking in? The whole point of recording
@@ -1638,20 +1764,9 @@ const server = http.createServer(async (req, res) => {
     }
 
     if ((m = p.match(/^\/v1\/accounts\/([a-z0-9-]{1,60})\/activate$/)) && req.method === 'POST') {
-      const before = await accountStatus();
-      const r = accounts.activate(m[1], before.email);
+      const r = await performSwitch(m[1]);
       if (!r.ok) return sendErr(res, 404, r.error);
-      // Report what the host actually thinks it is now, not what we intended.
-      const after = await accountStatus();
-      // Fingerprint keying means a label can be stale; now that this login is
-      // live, `auth status` is authoritative for it, so correct the record.
-      const nowLive = accounts.readActive();
-      if (nowLive && after.loggedIn && after.email) {
-        accounts.save(after.email, nowLive, after.orgName ? { orgName: after.orgName } : {});
-      }
-      planCache.at = 0; planCache.data = null;   // the old plan figures are not this account's
-      log(`account switched: ${before.email || 'unknown'} -> ${after.email || 'unknown'}`);
-      return sendJson(res, 200, { ok: true, ...after });
+      return sendJson(res, 200, { ok: true, ...r.after });
     }
 
     if (req.method === 'POST' && p === '/v1/account/login') {

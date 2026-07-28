@@ -22,6 +22,7 @@ import com.silencelen.huginn.data.Plan
 import com.silencelen.huginn.data.SavedAccount
 import com.silencelen.huginn.data.Usage
 import com.silencelen.huginn.data.AgentsInfo
+import com.silencelen.huginn.data.Autoswitch
 import com.silencelen.huginn.data.Alerts
 import com.silencelen.huginn.data.ClientsInfo
 import com.silencelen.huginn.data.PushStatus
@@ -897,6 +898,29 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
         suggestJob?.cancel()
         _suggestions.value = emptyList()
         suggestedForOffset = -1L
+    }
+
+    /** Host-side automatic account rotation. */
+    private val _autoswitch = MutableStateFlow<Autoswitch?>(null)
+    val autoswitch: StateFlow<Autoswitch?> = _autoswitch.asStateFlow()
+
+    fun refreshAutoswitch() {
+        viewModelScope.launch {
+            runCatching { client.autoswitch() }.onSuccess { _autoswitch.value = it }
+        }
+    }
+
+    fun setAutoswitch(on: Boolean) {
+        viewModelScope.launch {
+            runCatching { client.setAutoswitch(on) }
+                .onSuccess {
+                    _autoswitch.value = (_autoswitch.value ?: Autoswitch()).copy(enabled = it.enabled)
+                    _toast.value = if (it.enabled)
+                        "huginn will rotate accounts when one runs out"
+                    else "Automatic switching off"
+                }
+                .onFailure { _toast.value = errText(it) }
+        }
     }
 
     /** Agents for the open work sheet; polled only while the sheet is up. */
