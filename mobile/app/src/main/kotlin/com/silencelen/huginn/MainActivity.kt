@@ -25,6 +25,7 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.Chat
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.MonitorHeart
+import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Terminal
@@ -37,7 +38,12 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.NavigationRail
 import androidx.compose.material3.NavigationRailItem
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.VerticalDivider
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
@@ -244,6 +250,14 @@ fun HuginnApp(
     val suggestions by vm.suggestions.collectAsState()
     val autoswitch by vm.autoswitch.collectAsState()
 
+    // Per-surface action menu state (the top-bar slot).
+    var surfaceMenu by remember { mutableStateOf(false) }
+    var renameTarget by remember { mutableStateOf<String?>(null) }        // session name
+    var renameChatTarget by remember { mutableStateOf<String?>(null) }    // chat id
+    var renameText by remember { mutableStateOf("") }
+    var killTarget by remember { mutableStateOf<String?>(null) }
+    var deleteChatTarget by remember { mutableStateOf<String?>(null) }
+
     val snackbar = remember { SnackbarHostState() }
     LaunchedEffect(toast) { toast?.let { snackbar.showSnackbar(it); vm.toastShown() } }
 
@@ -333,6 +347,73 @@ fun HuginnApp(
         )
     }
 
+    renameTarget?.let { from ->
+        AlertDialog(
+            onDismissRequest = { renameTarget = null },
+            title = { Text("Rename session") },
+            text = {
+                OutlinedTextField(value = renameText, onValueChange = { renameText = it }, singleLine = true)
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    val to = renameText.trim().lowercase().replace(Regex("[^a-z0-9_]"), "_")
+                    if (to.isNotEmpty() && to != from) {
+                        vm.renameSession(from, to)
+                        dest = Dest.SessionView(to)
+                    }
+                    renameTarget = null
+                }) { Text("Rename") }
+            },
+            dismissButton = { TextButton(onClick = { renameTarget = null }) { Text("Cancel") } },
+        )
+    }
+    renameChatTarget?.let { id ->
+        AlertDialog(
+            onDismissRequest = { renameChatTarget = null },
+            title = { Text("Rename chat") },
+            text = {
+                OutlinedTextField(value = renameText, onValueChange = { renameText = it }, singleLine = true)
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    if (renameText.isNotBlank()) vm.renameChat(id, renameText)
+                    renameChatTarget = null
+                }) { Text("Rename") }
+            },
+            dismissButton = { TextButton(onClick = { renameChatTarget = null }) { Text("Cancel") } },
+        )
+    }
+    killTarget?.let { name ->
+        AlertDialog(
+            onDismissRequest = { killTarget = null },
+            title = { Text("Kill $name?") },
+            text = { Text("Ends the tmux session and whatever Claude is doing in it.") },
+            confirmButton = {
+                TextButton(onClick = {
+                    vm.killSession(name)
+                    if ((dest as? Dest.SessionView)?.name == name) dest = Dest.Sessions
+                    killTarget = null
+                }) { Text("Kill") }
+            },
+            dismissButton = { TextButton(onClick = { killTarget = null }) { Text("Cancel") } },
+        )
+    }
+    deleteChatTarget?.let { id ->
+        AlertDialog(
+            onDismissRequest = { deleteChatTarget = null },
+            title = { Text("Delete this chat?") },
+            text = { Text("Removes it from huginn. The underlying transcript file stays on the host.") },
+            confirmButton = {
+                TextButton(onClick = {
+                    vm.deleteChat(id)
+                    if ((dest as? Dest.Chat)?.id == id) dest = Dest.Chats
+                    deleteChatTarget = null
+                }) { Text("Delete") }
+            },
+            dismissButton = { TextButton(onClick = { deleteChatTarget = null }) { Text("Cancel") } },
+        )
+    }
+
     // The Z Fold's inner display is ~840dp across; phones are ~360-410. The
     // two-pane threshold sits between them, so unfolding turns the list screens
     // into list-plus-detail and folding collapses them back — and the navigation
@@ -364,7 +445,14 @@ fun HuginnApp(
             )
         }
         val chatDetail: @Composable (String) -> Unit = { id ->
-            DisposableEffect(id) { onDispose { vm.detachStream() } }
+            DisposableEffect(id) { onDispose { vm.detachStream(); vm.clearSuggestions() } }
+            // A turn boundary — the transcript grew and nothing is in flight — is
+            // the moment suggestions are worth generating; same rule as sessions.
+            val chatBusy = sending || streamingText != null || activeTool != null ||
+                chats.firstOrNull { c -> c.id == id }?.running == true
+            LaunchedEffect(chatPage?.nextOffset, chatBusy) {
+                vm.maybeSuggestChat(id, chatPage, chatBusy)
+            }
             ChatScreen(
                 page = chatPage,
                 streamingText = streamingText,
@@ -376,6 +464,7 @@ fun HuginnApp(
                 models = models,
                 onSetOptions = { m, e -> vm.setChatOptions(id, model = m, effort = e) },
                 chatId = id,
+                suggestions = suggestions,
                 draft = drafts[HuginnViewModel.chatDraftKey(id)].orEmpty(),
                 onDraft = { vm.setDraft(HuginnViewModel.chatDraftKey(id), it) },
                 onSend = { vm.send(id, it) },
@@ -557,11 +646,43 @@ fun HuginnApp(
                                 Icon(Icons.Filled.Refresh, contentDescription = "Refresh")
                             }
                         }
-                        // Not inside a chat or a session: nothing there is a settings
-                        // task, and the slot is reserved for per-session controls.
                         if (dest !is Dest.Settings && dest !is Dest.Chat && dest !is Dest.SessionView) {
                             IconButton(onClick = { dest = Dest.Settings }) {
                                 Icon(Icons.Filled.Settings, contentDescription = "Settings")
+                            }
+                        }
+                        // The slot the settings gear vacated: controls for the thing
+                        // being looked at, not for the app.
+                        if (dest is Dest.SessionView || dest is Dest.Chat) {
+                            Box {
+                                IconButton(onClick = { surfaceMenu = true }) {
+                                    Icon(Icons.Filled.MoreVert, contentDescription = "Actions")
+                                }
+                                DropdownMenu(expanded = surfaceMenu, onDismissRequest = { surfaceMenu = false }) {
+                                    when (val d = dest) {
+                                        is Dest.SessionView -> {
+                                            DropdownMenuItem(text = { Text("Rename session") },
+                                                onClick = { surfaceMenu = false; renameTarget = d.name; renameText = d.name })
+                                            DropdownMenuItem(text = { Text("Fit pane to phone") },
+                                                onClick = { surfaceMenu = false; vm.forceFit() })
+                                            DropdownMenuItem(text = { Text("Interrupt (Esc)") },
+                                                onClick = { surfaceMenu = false; vm.interruptSession(d.name) })
+                                            DropdownMenuItem(text = { Text("Kill session…") },
+                                                onClick = { surfaceMenu = false; killTarget = d.name })
+                                        }
+                                        is Dest.Chat -> {
+                                            DropdownMenuItem(text = { Text("Rename chat") },
+                                                onClick = {
+                                                    surfaceMenu = false
+                                                    renameChatTarget = d.id
+                                                    renameText = chatTitle ?: ""
+                                                })
+                                            DropdownMenuItem(text = { Text("Delete chat…") },
+                                                onClick = { surfaceMenu = false; deleteChatTarget = d.id })
+                                        }
+                                        else -> Unit
+                                    }
+                                }
                             }
                         }
                     },

@@ -390,6 +390,14 @@ class HuginnClient(
     suspend fun sessionSuggestions(name: String): Suggestions =
         decode(call(builder("/v1/sessions/$name/suggestions").get().build(), Client.POLL))
 
+    suspend fun chatSuggestions(id: String): Suggestions =
+        decode(call(builder("/v1/chats/$id/suggestions").get().build(), Client.POLL))
+
+    /** Renames a chat; the title is the only field this touches. */
+    suspend fun renameChat(id: String, title: String) {
+        call(builder("/v1/chats/$id").patch(encode(buildJsonObject { put("title", JsonPrimitive(title)) })).build())
+    }
+
     /** The individual agents behind a fan-out, for the work detail sheet. */
     suspend fun sessionAgents(name: String): AgentsInfo =
         decode(call(builder("/v1/sessions/$name/agents").get().build()))
