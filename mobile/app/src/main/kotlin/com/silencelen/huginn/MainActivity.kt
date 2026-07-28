@@ -75,6 +75,7 @@ import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.silencelen.huginn.data.SettingsStore
 import com.silencelen.huginn.notify.AppLock
+import com.silencelen.huginn.notify.Foreground
 import com.silencelen.huginn.notify.SessionWatchWorker
 import com.silencelen.huginn.ui.ChatScreen
 import com.silencelen.huginn.ui.EmptyState
@@ -165,6 +166,18 @@ class MainActivity : FragmentActivity() {
         }
     }
 
+    override fun onResume() {
+        super.onResume()
+        Foreground.resumed = true
+    }
+
+    override fun onPause() {
+        // Cleared FIRST: from this instant a notification about the open screen is
+        // no longer redundant, and a push racing the pocket must win.
+        Foreground.resumed = false
+        super.onPause()
+    }
+
     override fun onStop() {
         super.onStop()
         // Recorded only while unlocked: a lock screen left in the background must
@@ -241,6 +254,16 @@ fun HuginnApp(
     var tab by rememberSaveable { mutableStateOf(1) }
     var dest by remember { mutableStateOf<Dest>(Dest.Sessions) }
     var sessionTab by rememberSaveable { mutableStateOf(0) }
+
+    // What is on screen, published for notification suppression: a buzz about the
+    // conversation the reader is already watching carries nothing. Cleared when
+    // this whole tree leaves composition — which is exactly what happens when the
+    // app lock takes over, so a locked screen never counts as "looking at it".
+    DisposableEffect(dest) {
+        Foreground.chat = (dest as? Dest.Chat)?.id
+        Foreground.session = (dest as? Dest.SessionView)?.name
+        onDispose { Foreground.chat = null; Foreground.session = null }
+    }
 
     // Navigation asked for by a notification tap, applied here rather than in the
     // initial state so that a tap arriving at an app that is ALREADY open moves it

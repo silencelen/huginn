@@ -1,5 +1,19 @@
 # Huginn changelog
 
+## 2.37.0 — 2026-07-28
+
+### No buzz about the screen you are looking at
+A chat finishing while you were watching it stream in still posted a
+notification, and a session asking a question while you had that session open
+did the same — announcing what was already in front of you. Every messaging app
+suppresses this, and for the same reason: a buzz that carries nothing teaches
+you that buzzes carry nothing, and then the ones that matter get ignored too.
+
+Suppressed only while the app is actually in the foreground on that exact chat
+or session. A conversation left open in a pocketed phone still notifies, and the
+suppressed alert is consumed rather than deferred — navigating away later does
+not make an already-seen question suddenly buzz.
+
 ## 2.36.1 — 2026-07-28
 
 ### The app states its own version beside appd's
