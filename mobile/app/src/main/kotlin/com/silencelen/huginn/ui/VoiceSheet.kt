@@ -64,6 +64,7 @@ fun VoiceSheet(
     val context = androidx.compose.ui.platform.LocalContext.current
     var state by remember { mutableStateOf<VoiceLoop.State>(VoiceLoop.State.Idle) }
     var spokenFor by remember { mutableStateOf<String?>(null) }
+    var micNote by remember { mutableStateOf<String?>(null) }
 
     val currentOnSend = rememberUpdatedState(onSend)
 
@@ -77,7 +78,13 @@ fun VoiceSheet(
             VoiceLoop.Effect.StartListening -> engines.listen(
                 onPartial = { p -> state = VoiceLoop.reduce(state, VoiceLoop.Event.Partial(p)).state },
                 onFinal = { heard -> apply(VoiceLoop.reduce(state, VoiceLoop.Event.Heard(heard))) },
-                onError = { transient -> apply(VoiceLoop.reduce(state, VoiceLoop.Event.MicFailed(transient))) },
+                onError = { transient ->
+                    // A hard mic failure must SAY so on the sheet: the silent
+                    // version of this is a button that appears to do nothing.
+                    if (!transient) micNote = "The microphone or speech service is not available. " +
+                        "Check the mic permission, or use the dictation mic instead."
+                    apply(VoiceLoop.reduce(state, VoiceLoop.Event.MicFailed(transient)))
+                },
             )
             VoiceLoop.Effect.StopListening -> engines.stopListening()
             is VoiceLoop.Effect.SendMessage -> currentOnSend.value(e.text)
@@ -116,7 +123,11 @@ fun VoiceSheet(
                 is VoiceLoop.State.Listening -> Triple(Icons.Filled.Mic, "Listening…", true)
                 VoiceLoop.State.Thinking -> Triple(Icons.Filled.MicOff, "Thinking…", false)
                 VoiceLoop.State.Speaking -> Triple(Icons.Filled.VolumeUp, "Tap to interrupt", true)
-                VoiceLoop.State.Idle -> Triple(Icons.Filled.Mic, "Tap to talk", false)
+                VoiceLoop.State.Idle -> Triple(
+                    Icons.Filled.Mic,
+                    if (micNote != null) "Voice unavailable" else "Tap to talk",
+                    false,
+                )
             }
             Box(
                 Modifier
@@ -147,7 +158,7 @@ fun VoiceSheet(
                 is VoiceLoop.State.Listening -> st.partial.ifBlank { " " }
                 VoiceLoop.State.Thinking -> streamingText ?: " "
                 VoiceLoop.State.Speaking -> lastAnswer ?: " "
-                VoiceLoop.State.Idle -> " "
+                VoiceLoop.State.Idle -> micNote ?: " "
             }
             Text(
                 body,

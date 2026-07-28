@@ -74,6 +74,8 @@ fun ChatScreen(
     chatId: String,
     suggestions: List<String>,
     voiceReady: Boolean,
+    voiceWanted: Boolean,
+    onVoiceWantedHandled: () -> Unit,
     onVoicePermission: () -> Unit,
     draft: String,
     onDraft: (String) -> Unit,
@@ -84,6 +86,14 @@ fun ChatScreen(
     val scope = rememberCoroutineScope()
     val listState = rememberLazyListState()
     var voiceOpen by remember { mutableStateOf(false) }
+    // The tap that triggered a permission ask gets its sheet the moment the
+    // grant lands, not on a second tap.
+    LaunchedEffect(voiceReady, voiceWanted) {
+        if (voiceReady && voiceWanted) {
+            voiceOpen = true
+            onVoiceWantedHandled()
+        }
+    }
     val events = page?.events ?: emptyList()
     val rows = remember(events) { TranscriptGroups.group(events) }
     val streaming = streamingText != null || activeTool != null
