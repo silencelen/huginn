@@ -1,5 +1,15 @@
 # Huginn changelog
 
+## 2.36.1 — 2026-07-28
+
+### The app states its own version beside appd's
+The Status tab showed "appd 2.33.0" with nothing beside it, which reads as this
+app's version to anyone who has not internalised that the phone app and the host
+daemon are separate release lines — updating to 2.35.0 and then seeing "2.33.0"
+looked like the update had not landed. Status now shows **This app** and **appd
+(host)** as adjacent rows, and the connection toast names both: "Connected to
+huginn — app 2.36.1, appd 2.33.0".
+
 ## 2.36.0 — 2026-07-28
 
 ### The conversation survives huginn answering
