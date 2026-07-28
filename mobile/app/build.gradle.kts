@@ -37,7 +37,7 @@ android {
         // devstore fleet convention. HUGINN_VERSIONCODE overrides for pinned builds.
         versionCode   = System.getenv("HUGINN_VERSIONCODE")?.toIntOrNull()
             ?: (System.currentTimeMillis() / 1000L - 1_767_225_600L).toInt()
-        versionName   = "2.39.0"
+        versionName   = "2.39.1"
 
         // Single-ABI for smaller APK; phone is arm64-v8a.
         ndk { abiFilters += listOf("arm64-v8a") }
@@ -130,6 +130,7 @@ dependencies {
     // silently failed on the target device — the lock never visibly engaged —
     // and the library exists precisely to absorb those OEM differences.
     implementation(libs.androidx.biometric)
+    implementation(libs.androidx.exifinterface)
     // Explicit, and load-bearing: biometric 1.1.0 transitively pins
     // androidx.fragment 1.2.5, whose FragmentActivity validates permission
     // request codes as 16-bit. The activity-result launcher generates codes
