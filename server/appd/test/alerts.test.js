@@ -284,3 +284,64 @@ test('a question with no options still reports the question', () => {
   // No trailing blank section where the options would have gone.
   assert.doesNotMatch(text, /\n\n/);
 });
+
+// ------------------------------- a chat that lived entirely inside one window
+//
+// Same class of bug as the finishedRuns counter: an edge sampled on a timer is
+// lossy. A chat CREATED and finished between two observations was absent from the
+// previous one, so the "do not announce history" rule skipped it and it never
+// alerted AT ALL. A one-line question answered in eight seconds is ordinary, and
+// it was silently the one thing this could not report.
+
+const BORN = Math.floor((NOW - 5_000) / 1000);   // created 5s ago, epoch seconds
+
+test('a chat born since the last look and already finished DOES alert', () => {
+  const { alerts } = decideAlerts(
+    obs({}, {}),
+    obs({}, { c1: { running: false, finishedRuns: 1, title: 'Quick question', snippet: 'Yes.', createdAt: BORN } }),
+    {}, NOW, NOW - 10_000,
+  );
+  assert.strictEqual(alerts.length, 1);
+  assert.strictEqual(alerts[0].kind, 'chat_finished');
+  assert.strictEqual(alerts[0].text, 'Yes.');
+});
+
+test('a chat that predates the last look is still history, not news', () => {
+  const old = Math.floor((NOW - 86_400_000) / 1000);
+  const { alerts } = decideAlerts(
+    obs({}, {}),
+    obs({}, { c1: { running: false, finishedRuns: 3, title: 'Yesterday', createdAt: old } }),
+    {}, NOW, NOW - 10_000,
+  );
+  assert.deepStrictEqual(alerts, []);
+});
+
+test('a chat born since the last look but still RUNNING does not alert yet', () => {
+  const { alerts } = decideAlerts(
+    obs({}, {}),
+    obs({}, { c1: { running: true, finishedRuns: 0, createdAt: BORN } }),
+    {}, NOW, NOW - 10_000,
+  );
+  assert.deepStrictEqual(alerts, []);
+});
+
+test('without a recorded look-time, a new chat is treated as history', () => {
+  // Alert state written before prevAt existed. Silence is the safe reading: the
+  // alternative is announcing every chat on disk the first time huginn restarts.
+  const { alerts } = decideAlerts(
+    obs({}, {}),
+    obs({}, { c1: { running: false, finishedRuns: 1, createdAt: BORN } }),
+    {}, NOW,
+  );
+  assert.deepStrictEqual(alerts, []);
+});
+
+test('the born-since path respects the quiet window like any other', () => {
+  const sent = { 'chat:c1:1': NOW - 60_000 };
+  const { alerts } = decideAlerts(
+    obs({}, {}),
+    obs({}, { c1: { running: false, finishedRuns: 1, createdAt: BORN } }),
+    sent, NOW, NOW - 10_000,
+  );
+  assert.deepStrictEqual(alerts, []);
+});
