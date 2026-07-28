@@ -29,6 +29,17 @@ pushes it has sent this install, and the phone compares that against how many
 actually landed. Nothing dropped, however long the quiet: stay hourly. Something
 dropped: tighten immediately, without waiting out any window.
 
+## appd 2.32.0 — 2026-07-28 (host)
+
+### A short chat could finish without ever telling you
+A chat created *and* finished between two observations was absent from the
+previous one, so the "don't announce history" rule skipped it — and it never
+alerted at all. A one-line question answered in eight seconds is an ordinary
+thing to want told about, and it was silently the one thing this could not
+report. The watcher now stamps when it last looked, so a chat born since then is
+news while one that predates it stays history. Verified live: the same request
+that produced nothing now pushes in ~8s.
+
 ## appd 2.31.1 — 2026-07-28 (host)
 
 ### A finished chat now quotes its answer
