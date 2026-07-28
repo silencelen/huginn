@@ -39,7 +39,7 @@ const clientsLib = require('./lib/clients');
 const pushLib = require('./lib/pushtokens');
 const { trySender } = require('./lib/fcm');
 
-const VERSION = '2.14.0';
+const VERSION = '2.14.1';
 const PORT = Number(process.env.HUGINN_APPD_PORT || 8787);
 const DATA_DIR = process.env.HUGINN_APPD_DATA || '/var/lib/huginn-appd';
 const TOKEN_FILE = process.env.HUGINN_APPD_TOKEN_FILE || '/etc/huginn-appd/token';
@@ -1185,8 +1185,9 @@ async function deliverPush(alert) {
     }
     if (r.ok) {
       sent++;
-      pushLib.noteSuccess(st, d.installId);
+      pushLib.noteSuccess(st, d.installId, Date.now());
       dirty = true;
+      log(`push: delivered ${alert.kind || 'alert'} to ${d.installId}${d.model ? ` (${d.model})` : ''}`);
     } else if (r.dead) {
       dead++;
       log(`push: dropping dead token for ${d.installId} (${r.error})`);
@@ -1220,11 +1221,7 @@ async function alertTick() {
   let pushedAny = false;
   for (const a of alerts) {
     const r = await deliverPush(a);
-    if (r.sent > 0) {
-      pushedAny = true;
-      st.pushed = (st.pushed || 0) + r.sent;
-      log(`push: sent ${a.kind} for ${a.subject} to ${r.sent} device${r.sent === 1 ? '' : 's'}`);
-    }
+    if (r.sent > 0) pushedAny = true;   // deliverPush logs and counts each device
   }
 
   // With no push configured and no tokens registered, fall back to the older signal:
@@ -1291,7 +1288,7 @@ const server = http.createServer(async (req, res) => {
         appOnline: clientsLib.appOnline(clientState, Date.now()),
         pushConfigured: !!fcm,
         pushDevices: pushLib.count(loadPushState()),
-        pushed: st.pushed || 0,
+        pushed: pushLib.totals(loadPushState()).pushed,
       });
     }
 
@@ -1330,7 +1327,7 @@ const server = http.createServer(async (req, res) => {
           // Never the token itself: it is a delivery credential for this device.
           tokenTail: token.slice(-8),
         })),
-        pushed: loadAlertState().pushed || 0,
+        ...pushLib.totals(st),
       });
     }
 
