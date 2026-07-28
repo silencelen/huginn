@@ -1,5 +1,18 @@
 # Huginn changelog
 
+## 2.40.1 / appd 2.37.1 — 2026-07-28
+
+### Photo messages read like photos, not plumbing
+A photo-only message used to display — and title its chat — as the raw
+attachment marker: "[Attached image at /var/lib/huginn-appd/uploads/img-…".
+The bracketed path is for Claude; people now see "📷 Photo attached" in the
+transcript bubble, and chat titles and list snippets derived from such messages
+say "📷 photo" instead of where the daemon stored a file.
+
+Also: the README now documents everything this week actually built —
+notification channels and un-notification rules, the adaptive heartbeat,
+attachments and the share sheet, deterministic ask mode, and the new API routes.
+
 ## 2.40.0 — 2026-07-28
 
 ### Photos in sessions, not just chats
