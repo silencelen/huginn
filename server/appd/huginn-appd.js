@@ -45,7 +45,7 @@ const { decideSwitch, worstLimit } = require('./lib/autoswitch');
 const pushLib = require('./lib/pushtokens');
 const { trySender } = require('./lib/fcm');
 
-const VERSION = '2.31.1';
+const VERSION = '2.32.0';
 const PORT = Number(process.env.HUGINN_APPD_PORT || 8787);
 const DATA_DIR = process.env.HUGINN_APPD_DATA || '/var/lib/huginn-appd';
 const TOKEN_FILE = process.env.HUGINN_APPD_TOKEN_FILE || '/etc/huginn-appd/token';
@@ -579,6 +579,9 @@ function chatStates() {
       // event, so this costs nothing here, and it is what turns "a chat
       // finished" into a notification worth reading without opening anything.
       snippet: m.lastSnippet || null,
+      // Carried so a chat seen for the first time can be told apart from a chat
+      // that merely existed before anyone happened to be looking.
+      createdAt: Number(m.createdAt) || 0,
     });
   }
   return out;
@@ -1469,7 +1472,7 @@ async function alertTickInner(st) {
   const d = digest(await listSessions(), chatStates());
   const observation = { sessions: d.sessions, chats: d.chats };
 
-  const { alerts, sentUpdates } = decideAlerts(st.prev, observation, st.sent, now);
+  const { alerts, sentUpdates } = decideAlerts(st.prev, observation, st.sent, now, st.prevAt || 0);
 
   // "A session needs you" is not much use on a lock screen — it says something is
   // wrong without saying what, so the only possible response is to go and look.
@@ -1538,6 +1541,10 @@ async function alertTickInner(st) {
   }
   st.sent = pruneSent({ ...(st.sent || {}), ...sentUpdates }, now);
   st.prev = observation;
+  // Stamped alongside it, because "was this chat created since we last looked?"
+  // cannot be answered by the observation itself — it records what existed, not
+  // when the looking happened.
+  st.prevAt = now;
   saveAlertState(st);
 }
 

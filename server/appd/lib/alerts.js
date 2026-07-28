@@ -23,9 +23,12 @@ const REPEAT_MS = 30 * 60 * 1000;
  * @param next  current, same shape
  * @param sent  {key: timestampMs} of what has already been said
  * @param now   ms
+ * @param prevAt when `prev` was observed, ms. Lets a chat born since then be told
+ *        apart from one that predates the watcher; 0 disables that distinction,
+ *        which is the safe reading for state written before this was recorded.
  * @returns {{alerts: Array<{key,kind,subject,title,text}>, sentUpdates: object}}
  */
-function decideAlerts(prev, next, sent, now) {
+function decideAlerts(prev, next, sent, now, prevAt = 0) {
   const alerts = [];
   const sentUpdates = {};
 
@@ -60,7 +63,38 @@ function decideAlerts(prev, next, sent, now) {
 
   for (const [id, cur] of Object.entries(next.chats || {})) {
     const before = (prev.chats || {})[id];
-    if (!before) continue;                       // a chat that appeared mid-window
+    // A chat absent from the previous observation is usually history — something
+    // that existed before anyone was watching — and announcing it would turn a
+    // first look into a burst of notifications about the past.
+    //
+    // But not always, and the exception is not exotic: a chat CREATED and finished
+    // entirely inside one window was never in a previous observation either, and
+    // under the old blanket rule it never alerted at all. A one-line question
+    // answered in eight seconds is an ordinary thing to ask a phone about, and it
+    // was silently the one thing this could not report.
+    //
+    // Creation time separates the two cleanly. Newer than the last observation
+    // means it came into existence while we were watching, so its finish is news;
+    // older means it predates us, and it is not.
+    if (!before) {
+      const createdMs = (Number(cur.createdAt) || 0) * 1000;
+      const bornSincePrev = prevAt > 0 && createdMs > prevAt;
+      if (!bornSincePrev || !(cur.finishedRuns > 0) || cur.running) continue;
+      const key = `chat:${id}:${cur.finishedRuns}`;
+      if (fresh(key)) {
+        const label = cur.title || 'a chat';
+        alerts.push({
+          key,
+          kind: 'chat_finished',
+          subject: id,
+          title: label.slice(0, 60),
+          text: cur.snippet || 'Finished.',
+          label,
+        });
+        sentUpdates[key] = now;
+      }
+      continue;
+    }
     // Two ways to notice, because the obvious one is lossy. `running` going false
     // is an EDGE, and this runs on a timer: a chat that began and ended between two
     // observations was never seen running, so its finish went unreported — measured,
