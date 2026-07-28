@@ -451,6 +451,8 @@ data class WatchChat(
      * all. A counter that is higher than last time cannot be missed that way.
      */
     val finishedRuns: Long = 0,
+    /** The last thing Claude said, so a finish notification can carry the answer. */
+    val snippet: String? = null,
 )
 
 /** The change signal a watching client parks on. */
@@ -461,6 +463,12 @@ data class Watch(
     val chats: Map<String, WatchChat> = emptyMap(),
     val changed: Boolean = false,
     val serverTime: Long = 0,
+    /**
+     * How many pushes the host believes it has sent this install. Compared against
+     * what actually arrived, it is the only signal that separates a quiet night
+     * from a broken delivery path — see [com.silencelen.huginn.notify.Heartbeat].
+     */
+    val pushesSent: Long = 0,
 )
 
 /** State of an in-progress sign-in, read off the login session's pane. */

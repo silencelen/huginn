@@ -45,7 +45,7 @@ const { decideSwitch, worstLimit } = require('./lib/autoswitch');
 const pushLib = require('./lib/pushtokens');
 const { trySender } = require('./lib/fcm');
 
-const VERSION = '2.30.0';
+const VERSION = '2.31.1';
 const PORT = Number(process.env.HUGINN_APPD_PORT || 8787);
 const DATA_DIR = process.env.HUGINN_APPD_DATA || '/var/lib/huginn-appd';
 const TOKEN_FILE = process.env.HUGINN_APPD_TOKEN_FILE || '/etc/huginn-appd/token';
@@ -575,6 +575,10 @@ function chatStates() {
       running: activeRuns.has(id),
       pending: Array.isArray(m.pending) ? m.pending.length : 0,
       finishedRuns: m.finishedRuns || 0,
+      // The last thing Claude said. Already on disk from the run's own result
+      // event, so this costs nothing here, and it is what turns "a chat
+      // finished" into a notification worth reading without opening anything.
+      snippet: m.lastSnippet || null,
     });
   }
   return out;
@@ -1793,10 +1797,16 @@ const server = http.createServer(async (req, res) => {
         d = digest(await listSessions(), chatStates());
       }
       if (req.destroyed) return;
+      const installId = String(req.headers['x-huginn-client'] || '').trim().slice(0, 64);
       return sendJson(res, 200, {
         ...d,
         changed: !known || d.hash !== known,
         serverTime: Math.floor(Date.now() / 1000),
+        // What this host thinks it has delivered to the caller. The phone compares
+        // it against what it actually received, which is the only way it can tell a
+        // quiet night from a broken delivery path — and that distinction is worth a
+        // hundred and twenty device wake-ups a day.
+        pushesSent: installId ? pushLib.sentTo(loadPushState(), installId) : 0,
       });
     }
 

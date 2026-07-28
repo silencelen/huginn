@@ -89,3 +89,27 @@ test('a chat with no counter reads as zero rather than undefined', () => {
   const d = digest([], [{ id: 'c1', running: false, pending: 0 }]);
   assert.equal(d.chats.c1.finishedRuns, 0);
 });
+
+// Regression, found on the device: chatStates() grew a `snippet` field, the alert
+// code read it, and it was null every time — because this function rebuilds each
+// chat from an explicit list and silently dropped anything not named. The symptom
+// was a notification reading "Finished." while the answer sat correctly on disk.
+// Nothing failed; a value simply evaporated one layer below the change.
+
+test('a chat snippet survives the digest', () => {
+  const d = digest([], [{ id: 'c1', running: false, finishedRuns: 1, snippet: 'Sonarr is fine.' }]);
+  assert.equal(d.chats.c1.snippet, 'Sonarr is fine.');
+});
+
+test('a chat with no snippet yet digests to null, not undefined', () => {
+  const d = digest([], [{ id: 'c1', running: true }]);
+  assert.strictEqual(d.chats.c1.snippet, null);
+});
+
+test('the snippet is payload, not a change signal', () => {
+  // It must not enter the hash: a snippet rewritten as an answer streams in would
+  // wake every parked phone to tell it nothing it would alert on had changed.
+  const a = digest([], [{ id: 'c1', running: true, snippet: 'thinking' }]);
+  const b = digest([], [{ id: 'c1', running: true, snippet: 'still thinking' }]);
+  assert.equal(a.hash, b.hash);
+});

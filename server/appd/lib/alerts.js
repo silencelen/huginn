@@ -74,12 +74,17 @@ function decideAlerts(prev, next, sent, now) {
       const key = `chat:${id}:${cur.finishedRuns || 0}`;
       if (fresh(key)) {
         const label = cur.title || before.title || 'a chat';
+        // Titled by the chat and bodied by the answer, the way a message from a
+        // person would be. "huginn finished: deploy the thing" reports only that
+        // something ended, and the one question it provokes — "and?" — is
+        // precisely what the snippet already answers.
         alerts.push({
           key,
           kind: 'chat_finished',
           subject: id,
-          title: 'Chat finished',
-          text: `huginn finished: ${label}`,
+          title: label.slice(0, 60),
+          text: cur.snippet || before.snippet || 'Finished.',
+          label,
         });
         sentUpdates[key] = now;
       }
@@ -129,6 +134,10 @@ function routeAlerts(alerts, { mode = 'fallback', appOnline = false } = {}) {
  * saying what, so the only possible response is to go and look.
  */
 function telegramText(a) {
+  // A finished chat is titled by the chat itself, which reads correctly on a
+  // phone (where the app supplies the context) and ambiguously here, where an
+  // unadorned project name arriving out of nowhere could be anything.
+  if (a.kind === 'chat_finished') return `\u{1F514} Chat finished: ${a.label || a.title}\n${a.text}`;
   const head = `\u{1F514} ${a.title}`;
   if (a.kind !== 'session_attention' || !a.question) return `${head}\n${a.text}`;
   const opts = (a.options || []).map((o) => `${o.number}) ${o.label}`).join('\n');
