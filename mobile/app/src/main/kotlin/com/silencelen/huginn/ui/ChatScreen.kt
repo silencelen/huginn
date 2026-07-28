@@ -29,7 +29,10 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.SuggestionChip
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -68,6 +71,7 @@ fun ChatScreen(
     models: List<ModelChoice>,
     onSetOptions: (String?, String?) -> Unit,
     chatId: String,
+    suggestions: List<String>,
     draft: String,
     onDraft: (String) -> Unit,
     onSend: (String) -> Unit,
@@ -132,6 +136,32 @@ fun ChatScreen(
 
         if (hasUnseen) {
             JumpToNewest { scope.launch { listState.animateScrollToItem((itemCount - 1).coerceAtLeast(0)) } }
+        }
+
+        // Same contract as the session chips: a suggestion FILLS the composer,
+        // yields to typing, and clears when a new turn starts.
+        if (suggestions.isNotEmpty() && !streaming && !sending && draft.isBlank()) {
+            Row(
+                Modifier
+                    .fillMaxWidth()
+                    .horizontalScroll(rememberScrollState())
+                    .padding(horizontal = 10.dp, vertical = 2.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                suggestions.forEach { sug ->
+                    SuggestionChip(
+                        onClick = { onDraft(sug) },
+                        label = {
+                            Text(
+                                sug,
+                                style = MaterialTheme.typography.labelMedium,
+                                maxLines = 1,
+                                overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+                            )
+                        },
+                    )
+                }
+            }
         }
 
         Composer(

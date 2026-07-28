@@ -621,14 +621,18 @@ private fun AgentRow(a: com.silencelen.huginn.data.AgentRun) {
                     overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
                 )
             }
-            a.lastLine?.let { last ->
+            // A settled agent's own conclusion beats its last tool call as an
+            // epitaph; the live line stays for agents still working.
+            val closing = if (!a.active && !a.summary.isNullOrBlank()) a.summary else a.lastLine
+            closing?.let { last ->
                 Spacer(Modifier.size(3.dp))
                 Text(
                     last,
                     style = MaterialTheme.typography.labelSmall,
-                    fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
+                    fontFamily = if (last == a.summary) androidx.compose.ui.text.font.FontFamily.Default
+                    else androidx.compose.ui.text.font.FontFamily.Monospace,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    maxLines = 1,
+                    maxLines = 2,
                     overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
                 )
             }

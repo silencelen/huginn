@@ -1,5 +1,24 @@
 # Huginn changelog
 
+## 2.25.0 — 2026-07-28
+
+### Suggestions come to chats
+The same next-message chips the sessions conversation got: up to three grounded
+suggestions at each turn boundary, filling the composer rather than sending,
+stepping aside the moment you type or a new turn starts. Same generation, same
+cache — a chat and a session are the same transcript wearing different UIs.
+
+### The top-bar slot earns its keep
+The space the settings gear vacated now holds controls for the thing you are
+looking at. In a session: rename, fit the pane to the phone, interrupt (Esc),
+kill. In a chat: rename, delete. Destructive ones confirm first.
+
+### Settled agents show their conclusions
+The work sheet's settled agents used to end on their last tool call ("last:
+StructuredOutput" — technically true, useless). The workflow journal records
+each agent's own summary of what it concluded, and that is what a settled row
+now shows: "Traced the migration; sound." Live agents keep the live line.
+
 ## 2.24.0 — 2026-07-28
 
 ### Multi-select questions work
