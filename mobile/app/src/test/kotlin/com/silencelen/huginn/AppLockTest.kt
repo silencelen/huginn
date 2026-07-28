@@ -2,6 +2,7 @@ package com.silencelen.huginn
 
 import com.silencelen.huginn.notify.AppLock
 import com.silencelen.huginn.notify.Heartbeat
+import com.silencelen.huginn.ui.HuginnViewModel
 import com.silencelen.huginn.ui.appendDictation
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -117,5 +118,44 @@ class HeartbeatIntervalTest {
     fun `the relaxed cadence is a real saving, not a token one`() {
         // 144 wake-ups a day becomes 24.
         assertTrue(Heartbeat.RELAXED_INTERVAL_MS >= Heartbeat.INTERVAL_MS * 6)
+    }
+}
+
+/**
+ * What Settings tells you about the wake-up cadence.
+ *
+ * Derived from the same function the alarm uses rather than restated, so the
+ * screen cannot claim one thing while the alarm does another — which is the
+ * failure mode for any status display that reimplements the logic it reports on.
+ */
+class DeliveryHealthTest {
+
+    private fun health(sent: Long, received: Long) =
+        HuginnViewModel.DeliveryHealth(pushesSent = sent, pushesReceived = received)
+
+    @Test
+    fun `nothing dropped reads as relaxed`() {
+        assertTrue(health(40, 40).relaxed)
+        assertEquals(0L, health(40, 40).pushesMissing)
+    }
+
+    @Test
+    fun `a deficit reads as tightened, and counts what is missing`() {
+        assertFalse(health(43, 41).relaxed)
+        assertEquals(2L, health(43, 41).pushesMissing)
+    }
+
+    @Test
+    fun `an unproven path reads as tightened`() {
+        assertFalse(health(0, 0).relaxed)
+    }
+
+    @Test
+    fun `a host that forgot its tally never reports negative losses`() {
+        // Sent < received after a daemon state reset. "-38 pushes never arrived"
+        // would be nonsense on the screen, and it must not read as a fault.
+        val h = health(0, 38)
+        assertEquals(0L, h.pushesMissing)
+        assertTrue(h.relaxed)
     }
 }
