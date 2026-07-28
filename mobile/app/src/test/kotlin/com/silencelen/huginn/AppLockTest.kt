@@ -1,6 +1,7 @@
 package com.silencelen.huginn
 
 import com.silencelen.huginn.notify.AppLock
+import com.silencelen.huginn.notify.Foreground
 import com.silencelen.huginn.notify.Heartbeat
 import com.silencelen.huginn.ui.HuginnViewModel
 import com.silencelen.huginn.ui.appendDictation
@@ -157,5 +158,57 @@ class DeliveryHealthTest {
         val h = health(0, 38)
         assertEquals(0L, h.pushesMissing)
         assertTrue(h.relaxed)
+    }
+}
+
+/**
+ * The don't-buzz-about-the-open-screen rule.
+ *
+ * The `resumed` gate is the part worth pinning: a chat left open when the phone
+ * was pocketed is still the composed destination, but nobody is looking at it,
+ * and a finish arriving then MUST notify.
+ */
+class ForegroundTest {
+
+    @org.junit.After
+    fun reset() {
+        Foreground.resumed = false
+        Foreground.chat = null
+        Foreground.session = null
+    }
+
+    @Test
+    fun `the open chat, while resumed, is showing`() {
+        Foreground.resumed = true; Foreground.chat = "c1"
+        assertTrue(Foreground.showsChat("c1"))
+        assertFalse(Foreground.showsChat("c2"))
+    }
+
+    @Test
+    fun `the same chat, paused, is NOT showing`() {
+        Foreground.resumed = false; Foreground.chat = "c1"
+        assertFalse(Foreground.showsChat("c1"))
+    }
+
+    @Test
+    fun `a fresh process shows nothing`() {
+        // FCM starts the process; nothing has written here; defaults must read
+        // as "not looking", so the push posts normally.
+        assertFalse(Foreground.showsChat("c1"))
+        assertFalse(Foreground.showsSession("s1"))
+    }
+
+    @Test
+    fun `null never matches, even against null state`() {
+        Foreground.resumed = true
+        assertFalse(Foreground.showsChat(null))
+        assertFalse(Foreground.showsSession(null))
+    }
+
+    @Test
+    fun `sessions and chats do not cross-match`() {
+        Foreground.resumed = true; Foreground.session = "x"
+        assertFalse(Foreground.showsChat("x"))
+        assertTrue(Foreground.showsSession("x"))
     }
 }
