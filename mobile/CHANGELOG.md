@@ -1,5 +1,21 @@
 # Huginn changelog
 
+## 2.23.0 — 2026-07-28
+
+### Accounts rotate themselves
+The reason for keeping several Max accounts, finally automated: when the active
+account's binding limit crosses ~95%, huginn switches to the saved account with
+the most headroom and notifies you it did — push if the app is reachable,
+Telegram otherwise. Decided and executed on the host, so it works with the phone
+in a drawer.
+
+It is deliberately conservative: no switch unless a candidate is meaningfully
+fresher (not just less dead), a 30-minute cooldown so a misjudgment cannot
+oscillate, an account with unknown headroom is never chosen, and running
+sessions keep their account until they restart — the same rule manual switching
+has always had. The toggle lives in Settings under the saved accounts, with the
+last rotation shown beneath it.
+
 ## 2.22.1 — 2026-07-27
 
 ### Sessions is now the home screen

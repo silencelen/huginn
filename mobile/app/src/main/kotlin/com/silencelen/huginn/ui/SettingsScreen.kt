@@ -69,6 +69,8 @@ fun SettingsScreen(
     appLockAvailable: Boolean,
     onAppLock: (Boolean) -> Unit,
     onLockNow: () -> Unit,
+    autoswitch: com.silencelen.huginn.data.Autoswitch?,
+    onAutoswitch: (Boolean) -> Unit,
     notificationsAllowed: Boolean,
     onRequestNotifications: () -> Unit,
     onOpenSystemNotificationSettings: () -> Unit,
@@ -290,6 +292,30 @@ fun SettingsScreen(
                 style = MaterialTheme.typography.labelMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
+            // The rotation the accounts exist FOR, automated: when the active
+            // login's binding limit crosses ~95%, huginn switches to the freshest
+            // saved one and tells you it did. Decided and executed on the host, so
+            // it works with the phone in a drawer.
+            if (savedAccounts.size > 1 && autoswitch != null) {
+                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                    Column(Modifier.weight(1f)) {
+                        Text("Switch automatically when one runs out", style = MaterialTheme.typography.bodyMedium)
+                        Text(
+                            buildString {
+                                append("Rotates to the account with the most headroom and notifies you. ")
+                                append("Running sessions keep their account until they restart.")
+                                autoswitch.last?.let { l ->
+                                    append("\nLast: ${l.fromEmail ?: "?"} ${l.fromPercent}% → ")
+                                    append("${l.toEmail ?: "?"} ${l.toPercent}%  ·  ${relTime(l.at)}")
+                                }
+                            },
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    Switch(checked = autoswitch.enabled, onCheckedChange = onAutoswitch)
+                }
+            }
             Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                 savedAccounts.forEach { a ->
                     SavedAccountRow(
