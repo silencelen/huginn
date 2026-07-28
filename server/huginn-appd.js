@@ -36,8 +36,10 @@ const { pushPending, takePending, clearPending, queuedEvents } = require('./lib/
 const { digest } = require('./lib/watch');
 const { decideAlerts, routeAlerts, pruneSent } = require('./lib/alerts');
 const clientsLib = require('./lib/clients');
+const pushLib = require('./lib/pushtokens');
+const { trySender } = require('./lib/fcm');
 
-const VERSION = '2.13.0';
+const VERSION = '2.14.0';
 const PORT = Number(process.env.HUGINN_APPD_PORT || 8787);
 const DATA_DIR = process.env.HUGINN_APPD_DATA || '/var/lib/huginn-appd';
 const TOKEN_FILE = process.env.HUGINN_APPD_TOKEN_FILE || '/etc/huginn-appd/token';
@@ -1137,6 +1139,70 @@ async function deliverTelegram(text) {
   return true;
 }
 
+// ------------------------------------------------------------------ FCM push
+//
+// The one transport that reaches a phone asleep with the app closed, in seconds
+// rather than at the next alarm. Optional on purpose: absent a key this daemon still
+// alerts by Telegram and the app still checks in on its own, so a host without push
+// set up is degraded rather than broken.
+const FCM_KEY = process.env.HUGINN_FCM_KEY || '/etc/huginn-appd/fcm-service-account.json';
+const PUSH_STATE = path.join(DATA_DIR, 'push.json');
+const fcm = trySender(FCM_KEY, log);
+
+function loadPushState() {
+  try { return JSON.parse(fs.readFileSync(PUSH_STATE, 'utf8')); }
+  catch { return pushLib.emptyState(); }
+}
+function savePushState(st) {
+  try {
+    fs.writeFileSync(`${PUSH_STATE}.tmp`, JSON.stringify(st), { mode: 0o600 });
+    fs.renameSync(`${PUSH_STATE}.tmp`, PUSH_STATE);
+  } catch (e) { log('push: could not persist tokens', e.message); }
+}
+
+/**
+ * Pushes one alert to every registered device.
+ *
+ * A token FCM reports as dead is forgotten; any other failure is counted and left
+ * alone. That distinction is deliberate — treating an outage as a dead token would
+ * unregister a working phone and leave no route back except reinstalling the app.
+ *
+ * @returns {Promise<{sent: number, dead: number, failed: number}>}
+ */
+async function deliverPush(alert) {
+  if (!fcm) return { sent: 0, dead: 0, failed: 0 };
+  const st = loadPushState();
+  const devices = pushLib.list(st);
+  if (!devices.length) return { sent: 0, dead: 0, failed: 0 };
+
+  let sent = 0; let dead = 0; let failed = 0; let dirty = false;
+  for (const d of devices) {
+    let r;
+    try {
+      r = await fcm.send(d.token, alert);
+    } catch (e) {
+      r = { ok: false, dead: false, status: 0, error: e.message };
+    }
+    if (r.ok) {
+      sent++;
+      pushLib.noteSuccess(st, d.installId);
+      dirty = true;
+    } else if (r.dead) {
+      dead++;
+      log(`push: dropping dead token for ${d.installId} (${r.error})`);
+      pushLib.drop(st, d.installId);
+      dirty = true;
+    } else {
+      failed++;
+      log(`push: send failed for ${d.installId} (${r.status} ${r.error})`);
+      pushLib.noteFailure(st, d.installId);
+      dirty = true;
+    }
+  }
+  if (dirty) savePushState(st);
+  return { sent, dead, failed };
+}
+
 let alertTimer = null;
 async function alertTick() {
   const st = loadAlertState();
@@ -1146,14 +1212,31 @@ async function alertTick() {
   const observation = { sessions: d.sessions, chats: d.chats };
 
   const { alerts, sentUpdates } = decideAlerts(st.prev, observation, st.sent, now);
-  const online = clientsLib.appOnline(clientState, now);
-  const { deliver, held } = routeAlerts(alerts, { mode: st.mode || 'fallback', appOnline: online });
+
+  // Push first, because it is the route that actually reaches a sleeping phone, and
+  // because its outcome is what decides whether Telegram is needed. FCM accepting a
+  // message is far better evidence than "this phone checked in recently" — so when
+  // push is configured the fallback turns on real delivery rather than a guess.
+  let pushedAny = false;
+  for (const a of alerts) {
+    const r = await deliverPush(a);
+    if (r.sent > 0) {
+      pushedAny = true;
+      st.pushed = (st.pushed || 0) + r.sent;
+      log(`push: sent ${a.kind} for ${a.subject} to ${r.sent} device${r.sent === 1 ? '' : 's'}`);
+    }
+  }
+
+  // With no push configured and no tokens registered, fall back to the older signal:
+  // whether a phone has been checking in on its own.
+  const appReached = pushedAny || clientsLib.appOnline(clientState, now);
+  const { deliver, held } = routeAlerts(alerts, { mode: st.mode || 'fallback', appOnline: appReached });
 
   for (const a of held) {
     // Logged rather than dropped quietly: months from now, "why did Telegram stay
     // silent" needs an answer, and "the app had it" is a different answer from
     // "nothing happened".
-    log(`alerts: held ${a.kind} for ${a.subject} (app checked in recently)`);
+    log(`alerts: held ${a.kind} for ${a.subject} (${pushedAny ? 'pushed to the app' : 'app checked in recently'})`);
     delete sentUpdates[a.key];
   }
   for (const a of deliver) {
@@ -1206,6 +1289,63 @@ const server = http.createServer(async (req, res) => {
         lastAt: st.lastAt ?? null,
         channel: fs.existsSync(TELEGRAM_SCRIPT) ? 'telegram' : 'none',
         appOnline: clientsLib.appOnline(clientState, Date.now()),
+        pushConfigured: !!fcm,
+        pushDevices: pushLib.count(loadPushState()),
+        pushed: st.pushed || 0,
+      });
+    }
+
+    // --- FCM: the app hands over the token Google will deliver to
+    if (req.method === 'POST' && p === '/v1/push/register') {
+      const body = JSON.parse(await readBody(req) || '{}');
+      const installId = String(body.installId || '').trim().slice(0, 64);
+      const token = String(body.token || '').trim();
+      if (!installId || !token) return sendErr(res, 400, 'installId and token are required');
+      const st = loadPushState();
+      const r = pushLib.register(st, installId, token, Date.now(), { model: body.model });
+      // Persisted only on a real change, because the app re-registers on every start
+      // and rewriting the file each time buys nothing.
+      if (r.changed) {
+        savePushState(st);
+        log(`push: ${r.rotated ? 'rotated' : 'registered'} token for ${installId}`);
+      }
+      return sendJson(res, 200, {
+        ok: true,
+        configured: !!fcm,
+        devices: pushLib.count(st),
+        rotated: r.rotated,
+      });
+    }
+
+    if (req.method === 'GET' && p === '/v1/push') {
+      const st = loadPushState();
+      return sendJson(res, 200, {
+        // Whether the HOST can send at all, which is a different question from
+        // whether any phone has registered — and they fail for different reasons.
+        configured: !!fcm,
+        projectId: fcm ? fcm.projectId : null,
+        sender: fcm ? fcm.email : null,
+        devices: pushLib.list(st).map(({ token, ...rest }) => ({
+          ...rest,
+          // Never the token itself: it is a delivery credential for this device.
+          tokenTail: token.slice(-8),
+        })),
+        pushed: loadAlertState().pushed || 0,
+      });
+    }
+
+    if (req.method === 'POST' && p === '/v1/push/test') {
+      if (!fcm) return sendErr(res, 503, 'FCM is not configured on this host');
+      const r = await deliverPush({
+        title: 'Huginn push test',
+        text: 'This is what an alert delivered straight to the app looks like.',
+        kind: 'test',
+        subject: 'test',
+      });
+      return sendJson(res, r.sent > 0 ? 200 : 502, {
+        ok: r.sent > 0, ...r,
+        error: r.sent > 0 ? undefined
+          : (r.dead ? 'the registered token was rejected as dead' : 'no device accepted the push'),
       });
     }
 

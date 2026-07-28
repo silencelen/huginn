@@ -23,9 +23,11 @@ import com.silencelen.huginn.data.SavedAccount
 import com.silencelen.huginn.data.Usage
 import com.silencelen.huginn.data.Alerts
 import com.silencelen.huginn.data.ClientsInfo
+import com.silencelen.huginn.data.PushStatus
 import com.silencelen.huginn.data.LoginState
 import com.silencelen.huginn.notify.SessionWatchWorker
 import com.silencelen.huginn.notify.Heartbeat
+import com.silencelen.huginn.notify.HuginnMessagingService
 import com.silencelen.huginn.notify.WatchService
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -106,11 +108,34 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
     private val _clients = MutableStateFlow<ClientsInfo?>(null)
     val clients: StateFlow<ClientsInfo?> = _clients.asStateFlow()
 
+    /** Whether the host can push, and whether THIS phone has registered to receive it. */
+    private val _push = MutableStateFlow<PushStatus?>(null)
+    val push: StateFlow<PushStatus?> = _push.asStateFlow()
+
     fun refreshDelivery() {
         viewModelScope.launch {
             runCatching { client.alerts() }.onSuccess { _alerts.value = it }
             runCatching { client.clients() }.onSuccess { _clients.value = it }
+            runCatching { client.push() }.onSuccess { _push.value = it }
             _health.value = readHealth()
+        }
+    }
+
+    /**
+     * Sends a real push to this device.
+     *
+     * Deliberately the same path a genuine alert takes, right through Google, so a
+     * success here means the whole chain works rather than that one link does.
+     */
+    fun sendTestPush() {
+        viewModelScope.launch {
+            runCatching { client.testPush() }
+                .onSuccess {
+                    _toast.value = if (it.ok) "Pushed to ${it.sent} device${if (it.sent == 1) "" else "s"}"
+                        else (it.error ?: "No device accepted the push")
+                    refreshDelivery()
+                }
+                .onFailure { _toast.value = errText(it) }
         }
     }
 
@@ -248,6 +273,11 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
                 refreshAll()
                 refreshModels()
                 if (_notifyEnabled.value) ensureBackgroundDelivery()
+                // Handed over on every start, not just when Firebase issues a new one:
+                // a token minted before the server URL was configured, or while huginn
+                // was unreachable, would otherwise never arrive — and push would look
+                // set up while nothing could actually be delivered.
+                HuginnMessagingService.syncToken(getApplication())
                 if (_watchEnabled.value) WatchService.start(getApplication())
             }
         }
@@ -271,6 +301,8 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch {
             settings.setBaseUrl(url)
             settings.setToken(tok)
+            // A token registered against the previous host means nothing to the new one.
+            HuginnMessagingService.syncToken(getApplication())
             baseUrlNow = url.trim()
             tokenNow = tok.trim()
             _baseUrl.value = baseUrlNow

@@ -133,6 +133,7 @@ fun HuginnApp(
     val hostAlerts by vm.alerts.collectAsState()
     val health by vm.health.collectAsState()
     val clients by vm.clients.collectAsState()
+    val push by vm.push.collectAsState()
 
     val snackbar = remember { SnackbarHostState() }
     LaunchedEffect(toast) { toast?.let { snackbar.showSnackbar(it); vm.toastShown() } }
@@ -399,8 +400,10 @@ fun HuginnApp(
                         onNotifyEnabled = { vm.setNotifyEnabled(it) },
                         health = health,
                         clients = clients,
+                        push = push,
                         onRequestDozeExemption = { vm.requestDozeExemption() },
                         onRefreshDelivery = { vm.refreshDelivery() },
+                        onTestPush = { vm.sendTestPush() },
                         onAlertsMode = { vm.setAlertsMode(it) },
                         notificationsAllowed = notificationsAllowed,
                         onRequestNotifications = requestNotifications,

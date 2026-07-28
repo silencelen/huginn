@@ -20,6 +20,8 @@ plugins {
     alias(libs.plugins.kotlin.android)
     alias(libs.plugins.kotlin.compose)
     alias(libs.plugins.kotlin.serialization)
+    // Reads app/google-services.json and generates the Firebase config resources.
+    alias(libs.plugins.google.services)
 }
 
 android {
@@ -35,7 +37,7 @@ android {
         // devstore fleet convention. HUGINN_VERSIONCODE overrides for pinned builds.
         versionCode   = System.getenv("HUGINN_VERSIONCODE")?.toIntOrNull()
             ?: (System.currentTimeMillis() / 1000L - 1_767_225_600L).toInt()
-        versionName   = "2.13.0"
+        versionName   = "2.14.0"
 
         // Single-ABI for smaller APK; phone is arm64-v8a.
         ndk { abiFilters += listOf("arm64-v8a") }
@@ -119,6 +121,13 @@ dependencies {
     implementation(libs.androidx.datastore.preferences)
     // Background poll that notices when a session starts waiting on you.
     implementation(libs.androidx.work.runtime.ktx)
+
+    // FCM. The one transport that reaches a phone asleep with the app closed, in
+    // seconds rather than at the next alarm — everything else here either waits for
+    // a beat or arrives on a different app. Needs app/google-services.json, which is
+    // NOT a secret: the same values ship inside every copy of the APK.
+    implementation(platform(libs.firebase.bom))
+    implementation(libs.firebase.messaging)
 
     debugImplementation(libs.compose.ui.tooling)
 
