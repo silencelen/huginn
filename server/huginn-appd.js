@@ -35,7 +35,7 @@ const { formatModel, discoverModels, parseModelId } = require('./lib/models');
 const { pushPending, takePending, clearPending, queuedEvents } = require('./lib/chatqueue');
 const { digest } = require('./lib/watch');
 
-const VERSION = '2.11.0';
+const VERSION = '2.11.1';
 const PORT = Number(process.env.HUGINN_APPD_PORT || 8787);
 const DATA_DIR = process.env.HUGINN_APPD_DATA || '/var/lib/huginn-appd';
 const TOKEN_FILE = process.env.HUGINN_APPD_TOKEN_FILE || '/etc/huginn-appd/token';
@@ -779,7 +779,8 @@ function deliverOrphanedQueues() {
 }
 
 const CREDENTIALS_PATH = path.join(os.homedir(), '.claude', '.credentials.json');
-const accounts = new AccountStore(path.join(DATA_DIR, 'accounts'), CREDENTIALS_PATH);
+const CLAUDE_CONFIG_PATH = path.join(os.homedir(), '.claude.json');
+const accounts = new AccountStore(path.join(DATA_DIR, 'accounts'), CREDENTIALS_PATH, CLAUDE_CONFIG_PATH);
 
 // Fingerprint of the login that was active when a sign-in flow started. When the
 // live credentials no longer match it, the flow finished — which is how the
@@ -856,22 +857,51 @@ async function planForCredentials(creds) {
 // ------------------------------------------------------- account + usage
 
 /** `claude auth status` already emits JSON; pass it through, minus nothing secret. */
+/**
+ * Who the host is signed in as.
+ *
+ * `claude auth status` reads an identity block in ~/.claude.json that the CLI
+ * refreshes when it next RUNS — so immediately after switching accounts it reports
+ * nothing at all, which would show up as "not signed in" on a host that is
+ * perfectly signed in. The credentials are the real answer, so fall back to asking
+ * them who they belong to.
+ */
 async function accountStatus() {
   const { err, stdout } = await run('claude', ['auth', 'status'], { timeout: 20_000 });
-  if (err) return { loggedIn: false, error: 'could not read auth status' };
-  try {
-    const o = JSON.parse(stdout);
+  let parsed = null;
+  if (!err) { try { parsed = JSON.parse(stdout); } catch { /* handled below */ } }
+
+  if (parsed && parsed.loggedIn && parsed.email) {
     return {
-      loggedIn: !!o.loggedIn,
-      email: o.email ?? null,
-      orgName: o.orgName ?? null,
-      subscriptionType: o.subscriptionType ?? null,
-      authMethod: o.authMethod ?? null,
-      apiProvider: o.apiProvider ?? null,
+      loggedIn: true,
+      email: parsed.email,
+      orgName: parsed.orgName ?? null,
+      subscriptionType: parsed.subscriptionType ?? null,
+      authMethod: parsed.authMethod ?? null,
+      apiProvider: parsed.apiProvider ?? null,
+      identitySource: 'cli',
     };
-  } catch {
-    return { loggedIn: false, error: 'unexpected auth status output' };
   }
+
+  const live = accounts.readActive();
+  if (live) {
+    const email = await resolveEmail(live);
+    if (email) {
+      const o = live.claudeAiOauth || {};
+      return {
+        loggedIn: true,
+        email,
+        orgName: null,
+        subscriptionType: o.subscriptionType ?? null,
+        authMethod: 'claude.ai',
+        apiProvider: 'firstParty',
+        // The CLI will name it itself once it next runs; until then this is the
+        // token's own answer, which cannot be stale.
+        identitySource: 'token',
+      };
+    }
+  }
+  return { loggedIn: false, error: parsed ? 'not signed in' : 'could not read auth status' };
 }
 
 /**
