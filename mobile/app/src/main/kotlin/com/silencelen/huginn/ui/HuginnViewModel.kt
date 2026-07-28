@@ -362,8 +362,10 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch {
             // At the cadence push health has earned, so a restart does not reset a
             // relaxed alarm back to waking the device every ten minutes.
-            val last = runCatching { settings.lastPushAt.first() }.getOrDefault(0L)
-            Heartbeat.arm(app, Heartbeat.intervalFor(last, System.currentTimeMillis()))
+            Heartbeat.arm(app, Heartbeat.intervalFor(
+                runCatching { settings.pushesSent.first() }.getOrDefault(0L),
+                runCatching { settings.pushesReceived.first() }.getOrDefault(0L),
+            ))
         }
         SessionWatchWorker.schedule(app)
     }

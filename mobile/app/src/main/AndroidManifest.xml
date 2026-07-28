@@ -105,6 +105,14 @@
             android:exported="false"
             android:enabled="true" />
 
+        <!-- Receives what was typed into a notification's reply box. Not exported
+             for the same reason: the PendingIntent that carries the text has to be
+             mutable, but only this app can hand it out. -->
+        <receiver
+            android:name=".notify.ReplyReceiver"
+            android:exported="false"
+            android:enabled="true" />
+
         <!-- Woken by AlarmManager while the phone is idle. Not exported: it is
              triggered only by an alarm this app scheduled against its own component. -->
         <receiver

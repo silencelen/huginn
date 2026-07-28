@@ -120,6 +120,19 @@ function noteSuccess(state, installId, now) {
   if (now) state.lastPushAt = now;
 }
 
+/**
+ * How many pushes this host believes it has delivered to one install.
+ *
+ * Exists so the phone can tell "no push because nothing happened" apart from "no
+ * push because FCM is broken" — indistinguishable from the phone alone, and the
+ * difference decides how often it has to wake itself up to check. Comparing counts
+ * rather than timestamps keeps clock skew out of the answer entirely.
+ */
+function sentTo(state, installId) {
+  const t = ((state && state.tokens) || {})[installId];
+  return (t && t.pushes) || 0;
+}
+
 module.exports = {
-  emptyState, register, list, count, drop, noteFailure, noteSuccess, totals, MAX_TOKENS,
+  emptyState, register, list, count, drop, noteFailure, noteSuccess, totals, sentTo, MAX_TOKENS,
 };

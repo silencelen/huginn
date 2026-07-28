@@ -95,6 +95,34 @@ class MainActivity : FragmentActivity() {
     private val locked = mutableStateOf(false)
     private val lockError = mutableStateOf<String?>(null)
 
+    /**
+     * Where a notification tap wants the app to land.
+     *
+     * State rather than a value read once in [onCreate], because the notifications
+     * are launched SINGLE_TOP: while the app is already open, a tap does not
+     * recreate the activity, it arrives at [onNewIntent] — and a target captured at
+     * creation time can never see it. That made tapping an alert do nothing at all
+     * whenever the app happened to be foregrounded, which is exactly when a person
+     * watching a session is most likely to tap one.
+     */
+    private val openTarget = mutableStateOf<OpenTarget?>(null)
+    private var targetSeq = 0
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        readTarget(intent)
+    }
+
+    private fun readTarget(intent: Intent?) {
+        val session = intent?.getStringExtra(SessionWatchWorker.EXTRA_SESSION)
+        val chat = intent?.getStringExtra(SessionWatchWorker.EXTRA_CHAT)
+        // Only when there is something to go to. A plain launcher tap carries
+        // neither, and overwriting the target with nulls would yank the reader out
+        // of wherever they already were.
+        if (session != null || chat != null) openTarget.value = OpenTarget(session, chat, ++targetSeq)
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
@@ -105,8 +133,9 @@ class MainActivity : FragmentActivity() {
         AppLock.enabledCache = runBlocking {
             SettingsStore(applicationContext).appLock.first()
         }
-        // Tapping a "needs you" notification opens straight into that session.
-        val openSession = intent?.getStringExtra(SessionWatchWorker.EXTRA_SESSION)
+        // Tapping a "needs you" notification opens straight into that session, and a
+        // finished-chat notification into that chat, at the answer it announced.
+        readTarget(intent)
         setContent {
             HuginnTheme {
                 if (locked.value) {
@@ -121,7 +150,7 @@ class MainActivity : FragmentActivity() {
                     )
                 } else {
                     HuginnApp(
-                        openSession = openSession,
+                        target = openTarget.value,
                         onLockNow = { lockError.value = null; locked.value = true },
                     )
                 }
@@ -182,6 +211,15 @@ private fun LockedScreen(error: String?, onUnlock: () -> Unit) {
     }
 }
 
+/**
+ * Where a notification tap should land.
+ *
+ * [seq] exists so that tapping the SAME notification twice still navigates: without
+ * it two identical targets compare equal, the effect watching them never re-runs,
+ * and a tap made after wandering elsewhere in the app does nothing.
+ */
+data class OpenTarget(val session: String?, val chat: String?, val seq: Int)
+
 private sealed interface Dest {
     data object Chats : Dest
     data class Chat(val id: String) : Dest
@@ -194,17 +232,32 @@ private sealed interface Dest {
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun HuginnApp(
-    openSession: String? = null,
+    target: OpenTarget? = null,
     onLockNow: () -> Unit = {},
     vm: HuginnViewModel = viewModel(factory = HuginnViewModel.Factory),
 ) {
     // Sessions is home: the owner's real use is watching and steering the
     // sessions already running, with chats the occasional side door.
     var tab by rememberSaveable { mutableStateOf(1) }
-    var dest by remember {
-        mutableStateOf<Dest>(if (openSession != null) Dest.SessionView(openSession) else Dest.Sessions)
-    }
+    var dest by remember { mutableStateOf<Dest>(Dest.Sessions) }
     var sessionTab by rememberSaveable { mutableStateOf(0) }
+
+    // Navigation asked for by a notification tap, applied here rather than in the
+    // initial state so that a tap arriving at an app that is ALREADY open moves it
+    // too — the common case, and the one the previous read-once version missed.
+    LaunchedEffect(target) {
+        val t = target ?: return@LaunchedEffect
+        when {
+            t.session != null -> { tab = 1; dest = Dest.SessionView(t.session) }
+            t.chat != null -> {
+                tab = 0
+                // The chat screen renders from the view model, which a destination
+                // constructed here has not asked to load; without this it opens empty.
+                vm.openChat(t.chat)
+                dest = Dest.Chat(t.chat)
+            }
+        }
+    }
 
     val chats by vm.chats.collectAsState()
     val sessions by vm.sessions.collectAsState()
