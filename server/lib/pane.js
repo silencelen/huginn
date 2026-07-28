@@ -66,6 +66,11 @@ function previewLines(lines, max = 3) {
     if (PROMPT_MARK_RE.test(t) && t.replace(PROMPT_MARK_RE, '').trim() === '') continue;
     if (MODE_HINT_RE.test(t)) continue;
     if (STATUS_RE.test(t)) continue;
+    // Footer furniture: workflow/board rows persist there long after the run
+    // ends, so a dead workflow was headlining the session's preview forever;
+    // selector help lines are instructions, not content.
+    if (/^\s*[\u25EF\u25D0\u25D1\u25D2\u25D3\u29C9]\s/.test(t)) continue;
+    if (/enter to select|to navigate|esc to cancel/i.test(t)) continue;
     keep.push(t.trim().slice(0, 220));
   }
   return keep.reverse();
@@ -254,7 +259,14 @@ function parseStatusExtras(lines, max = 3) {
     durable.push(transient);
     transient = null;
   }
-  return { durable, transient };
+  // A workflow row reporting every agent done is FINISHED — the TUI keeps the
+  // row on screen, but mirrored into a status strip it reads as still running.
+  // Confirmed as a ghost by the user against the actual pane.
+  const alive = durable.filter((d) => {
+    const m = /(\d+)\/(\d+) agents done/.exec(d);
+    return !(m && m[1] === m[2]);
+  });
+  return { durable: alive, transient };
 }
 
 /**

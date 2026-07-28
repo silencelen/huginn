@@ -21,8 +21,12 @@ const { readTranscript } = require('./transcript');
 /** Same window the tasks scanner uses for agents: growth within this = active. */
 const ACTIVE_S = 90;
 
-/** Ignore runs older than this: yesterday's fan-out is history, not progress. */
-const RECENT_S = 6 * 3600;
+/**
+ * Ignore runs older than this. Was six hours, which filled the sheet with the
+ * corpses of every fan-out since lunch — the sheet answers "what is happening",
+ * and settled agents stop being part of that answer quickly.
+ */
+const RECENT_S = 45 * 60;
 
 function agentsDirFor(transcriptPath, sessionId) {
   if (!transcriptPath || !sessionId) return null;

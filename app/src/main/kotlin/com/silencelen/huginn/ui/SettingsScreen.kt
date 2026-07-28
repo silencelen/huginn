@@ -68,6 +68,7 @@ fun SettingsScreen(
     appLock: Boolean,
     appLockAvailable: Boolean,
     onAppLock: (Boolean) -> Unit,
+    onLockNow: () -> Unit,
     notificationsAllowed: Boolean,
     onRequestNotifications: () -> Unit,
     onOpenSystemNotificationSettings: () -> Unit,
@@ -239,6 +240,12 @@ fun SettingsScreen(
                 onCheckedChange = onAppLock,
                 enabled = appLockAvailable,
             )
+        }
+        // Proof on demand. The lock's normal trigger is time away, which makes
+        // "is it even on?" unanswerable by looking — the first version's silent
+        // failure sat unnoticed behind exactly that.
+        if (appLock && appLockAvailable) {
+            OutlinedButton(onClick = onLockNow) { Text("Lock now") }
         }
 
         Spacer(Modifier.height(8.dp))
