@@ -40,6 +40,8 @@ class SettingsStore(private val context: Context) {
         private val PUSH_TOKEN = stringPreferencesKey("push_token")
         private val PUSH_TOKEN_AT = longPreferencesKey("push_token_at")
         private val LAST_PUSH_AT = longPreferencesKey("last_push_at")
+        private val PUSHES_RECEIVED = longPreferencesKey("pushes_received")
+        private val PUSHES_SENT = longPreferencesKey("pushes_sent")
         private val SEEDED = booleanPreferencesKey("watch_seeded")
         private val LAST_CONTACT = longPreferencesKey("last_contact_at")
         private val LAST_ALARM = longPreferencesKey("last_alarm_at")
@@ -113,8 +115,24 @@ class SettingsStore(private val context: Context) {
      */
     val lastPushAt: Flow<Long> = context.dataStore.data.map { it[LAST_PUSH_AT] ?: 0L }
 
+    /**
+     * How many pushes have actually ARRIVED here, against how many the host says it
+     * sent. Counted rather than timed on purpose: the two numbers are compared
+     * across a network boundary, and counts cannot disagree about what time it is.
+     */
+    val pushesReceived: Flow<Long> = context.dataStore.data.map { it[PUSHES_RECEIVED] ?: 0L }
+    val pushesSent: Flow<Long> = context.dataStore.data.map { it[PUSHES_SENT] ?: 0L }
+
     suspend fun notePushArrived(atMs: Long) {
-        context.dataStore.edit { it[LAST_PUSH_AT] = atMs }
+        context.dataStore.edit {
+            it[LAST_PUSH_AT] = atMs
+            it[PUSHES_RECEIVED] = (it[PUSHES_RECEIVED] ?: 0L) + 1
+        }
+    }
+
+    /** The host's own tally, learned from a watch response. */
+    suspend fun notePushesSent(count: Long) {
+        context.dataStore.edit { it[PUSHES_SENT] = count }
     }
 
     suspend fun notePushToken(token: String, atMs: Long) {

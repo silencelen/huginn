@@ -69,41 +69,53 @@ class AppLockTest {
  */
 class HeartbeatIntervalTest {
 
-    private val NOW = 1_800_000_000_000L
-
     @Test
     fun `never received a push - stay on the tight safety-net cadence`() {
-        assertEquals(Heartbeat.INTERVAL_MS, Heartbeat.intervalFor(0L, NOW))
+        // Unproven path. Relaxing has to be earned by an arrival, not assumed,
+        // or a fresh install where FCM is unavailable checks in once an hour.
+        assertEquals(Heartbeat.INTERVAL_MS, Heartbeat.intervalFor(0L, 0L))
     }
 
     @Test
-    fun `a recent push earns the relaxed hourly cadence`() {
-        assertEquals(Heartbeat.RELAXED_INTERVAL_MS, Heartbeat.intervalFor(NOW - 60_000, NOW))
+    fun `nothing dropped - the relaxed hourly cadence`() {
+        assertEquals(Heartbeat.RELAXED_INTERVAL_MS, Heartbeat.intervalFor(1L, 1L))
+        assertEquals(Heartbeat.RELAXED_INTERVAL_MS, Heartbeat.intervalFor(40L, 40L))
     }
 
     @Test
-    fun `an idle night does not tighten it - trust outlasts a quiet spell`() {
-        val ninetyMinutes = 90 * 60 * 1000L
-        assertEquals(Heartbeat.RELAXED_INTERVAL_MS, Heartbeat.intervalFor(NOW - ninetyMinutes, NOW))
+    fun `a silent night stays relaxed - REGRESSION, measured 2026-07-28`() {
+        // The bug this rule replaced. The old policy relaxed only while a push had
+        // arrived within two hours, so an idle night — no chats finishing, nothing
+        // asking anything, therefore no pushes — tightened the alarm to ten
+        // minutes. Observed on the owner's phone: 33 wake-ups between 02:00 and
+        // 06:00, in the hours with the least to report. Silence is not failure;
+        // only a push that was SENT and never arrived is.
+        assertEquals(Heartbeat.RELAXED_INTERVAL_MS, Heartbeat.intervalFor(12L, 12L))
     }
 
     @Test
-    fun `push gone quiet for hours tightens back up - self-correcting`() {
-        assertEquals(Heartbeat.INTERVAL_MS, Heartbeat.intervalFor(NOW - Heartbeat.PUSH_TRUST_MS, NOW))
-        assertEquals(Heartbeat.INTERVAL_MS, Heartbeat.intervalFor(NOW - 24 * 60 * 60 * 1000L, NOW))
+    fun `a push that was sent but never arrived tightens immediately`() {
+        assertEquals(Heartbeat.INTERVAL_MS, Heartbeat.intervalFor(13L, 12L))
+        assertEquals(Heartbeat.INTERVAL_MS, Heartbeat.intervalFor(99L, 12L))
+    }
+
+    @Test
+    fun `catching back up returns to relaxed - self-correcting`() {
+        assertEquals(Heartbeat.INTERVAL_MS, Heartbeat.intervalFor(13L, 12L))
+        assertEquals(Heartbeat.RELAXED_INTERVAL_MS, Heartbeat.intervalFor(13L, 13L))
+    }
+
+    @Test
+    fun `a host that forgot its tally does not tighten the phone`() {
+        // The daemon's push state can be reset (a wipe, a reinstall) while the
+        // phone's count stands. Fewer sent than received means nothing is being
+        // dropped, which is the safe reading — not an error to react to.
+        assertEquals(Heartbeat.RELAXED_INTERVAL_MS, Heartbeat.intervalFor(0L, 40L))
     }
 
     @Test
     fun `the relaxed cadence is a real saving, not a token one`() {
         // 144 wake-ups a day becomes 24.
         assertTrue(Heartbeat.RELAXED_INTERVAL_MS >= Heartbeat.INTERVAL_MS * 6)
-    }
-
-    @Test
-    fun `a clock that jumped backwards does not grant infinite trust`() {
-        // lastPush in the future (clock change): now - last is negative, which is
-        // < the window, so it relaxes — acceptable, and the next real push or the
-        // hourly beat corrects it. Pinned so the behaviour is deliberate.
-        assertEquals(Heartbeat.RELAXED_INTERVAL_MS, Heartbeat.intervalFor(NOW + 60_000, NOW))
     }
 }

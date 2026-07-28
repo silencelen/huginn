@@ -73,6 +73,13 @@ object WatchCycle {
         val running = watch.chats.filterValues { it.running }.keys
         val runsNow = watch.chats.mapValues { it.value.finishedRuns }
 
+        // Recorded on EVERY observation, before anything else, and deliberately
+        // outside the seeding shortcut below: the heartbeat re-arms itself from this
+        // number the moment its own tick returns, so a cycle that skipped it would
+        // re-arm on a stale tally. Every path that reaches an observation — stream,
+        // alarm, worker, push reconcile — comes through here, which is the point.
+        settings.notePushesSent(watch.pushesSent)
+
         // Nothing has ever been observed, so there is no transition to speak of —
         // only a list of things that were already true. Announcing those would mean
         // switching the feature on produces a burst of notifications about the past.
@@ -119,12 +126,20 @@ object WatchCycle {
         if (finished.isNotEmpty()) {
             // A chat that finished and was then deleted is no longer in the snapshot,
             // so a missing title is ordinary rather than a fault.
-            val title = watch.chats[finished.first()]?.title
+            val only = finished.singleOrNull()
+            val chat = only?.let { watch.chats[it] }
             SessionWatchWorker.post(
                 context,
-                if (finished.size == 1) "Chat finished" else "${finished.size} chats finished",
-                title?.take(80) ?: "huginn has answered",
+                // Titled by the chat and bodied by its answer, matching what the push
+                // path sends for the same event — the two must not describe the same
+                // finish differently depending on which noticed it first.
+                chat?.title?.take(60) ?: if (only != null) "Chat finished" else "${finished.size} chats finished",
+                chat?.snippet ?: "huginn has answered",
                 null,
+                // Only when there is exactly one: a reply box has to know where the
+                // reply goes, and with several finished at once there is no answer
+                // to that which is not a guess.
+                replyChat = only,
             )
             posted++
         }

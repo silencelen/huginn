@@ -142,3 +142,35 @@ test('listing never has to be sorted by the caller', () => {
   push.register(st, 'newer', 'tok-b', T0 + 60_000);
   assert.deepEqual(push.list(st).map((d) => d.installId), ['newer', 'older']);
 });
+
+// The tally the phone's wake-up cadence is decided from. It answers a question the
+// phone cannot answer alone — "was a push sent that never arrived?" — so a wrong
+// answer here costs either missed alerts or a hundred and twenty needless wake-ups
+// a day.
+
+test('the per-install tally counts only that install', () => {
+  const st = push.emptyState();
+  push.register(st, 'phone', 'tok-a', T0);
+  push.register(st, 'tablet', 'tok-b', T0);
+  push.noteSuccess(st, 'phone', T0 + 1000);
+  push.noteSuccess(st, 'phone', T0 + 2000);
+  assert.equal(push.sentTo(st, 'phone'), 2);
+  assert.equal(push.sentTo(st, 'tablet'), 0);
+});
+
+test('an unknown install reports zero rather than throwing', () => {
+  // A phone whose token was pruned still calls /v1/watch. Zero is the honest
+  // answer and the safe one: it can never look like a deficit.
+  const st = push.emptyState();
+  assert.equal(push.sentTo(st, 'never-registered'), 0);
+  assert.equal(push.sentTo(push.emptyState(), 'x'), 0);
+  assert.equal(push.sentTo(null, 'x'), 0);
+});
+
+test('a failed send does not count as sent', () => {
+  // Otherwise every outage would look like a dropped push and tighten the alarm.
+  const st = push.emptyState();
+  push.register(st, 'phone', 'tok-a', T0);
+  push.noteFailure(st, 'phone');
+  assert.equal(push.sentTo(st, 'phone'), 0);
+});

@@ -63,19 +63,38 @@ object Heartbeat {
     val RELAXED_INTERVAL_MS = 60 * 60 * 1000L
 
     /**
-     * How recently a push must have arrived to keep trusting it. Longer than any
-     * plausible quiet spell in a working setup, so an idle night does not tighten
-     * the alarm — but short enough that a genuinely dead FCM path is noticed
-     * within a couple of hours rather than a day.
+     * The cadence to use, from the only evidence that actually distinguishes a
+     * working push path from a broken one.
+     *
+     * The previous rule — relax while a push arrived within the last two hours —
+     * was wrong, and the overnight measurement said so plainly. A quiet night is
+     * SILENT: no chats finish, no sessions ask anything, so no pushes arrive, so
+     * after two hours the rule concluded push had failed and tightened to ten
+     * minutes. The hours with the least to report were the hours it woke the phone
+     * most, which is precisely backwards.
+     *
+     * The mistake was treating "no push arrived" as evidence of failure when it is
+     * mostly evidence that nothing happened. Those two are indistinguishable from
+     * the phone alone — but not from the host, which knows exactly how many pushes
+     * it sent here. So the host reports its tally and this compares:
+     *
+     *   * host sent no more than arrived → nothing is being dropped → stay relaxed,
+     *     however long the silence;
+     *   * host sent more than arrived → a push went missing → tighten, immediately,
+     *     without waiting out any trust window.
+     *
+     * A push in flight at the moment of a beat can show a deficit of one for a few
+     * seconds. That resolves itself on the next beat, and erring toward checking
+     * more often is the safe direction for a fallback.
+     *
+     * Relaxing also has to be EARNED: until a push has actually arrived once, the
+     * path is unproven and the tight cadence is what makes a fresh install work at
+     * all when FCM turns out to be unavailable.
+     *
+     * Pure, so the whole battery story is one testable function.
      */
-    val PUSH_TRUST_MS = 2 * 60 * 60 * 1000L
-
-    /**
-     * The cadence to use, given when a push last arrived. Pure, so the policy is
-     * testable without a device: this is the whole battery story in one function.
-     */
-    fun intervalFor(lastPushAtMs: Long, nowMs: Long): Long =
-        if (lastPushAtMs > 0L && nowMs - lastPushAtMs < PUSH_TRUST_MS) RELAXED_INTERVAL_MS
+    fun intervalFor(pushesSent: Long, pushesReceived: Long): Long =
+        if (pushesReceived > 0L && pushesSent <= pushesReceived) RELAXED_INTERVAL_MS
         else INTERVAL_MS
 
     private const val REQUEST = 4713
@@ -152,11 +171,13 @@ class HeartbeatReceiver : BroadcastReceiver() {
                 // not an exceptional one. Only an explicit "the feature is off"
                 // clears this flag.
                 if (rearm) {
-                    // Re-armed at the cadence push health earns: hourly while FCM
-                    // is delivering, ten-minutely when it has gone quiet.
+                    // Re-armed at the cadence push health earns: hourly while
+                    // nothing is being dropped, ten-minutely once something is.
                     val settings = SettingsStore(app)
-                    val last = runCatching { settings.lastPushAt.first() }.getOrDefault(0L)
-                    Heartbeat.arm(app, Heartbeat.intervalFor(last, System.currentTimeMillis()))
+                    Heartbeat.arm(app, Heartbeat.intervalFor(
+                        runCatching { settings.pushesSent.first() }.getOrDefault(0L),
+                        runCatching { settings.pushesReceived.first() }.getOrDefault(0L),
+                    ))
                 }
                 pending.finish()
             }

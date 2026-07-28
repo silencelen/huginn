@@ -31,9 +31,18 @@ function digest(sessions, chats) {
       // however briefly they lasted. It also catches back-to-back runs, where a
       // queued message restarts the chat and `running` never dips.
       finishedRuns: Number(x.finishedRuns) || 0,
+      // The last thing Claude said, carried so a finish notification can quote the
+      // answer instead of only announcing that there is one.
+      snippet: x.snippet ?? null,
     };
   }
   // Sorted keys so the hash depends on the values, not on directory order.
+  //
+  // Note which fields are IN the hash and which are only carried: the hash is a
+  // change signal that wakes a parked phone, so it must contain the facts an alert
+  // turns on and nothing else. `title` and `snippet` are payload — a chat renamed,
+  // or a snippet rewritten mid-run, is not news, and hashing them would wake every
+  // watching phone to tell it so.
   const stable = JSON.stringify({
     s: Object.keys(s).sort().map((k) => [k, s[k]]),
     c: Object.keys(c).sort().map((k) => [k, c[k].running, c[k].pending, c[k].finishedRuns]),
