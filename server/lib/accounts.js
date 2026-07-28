@@ -63,10 +63,50 @@ function describe(creds) {
 }
 
 class AccountStore {
-  constructor(dir, credentialsPath) {
+  /**
+   * @param configPath ~/.claude.json — holds the `oauthAccount` block (email,
+   *   org, rate-limit tier) that the CLI reports as its identity. It lives apart
+   *   from the credentials, so swapping tokens alone leaves the CLI convinced it
+   *   is still the previous account: measured, the tokens moved correctly while
+   *   `claude auth status` kept naming the old one.
+   */
+  constructor(dir, credentialsPath, configPath = null) {
     this.dir = dir;
     this.credentialsPath = credentialsPath;
+    this.configPath = configPath;
     fs.mkdirSync(this.dir, { recursive: true, mode: 0o700 });
+  }
+
+  /** The identity block the CLI is currently presenting, if any. */
+  readOauthAccount() {
+    if (!this.configPath) return null;
+    try {
+      const cfg = JSON.parse(fs.readFileSync(this.configPath, 'utf8'));
+      return cfg && cfg.oauthAccount ? cfg.oauthAccount : null;
+    } catch { return null; }
+  }
+
+  /**
+   * Replaces just the identity block, leaving the rest of that file alone — it
+   * holds a great deal of unrelated state. Passing null REMOVES the block, which
+   * is the right move when we have no identity to install: the CLI can re-derive
+   * it from the token, whereas a stale block would keep misreporting.
+   */
+  writeOauthAccount(account) {
+    if (!this.configPath) return false;
+    let cfg;
+    try { cfg = JSON.parse(fs.readFileSync(this.configPath, 'utf8')); } catch { return false; }
+    if (account) cfg.oauthAccount = account; else delete cfg.oauthAccount;
+    const tmp = `${this.configPath}.huginn-tmp`;
+    try {
+      const mode = (fs.statSync(this.configPath).mode & 0o777) || 0o600;
+      fs.writeFileSync(tmp, JSON.stringify(cfg), { mode });
+      fs.renameSync(tmp, this.configPath);
+      return true;
+    } catch {
+      try { fs.unlinkSync(tmp); } catch { }
+      return false;
+    }
   }
 
   readActive() {
@@ -89,6 +129,13 @@ class AccountStore {
     const slug = fingerprint(creds);
     if (!slug) return null;
     const existing = this.readProfile(slug);
+    // Capture the identity block ONLY when these are the credentials currently in
+    // use, since that is the only time the block describes them.
+    const live = this.readActive();
+    const isLive = live && sameAccount(live, creds);
+    const oauthAccount = isLive
+      ? (this.readOauthAccount() ?? (existing && existing.oauthAccount) ?? null)
+      : ((existing && existing.oauthAccount) ?? null);
     const record = {
       slug,
       // Keep a known-good label rather than replacing it with a blank one.
@@ -96,6 +143,7 @@ class AccountStore {
       firstSeen: (existing && existing.firstSeen) ?? Math.floor(Date.now() / 1000),
       savedAt: Math.floor(Date.now() / 1000),
       ...extra,
+      oauthAccount,
       credentials: creds,
     };
     const tmp = `${this._path(slug)}.tmp`;
@@ -187,13 +235,21 @@ class AccountStore {
     const current = this.readActive();
     if (current && !sameAccount(current, rec.credentials)) {
       // Keyed by its own fingerprint, so this cannot overwrite the incoming one
-      // even if the email we were handed belongs to somebody else.
+      // even if the email we were handed belongs to somebody else. Saved while it
+      // is still live, so its identity block is captured with it.
       this.save(activeEmail || null, current);
     }
     const tmp = `${this.credentialsPath}.huginn-tmp`;
     fs.writeFileSync(tmp, JSON.stringify(rec.credentials), { mode: 0o600 });
     fs.renameSync(tmp, this.credentialsPath);
-    return { ok: true, email: rec.email ?? null, slug };
+    // And move the identity with the tokens, or the CLI keeps naming the old
+    // account. No stored block means removing the stale one and letting the CLI
+    // re-derive: wrong is worse than absent.
+    this.writeOauthAccount(rec.oauthAccount ?? null);
+    return {
+      ok: true, email: rec.email ?? null, slug,
+      identityRestored: !!rec.oauthAccount,
+    };
   }
 }
 

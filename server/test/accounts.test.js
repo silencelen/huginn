@@ -194,3 +194,89 @@ test('stored profiles are not world readable', () => {
   const mode = fs.statSync(path.join(store.dir, `${slug}.json`)).mode & 0o777;
   assert.strictEqual(mode, 0o600, 'these are credentials');
 });
+
+// ---- identity, which lives apart from the credentials ----------------------
+
+function newStoreWithConfig() {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'acct-'));
+  const credPath = path.join(root, '.credentials.json');
+  const cfgPath = path.join(root, '.claude.json');
+  fs.writeFileSync(cfgPath, JSON.stringify({ unrelated: 'state', projects: { a: 1 } }));
+  return {
+    store: new AccountStore(path.join(root, 'accounts'), credPath, cfgPath),
+    credPath, cfgPath,
+  };
+}
+
+function idBlock(email) {
+  return { emailAddress: email, accountUuid: `uuid-${email}`, organizationName: `${email}'s Organization` };
+}
+
+test('the identity block is captured only for the credentials actually in use', () => {
+  // It describes whichever login is live, so attaching it to some other
+  // account's profile would install the wrong identity on a later switch.
+  const { store, credPath, cfgPath } = newStoreWithConfig();
+  fs.writeFileSync(credPath, JSON.stringify(creds('r-work')));
+  fs.writeFileSync(cfgPath, JSON.stringify({ oauthAccount: idBlock('work@example.com') }));
+
+  store.save('work@example.com', creds('r-work'));
+  store.save('personal@example.com', creds('r-home'));
+
+  assert.strictEqual(store.readProfile(fingerprint(creds('r-work'))).oauthAccount.emailAddress, 'work@example.com');
+  assert.strictEqual(store.readProfile(fingerprint(creds('r-home'))).oauthAccount, null,
+    'a profile that is not live must not borrow the live identity');
+});
+
+test('activating installs that account identity, not the previous one', () => {
+  const { store, credPath, cfgPath } = newStoreWithConfig();
+  fs.writeFileSync(credPath, JSON.stringify(creds('r-work')));
+  fs.writeFileSync(cfgPath, JSON.stringify({ oauthAccount: idBlock('work@example.com') }));
+  store.save('work@example.com', creds('r-work'));
+
+  // Give the other profile an identity as though it had been live before.
+  fs.writeFileSync(credPath, JSON.stringify(creds('r-home')));
+  fs.writeFileSync(cfgPath, JSON.stringify({ oauthAccount: idBlock('personal@example.com') }));
+  store.save('personal@example.com', creds('r-home'));
+
+  const r = store.activate(fingerprint(creds('r-work')), 'personal@example.com');
+  assert.strictEqual(r.ok, true);
+  assert.strictEqual(r.identityRestored, true);
+  const cfg = JSON.parse(fs.readFileSync(cfgPath, 'utf8'));
+  assert.strictEqual(cfg.oauthAccount.emailAddress, 'work@example.com');
+});
+
+test('with no stored identity the stale one is REMOVED, never left in place', () => {
+  // Leaving it would make the CLI keep naming the previous account while holding
+  // another account's tokens — which is exactly what happened before this.
+  const { store, credPath, cfgPath } = newStoreWithConfig();
+  fs.writeFileSync(credPath, JSON.stringify(creds('r-work')));
+  fs.writeFileSync(cfgPath, JSON.stringify({ oauthAccount: idBlock('work@example.com'), keepMe: true }));
+  store.save('personal@example.com', creds('r-home'));   // saved while NOT live: no identity
+
+  const r = store.activate(fingerprint(creds('r-home')), 'work@example.com');
+  assert.strictEqual(r.identityRestored, false);
+  const cfg = JSON.parse(fs.readFileSync(cfgPath, 'utf8'));
+  assert.strictEqual('oauthAccount' in cfg, false, 'the wrong identity must be gone');
+  assert.strictEqual(cfg.keepMe, true, 'and the rest of that file untouched');
+});
+
+test('patching the identity preserves the rest of a large config file', () => {
+  const { store, credPath, cfgPath } = newStoreWithConfig();
+  fs.writeFileSync(credPath, JSON.stringify(creds('r-work')));
+  store.writeOauthAccount(idBlock('someone@example.com'));
+  const cfg = JSON.parse(fs.readFileSync(cfgPath, 'utf8'));
+  assert.strictEqual(cfg.unrelated, 'state');
+  assert.deepStrictEqual(cfg.projects, { a: 1 });
+  assert.strictEqual(cfg.oauthAccount.emailAddress, 'someone@example.com');
+});
+
+test('a store with no config path still switches credentials', () => {
+  // Identity handling is additive; its absence must not break the swap.
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'acct-'));
+  const credPath = path.join(root, '.credentials.json');
+  const store = new AccountStore(path.join(root, 'accounts'), credPath);
+  fs.writeFileSync(credPath, JSON.stringify(creds('r-work')));
+  store.save('personal@example.com', creds('r-home'));
+  assert.strictEqual(store.activate(fingerprint(creds('r-home')), null).ok, true);
+  assert.strictEqual(JSON.parse(fs.readFileSync(credPath, 'utf8')).claudeAiOauth.refreshToken, 'r-home');
+});
