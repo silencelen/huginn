@@ -22,6 +22,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.Send
 import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material3.CircularProgressIndicator
@@ -76,8 +77,9 @@ fun ChatScreen(
     val scope = rememberCoroutineScope()
     val listState = rememberLazyListState()
     val events = page?.events ?: emptyList()
+    val rows = remember(events) { TranscriptGroups.group(events) }
     val streaming = streamingText != null || activeTool != null
-    val itemCount = events.size + if (streaming) 1 else 0
+    val itemCount = rows.size + if (streaming) 1 else 0
 
     // streamingText.length is what makes a live answer follow: the item count does
     // not change while tokens arrive into the same block.
@@ -121,7 +123,7 @@ fun ChatScreen(
                 ),
                 verticalArrangement = Arrangement.spacedBy(9.dp),
             ) {
-                items(events.size) { i -> TranscriptEventItem(events[i], onCopy) }
+                items(rows.size) { i -> TranscriptRowItem(rows[i], onCopy) }
                 if (streaming) {
                     item { StreamingItem(streamingText, activeTool, onCopy) }
                 }
@@ -220,6 +222,15 @@ private fun Composer(
                 shape = RoundedCornerShape(20.dp),
             )
             Spacer(Modifier.width(6.dp))
+            rememberSpeechInput { heard -> onDraft(appendDictation(draft, heard)) }?.let { speak ->
+                IconButton(onClick = speak, modifier = Modifier.size(46.dp)) {
+                    Icon(
+                        Icons.Filled.Mic,
+                        contentDescription = "Dictate",
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
             if (sending && draft.isBlank()) {
                 // Nothing typed: the useful action on a running turn is to stop it.
                 IconButton(

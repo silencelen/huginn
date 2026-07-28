@@ -17,6 +17,7 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.KeyboardReturn
+import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
@@ -150,6 +151,9 @@ private fun SessionConversation(
     val scope = rememberCoroutineScope()
     val listState = rememberLazyListState()
     val events = page?.events ?: emptyList()
+    // Grouped so a fan-out reads as delegated units instead of drowning the
+    // main thread; recomputed only when the events actually change.
+    val rows = remember(events) { TranscriptGroups.group(events) }
     val headerItems = if (page?.truncated == true) 1 else 0
 
     // Revision keys on nextOffset, which strictly increases as transcript bytes
@@ -157,7 +161,7 @@ private fun SessionConversation(
     // long session it stops changing and following would silently stop with it.
     val hasUnseen = AutoScrollToNewest(
         listState = listState,
-        itemCount = events.size + headerItems,
+        itemCount = rows.size + headerItems,
         revision = tailRevision(page?.nextOffset, events.size, events.lastOrNull()?.text?.length),
         key = name,
     )
@@ -192,12 +196,12 @@ private fun SessionConversation(
                         )
                     }
                 }
-                items(events.size) { i -> TranscriptEventItem(events[i], onCopy) }
+                items(rows.size) { i -> TranscriptRowItem(rows[i], onCopy) }
             }
         }
 
         if (hasUnseen) {
-            JumpToNewest { scope.launch { listState.animateScrollToItem((events.size + headerItems - 1).coerceAtLeast(0)) } }
+            JumpToNewest { scope.launch { listState.animateScrollToItem((rows.size + headerItems - 1).coerceAtLeast(0)) } }
         }
 
         prompt?.let {
@@ -227,6 +231,15 @@ private fun SessionConversation(
                     shape = RoundedCornerShape(20.dp),
                 )
                 Spacer(Modifier.width(6.dp))
+                rememberSpeechInput { heard -> onDraft(appendDictation(draft, heard)) }?.let { speak ->
+                    IconButton(onClick = speak, modifier = Modifier.size(46.dp)) {
+                        Icon(
+                            Icons.Filled.Mic,
+                            contentDescription = "Dictate",
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                }
                 // Esc is how you stop Claude at the keyboard; with nothing typed
                 // that is the action this composer should offer.
                 if (working && draft.isBlank()) {

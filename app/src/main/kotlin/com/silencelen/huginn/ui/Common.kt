@@ -19,14 +19,16 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.foundation.gestures.scrollBy
+import androidx.compose.foundation.interaction.DragInteraction
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
+import androidx.compose.animation.core.animateFloat
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -38,24 +40,33 @@ import androidx.compose.ui.unit.dp
  * Keeps a conversation pinned to its newest content, and reports when there is
  * something new below the fold.
  *
- * The rules, and why each one exists:
+ * Following is a LATCH, not a per-arrival test — that distinction is the fix for
+ * a real failure. The old version asked "are they at the bottom?" at the moment
+ * content arrived, but by the time that effect ran the new content was already
+ * laid out, so a reader who WAS at the bottom now measured as scrolled-up and
+ * following silently stopped; the "new messages" pill appeared where a scroll
+ * should have happened. Asking the question later cannot fix a question whose
+ * answer changes the moment it becomes interesting, so the state is explicit:
  *
- *  * **Open on the newest message.** Without an explicit first jump, a
- *    follow-if-at-bottom rule can never fire on a cold open: nothing is laid out
- *    yet, so the reader looks scrolled-up and stays parked at the oldest message.
- *  * **Follow on any content change, not on item count.** The retained window is
- *    capped, so once a long session reaches the cap the count stops changing
- *    forever — keying on it silently killed following for exactly the sessions
- *    that need it. [tailRevision] changes whenever visible content changes,
- *    including a streaming message growing without a new item appearing.
- *  * **Decide "at the bottom" from geometry, not from an index.** A last item
- *    taller than the viewport is "the last index" while the reader sits at its
- *    top, and yanking them to the end mid-read is worse than not following.
- *  * **Scroll to the end of the content**, not to the top of the last item, or
- *    following a long streaming answer shows its beginning forever.
+ *  * **At the bottom means locked on.** Reaching the tail by any route — scroll,
+ *    fling, the pill, the initial jump — arms following, and while armed every
+ *    content change scrolls, no measurement consulted.
+ *  * **Only a finger breaks the lock.** A [DragInteraction.Start] is the one
+ *    signal that means the reader chose to leave. Programmatic scrolls never emit
+ *    drags, so the follower can never mistake its own scrolling for the reader
+ *    leaving — which is exactly the mistake the geometry test made.
+ *  * **A tap that goes nowhere does not count as leaving.** Touch down and
+ *    release still at the tail re-arms immediately.
+ *
+ * Everything else stands from before: open on the newest message (nothing is laid
+ * out on a cold open, so an at-bottom rule can never fire), key the revision on
+ * content rather than item count (the retained window is capped, so count freezes
+ * on long sessions), and scroll to the END of the content, not the top of the
+ * last item (a streaming answer taller than the screen otherwise shows its
+ * beginning forever).
  *
  * @param key re-arms the initial jump when the conversation changes.
- * @return true when new content arrived while scrolled away from the bottom.
+ * @return true when new content arrived while the reader had scrolled away.
  */
 @Composable
 fun AutoScrollToNewest(
@@ -65,10 +76,31 @@ fun AutoScrollToNewest(
     key: Any?,
 ): Boolean {
     var opened by remember(key) { mutableStateOf(false) }
+    var following by remember(key) { mutableStateOf(true) }
     var unseen by remember(key) { mutableStateOf(false) }
     var lastCount by remember(key) { mutableStateOf(0) }
 
-    val atBottom by remember(listState) { derivedStateOf { listState.isAtTail() } }
+    // The reader's finger, and nothing else, breaks the latch.
+    LaunchedEffect(key, listState) {
+        listState.interactionSource.interactions.collect { i ->
+            when (i) {
+                is DragInteraction.Start -> following = false
+                // Released without leaving the tail: they did not go anywhere, so
+                // there is nothing to stay unlatched about. A fling still in motion
+                // is not at the tail yet; the landing is caught below.
+                is DragInteraction.Stop, is DragInteraction.Cancel ->
+                    if (listState.isAtTail()) { following = true; unseen = false }
+                else -> Unit
+            }
+        }
+    }
+
+    // Reaching the bottom by any means re-arms the latch.
+    LaunchedEffect(key, listState) {
+        snapshotFlow { listState.isAtTail() }.collect { at ->
+            if (at) { following = true; unseen = false }
+        }
+    }
 
     LaunchedEffect(key, itemCount, revision) {
         if (itemCount <= 0) return@LaunchedEffect
@@ -80,9 +112,7 @@ fun AutoScrollToNewest(
         }
         val grew = itemCount > lastCount
         lastCount = itemCount
-        // Read before the new content is laid out, so this is "were they at the
-        // bottom when it arrived", which is the question that matters.
-        if (atBottom) {
+        if (following) {
             // Animate a genuinely new message; jump for a growing one, where an
             // animation restarted on every token would never finish.
             listState.jumpToTail(itemCount, animate = grew)
@@ -90,9 +120,6 @@ fun AutoScrollToNewest(
             unseen = true
         }
     }
-
-    // Catching up clears the marker.
-    LaunchedEffect(atBottom) { if (atBottom) unseen = false }
 
     return unseen
 }
@@ -176,6 +203,25 @@ fun StateDot(state: String?, modifier: Modifier = Modifier) {
         else -> MaterialTheme.colorScheme.outline
     }
     Box(modifier.size(8.dp).clip(CircleShape).background(c))
+}
+
+/**
+ * A slow breathing dot for something actively working. A spinner reads as "the
+ * app is busy"; this reads as "the thing over there is busy", which is the truth.
+ */
+@Composable
+fun PulsingDot(color: Color, modifier: Modifier = Modifier) {
+    val transition = androidx.compose.animation.core.rememberInfiniteTransition(label = "pulse")
+    val a by transition.animateFloat(
+        initialValue = 0.35f,
+        targetValue = 1f,
+        animationSpec = androidx.compose.animation.core.infiniteRepeatable(
+            androidx.compose.animation.core.tween(800),
+            androidx.compose.animation.core.RepeatMode.Reverse,
+        ),
+        label = "alpha",
+    )
+    Box(modifier.size(8.dp).clip(CircleShape).background(color.copy(alpha = a)))
 }
 
 fun stateLabel(state: String?): String = when (state) {

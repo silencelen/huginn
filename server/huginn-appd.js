@@ -40,7 +40,7 @@ const clientsLib = require('./lib/clients');
 const pushLib = require('./lib/pushtokens');
 const { trySender } = require('./lib/fcm');
 
-const VERSION = '2.15.0';
+const VERSION = '2.16.0';
 const PORT = Number(process.env.HUGINN_APPD_PORT || 8787);
 const DATA_DIR = process.env.HUGINN_APPD_DATA || '/var/lib/huginn-appd';
 const TOKEN_FILE = process.env.HUGINN_APPD_TOKEN_FILE || '/etc/huginn-appd/token';
@@ -368,7 +368,20 @@ async function captureScreen(name, { cols = null, rows = null, history = 0, forc
   // Refuse to shrink a window somebody is actually looking at unless told to.
   let resizeBlocked = false;
   if (cols && rows) {
-    if (attached > 0 && !force) {
+    // "Blocked" means a resize is NEEDED and refused — not merely that a client is
+    // attached. The distinction is what fixes the returning banner: after "fit
+    // anyway" forced the resize, every later poll still had an attached client, so
+    // the old test kept reporting blocked about a resize nothing was asking for,
+    // and the banner the user had just dealt with came straight back.
+    const wantW = Math.max(20, Math.min(300, Math.floor(cols)));
+    const wantH = Math.max(10, Math.min(200, Math.floor(rows)));
+    const [paneW, paneH] = dim.stdout.split('\t').map(Number);
+    if (paneW === wantW && paneH === wantH) {
+      // Already fits. Renew a lease we hold so the sweeper does not hand the
+      // window back mid-view; if we hold none, the size is somebody else's doing
+      // and setting `manual` on their window would be a real change, not a renewal.
+      if (leases.has(name)) await acquireSize(name, cols, rows);
+    } else if (attached > 0 && !force) {
       resizeBlocked = true;
     } else if (await acquireSize(name, cols, rows)) {
       // Only re-read geometry when the resize actually changed something; a
