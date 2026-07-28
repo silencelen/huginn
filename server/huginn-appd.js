@@ -34,8 +34,9 @@ const { AccountStore, fingerprint } = require('./lib/accounts');
 const { formatModel, discoverModels, parseModelId } = require('./lib/models');
 const { pushPending, takePending, clearPending, queuedEvents } = require('./lib/chatqueue');
 const { digest } = require('./lib/watch');
+const { decideAlerts, pruneSent } = require('./lib/alerts');
 
-const VERSION = '2.11.1';
+const VERSION = '2.12.0';
 const PORT = Number(process.env.HUGINN_APPD_PORT || 8787);
 const DATA_DIR = process.env.HUGINN_APPD_DATA || '/var/lib/huginn-appd';
 const TOKEN_FILE = process.env.HUGINN_APPD_TOKEN_FILE || '/etc/huginn-appd/token';
@@ -1048,6 +1049,74 @@ async function statusPayload() {
   };
 }
 
+// ------------------------------------------------------------ host-side alerts
+//
+// The phone can only notice things while the app is alive. For an alert to reach
+// somebody whose phone has been in a pocket for two hours, the HOST has to notice
+// and reach out — so this watches the same state the app does and delivers over
+// Telegram, which is already how this homelab reaches its owner.
+const ALERT_STATE = path.join(DATA_DIR, 'alerts.json');
+const ALERT_POLL_MS = 10_000;
+const TELEGRAM_SCRIPT = '/root/netplan/scripts/active/send-telegram.sh';
+
+function loadAlertState() {
+  try { return JSON.parse(fs.readFileSync(ALERT_STATE, 'utf8')); }
+  catch { return { enabled: false, sent: {}, prev: null, delivered: 0, lastAt: null }; }
+}
+function saveAlertState(st) {
+  try {
+    fs.writeFileSync(`${ALERT_STATE}.tmp`, JSON.stringify(st), { mode: 0o600 });
+    fs.renameSync(`${ALERT_STATE}.tmp`, ALERT_STATE);
+  } catch (e) { log('alerts: could not persist state', e.message); }
+}
+
+/**
+ * Sends through the homelab's existing Telegram path rather than a new one: it is
+ * outbound-only, it logs every send, and the owner already has it. House rule
+ * from that setup — statements only, never a question, because nothing consumes
+ * replies.
+ */
+async function deliverTelegram(text) {
+  if (!fs.existsSync(TELEGRAM_SCRIPT)) return false;
+  const r = await run('bash', [TELEGRAM_SCRIPT, '--message', text, '--source', 'huginn-app'],
+    { timeout: 30_000 });
+  if (r.err) { log('alerts: telegram send failed', (r.stderr || '').trim().slice(0, 120)); return false; }
+  return true;
+}
+
+let alertTimer = null;
+async function alertTick() {
+  const st = loadAlertState();
+  if (!st.enabled) return;
+  const now = Date.now();
+  const d = digest(await listSessions(), chatStates());
+  const observation = { sessions: d.sessions, chats: d.chats };
+
+  const { alerts, sentUpdates } = decideAlerts(st.prev, observation, st.sent, now);
+  for (const a of alerts) {
+    const ok = await deliverTelegram(`🔔 ${a.title}\n${a.text}`);
+    if (ok) {
+      st.delivered = (st.delivered || 0) + 1;
+      st.lastAt = Math.floor(now / 1000);
+      log(`alerts: sent ${a.kind} for ${a.subject}`);
+    } else {
+      // Undo the suppression so a failed send is retried on the next tick
+      // rather than swallowed for half an hour.
+      delete sentUpdates[a.key];
+    }
+  }
+  st.sent = pruneSent({ ...(st.sent || {}), ...sentUpdates }, now);
+  st.prev = observation;
+  saveAlertState(st);
+}
+
+function startAlertWatcher() {
+  if (alertTimer) return;
+  alertTimer = setInterval(() => { alertTick().catch((e) => log('alerts: tick failed', e.message)); },
+    ALERT_POLL_MS);
+  alertTimer.unref();
+}
+
 // ---------------------------------------------------------------- routing
 
 const server = http.createServer(async (req, res) => {
@@ -1063,6 +1132,37 @@ const server = http.createServer(async (req, res) => {
     // --- ping / status
     if (req.method === 'GET' && p === '/v1/ping') return sendJson(res, 200, { ok: true, version: VERSION, host: os.hostname() });
     if (req.method === 'GET' && p === '/v1/status') return sendJson(res, 200, await statusPayload());
+
+    // --- host-side alerts, which reach a phone with the app closed
+    if (req.method === 'GET' && p === '/v1/alerts') {
+      const st = loadAlertState();
+      return sendJson(res, 200, {
+        enabled: !!st.enabled,
+        delivered: st.delivered || 0,
+        lastAt: st.lastAt ?? null,
+        channel: fs.existsSync(TELEGRAM_SCRIPT) ? 'telegram' : 'none',
+      });
+    }
+
+    if (req.method === 'POST' && p === '/v1/alerts') {
+      const body = JSON.parse(await readBody(req) || '{}');
+      const st = loadAlertState();
+      if (typeof body.enabled === 'boolean') {
+        st.enabled = body.enabled;
+        // Forget the previous observation when switching on, so turning it on
+        // does not announce whatever was already true.
+        if (body.enabled) st.prev = null;
+      }
+      saveAlertState(st);
+      if (st.enabled) startAlertWatcher();
+      log(`alerts: ${st.enabled ? 'enabled' : 'disabled'}`);
+      return sendJson(res, 200, { enabled: !!st.enabled });
+    }
+
+    if (req.method === 'POST' && p === '/v1/alerts/test') {
+      const ok = await deliverTelegram('🔔 Huginn test alert\nThis is what a session needing you will look like.');
+      return sendJson(res, ok ? 200 : 500, ok ? { ok: true } : { error: 'could not deliver' });
+    }
 
     // --- the change signal a watching phone parks on
     if (req.method === 'GET' && p === '/v1/watch') {
@@ -1646,6 +1746,7 @@ resolveBind().then(async (bind) => {
   // triggered by that run closing — so without this, messages queued before a
   // restart would sit on disk unanswered forever.
   deliverOrphanedQueues();
+  if (loadAlertState().enabled) { startAlertWatcher(); log('alerts: watcher resumed'); }
   // Re-key any profile still stored under the old email-derived name, and clear
   // the duplicates that scheme produced.
   try {

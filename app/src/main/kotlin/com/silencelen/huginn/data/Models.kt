@@ -367,3 +367,13 @@ data class LoginState(
     /** Signed in as somebody other than the account that was being added. */
     val mismatch: Boolean = false,
 )
+
+/** Host-side alerting: reaches the phone with the app closed. */
+@Serializable
+data class Alerts(
+    val enabled: Boolean = false,
+    val delivered: Int = 0,
+    val lastAt: Long? = null,
+    /** telegram | none */
+    val channel: String = "none",
+)
