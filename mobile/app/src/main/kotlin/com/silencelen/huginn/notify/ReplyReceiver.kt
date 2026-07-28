@@ -115,10 +115,7 @@ class ReplyReceiver : BroadcastReceiver() {
         // The thread as it stands, read back off the shade. Absent — swiped away, or
         // posted before this app rendered chats as conversations — a fresh one starts
         // with just this message, which is better than dropping the reply entirely.
-        val style = activeStyle(context, id)
-            ?: NotificationCompat.MessagingStyle(SessionWatchWorker.you(context))
-                .setConversationTitle(title)
-                .setGroupConversation(true)
+        val style = SessionWatchWorker.threadFor(context, id, title)
         val now = System.currentTimeMillis()
         if (mine != null) style.addMessage(mine, now, SessionWatchWorker.you(context))
         if (theirs != null) style.addMessage(theirs, now, SessionWatchWorker.huginn())
@@ -160,26 +157,6 @@ class ReplyReceiver : BroadcastReceiver() {
                     )).addRemoteInput(remote).build()
             )
         NotificationManagerCompat.from(context).notify(id, builder.build())
-    }
-
-    /**
-     * The conversation currently on screen for this id, if there is one.
-     *
-     * Reads from the live notification rather than any store of our own, because the
-     * shade already IS the store: it holds exactly the messages the reader can see,
-     * and it forgets them at exactly the moment they swipe it away. Keeping a
-     * parallel history would mean a dismissed notification could come back carrying
-     * messages the reader had deliberately cleared.
-     */
-    private fun activeStyle(context: Context, id: Int): NotificationCompat.MessagingStyle? {
-        val nm = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-        val existing = runCatching {
-            nm.activeNotifications.firstOrNull { it.id == id }?.notification
-        }.getOrNull() ?: return null
-        return runCatching {
-            NotificationCompat.MessagingStyle
-                .extractMessagingStyleFromNotification(existing)
-        }.getOrNull()
     }
 
     companion object {
