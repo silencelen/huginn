@@ -492,3 +492,45 @@ test('a NEW question after a resolution alerts immediately', () => {
   assert.strictEqual(again.alerts.length, 1);
   assert.strictEqual(again.alerts[0].kind, 'session_attention');
 });
+
+// --------------------------------------------- the run-start ledger
+//
+// Regression, measured live: the state file's ts is rewritten by the hook on
+// EVERY tool call, so "stateSince" means "seconds since a tool last ran" — and
+// the finish gate fed that read near-zero for runs of any length. Multiple
+// 15-minute runs, zero alerts. The watcher keeps its own ledger instead.
+
+const { carryRunStarts } = require('../lib/alerts');
+
+test('a newly running session is stamped now', () => {
+  assert.deepStrictEqual(carryRunStarts({}, { a: 'running' }, 1000), { a: 1000 });
+});
+
+test('a still-running session keeps its ORIGINAL start across observations', () => {
+  const first = carryRunStarts({}, { a: 'running' }, 1000);
+  const later = carryRunStarts(first, { a: 'running' }, 5000);
+  assert.deepStrictEqual(later, { a: 1000 });
+});
+
+test('a session no longer running drops out of the ledger', () => {
+  assert.deepStrictEqual(carryRunStarts({ a: 900 }, { a: 'idle' }, 1000), {});
+  assert.deepStrictEqual(carryRunStarts({ a: 900 }, {}, 1000), {});
+});
+
+test('idle and attention sessions never enter the ledger', () => {
+  assert.deepStrictEqual(carryRunStarts({}, { a: 'idle', b: 'attention' }, 1000), {});
+});
+
+test('the ledger feeds the finish gate end to end', () => {
+  // The integration the bug lived in: ledger at t0, finish at t0+9min.
+  const t0 = Math.floor(NOW / 1000) - 9 * 60;
+  const ledger = carryRunStarts({}, { a: 'running' }, t0);
+  const { alerts } = decideAlerts(
+    { sessions: { a: 'running' }, sessionsSince: ledger, chats: {} },
+    { sessions: { a: 'idle' }, sessionsSince: {}, chats: {} },
+    {}, NOW,
+  );
+  assert.strictEqual(alerts.length, 1);
+  assert.strictEqual(alerts[0].kind, 'session_finished');
+  assert.ok(alerts[0].text.includes('9m'), alerts[0].text);
+});

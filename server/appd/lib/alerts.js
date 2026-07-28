@@ -25,6 +25,37 @@ const REPEAT_MS = 30 * 60 * 1000;
  */
 const LONG_RUN_MS = 5 * 60 * 1000;
 
+/**
+ * When each currently-running session's run BEGAN, carried forward observation to
+ * observation.
+ *
+ * Exists because the obvious source is wrong: the session state file's `ts` is
+ * rewritten by the hook on every tool call, so for a busy session "stateSince"
+ * means "seconds since the last tool touched it" — and a duration gate fed that
+ * measured near-zero for a run of any length. Measured: multiple 15-minute runs,
+ * zero finish alerts, because each looked seconds old when it ended.
+ *
+ * So the watcher keeps its own ledger: a session seen running keeps the start it
+ * was first seen running at; one newly running is stamped now; one not running
+ * drops out. A daemon restarted mid-run inherits the start from the persisted
+ * previous observation — and when there is none, the run is stamped as starting
+ * now, which undercounts and may miss that one finish. Conservative on purpose:
+ * inventing an earlier start would fire "finished" for runs that never crossed
+ * the threshold.
+ *
+ * @param prevSince {name: epochSeconds} from the previous observation
+ * @param sessions  {name: state} of the current observation
+ * @param nowSec    epoch seconds
+ */
+function carryRunStarts(prevSince, sessions, nowSec) {
+  const out = {};
+  for (const [name, state] of Object.entries(sessions || {})) {
+    if (state !== 'running') continue;
+    out[name] = Number((prevSince || {})[name]) || nowSec;
+  }
+  return out;
+}
+
 /** "7m", "1h 12m" — enough to know whether it was the slow thing you started. */
 function humanDuration(ms) {
   const mins = Math.round(ms / 60000);
@@ -259,4 +290,4 @@ function pruneSent(sent, now) {
   return out;
 }
 
-module.exports = { decideAlerts, routeAlerts, telegramText, pruneSent, humanDuration, REPEAT_MS, LONG_RUN_MS };
+module.exports = { decideAlerts, routeAlerts, telegramText, pruneSent, humanDuration, carryRunStarts, REPEAT_MS, LONG_RUN_MS };
