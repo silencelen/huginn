@@ -1,5 +1,42 @@
 # Huginn changelog
 
+## 2.14.0 — 2026-07-27
+
+### Real push: huginn now reaches this phone in seconds, asleep or not
+Firebase Cloud Messaging is wired up. High-priority FCM is the one transport Google
+delivers straight into Doze, so an alert no longer waits for the ten-minute background
+check — it arrives about as fast as any message on your phone.
+
+The other two paths stay exactly as they were, because all three fail differently.
+FCM needs Play Services, a network, and an app that has not been force-stopped. The
+alarm needs none of those and gets there within ten minutes. Telegram needs neither
+the app nor the phone to be reachable at all. **Push first, alarm underneath, Telegram
+when nothing else got through.**
+
+Settings → Background delivery now leads with whether push is working, and separates
+two things worth separating: whether **huginn** can send, and whether **this phone**
+has registered to receive. Those fail for different reasons, and a single "push: on"
+would hide the second. There is a **Send a test push** button that goes the whole way
+through Google rather than faking the last step.
+
+### Telegram now steps aside on real delivery, not a guess
+Previously the fallback was decided by whether the phone had checked in recently.
+Now, when FCM accepts a message, that is evidence the app was actually reached, and
+Telegram holds back on that basis instead. Set alerts to "always" in Settings if you
+would rather have both regardless.
+
+### Details worth knowing
+Registration tokens are stored per installation rather than per token, because
+Firebase reissues them after a reinstall or restore — keyed the other way, every
+reinstall would leave a dead token behind to be retried forever. A token FCM reports
+as **dead** is forgotten; any other failure is only counted, so an outage or a lapsed
+credential can never quietly unregister a working phone.
+
+Messages are data-only by design. A `notification` payload would be drawn by the
+system without consulting the app, which is simpler but means the app never learns it
+has already told you — and the ten-minute alarm would then repeat the same alert
+later. This way one place decides what you have already seen.
+
 ## 2.13.0 — 2026-07-27
 
 ### Notifications that survive a sleeping phone

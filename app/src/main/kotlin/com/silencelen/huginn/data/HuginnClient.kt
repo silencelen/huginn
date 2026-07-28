@@ -147,6 +147,28 @@ class HuginnClient(
      */
     suspend fun clients(): ClientsInfo = decode(call(builder("/v1/clients").get().build()))
 
+    /**
+     * Hands this device's FCM registration token to huginn.
+     *
+     * Keyed by the installation id rather than by the token, because Firebase rotates
+     * tokens: keyed the other way, every reinstall would leave a dead token behind for
+     * the host to retry forever.
+     */
+    suspend fun registerPush(installId: String, token: String, model: String? = null): PushRegistration {
+        val body = buildJsonObject {
+            put("installId", JsonPrimitive(installId))
+            put("token", JsonPrimitive(token))
+            model?.let { put("model", JsonPrimitive(it)) }
+        }
+        return decode(call(builder("/v1/push/register").post(encode(body)).build()))
+    }
+
+    /** Whether the HOST can push at all, and which devices it would reach. */
+    suspend fun push(): PushStatus = decode(call(builder("/v1/push").get().build()))
+
+    suspend fun testPush(): PushTestResult =
+        decode(call(builder("/v1/push/test").post(ByteArray(0).toRequestBody(null)).build(), Client.POLL))
+
     suspend fun testAlert() {
         call(builder("/v1/alerts/test").post(ByteArray(0).toRequestBody(null)).build(), Client.POLL)
     }

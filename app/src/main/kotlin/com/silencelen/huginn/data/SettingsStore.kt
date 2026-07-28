@@ -36,6 +36,8 @@ class SettingsStore(private val context: Context) {
         private val DRAFTS = stringPreferencesKey("drafts")
         private val CLIENT_ID = stringPreferencesKey("client_id")
         private val CHAT_RUNS = stringPreferencesKey("chat_runs")
+        private val PUSH_TOKEN = stringPreferencesKey("push_token")
+        private val PUSH_TOKEN_AT = longPreferencesKey("push_token_at")
         private val SEEDED = booleanPreferencesKey("watch_seeded")
         private val LAST_CONTACT = longPreferencesKey("last_contact_at")
         private val LAST_ALARM = longPreferencesKey("last_alarm_at")
@@ -91,6 +93,20 @@ class SettingsStore(private val context: Context) {
     suspend fun setChatRuns(value: Map<String, Long>) {
         val encoded = Json.encodeToString(MapSerializer(String.serializer(), Long.serializer()), value)
         context.dataStore.edit { it[CHAT_RUNS] = encoded }
+    }
+
+    /**
+     * The FCM token last handed to huginn, and when.
+     *
+     * Recorded so the delivery panel can say whether this phone has actually
+     * registered — "push is configured on the host" and "this phone can be reached"
+     * are different claims, and only the second one matters to you.
+     */
+    val pushToken: Flow<String> = context.dataStore.data.map { it[PUSH_TOKEN] ?: "" }
+    val pushTokenAt: Flow<Long> = context.dataStore.data.map { it[PUSH_TOKEN_AT] ?: 0L }
+
+    suspend fun notePushToken(token: String, atMs: Long) {
+        context.dataStore.edit { it[PUSH_TOKEN] = token; it[PUSH_TOKEN_AT] = atMs }
     }
 
     /** Delivery health, so "is this working?" is answerable without guessing. */
