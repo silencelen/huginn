@@ -1,5 +1,22 @@
 # Huginn changelog
 
+## 2.21.0 — 2026-07-27
+
+### Question popups actually pop up
+When huginn asks a question through Claude Code's question tool, the app used to
+show the raw tool call — `AskUserQuestion {"questions":[{"question":"…` — and no
+buttons anywhere. The dialog's on-screen shape defeated the prompt detector three
+ways at once: each option carries an indented description line, a rule sits inside
+the list before the built-in choices, and a help footer sits underneath. All three
+are now understood (pinned by tests against a live capture), so the question
+appears as tappable buttons in both the Conversation and Screen tabs, answered
+through the same fingerprint guard as every other prompt. Verified end to end
+against a real dialog: parsed, answered "Blue" from the API, Claude confirmed.
+
+In the transcript, the question renders as a proper card — header, question,
+choices — and once answered it shows the chosen reply instead of the choices.
+Raw JSON appears nowhere.
+
 ## 2.20.0 — 2026-07-27
 
 ### Suggested next messages

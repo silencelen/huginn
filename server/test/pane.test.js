@@ -438,3 +438,49 @@ test('rows above the pane tail are history, not status', () => {
   const lines = ['Running 1 shell command \u00B7 2s\u2026'].concat(Array(12).fill('scrolled text'));
   assert.equal(parseStatusExtras(lines).transient, null, 'that row scrolled away eleven lines ago');
 });
+
+
+// ------------------------------------------------ the AskUserQuestion dialog
+//
+// Captured verbatim from a live dialog (Claude Code v2.1.220). Three things
+// about its shape defeated the old parser: description lines between options,
+// a rule INSIDE the list before the built-in trailing options, and the help
+// footer below the run.
+const ASK_DIALOG = [
+  ' \u2610 Banner color',
+  'Which color should the banner be?',
+  '\u276F 1. Red',
+  '     A vibrant red banner',
+  '  2. Blue',
+  '     A vibrant blue banner',
+  '  3. Green',
+  '     A vibrant green banner',
+  '  4. Type something.',
+  '\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500',
+  '  5. Chat about this',
+  'Enter to select \u00B7 \u2191/\u2193 to navigate \u00B7 Esc to cancel',
+];
+
+test('the AskUserQuestion dialog parses into a full prompt', () => {
+  const p = detectPrompt(ASK_DIALOG);
+  assert.ok(p, 'this exact shape rendered as raw JSON to the user');
+  assert.equal(p.question, 'Which color should the banner be?');
+  assert.deepEqual(p.options.map((o) => o.label),
+    ['Red', 'Blue', 'Green', 'Type something.', 'Chat about this']);
+  assert.equal(p.options.filter((o) => o.selected).length, 1);
+  assert.equal(p.options[0].selected, true);
+});
+
+test('the tab header is not mistaken for the question', () => {
+  const p = detectPrompt(ASK_DIALOG);
+  assert.doesNotMatch(p.question, /Banner color/);
+});
+
+test('a scrolled-away dialog with a composer below is still not a prompt', () => {
+  const gone = ASK_DIALOG.concat([
+    '\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500',
+    '\u276F ',
+    '  \u23F5\u23F5 auto mode on',
+  ]);
+  assert.equal(detectPrompt(gone), null);
+});

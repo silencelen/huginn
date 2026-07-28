@@ -17,6 +17,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.HelpOutline
 import androidx.compose.material.icons.filled.AccountTree
 import androidx.compose.material.icons.filled.Build
 import androidx.compose.material.icons.filled.ContentCopy
@@ -69,7 +70,7 @@ fun TranscriptEventItem(
             "user" -> UserBubble(ev.text.orEmpty(), ev.queued)
             "assistant" -> AssistantBlock(ev, onCopy)
             "thinking" -> ThinkingBlock(ev.text.orEmpty())
-            "tool" -> ToolCard(ev)
+            "tool" -> if (ev.ask != null) AskCard(ev) else ToolCard(ev)
             "tool_result" -> ToolResultOrphan(ev)
             "command" -> CommandNote(ev.text.orEmpty(), isResult = false)
             "command_result" -> CommandNote(ev.text.orEmpty(), isResult = true)
@@ -361,6 +362,80 @@ private fun ToolCard(ev: TranscriptEvent) {
             }
         }
     }
+}
+
+/**
+ * An AskUserQuestion, as a question rather than as JSON. The options here are a
+ * RECORD of what was asked — the live, tappable version is the prompt card fed
+ * from the pane, which appears while the dialog is actually up. Once answered,
+ * the chosen reply arrives in the result and is shown in place of the choices.
+ */
+@Composable
+private fun AskCard(ev: TranscriptEvent) {
+    val ask = ev.ask ?: return
+    Surface(
+        color = MaterialTheme.colorScheme.surfaceContainerHigh,
+        shape = RoundedCornerShape(10.dp),
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        Column(Modifier.padding(horizontal = 12.dp, vertical = 10.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(
+                    Icons.AutoMirrored.Filled.HelpOutline,
+                    contentDescription = null,
+                    modifier = Modifier.size(14.dp),
+                    tint = MaterialTheme.colorScheme.primary,
+                )
+                Spacer(Modifier.width(6.dp))
+                Text(
+                    ask.questions.firstOrNull()?.header ?: "Question",
+                    style = MaterialTheme.typography.labelMedium,
+                    fontWeight = FontWeight.SemiBold,
+                    color = MaterialTheme.colorScheme.primary,
+                )
+            }
+            ask.questions.forEach { q ->
+                Spacer(Modifier.height(5.dp))
+                Text(q.question, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Medium)
+                if (ev.result.isNullOrBlank() && q.options.isNotEmpty()) {
+                    Spacer(Modifier.height(4.dp))
+                    q.options.forEach { opt ->
+                        Text(
+                            "•  $opt",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.padding(start = 4.dp, top = 1.dp),
+                        )
+                    }
+                }
+            }
+            // Answered: what came back matters more than what was offered.
+            if (!ev.result.isNullOrBlank()) {
+                Spacer(Modifier.height(6.dp))
+                Text(
+                    "→ ${answeredSummary(ev.result)}",
+                    style = MaterialTheme.typography.bodySmall,
+                    fontWeight = FontWeight.SemiBold,
+                    color = MaterialTheme.colorScheme.primary,
+                )
+            } else {
+                Spacer(Modifier.height(6.dp))
+                Text(
+                    "Waiting for your answer — buttons below, or on the Screen tab",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
+    }
+}
+
+/** The chosen option, dug out of the result's JSON-ish text; whole text if not. */
+private fun answeredSummary(result: String): String {
+    // Results look like {"questions":[…"answer":"Blue"…]} — the answers are the point.
+    val answers = Regex("\"answer\"\\s*:\\s*\"((?:[^\"\\\\]|\\\\.)*)\"")
+        .findAll(result).map { it.groupValues[1] }.toList()
+    return if (answers.isNotEmpty()) answers.joinToString("  ·  ") else result.take(120)
 }
 
 @Composable
