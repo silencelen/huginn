@@ -19,11 +19,13 @@ import androidx.compose.ui.platform.LocalContext
  * is the platform's own dialog: the permission is its problem, the UI is its
  * problem, and the result comes back as plain text or not at all.
  *
- * Returns null when no recognizer exists on the device, so callers show no mic
- * rather than a button that cannot work.
+ * Always returns a launcher: hiding the button behind an availability
+ * pre-check turned out to hide it on phones where dictation worked, because
+ * resolveActivity answers about package VISIBILITY, not existence. A launch
+ * that truly cannot work toasts instead.
  */
 @Composable
-fun rememberSpeechInput(onText: (String) -> Unit): (() -> Unit)? {
+fun rememberSpeechInput(onText: (String) -> Unit): () -> Unit {
     val context = LocalContext.current
     // The freshest callback, not the one captured when the launcher was created:
     // the composer's lambda closes over the current draft, which changes.
@@ -39,12 +41,12 @@ fun rememberSpeechInput(onText: (String) -> Unit): (() -> Unit)? {
         if (!heard.isNullOrEmpty()) currentOnText.value(heard)
     }
 
-    val available = remember {
-        Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH)
-            .resolveActivity(context.packageManager) != null
-    }
-    if (!available) return null
-
+    // No availability pre-check, deliberately. resolveActivity is subject to
+    // package-visibility filtering (Android 11+), and a null there made this
+    // button REMOVE ITSELF on a phone where the recognizer worked fine — a
+    // silent gate, the worst kind. The <queries> declaration fixes the check,
+    // but the button no longer trusts any pre-check: it always shows, and a
+    // launch that genuinely cannot work says so out loud.
     return {
         runCatching {
             launcher.launch(
@@ -56,6 +58,12 @@ fun rememberSpeechInput(onText: (String) -> Unit): (() -> Unit)? {
                     putExtra(RecognizerIntent.EXTRA_PROMPT, "Speak to huginn")
                 }
             )
+        }.onFailure {
+            android.widget.Toast.makeText(
+                context,
+                "No speech input app is available on this phone.",
+                android.widget.Toast.LENGTH_LONG,
+            ).show()
         }
     }
 }
