@@ -218,6 +218,7 @@ fun HuginnApp(
     val clients by vm.clients.collectAsState()
     val push by vm.push.collectAsState()
     val appLock by vm.appLock.collectAsState()
+    val agents by vm.agents.collectAsState()
 
     val snackbar = remember { SnackbarHostState() }
     LaunchedEffect(toast) { toast?.let { snackbar.showSnackbar(it); vm.toastShown() } }
@@ -402,6 +403,9 @@ fun HuginnApp(
                 onSendText = { text, enter -> vm.sendText(name, text, enter) },
                 onSendKeys = { vm.sendKeys(name, it) },
                 onLive = { vm.sendLive(name, it) },
+                agents = agents,
+                onAgentsOpen = { vm.startAgentsPolling(name) },
+                onAgentsClose = { vm.stopAgentsPolling() },
                 onAnswerPrompt = { vm.answerPrompt(name, it) },
                 onForceResize = { vm.forceFit() },
                 onInterrupt = { vm.interruptSession(name) },
