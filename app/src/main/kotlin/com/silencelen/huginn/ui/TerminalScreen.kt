@@ -235,7 +235,7 @@ fun TerminalScreen(
                     .fillMaxWidth()
                     .imePadding()
                     .navigationBarsPadding()
-                    .padding(start = 12.dp, end = 8.dp, top = 6.dp, bottom = 2.dp),
+                    .padding(start = 12.dp, end = 8.dp, top = 6.dp, bottom = 6.dp),
                 verticalAlignment = Alignment.Bottom,
             ) {
                 OutlinedTextField(

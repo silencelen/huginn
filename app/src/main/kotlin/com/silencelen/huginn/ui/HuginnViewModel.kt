@@ -21,6 +21,7 @@ import com.silencelen.huginn.data.TranscriptPage
 import com.silencelen.huginn.data.Plan
 import com.silencelen.huginn.data.SavedAccount
 import com.silencelen.huginn.data.Usage
+import com.silencelen.huginn.data.AgentsInfo
 import com.silencelen.huginn.data.Alerts
 import com.silencelen.huginn.data.ClientsInfo
 import com.silencelen.huginn.data.PushStatus
@@ -865,6 +866,27 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
     private val _sessionGone = MutableStateFlow<String?>(null)
     val sessionGone: StateFlow<String?> = _sessionGone.asStateFlow()
     fun sessionGoneHandled() { _sessionGone.value = null }
+
+    /** Agents for the open work sheet; polled only while the sheet is up. */
+    private val _agents = MutableStateFlow<AgentsInfo?>(null)
+    val agents: StateFlow<AgentsInfo?> = _agents.asStateFlow()
+    private var agentsJob: Job? = null
+
+    fun startAgentsPolling(name: String) {
+        agentsJob?.cancel()
+        agentsJob = viewModelScope.launch {
+            while (isActive) {
+                runCatching { client.sessionAgents(name) }.onSuccess { _agents.value = it }
+                delay(3000)
+            }
+        }
+    }
+
+    fun stopAgentsPolling() {
+        agentsJob?.cancel()
+        agentsJob = null
+        _agents.value = null
+    }
 
     fun sendLive(name: String, op: LiveInput.Op) {
         liveOps.addLast(op)

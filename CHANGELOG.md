@@ -1,5 +1,36 @@
 # Huginn changelog
 
+## 2.19.0 — 2026-07-27
+
+### Tap the work strip to see the agents
+The strip now opens into a sheet: the TUI's progress rows, the background shells
+with elapsed times, and — the point — **each individual agent** behind "0/4 agents
+done". Every agent shows whether it is working or settled, which workflow run it
+belongs to, the task it was given (in the parent's own words), and the very last
+thing it did, read live from its own transcript. Polling for this runs only while
+the sheet is open.
+
+### The strip stopped flapping
+Two separate causes. The per-tool rows ("Running 2 shell commands · 4s…",
+"Searching for 1 pattern…") turn over at tool speed, so the strip grew a line and
+lost it again on repeat — they are now a single slot that updates its text in place
+and never blinks out mid-turn. And the strip sometimes echoed lines of the
+conversation itself: the TUI marks ordinary messages with a bullet the parser was
+reading as a progress glyph, and old scroll text looked like status. Progress rows
+now match only the real progress glyphs, and only in the bottom of the pane where
+the status area actually lives.
+
+### Sends that sat in the composer
+Rarely, a message sent from the conversation tab landed in Claude's input box
+without submitting — the text and the Enter arrived in one burst, which the TUI
+occasionally reads as a paste, inserting the newline instead of submitting. huginn
+now puts a beat between the text and the Enter, making it a distinct keypress
+every time.
+
+### Composer padding, take three
+A couple of pixels of breathing room under the entry bubble (6dp) — the previous
+fix removed the doubled inset but took the gap to nothing.
+
 ## 2.18.0 — 2026-07-27
 
 ### Background work is visible everywhere it was invisible

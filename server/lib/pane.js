@@ -192,27 +192,50 @@ const GLYPH_STATUS_RE = /^\s*[\u2722\u2733\u273D\u273B\u2736\u2738\u2739\u273A\u
 //   \u25EF andvari-polish-wave3  Wave 3   0/4 agents done \u00B7 7m 39s \u00B7 \u2193 562.4k tokens
 //   \u29C9  audit-board
 //   Running 1 shell command \u00B7 2s\u2026
-const PROGRESS_ROW_RE = /^\s*[\u25EF\u25CB\u25CF\u25D0\u25D1\u25D2\u25D3\u29C9\u25C9\u25CE]\s+(\S.*)$/;
+// ONLY the glyphs observed on real progress rows: \u25EF workflow, \u29C9 board,
+// \u25D0-\u25D3 phase spinner. \u25CF is NOT here — it is the TUI's ordinary message
+// bullet, and including it promoted scroll text ("\u25CF Two clean asks…",
+// "\u25CF Write(file)") into the status strip.
+const PROGRESS_ROW_RE = /^\s*[\u25EF\u25D0\u25D1\u25D2\u25D3\u29C9]\s+(\S.*)$/;
 const RUNNING_ROW_RE = /^\s*(Running \d+ (?:agents?|shells?|shell commands?|tasks?|commands?)\b.*)$/i;
 
+// The transient per-tool summary the TUI redraws constantly: "Running 2 shell
+// commands \u00B7 4s\u2026", "Searching for 1 pattern\u2026". Distinct from the durable rows
+// because it appears and vanishes at tool speed — rendered naively it made the
+// strip grow a line and lose it again on repeat.
+const TRANSIENT_ROW_RE = /^\s*((?:Running|Searching|Spawning|Reading|Writing|Fetching|Building|Testing|Analyzing|Editing)\b.*(?:\d.*|\u2026))$/i;
+
 /**
- * The progress rows the TUI draws besides the spinner: workflow phase lines,
- * "Running N agents/shells", board markers. These are how Claude Code itself
- * shows fan-out work, so the phone's status strip shows the same rows rather
- * than inventing its own vocabulary.
+ * The progress rows the TUI draws besides the spinner, split by lifetime.
+ * Durable rows (workflow phases \u25EF, boards \u29C9, "Running N agents") persist for
+ * the length of the work; the transient row turns over with every tool call and
+ * is reported separately so the client can update it in place.
  */
 function parseStatusExtras(lines, max = 3) {
-  const out = [];
-  for (const raw of lines) {
+  const durable = [];
+  let transient = null;
+  // Only the pane tail: the live status area is always at the bottom, and the
+  // scroll above it can contain text that LOOKS like a status row — old renders
+  // of tool activity, prose bullets — which is history, not status.
+  for (const raw of lines.slice(-10)) {
     const t = stripAnsi(raw).trimEnd();
     if (!t.trim() || /Tip:/.test(t)) continue;
-    let m = PROGRESS_ROW_RE.exec(t) || RUNNING_ROW_RE.exec(t);
-    if (!m) continue;
-    const text = m[1].replace(/\s{2,}/g, ' \u00B7 ').trim().slice(0, 120);
-    if (!out.includes(text)) out.push(text);
-    if (out.length >= max) break;
+    const p = PROGRESS_ROW_RE.exec(t);
+    if (p) {
+      const text = p[1].replace(/\s{2,}/g, ' \u00B7 ').trim().slice(0, 120);
+      if (!durable.includes(text) && durable.length < max) durable.push(text);
+      continue;
+    }
+    const r = RUNNING_ROW_RE.exec(t) || TRANSIENT_ROW_RE.exec(t);
+    // Bottom-most wins: the newest state of a row that redraws in place.
+    if (r) transient = r[1].replace(/\s{2,}/g, ' \u00B7 ').trim().slice(0, 120);
   }
-  return out;
+  // "Running N agents" is durable in spirit (it lasts the fan-out), so promote it.
+  if (transient && /^Running \d+ agents?\b/i.test(transient) && durable.length < max) {
+    durable.push(transient);
+    transient = null;
+  }
+  return { durable, transient };
 }
 
 /**
