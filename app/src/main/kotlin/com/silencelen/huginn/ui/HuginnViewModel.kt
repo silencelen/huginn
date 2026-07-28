@@ -21,6 +21,7 @@ import com.silencelen.huginn.data.TranscriptPage
 import com.silencelen.huginn.data.Plan
 import com.silencelen.huginn.data.SavedAccount
 import com.silencelen.huginn.data.Usage
+import com.silencelen.huginn.data.Alerts
 import com.silencelen.huginn.data.LoginState
 import com.silencelen.huginn.notify.SessionWatchWorker
 import com.silencelen.huginn.notify.WatchService
@@ -83,6 +84,39 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
 
     private val _watchEnabled = MutableStateFlow(false)
     val watchEnabled: StateFlow<Boolean> = _watchEnabled.asStateFlow()
+
+    /**
+     * Alerts sent by the HOST, which is the only kind that arrives when the app is
+     * not running. Its state lives on the server, not here, because the server is
+     * what does the sending.
+     */
+    private val _alerts = MutableStateFlow<Alerts?>(null)
+    val alerts: StateFlow<Alerts?> = _alerts.asStateFlow()
+
+    fun refreshAlerts() {
+        viewModelScope.launch { runCatching { client.alerts() }.onSuccess { _alerts.value = it } }
+    }
+
+    fun setAlertsEnabled(on: Boolean) {
+        viewModelScope.launch {
+            runCatching { client.setAlerts(on) }
+                .onSuccess {
+                    _alerts.value = _alerts.value?.copy(enabled = it.enabled) ?: it
+                    _toast.value = if (it.enabled)
+                        "huginn will message you when a session needs you"
+                    else "huginn will stop messaging you"
+                }
+                .onFailure { _toast.value = errText(it) }
+        }
+    }
+
+    fun sendTestAlert() {
+        viewModelScope.launch {
+            runCatching { client.testAlert() }
+                .onSuccess { _toast.value = "Test sent from huginn"; refreshAlerts() }
+                .onFailure { _toast.value = errText(it) }
+        }
+    }
 
     /**
      * Continuous watching versus the 15-minute periodic check. Only one should be

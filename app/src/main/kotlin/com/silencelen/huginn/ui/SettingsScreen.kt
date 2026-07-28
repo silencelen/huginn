@@ -54,6 +54,9 @@ fun SettingsScreen(
     onNotifyEnabled: (Boolean) -> Unit,
     watchEnabled: Boolean,
     onWatchEnabled: (Boolean) -> Unit,
+    alerts: com.silencelen.huginn.data.Alerts?,
+    onAlertsEnabled: (Boolean) -> Unit,
+    onTestAlert: () -> Unit,
     notificationsAllowed: Boolean,
     onRequestNotifications: () -> Unit,
     onOpenSystemNotificationSettings: () -> Unit,
@@ -143,6 +146,41 @@ fun SettingsScreen(
                 color = MaterialTheme.colorScheme.error,
             )
             null -> Unit
+        }
+
+        // Host-sent alerts are listed before the in-app ones because they are the
+        // ones that work when the app is closed, which is most of the time.
+        alerts?.let { al ->
+            Spacer(Modifier.height(8.dp))
+            Text("Alerts from huginn", style = MaterialTheme.typography.titleMedium)
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f)) {
+                    Text("Message me when a session needs me", style = MaterialTheme.typography.bodyMedium)
+                    Text(
+                        if (al.channel == "telegram")
+                            "Sent by huginn over Telegram, so it reaches you with this app closed " +
+                                "and costs no battery. Also tells you when a long chat finishes."
+                        else "No delivery channel is configured on huginn.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    if (al.delivered > 0) {
+                        Text(
+                            "${al.delivered} sent so far",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                }
+                Switch(
+                    checked = al.enabled,
+                    onCheckedChange = onAlertsEnabled,
+                    enabled = al.channel != "none",
+                )
+            }
+            if (al.enabled) {
+                OutlinedButton(onClick = onTestAlert) { Text("Send a test") }
+            }
         }
 
         Spacer(Modifier.height(8.dp))

@@ -99,6 +99,17 @@ class HuginnClient(
 
     suspend fun status(): Status = decode(call(builder("/v1/status").get().build()))
 
+    suspend fun alerts(): Alerts = decode(call(builder("/v1/alerts").get().build()))
+
+    suspend fun setAlerts(enabled: Boolean): Alerts {
+        val body = buildJsonObject { put("enabled", JsonPrimitive(enabled)) }
+        return decode(call(builder("/v1/alerts").post(encode(body)).build()))
+    }
+
+    suspend fun testAlert() {
+        call(builder("/v1/alerts/test").post(ByteArray(0).toRequestBody(null)).build(), Client.POLL)
+    }
+
     /**
      * Parks until something an alert depends on changes, or [waitMs] elapses.
      * Uses the long-poll client: the server holds this open deliberately.
