@@ -85,6 +85,8 @@ fun SessionScreen(
     onAgentsOpen: () -> Unit,
     onAgentsClose: () -> Unit,
     suggestions: List<String>,
+    micGranted: Boolean,
+    onRequestMic: () -> Unit,
     onAnswerPrompt: (Int) -> Unit,
     onAnswerMulti: (List<Int>) -> Unit,
     onForceResize: () -> Unit,
@@ -124,6 +126,8 @@ fun SessionScreen(
                     onAgentsOpen = onAgentsOpen,
                     onAgentsClose = onAgentsClose,
                     suggestions = suggestions,
+                    micGranted = micGranted,
+                    onRequestMic = onRequestMic,
                     draft = draft,
                     onDraft = onDraft,
                     onSendText = onSendText,
@@ -148,6 +152,8 @@ fun SessionScreen(
                     onSendText = onSendText,
                     onSendKeys = onSendKeys,
                     onLive = onLive,
+                    micGranted = micGranted,
+                    onRequestMic = onRequestMic,
                     onAnswerPrompt = onAnswerPrompt,
                     onAnswerMulti = onAnswerMulti,
                     onForceResize = onForceResize,
@@ -173,6 +179,8 @@ private fun SessionConversation(
     draft: String,
     onDraft: (String) -> Unit,
     onSendText: (String, Boolean) -> Unit,
+    micGranted: Boolean,
+    onRequestMic: () -> Unit,
     onAnswerPrompt: (Int) -> Unit,
     onAnswerMulti: (List<Int>) -> Unit,
     onInterrupt: () -> Unit,
@@ -337,15 +345,11 @@ private fun SessionConversation(
                     shape = RoundedCornerShape(20.dp),
                 )
                 Spacer(Modifier.width(6.dp))
-                rememberSpeechInput { heard -> onDraft(appendDictation(draft, heard)) }.let { speak ->
-                    IconButton(onClick = speak, modifier = Modifier.size(46.dp)) {
-                        Icon(
-                            Icons.Filled.Mic,
-                            contentDescription = "Dictate",
-                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                    }
-                }
+                DictationMicButton(
+                    micGranted = micGranted,
+                    onRequestMic = onRequestMic,
+                    onText = { heard -> onDraft(appendDictation(draft, heard)) },
+                )
                 // Esc is how you stop Claude at the keyboard; with nothing typed
                 // that is the action this composer should offer.
                 if (working && draft.isBlank()) {

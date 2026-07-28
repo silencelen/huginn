@@ -81,6 +81,8 @@ fun TerminalScreen(
     onSendText: (String, Boolean) -> Unit,
     onSendKeys: (List<String>) -> Unit,
     onLive: (LiveInput.Op) -> Unit,
+    micGranted: Boolean,
+    onRequestMic: () -> Unit,
     onAnswerPrompt: (Int) -> Unit,
     onAnswerMulti: (List<Int>) -> Unit,
     onForceResize: () -> Unit,
@@ -269,15 +271,11 @@ fun TerminalScreen(
                     shape = RoundedCornerShape(20.dp),
                 )
                 Spacer(Modifier.width(6.dp))
-                rememberSpeechInput { heard -> onDraft(appendDictation(draft, heard)) }.let { speak ->
-                    IconButton(onClick = speak) {
-                        Icon(
-                            Icons.Filled.Mic,
-                            contentDescription = "Dictate",
-                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                    }
-                }
+                DictationMicButton(
+                    micGranted = micGranted,
+                    onRequestMic = onRequestMic,
+                    onText = { heard -> onDraft(appendDictation(draft, heard)) },
+                )
                 // Send-without-newline: Claude Code's composer takes multi-line
                 // input, so putting text in the box is a distinct action from
                 // submitting it.
