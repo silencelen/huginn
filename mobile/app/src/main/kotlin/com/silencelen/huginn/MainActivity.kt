@@ -119,10 +119,30 @@ class MainActivity : FragmentActivity() {
     private fun readTarget(intent: Intent?) {
         val session = intent?.getStringExtra(SessionWatchWorker.EXTRA_SESSION)
         val chat = intent?.getStringExtra(SessionWatchWorker.EXTRA_CHAT)
+        // The system share sheet. Text and images arrive as different extras of
+        // the same action, and either one means "start a chat about this".
+        var shareText: String? = null
+        var shareImage: Uri? = null
+        if (intent?.action == Intent.ACTION_SEND) {
+            if (intent.type == "text/plain") {
+                shareText = intent.getStringExtra(Intent.EXTRA_TEXT)
+                    // Some apps put the payload in SUBJECT (title) + TEXT (url);
+                    // both is better than either for "what is this page".
+                    ?.let { t ->
+                        val subject = intent.getStringExtra(Intent.EXTRA_SUBJECT)
+                        if (!subject.isNullOrBlank() && !t.contains(subject)) "$subject\n$t" else t
+                    }
+            } else if (intent.type?.startsWith("image/") == true) {
+                shareImage = androidx.core.content.IntentCompat.getParcelableExtra(
+                    intent, Intent.EXTRA_STREAM, Uri::class.java)
+            }
+        }
         // Only when there is something to go to. A plain launcher tap carries
-        // neither, and overwriting the target with nulls would yank the reader out
-        // of wherever they already were.
-        if (session != null || chat != null) openTarget.value = OpenTarget(session, chat, ++targetSeq)
+        // none of these, and overwriting the target with nulls would yank the
+        // reader out of wherever they already were.
+        if (session != null || chat != null || shareText != null || shareImage != null) {
+            openTarget.value = OpenTarget(session, chat, ++targetSeq, shareText, shareImage)
+        }
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -232,7 +252,15 @@ private fun LockedScreen(error: String?, onUnlock: () -> Unit) {
  * it two identical targets compare equal, the effect watching them never re-runs,
  * and a tap made after wandering elsewhere in the app does nothing.
  */
-data class OpenTarget(val session: String?, val chat: String?, val seq: Int)
+data class OpenTarget(
+    val session: String?,
+    val chat: String?,
+    val seq: Int,
+    /** Text handed in through the system share sheet; becomes a new chat's draft. */
+    val shareText: String? = null,
+    /** An image shared in; staged as the new chat's attachment. */
+    val shareImage: Uri? = null,
+)
 
 private sealed interface Dest {
     data object Chats : Dest
@@ -290,6 +318,14 @@ fun HuginnApp(
                 vm.openChat(t.chat)
                 dest = Dest.Chat(t.chat)
             }
+            t.shareText != null || t.shareImage != null -> {
+                // Something shared in from another app: a fresh chat with it
+                // staged. Staged, not sent — the share sheet's contract everywhere
+                // else is "compose around this", and a wrong-guess auto-send would
+                // burn a turn on it.
+                tab = 0
+                vm.newChatForShare(t.shareText, t.shareImage) { id -> dest = Dest.Chat(id) }
+            }
         }
     }
 
@@ -335,6 +371,7 @@ fun HuginnApp(
     val appLock by vm.appLock.collectAsState()
     val agents by vm.agents.collectAsState()
     val suggestions by vm.suggestions.collectAsState()
+    val attachment by vm.attachment.collectAsState()
     val autoswitch by vm.autoswitch.collectAsState()
 
     // Per-surface action menu state (the top-bar slot).
@@ -556,7 +593,14 @@ fun HuginnApp(
             )
         }
         val chatDetail: @Composable (String) -> Unit = { id ->
-            DisposableEffect(id) { onDispose { vm.detachStream(); vm.clearSuggestions() } }
+            DisposableEffect(id) {
+                onDispose {
+                    vm.detachStream(); vm.clearSuggestions()
+                    // A photo staged for THIS chat must not silently ride the next
+                    // one opened.
+                    vm.clearAttachment()
+                }
+            }
             // A turn boundary — the transcript grew and nothing is in flight — is
             // the moment suggestions are worth generating; same rule as sessions.
             val chatBusy = sending || streamingText != null || activeTool != null ||
@@ -583,6 +627,9 @@ fun HuginnApp(
                 onSend = { vm.send(id, it) },
                 onCancel = { vm.cancel(id) },
                 onCopy = { vm.copy(it) },
+                attachment = attachment,
+                onAttach = { vm.attachImage(it) },
+                onClearAttachment = { vm.clearAttachment() },
             )
         }
         val sessionsPane: @Composable (Boolean) -> Unit = { twoPane ->

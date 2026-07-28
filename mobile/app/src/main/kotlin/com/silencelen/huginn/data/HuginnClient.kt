@@ -393,6 +393,14 @@ class HuginnClient(
     suspend fun chatSuggestions(id: String): Suggestions =
         decode(call(builder("/v1/chats/$id/suggestions").get().build(), Client.POLL))
 
+    /**
+     * Lands an image on huginn where a chat's Read tool can see it. Raw bytes,
+     * not multipart: one image needs no parts, and the server names the file so
+     * nothing sent here decides where it is written.
+     */
+    suspend fun upload(bytes: ByteArray, mime: String): UploadResult =
+        decode(call(builder("/v1/uploads").post(bytes.toRequestBody(mime.toMediaType())).build()))
+
     /** Renames a chat; the title is the only field this touches. */
     suspend fun renameChat(id: String, title: String) {
         call(builder("/v1/chats/$id").patch(encode(buildJsonObject { put("title", JsonPrimitive(title)) })).build())
