@@ -34,9 +34,10 @@ const { AccountStore, fingerprint } = require('./lib/accounts');
 const { formatModel, discoverModels, parseModelId } = require('./lib/models');
 const { pushPending, takePending, clearPending, queuedEvents } = require('./lib/chatqueue');
 const { digest } = require('./lib/watch');
-const { decideAlerts, pruneSent } = require('./lib/alerts');
+const { decideAlerts, routeAlerts, pruneSent } = require('./lib/alerts');
+const clientsLib = require('./lib/clients');
 
-const VERSION = '2.12.0';
+const VERSION = '2.13.0';
 const PORT = Number(process.env.HUGINN_APPD_PORT || 8787);
 const DATA_DIR = process.env.HUGINN_APPD_DATA || '/var/lib/huginn-appd';
 const TOKEN_FILE = process.env.HUGINN_APPD_TOKEN_FILE || '/etc/huginn-appd/token';
@@ -482,6 +483,7 @@ function chatStates() {
       title: m.title ?? null,
       running: activeRuns.has(id),
       pending: Array.isArray(m.pending) ? m.pending.length : 0,
+      finishedRuns: m.finishedRuns || 0,
     });
   }
   return out;
@@ -633,6 +635,11 @@ function startRun(meta, userText) {
       run_.emit('error', { text: errText });
       updateMeta(chatId, (m) => { m.updatedAt = ts; m.lastSnippet = errText.slice(0, 120); });
     }
+    // Recorded before anything else observes the finish. A completed run has to
+    // leave a durable mark: the alert watcher runs on a timer and cannot be relied
+    // on to catch the instant `running` goes false — a five-second run slipped
+    // straight through a ten-second tick and was never reported.
+    updateMeta(chatId, (m) => { m.finishedRuns = (m.finishedRuns || 0) + 1; m.finishedAt = ts; });
     run_.emit('done', { exitCode: code });
     run_.finish();
     log(`chat ${chatId} run finished (exit ${code})`);
@@ -1059,6 +1066,52 @@ const ALERT_STATE = path.join(DATA_DIR, 'alerts.json');
 const ALERT_POLL_MS = 10_000;
 const TELEGRAM_SCRIPT = '/root/netplan/scripts/active/send-telegram.sh';
 
+// ------------------------------------------------------- who is still listening
+//
+// In memory, because it is written on every keepalive from every watching phone
+// and this is the only process that writes it. Flushed to disk on a timer so a
+// daemon restart does not make every phone look newly-arrived, and so the record
+// of an overnight vigil survives to be read in the morning.
+const CLIENT_STATE = path.join(DATA_DIR, 'clients.json');
+const CLIENT_FLUSH_MS = 60_000;
+let clientState = (() => {
+  try { return JSON.parse(fs.readFileSync(CLIENT_STATE, 'utf8')); }
+  catch { return clientsLib.emptyState(); }
+})();
+let clientDirty = false;
+
+function flushClients() {
+  if (!clientDirty) return;
+  clientDirty = false;
+  try {
+    clientsLib.pruneClients(clientState, Date.now());
+    fs.writeFileSync(`${CLIENT_STATE}.tmp`, JSON.stringify(clientState), { mode: 0o600 });
+    fs.renameSync(`${CLIENT_STATE}.tmp`, CLIENT_STATE);
+  } catch (e) { log('clients: could not persist', e.message); }
+}
+setInterval(flushClients, CLIENT_FLUSH_MS).unref();
+
+/**
+ * Stamps the calling app as still listening. Headers rather than query parameters
+ * so the id never lands in a URL, and so an ordinary long poll carries it without
+ * changing its shape.
+ *
+ * `X-Huginn-Notify` is the app reporting whether Android will in fact display what
+ * it posts — a connected app with notifications denied is not a delivery route, and
+ * counting it as one would hold back the Telegram fallback in favour of nothing.
+ */
+function noteClient(req, kind) {
+  const id = String(req.headers['x-huginn-client'] || '').trim().slice(0, 64);
+  if (!id) return;
+  const notifyHeader = req.headers['x-huginn-notify'];
+  clientsLib.noteSeen(clientState, id, {
+    kind,
+    ua: req.headers['user-agent'],
+    notify: notifyHeader == null ? undefined : notifyHeader === '1',
+  }, Date.now());
+  clientDirty = true;
+}
+
 function loadAlertState() {
   try { return JSON.parse(fs.readFileSync(ALERT_STATE, 'utf8')); }
   catch { return { enabled: false, sent: {}, prev: null, delivered: 0, lastAt: null }; }
@@ -1093,7 +1146,17 @@ async function alertTick() {
   const observation = { sessions: d.sessions, chats: d.chats };
 
   const { alerts, sentUpdates } = decideAlerts(st.prev, observation, st.sent, now);
-  for (const a of alerts) {
+  const online = clientsLib.appOnline(clientState, now);
+  const { deliver, held } = routeAlerts(alerts, { mode: st.mode || 'fallback', appOnline: online });
+
+  for (const a of held) {
+    // Logged rather than dropped quietly: months from now, "why did Telegram stay
+    // silent" needs an answer, and "the app had it" is a different answer from
+    // "nothing happened".
+    log(`alerts: held ${a.kind} for ${a.subject} (app checked in recently)`);
+    delete sentUpdates[a.key];
+  }
+  for (const a of deliver) {
     const ok = await deliverTelegram(`🔔 ${a.title}\n${a.text}`);
     if (ok) {
       st.delivered = (st.delivered || 0) + 1;
@@ -1138,9 +1201,27 @@ const server = http.createServer(async (req, res) => {
       const st = loadAlertState();
       return sendJson(res, 200, {
         enabled: !!st.enabled,
+        mode: st.mode || 'fallback',
         delivered: st.delivered || 0,
         lastAt: st.lastAt ?? null,
         channel: fs.existsSync(TELEGRAM_SCRIPT) ? 'telegram' : 'none',
+        appOnline: clientsLib.appOnline(clientState, Date.now()),
+      });
+    }
+
+    // --- has the phone actually been checking in? The whole point of recording
+    //     this on the host is that the phone cannot answer while it is asleep.
+    if (req.method === 'GET' && p === '/v1/clients') {
+      const now = Date.now();
+      return sendJson(res, 200, {
+        clients: clientsLib.listClients(clientState, now),
+        appOnline: clientsLib.appOnline(clientState, now),
+        // Per-kind, because a stream that has said nothing for three minutes is dead
+        // while an alarm that has said nothing for three minutes is merely between
+        // beats. Each client carries the window it is actually judged against.
+        freshStreamSeconds: Math.floor(clientsLib.FRESH_STREAM_MS / 1000),
+        freshBeatSeconds: Math.floor(clientsLib.FRESH_BEAT_MS / 1000),
+        serverTime: Math.floor(now / 1000),
       });
     }
 
@@ -1153,10 +1234,11 @@ const server = http.createServer(async (req, res) => {
         // does not announce whatever was already true.
         if (body.enabled) st.prev = null;
       }
+      if (body.mode === 'fallback' || body.mode === 'always') st.mode = body.mode;
       saveAlertState(st);
       if (st.enabled) startAlertWatcher();
-      log(`alerts: ${st.enabled ? 'enabled' : 'disabled'}`);
-      return sendJson(res, 200, { enabled: !!st.enabled });
+      log(`alerts: ${st.enabled ? 'enabled' : 'disabled'} mode=${st.mode || 'fallback'}`);
+      return sendJson(res, 200, { enabled: !!st.enabled, mode: st.mode || 'fallback' });
     }
 
     if (req.method === 'POST' && p === '/v1/alerts/test') {
@@ -1167,7 +1249,60 @@ const server = http.createServer(async (req, res) => {
     // --- the change signal a watching phone parks on
     if (req.method === 'GET' && p === '/v1/watch') {
       const known = u.searchParams.get('hash');
+
+      // Streaming mode exists for one reason: a long poll that dies silently is
+      // indistinguishable from a long poll that is simply waiting. The phone had
+      // no way to tell, so a socket black-holed by a network change or a NAT
+      // timeout looked exactly like a quiet night, and the app went on believing
+      // it was watching. A keepalive every 25 seconds makes silence mean failure,
+      // which the app can act on — and each one re-stamps this client as alive, so
+      // the host can also see the vigil from its side.
+      if (u.searchParams.get('stream') === '1') {
+        noteClient(req, 'stream');
+        res.writeHead(200, {
+          'Content-Type': 'text/event-stream',
+          'Cache-Control': 'no-cache',
+          'Connection': 'keep-alive',
+          'X-Accel-Buffering': 'no',
+        });
+        let last = known || null;
+        const started = Date.now();
+        // Bounded so a client that vanished without closing cannot hold a tmux
+        // polling loop forever; the app treats `bye` as "reconnect", not "stop".
+        const MAX_MS = 30 * 60 * 1000;
+        const KEEPALIVE_MS = 25_000;
+        let nextKeepalive = Date.now() + KEEPALIVE_MS;
+
+        while (!req.destroyed && !res.writableEnded) {
+          const d = digest(await listSessions(), chatStates());
+          if (d.hash !== last) {
+            last = d.hash;
+            res.write(`event: state\ndata: ${JSON.stringify({
+              ...d, changed: true, serverTime: Math.floor(Date.now() / 1000),
+            })}\n\n`);
+            nextKeepalive = Date.now() + KEEPALIVE_MS;
+          } else if (Date.now() >= nextKeepalive) {
+            // A comment frame: valid SSE, ignored by any parser, and enough to
+            // prove the path is still open in both directions.
+            res.write(`: ka ${Math.floor(Date.now() / 1000)}\n\n`);
+            nextKeepalive = Date.now() + KEEPALIVE_MS;
+            noteClient(req, 'stream');
+          }
+          if (Date.now() - started > MAX_MS) {
+            res.write('event: bye\ndata: {"reason":"rotate"}\n\n');
+            break;
+          }
+          await sleep(3000);
+        }
+        if (!res.writableEnded) res.end();
+        return;
+      }
+
       const waitMs = Math.max(0, Math.min(300_000, Number(u.searchParams.get('wait')) || 0));
+      // A zero-wait watch is the Doze-proof alarm checking in; a long one is the
+      // older poll. Worth telling apart, because "the alarm still fires while the
+      // phone sleeps" is the claim this whole change stands on.
+      noteClient(req, waitMs > 0 ? 'poll' : 'heartbeat');
       const deadline = Date.now() + waitMs;
       // Cheap inputs on purpose: no previews, no transcripts. This runs in a loop
       // for as long as a phone is watching.

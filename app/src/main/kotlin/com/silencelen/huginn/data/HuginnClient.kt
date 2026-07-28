@@ -30,6 +30,22 @@ import java.util.concurrent.TimeUnit
 class HuginnClient(
     private val baseUrlProvider: () -> String,
     private val tokenProvider: () -> String,
+    /**
+     * Stable per-installation id, sent so the HOST can record that this phone is
+     * still listening. That record is the only way to answer "did my phone keep
+     * checking in overnight?", because the phone cannot report having gone quiet
+     * and waking it to ask ends the very state under investigation.
+     *
+     * Blank for the ordinary UI client: a foreground screen is not evidence of
+     * background delivery and should not be counted as such.
+     */
+    private val clientIdProvider: () -> String = { "" },
+    /**
+     * Whether Android will actually display what this app posts. Null means "not
+     * saying". The host holds Telegram back when a phone is listening, so a
+     * listening app that cannot show anything must not claim to be a route.
+     */
+    private val canNotifyProvider: () -> Boolean? = { null },
 ) {
     class HuginnException(val code: Int, override val message: String) : Exception(message)
 
@@ -67,9 +83,25 @@ class HuginnClient(
         return "$withScheme$path"
     }
 
-    private fun builder(path: String) = Request.Builder()
-        .url(url(path))
-        .header("Authorization", "Bearer ${tokenProvider().trim()}")
+    // The watch stream is a THIRD kind of timeout, and the distinction is the point
+    // of the stream existing. Chat streams may be silent for a whole Claude turn, so
+    // they get none. The watch stream is contractually never silent — the server
+    // sends a keepalive every 25 seconds — so silence beyond a minute means the
+    // socket is dead, which is exactly the failure that used to go unnoticed while
+    // the phone slept and the app went on believing it was watching.
+    private val watchHttp = http.newBuilder()
+        .readTimeout(60, TimeUnit.SECONDS)
+        .build()
+
+    private fun builder(path: String): Request.Builder {
+        val b = Request.Builder()
+            .url(url(path))
+            .header("Authorization", "Bearer ${tokenProvider().trim()}")
+        val id = clientIdProvider().trim()
+        if (id.isNotEmpty()) b.header("X-Huginn-Client", id)
+        canNotifyProvider()?.let { b.header("X-Huginn-Notify", if (it) "1" else "0") }
+        return b
+    }
 
     private inline fun <reified T> decode(body: String): T = json.decodeFromString(body)
 
@@ -101,10 +133,19 @@ class HuginnClient(
 
     suspend fun alerts(): Alerts = decode(call(builder("/v1/alerts").get().build()))
 
-    suspend fun setAlerts(enabled: Boolean): Alerts {
-        val body = buildJsonObject { put("enabled", JsonPrimitive(enabled)) }
+    suspend fun setAlerts(enabled: Boolean? = null, mode: String? = null): Alerts {
+        val body = buildJsonObject {
+            enabled?.let { put("enabled", JsonPrimitive(it)) }
+            mode?.let { put("mode", JsonPrimitive(it)) }
+        }
         return decode(call(builder("/v1/alerts").post(encode(body)).build()))
     }
+
+    /**
+     * What the host has seen of this phone. Read from the host on purpose: asking
+     * the phone whether it stayed awake is asking the witness to alibi itself.
+     */
+    suspend fun clients(): ClientsInfo = decode(call(builder("/v1/clients").get().build()))
 
     suspend fun testAlert() {
         call(builder("/v1/alerts/test").post(ByteArray(0).toRequestBody(null)).build(), Client.POLL)
@@ -122,6 +163,68 @@ class HuginnClient(
         val path = "/v1/watch" + if (q.isEmpty()) "" else "?$q"
         return decode(call(builder(path).get().build(), if (waitMs > 0) Client.POLL else Client.NORMAL))
     }
+
+    /**
+     * The watching connection: state when something changes, and a heartbeat when
+     * nothing does.
+     *
+     * A separate reader from [sse] rather than a shared one, because the two want
+     * opposite things from a comment frame. A chat stream treats `:` as noise to
+     * skip; here it is the entire payload — proof the path is still open in both
+     * directions. Collapsing them would mean the reader that most needs to notice
+     * silence being written by the code that ignores it.
+     */
+    fun watchStream(knownHash: String?): Flow<WatchEvent> = callbackFlow {
+        val path = "/v1/watch?stream=1" + if (knownHash != null) "&hash=$knownHash" else ""
+        val call = watchHttp.newCall(builder(path).get().build())
+        call.enqueue(object : Callback {
+            override fun onFailure(c: Call, e: IOException) {
+                if (!c.isCanceled()) trySend(WatchEvent.Failure(e.message ?: "network error"))
+                close()
+            }
+
+            override fun onResponse(c: Call, response: Response) {
+                response.use { resp ->
+                    val body = resp.body
+                    if (!resp.isSuccessful || body == null) {
+                        trySend(WatchEvent.Failure(errorFrom(resp.code, body?.string().orEmpty()).message))
+                        close(); return
+                    }
+                    try {
+                        val source = body.source()
+                        var event: String? = null
+                        val data = StringBuilder()
+                        while (!source.exhausted()) {
+                            val line = source.readUtf8LineStrict()
+                            when {
+                                line.startsWith(":") -> trySend(WatchEvent.Alive)
+                                line.startsWith("event:") -> event = line.removePrefix("event:").trim()
+                                line.startsWith("data:") -> data.append(line.removePrefix("data:").trim())
+                                line.isEmpty() -> {
+                                    when (event) {
+                                        "state" -> runCatching { decode<Watch>(data.toString()) }
+                                            .getOrNull()?.let { trySend(WatchEvent.State(it)) }
+                                        // The server rotates a long-lived stream. Not
+                                        // an error, and must not be treated as one:
+                                        // backing off after a clean rotation would
+                                        // leave the phone unwatched for no reason.
+                                        "bye" -> { trySend(WatchEvent.Rotated); close(); return }
+                                    }
+                                    event = null; data.setLength(0)
+                                }
+                            }
+                        }
+                        // Ran out of body without a `bye`: the socket closed under us.
+                        if (!c.isCanceled()) trySend(WatchEvent.Failure("stream ended"))
+                    } catch (e: Exception) {
+                        if (!c.isCanceled()) trySend(WatchEvent.Failure(e.message ?: "stream ended"))
+                    }
+                    close()
+                }
+            }
+        })
+        awaitClose { call.cancel() }
+    }.flowOn(Dispatchers.IO)
 
     /** Where an in-progress sign-in has got to. */
     suspend fun loginState(): LoginState =

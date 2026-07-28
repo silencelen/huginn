@@ -73,3 +73,19 @@ test('the digest carries the states an alert needs', () => {
 test('empty input is valid and stable', () => {
   assert.strictEqual(digest([], []).hash, digest(null, null).hash);
 });
+
+test('a completed run changes the digest even if running never dipped', () => {
+  const a = digest([], [{ id: 'c1', running: true, pending: 0, finishedRuns: 1 }]);
+  const b = digest([], [{ id: 'c1', running: true, pending: 0, finishedRuns: 2 }]);
+  assert.notEqual(a.hash, b.hash, 'a finish the watcher could otherwise miss');
+});
+
+test('the digest exposes the run counter to whatever compares observations', () => {
+  const d = digest([], [{ id: 'c1', running: false, pending: 0, finishedRuns: 3 }]);
+  assert.equal(d.chats.c1.finishedRuns, 3);
+});
+
+test('a chat with no counter reads as zero rather than undefined', () => {
+  const d = digest([], [{ id: 'c1', running: false, pending: 0 }]);
+  assert.equal(d.chats.c1.finishedRuns, 0);
+});

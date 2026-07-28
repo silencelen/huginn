@@ -4,10 +4,12 @@ import android.content.Context
 import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.floatPreferencesKey
+import androidx.datastore.preferences.core.longPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.core.stringSetPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import kotlinx.serialization.builtins.MapSerializer
 import kotlinx.serialization.builtins.serializer
@@ -32,6 +34,81 @@ class SettingsStore(private val context: Context) {
         private val RUNNING_CHATS = stringSetPreferencesKey("running_chats")
         private val WATCH = booleanPreferencesKey("watch_continuously")
         private val DRAFTS = stringPreferencesKey("drafts")
+        private val CLIENT_ID = stringPreferencesKey("client_id")
+        private val CHAT_RUNS = stringPreferencesKey("chat_runs")
+        private val SEEDED = booleanPreferencesKey("watch_seeded")
+        private val LAST_CONTACT = longPreferencesKey("last_contact_at")
+        private val LAST_ALARM = longPreferencesKey("last_alarm_at")
+        private val LAST_ERROR = stringPreferencesKey("last_watch_error")
+        private val LAST_ERROR_AT = longPreferencesKey("last_watch_error_at")
+    }
+
+    /**
+     * Stable id for this installation, minted once. Sent to the host so it can
+     * record that this phone is still checking in; a random UUID rather than
+     * anything derived from the device, since its only job is to be the same
+     * tomorrow as it is today.
+     */
+    suspend fun clientId(): String {
+        val existing = context.dataStore.data.map { it[CLIENT_ID] }.first()
+        if (!existing.isNullOrBlank()) return existing
+        val minted = java.util.UUID.randomUUID().toString()
+        context.dataStore.edit { it[CLIENT_ID] = minted }
+        return minted
+    }
+
+    /**
+     * Whether an observation has ever been recorded.
+     *
+     * Load-bearing, and it fixes a real hole. The baseline used to be re-seeded
+     * every time the watcher started, which meant anything that changed while the
+     * watcher was dead was silently absorbed as "how things have always been" —
+     * and the watcher is most likely to have been killed exactly while the phone
+     * was asleep, which is the case this is all for. Persisting the fact of having
+     * looked lets a restart COMPARE instead of forget.
+     */
+    val watchSeeded: Flow<Boolean> = context.dataStore.data.map { it[SEEDED] ?: false }
+
+    suspend fun setWatchSeeded(value: Boolean) {
+        context.dataStore.edit { it[SEEDED] = value }
+    }
+
+    /**
+     * Completed-run counts per chat, as of the last observation.
+     *
+     * Persisted alongside the running set because the two answer different questions
+     * and only one of them survives a gap. "Which chats were running" misses a chat
+     * that started and finished between two looks, and with a ten-minute background
+     * check that is an ordinary occurrence rather than a corner case.
+     */
+    val chatRuns: Flow<Map<String, Long>> = context.dataStore.data.map { prefs ->
+        val raw = prefs[CHAT_RUNS] ?: return@map emptyMap()
+        runCatching {
+            Json.decodeFromString(MapSerializer(String.serializer(), Long.serializer()), raw)
+        }.getOrDefault(emptyMap())
+    }
+
+    suspend fun setChatRuns(value: Map<String, Long>) {
+        val encoded = Json.encodeToString(MapSerializer(String.serializer(), Long.serializer()), value)
+        context.dataStore.edit { it[CHAT_RUNS] = encoded }
+    }
+
+    /** Delivery health, so "is this working?" is answerable without guessing. */
+    val lastContactAt: Flow<Long> = context.dataStore.data.map { it[LAST_CONTACT] ?: 0L }
+    val lastAlarmAt: Flow<Long> = context.dataStore.data.map { it[LAST_ALARM] ?: 0L }
+    val lastWatchError: Flow<String> = context.dataStore.data.map { it[LAST_ERROR] ?: "" }
+    val lastWatchErrorAt: Flow<Long> = context.dataStore.data.map { it[LAST_ERROR_AT] ?: 0L }
+
+    suspend fun noteContact(atMs: Long) {
+        context.dataStore.edit { it[LAST_CONTACT] = atMs }
+    }
+
+    suspend fun noteAlarm(atMs: Long) {
+        context.dataStore.edit { it[LAST_ALARM] = atMs }
+    }
+
+    suspend fun noteWatchError(message: String, atMs: Long) {
+        context.dataStore.edit { it[LAST_ERROR] = message.take(120); it[LAST_ERROR_AT] = atMs }
     }
 
     val baseUrl: Flow<String> = context.dataStore.data.map { it[BASE_URL] ?: DEFAULT_BASE_URL }

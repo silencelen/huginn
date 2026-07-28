@@ -56,7 +56,12 @@ fun SettingsScreen(
     onWatchEnabled: (Boolean) -> Unit,
     alerts: com.silencelen.huginn.data.Alerts?,
     onAlertsEnabled: (Boolean) -> Unit,
+    onAlertsMode: (String) -> Unit,
     onTestAlert: () -> Unit,
+    health: HuginnViewModel.DeliveryHealth,
+    clients: com.silencelen.huginn.data.ClientsInfo?,
+    onRequestDozeExemption: () -> Unit,
+    onRefreshDelivery: () -> Unit,
     notificationsAllowed: Boolean,
     onRequestNotifications: () -> Unit,
     onOpenSystemNotificationSettings: () -> Unit,
@@ -179,6 +184,30 @@ fun SettingsScreen(
                 )
             }
             if (al.enabled) {
+                // Fallback is the default and the recommendation. Both channels
+                // firing for one event is worse than either alone: you learn to
+                // dismiss without reading, and then the one that mattered is gone.
+                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                    Column(Modifier.weight(1f)) {
+                        Text("Only when the app is out of contact", style = MaterialTheme.typography.bodyMedium)
+                        Text(
+                            if (al.mode == "always")
+                                "Off, so every alert arrives twice — once in the app and once on Telegram."
+                            else if (al.appOnline)
+                                "On. huginn can see this phone checking in, so it is staying quiet " +
+                                    "and letting the app notify you."
+                            else
+                                "On. huginn has not heard from this phone recently, so Telegram is " +
+                                    "carrying alerts.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    Switch(
+                        checked = al.mode != "always",
+                        onCheckedChange = { onAlertsMode(if (it) "fallback" else "always") },
+                    )
+                }
                 OutlinedButton(onClick = onTestAlert) { Text("Send a test") }
             }
         }
@@ -277,8 +306,8 @@ fun SettingsScreen(
             Column(Modifier.weight(1f)) {
                 Text("Tell me when a session needs me", style = MaterialTheme.typography.bodyMedium)
                 Text(
-                    "Checks every 15 minutes while the phone is on the tailnet, and notifies " +
-                        "when a session starts waiting for an answer.",
+                    "Checks huginn about every 10 minutes, including while the phone is " +
+                        "asleep, and notifies when a session starts waiting for an answer.",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
@@ -292,17 +321,75 @@ fun SettingsScreen(
                     Text("Watch continuously", style = MaterialTheme.typography.bodyMedium)
                     Text(
                         if (watchEnabled)
-                            "Alerts arrive within seconds. Android requires a quiet ongoing " +
-                                "notification while this runs, and it shows what huginn is doing."
+                            "Alerts arrive within seconds while the phone is awake. Android " +
+                                "requires a quiet ongoing notification, and it shows what huginn is doing."
                         else
-                            "Off, so the check runs every 15 minutes — Android's minimum for " +
-                                "periodic work. A session waiting on you can go unnoticed that long.",
+                            "Off, so alerts wait for the 10-minute check rather than arriving " +
+                                "at once. Nothing is missed either way.",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
                 Switch(checked = watchEnabled, onCheckedChange = onWatchEnabled)
             }
+
+            // The part that decides whether any of the above works while the phone
+            // sleeps, and the part that used to be invisible. Without the allowlist
+            // entry Android suspends this app's network during Doze, so the check
+            // still fires and reaches nothing — a failure indistinguishable from no
+            // check at all, which is why it is stated rather than assumed.
+            Spacer(Modifier.height(4.dp))
+            Text("Background delivery", style = MaterialTheme.typography.titleMedium)
+            if (!health.dozeExempt) {
+                Text(
+                    "Android is allowed to put this app to sleep. When it does, the checks " +
+                        "still run but cannot reach huginn — this is the usual reason " +
+                        "notifications stop arriving overnight.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.error,
+                )
+                Button(onClick = onRequestDozeExemption) { Text("Allow background use") }
+            } else {
+                Text(
+                    "Exempt from battery optimisation, so checks keep working while the " +
+                        "phone is asleep.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.primary,
+                )
+            }
+
+            // Two witnesses. The app's own record can only be written while the app
+            // is alive, so it cannot testify about the hours that matter; huginn's
+            // was taken by a machine that never slept.
+            Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                Text(
+                    "This app last reached huginn ${ago(health.lastContactAt)}",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Text(
+                    "Background check last ran ${ago(health.lastAlarmAt)}",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                clients?.clients?.firstOrNull()?.let { c ->
+                    Text(
+                        "huginn last heard from this phone ${agoSeconds(c.ageSeconds)}" +
+                            (c.kind?.let { k -> " (${describeKind(k)})" } ?: "") +
+                            "  ·  ${c.checkIns} check-ins",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                if (health.lastError.isNotBlank()) {
+                    Text(
+                        "Last failure ${ago(health.lastErrorAt)}: ${health.lastError}",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
+            OutlinedButton(onClick = onRefreshDelivery) { Text("Refresh") }
         }
 
         // Whether the system will actually deliver them is a separate question
@@ -455,4 +542,29 @@ private fun SavedAccountRow(
             }
         }
     }
+}
+
+/**
+ * "4 minutes ago", or "never" for a zero — a timestamp of 0 means the thing has not
+ * happened yet, and rendering that as 1970 would read as a fault rather than a
+ * blank. Deliberately coarse: the question these answer is "recently or not", and a
+ * figure to the second invites a precision the underlying schedule does not have.
+ */
+private fun ago(atMs: Long): String =
+    if (atMs <= 0) "never" else agoSeconds((System.currentTimeMillis() - atMs) / 1000)
+
+private fun agoSeconds(seconds: Long): String = when {
+    seconds < 0 -> "just now"
+    seconds < 60 -> "just now"
+    seconds < 3600 -> "${seconds / 60} min ago"
+    seconds < 86_400 -> "${seconds / 3600} h ago"
+    else -> "${seconds / 86_400} d ago"
+}
+
+/** The mechanism behind a check-in, in words rather than the wire's vocabulary. */
+private fun describeKind(kind: String): String = when (kind) {
+    "stream" -> "live connection"
+    "heartbeat" -> "background check"
+    "poll" -> "poll"
+    else -> kind
 }

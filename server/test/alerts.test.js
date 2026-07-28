@@ -106,3 +106,107 @@ test('pruning forgets entries too old to suppress anything', () => {
   const kept = pruneSent({ recent: NOW - 1000, ancient: NOW - REPEAT_MS * 3 }, NOW);
   assert.deepStrictEqual(Object.keys(kept), ['recent']);
 });
+
+// ------------------------------------------------------------------- routing
+//
+// Routing is tested apart from deciding because they answer different questions:
+// deciding is about huginn, routing is about which of your devices is reachable.
+
+const { routeAlerts } = require('../lib/alerts');
+
+const A = [{ key: 'k1', kind: 'chat_finished', subject: 'c1' }];
+
+test('fallback mode delivers when no phone has checked in', () => {
+  const r = routeAlerts(A, { mode: 'fallback', appOnline: false });
+  assert.equal(r.deliver.length, 1);
+  assert.equal(r.held.length, 0);
+});
+
+test('fallback mode holds back when the app is reachable', () => {
+  const r = routeAlerts(A, { mode: 'fallback', appOnline: true });
+  assert.equal(r.deliver.length, 0);
+  assert.equal(r.held.length, 1, 'held, so the silence can be explained later');
+});
+
+test('always mode delivers even when the app is reachable', () => {
+  assert.equal(routeAlerts(A, { mode: 'always', appOnline: true }).deliver.length, 1);
+});
+
+test('off mode delivers nothing either way', () => {
+  assert.equal(routeAlerts(A, { mode: 'off', appOnline: false }).deliver.length, 0);
+  assert.equal(routeAlerts(A, { mode: 'off', appOnline: true }).deliver.length, 0);
+});
+
+test('fallback is the default when no mode is given', () => {
+  assert.equal(routeAlerts(A, { appOnline: true }).deliver.length, 0);
+  assert.equal(routeAlerts(A, {}).deliver.length, 1);
+  assert.equal(routeAlerts(A).deliver.length, 1);
+});
+
+test('routing never invents an alert', () => {
+  for (const mode of ['off', 'fallback', 'always']) {
+    for (const online of [true, false]) {
+      const r = routeAlerts([], { mode, appOnline: online });
+      assert.equal(r.deliver.length + r.held.length, 0, `${mode}/${online}`);
+    }
+  }
+});
+
+// ------------------------------------------- finishes that the timer would miss
+//
+// Regression, from a measured failure: a chat that ran for five seconds against a
+// ten-second alert tick was never observed in the `running` state, so the edge
+// never appeared and no finish was ever reported.
+
+test('a chat that began and ended between two observations still alerts', () => {
+  const prev = { sessions: {}, chats: { c1: { running: false, finishedRuns: 0 } } };
+  // Never seen running: only the counter records that anything happened.
+  const next = { sessions: {}, chats: { c1: { running: false, finishedRuns: 1 } } };
+  const { alerts } = decideAlerts(prev, next, {}, 1000);
+  assert.equal(alerts.length, 1);
+  assert.equal(alerts[0].kind, 'chat_finished');
+});
+
+test('back-to-back runs alert even though running never dips', () => {
+  const prev = { sessions: {}, chats: { c1: { running: true, finishedRuns: 1 } } };
+  const next = { sessions: {}, chats: { c1: { running: true, finishedRuns: 2 } } };
+  assert.equal(decideAlerts(prev, next, {}, 1000).alerts.length, 1);
+});
+
+test('an unchanged counter with no edge stays silent', () => {
+  const prev = { sessions: {}, chats: { c1: { running: true, finishedRuns: 3 } } };
+  const next = { sessions: {}, chats: { c1: { running: true, finishedRuns: 3 } } };
+  assert.equal(decideAlerts(prev, next, {}, 1000).alerts.length, 0);
+});
+
+// Two genuine finishes are two events. Keying suppression on the chat alone would
+// swallow the second one for half an hour.
+test('a later finish of the same chat is not suppressed as a repeat', () => {
+  const first = decideAlerts(
+    { sessions: {}, chats: { c1: { running: true, finishedRuns: 0 } } },
+    { sessions: {}, chats: { c1: { running: false, finishedRuns: 1 } } },
+    {}, 1000,
+  );
+  assert.equal(first.alerts.length, 1);
+  const second = decideAlerts(
+    { sessions: {}, chats: { c1: { running: true, finishedRuns: 1 } } },
+    { sessions: {}, chats: { c1: { running: false, finishedRuns: 2 } } },
+    first.sentUpdates, 2000,                       // well inside the repeat window
+  );
+  assert.equal(second.alerts.length, 1, 'a second finish is a second event');
+});
+
+// ...but a retry of the SAME finish must not double-send.
+test('re-observing one finish does not alert twice', () => {
+  const prev = { sessions: {}, chats: { c1: { running: true, finishedRuns: 0 } } };
+  const next = { sessions: {}, chats: { c1: { running: false, finishedRuns: 1 } } };
+  const first = decideAlerts(prev, next, {}, 1000);
+  const again = decideAlerts(prev, next, first.sentUpdates, 2000);
+  assert.equal(again.alerts.length, 0);
+});
+
+test('a chat with no counter at all still alerts on the edge', () => {
+  const prev = { sessions: {}, chats: { c1: { running: true } } };
+  const next = { sessions: {}, chats: { c1: { running: false } } };
+  assert.equal(decideAlerts(prev, next, {}, 1000).alerts.length, 1);
+});
