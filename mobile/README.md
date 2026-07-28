@@ -186,9 +186,16 @@ older hook that writes only the bare state word is still accepted.
 ## Build and ship
 
 ```bash
-scripts/build.sh [release|debug]   # tests + assemble + refuse an unsigned release
 scripts/ship.sh  [release|debug]   # build + scp to devserv + reindex + verify live
+scripts/build.sh [release|debug]   # tests + assemble only, no publish
 ```
+
+**`ship.sh` is the default. Reach for `build.sh` only when you genuinely do not
+want the release published.** It runs `build.sh` first, so preferring it skips
+nothing. A build that is sideloaded to the test phone and never shipped leaves
+every other device on an older version while the work looks finished — and since
+`versionCode` is a build timestamp, shipping the same `versionName` later mints a
+*different* code, so the test phone is then offered a pointless update.
 
 Requires JDK 17 (`/usr/lib/jvm/java-17-openjdk-amd64`) and
 `/opt/android-sdk` with `platforms/android-35` + `build-tools/35.0.0`.
