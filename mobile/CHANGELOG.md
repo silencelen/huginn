@@ -1,5 +1,21 @@
 # Huginn changelog
 
+## appd 2.30.0 — 2026-07-28 (host only, no app update needed)
+
+### Alerts are noticed instantly instead of on a timer
+huginn checked every ten seconds whether a session had started waiting on you,
+so a question could sit unnoticed for that long before the (sub-100ms) push even
+began. It now watches the file the session hook writes, and reacts the moment it
+changes. Measured end to end — session starts waiting, phone asleep, app not
+running — **176-428ms**, down from ~1.9s. The ten-second check stays underneath
+as a floor, since not every alert has a file to watch.
+
+### A pushed alert no longer forgets it was sent
+When a push delivered an alert, huginn cleared the marker that prevents the same
+alert repeating — so a session flipping in and out of waiting could push every
+single time with no rate limit. Delivery by push now counts as delivery.
+Verified: flapping a session immediately produced exactly one push.
+
 ## 2.29.1 — 2026-07-28
 
 Each arriving push now defers the wake-up alarm directly, instead of waiting for
