@@ -34,6 +34,7 @@ function digest(sessions, chats) {
       // The last thing Claude said, carried so a finish notification can quote the
       // answer instead of only announcing that there is one.
       snippet: x.snippet ?? null,
+      createdAt: Number(x.createdAt) || 0,
     };
   }
   // Sorted keys so the hash depends on the values, not on directory order.
