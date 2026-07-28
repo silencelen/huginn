@@ -1,5 +1,11 @@
 # Huginn changelog
 
+## 2.22.1 — 2026-07-27
+
+### Sessions is now the home screen
+The app opens on Sessions instead of Chats — watching and steering running
+sessions is what this app is for; chats keep their tab one tap away.
+
 ## 2.22.0 — 2026-07-27
 
 ### The app lock now actually locks
