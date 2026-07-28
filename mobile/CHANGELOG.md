@@ -1,5 +1,32 @@
 # Huginn changelog
 
+## 2.28.1 — 2026-07-28
+
+### The crash behind three releases of voice trouble
+Every runtime permission request has been crashing the app since 2.22.0 — the
+release that added the biometric lock. Making the main screen a different kind
+of Android activity quietly pulled in an old support library whose permission
+handling rejects the request codes the modern one generates. The mic tap was
+simply the first permission this app had asked for since. Found by attaching a
+debugger to the phone and reading the stack trace; fixed by pinning the modern
+library.
+
+This also explains the earlier "the voice button does nothing" reports: they
+were this crash, and the three fixes before it were treating symptoms of a bug
+introduced two releases before the feature existed.
+
+### Dictation can find the recogniser again
+The app declared that it looks for the speech *dialog* but never the speech
+*service*, so Android answered "no recogniser here" on a phone carrying
+Google's. Both are declared now. Verified on-device: the mic opens Listening,
+and speech lands in the message box.
+
+### A question notification could lose its buttons
+A push carrying a question and its answer buttons could be replaced moments
+later by a generic "Waiting for your answer" from the app's own follow-up
+check. The push now claims the session first, so nothing re-announces what you
+have already been told.
+
 ## 2.28.0 — 2026-07-28
 
 ### Dictation rebuilt on the path this phone actually has

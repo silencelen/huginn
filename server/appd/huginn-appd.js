@@ -1473,6 +1473,7 @@ async function alertTick() {
     a.options = prompt.multiSelect ? [] : prompt.options.map((o) => ({ number: o.number, label: o.label }));
     a.fingerprint = promptFingerprint(prompt);
     if (a.question) a.text = a.question;
+    log(`alerts: enriched ${a.subject} q=${JSON.stringify((a.question||'').slice(0,40))} opts=${(a.options||[]).length}`);
   }
 
   // Push first, because it is the route that actually reaches a sleeping phone, and
