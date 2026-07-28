@@ -70,12 +70,16 @@ data class PromptOption(
     val number: Int,
     val label: String,
     val selected: Boolean = false,
+    /** Multi-select checkbox state; null on rows that are not checkboxes. */
+    val checked: Boolean? = null,
 )
 
 @Serializable
 data class PanePrompt(
     val question: String = "",
     val options: List<PromptOption> = emptyList(),
+    /** True when the dialog wants a SET of answers rather than one. */
+    val multiSelect: Boolean = false,
     /**
      * Identifies this exact question, computed by the host. An answer carries it back
      * so the host can refuse to type into a pane that has moved on — the app must not
@@ -535,6 +539,7 @@ data class AnswerResult(
     val ok: Boolean = false,
     val option: Int = 0,
     val label: String? = null,
+    val labels: List<String>? = null,
     val reason: String? = null,
     val error: String? = null,
 )

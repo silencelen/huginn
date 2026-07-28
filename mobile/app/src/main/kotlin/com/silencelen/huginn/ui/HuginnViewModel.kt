@@ -973,6 +973,17 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
+    fun answerPromptMulti(name: String, options: List<Int>, fingerprint: String?) {
+        viewModelScope.launch {
+            runCatching { client.answerPromptMulti(name, options, fingerprint) }
+                .onSuccess { r ->
+                    _toast.value = if (r.ok) "Answered: ${r.labels?.joinToString(", ") ?: options.joinToString(", ")}"
+                    else r.error ?: "Could not answer"
+                }
+                .onFailure { _toast.value = errText(it) }
+        }
+    }
+
     /** Answers a detected choice prompt by sending its number. */
     fun answerPrompt(name: String, number: Int) {
         viewModelScope.launch {
