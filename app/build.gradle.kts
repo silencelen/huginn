@@ -37,7 +37,7 @@ android {
         // devstore fleet convention. HUGINN_VERSIONCODE overrides for pinned builds.
         versionCode   = System.getenv("HUGINN_VERSIONCODE")?.toIntOrNull()
             ?: (System.currentTimeMillis() / 1000L - 1_767_225_600L).toInt()
-        versionName   = "2.21.0"
+        versionName   = "2.22.0"
 
         // Single-ABI for smaller APK; phone is arm64-v8a.
         ndk { abiFilters += listOf("arm64-v8a") }
@@ -126,6 +126,11 @@ dependencies {
     // seconds rather than at the next alarm — everything else here either waits for
     // a beat or arrives on a different app. Needs app/google-services.json, which is
     // NOT a secret: the same values ship inside every copy of the APK.
+    // The androidx prompt rather than the framework one: the framework prompt
+    // silently failed on the target device — the lock never visibly engaged —
+    // and the library exists precisely to absorb those OEM differences.
+    implementation(libs.androidx.biometric)
+
     implementation(platform(libs.firebase.bom))
     implementation(libs.firebase.messaging)
 

@@ -6,7 +6,7 @@ import android.net.Uri
 import android.provider.Settings
 import android.os.Build
 import android.os.Bundle
-import androidx.activity.ComponentActivity
+import androidx.fragment.app.FragmentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
@@ -83,10 +83,11 @@ import com.silencelen.huginn.ui.SignInDialog
 import com.silencelen.huginn.ui.StatusScreen
 import com.silencelen.huginn.ui.theme.HuginnTheme
 
-class MainActivity : ComponentActivity() {
+class MainActivity : FragmentActivity() {
 
-    /** Compose reads this; the lifecycle below writes it. */
+    /** Compose reads these; the lifecycle below writes them. */
     private val locked = mutableStateOf(false)
+    private val lockError = mutableStateOf<String?>(null)
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -104,14 +105,19 @@ class MainActivity : ComponentActivity() {
             HuginnTheme {
                 if (locked.value) {
                     LockedScreen(
+                        error = lockError.value,
                         onUnlock = {
-                            AppLock.authenticate(this) { ok ->
-                                if (ok) locked.value = false
+                            AppLock.authenticate(this) { ok, why ->
+                                if (ok) { locked.value = false; lockError.value = null }
+                                else lockError.value = why
                             }
                         },
                     )
                 } else {
-                    HuginnApp(openSession = openSession)
+                    HuginnApp(
+                        openSession = openSession,
+                        onLockNow = { lockError.value = null; locked.value = true },
+                    )
                 }
             }
         }
@@ -137,12 +143,15 @@ class MainActivity : ComponentActivity() {
  * would mean little if the surface underneath kept narrating.
  */
 @Composable
-private fun LockedScreen(onUnlock: () -> Unit) {
+private fun LockedScreen(error: String?, onUnlock: () -> Unit) {
     // Offer the sheet as soon as the screen appears; the button is for after a
     // dismissal, not the primary path.
     LaunchedEffect(Unit) { onUnlock() }
     Box(Modifier.fillMaxSize(), contentAlignment = androidx.compose.ui.Alignment.Center) {
-        Column(horizontalAlignment = androidx.compose.ui.Alignment.CenterHorizontally) {
+        Column(
+            horizontalAlignment = androidx.compose.ui.Alignment.CenterHorizontally,
+            modifier = Modifier.padding(horizontal = 32.dp),
+        ) {
             Icon(
                 Icons.Filled.Lock,
                 contentDescription = null,
@@ -151,6 +160,16 @@ private fun LockedScreen(onUnlock: () -> Unit) {
             )
             Spacer(Modifier.height(14.dp))
             Text("Huginn is locked", style = MaterialTheme.typography.titleMedium)
+            // A prompt that cannot show must SAY so: an invisible failure here is
+            // exactly how the first version of this feature disappeared.
+            if (error != null) {
+                Spacer(Modifier.height(8.dp))
+                Text(
+                    error,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.error,
+                )
+            }
             Spacer(Modifier.height(18.dp))
             Button(onClick = onUnlock) { Text("Unlock") }
         }
@@ -170,6 +189,7 @@ private sealed interface Dest {
 @Composable
 fun HuginnApp(
     openSession: String? = null,
+    onLockNow: () -> Unit = {},
     vm: HuginnViewModel = viewModel(factory = HuginnViewModel.Factory),
 ) {
     var tab by rememberSaveable { mutableStateOf(0) }
@@ -457,6 +477,7 @@ fun HuginnApp(
                 appLock = appLock,
                 appLockAvailable = remember { AppLock.canLock(context) },
                 onAppLock = { vm.setAppLock(it) },
+                onLockNow = onLockNow,
                 notificationsAllowed = notificationsAllowed,
                 onRequestNotifications = requestNotifications,
                 onOpenSystemNotificationSettings = {
