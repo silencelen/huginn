@@ -22,6 +22,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.GraphicEq
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.Send
 import androidx.compose.material.icons.filled.Stop
@@ -72,6 +73,8 @@ fun ChatScreen(
     onSetOptions: (String?, String?) -> Unit,
     chatId: String,
     suggestions: List<String>,
+    voiceReady: Boolean,
+    onVoicePermission: () -> Unit,
     draft: String,
     onDraft: (String) -> Unit,
     onSend: (String) -> Unit,
@@ -80,6 +83,7 @@ fun ChatScreen(
 ) {
     val scope = rememberCoroutineScope()
     val listState = rememberLazyListState()
+    var voiceOpen by remember { mutableStateOf(false) }
     val events = page?.events ?: emptyList()
     val rows = remember(events) { TranscriptGroups.group(events) }
     val streaming = streamingText != null || activeTool != null
@@ -93,6 +97,18 @@ fun ChatScreen(
         revision = tailRevision(page?.nextOffset, events.size, streamingText?.length, activeTool),
         key = chatId,
     )
+
+    if (voiceOpen) {
+        VoiceSheet(
+            sending = sending,
+            streamingText = streamingText,
+            lastAnswer = remember(events) {
+                events.lastOrNull { it.kind == "assistant" && !it.sidechain }?.text
+            },
+            onSend = { onSend(it) },
+            onDismiss = { voiceOpen = false },
+        )
+    }
 
     Column(Modifier.fillMaxSize()) {
         // Model and effort apply to the next turn; a run already in flight keeps
@@ -169,6 +185,9 @@ fun ChatScreen(
             onDraft = onDraft,
             sending = sending,
             mode = mode,
+            voiceReady = voiceReady,
+            onVoiceOpen = { voiceOpen = true },
+            onVoicePermission = onVoicePermission,
             onSend = {
                 val t = draft.trim()
                 if (t.isNotEmpty()) onSend(t)
@@ -225,6 +244,9 @@ private fun Composer(
     onDraft: (String) -> Unit,
     sending: Boolean,
     mode: String,
+    voiceReady: Boolean,
+    onVoiceOpen: () -> Unit,
+    onVoicePermission: () -> Unit,
     onSend: () -> Unit,
     onCancel: () -> Unit,
 ) {
@@ -253,13 +275,28 @@ private fun Composer(
             )
             Spacer(Modifier.width(6.dp))
             rememberSpeechInput { heard -> onDraft(appendDictation(draft, heard)) }?.let { speak ->
-                IconButton(onClick = speak, modifier = Modifier.size(46.dp)) {
+                IconButton(
+                    onClick = speak,
+                    modifier = Modifier.size(46.dp),
+                ) {
                     Icon(
                         Icons.Filled.Mic,
                         contentDescription = "Dictate",
                         tint = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
+            }
+            // Voice MODE, distinct from dictation: a hands-free loop that listens,
+            // sends, reads the answer aloud, and listens again.
+            IconButton(
+                onClick = { if (voiceReady) onVoiceOpen() else onVoicePermission() },
+                modifier = Modifier.size(46.dp),
+            ) {
+                Icon(
+                    Icons.Filled.GraphicEq,
+                    contentDescription = "Voice conversation",
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
             }
             if (sending && draft.isBlank()) {
                 // Nothing typed: the useful action on a running turn is to stop it.
