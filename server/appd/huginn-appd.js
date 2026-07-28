@@ -45,7 +45,7 @@ const { decideSwitch, worstLimit } = require('./lib/autoswitch');
 const pushLib = require('./lib/pushtokens');
 const { trySender } = require('./lib/fcm');
 
-const VERSION = '2.36.1';
+const VERSION = '2.37.0';
 const PORT = Number(process.env.HUGINN_APPD_PORT || 8787);
 const DATA_DIR = process.env.HUGINN_APPD_DATA || '/var/lib/huginn-appd';
 const UPLOADS_DIR = path.join(DATA_DIR, 'uploads');
@@ -88,8 +88,24 @@ const TOOLS = {
   // mode), act can additionally run and change things. A scoped
   // Read(//uploads/**) rule was tried here and removed as a no-op — do not
   // reintroduce it as if it were a fence.
-  ask: 'mcp__mempalace',
-  act: 'Bash Read Edit Write Glob Grep WebFetch mcp__mempalace',
+  //
+  // WebFetch/WebSearch are granted to ask explicitly: reads over the network fit
+  // the same line, and without them a "what's the weather Saturday" falls back
+  // to Bash-curl and the coin-flip below.
+  ask: 'mcp__mempalace WebFetch WebSearch',
+  act: 'Bash Read Edit Write Glob Grep WebFetch WebSearch mcp__mempalace',
+};
+
+// The deny half, which allowedTools cannot express. Measured 2026-07-28, one
+// minute apart in ONE ask chat: two near-identical `curl | python3` commands,
+// the first auto-approved by Claude Code's content-dependent safe-Bash
+// classification, the second refused ("contains multiple operations"). From the
+// phone that reads as a feature that works and then doesn't. Deny beats every
+// heuristic, so listing Bash here makes ask mode DETERMINISTIC: the model never
+// sees Bash at all and reaches for WebFetch instead of gambling.
+const DISALLOWED = {
+  ask: 'Bash Edit Write NotebookEdit',
+  act: '',
 };
 
 // ---------------------------------------------------------------- utilities
@@ -725,6 +741,8 @@ function startRun(meta, userText) {
   try { persona = fs.readFileSync(PERSONA_FILE, 'utf8'); } catch { /* interactive-only host */ }
   if (persona) args.push('--append-system-prompt', persona);
   args.push('--allowedTools', TOOLS[meta.mode] || TOOLS.ask);
+  const denied = DISALLOWED[meta.mode] ?? DISALLOWED.ask;
+  if (denied) args.push('--disallowedTools', denied);
 
   const run_ = new Run(chatId);
   activeRuns.set(chatId, run_);
