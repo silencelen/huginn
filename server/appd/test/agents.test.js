@@ -51,3 +51,29 @@ test('a garbled head yields no task rather than a crash', () => {
 test('a missing agents dir lists nothing', () => {
   assert.deepEqual(listAgentFiles('/nonexistent-dir-xyz'), []);
 });
+
+
+test('journal result summaries map agent to outcome', () => {
+  const os3 = require('node:os');
+  const fs3 = require('node:fs');
+  const path3 = require('node:path');
+  const { journalSummaries } = require('../lib/agents');
+  const dir = fs3.mkdtempSync(path3.join(os3.tmpdir(), 'journal-'));
+  const f = path3.join(dir, 'journal.jsonl');
+  fs3.writeFileSync(f, [
+    JSON.stringify({ type: 'started', agentId: 'a1' }),
+    JSON.stringify({ type: 'result', agentId: 'a1', result: { summary: 'Traced the   migration; sound.' } }),
+    JSON.stringify({ type: 'result', agentId: 'a2', result: 'plain string result' }),
+    '{"type":"result","agentId":"a3","result":{"summ',   // mid-write
+    '',
+  ].join('\n'));
+  const m = journalSummaries(f);
+  assert.equal(m.get('a1'), 'Traced the migration; sound.');
+  assert.equal(m.get('a2'), 'plain string result');
+  assert.equal(m.has('a3'), false, 'a half-written line is skipped, not fatal');
+});
+
+test('a missing journal is an empty map', () => {
+  const { journalSummaries } = require('../lib/agents');
+  assert.equal(journalSummaries('/nope/journal.jsonl').size, 0);
+});
