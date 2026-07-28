@@ -153,6 +153,38 @@ class SessionWatchWorker(
             androidx.core.app.Person.Builder().setKey("huginn").setName("huginn").setBot(true).build()
 
         /**
+         * The chat's thread as it currently stands on the shade, or a new one.
+         *
+         * Shared by both writers, and it has to be. When only the reply path
+         * appended, a conversation survived exactly until huginn answered: the next
+         * chat_finished push built a FRESH single-message thread and the exchange
+         * above it vanished. Measured on-device — the reply reached the chat, the
+         * chat answered, and the notification came back showing one message with no
+         * trace of what had been asked.
+         *
+         * Read from the live notification rather than a store of our own, because
+         * the shade already IS the store: it holds exactly what the reader can see
+         * and forgets it the moment they swipe it away. A parallel history could
+         * resurrect messages that had been deliberately cleared.
+         */
+        fun threadFor(context: Context, id: Int, title: String): NotificationCompat.MessagingStyle {
+            val nm = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+            val existing = runCatching {
+                nm.activeNotifications.firstOrNull { it.id == id }?.notification
+            }.getOrNull()
+            val recovered = existing?.let {
+                runCatching {
+                    NotificationCompat.MessagingStyle.extractMessagingStyleFromNotification(it)
+                }.getOrNull()
+            }
+            return recovered ?: NotificationCompat.MessagingStyle(you(context))
+                .setConversationTitle(title)
+                // Shown even with one participant; otherwise Android hides the title
+                // as redundant.
+                .setGroupConversation(true)
+        }
+
+        /**
          * Android renders at most three action buttons, so a question with more
          * options than this keeps its first three and is finished in the app.
          *
@@ -238,12 +270,11 @@ class SessionWatchWorker(
                 // what huginn answered next to what you sent back. Android also files
                 // these under its Conversations section and lets them be bubbled or
                 // prioritised individually, none of which BigTextStyle can offer.
+                // APPENDED to whatever is already on the shade, not a fresh thread.
+                // Building a new one here is what silently discarded the exchange
+                // every time huginn answered a reply.
                 builder.setStyle(
-                    NotificationCompat.MessagingStyle(you(context))
-                        .setConversationTitle(title)
-                        // Marked as a group so the title is shown even with a single
-                        // participant; otherwise Android hides it as redundant.
-                        .setGroupConversation(true)
+                    threadFor(context, notificationId, title)
                         .addMessage(text, System.currentTimeMillis(), huginn())
                 )
                 // Deliberately NO setShortcutId. Android's Conversations section
