@@ -64,13 +64,20 @@ class HuginnMessagingService : FirebaseMessagingService() {
             applicationContext,
             title,
             text,
-            if (kind == "session_attention") subject else null,
+            // Carried for BOTH session kinds, so tapping either opens that session.
+            // It does not imply buttons: those come from `answers`, which the host
+            // only ever attaches to a question. A finished session therefore gets
+            // the deep link and no actions, which is exactly right — there is
+            // nothing to answer.
+            if (kind == "session_attention" || kind == "session_finished") subject else null,
             answers,
             data["fingerprint"],
             // A finished chat can be continued from the shade. Sessions cannot: a
             // tmux pane takes keystrokes, not messages, and free text typed at one
-            // lands wherever the cursor happens to be.
+            // lands wherever the cursor happens to be — and the owner's rule is that
+            // a notification may only offer choices huginn itself put on the screen.
             replyChat = if (kind == "chat_finished") subject else null,
+            isResult = kind == "session_finished",
         )
 
         // Then bring the app's own record up to date, so the ten-minute alarm does not
