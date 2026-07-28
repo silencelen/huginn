@@ -552,6 +552,8 @@ fun HuginnApp(
                 onAgentsOpen = { vm.startAgentsPolling(name) },
                 onAgentsClose = { vm.stopAgentsPolling() },
                 suggestions = suggestions,
+                micGranted = voiceReady,
+                onRequestMic = { voicePermission.launch(Manifest.permission.RECORD_AUDIO) },
                 onAnswerPrompt = { vm.answerPrompt(name, it) },
                 onAnswerMulti = { opts -> vm.answerPromptMulti(name, opts, screen?.prompt?.fingerprint) },
                 onForceResize = { vm.forceFit() },
