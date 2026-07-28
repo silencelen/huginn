@@ -367,6 +367,10 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
                 runCatching { settings.pushesReceived.first() }.getOrDefault(0L),
             ))
         }
+        // Created up front, not on first use: a channel Android has never seen does
+        // not appear in the app's notification settings, so the two kinds could only
+        // be tuned separately AFTER each had already interrupted you once.
+        SessionWatchWorker.ensureChannels(app)
         SessionWatchWorker.schedule(app)
     }
 

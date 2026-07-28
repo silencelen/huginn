@@ -1,5 +1,26 @@
 # Huginn changelog
 
+## 2.32.0 — 2026-07-28
+
+### Notification answers stay bounded; free text needs the phone unlocked
+A session's notification offers the options huginn itself put on the screen, and
+nothing else. That bound is what lets the answer buttons work on a locked phone
+with no login at all: whoever taps one can only choose among answers the session
+was already waiting for. Free text into a pane is a different power — arbitrary
+instruction to Claude Code on the host — so it is deliberately not offered there.
+A session asking something the buttons cannot express is answered by opening the
+app, one tap away on the same notification.
+
+The chat reply box, being free text, now **requires the device to be unlocked**
+before it sends. The answer buttons deliberately do not: a choice among offered
+options is bounded, which is exactly why it needs no authentication.
+
+### Chat results have their own notification channel
+They were sharing the sessions channel, so silencing the chatty one silenced the
+blocking one too. A session waiting on you has stopped working until you answer;
+a chat that finished is news you asked for. Now tunable separately in Android's
+notification settings.
+
 ## 2.31.0 — 2026-07-28
 
 ### Reply to a finished chat from the notification
