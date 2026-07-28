@@ -19,12 +19,24 @@ function digest(sessions, chats) {
   for (const x of sessions || []) s[x.name] = x.state ?? null;
   const c = {};
   for (const x of chats || []) {
-    c[x.id] = { running: !!x.running, pending: Number(x.pending) || 0, title: x.title ?? null };
+    c[x.id] = {
+      running: !!x.running,
+      pending: Number(x.pending) || 0,
+      title: x.title ?? null,
+      // A count of completed runs, not a flag. A finish is otherwise only visible
+      // as the instant `running` goes false, and anything watching on a timer can
+      // miss an edge — a chat that started and finished between two ticks was
+      // never seen running at all, so no finish was ever noticed. A counter cannot
+      // be missed that way: whenever it is higher than last time, runs completed,
+      // however briefly they lasted. It also catches back-to-back runs, where a
+      // queued message restarts the chat and `running` never dips.
+      finishedRuns: Number(x.finishedRuns) || 0,
+    };
   }
   // Sorted keys so the hash depends on the values, not on directory order.
   const stable = JSON.stringify({
     s: Object.keys(s).sort().map((k) => [k, s[k]]),
-    c: Object.keys(c).sort().map((k) => [k, c[k].running, c[k].pending]),
+    c: Object.keys(c).sort().map((k) => [k, c[k].running, c[k].pending, c[k].finishedRuns]),
   });
   return {
     hash: createHash('sha1').update(stable).digest('hex').slice(0, 16),
