@@ -103,7 +103,38 @@ test('a send posts a high-priority data-only message to the right project', asyn
   assert.equal(msg.token, 'device-tok');
   assert.equal(msg.android.priority, 'high', 'normal priority is batched until the device wakes');
   assert.equal(msg.notification, undefined, 'data-only, so the app decides what you have seen');
-  assert.deepEqual(msg.data, { title: 'T', text: 'B', kind: 'k', subject: 's' });
+  assert.deepEqual(msg.data, {
+    title: 'T', text: 'B', kind: 'k', subject: 's',
+    // Empty when there is nothing to answer, present when there is.
+    options: '', fingerprint: '',
+  });
+});
+
+// What lets a notification offer "1) Yes  2) No" as buttons on a lock screen.
+test('a question travels with its options and fingerprint', async () => {
+  const sender = new FcmSender(writeKey());
+  const f = stubFetch([TOKEN_OK, { status: 200, body: '{}' }]);
+  await sender.send('t', {
+    title: 'jtyper needs you',
+    text: 'Do you want to create jtyper.md?',
+    kind: 'session_attention',
+    subject: 'jtyper',
+    options: [{ number: 1, label: 'Yes' }, { number: 2, label: 'No' }],
+    fingerprint: 'abc123def456',
+  }, f);
+  const data = JSON.parse(f.calls[1].opts.body).message.data;
+  assert.equal(data.fingerprint, 'abc123def456');
+  assert.deepEqual(JSON.parse(data.options), [
+    { number: 1, label: 'Yes' }, { number: 2, label: 'No' },
+  ]);
+  assert.equal(typeof data.options, 'string', 'FCM data is string-to-string');
+});
+
+test('an alert with nothing to answer sends no empty option array', async () => {
+  const sender = new FcmSender(writeKey());
+  const f = stubFetch([TOKEN_OK, { status: 200, body: '{}' }]);
+  await sender.send('t', { title: 'Chat finished', text: 'done', options: [] }, f);
+  assert.equal(JSON.parse(f.calls[1].opts.body).message.data.options, '');
 });
 
 test('every data value is a string, since FCM rejects anything else', async () => {

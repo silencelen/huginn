@@ -114,6 +114,27 @@ function routeAlerts(alerts, { mode = 'fallback', appOnline = false } = {}) {
   return appOnline ? { deliver: [], held: alerts.slice() } : { deliver: alerts.slice(), held: [] };
 }
 
+/**
+ * The Telegram wording for one alert.
+ *
+ * Quoting a session's pending question here needed a moment's thought, because the
+ * standing rule for this channel is statements only - huginn must never ask the owner
+ * something over a path that carries no reply. Reporting WHAT a session is asking is
+ * not that: it is a status line about huginn, answered in the app or in tmux, so
+ * nothing is left waiting on a reply that cannot arrive. Phrased as a report for
+ * exactly that reason ("Asked:", options listed flat) rather than as a question put
+ * to the reader.
+ *
+ * Worth having at all because "a session needs you" says something is waiting without
+ * saying what, so the only possible response is to go and look.
+ */
+function telegramText(a) {
+  const head = `\u{1F514} ${a.title}`;
+  if (a.kind !== 'session_attention' || !a.question) return `${head}\n${a.text}`;
+  const opts = (a.options || []).map((o) => `${o.number}) ${o.label}`).join('\n');
+  return [head, `Asked: ${a.question}`, opts].filter(Boolean).join('\n');
+}
+
 /** Drops entries old enough that they can never suppress anything again. */
 function pruneSent(sent, now) {
   const out = {};
@@ -123,4 +144,4 @@ function pruneSent(sent, now) {
   return out;
 }
 
-module.exports = { decideAlerts, routeAlerts, pruneSent, REPEAT_MS };
+module.exports = { decideAlerts, routeAlerts, telegramText, pruneSent, REPEAT_MS };

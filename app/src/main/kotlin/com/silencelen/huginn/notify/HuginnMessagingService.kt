@@ -6,6 +6,8 @@ import com.google.firebase.messaging.FirebaseMessagingService
 import com.google.firebase.messaging.RemoteMessage
 import com.silencelen.huginn.data.HuginnClient
 import com.silencelen.huginn.data.SettingsStore
+import kotlinx.serialization.Serializable
+import kotlinx.serialization.json.Json
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.first
@@ -50,6 +52,11 @@ class HuginnMessagingService : FirebaseMessagingService() {
         val subject = data["subject"]?.takeIf { it.isNotBlank() }
         val kind = data["kind"].orEmpty()
 
+        // The question's options, when it has any, become the notification's buttons —
+        // so a permission prompt can be answered from the lock screen rather than by
+        // unlocking, finding the app and finding the session.
+        val answers = parseAnswers(data["options"])
+
         // Posted from the payload first, and without touching the network: the phone
         // may have been woken from Doze with a few seconds of grace, and an alert that
         // depends on a round trip to arrive is an alert that sometimes does not.
@@ -58,6 +65,8 @@ class HuginnMessagingService : FirebaseMessagingService() {
             title,
             text,
             if (kind == "session_attention") subject else null,
+            answers,
+            data["fingerprint"],
         )
 
         // Then bring the app's own record up to date, so the ten-minute alarm does not
@@ -106,6 +115,25 @@ class HuginnMessagingService : FirebaseMessagingService() {
                 }
             }
         }
+
+        /**
+         * The options list, which travels as a JSON string because an FCM data payload
+         * is string-to-string. A malformed or absent value yields no buttons rather
+         * than dropping the alert: being told a session needs you without buttons is
+         * far better than not being told.
+         */
+        private fun parseAnswers(raw: String?): List<SessionWatchWorker.Companion.AnswerOption> {
+            if (raw.isNullOrBlank()) return emptyList()
+            return runCatching {
+                Json { ignoreUnknownKeys = true }
+                    .decodeFromString<List<WireOption>>(raw)
+                    .filter { it.number >= 1 && it.label.isNotBlank() }
+                    .map { SessionWatchWorker.Companion.AnswerOption(it.number, it.label) }
+            }.getOrDefault(emptyList())
+        }
+
+        @Serializable
+        private data class WireOption(val number: Int = 0, val label: String = "")
 
         /** Re-reads huginn's state so the shared baseline consumes this transition. */
         private suspend fun reconcile(context: Context) {

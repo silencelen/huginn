@@ -44,6 +44,26 @@ detected and offered as tappable options in both views. Detection requires the
 live selection caret, so an assistant answer that merely ends in a numbered list
 does not produce buttons.
 
+**And they reach the lock screen.** An alert about a waiting session carries the
+question and its options as notification action buttons, so it can be answered
+without opening the app. Each answer carries a fingerprint of the question it was
+offered for and huginn refuses it if the pane has moved on — by the time you tap,
+the session may have been answered in tmux or asked something else, and a digit
+delivered to the wrong prompt could accept something you never saw. The check runs
+on the host in the same request, because nothing on the phone can hold the pane
+still between reading it and typing into it. Moving the selection highlight does not
+invalidate an answer.
+
+**Notifications survive a sleeping phone.** Three mechanisms, because each fails
+differently: high-priority FCM (seconds, needs Play Services and an app that has not
+been force-stopped), a `setAndAllowWhileIdle` alarm every ten minutes (the one kind
+Doze honours, and it revives the watcher if it was killed), and Telegram from the host
+when nothing else got through. WorkManager is **not** one of them — its periodic work
+is deferred by Doze, which is why a 15-minute poll delivered all day and nothing
+overnight. Settings shows which of these is actually working, including huginn's own
+record of when this phone last checked in; the app cannot testify about hours it spent
+asleep, but the host was awake for them.
+
 **Code is coloured.** Code blocks and the commands on tool cards are syntax
 highlighted — shell, C-family, JSON, config and diffs (whole-line by sign, so an
 Edit's result reads at a glance). The highlighter is a lexer, so a missed keyword
@@ -119,6 +139,14 @@ bytes in `/etc/huginn-appd/token` (0600), generated on first deploy.
 | DELETE | `/v1/sessions/<name>/size` | release the resize lease now |
 | GET | `/v1/sessions/<name>/transcript` | structured events; `?offset=` tails |
 | POST | `/v1/sessions/<name>/keys` | `{text?, keys?}`; keys validated against an allowlist |
+| POST | `/v1/sessions/<name>/answer` | `{option, fingerprint?}`; answers a numbered prompt. Refuses with 409 if the pane no longer shows that question |
+| GET | `/v1/watch` | change signal; `?stream=1` is SSE with a 25s keepalive, otherwise a long poll |
+| GET | `/v1/clients` | which phones have checked in, and how recently |
+| GET | `/v1/alerts` · POST | host-sent alerts: `{enabled, mode: fallback\|always}` |
+| POST | `/v1/alerts/test` | sends one Telegram alert now |
+| GET | `/v1/push` | whether FCM is configured, and the registered devices (never their tokens) |
+| POST | `/v1/push/register` | `{installId, token, model?}` |
+| POST | `/v1/push/test` | pushes a real message to every registered device |
 | GET | `/v1/chats` | chat list, newest first |
 | POST | `/v1/chats` | `{mode: ask\|act}` |
 | GET | `/v1/chats/<id>` | metadata + digest transcript + in-flight partial text |

@@ -2,6 +2,8 @@
 // Pure pane-text analysis, split out of the daemon so it can be tested with
 // `node --test` against real captured panes (server/test/).
 
+const { createHash } = require('node:crypto');
+
 /**
  * Cheap stable hash of the screen text. Used to answer "did anything change?"
  * for long-polling, so an idle session costs one held request instead of a
@@ -142,6 +144,30 @@ function detectPrompt(lines) {
 }
 
 /**
+ * The identity of a question, so an answer can be matched to what it answers.
+ *
+ * This exists to close a race with teeth. An alert can offer "1) Yes  2) No" on a
+ * lock screen, and by the time it is tapped the session may have been answered in
+ * tmux, moved to an entirely different question, or gone back to an idle composer.
+ * Sending the digit regardless would type it into whatever is there now — which in a
+ * Claude Code pane is not a harmless no-op; it could accept a *different* prompt.
+ *
+ * So an answer carries the fingerprint of the question it was offered for, and the
+ * host refuses to deliver it if the pane no longer shows that same question. The
+ * selection caret is deliberately EXCLUDED: moving the highlight up and down does not
+ * change which question is being asked, and including it would reject a valid answer
+ * simply because the cursor had moved.
+ */
+function promptFingerprint(prompt) {
+  if (!prompt || !Array.isArray(prompt.options) || !prompt.options.length) return null;
+  const stable = JSON.stringify([
+    prompt.question || '',
+    prompt.options.map((o) => [o.number, o.label]),
+  ]);
+  return createHash('sha1').update(stable).digest('hex').slice(0, 12);
+}
+
+/**
  * Reads the live model, branch and permission mode off Claude Code's status
  * line, e.g.
  *
@@ -243,5 +269,6 @@ function loginPaneState(lines) {
 }
 
 module.exports = {
-  screenHash, stripAnsi, previewLines, detectPrompt, extractLoginUrl, parseStatusLine, loginPaneState,
+  screenHash, stripAnsi, previewLines, detectPrompt, promptFingerprint,
+  extractLoginUrl, parseStatusLine, loginPaneState,
 };
