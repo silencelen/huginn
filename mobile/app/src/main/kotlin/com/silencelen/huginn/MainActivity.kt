@@ -299,6 +299,19 @@ fun HuginnApp(
         lifecycleOwner.lifecycle.addObserver(obs)
         onDispose { lifecycleOwner.lifecycle.removeObserver(obs) }
     }
+    // Voice mode's streaming recognizer needs the mic permission; the dictation
+    // dialog does not, so denial only narrows, never breaks.
+    var voiceReady by remember {
+        mutableStateOf(
+            androidx.core.content.ContextCompat.checkSelfPermission(
+                context, Manifest.permission.RECORD_AUDIO
+            ) == android.content.pm.PackageManager.PERMISSION_GRANTED
+        )
+    }
+    val voicePermission = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { granted -> voiceReady = granted }
+
     val requestNotifications: () -> Unit = {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             notifPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
@@ -465,6 +478,8 @@ fun HuginnApp(
                 onSetOptions = { m, e -> vm.setChatOptions(id, model = m, effort = e) },
                 chatId = id,
                 suggestions = suggestions,
+                voiceReady = voiceReady,
+                onVoicePermission = { voicePermission.launch(Manifest.permission.RECORD_AUDIO) },
                 draft = drafts[HuginnViewModel.chatDraftKey(id)].orEmpty(),
                 onDraft = { vm.setDraft(HuginnViewModel.chatDraftKey(id), it) },
                 onSend = { vm.send(id, it) },

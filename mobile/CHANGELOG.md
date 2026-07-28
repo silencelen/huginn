@@ -1,5 +1,25 @@
 # Huginn changelog
 
+## 2.26.0 — 2026-07-28
+
+### Voice mode
+The waveform button beside a chat's mic opens a hands-free conversation: it
+listens, sends what you said, and reads the answer aloud — then listens again,
+until you close the sheet. Tap anywhere while it speaks to cut in; a silence
+just makes it keep listening; a real mic failure stops the loop instead of
+retrying into the same wall.
+
+Answers are translated for ears before they are spoken: code blocks become
+"code omitted", links speak their text rather than their targets, tables are
+skipped, and a very long answer is cut at a sentence with "the rest is on
+screen" — because markdown is for eyes, and a minute of recited punctuation is
+nobody's assistant. The full answer always remains in the chat.
+
+Voice mode uses the streaming recognizer, which needs the microphone permission
+(asked on first use); declining it leaves the dictation mic working as before,
+since that one goes through the system dialog. If a phone has no recognizer or
+no speech engine, the loop degrades to silent steps rather than hanging.
+
 ## 2.25.0 — 2026-07-28
 
 ### Suggestions come to chats

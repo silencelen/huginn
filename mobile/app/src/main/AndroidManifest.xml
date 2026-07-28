@@ -6,6 +6,9 @@
     <!-- Only to tell you a session is waiting on an answer; declined simply
          means the background poll notifies nothing. -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <!-- Voice mode's streaming recognizer. Declined simply means the mic button
+         falls back to the system dictation dialog, which needs no permission. -->
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
     <!-- Continuous watching: a live connection so a "needs you" arrives in
          seconds rather than on WorkManager's 15-minute floor. specialUse rather
          than dataSync because dataSync is capped at 6 hours per day on Android 15
