@@ -74,6 +74,20 @@ class HuginnMessagingService : FirebaseMessagingService() {
         // if it fails the worst case is one duplicate, which is much better than a
         // missed alert.
         CoroutineScope(Dispatchers.IO).launch {
+            // Proof that push works — and the moment to act on it. Recording the
+            // arrival is not enough on its own: the pending alarm was armed with
+            // whatever cadence was true when it was set, so without re-arming here
+            // a healthy setup still wakes the device on the tight schedule until
+            // the next beat happens to notice. Feeding the watchdog on every push
+            // means a phone receiving pushes may never wake for the alarm at all.
+            runCatching {
+                val settings = SettingsStore(applicationContext)
+                val now = System.currentTimeMillis()
+                settings.notePushArrived(now)
+                if (settings.notifyEnabled.first()) {
+                    Heartbeat.arm(applicationContext, Heartbeat.intervalFor(now, now))
+                }
+            }
             // Claim this session BEFORE reconciling. Otherwise the reconcile's own
             // WatchCycle sees the same transition as fresh and posts a SECOND
             // notification under the same per-session id — and its text is the

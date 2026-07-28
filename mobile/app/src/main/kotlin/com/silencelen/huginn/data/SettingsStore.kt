@@ -39,6 +39,7 @@ class SettingsStore(private val context: Context) {
         private val APP_LOCK = booleanPreferencesKey("app_lock")
         private val PUSH_TOKEN = stringPreferencesKey("push_token")
         private val PUSH_TOKEN_AT = longPreferencesKey("push_token_at")
+        private val LAST_PUSH_AT = longPreferencesKey("last_push_at")
         private val SEEDED = booleanPreferencesKey("watch_seeded")
         private val LAST_CONTACT = longPreferencesKey("last_contact_at")
         private val LAST_ALARM = longPreferencesKey("last_alarm_at")
@@ -105,6 +106,16 @@ class SettingsStore(private val context: Context) {
      */
     val pushToken: Flow<String> = context.dataStore.data.map { it[PUSH_TOKEN] ?: "" }
     val pushTokenAt: Flow<Long> = context.dataStore.data.map { it[PUSH_TOKEN_AT] ?: 0L }
+
+    /**
+     * When a push last actually ARRIVED — not when one was sent. This is the
+     * evidence the heartbeat uses to decide it can stay out of the way.
+     */
+    val lastPushAt: Flow<Long> = context.dataStore.data.map { it[LAST_PUSH_AT] ?: 0L }
+
+    suspend fun notePushArrived(atMs: Long) {
+        context.dataStore.edit { it[LAST_PUSH_AT] = atMs }
+    }
 
     suspend fun notePushToken(token: String, atMs: Long) {
         context.dataStore.edit { it[PUSH_TOKEN] = token; it[PUSH_TOKEN_AT] = atMs }
