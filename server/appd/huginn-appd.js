@@ -45,7 +45,7 @@ const { decideSwitch, worstLimit } = require('./lib/autoswitch');
 const pushLib = require('./lib/pushtokens');
 const { trySender } = require('./lib/fcm');
 
-const VERSION = '2.37.0';
+const VERSION = '2.37.1';
 const PORT = Number(process.env.HUGINN_APPD_PORT || 8787);
 const DATA_DIR = process.env.HUGINN_APPD_DATA || '/var/lib/huginn-appd';
 const UPLOADS_DIR = path.join(DATA_DIR, 'uploads');
@@ -111,6 +111,17 @@ const DISALLOWED = {
 // ---------------------------------------------------------------- utilities
 
 function log(...args) { console.log(new Date().toISOString(), ...args); }
+
+/**
+ * User text as a title or snippet should read. The attachment marker is
+ * plumbing for Claude — a chat list entry titled
+ * "[Attached image at /var/lib/huginn-appd/uploads/img-17852…" is where the
+ * daemon stored a file, not what the conversation is about.
+ */
+function humanizeUserText(t) {
+  const s = String(t || '').replace(/\[Attached image at [^\]]+\]/g, '\u{1F4F7} photo').trim();
+  return s || '\u{1F4F7} photo';
+}
 
 const TOKEN = (() => {
   try { return fs.readFileSync(TOKEN_FILE, 'utf8').trim(); }
@@ -730,8 +741,8 @@ function startRun(meta, userText) {
   const now = Math.floor(Date.now() / 1000);
   appendMsg(chatId, { type: 'user', text: userText, ts: now });
   meta.updatedAt = now;
-  meta.lastSnippet = userText.slice(0, 120);
-  updateMeta(chatId, (m) => { m.updatedAt = now; m.lastSnippet = userText.slice(0, 120); });
+  meta.lastSnippet = humanizeUserText(userText).slice(0, 120);
+  updateMeta(chatId, (m) => { m.updatedAt = now; m.lastSnippet = humanizeUserText(userText).slice(0, 120); });
 
   const args = ['-p', '--output-format', 'stream-json', '--verbose', '--include-partial-messages'];
   if (meta.model) args.push('--model', meta.model);
@@ -2491,7 +2502,7 @@ const server = http.createServer(async (req, res) => {
         const started = startRun(meta, text);
         if (started.error) return sendErr(res, started.code, started.error);
         // Auto-title from the first message.
-        if (!meta.title) { meta.title = text.slice(0, 60); saveMeta(meta); }
+        if (!meta.title) { meta.title = humanizeUserText(text).slice(0, 60); saveMeta(meta); }
         if (u.searchParams.get('stream') === '1') {
           res.writeHead(200, {
             'Content-Type': 'text/event-stream',

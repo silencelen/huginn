@@ -172,7 +172,9 @@ private fun UserBubble(text: String, queued: Boolean = false) {
             modifier = Modifier.fillMaxWidth(0.9f),
         ) {
             Column(Modifier.padding(horizontal = 14.dp, vertical = 10.dp)) {
-                Text(text.trim(), style = MaterialTheme.typography.bodyMedium)
+                // Attachment markers render as what they mean, not where the file
+                // landed on the daemon.
+                Text(Attachments.displayText(text.trim()), style = MaterialTheme.typography.bodyMedium)
                 // Sent while Claude was mid-turn: it is waiting its turn, which is
                 // worth saying so the message does not look ignored.
                 if (queued) {
