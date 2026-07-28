@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 108 108">
+  <rect width="108" height="108" fill="#12100F"/>
+  <!-- Raven head in profile facing right: elongated skull, heavy downcurved bill,
+       throat sloping back into the neck. One shape, no floating parts. -->
+  <path fill="#E8E2DA" d="
+    M30,72
+    C24,62 24,48 32,40
+    C39,33 50,30 58,33
+    L64,36
+    L90,47
+    C92,48 92,50 90,51
+    L64,55
+    C62,64 56,72 46,76
+    C40,78 34,77 30,72
+    Z"/>
+  <circle cx="52" cy="44" r="3.6" fill="#12100F"/>
+</svg>

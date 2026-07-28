@@ -1,0 +1,15 @@
+{
+ "chats": [
+  {
+   "id": "<id scrubbed, 36 chars>",
+   "title": "<title scrubbed, 44 chars>",
+   "mode": "ask",
+   "createdAt": 1785140767,
+   "updatedAt": 1785140853,
+   "claudeSessionId": "<claudeSessionId scrubbed, 36 chars>",
+   "lastSnippet": "<lastSnippet scrubbed, 120 chars>",
+   "turns": 1,
+   "running": false
+  }
+ ]
+}
