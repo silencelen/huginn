@@ -55,6 +55,8 @@ import androidx.compose.ui.unit.dp
 @OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
 @Composable
 fun VoiceSheet(
+    micGranted: Boolean,
+    onRequestMic: () -> Unit,
     sending: Boolean,
     streamingText: String?,
     lastAnswer: String?,
@@ -96,8 +98,15 @@ fun VoiceSheet(
         }
     }
 
-    // Begin listening the moment the sheet opens: that is what it is for.
-    LaunchedEffect(Unit) { apply(VoiceLoop.reduce(VoiceLoop.State.Idle, VoiceLoop.Event.Tap)) }
+    // Begin listening the moment the sheet opens — or the moment the mic
+    // permission lands, when the sheet had to ask for it first. Either way the
+    // sheet is ALREADY VISIBLE while any of this happens: the permission flow
+    // living behind an unopened sheet is how a tap came to do nothing at all.
+    LaunchedEffect(micGranted) {
+        if (micGranted && state == VoiceLoop.State.Idle) {
+            apply(VoiceLoop.reduce(VoiceLoop.State.Idle, VoiceLoop.Event.Tap))
+        }
+    }
 
     // The turn boundary: thinking, nothing in flight any more, and an answer
     // text that is not the one already spoken.
@@ -111,6 +120,36 @@ fun VoiceSheet(
     }
 
     ModalBottomSheet(onDismissRequest = { engines.destroy(); onDismiss() }) {
+        if (!micGranted) {
+            Column(
+                Modifier.fillMaxWidth().padding(horizontal = 24.dp).padding(bottom = 36.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
+            ) {
+                Icon(
+                    Icons.Filled.MicOff, contentDescription = null,
+                    modifier = Modifier.size(40.dp),
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Text(
+                    "Voice mode needs the microphone",
+                    style = MaterialTheme.typography.titleSmall,
+                    modifier = Modifier.padding(top = 10.dp),
+                )
+                Text(
+                    "If no dialog appears after tapping Grant, the system is blocking " +
+                        "the request — enable Microphone under App info → Permissions.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    textAlign = TextAlign.Center,
+                    modifier = Modifier.padding(top = 6.dp),
+                )
+                androidx.compose.material3.Button(
+                    onClick = onRequestMic,
+                    modifier = Modifier.padding(top = 14.dp),
+                ) { Text("Grant microphone access") }
+            }
+            return@ModalBottomSheet
+        }
         Column(
             Modifier
                 .fillMaxWidth()
