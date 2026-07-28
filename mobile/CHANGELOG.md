@@ -1,5 +1,25 @@
 # Huginn changelog
 
+## 2.27.0 — 2026-07-28
+
+### Live typing echoes instantly
+Characters you type in Live mode now appear at the cursor the moment you press
+them, slightly translucent, and solidify when the pane confirms — perceived echo
+drops from a round trip to a frame. The echo is deliberately cowardly about
+guessing: it never predicts a line wrap (it clips at the row's end), any key
+whose effect it cannot foresee — Enter, arrows, backspacing past what you just
+typed — silences it until the next real frame, and every authoritative frame
+wins. A wrong guess would be a ghost character floating in a live pane, which is
+worse than the latency this hides.
+
+### The voice button always answers
+In 2.26.0, tapping the voice button could visibly do nothing: on some builds the
+system auto-denies the microphone request without ever showing a dialog, and the
+silent version of that reads as a broken button. Now every outcome speaks — a
+grant opens the voice sheet immediately (no second tap), a denial explains
+itself and points at App info → Permissions, and a missing speech service says
+so on the sheet instead of sitting mute.
+
 ## 2.26.0 — 2026-07-28
 
 ### Voice mode

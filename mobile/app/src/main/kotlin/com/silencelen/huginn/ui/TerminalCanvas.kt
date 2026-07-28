@@ -62,6 +62,8 @@ fun TerminalCanvas(
     metrics: CellMetrics,
     cursor: Pair<Int, Int>?,      // col, row
     cursorColor: Color,
+    /** Optimistically typed text drawn at the cursor, clipped to the row. */
+    echo: String = "",
     modifier: Modifier = Modifier,
 ) {
     val density = LocalDensity.current
@@ -69,7 +71,7 @@ fun TerminalCanvas(
     val h = remember(grid.height, metrics) { with(density) { (grid.height * metrics.cellHeight).toDp() } }
 
     Canvas(modifier.size(w, h)) {
-        drawGrid(grid, metrics, cursor, cursorColor, density)
+        drawGrid(grid, metrics, cursor, cursorColor, density, echo)
     }
 }
 
@@ -79,6 +81,7 @@ private fun DrawScope.drawGrid(
     cursor: Pair<Int, Int>?,
     cursorColor: Color,
     density: Density,
+    echo: String = "",
 ) {
     // Background runs first, so a coloured span cannot paint over the glyph of
     // the cell to its left.
@@ -153,11 +156,36 @@ private fun DrawScope.drawGrid(
 
     if (cursor != null) {
         val (cx, cy) = cursor
-        if (cy in 0 until grid.height && cx in 0 until grid.cols) {
+
+        // Optimistic echo: characters typed but not yet confirmed by the pane,
+        // drawn from the cursor cell and CLIPPED at the row's end — the echo
+        // never invents a wrap, because predicting the composer's wrapping is
+        // exactly where ghost characters come from. Slightly translucent, so a
+        // reader can tell promised text from confirmed text if they look.
+        var drawnEcho = 0
+        if (echo.isNotEmpty() && cy in 0 until grid.height) {
+            val paint = Paint(m.paint).apply {
+                color = cursorColor.copy(alpha = 0.85f).toArgb()
+            }
+            val y = cy * m.cellHeight + m.baseline
+            for (ch in echo) {
+                val col = cx + drawnEcho
+                if (col >= grid.cols) break
+                drawIntoCanvas { c ->
+                    c.nativeCanvas.drawText(ch.toString(), col * m.cellWidth, y, paint)
+                }
+                drawnEcho++
+            }
+        }
+
+        // The cursor sits AFTER the echo: that is where the next character goes,
+        // which is what a cursor is for.
+        val ecx = (cx + drawnEcho).coerceAtMost(grid.cols - 1)
+        if (cy in 0 until grid.height && ecx in 0 until grid.cols) {
             // Hollow box: it marks the position without hiding the character
             // underneath, which matters when the cursor sits on real text.
             val t = (m.cellWidth * 0.12f).coerceAtLeast(1f)
-            val x = cx * m.cellWidth
+            val x = ecx * m.cellWidth
             val y = cy * m.cellHeight
             drawRect(cursorColor, Offset(x, y), Size(m.cellWidth, t))
             drawRect(cursorColor, Offset(x, y + m.cellHeight - t), Size(m.cellWidth, t))
