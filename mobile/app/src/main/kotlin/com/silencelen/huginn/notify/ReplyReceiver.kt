@@ -45,27 +45,29 @@ class ReplyReceiver : BroadcastReceiver() {
         val app = context.applicationContext
         val pending = goAsync()
 
-        update(app, notificationId, title, "Sending: $text", chat)
+        // Echoed into the thread immediately, before the network is touched. The box
+        // the words were typed into is already gone by now, so anything slower leaves
+        // a moment where the reply exists nowhere the reader can see.
+        update(app, notificationId, title, chat, mine = text)
 
         CoroutineScope(Dispatchers.IO).launch {
             try {
                 val ok = withTimeoutOrNull(25_000) { send(app, chat, text) }
+                // Nothing more to say on success: the reply is already in the thread,
+                // and huginn's answer will arrive as the next message in it. Only
+                // failure needs words — and it repeats the text back, because it was
+                // typed into a box the system has torn down and would otherwise have
+                // to be written again from memory.
                 when (ok) {
-                    // The chat is now running, and its finish will arrive as a fresh
-                    // notification through the ordinary path — so this one says only
-                    // that the message left, and offers the box again for a follow-up.
-                    true -> update(app, notificationId, title, "Sent: $text", chat)
-                    // The text is repeated back on every failure. It was typed into a
-                    // box the system has already torn down; losing it would mean the
-                    // sentence has to be written again from memory.
-                    false -> update(app, notificationId, title,
-                        "Not sent — huginn is unreachable. Your message: $text", chat)
-                    null -> update(app, notificationId, title,
-                        "Not sent — huginn did not respond. Your message: $text", chat)
+                    true -> Unit
+                    false -> update(app, notificationId, title, chat,
+                        theirs = "Not sent — huginn is unreachable. Your message: $text")
+                    null -> update(app, notificationId, title, chat,
+                        theirs = "Not sent — huginn did not respond. Your message: $text")
                 }
             } catch (e: Exception) {
-                update(app, notificationId, title,
-                    "Not sent (${e.message ?: "error"}). Your message: $text", chat)
+                update(app, notificationId, title, chat,
+                    theirs = "Not sent (${e.message ?: "error"}). Your message: $text")
             } finally {
                 pending.finish()
             }
@@ -86,22 +88,41 @@ class ReplyReceiver : BroadcastReceiver() {
     }
 
     /**
-     * Rebuilds the notification in place, keeping its reply box.
+     * Appends a message to the chat's thread, keeping its reply box.
      *
-     * Built fresh rather than recovered from the active notification: reading one
-     * back gives a [Notification] whose actions cannot be edited, so preserving the
-     * box would mean posting the old object and losing the new text.
+     * The STYLE is recovered from the notification already on screen and the rest is
+     * rebuilt. Both halves of that matter: recovering the style is what preserves the
+     * conversation — huginn's answer, then your reply, then whatever came next — and
+     * rebuilding the rest is necessary because a notification read back from the
+     * system has actions that cannot be edited, so reposting it wholesale would drop
+     * the reply box.
+     *
+     * @param mine   a message from the owner (the reply just typed)
+     * @param theirs a message from huginn (only ever a failure report; a successful
+     *               send says nothing, since huginn's real answer follows on its own)
      */
-    private fun update(context: Context, id: Int, title: String, body: String, chat: String) {
+    private fun update(
+        context: Context,
+        id: Int,
+        title: String,
+        chat: String,
+        mine: String? = null,
+        theirs: String? = null,
+    ) {
         if (id == 0 || !SessionWatchWorker.canNotify(context)) return
-        val nm = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-        nm.createNotificationChannel(
-            android.app.NotificationChannel(
-                SessionWatchWorker.CHANNEL,
-                "Sessions needing you",
-                NotificationManager.IMPORTANCE_DEFAULT,
-            )
-        )
+        SessionWatchWorker.ensureChannels(context)
+
+        // The thread as it stands, read back off the shade. Absent — swiped away, or
+        // posted before this app rendered chats as conversations — a fresh one starts
+        // with just this message, which is better than dropping the reply entirely.
+        val style = activeStyle(context, id)
+            ?: NotificationCompat.MessagingStyle(SessionWatchWorker.you(context))
+                .setConversationTitle(title)
+                .setGroupConversation(true)
+        val now = System.currentTimeMillis()
+        if (mine != null) style.addMessage(mine, now, SessionWatchWorker.you(context))
+        if (theirs != null) style.addMessage(theirs, now, SessionWatchWorker.huginn())
+
         val open = Intent(context, com.silencelen.huginn.MainActivity::class.java).apply {
             flags = Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
             putExtra(SessionWatchWorker.EXTRA_CHAT, chat)
@@ -113,11 +134,10 @@ class ReplyReceiver : BroadcastReceiver() {
             putExtra(EXTRA_NOTIFICATION_ID, id)
             putExtra(EXTRA_TITLE, title)
         }
-        val builder = NotificationCompat.Builder(context, SessionWatchWorker.CHANNEL)
+        val builder = NotificationCompat.Builder(context, SessionWatchWorker.CHANNEL_CHATS)
             .setSmallIcon(R.drawable.ic_stat_huginn)
             .setContentTitle(title)
-            .setContentText(body)
-            .setStyle(NotificationCompat.BigTextStyle().bigText(body))
+            .setStyle(style)
             .setAutoCancel(true)
             // Silent: this is the echo of something the reader just did, and buzzing
             // a phone to confirm its own keystroke is how a useful channel becomes
@@ -140,6 +160,26 @@ class ReplyReceiver : BroadcastReceiver() {
                     )).addRemoteInput(remote).build()
             )
         NotificationManagerCompat.from(context).notify(id, builder.build())
+    }
+
+    /**
+     * The conversation currently on screen for this id, if there is one.
+     *
+     * Reads from the live notification rather than any store of our own, because the
+     * shade already IS the store: it holds exactly the messages the reader can see,
+     * and it forgets them at exactly the moment they swipe it away. Keeping a
+     * parallel history would mean a dismissed notification could come back carrying
+     * messages the reader had deliberately cleared.
+     */
+    private fun activeStyle(context: Context, id: Int): NotificationCompat.MessagingStyle? {
+        val nm = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+        val existing = runCatching {
+            nm.activeNotifications.firstOrNull { it.id == id }?.notification
+        }.getOrNull() ?: return null
+        return runCatching {
+            NotificationCompat.MessagingStyle
+                .extractMessagingStyleFromNotification(existing)
+        }.getOrNull()
     }
 
     companion object {

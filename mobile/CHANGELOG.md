@@ -1,5 +1,20 @@
 # Huginn changelog
 
+## 2.34.0 — 2026-07-28
+
+### A chat notification is now a conversation, not a line of text
+Replying used to overwrite the notification body: huginn's answer vanished and
+"Sent: ..." took its place. A chat is a conversation, so it now renders as one —
+huginn's answer, then your reply underneath it, then whatever comes next. The
+thread is read back off the shade itself rather than kept in a store of our own,
+which means swiping the notification away really does forget it; a parallel
+history could otherwise resurrect messages you had deliberately cleared.
+
+A successful send now says nothing at all. It does not need to: your reply is
+already in the thread and huginn's answer arrives as the next message in it.
+Only failures speak up, and they repeat your text back, because the box it was
+typed into is gone by then.
+
 ## 2.33.0 — 2026-07-28
 
 ### Settings says what the background check has decided, and why
