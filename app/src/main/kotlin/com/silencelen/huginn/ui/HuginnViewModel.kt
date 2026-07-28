@@ -26,6 +26,7 @@ import com.silencelen.huginn.data.ClientsInfo
 import com.silencelen.huginn.data.PushStatus
 import com.silencelen.huginn.data.LoginState
 import com.silencelen.huginn.notify.SessionWatchWorker
+import com.silencelen.huginn.ui.LiveInput
 import com.silencelen.huginn.notify.AppLock
 import com.silencelen.huginn.notify.Heartbeat
 import com.silencelen.huginn.notify.HuginnMessagingService
@@ -841,6 +842,37 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
             runCatching {
                 client.sendKeys(name, text = text, keys = if (thenEnter) listOf("Enter") else emptyList())
             }.onFailure { _toast.value = errText(it) }
+        }
+    }
+
+    // ------------------------------------------------ live typing (ordered)
+    //
+    // One queue, one drainer. viewModelScope runs on the main dispatcher, so
+    // enqueue and drain never race; the drainer merges bursts into single
+    // requests and sends them SEQUENTIALLY — the per-keystroke launch it
+    // replaces could reorder characters in flight.
+    private val liveOps = ArrayDeque<LiveInput.Op>()
+    private var liveDrainer: Job? = null
+
+    fun sendLive(name: String, op: LiveInput.Op) {
+        liveOps.addLast(op)
+        if (liveDrainer?.isActive == true) return
+        liveDrainer = viewModelScope.launch {
+            // A beat for the burst to accumulate: keystrokes arrive faster than
+            // round trips complete, and merging them is the point.
+            delay(35)
+            while (liveOps.isNotEmpty()) {
+                val batch = LiveInput.merge(liveOps.toList())
+                liveOps.clear()
+                for (m in batch) {
+                    runCatching {
+                        when (m) {
+                            is LiveInput.Op.Text -> client.sendKeys(name, text = m.text)
+                            is LiveInput.Op.Key -> client.sendKeys(name, keys = m.keys)
+                        }
+                    }.onFailure { _toast.value = errText(it) }
+                }
+            }
         }
     }
 

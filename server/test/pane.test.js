@@ -322,3 +322,46 @@ test('nothing to answer has no fingerprint', () => {
 test('a fingerprint is short enough to travel in a notification payload', () => {
   assert.ok(promptFingerprint(PROMPT_A).length <= 12);
 });
+
+
+// ---------------------------------------------------------- live status line
+//
+// The spinner is the only moment-to-moment signal a running turn produces; the
+// conversation strip is built from it. Matched by SHAPE (glyph + ellipsis word +
+// optional parenthetical) because the verbs are whimsical-random by design.
+
+const { parseSpinner } = require('../lib/pane');
+
+test('the real captured spinner parses, keeping timing and tokens', () => {
+  // Verbatim from a live pane, 2026-07-27.
+  const got = parseSpinner(['\u273D Gallivanting\u2026 (3m 15s \u00B7 \u2193 10.0k tokens)']);
+  assert.equal(got, 'Gallivanting\u2026 \u00B7 3m 15s \u00B7 \u2193 10.0k tokens');
+});
+
+test('keyboard hints are dropped from the status', () => {
+  const got = parseSpinner(['\u2733 Simmering\u2026 (esc to interrupt \u00B7 45s)']);
+  assert.equal(got, 'Simmering\u2026 \u00B7 45s', 'instructions for a terminal the reader is not at');
+});
+
+test('a bare spinner with no parenthetical still reads', () => {
+  assert.equal(parseSpinner(['\u00B7 Deliberating\u2026']), 'Deliberating\u2026');
+});
+
+test('prose and lists are not a spinner', () => {
+  assert.equal(parseSpinner(['All done\u2026 for now', '1. a list item']), null);
+});
+
+test('composer furniture is not a spinner', () => {
+  assert.equal(parseSpinner(['  \u23F5\u23F5 auto mode on (shift+tab to cycle)', '  [x] Fable 5 \u00B7 main']), null);
+});
+
+test('the newest spinner wins when the pane holds an older one', () => {
+  const got = parseSpinner(['\u273B Musing\u2026 (2s)', 'output text', '\u273D Finalising\u2026 (1m)']);
+  assert.equal(got, 'Finalising\u2026 \u00B7 1m');
+});
+
+test('ansi colour on the spinner line does not defeat the match', () => {
+  const e = '\u001B';
+  const got = parseSpinner([e + '[38;5;174m\u273D' + e + '[39m ' + e + '[38;5;180mPondering\u2026' + e + '[39m (12s)']);
+  assert.equal(got, 'Pondering\u2026 \u00B7 12s');
+});
