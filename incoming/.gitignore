@@ -1,0 +1,17 @@
+# Gradle / build outputs
+.gradle/
+build/
+app/build/
+.kotlin/
+local.properties
+
+# Shipped artifacts: APKs are big binaries regenerated on every build;
+# the manifests (latest*.json) stay tracked as the record of what shipped.
+dist/*.apk
+# ship.sh stages a copy of the root CHANGELOG.md here for upload; the root file
+# is the source of truth.
+dist/CHANGELOG.md
+
+# IDE noise
+.idea/
+*.iml
