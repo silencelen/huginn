@@ -139,6 +139,20 @@ class SessionWatchWorker(
         data class AnswerOption(val number: Int, val label: String)
 
         /**
+         * The two participants in a chat thread.
+         *
+         * Keys are stable strings rather than defaults, because MessagingStyle uses
+         * them to decide which messages are yours: a Person without a key compares
+         * by name, so a rebuilt notification can fail to recognise its own history
+         * and render your last reply as though huginn had said it.
+         */
+        fun you(context: Context): androidx.core.app.Person =
+            androidx.core.app.Person.Builder().setKey("owner").setName("You").build()
+
+        fun huginn(): androidx.core.app.Person =
+            androidx.core.app.Person.Builder().setKey("huginn").setName("huginn").setBot(true).build()
+
+        /**
          * Android renders at most three action buttons, so a question with more
          * options than this keeps its first three and is finished in the app.
          *
@@ -208,12 +222,35 @@ class SessionWatchWorker(
                 .setSmallIcon(R.drawable.ic_stat_huginn)
                 .setContentTitle(title)
                 .setContentText(text)
-                // The question is often longer than one line, and truncating it to
-                // "Do you want to create the fi…" defeats the purpose of sending it.
-                .setStyle(NotificationCompat.BigTextStyle().bigText(text))
                 .setAutoCancel(true)
                 .setContentIntent(pending)
                 .setPriority(NotificationCompat.PRIORITY_DEFAULT)
+
+            if (replyChat != null) {
+                // A chat really is a conversation, so it is rendered as one. This is
+                // not decoration: MessagingStyle is what makes a reply APPEND to the
+                // thread instead of overwriting the body, so the shade keeps showing
+                // what huginn answered next to what you sent back. Android also files
+                // these under its Conversations section and lets them be bubbled or
+                // prioritised individually, none of which BigTextStyle can offer.
+                builder.setStyle(
+                    NotificationCompat.MessagingStyle(you(context))
+                        .setConversationTitle(title)
+                        // Marked as a group so the title is shown even with a single
+                        // participant; otherwise Android hides it as redundant.
+                        .setGroupConversation(true)
+                        .addMessage(text, System.currentTimeMillis(), huginn())
+                )
+                // Deliberately NO setShortcutId. Android's Conversations section
+                // wants one, but only alongside a published long-lived dynamic
+                // shortcut — and naming a shortcut that does not exist gets the
+                // notification demoted rather than promoted. The thread rendering
+                // and the reply history, which are the point, need no shortcut.
+            } else {
+                // The question is often longer than one line, and truncating it to
+                // "Do you want to create the fi…" defeats the purpose of sending it.
+                builder.setStyle(NotificationCompat.BigTextStyle().bigText(text))
+            }
 
             if (session != null) {
                 for (a in answers.take(MAX_ACTIONS)) {
