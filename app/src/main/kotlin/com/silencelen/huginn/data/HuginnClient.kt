@@ -362,6 +362,14 @@ class HuginnClient(
     }
 
     /** Structured conversation for a tmux session, from its Claude transcript. */
+    /**
+     * Suggested next messages. The server generates on a turn boundary and
+     * caches; this can take several seconds the first time, so it rides the
+     * long-poll client rather than the 30s default.
+     */
+    suspend fun sessionSuggestions(name: String): Suggestions =
+        decode(call(builder("/v1/sessions/$name/suggestions").get().build(), Client.POLL))
+
     /** The individual agents behind a fan-out, for the work detail sheet. */
     suspend fun sessionAgents(name: String): AgentsInfo =
         decode(call(builder("/v1/sessions/$name/agents").get().build()))

@@ -867,6 +867,38 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
     val sessionGone: StateFlow<String?> = _sessionGone.asStateFlow()
     fun sessionGoneHandled() { _sessionGone.value = null }
 
+    /**
+     * Suggested next messages for the open session. Fetched when a turn ends —
+     * detected as the transcript growing while the session is not running — and
+     * cleared the moment a new turn starts, because suggestions for the previous
+     * reply are stale the instant there is a newer one coming.
+     */
+    private val _suggestions = MutableStateFlow<List<String>>(emptyList())
+    val suggestions: StateFlow<List<String>> = _suggestions.asStateFlow()
+    private var suggestedForOffset = -1L
+    private var suggestJob: Job? = null
+
+    fun maybeSuggest(name: String, page: TranscriptPage?, working: Boolean) {
+        if (working) {
+            if (_suggestions.value.isNotEmpty()) _suggestions.value = emptyList()
+            return
+        }
+        val offset = page?.nextOffset ?: return
+        if (offset == suggestedForOffset || suggestJob?.isActive == true) return
+        suggestedForOffset = offset
+        suggestJob = viewModelScope.launch {
+            runCatching { client.sessionSuggestions(name) }
+                .onSuccess { _suggestions.value = it.suggestions }
+                .onFailure { /* suggestions are a nicety; silence is the right failure */ }
+        }
+    }
+
+    fun clearSuggestions() {
+        suggestJob?.cancel()
+        _suggestions.value = emptyList()
+        suggestedForOffset = -1L
+    }
+
     /** Agents for the open work sheet; polled only while the sheet is up. */
     private val _agents = MutableStateFlow<AgentsInfo?>(null)
     val agents: StateFlow<AgentsInfo?> = _agents.asStateFlow()
