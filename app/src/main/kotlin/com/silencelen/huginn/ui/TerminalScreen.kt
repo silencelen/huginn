@@ -25,7 +25,9 @@ import androidx.compose.material.icons.filled.ArrowDownward
 import androidx.compose.material.icons.filled.ArrowUpward
 import androidx.compose.material.icons.filled.KeyboardArrowLeft
 import androidx.compose.material.icons.filled.KeyboardArrowRight
+import androidx.compose.material.icons.filled.Keyboard
 import androidx.compose.material.icons.filled.KeyboardReturn
+import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material3.AssistChip
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -43,6 +45,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -83,6 +86,10 @@ fun TerminalScreen(
     val density = LocalDensity.current
     val fg = MaterialTheme.colorScheme.onSurface
     val bg = MaterialTheme.colorScheme.background
+    // Live mode: the soft keyboard types straight into the pane, keystroke by
+    // keystroke, instead of composing in the bubble and sending. Per-visit rather
+    // than persisted: it is a way of leaning in, not a configuration.
+    var liveTyping by rememberSaveable(session) { mutableStateOf(false) }
     val metrics = remember(fontScale, density) {
         CellMetrics(with(density) { fontScale.sp.toPx() })
     }
@@ -176,9 +183,49 @@ fun TerminalScreen(
             PromptCard(prompt.question, prompt.options.map { it.number to it.label }, prompt.options.firstOrNull { it.selected }?.number, onAnswerPrompt)
         }
 
-        KeyRow(onSendKeys)
+        KeyRow(onSendKeys, liveTyping, onToggleLive = { liveTyping = !liveTyping })
 
-        Surface(color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f)) {
+        LiveKeyboardField(
+            active = liveTyping,
+            onText = { onSendText(it, false) },
+            onKeys = onSendKeys,
+        )
+
+        if (liveTyping) {
+            // A slim strip in place of the composer: says what is happening, and is
+            // the tap target that brings the keyboard back if it was dismissed.
+            Surface(color = MaterialTheme.colorScheme.primaryContainer) {
+                Row(
+                    Modifier
+                        .fillMaxWidth()
+                        .clickable { liveTyping = false }
+                        .imePadding()
+                        .navigationBarsPadding()
+                        .padding(horizontal = 14.dp, vertical = 10.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Icon(
+                        Icons.Filled.Keyboard,
+                        contentDescription = null,
+                        modifier = Modifier.size(16.dp),
+                        tint = MaterialTheme.colorScheme.onPrimaryContainer,
+                    )
+                    Spacer(Modifier.width(8.dp))
+                    Text(
+                        "Typing straight into $session — every key goes to the pane",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onPrimaryContainer,
+                        modifier = Modifier.weight(1f),
+                    )
+                    Text(
+                        "Done",
+                        style = MaterialTheme.typography.labelMedium,
+                        fontWeight = FontWeight.SemiBold,
+                        color = MaterialTheme.colorScheme.onPrimaryContainer,
+                    )
+                }
+            }
+        } else Surface(color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f)) {
             Row(
                 Modifier
                     .fillMaxWidth()
@@ -196,6 +243,15 @@ fun TerminalScreen(
                     shape = RoundedCornerShape(20.dp),
                 )
                 Spacer(Modifier.width(6.dp))
+                rememberSpeechInput { heard -> onDraft(appendDictation(draft, heard)) }?.let { speak ->
+                    IconButton(onClick = speak) {
+                        Icon(
+                            Icons.Filled.Mic,
+                            contentDescription = "Dictate",
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                }
                 // Send-without-newline: Claude Code's composer takes multi-line
                 // input, so putting text in the box is a distinct action from
                 // submitting it.
@@ -319,9 +375,13 @@ fun PromptCard(
     }
 }
 
-/** The keys a phone keyboard cannot send. */
+/** The keys a phone keyboard cannot send, plus the live-typing toggle. */
 @Composable
-private fun KeyRow(onSendKeys: (List<String>) -> Unit) {
+private fun KeyRow(
+    onSendKeys: (List<String>) -> Unit,
+    liveTyping: Boolean = false,
+    onToggleLive: (() -> Unit)? = null,
+) {
     val hScroll = rememberScrollState()
     Surface(color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)) {
         Row(
@@ -332,6 +392,28 @@ private fun KeyRow(onSendKeys: (List<String>) -> Unit) {
             horizontalArrangement = Arrangement.spacedBy(6.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
+            onToggleLive?.let { toggle ->
+                // First, because it changes what the whole keyboard means.
+                AssistChip(
+                    onClick = toggle,
+                    label = {
+                        Icon(
+                            Icons.Filled.Keyboard,
+                            contentDescription = null,
+                            modifier = Modifier.size(15.dp),
+                            tint = if (liveTyping) MaterialTheme.colorScheme.primary
+                            else MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                        Spacer(Modifier.width(4.dp))
+                        Text(
+                            "Live",
+                            fontSize = 12.sp,
+                            color = if (liveTyping) MaterialTheme.colorScheme.primary
+                            else MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    },
+                )
+            }
             KeyChip("Esc") { onSendKeys(listOf("Escape")) }
             KeyChip("⇧Tab") { onSendKeys(listOf("BTab")) }
             KeyChip("Tab") { onSendKeys(listOf("Tab")) }
