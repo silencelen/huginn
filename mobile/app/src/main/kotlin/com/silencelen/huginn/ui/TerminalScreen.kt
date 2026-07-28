@@ -92,6 +92,16 @@ fun TerminalScreen(
     // keystroke, instead of composing in the bubble and sending. Per-visit rather
     // than persisted: it is a way of leaning in, not a configuration.
     var liveTyping by rememberSaveable(session) { mutableStateOf(false) }
+    // Optimistic echo state for live typing; rules live in LocalEcho (pure).
+    var echo by remember(session) { mutableStateOf(LocalEcho.Echo()) }
+    var prevCursor by remember(session) { mutableStateOf<Pair<Int, Int>?>(null) }
+    // Each authoritative frame consumes what its cursor movement explains.
+    LaunchedEffect(screen?.hash) {
+        val s2 = screen ?: return@LaunchedEffect
+        val cur = s2.cursorX to s2.cursorY
+        echo = LocalEcho.frame(echo, prevCursor, cur)
+        prevCursor = cur
+    }
     val metrics = remember(fontScale, density) {
         CellMetrics(with(density) { fontScale.sp.toPx() })
     }
@@ -173,6 +183,7 @@ fun TerminalScreen(
                         metrics = metrics,
                         cursor = screen.cursorX to screen.cursorY,
                         cursorColor = MaterialTheme.colorScheme.primary,
+                        echo = if (liveTyping && echo.visible) echo.text else "",
                     )
                 }
             }
@@ -192,8 +203,18 @@ fun TerminalScreen(
             // Through the ordered queue, not the fire-and-forget path: per-keystroke
             // coroutines can reorder characters in flight, and a queue that merges a
             // burst into one request is also what makes typing feel immediate.
-            onText = { onLive(LiveInput.Op.Text(it)) },
-            onKeys = { onLive(LiveInput.Op.Key(it)) },
+            // Each keystroke ALSO feeds the local echo, which is what makes it
+            // feel instant: render now, reconcile when the pane confirms.
+            onText = {
+                echo = LocalEcho.typed(echo, it)
+                onLive(LiveInput.Op.Text(it))
+            },
+            onKeys = { keys ->
+                echo = if (keys.all { k -> k == "BSpace" }) {
+                    keys.fold(echo) { acc, _ -> LocalEcho.backspace(acc) }
+                } else LocalEcho.otherKey(echo)
+                onLive(LiveInput.Op.Key(keys))
+            },
         )
 
         if (liveTyping) {

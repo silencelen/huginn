@@ -308,9 +308,23 @@ fun HuginnApp(
             ) == android.content.pm.PackageManager.PERMISSION_GRANTED
         )
     }
+    // A grant OPENS the sheet the tap was aiming at — requiring a second tap made
+    // the first one look dead. A denial says so out loud and points at the fix,
+    // because on some builds the system dialog never appears at all (the request
+    // is auto-denied) and the silent version of that reads as a broken button.
+    var voiceWanted by remember { mutableStateOf(false) }
     val voicePermission = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestPermission()
-    ) { granted -> voiceReady = granted }
+    ) { granted ->
+        voiceReady = granted
+        if (!granted) {
+            vm.showToast(
+                "Microphone permission was not granted — enable it under App info → " +
+                    "Permissions, or use the dictation mic, which needs none."
+            )
+            voiceWanted = false
+        }
+    }
 
     val requestNotifications: () -> Unit = {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
@@ -479,7 +493,12 @@ fun HuginnApp(
                 chatId = id,
                 suggestions = suggestions,
                 voiceReady = voiceReady,
-                onVoicePermission = { voicePermission.launch(Manifest.permission.RECORD_AUDIO) },
+                voiceWanted = voiceWanted,
+                onVoiceWantedHandled = { voiceWanted = false },
+                onVoicePermission = {
+                    voiceWanted = true
+                    voicePermission.launch(Manifest.permission.RECORD_AUDIO)
+                },
                 draft = drafts[HuginnViewModel.chatDraftKey(id)].orEmpty(),
                 onDraft = { vm.setDraft(HuginnViewModel.chatDraftKey(id), it) },
                 onSend = { vm.send(id, it) },
