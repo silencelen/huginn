@@ -1,6 +1,7 @@
 package com.silencelen.huginn.notify
 
 import android.content.Context
+import androidx.core.app.NotificationManagerCompat
 import com.silencelen.huginn.data.HuginnClient
 import com.silencelen.huginn.data.SettingsStore
 import com.silencelen.huginn.data.Watch
@@ -94,6 +95,19 @@ object WatchCycle {
         var posted = 0
 
         val previouslyNeeding = settings.notifiedSessions.first()
+
+        // Questions that stopped waiting since the last look — answered in tmux,
+        // from another device, or the session died. Their notifications come down,
+        // here as well as on the push, because this is the path that runs when the
+        // resolution push could not be delivered (app dead at the time) — the alarm
+        // rediscovers the truth and the shade catches up.
+        for (name in previouslyNeeding - needing) {
+            runCatching {
+                NotificationManagerCompat.from(context)
+                    .cancel(SessionWatchWorker.notificationIdFor(name))
+            }
+        }
+
         val fresh = needing - previouslyNeeding
         // Withheld when the one session in question is the screen the reader has
         // open — its prompt is already rendered in front of them, buttons and all.

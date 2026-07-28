@@ -4,6 +4,7 @@ import android.content.Context
 import com.google.firebase.messaging.FirebaseMessaging
 import com.google.firebase.messaging.FirebaseMessagingService
 import com.google.firebase.messaging.RemoteMessage
+import androidx.core.app.NotificationManagerCompat
 import com.silencelen.huginn.data.HuginnClient
 import com.silencelen.huginn.data.SettingsStore
 import kotlinx.serialization.Serializable
@@ -63,7 +64,21 @@ class HuginnMessagingService : FirebaseMessagingService() {
         // post still runs: the arrival is recorded, the session claimed, the state
         // reconciled, so the suppressed notification cannot come back later through
         // the alarm rediscovering the same transition.
-        val redundant = when (kind) {
+        // A resolution is not a notification — it is an instruction to take one
+        // down. The question was answered in tmux or from another device, and the
+        // "needs you" still in the shade now invites a tap whose fingerprint the
+        // host will refuse. Everything below the post still runs: the arrival is
+        // counted (the host counted the send, and an uncounted arrival would read
+        // as a dropped push and tighten the heartbeat), and the reconcile advances
+        // the shared baseline.
+        if (kind == "session_resolved" && subject != null) {
+            runCatching {
+                NotificationManagerCompat.from(applicationContext)
+                    .cancel(SessionWatchWorker.notificationIdFor(subject))
+            }
+        }
+
+        val redundant = kind == "session_resolved" || when (kind) {
             "chat_finished" -> Foreground.showsChat(subject)
             "session_attention", "session_finished" -> Foreground.showsSession(subject)
             else -> false
