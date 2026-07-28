@@ -89,3 +89,44 @@ class LiveInputTest {
         assertEquals('​', S[0])
     }
 }
+
+/**
+ * The merge that turns a queued burst into the fewest ordered requests. Ordering
+ * is the point: the per-keystroke path this replaced could deliver "ls" as "sl".
+ */
+class LiveMergeTest {
+
+    private fun t(s: String) = LiveInput.Op.Text(s)
+    private fun k(vararg keys: String) = LiveInput.Op.Key(keys.toList())
+
+    @Test
+    fun `a typing burst becomes one request`() {
+        assertEquals(listOf(t("hello")), LiveInput.merge(listOf(t("h"), t("e"), t("llo"))))
+    }
+
+    @Test
+    fun `keys between text split the merge, preserving order`() {
+        assertEquals(
+            listOf(t("ls"), k("Enter"), t("cd")),
+            LiveInput.merge(listOf(t("l"), t("s"), k("Enter"), t("c"), t("d"))),
+        )
+    }
+
+    @Test
+    fun `consecutive keys merge into one request too`() {
+        assertEquals(
+            listOf(k("BSpace", "BSpace", "Enter")),
+            LiveInput.merge(listOf(k("BSpace"), k("BSpace"), k("Enter"))),
+        )
+    }
+
+    @Test
+    fun `an empty queue merges to nothing`() {
+        assertEquals(emptyList<LiveInput.Op>(), LiveInput.merge(emptyList()))
+    }
+
+    @Test
+    fun `a single op passes through untouched`() {
+        assertEquals(listOf(t("x")), LiveInput.merge(listOf(t("x"))))
+    }
+}

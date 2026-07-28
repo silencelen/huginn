@@ -80,6 +80,7 @@ fun TerminalScreen(
     onGeometry: (Int, Int) -> Unit,
     onSendText: (String, Boolean) -> Unit,
     onSendKeys: (List<String>) -> Unit,
+    onLive: (LiveInput.Op) -> Unit,
     onAnswerPrompt: (Int) -> Unit,
     onForceResize: () -> Unit,
 ) {
@@ -187,8 +188,11 @@ fun TerminalScreen(
 
         LiveKeyboardField(
             active = liveTyping,
-            onText = { onSendText(it, false) },
-            onKeys = onSendKeys,
+            // Through the ordered queue, not the fire-and-forget path: per-keystroke
+            // coroutines can reorder characters in flight, and a queue that merges a
+            // burst into one request is also what makes typing feel immediate.
+            onText = { onLive(LiveInput.Op.Text(it)) },
+            onKeys = { onLive(LiveInput.Op.Key(it)) },
         )
 
         if (liveTyping) {
@@ -231,7 +235,7 @@ fun TerminalScreen(
                     .fillMaxWidth()
                     .imePadding()
                     .navigationBarsPadding()
-                    .padding(start = 12.dp, end = 8.dp, top = 8.dp, bottom = 8.dp),
+                    .padding(start = 12.dp, end = 8.dp, top = 6.dp, bottom = 2.dp),
                 verticalAlignment = Alignment.Bottom,
             ) {
                 OutlinedTextField(

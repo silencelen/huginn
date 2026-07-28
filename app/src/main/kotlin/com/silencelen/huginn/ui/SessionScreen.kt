@@ -73,6 +73,7 @@ fun SessionScreen(
     onDraft: (String) -> Unit,
     onSendText: (String, Boolean) -> Unit,
     onSendKeys: (List<String>) -> Unit,
+    onLive: (LiveInput.Op) -> Unit,
     onAnswerPrompt: (Int) -> Unit,
     onForceResize: () -> Unit,
     onInterrupt: () -> Unit,
@@ -104,6 +105,7 @@ fun SessionScreen(
                     page = transcript,
                     error = transcriptError,
                     prompt = screen?.prompt,
+                    spinner = screen?.spinner,
                     draft = draft,
                     onDraft = onDraft,
                     onSendText = onSendText,
@@ -126,6 +128,7 @@ fun SessionScreen(
                     onGeometry = onGeometry,
                     onSendText = onSendText,
                     onSendKeys = onSendKeys,
+                    onLive = onLive,
                     onAnswerPrompt = onAnswerPrompt,
                     onForceResize = onForceResize,
                 )
@@ -140,6 +143,7 @@ private fun SessionConversation(
     page: TranscriptPage?,
     error: String?,
     prompt: com.silencelen.huginn.data.PanePrompt?,
+    spinner: String?,
     draft: String,
     onDraft: (String) -> Unit,
     onSendText: (String, Boolean) -> Unit,
@@ -204,6 +208,23 @@ private fun SessionConversation(
             JumpToNewest { scope.launch { listState.animateScrollToItem((rows.size + headerItems - 1).coerceAtLeast(0)) } }
         }
 
+        // What the session is doing RIGHT NOW, pinned above the composer. The
+        // transcript stays silent until whole blocks complete, so without this the
+        // conversation looked dead exactly when the most was happening — right
+        // after sending a message. The pane's own status line is the best source;
+        // the transcript's unresolved tool is the fallback; "working" is the floor.
+        if (working || spinner != null) {
+            WorkStrip(
+                spinner = spinner,
+                activity = page?.activity,
+                onClick = {
+                    scope.launch {
+                        listState.animateScrollToItem((events.size + headerItems - 1).coerceAtLeast(0))
+                    }
+                },
+            )
+        }
+
         prompt?.let {
             PromptCard(
                 it.question,
@@ -219,7 +240,7 @@ private fun SessionConversation(
                     .fillMaxWidth()
                     .imePadding()
                     .navigationBarsPadding()
-                    .padding(start = 12.dp, end = 8.dp, top = 8.dp, bottom = 8.dp),
+                    .padding(start = 12.dp, end = 8.dp, top = 6.dp, bottom = 2.dp),
                 verticalAlignment = Alignment.Bottom,
             ) {
                 OutlinedTextField(
@@ -285,4 +306,46 @@ fun SessionSubtitle(page: TranscriptPage?, screen: Screen?) {
         color = MaterialTheme.colorScheme.onSurfaceVariant,
         fontWeight = FontWeight.Normal,
     )
+}
+
+
+/**
+ * The "what is it doing right now" strip. Priority of sources: the pane's own
+ * status line (verbatim-ish, the way Claude Code shows it), then the transcript's
+ * unresolved tool, then the bare fact of running. Tapping it jumps to the newest
+ * content, since "what is happening" and "show me" are the same impulse.
+ */
+@Composable
+private fun WorkStrip(
+    spinner: String?,
+    activity: com.silencelen.huginn.data.Activity?,
+    onClick: () -> Unit,
+) {
+    val text = spinner ?: activity?.let { a ->
+        buildString {
+            append(a.tool ?: "working")
+            a.detail?.takeIf { it.isNotBlank() }?.let { append("  ").append(it) }
+            if (a.subagents > 0) append("  ·  ${a.subagents} subagent${if (a.subagents == 1) "" else "s"}")
+        }
+    } ?: "working"
+    Surface(
+        color = MaterialTheme.colorScheme.surfaceContainerHigh,
+        modifier = Modifier.fillMaxWidth(),
+        onClick = onClick,
+    ) {
+        Row(
+            Modifier.padding(horizontal = 14.dp, vertical = 7.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            PulsingDot(MaterialTheme.colorScheme.primary)
+            Spacer(Modifier.width(9.dp))
+            Text(
+                text,
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
+                overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+            )
+        }
+    }
 }

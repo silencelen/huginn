@@ -71,6 +71,7 @@ import com.silencelen.huginn.notify.AppLock
 import com.silencelen.huginn.notify.SessionWatchWorker
 import com.silencelen.huginn.ui.ChatScreen
 import com.silencelen.huginn.ui.EmptyState
+import com.silencelen.huginn.ui.LiveInput
 import com.silencelen.huginn.ui.ChatsScreen
 import com.silencelen.huginn.ui.HuginnViewModel
 import com.silencelen.huginn.ui.SessionScreen
@@ -389,6 +390,7 @@ fun HuginnApp(
                 onDraft = { vm.setDraft(HuginnViewModel.sessionDraftKey(name), it) },
                 onSendText = { text, enter -> vm.sendText(name, text, enter) },
                 onSendKeys = { vm.sendKeys(name, it) },
+                onLive = { vm.sendLive(name, it) },
                 onAnswerPrompt = { vm.answerPrompt(name, it) },
                 onForceResize = { vm.forceFit() },
                 onInterrupt = { vm.interruptSession(name) },
@@ -587,7 +589,7 @@ fun HuginnApp(
                     } else {
                         when (val d = dest) {
                             is Dest.Chats, is Dest.Chat -> Row(Modifier.fillMaxSize()) {
-                                Box(Modifier.width(348.dp).fillMaxSize()) { chatsPane(true) }
+                                Box(Modifier.width(292.dp).fillMaxSize()) { chatsPane(true) }
                                 VerticalDivider(color = MaterialTheme.colorScheme.outlineVariant)
                                 Box(Modifier.weight(1f).fillMaxSize()) {
                                     val open = dest as? Dest.Chat
@@ -598,7 +600,7 @@ fun HuginnApp(
                                 }
                             }
                             is Dest.Sessions, is Dest.SessionView -> Row(Modifier.fillMaxSize()) {
-                                Box(Modifier.width(348.dp).fillMaxSize()) { sessionsPane(true) }
+                                Box(Modifier.width(292.dp).fillMaxSize()) { sessionsPane(true) }
                                 VerticalDivider(color = MaterialTheme.colorScheme.outlineVariant)
                                 Box(Modifier.weight(1f).fillMaxSize()) {
                                     val open = dest as? Dest.SessionView
