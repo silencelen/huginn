@@ -91,28 +91,53 @@ function previewLines(lines, max = 3) {
  */
 function detectPrompt(lines) {
   const plain = lines.map((l) => stripAnsi(l).replace(/\s+$/, ''));
-  // Ignore anything more than 14 rows above the last non-empty row.
+  // Ignore anything well above the last non-empty row; the AskUserQuestion
+  // dialog is tall (per-option descriptions), so the window is generous.
   let lastContent = -1;
   for (let i = plain.length - 1; i >= 0; i--) {
     if (plain[i].trim()) { lastContent = i; break; }
   }
   if (lastContent < 0) return null;
-  const floor = Math.max(0, lastContent - 14);
+  const floor = Math.max(0, lastContent - 24);
 
-  const OPTION_RE = /^(\s*)(?:[❯>]\s*)?(\d{1,2})[.)]\s+(\S.*)$/;
+  const OPTION_RE = /^(\s*)(?:[\u276F>]\s*)?(\d{1,2})[.)]\s+(\S.*)$/;
+  // The selector's own help line, drawn under the options.
+  const HINT_RE = /enter to select|to navigate|esc to cancel|tab\/arrows/i;
+  // Multi-question tab headers above the question text.
+  const HEADER_RE = /^\s*[\u2610\u2611\u2612]\s/;
+
+  // Step 1: from the bottom, walk up past the dialog's own furniture to the
+  // last option line. Anything else down there — a composer, a status line,
+  // prose — means the options are history, not a question being asked now.
+  let i = lastContent;
+  while (i >= floor && !OPTION_RE.test(plain[i])) {
+    const t = plain[i].trim();
+    if (t && !HINT_RE.test(t) && !RULE_RE.test(plain[i])) return null;
+    i--;
+  }
+  if (i < floor) return null;
+
+  // Step 2: collect the run, allowing what the AskUserQuestion dialog actually
+  // draws between numbered lines (verified against a live capture): indented
+  // description lines under each option, and a rule separating the built-in
+  // trailing options. Everything else ends the run.
   const opts = [];
-  let firstIdx = -1;
-  let lastIdx = -1;
-  for (let i = lastContent; i >= floor; i--) {
-    const m = OPTION_RE.exec(plain[i]);
+  let firstIdx = i;
+  for (let j = i; j >= floor; j--) {
+    const m = OPTION_RE.exec(plain[j]);
     if (m) {
-      opts.unshift({ number: Number(m[2]), label: m[3].trim().slice(0, 120), selected: /[❯>]/.test(plain[i]) });
-      firstIdx = i;
-      if (lastIdx < 0) lastIdx = i;
-    } else if (opts.length) {
-      // Run ended; the line above it is the question.
-      break;
+      opts.unshift({ number: Number(m[2]), label: m[3].trim().slice(0, 120), selected: /[\u276F>]/.test(plain[j]) });
+      firstIdx = j;
+      continue;
     }
+    const t = plain[j].trim();
+    if (!t) continue;
+    if (RULE_RE.test(plain[j])) continue;
+    // A description line: indented under its option. A question or any other
+    // flush-left content ends the run.
+    if (/^\s{2,}/.test(plain[j]) && !MODE_HINT_RE.test(plain[j]) &&
+        !STATUS_RE.test(plain[j]) && !PROMPT_MARK_RE.test(plain[j])) continue;
+    break;
   }
   if (opts.length < 2) return null;
   // Must be 1..n contiguous, else this is prose that happens to have numbers.
@@ -124,19 +149,13 @@ function detectPrompt(lines) {
   // matched every other rule — and a false positive is not benign here, because
   // tapping the resulting button types a digit into Claude's composer.
   if (opts.filter((o) => o.selected).length !== 1) return null;
-  // A composer below the run means the options are message content that has
-  // already scrolled behind the input box, not a question being asked now.
-  for (let i = lastIdx + 1; i <= lastContent; i++) {
-    const t = plain[i];
-    if (!t.trim()) continue;
-    if (RULE_RE.test(t) || MODE_HINT_RE.test(t) || STATUS_RE.test(t)) return null;
-    if (PROMPT_MARK_RE.test(t)) return null;
-  }
-  // Question: nearest non-empty line above the run that is not furniture.
+
+  // Question: nearest non-empty line above the run that is not furniture and
+  // not a tab header ("\u2610 Banner color") from a multi-question dialog.
   let question = '';
-  for (let i = firstIdx - 1; i >= floor; i--) {
-    const t = plain[i].trim();
-    if (!t || RULE_RE.test(t)) continue;
+  for (let k = firstIdx - 1; k >= floor; k--) {
+    const t = plain[k].trim();
+    if (!t || RULE_RE.test(plain[k]) || HEADER_RE.test(plain[k])) continue;
     question = t.slice(0, 240);
     break;
   }

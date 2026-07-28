@@ -28,6 +28,30 @@ function digestToolInput(input, limit = 400) {
 }
 
 /**
+ * AskUserQuestion input, reduced to what a card needs. Defensive throughout:
+ * this shape belongs to the CLI and may grow fields; a question we cannot parse
+ * falls back to the generic tool card rather than a broken one.
+ */
+function parseAsk(input) {
+  if (!input || !Array.isArray(input.questions) || !input.questions.length) return null;
+  const questions = [];
+  for (const q of input.questions.slice(0, 4)) {
+    if (!q || typeof q.question !== 'string' || !q.question.trim()) continue;
+    questions.push({
+      question: clip(q.question.trim(), 240),
+      header: typeof q.header === 'string' ? clip(q.header, 24) : null,
+      multiSelect: q.multiSelect === true,
+      options: Array.isArray(q.options)
+        ? q.options.slice(0, 6).map((o) => clip(
+            typeof o === 'string' ? o : (o && o.label) || '', 80,
+          )).filter(Boolean)
+        : [],
+    });
+  }
+  return questions.length ? { questions } : null;
+}
+
+/**
  * Machine-generated text that Claude Code injects into the conversation
  * (background-task notifications, hook output). It is real input to the model
  * but it is not something a person said, so it is shown as a one-line note
@@ -323,6 +347,15 @@ function readTranscript(path, { offset = null, limit = 400 } = {}) {
             } else if (b.name === 'Agent' || b.name === 'Task') {
               const t = b.input && (b.input.description || b.input.subagent_type);
               if (t) ev.detail = clip(t, 80);
+            } else if (b.name === 'AskUserQuestion') {
+              // Rendered as a question card, never as raw JSON — which is
+              // exactly how it looked: `{"questions":[{"question":"The push…`.
+              const ask = parseAsk(b.input);
+              if (ask) {
+                ev.ask = ask;
+                ev.detail = clip(ask.questions[0].question, 80);
+                ev.input = '';
+              }
             }
             out.events.push(ev);
             if (b.id) pendingTools.set(b.id, ev);
@@ -385,5 +418,5 @@ function liveActivity(events, nowSec) {
   return { ...(tool || {}), subagents };
 }
 
-module.exports = { readTranscript, digestToolInput, workflowName, textOf, liveActivity, machineText, describeMachineText, humanRemainder,
+module.exports = { readTranscript, digestToolInput, workflowName, textOf, liveActivity, machineText, describeMachineText, humanRemainder, parseAsk,
 };

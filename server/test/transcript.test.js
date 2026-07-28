@@ -438,3 +438,36 @@ test('a real message concatenated after a notification still survives', () => {
   const mixed = REAL_NOTIFICATION + '\n\nalso please check the logs when done';
   assert.equal(humanRemainder(mixed), 'also please check the logs when done');
 });
+
+
+// ------------------------------------------------------- AskUserQuestion cards
+//
+// The tool's input rendered as raw JSON to the user ("AskUserQuestion
+// {\"questions\":[{\"question\":\"The push…"). It becomes a structured card.
+
+const { parseAsk } = require('../lib/transcript');
+
+test('a question with options parses into card data', () => {
+  const a = parseAsk({ questions: [{
+    question: 'Which color should the banner be?',
+    header: 'Banner color',
+    multiSelect: false,
+    options: [{ label: 'Red', description: 'x' }, { label: 'Blue' }],
+  }] });
+  assert.equal(a.questions[0].question, 'Which color should the banner be?');
+  assert.equal(a.questions[0].header, 'Banner color');
+  assert.deepEqual(a.questions[0].options, ['Red', 'Blue']);
+});
+
+test('string options and missing fields survive', () => {
+  const a = parseAsk({ questions: [{ question: 'Q?', options: ['A', 'B'] }] });
+  assert.deepEqual(a.questions[0].options, ['A', 'B']);
+  assert.equal(a.questions[0].header, null);
+});
+
+test('garbage input falls back to the generic card', () => {
+  assert.equal(parseAsk(null), null);
+  assert.equal(parseAsk({}), null);
+  assert.equal(parseAsk({ questions: [{}] }), null);
+  assert.equal(parseAsk({ questions: 'nope' }), null);
+});
