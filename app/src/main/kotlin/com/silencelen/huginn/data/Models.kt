@@ -165,6 +165,14 @@ data class TranscriptPage(
     val bgAgents: Int = 0,
 )
 
+/** Suggested next messages, generated at a turn boundary. */
+@Serializable
+data class Suggestions(
+    val suggestions: List<String> = emptyList(),
+    val forSize: Long = 0,
+    val reason: String? = null,
+)
+
 /** One agent behind a fan-out, live or recently settled. */
 @Serializable
 data class AgentRun(

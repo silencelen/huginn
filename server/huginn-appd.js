@@ -39,10 +39,11 @@ const { decideAlerts, routeAlerts, telegramText, pruneSent } = require('./lib/al
 const clientsLib = require('./lib/clients');
 const { taskDirFor, parsePs, scanTasks, extractBgIds } = require('./lib/tasks');
 const { agentsDirFor, listAgents } = require('./lib/agents');
+const { suggestionContext, buildPrompt, parseSuggestions } = require('./lib/suggest');
 const pushLib = require('./lib/pushtokens');
 const { trySender } = require('./lib/fcm');
 
-const VERSION = '2.19.1';
+const VERSION = '2.20.0';
 const PORT = Number(process.env.HUGINN_APPD_PORT || 8787);
 const DATA_DIR = process.env.HUGINN_APPD_DATA || '/var/lib/huginn-appd';
 const TOKEN_FILE = process.env.HUGINN_APPD_TOKEN_FILE || '/etc/huginn-appd/token';
@@ -1290,6 +1291,8 @@ async function deliverPush(alert) {
   return { sent, dead, failed };
 }
 
+const suggestCache = new Map();   // sessionId -> {size, suggestions, promise}
+
 let alertTimer = null;
 async function alertTick() {
   const st = loadAlertState();
@@ -1922,6 +1925,58 @@ const server = http.createServer(async (req, res) => {
           return { tasks: bg.shells, bgAgents: bg.agents };
         })(),
       });
+    }
+
+    // --- suggested next messages, generated when a turn has just ended
+    if ((m = p.match(/^\/v1\/sessions\/([a-z0-9_]{1,50})\/suggestions$/)) && req.method === 'GET') {
+      const name = m[1];
+      if (!(await sessionExists(name))) return sendErr(res, 404, 'no such session');
+      const st = readSessionState(name);
+      // Mid-turn suggestions would be guesses about a reply that is still being
+      // written; the moment for them is the turn boundary.
+      if (!st || st.state === 'running' || !st.transcript) {
+        return sendJson(res, 200, { suggestions: [], reason: 'running' });
+      }
+      let size = 0;
+      try { size = fs.statSync(st.transcript).size; } catch {
+        return sendJson(res, 200, { suggestions: [], reason: 'no transcript' });
+      }
+      const hit = suggestCache.get(st.sessionId);
+      if (hit && hit.size === size) {
+        if (hit.promise) { await hit.promise; }
+        const now2 = suggestCache.get(st.sessionId);
+        return sendJson(res, 200, { suggestions: (now2 && now2.suggestions) || [], forSize: size });
+      }
+      const t = readTranscript(st.transcript, { limit: 60 });
+      const context = suggestionContext(t.events);
+      if (!context) return sendJson(res, 200, { suggestions: [], reason: 'nothing to react to' });
+
+      // Single-flight per session: a phone polls, and two identical haiku calls
+      // for one turn boundary is one too many.
+      const entry = { size, suggestions: [], promise: null };
+      entry.promise = (async () => {
+        const r = await run('claude', [
+          '-p',
+          // Caged: no CLAUDE.md (global or project), no tools, one turn, cheap
+          // model, scratch cwd. This call must never inherit huginn's persona.
+          '--setting-sources', '',
+          '--model', 'haiku',
+          '--max-turns', '1',
+          '--tools', '',
+          '--', buildPrompt(context),
+        ], { timeout: 45_000, cwd: DATA_DIR });
+        entry.suggestions = r.err ? [] : parseSuggestions(r.stdout);
+        entry.promise = null;
+        if (r.err) log(`suggest: ${name} failed: ${(r.stderr || r.err.message || '').slice(0, 120)}`);
+        else log(`suggest: ${name} -> ${entry.suggestions.length} for size ${size}`);
+      })();
+      suggestCache.set(st.sessionId, entry);
+      if (suggestCache.size > 50) {
+        const oldest = suggestCache.keys().next().value;
+        suggestCache.delete(oldest);
+      }
+      await entry.promise;
+      return sendJson(res, 200, { suggestions: entry.suggestions, forSize: size });
     }
 
     // --- the individual agents behind "0/4 agents done"

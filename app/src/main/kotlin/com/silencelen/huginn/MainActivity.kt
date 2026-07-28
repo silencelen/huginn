@@ -219,6 +219,7 @@ fun HuginnApp(
     val push by vm.push.collectAsState()
     val appLock by vm.appLock.collectAsState()
     val agents by vm.agents.collectAsState()
+    val suggestions by vm.suggestions.collectAsState()
 
     val snackbar = remember { SnackbarHostState() }
     LaunchedEffect(toast) { toast?.let { snackbar.showSnackbar(it); vm.toastShown() } }
@@ -382,7 +383,13 @@ fun HuginnApp(
             LifecycleStartEffect(name) {
                 vm.startTranscriptPolling(name)
                 vm.startScreenPolling(name)
-                onStopOrDispose { vm.stopScreenPolling(); vm.refreshSessions() }
+                onStopOrDispose { vm.stopScreenPolling(); vm.clearSuggestions(); vm.refreshSessions() }
+            }
+            // A turn boundary — the transcript grew and the session is idle — is
+            // the moment suggestions become worth generating.
+            val sessionWorking = sessions.firstOrNull { s -> s.name == name }?.state == "running"
+            LaunchedEffect(transcript?.nextOffset, sessionWorking) {
+                vm.maybeSuggest(name, transcript, sessionWorking)
             }
             SessionScreen(
                 name = name,
@@ -406,6 +413,7 @@ fun HuginnApp(
                 agents = agents,
                 onAgentsOpen = { vm.startAgentsPolling(name) },
                 onAgentsClose = { vm.stopAgentsPolling() },
+                suggestions = suggestions,
                 onAnswerPrompt = { vm.answerPrompt(name, it) },
                 onForceResize = { vm.forceFit() },
                 onInterrupt = { vm.interruptSession(name) },
