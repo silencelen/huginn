@@ -178,6 +178,25 @@ data class TranscriptPage(
     val bgAgents: Int = 0,
 )
 
+/** Automatic account rotation state, held by the host. */
+@Serializable
+data class Autoswitch(
+    val enabled: Boolean = false,
+    val switches: Int = 0,
+    val last: AutoswitchEvent? = null,
+    val accounts: Int = 0,
+)
+
+@Serializable
+data class AutoswitchEvent(
+    val at: Long = 0,
+    val fromEmail: String? = null,
+    val fromPercent: Int = 0,
+    val fromLabel: String? = null,
+    val toEmail: String? = null,
+    val toPercent: Int = 0,
+)
+
 /** Suggested next messages, generated at a turn boundary. */
 @Serializable
 data class Suggestions(

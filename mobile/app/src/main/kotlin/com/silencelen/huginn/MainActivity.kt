@@ -242,6 +242,7 @@ fun HuginnApp(
     val appLock by vm.appLock.collectAsState()
     val agents by vm.agents.collectAsState()
     val suggestions by vm.suggestions.collectAsState()
+    val autoswitch by vm.autoswitch.collectAsState()
 
     val snackbar = remember { SnackbarHostState() }
     LaunchedEffect(toast) { toast?.let { snackbar.showSnackbar(it); vm.toastShown() } }
@@ -462,7 +463,7 @@ fun HuginnApp(
             // Re-read on every visit rather than once: the Doze exemption is held
             // by the system and can be revoked outside this app, so a cached
             // "granted" would keep reassuring long after it stopped being true.
-            LaunchedEffect(Unit) { vm.refreshAccount(); vm.refreshDelivery() }
+            LaunchedEffect(Unit) { vm.refreshAccount(); vm.refreshDelivery(); vm.refreshAutoswitch() }
             SettingsScreen(
                 baseUrl = baseUrl,
                 token = token,
@@ -480,6 +481,8 @@ fun HuginnApp(
                 appLockAvailable = remember { AppLock.canLock(context) },
                 onAppLock = { vm.setAppLock(it) },
                 onLockNow = onLockNow,
+                autoswitch = autoswitch,
+                onAutoswitch = { vm.setAutoswitch(it) },
                 notificationsAllowed = notificationsAllowed,
                 onRequestNotifications = requestNotifications,
                 onOpenSystemNotificationSettings = {
