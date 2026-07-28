@@ -37,6 +37,12 @@
         <intent>
             <action android:name="android.intent.action.TTS_SERVICE" />
         </intent>
+        <!-- The SERVICE, not just the (extinct) dialog activity: this is what
+             SpeechRecognizer.isRecognitionAvailable resolves, and without it the
+             check answers "no recognizer" on a phone carrying Google's. -->
+        <intent>
+            <action android:name="android.speech.RecognitionService" />
+        </intent>
     </queries>
 
     <application

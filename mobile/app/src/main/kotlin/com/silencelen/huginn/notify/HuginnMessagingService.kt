@@ -74,6 +74,20 @@ class HuginnMessagingService : FirebaseMessagingService() {
         // if it fails the worst case is one duplicate, which is much better than a
         // missed alert.
         CoroutineScope(Dispatchers.IO).launch {
+            // Claim this session BEFORE reconciling. Otherwise the reconcile's own
+            // WatchCycle sees the same transition as fresh and posts a SECOND
+            // notification under the same per-session id — and its text is the
+            // generic "Waiting for your answer" whenever its prompt fetch comes
+            // back empty, silently replacing the question and its answer buttons.
+            // Observed on-device: the first attention push rendered as the generic
+            // line, the second as the question. The push already told the user;
+            // nothing downstream should re-announce it.
+            if (kind == "session_attention" && subject != null) {
+                runCatching {
+                    val settings = SettingsStore(applicationContext)
+                    settings.setNotifiedSessions(settings.notifiedSessions.first() + subject)
+                }
+            }
             withTimeoutOrNull(15_000) { reconcile(applicationContext) }
         }
     }
