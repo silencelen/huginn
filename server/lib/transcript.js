@@ -34,7 +34,11 @@ function digestToolInput(input, limit = 400) {
  * rather than a message bubble.
  */
 function machineText(s) {
-  return /^\s*<(task-notification|system-reminder|command-name|command-message|command-args|local-command)/.test(s);
+  // The bracketed preamble is the newer wrapper around task notifications:
+  // "[SYSTEM NOTIFICATION - NOT USER INPUT] …" followed by the tagged element.
+  // Without matching it, the whole notification rendered as a message the user
+  // supposedly sent.
+  return /^\s*(<(task-notification|system-reminder|command-name|command-message|command-args|local-command)|\[SYSTEM NOTIFICATION)/.test(s);
 }
 
 /**
@@ -66,8 +70,10 @@ function describeMachineText(s) {
     return body ? { kind: 'command_result', text: clip(body, 300) } : null;
   }
 
-  if (/^\s*<task-notification/.test(s)) {
-    return { kind: 'system', text: 'background task reported back' };
+  if (/<task-notification/.test(s) || /^\s*\[SYSTEM NOTIFICATION/.test(s)) {
+    // The summary is written for exactly this purpose; use it.
+    const sum = /<summary>\s*([\s\S]*?)\s*<\/summary>/.exec(s);
+    return { kind: 'system', text: sum ? clip(sum[1].replace(/\s+/g, ' '), 160) : 'background task reported back' };
   }
   return { kind: 'system', text: 'injected input' };
 }
@@ -83,6 +89,14 @@ function humanRemainder(s) {
     .replace(/<local-command-caveat>[\s\S]*?<\/local-command-caveat>/g, '')
     .replace(/<local-command-stdout>[\s\S]*?<\/local-command-stdout>/g, '')
     .replace(/<command-(name|message|args)>[\s\S]*?<\/command-\1>/g, '')
+    // The bracketed preamble FIRST, while its terminating tag still exists —
+    // stripped after the element it would run to end-of-string and eat any real
+    // message concatenated behind the notification.
+    .replace(/\[SYSTEM NOTIFICATION - NOT USER INPUT\][\s\S]*?(?=<task-notification|$)/g, '')
+    // Then the WHOLE element, not just its tags: stripping tags alone left the
+    // inner task-id/summary text to render as a message the user supposedly wrote.
+    .replace(/<task-notification>[\s\S]*?<\/task-notification>/g, '')
+    .replace(/<system-reminder>[\s\S]*?<\/system-reminder>/g, '')
     .replace(/<\/?(task-notification|system-reminder)[^>]*>/g, '')
     .trim();
   // Short leftovers are tag debris, not prose.
@@ -371,5 +385,5 @@ function liveActivity(events, nowSec) {
   return { ...(tool || {}), subagents };
 }
 
-module.exports = { readTranscript, digestToolInput, workflowName, textOf, liveActivity,
+module.exports = { readTranscript, digestToolInput, workflowName, textOf, liveActivity, machineText, describeMachineText, humanRemainder,
 };

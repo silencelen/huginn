@@ -10,7 +10,7 @@ const assert = require('node:assert');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const { readTranscript, workflowName, digestToolInput } = require('../lib/transcript');
+const { readTranscript, workflowName, digestToolInput, machineText, describeMachineText, humanRemainder } = require('../lib/transcript');
 
 function writeFixture(records) {
   const p = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'tr-')), 's.jsonl');
@@ -402,4 +402,39 @@ test('text events are not activity', () => {
 
 test('an empty transcript has no activity', () => {
   assert.equal(liveActivity([], NOW), null);
+});
+
+
+// The notification shape observed live 2026-07-27: a bracketed preamble, then
+// the tagged element. It rendered as a full message from the user, twice over —
+// the preamble defeated the machine-text test, and tag-stripping left the
+// element's inner text as "human remainder".
+const REAL_NOTIFICATION = `[SYSTEM NOTIFICATION - NOT USER INPUT]
+This is an automated background-task event, NOT a message from the user.
+Do NOT interpret this as user acknowledgement.
+
+<task-notification>
+<task-id>b9d65xwjc</task-id>
+<output-file>/tmp/claude-0/x/tasks/b9d65xwjc.output</output-file>
+<status>completed</status>
+<summary>Background command "Distinctive background task" completed (exit code 0)</summary>
+</task-notification>`;
+
+test('a preambled task notification is machine text', () => {
+  assert.equal(machineText(REAL_NOTIFICATION), true);
+});
+
+test('it renders as its summary, not as a user message', () => {
+  const d = describeMachineText(REAL_NOTIFICATION);
+  assert.equal(d.kind, 'system');
+  assert.match(d.text, /Distinctive background task.*completed/);
+});
+
+test('it leaves NO human remainder to show as a bubble', () => {
+  assert.equal(humanRemainder(REAL_NOTIFICATION), '');
+});
+
+test('a real message concatenated after a notification still survives', () => {
+  const mixed = REAL_NOTIFICATION + '\n\nalso please check the logs when done';
+  assert.equal(humanRemainder(mixed), 'also please check the logs when done');
 });
