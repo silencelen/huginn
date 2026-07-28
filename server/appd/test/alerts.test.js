@@ -534,3 +534,57 @@ test('the ledger feeds the finish gate end to end', () => {
   assert.strictEqual(alerts[0].kind, 'session_finished');
   assert.ok(alerts[0].text.includes('9m'), alerts[0].text);
 });
+
+// -------------------------------------- finishes nobody needs to be told about
+//
+// A terminal attached to the session means someone was sitting at it, and telling
+// them their own screen changed is the redundancy the app already suppresses for
+// its open conversation. Gates ONLY the finish: a question always alerts, because
+// an attached-but-idle terminal in another room missing a blocking ask is the one
+// failure worse than a redundant buzz.
+
+const attendedObs = (state) => ({
+  sessions: { a: state },
+  sessionsSince: { a: SINCE },
+  sessionsAttached: { a: true },
+  chats: {},
+});
+
+test('a long run finishing while a terminal is attached stays quiet', () => {
+  const { alerts } = decideAlerts(
+    attendedObs('running'),
+    { sessions: { a: 'idle' }, sessionsSince: {}, chats: {} },
+    {}, NOW,
+  );
+  assert.deepStrictEqual(alerts, []);
+});
+
+test('the same finish, detached, alerts', () => {
+  const detached = { ...attendedObs('running'), sessionsAttached: {} };
+  const { alerts } = decideAlerts(
+    detached,
+    { sessions: { a: 'idle' }, sessionsSince: {}, chats: {} },
+    {}, NOW,
+  );
+  assert.deepStrictEqual(alerts.map((x) => x.kind), ['session_finished']);
+});
+
+test('attachment never silences a QUESTION', () => {
+  const { alerts } = decideAlerts(
+    attendedObs('running'),
+    { sessions: { a: 'attention' }, sessionsSince: {}, chats: {} },
+    {}, NOW,
+  );
+  assert.deepStrictEqual(alerts.map((x) => x.kind), ['session_attention']);
+});
+
+test('observations that predate the attachment field still alert', () => {
+  // Persisted prev from an older daemon has no sessionsAttached at all; absent
+  // evidence of attendance, notify — the pre-existing behaviour.
+  const { alerts } = decideAlerts(
+    { sessions: { a: 'running' }, sessionsSince: { a: SINCE }, chats: {} },
+    { sessions: { a: 'idle' }, sessionsSince: {}, chats: {} },
+    {}, NOW,
+  );
+  assert.deepStrictEqual(alerts.map((x) => x.kind), ['session_finished']);
+});

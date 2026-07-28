@@ -1,5 +1,20 @@
 # Huginn changelog
 
+## appd 2.35.0 — 2026-07-28 (host)
+
+### No "finished" buzz for a session you are sitting at
+session_finished would have fired for every long turn of a session actively
+driven from a terminal — a push per exchange, all evening, for someone at the
+keyboard watching it happen. The finish now stays quiet while a tmux client is
+attached, the terminal-side sibling of the app's foreground suppression.
+
+Only the finish. A question always alerts: an attached-but-idle terminal in
+another room missing a blocking ask is the one failure worse than a redundant
+buzz. And attachment is read from the final stretch of the run, deliberately not
+sticky — a ten-second attach early in a two-hour run must not silence its finish.
+The phone app never attaches, so app-driven sessions still notify unless the app
+itself is open on them.
+
 ## 2.38.0 / appd 2.34.0 — 2026-07-28
 
 ### A notification that stops being true stops being shown
