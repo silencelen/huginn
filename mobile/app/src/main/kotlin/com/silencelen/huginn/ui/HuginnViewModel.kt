@@ -65,6 +65,7 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
     private val _toast = MutableStateFlow<String?>(null)
     val toast: StateFlow<String?> = _toast.asStateFlow()
     fun toastShown() { _toast.value = null }
+    fun showToast(text: String) { _toast.value = text }
 
     private val _status = MutableStateFlow<Status?>(null)
     val status: StateFlow<Status?> = _status.asStateFlow()
