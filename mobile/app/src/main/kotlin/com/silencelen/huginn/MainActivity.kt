@@ -60,6 +60,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.core.app.NotificationManagerCompat
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -259,9 +260,19 @@ fun HuginnApp(
     // conversation the reader is already watching carries nothing. Cleared when
     // this whole tree leaves composition — which is exactly what happens when the
     // app lock takes over, so a locked screen never counts as "looking at it".
+    val ctx = LocalContext.current
     DisposableEffect(dest) {
         Foreground.chat = (dest as? Dest.Chat)?.id
         Foreground.session = (dest as? Dest.SessionView)?.name
+        // Read = dismissed. Opening the thing a notification pointed at is the
+        // strongest possible form of having seen it; leaving the notification up
+        // afterwards would just be a chore handed back to the reader.
+        val read = when (val d = dest) {
+            is Dest.Chat -> SessionWatchWorker.notificationIdFor("chat:${d.id}")
+            is Dest.SessionView -> SessionWatchWorker.notificationIdFor(d.name)
+            else -> null
+        }
+        if (read != null) runCatching { NotificationManagerCompat.from(ctx).cancel(read) }
         onDispose { Foreground.chat = null; Foreground.session = null }
     }
 

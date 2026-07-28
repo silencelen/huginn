@@ -118,12 +118,17 @@ test('several transitions at once each produce their own alert', () => {
   );
 });
 
-test('a session going quiet or disappearing is not an alert', () => {
-  const { alerts } = decideAlerts(
-    obs({ a: 'attention' }), obs({ a: 'idle' }), {}, NOW,
-  );
-  assert.deepStrictEqual(alerts, []);
-  assert.deepStrictEqual(decideAlerts(obs({ a: 'attention' }), obs({}), {}, NOW).alerts, []);
+test('a session going quiet is a RESOLUTION, never person-facing news', () => {
+  // Changed contract (2026-07-28): these transitions used to emit nothing, which
+  // left an answered question's notification stale in the shade. They now emit
+  // session_resolved — phone plumbing that the daemon keeps off Telegram (see
+  // the `news` filter in alertTickInner).
+  for (const after of [obs({ a: 'idle' }), obs({})]) {
+    const { alerts } = decideAlerts(obs({ a: 'attention' }), after, {}, NOW);
+    assert.deepStrictEqual(alerts.map((x) => x.kind), ['session_resolved']);
+  }
+  // And a session that was never waiting resolves nothing by going idle.
+  assert.deepStrictEqual(decideAlerts(obs({ a: 'running' }), obs({ a: 'idle' }), {}, NOW).alerts, []);
 });
 
 test('pruning forgets entries too old to suppress anything', () => {
@@ -431,4 +436,59 @@ test('durations read the way a person would say them', () => {
   assert.strictEqual(humanDuration(7 * 60 * 1000), '7m');
   assert.strictEqual(humanDuration(72 * 60 * 1000), '1h 12m');
   assert.strictEqual(humanDuration(120 * 60 * 1000), '2h 0m');
+});
+
+// ---------------------------------------------- questions that stopped waiting
+//
+// Not news for a person — an instruction to the phone to take a stale "needs you"
+// notification down. Answered in tmux, from another device, or the session died:
+// in every case a notification inviting a tap whose fingerprint will be refused
+// is worse than none.
+
+test('a question answered elsewhere emits a resolution', () => {
+  const { alerts } = decideAlerts(
+    obs({ andrev: 'attention' }), obs({ andrev: 'running' }), {}, NOW,
+  );
+  assert.strictEqual(alerts.length, 1);
+  assert.strictEqual(alerts[0].kind, 'session_resolved');
+  assert.strictEqual(alerts[0].subject, 'andrev');
+});
+
+test('a killed session also resolves — prev is what is iterated', () => {
+  // Gone from `next` entirely; a loop over next would never see it go.
+  const { alerts } = decideAlerts(obs({ andrev: 'attention' }), obs({}), {}, NOW);
+  assert.strictEqual(alerts.length, 1);
+  assert.strictEqual(alerts[0].kind, 'session_resolved');
+});
+
+test('still waiting is not resolved', () => {
+  const { alerts } = decideAlerts(
+    obs({ andrev: 'attention' }), obs({ andrev: 'attention' }), {}, NOW,
+  );
+  assert.deepStrictEqual(alerts, []);
+});
+
+test('resolution bypasses the quiet window — edges cannot repeat', () => {
+  // The second answered-question of the half hour must not leave its
+  // notification stale because the first one "used up" the window.
+  const sent = { 'session-resolved:andrev': NOW - 60_000 };
+  const { alerts } = decideAlerts(
+    obs({ andrev: 'attention' }), obs({ andrev: 'idle' }), sent, NOW,
+  );
+  assert.strictEqual(alerts.length, 1);
+});
+
+test('a NEW question after a resolution alerts immediately', () => {
+  // The repeat guard exists to stop the SAME question re-alerting. Once one was
+  // answered, the next is genuinely new — resolution clears the guard the way
+  // the daemon merges it: sentUpdates over sent, then pruned.
+  const asked = { 'session:andrev': NOW - 60_000 };          // alerted a minute ago
+  const r = decideAlerts(obs({ andrev: 'attention' }), obs({ andrev: 'running' }), asked, NOW);
+  const merged = pruneSent({ ...asked, ...r.sentUpdates }, NOW);
+  assert.ok(!('session:andrev' in merged), 'guard cleared by the resolution');
+  const again = decideAlerts(
+    obs({ andrev: 'running' }), obs({ andrev: 'attention' }), merged, NOW + 120_000,
+  );
+  assert.strictEqual(again.alerts.length, 1);
+  assert.strictEqual(again.alerts[0].kind, 'session_attention');
 });

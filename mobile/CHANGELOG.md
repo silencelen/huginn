@@ -1,5 +1,23 @@
 # Huginn changelog
 
+## 2.38.0 / appd 2.34.0 — 2026-07-28
+
+### A notification that stops being true stops being shown
+Answer a session's question in tmux, or from another device, and the phone's
+"needs you" notification used to sit in the shade forever — inviting a tap the
+host would refuse, since the question it referred to no longer exists. huginn
+now pushes a silent resolution the moment a waiting question is handled, and the
+phone takes the stale notification down. Nothing appears; something disappears.
+Telegram never carries these — "andrev answered" arriving as a message would be
+noise about something you yourself just did.
+
+Two companions to that:
+- **Opening a chat or session clears its notification.** Read is dismissed —
+  leaving it up would just be a chore handed back to you.
+- **An answered question resets the repeat guard.** The 30-minute quiet window
+  exists to stop the *same* question re-alerting; once one was answered, the next
+  question from that session is genuinely new and alerts immediately.
+
 ## 2.37.0 — 2026-07-28
 
 ### No buzz about the screen you are looking at

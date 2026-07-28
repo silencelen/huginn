@@ -106,6 +106,33 @@ function decideAlerts(prev, next, sent, now, prevAt = 0) {
     }
   }
 
+  // Questions that stopped waiting — answered in tmux, from another device, or
+  // the session was killed. Not news for a person (nothing to read, nothing to
+  // do), but the PHONE needs to hear it: a "needs you" notification for a question
+  // that no longer exists sits in the shade inviting a tap whose fingerprint will
+  // be refused. Iterated over PREV, because a killed session vanishes from `next`
+  // entirely and a loop over `next` would never see it go.
+  //
+  // Two deliberate departures from the alerts above:
+  //   * no quiet-window check — a resolution is an edge, and edges cannot repeat;
+  //     gating it would leave the second answered-question of the half hour stale.
+  //   * it CLEARS the subject's repeat guard (via the zero written below, which
+  //     pruneSent then drops) — the question was answered, so a NEW question from
+  //     the same session is genuinely new and must not inherit the old one's
+  //     30-minute suppression.
+  for (const [name, before] of Object.entries(prev.sessions || {})) {
+    if (before !== 'attention') continue;
+    if ((next.sessions || {})[name] === 'attention') continue;   // still waiting
+    alerts.push({
+      key: `session-resolved:${name}`,
+      kind: 'session_resolved',
+      subject: name,
+      title: `${name} answered`,
+      text: 'The question was handled elsewhere.',
+    });
+    sentUpdates[`session:${name}`] = 0;
+  }
+
   for (const [id, cur] of Object.entries(next.chats || {})) {
     const before = (prev.chats || {})[id];
     // A chat absent from the previous observation is usually history — something
