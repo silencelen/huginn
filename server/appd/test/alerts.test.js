@@ -5,7 +5,7 @@
 
 const { test } = require('node:test');
 const assert = require('node:assert');
-const { decideAlerts, pruneSent, telegramText, REPEAT_MS } = require('../lib/alerts');
+const { decideAlerts, pruneSent, telegramText, humanDuration, REPEAT_MS } = require("../lib/alerts");
 
 const NOW = 1_700_000_000_000;
 const obs = (sessions, chats = {}) => ({ sessions, chats });
@@ -344,4 +344,91 @@ test('the born-since path respects the quiet window like any other', () => {
     sent, NOW, NOW - 10_000,
   );
   assert.deepStrictEqual(alerts, []);
+});
+
+// ------------------------------------------------- a long task finishing
+//
+// The counterpart to a chat finishing. Gated on DURATION, because a session goes
+// idle after every single turn — without the gate this produces a notification per
+// exchange, which is the fastest way to get the whole channel muted.
+
+const SINCE = Math.floor((NOW - 9 * 60 * 1000) / 1000);   // running for 9 minutes
+
+const withSince = (sessions, since) => ({ sessions, sessionsSince: since, chats: {} });
+
+test('a session that ran a long time and went idle alerts', () => {
+  const { alerts } = decideAlerts(
+    withSince({ andrev: 'running' }, { andrev: SINCE }),
+    withSince({ andrev: 'idle' }, {}),
+    {}, NOW,
+  );
+  assert.strictEqual(alerts.length, 1);
+  assert.strictEqual(alerts[0].kind, 'session_finished');
+  assert.strictEqual(alerts[0].title, 'andrev finished');
+  assert.ok(alerts[0].text.includes('9m'), alerts[0].text);
+});
+
+test('an ordinary short turn going idle says NOTHING', () => {
+  // The whole point of the gate. A ten-second answer is not news.
+  const shortAgo = Math.floor((NOW - 10_000) / 1000);
+  const { alerts } = decideAlerts(
+    withSince({ andrev: 'running' }, { andrev: shortAgo }),
+    withSince({ andrev: 'idle' }, {}),
+    {}, NOW,
+  );
+  assert.deepStrictEqual(alerts, []);
+});
+
+test('a session with no recorded start time does not alert', () => {
+  // Absent a start, the duration is unknowable and silence is the safe reading.
+  const { alerts } = decideAlerts(
+    withSince({ andrev: 'running' }, {}),
+    withSince({ andrev: 'idle' }, {}),
+    {}, NOW,
+  );
+  assert.deepStrictEqual(alerts, []);
+});
+
+test('running to ATTENTION is not a finish', () => {
+  // It stopped to ask something. That is the other alert, and reporting both
+  // would say "finished" about a session that is actively waiting on you.
+  const { alerts } = decideAlerts(
+    withSince({ andrev: 'running' }, { andrev: SINCE }),
+    withSince({ andrev: 'attention' }, {}),
+    {}, NOW,
+  );
+  assert.strictEqual(alerts.length, 1);
+  assert.strictEqual(alerts[0].kind, 'session_attention');
+});
+
+test('the same finish is not reported twice', () => {
+  const sent = { [`session-done:andrev:${SINCE}`]: NOW - 60_000 };
+  const { alerts } = decideAlerts(
+    withSince({ andrev: 'running' }, { andrev: SINCE }),
+    withSince({ andrev: 'idle' }, {}),
+    sent, NOW,
+  );
+  assert.deepStrictEqual(alerts, []);
+});
+
+test('a second long run reports again, because the key moves with it', () => {
+  // Started two minutes after the first, so still seven minutes ago: a DIFFERENT
+  // suppression key, and long enough to qualify on its own. (Adding an HOUR here
+  // first time round put the start in the FUTURE, making the duration negative
+  // and the alert correctly silent — the test was wrong, not the rule.)
+  const later = SINCE + 120;
+  const sent = { [`session-done:andrev:${SINCE}`]: NOW - 60_000 };
+  const { alerts } = decideAlerts(
+    withSince({ andrev: 'running' }, { andrev: later }),
+    withSince({ andrev: 'idle' }, {}),
+    sent, NOW,
+  );
+  assert.strictEqual(alerts.length, 1);
+  assert.strictEqual(alerts[0].kind, 'session_finished');
+});
+
+test('durations read the way a person would say them', () => {
+  assert.strictEqual(humanDuration(7 * 60 * 1000), '7m');
+  assert.strictEqual(humanDuration(72 * 60 * 1000), '1h 12m');
+  assert.strictEqual(humanDuration(120 * 60 * 1000), '2h 0m');
 });

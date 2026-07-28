@@ -17,6 +17,22 @@
 const REPEAT_MS = 30 * 60 * 1000;
 
 /**
+ * How long a session must have been running for its finish to be worth saying.
+ *
+ * Five minutes, chosen as the point where somebody has plausibly stopped watching.
+ * Below it a "finished" notification competes with the screen the owner is already
+ * looking at; above it, they walked away and this is the whole point of the app.
+ */
+const LONG_RUN_MS = 5 * 60 * 1000;
+
+/** "7m", "1h 12m" — enough to know whether it was the slow thing you started. */
+function humanDuration(ms) {
+  const mins = Math.round(ms / 60000);
+  if (mins < 60) return `${mins}m`;
+  return `${Math.floor(mins / 60)}h ${mins % 60}m`;
+}
+
+/**
  * Diffs two observations and returns the alerts worth sending.
  *
  * @param prev  previous {sessions:{name:state}, chats:{id:{running,title}}}
@@ -57,6 +73,35 @@ function decideAlerts(prev, next, sent, now, prevAt = 0) {
           text: `Claude Code session ${name} is waiting for an answer.`,
         });
         sentUpdates[key] = now;
+      }
+    }
+
+    // A long task finishing. The counterpart to a chat finishing, and close to the
+    // reason the app exists: start something slow, put the phone down, be told.
+    //
+    // Gated on how long it ran, because a session goes idle after EVERY turn. A
+    // ten-second answer going quiet is not news, and announcing it would mean a
+    // notification per exchange — the fastest way to get the whole app muted. The
+    // threshold is what separates "I am working in this session" from "I left it
+    // running and walked away", and only the second one is worth an interruption.
+    if (state === 'idle' && before === 'running') {
+      const since = Number((prev.sessionsSince || {})[name]) || 0;
+      const ranForMs = since ? now - since * 1000 : 0;
+      if (ranForMs >= LONG_RUN_MS) {
+        // Keyed by which run finished, so a session that runs long twice reports
+        // twice while a redelivery of the same finish stays suppressed.
+        const key = `session-done:${name}:${since}`;
+        if (fresh(key)) {
+          alerts.push({
+            key,
+            kind: 'session_finished',
+            subject: name,
+            title: `${name} finished`,
+            text: `Ran for ${humanDuration(ranForMs)}, now idle.`,
+            ranForMs,
+          });
+          sentUpdates[key] = now;
+        }
       }
     }
   }
@@ -187,4 +232,4 @@ function pruneSent(sent, now) {
   return out;
 }
 
-module.exports = { decideAlerts, routeAlerts, telegramText, pruneSent, REPEAT_MS };
+module.exports = { decideAlerts, routeAlerts, telegramText, pruneSent, humanDuration, REPEAT_MS, LONG_RUN_MS };

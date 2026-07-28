@@ -102,8 +102,8 @@ class SessionWatchWorker(
                 }
             )
             nm.createNotificationChannel(
-                NotificationChannel(CHANNEL_CHATS, "Chat results", NotificationManager.IMPORTANCE_DEFAULT).apply {
-                    description = "A chat you started on huginn has finished"
+                NotificationChannel(CHANNEL_CHATS, "Finished work", NotificationManager.IMPORTANCE_DEFAULT).apply {
+                    description = "A chat, or a long-running session, has finished on huginn"
                 }
             )
         }
@@ -198,9 +198,14 @@ class SessionWatchWorker(
             answers: List<AnswerOption> = emptyList(),
             fingerprint: String? = null,
             replyChat: String? = null,
+            isResult: Boolean = false,
         ) {
             if (!canNotify(context)) return
-            val channel = if (replyChat != null) CHANNEL_CHATS else CHANNEL
+            // By NATURE, not by type. A session waiting on you is blocking — work has
+            // stopped until you answer — while a chat result and a finished session
+            // are both news you asked for. Splitting them that way is what lets the
+            // chatty kind be silenced without silencing the kind that blocks.
+            val channel = if (replyChat != null || isResult) CHANNEL_CHATS else CHANNEL
             ensureChannels(context)
             val intent = Intent(context, MainActivity::class.java).apply {
                 flags = Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
