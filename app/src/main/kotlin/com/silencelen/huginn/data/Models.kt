@@ -55,6 +55,10 @@ data class Session(
     val preview: List<String> = emptyList(),
     val liveModel: String? = null,
     val liveMode: String? = null,
+    /** Background shells still running, and the longest-running one's command. */
+    val bgShells: Int = 0,
+    val bgAgents: Int = 0,
+    val bgTask: String? = null,
 )
 
 @Serializable
@@ -102,6 +106,8 @@ data class Screen(
     val prompt: PanePrompt? = null,
     /** The live status line ("Gallivanting… · 3m 15s"), the only moment-to-moment signal. */
     val spinner: String? = null,
+    /** The TUI's own progress rows: workflow phases, "Running N agents". */
+    val statusLines: List<String> = emptyList(),
     /** Model/mode as the pane reports them right now (the transcript lags a turn). */
     val liveModel: String? = null,
     val liveMode: String? = null,
@@ -152,6 +158,17 @@ data class TranscriptPage(
     val pending: Int = 0,
     /** What the transcript tail says is in flight; null when nothing is. */
     val activity: Activity? = null,
+    /** Background shells this session still has running. */
+    val tasks: List<BgTask> = emptyList(),
+    val bgAgents: Int = 0,
+)
+
+/** One background shell: what it runs, and for how long so far. */
+@Serializable
+data class BgTask(
+    val id: String = "",
+    val command: String = "",
+    val forSeconds: Long = 0,
 )
 
 /** In-flight work: an unresolved tool call, and how many subagents are busy. */

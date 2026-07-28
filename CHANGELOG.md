@@ -1,5 +1,41 @@
 # Huginn changelog
 
+## 2.18.0 — 2026-07-27
+
+### Background work is visible everywhere it was invisible
+A session blocked on a twenty-minute build looked stalled from the conversation and
+the list, with the truth only on the tmux screen. Now:
+
+- **The sessions list says "background work"** (with a pulsing dot) instead of
+  "waiting", and shows the longest-running command — "⚙ npm run build · 14m" — plus
+  a count of any other shells and agents.
+- **The conversation work strip stays up while background work runs**, even after
+  the turn ends, listing each background shell with its elapsed time.
+- **Workflows and fan-outs now show the way Claude Code itself shows them.** The
+  strip lifts the TUI's own progress rows verbatim: "Waiting for 1 dynamic workflow
+  to finish", "wave-3 · 0/4 agents done · 7m 39s · ↓ 562k tokens", "Running 2
+  agents". The earlier version missed these entirely — the workflow-wait status has
+  no "…" and lived outside the line the parser matched.
+
+Detection is exact rather than guessed: a background shell counts only while a
+process in that session still holds its output open, and only when the transcript
+itself called that task background — a foreground command writes to the same place,
+and counting it would show you the thing you were already watching.
+
+### A killed session closes its own view
+If a session exits while you are inside it, the app returns to the sessions list
+with a note, instead of leaving you on a dead screen.
+
+### The doubled gap under the composer is gone
+The layout reserved the navigation-bar height twice — once by the scaffold, once by
+the composer — which read as a thick dead band on phones with button navigation.
+One owner per inset now.
+
+### Also
+Live typing coalesces faster (15ms window), and each background-task fact above
+comes from a live capture rather than assumption: the wrapper argv, the workflow
+rows, and the foreground-task trap were all measured on running sessions.
+
 ## 2.17.0 — 2026-07-27
 
 ### The conversation shows what Claude is doing, live

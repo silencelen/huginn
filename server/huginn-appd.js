@@ -25,7 +25,7 @@ const path = require('node:path');
 const os = require('node:os');
 const { execFile, spawn } = require('node:child_process');
 const {
-  screenHash, previewLines, detectPrompt, promptFingerprint, parseSpinner,
+  screenHash, previewLines, detectPrompt, promptFingerprint, parseSpinner, parseStatusExtras,
   extractLoginUrl, parseStatusLine, loginPaneState,
 } = require('./lib/pane');
 const { readTranscript, liveActivity } = require('./lib/transcript');
@@ -37,10 +37,11 @@ const { pushPending, takePending, clearPending, queuedEvents } = require('./lib/
 const { digest } = require('./lib/watch');
 const { decideAlerts, routeAlerts, telegramText, pruneSent } = require('./lib/alerts');
 const clientsLib = require('./lib/clients');
+const { taskDirFor, parsePs, scanTasks, extractBgIds } = require('./lib/tasks');
 const pushLib = require('./lib/pushtokens');
 const { trySender } = require('./lib/fcm');
 
-const VERSION = '2.17.0';
+const VERSION = '2.18.0';
 const PORT = Number(process.env.HUGINN_APPD_PORT || 8787);
 const DATA_DIR = process.env.HUGINN_APPD_DATA || '/var/lib/huginn-appd';
 const TOKEN_FILE = process.env.HUGINN_APPD_TOKEN_FILE || '/etc/huginn-appd/token';
@@ -158,18 +159,56 @@ function readSessionState(name) {
   return { state: raw, sessionId: null, transcript: null, cwd: null, stateSince: mtime };
 }
 
+// One ps snapshot serves every caller inside its window; the sessions list and
+// several transcript polls land inside the same second, and each fresh ps is a
+// process spawn.
+let psCache = { at: 0, procs: new Map() };
+async function psSnapshot() {
+  if (Date.now() - psCache.at < 1500) return psCache.procs;
+  const r = await run('ps', ['-eo', 'pid,ppid,etimes,args', '--no-headers']);
+  if (!r.err) psCache = { at: Date.now(), procs: parsePs(r.stdout) };
+  return psCache.procs;
+}
+
+/**
+ * Which task ids this session's transcript has called background. Cached on the
+ * transcript's size so the tail is re-read only when it grew — the sessions list
+ * polls every few seconds and must not re-read every transcript each time.
+ */
+const bgIdCache = new Map();   // sessionId -> {size, ids}
+function knownBackgroundIds(st) {
+  if (!st || !st.transcript || !st.sessionId) return new Set();
+  let size = 0;
+  try { size = fs.statSync(st.transcript).size; } catch { return new Set(); }
+  const hit = bgIdCache.get(st.sessionId);
+  if (hit && hit.size === size) return hit.ids;
+  const t = readTranscript(st.transcript, { limit: 600 });
+  const ids = extractBgIds(t.events);
+  bgIdCache.set(st.sessionId, { size, ids });
+  return ids;
+}
+
+/** Background shells + agents for one session, or the empty shape. */
+async function backgroundWork(name, panePid) {
+  const st = readSessionState(name);
+  const dir = st ? taskDirFor(st.transcript, st.sessionId, process.getuid()) : null;
+  if (!dir || !panePid) return { shells: [], agents: 0 };
+  return scanTasks(dir, await psSnapshot(), panePid, Math.floor(Date.now() / 1000),
+    fs, knownBackgroundIds(st));
+}
+
 async function listSessions({ preview = false } = {}) {
   // window_activity, NOT session_activity: the latter does not move when a pane
   // produces output, so it read ~8 hours stale on sessions that had been busy
   // continuously and the list ordered by it was effectively frozen.
   const fmt = '#{session_name}\t#{session_created}\t#{session_attached}\t#{window_activity}\t' +
-    '#{session_windows}\t#{window_width}\t#{window_height}\t#{window-size}\t#{session_activity}';
+    '#{session_windows}\t#{window_width}\t#{window_height}\t#{window-size}\t#{session_activity}\t#{pane_pid}';
   const { err, stdout } = await run('tmux', ['list-sessions', '-F', fmt]);
   if (err) return []; // no server running -> no sessions
   const rows = [];
   for (const line of stdout.trim().split('\n')) {
     if (!line) continue;
-    const [name, created, attached, activity, windows, w, h, wsize, sessActivity] = line.split('\t');
+    const [name, created, attached, activity, windows, w, h, wsize, sessActivity, panePid] = line.split('\t');
     const st = readSessionState(name) || {};
     rows.push({
       name,
@@ -189,10 +228,23 @@ async function listSessions({ preview = false } = {}) {
       hasTranscript: !!(st.transcript && fs.existsSync(st.transcript)),
       title: null,
       preview: [],
+      panePid: Number(panePid) || null,
+      bgShells: 0,
+      bgAgents: 0,
+      bgTask: null,
     });
   }
 
   if (preview) {
+    // Background work rides along so the LIST can say a session is not stalled:
+    // that complaint came from exactly this surface. One ps snapshot serves all
+    // rows via the cache; the per-row cost is one readdir plus a few /proc reads.
+    await Promise.all(rows.map(async (r) => {
+      const bg = await backgroundWork(r.name, r.panePid);
+      r.bgShells = bg.shells.length;
+      r.bgAgents = bg.agents;
+      r.bgTask = bg.shells[0] ? bg.shells[0].command : null;
+    }));
     // Title comes from the transcript (Claude Code's own ai-title, which is a far
     // better label than the tmux name); the preview lines come from the pane,
     // because the spinner/progress state a user wants at a glance is drawn by the
@@ -432,6 +484,9 @@ async function captureScreen(name, { cols = null, rows = null, history = 0, forc
     // the transcript is silent until whole blocks complete, which left the
     // conversation looking dead right after a message was sent.
     spinner: parseSpinner(lines),
+    // The TUI's own progress rows — workflow phases, "Running N agents" — shown
+    // in the app's strip the way Claude Code itself shows them.
+    statusLines: parseStatusExtras(lines),
     // The pane is the only CURRENT source for these; the transcript lags a turn.
     ...(() => {
       const st = parseStatusLine(lines);
@@ -1853,6 +1908,13 @@ const server = http.createServer(async (req, res) => {
         // so the conversation can show work happening rather than going silent
         // between completed blocks.
         activity: liveActivity(t.events, Math.floor(Date.now() / 1000)),
+        // Background shells and agents, so a session blocked on a long build does
+        // not read as stalled from the conversation.
+        ...await (async () => {
+          const pid = await run('tmux', ['display-message', '-p', '-t', `=${name}:`, '#{pane_pid}']);
+          const bg = await backgroundWork(name, pid.err ? null : Number(pid.stdout.trim()) || null);
+          return { tasks: bg.shells, bgAgents: bg.agents };
+        })(),
       });
     }
 
