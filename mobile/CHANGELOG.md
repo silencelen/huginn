@@ -1,5 +1,18 @@
 # Huginn changelog
 
+## 2.39.1 — 2026-07-28
+
+### Attaching a photo failed for every image — fixed
+The transcoder's first pass asks Android only for the image's dimensions, and in
+that mode the decoder returns null *by design*. 2.39.0 read that null as "could
+not read this image" and rejected every photo ever attached. The dimensions are
+now the success signal, as they always should have been.
+
+Portrait photos also arrive upright now: the camera records rotation as EXIF
+metadata rather than turning the pixels, a re-encode drops the metadata, and
+without applying it first every portrait shot would have reached huginn
+sideways.
+
 ## 2.39.0 / appd 2.36.1 — 2026-07-28
 
 ### Share to huginn, and photo attachments
