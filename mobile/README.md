@@ -17,8 +17,12 @@ Two halves:
 **Chats** are headless Claude Code turns that run on huginn in `~/netplan`,
 streamed token by token. Each chat picks a mode at creation, matching the CLI:
 
-- **Ask** = `huginn -p`: reasoning plus MemPalace memory, no tools.
-- **Act** = `huginn -y`: also Bash, Read, Edit, Write, Glob, Grep, WebFetch.
+- **Ask** = `huginn -p`: reasoning, MemPalace memory, reading (files and the
+  web via WebFetch/WebSearch) — and a hard deny on Bash/Edit/Write, because
+  Claude Code's own safe-command heuristics are content-dependent and were
+  measured approving one `curl | python3` and refusing its near-twin a minute
+  later. The ask/act line is drawn at mutation, deterministically.
+- **Act** = `huginn -y`: also Bash, Edit, Write.
 
 Closing the chat screen detaches the SSE stream but never cancels the run:
 locking your phone must not kill a turn.
@@ -39,6 +43,17 @@ the laptop, which are the ones most worth seeing from a phone. Scraping the
 screen as the primary source loses structure. So the transcript is the content
 and tmux is the interaction, and each does what it is good at.
 
+**Photos attach, and huginn is a share target.** The attach button in either
+composer (chats and sessions share one implementation) opens the system photo
+picker; the share sheet accepts text — staged as a new chat's draft, never
+auto-sent — and images from any app. Everything is transcoded to JPEG at
+≤2048px before upload, because Samsung cameras shoot HEIC, Claude's Read tool
+cannot open HEIC, and without transcoding the failure is a successful upload
+followed by a shrug. The photo rides the message as a bracketed path marker the
+model Reads; the app renders that marker back as "📷 Photo attached" rather
+than the daemon's storage path. Uploads land in `/var/lib/huginn-appd/uploads`
+(server-named, 20MB cap, pruned after 7 days).
+
 **Permission prompts become buttons.** A numbered question in the pane is
 detected and offered as tappable options in both views. Detection requires the
 live selection caret, so an assistant answer that merely ends in a numbered list
@@ -55,14 +70,30 @@ still between reading it and typing into it. Moving the selection highlight does
 invalidate an answer.
 
 **Notifications survive a sleeping phone.** Three mechanisms, because each fails
-differently: high-priority FCM (seconds, needs Play Services and an app that has not
-been force-stopped), a `setAndAllowWhileIdle` alarm every ten minutes (the one kind
-Doze honours, and it revives the watcher if it was killed), and Telegram from the host
-when nothing else got through. WorkManager is **not** one of them — its periodic work
-is deferred by Doze, which is why a 15-minute poll delivered all day and nothing
-overnight. Settings shows which of these is actually working, including huginn's own
-record of when this phone last checked in; the app cannot testify about hours it spent
-asleep, but the host was awake for them.
+differently: high-priority FCM (measured 17–86ms to a sleeping, even Dozing,
+phone), a `setAndAllowWhileIdle` alarm (the one kind Doze honours, and it
+revives the watcher if it was killed), and Telegram from the host when nothing
+else got through. WorkManager is **not** one of them — its periodic work is
+deferred by Doze, which is why a 15-minute poll delivered all day and nothing
+overnight. The alarm's cadence is adaptive and *explained in Settings*: the
+host reports how many pushes it has sent this install, the app compares that
+against how many arrived, and nothing-dropped earns the relaxed hourly check
+while any deficit tightens it to ten minutes immediately. Silence is not
+failure — only a push that was sent and never arrived is.
+
+**What notifies, and what un-notifies.** Two channels, split by nature:
+*Sessions needing you* (blocking — a question is waiting) and *Finished work*
+(news — a chat answered, or a session that ran ≥5 minutes went idle). A chat's
+notification is a real conversation thread: the answer arrives as a message,
+the reply box appends yours under it (free text requires the device unlocked —
+bounded answer buttons deliberately do not), and huginn's next answer continues
+the same thread. Notifications also know when to shut up: nothing fires for the
+chat or session you are looking at (and a pocketed phone still notifies — the
+gate is resumed-and-visible, not merely open); a finish stays quiet for a
+session with a terminal attached; and a question answered elsewhere takes its
+own stale notification down, via a silent `session_resolved` push that Telegram
+never carries. Opening a chat or session clears its notification: read is
+dismissed.
 
 **Code is coloured.** Code blocks and the commands on tool cards are syntax
 highlighted — shell, C-family, JSON, config and diffs (whole-line by sign, so an
@@ -139,7 +170,7 @@ bytes in `/etc/huginn-appd/token` (0600), generated on first deploy.
 | DELETE | `/v1/sessions/<name>/size` | release the resize lease now |
 | GET | `/v1/sessions/<name>/transcript` | structured events; `?offset=` tails |
 | POST | `/v1/sessions/<name>/keys` | `{text?, keys?}`; keys validated against an allowlist |
-| POST | `/v1/sessions/<name>/answer` | `{option, fingerprint?}`; answers a numbered prompt. Refuses with 409 if the pane no longer shows that question |
+| POST | `/v1/sessions/<name>/answer` | `{option}` or `{options:[…]}` for multi-select, plus `fingerprint?`; answers a numbered prompt. Refuses with 409 if the pane no longer shows that question |
 | GET | `/v1/watch` | change signal; `?stream=1` is SSE with a 25s keepalive, otherwise a long poll |
 | GET | `/v1/clients` | which phones have checked in, and how recently |
 | GET | `/v1/alerts` · POST | host-sent alerts: `{enabled, mode: fallback\|always}` |
@@ -156,6 +187,11 @@ bytes in `/etc/huginn-appd/token` (0600), generated on first deploy.
 | POST | `/v1/chats/<id>/messages?stream=1` | posts and streams the run as SSE |
 | GET | `/v1/chats/<id>/stream?since=<seq>` | reattach to an in-flight run |
 | POST | `/v1/chats/<id>/cancel` | SIGTERM then SIGKILL |
+| POST | `/v1/uploads` | raw image bytes (jpeg/png/webp/gif, ≤20MB); server names the file, returns its path; pruned after 7 days |
+| GET | `/v1/sessions/<name>/suggestions` | suggested next messages at a turn boundary (cached by transcript size) |
+| GET | `/v1/chats/<id>/suggestions` | the same, for a chat |
+| GET | `/v1/sessions/<name>/agents` | the individual agents behind a fan-out |
+| GET | `/v1/autoswitch` · POST | automatic account rotation state / `{enabled}` |
 
 SSE events: `started`, `delta`, `assistant`, `tool_start`, `tool`, `result`,
 `error`, `done`. Each run keeps a bounded replay buffer so a phone that locks
