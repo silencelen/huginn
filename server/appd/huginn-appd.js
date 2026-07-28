@@ -45,7 +45,7 @@ const { decideSwitch, worstLimit } = require('./lib/autoswitch');
 const pushLib = require('./lib/pushtokens');
 const { trySender } = require('./lib/fcm');
 
-const VERSION = '2.34.1';
+const VERSION = '2.35.0';
 const PORT = Number(process.env.HUGINN_APPD_PORT || 8787);
 const DATA_DIR = process.env.HUGINN_APPD_DATA || '/var/lib/huginn-appd';
 const TOKEN_FILE = process.env.HUGINN_APPD_TOKEN_FILE || '/etc/huginn-appd/token';
@@ -1480,7 +1480,16 @@ async function alertTickInner(st) {
   // parked phones hash, and a timestamp would make it churn.
   const sessionsSince = carryRunStarts(
     st.prev && st.prev.sessionsSince, d.sessions, Math.floor(now / 1000));
-  const observation = { sessions: d.sessions, sessionsSince, chats: d.chats };
+  // Whether a terminal is attached right now, so a finish can stay quiet for a
+  // session somebody is sitting at. Deliberately NOT sticky across the run: the
+  // finish gate reads the attachment from the last observation while running —
+  // "were they watching when it wrapped up" — and making it sticky would mean a
+  // ten-second attach early in a two-hour run silences the finish entirely, a
+  // missed notification. The non-sticky failure is the benign one: detach in
+  // the final seconds and the buzz is merely redundant.
+  const sessionsAttached = {};
+  for (const s of sessions) if (s.attachedClients > 0) sessionsAttached[s.name] = true;
+  const observation = { sessions: d.sessions, sessionsSince, sessionsAttached, chats: d.chats };
 
   const { alerts, sentUpdates } = decideAlerts(st.prev, observation, st.sent, now, st.prevAt || 0);
 
