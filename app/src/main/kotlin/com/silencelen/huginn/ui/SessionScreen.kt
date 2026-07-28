@@ -16,6 +16,10 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.foundation.background
+import androidx.compose.ui.draw.clip
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.filled.KeyboardReturn
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.Stop
@@ -74,6 +78,9 @@ fun SessionScreen(
     onSendText: (String, Boolean) -> Unit,
     onSendKeys: (List<String>) -> Unit,
     onLive: (LiveInput.Op) -> Unit,
+    agents: com.silencelen.huginn.data.AgentsInfo?,
+    onAgentsOpen: () -> Unit,
+    onAgentsClose: () -> Unit,
     onAnswerPrompt: (Int) -> Unit,
     onForceResize: () -> Unit,
     onInterrupt: () -> Unit,
@@ -107,6 +114,10 @@ fun SessionScreen(
                     prompt = screen?.prompt,
                     spinner = screen?.spinner,
                     statusLines = screen?.statusLines ?: emptyList(),
+                    transientLine = screen?.transientLine,
+                    agents = agents,
+                    onAgentsOpen = onAgentsOpen,
+                    onAgentsClose = onAgentsClose,
                     draft = draft,
                     onDraft = onDraft,
                     onSendText = onSendText,
@@ -146,6 +157,10 @@ private fun SessionConversation(
     prompt: com.silencelen.huginn.data.PanePrompt?,
     spinner: String?,
     statusLines: List<String>,
+    transientLine: String?,
+    agents: com.silencelen.huginn.data.AgentsInfo?,
+    onAgentsOpen: () -> Unit,
+    onAgentsClose: () -> Unit,
     draft: String,
     onDraft: (String) -> Unit,
     onSendText: (String, Boolean) -> Unit,
@@ -218,20 +233,39 @@ private fun SessionConversation(
         // Shown while the turn runs, and ALSO while background work continues after
         // it — a session blocked on a twenty-minute build used to read as stalled
         // from here, with the truth visible only on the tmux screen.
+        // The transient per-tool row turns over constantly and vanishes between
+        // tools; shown from memory while the turn runs so the strip changes text
+        // in place instead of growing a line and losing it again on repeat.
+        var lastTransient by remember(name) { mutableStateOf<String?>(null) }
+        LaunchedEffect(transientLine, working) {
+            if (transientLine != null) lastTransient = transientLine
+            if (!working) lastTransient = null
+        }
+        var showWork by rememberSaveable(name) { mutableStateOf(false) }
+
         if (working || spinner != null || statusLines.isNotEmpty() ||
             page?.tasks?.isNotEmpty() == true || (page?.bgAgents ?: 0) > 0
         ) {
             WorkStrip(
                 spinner = spinner,
                 statusLines = statusLines,
+                transient = if (working) lastTransient else null,
                 activity = page?.activity,
                 tasks = page?.tasks ?: emptyList(),
                 bgAgents = page?.bgAgents ?: 0,
-                onClick = {
-                    scope.launch {
-                        listState.animateScrollToItem((events.size + headerItems - 1).coerceAtLeast(0))
-                    }
-                },
+                onClick = { showWork = true },
+            )
+        }
+
+        if (showWork) {
+            WorkSheet(
+                name = name,
+                spinner = spinner,
+                statusLines = statusLines,
+                tasks = page?.tasks ?: emptyList(),
+                agents = agents,
+                onOpen = onAgentsOpen,
+                onDismiss = { showWork = false; onAgentsClose() },
             )
         }
 
@@ -250,7 +284,7 @@ private fun SessionConversation(
                     .fillMaxWidth()
                     .imePadding()
                     .navigationBarsPadding()
-                    .padding(start = 12.dp, end = 8.dp, top = 6.dp, bottom = 2.dp),
+                    .padding(start = 12.dp, end = 8.dp, top = 6.dp, bottom = 6.dp),
                 verticalAlignment = Alignment.Bottom,
             ) {
                 OutlinedTextField(
@@ -329,6 +363,7 @@ fun SessionSubtitle(page: TranscriptPage?, screen: Screen?) {
 private fun WorkStrip(
     spinner: String?,
     statusLines: List<String>,
+    transient: String?,
     activity: com.silencelen.huginn.data.Activity?,
     tasks: List<com.silencelen.huginn.data.BgTask>,
     bgAgents: Int,
@@ -342,8 +377,9 @@ private fun WorkStrip(
         }
     } ?: if (tasks.isNotEmpty() || bgAgents > 0) "background work" else "working"
 
-    // The TUI's own rows first (workflow phases, agent counts), then background
-    // shells the transcript knows about, deduplicated by presence.
+    // Durable rows first (workflow phases, agent counts), then background shells,
+    // then the in-place transient slot — which changes text but never appears and
+    // disappears mid-turn, because that made the strip pump up and down.
     val detailRows = buildList {
         addAll(statusLines)
         tasks.take(2).forEach { t ->
@@ -352,6 +388,7 @@ private fun WorkStrip(
         if (bgAgents > 0 && statusLines.none { it.contains("agent") }) {
             add("$bgAgents background agent${if (bgAgents == 1) "" else "s"}")
         }
+        transient?.let { add(it) }
     }.take(3)
 
     Surface(
@@ -369,6 +406,13 @@ private fun WorkStrip(
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     maxLines = 1,
                     overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f),
+                )
+                Icon(
+                    Icons.Filled.ExpandLess,
+                    contentDescription = "Open work details",
+                    modifier = Modifier.size(15.dp),
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
             detailRows.forEach { line ->
@@ -390,4 +434,163 @@ private fun agoShort(seconds: Long): String = when {
     seconds < 60 -> "${seconds}s"
     seconds < 3600 -> "${seconds / 60}m"
     else -> "${seconds / 3600}h ${(seconds % 3600) / 60}m"
+}
+
+
+/**
+ * The work strip, opened. Everything the strip compresses: the TUI's progress
+ * rows, background shells, and — the reason it exists — the individual agents
+ * behind "0/4 agents done", each with its task and what it is doing right now.
+ * Polled only while open; agents are files on huginn, and reading two dozen
+ * transcript tails every three seconds is a cost worth paying only while
+ * somebody is actually looking.
+ */
+@OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
+@Composable
+private fun WorkSheet(
+    name: String,
+    spinner: String?,
+    statusLines: List<String>,
+    tasks: List<com.silencelen.huginn.data.BgTask>,
+    agents: com.silencelen.huginn.data.AgentsInfo?,
+    onOpen: () -> Unit,
+    onDismiss: () -> Unit,
+) {
+    LaunchedEffect(name) { onOpen() }
+    androidx.compose.material3.ModalBottomSheet(onDismissRequest = onDismiss) {
+        LazyColumn(
+            Modifier.fillMaxWidth(),
+            contentPadding = androidx.compose.foundation.layout.PaddingValues(
+                start = 18.dp, end = 18.dp, bottom = 28.dp,
+            ),
+            verticalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            item {
+                Text(
+                    spinner ?: "Work in $name",
+                    style = MaterialTheme.typography.titleSmall,
+                    fontWeight = FontWeight.SemiBold,
+                )
+            }
+            items(statusLines.size) { i ->
+                Text(
+                    statusLines[i],
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            if (tasks.isNotEmpty()) {
+                item {
+                    Text(
+                        "Background shells",
+                        style = MaterialTheme.typography.labelMedium,
+                        fontWeight = FontWeight.SemiBold,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(top = 6.dp),
+                    )
+                }
+                items(tasks.size) { i ->
+                    val t = tasks[i]
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        PulsingDot(MaterialTheme.colorScheme.primary)
+                        Spacer(Modifier.width(9.dp))
+                        Column(Modifier.weight(1f)) {
+                            Text(
+                                t.command,
+                                style = MaterialTheme.typography.bodySmall,
+                                maxLines = 2,
+                                overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+                            )
+                        }
+                        Spacer(Modifier.width(8.dp))
+                        Text(
+                            agoShort(t.forSeconds),
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                }
+            }
+            val list = agents?.agents ?: emptyList()
+            item {
+                Text(
+                    when {
+                        agents == null -> "Agents…"
+                        list.isEmpty() -> "No agents in this session recently"
+                        else -> "${agents.active} of ${list.size} agents active"
+                    },
+                    style = MaterialTheme.typography.labelMedium,
+                    fontWeight = FontWeight.SemiBold,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(top = 6.dp),
+                )
+            }
+            items(list.size) { i -> AgentRow(list[i]) }
+        }
+    }
+}
+
+@Composable
+private fun AgentRow(a: com.silencelen.huginn.data.AgentRun) {
+    Surface(
+        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = if (a.active) 0.65f else 0.3f),
+        shape = RoundedCornerShape(10.dp),
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        Column(Modifier.padding(horizontal = 12.dp, vertical = 9.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                if (a.active) PulsingDot(MaterialTheme.colorScheme.primary)
+                else Box(
+                    Modifier.size(8.dp)
+                        .clip(androidx.compose.foundation.shape.CircleShape)
+                        .background(MaterialTheme.colorScheme.outline)
+                )
+                Spacer(Modifier.width(8.dp))
+                Text(
+                    if (a.active) "working" else "settled",
+                    style = MaterialTheme.typography.labelSmall,
+                    fontWeight = FontWeight.SemiBold,
+                    color = if (a.active) MaterialTheme.colorScheme.primary
+                    else MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                a.workflow?.let { wf ->
+                    Spacer(Modifier.width(8.dp))
+                    Text(
+                        // wf_b3db6247-567 → b3db6247: enough to tell runs apart.
+                        wf.removePrefix("wf_").substringBefore("-"),
+                        style = MaterialTheme.typography.labelSmall,
+                        fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
+                        color = MaterialTheme.colorScheme.tertiary,
+                    )
+                }
+                Spacer(Modifier.weight(1f))
+                Text(
+                    relTime(a.updatedAt),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            a.task?.let { task ->
+                Spacer(Modifier.size(3.dp))
+                Text(
+                    // The boilerplate context header buries the actual ask.
+                    task.removePrefix("CONTEXT:").trim(),
+                    style = MaterialTheme.typography.bodySmall,
+                    maxLines = 2,
+                    overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+                )
+            }
+            a.lastLine?.let { last ->
+                Spacer(Modifier.size(3.dp))
+                Text(
+                    last,
+                    style = MaterialTheme.typography.labelSmall,
+                    fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+                )
+            }
+        }
+    }
 }

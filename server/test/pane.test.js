@@ -382,20 +382,59 @@ test('workflow progress rows are lifted as the TUI shows them', () => {
     '  \u25EF andvari-polish-wave3  Wave 3   0/4 agents done \u00B7 7m 39s \u00B7 \u2193 562.4k tokens',
     '  \u29C9  audit-board',
   ];
-  assert.deepEqual(parseStatusExtras(lines), [
+  const px = parseStatusExtras(lines);
+  assert.deepEqual(px.durable, [
     'andvari-polish-wave3 \u00B7 Wave 3 \u00B7 0/4 agents done \u00B7 7m 39s \u00B7 \u2193 562.4k tokens',
     'audit-board',
   ]);
+  assert.equal(px.transient, null);
 });
 
-test('the running-shells row is lifted; the tip is not', () => {
-  const lines = [
+// Rendered naively these made the strip grow a line and lose it again on
+// repeat: they turn over at tool speed, so they are TRANSIENT — one slot the
+// client updates in place — never additional rows.
+test('per-tool rows are transient, and the tip is nothing at all', () => {
+  const px = parseStatusExtras([
     'Running 1 shell command \u00B7 2s\u2026',
     '  \u23FF  Tip: Ask Claude to create a todo list',
-  ];
-  assert.deepEqual(parseStatusExtras(lines), ['Running 1 shell command \u00B7 2s\u2026']);
+  ]);
+  assert.deepEqual(px.durable, []);
+  assert.equal(px.transient, 'Running 1 shell command \u00B7 2s\u2026');
+});
+
+test('the search row is transient too', () => {
+  assert.equal(parseStatusExtras(['Searching for 1 pattern\u2026']).transient,
+    'Searching for 1 pattern\u2026');
+});
+
+test('the bottom-most transient row wins, as the newest redraw', () => {
+  const px = parseStatusExtras(['Running 2 shell commands \u00B7 1s\u2026', 'text', 'Searching for 1 pattern\u2026']);
+  assert.equal(px.transient, 'Searching for 1 pattern\u2026');
+});
+
+test('a running-agents row is durable: it lasts the whole fan-out', () => {
+  const px = parseStatusExtras(['Running 3 agents \u00B7 2m\u2026']);
+  assert.deepEqual(px.durable, ['Running 3 agents \u00B7 2m\u2026']);
+  assert.equal(px.transient, null);
 });
 
 test('prose produces no progress rows', () => {
-  assert.deepEqual(parseStatusExtras(['plain text', '1. list', '\u276F composer']), []);
+  const px = parseStatusExtras(['plain text', '1. list', '\u276F composer']);
+  assert.deepEqual(px.durable, []);
+  assert.equal(px.transient, null);
+});
+
+
+test('message bullets in the scroll are not progress rows', () => {
+  const px = parseStatusExtras([
+    '\u25CF Two clean asks. The agent data source first',
+    '\u25CF Write(huginn-app/server/lib/agents.js)',
+  ]);
+  assert.deepEqual(px.durable, []);
+  assert.equal(px.transient, null);
+});
+
+test('rows above the pane tail are history, not status', () => {
+  const lines = ['Running 1 shell command \u00B7 2s\u2026'].concat(Array(12).fill('scrolled text'));
+  assert.equal(parseStatusExtras(lines).transient, null, 'that row scrolled away eleven lines ago');
 });

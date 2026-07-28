@@ -38,10 +38,11 @@ const { digest } = require('./lib/watch');
 const { decideAlerts, routeAlerts, telegramText, pruneSent } = require('./lib/alerts');
 const clientsLib = require('./lib/clients');
 const { taskDirFor, parsePs, scanTasks, extractBgIds } = require('./lib/tasks');
+const { agentsDirFor, listAgents } = require('./lib/agents');
 const pushLib = require('./lib/pushtokens');
 const { trySender } = require('./lib/fcm');
 
-const VERSION = '2.18.0';
+const VERSION = '2.19.0';
 const PORT = Number(process.env.HUGINN_APPD_PORT || 8787);
 const DATA_DIR = process.env.HUGINN_APPD_DATA || '/var/lib/huginn-appd';
 const TOKEN_FILE = process.env.HUGINN_APPD_TOKEN_FILE || '/etc/huginn-appd/token';
@@ -484,9 +485,14 @@ async function captureScreen(name, { cols = null, rows = null, history = 0, forc
     // the transcript is silent until whole blocks complete, which left the
     // conversation looking dead right after a message was sent.
     spinner: parseSpinner(lines),
-    // The TUI's own progress rows — workflow phases, "Running N agents" — shown
-    // in the app's strip the way Claude Code itself shows them.
-    statusLines: parseStatusExtras(lines),
+    // The TUI's own progress rows, split by lifetime: durable rows (workflow
+    // phases, boards) render as-is; the transient per-tool row ("Running 2 shell
+    // commands…") flaps in and out at tool speed, so the app updates it in place
+    // instead of letting the strip grow and shrink on repeat.
+    ...(() => {
+      const px = parseStatusExtras(lines);
+      return { statusLines: px.durable, transientLine: px.transient };
+    })(),
     // The pane is the only CURRENT source for these; the transcript lags a turn.
     ...(() => {
       const st = parseStatusLine(lines);
@@ -1918,6 +1924,20 @@ const server = http.createServer(async (req, res) => {
       });
     }
 
+    // --- the individual agents behind "0/4 agents done"
+    if ((m = p.match(/^\/v1\/sessions\/([a-z0-9_]{1,50})\/agents$/)) && req.method === 'GET') {
+      const name = m[1];
+      if (!(await sessionExists(name))) return sendErr(res, 404, 'no such session');
+      const st = readSessionState(name);
+      const dir = st ? agentsDirFor(st.transcript, st.sessionId) : null;
+      const agents = dir ? listAgents(dir, Math.floor(Date.now() / 1000)) : [];
+      return sendJson(res, 200, {
+        agents,
+        active: agents.filter((a) => a.active).length,
+        serverTime: Math.floor(Date.now() / 1000),
+      });
+    }
+
     if ((m = p.match(/^\/v1\/sessions\/([a-z0-9_]{1,50})\/rename$/)) && req.method === 'POST') {
       const from = m[1];
       const body = JSON.parse(await readBody(req) || '{}');
@@ -1940,6 +1960,12 @@ const server = http.createServer(async (req, res) => {
         if (body.text.length > 8000) return sendErr(res, 400, 'text too long');
         const r = await run('tmux', ['send-keys', '-t', `=${name}:`, '-l', '--', body.text]);
         if (r.err) return sendErr(res, 500, `tmux: ${r.stderr.trim()}`);
+        // A beat before any Enter that follows. Text and Enter in one burst
+        // occasionally read to the TUI as a single paste, which INSERTS the
+        // newline instead of submitting — the message sat in Claude's composer
+        // until someone pressed Enter by hand. Rare because it needs the reads
+        // to coincide; the pause makes Enter a distinct keypress every time.
+        if (Array.isArray(body.keys) && body.keys.includes('Enter')) await sleep(150);
       }
       if (Array.isArray(body.keys)) {
         if (body.keys.length > 32) return sendErr(res, 400, 'too many keys');

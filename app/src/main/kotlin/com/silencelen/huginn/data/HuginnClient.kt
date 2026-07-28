@@ -362,6 +362,10 @@ class HuginnClient(
     }
 
     /** Structured conversation for a tmux session, from its Claude transcript. */
+    /** The individual agents behind a fan-out, for the work detail sheet. */
+    suspend fun sessionAgents(name: String): AgentsInfo =
+        decode(call(builder("/v1/sessions/$name/agents").get().build()))
+
     suspend fun sessionTranscript(name: String, offset: Long? = null, limit: Int = 400): TranscriptPage =
         decode(call(builder(
             "/v1/sessions/$name/transcript?limit=$limit" + (offset?.let { "&offset=$it" } ?: "")
