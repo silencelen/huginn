@@ -35,7 +35,7 @@ const { formatModel, discoverModels, parseModelId } = require('./lib/models');
 const { pushPending, takePending, clearPending, queuedEvents } = require('./lib/chatqueue');
 const { digest } = require('./lib/watch');
 
-const VERSION = '2.10.1';
+const VERSION = '2.11.0';
 const PORT = Number(process.env.HUGINN_APPD_PORT || 8787);
 const DATA_DIR = process.env.HUGINN_APPD_DATA || '/var/lib/huginn-appd';
 const TOKEN_FILE = process.env.HUGINN_APPD_TOKEN_FILE || '/etc/huginn-appd/token';
@@ -786,6 +786,9 @@ const accounts = new AccountStore(path.join(DATA_DIR, 'accounts'), CREDENTIALS_P
 // leftover `login` session gets cleaned up without the user having to notice it.
 let loginStartedFrom = null;
 let loginUrl = null;
+// Which account the user SAID they were adding, so the outcome can be checked
+// against their intent instead of merely reported.
+let loginIntent = null;
 
 /**
  * Who a stored credential set actually belongs to, asked of the credentials
@@ -1140,6 +1143,13 @@ const server = http.createServer(async (req, res) => {
     }
 
     if (req.method === 'POST' && p === '/v1/account/login') {
+      const loginBody = JSON.parse(await readBody(req) || '{}');
+      // An email is optional but strongly worth having: the authorize page uses
+      // whatever claude.ai session the browser already has, which is how signing
+      // in "as a second account" can silently re-authorize the first one.
+      loginIntent = typeof loginBody.email === 'string' && /^[^\s@]+@[^\s@]+$/.test(loginBody.email.trim())
+        ? loginBody.email.trim().toLowerCase()
+        : null;
       // Signing in is an interactive OAuth flow: it prints a URL and waits for a
       // code. There is no headless path, so put it in a real tmux session and
       // hand the app the session name — the Screen view can show the URL and
@@ -1168,7 +1178,17 @@ const server = http.createServer(async (req, res) => {
         if (!cap.err) url = extractLoginUrl(cap.stdout.replace(/\n$/, '').split('\n'));
       }
       if (url) loginUrl = url;
-      return sendJson(res, existed ? 200 : 201, { ok: true, session: name, existed, url: url || loginUrl });
+      let out = url || loginUrl;
+      // login_hint is the standard way to aim an authorize page at one account.
+      // The endpoint accepts it; whether it overrides an existing browser session
+      // is not something this host can prove, so the app also tells the user how
+      // to be certain (a signed-out or private window).
+      if (out && loginIntent) {
+        out += (out.includes('?') ? '&' : '?') + 'login_hint=' + encodeURIComponent(loginIntent);
+      }
+      return sendJson(res, existed ? 200 : 201, {
+        ok: true, session: name, existed, url: out, intendedEmail: loginIntent,
+      });
     }
 
     // Where the sign-in has got to, so the app can host the whole flow.
@@ -1203,12 +1223,30 @@ const server = http.createServer(async (req, res) => {
           if (live) accounts.save(acct.loggedIn ? acct.email : null, live,
             acct.orgName ? { orgName: acct.orgName } : {});
           if (await sessionExists('login')) await run('tmux', ['kill-session', '-t', '=login']);
+
+          // Ask the new token who it is, rather than trusting the label: this is
+          // the check that catches "signed in the same account again", which is
+          // the failure this whole flow exists to avoid.
+          const captured = (live && await resolveEmail(live)) || acct.email || null;
+          const others = accounts.list().filter((a) => a.slug !== fingerprint(live));
+          const dupSlugs = [];
+          for (const o of others) {
+            const rec = accounts.readProfile(o.slug);
+            const em = rec && await resolveEmail(rec.credentials);
+            if (em && captured && em.toLowerCase() === captured.toLowerCase()) dupSlugs.push(o.slug);
+          }
+          const intended = loginIntent;
           loginStartedFrom = null;
           loginUrl = null;
-          log(`sign-in completed as ${acct.email || 'unknown'}`);
+          loginIntent = null;
+          log(`sign-in completed as ${captured || 'unknown'}${dupSlugs.length ? ' (DUPLICATE)' : ''}`);
           return sendJson(res, 200, {
             session: 'login', running: false, awaitingCode: false, done: true,
-            email: acct.email ?? null, message: 'Signed in',
+            email: captured,
+            intendedEmail: intended,
+            duplicate: dupSlugs.length > 0,
+            mismatch: !!(intended && captured && intended !== captured.toLowerCase()),
+            message: 'Signed in',
           });
         }
       }

@@ -336,10 +336,15 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
                 .onSuccess { st ->
                     _login.value = st
                     if (st.done) {
-                        _toast.value = "Signed in as ${st.email ?: "the new account"}"
                         refreshAccount()
                         refreshSavedAccounts()
-                        _login.value = null
+                        // A duplicate or a mismatch is the whole point of asking, so
+                        // the dialog stays up to say what happened. Only a clean
+                        // result closes it.
+                        if (!st.duplicate && !st.mismatch) {
+                            _toast.value = "Signed in as ${st.email ?: "the new account"}"
+                            _login.value = null
+                        }
                     }
                 }
                 .onFailure { _toast.value = errText(it) }
@@ -362,16 +367,22 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
      * Starts sign-in and stays in the app: the URL goes to the browser, and the
      * code comes back into a field here rather than into a tmux pane.
      */
-    fun startLogin() {
+    /** Opens the "which account?" step; nothing happens on the host yet. */
+    fun beginAddAccount() {
+        _login.value = LoginState(running = false, message = null)
+    }
+
+    fun startLogin(email: String?) {
         if (_loginBusy.value) return
         _loginBusy.value = true
-        _login.value = LoginState(running = true, message = "Starting sign-in…")
+        _login.value = LoginState(running = true, intendedEmail = email, message = "Starting sign-in…")
         viewModelScope.launch {
-            runCatching { client.startLogin() }
+            runCatching { client.startLogin(email) }
                 .onSuccess {
                     _loginUrl.value = it.url                     // opens the browser
                     _login.value = LoginState(
                         running = true, awaitingCode = true, url = it.url,
+                        intendedEmail = email,
                         message = "Paste the code from your browser",
                     )
                     refreshSessions()

@@ -268,6 +268,7 @@ data class LoginSession(
     val existed: Boolean = false,
     /** Full sign-in URL, lifted off the pane where it is hard-wrapped. */
     val url: String? = null,
+    val intendedEmail: String? = null,
 )
 
 /** One row of Claude's plan utilization, as `/usage` shows it. */
@@ -358,5 +359,11 @@ data class LoginState(
     val done: Boolean = false,
     val url: String? = null,
     val message: String? = null,
+    /** Who the new token actually belongs to, resolved from the token itself. */
     val email: String? = null,
+    val intendedEmail: String? = null,
+    /** The captured account is one already stored: the same login twice. */
+    val duplicate: Boolean = false,
+    /** Signed in as somebody other than the account that was being added. */
+    val mismatch: Boolean = false,
 )

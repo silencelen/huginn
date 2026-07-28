@@ -1,5 +1,27 @@
 # Huginn changelog
 
+## 2.11.0 — 2026-07-27
+
+### Adding a second and third account actually adds them
+The reason a second sign-in kept producing the account you already had: **the
+authorize page uses whichever account your browser is already signed into.** Click
+through it while signed in as one account and it authorizes that one, whatever you
+intended. Nothing in the app could tell, so it saved what it was given and showed
+you two rows that were one account.
+
+Adding an account now asks which one you are adding, and:
+
+- aims the sign-in page at that account,
+- says up front that the browser's current session decides it, and that a private
+  window or signing out of claude.ai is how to be sure,
+- **asks the new token who it belongs to** and tells you the answer — so a
+  duplicate or the wrong account is stated at the moment it happens, with a **Try
+  again** button, rather than turning up later as a row that looks like an account
+  you do not have.
+
+Once three genuinely different accounts are saved, each row shows its own plan and
+how much of its own week it has used, and switching picks the one with headroom.
+
 ## 2.10.1 — 2026-07-27
 
 ### Accounts are named by their own credentials
