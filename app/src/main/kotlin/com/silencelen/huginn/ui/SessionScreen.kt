@@ -106,6 +106,7 @@ fun SessionScreen(
                     error = transcriptError,
                     prompt = screen?.prompt,
                     spinner = screen?.spinner,
+                    statusLines = screen?.statusLines ?: emptyList(),
                     draft = draft,
                     onDraft = onDraft,
                     onSendText = onSendText,
@@ -144,6 +145,7 @@ private fun SessionConversation(
     error: String?,
     prompt: com.silencelen.huginn.data.PanePrompt?,
     spinner: String?,
+    statusLines: List<String>,
     draft: String,
     onDraft: (String) -> Unit,
     onSendText: (String, Boolean) -> Unit,
@@ -213,10 +215,18 @@ private fun SessionConversation(
         // conversation looked dead exactly when the most was happening — right
         // after sending a message. The pane's own status line is the best source;
         // the transcript's unresolved tool is the fallback; "working" is the floor.
-        if (working || spinner != null) {
+        // Shown while the turn runs, and ALSO while background work continues after
+        // it — a session blocked on a twenty-minute build used to read as stalled
+        // from here, with the truth visible only on the tmux screen.
+        if (working || spinner != null || statusLines.isNotEmpty() ||
+            page?.tasks?.isNotEmpty() == true || (page?.bgAgents ?: 0) > 0
+        ) {
             WorkStrip(
                 spinner = spinner,
+                statusLines = statusLines,
                 activity = page?.activity,
+                tasks = page?.tasks ?: emptyList(),
+                bgAgents = page?.bgAgents ?: 0,
                 onClick = {
                     scope.launch {
                         listState.animateScrollToItem((events.size + headerItems - 1).coerceAtLeast(0))
@@ -318,34 +328,66 @@ fun SessionSubtitle(page: TranscriptPage?, screen: Screen?) {
 @Composable
 private fun WorkStrip(
     spinner: String?,
+    statusLines: List<String>,
     activity: com.silencelen.huginn.data.Activity?,
+    tasks: List<com.silencelen.huginn.data.BgTask>,
+    bgAgents: Int,
     onClick: () -> Unit,
 ) {
-    val text = spinner ?: activity?.let { a ->
+    val headline = spinner ?: activity?.let { a ->
         buildString {
             append(a.tool ?: "working")
             a.detail?.takeIf { it.isNotBlank() }?.let { append("  ").append(it) }
             if (a.subagents > 0) append("  ·  ${a.subagents} subagent${if (a.subagents == 1) "" else "s"}")
         }
-    } ?: "working"
+    } ?: if (tasks.isNotEmpty() || bgAgents > 0) "background work" else "working"
+
+    // The TUI's own rows first (workflow phases, agent counts), then background
+    // shells the transcript knows about, deduplicated by presence.
+    val detailRows = buildList {
+        addAll(statusLines)
+        tasks.take(2).forEach { t ->
+            add("⚙ ${t.command}" + if (t.forSeconds > 0) " · ${agoShort(t.forSeconds)}" else "")
+        }
+        if (bgAgents > 0 && statusLines.none { it.contains("agent") }) {
+            add("$bgAgents background agent${if (bgAgents == 1) "" else "s"}")
+        }
+    }.take(3)
+
     Surface(
         color = MaterialTheme.colorScheme.surfaceContainerHigh,
         modifier = Modifier.fillMaxWidth(),
         onClick = onClick,
     ) {
-        Row(
-            Modifier.padding(horizontal = 14.dp, vertical = 7.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            PulsingDot(MaterialTheme.colorScheme.primary)
-            Spacer(Modifier.width(9.dp))
-            Text(
-                text,
-                style = MaterialTheme.typography.labelMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                maxLines = 1,
-                overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
-            )
+        Column(Modifier.padding(horizontal = 14.dp, vertical = 7.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                PulsingDot(MaterialTheme.colorScheme.primary)
+                Spacer(Modifier.width(9.dp))
+                Text(
+                    headline,
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+                )
+            }
+            detailRows.forEach { line ->
+                Text(
+                    line,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+                    modifier = Modifier.padding(start = 17.dp, top = 2.dp),
+                )
+            }
         }
     }
+}
+
+/** "12s", "4m", "1h 12m" — elapsed for a background task, kept short. */
+private fun agoShort(seconds: Long): String = when {
+    seconds < 60 -> "${seconds}s"
+    seconds < 3600 -> "${seconds / 60}m"
+    else -> "${seconds / 3600}h ${(seconds % 3600) / 60}m"
 }

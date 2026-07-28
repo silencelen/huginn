@@ -755,7 +755,11 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
                     }
                 }.onFailure { e ->
                     if (e is HuginnClient.HuginnException && e.code == 404) {
-                        _toast.value = "Session ended"
+                        // The session died under the viewer. Saying so in a toast
+                        // while leaving them staring at a dead screen is not
+                        // enough — the UI collects this and navigates back.
+                        _toast.value = "Session $name ended"
+                        _sessionGone.value = name
                         return@launch
                     }
                     // Network blips are expected on a phone; back off instead of
@@ -854,13 +858,21 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
     private val liveOps = ArrayDeque<LiveInput.Op>()
     private var liveDrainer: Job? = null
 
+    /**
+     * Set when the session being viewed stops existing, so the UI can close its
+     * view instead of leaving the reader on a dead screen.
+     */
+    private val _sessionGone = MutableStateFlow<String?>(null)
+    val sessionGone: StateFlow<String?> = _sessionGone.asStateFlow()
+    fun sessionGoneHandled() { _sessionGone.value = null }
+
     fun sendLive(name: String, op: LiveInput.Op) {
         liveOps.addLast(op)
         if (liveDrainer?.isActive == true) return
         liveDrainer = viewModelScope.launch {
             // A beat for the burst to accumulate: keystrokes arrive faster than
             // round trips complete, and merging them is the point.
-            delay(35)
+            delay(15)
             while (liveOps.isNotEmpty()) {
                 val batch = LiveInput.merge(liveOps.toList())
                 liveOps.clear()
