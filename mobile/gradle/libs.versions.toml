@@ -4,6 +4,9 @@ agp = "8.7.3"
 google-services = "4.4.2"
 firebase-bom = "33.7.0"
 biometric = "1.1.0"
+# Forced ABOVE the 1.2.5 that biometric drags in: that FragmentActivity rejects
+# the request codes the modern activity-result launcher generates.
+fragment = "1.8.5"
 kotlin = "2.1.0"
 compose-bom = "2024.12.01"
 activity-compose = "1.9.3"
@@ -39,6 +42,7 @@ androidx-work-runtime-ktx = { group = "androidx.work", name = "work-runtime-ktx"
 firebase-bom = { group = "com.google.firebase", name = "firebase-bom", version.ref = "firebase-bom" }
 firebase-messaging = { group = "com.google.firebase", name = "firebase-messaging" }
 androidx-biometric = { group = "androidx.biometric", name = "biometric", version.ref = "biometric" }
+androidx-fragment = { group = "androidx.fragment", name = "fragment", version.ref = "fragment" }
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }
