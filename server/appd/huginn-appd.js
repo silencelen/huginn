@@ -45,7 +45,7 @@ const { decideSwitch, worstLimit } = require('./lib/autoswitch');
 const pushLib = require('./lib/pushtokens');
 const { trySender } = require('./lib/fcm');
 
-const VERSION = '2.25.0';
+const VERSION = '2.30.0';
 const PORT = Number(process.env.HUGINN_APPD_PORT || 8787);
 const DATA_DIR = process.env.HUGINN_APPD_DATA || '/var/lib/huginn-appd';
 const TOKEN_FILE = process.env.HUGINN_APPD_TOKEN_FILE || '/etc/huginn-appd/token';
@@ -1443,9 +1443,24 @@ setInterval(() => { autoswitchTick().catch(() => { }); }, AUTOSWITCH_POLL_MS).un
 
 
 let alertTimer = null;
+// Set while a tick is in flight. The poll and the file watcher can now both
+// trigger a tick, and two overlapping runs would read-modify-write the same
+// alert state — the classic way a "sent" marker gets lost and an alert fires
+// twice.
+let alertBusy = false;
 async function alertTick() {
   const st = loadAlertState();
   if (!st.enabled) return;
+  if (alertBusy) return;
+  alertBusy = true;
+  try {
+    await alertTickInner(st);
+  } finally {
+    alertBusy = false;
+  }
+}
+
+async function alertTickInner(st) {
   const now = Date.now();
   const d = digest(await listSessions(), chatStates());
   const observation = { sessions: d.sessions, chats: d.chats };
@@ -1481,9 +1496,10 @@ async function alertTick() {
   // message is far better evidence than "this phone checked in recently" — so when
   // push is configured the fallback turns on real delivery rather than a guess.
   let pushedAny = false;
+  const pushedKeys = new Set();
   for (const a of alerts) {
     const r = await deliverPush(a);
-    if (r.sent > 0) pushedAny = true;   // deliverPush logs and counts each device
+    if (r.sent > 0) { pushedAny = true; pushedKeys.add(a.key); }   // deliverPush logs and counts each device
   }
 
   // With no push configured and no tokens registered, fall back to the older signal:
@@ -1496,7 +1512,13 @@ async function alertTick() {
     // silent" needs an answer, and "the app had it" is a different answer from
     // "nothing happened".
     log(`alerts: held ${a.kind} for ${a.subject} (${pushedAny ? 'pushed to the app' : 'app checked in recently'})`);
-    delete sentUpdates[a.key];
+    // "Held" means two different things and only one of them should un-suppress.
+    // Held because a PUSH delivered it: the owner has been told, so the repeat
+    // guard must stand — otherwise a session flapping in and out of attention
+    // pushes every time with no rate limit at all. Held because the app merely
+    // looked reachable: nothing was actually delivered, so the marker goes and
+    // the next tick may try again.
+    if (!pushedKeys.has(a.key)) delete sentUpdates[a.key];
   }
   for (const a of deliver) {
     const ok = await deliverTelegram(telegramText(a));
@@ -1515,11 +1537,49 @@ async function alertTick() {
   saveAlertState(st);
 }
 
+/**
+ * Watches the hook's state directory so a session changing state is noticed
+ * IMMEDIATELY rather than on the next poll.
+ *
+ * Measured before this existed: a real question took ~1.9s to reach the phone,
+ * of which the push itself was under 100ms — the rest was waiting for the
+ * ten-second poll to come round. The hook already writes
+ * /run/huginn-claude-state/<session> the moment a session's state changes, so
+ * the information is sitting there; polling for it was the only reason it went
+ * unnoticed.
+ *
+ * The interval poll STAYS as a floor: inotify can miss events under some
+ * filesystem conditions, and chat-finished alerts have no state file to watch
+ * at all. This makes the common case instant without becoming the only path.
+ */
+let stateWatcher = null;
+let watchDebounce = null;
+function startStateWatch() {
+  if (stateWatcher) return;
+  try {
+    stateWatcher = fs.watch(STATE_DIR, () => {
+      // Debounced: a single state change is several filesystem events (write,
+      // rename, attribute), and each should not spawn its own tick.
+      if (watchDebounce) return;
+      watchDebounce = setTimeout(() => {
+        watchDebounce = null;
+        alertTick().catch((e) => log('alerts: watch tick failed', e.message));
+      }, 120);
+      watchDebounce.unref();
+    });
+    log(`alerts: watching ${STATE_DIR} for instant detection`);
+  } catch (e) {
+    // No watch is survivable — the poll still covers everything, just slower.
+    log(`alerts: could not watch ${STATE_DIR} (${e.message}); polling only`);
+  }
+}
+
 function startAlertWatcher() {
   if (alertTimer) return;
   alertTimer = setInterval(() => { alertTick().catch((e) => log('alerts: tick failed', e.message)); },
     ALERT_POLL_MS);
   alertTimer.unref();
+  startStateWatch();
 }
 
 // ---------------------------------------------------------------- routing
