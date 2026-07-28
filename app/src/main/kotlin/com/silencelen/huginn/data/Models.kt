@@ -106,8 +106,10 @@ data class Screen(
     val prompt: PanePrompt? = null,
     /** The live status line ("Gallivanting… · 3m 15s"), the only moment-to-moment signal. */
     val spinner: String? = null,
-    /** The TUI's own progress rows: workflow phases, "Running N agents". */
+    /** The TUI's own durable progress rows: workflow phases, "Running N agents". */
     val statusLines: List<String> = emptyList(),
+    /** The per-tool row that turns over constantly; updated in place, never stacked. */
+    val transientLine: String? = null,
     /** Model/mode as the pane reports them right now (the transcript lags a turn). */
     val liveModel: String? = null,
     val liveMode: String? = null,
@@ -161,6 +163,27 @@ data class TranscriptPage(
     /** Background shells this session still has running. */
     val tasks: List<BgTask> = emptyList(),
     val bgAgents: Int = 0,
+)
+
+/** One agent behind a fan-out, live or recently settled. */
+@Serializable
+data class AgentRun(
+    val id: String = "",
+    /** The workflow run it belongs to; null for a directly-spawned agent. */
+    val workflow: String? = null,
+    val task: String? = null,
+    val lastLine: String? = null,
+    val active: Boolean = false,
+    val updatedAt: Long = 0,
+    val startedAt: Long = 0,
+    val bytes: Long = 0,
+)
+
+@Serializable
+data class AgentsInfo(
+    val agents: List<AgentRun> = emptyList(),
+    val active: Int = 0,
+    val serverTime: Long = 0,
 )
 
 /** One background shell: what it runs, and for how long so far. */
