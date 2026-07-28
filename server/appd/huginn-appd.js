@@ -45,7 +45,7 @@ const { decideSwitch, worstLimit } = require('./lib/autoswitch');
 const pushLib = require('./lib/pushtokens');
 const { trySender } = require('./lib/fcm');
 
-const VERSION = '2.33.0';
+const VERSION = '2.34.0';
 const PORT = Number(process.env.HUGINN_APPD_PORT || 8787);
 const DATA_DIR = process.env.HUGINN_APPD_DATA || '/var/lib/huginn-appd';
 const TOKEN_FILE = process.env.HUGINN_APPD_TOKEN_FILE || '/etc/huginn-appd/token';
@@ -1520,7 +1520,12 @@ async function alertTickInner(st) {
   // With no push configured and no tokens registered, fall back to the older signal:
   // whether a phone has been checking in on its own.
   const appReached = pushedAny || clientsLib.appOnline(clientState, now);
-  const { deliver, held } = routeAlerts(alerts, { mode: st.mode || 'fallback', appOnline: appReached });
+  // Resolutions are plumbing for the phone — an instruction to take a stale
+  // notification down — never news for a person. Telegram must not carry one:
+  // "andrev answered" arriving as a message is noise about something the owner
+  // themselves just did.
+  const news = alerts.filter((a) => a.kind !== 'session_resolved');
+  const { deliver, held } = routeAlerts(news, { mode: st.mode || 'fallback', appOnline: appReached });
 
   for (const a of held) {
     // Logged rather than dropped quietly: months from now, "why did Telegram stay
