@@ -192,9 +192,11 @@ fun HuginnApp(
     onLockNow: () -> Unit = {},
     vm: HuginnViewModel = viewModel(factory = HuginnViewModel.Factory),
 ) {
-    var tab by rememberSaveable { mutableStateOf(0) }
+    // Sessions is home: the owner's real use is watching and steering the
+    // sessions already running, with chats the occasional side door.
+    var tab by rememberSaveable { mutableStateOf(1) }
     var dest by remember {
-        mutableStateOf<Dest>(if (openSession != null) Dest.SessionView(openSession) else Dest.Chats)
+        mutableStateOf<Dest>(if (openSession != null) Dest.SessionView(openSession) else Dest.Sessions)
     }
     var sessionTab by rememberSaveable { mutableStateOf(0) }
 
