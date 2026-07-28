@@ -1,5 +1,19 @@
 # Huginn changelog
 
+## 2.14.1 — 2026-07-27 (server-side only)
+
+### Fixed: a push that worked left no trace
+2.14.0 logged and counted push FAILURES but not successes, so two test pushes that
+had genuinely been delivered showed "0 delivered" in Settings and produced no log
+line — the only evidence was a 200 buried in the request log. For a feature whose
+entire point is arriving while nobody is watching it arrive, "it worked" has to be at
+least as visible as "it did not".
+
+huginn now logs each delivery with the device it reached, keeps a running total, and
+records when each phone was last pushed to. The total survives a handset being
+pruned, since it is a record of what the host managed to deliver. No app update
+needed — the count Settings was already trying to show now has something behind it.
+
 ## 2.14.0 — 2026-07-27
 
 ### Real push: huginn now reaches this phone in seconds, asleep or not
