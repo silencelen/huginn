@@ -187,6 +187,8 @@ fun ChatScreen(
             onDraft = onDraft,
             sending = sending,
             mode = mode,
+            micGranted = voiceReady,
+            onRequestMic = onVoicePermission,
             onVoiceOpen = { voiceOpen = true },
             onSend = {
                 val t = draft.trim()
@@ -244,6 +246,8 @@ private fun Composer(
     onDraft: (String) -> Unit,
     sending: Boolean,
     mode: String,
+    micGranted: Boolean,
+    onRequestMic: () -> Unit,
     onVoiceOpen: () -> Unit,
     onSend: () -> Unit,
     onCancel: () -> Unit,
@@ -272,18 +276,11 @@ private fun Composer(
                 shape = RoundedCornerShape(20.dp),
             )
             Spacer(Modifier.width(6.dp))
-            rememberSpeechInput { heard -> onDraft(appendDictation(draft, heard)) }.let { speak ->
-                IconButton(
-                    onClick = speak,
-                    modifier = Modifier.size(46.dp),
-                ) {
-                    Icon(
-                        Icons.Filled.Mic,
-                        contentDescription = "Dictate",
-                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
-            }
+            DictationMicButton(
+                micGranted = micGranted,
+                onRequestMic = onRequestMic,
+                onText = { heard -> onDraft(appendDictation(draft, heard)) },
+            )
             // Voice MODE, distinct from dictation: a hands-free loop that listens,
             // sends, reads the answer aloud, and listens again.
             IconButton(

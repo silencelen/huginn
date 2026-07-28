@@ -1,5 +1,21 @@
 # Huginn changelog
 
+## 2.28.0 — 2026-07-28
+
+### Dictation rebuilt on the path this phone actually has
+2.27.1's honest error named the condition: this phone has no app left that
+handles the old system speech dialog — modern builds provide speech input as a
+background service instead (the same engine voice mode uses). The dictation mic
+now hosts its own small "Listening…" dialog on that service path: tap, speak,
+and the words land in the message box. The old system dialog remains as a
+fallback for devices that still have one, and a phone with neither says so in
+the dialog rather than pretending.
+
+The service path needs the microphone permission (the old dialog carried its
+own): the first tap asks, and the dictation you asked for starts the moment the
+grant lands — no second tap. All three mics — chats, session conversation, and
+the terminal composer — use the new path.
+
 ## 2.27.1 — 2026-07-28
 
 ### The voice buttons stop being silent, for real this time
