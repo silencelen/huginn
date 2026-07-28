@@ -1,5 +1,24 @@
 # Huginn changelog
 
+## 2.11.1 — 2026-07-27
+
+### Switching accounts now moves the identity too
+With three accounts saved, switching swapped the credentials correctly but Claude
+Code kept **naming the account you left**. Its identity — the email, org and rate
+tier that `claude auth status` reports — lives in a different file from the
+credentials, so moving the tokens alone left the two disagreeing.
+
+The identity now travels with the tokens. Where a saved account has no identity
+recorded yet, the stale one is **removed** rather than left in place, because
+Claude Code re-derives it from the token the next time it runs, and no answer is
+better than a confidently wrong one. Meanwhile the app reports the account by
+asking the credentials themselves, so it never shows "not signed in" on a host
+that is signed in.
+
+Verified across all three accounts: each switch reports the right account
+immediately, in the app and from the command line, and switching back restores
+exactly what was there before.
+
 ## 2.11.0 — 2026-07-27
 
 ### Adding a second and third account actually adds them
