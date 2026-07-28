@@ -1,5 +1,17 @@
 # Huginn changelog
 
+## 2.36.0 — 2026-07-28
+
+### The conversation survives huginn answering
+2.34.0 made a chat notification a thread, and replying did append to it — but only
+until huginn answered. The next result rebuilt the notification from scratch with
+a single message, and everything above it vanished, so a two-turn exchange was
+never visible as one.
+
+Both writers now append to the same thread. Caught by driving the shade on a real
+phone: the reply reached the chat, the chat answered, and the notification came
+back showing one message with no trace of what had been asked.
+
 ## 2.35.0 / appd 2.33.0 — 2026-07-28
 
 ### A long session finishing now tells you
