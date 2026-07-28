@@ -74,8 +74,48 @@ test('failures are counted, not punished', () => {
   push.noteFailure(st, 'install-1');
   assert.equal(push.count(st), 1, 'still registered');
   assert.equal(push.list(st)[0].failures, 2);
-  push.noteSuccess(st, 'install-1');
+  push.noteSuccess(st, 'install-1', T0 + 1000);
   assert.equal(push.list(st)[0].failures, 0, 'cleared once something got through');
+});
+
+// Regression. The first version recorded only failures, so a push that WORKED left no
+// trace beyond a 200 in the request log — unacceptable for a feature whose entire
+// point is arriving while nobody is watching it arrive.
+test('a delivery that got through is recorded, not just cleared', () => {
+  const st = push.emptyState();
+  push.register(st, 'install-1', 'tok-a', T0);
+  push.noteSuccess(st, 'install-1', T0 + 5000);
+  const d = push.list(st)[0];
+  assert.equal(d.pushes, 1);
+  assert.equal(d.lastPushAt, Math.floor((T0 + 5000) / 1000));
+  assert.equal(push.totals(st).pushed, 1);
+});
+
+test('deliveries accumulate across devices', () => {
+  const st = push.emptyState();
+  push.register(st, 'a', 'tok-a', T0);
+  push.register(st, 'b', 'tok-b', T0);
+  push.noteSuccess(st, 'a', T0 + 1000);
+  push.noteSuccess(st, 'b', T0 + 2000);
+  push.noteSuccess(st, 'a', T0 + 3000);
+  assert.equal(push.totals(st).pushed, 3);
+  assert.equal(push.totals(st).lastPushAt, Math.floor((T0 + 3000) / 1000));
+});
+
+// The tally is the record of what the host has managed to deliver, so pruning a dead
+// handset must not rewrite that history.
+test('the running total survives a device being dropped', () => {
+  const st = push.emptyState();
+  push.register(st, 'install-1', 'tok-a', T0);
+  push.noteSuccess(st, 'install-1', T0 + 1000);
+  push.drop(st, 'install-1');
+  assert.equal(push.totals(st).pushed, 1);
+});
+
+test('a fresh store reports nothing delivered rather than undefined', () => {
+  const t = push.totals(push.emptyState());
+  assert.equal(t.pushed, 0);
+  assert.equal(t.lastPushAt, 0);
 });
 
 test('recording against an unknown installation does not create one', () => {
