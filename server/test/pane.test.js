@@ -365,3 +365,37 @@ test('ansi colour on the spinner line does not defeat the match', () => {
   const got = parseSpinner([e + '[38;5;174m\u273D' + e + '[39m ' + e + '[38;5;180mPondering\u2026' + e + '[39m (12s)']);
   assert.equal(got, 'Pondering\u2026 \u00B7 12s');
 });
+
+
+test('the workflow-wait status is a headline even without an ellipsis', () => {
+  // Captured live: this is how a session waiting on a workflow looks, and the
+  // ellipsis-only match made exactly this case invisible.
+  const got = parseSpinner(['\u2733 Waiting for 1 dynamic workflow to finish', '\u276F go ahead']);
+  assert.equal(got, 'Waiting for 1 dynamic workflow to finish');
+});
+
+const { parseStatusExtras } = require('../lib/pane');
+
+test('workflow progress rows are lifted as the TUI shows them', () => {
+  const lines = [
+    '  [andrev] Opus 5 \u00B7 main',
+    '  \u25EF andvari-polish-wave3  Wave 3   0/4 agents done \u00B7 7m 39s \u00B7 \u2193 562.4k tokens',
+    '  \u29C9  audit-board',
+  ];
+  assert.deepEqual(parseStatusExtras(lines), [
+    'andvari-polish-wave3 \u00B7 Wave 3 \u00B7 0/4 agents done \u00B7 7m 39s \u00B7 \u2193 562.4k tokens',
+    'audit-board',
+  ]);
+});
+
+test('the running-shells row is lifted; the tip is not', () => {
+  const lines = [
+    'Running 1 shell command \u00B7 2s\u2026',
+    '  \u23FF  Tip: Ask Claude to create a todo list',
+  ];
+  assert.deepEqual(parseStatusExtras(lines), ['Running 1 shell command \u00B7 2s\u2026']);
+});
+
+test('prose produces no progress rows', () => {
+  assert.deepEqual(parseStatusExtras(['plain text', '1. list', '\u276F composer']), []);
+});

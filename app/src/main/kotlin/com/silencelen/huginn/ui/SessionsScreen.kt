@@ -182,7 +182,14 @@ private fun SessionRow(
     ) {
         Column(Modifier.weight(1f)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                StateDot(s.state)
+                if (s.state == "running" || s.bgShells > 0 || s.bgAgents > 0) {
+                    PulsingDot(
+                        if (s.state == "attention") MaterialTheme.colorScheme.error
+                        else MaterialTheme.colorScheme.primary
+                    )
+                } else {
+                    StateDot(s.state)
+                }
                 Spacer(Modifier.width(8.dp))
                 Text(
                     s.name,
@@ -192,11 +199,15 @@ private fun SessionRow(
                 )
                 Spacer(Modifier.width(8.dp))
                 Text(
-                    stateLabel(s.state),
+                    // "waiting" over a session running four background shells was
+                    // a lie of omission — the list is where "looks stalled" started.
+                    if (s.state != "running" && (s.bgShells > 0 || s.bgAgents > 0)) "background work"
+                    else stateLabel(s.state),
                     style = MaterialTheme.typography.labelSmall,
-                    color = when (s.state) {
-                        "attention" -> MaterialTheme.colorScheme.error
-                        "running" -> MaterialTheme.colorScheme.primary
+                    color = when {
+                        s.state == "attention" -> MaterialTheme.colorScheme.error
+                        s.state == "running" || s.bgShells > 0 || s.bgAgents > 0 ->
+                            MaterialTheme.colorScheme.primary
                         else -> MaterialTheme.colorScheme.onSurfaceVariant
                     },
                 )
@@ -215,6 +226,21 @@ private fun SessionRow(
                     style = MaterialTheme.typography.bodyMedium,
                     fontWeight = FontWeight.Medium,
                     maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+
+            if (s.bgShells > 0 || s.bgAgents > 0) {
+                Spacer(Modifier.height(3.dp))
+                Text(
+                    buildList {
+                        s.bgTask?.let { add("⚙ $it") }
+                        if (s.bgShells > 1) add("+${s.bgShells - 1} more")
+                        if (s.bgAgents > 0) add("${s.bgAgents} agent${if (s.bgAgents == 1) "" else "s"}")
+                    }.joinToString("  ·  "),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.primary,
+                    maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                 )
             }

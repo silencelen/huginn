@@ -57,6 +57,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.foundation.layout.BoxWithConstraints
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.flow.first
@@ -220,6 +221,16 @@ fun HuginnApp(
 
     val snackbar = remember { SnackbarHostState() }
     LaunchedEffect(toast) { toast?.let { snackbar.showSnackbar(it); vm.toastShown() } }
+
+    // A session killed while its view is open closes that view: leaving the
+    // reader on a dead screen that no longer exists helps nobody.
+    val sessionGone by vm.sessionGone.collectAsState()
+    LaunchedEffect(sessionGone) {
+        sessionGone?.let { gone ->
+            if ((dest as? Dest.SessionView)?.name == gone) dest = Dest.Sessions
+            vm.sessionGoneHandled()
+        }
+    }
 
     // The sign-in URL is 450 characters and hard-wrapped in the pane, so hand it
     // straight to a browser instead of asking anyone to copy it off a terminal.
@@ -542,6 +553,13 @@ fun HuginnApp(
                 }
             },
             snackbarHost = { SnackbarHost(snackbar) },
+            // Zero, deliberately: Scaffold's default contentWindowInsets ALSO
+            // reserves the navigation-bar height, and every composer already
+            // applies navigationBarsPadding() itself — the two stacked into a
+            // doubled band of dead space under the entry bubble (tallest on
+            // 3-button One UI, where the bar is a real 48dp inset). One owner
+            // per inset: the bars and composers handle their own.
+            contentWindowInsets = WindowInsets(0, 0, 0, 0),
         ) { pad ->
             Row(Modifier.fillMaxSize().padding(pad)) {
                 if (wide) {
