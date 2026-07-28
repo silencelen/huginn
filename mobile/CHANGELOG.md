@@ -1,5 +1,44 @@
 # Huginn changelog
 
+## 2.29.1 — 2026-07-28
+
+Each arriving push now defers the wake-up alarm directly, instead of waiting for
+the next beat to notice push is healthy. On a phone receiving pushes the alarm
+may never fire at all.
+
+## 2.29.0 — 2026-07-28
+
+### Snapchat-fast, without a process camped on your battery
+Notifications were measured on the phone across every state that matters, timed
+from the moment huginn decides to tell you:
+
+| state | delivery |
+|---|---|
+| app open | 42ms |
+| app backgrounded | 21ms |
+| app process killed | 86ms |
+| screen off | 17ms |
+| deep Doze (unplugged, asleep) | 72ms |
+| deep Doze **and** process killed | 35ms |
+| deep Doze, killed, **and off the battery allowlist** | 34ms |
+
+No foreground service, no persistent connection, nothing kept alive — this is
+push doing exactly what it is for.
+
+### The wake-up alarm now stays out of the way
+Because push proved that fast even with the app killed and unexempted, the
+ten-minute background check was insurance against something that does not need
+it — at 144 device wake-ups a day. It now stretches to **hourly while push is
+delivering**, and tightens back to ten minutes on its own if pushes stop for a
+couple of hours. Same safety net, a sixth of the cost, self-correcting.
+
+### One thing worth knowing
+Force-stopping the app (or an aggressive "battery saver" that does it for you)
+stops notifications entirely — Android blocks push to force-stopped apps until
+they are opened again. Measured: no delivery while force-stopped, back to 56ms
+after a single launch. If notifications ever go quiet, opening the app once is
+the fix.
+
 ## 2.28.1 — 2026-07-28
 
 ### The crash behind three releases of voice trouble

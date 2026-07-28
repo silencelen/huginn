@@ -31,6 +31,9 @@ class BootReceiver : BroadcastReceiver() {
             try {
                 val settings = SettingsStore(app)
                 if (settings.token.first().isBlank()) return@launch
+                // A minute out after a reboot regardless of cadence: the first beat
+                // after boot re-registers the push token and re-reads state, which
+                // is exactly when it is most worth doing promptly.
                 if (settings.notifyEnabled.first()) Heartbeat.arm(app, delayMs = 60_000)
                 if (settings.watchEnabled.first()) WatchService.start(app)
             } finally {
