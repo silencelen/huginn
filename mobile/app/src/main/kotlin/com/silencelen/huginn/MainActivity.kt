@@ -655,7 +655,12 @@ fun HuginnApp(
             LifecycleStartEffect(name) {
                 vm.startTranscriptPolling(name)
                 vm.startScreenPolling(name)
-                onStopOrDispose { vm.stopScreenPolling(); vm.clearSuggestions(); vm.refreshSessions() }
+                onStopOrDispose {
+                    vm.stopScreenPolling(); vm.clearSuggestions(); vm.refreshSessions()
+                    // A photo staged for THIS session must not silently ride
+                    // whatever screen is opened next.
+                    vm.clearAttachment()
+                }
             }
             // A turn boundary — the transcript grew and the session is idle — is
             // the moment suggestions become worth generating.
@@ -693,6 +698,9 @@ fun HuginnApp(
                 onForceResize = { vm.forceFit() },
                 onInterrupt = { vm.interruptSession(name) },
                 working = sessions.firstOrNull { s -> s.name == name }?.state == "running",
+                attachment = attachment,
+                onAttach = { vm.attachImage(it) },
+                onClearAttachment = { vm.clearAttachment() },
                 onCopy = { vm.copy(it) },
             )
         }

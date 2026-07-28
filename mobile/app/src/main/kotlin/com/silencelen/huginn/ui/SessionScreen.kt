@@ -93,6 +93,9 @@ fun SessionScreen(
     onInterrupt: () -> Unit,
     onCopy: (String) -> Unit,
     working: Boolean,
+    attachment: HuginnViewModel.Attachment? = null,
+    onAttach: (android.net.Uri) -> Unit = {},
+    onClearAttachment: () -> Unit = {},
 ) {
     Column(Modifier.fillMaxSize()) {
         TabRow(selectedTabIndex = tab) {
@@ -136,7 +139,10 @@ fun SessionScreen(
                     onInterrupt = onInterrupt,
                     working = working,
                     onCopy = onCopy,
-                )
+                attachment = attachment,
+                onAttach = onAttach,
+                onClearAttachment = onClearAttachment,
+            )
             } else {
                 TerminalScreen(
                     session = name,
@@ -186,6 +192,9 @@ private fun SessionConversation(
     onInterrupt: () -> Unit,
     working: Boolean,
     onCopy: (String) -> Unit,
+    attachment: HuginnViewModel.Attachment? = null,
+    onAttach: (android.net.Uri) -> Unit = {},
+    onClearAttachment: () -> Unit = {},
 ) {
     val scope = rememberCoroutineScope()
     val listState = rememberLazyListState()
@@ -328,6 +337,8 @@ private fun SessionConversation(
         }
 
         Surface(color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f)) {
+          Column {
+            AttachmentBar(attachment, onClearAttachment)
             Row(
                 Modifier
                     .fillMaxWidth()
@@ -345,6 +356,7 @@ private fun SessionConversation(
                     shape = RoundedCornerShape(20.dp),
                 )
                 Spacer(Modifier.width(6.dp))
+                AttachPhotoButton(onPick = onAttach)
                 DictationMicButton(
                     micGranted = micGranted,
                     onRequestMic = onRequestMic,
@@ -361,19 +373,23 @@ private fun SessionConversation(
                         )
                     }
                 }
+                // A photo alone is a complete message here too; the send path
+                // builds the marker text when the draft is blank.
+                val canSend = draft.isNotBlank() || attachment is HuginnViewModel.Attachment.Ready
                 IconButton(
-                    onClick = { if (draft.isNotBlank()) onSendText(draft, true) },
-                    enabled = draft.isNotBlank(),
+                    onClick = { if (canSend) onSendText(draft, true) },
+                    enabled = canSend,
                     modifier = Modifier.size(46.dp),
                 ) {
                     Icon(
                         Icons.Filled.KeyboardReturn,
                         contentDescription = "Send",
-                        tint = if (draft.isNotBlank()) MaterialTheme.colorScheme.primary
+                        tint = if (canSend) MaterialTheme.colorScheme.primary
                         else MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
             }
+          }
         }
     }
 }

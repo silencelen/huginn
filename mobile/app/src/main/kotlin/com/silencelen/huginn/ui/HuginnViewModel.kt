@@ -934,6 +934,17 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun sendText(name: String, text: String, thenEnter: Boolean) {
+        // The staged photo rides this message, same contract as a chat send:
+        // consumed here so it cannot ride twice, marker-only when nothing was
+        // typed. An interactive session's Claude reads the path like any file.
+        val att = _attachment.value
+        @Suppress("NAME_SHADOWING") var text = text
+        if (att is Attachment.Ready) {
+            text = if (text.isBlank()) Attachments.marker(att.path)
+            else text + "\n\n" + Attachments.marker(att.path)
+            _attachment.value = null
+        }
+        if (text.isBlank()) return
         clearDraft(sessionDraftKey(name))
         viewModelScope.launch {
             runCatching {
