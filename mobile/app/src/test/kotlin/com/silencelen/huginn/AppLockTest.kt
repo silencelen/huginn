@@ -1,6 +1,7 @@
 package com.silencelen.huginn
 
 import com.silencelen.huginn.notify.AppLock
+import com.silencelen.huginn.notify.Heartbeat
 import com.silencelen.huginn.ui.appendDictation
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -56,5 +57,53 @@ class AppLockTest {
     @Test
     fun `hearing nothing changes nothing`() {
         assertEquals("draft", appendDictation("draft", "   "))
+    }
+}
+
+/**
+ * The wake-up cadence policy — the whole battery story in one function.
+ *
+ * Push measured at 17-86ms on real hardware in every state including deep Doze
+ * with the process killed and the app off the battery allowlist. The alarm is
+ * therefore a safety net, not the delivery path, and should cost accordingly.
+ */
+class HeartbeatIntervalTest {
+
+    private val NOW = 1_800_000_000_000L
+
+    @Test
+    fun `never received a push - stay on the tight safety-net cadence`() {
+        assertEquals(Heartbeat.INTERVAL_MS, Heartbeat.intervalFor(0L, NOW))
+    }
+
+    @Test
+    fun `a recent push earns the relaxed hourly cadence`() {
+        assertEquals(Heartbeat.RELAXED_INTERVAL_MS, Heartbeat.intervalFor(NOW - 60_000, NOW))
+    }
+
+    @Test
+    fun `an idle night does not tighten it - trust outlasts a quiet spell`() {
+        val ninetyMinutes = 90 * 60 * 1000L
+        assertEquals(Heartbeat.RELAXED_INTERVAL_MS, Heartbeat.intervalFor(NOW - ninetyMinutes, NOW))
+    }
+
+    @Test
+    fun `push gone quiet for hours tightens back up - self-correcting`() {
+        assertEquals(Heartbeat.INTERVAL_MS, Heartbeat.intervalFor(NOW - Heartbeat.PUSH_TRUST_MS, NOW))
+        assertEquals(Heartbeat.INTERVAL_MS, Heartbeat.intervalFor(NOW - 24 * 60 * 60 * 1000L, NOW))
+    }
+
+    @Test
+    fun `the relaxed cadence is a real saving, not a token one`() {
+        // 144 wake-ups a day becomes 24.
+        assertTrue(Heartbeat.RELAXED_INTERVAL_MS >= Heartbeat.INTERVAL_MS * 6)
+    }
+
+    @Test
+    fun `a clock that jumped backwards does not grant infinite trust`() {
+        // lastPush in the future (clock change): now - last is negative, which is
+        // < the window, so it relaxes — acceptable, and the next real push or the
+        // hourly beat corrects it. Pinned so the behaviour is deliberate.
+        assertEquals(Heartbeat.RELAXED_INTERVAL_MS, Heartbeat.intervalFor(NOW + 60_000, NOW))
     }
 }

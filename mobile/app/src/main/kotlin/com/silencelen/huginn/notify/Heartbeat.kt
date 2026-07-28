@@ -44,7 +44,40 @@ import kotlinx.coroutines.withTimeoutOrNull
  */
 object Heartbeat {
 
+    /** The safety-net cadence used when push cannot be trusted. */
     val INTERVAL_MS = 10 * 60 * 1000L
+
+    /**
+     * The cadence used while push is demonstrably working.
+     *
+     * Measured on the owner's SM-F966U (2026-07-28): a high-priority FCM message
+     * reached the phone in 17-86ms in EVERY state — app open, backgrounded,
+     * process killed, screen off, full Doze, and Doze with the process killed —
+     * and it did so with the app REMOVED from the battery allowlist (34ms). The
+     * ten-minute alarm was insurance against a delivery path that turns out not
+     * to need it, and 144 device wake-ups a day is a real cost for insurance.
+     *
+     * So the alarm stretches to hourly while push is proving itself, and stays
+     * only as the thing that notices if push ever stops.
+     */
+    val RELAXED_INTERVAL_MS = 60 * 60 * 1000L
+
+    /**
+     * How recently a push must have arrived to keep trusting it. Longer than any
+     * plausible quiet spell in a working setup, so an idle night does not tighten
+     * the alarm — but short enough that a genuinely dead FCM path is noticed
+     * within a couple of hours rather than a day.
+     */
+    val PUSH_TRUST_MS = 2 * 60 * 60 * 1000L
+
+    /**
+     * The cadence to use, given when a push last arrived. Pure, so the policy is
+     * testable without a device: this is the whole battery story in one function.
+     */
+    fun intervalFor(lastPushAtMs: Long, nowMs: Long): Long =
+        if (lastPushAtMs > 0L && nowMs - lastPushAtMs < PUSH_TRUST_MS) RELAXED_INTERVAL_MS
+        else INTERVAL_MS
+
     private const val REQUEST = 4713
 
     private fun intent(context: Context) = PendingIntent.getBroadcast(
@@ -118,7 +151,13 @@ class HeartbeatReceiver : BroadcastReceiver() {
                 // first time the tailnet is unreachable — which is a nightly event,
                 // not an exceptional one. Only an explicit "the feature is off"
                 // clears this flag.
-                if (rearm) Heartbeat.arm(app)
+                if (rearm) {
+                    // Re-armed at the cadence push health earns: hourly while FCM
+                    // is delivering, ten-minutely when it has gone quiet.
+                    val settings = SettingsStore(app)
+                    val last = runCatching { settings.lastPushAt.first() }.getOrDefault(0L)
+                    Heartbeat.arm(app, Heartbeat.intervalFor(last, System.currentTimeMillis()))
+                }
                 pending.finish()
             }
         }
