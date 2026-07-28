@@ -72,6 +72,13 @@ data class PromptOption(
 data class PanePrompt(
     val question: String = "",
     val options: List<PromptOption> = emptyList(),
+    /**
+     * Identifies this exact question, computed by the host. An answer carries it back
+     * so the host can refuse to type into a pane that has moved on — the app must not
+     * compute it, because two implementations of "which question is this" would
+     * eventually disagree over a space and reject valid answers.
+     */
+    val fingerprint: String? = null,
 )
 
 @Serializable
@@ -421,6 +428,22 @@ data class ClientsInfo(
     val clients: List<ClientInfo> = emptyList(),
     val appOnline: Boolean = false,
     val serverTime: Long = 0,
+)
+
+/**
+ * The outcome of answering from a notification.
+ *
+ * A refusal is a 409 carrying `reason`: `gone` when there is no question on screen any
+ * more, `changed` when the session is asking something else. Both are ordinary — the
+ * tap was correct when it was offered — so they are reported, never retried.
+ */
+@Serializable
+data class AnswerResult(
+    val ok: Boolean = false,
+    val option: Int = 0,
+    val label: String? = null,
+    val reason: String? = null,
+    val error: String? = null,
 )
 
 @Serializable

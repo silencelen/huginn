@@ -44,7 +44,7 @@ class FcmSender {
    * @returns {Promise<{ok: boolean, dead: boolean, status: number, error: string|null}>}
    *   `dead` distinguishes "forget this token" from "try again later".
    */
-  async send(token, { title, text, kind, subject }, fetchImpl = fetch) {
+  async send(token, { title, text, kind, subject, options, fingerprint }, fetchImpl = fetch) {
     const accessToken = await this.sa.accessToken(fetchImpl);
     const res = await fetchImpl(
       `https://fcm.googleapis.com/v1/projects/${this.projectId}/messages:send`,
@@ -64,6 +64,11 @@ class FcmSender {
               text: String(text ?? ''),
               kind: String(kind ?? ''),
               subject: String(subject ?? ''),
+              // The question, so the notification can offer its options as buttons
+              // and be answered without opening the app. JSON in a string because an
+              // FCM data payload is string-to-string and nothing else.
+              options: options && options.length ? JSON.stringify(options) : '',
+              fingerprint: String(fingerprint ?? ''),
             },
             android: {
               // The point of the exercise. Normal priority is batched until the

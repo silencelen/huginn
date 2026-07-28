@@ -250,3 +250,75 @@ test('loginPaneState on an empty pane says nothing rather than guessing', () => 
   assert.strictEqual(st.done, false);
   assert.strictEqual(st.message, null);
 });
+
+// ------------------------------------------------ answering from a notification
+//
+// The fingerprint is what stops a lock-screen answer landing on a question that has
+// since changed. These tests are about which differences must and must not matter.
+
+const { promptFingerprint } = require('../lib/pane');
+
+const PROMPT_A = {
+  question: 'Do you want to create jtyper.md?',
+  options: [
+    { number: 1, label: 'Yes', selected: true },
+    { number: 2, label: 'No, tell Claude what to do differently', selected: false },
+  ],
+};
+
+test('the same question fingerprints the same', () => {
+  assert.equal(promptFingerprint(PROMPT_A), promptFingerprint({ ...PROMPT_A }));
+});
+
+// Moving the highlight does not change what is being asked, and rejecting an answer
+// because the caret had moved would be maddening and pointless.
+test('moving the selection caret does not change the fingerprint', () => {
+  const moved = {
+    question: PROMPT_A.question,
+    options: [
+      { number: 1, label: 'Yes', selected: false },
+      { number: 2, label: 'No, tell Claude what to do differently', selected: true },
+    ],
+  };
+  assert.equal(promptFingerprint(moved), promptFingerprint(PROMPT_A));
+});
+
+test('a different question fingerprints differently', () => {
+  const other = { ...PROMPT_A, question: 'Do you want to delete jtyper.md?' };
+  assert.notEqual(promptFingerprint(other), promptFingerprint(PROMPT_A));
+});
+
+// The dangerous case: same wording, different choices. Answering "2" against the
+// wrong set accepts something the owner never saw.
+test('the same question with different options fingerprints differently', () => {
+  const other = {
+    question: PROMPT_A.question,
+    options: [
+      { number: 1, label: 'Yes', selected: true },
+      { number: 2, label: 'Yes, and do not ask again', selected: false },
+      { number: 3, label: 'No', selected: false },
+    ],
+  };
+  assert.notEqual(promptFingerprint(other), promptFingerprint(PROMPT_A));
+});
+
+test('reordered labels are not the same question', () => {
+  const other = {
+    question: PROMPT_A.question,
+    options: [
+      { number: 1, label: 'No, tell Claude what to do differently', selected: true },
+      { number: 2, label: 'Yes', selected: false },
+    ],
+  };
+  assert.notEqual(promptFingerprint(other), promptFingerprint(PROMPT_A));
+});
+
+test('nothing to answer has no fingerprint', () => {
+  assert.equal(promptFingerprint(null), null);
+  assert.equal(promptFingerprint({ question: 'q', options: [] }), null);
+  assert.equal(promptFingerprint({ question: 'q' }), null);
+});
+
+test('a fingerprint is short enough to travel in a notification payload', () => {
+  assert.ok(promptFingerprint(PROMPT_A).length <= 12);
+});

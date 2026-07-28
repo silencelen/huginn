@@ -163,6 +163,22 @@ class HuginnClient(
         return decode(call(builder("/v1/push/register").post(encode(body)).build()))
     }
 
+    /**
+     * Answers a session's numbered question.
+     *
+     * [fingerprint] identifies the question being answered, and the host refuses the
+     * answer if the pane has moved on. Checked there rather than here because this app
+     * cannot hold the pane still between looking at it and typing into it — and a digit
+     * delivered to the wrong prompt could accept something never seen.
+     */
+    suspend fun answerPrompt(session: String, option: Int, fingerprint: String? = null): AnswerResult {
+        val body = buildJsonObject {
+            put("option", JsonPrimitive(option))
+            fingerprint?.let { put("fingerprint", JsonPrimitive(it)) }
+        }
+        return decode(call(builder("/v1/sessions/$session/answer").post(encode(body)).build()))
+    }
+
     /** Whether the HOST can push at all, and which devices it would reach. */
     suspend fun push(): PushStatus = decode(call(builder("/v1/push").get().build()))
 

@@ -1,6 +1,7 @@
 package com.silencelen.huginn.notify
 
 import android.content.Context
+import com.silencelen.huginn.data.HuginnClient
 import com.silencelen.huginn.data.SettingsStore
 import com.silencelen.huginn.data.Watch
 import kotlinx.coroutines.flow.first
@@ -53,7 +54,21 @@ object WatchCycle {
         return ranAgain + (previouslyRunning - running)
     }
 
-    suspend fun apply(context: Context, settings: SettingsStore, watch: Watch): Outcome {
+    /**
+     * Applies an observation, optionally fetching the pending question.
+     *
+     * [client] is what lets a notification found by the alarm or the stream carry the
+     * same question — and the same answer buttons — as one delivered by push. Without
+     * it the two paths would say different things about the same event depending purely
+     * on which noticed first, which is the drift this shared cycle exists to prevent.
+     * Optional, so a caller with no client still works and simply gets the plain text.
+     */
+    suspend fun apply(
+        context: Context,
+        settings: SettingsStore,
+        watch: Watch,
+        client: HuginnClient? = null,
+    ): Outcome {
         val needing = watch.sessions.filterValues { it == "attention" }.keys
         val running = watch.chats.filterValues { it.running }.keys
         val runsNow = watch.chats.mapValues { it.value.finishedRuns }
@@ -74,11 +89,23 @@ object WatchCycle {
         val previouslyNeeding = settings.notifiedSessions.first()
         val fresh = needing - previouslyNeeding
         if (fresh.isNotEmpty()) {
+            val only = fresh.singleOrNull()
+            // Only for a single session: with several waiting there is no one question
+            // to show, and guessing which to offer buttons for would be worse than
+            // offering none.
+            val prompt = if (only != null && client != null) {
+                runCatching { client.screen(only).prompt }.getOrNull()
+            } else null
+
             SessionWatchWorker.post(
                 context,
-                if (fresh.size == 1) "${fresh.first()} needs you" else "${fresh.size} sessions need you",
-                if (fresh.size == 1) "Waiting for your answer" else fresh.sorted().joinToString(", "),
+                if (only != null) "$only needs you" else "${fresh.size} sessions need you",
+                prompt?.question?.takeIf { it.isNotBlank() }
+                    ?: if (only != null) "Waiting for your answer" else fresh.sorted().joinToString(", "),
                 fresh.first(),
+                prompt?.options?.map { SessionWatchWorker.Companion.AnswerOption(it.number, it.label) }
+                    ?: emptyList(),
+                prompt?.fingerprint,
             )
             posted++
         }

@@ -210,3 +210,53 @@ test('a chat with no counter at all still alerts on the edge', () => {
   const next = { sessions: {}, chats: { c1: { running: false } } };
   assert.equal(decideAlerts(prev, next, {}, 1000).alerts.length, 1);
 });
+
+// ------------------------------------------------------------ Telegram wording
+//
+// The standing rule for this channel is statements only — huginn must never ask the
+// owner something down a path that carries no reply. Quoting what a SESSION is asking
+// is a status report, not huginn asking, and these tests pin that shape down.
+
+const { telegramText } = require('../lib/alerts');
+
+test('a question is reported, with its options listed', () => {
+  const text = telegramText({
+    kind: 'session_attention',
+    title: 'jtyper needs you',
+    text: 'ignored when a question is present',
+    question: 'Do you want to create jtyper.md?',
+    options: [{ number: 1, label: 'Yes' }, { number: 2, label: 'No' }],
+  });
+  assert.match(text, /jtyper needs you/);
+  assert.match(text, /^Asked: Do you want to create jtyper\.md\?$/m,
+    'framed as a report, not put to the reader');
+  assert.match(text, /^1\) Yes$/m);
+  assert.match(text, /^2\) No$/m);
+});
+
+test('an attention alert with no parsed question keeps its plain wording', () => {
+  const text = telegramText({
+    kind: 'session_attention',
+    title: 'andrev needs you',
+    text: 'Claude Code session andrev is waiting for an answer.',
+  });
+  assert.match(text, /waiting for an answer/);
+  assert.doesNotMatch(text, /Asked:/);
+});
+
+test('a chat finishing is unaffected by any of this', () => {
+  const text = telegramText({ kind: 'chat_finished', title: 'Chat finished', text: 'huginn finished: x' });
+  assert.match(text, /Chat finished/);
+  assert.match(text, /huginn finished: x/);
+  assert.doesNotMatch(text, /Asked:/);
+});
+
+test('a question with no options still reports the question', () => {
+  const text = telegramText({
+    kind: 'session_attention', title: 't needs you', text: 'x',
+    question: 'Continue?', options: [],
+  });
+  assert.match(text, /Asked: Continue\?/);
+  // No trailing blank section where the options would have gone.
+  assert.doesNotMatch(text, /\n\n/);
+});
