@@ -13,7 +13,9 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Row
@@ -26,6 +28,7 @@ import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.font.FontWeight
+import com.silencelen.huginn.appVersion
 import com.silencelen.huginn.data.Plan
 import com.silencelen.huginn.data.PlanLimit
 import com.silencelen.huginn.data.Status
@@ -43,6 +46,7 @@ fun StatusScreen(
     plan: Plan?,
     usage: Usage?,
 ) {
+    val ctx = LocalContext.current
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).navigationBarsPadding()) {
         if (error != null) {
             Surface(
@@ -90,7 +94,12 @@ fun StatusScreen(
 
         SectionLabel("Agent")
         KeyValueRow("Claude Code", status.claude ?: "unknown")
-        KeyValueRow("appd", status.appdVersion ?: "unknown")
+        // Adjacent and labelled apart, because they version independently: app
+        // 2.36.0 beside appd 2.33.0 is an ordinary state, and a lone "appd" row
+        // reads as the app's own version to anyone who has not internalised that
+        // the phone and the host daemon are separate release lines.
+        KeyValueRow("This app", remember(ctx) { appVersion(ctx) })
+        KeyValueRow("appd (host)", status.appdVersion ?: "unknown")
         KeyValueRow(
             "MemPalace",
             when (status.mempalace) {

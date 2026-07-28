@@ -8,6 +8,7 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
+import com.silencelen.huginn.appVersion
 import com.silencelen.huginn.data.Account
 import com.silencelen.huginn.data.Chat
 import com.silencelen.huginn.data.ChatEvent
@@ -394,7 +395,11 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
             runCatching { client.ping() }
                 .onSuccess {
                     _connected.value = it.ok
-                    _toast.value = "Connected to ${it.host ?: "huginn"} (appd ${it.version ?: "?"})"
+                    // Both numbers, labelled: they version independently, and a bare
+                    // "appd 2.33.0" reads as this app's version to anyone who has
+                    // not internalised that phone and host are separate lines.
+                    _toast.value = "Connected to ${it.host ?: "huginn"} — " +
+                        "app ${appVersion(getApplication())}, appd ${it.version ?: "?"}"
                     refreshAll()
                 }
                 .onFailure {
