@@ -118,7 +118,16 @@ function decideAlerts(prev, next, sent, now, prevAt = 0) {
     if (state === 'idle' && before === 'running') {
       const since = Number((prev.sessionsSince || {})[name]) || 0;
       const ranForMs = since ? now - since * 1000 : 0;
-      if (ranForMs >= LONG_RUN_MS) {
+      // Withheld when a terminal was attached while it ran: someone was sitting
+      // at that tmux session, and telling them their own screen just changed is
+      // the same redundancy the app suppresses for its open conversation. This
+      // gates ONLY the finish — a question ("attention") always alerts, because
+      // an attached-but-idle terminal in another room missing a blocking ask is
+      // the one failure mode worse than a redundant buzz. The phone app never
+      // attaches (it reads panes over capture), so app-driven sessions still
+      // notify unless the app itself is foregrounded on them.
+      const attended = !!(prev.sessionsAttached || {})[name];
+      if (!attended && ranForMs >= LONG_RUN_MS) {
         // Keyed by which run finished, so a session that runs long twice reports
         // twice while a redelivery of the same finish stays suppressed.
         const key = `session-done:${name}:${since}`;
