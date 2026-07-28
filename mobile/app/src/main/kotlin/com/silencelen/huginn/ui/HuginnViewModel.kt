@@ -164,7 +164,20 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
         val lastError: String = "",
         val lastErrorAt: Long = 0,
         val dozeExempt: Boolean = false,
-    )
+        /**
+         * The two counts the wake-up cadence is decided from. Surfaced because the
+         * decision was otherwise invisible: the alarm quietly chose hourly or
+         * ten-minutely and nothing said which, or why — so the one bug it has
+         * already had could only be found by reading a night of server logs.
+         */
+        val pushesSent: Long = 0,
+        val pushesReceived: Long = 0,
+    ) {
+        /** What the alarm will do next, in the same terms the rule is written in. */
+        val relaxed: Boolean get() = Heartbeat.intervalFor(pushesSent, pushesReceived) ==
+            Heartbeat.RELAXED_INTERVAL_MS
+        val pushesMissing: Long get() = (pushesSent - pushesReceived).coerceAtLeast(0)
+    }
 
     private val _health = MutableStateFlow(DeliveryHealth())
     val health: StateFlow<DeliveryHealth> = _health.asStateFlow()
@@ -175,6 +188,8 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
         lastError = settings.lastWatchError.first(),
         lastErrorAt = settings.lastWatchErrorAt.first(),
         dozeExempt = Heartbeat.isExemptFromDoze(getApplication()),
+        pushesSent = settings.pushesSent.first(),
+        pushesReceived = settings.pushesReceived.first(),
     )
 
     /**

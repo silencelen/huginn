@@ -448,6 +448,26 @@ fun SettingsScreen(
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
+                // What the background alarm has decided to do, and why. Worth a line
+                // of its own: the cadence swings by a factor of six and used to make
+                // that choice silently, so the one bug it has had could only be found
+                // by reading a night of server logs after the fact.
+                Text(
+                    when {
+                        health.pushesReceived == 0L ->
+                            "No push has arrived here yet, so the backup check runs every " +
+                                "10 minutes until one proves it can."
+                        health.pushesMissing > 0L ->
+                            "${health.pushesMissing} push(es) huginn sent never arrived, so the " +
+                                "backup check has tightened to every 10 minutes."
+                        else ->
+                            "${health.pushesReceived} of ${health.pushesSent} pushes arrived — " +
+                                "nothing dropped, so the backup check only runs hourly."
+                    },
+                    style = MaterialTheme.typography.labelSmall,
+                    color = if (health.relaxed) MaterialTheme.colorScheme.onSurfaceVariant
+                        else MaterialTheme.colorScheme.error,
+                )
                 if (ps.configured && registered) {
                     OutlinedButton(onClick = onTestPush) { Text("Send a test push") }
                 }

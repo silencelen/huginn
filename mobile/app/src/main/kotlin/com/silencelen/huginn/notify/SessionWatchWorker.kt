@@ -139,10 +139,14 @@ class SessionWatchWorker(
         data class AnswerOption(val number: Int, val label: String)
 
         /**
-         * Android renders at most three action buttons, so a longer question keeps its
-         * first two and is finished in the app. Two rather than three, so there is
-         * always room for the tap that opens the session — a four-option prompt whose
-         * buttons were all answers would offer no way to see the rest.
+         * Android renders at most three action buttons, so a question with more
+         * options than this keeps its first three and is finished in the app.
+         *
+         * All three may be answers: the way out of a truncated prompt is tapping the
+         * notification BODY, which opens the session and shows the rest — an action
+         * slot does not have to be reserved for it. (An earlier comment here claimed
+         * two were offered for exactly that reason, while the code offered three;
+         * the code was right and the reservation was never needed.)
          */
         private const val MAX_ACTIONS = 3
 

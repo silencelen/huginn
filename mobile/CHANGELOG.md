@@ -1,5 +1,17 @@
 # Huginn changelog
 
+## 2.33.0 — 2026-07-28
+
+### Settings says what the background check has decided, and why
+The wake-up cadence swings by a factor of six and used to choose silently, so the
+one bug it has had could only be found by reading a night of server logs after
+the fact. Settings now states the decision in the same terms the rule is written
+in: *"40 of 40 pushes arrived — nothing dropped, so the backup check only runs
+hourly"*, or, in red, *"2 pushes huginn sent never arrived, so the backup check
+has tightened to every 10 minutes"*. The line is derived from the very function
+the alarm uses, so the screen cannot claim one thing while the alarm does
+another.
+
 ## 2.32.0 — 2026-07-28
 
 ### Notification answers stay bounded; free text needs the phone unlocked
