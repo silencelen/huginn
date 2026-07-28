@@ -1,5 +1,28 @@
 # Huginn changelog
 
+## 2.35.0 / appd 2.33.0 — 2026-07-28
+
+### A long session finishing now tells you
+Chats have announced their results for a while; sessions never did, so the one
+thing the app is most useful for — start something slow, put the phone down, get
+told when it lands — only worked for the wrong half. A session going idle now
+notifies, and tapping it opens that session.
+
+Gated on how long it ran (5 minutes), because a session goes idle after *every*
+turn. Without the gate this is a notification per exchange, which is the fastest
+possible way to get the whole app muted. The threshold is the line between "I am
+working in this session" and "I left it running and walked away", and only the
+second is worth interrupting anyone for. A session that stops to ask something is
+not a finish — that is the other notification, and reporting both would say
+"finished" about a session actively waiting on you.
+
+### Notification channels now split by nature, not by type
+"Chat results" became **"Finished work"** and now carries finished sessions too.
+A session waiting on you is *blocking* — work has stopped until you answer — while
+a chat result and a finished session are both news you asked for. Splitting them
+that way is what lets the chatty kind be silenced without silencing the kind that
+blocks.
+
 ## 2.34.0 — 2026-07-28
 
 ### A chat notification is now a conversation, not a line of text
