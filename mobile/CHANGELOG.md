@@ -1,5 +1,26 @@
 # Huginn changelog
 
+## 2.39.0 / appd 2.36.1 — 2026-07-28
+
+### Share to huginn, and photo attachments
+huginn now appears in Android's share sheet. A link or paragraph from any app
+becomes a new chat with the text staged as the draft — compose around it, then
+send. A shared photo, or one attached with the new 🖼 button in the chat
+composer, uploads to huginn and the chat reads it: snap the breaker panel, ask
+what the tripped one feeds.
+
+Everything is transcoded to JPEG and downscaled to 2048px before upload —
+Samsung cameras shoot HEIC, which Claude cannot read, and the failure without
+transcoding is the worst kind: upload fine, chat runs, shrug about an unreadable
+file. A photo alone is a complete message; the staged chip shows uploading /
+attached / failed states and can be removed before sending. Uploads are pruned
+on huginn after 7 days.
+
+One honest note: ask-mode chats could always read files on huginn — `-p` mode
+auto-allows read-only tools, and a scoped-Read rule tried during this work
+turned out to be a no-op and was removed rather than shipped as a fake fence.
+The ask/act line is drawn at mutation, not at reading.
+
 ## appd 2.35.0 — 2026-07-28 (host)
 
 ### No "finished" buzz for a session you are sitting at

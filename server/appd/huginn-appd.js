@@ -45,9 +45,31 @@ const { decideSwitch, worstLimit } = require('./lib/autoswitch');
 const pushLib = require('./lib/pushtokens');
 const { trySender } = require('./lib/fcm');
 
-const VERSION = '2.35.0';
+const VERSION = '2.36.1';
 const PORT = Number(process.env.HUGINN_APPD_PORT || 8787);
 const DATA_DIR = process.env.HUGINN_APPD_DATA || '/var/lib/huginn-appd';
+const UPLOADS_DIR = path.join(DATA_DIR, 'uploads');
+const UPLOAD_MAX_BYTES = 20 * 1024 * 1024;
+// The kinds Claude's Read tool can actually view. HEIC is conspicuously absent:
+// Samsung cameras shoot it by default and Read cannot open it, so the APP
+// transcodes to JPEG before uploading — reject it here and the failure names
+// itself instead of surfacing as a mute chat.
+const UPLOAD_TYPES = { 'image/jpeg': 'jpg', 'image/png': 'png', 'image/webp': 'webp', 'image/gif': 'gif' };
+
+/**
+ * Drops uploads old enough that no conversation is coming back for them.
+ * Run on each upload rather than a timer: a dir that only grows when the
+ * feature is used only needs sweeping then.
+ */
+function pruneUploads(maxAgeMs = 7 * 24 * 60 * 60 * 1000) {
+  let names = [];
+  try { names = fs.readdirSync(UPLOADS_DIR); } catch { return; }
+  const cutoff = Date.now() - maxAgeMs;
+  for (const n of names) {
+    const f = path.join(UPLOADS_DIR, n);
+    try { if (fs.statSync(f).mtimeMs < cutoff) fs.unlinkSync(f); } catch { /* raced; fine */ }
+  }
+}
 const TOKEN_FILE = process.env.HUGINN_APPD_TOKEN_FILE || '/etc/huginn-appd/token';
 const STATE_DIR = '/run/huginn-claude-state';
 const PERSONA_FILE = '/usr/local/share/huginn-cli/persona.md';
@@ -58,6 +80,14 @@ const RUN_HARD_CAP_MS = 2 * 60 * 60 * 1000; // 2 h — safety net, not a feature
 
 // Tool sets mirror the huginn CLI exactly: `-p` (ask) vs `-y` (act).
 const TOOLS = {
+  // --allowedTools AUTO-APPROVES; it does not restrict. In -p mode the read-only
+  // tools (Read/Glob/Grep) are allowed by default with no grant at all — VERIFIED
+  // 2026-07-28 by having an ask chat read /etc/hostname with no Read rule present.
+  // So the ask/act line is drawn at MUTATION, not at reading: ask can see this
+  // host (including attached photos, which is what makes attachments work in ask
+  // mode), act can additionally run and change things. A scoped
+  // Read(//uploads/**) rule was tried here and removed as a no-op — do not
+  // reintroduce it as if it were a fence.
   ask: 'mcp__mempalace',
   act: 'Bash Read Edit Write Glob Grep WebFetch mcp__mempalace',
 };
@@ -89,6 +119,11 @@ function sendJson(res, code, obj) {
 function sendErr(res, code, msg) { sendJson(res, code, { error: msg }); }
 
 function readBody(req, limit = 256 * 1024) {
+  return readBodyRaw(req, limit).then((b) => b.toString('utf8'));
+}
+
+/** The same, kept as bytes — an image round-tripped through utf8 is destroyed. */
+function readBodyRaw(req, limit = 256 * 1024) {
   return new Promise((resolve, reject) => {
     const chunks = []; let size = 0;
     req.on('data', (c) => {
@@ -96,7 +131,7 @@ function readBody(req, limit = 256 * 1024) {
       if (size > limit) { reject(new Error('body too large')); req.destroy(); return; }
       chunks.push(c);
     });
-    req.on('end', () => resolve(Buffer.concat(chunks).toString('utf8')));
+    req.on('end', () => resolve(Buffer.concat(chunks)));
     req.on('error', reject);
   });
 }
@@ -2356,6 +2391,27 @@ const server = http.createServer(async (req, res) => {
     }
 
     // --- chats
+    // --- attachments: a photo from the phone, landed where a chat can Read it
+    //
+    // Raw bytes rather than multipart, because the daemon has no multipart parser
+    // and one image needs none: the body IS the file, Content-Type names its kind,
+    // and the server chooses the filename — so nothing the phone sends can steer
+    // where this writes.
+    if (req.method === 'POST' && p === '/v1/uploads') {
+      const ext = UPLOAD_TYPES[String(req.headers['content-type'] || '').split(';')[0].trim()];
+      if (!ext) return sendErr(res, 415, 'send an image (jpeg, png, webp or gif)');
+      let body;
+      try { body = await readBodyRaw(req, UPLOAD_MAX_BYTES); }
+      catch { return sendErr(res, 413, `image too large (max ${Math.floor(UPLOAD_MAX_BYTES / 1024 / 1024)}MB)`); }
+      if (!body.length) return sendErr(res, 400, 'empty body');
+      fs.mkdirSync(UPLOADS_DIR, { recursive: true });
+      pruneUploads();
+      const file = path.join(UPLOADS_DIR, `img-${Date.now()}-${crypto.randomBytes(3).toString('hex')}.${ext}`);
+      fs.writeFileSync(file, body, { mode: 0o600 });
+      log(`uploads: ${path.basename(file)} (${body.length} bytes)`);
+      return sendJson(res, 200, { ok: true, path: file, bytes: body.length });
+    }
+
     if (req.method === 'GET' && p === '/v1/chats') return sendJson(res, 200, { chats: listChats() });
 
     if (req.method === 'POST' && p === '/v1/chats') {

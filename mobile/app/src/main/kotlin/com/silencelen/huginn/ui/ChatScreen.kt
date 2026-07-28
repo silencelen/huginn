@@ -25,7 +25,9 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.GraphicEq
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.Send
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Stop
+import androidx.compose.material.icons.outlined.Image
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -80,6 +82,9 @@ fun ChatScreen(
     onSend: (String) -> Unit,
     onCancel: () -> Unit,
     onCopy: (String) -> Unit,
+    attachment: HuginnViewModel.Attachment? = null,
+    onAttach: (android.net.Uri) -> Unit = {},
+    onClearAttachment: () -> Unit = {},
 ) {
     val scope = rememberCoroutineScope()
     val listState = rememberLazyListState()
@@ -190,9 +195,14 @@ fun ChatScreen(
             micGranted = voiceReady,
             onRequestMic = onVoicePermission,
             onVoiceOpen = { voiceOpen = true },
+            attachment = attachment,
+            onAttach = onAttach,
+            onClearAttachment = onClearAttachment,
             onSend = {
                 val t = draft.trim()
-                if (t.isNotEmpty()) onSend(t)
+                // A photo alone is a complete message: "what is this?" is implied
+                // by having attached it, and the send path builds the marker text.
+                if (t.isNotEmpty() || attachment is HuginnViewModel.Attachment.Ready) onSend(t)
             },
             onCancel = onCancel,
         )
@@ -241,6 +251,31 @@ private fun ThinkingLine() {
 }
 
 @Composable
+private fun AttachmentChip(label: String, onClear: () -> Unit, isError: Boolean = false) {
+    Row(
+        Modifier.fillMaxWidth().padding(start = 14.dp, end = 8.dp, top = 6.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(
+            label,
+            style = MaterialTheme.typography.labelMedium,
+            color = if (isError) MaterialTheme.colorScheme.error
+                else MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.weight(1f),
+            maxLines = 1,
+            overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+        )
+        IconButton(onClick = onClear, modifier = Modifier.size(28.dp)) {
+            Icon(
+                Icons.Filled.Close,
+                contentDescription = "Remove attachment",
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+    }
+}
+
+@Composable
 private fun Composer(
     draft: String,
     onDraft: (String) -> Unit,
@@ -251,8 +286,28 @@ private fun Composer(
     onVoiceOpen: () -> Unit,
     onSend: () -> Unit,
     onCancel: () -> Unit,
+    attachment: HuginnViewModel.Attachment? = null,
+    onAttach: (android.net.Uri) -> Unit = {},
+    onClearAttachment: () -> Unit = {},
 ) {
+    // The photo picker needs no permission on any supported Android; it is the
+    // system's own UI handing back one grant-scoped Uri.
+    val pickImage = androidx.activity.compose.rememberLauncherForActivityResult(
+        androidx.activity.result.contract.ActivityResultContracts.PickVisualMedia()
+    ) { uri -> if (uri != null) onAttach(uri) }
+
     Surface(color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f)) {
+      Column {
+        // The staged photo, visible and killable. State chips rather than silence:
+        // an upload that fails while the user types must say so BEFORE they send a
+        // message that would then arrive without the thing it talks about.
+        when (attachment) {
+            is HuginnViewModel.Attachment.Uploading -> AttachmentChip("Uploading photo…", onClearAttachment)
+            is HuginnViewModel.Attachment.Ready -> AttachmentChip("Photo attached", onClearAttachment)
+            is HuginnViewModel.Attachment.Failed -> AttachmentChip(
+                "Photo failed: ${attachment.why}", onClearAttachment, isError = true)
+            null -> {}
+        }
         Row(
             Modifier
                 .fillMaxWidth()
@@ -276,6 +331,22 @@ private fun Composer(
                 shape = RoundedCornerShape(20.dp),
             )
             Spacer(Modifier.width(6.dp))
+            IconButton(
+                onClick = {
+                    pickImage.launch(
+                        androidx.activity.result.PickVisualMediaRequest(
+                            androidx.activity.result.contract.ActivityResultContracts.PickVisualMedia.ImageOnly
+                        )
+                    )
+                },
+                modifier = Modifier.size(46.dp),
+            ) {
+                Icon(
+                    Icons.Outlined.Image,
+                    contentDescription = "Attach a photo",
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
             DictationMicButton(
                 micGranted = micGranted,
                 onRequestMic = onRequestMic,
@@ -308,25 +379,27 @@ private fun Composer(
                     Icon(Icons.Filled.Stop, contentDescription = "Stop", tint = MaterialTheme.colorScheme.onError)
                 }
             } else {
+                val canSend = draft.isNotBlank() || attachment is HuginnViewModel.Attachment.Ready
                 IconButton(
                     onClick = onSend,
-                    enabled = draft.isNotBlank(),
+                    enabled = canSend,
                     modifier = Modifier
                         .size(46.dp)
                         .clip(RoundedCornerShape(23.dp))
                         .background(
-                            if (draft.isNotBlank()) MaterialTheme.colorScheme.primary
+                            if (canSend) MaterialTheme.colorScheme.primary
                             else MaterialTheme.colorScheme.surfaceContainerHigh
                         ),
                 ) {
                     Icon(
                         Icons.Filled.Send,
                         contentDescription = "Send",
-                        tint = if (draft.isNotBlank()) MaterialTheme.colorScheme.onPrimary
+                        tint = if (canSend) MaterialTheme.colorScheme.onPrimary
                         else MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
             }
         }
+      }
     }
 }
