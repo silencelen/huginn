@@ -64,6 +64,18 @@
             </intent-filter>
         </receiver>
 
+        <!-- FCM. Data-only messages, so this runs even while the app is backgrounded
+             and the app itself decides what has already been shown; a `notification`
+             block would be drawn by the system without consulting the app, which would
+             leave the ten-minute alarm free to repeat the same alert later. -->
+        <service
+            android:name=".notify.HuginnMessagingService"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="com.google.firebase.MESSAGING_EVENT" />
+            </intent-filter>
+        </service>
+
         <!-- Woken by AlarmManager while the phone is idle. Not exported: it is
              triggered only by an alarm this app scheduled against its own component. -->
         <receiver

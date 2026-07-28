@@ -391,6 +391,10 @@ data class Alerts(
     val channel: String = "none",
     /** Whether the host currently believes a phone is listening. */
     val appOnline: Boolean = false,
+    /** Whether the host holds an FCM credential at all. */
+    val pushConfigured: Boolean = false,
+    val pushDevices: Int = 0,
+    val pushed: Int = 0,
 )
 
 /** One phone, as the host has seen it. */
@@ -417,6 +421,43 @@ data class ClientsInfo(
     val clients: List<ClientInfo> = emptyList(),
     val appOnline: Boolean = false,
     val serverTime: Long = 0,
+)
+
+@Serializable
+data class PushRegistration(
+    val ok: Boolean = false,
+    val configured: Boolean = false,
+    val devices: Int = 0,
+    val rotated: Boolean = false,
+)
+
+/** One device huginn can push to. Never carries the token itself. */
+@Serializable
+data class PushDevice(
+    val installId: String = "",
+    val model: String? = null,
+    val seenAt: Long = 0,
+    val failures: Int = 0,
+    val tokenTail: String = "",
+)
+
+@Serializable
+data class PushStatus(
+    /** Whether the host has an FCM credential — separate from whether a phone registered. */
+    val configured: Boolean = false,
+    val projectId: String? = null,
+    val sender: String? = null,
+    val devices: List<PushDevice> = emptyList(),
+    val pushed: Int = 0,
+)
+
+@Serializable
+data class PushTestResult(
+    val ok: Boolean = false,
+    val sent: Int = 0,
+    val dead: Int = 0,
+    val failed: Int = 0,
+    val error: String? = null,
 )
 
 /** What arrives on the watching connection. */

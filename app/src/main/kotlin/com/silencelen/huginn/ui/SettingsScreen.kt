@@ -60,8 +60,10 @@ fun SettingsScreen(
     onTestAlert: () -> Unit,
     health: HuginnViewModel.DeliveryHealth,
     clients: com.silencelen.huginn.data.ClientsInfo?,
+    push: com.silencelen.huginn.data.PushStatus?,
     onRequestDozeExemption: () -> Unit,
     onRefreshDelivery: () -> Unit,
+    onTestPush: () -> Unit,
     notificationsAllowed: Boolean,
     onRequestNotifications: () -> Unit,
     onOpenSystemNotificationSettings: () -> Unit,
@@ -356,6 +358,39 @@ fun SettingsScreen(
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.primary,
                 )
+            }
+
+            // Push status before the rest, because when it is working the other numbers
+            // stop mattering much: FCM reaches a sleeping phone in seconds, where the
+            // alarm below takes up to ten minutes.
+            push?.let { ps ->
+                val registered = ps.devices.isNotEmpty()
+                Text(
+                    when {
+                        ps.configured && registered ->
+                            "Push is on. huginn sends straight to this phone through Google, " +
+                                "which arrives in seconds even while it is asleep."
+                        ps.configured && !registered ->
+                            "huginn can push, but this phone has not registered yet. It " +
+                                "registers itself on start — check the token above is right."
+                        else ->
+                            "Push is not set up on huginn, so alerts arrive on the 10-minute " +
+                                "check or by Telegram instead."
+                    },
+                    style = MaterialTheme.typography.bodySmall,
+                    color = if (ps.configured && registered) MaterialTheme.colorScheme.primary
+                        else MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                if (ps.pushed > 0) {
+                    Text(
+                        "${ps.pushed} delivered so far",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                if (ps.configured && registered) {
+                    OutlinedButton(onClick = onTestPush) { Text("Send a test push") }
+                }
             }
 
             // Two witnesses. The app's own record can only be written while the app
