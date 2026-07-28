@@ -130,6 +130,7 @@ fun HuginnApp(
     val login by vm.login.collectAsState()
     val loginBusy by vm.loginBusy.collectAsState()
     val watchEnabled by vm.watchEnabled.collectAsState()
+    val hostAlerts by vm.alerts.collectAsState()
 
     val snackbar = remember { SnackbarHostState() }
     LaunchedEffect(toast) { toast?.let { snackbar.showSnackbar(it); vm.toastShown() } }
@@ -383,7 +384,7 @@ fun HuginnApp(
                 }
 
                 is Dest.Settings -> {
-                    LaunchedEffect(Unit) { vm.refreshAccount() }
+                    LaunchedEffect(Unit) { vm.refreshAccount(); vm.refreshAlerts() }
                     SettingsScreen(
                         baseUrl = baseUrl,
                         token = token,
@@ -415,6 +416,9 @@ fun HuginnApp(
                         onSwitchAccount = { vm.activateAccount(it) },
                         onForgetAccount = { vm.forgetAccount(it) },
                         onSignIn = { vm.beginAddAccount() },
+                        alerts = hostAlerts,
+                        onAlertsEnabled = { vm.setAlertsEnabled(it) },
+                        onTestAlert = { vm.sendTestAlert() },
                         watchEnabled = watchEnabled,
                         onWatchEnabled = { vm.setWatchEnabled(it) },
                         onSignOut = { vm.logout() },

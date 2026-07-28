@@ -1,5 +1,28 @@
 # Huginn changelog
 
+## 2.12.0 — 2026-07-27
+
+### Push notifications that arrive with the app closed
+**huginn now messages you itself.** Turn on "Message me when a session needs me"
+in Settings and the host watches its own state and reaches out over the Telegram
+path this homelab already uses — so an alert arrives when your phone has been in a
+pocket for two hours, with the app not running and no battery cost.
+
+That is the difference from what shipped before: watching continuously is instant
+but only lives as long as the app does, and the periodic check needs the app too.
+Only the host can notice something while the phone is asleep.
+
+It is deliberately quiet. It alerts on the **transition** into needing an answer,
+never on a session that has simply been waiting a while; it stays silent about
+whatever was already true when you switched it on; the same subject will not
+repeat inside half an hour; and a send that fails is retried rather than swallowed.
+A chat finishing is announced by name. There is a **Send a test** button, and
+every message is logged on the host like every other alert it sends.
+
+Real push to the app itself needs a Firebase project, which only you can create
+under your own Google account — say the word and I will wire it up. Until then
+this reaches the same phone by a route that already works.
+
 ## 2.11.1 — 2026-07-27
 
 ### Switching accounts now moves the identity too
