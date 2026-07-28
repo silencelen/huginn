@@ -269,7 +269,7 @@ fun TerminalScreen(
                     shape = RoundedCornerShape(20.dp),
                 )
                 Spacer(Modifier.width(6.dp))
-                rememberSpeechInput { heard -> onDraft(appendDictation(draft, heard)) }?.let { speak ->
+                rememberSpeechInput { heard -> onDraft(appendDictation(draft, heard)) }.let { speak ->
                     IconButton(onClick = speak) {
                         Icon(
                             Icons.Filled.Mic,

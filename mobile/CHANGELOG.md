@@ -1,5 +1,26 @@
 # Huginn changelog
 
+## 2.27.1 — 2026-07-28
+
+### The voice buttons stop being silent, for real this time
+The report was exact: "it used to open the Google speech to text, now nothing" —
+and that named the actual culprit. The dictation mic hid itself behind an
+availability check that asks Android whether the speech dialog is *visible to
+this app*, not whether it exists; without a `queries` declaration that answer
+can be no on a phone where dictation works fine, so the mic vanished and the
+new waveform button sat in its place, eating the taps meant for it.
+
+Three fixes, all with the same shape — no silent gates:
+
+- The app now declares the speech-recognition query, so the visibility check
+  answers honestly.
+- The dictation mic never hides itself again. It always shows, and a launch
+  that truly cannot work says so in a toast instead of not existing.
+- The waveform button **always opens the voice sheet**. If the microphone
+  permission is missing, the ask happens inside the sheet, visibly — with a
+  Grant button and a note about what it means if no dialog appears — instead of
+  behind an unopened sheet where a blocked request looked like a dead button.
+
 ## 2.27.0 — 2026-07-28
 
 ### Live typing echoes instantly

@@ -74,8 +74,6 @@ fun ChatScreen(
     chatId: String,
     suggestions: List<String>,
     voiceReady: Boolean,
-    voiceWanted: Boolean,
-    onVoiceWantedHandled: () -> Unit,
     onVoicePermission: () -> Unit,
     draft: String,
     onDraft: (String) -> Unit,
@@ -86,14 +84,6 @@ fun ChatScreen(
     val scope = rememberCoroutineScope()
     val listState = rememberLazyListState()
     var voiceOpen by remember { mutableStateOf(false) }
-    // The tap that triggered a permission ask gets its sheet the moment the
-    // grant lands, not on a second tap.
-    LaunchedEffect(voiceReady, voiceWanted) {
-        if (voiceReady && voiceWanted) {
-            voiceOpen = true
-            onVoiceWantedHandled()
-        }
-    }
     val events = page?.events ?: emptyList()
     val rows = remember(events) { TranscriptGroups.group(events) }
     val streaming = streamingText != null || activeTool != null
@@ -110,6 +100,8 @@ fun ChatScreen(
 
     if (voiceOpen) {
         VoiceSheet(
+            micGranted = voiceReady,
+            onRequestMic = onVoicePermission,
             sending = sending,
             streamingText = streamingText,
             lastAnswer = remember(events) {
@@ -195,9 +187,7 @@ fun ChatScreen(
             onDraft = onDraft,
             sending = sending,
             mode = mode,
-            voiceReady = voiceReady,
             onVoiceOpen = { voiceOpen = true },
-            onVoicePermission = onVoicePermission,
             onSend = {
                 val t = draft.trim()
                 if (t.isNotEmpty()) onSend(t)
@@ -254,9 +244,7 @@ private fun Composer(
     onDraft: (String) -> Unit,
     sending: Boolean,
     mode: String,
-    voiceReady: Boolean,
     onVoiceOpen: () -> Unit,
-    onVoicePermission: () -> Unit,
     onSend: () -> Unit,
     onCancel: () -> Unit,
 ) {
@@ -284,7 +272,7 @@ private fun Composer(
                 shape = RoundedCornerShape(20.dp),
             )
             Spacer(Modifier.width(6.dp))
-            rememberSpeechInput { heard -> onDraft(appendDictation(draft, heard)) }?.let { speak ->
+            rememberSpeechInput { heard -> onDraft(appendDictation(draft, heard)) }.let { speak ->
                 IconButton(
                     onClick = speak,
                     modifier = Modifier.size(46.dp),
@@ -299,7 +287,10 @@ private fun Composer(
             // Voice MODE, distinct from dictation: a hands-free loop that listens,
             // sends, reads the answer aloud, and listens again.
             IconButton(
-                onClick = { if (voiceReady) onVoiceOpen() else onVoicePermission() },
+                // ALWAYS opens the sheet. The permission ask happens inside it,
+                // visibly — a tap that can silently do nothing is a broken button,
+                // and on some builds a permission request IS silently denied.
+                onClick = onVoiceOpen,
                 modifier = Modifier.size(46.dp),
             ) {
                 Icon(

@@ -26,6 +26,19 @@
          it watches. Asking is all it does: the system dialogue decides. -->
     <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
 
+    <!-- Package visibility (Android 11+): resolveActivity for the system speech
+         dialog silently returns null without this, which made the dictation mic
+         REMOVE ITSELF on devices where it had always worked — reported as "the
+         voice button used to open Google speech to text, now nothing". -->
+    <queries>
+        <intent>
+            <action android:name="android.speech.action.RECOGNIZE_SPEECH" />
+        </intent>
+        <intent>
+            <action android:name="android.intent.action.TTS_SERVICE" />
+        </intent>
+    </queries>
+
     <application
         android:allowBackup="false"
         android:icon="@mipmap/ic_launcher"
