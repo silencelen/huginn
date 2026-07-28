@@ -14,6 +14,14 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+    <!-- Lets the app ask to sit on the Doze allowlist. Without that entry the
+         system suspends this app's network access while the phone is idle, so the
+         heartbeat alarm still fires but its request reaches nothing — a failure that
+         looks identical to no alarm at all. Play policy restricts this permission to
+         a few app categories; this app is sideloaded from devstore, so the only judge
+         of whether it is warranted is the person who owns both the phone and the host
+         it watches. Asking is all it does: the system dialogue decides. -->
+    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
 
     <application
         android:allowBackup="false"
@@ -50,7 +58,17 @@
             android:enabled="true">
             <intent-filter>
                 <action android:name="android.intent.action.BOOT_COMPLETED" />
+                <!-- Installing a new version cancels this app's pending alarms, so
+                     without this a release would quietly end the heartbeat. -->
+                <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
             </intent-filter>
         </receiver>
+
+        <!-- Woken by AlarmManager while the phone is idle. Not exported: it is
+             triggered only by an alarm this app scheduled against its own component. -->
+        <receiver
+            android:name=".notify.HeartbeatReceiver"
+            android:exported="false"
+            android:enabled="true" />
     </application>
 </manifest>

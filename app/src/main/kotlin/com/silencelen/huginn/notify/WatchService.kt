@@ -6,6 +6,8 @@ import android.app.PendingIntent
 import android.app.Service
 import android.content.Context
 import android.content.Intent
+import android.net.ConnectivityManager
+import android.net.Network
 import android.os.Build
 import android.os.IBinder
 import androidx.core.app.NotificationCompat
@@ -14,6 +16,8 @@ import com.silencelen.huginn.MainActivity
 import com.silencelen.huginn.R
 import com.silencelen.huginn.data.HuginnClient
 import com.silencelen.huginn.data.SettingsStore
+import com.silencelen.huginn.data.Watch
+import com.silencelen.huginn.data.WatchEvent
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
@@ -24,29 +28,36 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 
 /**
- * Watches huginn continuously so an alert arrives in seconds.
+ * Holds a connection to huginn so an alert arrives in seconds.
  *
- * The alternative, and what this replaces, is WorkManager's periodic floor of 15
- * minutes — which is fine for "your disk is filling" and useless for "Claude is
- * waiting on an answer". A live connection is the only way to do better, and a
- * live connection on Android means a foreground service with an ongoing
- * notification. That notification is the honest price, so it is made to earn its
- * place: it states what huginn is doing right now.
+ * Now a keepalive'd stream rather than a long poll, for one reason: a long poll that
+ * has silently died is indistinguishable from one that is patiently waiting. The
+ * service went on reporting that it was watching while its socket had in fact been
+ * black-holed by a network change hours earlier — and it recovered only when
+ * something happened to make it look, which is precisely the moment the alert was
+ * needed. The server now sends a keepalive every 25 seconds and the reader times out
+ * after 60, so silence has become a fact the app can act on.
  *
- * The connection is a long poll against `/v1/watch`, which parks until something
- * an alert depends on actually changes. Idle costs one held request; it does not
- * poll in a loop from the phone.
+ * This is still the FAST path, not the reliable one. Doze powers down the radio and
+ * the system may kill the service outright, so [Heartbeat] runs underneath as the
+ * floor that survives both, and the host itself alerts over Telegram when no phone
+ * has checked in at all. Three mechanisms because each fails differently.
  */
 class WatchService : Service() {
 
     private var scope: CoroutineScope? = null
     private var job: Job? = null
+    private var netCallback: ConnectivityManager.NetworkCallback? = null
+
+    /** Bumped whenever the network returns, to cut short a backoff that is now stale. */
+    @Volatile private var networkGeneration = 0
 
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onCreate() {
         super.onCreate()
         createChannels(this)
+        registerNetworkCallback()
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -60,6 +71,19 @@ class WatchService : Service() {
         if (job == null) start()
         // Restart if the system kills us; the watch is the point of the service.
         return START_STICKY
+    }
+
+    /**
+     * Reconnects the moment the network comes back, instead of waiting out a
+     * backoff. Without this, coming home to wifi could leave the phone unwatched for
+     * two minutes for no reason other than arithmetic.
+     */
+    private fun registerNetworkCallback() {
+        val cm = getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager ?: return
+        val cb = object : ConnectivityManager.NetworkCallback() {
+            override fun onAvailable(network: Network) { networkGeneration++ }
+        }
+        runCatching { cm.registerDefaultNetworkCallback(cb) }.onSuccess { netCallback = cb }
     }
 
     private fun start() {
@@ -78,70 +102,86 @@ class WatchService : Service() {
                     delay(30_000)
                     continue
                 }
-                val client = HuginnClient({ base }, { token })
-                val watch = runCatching { client.watch(knownHash, waitMs = 120_000) }.getOrNull()
+                val id = settings.clientId()
+                val canNotify = SessionWatchWorker.canNotify(applicationContext)
+                val client = HuginnClient({ base }, { token }, { id }, { canNotify })
 
-                if (watch == null) {
-                    // Off the tailnet, asleep, daemon restarting: all ordinary.
-                    update(ongoing("Watching huginn", "Not connected, retrying"))
-                    delay(backoff)
-                    backoff = (backoff * 2).coerceAtMost(120_000)
-                    continue
-                }
-                backoff = 5_000L
-                val firstLook = knownHash == null
-                knownHash = watch.hash
+                var sawAnything = false
+                var rotated = false
+                var failure: String? = null
+                var latest: Watch? = null
 
-                val needing = watch.sessions.filterValues { it == "attention" }.keys
-                val runningChats = watch.chats.filterValues { it.running }.keys
-
-                // On the FIRST look there is no previous observation, so anything
-                // already waiting would arrive as a fresh alert for something that
-                // happened before the service started. Record and stay quiet.
-                if (firstLook) {
-                    settings.setNotifiedSessions(needing)
-                    settings.setRunningChats(runningChats)
-                } else {
-                    val notified = settings.notifiedSessions.first()
-                    val fresh = needing - notified
-                    if (fresh.isNotEmpty()) {
-                        SessionWatchWorker.post(
-                            applicationContext,
-                            if (fresh.size == 1) "${fresh.first()} needs you" else "${fresh.size} sessions need you",
-                            if (fresh.size == 1) "Waiting for your answer" else fresh.joinToString(", "),
-                            fresh.first(),
-                        )
+                try {
+                    client.watchStream(knownHash).collect { ev ->
+                        when (ev) {
+                            is WatchEvent.State -> {
+                                sawAnything = true
+                                knownHash = ev.watch.hash
+                                latest = ev.watch
+                                settings.noteContact(System.currentTimeMillis())
+                                WatchCycle.apply(applicationContext, settings, ev.watch)
+                                update(ongoing("Watching huginn", summary(ev.watch)))
+                            }
+                            // Nothing changed, but the path is proven open — which is
+                            // itself the thing worth recording, since the host uses it
+                            // to decide whether Telegram needs to step in.
+                            WatchEvent.Alive -> {
+                                sawAnything = true
+                                settings.noteContact(System.currentTimeMillis())
+                                latest?.let { update(ongoing("Watching huginn", summary(it))) }
+                            }
+                            WatchEvent.Rotated -> rotated = true
+                            is WatchEvent.Failure -> failure = ev.message
+                        }
                     }
-                    if (needing != notified) settings.setNotifiedSessions(needing)
-
-                    val wasRunning = settings.runningChats.first()
-                    val finished = wasRunning - runningChats
-                    if (finished.isNotEmpty()) {
-                        val title = watch.chats[finished.first()]?.title
-                        SessionWatchWorker.post(
-                            applicationContext,
-                            if (finished.size == 1) "Chat finished" else "${finished.size} chats finished",
-                            title?.take(80) ?: "huginn has answered",
-                            null,
-                        )
-                    }
-                    if (runningChats != wasRunning) settings.setRunningChats(runningChats)
+                } catch (e: Exception) {
+                    failure = e.message ?: "stream ended"
                 }
 
-                update(ongoing("Watching huginn", summary(watch.sessions, runningChats.size)))
+                if (!isActive) break
+
+                when {
+                    // A clean rotation is not a fault and must not be backed off, or
+                    // the phone would go unwatched every half hour by design.
+                    rotated -> backoff = 5_000L
+                    // Something got through before the drop, so the setup is sound and
+                    // the connection merely aged out. Reconnect at once.
+                    sawAnything -> backoff = 5_000L
+                    else -> {
+                        failure?.let { settings.noteWatchError(it, System.currentTimeMillis()) }
+                        update(ongoing("Watching huginn", offlineText(failure)))
+                        waitOrNetwork(backoff)
+                        backoff = (backoff * 2).coerceAtMost(120_000)
+                    }
+                }
             }
         }
     }
 
+    /** Sleeps, but wakes early if the network returns in the meantime. */
+    private suspend fun waitOrNetwork(ms: Long) {
+        val generation = networkGeneration
+        var waited = 0L
+        while (waited < ms && networkGeneration == generation) {
+            delay(1_000)
+            waited += 1_000
+        }
+    }
+
+    private fun offlineText(failure: String?): String =
+        if (failure.isNullOrBlank()) "Not connected, retrying"
+        else "Not connected: ${failure.take(60)}"
+
     /** The ongoing notification says what is happening, not merely that we exist. */
-    private fun summary(sessions: Map<String, String?>, chatsRunning: Int): String {
-        val needing = sessions.count { it.value == "attention" }
-        val working = sessions.count { it.value == "running" }
+    private fun summary(watch: Watch): String {
+        val needing = watch.sessions.count { it.value == "attention" }
+        val working = watch.sessions.count { it.value == "running" }
+        val chatsRunning = watch.chats.count { it.value.running }
         return buildList {
             if (needing > 0) add(if (needing == 1) "1 session needs you" else "$needing sessions need you")
             if (working > 0) add("$working working")
             if (chatsRunning > 0) add("$chatsRunning chat${if (chatsRunning == 1) "" else "s"} running")
-            if (isEmpty()) add("${sessions.size} session${if (sessions.size == 1) "" else "s"}, all idle")
+            if (isEmpty()) add("${watch.sessions.size} session${if (watch.sessions.size == 1) "" else "s"}, all idle")
         }.joinToString(" · ")
     }
 
@@ -192,6 +232,11 @@ class WatchService : Service() {
     }
 
     override fun onDestroy() {
+        netCallback?.let { cb ->
+            val cm = getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager
+            runCatching { cm?.unregisterNetworkCallback(cb) }
+        }
+        netCallback = null
         job?.cancel()
         scope?.cancel()
         job = null

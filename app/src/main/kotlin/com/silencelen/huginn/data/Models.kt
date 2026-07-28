@@ -338,6 +338,13 @@ data class WatchChat(
     val running: Boolean = false,
     val pending: Int = 0,
     val title: String? = null,
+    /**
+     * Completed runs, counted rather than flagged. `running` going false is an edge,
+     * and anything looking on a schedule can miss one — with a ten-minute background
+     * check, a chat that started and finished in between was never seen running at
+     * all. A counter that is higher than last time cannot be missed that way.
+     */
+    val finishedRuns: Long = 0,
 )
 
 /** The change signal a watching client parks on. */
@@ -372,8 +379,52 @@ data class LoginState(
 @Serializable
 data class Alerts(
     val enabled: Boolean = false,
+    /**
+     * `fallback` — only when no phone has checked in recently; `always` — every
+     * time. Fallback by default: two notifications for one event teaches you to
+     * dismiss both without reading, and then the one that mattered is gone too.
+     */
+    val mode: String = "fallback",
     val delivered: Int = 0,
     val lastAt: Long? = null,
     /** telegram | none */
     val channel: String = "none",
+    /** Whether the host currently believes a phone is listening. */
+    val appOnline: Boolean = false,
 )
+
+/** One phone, as the host has seen it. */
+@Serializable
+data class ClientInfo(
+    val id: String = "",
+    /** stream | poll | heartbeat — which mechanism last checked in. */
+    val kind: String? = null,
+    val notify: Boolean? = null,
+    val lastAt: Long = 0,
+    val ageSeconds: Long = 0,
+    val checkIns: Long = 0,
+    val fresh: Boolean = false,
+    /** The window this client's own mechanism is judged against. */
+    val expectedWithinSeconds: Long = 0,
+)
+
+/**
+ * The host's own record of who is listening — the evidence that background
+ * delivery is working, gathered by a machine that never sleeps.
+ */
+@Serializable
+data class ClientsInfo(
+    val clients: List<ClientInfo> = emptyList(),
+    val appOnline: Boolean = false,
+    val serverTime: Long = 0,
+)
+
+/** What arrives on the watching connection. */
+sealed interface WatchEvent {
+    data class State(val watch: Watch) : WatchEvent
+    /** A keepalive. Carries nothing but the fact that the path is still open. */
+    data object Alive : WatchEvent
+    /** The server retired a long-lived stream; reconnect at once, do not back off. */
+    data object Rotated : WatchEvent
+    data class Failure(val message: String) : WatchEvent
+}

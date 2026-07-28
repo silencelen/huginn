@@ -1,5 +1,71 @@
 # Huginn changelog
 
+## 2.13.0 — 2026-07-27
+
+### Notifications that survive a sleeping phone
+The honest problem with 2.12.0: the app's own notifications worked all day and
+then stopped overnight. **Android's Doze mode was the cause**, and it defeats both
+mechanisms the app had. WorkManager's periodic check is *deferred* while the device
+is idle — it does not run and then catch up, it waits for the screen to come on. The
+foreground service keeps its process alive but loses network access, so its
+connection dies and every retry fails silently. Nothing reported a fault; it simply
+went quiet. (The same is true of devstore's six-hourly update check, for the same
+reason.)
+
+Three things changed, each fixing a different way it failed:
+
+**A background check that fires while the phone is asleep.** Ten-minute alarms of
+the one kind Doze honours, independent of the service, so they keep working when it
+has been killed — and they restart it when they find it gone.
+
+**Battery optimisation is now surfaced, and askable.** Without an allowlist entry
+Android suspends this app's network while idle, so the check still fires but reaches
+nothing — a failure that looks exactly like no check at all. Settings now says
+plainly whether the app is exempt, with a button to ask. **This is the single
+setting most likely to be why notifications were not arriving.**
+
+**Silence now means failure.** The watching connection used to be a long poll,
+where a socket killed by a network change was indistinguishable from one patiently
+waiting — so the app went on believing it was watching for hours. huginn now sends
+a keepalive every 25 seconds and the app gives up after 60, reconnecting at once
+rather than after a two-minute backoff, and immediately when the network returns.
+
+### Telegram is now a fallback rather than a duplicate
+huginn records when your phone last checked in, so it can tell whether the app is
+reachable. When it is, huginn stays quiet and lets the app notify you; when it is
+not, Telegram carries the alert. Two notifications for one event teaches you to
+dismiss both without reading, and then the one that mattered is gone too. Set it
+back to "always" in Settings if you would rather have both.
+
+### Background delivery, in Settings
+A new section answers "is this actually working?" without guesswork: whether the app
+is exempt from battery optimisation, when it last reached huginn, when the
+background check last ran, and — from the host, which never sleeps — **when huginn
+last heard from this phone and how many times it has checked in.** That last figure
+is the one worth trusting. Lock the phone, leave it half an hour, and it will tell
+you whether the vigil held.
+
+### Fixed: short chats finished without telling you
+A chat that started and finished between two observations was never seen running, so
+its finish was never reported — measured on a run that took five seconds against a
+ten-second check. Completed runs are now counted rather than inferred from an edge,
+so a finish cannot fall through a gap. This also covers back-to-back runs, where a
+queued message restarts a chat and it never appears to stop.
+
+### Fixed: transitions during a gap were absorbed instead of reported
+The comparison baseline was rebuilt from scratch each time the watcher started, so
+anything that changed while it was down was quietly accepted as "how things have
+always been" — and the watcher is most likely to have been killed exactly while the
+phone was asleep. The baseline now persists, so a restart compares rather than
+forgets. Installing a new version of the app also used to cancel its alarms
+silently; it now re-arms itself.
+
+### Still true
+Real FCM push — the kind Google delivers straight to a sleeping phone — needs a
+Firebase project created under your own Google account. Everything above is what
+can be built without one, and it is close: the practical difference is seconds
+versus up to ten minutes when the phone is deeply asleep.
+
 ## 2.12.0 — 2026-07-27
 
 ### Push notifications that arrive with the app closed
