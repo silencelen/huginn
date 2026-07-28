@@ -438,6 +438,10 @@ data class ModelChoice(
 @Serializable
 data class ModelList(val models: List<ModelChoice> = emptyList())
 
+/** Where an uploaded image landed on huginn. */
+@Serializable
+data class UploadResult(val ok: Boolean = false, val path: String = "", val bytes: Long = 0)
+
 /** One chat's state in the watch digest. */
 @Serializable
 data class WatchChat(

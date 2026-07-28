@@ -272,6 +272,55 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
      * it survives navigating away, and written through to storage (debounced) so
      * it survives the process being killed.
      */
+    /**
+     * The one photo staged for the open chat's next message.
+     *
+     * A single slot, not a list, and deliberately so: the message marker carries
+     * one path, the composer shows one chip, and "which of my three photos did it
+     * answer about" is not a question this UI should ever pose. Cleared on send
+     * and on leaving the chat.
+     */
+    sealed interface Attachment {
+        data object Uploading : Attachment
+        data class Ready(val path: String) : Attachment
+        data class Failed(val why: String) : Attachment
+    }
+
+    private val _attachment = MutableStateFlow<Attachment?>(null)
+    val attachment: StateFlow<Attachment?> = _attachment.asStateFlow()
+
+    fun clearAttachment() { _attachment.value = null }
+
+    /** Transcodes to JPEG off the main thread, uploads, and stages the path. */
+    fun attachImage(uri: android.net.Uri) {
+        _attachment.value = Attachment.Uploading
+        viewModelScope.launch(kotlinx.coroutines.Dispatchers.IO) {
+            val bytes = Attachments.toJpeg(getApplication(), uri)
+            if (bytes == null) {
+                _attachment.value = Attachment.Failed("Could not read that image")
+                return@launch
+            }
+            runCatching { client.upload(bytes, Attachments.MIME) }
+                .onSuccess { _attachment.value = Attachment.Ready(it.path) }
+                .onFailure { _attachment.value = Attachment.Failed(errText(it)) }
+        }
+    }
+
+    /**
+     * A share handed in from another app: a new chat, pre-staged. Text becomes
+     * the draft (editable before sending, like every share target worth using);
+     * an image starts uploading immediately so the chip is usually Ready by the
+     * time a first word is typed.
+     */
+    fun newChatForShare(text: String?, image: android.net.Uri?, onOpened: (String) -> Unit) {
+        newChat(_chatMode.value) { id ->
+            openChat(id)
+            if (!text.isNullOrBlank()) setDraft(chatDraftKey(id), text)
+            if (image != null) attachImage(image)
+            onOpened(id)
+        }
+    }
+
     private val _drafts = MutableStateFlow<Map<String, String>>(emptyMap())
     val drafts: StateFlow<Map<String, String>> = _drafts.asStateFlow()
     private var draftSaveJob: Job? = null
@@ -1139,6 +1188,16 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
      * used to when a chat was busy.
      */
     fun send(id: String, text: String) {
+        // The staged photo rides this message. Consumed HERE, whichever path the
+        // send takes (stream or queue), so it cannot ride two messages.
+        val att = _attachment.value
+        @Suppress("NAME_SHADOWING") var text = text
+        if (att is Attachment.Ready) {
+            text = if (text.isBlank()) Attachments.marker(att.path)
+            else text + "\n\n" + Attachments.marker(att.path)
+            _attachment.value = null
+        }
+        if (text.isBlank()) return
         clearDraft(chatDraftKey(id))
         if (_sending.value) {
             viewModelScope.launch {
