@@ -1,5 +1,24 @@
 # Huginn changelog
 
+## 2.20.0 — 2026-07-27
+
+### Suggested next messages
+When a turn ends, the conversation offers up to three tappable suggestions for
+your next message — grounded in what was just said, with the first one answering
+any question huginn left hanging. Tapping one **fills the composer** rather than
+sending: a suggestion is a draft, not a decision. They step aside for a live
+permission prompt, disappear the moment you start typing or a new turn starts,
+and are generated once per turn boundary by a small, caged model call on the host
+(no tools, one turn, none of huginn's own instructions) — cached, so reopening a
+conversation costs nothing.
+
+### Stale workflows no longer haunt the strip
+The terminal keeps workflow and board rows in its footer after a run finishes —
+readable as history there, but mirrored into the work strip they claimed a
+workflow was still running when it had long ended. Pane-derived rows now show
+only while the session is actually working; background shells and agents are
+unaffected, because their liveness is measured rather than read off a screen.
+
 ## 2.19.0 — 2026-07-27
 
 ### Tap the work strip to see the agents

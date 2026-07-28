@@ -5,6 +5,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.imePadding
@@ -28,6 +29,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.SuggestionChip
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Tab
 import androidx.compose.material3.TabRow
@@ -37,6 +39,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
@@ -81,6 +84,7 @@ fun SessionScreen(
     agents: com.silencelen.huginn.data.AgentsInfo?,
     onAgentsOpen: () -> Unit,
     onAgentsClose: () -> Unit,
+    suggestions: List<String>,
     onAnswerPrompt: (Int) -> Unit,
     onForceResize: () -> Unit,
     onInterrupt: () -> Unit,
@@ -118,6 +122,7 @@ fun SessionScreen(
                     agents = agents,
                     onAgentsOpen = onAgentsOpen,
                     onAgentsClose = onAgentsClose,
+                    suggestions = suggestions,
                     draft = draft,
                     onDraft = onDraft,
                     onSendText = onSendText,
@@ -161,6 +166,7 @@ private fun SessionConversation(
     agents: com.silencelen.huginn.data.AgentsInfo?,
     onAgentsOpen: () -> Unit,
     onAgentsClose: () -> Unit,
+    suggestions: List<String>,
     draft: String,
     onDraft: (String) -> Unit,
     onSendText: (String, Boolean) -> Unit,
@@ -243,14 +249,23 @@ private fun SessionConversation(
         }
         var showWork by rememberSaveable(name) { mutableStateOf(false) }
 
-        if (working || spinner != null || statusLines.isNotEmpty() ||
-            page?.tasks?.isNotEmpty() == true || (page?.bgAgents ?: 0) > 0
-        ) {
+        // Pane-derived rows are trusted only while the session is actually
+        // working. The TUI keeps workflow and board rows in its persistent
+        // footer after the run ends — truthful on a terminal where they read as
+        // history, but mirrored into this strip they claimed a workflow was
+        // still running when it was long finished. The hook state knows better;
+        // background shells and agents are exempt because their liveness is
+        // already measured, not read off a screen.
+        val paneRows = if (working) statusLines else emptyList()
+        val paneSpinner = if (working) spinner else null
+        val bgWork = page?.tasks?.isNotEmpty() == true || (page?.bgAgents ?: 0) > 0
+
+        if (working || bgWork) {
             WorkStrip(
-                spinner = spinner,
-                statusLines = statusLines,
+                spinner = paneSpinner,
+                statusLines = paneRows,
                 transient = if (working) lastTransient else null,
-                activity = page?.activity,
+                activity = if (working) page?.activity else null,
                 tasks = page?.tasks ?: emptyList(),
                 bgAgents = page?.bgAgents ?: 0,
                 onClick = { showWork = true },
@@ -260,13 +275,40 @@ private fun SessionConversation(
         if (showWork) {
             WorkSheet(
                 name = name,
-                spinner = spinner,
-                statusLines = statusLines,
+                spinner = paneSpinner,
+                statusLines = paneRows,
                 tasks = page?.tasks ?: emptyList(),
                 agents = agents,
                 onOpen = onAgentsOpen,
                 onDismiss = { showWork = false; onAgentsClose() },
             )
+        }
+
+        // Suggested next messages, at the turn boundary only. A live prompt's
+        // buttons outrank them, typing dismisses them, and tapping one FILLS the
+        // composer rather than sending — a suggestion is a draft, not a decision.
+        if (suggestions.isNotEmpty() && prompt == null && !working && draft.isBlank()) {
+            Row(
+                Modifier
+                    .fillMaxWidth()
+                    .horizontalScroll(rememberScrollState())
+                    .padding(horizontal = 10.dp, vertical = 2.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                suggestions.forEach { sug ->
+                    SuggestionChip(
+                        onClick = { onDraft(sug) },
+                        label = {
+                            Text(
+                                sug,
+                                style = MaterialTheme.typography.labelMedium,
+                                maxLines = 1,
+                                overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+                            )
+                        },
+                    )
+                }
+            }
         }
 
         prompt?.let {
