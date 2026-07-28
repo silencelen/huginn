@@ -67,6 +67,10 @@ class HuginnMessagingService : FirebaseMessagingService() {
             if (kind == "session_attention") subject else null,
             answers,
             data["fingerprint"],
+            // A finished chat can be continued from the shade. Sessions cannot: a
+            // tmux pane takes keystrokes, not messages, and free text typed at one
+            // lands wherever the cursor happens to be.
+            replyChat = if (kind == "chat_finished") subject else null,
         )
 
         // Then bring the app's own record up to date, so the ten-minute alarm does not
@@ -85,7 +89,12 @@ class HuginnMessagingService : FirebaseMessagingService() {
                 val now = System.currentTimeMillis()
                 settings.notePushArrived(now)
                 if (settings.notifyEnabled.first()) {
-                    Heartbeat.arm(applicationContext, Heartbeat.intervalFor(now, now))
+                    // Read back AFTER recording the arrival, so this push counts
+                    // toward the tally that decides the cadence.
+                    Heartbeat.arm(applicationContext, Heartbeat.intervalFor(
+                        settings.pushesSent.first(),
+                        settings.pushesReceived.first(),
+                    ))
                 }
             }
             // Claim this session BEFORE reconciling. Otherwise the reconcile's own

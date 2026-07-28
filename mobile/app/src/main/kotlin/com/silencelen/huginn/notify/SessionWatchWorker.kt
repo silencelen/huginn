@@ -10,6 +10,7 @@ import android.content.pm.PackageManager
 import android.os.Build
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
+import androidx.core.app.RemoteInput
 import androidx.core.content.ContextCompat
 import androidx.work.Constraints
 import androidx.work.CoroutineWorker
@@ -76,6 +77,7 @@ class SessionWatchWorker(
     companion object {
         const val CHANNEL = "sessions_attention"
         const val EXTRA_SESSION = "session"
+        const val EXTRA_CHAT = "chat"
         private const val NOTIFY_ID = 4711
         private const val WORK = "session-watch"
 
@@ -135,6 +137,12 @@ class SessionWatchWorker(
          * and by the test button in Settings, so what you verify is the same path
          * that fires for real.
          */
+        /**
+         * @param replyChat when set, the notification carries an inline reply box
+         *        whose text is posted to that chat — so answering a finished chat
+         *        costs a swipe-down and a sentence rather than unlocking, finding
+         *        the app, finding the chat and scrolling to the bottom of it.
+         */
         fun post(
             context: Context,
             title: String,
@@ -142,6 +150,7 @@ class SessionWatchWorker(
             session: String?,
             answers: List<AnswerOption> = emptyList(),
             fingerprint: String? = null,
+            replyChat: String? = null,
         ) {
             if (!canNotify(context)) return
             val nm = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
@@ -153,12 +162,19 @@ class SessionWatchWorker(
             val intent = Intent(context, MainActivity::class.java).apply {
                 flags = Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
                 if (session != null) putExtra(EXTRA_SESSION, session)
+                if (replyChat != null) putExtra(EXTRA_CHAT, replyChat)
             }
             val pending = PendingIntent.getActivity(
-                context, 0, intent,
+                context,
+                // Distinct per target, for the same reason the answer buttons are:
+                // one shared request code plus FLAG_UPDATE_CURRENT means the newest
+                // notification's extras are handed to every earlier one, so tapping
+                // an older alert opens whatever arrived last.
+                (session ?: replyChat)?.hashCode() ?: 0,
+                intent,
                 PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
             )
-            val notificationId = notificationIdFor(session)
+            val notificationId = notificationIdFor(session ?: replyChat?.let { "chat:$it" })
             val builder = NotificationCompat.Builder(context, CHANNEL)
                 .setSmallIcon(R.drawable.ic_stat_huginn)
                 .setContentTitle(title)
@@ -197,6 +213,28 @@ class SessionWatchWorker(
                         ),
                     )
                 }
+            }
+            if (replyChat != null) {
+                val remote = RemoteInput.Builder(ReplyReceiver.KEY_REPLY)
+                    .setLabel("Reply to huginn")
+                    .build()
+                val replyIntent = Intent(context, ReplyReceiver::class.java).apply {
+                    action = ReplyReceiver.ACTION
+                    putExtra(ReplyReceiver.EXTRA_CHAT, replyChat)
+                    putExtra(ReplyReceiver.EXTRA_NOTIFICATION_ID, notificationId)
+                    putExtra(ReplyReceiver.EXTRA_TITLE, title)
+                }
+                builder.addAction(
+                    NotificationCompat.Action.Builder(0, "Reply", PendingIntent.getBroadcast(
+                        context,
+                        replyChat.hashCode(),
+                        replyIntent,
+                        // MUTABLE, and it has to be: RemoteInput delivers what was
+                        // typed by writing it into this very intent, which an
+                        // immutable one forbids — the reply arrives empty.
+                        PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_MUTABLE,
+                    )).addRemoteInput(remote).build()
+                )
             }
             NotificationManagerCompat.from(context).notify(notificationId, builder.build())
         }

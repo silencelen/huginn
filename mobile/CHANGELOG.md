@@ -1,5 +1,51 @@
 # Huginn changelog
 
+## 2.31.0 — 2026-07-28
+
+### Reply to a finished chat from the notification
+A chat finishing used to announce only that it had ("huginn finished: audit the
+arr stack"), which raises exactly one question — *and?* — that you had to unlock
+the phone to answer. The notification now carries **the answer itself**, and a
+**reply box**: type a sentence in the shade and it goes straight to that chat.
+The notification then stays, updated with what was sent, rather than vanishing
+and leaving no evidence the send worked. Tapping it opens that chat.
+
+### Tapping a notification works while the app is already open
+The notifications launch SINGLE_TOP, so a tap on an app that is already running
+delivers to `onNewIntent` — which nothing read. Tapping "andrev needs you" did
+nothing at all whenever the app happened to be foregrounded, which is exactly
+when you are most likely to tap one. Fixed for sessions and chats alike.
+
+### The overnight wake-up cadence was backwards
+Measured on the owner's phone, 02:00-06:00: **33 wake-ups**, in the hours with
+the least to report. The alarm relaxed to hourly only while a push had arrived
+in the last two hours, and a quiet night sends no pushes — so silence was read
+as failure and the alarm tightened to ten minutes precisely when nothing was
+happening.
+
+Silence is not failure. Only a push that was *sent and never arrived* is, and
+the phone cannot tell those apart on its own — so huginn now reports how many
+pushes it has sent this install, and the phone compares that against how many
+actually landed. Nothing dropped, however long the quiet: stay hourly. Something
+dropped: tighten immediately, without waiting out any window.
+
+## appd 2.31.1 — 2026-07-28 (host)
+
+### A finished chat now quotes its answer
+The alert carries the last thing Claude said, so the notification and the
+Telegram fallback both say what happened rather than only that something did.
+
+**A field that evaporated one layer down.** `chatStates()` grew a `snippet`, the
+alert code read it, and it was null every single time: `digest()` rebuilds each
+chat from an explicit field list and silently dropped anything not named. Nothing
+failed — the value simply disappeared between two correct-looking functions, and
+only reading the notification on a real phone showed it. Pinned by a test, along
+with the reason `snippet` and `title` stay OUT of the change hash: they are
+payload, and hashing them would wake every parked phone to report a rename.
+
+### The watch response reports pushes sent
+So the phone can tell a quiet night from a broken delivery path. See 2.31.0.
+
 ## appd 2.30.0 — 2026-07-28 (host only, no app update needed)
 
 ### Alerts are noticed instantly instead of on a timer

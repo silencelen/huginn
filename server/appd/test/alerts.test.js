@@ -5,7 +5,7 @@
 
 const { test } = require('node:test');
 const assert = require('node:assert');
-const { decideAlerts, pruneSent, REPEAT_MS } = require('../lib/alerts');
+const { decideAlerts, pruneSent, telegramText, REPEAT_MS } = require('../lib/alerts');
 
 const NOW = 1_700_000_000_000;
 const obs = (sessions, chats = {}) => ({ sessions, chats });
@@ -42,7 +42,31 @@ test('a finished chat alerts, and is named', () => {
   );
   assert.strictEqual(alerts.length, 1);
   assert.strictEqual(alerts[0].kind, 'chat_finished');
-  assert.ok(alerts[0].text.includes('Audit the arr stack'));
+  // Named by the chat, so a phone notification reads like a message from it.
+  assert.strictEqual(alerts[0].title, 'Audit the arr stack');
+  assert.strictEqual(alerts[0].label, 'Audit the arr stack');
+});
+
+test('a finished chat carries the answer, not just the fact that it ended', () => {
+  const { alerts } = decideAlerts(
+    obs({}, { c1: { running: true, title: 'Audit the arr stack' } }),
+    obs({}, { c1: { running: false, title: 'Audit the arr stack', snippet: 'Sonarr is on 4.0.10; nothing to do.' } }),
+    {}, NOW,
+  );
+  assert.strictEqual(alerts[0].text, 'Sonarr is on 4.0.10; nothing to do.');
+  // Telegram has no app around it to supply the context, so it says the event too.
+  const tg = telegramText(alerts[0]);
+  assert.ok(tg.startsWith('\u{1F514} Chat finished: Audit the arr stack'), tg);
+  assert.ok(tg.includes('Sonarr is on 4.0.10'), tg);
+});
+
+test('a finished chat with nothing recorded still says something', () => {
+  const { alerts } = decideAlerts(
+    obs({}, { c1: { running: true, title: 'Audit the arr stack' } }),
+    obs({}, { c1: { running: false, title: 'Audit the arr stack' } }),
+    {}, NOW,
+  );
+  assert.strictEqual(alerts[0].text, 'Finished.');
 });
 
 test('a chat still running does not alert', () => {
@@ -217,7 +241,7 @@ test('a chat with no counter at all still alerts on the edge', () => {
 // owner something down a path that carries no reply. Quoting what a SESSION is asking
 // is a status report, not huginn asking, and these tests pin that shape down.
 
-const { telegramText } = require('../lib/alerts');
+
 
 test('a question is reported, with its options listed', () => {
   const text = telegramText({
