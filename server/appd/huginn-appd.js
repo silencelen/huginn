@@ -36,7 +36,7 @@ const { AccountStore, fingerprint } = require('./lib/accounts');
 const { formatModel, discoverModels, parseModelId } = require('./lib/models');
 const { pushPending, takePending, clearPending, queuedEvents } = require('./lib/chatqueue');
 const { digest } = require('./lib/watch');
-const { decideAlerts, routeAlerts, telegramText, pruneSent } = require('./lib/alerts');
+const { decideAlerts, routeAlerts, telegramText, pruneSent, carryRunStarts } = require('./lib/alerts');
 const clientsLib = require('./lib/clients');
 const { taskDirFor, parsePs, scanTasks, extractBgIds } = require('./lib/tasks');
 const { agentsDirFor, listAgents } = require('./lib/agents');
@@ -45,7 +45,7 @@ const { decideSwitch, worstLimit } = require('./lib/autoswitch');
 const pushLib = require('./lib/pushtokens');
 const { trySender } = require('./lib/fcm');
 
-const VERSION = '2.34.0';
+const VERSION = '2.34.1';
 const PORT = Number(process.env.HUGINN_APPD_PORT || 8787);
 const DATA_DIR = process.env.HUGINN_APPD_DATA || '/var/lib/huginn-appd';
 const TOKEN_FILE = process.env.HUGINN_APPD_TOKEN_FILE || '/etc/huginn-appd/token';
@@ -1471,13 +1471,15 @@ async function alertTickInner(st) {
   const now = Date.now();
   const sessions = await listSessions();
   const d = digest(sessions, chatStates());
-  // stateSince rides alongside the digest rather than inside it, on purpose. The
-  // digest is a change signal that parked phones hash — a timestamp that advances
-  // on every state change would make it churn. Here it is only read to answer one
-  // question: when a session goes idle, had it been running long enough for that
-  // to be worth saying?
-  const sessionsSince = {};
-  for (const s of sessions) if (s.stateSince) sessionsSince[s.name] = s.stateSince;
+  // When each running session's run began — the watcher's OWN ledger, carried
+  // from the previous observation, not the state file's timestamp. The file is
+  // rewritten by the hook on every tool call, so its ts means "seconds since a
+  // tool last ran", and a duration gate fed that read near-zero for runs of any
+  // length: multiple 15-minute runs produced zero finish alerts. Rides alongside
+  // the digest rather than inside it, because the digest is a change signal that
+  // parked phones hash, and a timestamp would make it churn.
+  const sessionsSince = carryRunStarts(
+    st.prev && st.prev.sessionsSince, d.sessions, Math.floor(now / 1000));
   const observation = { sessions: d.sessions, sessionsSince, chats: d.chats };
 
   const { alerts, sentUpdates } = decideAlerts(st.prev, observation, st.sent, now, st.prevAt || 0);
