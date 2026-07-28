@@ -1,0 +1,93 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <!-- Only to tell you a session is waiting on an answer; declined simply
+         means the background poll notifies nothing. -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <!-- Continuous watching: a live connection so a "needs you" arrives in
+         seconds rather than on WorkManager's 15-minute floor. specialUse rather
+         than dataSync because dataSync is capped at 6 hours per day on Android 15
+         and this is meant to sit connected; the app is sideloaded via devstore, so
+         there is no store review to satisfy. -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+    <!-- Lets the app ask to sit on the Doze allowlist. Without that entry the
+         system suspends this app's network access while the phone is idle, so the
+         heartbeat alarm still fires but its request reaches nothing — a failure that
+         looks identical to no alarm at all. Play policy restricts this permission to
+         a few app categories; this app is sideloaded from devstore, so the only judge
+         of whether it is warranted is the person who owns both the phone and the host
+         it watches. Asking is all it does: the system dialogue decides. -->
+    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
+
+    <application
+        android:allowBackup="false"
+        android:icon="@mipmap/ic_launcher"
+        android:label="@string/app_name"
+        android:roundIcon="@mipmap/ic_launcher_round"
+        android:supportsRtl="true"
+        android:networkSecurityConfig="@xml/network_security_config"
+        android:theme="@style/Theme.Huginn">
+
+        <activity
+            android:name=".MainActivity"
+            android:exported="true"
+            android:label="@string/app_name"
+            android:windowSoftInputMode="adjustResize"
+            android:theme="@style/Theme.Huginn">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+        <service
+            android:name=".notify.WatchService"
+            android:exported="false"
+            android:foregroundServiceType="specialUse">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="Maintains a connection to the user's own huginn host to deliver alerts when a Claude Code session needs an answer" />
+        </service>
+
+        <receiver
+            android:name=".notify.BootReceiver"
+            android:exported="true"
+            android:enabled="true">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+                <!-- Installing a new version cancels this app's pending alarms, so
+                     without this a release would quietly end the heartbeat. -->
+                <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
+            </intent-filter>
+        </receiver>
+
+        <!-- FCM. Data-only messages, so this runs even while the app is backgrounded
+             and the app itself decides what has already been shown; a `notification`
+             block would be drawn by the system without consulting the app, which would
+             leave the ten-minute alarm free to repeat the same alert later. -->
+        <service
+            android:name=".notify.HuginnMessagingService"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="com.google.firebase.MESSAGING_EVENT" />
+            </intent-filter>
+        </service>
+
+        <!-- Answers a session's question from the notification's action buttons. Not
+             exported: only this app's own notifications trigger it. -->
+        <receiver
+            android:name=".notify.AnswerReceiver"
+            android:exported="false"
+            android:enabled="true" />
+
+        <!-- Woken by AlarmManager while the phone is idle. Not exported: it is
+             triggered only by an alarm this app scheduled against its own component. -->
+        <receiver
+            android:name=".notify.HeartbeatReceiver"
+            android:exported="false"
+            android:enabled="true" />
+    </application>
+</manifest>
