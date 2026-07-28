@@ -1,5 +1,22 @@
 # Huginn changelog
 
+## 2.24.0 — 2026-07-28
+
+### Multi-select questions work
+When huginn asks a pick-several question, the app now shows real checkboxes:
+toggle what you want, then one **Answer** button submits the set. Nothing touches
+the session until you answer, so a half-formed selection is never typed into the
+pane — and if you had already toggled some options in tmux, the app starts from
+that state and the host reconciles the difference rather than blindly re-toggling.
+
+Under the hood the dialog takes a little dance (digits toggle, a review tab,
+then submit), learned by driving a real one and watched all the way through: the
+end-to-end test pre-toggled an option by hand in tmux, asked the app for a
+different set, and the session recorded exactly that set.
+
+Notification buttons stay single-select only — one tap cannot honestly express a
+set, so a multi-select question's notification opens the app instead.
+
 ## 2.23.0 — 2026-07-28
 
 ### Accounts rotate themselves

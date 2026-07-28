@@ -438,6 +438,7 @@ fun HuginnApp(
                 onAgentsClose = { vm.stopAgentsPolling() },
                 suggestions = suggestions,
                 onAnswerPrompt = { vm.answerPrompt(name, it) },
+                onAnswerMulti = { opts -> vm.answerPromptMulti(name, opts, screen?.prompt?.fingerprint) },
                 onForceResize = { vm.forceFit() },
                 onInterrupt = { vm.interruptSession(name) },
                 working = sessions.firstOrNull { s -> s.name == name }?.state == "running",

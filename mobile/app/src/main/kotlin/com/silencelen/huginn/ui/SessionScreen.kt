@@ -86,6 +86,7 @@ fun SessionScreen(
     onAgentsClose: () -> Unit,
     suggestions: List<String>,
     onAnswerPrompt: (Int) -> Unit,
+    onAnswerMulti: (List<Int>) -> Unit,
     onForceResize: () -> Unit,
     onInterrupt: () -> Unit,
     onCopy: (String) -> Unit,
@@ -127,6 +128,7 @@ fun SessionScreen(
                     onDraft = onDraft,
                     onSendText = onSendText,
                     onAnswerPrompt = onAnswerPrompt,
+                    onAnswerMulti = onAnswerMulti,
                     onInterrupt = onInterrupt,
                     working = working,
                     onCopy = onCopy,
@@ -147,6 +149,7 @@ fun SessionScreen(
                     onSendKeys = onSendKeys,
                     onLive = onLive,
                     onAnswerPrompt = onAnswerPrompt,
+                    onAnswerMulti = onAnswerMulti,
                     onForceResize = onForceResize,
                 )
             }
@@ -171,6 +174,7 @@ private fun SessionConversation(
     onDraft: (String) -> Unit,
     onSendText: (String, Boolean) -> Unit,
     onAnswerPrompt: (Int) -> Unit,
+    onAnswerMulti: (List<Int>) -> Unit,
     onInterrupt: () -> Unit,
     working: Boolean,
     onCopy: (String) -> Unit,
@@ -312,12 +316,7 @@ private fun SessionConversation(
         }
 
         prompt?.let {
-            PromptCard(
-                it.question,
-                it.options.map { o -> o.number to o.label },
-                it.options.firstOrNull { o -> o.selected }?.number,
-                onAnswerPrompt,
-            )
+            PromptCard(it, onAnswerPrompt, onAnswerMulti)
         }
 
         Surface(color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f)) {
