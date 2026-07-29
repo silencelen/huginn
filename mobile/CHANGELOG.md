@@ -1,5 +1,22 @@
 # Huginn changelog
 
+## 2.47.0 — 2026-07-28 (audit fixes, round 5)
+
+### The background heartbeat could end silently and never restart
+Each beat scheduled the next one only *after* its network check — a check
+allowed 25 seconds, inside a receiver the system guarantees about ten. If the
+process was killed in that window (Doze, memory pressure, the system reclaiming
+a background app — precisely the conditions this alarm exists to survive) no
+next alarm was ever scheduled, and the fallback was simply over until you next
+opened the app by hand. The next beat is now armed *before* any work, so the
+chain survives the check dying in any manner at all.
+
+### "Stop watching" now actually stops
+The notification's Stop button stopped the service but left the preference on,
+so the next heartbeat tick — or the next time you opened the app — quietly
+started it again. It looked like it worked and came back within the hour. It
+now turns the setting off too, which is what the button always claimed to do.
+
 ## 2.46.0 / appd 2.42.0 — 2026-07-28 (audit fixes, round 4)
 
 ### Answering one waiting session no longer hides the others

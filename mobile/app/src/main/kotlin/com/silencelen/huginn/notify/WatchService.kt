@@ -19,6 +19,7 @@ import com.silencelen.huginn.data.SettingsStore
 import com.silencelen.huginn.data.Watch
 import com.silencelen.huginn.data.WatchEvent
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
@@ -62,6 +63,15 @@ class WatchService : Service() {
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         if (intent?.action == ACTION_STOP) {
+            // Clear the PREFERENCE too, not just this process. Stopping alone was
+            // undone within the hour: the heartbeat tick starts the service
+            // whenever watchEnabled is true, and so does app start — so the
+            // notification's Stop button looked like it worked and the service
+            // quietly came back. A control that does not control is worse than no
+            // control. Detached scope because this service is about to die.
+            CoroutineScope(SupervisorJob() + Dispatchers.IO).launch {
+                runCatching { SettingsStore(applicationContext).setWatchEnabled(false) }
+            }
             stopSelf()
             return START_NOT_STICKY
         }

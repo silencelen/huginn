@@ -157,6 +157,27 @@ class HeartbeatReceiver : BroadcastReceiver() {
         val app = context.applicationContext
         val pending = goAsync()
         CoroutineScope(Dispatchers.IO).launch {
+            val settings = SettingsStore(app)
+
+            // ARMED FIRST, before any work.
+            //
+            // The next beat used to be scheduled only in the `finally` below —
+            // after a network tick bounded at 25 SECONDS, inside a broadcast
+            // receiver that is guaranteed roughly ten. A process killed in that
+            // window (Doze, memory pressure, the system reclaiming a background
+            // app — the exact conditions this alarm exists for) left NO pending
+            // alarm at all, and the heartbeat was simply over: silently, until
+            // the app was next opened by hand. Scheduling before working means
+            // the chain survives the tick dying in any manner whatsoever.
+            //
+            // Same PendingIntent and request code, so the refinement at the end
+            // REPLACES this rather than stacking a second alarm.
+            suspend fun armFromHealth() = Heartbeat.arm(app, Heartbeat.intervalFor(
+                runCatching { settings.pushesSent.first() }.getOrDefault(0L),
+                runCatching { settings.pushesReceived.first() }.getOrDefault(0L),
+            ))
+            runCatching { armFromHealth() }
+
             var rearm = true
             try {
                 // Bounded: a broadcast receiver is not a place to wait on a network,
@@ -171,13 +192,13 @@ class HeartbeatReceiver : BroadcastReceiver() {
                 // not an exceptional one. Only an explicit "the feature is off"
                 // clears this flag.
                 if (rearm) {
-                    // Re-armed at the cadence push health earns: hourly while
-                    // nothing is being dropped, ten-minutely once something is.
-                    val settings = SettingsStore(app)
-                    Heartbeat.arm(app, Heartbeat.intervalFor(
-                        runCatching { settings.pushesSent.first() }.getOrDefault(0L),
-                        runCatching { settings.pushesReceived.first() }.getOrDefault(0L),
-                    ))
+                    // At the cadence push health has earned, now that the tick has
+                    // refreshed the tallies it is read from.
+                    runCatching { armFromHealth() }
+                } else {
+                    // The feature is off: undo the defensive arm above, or it
+                    // would keep waking the device for a watch nobody wants.
+                    Heartbeat.cancel(app)
                 }
                 pending.finish()
             }
