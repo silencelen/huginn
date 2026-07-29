@@ -289,20 +289,45 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
     private val _attachment = MutableStateFlow<Attachment?>(null)
     val attachment: StateFlow<Attachment?> = _attachment.asStateFlow()
 
-    fun clearAttachment() { _attachment.value = null }
+    /**
+     * WHOSE photo the slot holds — a chat's draft key or a session's. The slot is
+     * a single global, and before it had an owner a photo staged on one screen
+     * could ride a send from another: stage in chat A, hop to chat B before A's
+     * dispose ran, send — B's message carried A's photo. Every read of the slot
+     * now names the surface asking, and a mismatch reads as empty.
+     */
+    private val _attachmentOwner = MutableStateFlow<String?>(null)
+    val attachmentOwner: StateFlow<String?> = _attachmentOwner.asStateFlow()
+
+    /** Clears the slot — everyone's, or only if [owner] still holds it. */
+    fun clearAttachment(owner: String? = null) {
+        if (owner == null || _attachmentOwner.value == owner) {
+            _attachment.value = null
+            _attachmentOwner.value = null
+        }
+    }
+
+    /** The Ready path for [owner], consumed atomically; null if not theirs. */
+    private fun takeAttachment(owner: String): String? {
+        val att = _attachment.value
+        if (att !is Attachment.Ready || _attachmentOwner.value != owner) return null
+        _attachment.value = null
+        _attachmentOwner.value = null
+        return att.path
+    }
 
     /** Transcodes to JPEG off the main thread, uploads, and stages the path. */
-    fun attachImage(uri: android.net.Uri) {
+    fun attachImage(uri: android.net.Uri, owner: String) {
+        _attachmentOwner.value = owner
         _attachment.value = Attachment.Uploading
         viewModelScope.launch(kotlinx.coroutines.Dispatchers.IO) {
             val bytes = Attachments.toJpeg(getApplication(), uri)
-            if (bytes == null) {
-                _attachment.value = Attachment.Failed("Could not read that image")
-                return@launch
-            }
-            runCatching { client.upload(bytes, Attachments.MIME) }
-                .onSuccess { _attachment.value = Attachment.Ready(it.path) }
-                .onFailure { _attachment.value = Attachment.Failed(errText(it)) }
+            val result = if (bytes == null) Attachment.Failed("Could not read that image")
+                else runCatching { client.upload(bytes, Attachments.MIME) }
+                    .fold({ Attachment.Ready(it.path) }, { Attachment.Failed(errText(it)) })
+            // The slot may have been re-staged for someone else while this
+            // uploaded; a stale upload must not overwrite the newer claim.
+            if (_attachmentOwner.value == owner) _attachment.value = result
         }
     }
 
@@ -312,6 +337,27 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
      * an image starts uploading immediately so the chip is usually Ready by the
      * time a first word is typed.
      */
+    /** Stages shared content into an EXISTING chat: draft appended, photo owned. */
+    fun stageShareInChat(id: String, text: String?, image: android.net.Uri?) {
+        val key = chatDraftKey(id)
+        if (!text.isNullOrBlank()) {
+            val cur = _drafts.value[key].orEmpty()
+            // Appended, never clobbered: a half-typed draft outranks a share.
+            setDraft(key, if (cur.isBlank()) text else cur + "\n" + text)
+        }
+        if (image != null) attachImage(image, key)
+    }
+
+    /** The same, into a session's conversation composer. */
+    fun stageShareInSession(name: String, text: String?, image: android.net.Uri?) {
+        val key = sessionDraftKey(name)
+        if (!text.isNullOrBlank()) {
+            val cur = _drafts.value[key].orEmpty()
+            setDraft(key, if (cur.isBlank()) text else cur + "\n" + text)
+        }
+        if (image != null) attachImage(image, key)
+    }
+
     fun newChatForShare(text: String?, image: android.net.Uri?, onOpened: (String) -> Unit) {
         viewModelScope.launch {
             // A share often arrives in a BRAND NEW activity with a brand new view
@@ -325,7 +371,7 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
             newChat(_chatMode.value) { id ->
                 openChat(id)
                 if (!text.isNullOrBlank()) setDraft(chatDraftKey(id), text)
-                if (image != null) attachImage(image)
+                if (image != null) attachImage(image, chatDraftKey(id))
                 onOpened(id)
             }
         }
@@ -935,14 +981,13 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
 
     fun sendText(name: String, text: String, thenEnter: Boolean) {
         // The staged photo rides this message, same contract as a chat send:
-        // consumed here so it cannot ride twice, marker-only when nothing was
-        // typed. An interactive session's Claude reads the path like any file.
-        val att = _attachment.value
+        // consumed here (and only if staged for THIS session) so it cannot ride
+        // twice or cross surfaces. Claude in the pane reads the path like any file.
+        val path = takeAttachment(sessionDraftKey(name))
         @Suppress("NAME_SHADOWING") var text = text
-        if (att is Attachment.Ready) {
-            text = if (text.isBlank()) Attachments.marker(att.path)
-            else text + "\n\n" + Attachments.marker(att.path)
-            _attachment.value = null
+        if (path != null) {
+            text = if (text.isBlank()) Attachments.marker(path)
+            else text + "\n\n" + Attachments.marker(path)
         }
         if (text.isBlank()) return
         clearDraft(sessionDraftKey(name))
@@ -1209,14 +1254,14 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
      * used to when a chat was busy.
      */
     fun send(id: String, text: String) {
-        // The staged photo rides this message. Consumed HERE, whichever path the
-        // send takes (stream or queue), so it cannot ride two messages.
-        val att = _attachment.value
+        // The staged photo rides this message — but only if it was staged for
+        // THIS chat. Consumed here, whichever path the send takes (stream or
+        // queue), so it cannot ride two messages.
+        val path = takeAttachment(chatDraftKey(id))
         @Suppress("NAME_SHADOWING") var text = text
-        if (att is Attachment.Ready) {
-            text = if (text.isBlank()) Attachments.marker(att.path)
-            else text + "\n\n" + Attachments.marker(att.path)
-            _attachment.value = null
+        if (path != null) {
+            text = if (text.isBlank()) Attachments.marker(path)
+            else text + "\n\n" + Attachments.marker(path)
         }
         if (text.isBlank()) return
         clearDraft(chatDraftKey(id))
