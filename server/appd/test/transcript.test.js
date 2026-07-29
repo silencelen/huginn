@@ -10,7 +10,7 @@ const assert = require('node:assert');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const { readTranscript, workflowName, digestToolInput, machineText, describeMachineText, humanRemainder } = require('../lib/transcript');
+const { readTranscript, workflowName, digestToolInput, machineText, describeMachineText, humanRemainder, startsAtBoundary } = require("../lib/transcript");
 
 function writeFixture(records) {
   const p = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'tr-')), 's.jsonl');
@@ -539,4 +539,31 @@ test('a message still waiting keeps its badge while its twin is delivered', () =
   const oks = readTranscript(p).events.filter((e) => e.text === 'ok');
   assert.strictEqual(oks.length, 2);
   assert.strictEqual(oks.filter((e) => e.queued).length, 1, 'exactly one should still be waiting');
+});
+
+// Audit round 6. A truncated tail dropped its first line unconditionally, on the
+// assumption that a window always lands mid-record. When it lands exactly ON a
+// boundary that line is a WHOLE record, and dropping it lost a real message from
+// the top of the view. The rule is now asked of the file rather than assumed.
+
+test('startsAtBoundary distinguishes a whole record from a fragment', () => {
+  const p = writeFixture([
+    { type: 'user', message: { content: 'alpha' }, timestamp: T },
+    { type: 'user', message: { content: 'beta' }, timestamp: T },
+  ]);
+  const raw = fs.readFileSync(p, 'utf8');
+  const secondLineStart = raw.indexOf('\n') + 1;
+
+  assert.strictEqual(startsAtBoundary(p, 0), true, 'offset 0 is the start of a record');
+  assert.strictEqual(startsAtBoundary(p, secondLineStart), true,
+    'the byte after a newline begins a whole record');
+  assert.strictEqual(startsAtBoundary(p, secondLineStart + 5), false,
+    'mid-line is a fragment');
+  assert.strictEqual(startsAtBoundary(p, secondLineStart - 1), false,
+    'the newline itself is not the start of a record');
+});
+
+test('startsAtBoundary is safe on an unreadable path', () => {
+  // Better to slice a possibly-whole line than to throw inside a read.
+  assert.strictEqual(startsAtBoundary('/nonexistent/nope.jsonl', 10), false);
 });
