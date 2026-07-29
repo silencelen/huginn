@@ -45,28 +45,17 @@ const { decideSwitch, worstLimit } = require('./lib/autoswitch');
 const pushLib = require('./lib/pushtokens');
 const { trySender } = require('./lib/fcm');
 
-const VERSION = '2.38.0';
+const VERSION = '2.38.1';
 const PORT = Number(process.env.HUGINN_APPD_PORT || 8787);
 const DATA_DIR = process.env.HUGINN_APPD_DATA || '/var/lib/huginn-appd';
 const UPLOADS_DIR = path.join(DATA_DIR, 'uploads');
 const UPLOAD_MAX_BYTES = 20 * 1024 * 1024;
-// The kinds Claude's Read tool can actually view. HEIC is conspicuously absent:
-// Samsung cameras shoot it by default and Read cannot open it, so the APP
-// transcodes to JPEG before uploading — reject it here and the failure names
-// itself instead of surfacing as a mute chat. Beyond images, the document types
-// Read genuinely handles: PDFs, and text in its many suits. Binaries that Read
-// would print as garbage (docx, zip, apk) are refused for the same reason HEIC
-// is — a mute failure downstream is worse than a named one here.
-const UPLOAD_TYPES = {
-  'image/jpeg': 'jpg', 'image/png': 'png', 'image/webp': 'webp', 'image/gif': 'gif',
-  'application/pdf': 'pdf',
-  'text/plain': 'txt', 'text/markdown': 'md', 'text/csv': 'csv', 'text/html': 'html',
-  'application/json': 'json', 'text/xml': 'xml', 'application/xml': 'xml',
-  'text/yaml': 'yaml', 'application/x-yaml': 'yaml',
-};
-// For an octet-stream (the picker's shrug), the FILENAME's extension decides —
-// but only from this list, so an .exe renamed nothing sneaks in as nothing.
-const UPLOAD_NAME_EXTS = new Set(['jpg','jpeg','png','webp','gif','pdf','txt','md','csv','html','json','xml','yaml','yml','log','conf','ini','sh','py','js','ts','kt']);
+// What uploads are accepted — the rules live in lib/uploads (family matching +
+// filename fallback), extracted after the exact-match table refused real .txt
+// and .csv files: Android providers report mimes like text/comma-separated-
+// values, or nothing at all, and exact-match punished the user for their file
+// manager's vocabulary.
+const { uploadExtFor } = require('./lib/uploads');
 
 /**
  * Drops uploads old enough that no conversation is coming back for them.
@@ -2442,14 +2431,15 @@ const server = http.createServer(async (req, res) => {
     // and the server chooses the filename — so nothing the phone sends can steer
     // where this writes.
     if (req.method === 'POST' && p === '/v1/uploads') {
-      const mime = String(req.headers['content-type'] || '').split(';')[0].trim();
-      let ext = UPLOAD_TYPES[mime];
-      if (!ext && mime === 'application/octet-stream') {
-        const name = String(u.searchParams.get('name') || '');
-        const cand = name.includes('.') ? name.split('.').pop().toLowerCase() : '';
-        if (UPLOAD_NAME_EXTS.has(cand)) ext = cand === 'jpeg' ? 'jpg' : cand;
+      const mime = String(req.headers['content-type'] || '');
+      const name = String(u.searchParams.get('name') || '');
+      const ext = uploadExtFor(mime, name);
+      if (!ext) {
+        // Logged with the evidence: the first field failure of this gate could
+        // only be diagnosed by guessing, because the refusal recorded nothing.
+        log(`uploads: refused mime=${JSON.stringify(mime)} name=${JSON.stringify(name)}`);
+        return sendErr(res, 415, `cannot read ${name || 'that file'} here (type ${mime || 'unknown'}) — images, pdf and text formats work`);
       }
-      if (!ext) return sendErr(res, 415, 'that file type cannot be read here (images, pdf, or text formats)');
       let body;
       try { body = await readBodyRaw(req, UPLOAD_MAX_BYTES); }
       catch { return sendErr(res, 413, `image too large (max ${Math.floor(UPLOAD_MAX_BYTES / 1024 / 1024)}MB)`); }
