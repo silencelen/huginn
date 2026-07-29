@@ -1081,7 +1081,17 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
     // enqueue and drain never race; the drainer merges bursts into single
     // requests and sends them SEQUENTIALLY — the per-keystroke launch it
     // replaces could reorder characters in flight.
-    private val liveOps = ArrayDeque<LiveInput.Op>()
+    /**
+     * Queued keystrokes, each tagged with the session it was typed into.
+     *
+     * The tag is the whole point. The drainer used to capture `name` from
+     * whichever call happened to start it, while later calls enqueued into this
+     * same deque and returned early because a drainer was already running — so
+     * typing in session A, switching to B, and typing again sent B's keystrokes
+     * into A's pane. Arbitrary text into the wrong live Claude Code session,
+     * which can answer a prompt or run something the reader never saw.
+     */
+    private val liveOps = ArrayDeque<Pair<String, LiveInput.Op>>()
     private var liveDrainer: Job? = null
 
     /**
@@ -1193,22 +1203,34 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun sendLive(name: String, op: LiveInput.Op) {
-        liveOps.addLast(op)
+        liveOps.addLast(name to op)
         if (liveDrainer?.isActive == true) return
         liveDrainer = viewModelScope.launch {
             // A beat for the burst to accumulate: keystrokes arrive faster than
             // round trips complete, and merging them is the point.
             delay(15)
             while (liveOps.isNotEmpty()) {
-                val batch = LiveInput.merge(liveOps.toList())
+                val batch = liveOps.toList()
                 liveOps.clear()
-                for (m in batch) {
-                    runCatching {
-                        when (m) {
-                            is LiveInput.Op.Text -> client.sendKeys(name, text = m.text)
-                            is LiveInput.Op.Key -> client.sendKeys(name, keys = m.keys)
-                        }
-                    }.onFailure { _toast.value = errText(it) }
+                // Split into runs of consecutive ops for the SAME session, then
+                // merge within each run. Merging across the boundary would fuse
+                // two sessions' keystrokes into one string; sending the whole
+                // batch to one name would deliver them to the wrong pane.
+                var i = 0
+                while (i < batch.size) {
+                    val target = batch[i].first
+                    var j = i
+                    while (j < batch.size && batch[j].first == target) j++
+                    val ops = LiveInput.merge(batch.subList(i, j).map { it.second })
+                    for (m in ops) {
+                        runCatching {
+                            when (m) {
+                                is LiveInput.Op.Text -> client.sendKeys(target, text = m.text)
+                                is LiveInput.Op.Key -> client.sendKeys(target, keys = m.keys)
+                            }
+                        }.onFailure { _toast.value = errText(it) }
+                    }
+                    i = j
                 }
             }
         }
