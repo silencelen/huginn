@@ -45,7 +45,7 @@ const { decideSwitch, worstLimit } = require('./lib/autoswitch');
 const pushLib = require('./lib/pushtokens');
 const { trySender } = require('./lib/fcm');
 
-const VERSION = '2.43.0';
+const VERSION = '2.44.0';
 const PORT = Number(process.env.HUGINN_APPD_PORT || 8787);
 const DATA_DIR = process.env.HUGINN_APPD_DATA || '/var/lib/huginn-appd';
 const UPLOADS_DIR = path.join(DATA_DIR, 'uploads');
@@ -273,8 +273,20 @@ async function listSessions({ preview = false } = {}) {
   // continuously and the list ordered by it was effectively frozen.
   const fmt = '#{session_name}\t#{session_created}\t#{session_attached}\t#{window_activity}\t' +
     '#{session_windows}\t#{window_width}\t#{window_height}\t#{window-size}\t#{session_activity}\t#{pane_pid}';
-  const { err, stdout } = await run('tmux', ['list-sessions', '-F', fmt]);
-  if (err) return []; // no server running -> no sessions
+  const { err, stdout, stderr } = await run('tmux', ['list-sessions', '-F', fmt]);
+  if (err) {
+    // Two very different things used to look identical here. tmux exiting
+    // because there is genuinely no server is an OBSERVATION: there are no
+    // sessions. Any other failure (a fork that hit EAGAIN, the server
+    // restarting, the 10s timeout) is a FAILURE TO OBSERVE — and returning []
+    // for it told the alert watcher that every session had vanished, so every
+    // waiting question was announced as answered, its notification cancelled,
+    // and then re-announced once tmux came back. A transient hiccup became a
+    // burst of wrong notifications in both directions.
+    if (/no server running|no such file or directory/i.test(stderr || '')) return [];
+    log(`tmux list-sessions failed: ${(stderr || err.message || '').trim().slice(0, 120)}`);
+    return null;
+  }
   const rows = [];
   for (const line of stdout.trim().split('\n')) {
     if (!line) continue;
@@ -1218,7 +1230,7 @@ async function statusPayload() {
   const [ver, mp, df, sessions] = await Promise.all([
     claudeVersion(), mempalaceState(),
     run('df', ['-h', '/']),
-    listSessions(),
+    listSessions().then((v) => v ?? []),
   ]);
   let disk = null;
   const lines = df.stdout.trim().split('\n');
@@ -1556,6 +1568,9 @@ async function alertTick() {
 async function alertTickInner(st) {
   const now = Date.now();
   const sessions = await listSessions();
+  // Unknown, not empty. Diffing against a snapshot we failed to take is how a
+  // tmux blip turns into mass spurious resolutions; the next tick is 10s away.
+  if (sessions === null) { log('alerts: skipping tick, session list unavailable'); return; }
   const d = digest(sessions, chatStates());
   // When each running session's run began — the watcher's OWN ledger, carried
   // from the previous observation, not the state file's timestamp. The file is
@@ -1710,10 +1725,17 @@ async function alertTickInner(st) {
  * at all. This makes the common case instant without becoming the only path.
  */
 let stateWatcher = null;
+let stateWatchRetry = null;
 let watchDebounce = null;
 function startStateWatch() {
   if (stateWatcher) return;
   try {
+    // STATE_DIR lives under /run, which is a tmpfs: it does NOT survive a
+    // reboot. If this daemon started before anything recreated it, fs.watch
+    // threw ENOENT, the failure was logged exactly once, and instant detection
+    // was off for the entire uptime — degraded to the 10s poll with nothing
+    // saying so. Creating it costs nothing and is idempotent.
+    fs.mkdirSync(STATE_DIR, { recursive: true });
     stateWatcher = fs.watch(STATE_DIR, () => {
       // Debounced: a single state change is several filesystem events (write,
       // rename, attribute), and each should not spawn its own tick.
@@ -1724,11 +1746,33 @@ function startStateWatch() {
       }, 120);
       watchDebounce.unref();
     });
+    // A watch can also DIE later — the directory being removed and recreated
+    // leaves a handle watching an inode nobody writes to any more, which is
+    // silent in exactly the same way.
+    stateWatcher.on('error', (e) => {
+      log(`alerts: state watch died (${e.message}); will retry`);
+      try { stateWatcher.close(); } catch { }
+      stateWatcher = null;
+      retryStateWatch();
+    });
     log(`alerts: watching ${STATE_DIR} for instant detection`);
   } catch (e) {
-    // No watch is survivable — the poll still covers everything, just slower.
-    log(`alerts: could not watch ${STATE_DIR} (${e.message}); polling only`);
+    // No watch is survivable — the poll still covers everything, just slower —
+    // but it should not be PERMANENT. Retried, so a reboot race heals itself
+    // instead of costing instant detection until the next deploy.
+    log(`alerts: could not watch ${STATE_DIR} (${e.message}); retrying, polling meanwhile`);
+    retryStateWatch();
   }
+}
+
+/** Re-attempts the state watch, at a cadence that cannot become a busy loop. */
+function retryStateWatch() {
+  if (stateWatchRetry) return;
+  stateWatchRetry = setTimeout(() => {
+    stateWatchRetry = null;
+    startStateWatch();
+  }, 30_000);
+  stateWatchRetry.unref();
 }
 
 function startAlertWatcher() {
@@ -1913,8 +1957,11 @@ const server = http.createServer(async (req, res) => {
         let nextKeepalive = Date.now() + KEEPALIVE_MS;
 
         while (!req.destroyed && !res.writableEnded) {
-          const d = digest(await listSessions(), chatStates());
-          if (d.hash !== last) {
+          const sess = await listSessions();
+          const d = digest(sess ?? [], chatStates());
+          // A failed observation must not be published as a change: the phone
+          // would see every session disappear and act on it.
+          if (sess !== null && d.hash !== last) {
             last = d.hash;
             res.write(`event: state\ndata: ${JSON.stringify({
               ...d, changed: true, serverTime: Math.floor(Date.now() / 1000),
@@ -1951,10 +1998,12 @@ const server = http.createServer(async (req, res) => {
       const deadline = Date.now() + waitMs;
       // Cheap inputs on purpose: no previews, no transcripts. This runs in a loop
       // for as long as a phone is watching.
-      let d = digest(await listSessions(), chatStates());
-      while (known && d.hash === known && Date.now() < deadline && !req.destroyed) {
+      let sess = await listSessions();
+      let d = digest(sess ?? [], chatStates());
+      while (known && (sess === null || d.hash === known) && Date.now() < deadline && !req.destroyed) {
         await sleep(3000);
-        d = digest(await listSessions(), chatStates());
+        sess = await listSessions();
+        d = digest(sess ?? [], chatStates());
       }
       if (req.destroyed) return;
       const installId = String(req.headers['x-huginn-client'] || '').trim().slice(0, 64);
@@ -2203,7 +2252,11 @@ const server = http.createServer(async (req, res) => {
       // preview=1 costs one capture-pane + one transcript head per session, so
       // the list stays cheap for the notification poller that only needs state.
       const preview = u.searchParams.get('preview') === '1';
-      return sendJson(res, 200, { sessions: await listSessions({ preview }) });
+      {
+        const sess = await listSessions({ preview });
+        if (sess === null) return sendErr(res, 503, 'tmux is not answering right now');
+        return sendJson(res, 200, { sessions: sess });
+      }
     }
 
     if (req.method === 'POST' && p === '/v1/sessions') {
