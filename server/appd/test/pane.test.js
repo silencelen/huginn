@@ -574,3 +574,46 @@ test('the review tab is an ordinary confirm prompt', () => {
   assert.equal(p.multiSelect, false);
   assert.deepEqual(p.options.map((o) => o.label), ['Submit answers', 'Cancel']);
 });
+
+// Audit round 3, 2026-07-28. A '>' inside an option's TEXT used to count as the
+// selection caret, so two options looked selected, the exactly-one-caret guard
+// rejected the dialog, and a permission prompt for any redirecting command
+// vanished: no buttons in the app, no options on the notification, no
+// lock-screen answer. The caret is only ever drawn at the start of the line.
+
+test('a redirect in an option label does not destroy the prompt', () => {
+  const lines = [
+    'Bash command',
+    '  rm -rf /tmp/scratch',
+    '',
+    'Do you want to proceed?',
+    '❯ 1. Yes',
+    "  2. Yes, and don't ask again for echo a > b",
+    '  3. No, and tell Claude what to do differently (esc)',
+    '',
+  ];
+  const p = detectPrompt(lines);
+  assert.ok(p, 'prompt vanished because an option mentioned a redirect');
+  assert.strictEqual(p.options.length, 3);
+  assert.deepStrictEqual(p.options.map((o) => o.selected), [true, false, false]);
+});
+
+test('the caret still selects when it is the caret', () => {
+  const lines = [
+    'Do you want to proceed?',
+    '  1. Yes',
+    '❯ 2. Yes, and pipe it: a > b',
+    '  3. No',
+    '',
+  ];
+  const p = detectPrompt(lines);
+  assert.ok(p);
+  assert.deepStrictEqual(p.options.map((o) => o.selected), [false, true, false]);
+});
+
+test("an ASCII '>' caret at line start still counts", () => {
+  const lines = ['Pick one', '> 1. Alpha', '  2. Beta', ''];
+  const p = detectPrompt(lines);
+  assert.ok(p);
+  assert.strictEqual(p.options[0].selected, true);
+});
