@@ -1,5 +1,29 @@
 # Huginn changelog
 
+## 2.49.0 / appd 2.44.0 — 2026-07-28 (audit fixes, round 7)
+
+### A momentary tmux hiccup could fake a wave of answered questions
+Any failure to list sessions — a fork that hit a resource limit, the tmux server
+restarting — was reported as "there are no sessions". The alert watcher read
+that as every waiting question having been answered: it cancelled all those
+notifications, then announced them again when tmux came back. A blip became a
+burst of wrong notifications in both directions. Failing to look is now
+distinguished from looking and seeing nothing, and a tick that cannot see skips
+rather than concludes.
+
+### Instant alerts could stop for good after a reboot
+The watcher on huginn's session-state directory is attached once at startup, and
+that directory lives on storage cleared by a reboot. Starting before it existed
+threw once, logged once, and left alerts on the slower ten-second poll for the
+rest of the daemon's life with nothing saying so. It now creates the directory,
+and retries if the watch is ever lost.
+
+### Sending while a photo was still uploading lost it
+The message went without the photo, and because the attachment stayed staged it
+silently rode your *next* message instead. Attaching something is a statement
+about the message you are writing, so the send now waits for the upload — with a
+timeout, so a stuck upload cannot strand the message.
+
 ## 2.48.0 / appd 2.43.0 — 2026-07-28 (audit fixes, round 6)
 
 ### Session controls were wrong on the folded phone
