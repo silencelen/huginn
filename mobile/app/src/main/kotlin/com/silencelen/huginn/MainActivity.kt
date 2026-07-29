@@ -95,7 +95,7 @@ import com.silencelen.huginn.ui.theme.HuginnTheme
 class MainActivity : FragmentActivity() {
 
     /** Compose reads these; the lifecycle below writes them. */
-    private val locked = mutableStateOf(false)
+    private val locked = mutableStateOf(AppLock.lockedNow)
     private val lockError = mutableStateOf<String?>(null)
 
     /**
@@ -143,6 +143,19 @@ class MainActivity : FragmentActivity() {
         // reader out of wherever they already were.
         if (session != null || chat != null || shareText != null || shareImage != null) {
             openTarget.value = OpenTarget(session, chat, ++targetSeq, shareText, shareImage)
+            // CONSUMED. getIntent() keeps returning the launching intent forever,
+            // so without stripping it every activity recreation — rotate, fold,
+            // unlock, theme change — re-read the same extras and navigated again,
+            // yanking the reader back to a notification they had already dealt
+            // with. Clearing the extras leaves an inert intent behind.
+            intent?.apply {
+                removeExtra(SessionWatchWorker.EXTRA_SESSION)
+                removeExtra(SessionWatchWorker.EXTRA_CHAT)
+                removeExtra(Intent.EXTRA_TEXT)
+                removeExtra(Intent.EXTRA_SUBJECT)
+                removeExtra(Intent.EXTRA_STREAM)
+                action = null
+            }
         }
     }
 
@@ -166,7 +179,7 @@ class MainActivity : FragmentActivity() {
                         error = lockError.value,
                         onUnlock = {
                             AppLock.authenticate(this) { ok, why ->
-                                if (ok) { locked.value = false; lockError.value = null }
+                                if (ok) { AppLock.lockedNow = false; locked.value = false; lockError.value = null }
                                 else lockError.value = why
                             }
                         },
@@ -174,7 +187,7 @@ class MainActivity : FragmentActivity() {
                 } else {
                     HuginnApp(
                         target = openTarget.value,
-                        onLockNow = { lockError.value = null; locked.value = true },
+                        onLockNow = { lockError.value = null; AppLock.lockedNow = true; locked.value = true },
                     )
                 }
             }
@@ -184,6 +197,7 @@ class MainActivity : FragmentActivity() {
     override fun onStart() {
         super.onStart()
         if (AppLock.shouldLock(AppLock.enabledCache, AppLock.lastAwayAt, System.currentTimeMillis())) {
+            AppLock.lockedNow = true
             locked.value = true
         }
     }
@@ -263,6 +277,35 @@ data class OpenTarget(
     val shareImage: Uri? = null,
 )
 
+/**
+ * Encodes the current screen for [rememberSaveable]. A bundle cannot hold a
+ * sealed-interface instance, and losing the screen on every fold is worse than
+ * the small tax of a string.
+ */
+private val DestSaver = androidx.compose.runtime.saveable.Saver<Dest, String>(
+    save = { d ->
+        when (d) {
+            is Dest.Chats -> "chats"
+            is Dest.Chat -> "chat:${d.id}"
+            is Dest.Sessions -> "sessions"
+            is Dest.SessionView -> "session:${d.name}"
+            is Dest.Status -> "status"
+            is Dest.Settings -> "settings"
+        }
+    },
+    restore = { v ->
+        when {
+            v == "chats" -> Dest.Chats
+            v.startsWith("chat:") -> Dest.Chat(v.removePrefix("chat:"))
+            v == "sessions" -> Dest.Sessions
+            v.startsWith("session:") -> Dest.SessionView(v.removePrefix("session:"))
+            v == "status" -> Dest.Status
+            v == "settings" -> Dest.Settings
+            else -> Dest.Sessions
+        }
+    },
+)
+
 private sealed interface Dest {
     data object Chats : Dest
     data class Chat(val id: String) : Dest
@@ -282,7 +325,11 @@ fun HuginnApp(
     // Sessions is home: the owner's real use is watching and steering the
     // sessions already running, with chats the occasional side door.
     var tab by rememberSaveable { mutableStateOf(1) }
-    var dest by remember { mutableStateOf<Dest>(Dest.Sessions) }
+    // rememberSaveable, because a fold or a rotate REBUILDS this activity: with a
+    // plain remember, unfolding while reading a session threw the reader back to
+    // the sessions list every single time. Saved as a short string since Dest is
+    // a sealed type Compose cannot bundle on its own.
+    var dest by rememberSaveable(stateSaver = DestSaver) { mutableStateOf<Dest>(Dest.Sessions) }
     var sessionTab by rememberSaveable { mutableStateOf(0) }
     var pendingShare by remember { mutableStateOf<OpenTarget?>(null) }
 
@@ -729,7 +776,7 @@ fun HuginnApp(
                 suggestions = suggestions,
                 micGranted = voiceReady,
                 onRequestMic = { voicePermission.launch(Manifest.permission.RECORD_AUDIO) },
-                onAnswerPrompt = { vm.answerPrompt(name, it) },
+                onAnswerPrompt = { vm.answerPrompt(name, it, screen?.prompt?.fingerprint) },
                 onAnswerMulti = { opts -> vm.answerPromptMulti(name, opts, screen?.prompt?.fingerprint) },
                 onForceResize = { vm.forceFit() },
                 onInterrupt = { vm.interruptSession(name) },

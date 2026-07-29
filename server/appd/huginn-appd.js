@@ -45,7 +45,7 @@ const { decideSwitch, worstLimit } = require('./lib/autoswitch');
 const pushLib = require('./lib/pushtokens');
 const { trySender } = require('./lib/fcm');
 
-const VERSION = '2.39.1';
+const VERSION = '2.40.1';
 const PORT = Number(process.env.HUGINN_APPD_PORT || 8787);
 const DATA_DIR = process.env.HUGINN_APPD_DATA || '/var/lib/huginn-appd';
 const UPLOADS_DIR = path.join(DATA_DIR, 'uploads');
@@ -2697,6 +2697,9 @@ const server = http.createServer(async (req, res) => {
 });
 
 // SSE heartbeat so half-open phone connections die fast instead of lingering.
+// Also what makes the phone's 60s stream read timeout safe: silence longer than
+// a few of these means the path is gone, not that Claude is thinking. Keep the
+// interval well under that timeout.
 setInterval(() => {
   for (const run_ of activeRuns.values()) {
     for (const res of run_.subscribers) {

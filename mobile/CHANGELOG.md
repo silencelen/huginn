@@ -1,5 +1,35 @@
 # Huginn changelog
 
+## 2.44.0 / appd 2.40.1 — 2026-07-28 (audit fixes, round 2)
+
+### Folding the phone no longer loses your place
+Every unfold, rotate, or theme change rebuilds the activity, and three things
+did not survive it:
+
+- **The screen you were on.** Reading a session and unfolding threw you back to
+  the sessions list, every time.
+- **"Lock now".** The lock flag lived in the activity, so locking and unfolding
+  reopened the app unchallenged — inside the grace window that was supposed to
+  keep it shut.
+- **The notification you already dealt with.** The launching intent is returned
+  forever, so each rebuild re-read it and navigated you back to that session or
+  chat again. It is consumed now.
+
+### Answering a prompt in the app is checked like answering from the lock screen
+Tapping an option on the prompt card typed a bare digit into the pane with no
+verification — while the same answer from a notification went through the
+guarded endpoint that refuses a stale one. Exactly backwards: the in-app card
+shows a *polled* screen and is the most likely to be out of date, and a digit
+landing in a question you never saw can accept something you never agreed to.
+Both paths now carry the question's fingerprint, and you get told when the
+session has moved on instead of being left thinking the tap landed.
+
+### A chat stream that dies mid-turn now recovers
+The streaming client had no read timeout at all, so a socket lost to a network
+change looked identical to Claude thinking — the composer stayed disabled until
+the app was restarted. Bounded now, comfortably above the server's existing
+15-second heartbeat.
+
 ## 2.43.1 / appd 2.39.1 — 2026-07-28 (audit fixes, round 1)
 
 A 15-lane audit of every file in the app and daemon produced 94 confirmed
