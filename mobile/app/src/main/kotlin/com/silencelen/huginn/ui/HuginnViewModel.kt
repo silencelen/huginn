@@ -342,6 +342,27 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
         return att
     }
 
+    /**
+     * Runs [go] once [owner]'s attachment is no longer mid-upload.
+     *
+     * Sending while the chip still said "Uploading…" used to drop the photo
+     * silently — takeAttachment only accepts a Ready slot — and because the slot
+     * was left staged, the photo then rode the NEXT message instead. Attaching
+     * something is a statement of intent about THIS message, so the send waits
+     * for it. Bounded, because a stuck upload must not strand the message: past
+     * the timeout it sends as text, which is at least visible and recoverable.
+     */
+    private fun whenAttachmentSettled(owner: String, go: () -> Unit) {
+        val mine = _attachmentOwner.value == owner
+        if (!mine || _attachment.value !is Attachment.Uploading) { go(); return }
+        viewModelScope.launch {
+            kotlinx.coroutines.withTimeoutOrNull(20_000) {
+                attachment.first { it !is Attachment.Uploading || _attachmentOwner.value != owner }
+            }
+            go()
+        }
+    }
+
     /** The marker line an attachment contributes to an outgoing message. */
     private fun markerFor(att: Attachment.Ready): String =
         if (att.image) Attachments.marker(att.path) else Attachments.fileMarker(att.path, att.name)
@@ -1058,6 +1079,10 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun sendText(name: String, text: String, thenEnter: Boolean) {
+        whenAttachmentSettled(sessionDraftKey(name)) { sendTextNow(name, text, thenEnter) }
+    }
+
+    private fun sendTextNow(name: String, text: String, thenEnter: Boolean) {
         // The staged photo rides this message, same contract as a chat send:
         // consumed here (and only if staged for THIS session) so it cannot ride
         // twice or cross surfaces. Claude in the pane reads the path like any file.
@@ -1369,6 +1394,10 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
      * used to when a chat was busy.
      */
     fun send(id: String, text: String) {
+        whenAttachmentSettled(chatDraftKey(id)) { sendNow(id, text) }
+    }
+
+    private fun sendNow(id: String, text: String) {
         // The staged photo rides this message — but only if it was staged for
         // THIS chat. Consumed here, whichever path the send takes (stream or
         // queue), so it cannot ride two messages.
