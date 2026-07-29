@@ -25,10 +25,12 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.TextButton
 import com.silencelen.huginn.data.Account
+import com.silencelen.huginn.data.AppdRoutes
 import com.silencelen.huginn.data.SavedAccount
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Switch
@@ -84,6 +86,11 @@ fun SettingsScreen(
     onSignOut: () -> Unit,
     onSave: (String, String) -> Unit,
     onTest: () -> Unit,
+    routePinned: Boolean,
+    resolvingRoute: Boolean,
+    onSelectRoute: (String) -> Unit,
+    onResolveRoute: () -> Unit,
+    onUnpinRoute: () -> Unit,
 ) {
     var confirmSignOut by remember { mutableStateOf(false) }
     var forgetTarget by remember { mutableStateOf<SavedAccount?>(null) }
@@ -97,11 +104,45 @@ fun SettingsScreen(
     ) {
         Text("Server", style = MaterialTheme.typography.titleMedium)
         Text(
-            "huginn-appd binds huginn's tailnet address, so the phone must be on the tailnet. " +
-                "The MagicDNS name works too.",
+            "Android runs one VPN at a time, so the route that reaches huginn depends on " +
+                "which tunnel is up. Pick one, or let it find the live one.",
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            for (route in AppdRoutes.ALL) {
+                FilterChip(
+                    selected = AppdRoutes.normalize(baseUrl) == AppdRoutes.normalize(route.url),
+                    onClick = { onSelectRoute(route.url) },
+                    label = { Text(route.label) },
+                )
+            }
+        }
+        Row(
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalAlignment = androidx.compose.ui.Alignment.CenterVertically,
+        ) {
+            OutlinedButton(onClick = onResolveRoute, enabled = !resolvingRoute) {
+                Text(if (resolvingRoute) "Finding…" else "Find live route")
+            }
+            if (routePinned) {
+                TextButton(onClick = onUnpinRoute) { Text("Pinned — unpin") }
+            } else {
+                Text(
+                    "Auto",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
+        AppdRoutes.match(baseUrl)?.let {
+            Text(
+                "${it.label} · ${it.hint}",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+
         OutlinedTextField(
             value = url,
             onValueChange = { url = it },
