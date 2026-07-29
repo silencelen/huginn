@@ -1,5 +1,24 @@
 # Huginn changelog
 
+## 2.45.0 / appd 2.41.0 — 2026-07-28 (audit fixes, round 3)
+
+### Typing in one session could land in another
+Live typing queues keystrokes and drains them in the background. The drainer
+remembered whichever session started it, but a later burst joined the same queue
+without starting a new one — so typing in a session, switching, and typing again
+sent the new keystrokes to the **old** session's pane. Arbitrary text into the
+wrong live Claude Code session, which can answer a prompt or run something you
+never saw. Every keystroke now carries its own destination.
+
+### A permission prompt could vanish because it mentioned a redirect
+The selection caret was matched anywhere on the line, so a `>` inside an
+option's own text counted as one — and "Yes, and don't ask again for `echo a >
+b`" is ordinary Claude Code wording. Two options then looked selected, the
+guard that requires exactly one rejected the whole dialog, and that permission
+prompt got **no buttons in the app, no options on its notification, and no
+lock-screen answer**. The caret is only ever drawn at the start of a line, and
+is now matched only there.
+
 ## 2.44.0 / appd 2.40.1 — 2026-07-28 (audit fixes, round 2)
 
 ### Folding the phone no longer loses your place
