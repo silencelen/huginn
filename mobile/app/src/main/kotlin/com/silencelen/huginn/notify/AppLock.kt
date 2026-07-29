@@ -45,6 +45,18 @@ object AppLock {
     @Volatile var enabledCache: Boolean = false
 
     /**
+     * Whether the app is currently locked, held OUTSIDE the activity.
+     *
+     * A rotate or a fold destroys and rebuilds the activity, and the lock flag
+     * used to live in an activity field initialised to false — so "Lock now",
+     * then unfold, and the app was open again with no challenge, well inside the
+     * grace window that would otherwise have kept it locked. Process-global (like
+     * the two fields above) because the lock is a property of the SESSION, not of
+     * whichever activity instance happens to exist.
+     */
+    @Volatile var lockedNow: Boolean = false
+
+    /**
      * Whether coming to the foreground should demand an unlock.
      *
      * `awayAt == 0` means the process has never been backgrounded — a cold start —

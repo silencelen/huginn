@@ -59,10 +59,14 @@ class HuginnClient(
         .readTimeout(30, TimeUnit.SECONDS)
         .build()
 
-    // SSE chat streams legitimately stay open for a whole Claude turn, so no
-    // read timeout applies to them.
+    // Chat streams stay open for a whole Claude turn, so the timeout cannot be
+    // short — but it must EXIST. With none, a socket black-holed mid-turn never
+    // failed, the flow never completed, and the chat sat with `sending` true and
+    // a composer that would not send until the app was restarted. The daemon now
+    // emits a keepalive comment every 20s, so silence for a minute means the
+    // path is genuinely gone rather than that Claude is thinking.
     private val streamHttp = http.newBuilder()
-        .readTimeout(0, TimeUnit.MILLISECONDS)
+        .readTimeout(60, TimeUnit.SECONDS)
         .build()
 
     // Screen long polls are DIFFERENT: the server answers within its `wait`
