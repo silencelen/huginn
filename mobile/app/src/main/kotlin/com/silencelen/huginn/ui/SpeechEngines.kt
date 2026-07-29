@@ -20,7 +20,18 @@ class SpeechEngines(private val context: Context) {
     private var ttsReady = false
     private var pendingSpeak: Pair<String, () -> Unit>? = null
 
+    /**
+     * Terminal once [destroy] runs. Nulling the engines is not enough: a TTS
+     * completion is delivered by POSTING to the main looper, so a callback
+     * already in flight when the sheet was dismissed still arrived — and it
+     * drove the voice loop's "finished speaking, now listen" transition, which
+     * turned the microphone back on for a sheet the reader had closed. Every
+     * callback and every entry point checks this instead.
+     */
+    @Volatile private var destroyed = false
+
     fun listen(onPartial: (String) -> Unit, onFinal: (String) -> Unit, onError: (Boolean) -> Unit) {
+        if (destroyed) return
         runCatching {
             if (!SpeechRecognizer.isRecognitionAvailable(context)) { onError(false); return }
             val r = recognizer ?: SpeechRecognizer.createSpeechRecognizer(context).also { recognizer = it }
@@ -65,6 +76,7 @@ class SpeechEngines(private val context: Context) {
     }
 
     fun speak(text: String, onDone: () -> Unit) {
+        if (destroyed) return
         runCatching {
             val engine = tts
             if (engine == null) {
@@ -89,11 +101,11 @@ class SpeechEngines(private val context: Context) {
         val engine = tts ?: return onDone()
         engine.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
             override fun onDone(utteranceId: String?) {
-                android.os.Handler(context.mainLooper).post { onDone() }
+                android.os.Handler(context.mainLooper).post { if (!destroyed) onDone() }
             }
 
             override fun onError(utteranceId: String?) {
-                android.os.Handler(context.mainLooper).post { onDone() }
+                android.os.Handler(context.mainLooper).post { if (!destroyed) onDone() }
             }
 
             override fun onStart(utteranceId: String?) = Unit
@@ -106,7 +118,14 @@ class SpeechEngines(private val context: Context) {
     }
 
     fun destroy() {
+        // Set FIRST, so anything already queued on the main looper is inert by
+        // the time it runs.
+        destroyed = true
+        pendingSpeak = null
+        runCatching { recognizer?.stopListening() }
+        runCatching { recognizer?.cancel() }
         runCatching { recognizer?.destroy() }; recognizer = null
+        runCatching { tts?.stop() }
         runCatching { tts?.shutdown() }; tts = null; ttsReady = false
     }
 }

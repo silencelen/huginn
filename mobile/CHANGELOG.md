@@ -1,5 +1,28 @@
 # Huginn changelog
 
+## 2.48.0 / appd 2.43.0 — 2026-07-28 (audit fixes, round 6)
+
+### Session controls were wrong on the folded phone
+Whether a session is "working" decides which control the composer offers —
+interrupt while it runs, send when it is idle. That state came from the sessions
+list, which is only kept fresh while the list is on screen. Folded, a session
+opens *alone*, so the list stopped updating and the flag froze: a session that
+started working still offered Send, and one that finished still offered Stop.
+It now reads the live state the session view already polls for itself.
+
+### Closing voice mode could turn the microphone back on
+Text-to-speech reports completion by posting back to the main thread, so a
+completion already in flight when you dismissed the sheet still arrived — and
+drove the loop's "finished speaking, now listen" step, starting the recogniser
+for a sheet you had closed. Dismissal is now final: pending callbacks are inert
+and the engines refuse to restart.
+
+### A message could vanish from the top of a long conversation
+Reading the tail of a long transcript assumed the window always lands mid-record
+and dropped its first line. When the window happened to land exactly on a record
+boundary, that line was a whole message — and it was thrown away. The reader now
+checks the file instead of assuming.
+
 ## 2.47.0 — 2026-07-28 (audit fixes, round 5)
 
 ### The background heartbeat could end silently and never restart
