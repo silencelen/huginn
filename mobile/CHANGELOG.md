@@ -1,5 +1,15 @@
 # Huginn changelog
 
+## 2.42.1 — 2026-07-28
+
+### File attach in chats actually attaches
+Picking a file from a chat's attach menu did nothing at all — the chat
+composer's file handler was left unwired (sessions had it), so the tap fell
+into an empty default. The daemon log was the tell: photos arrived, files never
+even tried. Wired, and the file path is now crash-proof besides: anything that
+throws while reading or uploading becomes a visible "Attachment failed" chip
+with the reason, never silence.
+
 ## 2.42.0 / appd 2.38.0 — 2026-07-28
 
 ### A second photo no longer "deletes" the conversation (it never did)

@@ -198,6 +198,7 @@ fun ChatScreen(
             onVoiceOpen = { voiceOpen = true },
             attachment = attachment,
             onAttach = onAttach,
+            onAttachFile = onAttachFile,
             onClearAttachment = onClearAttachment,
             onSend = {
                 val t = draft.trim()

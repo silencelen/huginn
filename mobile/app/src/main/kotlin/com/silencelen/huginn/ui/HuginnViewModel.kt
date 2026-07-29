@@ -336,24 +336,29 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
         _attachmentOwner.value = owner
         _attachment.value = Attachment.Uploading
         viewModelScope.launch(kotlinx.coroutines.Dispatchers.IO) {
-            val cr = getApplication<Application>().contentResolver
-            val mime = cr.getType(uri) ?: "application/octet-stream"
-            if (mime.startsWith("image/")) { attachImage(uri, owner); return@launch }
-            val name = runCatching {
-                cr.query(uri, arrayOf(android.provider.OpenableColumns.DISPLAY_NAME), null, null, null)?.use {
-                    if (it.moveToFirst()) it.getString(0) else null
+            // The WHOLE body is caught: an uncaught throw in viewModelScope kills
+            // the process, and a picker that sometimes crashes the app is worse
+            // than one that says why it failed. Anything thrown becomes a chip.
+            val result = runCatching {
+                val cr = getApplication<Application>().contentResolver
+                val mime = runCatching { cr.getType(uri) }.getOrNull() ?: "application/octet-stream"
+                if (mime.startsWith("image/")) { attachImage(uri, owner); return@launch }
+                val name = runCatching {
+                    cr.query(uri, arrayOf(android.provider.OpenableColumns.DISPLAY_NAME), null, null, null)?.use {
+                        if (it.moveToFirst()) it.getString(0) else null
+                    }
+                }.getOrNull()
+                val bytes = runCatching { cr.openInputStream(uri)?.use { it.readBytes() } }.getOrNull()
+                when {
+                    bytes == null || bytes.isEmpty() -> Attachment.Failed("Could not read that file")
+                    bytes.size > 20 * 1024 * 1024 -> Attachment.Failed("Too large (max 20MB)")
+                    else -> runCatching { client.upload(bytes, mime, name) }
+                        .fold(
+                            { Attachment.Ready(it.path, name = name, image = false) },
+                            { Attachment.Failed(errText(it)) },
+                        )
                 }
-            }.getOrNull()
-            val bytes = runCatching { cr.openInputStream(uri)?.use { it.readBytes() } }.getOrNull()
-            val result = when {
-                bytes == null || bytes.isEmpty() -> Attachment.Failed("Could not read that file")
-                bytes.size > 20 * 1024 * 1024 -> Attachment.Failed("Too large (max 20MB)")
-                else -> runCatching { client.upload(bytes, mime, name) }
-                    .fold(
-                        { Attachment.Ready(it.path, name = name, image = false) },
-                        { Attachment.Failed(errText(it)) },
-                    )
-            }
+            }.getOrElse { Attachment.Failed(it.message ?: "Could not attach that file") }
             if (_attachmentOwner.value == owner) _attachment.value = result
         }
     }
