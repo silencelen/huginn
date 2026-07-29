@@ -282,31 +282,33 @@ data class OpenTarget(
  * sealed-interface instance, and losing the screen on every fold is worse than
  * the small tax of a string.
  */
-private val DestSaver = androidx.compose.runtime.saveable.Saver<Dest, String>(
-    save = { d ->
-        when (d) {
-            is Dest.Chats -> "chats"
-            is Dest.Chat -> "chat:${d.id}"
-            is Dest.Sessions -> "sessions"
-            is Dest.SessionView -> "session:${d.name}"
-            is Dest.Status -> "status"
-            is Dest.Settings -> "settings"
-        }
-    },
-    restore = { v ->
-        when {
-            v == "chats" -> Dest.Chats
-            v.startsWith("chat:") -> Dest.Chat(v.removePrefix("chat:"))
-            v == "sessions" -> Dest.Sessions
-            v.startsWith("session:") -> Dest.SessionView(v.removePrefix("session:"))
-            v == "status" -> Dest.Status
-            v == "settings" -> Dest.Settings
-            else -> Dest.Sessions
-        }
-    },
+/** The encode half of [DestSaver], exposed so the round trip can be tested. */
+internal fun destToKey(d: Dest): String = when (d) {
+    is Dest.Chats -> "chats"
+    is Dest.Chat -> "chat:${d.id}"
+    is Dest.Sessions -> "sessions"
+    is Dest.SessionView -> "session:${d.name}"
+    is Dest.Status -> "status"
+    is Dest.Settings -> "settings"
+}
+
+/** The decode half. Anything unrecognised lands on the home screen, never crashes. */
+internal fun keyToDest(v: String): Dest = when {
+    v == "chats" -> Dest.Chats
+    v.startsWith("chat:") -> Dest.Chat(v.removePrefix("chat:"))
+    v == "sessions" -> Dest.Sessions
+    v.startsWith("session:") -> Dest.SessionView(v.removePrefix("session:"))
+    v == "status" -> Dest.Status
+    v == "settings" -> Dest.Settings
+    else -> Dest.Sessions
+}
+
+internal val DestSaver = androidx.compose.runtime.saveable.Saver<Dest, String>(
+    save = { destToKey(it) },
+    restore = { keyToDest(it) },
 )
 
-private sealed interface Dest {
+internal sealed interface Dest {
     data object Chats : Dest
     data class Chat(val id: String) : Dest
     data object Sessions : Dest
