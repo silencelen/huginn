@@ -15,6 +15,10 @@ const fs = require('node:fs');
 // A cold open reads at most this much from the END of the file. A long session's
 // transcript reaches many MB and a phone neither needs nor wants the head of it.
 const TAIL_BYTES = 256 * 1024;
+// Fewer events than this in the tail window means the window was mostly one
+// giant row (an embedded image) and must grow. Small on purpose: it only has
+// to distinguish "a screenful of conversation" from "half a base64 blob".
+const MIN_TAIL_EVENTS = 12;
 
 /** Trims a tool input down to the one field a human would want to see. */
 function digestToolInput(input, limit = 400) {
@@ -62,7 +66,11 @@ function machineText(s) {
   // "[SYSTEM NOTIFICATION - NOT USER INPUT] …" followed by the tagged element.
   // Without matching it, the whole notification rendered as a message the user
   // supposedly sent.
-  return /^\s*(<(task-notification|system-reminder|command-name|command-message|command-args|local-command)|\[SYSTEM NOTIFICATION)/.test(s);
+  // "[Image: original 1530x2048, displayed at 1494x2000. Multiply…]" is the
+  // caption Claude Code writes beside an image it ingested — coordinate-mapping
+  // instructions for the MODEL. Rendered as a user bubble it reads like the
+  // owner recited camera metadata at their own phone.
+  return /^\s*(<(task-notification|system-reminder|command-name|command-message|command-args|local-command)|\[SYSTEM NOTIFICATION|\[Image: original \d+x\d+)/.test(s);
 }
 
 /**
@@ -93,6 +101,10 @@ function describeMachineText(s) {
     const body = stripAnsiText(out[1]).trim();
     return body ? { kind: 'command_result', text: clip(body, 300) } : null;
   }
+
+  // The image-ingestion caption: the Read card above it already says an image
+  // was viewed, and coordinate-mapping instructions add nothing for a person.
+  if (/^\s*\[Image: original \d+x\d+/.test(s)) return null;
 
   if (/<task-notification/.test(s) || /^\s*\[SYSTEM NOTIFICATION/.test(s)) {
     // The summary is written for exactly this purpose; use it.
@@ -165,8 +177,23 @@ function readTranscript(path, { offset = null, limit = 400 } = {}) {
   let start = offset;
   let truncated = false;
   if (start == null || start < 0 || start > st.size) {
-    start = Math.max(0, st.size - TAIL_BYTES);
-    truncated = start > 0;
+    // Tail by EVENTS, not by a fixed byte count. A transcript row that Read an
+    // image carries the whole image as base64 — megabytes per photo — so a
+    // fixed window measured in bytes holds an arbitrary, sometimes zero, number
+    // of turns. Measured on a real chat: two photos made the file 2.1MB, the
+    // 256KB tail started mid-turn-2, and the app rendered the second exchange
+    // only — which read, from the phone, as sending a photo having DELETED the
+    // conversation above it. The window doubles until it holds a useful number
+    // of events or spans the whole file.
+    let win = TAIL_BYTES;
+    for (;;) {
+      start = Math.max(0, st.size - win);
+      truncated = start > 0;
+      if (start === 0) break;
+      const probe = readTranscript(path, { offset: start, limit });
+      if (probe.events.length >= Math.min(limit, MIN_TAIL_EVENTS)) break;
+      win *= 2;
+    }
   }
 
   let buf = Buffer.alloc(0);

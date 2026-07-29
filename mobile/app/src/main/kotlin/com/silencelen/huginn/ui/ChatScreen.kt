@@ -84,6 +84,7 @@ fun ChatScreen(
     onCopy: (String) -> Unit,
     attachment: HuginnViewModel.Attachment? = null,
     onAttach: (android.net.Uri) -> Unit = {},
+    onAttachFile: (android.net.Uri) -> Unit = {},
     onClearAttachment: () -> Unit = {},
 ) {
     val scope = rememberCoroutineScope()
@@ -263,6 +264,7 @@ private fun Composer(
     onCancel: () -> Unit,
     attachment: HuginnViewModel.Attachment? = null,
     onAttach: (android.net.Uri) -> Unit = {},
+    onAttachFile: (android.net.Uri) -> Unit = {},
     onClearAttachment: () -> Unit = {},
 ) {
     Surface(color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f)) {
@@ -291,7 +293,7 @@ private fun Composer(
                 shape = RoundedCornerShape(20.dp),
             )
             Spacer(Modifier.width(6.dp))
-            AttachPhotoButton(onPick = onAttach)
+            AttachButton(onPickImage = onAttach, onPickFile = onAttachFile)
             DictationMicButton(
                 micGranted = micGranted,
                 onRequestMic = onRequestMic,

@@ -398,8 +398,10 @@ class HuginnClient(
      * not multipart: one image needs no parts, and the server names the file so
      * nothing sent here decides where it is written.
      */
-    suspend fun upload(bytes: ByteArray, mime: String): UploadResult =
-        decode(call(builder("/v1/uploads").post(bytes.toRequestBody(mime.toMediaType())).build()))
+    suspend fun upload(bytes: ByteArray, mime: String, name: String? = null): UploadResult =
+        decode(call(builder(
+            "/v1/uploads" + (name?.let { "?name=" + java.net.URLEncoder.encode(it, "UTF-8") } ?: "")
+        ).post(bytes.toRequestBody(mime.toMediaType())).build()))
 
     /** Renames a chat; the title is the only field this touches. */
     suspend fun renameChat(id: String, title: String) {
