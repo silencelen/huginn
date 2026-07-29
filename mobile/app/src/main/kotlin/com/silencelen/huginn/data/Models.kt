@@ -472,7 +472,12 @@ data class Watch(
      * what actually arrived, it is the only signal that separates a quiet night
      * from a broken delivery path — see [com.silencelen.huginn.notify.Heartbeat].
      */
-    val pushesSent: Long = 0,
+    /**
+     * NULLABLE on purpose: absent means "this response does not carry the tally",
+     * which is not the same as zero. Defaulting it to 0 made every SSE state
+     * frame overwrite the app's real count and disabled deficit detection.
+     */
+    val pushesSent: Long? = null,
 )
 
 /** State of an in-progress sign-in, read off the login session's pane. */

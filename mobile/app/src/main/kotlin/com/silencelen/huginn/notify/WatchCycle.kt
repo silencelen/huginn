@@ -79,7 +79,10 @@ object WatchCycle {
         // number the moment its own tick returns, so a cycle that skipped it would
         // re-arm on a stale tally. Every path that reaches an observation — stream,
         // alarm, worker, push reconcile — comes through here, which is the point.
-        settings.notePushesSent(watch.pushesSent)
+        // Only when the response actually carried it. A frame without the tally
+        // (an older daemon, or any shape that omits it) must leave the stored
+        // count alone rather than reset it to zero.
+        watch.pushesSent?.let { settings.notePushesSent(it) }
 
         // Nothing has ever been observed, so there is no transition to speak of —
         // only a list of things that were already true. Announcing those would mean

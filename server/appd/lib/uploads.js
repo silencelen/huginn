@@ -41,7 +41,13 @@ const NAME_EXTS = new Set([
  */
 function uploadExtFor(mime, name) {
   const m = String(mime || '').split(';')[0].trim().toLowerCase();
-  if (MIME_EXTS[m]) return MIME_EXTS[m];
+  // hasOwn, not a bare lookup: `MIME_EXTS['constructor']` inherits a truthy
+  // FUNCTION from Object.prototype, and a Content-Type of `constructor` or
+  // `__proto__` therefore became the stored file's "extension" — writing
+  // up-<ts>-<hex>.function Object() { [native code] }. No traversal (nothing
+  // in the stringified value is a separator) and it needs the bearer token,
+  // but a type table must answer only for the types it actually declares.
+  if (Object.hasOwn(MIME_EXTS, m)) return MIME_EXTS[m];
 
   const n = String(name || '');
   const dot = n.lastIndexOf('.');
