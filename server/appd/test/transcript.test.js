@@ -471,3 +471,42 @@ test('garbage input falls back to the generic card', () => {
   assert.equal(parseAsk({ questions: [{}] }), null);
   assert.equal(parseAsk({ questions: 'nope' }), null);
 });
+
+// ------------------------------- tailing a file where bytes and events diverge
+//
+// Regression, from the owner's phone: a transcript row that Read a photo embeds
+// the whole image as base64 — megabytes per photo — so the fixed 256KB tail
+// window held zero complete turns after two photos, the initial view began
+// mid-turn-2, and the app looked like sending a second image had DELETED the
+// first exchange. The tail must be measured in events, not bytes.
+
+test('a giant embedded blob does not eat the conversation above it', () => {
+  const blob = 'x'.repeat(600 * 1024);          // one photo-sized ignored row
+  const p = writeFixture([
+    { type: 'user', message: { content: 'first question' }, timestamp: T },
+    { type: 'assistant', timestamp: T, message: { content: [{ type: 'text', text: 'first answer' }] } },
+    { type: 'attachment', payload: blob, timestamp: T },
+    { type: 'user', message: { content: 'second question' }, timestamp: T },
+    { type: 'assistant', timestamp: T, message: { content: [{ type: 'text', text: 'second answer' }] } },
+  ]);
+  const t = readTranscript(p);
+  const texts = t.events.map((e) => e.text);
+  assert.ok(texts.includes('first question'), `lost turn 1: ${JSON.stringify(texts)}`);
+  assert.ok(texts.includes('first answer'));
+  assert.ok(texts.includes('second question'));
+  assert.ok(texts.includes('second answer'));
+});
+
+test('a long ordinary transcript still tails instead of reading everything', () => {
+  // Hundreds of small rows totalling well past the window: the reader must
+  // still truncate rather than always swallowing whole files.
+  const rows = [];
+  for (let i = 0; i < 4000; i++) {
+    rows.push({ type: 'user', message: { content: `message number ${i} ${'pad'.repeat(40)}` }, timestamp: T });
+  }
+  const p = writeFixture(rows);
+  const t = readTranscript(p);
+  assert.strictEqual(t.truncated, true, 'expected a tail, not the whole file');
+  assert.ok(t.events.length > 0);
+  assert.ok(!t.events.some((e) => (e.text || '').startsWith('message number 0 ')), 'the head should be outside the window');
+});

@@ -95,6 +95,7 @@ fun SessionScreen(
     working: Boolean,
     attachment: HuginnViewModel.Attachment? = null,
     onAttach: (android.net.Uri) -> Unit = {},
+    onAttachFile: (android.net.Uri) -> Unit = {},
     onClearAttachment: () -> Unit = {},
 ) {
     Column(Modifier.fillMaxSize()) {
@@ -141,6 +142,7 @@ fun SessionScreen(
                     onCopy = onCopy,
                 attachment = attachment,
                 onAttach = onAttach,
+                onAttachFile = onAttachFile,
                 onClearAttachment = onClearAttachment,
             )
             } else {
@@ -194,6 +196,7 @@ private fun SessionConversation(
     onCopy: (String) -> Unit,
     attachment: HuginnViewModel.Attachment? = null,
     onAttach: (android.net.Uri) -> Unit = {},
+    onAttachFile: (android.net.Uri) -> Unit = {},
     onClearAttachment: () -> Unit = {},
 ) {
     val scope = rememberCoroutineScope()
@@ -356,7 +359,7 @@ private fun SessionConversation(
                     shape = RoundedCornerShape(20.dp),
                 )
                 Spacer(Modifier.width(6.dp))
-                AttachPhotoButton(onPick = onAttach)
+                AttachButton(onPickImage = onAttach, onPickFile = onAttachFile)
                 DictationMicButton(
                     micGranted = micGranted,
                     onRequestMic = onRequestMic,

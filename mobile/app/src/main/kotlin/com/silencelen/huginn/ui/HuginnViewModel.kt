@@ -282,7 +282,12 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
      */
     sealed interface Attachment {
         data object Uploading : Attachment
-        data class Ready(val path: String) : Attachment
+        data class Ready(
+            val path: String,
+            /** Original filename, for the chip and the marker; null for photos. */
+            val name: String? = null,
+            val image: Boolean = true,
+        ) : Attachment
         data class Failed(val why: String) : Attachment
     }
 
@@ -307,13 +312,50 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    /** The Ready path for [owner], consumed atomically; null if not theirs. */
-    private fun takeAttachment(owner: String): String? {
+    /** The Ready attachment for [owner], consumed atomically; null if not theirs. */
+    private fun takeAttachment(owner: String): Attachment.Ready? {
         val att = _attachment.value
         if (att !is Attachment.Ready || _attachmentOwner.value != owner) return null
         _attachment.value = null
         _attachmentOwner.value = null
-        return att.path
+        return att
+    }
+
+    /** The marker line an attachment contributes to an outgoing message. */
+    private fun markerFor(att: Attachment.Ready): String =
+        if (att.image) Attachments.marker(att.path) else Attachments.fileMarker(att.path, att.name)
+
+    /**
+     * A non-image document from the file picker. Images that arrive this way are
+     * routed through the photo pipeline (transcode, EXIF); everything else is
+     * uploaded as-is and stands or falls on the server's type allowlist — a
+     * refused docx fails HERE with the server's own words, not later as a chat
+     * shrugging at unreadable bytes.
+     */
+    fun attachFile(uri: android.net.Uri, owner: String) {
+        _attachmentOwner.value = owner
+        _attachment.value = Attachment.Uploading
+        viewModelScope.launch(kotlinx.coroutines.Dispatchers.IO) {
+            val cr = getApplication<Application>().contentResolver
+            val mime = cr.getType(uri) ?: "application/octet-stream"
+            if (mime.startsWith("image/")) { attachImage(uri, owner); return@launch }
+            val name = runCatching {
+                cr.query(uri, arrayOf(android.provider.OpenableColumns.DISPLAY_NAME), null, null, null)?.use {
+                    if (it.moveToFirst()) it.getString(0) else null
+                }
+            }.getOrNull()
+            val bytes = runCatching { cr.openInputStream(uri)?.use { it.readBytes() } }.getOrNull()
+            val result = when {
+                bytes == null || bytes.isEmpty() -> Attachment.Failed("Could not read that file")
+                bytes.size > 20 * 1024 * 1024 -> Attachment.Failed("Too large (max 20MB)")
+                else -> runCatching { client.upload(bytes, mime, name) }
+                    .fold(
+                        { Attachment.Ready(it.path, name = name, image = false) },
+                        { Attachment.Failed(errText(it)) },
+                    )
+            }
+            if (_attachmentOwner.value == owner) _attachment.value = result
+        }
     }
 
     /** Transcodes to JPEG off the main thread, uploads, and stages the path. */
@@ -983,11 +1025,10 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
         // The staged photo rides this message, same contract as a chat send:
         // consumed here (and only if staged for THIS session) so it cannot ride
         // twice or cross surfaces. Claude in the pane reads the path like any file.
-        val path = takeAttachment(sessionDraftKey(name))
+        val att = takeAttachment(sessionDraftKey(name))
         @Suppress("NAME_SHADOWING") var text = text
-        if (path != null) {
-            text = if (text.isBlank()) Attachments.marker(path)
-            else text + "\n\n" + Attachments.marker(path)
+        if (att != null) {
+            text = if (text.isBlank()) markerFor(att) else text + "\n\n" + markerFor(att)
         }
         if (text.isBlank()) return
         clearDraft(sessionDraftKey(name))
@@ -1257,11 +1298,10 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
         // The staged photo rides this message — but only if it was staged for
         // THIS chat. Consumed here, whichever path the send takes (stream or
         // queue), so it cannot ride two messages.
-        val path = takeAttachment(chatDraftKey(id))
+        val att = takeAttachment(chatDraftKey(id))
         @Suppress("NAME_SHADOWING") var text = text
-        if (path != null) {
-            text = if (text.isBlank()) Attachments.marker(path)
-            else text + "\n\n" + Attachments.marker(path)
+        if (att != null) {
+            text = if (text.isBlank()) markerFor(att) else text + "\n\n" + markerFor(att)
         }
         if (text.isBlank()) return
         clearDraft(chatDraftKey(id))

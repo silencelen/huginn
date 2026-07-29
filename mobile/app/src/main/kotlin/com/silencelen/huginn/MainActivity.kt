@@ -664,6 +664,7 @@ fun HuginnApp(
                 onCopy = { vm.copy(it) },
                 attachment = if (attachmentOwner == HuginnViewModel.chatDraftKey(id)) attachment else null,
                 onAttach = { vm.attachImage(it, HuginnViewModel.chatDraftKey(id)) },
+                onAttachFile = { vm.attachFile(it, HuginnViewModel.chatDraftKey(id)) },
                 onClearAttachment = { vm.clearAttachment(HuginnViewModel.chatDraftKey(id)) },
             )
         }
@@ -735,6 +736,7 @@ fun HuginnApp(
                 working = sessions.firstOrNull { s -> s.name == name }?.state == "running",
                 attachment = if (attachmentOwner == HuginnViewModel.sessionDraftKey(name)) attachment else null,
                 onAttach = { vm.attachImage(it, HuginnViewModel.sessionDraftKey(name)) },
+                onAttachFile = { vm.attachFile(it, HuginnViewModel.sessionDraftKey(name)) },
                 onClearAttachment = { vm.clearAttachment(HuginnViewModel.sessionDraftKey(name)) },
                 onCopy = { vm.copy(it) },
             )

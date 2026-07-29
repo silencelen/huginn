@@ -103,16 +103,24 @@ object Attachments {
     fun marker(path: String): String =
         "[Attached image at $path — view it with the Read tool.]"
 
+    /** The same, for a non-image file; the name travels for context. */
+    fun fileMarker(path: String, name: String?): String =
+        "[Attached file at $path${if (name.isNullOrBlank()) "" else " ($name)"} — view it with the Read tool.]"
+
     /**
      * The same marker, made fit for human eyes. The bracketed path is plumbing
      * for Claude; a person reading their own message back should see that they
      * sent a photo, not where the daemon happened to store it.
      */
     private val MARKER_RE = Regex("""\[Attached image at [^\]]+ — view it with the Read tool\.\]""")
+    private val FILE_RE = Regex("""\[Attached file at \S+( \(([^)]{1,80})\))? — view it with the Read tool\.\]""")
 
     fun displayText(text: String): String {
         if ('[' !in text) return text
-        val cleaned = text.replace(MARKER_RE, "📷 Photo attached").trim()
+        val cleaned = text
+            .replace(MARKER_RE, "📷 Photo attached")
+            .replace(FILE_RE) { m -> "📎 " + (m.groupValues[2].ifBlank { "File attached" }) }
+            .trim()
         return cleaned.ifBlank { "📷 Photo attached" }
     }
 }
