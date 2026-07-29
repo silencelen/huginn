@@ -1232,10 +1232,26 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    /** Answers a detected choice prompt by sending its number. */
-    fun answerPrompt(name: String, number: Int) {
+    /**
+     * Answers a detected choice prompt through the GUARDED endpoint.
+     *
+     * This used to type the bare digit with sendKeys — no fingerprint, no check —
+     * while the lock-screen notification used the guarded path. Exactly backwards:
+     * the host refuses a stale answer precisely because the pane can move on
+     * between being read and being typed into, and the in-app card is the MOST
+     * exposed to that, since it renders a polled screen that may be seconds old.
+     * A digit landing in a prompt the reader never saw can accept something they
+     * never agreed to, which is the whole reason the guard exists.
+     */
+    fun answerPrompt(name: String, number: Int, fingerprint: String? = null) {
         viewModelScope.launch {
-            runCatching { client.sendKeys(name, text = number.toString()) }
+            runCatching { client.answerPrompt(name, number, fingerprint) }
+                .onSuccess { r ->
+                    // 409 arrives as a failure; a false `ok` is the host declining
+                    // for its own reason. Either way the reader is told, rather
+                    // than left believing a tap landed.
+                    if (!r.ok) _toast.value = r.error ?: "The question moved on — check the session"
+                }
                 .onFailure { _toast.value = errText(it) }
         }
     }
