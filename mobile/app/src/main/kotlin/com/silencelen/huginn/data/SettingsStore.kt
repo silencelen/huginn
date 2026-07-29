@@ -27,6 +27,7 @@ class SettingsStore(private val context: Context) {
         const val DEFAULT_BASE_URL = "http://100.97.198.90:8787"
         const val DEFAULT_FONT_SCALE = 9f
         private val BASE_URL = stringPreferencesKey("base_url")
+        private val ROUTE_PINNED = booleanPreferencesKey("appd_route_pinned")
         private val TOKEN = stringPreferencesKey("token")
         private val FONT_SCALE = floatPreferencesKey("terminal_font_sp")
         private val NOTIFY = booleanPreferencesKey("notify_attention")
@@ -187,6 +188,24 @@ class SettingsStore(private val context: Context) {
 
     suspend fun setBaseUrl(value: String) {
         context.dataStore.edit { it[BASE_URL] = value.trim() }
+    }
+
+    /**
+     * True when the route was chosen by hand, which stops auto-resolution from
+     * moving off it. Typing a custom URL pins it implicitly.
+     */
+    val routePinned: Flow<Boolean> = context.dataStore.data.map { it[ROUTE_PINNED] ?: false }
+
+    /**
+     * Switches the active route. Written to the same key the background workers
+     * already read, so a switch applies to notifications and the watch service
+     * too, not just the foreground UI.
+     */
+    suspend fun selectRoute(url: String, pinned: Boolean) {
+        context.dataStore.edit {
+            it[BASE_URL] = url.trim()
+            it[ROUTE_PINNED] = pinned
+        }
     }
 
     suspend fun setToken(value: String) {

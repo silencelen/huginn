@@ -10,6 +10,7 @@ import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import com.silencelen.huginn.appVersion
 import com.silencelen.huginn.data.Account
+import com.silencelen.huginn.data.AppdRoutes
 import com.silencelen.huginn.data.Chat
 import com.silencelen.huginn.data.ChatEvent
 import com.silencelen.huginn.data.HuginnClient
@@ -28,6 +29,10 @@ import com.silencelen.huginn.data.Alerts
 import com.silencelen.huginn.data.ClientsInfo
 import com.silencelen.huginn.data.PushStatus
 import com.silencelen.huginn.data.LoginState
+import com.silencelen.huginn.data.RouteResolver
+import okhttp3.OkHttpClient
+import okhttp3.Request
+import java.util.concurrent.TimeUnit
 import com.silencelen.huginn.notify.SessionWatchWorker
 import com.silencelen.huginn.ui.LiveInput
 import com.silencelen.huginn.notify.AppLock
@@ -498,11 +503,16 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
             _drafts.value = settings.drafts.first()
             _health.value = readHealth()
             _appLock.value = settings.appLock.first()
+            _routePinned.value = settings.routePinned.first()
             AppLock.enabledCache = _appLock.value
             // Opened even when no token is configured: a caller must unblock and
             // get a real "not configured" failure rather than hang forever.
             ready.value = true
             if (tokenNow.isNotBlank()) {
+                // Only one VPN can hold the tunnel slot, so the reachable route
+                // changes when the owner switches between Tailscale and the
+                // yggdrasil mesh. Re-pick before the first fan-out of calls.
+                resolveRoute(silent = true)
                 refreshAll()
                 refreshModels()
                 if (_notifyEnabled.value) ensureBackgroundDelivery()
@@ -528,11 +538,89 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
         _toast.value = "Copied"
     }
 
+    // ------------------------------------------------------- appd routes
+
+    private val _routePinned = MutableStateFlow(false)
+    val routePinned: StateFlow<Boolean> = _routePinned.asStateFlow()
+    private val _resolvingRoute = MutableStateFlow(false)
+    val resolvingRoute: StateFlow<Boolean> = _resolvingRoute.asStateFlow()
+
+    /**
+     * Probes a candidate. Any HTTP reply counts as reachable — a 401 still
+     * proves the daemon answered, and the point here is to find a live path,
+     * not to check the token.
+     */
+    private suspend fun probeRoute(url: String): Boolean = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+        runCatching {
+            val client = OkHttpClient.Builder()
+                .connectTimeout(3, TimeUnit.SECONDS)
+                .readTimeout(3, TimeUnit.SECONDS)
+                .build()
+            val req = Request.Builder()
+                .url("${AppdRoutes.normalize(url)}/v1/sessions")
+                .head()
+                .build()
+            client.newCall(req).execute().use { true }
+        }.getOrDefault(false)
+    }
+
+    /**
+     * Moves to the first reachable route. Leaves the current setting alone when
+     * nothing answers — blanking it would turn "the network is down" into "the
+     * app is misconfigured".
+     */
+    fun resolveRoute(silent: Boolean = false) {
+        viewModelScope.launch {
+            if (settings.routePinned.first()) {
+                if (!silent) _toast.value = "Route is pinned — unpin to switch automatically"
+                return@launch
+            }
+            _resolvingRoute.value = true
+            val found = RouteResolver.resolve(AppdRoutes.candidates(baseUrlNow)) { probeRoute(it) }
+            _resolvingRoute.value = false
+            when {
+                found == null ->
+                    if (!silent) _toast.value = "No route to huginn — is a VPN connected?"
+                AppdRoutes.normalize(found) == AppdRoutes.normalize(baseUrlNow) ->
+                    if (!silent) _toast.value = "Still on ${AppdRoutes.labelFor(found)}"
+                else -> {
+                    applyRoute(found, pinned = false)
+                    _toast.value = "Switched to ${AppdRoutes.labelFor(found)}"
+                }
+            }
+        }
+    }
+
+    /** Manual switch from the Settings picker; pins so auto-resolve won't move it. */
+    fun selectRoute(url: String) {
+        viewModelScope.launch { applyRoute(url, pinned = true) }
+    }
+
+    fun unpinRoute() {
+        viewModelScope.launch {
+            settings.selectRoute(baseUrlNow, pinned = false)
+            _routePinned.value = false
+            resolveRoute()
+        }
+    }
+
+    private suspend fun applyRoute(url: String, pinned: Boolean) {
+        settings.selectRoute(url, pinned)
+        baseUrlNow = AppdRoutes.normalize(url)
+        _baseUrl.value = baseUrlNow
+        _routePinned.value = pinned
+        _connected.value = null
+        refreshAll()
+    }
+
     // ---------------------------------------------------------- settings
 
     fun saveSettings(url: String, tok: String) {
         viewModelScope.launch {
-            settings.setBaseUrl(url)
+            // A hand-typed URL is a deliberate choice; don't let auto-resolve
+            // silently move off it.
+            settings.selectRoute(url, pinned = true)
+            _routePinned.value = true
             settings.setToken(tok)
             // A token registered against the previous host means nothing to the new one.
             HuginnMessagingService.syncToken(getApplication())
