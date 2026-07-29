@@ -87,6 +87,7 @@ import com.silencelen.huginn.ui.SessionScreen
 import com.silencelen.huginn.ui.SessionSubtitle
 import com.silencelen.huginn.ui.SessionsScreen
 import com.silencelen.huginn.ui.SettingsScreen
+import com.silencelen.huginn.ui.ShareTargetSheet
 import com.silencelen.huginn.ui.SignInDialog
 import com.silencelen.huginn.ui.StatusScreen
 import com.silencelen.huginn.ui.theme.HuginnTheme
@@ -283,6 +284,7 @@ fun HuginnApp(
     var tab by rememberSaveable { mutableStateOf(1) }
     var dest by remember { mutableStateOf<Dest>(Dest.Sessions) }
     var sessionTab by rememberSaveable { mutableStateOf(0) }
+    var pendingShare by remember { mutableStateOf<OpenTarget?>(null) }
 
     // What is on screen, published for notification suppression: a buzz about the
     // conversation the reader is already watching carries nothing. Cleared when
@@ -304,6 +306,7 @@ fun HuginnApp(
         onDispose { Foreground.chat = null; Foreground.session = null }
     }
 
+
     // Navigation asked for by a notification tap, applied here rather than in the
     // initial state so that a tap arriving at an app that is ALREADY open moves it
     // too — the common case, and the one the previous read-once version missed.
@@ -319,12 +322,12 @@ fun HuginnApp(
                 dest = Dest.Chat(t.chat)
             }
             t.shareText != null || t.shareImage != null -> {
-                // Something shared in from another app: a fresh chat with it
-                // staged. Staged, not sent — the share sheet's contract everywhere
-                // else is "compose around this", and a wrong-guess auto-send would
-                // burn a turn on it.
-                tab = 0
-                vm.newChatForShare(t.shareText, t.shareImage) { id -> dest = Dest.Chat(id) }
+                // Something shared in from another app. Where it lands is the
+                // reader's call — the screenshot of an error belongs in the
+                // session already working on that error, not necessarily in a
+                // fresh chat — so a destination sheet asks. Staged, never sent:
+                // the share contract everywhere is "compose around this".
+                pendingShare = t
             }
         }
     }
@@ -372,6 +375,36 @@ fun HuginnApp(
     val agents by vm.agents.collectAsState()
     val suggestions by vm.suggestions.collectAsState()
     val attachment by vm.attachment.collectAsState()
+    val attachmentOwner by vm.attachmentOwner.collectAsState()
+
+    pendingShare?.let { share ->
+        ShareTargetSheet(
+            sessions = sessions,
+            chats = chats,
+            sharingImage = share.shareImage != null,
+            onDismiss = { pendingShare = null },
+            onNewChat = {
+                pendingShare = null
+                tab = 0
+                vm.newChatForShare(share.shareText, share.shareImage) { id -> dest = Dest.Chat(id) }
+            },
+            onChat = { id ->
+                pendingShare = null
+                tab = 0
+                vm.openChat(id)
+                dest = Dest.Chat(id)
+                vm.stageShareInChat(id, share.shareText, share.shareImage)
+            },
+            onSession = { name ->
+                pendingShare = null
+                tab = 1
+                sessionTab = 0
+                dest = Dest.SessionView(name)
+                vm.stageShareInSession(name, share.shareText, share.shareImage)
+            },
+        )
+    }
+
     val autoswitch by vm.autoswitch.collectAsState()
 
     // Per-surface action menu state (the top-bar slot).
@@ -597,8 +630,10 @@ fun HuginnApp(
                 onDispose {
                     vm.detachStream(); vm.clearSuggestions()
                     // A photo staged for THIS chat must not silently ride the next
-                    // one opened.
-                    vm.clearAttachment()
+                    // screen — but only this chat's own claim is cleared, so a share
+                    // staged for the DESTINATION while navigating there survives
+                    // the previous screen's teardown.
+                    vm.clearAttachment(HuginnViewModel.chatDraftKey(id))
                 }
             }
             // A turn boundary — the transcript grew and nothing is in flight — is
@@ -627,9 +662,9 @@ fun HuginnApp(
                 onSend = { vm.send(id, it) },
                 onCancel = { vm.cancel(id) },
                 onCopy = { vm.copy(it) },
-                attachment = attachment,
-                onAttach = { vm.attachImage(it) },
-                onClearAttachment = { vm.clearAttachment() },
+                attachment = if (attachmentOwner == HuginnViewModel.chatDraftKey(id)) attachment else null,
+                onAttach = { vm.attachImage(it, HuginnViewModel.chatDraftKey(id)) },
+                onClearAttachment = { vm.clearAttachment(HuginnViewModel.chatDraftKey(id)) },
             )
         }
         val sessionsPane: @Composable (Boolean) -> Unit = { twoPane ->
@@ -657,9 +692,9 @@ fun HuginnApp(
                 vm.startScreenPolling(name)
                 onStopOrDispose {
                     vm.stopScreenPolling(); vm.clearSuggestions(); vm.refreshSessions()
-                    // A photo staged for THIS session must not silently ride
-                    // whatever screen is opened next.
-                    vm.clearAttachment()
+                    // Only this session's own claim: a share staged for the next
+                    // destination must survive this screen's teardown.
+                    vm.clearAttachment(HuginnViewModel.sessionDraftKey(name))
                 }
             }
             // A turn boundary — the transcript grew and the session is idle — is
@@ -698,9 +733,9 @@ fun HuginnApp(
                 onForceResize = { vm.forceFit() },
                 onInterrupt = { vm.interruptSession(name) },
                 working = sessions.firstOrNull { s -> s.name == name }?.state == "running",
-                attachment = attachment,
-                onAttach = { vm.attachImage(it) },
-                onClearAttachment = { vm.clearAttachment() },
+                attachment = if (attachmentOwner == HuginnViewModel.sessionDraftKey(name)) attachment else null,
+                onAttach = { vm.attachImage(it, HuginnViewModel.sessionDraftKey(name)) },
+                onClearAttachment = { vm.clearAttachment(HuginnViewModel.sessionDraftKey(name)) },
                 onCopy = { vm.copy(it) },
             )
         }
