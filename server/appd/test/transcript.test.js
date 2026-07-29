@@ -567,3 +567,50 @@ test('startsAtBoundary is safe on an unreadable path', () => {
   // Better to slice a possibly-whole line than to throw inside a read.
   assert.strictEqual(startsAtBoundary('/nonexistent/nope.jsonl', 10), false);
 });
+
+// Owner report, 2026-07-29: a queued message "doesn't move — the message in the
+// original position persists when it should have moved". An enqueue happens
+// mid-turn, so the bubble first lands INTERLEAVED into the output of the turn
+// still running; un-badging it in place left it stranded above both the rest of
+// that answer and the answer it actually prompted.
+
+test('a delivered queued message moves to where it was delivered', () => {
+  const p = writeFixture([
+    { type: 'user', message: { content: 'first question' }, timestamp: T },
+    { type: 'queue-operation', operation: 'enqueue', content: 'follow up', timestamp: T },
+    { type: 'assistant', timestamp: T, message: { content: [{ type: 'text', text: 'answer to first' }] } },
+    { type: 'queue-operation', operation: 'remove', content: 'follow up', timestamp: T },
+    { type: 'assistant', timestamp: T, message: { content: [{ type: 'text', text: 'answer to follow up' }] } },
+  ]);
+  const texts = readTranscript(p).events.map((e) => e.text);
+  assert.deepStrictEqual(texts, [
+    'first question',
+    'answer to first',
+    'follow up',            // moved down past the answer it was typed during
+    'answer to follow up',
+  ], `wrong order: ${JSON.stringify(texts)}`);
+});
+
+test('a still-queued message stays at the bottom, badged', () => {
+  const p = writeFixture([
+    { type: 'user', message: { content: 'first question' }, timestamp: T },
+    { type: 'queue-operation', operation: 'enqueue', content: 'still waiting', timestamp: T },
+    { type: 'assistant', timestamp: T, message: { content: [{ type: 'text', text: 'answer to first' }] } },
+  ]);
+  const evs = readTranscript(p).events;
+  const last = evs[evs.length - 1];
+  assert.strictEqual(last.text, 'still waiting', 'a waiting message belongs at the bottom');
+  assert.strictEqual(last.queued, true, 'and it must keep its badge');
+});
+
+test('sequence numbers stay monotonic after a move', () => {
+  const p = writeFixture([
+    { type: 'user', message: { content: 'q' }, timestamp: T },
+    { type: 'queue-operation', operation: 'enqueue', content: 'later', timestamp: T },
+    { type: 'assistant', timestamp: T, message: { content: [{ type: 'text', text: 'a' }] } },
+    { type: 'queue-operation', operation: 'remove', content: 'later', timestamp: T },
+  ]);
+  const seqs = readTranscript(p).events.map((e) => e.seq);
+  assert.deepStrictEqual(seqs, [...seqs].sort((x, y) => x - y), `not monotonic: ${seqs}`);
+  assert.strictEqual(new Set(seqs).size, seqs.length, 'duplicate seq would break list keys');
+});

@@ -502,6 +502,22 @@ private fun agoShort(seconds: Long): String = when {
 
 
 /**
+ * How many agents the fan-out PLANNED, read off the TUI's own progress row
+ * ("0/4 agents done"), or null when no row says so.
+ *
+ * It has to come from here rather than from the agent files: a planned agent has
+ * no file until it starts, so counting files undercounts the total for exactly
+ * as long as the fan-out is interesting to look at. Takes the largest total on
+ * screen, since several workflow rows can be present and the widest is the job.
+ */
+internal fun plannedAgents(statusLines: List<String>): Int? {
+    val re = Regex("(\\d+)\\s*/\\s*(\\d+)\\s+agents?\\s+done")
+    return statusLines
+        .mapNotNull { re.find(it)?.groupValues?.get(2)?.toIntOrNull() }
+        .maxOrNull()
+}
+
+/**
  * The work strip, opened. Everything the strip compresses: the TUI's progress
  * rows, background shells, and — the reason it exists — the individual agents
  * behind "0/4 agents done", each with its task and what it is doing right now.
@@ -576,12 +592,19 @@ private fun WorkSheet(
                 }
             }
             val list = agents?.agents ?: emptyList()
+            // The TUI's own denominator, which counts agents that have not started
+            // yet. Ours came from the agent FILES on huginn, and a planned agent has
+            // no file until it runs — so "1 of 2 agents" sat beside the pane's
+            // "1/6 agents done" and read as a different fan-out. Same number, same
+            // phrasing, taken from the row Claude Code already prints.
+            val planned = plannedAgents(statusLines)
+            val done = list.count { !it.active }
             item {
                 Text(
                     when {
                         agents == null -> "Agents…"
-                        list.isEmpty() -> "No agents in this session recently"
-                        else -> "${agents.active} of ${list.size} agents active"
+                        list.isEmpty() && planned == null -> "No agents in this session recently"
+                        else -> "$done of ${maxOf(planned ?: list.size, list.size)} agents done"
                     },
                     style = MaterialTheme.typography.labelMedium,
                     fontWeight = FontWeight.SemiBold,
