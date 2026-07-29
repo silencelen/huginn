@@ -747,7 +747,17 @@ fun HuginnApp(
             }
             // A turn boundary — the transcript grew and the session is idle — is
             // the moment suggestions become worth generating.
-            val sessionWorking = sessions.firstOrNull { s -> s.name == name }?.state == "running"
+            // The TRANSCRIPT's state first, the sessions list only as a fallback.
+            //
+            // On a folded phone the session detail is rendered ALONE — the
+            // sessions pane is not composed, so nothing polls the list and its
+            // state freezes at whatever it held when the reader left it. The
+            // transcript IS polled here, and carries the same hook state, so it
+            // is the live source in exactly the case the list is stale. Frozen,
+            // this drove the wrong composer control (send instead of interrupt,
+            // or a Stop button on a finished session) and mis-timed suggestions.
+            val sessionWorking = (transcript?.state
+                ?: sessions.firstOrNull { s -> s.name == name }?.state) == "running"
             LaunchedEffect(transcript?.nextOffset, sessionWorking) {
                 vm.maybeSuggest(name, transcript, sessionWorking)
             }
@@ -780,7 +790,7 @@ fun HuginnApp(
                 onAnswerMulti = { opts -> vm.answerPromptMulti(name, opts, screen?.prompt?.fingerprint) },
                 onForceResize = { vm.forceFit() },
                 onInterrupt = { vm.interruptSession(name) },
-                working = sessions.firstOrNull { s -> s.name == name }?.state == "running",
+                working = sessionWorking,
                 attachment = if (attachmentOwner == HuginnViewModel.sessionDraftKey(name)) attachment else null,
                 onAttach = { vm.attachImage(it, HuginnViewModel.sessionDraftKey(name)) },
                 onAttachFile = { vm.attachFile(it, HuginnViewModel.sessionDraftKey(name)) },

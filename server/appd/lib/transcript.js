@@ -183,6 +183,23 @@ function workflowName(script) {
  *            permissionMode: string|null, model: string|null, gitBranch: string|null,
  *            cwd: string|null, lastActivityTs: number|null}}
  */
+/**
+ * Whether a byte offset sits immediately after a newline, i.e. at the start of a
+ * whole record. One byte read; cheaper than being wrong.
+ */
+function startsAtBoundary(path, start) {
+  if (start <= 0) return true;
+  let fd;
+  try {
+    fd = fs.openSync(path, 'r');
+    const b = Buffer.alloc(1);
+    fs.readSync(fd, b, 0, 1, start - 1);
+    return b[0] === 0x0a;
+  } catch { return false; } finally {
+    if (fd !== undefined) { try { fs.closeSync(fd); } catch { } }
+  }
+}
+
 function readTranscript(path, { offset = null, limit = 400 } = {}) {
   const st = fs.statSync(path);
   let start = offset;
@@ -229,8 +246,14 @@ function readTranscript(path, { offset = null, limit = 400 } = {}) {
     text = text.slice(0, lastNl + 1);
   }
   let lines = text.split('\n').filter((l) => l.length > 0);
-  // A tail read almost certainly starts mid-line; that fragment is not JSON.
-  if (truncated && lines.length && offset == null) lines = lines.slice(1);
+  // A tail read USUALLY starts mid-line, and that fragment is not JSON — but not
+  // always: when the window lands exactly on a record boundary the first line is
+  // whole, and dropping it unconditionally lost a real message from the top of
+  // the view. Ask the file instead of assuming: the byte before the window is a
+  // newline exactly when the window starts at a boundary.
+  if (truncated && lines.length && offset == null && !startsAtBoundary(path, start)) {
+    lines = lines.slice(1);
+  }
 
   const out = {
     events: [],
@@ -469,5 +492,5 @@ function liveActivity(events, nowSec) {
   return { ...(tool || {}), subagents };
 }
 
-module.exports = { readTranscript, digestToolInput, workflowName, textOf, liveActivity, machineText, describeMachineText, humanRemainder, parseAsk,
+module.exports = { readTranscript, digestToolInput, workflowName, textOf, liveActivity, machineText, describeMachineText, humanRemainder, parseAsk, startsAtBoundary,
 };
