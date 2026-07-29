@@ -1,5 +1,19 @@
 # Huginn changelog
 
+## 2.49.1 / appd 2.45.0 — 2026-07-29 (audit fixes, round 8)
+
+### Changing an alert setting during a check no longer undoes itself
+The alert watcher took a copy of its settings when a check began and wrote the
+whole thing back when the check finished — so turning alerts off, or changing
+the mode, while a check was in flight was silently reverted a moment later. The
+watcher now writes only the bookkeeping it owns and leaves your settings alone.
+
+### A refused run no longer destroys the messages it was given
+Queued messages are removed from the queue before the run that will deliver them
+is known to have started. When the start was refused — too many runs at once, or
+one already active — they were simply gone, after you had been told they were
+queued. They now go back to the front of the queue.
+
 ## 2.49.0 / appd 2.44.0 — 2026-07-28 (audit fixes, round 7)
 
 ### A momentary tmux hiccup could fake a wave of answered questions

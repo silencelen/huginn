@@ -45,7 +45,7 @@ const { decideSwitch, worstLimit } = require('./lib/autoswitch');
 const pushLib = require('./lib/pushtokens');
 const { trySender } = require('./lib/fcm');
 
-const VERSION = '2.44.0';
+const VERSION = '2.45.0';
 const PORT = Number(process.env.HUGINN_APPD_PORT || 8787);
 const DATA_DIR = process.env.HUGINN_APPD_DATA || '/var/lib/huginn-appd';
 const UPLOADS_DIR = path.join(DATA_DIR, 'uploads');
@@ -852,7 +852,7 @@ function startRun(meta, userText) {
         if (next) {
           saveMeta(fresh);
           log(`chat ${chatId} delivering queued message(s)`);
-          startRun(fresh, next);
+          startQueuedRun(fresh, next);
         }
       }
     }
@@ -969,6 +969,29 @@ async function readLoginState() {
  * Only reachable after a restart or a crash, since in normal operation the queue
  * is drained by the closing run.
  */
+/**
+ * Starts a run for text already drained from the queue, and PUTS IT BACK if the
+ * start is refused.
+ *
+ * Both drain sites used to `takePending` (which empties the queue), save that
+ * emptiness, then call startRun and ignore its return value. startRun refuses
+ * synchronously for ordinary reasons — too many concurrent runs, a run already
+ * active — and when it did, the messages were already erased from disk: silently
+ * destroyed, after the sender had been told they were queued.
+ */
+function startQueuedRun(meta, text) {
+  const started = startRun(meta, text);
+  if (!started || !started.error) return started;
+  // Restored at the FRONT, so it stays ahead of anything queued since, and as a
+  // single entry because takePending already joined the batch into one prompt.
+  updateMeta(meta.id, (m) => {
+    m.pending = [{ text, ts: Math.floor(Date.now() / 1000) }].concat(
+      Array.isArray(m.pending) ? m.pending : []);
+  });
+  log(`chat ${meta.id}: run refused (${started.error}); ${text.length} chars returned to the queue`);
+  return started;
+}
+
 function deliverOrphanedQueues() {
   for (const meta of listChats()) {
     if (!meta.pending || activeRuns.has(meta.id)) continue;
@@ -978,7 +1001,7 @@ function deliverOrphanedQueues() {
     if (!next) continue;
     saveMeta(full);
     log(`chat ${meta.id}: delivering ${meta.pending} message(s) queued before restart`);
-    startRun(full, next);
+    startQueuedRun(full, next);
   }
 }
 
@@ -1706,7 +1729,30 @@ async function alertTickInner(st) {
   // cannot be answered by the observation itself — it records what existed, not
   // when the looking happened.
   st.prevAt = now;
-  saveAlertState(st);
+
+  // Merged onto a RELOADED state, never written as a whole snapshot.
+  //
+  // `st` was loaded when this tick began, and a tick spans network calls — so a
+  // POST /v1/alerts landing meanwhile (turning alerts off, changing the mode)
+  // was silently reverted the moment the tick finished: the setting appeared to
+  // take, then undid itself. Only the fields this tick OWNS are written back;
+  // `enabled` and `mode` belong to the caller and are left exactly as found.
+  const fresh = loadAlertState();
+  if (fresh.enabled !== st.enabled) {
+    // The feature was toggled underneath us. Enabling deliberately clears `prev`
+    // so switching on does not announce everything already true, and writing our
+    // observation over that would defeat it. Keep only the suppression record
+    // and let the next tick take a clean baseline.
+    fresh.sent = st.sent;
+    log('alerts: settings changed during the tick; baseline left to the next one');
+  } else {
+    fresh.sent = st.sent;
+    fresh.prev = st.prev;
+    fresh.prevAt = st.prevAt;
+    fresh.delivered = st.delivered;
+    fresh.lastAt = st.lastAt;
+  }
+  saveAlertState(fresh);
 }
 
 /**
