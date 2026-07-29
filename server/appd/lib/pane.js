@@ -145,7 +145,16 @@ function detectPrompt(lines) {
       opts.unshift({
         number: Number(m[2]),
         label: label.slice(0, 120),
-        selected: /[\u276F>]/.test(plain[j]),
+        // Anchored to the line START, where the selection caret is actually
+        // drawn. Testing the whole line meant any '>' inside an option's TEXT
+        // counted as a caret — and "Yes, and don't ask again for echo a > b" is
+        // ordinary Claude Code wording. The consequence was not a mis-marked
+        // option but a prompt that vanished entirely: two options looked
+        // selected, the exactly-one-caret guard below rejected the whole thing,
+        // and that permission dialog got no buttons in the app, no options in
+        // its notification, and no lock-screen answer. Verified: adding '>' to
+        // one option's text flipped detection from true to false.
+        selected: /^\s*[\u276F>]/.test(plain[j]),
         ...(checked === null ? {} : { checked }),
       });
       firstIdx = j;
