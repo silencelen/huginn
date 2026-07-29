@@ -1,5 +1,22 @@
 # Huginn changelog
 
+## 2.51.0 / appd 2.46.0 — 2026-07-29
+
+### The agent count now matches the one Claude Code prints
+The work sheet counted only agents that had already started, because it counts
+files on huginn and a planned agent has no file until it runs. So "1 of 2
+agents" sat beside the pane's own "1/6 agents done" and read as a different
+fan-out. The total now comes from the TUI's own row, and the wording matches it.
+
+### A queued message behaves like one
+Two things were half-right. A message still waiting was drawn where it was
+typed — which is mid-turn, so it sat *above* the rest of the answer it was typed
+during and above the answer it was waiting for. It now waits at the bottom,
+where the pane shows it and where you look for it. And on delivery it used to
+just lose its "queued" tag in place; now it moves into its real position in the
+conversation, so the bubble goes where the exchange actually happened instead of
+being stranded mid-answer.
+
 ## 2.50.0 — 2026-07-29 (switchable routes to huginn)
 
 ### The app now knows more than one way to reach huginn
