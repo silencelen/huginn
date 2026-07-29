@@ -120,6 +120,13 @@ fun AttachButton(onPickImage: (Uri) -> Unit, onPickFile: (Uri) -> Unit) {
                 onClick = {
                     menuOpen = false
                     val dir = File(context.cacheDir, "captures").apply { mkdirs() }
+                    // Yesterday's captures have been uploaded or abandoned; either
+                    // way the full-res original has no further use here. Pruned on
+                    // the next use rather than a schedule — a dir that only grows
+                    // when the camera is used only needs sweeping then.
+                    dir.listFiles()?.forEach {
+                        if (it.lastModified() < System.currentTimeMillis() - 86_400_000L) it.delete()
+                    }
                     val uri = FileProvider.getUriForFile(
                         context,
                         "com.silencelen.huginn.fileprovider",
