@@ -198,3 +198,38 @@ test('a present key yields a sender that knows its project', () => {
   assert.ok(sender);
   assert.equal(sender.projectId, 'test-project');
 });
+
+// Audit findings, 2026-07-28.
+
+test('INVALID_ARGUMENT does NOT mark a token dead', async () => {
+  // FCM returns it for a malformed PAYLOAD as well as a bad token. Treating it
+  // as proof of death unregisters every device in one tick over one bad
+  // message, after which nothing can push until each phone re-registers.
+  const sender = new FcmSender(writeKey());
+  const f = stubFetch([TOKEN_OK, {
+    status: 400,
+    body: JSON.stringify({ error: { status: 'INVALID_ARGUMENT', message: 'bad payload' } }),
+  }]);
+  const r = await sender.send('device-tok', { title: 'T', text: 'B' }, f);
+  assert.equal(r.ok, false);
+  assert.equal(r.dead, false, 'INVALID_ARGUMENT must be retryable, not fatal to the registration');
+});
+
+test('a genuinely gone registration is still dropped', async () => {
+  for (const code of ['UNREGISTERED', 'NOT_FOUND']) {
+    const sender = new FcmSender(writeKey());
+    const f = stubFetch([TOKEN_OK, {
+      status: 404, body: JSON.stringify({ error: { status: code } }),
+    }]);
+    const r = await sender.send('t', { title: 'T', text: 'B' }, f);
+    assert.equal(r.dead, true, code);
+  }
+});
+
+test('the send is bounded so a hung socket cannot wedge the alert tick', async () => {
+  const sender = new FcmSender(writeKey());
+  const f = stubFetch([TOKEN_OK, { status: 200, body: '{}' }]);
+  await sender.send('t', { title: 'T', text: 'B' }, f);
+  assert.ok(f.calls[1].opts.signal, 'no AbortSignal on the FCM request');
+  assert.ok(f.calls[0].opts.signal, 'no AbortSignal on the token exchange');
+});

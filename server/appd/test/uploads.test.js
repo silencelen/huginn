@@ -42,3 +42,12 @@ test('jpeg normalizes to jpg wherever it enters', () => {
   assert.equal(uploadExtFor('image/jpeg', null), 'jpg');
   assert.equal(uploadExtFor('application/octet-stream', 'photo.jpeg'), 'jpg');
 });
+
+test('inherited Object properties are not file types', () => {
+  // A bare `MIME_EXTS[mime]` answers truthily for constructor/__proto__/toString
+  // and the inherited value becomes the stored extension.
+  for (const m of ['constructor', '__proto__', 'toString', 'hasOwnProperty', 'valueOf']) {
+    assert.strictEqual(uploadExtFor(m, 'x'), null, m);
+    assert.strictEqual(uploadExtFor(m, 'notes.txt'), 'txt', `${m} + real name`);
+  }
+});

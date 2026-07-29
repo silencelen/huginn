@@ -27,7 +27,15 @@ const SCOPE = 'https://www.googleapis.com/auth/firebase.messaging';
  * every token to be discarded — that would quietly unregister a working phone over an
  * outage and leave no way back except reinstalling.
  */
-const DEAD_TOKEN_CODES = new Set(['UNREGISTERED', 'INVALID_ARGUMENT', 'NOT_FOUND']);
+// Codes that mean "this registration is gone; forget it". INVALID_ARGUMENT is
+// deliberately NOT here: FCM returns it for a malformed PAYLOAD too, so one bad
+// message (a non-string data value, an over-long field) would be read as every
+// device being dead and would unregister the whole fleet in a single tick —
+// after which nothing can push until each phone happens to re-register.
+const DEAD_TOKEN_CODES = new Set(['UNREGISTERED', 'NOT_FOUND']);
+
+/** Long enough for a slow mobile round trip, short enough not to wedge a tick. */
+const FCM_TIMEOUT_MS = 15_000;
 
 class FcmSender {
   /** @param keyPath service-account JSON; absent means push is simply not configured. */
@@ -46,9 +54,14 @@ class FcmSender {
    */
   async send(token, { title, text, kind, subject, options, fingerprint }, fetchImpl = fetch) {
     const accessToken = await this.sa.accessToken(fetchImpl);
+    // Bounded, because this runs inside the alert tick and the tick is
+    // single-flight: a socket that hangs (captive portal, black-holed route)
+    // would otherwise stall EVERY later alert behind it for as long as the OS
+    // waits, with no log to say why the phone went quiet.
     const res = await fetchImpl(
       `https://fcm.googleapis.com/v1/projects/${this.projectId}/messages:send`,
       {
+        signal: AbortSignal.timeout(FCM_TIMEOUT_MS),
         method: 'POST',
         headers: {
           Authorization: `Bearer ${accessToken}`,
@@ -122,4 +135,4 @@ function trySender(keyPath, log = () => { }) {
   }
 }
 
-module.exports = { FcmSender, trySender, DEAD_TOKEN_CODES, SCOPE };
+module.exports = { FcmSender, trySender, DEAD_TOKEN_CODES, FCM_TIMEOUT_MS, SCOPE };

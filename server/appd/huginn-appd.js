@@ -45,7 +45,7 @@ const { decideSwitch, worstLimit } = require('./lib/autoswitch');
 const pushLib = require('./lib/pushtokens');
 const { trySender } = require('./lib/fcm');
 
-const VERSION = '2.38.1';
+const VERSION = '2.39.1';
 const PORT = Number(process.env.HUGINN_APPD_PORT || 8787);
 const DATA_DIR = process.env.HUGINN_APPD_DATA || '/var/lib/huginn-appd';
 const UPLOADS_DIR = path.join(DATA_DIR, 'uploads');
@@ -768,6 +768,24 @@ function startRun(meta, userText) {
     stdio: ['pipe', 'pipe', 'pipe'],
   });
   run_.proc = proc;
+
+  // An unhandled 'error' on a child process is FATAL to the daemon — Node
+  // rethrows it, systemd restarts, and the next message crashes it again: a
+  // user-driven crash loop. spawn fails for ordinary reasons (a wedged
+  // `claude update` leaving no binary on PATH, EMFILE under fd pressure), and
+  // this daemon holds every phone's SSE stream and the alert watcher, so its
+  // death is never local. 'close' still fires after a handled 'error', so the
+  // normal finish path below does the bookkeeping; this only has to record
+  // WHY, and absorb stdin's EPIPE when the child never existed to read it.
+  proc.on('error', (err) => {
+    const ts = Math.floor(Date.now() / 1000);
+    const text = `could not start claude: ${err.code || err.message}`;
+    appendMsg(chatId, { type: 'error', text, ts });
+    run_.emit('error', { text });
+    updateMeta(chatId, (m) => { m.updatedAt = ts; m.lastSnippet = text.slice(0, 120); });
+    log(`chat ${chatId} spawn failed: ${err.code || err.message}`);
+  });
+  proc.stdin.on('error', () => { /* EPIPE when the child never started */ });
   proc.stdin.end(userText);
 
   const killer = setTimeout(() => { try { proc.kill('SIGKILL'); } catch { } }, RUN_HARD_CAP_MS);
@@ -1619,6 +1637,7 @@ async function alertTickInner(st) {
     // the next tick may try again.
     if (!pushedKeys.has(a.key)) delete sentUpdates[a.key];
   }
+  const undelivered = [];
   for (const a of deliver) {
     const ok = await deliverTelegram(telegramText(a));
     if (ok) {
@@ -1629,9 +1648,44 @@ async function alertTickInner(st) {
       // Undo the suppression so a failed send is retried on the next tick
       // rather than swallowed for half an hour.
       delete sentUpdates[a.key];
+      if (!pushedKeys.has(a.key)) undelivered.push(a);
     }
   }
   st.sent = pruneSent({ ...(st.sent || {}), ...sentUpdates }, now);
+
+  // Clearing the repeat guard above is NOT enough to make a failed alert retry,
+  // and the comment there used to imply it was. decideAlerts only fires on a
+  // TRANSITION (attention edge, running->idle, finishedRuns increase) — so once
+  // this observation is saved as `prev`, the transition is consumed and no later
+  // tick can re-decide it. A blocking question that failed both channels during a
+  // brief WAN blip was therefore never delivered at all, on any channel, ever.
+  //
+  // So for alerts that reached nobody — push sent to zero devices AND Telegram
+  // refused — this rolls that subject back to its previous state, leaving the
+  // edge intact for the next tick to re-decide. Only the both-failed case: an
+  // alert HELD because the app has it is genuinely delivered (the phone's own
+  // watch baseline consumes it independently), and re-deciding those would
+  // re-buzz every tick until the phone reappeared.
+  if (undelivered.length) {
+    const prevObs = st.prev || {};
+    for (const a of undelivered) {
+      if (a.kind === 'chat_finished') {
+        const before = (prevObs.chats || {})[a.subject];
+        if (before) observation.chats[a.subject] = before;
+        else delete observation.chats[a.subject];
+      } else {
+        const before = (prevObs.sessions || {})[a.subject];
+        if (before === undefined) delete observation.sessions[a.subject];
+        else observation.sessions[a.subject] = before;
+        // The run-start ledger has to roll back with it, or a re-decided
+        // session_finished would measure a zero-length run and stay silent.
+        const since = (prevObs.sessionsSince || {})[a.subject];
+        if (since === undefined) delete observation.sessionsSince[a.subject];
+        else observation.sessionsSince[a.subject] = since;
+      }
+      log(`alerts: ${a.kind} for ${a.subject} reached nobody — edge kept for retry`);
+    }
+  }
   st.prev = observation;
   // Stamped alongside it, because "was this chat created since we last looked?"
   // cannot be answered by the observation itself — it records what existed, not
@@ -1843,6 +1897,7 @@ const server = http.createServer(async (req, res) => {
       // the host can also see the vigil from its side.
       if (u.searchParams.get('stream') === '1') {
         noteClient(req, 'stream');
+        const streamInstall = String(req.headers['x-huginn-client'] || '').trim().slice(0, 64);
         res.writeHead(200, {
           'Content-Type': 'text/event-stream',
           'Cache-Control': 'no-cache',
@@ -1863,6 +1918,12 @@ const server = http.createServer(async (req, res) => {
             last = d.hash;
             res.write(`event: state\ndata: ${JSON.stringify({
               ...d, changed: true, serverTime: Math.floor(Date.now() / 1000),
+              // Same field the long poll returns. Without it the app decodes the
+              // absent value as 0 and overwrites its real tally, which silently
+              // disables push-deficit detection: the phone can no longer tell a
+              // quiet night from a broken delivery path, so it never tightens
+              // its fallback cadence no matter how many pushes go missing.
+              pushesSent: streamInstall ? pushLib.sentTo(loadPushState(), streamInstall) : null,
             })}\n\n`);
             nextKeepalive = Date.now() + KEEPALIVE_MS;
           } else if (Date.now() >= nextKeepalive) {
@@ -2505,9 +2566,20 @@ const server = http.createServer(async (req, res) => {
         // A headless run cannot be fed mid-flight, and a dead end here would be
         // the one place the app behaves worse than typing into the session.
         if (activeRuns.has(id)) {
-          const q = pushPending(meta, text, Math.floor(Date.now() / 1000));
+          // Through updateMeta, NOT saveMeta(meta): `meta` was loaded before the
+          // readBody await above, and writing that whole snapshot back clobbers
+          // anything the run wrote meanwhile. Measured consequences of the
+          // snapshot version: two quick follow-ups both load pending=[], the
+          // second saves over the first and a message the caller was told was
+          // queued (202) silently vanishes; and a send straddling the run's close
+          // resurrects an already-drained message, answering it twice.
+          // pushPending mutates only on success, so a rejected queue leaves the
+          // reloaded meta untouched.
+          let q;
+          if (!updateMeta(id, (fresh) => { q = pushPending(fresh, text, Math.floor(Date.now() / 1000)); })) {
+            return sendErr(res, 404, 'no such chat');
+          }
           if (!q.ok) return sendErr(res, q.code, q.error);
-          saveMeta(meta);
           return sendJson(res, 202, { ok: true, queued: true, position: q.position });
         }
         const started = startRun(meta, text);
@@ -2581,7 +2653,10 @@ const server = http.createServer(async (req, res) => {
       }
       if (req.method === 'POST' && sub === '/cancel') {
         const run_ = activeRuns.get(id);
-        if (clearPending(meta)) saveMeta(meta);
+        // Reloaded too: no await precedes this one, but the run's own writes are
+        // concurrent with it, and the whole-snapshot write-back has the same
+        // clobbering shape.
+        updateMeta(id, (fresh) => { clearPending(fresh); });
         if (!run_) return sendErr(res, 409, 'no active run');
         run_.cancelled = true;
         try { run_.proc.kill('SIGTERM'); } catch { }
@@ -2590,17 +2665,26 @@ const server = http.createServer(async (req, res) => {
       }
       if (req.method === 'PATCH' && sub === '') {
         const body = JSON.parse(await readBody(req) || '{}');
+        // Applied to a RELOADED meta for the same reason as the queue branch: the
+        // snapshot above predates the readBody await, and saving it back reverted
+        // whatever the run recorded meanwhile. The worst case was specific and
+        // silent — a mode toggle landing across the run's init event wrote
+        // claudeSessionId back to null, so the next turn spawned without
+        // --resume and the chat lost its entire conversation history.
         let changed = false;
-        if (typeof body.title === 'string' && body.title.trim()) {
-          meta.title = body.title.trim().slice(0, 80); changed = true;
-        }
-        // Model and effort apply to the NEXT turn; an in-flight run keeps what it
-        // started with, since the flags are fixed at spawn.
-        if ('model' in body) { meta.model = validModel(body.model); changed = true; }
-        if ('effort' in body) { meta.effort = validEffort(body.effort); changed = true; }
-        if ('mode' in body) { meta.mode = body.mode === 'act' ? 'act' : 'ask'; changed = true; }
-        if (changed) saveMeta(meta);
-        return sendJson(res, 200, meta);
+        const updated = updateMeta(id, (fresh) => {
+          if (typeof body.title === 'string' && body.title.trim()) {
+            fresh.title = body.title.trim().slice(0, 80); changed = true;
+          }
+          // Model and effort apply to the NEXT turn; an in-flight run keeps what
+          // it started with, since the flags are fixed at spawn.
+          if ('model' in body) { fresh.model = validModel(body.model); changed = true; }
+          if ('effort' in body) { fresh.effort = validEffort(body.effort); changed = true; }
+          if ('mode' in body) { fresh.mode = body.mode === 'act' ? 'act' : 'ask'; changed = true; }
+        });
+        if (!updated) return sendErr(res, 404, 'no such chat');
+        updated.running = activeRuns.has(id);
+        return sendJson(res, 200, updated);
       }
     }
 

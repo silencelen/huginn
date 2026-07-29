@@ -1,5 +1,44 @@
 # Huginn changelog
 
+## 2.43.1 / appd 2.39.1 — 2026-07-28 (audit fixes, round 1)
+
+A 15-lane audit of every file in the app and daemon produced 94 confirmed
+findings. This is the first round of fixes — the ones that could lose your data
+or take the whole service down.
+
+### The daemon could be crash-looped by an ordinary chat message
+`spawn('claude')` had no error handler, and an unhandled child-process error is
+fatal to Node. If the claude binary were ever unresolvable — a wedged update, a
+PATH change — sending any message killed the daemon outright, taking every
+phone's live stream and the alert watcher with it, and systemd's restart just
+queued up the next crash. Reproduced on this host before fixing.
+
+### Two paths could silently lose or duplicate your messages
+`POST /messages` and `PATCH` both loaded the chat's metadata, awaited the
+request body, then wrote that stale snapshot back. Two quick follow-ups meant
+the second overwrote the first — a message you were told was queued, gone. A
+send landing as a run ended could resurrect an already-delivered message and
+answer it twice. And a mode toggle timed across a run's start could erase the
+chat's session id, losing its entire conversation context on the next turn.
+
+### An alert that failed to send was lost forever
+The code cleared its repeat-guard and a comment promised a retry, but the
+observation advanced regardless — and alerts only fire on transitions, so the
+transition was consumed. A blocking question that hit a brief network blip on
+both channels was never delivered again, on any channel. Failed alerts now keep
+their edge for the next tick.
+
+### Push deficit detection was silently disabled
+The streaming watch path omitted the host's push tally, so every state change
+overwrote the phone's copy with zero — meaning the phone could no longer tell a
+quiet night from a broken delivery path, and would never tighten its fallback.
+
+Also: one bad FCM payload could unregister every device at once
+(INVALID_ARGUMENT is not proof of a dead token); FCM and Google-token requests
+had no timeout, so one hung socket could stall the whole alert pipeline; and
+the app fired API calls before its credentials finished loading — 63 rejected
+requests a day, a flashed error and an empty list on every cold start.
+
 ## 2.42.1 — 2026-07-28
 
 ### File attach in chats actually attaches
