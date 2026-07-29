@@ -321,7 +321,23 @@ function readTranscript(path, { offset = null, limit = 400 } = {}) {
           const pending = queued.get(content);
           const ev = pending && pending.length ? pending.shift() : null;
           if (pending && pending.length === 0) queued.delete(content);
-          if (ev) { delete ev.queued; }
+          if (ev) {
+            // MOVED to the delivery point, not just un-badged where it sat.
+            //
+            // An enqueue happens mid-turn, so the bubble first appears INTERLEAVED
+            // into the output of the turn that was still running. Clearing the
+            // badge in place left it stranded there — above the rest of an answer
+            // it was sent after, and above the answer it actually prompted. What a
+            // reader expects is what the pane does: the message waits at the
+            // bottom while queued, then takes its real place in the conversation
+            // once delivered. Re-seq'd so ordering stays monotonic.
+            const at = out.events.indexOf(ev);
+            if (at >= 0) out.events.splice(at, 1);
+            delete ev.queued;
+            ev.seq = ++seq;
+            if (ts) ev.ts = ts;
+            out.events.push(ev);
+          }
           else if (content.trim() && !machineText(content)) {
             // The enqueue happened before the window we read.
             out.events.push({ seq: ++seq, kind: 'user', ts, sidechain, text: content });
@@ -450,10 +466,27 @@ function readTranscript(path, { offset = null, limit = 400 } = {}) {
     }
   }
 
+  // Anything STILL waiting floats to the bottom.
+  //
+  // An enqueue is recorded the moment it is typed, which is mid-turn — so left
+  // where it lands, a waiting message sits interleaved above the rest of the
+  // answer it was typed during, and above the answer it is waiting for. That is
+  // not where the pane shows it and not where a reader looks for it: a message
+  // that has not been delivered has not happened yet, so it belongs after
+  // everything that has. Relative order among several waiting messages is
+  // preserved, because that is the order they will be delivered in.
+  const waiting = out.events.filter((e) => e.queued);
+  if (waiting.length && waiting.length < out.events.length) {
+    out.events = out.events.filter((e) => !e.queued).concat(waiting);
+  }
+
   if (out.events.length > limit) {
     out.events = out.events.slice(-limit);
     out.truncated = true;
   }
+  // Renumbered last, so list keys stay monotonic after a float or a move. The
+  // seq is a per-response ordinal, not an identity that outlives the request.
+  out.events.forEach((e, i) => { e.seq = i + 1; });
   return out;
 }
 
