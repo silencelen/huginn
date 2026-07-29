@@ -24,6 +24,15 @@ import kotlinx.coroutines.flow.first
  */
 object WatchCycle {
 
+    /**
+     * How many freshly-waiting sessions still get their question fetched.
+     *
+     * Each fetch is a pane capture on the host; three at once is ordinary, a
+     * dozen means something unusual is happening and the notifications matter
+     * more than their buttons.
+     */
+    private const val PROMPT_FETCH_CAP = 3
+
     data class Outcome(
         val sessionsNeeding: Set<String>,
         val chatsRunning: Set<String>,
@@ -112,27 +121,38 @@ object WatchCycle {
         }
 
         val fresh = needing - previouslyNeeding
-        // Withheld when the one session in question is the screen the reader has
-        // open — its prompt is already rendered in front of them, buttons and all.
-        // The baseline update below still runs either way, so the suppressed alert
-        // is consumed rather than deferred: navigating away later must not make an
-        // already-seen question suddenly buzz.
-        val watching = fresh.size == 1 && Foreground.showsSession(fresh.first())
-        if (fresh.isNotEmpty() && !watching) {
-            val only = fresh.singleOrNull()
-            // Only for a single session: with several waiting there is no one question
-            // to show, and guessing which to offer buttons for would be worse than
-            // offering none.
-            val prompt = if (only != null && client != null) {
-                runCatching { client.screen(only).prompt }.getOrNull()
+        // ONE NOTIFICATION PER SESSION, never an aggregate.
+        //
+        // The aggregate ("3 sessions need you") was posted under the FIRST
+        // session's notification id, so when that one was answered the
+        // resolution above cancelled the id — and the notice about the other two
+        // vanished with it. They then went unannounced entirely, because their
+        // transition had already been consumed from the baseline.
+        //
+        // Per-session also removes the reason the aggregate carried no buttons:
+        // there is no longer any guessing about which question to show, so every
+        // waiting session can be answered from the lock screen instead of only
+        // the lucky one. Android groups them in the shade by itself.
+        for (name in fresh) {
+            // Withheld when this is the screen the reader has open — its prompt
+            // is already rendered in front of them, buttons and all. The baseline
+            // update below still runs either way, so the suppressed alert is
+            // consumed rather than deferred: navigating away later must not make
+            // an already-seen question suddenly buzz.
+            if (Foreground.showsSession(name)) continue
+
+            // Bounded: a burst of waiting sessions should not become a burst of
+            // pane captures. Past the cap the notification still arrives, just
+            // without its buttons.
+            val prompt = if (client != null && fresh.size <= PROMPT_FETCH_CAP) {
+                runCatching { client.screen(name).prompt }.getOrNull()
             } else null
 
             SessionWatchWorker.post(
                 context,
-                if (only != null) "$only needs you" else "${fresh.size} sessions need you",
-                prompt?.question?.takeIf { it.isNotBlank() }
-                    ?: if (only != null) "Waiting for your answer" else fresh.sorted().joinToString(", "),
-                fresh.first(),
+                "$name needs you",
+                prompt?.question?.takeIf { it.isNotBlank() } ?: "Waiting for your answer",
+                name,
                 prompt?.options?.map { SessionWatchWorker.Companion.AnswerOption(it.number, it.label) }
                     ?: emptyList(),
                 prompt?.fingerprint,

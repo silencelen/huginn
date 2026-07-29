@@ -70,7 +70,15 @@ function machineText(s) {
   // caption Claude Code writes beside an image it ingested — coordinate-mapping
   // instructions for the MODEL. Rendered as a user bubble it reads like the
   // owner recited camera metadata at their own phone.
-  return /^\s*(<(task-notification|system-reminder|command-name|command-message|command-args|local-command)|\[SYSTEM NOTIFICATION|\[Image: original \d+x\d+)/.test(s);
+  // "[Your previous response had no visible output…]" is Claude Code prodding
+  // the model after an empty turn. Found in real transcripts on this host; it
+  // rendered as a bubble the owner appeared to have typed.
+  //
+  // Deliberately a list of KNOWN openings rather than "any bracketed line":
+  // this app's own attachment markers ("[Attached image at …]") are bracketed
+  // too and ARE the user's message, so a blanket rule would silently swallow
+  // every photo and file the owner sends.
+  return /^\s*(<(task-notification|system-reminder|command-name|command-message|command-args|local-command)|\[SYSTEM NOTIFICATION|\[Image: original \d+x\d+|\[Your previous response)/.test(s);
 }
 
 /**
@@ -105,6 +113,9 @@ function describeMachineText(s) {
   // The image-ingestion caption: the Read card above it already says an image
   // was viewed, and coordinate-mapping instructions add nothing for a person.
   if (/^\s*\[Image: original \d+x\d+/.test(s)) return null;
+
+  // A nudge aimed at the model after an empty turn; nothing for a reader to do.
+  if (/^\s*\[Your previous response/.test(s)) return null;
 
   if (/<task-notification/.test(s) || /^\s*\[SYSTEM NOTIFICATION/.test(s)) {
     // The summary is written for exactly this purpose; use it.
@@ -239,6 +250,11 @@ function readTranscript(path, { offset = null, limit = 400 } = {}) {
   const pendingTools = new Map();
   // Queued messages by content, so a later `remove` can mark the same event
   // delivered instead of adding a duplicate.
+  // content -> FIFO of still-queued events with that exact text. A plain
+  // one-event-per-content map lost a duplicate: sending "ok" twice while Claude
+  // was busy overwrote the first event, leaving it stuck with a `queued` badge
+  // forever, and the second `remove` then found nothing and pushed a THIRD
+  // bubble. Two sends, three messages, one of them permanently "queued".
   const queued = new Map();
   let seq = 0;
 
@@ -270,11 +286,19 @@ function readTranscript(path, { offset = null, limit = 400 } = {}) {
             ev = { seq: ++seq, kind: 'user', ts, sidechain, text: content, queued: true };
           }
           out.events.push(ev);
-          if (ev.kind === 'user') queued.set(content, ev);
+          if (ev.kind === 'user') {
+            const pending = queued.get(content) || [];
+            pending.push(ev);
+            queued.set(content, pending);
+          }
         } else if (d.operation === 'remove') {
           // Delivered into the turn: it is now an ordinary message.
-          const ev = queued.get(content);
-          if (ev) { delete ev.queued; queued.delete(content); }
+          // Oldest first: the queue delivers in send order, so the first
+          // still-pending copy is the one being delivered now.
+          const pending = queued.get(content);
+          const ev = pending && pending.length ? pending.shift() : null;
+          if (pending && pending.length === 0) queued.delete(content);
+          if (ev) { delete ev.queued; }
           else if (content.trim() && !machineText(content)) {
             // The enqueue happened before the window we read.
             out.events.push({ seq: ++seq, kind: 'user', ts, sidechain, text: content });

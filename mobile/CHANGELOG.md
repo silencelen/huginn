@@ -1,5 +1,28 @@
 # Huginn changelog
 
+## 2.46.0 / appd 2.42.0 — 2026-07-28 (audit fixes, round 4)
+
+### Answering one waiting session no longer hides the others
+When several sessions needed you at once, they shared a single "3 sessions need
+you" notification — posted under the first session's slot. Answering that one
+cancelled the slot, and the notice about the rest vanished with it, their
+transitions already consumed. Each waiting session now gets its own
+notification, which also means each can be answered from the lock screen
+instead of only the lucky first one.
+
+### Claude's own prompts no longer appear as things you said
+"[Your previous response had no visible output...]" is Claude Code nudging
+itself after an empty turn. It was rendering as a message bubble you appeared to
+have typed. Found by scanning every real transcript on the host rather than
+guessing at shapes. Attachment markers stay visible — the rule matches known
+system phrasings, not "anything in brackets", precisely so your photos and
+files keep showing.
+
+### Sending the same message twice no longer produces three
+Queued messages were tracked one-per-text, so sending identical text twice while
+Claude was busy left the first stuck with a "queued" badge forever and invented
+a third bubble on delivery. Two sends, two messages, both delivered.
+
 ## 2.45.0 / appd 2.41.0 — 2026-07-28 (audit fixes, round 3)
 
 ### Typing in one session could land in another
