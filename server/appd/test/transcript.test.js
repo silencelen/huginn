@@ -510,3 +510,33 @@ test('a long ordinary transcript still tails instead of reading everything', () 
   assert.ok(t.events.length > 0);
   assert.ok(!t.events.some((e) => (e.text || '').startsWith('message number 0 ')), 'the head should be outside the window');
 });
+
+// Audit round 4. The queued map held ONE event per content string, so the same
+// text sent twice while Claude was busy overwrote the first — it kept a
+// `queued` badge forever — and the second `remove` found nothing and pushed a
+// third bubble. Two sends must produce exactly two messages, both delivered.
+
+test('the same message queued twice delivers as two, not three', () => {
+  const p = writeFixture([
+    { type: 'user', message: { content: 'first' }, timestamp: T },
+    { type: 'queue-operation', operation: 'enqueue', content: 'ok', timestamp: T },
+    { type: 'queue-operation', operation: 'enqueue', content: 'ok', timestamp: T },
+    { type: 'queue-operation', operation: 'remove', content: 'ok', timestamp: T },
+    { type: 'queue-operation', operation: 'remove', content: 'ok', timestamp: T },
+  ]);
+  const t = readTranscript(p);
+  const oks = t.events.filter((e) => e.text === 'ok');
+  assert.strictEqual(oks.length, 2, `expected 2 "ok" bubbles, got ${oks.length}`);
+  assert.ok(oks.every((e) => !e.queued), 'a delivered message must not keep its queued badge');
+});
+
+test('a message still waiting keeps its badge while its twin is delivered', () => {
+  const p = writeFixture([
+    { type: 'queue-operation', operation: 'enqueue', content: 'ok', timestamp: T },
+    { type: 'queue-operation', operation: 'enqueue', content: 'ok', timestamp: T },
+    { type: 'queue-operation', operation: 'remove', content: 'ok', timestamp: T },
+  ]);
+  const oks = readTranscript(p).events.filter((e) => e.text === 'ok');
+  assert.strictEqual(oks.length, 2);
+  assert.strictEqual(oks.filter((e) => e.queued).length, 1, 'exactly one should still be waiting');
+});
