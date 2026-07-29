@@ -1,5 +1,26 @@
 # Huginn changelog
 
+## 2.42.0 / appd 2.38.0 — 2026-07-28
+
+### A second photo no longer "deletes" the conversation (it never did)
+Sending a second image made the history above it vanish from view. Nothing was
+lost: each photo embeds itself into the transcript as megabytes of base64, and
+the reader tailed the file by a fixed 256KB of *bytes* — two photos pushed the
+whole first exchange behind the window, so the view began mid-turn-2. The tail
+is now measured in *events*, growing its window until the conversation is
+actually in it. Your "what's this" chat shows both turns again — reopen it.
+
+Also gone: the "[Image: original 1530x2048…]" bubble — that caption is
+coordinate-mapping instructions for the model, not something you said.
+
+### The attach button is now a real attachment menu
+**Take photo** (straight into the camera), **Photo library**, or **File** —
+in both chat and session composers. Files cover what huginn can genuinely read:
+PDFs and text in its many suits (md, json, csv, logs, configs, code). Types it
+would print as garbage — docx, zip, apk — are refused at upload with a plain
+sentence, because a mute failure downstream is worse than a named one here.
+File chips show the filename; file messages render as "📎 name".
+
 ## 2.41.0 — 2026-07-28
 
 ### Share to an existing chat or session

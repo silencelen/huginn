@@ -45,7 +45,7 @@ const { decideSwitch, worstLimit } = require('./lib/autoswitch');
 const pushLib = require('./lib/pushtokens');
 const { trySender } = require('./lib/fcm');
 
-const VERSION = '2.37.1';
+const VERSION = '2.38.0';
 const PORT = Number(process.env.HUGINN_APPD_PORT || 8787);
 const DATA_DIR = process.env.HUGINN_APPD_DATA || '/var/lib/huginn-appd';
 const UPLOADS_DIR = path.join(DATA_DIR, 'uploads');
@@ -53,8 +53,20 @@ const UPLOAD_MAX_BYTES = 20 * 1024 * 1024;
 // The kinds Claude's Read tool can actually view. HEIC is conspicuously absent:
 // Samsung cameras shoot it by default and Read cannot open it, so the APP
 // transcodes to JPEG before uploading — reject it here and the failure names
-// itself instead of surfacing as a mute chat.
-const UPLOAD_TYPES = { 'image/jpeg': 'jpg', 'image/png': 'png', 'image/webp': 'webp', 'image/gif': 'gif' };
+// itself instead of surfacing as a mute chat. Beyond images, the document types
+// Read genuinely handles: PDFs, and text in its many suits. Binaries that Read
+// would print as garbage (docx, zip, apk) are refused for the same reason HEIC
+// is — a mute failure downstream is worse than a named one here.
+const UPLOAD_TYPES = {
+  'image/jpeg': 'jpg', 'image/png': 'png', 'image/webp': 'webp', 'image/gif': 'gif',
+  'application/pdf': 'pdf',
+  'text/plain': 'txt', 'text/markdown': 'md', 'text/csv': 'csv', 'text/html': 'html',
+  'application/json': 'json', 'text/xml': 'xml', 'application/xml': 'xml',
+  'text/yaml': 'yaml', 'application/x-yaml': 'yaml',
+};
+// For an octet-stream (the picker's shrug), the FILENAME's extension decides —
+// but only from this list, so an .exe renamed nothing sneaks in as nothing.
+const UPLOAD_NAME_EXTS = new Set(['jpg','jpeg','png','webp','gif','pdf','txt','md','csv','html','json','xml','yaml','yml','log','conf','ini','sh','py','js','ts','kt']);
 
 /**
  * Drops uploads old enough that no conversation is coming back for them.
@@ -119,7 +131,10 @@ function log(...args) { console.log(new Date().toISOString(), ...args); }
  * daemon stored a file, not what the conversation is about.
  */
 function humanizeUserText(t) {
-  const s = String(t || '').replace(/\[Attached image at [^\]]+\]/g, '\u{1F4F7} photo').trim();
+  const s = String(t || '')
+    .replace(/\[Attached image at [^\]]+\]/g, '\u{1F4F7} photo')
+    .replace(/\[Attached file at [^\]]+\]/g, '\u{1F4CE} file')
+    .trim();
   return s || '\u{1F4F7} photo';
 }
 
@@ -2427,15 +2442,21 @@ const server = http.createServer(async (req, res) => {
     // and the server chooses the filename — so nothing the phone sends can steer
     // where this writes.
     if (req.method === 'POST' && p === '/v1/uploads') {
-      const ext = UPLOAD_TYPES[String(req.headers['content-type'] || '').split(';')[0].trim()];
-      if (!ext) return sendErr(res, 415, 'send an image (jpeg, png, webp or gif)');
+      const mime = String(req.headers['content-type'] || '').split(';')[0].trim();
+      let ext = UPLOAD_TYPES[mime];
+      if (!ext && mime === 'application/octet-stream') {
+        const name = String(u.searchParams.get('name') || '');
+        const cand = name.includes('.') ? name.split('.').pop().toLowerCase() : '';
+        if (UPLOAD_NAME_EXTS.has(cand)) ext = cand === 'jpeg' ? 'jpg' : cand;
+      }
+      if (!ext) return sendErr(res, 415, 'that file type cannot be read here (images, pdf, or text formats)');
       let body;
       try { body = await readBodyRaw(req, UPLOAD_MAX_BYTES); }
       catch { return sendErr(res, 413, `image too large (max ${Math.floor(UPLOAD_MAX_BYTES / 1024 / 1024)}MB)`); }
       if (!body.length) return sendErr(res, 400, 'empty body');
       fs.mkdirSync(UPLOADS_DIR, { recursive: true });
       pruneUploads();
-      const file = path.join(UPLOADS_DIR, `img-${Date.now()}-${crypto.randomBytes(3).toString('hex')}.${ext}`);
+      const file = path.join(UPLOADS_DIR, `up-${Date.now()}-${crypto.randomBytes(3).toString('hex')}.${ext}`);
       fs.writeFileSync(file, body, { mode: 0o600 });
       log(`uploads: ${path.basename(file)} (${body.length} bytes)`);
       return sendJson(res, 200, { ok: true, path: file, bytes: body.length });
