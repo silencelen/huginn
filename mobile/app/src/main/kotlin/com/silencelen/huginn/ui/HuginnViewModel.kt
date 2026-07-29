@@ -50,6 +50,25 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
     private var baseUrlNow = SettingsStore.DEFAULT_BASE_URL
     private var tokenNow = ""
 
+    /**
+     * Settings have been read off disk, so `tokenNow`/`baseUrlNow` mean something.
+     *
+     * Every public refresh waits on this. `init` loads credentials asynchronously,
+     * but the UI starts calling the moment it composes — the sessions screen's
+     * lifecycle effect fires immediately — so those calls used to go out with an
+     * empty bearer and come back 401. Measured on the live daemon: 63 rejected
+     * `GET /v1/sessions` in one day, one per cold start and screen resume, each
+     * one flashing an error toast and leaving the list briefly empty.
+     *
+     * A gate rather than another one-off await (the share path already grew one)
+     * so the rule holds for every caller, including ones added later.
+     */
+    private val ready = MutableStateFlow(false)
+
+    private suspend fun awaitReady() {
+        if (!ready.value) ready.first { it }
+    }
+
     private val client = HuginnClient(
         baseUrlProvider = { baseUrlNow },
         tokenProvider = { tokenNow },
@@ -133,6 +152,7 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
 
     fun refreshDelivery() {
         viewModelScope.launch {
+            awaitReady()
             runCatching { client.alerts() }.onSuccess { _alerts.value = it }
             runCatching { client.clients() }.onSuccess { _clients.value = it }
             runCatching { client.push() }.onSuccess { _push.value = it }
@@ -263,6 +283,7 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
     fun refreshModels() {
         if (_models.value.isNotEmpty()) return
         viewModelScope.launch {
+            awaitReady()
             runCatching { client.models() }.onSuccess { _models.value = it }
         }
     }
@@ -457,6 +478,9 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
             _health.value = readHealth()
             _appLock.value = settings.appLock.first()
             AppLock.enabledCache = _appLock.value
+            // Opened even when no token is configured: a caller must unblock and
+            // get a real "not configured" failure rather than hang forever.
+            ready.value = true
             if (tokenNow.isNotBlank()) {
                 refreshAll()
                 refreshModels()
@@ -753,6 +777,7 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
 
     fun refreshAll() {
         viewModelScope.launch {
+            awaitReady()
             _loading.value = true
             runCatching { client.status() }
                 .onSuccess { _status.value = it; _statusError.value = null; _connected.value = true }
@@ -772,6 +797,10 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
     fun startSessionsPolling() {
         sessionsPollJob?.cancel()
         sessionsPollJob = viewModelScope.launch {
+            // The poller starts the instant the sessions screen composes, which on
+            // a cold start is before credentials have loaded — its first tick was
+            // the one remaining 401.
+            awaitReady()
             while (isActive) {
                 runCatching { client.sessions(preview = true) }.onSuccess { _sessions.value = it }
                 delay(5000)
@@ -786,6 +815,7 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
 
     fun refreshSessions() {
         viewModelScope.launch {
+            awaitReady()
             runCatching { client.sessions(preview = true) }
                 .onSuccess { _sessions.value = it }
                 .onFailure { _toast.value = errText(it) }
@@ -794,6 +824,7 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
 
     fun refreshChats() {
         viewModelScope.launch {
+            awaitReady()
             runCatching { client.chats() }
                 .onSuccess { _chats.value = it }
                 .onFailure { _toast.value = errText(it) }

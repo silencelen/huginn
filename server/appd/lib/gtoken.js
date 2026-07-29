@@ -70,7 +70,10 @@ class ServiceAccount {
     if (this._token && t < this._expiresAt - EXPIRY_MARGIN_MS) return this._token;
 
     const assertion = buildAssertion(this.key, this.scope, Math.floor(t / 1000));
+    // Bounded for the same reason as the FCM send: the alert tick is
+    // single-flight, and a hung token exchange stalls every alert behind it.
     const res = await fetchImpl(this.key.token_uri || TOKEN_URL, {
+      signal: AbortSignal.timeout(15_000),
       method: 'POST',
       headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
       body: new URLSearchParams({
