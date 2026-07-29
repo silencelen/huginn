@@ -1,5 +1,23 @@
 # Huginn changelog
 
+## 2.41.0 — 2026-07-28
+
+### Share to an existing chat or session
+Sharing always started a new chat, which was wrong exactly when sharing is most
+useful: the screenshot of an error belongs in the session already working on
+that error, with all its context. A destination sheet now asks — new chat
+first (the safe default for a link), then sessions with their live state, then
+recent chats. Text appends to the target's draft without clobbering anything
+half-typed; a photo stages on the target's composer. Dismissing the sheet drops
+the share: you were just shown everywhere it could go.
+
+Under the hood the attachment slot now has an *owner*. It was a single global,
+and a photo staged on one screen could ride a send from another if you moved
+fast enough. Every stage, send, chip and clear now names its surface, so a
+photo can only leave in a message from the place it was attached — which is
+also what lets a share staged for the destination survive the previous
+screen's teardown during navigation.
+
 ## 2.40.1 / appd 2.37.1 — 2026-07-28
 
 ### Photo messages read like photos, not plumbing

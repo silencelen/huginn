@@ -45,8 +45,10 @@ and tmux is the interaction, and each does what it is good at.
 
 **Photos attach, and huginn is a share target.** The attach button in either
 composer (chats and sessions share one implementation) opens the system photo
-picker; the share sheet accepts text — staged as a new chat's draft, never
-auto-sent — and images from any app. Everything is transcoded to JPEG at
+picker; the share sheet accepts text and images
+from any app, and asks where they should land: a new chat, an existing chat, or
+a session (the screenshot of an error belongs in the session already working on
+it). Staged as a draft at the destination, never auto-sent. Everything is transcoded to JPEG at
 ≤2048px before upload, because Samsung cameras shoot HEIC, Claude's Read tool
 cannot open HEIC, and without transcoding the failure is a successful upload
 followed by a shrug. The photo rides the message as a bracketed path marker the
