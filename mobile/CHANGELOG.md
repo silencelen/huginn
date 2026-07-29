@@ -1,5 +1,23 @@
 # Huginn changelog
 
+## 2.50.0 — 2026-07-29 (switchable routes to huginn)
+
+### The app now knows more than one way to reach huginn
+Android runs one VPN at a time, so the address that reaches huginn depends on
+which tunnel is up: the tailnet address while Tailscale holds the slot, and
+huginn's LAN address (through the yggdrasil mesh gateway) while Yggdrasil does.
+Connecting one tunnel used to leave the app talking to an address that no longer
+routed, with nothing to do but retype the URL.
+
+Settings now offers both routes as a choice. Leave it on Auto and the app probes
+them on startup, keeping whichever answers; tap a route to pin it and auto stays
+out of the way. Typing a custom URL pins it too, so a deliberate address is never
+silently overridden. If nothing answers the existing setting is kept rather than
+cleared, because a dead network should not look like a misconfigured app.
+
+The chosen route is stored where the background workers already read it, so a
+switch applies to notifications and the watch service as well as the UI.
+
 ## 2.49.1 / appd 2.45.0 — 2026-07-29 (audit fixes, round 8)
 
 ### Changing an alert setting during a check no longer undoes itself
