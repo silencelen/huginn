@@ -43,9 +43,11 @@ the laptop, which are the ones most worth seeing from a phone. Scraping the
 screen as the primary source loses structure. So the transcript is the content
 and tmux is the interaction, and each does what it is good at.
 
-**Photos attach, and huginn is a share target.** The attach button in either
-composer (chats and sessions share one implementation) opens the system photo
-picker; the share sheet accepts text and images
+**Attachments, and huginn is a share target.** The attach menu in either
+composer (chats and sessions share one implementation) offers the camera, the
+photo library, or any file huginn can genuinely read — PDFs and text formats;
+binaries that Read would print as garbage are refused at upload by an
+allowlist; the share sheet accepts text and images
 from any app, and asks where they should land: a new chat, an existing chat, or
 a session (the screenshot of an error belongs in the session already working on
 it). Staged as a draft at the destination, never auto-sent. Everything is transcoded to JPEG at

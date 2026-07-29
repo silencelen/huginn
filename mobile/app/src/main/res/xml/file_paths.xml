@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Where camera captures land: app cache, cleaned by the OS under pressure and
+     by us after upload. Nothing outside the app's own storage is ever shared. -->
+<paths>
+    <cache-path name="captures" path="captures/" />
+</paths>

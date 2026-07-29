@@ -77,6 +77,18 @@
                 <data android:mimeType="image/*" />
             </intent-filter>
         </activity>
+        <!-- Hands the camera app a write-target URI for "take a photo" attachments.
+             Not exported; grants are per-capture. -->
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="com.silencelen.huginn.fileprovider"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/file_paths" />
+        </provider>
+
         <service
             android:name=".notify.WatchService"
             android:exported="false"
