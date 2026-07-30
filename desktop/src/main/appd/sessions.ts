@@ -30,6 +30,7 @@ interface ScreenSub {
   active: boolean
   timer: NodeJS.Timeout | null
   backoffMs: number
+  onGone?: () => void
 }
 
 export class Sessions {
@@ -135,7 +136,10 @@ export class Sessions {
       backoffMs: ERROR_BACKOFF_MIN_MS,
     }
     this.screenSubs.set(id, sub)
-    wc.once('destroyed', () => void this.stopScreenPoll(id))
+    // Kept so it can be removed on stop: geometry changes restart the poll,
+    // so a drag-resize used to add a listener per step, none ever removed.
+    sub.onGone = () => void this.stopScreenPoll(id)
+    wc.once('destroyed', sub.onGone)
     void this.pollLoop(sub)
     return id
   }
@@ -145,6 +149,9 @@ export class Sessions {
     if (!sub) return
     sub.active = false
     if (sub.timer) clearTimeout(sub.timer)
+    if (sub.onGone !== undefined && !sub.wc.isDestroyed()) {
+      sub.wc.removeListener('destroyed', sub.onGone)
+    }
     this.screenSubs.delete(id)
     // Release the lease only when no other live subscription still views this
     // session — two windows on one pane share the lease.
@@ -153,6 +160,22 @@ export class Sessions {
     )
     if (!stillViewed && (sub.cols !== null || sub.rows !== null)) {
       await this.releaseSize(sub.name)
+    }
+  }
+
+  /**
+   * Sleep parks a /screen?wait= request that then hangs until the 150s idle
+   * timeout — the pane looks frozen for minutes after waking. Bump the hash so
+   * the next poll asks fresh, and let the in-flight one die.
+   */
+  resetPolls(): void {
+    for (const sub of this.screenSubs.values()) {
+      sub.hash = null
+      sub.backoffMs = ERROR_BACKOFF_MIN_MS
+      if (sub.timer) {
+        clearTimeout(sub.timer)
+        sub.timer = null
+      }
     }
   }
 

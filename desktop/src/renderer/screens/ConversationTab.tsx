@@ -6,8 +6,14 @@
 import { useTranscript } from '../hooks/useTranscript'
 import { TranscriptList } from '../components/transcript/TranscriptList'
 
-export function ConversationTab({ name }: { name: string }): React.JSX.Element {
-  const t = useTranscript('session', name)
+export function ConversationTab({
+  name,
+  active = true,
+}: {
+  name: string
+  active?: boolean
+}): React.JSX.Element {
+  const t = useTranscript('session', name, active)
 
   if (t.neverRan) {
     return (

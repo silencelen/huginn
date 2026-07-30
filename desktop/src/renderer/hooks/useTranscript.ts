@@ -16,6 +16,7 @@ import { mergeTranscriptPage } from '../../shared/core/transcriptMerge'
 import { call } from '../lib/ipc'
 
 const POLL_MS = 2_500
+const MAX_BACKOFF_MS = 60_000
 
 export interface TranscriptState {
   /** The merged window on screen; null until the first page lands. */
@@ -49,7 +50,12 @@ const NEVER_RAN_MARKS = [
 
 const looksNeverRan = (msg: string): boolean => NEVER_RAN_MARKS.some((m) => msg.includes(m))
 
-export function useTranscript(kind: 'session' | 'chat', id: string): TranscriptState {
+export function useTranscript(
+  kind: 'session' | 'chat',
+  id: string,
+  /** Poll only while this view is on screen — see hooks/useVisible.ts. */
+  active = true,
+): TranscriptState {
   const [page, setPage] = useState<TranscriptPage | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [neverRan, setNeverRan] = useState(false)
@@ -57,6 +63,7 @@ export function useTranscript(kind: 'session' | 'chat', id: string): TranscriptS
   const pageRef = useRef<TranscriptPage | null>(null)
   const offsetRef = useRef<number | null>(null)
   const busyRef = useRef(false)
+  const failuresRef = useRef(0)
   const aliveRef = useRef(true)
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const stepRef = useRef<(() => void) | null>(null)
@@ -88,24 +95,23 @@ export function useTranscript(kind: 'session' | 'chat', id: string): TranscriptS
       }
       setError(null)
       setNeverRan(false)
+      failuresRef.current = 0
     } catch (e) {
       if (!aliveRef.current) return
       const msg = e instanceof Error ? e.message : String(e)
       setError(msg)
       setNeverRan(looksNeverRan(msg))
+      failuresRef.current += 1
     } finally {
       busyRef.current = false
     }
   }, [kind, id])
 
   useEffect(() => {
+    if (!active) return
     aliveRef.current = true
-    pageRef.current = null
-    offsetRef.current = null
     busyRef.current = false
-    setPage(null)
-    setError(null)
-    setNeverRan(false)
+    failuresRef.current = 0
 
     const step = (): void => {
       if (!aliveRef.current) return
@@ -117,10 +123,15 @@ export function useTranscript(kind: 'session' | 'chat', id: string): TranscriptS
         if (!aliveRef.current) return
         // Someone (a refresh) already re-armed while this tick was in flight.
         if (timerRef.current !== null) return
+        // Back off on repeated failure. A session whose transcript file is
+        // GONE 409s forever, and at a flat 2.5s that was ~24 daemon errors a
+        // minute for as long as the tab stayed open.
+        const f = failuresRef.current
+        const delay = f === 0 ? POLL_MS : Math.min(MAX_BACKOFF_MS, POLL_MS * 2 ** Math.min(f, 6))
         timerRef.current = setTimeout(() => {
           timerRef.current = null
           step()
-        }, POLL_MS)
+        }, delay)
       })
     }
     stepRef.current = step

@@ -21,8 +21,14 @@ import '../components/terminal/terminal.css'
 const TEXT_FLUSH_MS = 150
 const HISTORY_LINES = 2000
 
-export function ScreenTab({ name }: { name: string }): React.JSX.Element {
-  const { screen, fontPx, setFontPx, forceFit, containerRef } = useScreenPoll(name)
+export function ScreenTab({
+  name,
+  active = true,
+}: {
+  name: string
+  active?: boolean
+}): React.JSX.Element {
+  const { screen, fontPx, setFontPx, forceFit, containerRef } = useScreenPoll(name, active)
   const [scrollback, setScrollback] = useState<string[] | null>(null)
   const [loadingHist, setLoadingHist] = useState(false)
   const [liveTyping, setLiveTyping] = useState(false)

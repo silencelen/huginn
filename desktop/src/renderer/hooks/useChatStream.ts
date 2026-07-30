@@ -110,6 +110,12 @@ export function useChatStream(chatId: string | null): ChatLive {
             setQueuedNotice(null)
             void refresh()
             break
+          case 'stream_lost':
+            // The run is probably still going on the host — reattach rather
+            // than leaving a frozen half-answer on screen (this is what made
+            // chats wedge after every laptop sleep).
+            void subscribe()
+            break
           case 'error':
             setRunning(false)
             scheduleRefresh()
