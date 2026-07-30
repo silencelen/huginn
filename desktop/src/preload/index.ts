@@ -1,4 +1,4 @@
-import { contextBridge, ipcRenderer } from 'electron'
+import { contextBridge, ipcRenderer, webUtils } from 'electron'
 
 // The one bridge between the sandboxed renderer and the main process. Typed on
 // both sides by shared/ipc/contract.ts; this file is deliberately dumb — it
@@ -16,6 +16,8 @@ const PUSH_CHANNELS = new Set([
 contextBridge.exposeInMainWorld('huginn', {
   invoke: (channel: string, ...args: unknown[]): Promise<unknown> =>
     ipcRenderer.invoke(channel, ...args),
+  /** Real filesystem path of a dropped/picked File — main streams it from disk. */
+  pathForFile: (file: File): string => webUtils.getPathForFile(file),
   on: (channel: string, listener: (payload: unknown) => void): (() => void) => {
     if (!PUSH_CHANNELS.has(channel)) throw new Error(`unknown push channel: ${channel}`)
     const wrapped = (_event: unknown, payload: unknown): void => listener(payload)
