@@ -2,6 +2,7 @@
 // wide — no fold/rotate gymnastics, just panes.
 
 import { useEffect } from 'react'
+import { call } from './lib/ipc'
 import { useApp, wireAppStore, type Dest } from './stores/app'
 import { ChatsList } from './screens/ChatsList'
 import { SessionsList } from './screens/SessionsList'
@@ -23,6 +24,18 @@ export function App(): React.JSX.Element {
   const watchConnected = useApp((s) => s.watchConnected)
 
   useEffect(() => wireAppStore(), [])
+
+  // Tell main what the user is looking at, so notifications for the visible
+  // target are suppressed and its stale ones withdrawn.
+  useEffect(() => {
+    const target =
+      dest.view === 'chats' && dest.chatId !== null
+        ? { view: 'chats' as const, id: dest.chatId }
+        : dest.view === 'sessions' && dest.sessionName !== null
+          ? { view: 'sessions' as const, id: dest.sessionName }
+          : null
+    void call('ui.viewed', target)
+  }, [dest])
 
   const toDest = (view: Dest['view']): Dest =>
     view === 'chats'
