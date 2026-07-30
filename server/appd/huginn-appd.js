@@ -45,7 +45,7 @@ const { decideSwitch, worstLimit } = require('./lib/autoswitch');
 const pushLib = require('./lib/pushtokens');
 const { trySender } = require('./lib/fcm');
 
-const VERSION = '2.48.0';
+const VERSION = '2.49.0';
 const PORT = Number(process.env.HUGINN_APPD_PORT || 8787);
 const DATA_DIR = process.env.HUGINN_APPD_DATA || '/var/lib/huginn-appd';
 const UPLOADS_DIR = path.join(DATA_DIR, 'uploads');
@@ -196,10 +196,25 @@ function validEffort(v) {
 }
 
 // Session names: the cc contract — letters/digits/underscore, canonically lowercase.
+/**
+ * The session names this daemon will route to.
+ *
+ * Wider than it was, because tmux is wider than it was assumed to be: sessions made
+ * at the keyboard routinely carry a dash (`dev-phonefarm`) or a capital, and those
+ * were LISTED by the app and then 404'd when tapped — visible and unopenable.
+ *
+ * Still deliberately narrow. A name is used as a filename under /run (the Claude
+ * state file), so anything that could climb out of that directory is excluded: no
+ * slashes, and the first character must be alphanumeric or an underscore, which
+ * makes `.` and `..` unnameable. Every character allowed here is also legal
+ * unencoded in a URL path segment, so no caller has to remember to escape it.
+ */
+const NAME_RE = /^[A-Za-z0-9_][A-Za-z0-9_.-]{0,49}$/;
+
 function canonName(raw) {
   if (typeof raw !== 'string') return null;
   const s = raw.toLowerCase();
-  return /^[a-z0-9_]{1,50}$/.test(s) ? s : null;
+  return NAME_RE.test(s) ? s : null;
 }
 
 // ------------------------------------------------------------ tmux sessions
@@ -293,6 +308,11 @@ async function listSessions({ preview = false } = {}) {
   for (const line of stdout.trim().split('\n')) {
     if (!line) continue;
     const [name, created, attached, activity, windows, w, h, wsize, sessActivity, panePid] = line.split('\t');
+    // Still listed, never silently hidden: a monitoring app that drops a session
+    // from the list is worse than one that cannot open it, because the reader
+    // concludes it is gone. Logged once per listing so an unopenable row has an
+    // explanation on the host instead of being a mystery on the phone.
+    if (!NAME_RE.test(name)) log(`sessions: "${name}" cannot be addressed by the app (name shape)`);
     const st = readSessionState(name) || {};
     rows.push({
       name,
@@ -2390,14 +2410,14 @@ const server = http.createServer(async (req, res) => {
       return sendJson(res, 201, { ok: true, name });
     }
 
-    if ((m = p.match(/^\/v1\/sessions\/([a-z0-9_]{1,50})$/)) && req.method === 'DELETE') {
+    if ((m = p.match(/^\/v1\/sessions\/([A-Za-z0-9_][A-Za-z0-9_.-]{0,49})$/)) && req.method === 'DELETE') {
       const name = m[1];
       const { err, stderr } = await run('tmux', ['kill-session', '-t', `=${name}`]);
       if (err) return sendErr(res, 404, `tmux: ${stderr.trim() || 'no such session'}`);
       return sendJson(res, 200, { ok: true });
     }
 
-    if ((m = p.match(/^\/v1\/sessions\/([a-z0-9_]{1,50})\/screen$/)) && req.method === 'GET') {
+    if ((m = p.match(/^\/v1\/sessions\/([A-Za-z0-9_][A-Za-z0-9_.-]{0,49})\/screen$/)) && req.method === 'GET') {
       const name = m[1];
       const q = u.searchParams;
       const opts = {
@@ -2450,7 +2470,7 @@ const server = http.createServer(async (req, res) => {
 
     // Explicitly hand the pane size back to tmux (so an attached laptop re-fits
     // immediately rather than waiting for the lease to lapse).
-    if ((m = p.match(/^\/v1\/sessions\/([a-z0-9_]{1,50})\/size$/)) && req.method === 'DELETE') {
+    if ((m = p.match(/^\/v1\/sessions\/([A-Za-z0-9_][A-Za-z0-9_.-]{0,49})\/size$/)) && req.method === 'DELETE') {
       await releaseSize(m[1]);
       return sendJson(res, 200, { ok: true });
     }
@@ -2458,7 +2478,7 @@ const server = http.createServer(async (req, res) => {
     // Structured conversation for a tmux session, straight from its Claude Code
     // transcript: thinking, tool calls, subagent output, workflow runs. This is
     // the primary way the app shows a session; the pane is for interaction.
-    if ((m = p.match(/^\/v1\/sessions\/([a-z0-9_]{1,50})\/transcript$/)) && req.method === 'GET') {
+    if ((m = p.match(/^\/v1\/sessions\/([A-Za-z0-9_][A-Za-z0-9_.-]{0,49})\/transcript$/)) && req.method === 'GET') {
       const name = m[1];
       if (!(await sessionExists(name))) return sendErr(res, 404, 'no such session');
       const st = readSessionState(name);
@@ -2493,7 +2513,7 @@ const server = http.createServer(async (req, res) => {
     }
 
     // --- suggested next messages, generated when a turn has just ended
-    if ((m = p.match(/^\/v1\/sessions\/([a-z0-9_]{1,50})\/suggestions$/)) && req.method === 'GET') {
+    if ((m = p.match(/^\/v1\/sessions\/([A-Za-z0-9_][A-Za-z0-9_.-]{0,49})\/suggestions$/)) && req.method === 'GET') {
       const name = m[1];
       if (!(await sessionExists(name))) return sendErr(res, 404, 'no such session');
       const st = readSessionState(name);
@@ -2504,7 +2524,7 @@ const server = http.createServer(async (req, res) => {
     }
 
     // --- the individual agents behind "0/4 agents done"
-    if ((m = p.match(/^\/v1\/sessions\/([a-z0-9_]{1,50})\/agents$/)) && req.method === 'GET') {
+    if ((m = p.match(/^\/v1\/sessions\/([A-Za-z0-9_][A-Za-z0-9_.-]{0,49})\/agents$/)) && req.method === 'GET') {
       const name = m[1];
       if (!(await sessionExists(name))) return sendErr(res, 404, 'no such session');
       const st = readSessionState(name);
@@ -2517,7 +2537,7 @@ const server = http.createServer(async (req, res) => {
       });
     }
 
-    if ((m = p.match(/^\/v1\/sessions\/([a-z0-9_]{1,50})\/rename$/)) && req.method === 'POST') {
+    if ((m = p.match(/^\/v1\/sessions\/([A-Za-z0-9_][A-Za-z0-9_.-]{0,49})\/rename$/)) && req.method === 'POST') {
       const from = m[1];
       const body = JSON.parse(await readBody(req) || '{}');
       const to = canonName(body.name);
@@ -2531,7 +2551,7 @@ const server = http.createServer(async (req, res) => {
       return sendJson(res, 200, { ok: true, name: to });
     }
 
-    if ((m = p.match(/^\/v1\/sessions\/([a-z0-9_]{1,50})\/keys$/)) && req.method === 'POST') {
+    if ((m = p.match(/^\/v1\/sessions\/([A-Za-z0-9_][A-Za-z0-9_.-]{0,49})\/keys$/)) && req.method === 'POST') {
       const name = m[1];
       if (!(await sessionExists(name))) return sendErr(res, 404, 'no such session');
       const body = JSON.parse(await readBody(req) || '{}');
@@ -2569,7 +2589,7 @@ const server = http.createServer(async (req, res) => {
     // never meant to, and in a Claude Code pane that can accept a prompt the owner
     // never saw. So the fingerprint of the question being answered comes with the
     // answer, and a mismatch is refused rather than delivered hopefully.
-    if ((m = p.match(/^\/v1\/sessions\/([a-z0-9_]{1,50})\/answer$/)) && req.method === 'POST') {
+    if ((m = p.match(/^\/v1\/sessions\/([A-Za-z0-9_][A-Za-z0-9_.-]{0,49})\/answer$/)) && req.method === 'POST') {
       const name = m[1];
       if (!(await sessionExists(name))) return sendErr(res, 404, 'no such session');
       const body = JSON.parse(await readBody(req) || '{}');
@@ -2772,6 +2792,16 @@ const server = http.createServer(async (req, res) => {
         // Busy: hold it and deliver when this run ends, rather than refusing.
         // A headless run cannot be fed mid-flight, and a dead end here would be
         // the one place the app behaves worse than typing into the session.
+        // A run being cancelled is NOT a run that will deliver a queue. It stays in
+        // activeRuns until 'close' (up to the 5s SIGKILL fallback), and the close
+        // handler drops the queue on purpose so that stopping does not immediately
+        // start the next thing. A message sent in that window was therefore
+        // accepted with a 202 saying "queued" and then destroyed without a word —
+        // which is worse than being told to wait.
+        const cancelling = activeRuns.get(id);
+        if (cancelling && cancelling.cancelled) {
+          return sendErr(res, 409, 'this chat is stopping — send again in a moment');
+        }
         if (activeRuns.has(id)) {
           // Through updateMeta, NOT saveMeta(meta): `meta` was loaded before the
           // readBody await above, and writing that whole snapshot back clobbers
