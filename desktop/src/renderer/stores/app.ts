@@ -91,6 +91,15 @@ export function wireAppStore(): () => void {
     void refreshChats()
     void refreshSessions()
   })
+  const offNav = on('push.navigate', (target) => {
+    useApp
+      .getState()
+      .navigate(
+        target.view === 'chats'
+          ? { view: 'chats', chatId: target.id }
+          : { view: 'sessions', sessionName: target.id },
+      )
+  })
 
   const poll = setInterval(() => {
     void refreshChats()
@@ -100,6 +109,7 @@ export function wireAppStore(): () => void {
   return () => {
     offWatch()
     offLists()
+    offNav()
     clearInterval(poll)
     wired = false
   }
