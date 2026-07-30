@@ -71,7 +71,7 @@ export function registerIpc(deps: IpcDeps): void {
   handle('chats.delete', (_wc, id) => chats.delete(id))
   handle('chats.send', (_wc, id, text) => chats.send(id, text))
   handle('chats.cancel', (_wc, id) => chats.cancel(id))
-  handle('chats.transcript', (_wc, id) => chats.transcript(id))
+  handle('chats.transcript', (_wc, id, offset) => chats.transcript(id, offset))
   handle('chats.suggestions', (_wc, id) => chats.suggestions(id))
 
   handle('sessions.list', () => sessions.list())
