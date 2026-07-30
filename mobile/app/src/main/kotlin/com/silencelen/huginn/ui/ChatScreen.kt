@@ -38,6 +38,7 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.SuggestionChip
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -65,6 +66,9 @@ import com.silencelen.huginn.data.TranscriptPage
 @Composable
 fun ChatScreen(
     page: TranscriptPage?,
+    /** Why the transcript could not be read, when it could not. */
+    error: String?,
+    onRetry: () -> Unit,
     streamingText: String?,
     activeTool: String?,
     sending: Boolean,
@@ -92,6 +96,7 @@ fun ChatScreen(
     var voiceOpen by remember { mutableStateOf(false) }
     val events = page?.events ?: emptyList()
     val rows = remember(events) { TranscriptGroups.group(events) }
+    val rowKeys = remember(rows) { TranscriptGroups.keys(rows) }
     val streaming = streamingText != null || activeTool != null
     val itemCount = rows.size + if (streaming) 1 else 0
 
@@ -130,7 +135,21 @@ fun ChatScreen(
             onModel = { onSetOptions(it, null) },
             onEffort = { onSetOptions(null, it) },
         )
-        if (page == null) {
+        if (error != null && !streaming) {
+            // NOT the empty state. A chat that failed to load looks identical to a
+            // chat that has never run, and drawing history's absence when the
+            // history is merely unread reads as data loss. Nothing polls a chat, so
+            // the way back has to be offered rather than waited for.
+            Column(
+                Modifier.weight(1f).fillMaxWidth(),
+                verticalArrangement = Arrangement.Center,
+            ) {
+                EmptyState("Could not load this conversation", error)
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.Center) {
+                    TextButton(onClick = onRetry) { Text("Try again") }
+                }
+            }
+        } else if (page == null) {
             Box(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
                 CircularProgressIndicator(strokeWidth = 2.dp)
             }
@@ -151,7 +170,7 @@ fun ChatScreen(
                 ),
                 verticalArrangement = Arrangement.spacedBy(9.dp),
             ) {
-                items(rows.size) { i -> TranscriptRowItem(rows[i], onCopy) }
+                items(rows.size, key = { rowKeys[it] }) { i -> TranscriptRowItem(rows[i], onCopy) }
                 if (streaming) {
                     item { StreamingItem(streamingText, activeTool, onCopy) }
                 }
@@ -159,7 +178,7 @@ fun ChatScreen(
         }
 
         if (hasUnseen) {
-            JumpToNewest { scope.launch { listState.animateScrollToItem((itemCount - 1).coerceAtLeast(0)) } }
+            JumpToNewest { scope.launch { listState.jumpToTail(itemCount, animate = true) } }
         }
 
         // Same contract as the session chips: a suggestion FILLS the composer,

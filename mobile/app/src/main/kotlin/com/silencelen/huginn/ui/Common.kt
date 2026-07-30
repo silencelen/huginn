@@ -144,8 +144,13 @@ private fun LazyListState.isAtTail(slackPx: Int = 48): Boolean {
  * TOP of the last item, which hides the newest text whenever that item is taller
  * than the screen; the trailing [scrollBy] walks the remainder and is clamped by
  * the list, so it cannot overshoot.
+ *
+ * Public because the "new messages" pill needs the SAME landing. Using a bare
+ * animateScrollToItem there left the reader at the top of a long answer, and — worse
+ * — `isAtTail` stayed false, so the follow latch never re-armed and the pill stuck
+ * on screen while the conversation moved on beneath it.
  */
-private suspend fun LazyListState.jumpToTail(itemCount: Int, animate: Boolean) {
+suspend fun LazyListState.jumpToTail(itemCount: Int, animate: Boolean) {
     if (itemCount <= 0) return
     val last = itemCount - 1
     if (animate) animateScrollToItem(last) else scrollToItem(last)

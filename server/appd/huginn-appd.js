@@ -45,7 +45,7 @@ const { decideSwitch, worstLimit } = require('./lib/autoswitch');
 const pushLib = require('./lib/pushtokens');
 const { trySender } = require('./lib/fcm');
 
-const VERSION = '2.47.0';
+const VERSION = '2.48.0';
 const PORT = Number(process.env.HUGINN_APPD_PORT || 8787);
 const DATA_DIR = process.env.HUGINN_APPD_DATA || '/var/lib/huginn-appd';
 const UPLOADS_DIR = path.join(DATA_DIR, 'uploads');
@@ -607,8 +607,16 @@ function loadMeta(id) {
   try { return JSON.parse(fs.readFileSync(metaPath(id), 'utf8')); } catch { return null; }
 }
 function saveMeta(meta) {
+  // `running` is derived from activeRuns, and read paths attach it to the meta they
+  // just loaded; `pending` is the real queue on disk but a COUNT in list views.
+  // Persisting either stores something that is false the moment the daemon
+  // restarts — and a stored numeric `pending` reads as "no queue" to every
+  // consumer, which is a queue quietly thrown away. This is the single funnel all
+  // writes pass through, so it is where those two can be dropped for good.
+  const { running, ...rest } = meta;
+  if (typeof rest.pending === 'number') delete rest.pending;
   fs.mkdirSync(chatDir(meta.id), { recursive: true });
-  fs.writeFileSync(metaPath(meta.id), JSON.stringify(meta, null, 2));
+  fs.writeFileSync(metaPath(meta.id), JSON.stringify(rest, null, 2));
 }
 /**
  * Mutates the meta ON DISK: reload, change, save.
@@ -775,6 +783,10 @@ function startRun(meta, userText) {
 
   const run_ = new Run(chatId);
   activeRuns.set(chatId, run_);
+  // Durable "a run is in flight" marker. activeRuns is in memory, so after a
+  // restart there is nothing left to say a run had been going — see
+  // reconcileInterruptedRuns.
+  updateMeta(chatId, (m) => { m.runStartedAt = now; });
 
   const proc = spawn('claude', args, {
     cwd: WORKDIR,
@@ -837,7 +849,11 @@ function startRun(meta, userText) {
     // leave a durable mark: the alert watcher runs on a timer and cannot be relied
     // on to catch the instant `running` goes false — a five-second run slipped
     // straight through a ten-second tick and was never reported.
-    updateMeta(chatId, (m) => { m.finishedRuns = (m.finishedRuns || 0) + 1; m.finishedAt = ts; });
+    updateMeta(chatId, (m) => {
+      m.finishedRuns = (m.finishedRuns || 0) + 1;
+      m.finishedAt = ts;
+      delete m.runStartedAt;                  // this run is accounted for
+    });
     run_.emit('done', { exitCode: code });
     run_.finish();
     log(`chat ${chatId} run finished (exit ${code})`);
@@ -992,6 +1008,47 @@ function startQueuedRun(meta, text) {
   });
   log(`chat ${meta.id}: run refused (${started.error}); ${text.length} chars returned to the queue`);
   return started;
+}
+
+/**
+ * Records runs that a restart killed, which otherwise reported themselves as
+ * successful answers.
+ *
+ * SIGTERM exits immediately and systemd kills the `claude` child along with the
+ * cgroup, so the 'close' handler never runs: no error record, no finishedRuns
+ * bump, and meta.lastSnippet still holds the humanized USER text written at
+ * startRun. The alert watcher then sees running -> not-running on the next tick
+ * and announces a finished chat QUOTING THE OWNER'S OWN QUESTION as the answer.
+ * Deploys here are frequent, so this fired in ordinary use.
+ *
+ * The prompt is deliberately NOT re-run. Re-spawning would be a guess about what
+ * the owner wants and could pay for a long answer twice (a restart one second
+ * before completion is indistinguishable from one at the start). Saying plainly
+ * that it was interrupted leaves the decision where it belongs.
+ */
+function reconcileInterruptedRuns() {
+  let ids = [];
+  // The directory rather than listChats(): this runs before the port is open, and
+  // listChats reads a transcript file per chat to prettify titles — work nobody is
+  // waiting for here.
+  try { ids = fs.readdirSync(CHATS_DIR); } catch { return; }
+  for (const id of ids) {
+    const meta = loadMeta(id);
+    if (!meta || !meta.runStartedAt || activeRuns.has(id)) continue;
+    const ts = Math.floor(Date.now() / 1000);
+    const text = 'interrupted: huginn-appd restarted while this was running';
+    appendMsg(id, { type: 'error', text, ts });
+    updateMeta(id, (m) => {
+      m.finishedRuns = (m.finishedRuns || 0) + 1;
+      m.finishedAt = ts;
+      m.updatedAt = ts;
+      // The snippet is what the notification says, so it has to stop claiming the
+      // question was the answer.
+      m.lastSnippet = text.slice(0, 120);
+      delete m.runStartedAt;
+    });
+    log(`chat ${id}: run interrupted by restart (started ${meta.runStartedAt}) — recorded`);
+  }
 }
 
 function deliverOrphanedQueues() {
@@ -1394,7 +1451,14 @@ async function deliverPush(alert) {
   const devices = pushLib.list(st);
   if (!devices.length) return { sent: 0, dead: 0, failed: 0 };
 
-  let sent = 0; let dead = 0; let failed = 0; let dirty = false;
+  let sent = 0; let dead = 0; let failed = 0;
+  // Outcomes are COLLECTED, not written as they happen. This function awaits one
+  // network round trip per device, and POST /v1/push/register writes the same file:
+  // a phone registering a rotated token inside that window was erased when the
+  // snapshot loaded before the sends got saved over it, leaving the host pushing to
+  // a token the phone had already replaced. Two concurrent deliverPush calls
+  // (alert tick, autoswitch tick, /v1/push/test) clobbered each other the same way.
+  const outcomes = [];
   for (const d of devices) {
     let r;
     try {
@@ -1404,22 +1468,29 @@ async function deliverPush(alert) {
     }
     if (r.ok) {
       sent++;
-      pushLib.noteSuccess(st, d.installId, Date.now());
-      dirty = true;
+      outcomes.push({ kind: 'ok', installId: d.installId, token: d.token, at: Date.now() });
       log(`push: delivered ${alert.kind || 'alert'} to ${d.installId}${d.model ? ` (${d.model})` : ''}`);
     } else if (r.dead) {
       dead++;
       log(`push: dropping dead token for ${d.installId} (${r.error})`);
-      pushLib.drop(st, d.installId);
-      dirty = true;
+      outcomes.push({ kind: 'dead', installId: d.installId, token: d.token });
     } else {
       failed++;
       log(`push: send failed for ${d.installId} (${r.status} ${r.error})`);
-      pushLib.noteFailure(st, d.installId);
-      dirty = true;
+      outcomes.push({ kind: 'fail', installId: d.installId, token: d.token });
     }
   }
-  if (dirty) savePushState(st);
+  if (outcomes.length) {
+    const fresh = loadPushState();
+    for (const o of outcomes) {
+      if (o.kind === 'ok') pushLib.noteSuccess(fresh, o.installId, o.at);
+      // Only while the install still holds the token that failed: a drop keyed on
+      // the install alone would delete a registration made while we were sending.
+      else if (o.kind === 'dead') pushLib.drop(fresh, o.installId, o.token);
+      else pushLib.noteFailure(fresh, o.installId);
+    }
+    savePushState(fresh);
+  }
   return { sent, dead, failed };
 }
 
@@ -2680,6 +2751,12 @@ const server = http.createServer(async (req, res) => {
           messages: loadMsgs(id),
           // partial text of an in-flight turn so a cold open shows progress
           partialText: run_ ? run_.assistantText : null,
+          // WHERE that partial text ends in the event stream. The client seeds its
+          // streaming bubble from partialText and then subscribes; without a
+          // position it had to subscribe from 0, which replays the very deltas the
+          // seed already contains and rendered the answer TWICE. Read in the same
+          // synchronous handler as assistantText, so the pair cannot disagree.
+          seq: run_ ? run_.seq : null,
         });
       }
       if (req.method === 'DELETE' && sub === '') {
@@ -2714,8 +2791,19 @@ const server = http.createServer(async (req, res) => {
         }
         const started = startRun(meta, text);
         if (started.error) return sendErr(res, started.code, started.error);
-        // Auto-title from the first message.
-        if (!meta.title) { meta.title = humanizeUserText(text).slice(0, 60); saveMeta(meta); }
+        // Auto-title from the first message, through updateMeta.
+        //
+        // This was the LAST stale-snapshot writer in this route, and it was found
+        // by its damage rather than by reading: `meta` is loaded before the
+        // readBody await AND before startRun, which writes to disk through
+        // updateMeta — so saving this whole object put the pre-run meta back,
+        // silently erasing the in-flight marker startRun had just recorded. The
+        // interrupted-run test failed on a missing marker and this is why.
+        if (!meta.title) {
+          const title = humanizeUserText(text).slice(0, 60);
+          meta.title = title;
+          updateMeta(id, (m) => { if (!m.title) m.title = title; });
+        }
         if (u.searchParams.get('stream') === '1') {
           res.writeHead(200, {
             'Content-Type': 'text/event-stream',
@@ -2858,6 +2946,9 @@ resolveBind().then(async (bind) => {
   // A restart kills any run that was in flight, and delivery of a chat's queue is
   // triggered by that run closing — so without this, messages queued before a
   // restart would sit on disk unanswered forever.
+  // Before the queue drain, so an interrupted run is recorded as interrupted
+  // rather than being overwritten by the next run's bookkeeping.
+  reconcileInterruptedRuns();
   deliverOrphanedQueues();
   if (loadAlertState().enabled) { startAlertWatcher(); log('alerts: watcher resumed'); }
   // Re-key any profile still stored under the old email-derived name, and clear
