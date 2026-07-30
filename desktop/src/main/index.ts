@@ -7,6 +7,7 @@ import { Sessions } from './appd/sessions'
 import { WatchLoop } from './appd/watch'
 import { registerIpc } from './ipc'
 import { Settings } from './settings'
+import { Updater } from './updater'
 
 // A second launch focuses the existing window instead of starting a twin —
 // two instances would double every poll and fight over the pane-size lease.
@@ -87,10 +88,13 @@ void app.whenReady().then(() => {
     (connected) => broadcast('push.watch', { watch: null, connected }),
   )
 
-  registerIpc({ settings, client: getClient, chats, sessions, host, watch })
+  const updater = new Updater(settings, broadcast)
+
+  registerIpc({ settings, client: getClient, chats, sessions, host, watch, updater })
   ipcMain.handle('app:version', () => app.getVersion())
 
   watch.start()
+  updater.start()
 
   // Sleep black-holes every socket at once; on resume nothing errors, it just
   // hangs until the idle timeouts fire. Reset proactively instead.

@@ -45,7 +45,7 @@ const { decideSwitch, worstLimit } = require('./lib/autoswitch');
 const pushLib = require('./lib/pushtokens');
 const { trySender } = require('./lib/fcm');
 
-const VERSION = '2.49.0';
+const VERSION = '2.50.0';
 const PORT = Number(process.env.HUGINN_APPD_PORT || 8787);
 const DATA_DIR = process.env.HUGINN_APPD_DATA || '/var/lib/huginn-appd';
 const UPLOADS_DIR = path.join(DATA_DIR, 'uploads');
@@ -58,6 +58,10 @@ const UPLOAD_MAX_BYTES = 128 * 1024 * 1024;
 // values, or nothing at all, and exact-match punished the user for their file
 // manager's vocabulary.
 const { uploadExtFor, isReadable } = require('./lib/uploads');
+// The desktop app's update channel — feed ymls + installers served from
+// DATA_DIR/desktop, stocked by the desktop release script via local moves.
+const desktopLib = require('./lib/desktop');
+const DESKTOP_DIR = path.join(DATA_DIR, 'desktop');
 
 /**
  * Drops uploads old enough that no conversation is coming back for them.
@@ -2677,6 +2681,35 @@ const server = http.createServer(async (req, res) => {
     }
 
     // --- chats
+    // --- desktop update channel: electron-updater's feed (latest*.yml) and the
+    // installers themselves. Auth like every route — the updater sends the
+    // Bearer header on the feed AND artifact GETs. This is the daemon's first
+    // streaming-OUT path (uploads is the streaming-in precedent): an installer
+    // is ~90 MB and must never transit the heap.
+    if (req.method === 'GET' && p === '/v1/desktop/manifest') {
+      const man = desktopLib.readManifest(DESKTOP_DIR);
+      if (!man) return sendErr(res, 404, 'no desktop releases yet');
+      return sendJson(res, 200, man);
+    }
+    if (req.method === 'GET' && (m = p.match(/^\/v1\/desktop\/([^/]+)$/))) {
+      const name = decodeURIComponent(m[1]);
+      // Safe by construction: no separator passes the regex, so the joined
+      // path cannot leave DESKTOP_DIR.
+      if (!desktopLib.validName(name)) return sendErr(res, 400, 'bad name');
+      const file = path.join(DESKTOP_DIR, name);
+      let st;
+      try { st = fs.statSync(file); } catch { return sendErr(res, 404, 'no such file'); }
+      if (!st.isFile()) return sendErr(res, 404, 'no such file');
+      res.writeHead(200, {
+        'Content-Type': desktopLib.contentTypeFor(name),
+        'Content-Length': st.size,
+      });
+      const stream = fs.createReadStream(file);
+      stream.pipe(res);
+      stream.on('error', () => { try { res.destroy(); } catch { } });
+      return;
+    }
+
     // --- attachments: a photo from the phone, landed where a chat can Read it
     //
     // Raw bytes rather than multipart, because the daemon has no multipart parser
