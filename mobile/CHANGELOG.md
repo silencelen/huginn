@@ -1,5 +1,26 @@
 # Huginn changelog
 
+## 2.52.0 / appd 2.47.0 — 2026-07-30
+
+### Any file can be sent now, including router backups
+Attaching a UniFi backup was refused. The rule was "only what Claude can read
+directly", which conflated two different questions: whether a file may be stored
+on huginn, and whether the Read tool can display it. A backup, a tarball, a
+database or a capture can all be examined perfectly well — with `file`, `unzip`,
+`sqlite3` — they just cannot be *read* as text.
+
+So nothing is refused for its type any more. What the type decides instead is
+what the message asks Claude to do: readable things say "read it", binaries say
+"inspect it with shell tools", which is what the refusal was really protecting
+against — a binary handed to Read comes back as gibberish and the answer is a
+shrug. Binaries need act mode, and the message says so.
+
+The size limit went from 20 MB to 128 MB, because both ends now stream the file
+straight through instead of holding it in memory: the daemon writes to disk as
+bytes arrive, and the phone reads from the file to the socket. The limit lives on
+the host alone now, so there is no stale number in the app quietly refusing what
+the daemon would have taken.
+
 ## 2.51.0 / appd 2.46.0 — 2026-07-29
 
 ### The agent count now matches the one Claude Code prints
