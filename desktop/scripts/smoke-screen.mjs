@@ -20,7 +20,9 @@ if (rows === 0) throw new Error('no sessions to open — smoke needs a live tmux
 
 await win.locator('.list-pane .row').first().click()
 await win.waitForTimeout(1_000)
-await win.locator('.tab-switch button', { hasText: 'Screen' }).click()
+// The tab switch is the house `.seg` control (it was `.tab-switch` until the
+// 0.2.0 header rework; that class is dead CSS now).
+await win.locator('.tab-seg .seg-btn', { hasText: 'Screen' }).click()
 
 // Let the fit report geometry and the long-poll deliver a frame or two.
 await win.waitForTimeout(5_000)

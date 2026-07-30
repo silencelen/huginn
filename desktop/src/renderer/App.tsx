@@ -1,9 +1,11 @@
 // The three-pane shell: nav rail | list pane | detail pane. Desktop is always
 // wide — no fold/rotate gymnastics, just panes.
 
-import { useEffect, useRef } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { call } from './lib/ipc'
 import { useApp, wireAppStore, type Dest } from './stores/app'
+import { toDest, useShortcuts } from './hooks/useShortcuts'
+import { Cheatsheet, CommandPalette } from './components/common/CommandPalette'
 import { ChatsList } from './screens/ChatsList'
 import { SessionsList } from './screens/SessionsList'
 import { ChatView } from './screens/ChatView'
@@ -57,16 +59,21 @@ export function App(): React.JSX.Element {
     void call('ui.viewed', target)
   }, [dest])
 
-  const toDest = (view: Dest['view']): Dest =>
-    view === 'chats'
-      ? { view: 'chats', chatId: dest.view === 'chats' ? dest.chatId : null }
-      : view === 'sessions'
-        ? { view: 'sessions', sessionName: dest.view === 'sessions' ? dest.sessionName : null }
-        : view === 'status'
-          ? { view: 'status' }
-          : { view: 'settings' }
-
   const needsSetup = settings !== null && !settings.hasToken
+
+  // The two keyboard-only surfaces. They live here because they float over the
+  // whole shell and because the shortcut handler has to know one is up.
+  const [palette, setPalette] = useState(false)
+  const [cheats, setCheats] = useState(false)
+  const openPalette = useCallback(() => {
+    setCheats(false)
+    setPalette(true)
+  }, [])
+  const toggleCheatsheet = useCallback(() => {
+    setPalette(false)
+    setCheats((v) => !v)
+  }, [])
+  useShortcuts({ openPalette, toggleCheatsheet, overlayOpen: palette || cheats })
 
   return (
     <div className="shell">
@@ -75,7 +82,7 @@ export function App(): React.JSX.Element {
           <div
             key={item.key}
             className={`rail-item ${dest.view === item.key ? 'active' : ''}`}
-            onClick={() => navigate(toDest(item.key))}
+            onClick={() => navigate(toDest(item.key, dest))}
           >
             {item.label}
           </div>
@@ -125,6 +132,9 @@ export function App(): React.JSX.Element {
           {dest.view === 'status' ? <StatusScreen /> : <SettingsScreen />}
         </main>
       )}
+
+      {palette ? <CommandPalette onClose={() => setPalette(false)} /> : null}
+      {cheats ? <Cheatsheet onClose={() => setCheats(false)} /> : null}
     </div>
   )
 }

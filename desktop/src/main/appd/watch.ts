@@ -7,6 +7,7 @@
 import { routes } from '../../shared/api/routes'
 import type { Watch } from '../../shared/api/types'
 import { decodeWatchItem } from '../../shared/core/sse'
+import { log } from '../log'
 import type { AppdClient, StreamHandle } from './client'
 
 const BACKOFF_MIN_MS = 1_000
@@ -61,6 +62,7 @@ export class WatchLoop {
   private setConnected(connected: boolean): void {
     if (this.isConnected === connected) return
     this.isConnected = connected
+    log('info', 'watch', connected ? 'stream connected' : 'stream lost')
     this.onConnection(connected)
   }
 
@@ -105,6 +107,11 @@ export class WatchLoop {
       const failed = error !== null || notStream !== null
       const delay = failed ? this.backoffMs : 0
       if (failed) {
+        log(
+          'warn',
+          'watch',
+          `reconnecting in ${Math.round(this.backoffMs / 1000)}s: ${error ?? 'server answered non-SSE'}`,
+        )
         this.backoffMs = Math.min(
           BACKOFF_MAX_MS,
           Math.round(this.backoffMs * (1.6 + Math.random() * 0.4)),
