@@ -71,8 +71,13 @@ export interface RequestOptions {
 }
 
 export interface StreamHandle {
-  /** Resolves when the stream ends (cleanly or not). Never rejects. */
-  done: Promise<{ error: string | null }>
+  /**
+   * Resolves when the stream ends (cleanly or not). Never rejects. notStream
+   * carries the parsed body when the server answered 2xx with plain JSON
+   * instead of SSE — the daemon does exactly that for a ?stream=1 send that
+   * lands on a busy chat (202 {queued}).
+   */
+  done: Promise<{ error: string | null; notStream: unknown }>
   cancel: () => void
 }
 
@@ -188,25 +193,27 @@ export class AppdClient {
     let cancelled = false
     let reqRef: http.ClientRequest | null = null
 
-    const done = new Promise<{ error: string | null }>((resolve) => {
+    const done = new Promise<{ error: string | null; notStream: unknown }>((resolve) => {
       const headers = this.headers(
         opts.json !== undefined ? { 'Content-Type': 'application/json' } : undefined,
       )
       const req = http.request(url, { method: opts.method ?? 'GET', headers }, (res) => {
         const status = res.statusCode ?? 0
-        if (status < 200 || status >= 300) {
+        const contentType = res.headers['content-type'] ?? ''
+        if (status < 200 || status >= 300 || !contentType.includes('text/event-stream')) {
           const chunks: Buffer[] = []
           res.on('data', (c: Buffer) => chunks.push(c))
           res.on('end', () => {
-            let serverError: string | null = null
+            let body: unknown = null
             try {
-              serverError = parseApiError(JSON.parse(Buffer.concat(chunks).toString('utf8')))
+              body = JSON.parse(Buffer.concat(chunks).toString('utf8'))
             } catch {
-              serverError = null
+              body = null
             }
-            resolve({ error: serverError ?? `HTTP ${status}` })
+            if (status >= 200 && status < 300) resolve({ error: null, notStream: body ?? {} })
+            else resolve({ error: parseApiError(body) ?? `HTTP ${status}`, notStream: null })
           })
-          res.on('error', () => resolve({ error: `HTTP ${status}` }))
+          res.on('error', () => resolve({ error: `HTTP ${status}`, notStream: null }))
           return
         }
         const parser = new SseParser()
@@ -214,8 +221,8 @@ export class AppdClient {
         res.on('data', (chunk: string) => {
           for (const item of parser.push(chunk)) onItem(item)
         })
-        res.on('end', () => resolve({ error: null }))
-        res.on('error', (e) => resolve({ error: cancelled ? null : e.message }))
+        res.on('end', () => resolve({ error: null, notStream: null }))
+        res.on('error', (e) => resolve({ error: cancelled ? null : e.message, notStream: null }))
       })
       reqRef = req
 
@@ -227,7 +234,7 @@ export class AppdClient {
       req.setTimeout(idleMs, () => req.destroy(new Error('read timeout')))
       req.on('error', (e) => {
         clearTimeout(connectTimer)
-        resolve({ error: cancelled ? null : e.message })
+        resolve({ error: cancelled ? null : e.message, notStream: null })
       })
 
       if (opts.json !== undefined) req.end(JSON.stringify(opts.json))
