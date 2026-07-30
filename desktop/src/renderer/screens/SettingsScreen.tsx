@@ -6,6 +6,154 @@ import { useApp } from '../stores/app'
 import { call, on } from '../lib/ipc'
 import type { UpdateState } from '../../main/updater'
 
+function AccountsSection(): React.JSX.Element {
+  const [current, setCurrent] = useState<{ email: string | null; subscriptionType: string | null } | null>(null)
+  const [saved, setSaved] = useState<
+    { slug: string; email: string | null; isActive: boolean; weeklyPercent: number | null; verified: boolean; duplicateOf: boolean }[]
+  >([])
+  const [autoswitch, setAutoswitch] = useState<string | null>(null)
+  const [loginEmail, setLoginEmail] = useState('')
+  const [loginUrl, setLoginUrl] = useState<string | null>(null)
+  const [loginCode, setLoginCode] = useState('')
+  const [loginNote, setLoginNote] = useState<string | null>(null)
+
+  const reload = (): void => {
+    void call('account.current').then((a) => setCurrent(a)).catch(() => {})
+    void call('account.saved', true).then(setSaved).catch(() => {})
+    void call('account.autoswitch')
+      .then((a) => {
+        if (!a.enabled) setAutoswitch(null)
+        else {
+          const last = a.last
+          setAutoswitch(
+            last === null
+              ? `on · ${a.accounts} accounts`
+              : `on · last: ${last.fromEmail ?? '?'} (${last.fromPercent}%) → ${last.toEmail ?? '?'} (${last.toPercent}%)`,
+          )
+        }
+      })
+      .catch(() => {})
+  }
+  useEffect(reload, [])
+
+  const startLogin = (): void => {
+    setLoginNote('Starting sign-in on the host…')
+    void call('account.login.start', loginEmail.trim() === '' ? null : loginEmail.trim())
+      .then((s) => {
+        if (s.url !== null) {
+          setLoginUrl(s.url)
+          window.open(s.url)
+          setLoginNote('Complete the sign-in in the browser, then paste the code here.')
+        } else {
+          setLoginNote('The host did not produce a sign-in URL — check the login tmux session.')
+        }
+      })
+      .catch((e: unknown) => setLoginNote(e instanceof Error ? e.message : String(e)))
+  }
+
+  const submitCode = (): void => {
+    setLoginNote('Checking…')
+    void call('account.login.code', loginCode.trim())
+      .then((s) => {
+        setLoginNote(
+          s.duplicate
+            ? `Already saved: ${s.email ?? 'that account'} (same login twice).`
+            : s.mismatch
+              ? `Signed in as ${s.email ?? 'someone else'}, not ${s.intendedEmail ?? 'the intended account'}.`
+              : s.done
+                ? `Added ${s.email ?? 'account'}.`
+                : (s.message ?? 'Still waiting on the host.'),
+        )
+        if (s.done) {
+          setLoginUrl(null)
+          setLoginCode('')
+          reload()
+        }
+      })
+      .catch((e: unknown) => setLoginNote(e instanceof Error ? e.message : String(e)))
+  }
+
+  return (
+    <>
+      <h2>Account</h2>
+      <div className="about-line">
+        {current === null
+          ? 'Loading…'
+          : `${current.email ?? 'not signed in'}${current.subscriptionType !== null ? ` · ${current.subscriptionType}` : ''}`}
+        {autoswitch !== null ? ` · autoswitch ${autoswitch}` : ''}
+      </div>
+      {saved.map((a) => (
+        <div key={a.slug} className="account-row">
+          <span className={`state-dot ${a.isActive ? 'dot-running' : 'dot-idle'}`} />
+          <span className="account-email">
+            {a.email ?? a.slug}
+            {a.verified ? '' : ' (unconfirmed)'}
+            {a.duplicateOf ? ' (duplicate)' : ''}
+          </span>
+          {a.weeklyPercent !== null ? (
+            <span className="dim">{Math.round(a.weeklyPercent)}% of week</span>
+          ) : null}
+          {a.isActive ? (
+            <span className="dim">active</span>
+          ) : (
+            <button
+              type="button"
+              onClick={() => void call('account.activate', a.slug).then(reload)}
+            >
+              Use
+            </button>
+          )}
+          <button
+            type="button"
+            className="danger"
+            onClick={() => {
+              if (window.confirm(`Forget saved login ${a.email ?? a.slug}?`))
+                void call('account.forget', a.slug).then(reload)
+            }}
+          >
+            Forget
+          </button>
+        </div>
+      ))}
+      <div className="login-flow">
+        {loginUrl === null ? (
+          <>
+            <input
+              placeholder="email to add (aims the sign-in page)"
+              value={loginEmail}
+              onChange={(e) => setLoginEmail(e.target.value)}
+            />
+            <button type="button" onClick={startLogin}>
+              Add login
+            </button>
+          </>
+        ) : (
+          <>
+            <input
+              placeholder="paste the code from the browser"
+              value={loginCode}
+              onChange={(e) => setLoginCode(e.target.value)}
+            />
+            <button type="button" disabled={loginCode.trim() === ''} onClick={submitCode}>
+              Submit code
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                setLoginUrl(null)
+                setLoginNote(null)
+              }}
+            >
+              Cancel
+            </button>
+          </>
+        )}
+      </div>
+      {loginNote !== null ? <div className="dim">{loginNote}</div> : null}
+    </>
+  )
+}
+
 export function SettingsScreen(): React.JSX.Element {
   const settings = useApp((s) => s.settings)
   const updateSettings = useApp((s) => s.updateSettings)
@@ -98,6 +246,8 @@ export function SettingsScreen(): React.JSX.Element {
         />
         <span>Keep running in tray when closed</span>
       </label>
+
+      <AccountsSection />
 
       <h2>About</h2>
       <div className="about-line">
