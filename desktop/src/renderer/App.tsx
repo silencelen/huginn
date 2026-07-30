@@ -1,17 +1,10 @@
 import { useEffect, useState } from 'react'
-
-declare global {
-  interface Window {
-    huginn: {
-      version: () => Promise<string>
-    }
-  }
-}
+import { call } from './lib/ipc'
 
 export function App(): React.JSX.Element {
   const [version, setVersion] = useState('…')
   useEffect(() => {
-    void window.huginn.version().then(setVersion)
+    void call('app.version').then(setVersion)
   }, [])
 
   return (

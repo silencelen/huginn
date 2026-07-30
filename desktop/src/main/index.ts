@@ -1,5 +1,12 @@
-import { app, BrowserWindow, ipcMain, shell } from 'electron'
+import { app, BrowserWindow, ipcMain, powerMonitor, shell } from 'electron'
 import path from 'node:path'
+import { AppdClient } from './appd/client'
+import { Chats } from './appd/chats'
+import { Host } from './appd/host'
+import { Sessions } from './appd/sessions'
+import { WatchLoop } from './appd/watch'
+import { registerIpc } from './ipc'
+import { Settings } from './settings'
 
 // A second launch focuses the existing window instead of starting a twin —
 // two instances would double every poll and fight over the pane-size lease.
@@ -7,6 +14,12 @@ const gotLock = app.requestSingleInstanceLock()
 if (!gotLock) app.quit()
 
 let win: BrowserWindow | null = null
+
+const broadcast = (channel: string, payload: unknown): void => {
+  for (const w of BrowserWindow.getAllWindows()) {
+    if (!w.webContents.isDestroyed()) w.webContents.send(channel, payload)
+  }
+}
 
 function createWindow(): void {
   win = new BrowserWindow({
@@ -52,7 +65,48 @@ app.on('second-instance', () => {
 })
 
 void app.whenReady().then(() => {
+  const settings = new Settings()
+  const client = new AppdClient({
+    baseUrl: () => settings.getBaseUrl(),
+    token: () => settings.getToken(),
+    installId: () => settings.getInstallId(),
+    // Phase 3 replaces this with the idle-aware claim policy. Until the
+    // desktop can actually SHOW notifications it must not claim to be a
+    // delivery route, or it would silently mute the household Telegram
+    // fallback for everyone.
+    notify: () => false,
+  })
+  const getClient = (): AppdClient => client
+
+  const chats = new Chats(getClient, () => broadcast('push.listsChanged', {}))
+  const sessions = new Sessions(getClient)
+  const host = new Host(getClient)
+  const watch = new WatchLoop(
+    getClient,
+    (watchState, connected) => broadcast('push.watch', { watch: watchState, connected }),
+    (connected) => broadcast('push.watch', { watch: null, connected }),
+  )
+
+  registerIpc({ settings, client: getClient, chats, sessions, host, watch })
   ipcMain.handle('app:version', () => app.getVersion())
+
+  watch.start()
+
+  // Sleep black-holes every socket at once; on resume nothing errors, it just
+  // hangs until the idle timeouts fire. Reset proactively instead.
+  powerMonitor.on('resume', () => watch.reset())
+  powerMonitor.on('unlock-screen', () => watch.reset())
+
+  app.on('will-quit', (event) => {
+    // Leases die with us gracefully rather than stranding tmux windows at
+    // desktop geometry until the daemon's sweeper notices.
+    event.preventDefault()
+    void sessions.releaseAllLeases().finally(() => {
+      watch.stop()
+      app.exit(0)
+    })
+  })
+
   createWindow()
 
   app.on('activate', () => {
