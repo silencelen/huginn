@@ -1,0 +1,31 @@
+appId: com.silencelen.huginn.desktop
+productName: Huginn
+directories:
+  output: dist
+files:
+  - out/**
+  - package.json
+
+win:
+  target:
+    - target: nsis
+      arch: [x64]
+
+nsis:
+  # Per-user one-click: installs to %LOCALAPPDATA%, no UAC, no publisher
+  # dialog — the friction-free shape for an unsigned household app.
+  oneClick: true
+  perMachine: false
+  artifactName: Huginn-Setup-${version}.${ext}
+
+linux:
+  target:
+    - AppImage
+    - deb
+  category: Utility
+  maintainer: silencelen
+  artifactName: huginn-desktop-${version}.${ext}
+
+# Update feed is huginn-appd's /v1/desktop channel; the URL is injected at
+# runtime (setFeedURL) because the base URL is a user setting, not a constant.
+publish: null
