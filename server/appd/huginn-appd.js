@@ -2866,6 +2866,12 @@ const server = http.createServer(async (req, res) => {
           'X-Accel-Buffering': 'no',
         });
         if (!run_) { res.write('event: done\ndata: {"idle":true}\n\n'); res.end(); return; }
+        // Where the client is resuming from, and how much that costs it. `since=0`
+        // means a full replay of the buffer, which is both the expensive case and the
+        // one that doubled the answer on screen before chat meta carried a position —
+        // so it is worth being able to see which one a client is asking for.
+        const behind = run_.seq - since;
+        log(`chat ${id}: stream attach since=${since} (replaying ${behind > 0 ? behind : 0} of ${run_.seq})`);
         run_.subscribe(res, since);
         return;
       }
