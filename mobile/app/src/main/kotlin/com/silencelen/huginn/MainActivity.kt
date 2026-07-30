@@ -171,7 +171,9 @@ class MainActivity : FragmentActivity() {
             SettingsStore(applicationContext).appLock.first()
         }
         // With the lock ON, the window is SECURE — which is what actually keeps the
-        // conversation out of the Recents thumbnail.
+        // conversation out of the Recents thumbnail. Set here so a cold start is
+        // covered before the first frame; kept in step with the setting by the
+        // effect in HuginnApp.
         //
         // Locking on return was not enough: the thumbnail is captured when the app
         // goes to the background, which is BEFORE the grace period expires, so the
@@ -456,6 +458,17 @@ fun HuginnApp(
     val clients by vm.clients.collectAsState()
     val push by vm.push.collectAsState()
     val appLock by vm.appLock.collectAsState()
+    // FLAG_SECURE follows the setting LIVE, not just at onCreate. Reading it once on
+    // creation meant turning the lock ON left the window insecure — and its contents
+    // in the Recents thumbnail — for the rest of the app's life, which is exactly the
+    // exposure the user had just asked to close. Clearing on OFF matters too: nobody
+    // should have to restart an app to get their screenshots back.
+    val lockActivity = LocalContext.current as? android.app.Activity
+    LaunchedEffect(appLock) {
+        val w = lockActivity?.window ?: return@LaunchedEffect
+        if (appLock) w.setFlags(WindowManager.LayoutParams.FLAG_SECURE, WindowManager.LayoutParams.FLAG_SECURE)
+        else w.clearFlags(WindowManager.LayoutParams.FLAG_SECURE)
+    }
     val agents by vm.agents.collectAsState()
     val suggestions by vm.suggestions.collectAsState()
     val attachment by vm.attachment.collectAsState()
