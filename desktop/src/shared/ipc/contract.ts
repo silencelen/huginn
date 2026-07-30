@@ -114,6 +114,9 @@ export interface InvokeApi {
     result: UploadResult
   }
 
+  /** The renderer reports what the user is looking at (notification suppression). */
+  'ui.viewed': { args: [target: { view: 'chats' | 'sessions'; id: string } | null]; result: void }
+
   'update.state': { args: []; result: UpdateState }
   'update.check': { args: []; result: void }
   'update.install': { args: []; result: void }
@@ -140,6 +143,8 @@ export interface PushApi {
   'push.listsChanged': Record<string, never>
   /** Auto-update progress (packaged builds only). */
   'push.update': UpdateState
+  /** Main asks the renderer to show a target (notification/tray/toast click). */
+  'push.navigate': { view: 'chats' | 'sessions'; id: string }
 }
 
 export type InvokeChannel = keyof InvokeApi
