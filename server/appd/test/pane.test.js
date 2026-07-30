@@ -371,8 +371,17 @@ test('ansi colour on the spinner line does not defeat the match', () => {
 test('the workflow-wait status is a headline even without an ellipsis', () => {
   // Captured live: this is how a session waiting on a workflow looks, and the
   // ellipsis-only match made exactly this case invisible.
-  const got = parseSpinner(['\u2733 Waiting for 1 dynamic workflow to finish', '\u276F go ahead']);
+  // \u2727, the glyph the LIVE capture actually used. This test asserted the same
+  // sentence behind \u2733 and passed while the documented case returned null — the
+  // rule was being proven on a glyph nobody had seen it with.
+  const got = parseSpinner(['\u2727 Waiting for 1 dynamic workflow to finish', '\u276F go ahead']);
   assert.equal(got, 'Waiting for 1 dynamic workflow to finish');
+  // And the rest of the cycling set, so a future edit cannot narrow the class back
+  // down to whichever glyph happened to be on screen when it was written.
+  for (const g of ['\u2722', '\u2726', '\u2727', '\u2733', '\u273D', '\u273B', '\u2736', '\u2738', '\u2739', '\u273A']) {
+    assert.equal(parseSpinner([g + ' Waiting for 1 dynamic workflow to finish']),
+      'Waiting for 1 dynamic workflow to finish', `glyph ${g.codePointAt(0).toString(16)}`);
+  }
 });
 
 const { parseStatusExtras } = require('../lib/pane');

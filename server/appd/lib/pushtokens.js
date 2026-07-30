@@ -83,9 +83,20 @@ function totals(state) {
 }
 
 /** Forgets a token FCM has declared dead. */
-function drop(state, installId) {
+/**
+ * Forgets an install, optionally only while it still holds [token].
+ *
+ * The token check exists because rotation is EXACTLY when a dead-token verdict
+ * arrives: FCM answers UNREGISTERED for the token being retired at the same moment
+ * the phone registers its replacement. Dropping by installId alone deleted that
+ * replacement, so push went silent until the app was opened again — the failure
+ * mode the whole heartbeat exists to avoid.
+ */
+function drop(state, installId, token) {
   const tokens = (state && state.tokens) || {};
-  if (!tokens[installId]) return false;
+  const cur = tokens[installId];
+  if (!cur) return false;
+  if (token !== undefined && cur.token !== token) return false;
   delete tokens[installId];
   return true;
 }
