@@ -8,6 +8,7 @@ import type {
   Session, Status, Suggestions, TranscriptPage, UploadResult, Usage, Watch,
 } from '../api/types'
 import type { SettingsView } from '../../main/settings'
+import type { UpdateState } from '../../main/updater'
 
 /** Result of sending to a chat: either a run started (and streams) or it queued. */
 export interface SendOutcome {
@@ -113,6 +114,10 @@ export interface InvokeApi {
     result: UploadResult
   }
 
+  'update.state': { args: []; result: UpdateState }
+  'update.check': { args: []; result: void }
+  'update.install': { args: []; result: void }
+
   'chatStream.subscribe': { args: [chatId: string]; result: ChatStreamSnapshot }
   'chatStream.unsubscribe': { args: [subscriptionId: number]; result: void }
   'watch.latest': { args: []; result: { watch: Watch | null; connected: boolean } }
@@ -133,6 +138,8 @@ export interface PushApi {
   'push.screen': { subscriptionId: number; screen: Screen }
   /** Something about the chats/sessions lists changed; renderer should refresh. */
   'push.listsChanged': Record<string, never>
+  /** Auto-update progress (packaged builds only). */
+  'push.update': UpdateState
 }
 
 export type InvokeChannel = keyof InvokeApi

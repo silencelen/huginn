@@ -26,6 +26,9 @@ linux:
   maintainer: silencelen
   artifactName: huginn-desktop-${version}.${ext}
 
-# Update feed is huginn-appd's /v1/desktop channel; the URL is injected at
-# runtime (setFeedURL) because the base URL is a user setting, not a constant.
-publish: null
+# The generic provider exists so electron-builder EMITS latest.yml /
+# latest-linux.yml — the runtime feed URL is injected via setFeedURL (the
+# daemon address is a user setting), so this URL is never actually used.
+publish:
+  provider: generic
+  url: http://100.97.198.90:8787/v1/desktop

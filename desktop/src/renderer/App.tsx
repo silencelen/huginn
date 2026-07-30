@@ -6,6 +6,7 @@ import { useApp, wireAppStore, type Dest } from './stores/app'
 import { ChatsList } from './screens/ChatsList'
 import { SessionsList } from './screens/SessionsList'
 import { ChatView } from './screens/ChatView'
+import { SessionView } from './screens/SessionView'
 import { SettingsScreen } from './screens/SettingsScreen'
 import { StatusScreen } from './screens/StatusScreen'
 
@@ -79,11 +80,11 @@ export function App(): React.JSX.Element {
             <SessionsList activeName={dest.sessionName} />
           </aside>
           <main className="detail-pane">
-            <div className="pane-placeholder">
-              {dest.sessionName !== null
-                ? `Session view for ${dest.sessionName} lands in phase 2`
-                : 'Select a session'}
-            </div>
+            {dest.sessionName !== null ? (
+              <SessionView key={dest.sessionName} name={dest.sessionName} />
+            ) : (
+              <div className="pane-placeholder">Select a session</div>
+            )}
           </main>
         </>
       ) : (

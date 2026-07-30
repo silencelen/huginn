@@ -14,6 +14,7 @@ import type { Host } from './appd/host'
 import type { Sessions } from './appd/sessions'
 import type { WatchLoop } from './appd/watch'
 import type { Settings } from './settings'
+import type { Updater } from './updater'
 
 export interface IpcDeps {
   settings: Settings
@@ -22,6 +23,7 @@ export interface IpcDeps {
   sessions: Sessions
   host: Host
   watch: WatchLoop
+  updater: Updater
 }
 
 type Handler<C extends keyof InvokeApi> = (
@@ -30,7 +32,7 @@ type Handler<C extends keyof InvokeApi> = (
 ) => InvokeApi[C]['result'] | Promise<InvokeApi[C]['result']>
 
 export function registerIpc(deps: IpcDeps): void {
-  const { settings, chats, sessions, host, watch } = deps
+  const { settings, chats, sessions, host, watch, updater } = deps
 
   const handle = <C extends keyof InvokeApi>(channel: C, fn: Handler<C>): void => {
     ipcMain.handle(channel, (event, ...args) =>
@@ -109,6 +111,10 @@ export function registerIpc(deps: IpcDeps): void {
       }),
     )
   })
+
+  handle('update.state', () => updater.current())
+  handle('update.check', () => updater.check())
+  handle('update.install', () => updater.install())
 
   handle('chatStream.subscribe', (wc, chatId) => chats.subscribe(chatId, wc))
   handle('chatStream.unsubscribe', (_wc, id) => chats.unsubscribe(id))
