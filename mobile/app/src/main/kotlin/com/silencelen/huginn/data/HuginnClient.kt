@@ -18,6 +18,7 @@ import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
+import okio.source
 import okhttp3.Response
 import java.io.IOException
 import java.util.concurrent.TimeUnit
@@ -402,6 +403,35 @@ class HuginnClient(
      * not multipart: one image needs no parts, and the server names the file so
      * nothing sent here decides where it is written.
      */
+    /**
+     * Uploads whatever [open] yields, STREAMING it.
+     *
+     * A ByteArray overload exists for photos, which are already transcoded in
+     * memory and small. This one is for files the user picked: a router or NVR
+     * backup is tens of megabytes, and reading one into a ByteArray on a phone
+     * to hand to OkHttp means holding the whole thing twice. The body writes
+     * straight from the content resolver's stream to the socket.
+     */
+    suspend fun uploadStream(
+        mime: String,
+        name: String?,
+        contentLength: Long,
+        open: () -> java.io.InputStream?,
+    ): UploadResult {
+        val body = object : okhttp3.RequestBody() {
+            override fun contentType() = mime.toMediaType()
+            override fun contentLength() = contentLength
+            override fun writeTo(sink: okio.BufferedSink) {
+                val input = open() ?: throw java.io.IOException("could not open the file")
+                // writeAll takes a raw Source; the sink is already buffered.
+                input.use { stream -> sink.writeAll(stream.source()) }
+            }
+        }
+        return decode(call(builder(
+            "/v1/uploads" + (name?.let { "?name=" + java.net.URLEncoder.encode(it, "UTF-8") } ?: "")
+        ).post(body).build()))
+    }
+
     suspend fun upload(bytes: ByteArray, mime: String, name: String? = null): UploadResult =
         decode(call(builder(
             "/v1/uploads" + (name?.let { "?name=" + java.net.URLEncoder.encode(it, "UTF-8") } ?: "")

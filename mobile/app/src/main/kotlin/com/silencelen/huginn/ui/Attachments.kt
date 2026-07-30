@@ -104,8 +104,15 @@ object Attachments {
         "[Attached image at $path — view it with the Read tool.]"
 
     /** The same, for a non-image file; the name travels for context. */
-    fun fileMarker(path: String, name: String?): String =
-        "[Attached file at $path${if (name.isNullOrBlank()) "" else " ($name)"} — view it with the Read tool.]"
+    fun fileMarker(path: String, name: String?, readable: Boolean = true): String {
+        val where = "$path${if (name.isNullOrBlank()) "" else " ($name)"}"
+        // Telling Claude to Read a binary is exactly how the old upload refusal
+        // justified itself: it comes back as mojibake and the answer is a shrug.
+        // Naming the right tool instead is what makes accepting the file safe.
+        return if (readable) "[Attached file at $where — view it with the Read tool.]"
+        else "[Attached file at $where — a binary; inspect it with shell tools " +
+            "(file, unzip, strings, sqlite3) rather than Read. Requires act mode.]"
+    }
 
     /**
      * The same marker, made fit for human eyes. The bracketed path is plumbing
@@ -113,7 +120,7 @@ object Attachments {
      * sent a photo, not where the daemon happened to store it.
      */
     private val MARKER_RE = Regex("""\[Attached image at [^\]]+ — view it with the Read tool\.\]""")
-    private val FILE_RE = Regex("""\[Attached file at \S+( \(([^)]{1,80})\))? — view it with the Read tool\.\]""")
+    private val FILE_RE = Regex("""\[Attached file at \S+( \(([^)]{1,80})\))? — [^\]]*\]""")
 
     fun displayText(text: String): String {
         if ('[' !in text) return text

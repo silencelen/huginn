@@ -45,17 +45,19 @@ const { decideSwitch, worstLimit } = require('./lib/autoswitch');
 const pushLib = require('./lib/pushtokens');
 const { trySender } = require('./lib/fcm');
 
-const VERSION = '2.46.0';
+const VERSION = '2.47.0';
 const PORT = Number(process.env.HUGINN_APPD_PORT || 8787);
 const DATA_DIR = process.env.HUGINN_APPD_DATA || '/var/lib/huginn-appd';
 const UPLOADS_DIR = path.join(DATA_DIR, 'uploads');
-const UPLOAD_MAX_BYTES = 20 * 1024 * 1024;
+// Generous, because a router or NVR backup is tens of megabytes and the body is
+// streamed straight to disk rather than held in memory.
+const UPLOAD_MAX_BYTES = 128 * 1024 * 1024;
 // What uploads are accepted — the rules live in lib/uploads (family matching +
 // filename fallback), extracted after the exact-match table refused real .txt
 // and .csv files: Android providers report mimes like text/comma-separated-
 // values, or nothing at all, and exact-match punished the user for their file
 // manager's vocabulary.
-const { uploadExtFor } = require('./lib/uploads');
+const { uploadExtFor, isReadable } = require('./lib/uploads');
 
 /**
  * Drops uploads old enough that no conversation is coming back for them.
@@ -2593,23 +2595,52 @@ const server = http.createServer(async (req, res) => {
     if (req.method === 'POST' && p === '/v1/uploads') {
       const mime = String(req.headers['content-type'] || '');
       const name = String(u.searchParams.get('name') || '');
+      // Never refused for its type: see lib/uploads. A router backup is not
+      // Readable but IS inspectable, and blocking it blocked the owner.
       const ext = uploadExtFor(mime, name);
-      if (!ext) {
-        // Logged with the evidence: the first field failure of this gate could
-        // only be diagnosed by guessing, because the refusal recorded nothing.
-        log(`uploads: refused mime=${JSON.stringify(mime)} name=${JSON.stringify(name)}`);
-        return sendErr(res, 415, `cannot read ${name || 'that file'} here (type ${mime || 'unknown'}) — images, pdf and text formats work`);
-      }
-      let body;
-      try { body = await readBodyRaw(req, UPLOAD_MAX_BYTES); }
-      catch { return sendErr(res, 413, `image too large (max ${Math.floor(UPLOAD_MAX_BYTES / 1024 / 1024)}MB)`); }
-      if (!body.length) return sendErr(res, 400, 'empty body');
+
       fs.mkdirSync(UPLOADS_DIR, { recursive: true });
       pruneUploads();
       const file = path.join(UPLOADS_DIR, `up-${Date.now()}-${crypto.randomBytes(3).toString('hex')}.${ext}`);
-      fs.writeFileSync(file, body, { mode: 0o600 });
-      log(`uploads: ${path.basename(file)} (${body.length} bytes)`);
-      return sendJson(res, 200, { ok: true, path: file, bytes: body.length });
+
+      // STREAMED to disk rather than buffered. Backups are tens of megabytes and
+      // the old path concatenated the whole body in memory first — a 100MB
+      // upload meant 100MB of heap in a daemon that otherwise sits at ~130MB
+      // RSS. The cap is enforced as bytes arrive, so an over-sized upload is cut
+      // off early instead of being fully received and then rejected.
+      let bytes = 0;
+      let failed = null;
+      try {
+        await new Promise((resolve, reject) => {
+          const out = fs.createWriteStream(file, { mode: 0o600 });
+          const stop = (err) => { failed = err; try { req.destroy(); } catch { } out.destroy(); reject(err); };
+          req.on('data', (chunk) => {
+            bytes += chunk.length;
+            if (bytes > UPLOAD_MAX_BYTES) return stop(new Error('too large'));
+            if (!out.write(chunk)) req.pause();
+          });
+          out.on('drain', () => req.resume());
+          req.on('error', stop);
+          out.on('error', stop);
+          req.on('end', () => out.end());
+          out.on('close', () => (failed ? undefined : resolve()));
+        });
+      } catch {
+        try { fs.unlinkSync(file); } catch { }
+        const mb = Math.floor(UPLOAD_MAX_BYTES / 1024 / 1024);
+        log(`uploads: ${name || 'unnamed'} aborted after ${bytes} bytes`);
+        return sendErr(res, 413, `that file is too large (max ${mb}MB)`);
+      }
+      if (!bytes) {
+        try { fs.unlinkSync(file); } catch { }
+        return sendErr(res, 400, 'empty body');
+      }
+      const readable = isReadable(ext);
+      log(`uploads: ${path.basename(file)} (${bytes} bytes, ${readable ? 'readable' : 'binary'})`);
+      // `readable` travels so the app can phrase the message correctly: telling
+      // Claude to Read a binary is how the original refusal justified itself, and
+      // saying "inspect it with a shell" instead removes the reason to refuse.
+      return sendJson(res, 200, { ok: true, path: file, bytes, ext, readable });
     }
 
     if (req.method === 'GET' && p === '/v1/chats') return sendJson(res, 200, { chats: listChats() });
