@@ -10,13 +10,16 @@
 // cell-indexed mouse selection with clipboard copy, and clickable OSC 8
 // hyperlinks (http/https only; main routes window.open to the system browser).
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { parse, type TermCell, type TermGrid } from '../../../shared/core/terminalGrid'
 import type { TermColor } from '../../../shared/core/ansiPalette'
 import { cellMetrics, cssColor, fontString, TERM_BG, TERM_FG } from './metrics'
 
 const SELECTION_CSS = 'rgba(122,162,247,0.30)' // --accent at ~30%
 const CURSOR_CSS = '#7aa2f7' // --accent
+/** Pending local echo: accent-tinted and a shade transparent, so promised text
+    is tellable from confirmed text without being hard to read. */
+const ECHO_CSS = 'rgba(122,162,247,0.85)'
 
 const isHttp = (u: string): boolean => /^https?:\/\//i.test(u)
 
@@ -47,6 +50,12 @@ export interface TerminalCanvasProps {
   cols: number
   fontPx: number
   cursor: { x: number; y: number } | null
+  /**
+   * Characters typed but not yet confirmed by the pane (shared/core/localEcho
+   * decides what may be here). Drawn from the cursor cell and clipped at the
+   * row's end; empty on the scrollback canvas, which is settled history.
+   */
+  echo?: string
 }
 
 export function TerminalCanvas({
@@ -54,6 +63,7 @@ export function TerminalCanvas({
   cols,
   fontPx,
   cursor,
+  echo = '',
 }: TerminalCanvasProps): React.JSX.Element {
   const canvasRef = useRef<HTMLCanvasElement | null>(null)
   const [sel, setSel] = useState<Sel | null>(null)
@@ -169,7 +179,12 @@ export function TerminalCanvas({
   )
 
   // ------------------------------------------------------------------ painting
-  useEffect(() => {
+  // Layout phase, not passive: the parent reconciles the local echo against
+  // each new frame in ITS layout effect, which schedules one more render before
+  // the browser paints. A passive painter would have already put the previous
+  // (unreconciled) echo on screen by then, showing the character just confirmed
+  // twice for a frame — exactly the ghost the echo is supposed to avoid.
+  useLayoutEffect(() => {
     const canvas = canvasRef.current
     if (canvas === null) return
     const m = cellMetrics(fontPx)
@@ -265,26 +280,63 @@ export function TerminalCanvas({
       }
     }
 
-    // Cursor: a filled block with the covered glyph redrawn inverted.
-    if (
+    const onGrid =
       cursor !== null &&
       cursor.y >= 0 &&
       cursor.y < rows &&
       cursor.x >= 0 &&
       cursor.x < grid.cols
-    ) {
-      const x = cursor.x * m.cellW
-      const y = cursor.y * m.cellH
-      ctx.fillStyle = CURSOR_CSS
-      ctx.fillRect(x, y, m.cellW, m.cellH)
-      const cell = grid.rows[cursor.y]?.[cursor.x]
-      if (cell !== undefined && cell.text !== '' && cell.text !== ' ') {
-        ctx.font = fontString(m.fontPx, cell.bold, cell.italic)
+
+    // Optimistic echo: typed but unconfirmed characters, drawn from the cursor
+    // cell and CLIPPED at the row's end — the echo never invents a wrap,
+    // because predicting the composer's wrapping is where ghosts come from.
+    // The span is blanked first: an echo laid over whatever the pane last had
+    // there would be two glyphs in one cell, which reads as corruption.
+    let drawnEcho = 0
+    if (onGrid && cursor !== null && echo !== '') {
+      const chars = [...echo]
+      const n = Math.min(chars.length, grid.cols - cursor.x)
+      if (n > 0) {
+        const x = cursor.x * m.cellW
+        const y = cursor.y * m.cellH
         ctx.fillStyle = cssColor(TERM_BG)
-        ctx.fillText(cell.text, x, y + m.baseline)
+        ctx.fillRect(x, y, n * m.cellW, m.cellH)
+        ctx.font = fontString(m.fontPx, false, false)
+        ctx.fillStyle = ECHO_CSS
+        for (let i = 0; i < n; i++) {
+          const ch = chars[i]!
+          if (ch !== ' ') ctx.fillText(ch, x + i * m.cellW, y + m.baseline)
+        }
+        drawnEcho = n
       }
     }
-  }, [grid, fontPx, cursor, sel, hover])
+
+    // The cursor sits AFTER the echo: that is where the next character goes,
+    // which is what a cursor is for. Filled block normally; hollow while an
+    // echo is pending, so "the pane has not confirmed this yet" is visible in
+    // the terminal's own vernacular rather than as a second colour of text.
+    if (onGrid && cursor !== null) {
+      const cx = Math.min(cursor.x + drawnEcho, grid.cols - 1)
+      const x = cx * m.cellW
+      const y = cursor.y * m.cellH
+      ctx.fillStyle = CURSOR_CSS
+      if (drawnEcho > 0) {
+        const t = Math.max(1, m.cellW * 0.12)
+        ctx.fillRect(x, y, m.cellW, t)
+        ctx.fillRect(x, y + m.cellH - t, m.cellW, t)
+        ctx.fillRect(x, y, t, m.cellH)
+        ctx.fillRect(x + m.cellW - t, y, t, m.cellH)
+      } else {
+        ctx.fillRect(x, y, m.cellW, m.cellH)
+        const cell = grid.rows[cursor.y]?.[cx]
+        if (cell !== undefined && cell.text !== '' && cell.text !== ' ') {
+          ctx.font = fontString(m.fontPx, cell.bold, cell.italic)
+          ctx.fillStyle = cssColor(TERM_BG)
+          ctx.fillText(cell.text, x, y + m.baseline)
+        }
+      }
+    }
+  }, [grid, fontPx, cursor, sel, hover, echo])
 
   return (
     <canvas

@@ -2,14 +2,18 @@
 // cols × rows to the box and streams frames; TerminalCanvas paints them;
 // KeyRow covers the keys a composer cannot say; PromptCard turns a detected
 // choice prompt into buttons; live typing sends keystrokes straight to the
-// pane through liveInput's ordered queue. Scrollback (when the pane has any —
+// pane through liveInput's ordered queue, and localEcho renders them at the
+// cursor before the pane confirms. Scrollback (when the pane has any —
 // Claude Code runs on the alternate screen, which has none) loads above the
 // live grid. The shared session composer below this tab handles ordinary text
 // entry; this tab only ever speaks keys.
 
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import type { AnswerResult } from '../../shared/api/types'
 import { toWire, type Op } from '../../shared/core/liveInput'
+import {
+  backspace, emptyEcho, frame, otherKey, typed, visible, type Cursor, type Echo,
+} from '../../shared/core/localEcho'
 import { call } from '../lib/ipc'
 import { useScreenPoll } from '../hooks/useScreenPoll'
 import { TerminalCanvas } from '../components/terminal/TerminalCanvas'
@@ -32,6 +36,9 @@ export function ScreenTab({
   const [scrollback, setScrollback] = useState<string[] | null>(null)
   const [loadingHist, setLoadingHist] = useState(false)
   const [liveTyping, setLiveTyping] = useState(false)
+  // Optimistic echo state for live typing; the rules live in localEcho (pure).
+  const [echo, setEcho] = useState<Echo>(emptyEcho)
+  const prevCursorRef = useRef<Cursor | null>(null)
 
   const boxElRef = useRef<HTMLDivElement | null>(null)
   const scrollRef = useRef<HTMLDivElement | null>(null)
@@ -94,22 +101,57 @@ export function ScreenTab({
       // The pane owns this key now: the browser must not scroll, tab focus, etc.
       e.preventDefault()
       e.stopPropagation()
+      // Each keystroke ALSO feeds the echo, which is what makes typing feel
+      // immediate: render now, reconcile when the pane confirms. Only plain
+      // text is predictable — backspace eats one pending character, and every
+      // other named key mutes until a frame settles the question.
+      setEcho((prev) =>
+        op.kind === 'text'
+          ? typed(prev, op.text)
+          : op.keys.every((k) => k === 'BSpace')
+            ? op.keys.reduce((acc) => backspace(acc), prev)
+            : otherKey(prev),
+      )
       queueOp(op)
     },
     [queueOp],
   )
+
+  // Every authoritative frame consumes exactly what its cursor advance
+  // explains, and always lifts a mute. In the LAYOUT phase so the re-render it
+  // schedules lands before the browser paints: a passive effect here would
+  // show the just-confirmed character twice for one frame.
+  useLayoutEffect(() => {
+    if (screen === null) return
+    const cur: Cursor = [screen.cursorX, screen.cursorY]
+    // Read the previous cursor into a LOCAL before advancing the ref: a state
+    // updater runs when React calls it, not when it is written, so
+    // `prevCursorRef.current` inside the closure would already be `cur` — every
+    // frame would explain an advance of zero and consume nothing. That is not a
+    // subtle degradation: the echo simply never clears, which is the ghost the
+    // whole module exists to prevent (seen on screen before this line existed).
+    const prev = prevCursorRef.current
+    prevCursorRef.current = cur
+    setEcho((e) => frame(e, prev, cur))
+  }, [screen])
 
   // ----------------------------------------------------------- per-session UI
   useEffect(() => {
     setScrollback(null)
     setLoadingHist(false)
     setLiveTyping(false)
+    setEcho(emptyEcho)
+    prevCursorRef.current = null
     stickRef.current = true
     opsRef.current = []
   }, [name])
 
   useEffect(() => {
     if (liveTyping) liveRef.current?.focus()
+    // Leaving or entering live typing drops any pending guess: nothing that was
+    // typed before the mode changed can be predicted across it.
+    setEcho(emptyEcho)
+    prevCursorRef.current = null
   }, [liveTyping])
 
   useEffect(
@@ -233,6 +275,7 @@ export function ScreenTab({
                   cols={screen.width}
                   fontPx={fontPx}
                   cursor={{ x: screen.cursorX, y: screen.cursorY }}
+                  echo={liveTyping && visible(echo) ? echo.text : ''}
                 />
               </>
             )}

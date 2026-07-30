@@ -1,5 +1,47 @@
 # Huginn Desktop changelog
 
+## 0.3.0
+
+**Fixes a 0.2.0 regression: the Screen tab was broken.** Keeping both session
+tabs mounted (so flipping stops refetching the transcript and dropping the
+pane lease) shipped without the CSS that takes the hidden one out of layout.
+The Screen tab got a zero-height box, so it never measured a grid, never
+started its poll, and sat on "Connecting to the pane…" while the composer was
+pushed off the bottom of the window. Two rules; the comment says why.
+
+**Keyboard.** Ctrl+K opens a command palette over every chat and session, with
+verbs for new chat / new session / settings. Ctrl+1/2/3 switch views, Ctrl+,
+opens Settings, Ctrl+N and Ctrl+Shift+N start Ask and Act chats, Alt+Up/Down
+walks the current list (from the composer too), Escape goes back, F1 shows the
+cheat sheet. Ctrl+R and Ctrl+W are swallowed — a reload leaked main-side
+subscriptions and stranded the tmux size lease.
+
+**Right-click.** Context menus on both lists: open, rename, delete for chats;
+open, rename, interrupt, kill for sessions. One verb, one place, instead of a
+hover cross here and a header button there.
+
+**Typing feels immediate.** The terminal now echoes locally: your keystroke
+paints at the cursor in accent tint with a hollow cursor while it is a guess,
+and each authoritative frame consumes exactly what its cursor advance
+explains. It mutes on anything unpredictable rather than guessing wrong.
+
+**Answer without switching tabs.** A pending question now appears as buttons
+in the Conversation tab, not just the Screen tab — the same fingerprint-guarded
+card, so an answer to a question that has moved on says so instead of landing
+somewhere it did not belong.
+
+**Work stays readable.** The work strip survives five minutes past the end of
+work, so an agent's own conclusion is still there when it becomes available
+rather than vanishing at the moment it appears. The agent count now comes from
+the TUI's own "N of M" row instead of counting files.
+
+**Diagnostics.** Settings gained "Copy diagnostics" (a shareable report of this
+install, the connection, notification state, update status and the recent log,
+with the token excluded by construction) and "Send test notification", which
+fires a real toast through the same path a session alert uses — so whether
+notifications work is now a question you can answer in one click. The main
+process keeps a log at `%APPDATA%\huginn-desktop\huginn-desktop.log`.
+
 ## 0.2.0
 
 The first-audit release. Four parallel audits (main-process, renderer/design,

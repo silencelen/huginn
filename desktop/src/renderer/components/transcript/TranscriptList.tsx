@@ -140,8 +140,9 @@ function ToolCard({ ev }: { ev: TranscriptEvent }): React.JSX.Element {
 
 /**
  * An AskUserQuestion as a question rather than as JSON. HISTORICAL by design:
- * these options are a record of what was asked — the live, clickable prompt
- * card on the Screen tab is what answers. Once answered, the chosen reply
+ * these options are a record of what was asked — the live, clickable PromptCard
+ * is what answers, and it is pinned below this list (as well as on the Screen
+ * tab) whenever the pane is actually asking. Once answered, the chosen reply
  * (parsed out of the result) matters more than what was offered.
  */
 function AskCard({ ev }: { ev: TranscriptEvent }): React.JSX.Element | null {
@@ -172,7 +173,7 @@ function AskCard({ ev }: { ev: TranscriptEvent }): React.JSX.Element | null {
       {answered ? (
         <div className="ask-chosen">→ {answeredSummary(ev.result ?? '')}</div>
       ) : (
-        <div className="ask-waiting">Waiting for an answer — the Screen tab has the live buttons</div>
+        <div className="ask-waiting">Waiting for an answer — the live buttons are below</div>
       )}
     </div>
   )

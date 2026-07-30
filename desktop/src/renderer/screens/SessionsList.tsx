@@ -2,12 +2,14 @@
 // session titles, background-work lines, and pane previews. Same dot language
 // as the chats list: pulsing accent = working, amber = needs you, dim = idle.
 
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import type { Session } from '../../shared/api/types'
 import { useApp } from '../stores/app'
 import { call } from '../lib/ipc'
 import { isValidSessionName } from '../../shared/api/routes'
-import { InputDialog } from '../components/common/Dialog'
+import { ConfirmDialog, InputDialog } from '../components/common/Dialog'
+import { useContextMenu } from '../components/common/ContextMenu'
+import { onNewSessionRequest, useKeyboardNav } from '../hooks/useShortcuts'
 
 const relTime = (epochSec: number): string => {
   if (epochSec <= 0) return ''
@@ -33,12 +35,30 @@ const stateClass = (state: string | null): string => {
 
 const NAME_HELP = 'Lowercase letters, digits, dot, dash or underscore (up to 50 characters).'
 
-function SessionRow({ s, active }: { s: Session; active: boolean }): React.JSX.Element {
+function SessionRow(props: {
+  s: Session
+  active: boolean
+  onRename: (s: Session) => void
+  onInterrupt: (s: Session) => void
+  onKill: (s: Session) => void
+}): React.JSX.Element {
+  const { s, active } = props
   const navigate = useApp((st) => st.navigate)
+  const open = (): void => navigate({ view: 'sessions', sessionName: s.name })
+  const ctx = useContextMenu()
+
+  const kbNav = useKeyboardNav()
+  const ref = useRef<HTMLDivElement | null>(null)
+  useEffect(() => {
+    if (active && kbNav) ref.current?.scrollIntoView({ block: 'nearest' })
+  }, [active, kbNav])
+
   return (
     <div
-      className={`row ${active ? 'row-active' : ''}`}
-      onClick={() => navigate({ view: 'sessions', sessionName: s.name })}
+      ref={ref}
+      className={`row ${active ? 'row-active' : ''} ${active && kbNav ? 'row-selected' : ''}`}
+      onClick={open}
+      onContextMenu={ctx.onContextMenu}
     >
       <div className="row-line1">
         <span className={`state-dot ${stateClass(s.state)}`} />
@@ -59,6 +79,12 @@ function SessionRow({ s, active }: { s: Session; active: boolean }): React.JSX.E
         </span>
       </div>
       {s.preview.length > 0 ? <div className="row-preview">{s.preview.join('\n')}</div> : null}
+      {ctx.menu([
+        { label: 'Open', onClick: open },
+        { label: 'Rename', onClick: () => props.onRename(s) },
+        { label: 'Interrupt (Esc)', onClick: () => props.onInterrupt(s) },
+        { label: 'Kill', danger: true, onClick: () => props.onKill(s) },
+      ])}
     </div>
   )
 }
@@ -70,6 +96,16 @@ export function SessionsList({ activeName }: { activeName: string | null }): Rea
   const navigate = useApp((s) => s.navigate)
   const [creating, setCreating] = useState(false)
   const [createErr, setCreateErr] = useState<string | null>(null)
+  const [renaming, setRenaming] = useState<Session | null>(null)
+  const [renameErr, setRenameErr] = useState<string | null>(null)
+  const [killing, setKilling] = useState<Session | null>(null)
+  const [error, setError] = useState<string | null>(null)
+
+  // The palette's "New session" verb opens this pane's own dialog rather than
+  // carrying a second copy of the name rules.
+  useEffect(() => onNewSessionRequest(() => setCreating(true)), [])
+
+  const fail = (e: unknown): void => setError(e instanceof Error ? e.message : String(e))
 
   const create = (raw: string): void => {
     const name = raw.trim().toLowerCase()
@@ -87,6 +123,41 @@ export function SessionsList({ activeName }: { activeName: string | null }): Rea
       .catch((e: unknown) => setCreateErr(e instanceof Error ? e.message : String(e)))
   }
 
+  const rename = (raw: string): void => {
+    if (renaming === null) return
+    const from = renaming.name
+    const to = raw.trim().toLowerCase()
+    if (!isValidSessionName(to)) {
+      setRenameErr(`That name will not work. ${NAME_HELP}`)
+      return
+    }
+    void call('sessions.rename', from, to)
+      .then(async () => {
+        setRenaming(null)
+        setRenameErr(null)
+        await refreshSessions()
+        // The open session just changed identity; follow it.
+        if (activeName === from) navigate({ view: 'sessions', sessionName: to })
+      })
+      .catch((e: unknown) => setRenameErr(e instanceof Error ? e.message : String(e)))
+  }
+
+  const interrupt = (s: Session): void => {
+    void call('sessions.keys', s.name, { keys: ['Escape'] }).catch(fail)
+  }
+
+  const kill = (): void => {
+    if (killing === null) return
+    const name = killing.name
+    setKilling(null)
+    void call('sessions.kill', name)
+      .then(async () => {
+        await refreshSessions()
+        if (activeName === name) navigate({ view: 'sessions', sessionName: null })
+      })
+      .catch(fail)
+  }
+
   return (
     <div className="list">
       <div className="list-header">
@@ -95,6 +166,11 @@ export function SessionsList({ activeName }: { activeName: string | null }): Rea
           + New
         </button>
       </div>
+      {error !== null ? (
+        <div className="list-note" title="Dismiss" onClick={() => setError(null)}>
+          {error}
+        </div>
+      ) : null}
       {unavailable ? (
         <div className="list-empty">
           tmux is unreachable on the host, so sessions cannot be listed right now.
@@ -106,7 +182,16 @@ export function SessionsList({ activeName }: { activeName: string | null }): Rea
           No tmux sessions are running on the host. New creates one ready for Claude.
         </div>
       ) : (
-        sessions.map((s) => <SessionRow key={s.name} s={s} active={s.name === activeName} />)
+        sessions.map((s) => (
+          <SessionRow
+            key={s.name}
+            s={s}
+            active={s.name === activeName}
+            onRename={setRenaming}
+            onInterrupt={interrupt}
+            onKill={setKilling}
+          />
+        ))
       )}
       {creating ? (
         <InputDialog
@@ -118,6 +203,29 @@ export function SessionsList({ activeName }: { activeName: string | null }): Rea
             setCreating(false)
             setCreateErr(null)
           }}
+        />
+      ) : null}
+      {renaming !== null ? (
+        <InputDialog
+          title="Rename session"
+          label={renameErr ?? NAME_HELP}
+          initial={renaming.name}
+          confirmLabel="Rename"
+          onSubmit={rename}
+          onCancel={() => {
+            setRenaming(null)
+            setRenameErr(null)
+          }}
+        />
+      ) : null}
+      {killing !== null ? (
+        <ConfirmDialog
+          title="Kill session"
+          body={`Kill "${killing.name}"? Everything running in the pane stops.`}
+          confirmLabel="Kill"
+          danger
+          onConfirm={kill}
+          onCancel={() => setKilling(null)}
         />
       ) : null}
     </div>
