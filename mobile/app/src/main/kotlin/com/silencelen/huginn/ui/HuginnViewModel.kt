@@ -1015,20 +1015,34 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
     fun killSession(name: String) {
         viewModelScope.launch {
             runCatching { client.killSession(name) }
-                .onSuccess { _toast.value = "Ended $name"; refreshSessions() }
+                .onSuccess {
+                    clearDraft(sessionDraftKey(name))
+                    clearAttachment(sessionDraftKey(name))
+                    _toast.value = "Ended $name"; refreshSessions()
+                }
                 .onFailure { _toast.value = errText(it) }
         }
     }
 
     fun renameSession(from: String, to: String) {
         val canon = to.trim().lowercase()
-        if (!canon.matches(Regex("^[a-z0-9_]{1,50}$"))) {
-            _toast.value = "Name can use letters, digits and underscore only"
+        // Matches what the daemon will route to (NAME_RE): a leading alphanumeric
+        // or underscore keeps the name usable as a filename under /run, and dashes
+        // and dots are ordinary in sessions made at the keyboard.
+        if (!canon.matches(Regex("^[a-z0-9_][a-z0-9_.-]{0,49}$"))) {
+            _toast.value = "Start with a letter or digit; letters, digits, _ . - after that"
             return
         }
         viewModelScope.launch {
             runCatching { client.renameSession(from, canon) }
-                .onSuccess { _toast.value = "Renamed to $canon"; refreshSessions() }
+                .onSuccess {
+                    // MOVED, not dropped: half a typed message is worth keeping
+                    // across a rename, and the old key would never be read again.
+                    val carried = drafts.value[sessionDraftKey(from)].orEmpty()
+                    clearDraft(sessionDraftKey(from))
+                    if (carried.isNotBlank()) setDraft(sessionDraftKey(canon), carried)
+                    _toast.value = "Renamed to $canon"; refreshSessions()
+                }
                 .onFailure { _toast.value = errText(it) }
         }
     }
@@ -1555,7 +1569,13 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
     fun deleteChat(id: String) {
         viewModelScope.launch {
             runCatching { client.deleteChat(id) }
-                .onSuccess { _toast.value = "Chat deleted"; refreshChats() }
+                .onSuccess {
+                    // The draft outlives nothing: the persisted map is rewritten
+                    // whole on every keystroke, so orphans are paid for forever.
+                    clearDraft(chatDraftKey(id))
+                    clearAttachment(chatDraftKey(id))
+                    _toast.value = "Chat deleted"; refreshChats()
+                }
                 .onFailure { _toast.value = errText(it) }
         }
     }
