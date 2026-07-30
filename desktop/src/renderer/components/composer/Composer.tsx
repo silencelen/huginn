@@ -29,11 +29,16 @@ export function Composer(props: {
   const [dragOver, setDragOver] = useState(false)
   const loadedFor = useRef<string | null>(null)
   const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const pendingSave = useRef<{ key: string; value: string } | null>(null)
   const fileInput = useRef<HTMLInputElement | null>(null)
 
   useEffect(() => {
     let alive = true
     loadedFor.current = null
+    // A pending save from the PREVIOUS target must not fire now: `persist`
+    // resolves props.draftKey when the timer runs, so a late tick would write
+    // the old text under the new key — one chat's draft landing in another.
+    cancelPendingSave()
     setText('')
     setAttachment(null)
     void call('drafts.get', props.draftKey).then((draft) => {
@@ -55,11 +60,37 @@ export function Composer(props: {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [props.seedText])
 
+  // Closing a chat mid-debounce must not drop the last edit: flush the pending
+  // value rather than cancelling it.
+  useEffect(
+    () => () => {
+      if (saveTimer.current !== null) {
+        clearTimeout(saveTimer.current)
+        saveTimer.current = null
+        const p = pendingSave.current
+        if (p !== null) void call('drafts.set', p.key, p.value)
+      }
+    },
+    [],
+  )
+
+  function cancelPendingSave(): void {
+    if (saveTimer.current !== null) {
+      clearTimeout(saveTimer.current)
+      saveTimer.current = null
+    }
+    pendingSave.current = null
+  }
+
   const persist = (value: string): void => {
     if (loadedFor.current !== props.draftKey) return
-    if (saveTimer.current !== null) clearTimeout(saveTimer.current)
+    cancelPendingSave()
+    const key = props.draftKey
+    pendingSave.current = { key, value }
     saveTimer.current = setTimeout(() => {
-      void call('drafts.set', props.draftKey, value)
+      saveTimer.current = null
+      pendingSave.current = null
+      void call('drafts.set', key, value)
     }, 400)
   }
 
@@ -122,6 +153,10 @@ export function Composer(props: {
     const a = attachment
     setText('')
     setAttachment(null)
+    // THE BUG THIS FIXES: the last keystroke's 400ms save was still pending and
+    // fired AFTER this clear, re-saving the just-sent message as a draft — so
+    // it reappeared in the box on the next visit.
+    cancelPendingSave()
     void call('drafts.set', props.draftKey, '')
     void (async () => {
       if (a !== null) {

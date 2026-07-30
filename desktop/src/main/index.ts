@@ -1,5 +1,5 @@
 import {
-  app, BrowserWindow, globalShortcut, ipcMain, Notification, powerMonitor, shell,
+  app, BrowserWindow, globalShortcut, ipcMain, Notification, powerMonitor, session, shell,
 } from 'electron'
 import path from 'node:path'
 import { AppdClient } from './appd/client'
@@ -22,8 +22,16 @@ if (!gotLock) app.quit()
 
 app.setAsDefaultProtocolClient('huginn')
 
+// MUST match electron-builder's appId and the AUMID on the NSIS Start Menu
+// shortcut. Without it the process publishes toasts under Electron's default
+// identity, which matches no installed shortcut — and Windows then drops them
+// silently. That is why no notification ever appeared in the field.
+if (process.platform === 'win32') app.setAppUserModelId('com.silencelen.huginn.desktop')
+
 let win: BrowserWindow | null = null
 let quitting = false
+// Read by the window-all-closed handler, which lives outside whenReady().
+let closeToTray = (): boolean => true
 
 const broadcast = (channel: string, payload: unknown): void => {
   for (const w of BrowserWindow.getAllWindows()) {
@@ -32,7 +40,14 @@ const broadcast = (channel: string, payload: unknown): void => {
 }
 
 void app.whenReady().then(() => {
+  // Electron GRANTS permissions by default. This app needs none of them, and
+  // a renderer that displays remote content should never be one prompt away
+  // from the webcam or the microphone.
+  session.defaultSession.setPermissionRequestHandler((_wc, _permission, callback) => callback(false))
+  session.defaultSession.setPermissionCheckHandler(() => false)
+
   const settings = new Settings()
+  closeToTray = () => settings.getCloseToTray()
   const client = new AppdClient({
     baseUrl: () => settings.getBaseUrl(),
     token: () => settings.getToken(),
@@ -194,9 +209,15 @@ void app.whenReady().then(() => {
   })
 
   // Sleep black-holes every socket at once; on resume nothing errors, it just
-  // hangs until the idle timeouts fire. Reset proactively instead.
-  powerMonitor.on('resume', () => watch.reset())
-  powerMonitor.on('unlock-screen', () => watch.reset())
+  // hangs until the idle timeouts fire (up to 180s of frozen pane, and a chat
+  // run that never reports finishing). Reset all three proactively.
+  const resumeAll = (): void => {
+    watch.reset()
+    chats.resetStreams()
+    sessions.resetPolls()
+  }
+  powerMonitor.on('resume', resumeAll)
+  powerMonitor.on('unlock-screen', resumeAll)
 
   app.on('before-quit', () => {
     quitting = true
@@ -223,7 +244,8 @@ void app.whenReady().then(() => {
 })
 
 app.on('window-all-closed', () => {
-  // The tray keeps the app alive; closing the last window only quits when the
-  // user turned close-to-tray off.
-  if (quitting) app.quit()
+  // The tray keeps the app alive ONLY when the user asked for that. With
+  // close-to-tray off this used to keep running headless forever — window
+  // gone, watch stream and notify claim still live.
+  if (quitting || !closeToTray()) app.quit()
 })

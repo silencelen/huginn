@@ -1,10 +1,46 @@
 // Connection + app settings. The token is write-only from here: the renderer
 // can set it but never read it back (hasToken is all it learns).
+//
+// One save model everywhere: text fields commit on blur (or Enter) with an
+// inline "Saved" mark, matching the checkboxes' auto-save. settings.update can
+// REJECT a bad server address (the allowlist is a security control) — that
+// error surfaces inline under the field instead of being swallowed.
 
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useApp } from '../stores/app'
 import { call, on } from '../lib/ipc'
+import { ConfirmDialog } from '../components/common/Dialog'
 import type { UpdateState } from '../../main/updater'
+
+interface FieldNote {
+  ok: boolean
+  text: string
+}
+
+/** Field note that self-clears when it is a success mark (errors stay put). */
+function useFieldNote(): [FieldNote | null, (n: FieldNote | null) => void] {
+  const [note, setNote] = useState<FieldNote | null>(null)
+  const timer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const set = (n: FieldNote | null): void => {
+    if (timer.current !== null) clearTimeout(timer.current)
+    setNote(n)
+    if (n !== null && n.ok) timer.current = setTimeout(() => setNote(null), 3000)
+  }
+  useEffect(
+    () => () => {
+      if (timer.current !== null) clearTimeout(timer.current)
+    },
+    [],
+  )
+  return [note, set]
+}
+
+const errText = (e: unknown): string => (e instanceof Error ? e.message : String(e))
+
+function NoteLine({ note }: { note: FieldNote | null }): React.JSX.Element | null {
+  if (note === null) return null
+  return <span className={note.ok ? 'save-note ok' : 'field-error'}>{note.text}</span>
+}
 
 function AccountsSection(): React.JSX.Element {
   const [current, setCurrent] = useState<{ email: string | null; subscriptionType: string | null } | null>(null)
@@ -16,6 +52,7 @@ function AccountsSection(): React.JSX.Element {
   const [loginUrl, setLoginUrl] = useState<string | null>(null)
   const [loginCode, setLoginCode] = useState('')
   const [loginNote, setLoginNote] = useState<string | null>(null)
+  const [forgetting, setForgetting] = useState<{ slug: string; email: string | null } | null>(null)
 
   const reload = (): void => {
     void call('account.current').then((a) => setCurrent(a)).catch(() => {})
@@ -48,7 +85,7 @@ function AccountsSection(): React.JSX.Element {
           setLoginNote('The host did not produce a sign-in URL — check the login tmux session.')
         }
       })
-      .catch((e: unknown) => setLoginNote(e instanceof Error ? e.message : String(e)))
+      .catch((e: unknown) => setLoginNote(errText(e)))
   }
 
   const submitCode = (): void => {
@@ -70,51 +107,56 @@ function AccountsSection(): React.JSX.Element {
           reload()
         }
       })
-      .catch((e: unknown) => setLoginNote(e instanceof Error ? e.message : String(e)))
+      .catch((e: unknown) => setLoginNote(errText(e)))
   }
+
+  const step = loginUrl === null ? 1 : 2
 
   return (
     <>
-      <h2>Account</h2>
+      <h2>Accounts</h2>
+      <div className="field-help">
+        Saved Claude logins on the host. The active one serves every chat and session.
+      </div>
       <div className="about-line">
         {current === null
           ? 'Loading…'
-          : `${current.email ?? 'not signed in'}${current.subscriptionType !== null ? ` · ${current.subscriptionType}` : ''}`}
+          : `Signed in: ${current.email ?? 'nobody'}${current.subscriptionType !== null ? ` · ${current.subscriptionType}` : ''}`}
         {autoswitch !== null ? ` · autoswitch ${autoswitch}` : ''}
       </div>
       {saved.map((a) => (
-        <div key={a.slug} className="account-row">
+        <div key={a.slug} className={`account-row ${a.isActive ? 'account-row-active' : ''}`}>
           <span className={`state-dot ${a.isActive ? 'dot-running' : 'dot-idle'}`} />
           <span className="account-email">
             {a.email ?? a.slug}
             {a.verified ? '' : ' (unconfirmed)'}
             {a.duplicateOf ? ' (duplicate)' : ''}
           </span>
-          {a.weeklyPercent !== null ? (
-            <span className="dim">{Math.round(a.weeklyPercent)}% of week</span>
-          ) : null}
-          {a.isActive ? (
-            <span className="dim">active</span>
-          ) : (
-            <button
-              type="button"
-              onClick={() => void call('account.activate', a.slug).then(reload)}
-            >
+          <span className="account-pct">
+            {a.weeklyPercent !== null ? `${Math.round(a.weeklyPercent)}% of week` : ''}
+          </span>
+          <span className="account-state">{a.isActive ? 'active' : ''}</span>
+          {a.isActive ? null : (
+            <button type="button" onClick={() => void call('account.activate', a.slug).then(reload)}>
               Use
             </button>
           )}
           <button
             type="button"
             className="danger"
-            onClick={() => {
-              if (window.confirm(`Forget saved login ${a.email ?? a.slug}?`))
-                void call('account.forget', a.slug).then(reload)
-            }}
+            onClick={() => setForgetting({ slug: a.slug, email: a.email })}
           >
             Forget
           </button>
         </div>
       ))}
+      <div className="login-steps">
+        <span className={step === 1 ? 'step-current' : 'step'}>1 · Start sign-in</span>
+        <span className="step-sep">›</span>
+        <span className={step === 2 ? 'step-current' : 'step'}>2 · Approve in the browser</span>
+        <span className="step-sep">›</span>
+        <span className={step === 2 ? 'step-current' : 'step'}>3 · Paste the code</span>
+      </div>
       <div className="login-flow">
         {loginUrl === null ? (
           <>
@@ -150,6 +192,20 @@ function AccountsSection(): React.JSX.Element {
         )}
       </div>
       {loginNote !== null ? <div className="dim">{loginNote}</div> : null}
+      {forgetting !== null ? (
+        <ConfirmDialog
+          title="Forget saved login"
+          body={`Remove ${forgetting.email ?? forgetting.slug} from the host's saved logins? Signing in again re-adds it.`}
+          confirmLabel="Forget"
+          danger
+          onConfirm={() => {
+            const slug = forgetting.slug
+            setForgetting(null)
+            void call('account.forget', slug).then(reload)
+          }}
+          onCancel={() => setForgetting(null)}
+        />
+      ) : null}
     </>
   )
 }
@@ -159,34 +215,63 @@ export function SettingsScreen(): React.JSX.Element {
   const updateSettings = useApp((s) => s.updateSettings)
   const watchConnected = useApp((s) => s.watchConnected)
   const [baseUrl, setBaseUrl] = useState('')
+  const [urlDirty, setUrlDirty] = useState(false)
+  const [urlNote, setUrlNote] = useFieldNote()
   const [token, setToken] = useState('')
+  const [tokenNote, setTokenNote] = useFieldNote()
   const [pingResult, setPingResult] = useState<string | null>(null)
   const [version, setVersion] = useState('')
   const [update, setUpdate] = useState<UpdateState | null>(null)
 
+  // Seed the Server field from the store only while it is not being edited —
+  // otherwise toggling a checkbox mid-edit wipes what was typed.
   useEffect(() => {
-    if (settings) setBaseUrl(settings.baseUrl)
-  }, [settings])
+    if (settings !== null && !urlDirty) setBaseUrl(settings.baseUrl)
+  }, [settings, urlDirty])
   useEffect(() => {
     void call('app.version').then(setVersion)
     void call('update.state').then(setUpdate)
     return on('push.update', setUpdate)
   }, [])
 
-  const save = (): void => {
-    const patch: { baseUrl?: string; token?: string } = { baseUrl }
-    if (token !== '') patch.token = token
-    void updateSettings(patch).then(() => {
-      setToken('')
-      setPingResult(null)
-    })
+  const commitBaseUrl = (): void => {
+    if (settings === null) return
+    const next = baseUrl.trim()
+    if (next === '' || next === settings.baseUrl) {
+      setBaseUrl(settings.baseUrl)
+      setUrlDirty(false)
+      setUrlNote(null)
+      return
+    }
+    void updateSettings({ baseUrl: next })
+      .then(() => {
+        setUrlDirty(false)
+        setUrlNote({ ok: true, text: 'Saved' })
+        setPingResult(null)
+      })
+      .catch((e: unknown) => setUrlNote({ ok: false, text: errText(e) }))
+  }
+
+  const commitToken = (): void => {
+    if (token.trim() === '') return
+    void updateSettings({ token })
+      .then(() => {
+        setToken('')
+        setTokenNote({ ok: true, text: 'Token saved' })
+        setPingResult(null)
+      })
+      .catch((e: unknown) => setTokenNote({ ok: false, text: errText(e) }))
+  }
+
+  const blurOnEnter = (e: React.KeyboardEvent<HTMLInputElement>): void => {
+    if (e.key === 'Enter') e.currentTarget.blur()
   }
 
   const testConnection = (): void => {
     setPingResult('…')
     void call('host.ping')
       .then((p) => setPingResult(p.ok ? `OK — appd ${p.version ?? '?'}` : 'Daemon answered oddly'))
-      .catch((e: unknown) => setPingResult(e instanceof Error ? e.message : String(e)))
+      .catch((e: unknown) => setPingResult(errText(e)))
   }
 
   if (!settings) return <div className="pane-placeholder">Loading…</div>
@@ -194,17 +279,39 @@ export function SettingsScreen(): React.JSX.Element {
     <div className="settings">
       <h2>Connection</h2>
       <label className="field">
-        <span>Server</span>
-        <input value={baseUrl} onChange={(e) => setBaseUrl(e.target.value)} spellCheck={false} />
+        <span>
+          Server <NoteLine note={urlNote} />
+        </span>
+        <input
+          value={baseUrl}
+          onChange={(e) => {
+            setBaseUrl(e.target.value)
+            setUrlDirty(true)
+          }}
+          onBlur={commitBaseUrl}
+          onKeyDown={blurOnEnter}
+          spellCheck={false}
+        />
+        <span className="field-help">
+          The huginn-appd address. Saves when you leave the field; only known daemon addresses are
+          accepted.
+        </span>
       </label>
       <label className="field">
-        <span>Token {settings.hasToken ? '(saved)' : '(required)'}</span>
+        <span>
+          Token {settings.hasToken ? '(saved)' : '(required)'} <NoteLine note={tokenNote} />
+        </span>
         <input
           type="password"
           value={token}
           placeholder={settings.hasToken ? '••••••••  (leave blank to keep)' : 'paste the appd token'}
           onChange={(e) => setToken(e.target.value)}
+          onBlur={commitToken}
+          onKeyDown={blurOnEnter}
         />
+        <span className="field-help">
+          Write-only: paste a new token to replace the saved one. It is never shown back.
+        </span>
       </label>
       {settings.tokenPlaintextFallback ? (
         <div className="banner banner-warn">
@@ -212,9 +319,6 @@ export function SettingsScreen(): React.JSX.Element {
         </div>
       ) : null}
       <div className="settings-actions">
-        <button type="button" onClick={save}>
-          Save
-        </button>
         <button type="button" onClick={testConnection}>
           Test connection
         </button>
@@ -228,7 +332,12 @@ export function SettingsScreen(): React.JSX.Element {
           checked={settings.notifyEnabled}
           onChange={(e) => void updateSettings({ notifyEnabled: e.target.checked })}
         />
-        <span>Show notifications</span>
+        <span>
+          Show notifications
+          <span className="field-help">
+            Toast when a chat finishes or a session needs an answer.
+          </span>
+        </span>
       </label>
       <label className="check">
         <input
@@ -236,7 +345,10 @@ export function SettingsScreen(): React.JSX.Element {
           checked={settings.launchAtLogin}
           onChange={(e) => void updateSettings({ launchAtLogin: e.target.checked })}
         />
-        <span>Launch at login</span>
+        <span>
+          Launch at login
+          <span className="field-help">Start Huginn when you sign in to this computer.</span>
+        </span>
       </label>
       <label className="check">
         <input
@@ -244,7 +356,12 @@ export function SettingsScreen(): React.JSX.Element {
           checked={settings.closeToTray}
           onChange={(e) => void updateSettings({ closeToTray: e.target.checked })}
         />
-        <span>Keep running in tray when closed</span>
+        <span>
+          Keep running in tray when closed
+          <span className="field-help">
+            Closing the window keeps the watch stream and notifications alive.
+          </span>
+        </span>
       </label>
 
       <AccountsSection />

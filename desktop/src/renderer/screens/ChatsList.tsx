@@ -1,10 +1,12 @@
 // The chats list pane: newest first, live state dots, queued badges, and the
-// two-mode New button (a chat's ask/act nature is chosen at creation).
+// two-mode New button (a chat's ask/act nature is chosen at creation). State
+// dots speak the same language as the sessions list: pulsing accent = working.
 
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import type { Chat } from '../../shared/api/types'
 import { useApp } from '../stores/app'
 import { call } from '../lib/ipc'
+import { ConfirmDialog, InputDialog } from '../components/common/Dialog'
 
 const relTime = (epochSec: number): string => {
   if (epochSec <= 0) return ''
@@ -15,18 +17,23 @@ const relTime = (epochSec: number): string => {
   return `${Math.floor(s / 86400)}d`
 }
 
-function ChatRow({ chat, active }: { chat: Chat; active: boolean }): React.JSX.Element {
+function ChatRow(props: {
+  chat: Chat
+  active: boolean
+  onRename: (chat: Chat) => void
+  onDelete: (chat: Chat) => void
+}): React.JSX.Element {
+  const { chat, active } = props
   const navigate = useApp((s) => s.navigate)
-  const refreshChats = useApp((s) => s.refreshChats)
   return (
     <div
       className={`row ${active ? 'row-active' : ''}`}
       onClick={() => navigate({ view: 'chats', chatId: chat.id })}
     >
       <div className="row-line1">
-        {chat.running ? <span className="pulse-dot" /> : null}
-        {chat.mode === 'act' ? <span className="mode-chip mode-act">ACT</span> : null}
+        {chat.running ? <span className="state-dot dot-running dot-pulse" /> : null}
         <span className="row-title">{chat.title ?? 'Untitled'}</span>
+        {chat.mode === 'act' ? <span className="mode-mark">act</span> : null}
         <span className="row-time">{relTime(chat.updatedAt)}</span>
       </div>
       <div className="row-line2">
@@ -34,17 +41,22 @@ function ChatRow({ chat, active }: { chat: Chat; active: boolean }): React.JSX.E
         <span className="row-snippet">{chat.lastSnippet ?? ''}</span>
         <button
           type="button"
+          className="row-action"
+          title="Rename chat"
+          onClick={(e) => {
+            e.stopPropagation()
+            props.onRename(chat)
+          }}
+        >
+          ✎
+        </button>
+        <button
+          type="button"
           className="row-delete"
           title="Delete chat"
           onClick={(e) => {
             e.stopPropagation()
-            if (window.confirm('Delete this chat?')) {
-              void call('chats.delete', chat.id)
-                .then(() => refreshChats())
-                .catch((err: unknown) => {
-                  window.alert(err instanceof Error ? err.message : String(err))
-                })
-            }
+            props.onDelete(chat)
           }}
         >
           ✕
@@ -59,6 +71,24 @@ export function ChatsList({ activeChatId }: { activeChatId: string | null }): Re
   const navigate = useApp((s) => s.navigate)
   const refreshChats = useApp((s) => s.refreshChats)
   const [creating, setCreating] = useState(false)
+  const [renaming, setRenaming] = useState<Chat | null>(null)
+  const [deleting, setDeleting] = useState<Chat | null>(null)
+  const [loaded, setLoaded] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+
+  // The store starts with an empty list; wait for the first fetch to settle
+  // before claiming "no chats" on a cold start.
+  useEffect(() => {
+    let alive = true
+    void refreshChats().then(() => {
+      if (alive) setLoaded(true)
+    })
+    return () => {
+      alive = false
+    }
+  }, [refreshChats])
+
+  const fail = (err: unknown): void => setError(err instanceof Error ? err.message : String(err))
 
   const create = (mode: 'ask' | 'act'): void => {
     setCreating(false)
@@ -67,7 +97,7 @@ export function ChatsList({ activeChatId }: { activeChatId: string | null }): Re
         await refreshChats()
         navigate({ view: 'chats', chatId: chat.id })
       })
-      .catch((err: unknown) => window.alert(err instanceof Error ? err.message : String(err)))
+      .catch(fail)
   }
 
   return (
@@ -79,7 +109,7 @@ export function ChatsList({ activeChatId }: { activeChatId: string | null }): Re
             <button type="button" onClick={() => create('ask')}>
               Ask
             </button>
-            <button type="button" className="danger" onClick={() => create('act')}>
+            <button type="button" onClick={() => create('act')}>
               Act
             </button>
             <button type="button" onClick={() => setCreating(false)}>
@@ -92,10 +122,60 @@ export function ChatsList({ activeChatId }: { activeChatId: string | null }): Re
           </button>
         )}
       </div>
-      {chats.length === 0 ? <div className="pane-placeholder">No chats yet</div> : null}
+      {error !== null ? (
+        <div className="list-note" title="Dismiss" onClick={() => setError(null)}>
+          {error}
+        </div>
+      ) : null}
+      {chats.length === 0 ? (
+        loaded ? (
+          <div className="list-empty">
+            No chats yet. New starts one: Ask answers questions, Act can make changes on the host.
+          </div>
+        ) : (
+          <div className="list-empty">Loading chats…</div>
+        )
+      ) : null}
       {chats.map((c) => (
-        <ChatRow key={c.id} chat={c} active={c.id === activeChatId} />
+        <ChatRow
+          key={c.id}
+          chat={c}
+          active={c.id === activeChatId}
+          onRename={setRenaming}
+          onDelete={setDeleting}
+        />
       ))}
+      {renaming !== null ? (
+        <InputDialog
+          title="Rename chat"
+          label="Title"
+          initial={renaming.title ?? ''}
+          onSubmit={(title) => {
+            const id = renaming.id
+            setRenaming(null)
+            void call('chats.patch', id, { title })
+              .then(() => refreshChats())
+              .catch(fail)
+          }}
+          onCancel={() => setRenaming(null)}
+        />
+      ) : null}
+      {deleting !== null ? (
+        <ConfirmDialog
+          title="Delete chat"
+          body={`Delete "${deleting.title ?? 'Untitled'}" and its transcript? This cannot be undone.`}
+          confirmLabel="Delete"
+          danger
+          onConfirm={() => {
+            const id = deleting.id
+            setDeleting(null)
+            void call('chats.delete', id)
+              .then(() => refreshChats())
+              .catch(fail)
+          }}
+          onCancel={() => setDeleting(null)}
+        />
+      ) : null}
     </div>
   )
 }

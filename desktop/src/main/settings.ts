@@ -31,6 +31,32 @@ interface StoredSettings {
   drafts: Record<string, string>
 }
 
+/**
+ * Where this app is allowed to point. NOT cosmetic validation: the Bearer
+ * token follows baseUrl on every request, and (before the feed was pinned)
+ * the updater followed it too — so an unvalidated baseUrl was a one-setting
+ * path to handing the daemon token, and then arbitrary installers, to any
+ * host an attacker chose. Only huginn's own two known addresses qualify.
+ */
+const ALLOWED_HOSTS = new Set([
+  '100.97.198.90', // tailnet
+  '192.168.2.117', // yggdrasil / VLAN 2
+  'localhost',
+  '127.0.0.1',
+])
+
+export function isAllowedBaseUrl(raw: string): boolean {
+  let u: URL
+  try {
+    u = new URL(raw.trim())
+  } catch {
+    return false
+  }
+  if (u.protocol !== 'http:' && u.protocol !== 'https:') return false
+  if (u.pathname !== '/' && u.pathname !== '') return false
+  return ALLOWED_HOSTS.has(u.hostname)
+}
+
 const DEFAULTS: StoredSettings = {
   baseUrl: 'http://100.97.198.90:8787',
   tokenEncrypted: null,
@@ -152,7 +178,13 @@ export class Settings {
     terminalFontPx?: number
   }): SettingsView {
     if (patch.token !== undefined) this.setToken(patch.token)
-    if (patch.baseUrl !== undefined) this.state.baseUrl = patch.baseUrl.trim().replace(/\/+$/, '')
+    if (patch.baseUrl !== undefined) {
+      const next = patch.baseUrl.trim().replace(/\/+$/, '')
+      if (!isAllowedBaseUrl(next)) {
+        throw new Error(`refusing that server address — huginn only talks to its own daemon`)
+      }
+      this.state.baseUrl = next
+    }
     if (patch.notifyEnabled !== undefined) this.state.notifyEnabled = patch.notifyEnabled
     if (patch.launchAtLogin !== undefined) {
       this.state.launchAtLogin = patch.launchAtLogin
