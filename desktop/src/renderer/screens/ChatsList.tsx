@@ -2,11 +2,13 @@
 // two-mode New button (a chat's ask/act nature is chosen at creation). State
 // dots speak the same language as the sessions list: pulsing accent = working.
 
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import type { Chat } from '../../shared/api/types'
 import { useApp } from '../stores/app'
 import { call } from '../lib/ipc'
 import { ConfirmDialog, InputDialog } from '../components/common/Dialog'
+import { useContextMenu } from '../components/common/ContextMenu'
+import { createChat, useKeyboardNav } from '../hooks/useShortcuts'
 
 const relTime = (epochSec: number): string => {
   if (epochSec <= 0) return ''
@@ -25,10 +27,23 @@ function ChatRow(props: {
 }): React.JSX.Element {
   const { chat, active } = props
   const navigate = useApp((s) => s.navigate)
+  const open = (): void => navigate({ view: 'chats', chatId: chat.id })
+  const ctx = useContextMenu()
+
+  // Keyboard selection has to be visible and has to stay on screen; a pointer
+  // click already put the row where the user was looking, so neither applies.
+  const kbNav = useKeyboardNav()
+  const ref = useRef<HTMLDivElement | null>(null)
+  useEffect(() => {
+    if (active && kbNav) ref.current?.scrollIntoView({ block: 'nearest' })
+  }, [active, kbNav])
+
   return (
     <div
-      className={`row ${active ? 'row-active' : ''}`}
-      onClick={() => navigate({ view: 'chats', chatId: chat.id })}
+      ref={ref}
+      className={`row ${active ? 'row-active' : ''} ${active && kbNav ? 'row-selected' : ''}`}
+      onClick={open}
+      onContextMenu={ctx.onContextMenu}
     >
       <div className="row-line1">
         {chat.running ? <span className="state-dot dot-running dot-pulse" /> : null}
@@ -62,13 +77,17 @@ function ChatRow(props: {
           ✕
         </button>
       </div>
+      {ctx.menu([
+        { label: 'Open', onClick: open },
+        { label: 'Rename', onClick: () => props.onRename(chat) },
+        { label: 'Delete', danger: true, onClick: () => props.onDelete(chat) },
+      ])}
     </div>
   )
 }
 
 export function ChatsList({ activeChatId }: { activeChatId: string | null }): React.JSX.Element {
   const chats = useApp((s) => s.chats)
-  const navigate = useApp((s) => s.navigate)
   const refreshChats = useApp((s) => s.refreshChats)
   const [creating, setCreating] = useState(false)
   const [renaming, setRenaming] = useState<Chat | null>(null)
@@ -90,14 +109,10 @@ export function ChatsList({ activeChatId }: { activeChatId: string | null }): Re
 
   const fail = (err: unknown): void => setError(err instanceof Error ? err.message : String(err))
 
+  // Same implementation Ctrl+N and the palette use — see hooks/useShortcuts.
   const create = (mode: 'ask' | 'act'): void => {
     setCreating(false)
-    void call('chats.create', { mode })
-      .then(async (chat) => {
-        await refreshChats()
-        navigate({ view: 'chats', chatId: chat.id })
-      })
-      .catch(fail)
+    void createChat(mode).catch(fail)
   }
 
   return (

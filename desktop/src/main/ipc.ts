@@ -2,9 +2,12 @@
 // surface in the app; every handler is registered here so the attack surface
 // reachable from a compromised renderer is enumerable in one screen.
 
-import { app, ipcMain, type WebContents } from 'electron'
+import { app, ipcMain, Notification, type WebContents } from 'electron'
 import fs from 'node:fs'
 import path from 'node:path'
+import { buildDiagnostics } from './diagnostics'
+import { log } from './log'
+import { buildAttentionToast, winToastsUsable } from './notify/toasts-win'
 import type { InvokeApi } from '../shared/ipc/contract'
 import { parseUploadResult } from '../shared/api/types'
 import { routes } from '../shared/api/routes'
@@ -24,6 +27,8 @@ export interface IpcDeps {
   host: Host
   watch: WatchLoop
   updater: Updater
+  /** Most recent unexpected failure, for the diagnostics blob. */
+  lastError: () => string | null
 }
 
 type Handler<C extends keyof InvokeApi> = (
@@ -110,6 +115,45 @@ export function registerIpc(deps: IpcDeps): void {
         tier: 'longPoll',
       }),
     )
+  })
+
+  handle('diagnostics.text', async () => {
+    let appdVersion: string | null = null
+    try {
+      appdVersion = (await host.ping()).version
+    } catch (e) {
+      appdVersion = `unreachable (${e instanceof Error ? e.message : String(e)})`
+    }
+    return buildDiagnostics({
+      settings,
+      update: updater.current(),
+      watchConnected: watch.connected(),
+      appdVersion,
+      lastError: deps.lastError(),
+    })
+  })
+  handle('diagnostics.testNotification', () => {
+    if (!Notification.isSupported()) {
+      return { shown: false, reason: 'this OS reports no notification support' }
+    }
+    if (!settings.getNotifyEnabled()) {
+      return { shown: false, reason: 'notifications are switched off in Settings' }
+    }
+    // Deliberately the SAME toast path a real attention alert uses, so a
+    // success here proves the real thing works (the AUMID problem made every
+    // toast vanish silently and nothing in the app could tell).
+    const n = winToastsUsable()
+      ? buildAttentionToast('test', 'Notifications are working. Pick one:', [
+          { number: 1, label: 'Good' },
+          { number: 2, label: 'Also good' },
+        ], null)
+      : new Notification({
+          title: 'Huginn notifications work',
+          body: 'This is what a session alert will look like.',
+        })
+    n.show()
+    log('info', 'notify', 'test notification fired')
+    return { shown: true, reason: winToastsUsable() ? 'sent as a Windows toast' : 'sent' }
   })
 
   handle('update.state', () => updater.current())

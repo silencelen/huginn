@@ -222,6 +222,7 @@ export function SettingsScreen(): React.JSX.Element {
   const [pingResult, setPingResult] = useState<string | null>(null)
   const [version, setVersion] = useState('')
   const [update, setUpdate] = useState<UpdateState | null>(null)
+  const [diagNote, setDiagNote] = useFieldNote()
 
   // Seed the Server field from the store only while it is not being edited —
   // otherwise toggling a checkbox mid-edit wipes what was typed.
@@ -395,6 +396,41 @@ export function SettingsScreen(): React.JSX.Element {
             {update.status === 'downloading' ? `Downloading v${update.version ?? ''}…` : 'Checking…'}
           </span>
         )}
+      </div>
+
+      <h2>Diagnostics</h2>
+      <div className="field-help">
+        If something looks wrong, copy the diagnostics and paste them into a chat. They describe
+        this install and the recent log; the token is never included.
+      </div>
+      <div className="settings-actions">
+        <button
+          type="button"
+          onClick={() => {
+            void call('diagnostics.text')
+              .then((text) => navigator.clipboard.writeText(text))
+              .then(() => setDiagNote({ ok: true, text: 'Copied to the clipboard' }))
+              .catch((e: unknown) => setDiagNote({ ok: false, text: errText(e) }))
+          }}
+        >
+          Copy diagnostics
+        </button>
+        <button
+          type="button"
+          onClick={() => {
+            void call('diagnostics.testNotification')
+              .then((r) =>
+                setDiagNote({
+                  ok: r.shown,
+                  text: r.shown ? `Test notification ${r.reason}` : `Not sent: ${r.reason}`,
+                }),
+              )
+              .catch((e: unknown) => setDiagNote({ ok: false, text: errText(e) }))
+          }}
+        >
+          Send test notification
+        </button>
+        <NoteLine note={diagNote} />
       </div>
     </div>
   )

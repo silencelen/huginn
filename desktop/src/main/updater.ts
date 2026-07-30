@@ -5,6 +5,7 @@
 
 import { app, type WebContents } from 'electron'
 import electronUpdater from 'electron-updater'
+import { log } from './log'
 import type { Settings } from './settings'
 
 const { autoUpdater } = electronUpdater
@@ -58,14 +59,19 @@ export class Updater {
     })
 
     autoUpdater.on('checking-for-update', () => this.set({ status: 'checking' }))
-    autoUpdater.on('update-available', (info) =>
-      this.set({ status: 'downloading', version: info.version }),
-    )
+    autoUpdater.on('update-available', (info) => {
+      log('info', 'update', `available: ${info.version}`)
+      this.set({ status: 'downloading', version: info.version })
+    })
     autoUpdater.on('update-not-available', () => this.set({ status: 'none', version: null }))
-    autoUpdater.on('update-downloaded', (info) =>
-      this.set({ status: 'ready', version: info.version }),
-    )
-    autoUpdater.on('error', (e) => this.set({ status: 'error', error: e.message }))
+    autoUpdater.on('update-downloaded', (info) => {
+      log('info', 'update', `downloaded ${info.version}, will install on quit`)
+      this.set({ status: 'ready', version: info.version })
+    })
+    autoUpdater.on('error', (e) => {
+      log('error', 'update', e.message)
+      this.set({ status: 'error', error: e.message })
+    })
 
     this.check()
     this.timer = setInterval(() => this.check(), CHECK_EVERY_MS)
@@ -84,7 +90,10 @@ export class Updater {
     // check 401'd for the life of the process — self-update silently dead
     // until a restart, and the same bug on any token rotation.
     const token = this.settings.getToken()
-    if (token === '') return
+    if (token === '') {
+      log('warn', 'update', 'skipped: no token yet')
+      return
+    }
     autoUpdater.addAuthHeader(`Bearer ${token}`)
     void autoUpdater.checkForUpdates().catch(() => {
       // Reported through the 'error' event; a dead daemon must not crash us.

@@ -1,6 +1,6 @@
 {
   "name": "huginn-desktop",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Desktop client for huginn - chats, sessions, and the live pane, on a real screen",
   "homepage": "https://github.com/silencelen/huginn",
   "author": {

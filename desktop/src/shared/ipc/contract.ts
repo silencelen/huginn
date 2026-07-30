@@ -117,6 +117,11 @@ export interface InvokeApi {
   /** The renderer reports what the user is looking at (notification suppression). */
   'ui.viewed': { args: [target: { view: 'chats' | 'sessions'; id: string } | null]; result: void }
 
+  /** Shareable text describing this install's health — never contains the token. */
+  'diagnostics.text': { args: []; result: string }
+  /** Fire a real OS notification so the owner can confirm toasts work at all. */
+  'diagnostics.testNotification': { args: []; result: { shown: boolean; reason: string } }
+
   'update.state': { args: []; result: UpdateState }
   'update.check': { args: []; result: void }
   'update.install': { args: []; result: void }
