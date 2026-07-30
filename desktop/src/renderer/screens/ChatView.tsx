@@ -4,6 +4,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { Message } from '../../shared/api/types'
+import { displayText } from '../../shared/core/attachmentMarker'
 import { useChatStream } from '../hooks/useChatStream'
 import { call } from '../lib/ipc'
 import { MarkdownView } from '../components/markdown/MarkdownView'
@@ -15,7 +16,7 @@ function DigestMessage({ m }: { m: Message }): React.JSX.Element | null {
     case 'user':
       return (
         <div className="msg msg-user">
-          <div className="bubble bubble-user">{m.text ?? ''}</div>
+          <div className="bubble bubble-user">{displayText(m.text ?? '')}</div>
         </div>
       )
     case 'assistant':
@@ -55,6 +56,13 @@ export function ChatView({ chatId }: { chatId: string }): React.JSX.Element {
   const stickRef = useRef(true)
   const [suggestions, setSuggestions] = useState<string[]>([])
   const [draftSeed, setDraftSeed] = useState<string | null>(null)
+  const [models, setModels] = useState<{ id: string; display: string }[]>([])
+
+  useEffect(() => {
+    void call('host.models')
+      .then(setModels)
+      .catch(() => {})
+  }, [])
 
   // Follow the newest content unless the reader scrolled up — a latch, broken
   // only by the user's own scroll, re-armed when they return to the bottom.
@@ -101,12 +109,35 @@ export function ChatView({ chatId }: { chatId: string }): React.JSX.Element {
           <span className={`mode-chip mode-${detail?.mode ?? 'ask'}`}>
             {(detail?.mode ?? 'ask').toUpperCase()}
           </span>
-          {detail?.model !== null && detail?.model !== undefined ? (
-            <span className="view-meta">{detail.model}</span>
-          ) : null}
-          {detail?.effort !== null && detail?.effort !== undefined ? (
-            <span className="view-meta">{detail.effort}</span>
-          ) : null}
+          {/* Model/effort apply to the NEXT turn, like the phone's options bar. */}
+          <select
+            className="picker"
+            value={detail?.model ?? ''}
+            onChange={(e) => {
+              void call('chats.patch', chatId, { model: e.target.value }).then(() => live.refresh())
+            }}
+          >
+            <option value="">default model</option>
+            {models.map((m) => (
+              <option key={m.id} value={m.id}>
+                {m.display}
+              </option>
+            ))}
+          </select>
+          <select
+            className="picker"
+            value={detail?.effort ?? ''}
+            onChange={(e) => {
+              void call('chats.patch', chatId, { effort: e.target.value }).then(() => live.refresh())
+            }}
+          >
+            <option value="">default effort</option>
+            {['low', 'medium', 'high', 'xhigh', 'max'].map((e2) => (
+              <option key={e2} value={e2}>
+                {e2}
+              </option>
+            ))}
+          </select>
         </div>
       </header>
 
