@@ -54,10 +54,15 @@ if [ "$SKIP_TESTS" = 0 ]; then
 fi
 
 echo "[2/6] build"
+# Builder output goes to a log, never /dev/null — a silenced failing gate is
+# the house's oldest trap (green-over-red).
+BUILD_LOG=${TMPDIR:-/tmp}/huginn-desktop-build.log
 npx electron-vite build
-npx electron-builder --linux AppImage deb > /dev/null
+npx electron-builder --linux AppImage deb >> "$BUILD_LOG" 2>&1 || {
+  tail -30 "$BUILD_LOG"; echo "REFUSING: linux build failed (full log: $BUILD_LOG)" >&2; exit 1; }
 if [ "$LINUX_ONLY" = 0 ]; then
-  xvfb-run -a npx electron-builder --win nsis > /dev/null
+  xvfb-run -a npx electron-builder --win nsis >> "$BUILD_LOG" 2>&1 || {
+    tail -30 "$BUILD_LOG"; echo "REFUSING: windows build failed (full log: $BUILD_LOG)" >&2; exit 1; }
 fi
 ls -l dist/*.exe dist/*.AppImage dist/*.deb 2>/dev/null || true
 
