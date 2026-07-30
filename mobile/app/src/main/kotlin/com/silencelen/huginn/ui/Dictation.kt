@@ -52,7 +52,17 @@ fun DictationMicButton(
     var listening by remember { mutableStateOf(false) }
     var partial by remember { mutableStateOf("") }
     var failure by remember { mutableStateOf<String?>(null) }
-    var wantAfterGrant by remember { mutableStateOf(false) }
+    /**
+     * When this tap asked for the microphone, or 0 for "it did not".
+     *
+     * A time rather than a flag because a DENIAL produces no event here — the flag
+     * simply stayed true, and the next time the mic was granted for any other
+     * reason (the voice sheet in the same composer, or Settings) dictation opened
+     * by itself, on top of whatever that grant was actually for. An intent to
+     * dictate belongs to the tap that expressed it, and a permission dialog is
+     * answered in seconds, so it expires.
+     */
+    var askedAt by remember { mutableStateOf(0L) }
 
     val currentOnText = rememberUpdatedState(onText)
     val engines = remember { SpeechEngines(context) }
@@ -103,8 +113,11 @@ fun DictationMicButton(
     // A tap that had to ask for the permission gets its dictation the moment
     // the grant lands — not on a second tap that makes the first look dead.
     LaunchedEffect(micGranted) {
-        if (micGranted && wantAfterGrant) {
-            wantAfterGrant = false
+        val asked = askedAt
+        askedAt = 0L
+        if (micGranted && asked != 0L &&
+            android.os.SystemClock.elapsedRealtime() - asked < GRANT_WINDOW_MS
+        ) {
             start()
         }
     }
@@ -112,7 +125,7 @@ fun DictationMicButton(
     IconButton(
         onClick = {
             if (micGranted) start()
-            else { wantAfterGrant = true; onRequestMic() }
+            else { askedAt = android.os.SystemClock.elapsedRealtime(); onRequestMic() }
         },
         modifier = Modifier.size(46.dp),
     ) {
@@ -163,3 +176,6 @@ fun DictationMicButton(
         )
     }
 }
+
+/** How long a tap's intent to dictate outlives the permission request it started. */
+private const val GRANT_WINDOW_MS = 30_000L
