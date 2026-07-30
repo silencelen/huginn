@@ -80,8 +80,8 @@ export class Chats {
     this.onListsChanged()
   }
 
-  async transcript(id: string): Promise<TranscriptPage> {
-    return parseTranscriptPage(await this.client().request(routes.chatTranscript(id)))
+  async transcript(id: string, offset: number | null): Promise<TranscriptPage> {
+    return parseTranscriptPage(await this.client().request(routes.chatTranscript(id, { offset })))
   }
 
   async suggestions(id: string): Promise<Suggestions> {
