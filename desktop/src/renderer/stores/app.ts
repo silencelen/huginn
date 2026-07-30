@@ -101,15 +101,27 @@ export function wireAppStore(): () => void {
       )
   })
 
+  // Hidden window, no polling: the watch stream still wakes us for anything
+  // that matters, and a tray-resident app must not poll all night.
   const poll = setInterval(() => {
+    if (document.hidden) return
     void refreshChats()
     void refreshSessions()
   }, 5_000)
+
+  // Coming back from hidden should feel instant rather than up to 5s stale.
+  const onVisible = (): void => {
+    if (document.hidden) return
+    void refreshChats()
+    void refreshSessions()
+  }
+  document.addEventListener('visibilitychange', onVisible)
 
   return () => {
     offWatch()
     offLists()
     offNav()
+    document.removeEventListener('visibilitychange', onVisible)
     clearInterval(poll)
     wired = false
   }

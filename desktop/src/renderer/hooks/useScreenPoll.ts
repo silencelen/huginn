@@ -37,7 +37,13 @@ export interface ScreenPoll {
   containerRef: (el: HTMLElement | null) => void
 }
 
-export function useScreenPoll(name: string): ScreenPoll {
+/**
+ * @param active poll only while the pane is actually on screen. A hidden view
+ *   must not keep the long-poll alive, because the poll is what RENEWS the
+ *   tmux size lease — a minimized window used to hold a session pinned to
+ *   desktop geometry indefinitely.
+ */
+export function useScreenPoll(name: string, active = true): ScreenPoll {
   const [screen, setScreen] = useState<Screen | null>(null)
   const [fontPx, setFontPxState] = useState(DEFAULT_FONT_PX)
   // Polling waits for the persisted font size: starting at the default and
@@ -123,7 +129,7 @@ export function useScreenPoll(name: string): ScreenPoll {
   // The poll subscription itself: start for this name+geometry, stop (which
   // releases the lease in main) when either changes or the view unmounts.
   useEffect(() => {
-    if (!fontReady || geo === null) return
+    if (!fontReady || geo === null || !active) return
     let stopped = false
     let id: number | null = null
     call('screenPoll.start', name, { cols: geo.cols, rows: geo.rows, force })
@@ -143,7 +149,7 @@ export function useScreenPoll(name: string): ScreenPoll {
         void call('screenPoll.stop', id)
       }
     }
-  }, [name, geo, fontReady, force])
+  }, [name, geo, fontReady, force, active])
 
   // Frames: last-write-wins, filtered to the live subscription so a stale
   // frame from a just-stopped poll cannot repaint over a fresh one.

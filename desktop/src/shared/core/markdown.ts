@@ -131,6 +131,9 @@ export function parseMarkdown(src: string): MdBlock[] {
  * Inline spans: `code`, **bold**, *italic*, ~~strike~~ and [text](url).
  * Scanned in one pass so a marker inside a code span is left alone.
  */
+/** Schemes a rendered link may carry. Everything else keeps its label as text. */
+const isSafeHref = (url: string): boolean => /^(https?:|mailto:)/i.test(url.trim())
+
 export function parseInline(src: string): InlineText {
   let text = ''
   const spans: InlineSpan[] = []
@@ -193,7 +196,13 @@ export function parseInline(src: string): InlineText {
           const url = src.slice(close + 2, paren)
           // The label carries the meaning; the URL is appended as plain text
           // only when it adds information.
-          styled(label, 'link', url)
+          //
+          // Scheme filter: this text is written by a model reading untrusted
+          // files, so a `javascript:` or `file:` href must never reach an
+          // <a>. Downstream layers happen to stop it too (React sanitizes,
+          // CSP blocks, will-navigate only forwards http(s)) — but a link
+          // renderer should not depend on three accidents staying true.
+          styled(label, 'link', isSafeHref(url) ? url : undefined)
           if (url.trim() !== '' && url !== label) {
             text += ` (${url})`
           }

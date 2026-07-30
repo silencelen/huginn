@@ -580,6 +580,12 @@ export type ChatEvent =
   | { type: 'tool'; name: string; input: string | null }
   | { type: 'result'; ok: boolean; durationMs: number | null; costUsd: number | null }
   | { type: 'error'; text: string }
+  /**
+   * Client-side only (never a daemon frame): the SSE died while the run was
+   * still live. The renderer answers this by re-subscribing, which reattaches
+   * with ?since= — a run must not be abandoned because a socket blinked.
+   */
+  | { type: 'stream_lost'; text: string }
   | { type: 'done' }
 
 export interface Account {
