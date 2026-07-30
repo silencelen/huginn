@@ -816,3 +816,83 @@ textarea {
   overflow: hidden;
   text-overflow: ellipsis;
 }
+
+/* ---- attachments ---- */
+
+.composer-drag {
+  outline: 2px dashed var(--accent);
+  outline-offset: -6px;
+}
+
+.composer-attach {
+  padding: 8px 10px;
+  flex-shrink: 0;
+}
+
+.attach-chip {
+  position: absolute;
+  transform: translateY(-115%);
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  padding: 3px 10px;
+  font-size: 12px;
+  display: inline-flex;
+  gap: 6px;
+  align-items: center;
+}
+
+.attach-error {
+  color: var(--red);
+  border-color: var(--red);
+}
+
+.attach-remove {
+  border: none;
+  background: none;
+  padding: 0 2px;
+  color: var(--fg-dim);
+}
+
+.composer {
+  position: relative;
+}
+
+.update-line {
+  margin-top: 6px;
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.picker {
+  font-size: 12px;
+  background: var(--bg-card);
+  color: var(--fg-dim);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 2px 6px;
+}
+
+.account-row {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  margin: 6px 0;
+  font-size: 13px;
+}
+
+.account-email {
+  min-width: 240px;
+}
+
+.login-flow {
+  display: flex;
+  gap: 8px;
+  margin-top: 10px;
+  max-width: 520px;
+}
+
+.login-flow input {
+  flex: 1;
+}

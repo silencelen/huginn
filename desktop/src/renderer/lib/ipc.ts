@@ -6,6 +6,7 @@ import type { InvokeApi, PushApi } from '../../shared/ipc/contract'
 interface Bridge {
   invoke: (channel: string, ...args: unknown[]) => Promise<unknown>
   on: (channel: string, listener: (payload: unknown) => void) => () => void
+  pathForFile: (file: File) => string
 }
 
 declare global {
