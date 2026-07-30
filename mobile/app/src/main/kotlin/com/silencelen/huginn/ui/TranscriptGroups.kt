@@ -41,6 +41,44 @@ object TranscriptGroups {
         }
     }
 
+    /**
+     * A row's identity for list keys and saved state.
+     *
+     * Both conversation lists were POSITIONAL (`items(rows.size)`), so once the
+     * retained window hit its cap every poll dropped events off the front and shifted
+     * every index — LazyColumn anchors scroll by position, so the content slid under a
+     * reader who was scrolled up looking at something. Keyed on the row's first event
+     * instead, the viewport stays on the row it was on.
+     *
+     * The kind is part of the key so a Single and a Subagents run starting at the same
+     * seq can never collide.
+     */
+    private fun keyOf(row: Row): String = when (row) {
+        is Row.Single -> "s${row.event.seq}"
+        is Row.Subagents -> "a${row.key}"
+    }
+
+    /**
+     * Keys for a whole row list, guaranteed distinct.
+     *
+     * LazyColumn THROWS on a duplicate key, which would take out the entire
+     * conversation view — a far worse outcome than the drifting scroll position keys
+     * were added to fix. Uniqueness is supposed to hold by construction (the merge
+     * renumbers, and one page's seqs are unique), so a collision here means an
+     * assumption broke somewhere upstream; that costs one row its anchoring instead
+     * of costing the reader the screen.
+     */
+    fun keys(rows: List<Row>): List<String> {
+        val seen = HashSet<String>(rows.size * 2)
+        return rows.map { row ->
+            val base = keyOf(row)
+            if (seen.add(base)) return@map base
+            var n = 2
+            while (!seen.add("$base#$n")) n++
+            "$base#$n"
+        }
+    }
+
     fun group(events: List<TranscriptEvent>): List<Row> {
         val out = ArrayList<Row>(events.size)
         var run: MutableList<TranscriptEvent>? = null

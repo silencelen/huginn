@@ -35,6 +35,7 @@ import androidx.compose.material3.Tab
 import androidx.compose.material3.TabRow
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -205,6 +206,7 @@ private fun SessionConversation(
     // Grouped so a fan-out reads as delegated units instead of drowning the
     // main thread; recomputed only when the events actually change.
     val rows = remember(events) { TranscriptGroups.group(events) }
+    val rowKeys = remember(rows) { TranscriptGroups.keys(rows) }
     val headerItems = if (page?.truncated == true) 1 else 0
 
     // Revision keys on nextOffset, which strictly increases as transcript bytes
@@ -247,12 +249,12 @@ private fun SessionConversation(
                         )
                     }
                 }
-                items(rows.size) { i -> TranscriptRowItem(rows[i], onCopy) }
+                items(rows.size, key = { rowKeys[it] }) { i -> TranscriptRowItem(rows[i], onCopy) }
             }
         }
 
         if (hasUnseen) {
-            JumpToNewest { scope.launch { listState.animateScrollToItem((rows.size + headerItems - 1).coerceAtLeast(0)) } }
+            JumpToNewest { scope.launch { listState.jumpToTail(rows.size + headerItems, animate = true) } }
         }
 
         // What the session is doing RIGHT NOW, pinned above the composer. The
@@ -304,7 +306,10 @@ private fun SessionConversation(
                 tasks = page?.tasks ?: emptyList(),
                 agents = agents,
                 onOpen = onAgentsOpen,
-                onDismiss = { showWork = false; onAgentsClose() },
+                onClose = onAgentsClose,
+                // Closing the sheet is a navigation decision; stopping the poll is
+                // bookkeeping and belongs to the sheet's lifetime, above.
+                onDismiss = { showWork = false },
             )
         }
 
@@ -534,9 +539,18 @@ private fun WorkSheet(
     tasks: List<com.silencelen.huginn.data.BgTask>,
     agents: com.silencelen.huginn.data.AgentsInfo?,
     onOpen: () -> Unit,
+    onClose: () -> Unit,
     onDismiss: () -> Unit,
 ) {
-    LaunchedEffect(name) { onOpen() }
+    // Started and stopped by the SHEET'S OWN existence. Stopping only in
+    // onDismissRequest meant every other way the sheet can go — back navigation, the
+    // session being killed, a rail switch, the destination changing while
+    // backgrounded — left a 3-second agents poll running in viewModelScope forever,
+    // against a session no longer on screen.
+    DisposableEffect(name) {
+        onOpen()
+        onDispose { onClose() }
+    }
     androidx.compose.material3.ModalBottomSheet(onDismissRequest = onDismiss) {
         LazyColumn(
             Modifier.fillMaxWidth(),

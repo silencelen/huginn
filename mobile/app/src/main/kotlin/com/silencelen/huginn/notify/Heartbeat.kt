@@ -218,6 +218,11 @@ class HeartbeatReceiver : BroadcastReceiver() {
         // this first means even a failed check leaves the fast path restored.
         if (settings.watchEnabled.first()) WatchService.start(app)
 
+        // And make good on what BootReceiver has always claimed the first beat does:
+        // hand over the push token if the host does not have the current one. A no-op
+        // on an ordinary beat.
+        runCatching { HuginnMessagingService.ensureTokenRegistered(app) }
+
         val base = settings.baseUrl.first()
         val id = settings.clientId()
         val canNotify = SessionWatchWorker.canNotify(app)

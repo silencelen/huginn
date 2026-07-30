@@ -152,4 +152,41 @@ class SseTest {
         val events = client().streamChat("abc").toList()
         assertEquals(listOf(ChatEvent.Done), events)
     }
+
+    @Test
+    fun `a burst replay arrives whole rather than up to the channel capacity`() {
+        // Reattaching to a running chat replays the run's whole buffer at once (up
+        // to 4000 frames). The reader is the socket thread and the collector is the
+        // main thread, so with callbackFlow's default capacity of 64 and a trySend
+        // whose result was ignored, frames were DROPPED silently — including, on a
+        // bad boundary, the `done` that triggers the transcript reload.
+        //
+        // 4000 is the daemon's replay cap, and it is also the number this had to
+        // reach to reproduce: at 500 frames every event arrived even with a slow
+        // collector (the socket read paces the producer enough), so a smaller test
+        // would have passed against the unfixed client and proven nothing. Measured
+        // with the buffer removed: 2144 of 4000 arrived, 1856 lost.
+        val n = 4000
+        val body = buildString {
+            for (i in 1..n) append("id: $i\nevent: delta\ndata: {\"text\":\"$i \"}\n\n")
+            append("event: done\ndata: {}\n\n")
+        }
+        server.enqueue(sse(body))
+        // NOT runTest, and a DELIBERATELY SLOW collector: the producer is the socket
+        // reader thread and the real collector is the main thread rendering Compose.
+        // A collector that drains as fast as the reader fills never overflows the
+        // channel, so an eager one would hide exactly what this test exists to catch.
+        val events = mutableListOf<ChatEvent>()
+        kotlinx.coroutines.runBlocking {
+            client().streamChat("abc").collect { ev ->
+                events.add(ev)
+                if (events.size % 20 == 0) Thread.sleep(1)   // a frame's worth of work
+            }
+        }
+        val deltas = events.filterIsInstance<ChatEvent.Delta>()
+        assertEquals("every replayed delta must survive the handoff", n, deltas.size)
+        assertEquals("1 ", deltas.first().text)
+        assertEquals("$n ", deltas.last().text)
+        assertEquals(ChatEvent.Done, events.last())
+    }
 }

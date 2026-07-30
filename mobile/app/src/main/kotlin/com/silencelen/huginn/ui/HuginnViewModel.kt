@@ -12,6 +12,7 @@ import com.silencelen.huginn.appVersion
 import com.silencelen.huginn.data.Account
 import com.silencelen.huginn.data.AppdRoutes
 import com.silencelen.huginn.data.Chat
+import com.silencelen.huginn.data.ChatDetail
 import com.silencelen.huginn.data.ChatEvent
 import com.silencelen.huginn.data.HuginnClient
 import com.silencelen.huginn.data.ModelChoice
@@ -19,6 +20,7 @@ import com.silencelen.huginn.data.Screen
 import com.silencelen.huginn.data.Session
 import com.silencelen.huginn.data.SettingsStore
 import com.silencelen.huginn.data.Status
+import com.silencelen.huginn.data.TranscriptEvent
 import com.silencelen.huginn.data.TranscriptPage
 import com.silencelen.huginn.data.Plan
 import com.silencelen.huginn.data.SavedAccount
@@ -47,6 +49,53 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+
+/**
+ * Appends an incremental page to the window already on screen, renumbering it so
+ * `seq` is unique across the result.
+ *
+ * The daemon numbers each tail read from 0, so concatenated pages arrive with
+ * REPEATED seqs — and seq is the identity the UI keys row state on. Two rows could
+ * claim `seq = 3`, so opening one tool card opened the wrong one, and a row's
+ * expansion followed whichever event later inherited its number. Renumbering makes
+ * the identity mean what the callers assume it means; nothing client-side reads seq
+ * as the server's own numbering.
+ *
+ * Capped, because a session left open on a busy day would otherwise grow this list
+ * without limit and copy it whole on every poll.
+ */
+internal fun mergeTranscript(
+    kept: List<TranscriptEvent>,
+    incoming: List<TranscriptEvent>,
+    cap: Int,
+): List<TranscriptEvent> {
+    if (kept.isEmpty()) return incoming.takeLast(cap)
+    var next = (kept.lastOrNull()?.seq ?: -1) + 1
+    val renumbered = incoming.map { it.copy(seq = next++) }
+    return (kept + renumbered).takeLast(cap)
+}
+
+/** What to show and where to resume when reattaching to a running chat. */
+internal data class Reattach(val seed: String, val since: Long)
+
+/**
+ * How to pick a running chat back up, or null when there is nothing to follow.
+ *
+ * The seed (`partialText`) and the replay are two accounts of the SAME text, so the
+ * subscription has to start where the seed ends. Subscribing from 0 replays the
+ * deltas the seed already contains and renders the answer twice — for as long as
+ * the block keeps streaming, since live deltas then append to a doubled base.
+ *
+ * A daemon older than 2.48.0 reports no position. Then the replay alone is the only
+ * non-doubling choice, and it is also the more complete one: the seed is merely an
+ * accumulation the server kept, while the replay is the same event stream that
+ * drives live rendering.
+ */
+internal fun reattachPlan(meta: ChatDetail?): Reattach? {
+    if (meta?.running != true) return null
+    val seq = meta.seq ?: return Reattach(seed = "", since = 0)
+    return Reattach(seed = meta.partialText ?: "", since = seq)
+}
 
 class HuginnViewModel(app: Application) : AndroidViewModel(app) {
 
@@ -1146,7 +1195,7 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
                         // Keep what the tail read no longer carries. Bounded:
                         // a session left open on a busy day would otherwise grow
                         // this list without limit, copying it whole every poll.
-                        events = (cur.events + page.events).takeLast(MAX_EVENTS),
+                        events = mergeTranscript(cur.events, page.events, MAX_EVENTS),
                         // A tail read only reports fields whose records happen to
                         // fall inside it, so EVERY session-level field has to be
                         // carried forward or it reverts to null seconds after the
@@ -1425,6 +1474,16 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
     private val _sending = MutableStateFlow(false)
     val sending: StateFlow<Boolean> = _sending.asStateFlow()
 
+    /**
+     * Why the chat transcript could not be loaded, when it could not.
+     *
+     * Every failure used to render the pristine "Ask mode / Act mode" empty state,
+     * so a timeout on a chat with months of history looked exactly like a chat that
+     * had never run — the worst possible confusion, because it reads as data loss.
+     */
+    private val _chatError = MutableStateFlow<String?>(null)
+    val chatError: StateFlow<String?> = _chatError.asStateFlow()
+
     private var streamJob: Job? = null
     private var chatPollJob: Job? = null
 
@@ -1432,6 +1491,7 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
         _chatPage.value = null
         _streamingText.value = null
         _activeTool.value = null
+        _chatError.value = null
         viewModelScope.launch {
             val meta = runCatching { client.chat(id) }.getOrNull()
             _chatMode.value = meta?.mode ?: "ask"
@@ -1440,24 +1500,40 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
             _chatTitle.value = meta?.title
             // A chat that has never run has no transcript yet; that is not an error.
             loadChatTranscript(id)
-            if (meta?.running == true) {
-                _streamingText.value = meta.partialText ?: ""
-                _sending.value = true
-                collect(id, client.streamChat(id, since = 0))
-            }
+            attachIfRunning(id, meta)
         }
+    }
+
+    /** Follows an in-flight run, seeding the bubble with what it has already said. */
+    private fun attachIfRunning(id: String, meta: ChatDetail?) {
+        val plan = reattachPlan(meta) ?: return
+        _streamingText.value = plan.seed
+        _sending.value = true
+        collect(id, client.streamChat(id, since = plan.since))
     }
 
     private fun loadChatTranscript(id: String) {
         chatPollJob?.cancel()
         chatPollJob = viewModelScope.launch {
             runCatching { client.chatTranscript(id) }
-                .onSuccess { _chatPage.value = it }
-                .onFailure {
-                    // 409 = has not run yet. Show the empty state, not an error.
-                    if (_chatPage.value == null) _chatPage.value = TranscriptPage()
+                .onSuccess { _chatPage.value = it; _chatError.value = null }
+                .onFailure { e ->
+                    // 409 is the only failure that MEANS "nothing here yet" — the
+                    // chat exists but has never run. Anything else is a failure to
+                    // read history that exists, and must not be drawn as its absence.
+                    val neverRan = e is HuginnClient.HuginnException && e.code == 409
+                    if (_chatPage.value == null) {
+                        if (neverRan) _chatPage.value = TranscriptPage()
+                        else _chatError.value = errText(e)
+                    }
                 }
         }
+    }
+
+    /** Retries the transcript load after a failure the user can see. */
+    fun retryChatTranscript(id: String) {
+        _chatError.value = null
+        loadChatTranscript(id)
     }
 
     fun setChatOptions(id: String, model: String? = null, effort: String? = null) {
@@ -1571,6 +1647,10 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
                     is ChatEvent.Failure -> {
                         _toast.value = ev.text
                         _streamingText.value = null
+                        // The tool is not running for US any more, whatever it is
+                        // doing on huginn. Left set, `streaming` stayed true and the
+                        // view showed a spinner for a tool that had long finished.
+                        _activeTool.value = null
                     }
                     ChatEvent.Done -> {
                         _sending.value = false
@@ -1581,13 +1661,49 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
                     }
                 }
             }
-            _sending.value = false
+            // The flow ended. `done` is the ordinary reason; a dropped socket is the
+            // other, and nothing else polls a chat, so the answer would finish
+            // server-side while the screen sat frozen until the user navigated out
+            // and back in. Ask the server whether the run is still going and pick it
+            // back up if it is — the same path a cold open takes, so there is one
+            // reattach to keep correct.
+            resumeIfStillRunning(id)
         }
+    }
+
+    /**
+     * Reattaches after a stream ends with the run unfinished, backing off between
+     * attempts.
+     *
+     * Bounded, because a chat whose server-side run is wedged must not turn the
+     * phone into a reconnect loop; after the last try `sending` is released so the
+     * composer works again, which is the state the user can act from.
+     */
+    private suspend fun resumeIfStillRunning(id: String) {
+        var wait = 1_000L
+        repeat(CHAT_REATTACH_TRIES) {
+            val meta = runCatching { client.chat(id) }.getOrNull()
+            if (meta == null) {
+                delay(wait); wait = (wait * 2).coerceAtMost(8_000L)
+                return@repeat
+            }
+            if (meta.running != true) {
+                _sending.value = false
+                loadChatTranscript(id)
+                return
+            }
+            attachIfRunning(id, meta)      // replaces streamJob; this coroutine ends
+            return
+        }
+        _sending.value = false
     }
 
     companion object {
         /** Newest events kept in memory for one session view. */
         private const val MAX_EVENTS = 600
+
+        /** Reattach attempts after a chat stream drops with the run still going. */
+        private const val CHAT_REATTACH_TRIES = 4
 
         fun sessionDraftKey(name: String) = "sess:$name"
         fun chatDraftKey(id: String) = "chat:$id"

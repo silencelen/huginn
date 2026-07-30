@@ -232,7 +232,7 @@ function multiToggleDigits(options, desired) {
  * Keyboard hints inside the parenthetical ("esc to interrupt", "ctrl+t …") are
  * dropped: they are instructions for the terminal the reader is not at.
  */
-const LIVE_STATUS_RE = /^\s*[\u2722\u2733\u273D\u273B\u2736\u2738\u2739\u273A\u00B7\u2219\u2217*+]\s+(\S[^(]*?\u2026)\s*(?:\((.*)\))?\s*$/;
+const LIVE_STATUS_RE = /^\s*[\u2722\u2726\u2727\u2733\u273D\u273B\u2736\u2738\u2739\u273A\u00B7\u2219\u2217*+]\s+(\S[^(]*?\u2026)\s*(?:\((.*)\))?\s*$/;
 
 function parseSpinner(lines) {
   for (let i = lines.length - 1; i >= 0; i--) {
@@ -258,7 +258,12 @@ function parseSpinner(lines) {
   return null;
 }
 
-const GLYPH_STATUS_RE = /^\s*[\u2722\u2733\u273D\u273B\u2736\u2738\u2739\u273A\u00B7\u2219\u2217*+]\s+(\S.*)$/;
+// \u2726\u2727 (\u2726\u2727) are in the class because of the capture recorded above: the
+// comment documenting "\u2727 Waiting for 1 dynamic workflow to finish" as the reason
+// this second pass exists sat directly over a class that could not match it, so the
+// one case it was written for returned null. The pass had been proving itself on a
+// DIFFERENT glyph.
+const GLYPH_STATUS_RE = /^\s*[\u2722\u2726\u2727\u2733\u273D\u273B\u2736\u2738\u2739\u273A\u00B7\u2219\u2217*+]\s+(\S.*)$/;
 
 // The TUI's own progress furniture, captured live 2026-07-27:
 //   \u25EF andvari-polish-wave3  Wave 3   0/4 agents done \u00B7 7m 39s \u00B7 \u2193 562.4k tokens

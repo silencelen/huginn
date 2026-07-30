@@ -6,6 +6,7 @@ import android.net.Uri
 import android.provider.Settings
 import android.os.Build
 import android.os.Bundle
+import android.view.WindowManager
 import androidx.fragment.app.FragmentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
@@ -169,6 +170,18 @@ class MainActivity : FragmentActivity() {
         AppLock.enabledCache = runBlocking {
             SettingsStore(applicationContext).appLock.first()
         }
+        // With the lock ON, the window is SECURE — which is what actually keeps the
+        // conversation out of the Recents thumbnail.
+        //
+        // Locking on return was not enough: the thumbnail is captured when the app
+        // goes to the background, which is BEFORE the grace period expires, so the
+        // system held a picture of the open session and anyone flicking through
+        // Recents could read it without ever facing the lock. That is precisely the
+        // handed-over-phone case the lock exists for. Screenshots go too, which is
+        // the same promise stated once.
+        if (AppLock.enabledCache) {
+            window.setFlags(WindowManager.LayoutParams.FLAG_SECURE, WindowManager.LayoutParams.FLAG_SECURE)
+        }
         // Tapping a "needs you" notification opens straight into that session, and a
         // finished-chat notification into that chat, at the answer it announced.
         readTarget(intent)
@@ -220,6 +233,25 @@ class MainActivity : FragmentActivity() {
         // not refresh its own grace period and let the app back in unchallenged.
         if (!locked.value) AppLock.lastAwayAt = System.currentTimeMillis()
     }
+}
+
+/**
+ * Whether a teardown is the user LEAVING, or merely the activity being rebuilt.
+ *
+ * A fold, a rotate or a theme change destroys and recreates the activity, which
+ * disposes every composition on screen — indistinguishable, from inside
+ * `onDispose`, from navigating away. It matters because teardown here throws work
+ * away: a staged photo is the user's statement about the message they are writing,
+ * and unfolding the phone is not a retraction of it.
+ *
+ * A context that is not an Activity cannot answer, and then this reports "gone" —
+ * the pre-existing behaviour, so an unexpected host degrades to eager cleanup
+ * rather than to a leak.
+ */
+@Composable
+private fun rememberStillHere(): () -> Boolean {
+    val activity = LocalContext.current as? android.app.Activity
+    return { activity?.isChangingConfigurations == true }
 }
 
 /**
@@ -395,6 +427,7 @@ fun HuginnApp(
     val fontScale by vm.fontScale.collectAsState()
     val notifyEnabled by vm.notifyEnabled.collectAsState()
     val chatPage by vm.chatPage.collectAsState()
+    val chatError by vm.chatError.collectAsState()
     val chatMode by vm.chatMode.collectAsState()
     val chatTitle by vm.chatTitle.collectAsState()
     val streamingText by vm.streamingText.collectAsState()
@@ -677,6 +710,7 @@ fun HuginnApp(
             )
         }
         val chatDetail: @Composable (String) -> Unit = { id ->
+            val stillHere = rememberStillHere()
             DisposableEffect(id) {
                 onDispose {
                     vm.detachStream(); vm.clearSuggestions()
@@ -684,6 +718,13 @@ fun HuginnApp(
                     // screen — but only this chat's own claim is cleared, so a share
                     // staged for the DESTINATION while navigating there survives
                     // the previous screen's teardown.
+                    //
+                    // ...and not on a REBUILD. A fold or a rotate disposes this
+                    // composition too, and since `dest` now survives that rebuild the
+                    // user lands back on the same chat — with the photo they had
+                    // attached silently gone. Leaving the screen is a decision;
+                    // unfolding the phone is not.
+                    if (stillHere()) return@onDispose
                     vm.clearAttachment(HuginnViewModel.chatDraftKey(id))
                 }
             }
@@ -696,6 +737,8 @@ fun HuginnApp(
             }
             ChatScreen(
                 page = chatPage,
+                error = chatError,
+                onRetry = { vm.retryChatTranscript(id) },
                 streamingText = streamingText,
                 activeTool = activeTool,
                 sending = sending,
@@ -744,8 +787,18 @@ fun HuginnApp(
                 vm.startScreenPolling(name)
                 onStopOrDispose {
                     vm.stopScreenPolling(); vm.clearSuggestions(); vm.refreshSessions()
-                    // Only this session's own claim: a share staged for the next
-                    // destination must survive this screen's teardown.
+                }
+            }
+            // The staged photo is NOT lifecycle work, and it used to hang off the
+            // effect above — which fires on ON_STOP, so pocketing the phone or
+            // glancing at a notification threw the attachment away mid-message.
+            // Tied to composition instead, and skipped when the activity is only
+            // being rebuilt. Only this session's own claim, so a share staged for
+            // the next destination survives this screen's teardown.
+            val stillHere = rememberStillHere()
+            DisposableEffect(name) {
+                onDispose {
+                    if (stillHere()) return@onDispose
                     vm.clearAttachment(HuginnViewModel.sessionDraftKey(name))
                 }
             }
