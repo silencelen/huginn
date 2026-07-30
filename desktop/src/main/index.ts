@@ -8,6 +8,7 @@ import { Host } from './appd/host'
 import { Sessions } from './appd/sessions'
 import { WatchLoop } from './appd/watch'
 import { registerIpc } from './ipc'
+import { initLog, log } from './log'
 import { activationFromArgv, type Activation } from './notify/activation'
 import { NotifyRouter, type NavTarget } from './notify/router'
 import { Settings } from './settings'
@@ -40,6 +41,8 @@ const broadcast = (channel: string, payload: unknown): void => {
 }
 
 void app.whenReady().then(() => {
+  initLog()
+
   // Electron GRANTS permissions by default. This app needs none of them, and
   // a renderer that displays remote content should never be one prompt away
   // from the webcam or the microphone.
@@ -192,7 +195,27 @@ void app.whenReady().then(() => {
     if (activation !== null) handleActivation(activation)
   })
 
-  registerIpc({ settings, client: getClient, chats, sessions, host, watch, updater })
+  // Anything that fails where nobody is looking lands here and in the log, so
+  // the diagnostics blob can answer "what went wrong" without an SSH session.
+  let lastError: string | null = null
+  const noteError = (area: string, e: unknown): void => {
+    const msg = e instanceof Error ? e.message : String(e)
+    lastError = `${new Date().toISOString()} ${area}: ${msg}`
+    log('error', area, msg)
+  }
+  process.on('uncaughtException', (e) => noteError('uncaught', e))
+  process.on('unhandledRejection', (e) => noteError('unhandled-rejection', e))
+
+  registerIpc({
+    settings,
+    client: getClient,
+    chats,
+    sessions,
+    host,
+    watch,
+    updater,
+    lastError: () => lastError,
+  })
   ipcMain.handle('app:version', () => app.getVersion())
   ipcMain.handle('ui.viewed', (_event, target: NavTarget | null) => {
     focusedTarget = target

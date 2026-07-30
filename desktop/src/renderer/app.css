@@ -1168,3 +1168,197 @@ textarea {
   color: var(--red);
   border-color: #55333f;
 }
+
+/* ---- keyboard selection ---- */
+
+/* The keyboard's own mark on a row. A ring, not a bar: the list already says
+   which row is open, this only says the keyboard put it there. */
+.row-selected {
+  outline: 1px solid var(--accent);
+  outline-offset: -1px;
+}
+
+/* ---- command palette ---- */
+
+.palette-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(5, 8, 12, 0.6);
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding-top: 12vh;
+  z-index: 200;
+}
+
+.palette {
+  width: 560px;
+  max-width: calc(100vw - 48px);
+  background: var(--bg-raised);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.55);
+  overflow: hidden;
+}
+
+.palette-input {
+  width: 100%;
+  border: none;
+  border-bottom: 1px solid var(--border);
+  border-radius: 0;
+  background: transparent;
+  padding: var(--sp-3) var(--sp-4);
+  font-size: 15px;
+}
+
+.palette-input:focus {
+  outline: none;
+}
+
+.palette-results {
+  /* ~8 rows, then it scrolls. */
+  max-height: 368px;
+  overflow-y: auto;
+}
+
+.palette-row {
+  display: grid;
+  grid-template-columns: 56px 1fr max-content;
+  align-items: baseline;
+  gap: var(--sp-2);
+  padding: var(--sp-2) var(--sp-4);
+  cursor: pointer;
+}
+
+.palette-row.sel {
+  background: var(--bg-sel);
+}
+
+.palette-kind {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--fg-dim);
+}
+
+.palette-label {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.palette-mark {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--fg-dim);
+  white-space: nowrap;
+}
+
+.palette-sub {
+  grid-column: 2 / -1;
+  font-size: 12px;
+  color: var(--fg-dim);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.palette-empty {
+  padding: var(--sp-4);
+  color: var(--fg-dim);
+  font-size: 13px;
+}
+
+/* ---- cheat sheet ---- */
+
+.cheats {
+  background: var(--bg-raised);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.55);
+  padding: var(--sp-4) var(--sp-5);
+  width: 460px;
+  max-width: calc(100vw - 48px);
+}
+
+.cheats-row {
+  display: grid;
+  grid-template-columns: 120px 1fr;
+  gap: var(--sp-3);
+  padding: 3px 0;
+  font-size: 13px;
+}
+
+.cheats-key {
+  font-family: var(--mono);
+  font-size: 12px;
+  color: var(--fg-dim);
+  white-space: nowrap;
+}
+
+.cheats-note {
+  margin-top: var(--sp-3);
+  font-size: 12px;
+  color: var(--fg-dim);
+  line-height: 1.5;
+}
+
+/* ---- context menu ---- */
+
+.ctx-menu {
+  position: fixed;
+  z-index: 300;
+  min-width: 168px;
+  padding: var(--sp-1) 0;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5);
+  display: flex;
+  flex-direction: column;
+}
+
+.ctx-item {
+  border: none;
+  background: none;
+  border-radius: 0;
+  text-align: left;
+  padding: 6px var(--sp-3);
+  font-size: 13px;
+}
+
+.ctx-item:hover:not(:disabled),
+.ctx-item:focus-visible {
+  background: var(--bg-sel);
+  border-color: transparent;
+  outline: none;
+}
+
+.ctx-item:disabled {
+  color: var(--fg-dim);
+  cursor: default;
+}
+
+.ctx-danger {
+  color: var(--red);
+}
+
+/* ---- session tabs ---- */
+
+/*
+ * Both tabs stay MOUNTED (flipping used to refetch the transcript cold and
+ * drop/reacquire the pane lease every time), so the hidden one must be taken
+ * out of layout properly. Shipping the mount change without these two rules
+ * gave the Screen tab a zero-height box: it never measured a grid, never
+ * started its poll, and sat on "Connecting to the pane…" while the composer
+ * was pushed off the bottom of the window.
+ */
+.tab-host {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.tab-hidden {
+  display: none;
+}
