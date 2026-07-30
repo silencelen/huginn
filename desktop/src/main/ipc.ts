@@ -112,7 +112,7 @@ export function registerIpc(deps: IpcDeps): void {
 
   handle('chatStream.subscribe', (wc, chatId) => chats.subscribe(chatId, wc))
   handle('chatStream.unsubscribe', (_wc, id) => chats.unsubscribe(id))
-  handle('watch.latest', () => watch.latest())
+  handle('watch.latest', () => ({ watch: watch.latest(), connected: watch.connected() }))
   handle('screenPoll.start', (wc, name, opts) => ({
     subscriptionId: sessions.startScreenPoll(name, wc, opts),
   }))
