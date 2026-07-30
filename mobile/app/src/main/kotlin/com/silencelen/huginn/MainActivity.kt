@@ -238,6 +238,27 @@ class MainActivity : FragmentActivity() {
 }
 
 /**
+ * Where "back" goes from [dest], or null when this screen IS a root.
+ *
+ * One rule, because there are two ways to ask for it. The top-bar arrow had this
+ * logic inline and the system gesture had none at all, so back from a session or a
+ * chat did not go up — it left the app entirely (confirmed on the device: two
+ * presses from a session and topResumedActivity read Terminated). Returning null at
+ * a root is deliberate: leaving from there IS what back means on Android, and a
+ * handler that swallowed it would trap the user in the app.
+ */
+internal fun backFrom(dest: Dest, tab: Int): Dest? = when (dest) {
+    is Dest.SessionView -> Dest.Sessions
+    is Dest.Chat -> Dest.Chats
+    is Dest.Settings -> when (tab) {
+        0 -> Dest.Chats
+        1 -> Dest.Sessions
+        else -> Dest.Status
+    }
+    else -> null
+}
+
+/**
  * Whether a teardown is the user LEAVING, or merely the activity being rebuilt.
  *
  * A fold, a rotate or a theme change destroys and recreates the activity, which
@@ -599,6 +620,11 @@ fun HuginnApp(
     }
 
     val isChild = dest is Dest.Chat || dest is Dest.SessionView || dest is Dest.Settings
+    // The system gesture, going where the arrow goes. Without this the commonest
+    // gesture on the phone closed the app from every child screen.
+    androidx.activity.compose.BackHandler(enabled = isChild) {
+        backFrom(dest, tab)?.let { dest = it }
+    }
     val title = when (val d = dest) {
         is Dest.Chats -> "Huginn"
         is Dest.Chat -> chatTitle ?: "Chat"
@@ -963,18 +989,8 @@ fun HuginnApp(
                         }
                     },
                     navigationIcon = {
-                        if (isChild) {
-                            IconButton(onClick = {
-                                dest = when (dest) {
-                                    is Dest.SessionView -> Dest.Sessions
-                                    is Dest.Chat -> Dest.Chats
-                                    else -> when (tab) {
-                                        0 -> Dest.Chats
-                                        1 -> Dest.Sessions
-                                        else -> Dest.Status
-                                    }
-                                }
-                            }) {
+                        backFrom(dest, tab)?.let { up ->
+                            IconButton(onClick = { dest = up }) {
                                 Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
                             }
                         }
