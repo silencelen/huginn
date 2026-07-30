@@ -188,6 +188,39 @@ class HuginnMessagingService : FirebaseMessagingService() {
         }
 
         /**
+         * Re-registers the push token when the host does not have the current one.
+         *
+         * The heartbeat's job, and a real gap it was documented as covering: onNewToken
+         * registers ONCE with no retry, and [register] records the token only after the
+         * host accepts it — so a rotation while the tailnet was down (a nightly event,
+         * not an exceptional one) left this phone registered under a token FCM would no
+         * longer deliver to. Nothing noticed, because the app looked configured. The
+         * only repair was opening the app by hand, which is exactly what push exists to
+         * make unnecessary.
+         *
+         * Silent when nothing has changed: the comparison is against what was last
+         * ACCEPTED, so an ordinary beat costs one local Firebase lookup and no request.
+         */
+        suspend fun ensureTokenRegistered(context: Context): Boolean {
+            val current = currentToken() ?: return false
+            val known = runCatching { SettingsStore(context).pushToken.first() }.getOrDefault("")
+            if (current == known) return false
+            return register(context, current)
+        }
+
+        /** The device's current FCM token, or null if Firebase cannot say. */
+        private suspend fun currentToken(): String? = runCatching {
+            kotlinx.coroutines.withTimeoutOrNull(10_000) {
+                kotlinx.coroutines.suspendCancellableCoroutine { cont ->
+                    FirebaseMessaging.getInstance().token.addOnCompleteListener { task ->
+                        val t = if (task.isSuccessful) task.result else null
+                        if (cont.isActive) cont.resume(t?.takeIf { it.isNotBlank() }) { }
+                    }
+                }
+            }
+        }.getOrNull()
+
+        /**
          * The options list, which travels as a JSON string because an FCM data payload
          * is string-to-string. A malformed or absent value yields no buttons rather
          * than dropping the alert: being told a session needs you without buttons is

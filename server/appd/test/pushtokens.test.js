@@ -174,3 +174,17 @@ test('a failed send does not count as sent', () => {
   push.noteFailure(st, 'phone');
   assert.equal(push.sentTo(st, 'phone'), 0);
 });
+
+test('a dead-token drop cannot delete the replacement registered while sending', () => {
+  // The real sequence: FCM answers UNREGISTERED for the token being retired at the
+  // same moment the phone registers its new one. A drop keyed on the install alone
+  // deleted the NEW token, and push stayed silent until the app was reopened.
+  const st = push.emptyState();
+  push.register(st, 'install-1', 'old-token', 1000, { model: 'SM-F946U' });
+  push.register(st, 'install-1', 'new-token', 2000, { model: 'SM-F946U' });
+  assert.equal(push.drop(st, 'install-1', 'old-token'), false, 'the stale verdict must not apply');
+  assert.equal(push.list(st)[0].token, 'new-token');
+  // The unguarded form still works, and so does a matching token.
+  assert.equal(push.drop(st, 'install-1', 'new-token'), true);
+  assert.deepStrictEqual(push.list(st), []);
+});

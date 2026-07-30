@@ -100,4 +100,27 @@ class TranscriptGroupsTest {
         val rows = TranscriptGroups.group(listOf(ev(1, "user", side = true, text = "   ")))
         assertNull((rows[0] as TranscriptGroups.Row.Subagents).task)
     }
+
+    @Test
+    fun `row keys are distinct, and a Single never collides with a Subagents run`() {
+        // LazyColumn throws on a duplicate key, so this is a crash guard as much as
+        // an identity check.
+        val rows = TranscriptGroups.group(
+            listOf(ev(1, "user"), ev(2, "tool", side = true), ev(3, "assistant")),
+        )
+        val keys = TranscriptGroups.keys(rows)
+        assertEquals(rows.size, keys.size)
+        assertEquals(keys.size, keys.toSet().size)
+    }
+
+    @Test
+    fun `a repeated seq costs one row its anchoring, not the screen`() {
+        // Uniqueness holds by construction upstream; if that ever breaks, the list
+        // must still render.
+        val rows = TranscriptGroups.group(listOf(ev(4, "assistant"), ev(4, "assistant")))
+        val keys = TranscriptGroups.keys(rows)
+        assertEquals(2, keys.size)
+        assertEquals(2, keys.toSet().size)
+        assertEquals("s4", keys[0])
+    }
 }

@@ -299,6 +299,13 @@ data class ChatDetail(
     val running: Boolean = false,
     val messages: List<Message> = emptyList(),
     val partialText: String? = null,
+    /**
+     * Where [partialText] ends in the run's event stream, so a reattach can ask
+     * for what came AFTER it. Null when no run is in flight, and on daemons older
+     * than 2.48.0 — in which case the seed has to be skipped rather than
+     * double-counted.
+     */
+    val seq: Long? = null,
 )
 
 @Serializable

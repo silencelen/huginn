@@ -1,8 +1,10 @@
 package com.silencelen.huginn.data
 
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.buffer
 import kotlinx.coroutines.flow.callbackFlow
 import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.withContext
@@ -287,7 +289,15 @@ class HuginnClient(
             }
         })
         awaitClose { call.cancel() }
-    }.flowOn(Dispatchers.IO)
+        // UNLIMITED because the producer is the socket reader and the collector is
+        // the main thread. callbackFlow's default capacity is 64 and trySend DROPS
+        // silently when full: reattaching to a running chat replays up to 4000
+        // buffered events in one burst, so deltas — and even the `done` frame that
+        // triggers the transcript reload — were being discarded during a single
+        // 16ms frame, leaving a half-rendered answer that only a screen change
+        // fixed. Buffering fuses with the callbackFlow channel, so the capacity
+        // applies at the producer.
+    }.buffer(Channel.UNLIMITED).flowOn(Dispatchers.IO)
 
     /** Where an in-progress sign-in has got to. */
     suspend fun loginState(): LoginState =
@@ -577,7 +587,15 @@ class HuginnClient(
             }
         })
         awaitClose { call.cancel() }
-    }.flowOn(Dispatchers.IO)
+        // UNLIMITED because the producer is the socket reader and the collector is
+        // the main thread. callbackFlow's default capacity is 64 and trySend DROPS
+        // silently when full: reattaching to a running chat replays up to 4000
+        // buffered events in one burst, so deltas — and even the `done` frame that
+        // triggers the transcript reload — were being discarded during a single
+        // 16ms frame, leaving a half-rendered answer that only a screen change
+        // fixed. Buffering fuses with the callbackFlow channel, so the capacity
+        // applies at the producer.
+    }.buffer(Channel.UNLIMITED).flowOn(Dispatchers.IO)
 
     private fun parse(event: String, data: String): ChatEvent? {
         val obj = runCatching { json.decodeFromString<JsonObject>(data) }.getOrNull()
