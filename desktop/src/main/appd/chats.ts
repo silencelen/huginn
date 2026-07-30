@@ -116,28 +116,33 @@ export class Chats {
   }
 
   /**
-   * Renderer subscription. If the daemon says a run is in flight but this
-   * process has no stream for it (app restarted mid-run, or the run began on
-   * the phone), reattach with ?since=<seq> seeded from partialText — never
-   * both seed AND replay from zero, that renders the answer twice.
+   * If the daemon says a run is in flight but this process has no live stream
+   * for it (app restarted mid-run, or the run began on the phone), reattach
+   * with ?since=<seq> seeded from partialText — never both seed AND replay
+   * from zero, that renders the answer twice. Returns the local run, or null
+   * when nothing is running. NEVER fabricates a running state: a phantom run
+   * once made every send take the queued path while nobody streamed anything.
    */
-  async subscribe(chatId: string, wc: WebContents): Promise<ChatStreamSnapshot> {
-    let run = this.runs.get(chatId)
-    if (!run || !run.running) {
-      const detail = await this.get(chatId)
-      if (detail.running) {
-        if (detail.seq !== null) {
-          run = this.freshRun(chatId, detail.partialText ?? '')
-          this.startRun(chatId, { method: 'GET', path: routes.chatStream(chatId, detail.seq) }, run)
-        } else {
-          // Daemon older than 2.48.0: no seq, so the replay is the single
-          // account of the text — drop the seed and take the whole buffer.
-          run = this.freshRun(chatId, '')
-          this.startRun(chatId, { method: 'GET', path: routes.chatStream(chatId, 0) }, run)
-        }
-      }
+  private async attachIfRunning(chatId: string): Promise<RunState | null> {
+    const existing = this.runs.get(chatId)
+    if (existing?.running) return existing
+    const detail = await this.get(chatId)
+    if (!detail.running) return this.runs.get(chatId) ?? null
+    if (detail.seq !== null) {
+      const run = this.freshRun(chatId, detail.partialText ?? '')
+      this.startRun(chatId, { method: 'GET', path: routes.chatStream(chatId, detail.seq) }, run)
+      return run
     }
-    run = this.runs.get(chatId) ?? this.freshRun(chatId, '')
+    // Daemon older than 2.48.0: no seq, so the replay is the single account
+    // of the text — drop the seed and take the whole buffer.
+    const run = this.freshRun(chatId, '')
+    this.startRun(chatId, { method: 'GET', path: routes.chatStream(chatId, 0) }, run)
+    return run
+  }
+
+  /** Renderer subscription: one snapshot now, coalesced seq'd batches after. */
+  async subscribe(chatId: string, wc: WebContents): Promise<ChatStreamSnapshot> {
+    const run = await this.attachIfRunning(chatId)
 
     const id = this.nextSubId
     this.nextSubId += 1
@@ -147,9 +152,9 @@ export class Chats {
     return {
       subscriptionId: id,
       seq: 0,
-      running: run.running,
-      partialText: run.partialText,
-      events: run.events.slice(),
+      running: run?.running ?? false,
+      partialText: run?.partialText ?? '',
+      events: run === null ? [] : run.events.slice(),
     }
   }
 
@@ -192,8 +197,17 @@ export class Chats {
       { method: req.method, json: req.json },
     )
     run.handle = handle
-    void handle.done.then(({ error }) => {
+    void handle.done.then(({ error, notStream }) => {
       if (this.runs.get(chatId) !== run) return
+      if (notStream !== null) {
+        // The daemon answered plain JSON instead of SSE: a ?stream=1 send that
+        // landed on a busy chat (202 {queued}). The text IS safely queued
+        // server-side — drop this never-was-a-stream run and attach to the
+        // real one so its events start flowing.
+        this.runs.delete(chatId)
+        void this.attachIfRunning(chatId).then(() => this.onListsChanged())
+        return
+      }
       if (run.running && error !== null) {
         // The socket died but the run may well still be going server-side.
         // Tell subscribers the stream (not the run) failed; the renderer
