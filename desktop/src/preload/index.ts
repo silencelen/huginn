@@ -10,6 +10,7 @@ const PUSH_CHANNELS = new Set([
   'push.screen',
   'push.listsChanged',
   'push.update',
+  'push.navigate',
 ])
 
 contextBridge.exposeInMainWorld('huginn', {
