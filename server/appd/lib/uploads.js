@@ -1,14 +1,22 @@
 'use strict';
-// Which uploads are worth accepting, decided from what Claude's Read tool can
-// genuinely open. The gate exists so a docx or an apk fails HERE with a plain
-// sentence instead of downstream as a chat shrugging at unreadable bytes.
+// What an upload is stored as, and what can be done with it once it is there.
 //
-// Extracted from the daemon after the first field failure: the original was an
-// exact-match mime table, and Android providers do not do exact. A Samsung file
-// manager hands over ".csv" as text/comma-separated-values, ".txt" arrives from
-// some providers with no type at all, and the same file reports differently
-// from Downloads and from Drive. Mime STRINGS are hints; the rules below are
-// families plus a filename fallback, in that order of trust.
+// The first version refused anything Claude's Read tool could not open, which
+// conflated two different questions. "May this be stored on huginn" and "can Read
+// display it" are not the same: a UniFi backup, a tarball, a sqlite database and
+// a pcap are all useful to an `act` chat that can run `file`, `unzip`, `sqlite3`
+// or `tcpdump` on them — and the owner hit exactly that wall sending a router
+// backup, refused as `application/octet-stream` + `.unifi`.
+//
+// So nothing is refused for its TYPE any more. The type decides how the message
+// tells Claude to open it instead, which is what the refusal was really
+// protecting against: a binary handed to Read comes back as mojibake and the
+// answer is a shrug about an unreadable file.
+//
+// Mime strings remain hints only. Android providers do not do exact-match: a
+// Samsung file manager hands ".csv" over as text/comma-separated-values, ".txt"
+// sometimes arrives typeless, and the same file reports differently from
+// Downloads than from Drive.
 
 /** Exact mimes whose extension we know outright. */
 const MIME_EXTS = {
@@ -18,11 +26,15 @@ const MIME_EXTS = {
   'application/xml': 'xml',
   'application/x-yaml': 'yaml', 'application/yaml': 'yaml',
   'application/toml': 'toml',
+  'application/zip': 'zip',
+  'application/gzip': 'gz',
+  'application/x-tar': 'tar',
+  'application/x-sqlite3': 'sqlite',
   'text/markdown': 'md', 'text/csv': 'csv', 'text/html': 'html',
 };
 
-/** Extensions Read opens as text (or as themselves), for the filename fallback. */
-const NAME_EXTS = new Set([
+/** Extensions Read opens directly: images, PDFs, and text in its many suits. */
+const READABLE_EXTS = new Set([
   'jpg', 'jpeg', 'png', 'webp', 'gif', 'pdf',
   'txt', 'md', 'markdown', 'csv', 'tsv', 'html', 'htm', 'json', 'jsonl',
   'xml', 'yaml', 'yml', 'toml', 'ini', 'conf', 'cfg', 'log', 'env',
@@ -31,31 +43,45 @@ const NAME_EXTS = new Set([
 ]);
 
 /**
- * The extension to store an upload under, or null to refuse it.
+ * A filename's extension, reduced to something safe to build a path from.
  *
- * Order of trust: a known mime; then the FILENAME the picker reported (more
- * honest than provider mimes in practice — it is what the user sees); then the
- * text/* family wholesale, stored as .txt, because Read opens any text and a
- * refusal over an exotic subtype ("text/comma-separated-values") punishes the
- * user for their file manager's vocabulary.
+ * The server names the stored file, so this is never trusted as a path component
+ * — but an extension is still attacker-influenced text and has no business
+ * carrying a dot, a separator, or two hundred characters.
+ */
+function safeExt(name) {
+  const n = String(name || '');
+  const dot = n.lastIndexOf('.');
+  if (dot <= 0 || dot === n.length - 1) return null;
+  const raw = n.slice(dot + 1).toLowerCase();
+  if (!/^[a-z0-9]{1,12}$/.test(raw)) return null;
+  return raw === 'jpeg' ? 'jpg' : raw;
+}
+
+/**
+ * The extension to store an upload under. NEVER null: an upload with nothing to
+ * go on is stored as `.bin`, which is honest and still inspectable by a shell.
+ *
+ * Order of trust: a known mime; then the FILENAME the picker reported (in
+ * practice more honest than provider mimes, and it is what the user sees); then
+ * the text/* family wholesale, since Read opens any text.
  */
 function uploadExtFor(mime, name) {
   const m = String(mime || '').split(';')[0].trim().toLowerCase();
   // hasOwn, not a bare lookup: `MIME_EXTS['constructor']` inherits a truthy
-  // FUNCTION from Object.prototype, and a Content-Type of `constructor` or
-  // `__proto__` therefore became the stored file's "extension" — writing
-  // up-<ts>-<hex>.function Object() { [native code] }. No traversal (nothing
-  // in the stringified value is a separator) and it needs the bearer token,
-  // but a type table must answer only for the types it actually declares.
+  // FUNCTION from Object.prototype, so a Content-Type of `constructor` became
+  // the stored file's "extension". A type table must answer only for the types
+  // it actually declares.
   if (Object.hasOwn(MIME_EXTS, m)) return MIME_EXTS[m];
-
-  const n = String(name || '');
-  const dot = n.lastIndexOf('.');
-  const cand = dot > 0 ? n.slice(dot + 1).toLowerCase() : '';
-  if (NAME_EXTS.has(cand)) return cand === 'jpeg' ? 'jpg' : cand;
-
+  const fromName = safeExt(name);
+  if (fromName) return fromName;
   if (m.startsWith('text/')) return 'txt';
-  return null;
+  return 'bin';
 }
 
-module.exports = { uploadExtFor, MIME_EXTS, NAME_EXTS };
+/** Whether Read can display this directly, or whether it needs a shell. */
+function isReadable(ext) {
+  return READABLE_EXTS.has(String(ext || '').toLowerCase());
+}
+
+module.exports = { uploadExtFor, safeExt, isReadable, MIME_EXTS, READABLE_EXTS };

@@ -440,7 +440,18 @@ data class ModelList(val models: List<ModelChoice> = emptyList())
 
 /** Where an uploaded image landed on huginn. */
 @Serializable
-data class UploadResult(val ok: Boolean = false, val path: String = "", val bytes: Long = 0)
+data class UploadResult(
+    val ok: Boolean = false,
+    val path: String = "",
+    val bytes: Long = 0,
+    val ext: String? = null,
+    /**
+     * Whether Claude's Read tool can display this, as decided by the host. False
+     * for archives, databases, router backups — things a shell can inspect but
+     * Read renders as mojibake. It changes what the outgoing message ASKS for.
+     */
+    val readable: Boolean = true,
+)
 
 /** One chat's state in the watch digest. */
 @Serializable

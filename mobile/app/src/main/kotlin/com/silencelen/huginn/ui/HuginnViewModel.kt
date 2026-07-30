@@ -313,6 +313,8 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
             /** Original filename, for the chip and the marker; null for photos. */
             val name: String? = null,
             val image: Boolean = true,
+            /** Host's verdict on whether Read can open it; drives the marker. */
+            val readable: Boolean = true,
         ) : Attachment
         data class Failed(val why: String) : Attachment
     }
@@ -370,7 +372,8 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
 
     /** The marker line an attachment contributes to an outgoing message. */
     private fun markerFor(att: Attachment.Ready): String =
-        if (att.image) Attachments.marker(att.path) else Attachments.fileMarker(att.path, att.name)
+        if (att.image) Attachments.marker(att.path)
+        else Attachments.fileMarker(att.path, att.name, att.readable)
 
     /**
      * A non-image document from the file picker. Images that arrive this way are
@@ -395,16 +398,21 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
                         if (it.moveToFirst()) it.getString(0) else null
                     }
                 }.getOrNull()
-                val bytes = runCatching { cr.openInputStream(uri)?.use { it.readBytes() } }.getOrNull()
-                when {
-                    bytes == null || bytes.isEmpty() -> Attachment.Failed("Could not read that file")
-                    bytes.size > 20 * 1024 * 1024 -> Attachment.Failed("Too large (max 20MB)")
-                    else -> runCatching { client.upload(bytes, mime, name) }
-                        .fold(
-                            { Attachment.Ready(it.path, name = name, image = false) },
-                            { Attachment.Failed(errText(it)) },
-                        )
-                }
+                // Size read from the provider rather than by loading the file:
+                // a backup is tens of megabytes and reading it into a ByteArray
+                // to hand to the uploader would hold it twice on a phone.
+                val size = runCatching {
+                    cr.openAssetFileDescriptor(uri, "r")?.use { it.length }
+                }.getOrNull() ?: -1L
+                runCatching {
+                    client.uploadStream(mime, name, size) { cr.openInputStream(uri) }
+                }.fold(
+                    // The HOST owns the size limit now, and says so in its own
+                    // words — one place to change it, and no stale number here
+                    // quietly refusing what the daemon would have accepted.
+                    { Attachment.Ready(it.path, name = name, image = false, readable = it.readable) },
+                    { Attachment.Failed(errText(it)) },
+                )
             }.getOrElse { Attachment.Failed(it.message ?: "Could not attach that file") }
             if (_attachmentOwner.value == owner) _attachment.value = result
         }
