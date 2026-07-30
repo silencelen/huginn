@@ -24,6 +24,8 @@ interface ScreenSub {
   wc: WebContents
   cols: number | null
   rows: number | null
+  /** The user's explicit "fit anyway" while another client is attached. */
+  force: boolean
   hash: string | null
   active: boolean
   timer: NodeJS.Timeout | null
@@ -113,7 +115,11 @@ export class Sessions {
     }
   }
 
-  startScreenPoll(name: string, wc: WebContents, opts: { cols?: number; rows?: number }): number {
+  startScreenPoll(
+    name: string,
+    wc: WebContents,
+    opts: { cols?: number; rows?: number; force?: boolean },
+  ): number {
     const id = this.nextSubId
     this.nextSubId += 1
     const sub: ScreenSub = {
@@ -122,6 +128,7 @@ export class Sessions {
       wc,
       cols: opts.cols ?? null,
       rows: opts.rows ?? null,
+      force: opts.force ?? false,
       hash: null,
       active: true,
       timer: null,
@@ -166,6 +173,7 @@ export class Sessions {
             routes.screen(sub.name, {
               cols: sub.cols ?? undefined,
               rows: sub.rows ?? undefined,
+              force: sub.force,
               hash: sub.hash,
               waitMs: WAIT_MS,
             }),

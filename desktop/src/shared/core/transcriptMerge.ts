@@ -66,7 +66,10 @@ export const mergeTranscriptPage = (
     state: page.state ?? current.state,
     claudeSessionId: page.claudeSessionId ?? current.claudeSessionId,
     mode: page.mode ?? current.mode,
-    activity: page.activity ?? current.activity,
+    // activity is computed fresh by the server on EVERY response (liveActivity),
+    // so null means "nothing in flight" — carrying it forward would freeze a
+    // finished tool row on screen forever.
+    activity: page.activity,
     lastActivityTs: page.lastActivityTs ?? current.lastActivityTs,
     truncated: current.truncated,
   }

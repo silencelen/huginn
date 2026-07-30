@@ -125,7 +125,7 @@ export interface InvokeApi {
   'chatStream.unsubscribe': { args: [subscriptionId: number]; result: void }
   'watch.latest': { args: []; result: { watch: Watch | null; connected: boolean } }
   'screenPoll.start': {
-    args: [name: string, opts: { cols?: number; rows?: number }]
+    args: [name: string, opts: { cols?: number; rows?: number; force?: boolean }]
     result: { subscriptionId: number }
   }
   'screenPoll.stop': { args: [subscriptionId: number]; result: void }
