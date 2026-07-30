@@ -11,6 +11,11 @@ import { app, Notification } from 'electron'
 
 const esc = (s: string): string =>
   s
+    // C0 controls and lone surrogates are illegal in XML: one raw byte from
+    // tool output would make the whole toast unparseable, and the failure mode
+    // is a "needs you" notification that silently never appears.
+    .replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/g, '')
+    .replace(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g, '')
     .replaceAll('&', '&amp;')
     .replaceAll('<', '&lt;')
     .replaceAll('>', '&gt;')

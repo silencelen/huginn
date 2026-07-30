@@ -35,11 +35,14 @@ interface Subscription {
   seq: number
   pending: ChatEvent[]
   flushTimer: NodeJS.Timeout | null
+  /** Kept so the listener can be removed again — see unsubscribe(). */
+  onGone: () => void
 }
 
 export class Chats {
   private readonly runs = new Map<string, RunState>()
   private readonly subs = new Map<number, Subscription>()
+  private readonly attaching = new Map<string, Promise<RunState | null>>()
   private nextSubId = 1
 
   constructor(
@@ -124,6 +127,20 @@ export class Chats {
    * once made every send take the queued path while nobody streamed anything.
    */
   private async attachIfRunning(chatId: string): Promise<RunState | null> {
+    // Single-flight: subscribe() is called on mount, on every seq gap, and
+    // after send. Two overlapping calls both used to pass the running check
+    // and both opened a stream — every delta rendered twice and one SSE
+    // leaked. One attach per chat at a time.
+    const inFlight = this.attaching.get(chatId)
+    if (inFlight) return inFlight
+    const p = this.doAttach(chatId).finally(() => {
+      if (this.attaching.get(chatId) === p) this.attaching.delete(chatId)
+    })
+    this.attaching.set(chatId, p)
+    return p
+  }
+
+  private async doAttach(chatId: string): Promise<RunState | null> {
     const existing = this.runs.get(chatId)
     if (existing?.running) return existing
     const detail = await this.get(chatId)
@@ -146,9 +163,10 @@ export class Chats {
 
     const id = this.nextSubId
     this.nextSubId += 1
-    const sub: Subscription = { id, chatId, wc, seq: 0, pending: [], flushTimer: null }
+    const onGone = (): void => this.unsubscribe(id)
+    const sub: Subscription = { id, chatId, wc, seq: 0, pending: [], flushTimer: null, onGone }
     this.subs.set(id, sub)
-    wc.once('destroyed', () => this.unsubscribe(id))
+    wc.once('destroyed', onGone)
     return {
       subscriptionId: id,
       seq: 0,
@@ -162,6 +180,10 @@ export class Chats {
     const sub = this.subs.get(id)
     if (!sub) return
     if (sub.flushTimer) clearTimeout(sub.flushTimer)
+    // Every chat opened added a 'destroyed' listener that was never removed;
+    // on a tray-resident process that is unbounded growth plus Node's
+    // MaxListenersExceededWarning after ten.
+    if (!sub.wc.isDestroyed()) sub.wc.removeListener('destroyed', sub.onGone)
     this.subs.delete(id)
     // Deliberately NOT stopping the run's SSE: detach ≠ cancel, and the run
     // must keep accumulating for notifications and the next subscriber.
@@ -205,18 +227,42 @@ export class Chats {
         // server-side — drop this never-was-a-stream run and attach to the
         // real one so its events start flowing.
         this.runs.delete(chatId)
-        void this.attachIfRunning(chatId).then(() => this.onListsChanged())
+        void this.attachIfRunning(chatId)
+          .then(() => this.onListsChanged())
+          .catch(() => this.streamLost(chatId, run, 'could not reattach'))
         return
       }
-      if (run.running && error !== null) {
-        // The socket died but the run may well still be going server-side.
-        // Tell subscribers the stream (not the run) failed; the renderer
-        // re-subscribes, which reattaches with ?since=.
-        this.onEvent(chatId, run, { type: 'error', text: `stream lost: ${error}` })
-        run.running = false
-        run.handle = null
+      // ANY end while we still believe the run is live is a lost stream, not
+      // just an errored one: a `done` frame truncated mid-frame is discarded
+      // by the parser and the socket then closes cleanly, which used to leave
+      // the run permanently "running" — every later send took the queued path
+      // and the chat never streamed again until restart.
+      if (run.running) {
+        this.streamLost(chatId, run, error ?? 'stream ended without a result')
       }
     })
+  }
+
+  /**
+   * The socket died but the run is probably still going server-side. Tell
+   * subscribers so the renderer re-subscribes, which reattaches with ?since=
+   * and picks the answer back up where it left off.
+   */
+  private streamLost(chatId: string, run: RunState, why: string): void {
+    run.running = false
+    run.handle = null
+    this.onEvent(chatId, run, { type: 'stream_lost', text: why })
+    this.onListsChanged()
+  }
+
+  /** Sleep/resume black-holes every socket: reattach anything still running. */
+  resetStreams(): void {
+    for (const [chatId, run] of this.runs) {
+      run.handle?.cancel()
+      run.handle = null
+      run.running = false
+      void this.attachIfRunning(chatId).catch(() => {})
+    }
   }
 
   private onEvent(chatId: string, run: RunState, ev: ChatEvent): void {

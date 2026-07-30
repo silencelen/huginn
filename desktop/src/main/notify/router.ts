@@ -25,6 +25,8 @@ export class NotifyRouter {
   private prevRuns: Record<string, number> = {}
   private prevRunning = new Set<string>()
   private seeded = false
+  private generation = 0
+  private latestSessions: Record<string, string | null> = {}
   private readonly live = new Map<string, Notification>()
 
   constructor(
@@ -38,6 +40,8 @@ export class NotifyRouter {
   ) {}
 
   onDigest(watch: Watch): void {
+    this.generation += 1
+    this.latestSessions = watch.sessions
     if (!this.seeded) {
       // First observation is a baseline, never a wave of stale notifications.
       this.seeded = true
@@ -91,6 +95,7 @@ export class NotifyRouter {
   private async sessionAttention(name: string): Promise<void> {
     const target: NavTarget = { view: 'sessions', id: name }
     if (!this.shouldShow(target)) return
+    const generation = this.generation
     // Enrich with the actual question, like the FCM payload did.
     let question = 'Needs you'
     let options: { number: number; label: string }[] = []
@@ -106,6 +111,12 @@ export class NotifyRouter {
     } catch {
       // The plain notification still carries the session name.
     }
+
+    // The pane fetch is async, and the question may have been answered in tmux
+    // while it was in flight. Its withdraw edge would then find no toast, and
+    // this one would be posted after it — a "needs you" that nothing ever
+    // takes down. Only post if the world still says attention.
+    if (generation !== this.generation && this.latestSessions[name] !== 'attention') return
 
     const n = winToastsUsable()
       ? buildAttentionToast(name, question, options, fingerprint)

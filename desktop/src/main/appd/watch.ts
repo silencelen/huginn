@@ -89,7 +89,7 @@ export class WatchLoop {
       }
     })
     this.handle = handle
-    void handle.done.then(({ error }) => {
+    void handle.done.then(({ error, notStream }) => {
       if (this.handle !== handle) return
       this.handle = null
       if (this.stopped) return
@@ -99,8 +99,12 @@ export class WatchLoop {
         return
       }
       this.setConnected(false)
-      const delay = error === null ? 0 : this.backoffMs
-      if (error !== null) {
+      // A 2xx that ISN'T event-stream (a captive portal splash, something else
+      // answering on the port) used to reconnect with zero delay against an
+      // answer that never changes — a tight loop on hotel Wi-Fi.
+      const failed = error !== null || notStream !== null
+      const delay = failed ? this.backoffMs : 0
+      if (failed) {
         this.backoffMs = Math.min(
           BACKOFF_MAX_MS,
           Math.round(this.backoffMs * (1.6 + Math.random() * 0.4)),

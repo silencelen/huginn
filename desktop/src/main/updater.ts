@@ -11,6 +11,16 @@ const { autoUpdater } = electronUpdater
 
 const CHECK_EVERY_MS = 4 * 60 * 60 * 1000
 
+/**
+ * The update feed is PINNED, deliberately not derived from the (user-editable)
+ * baseUrl setting. These builds are unsigned, so electron-updater performs no
+ * publisher check and the sha512 it verifies comes from the same latest.yml it
+ * just downloaded — meaning whoever controls the feed URL controls what code
+ * gets installed. baseUrl is now allowlisted too, but the update path must not
+ * depend on that one check holding.
+ */
+const FEED_URL = 'http://100.97.198.90:8787/v1/desktop'
+
 export interface UpdateState {
   status: 'none' | 'checking' | 'available' | 'downloading' | 'ready' | 'error'
   version: string | null
@@ -39,12 +49,13 @@ export class Updater {
     autoUpdater.autoDownload = true
     autoUpdater.autoInstallOnAppQuit = true
     autoUpdater.disableDifferentialDownload = true
+    // Closes the second attacker-controlled URL in the download path.
+    autoUpdater.disableWebInstaller = true
     autoUpdater.setFeedURL({
       provider: 'generic',
-      url: `${this.settings.getBaseUrl()}/v1/desktop`,
+      url: FEED_URL,
       useMultipleRangeRequest: false,
     })
-    autoUpdater.addAuthHeader(`Bearer ${this.settings.getToken()}`)
 
     autoUpdater.on('checking-for-update', () => this.set({ status: 'checking' }))
     autoUpdater.on('update-available', (info) =>
@@ -67,6 +78,14 @@ export class Updater {
 
   check(): void {
     if (!app.isPackaged) return
+    // Re-arm the token on EVERY check rather than once at start(). Found in
+    // the field: on a fresh install the app launches before the owner has
+    // pasted a token, so the header was armed with "Bearer " and every later
+    // check 401'd for the life of the process — self-update silently dead
+    // until a restart, and the same bug on any token rotation.
+    const token = this.settings.getToken()
+    if (token === '') return
+    autoUpdater.addAuthHeader(`Bearer ${token}`)
     void autoUpdater.checkForUpdates().catch(() => {
       // Reported through the 'error' event; a dead daemon must not crash us.
     })

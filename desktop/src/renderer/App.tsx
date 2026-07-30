@@ -1,7 +1,7 @@
 // The three-pane shell: nav rail | list pane | detail pane. Desktop is always
 // wide — no fold/rotate gymnastics, just panes.
 
-import { useEffect } from 'react'
+import { useEffect, useRef } from 'react'
 import { call } from './lib/ipc'
 import { useApp, wireAppStore, type Dest } from './stores/app'
 import { ChatsList } from './screens/ChatsList'
@@ -24,6 +24,26 @@ export function App(): React.JSX.Element {
   const watchConnected = useApp((s) => s.watchConnected)
 
   useEffect(() => wireAppStore(), [])
+
+  // A chat deleted (here or from the phone) must not leave the detail pane
+  // rendering a dead id — that showed a raw IPC error and a composer that
+  // sent into nothing. Two consecutive misses, so a just-created chat that
+  // has not reached the list yet is never mistaken for a deleted one.
+  const chats = useApp((s) => s.chats)
+  const chatMisses = useRef(0)
+  useEffect(() => {
+    if (dest.view !== 'chats' || dest.chatId === null) {
+      chatMisses.current = 0
+      return
+    }
+    if (chats.some((c) => c.id === dest.chatId)) {
+      chatMisses.current = 0
+      return
+    }
+    if (chats.length === 0) return
+    chatMisses.current += 1
+    if (chatMisses.current >= 2) navigate({ view: 'chats', chatId: null })
+  }, [chats, dest, navigate])
 
   // Tell main what the user is looking at, so notifications for the visible
   // target are suppressed and its stale ones withdrawn.

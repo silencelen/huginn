@@ -6,10 +6,12 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { Message } from '../../shared/api/types'
 import { displayText } from '../../shared/core/attachmentMarker'
 import { useChatStream } from '../hooks/useChatStream'
+import { useApp } from '../stores/app'
 import { call } from '../lib/ipc'
 import { MarkdownView } from '../components/markdown/MarkdownView'
 import { CodeCard } from '../components/transcript/CodeCard'
 import { Composer } from '../components/composer/Composer'
+import { InputDialog } from '../components/common/Dialog'
 
 function DigestMessage({ m }: { m: Message }): React.JSX.Element | null {
   switch (m.type) {
@@ -57,6 +59,8 @@ export function ChatView({ chatId }: { chatId: string }): React.JSX.Element {
   const [suggestions, setSuggestions] = useState<string[]>([])
   const [draftSeed, setDraftSeed] = useState<string | null>(null)
   const [models, setModels] = useState<{ id: string; display: string }[]>([])
+  const [renaming, setRenaming] = useState(false)
+  const refreshChats = useApp((s) => s.refreshChats)
 
   useEffect(() => {
     void call('host.models')
@@ -103,21 +107,67 @@ export function ChatView({ chatId }: { chatId: string }): React.JSX.Element {
   const detail = live.detail
   return (
     <div className="chat-view">
+      {renaming ? (
+        <InputDialog
+          title="Rename chat"
+          initial={detail?.title ?? ''}
+          onCancel={() => setRenaming(false)}
+          onSubmit={(to) => {
+            setRenaming(false)
+            void call('chats.patch', chatId, { title: to }).then(() => {
+              void live.refresh()
+              void refreshChats()
+            })
+          }}
+        />
+      ) : null}
       <header className="view-header">
-        <div className="view-title">{detail?.title ?? 'Chat'}</div>
-        <div className="view-sub">
-          <span className={`mode-chip mode-${detail?.mode ?? 'ask'}`}>
-            {(detail?.mode ?? 'ask').toUpperCase()}
-          </span>
-          {/* Model/effort apply to the NEXT turn, like the phone's options bar. */}
+        <div className="view-title-row">
+          <div className="view-title" title={detail?.title ?? 'Chat'}>
+            {detail?.title ?? 'Chat'}
+          </div>
+          <div className="view-actions">
+            <button type="button" title="Rename this chat" onClick={() => setRenaming(true)}>
+              Rename
+            </button>
+          </div>
+        </div>
+        {/* One group, one verb: everything here decides what the NEXT turn runs
+            with. Applying mid-run is fine — the daemon fixes flags at spawn. */}
+        <div className="options-bar">
+          <span className="options-label">Next turn</span>
+          <div className="seg" role="group" aria-label="Mode">
+            {(['ask', 'act'] as const).map((m) => (
+              <button
+                key={m}
+                type="button"
+                className={`seg-btn ${(detail?.mode ?? 'ask') === m ? 'seg-on' : ''} ${m === 'act' ? 'seg-act' : ''}`}
+                title={
+                  m === 'ask'
+                    ? 'Ask — reasoning, memory, and reads. No shell, no edits.'
+                    : 'Act — can run commands and change files.'
+                }
+                onClick={() => {
+                  if ((detail?.mode ?? 'ask') === m) return
+                  void call('chats.patch', chatId, { mode: m }).then(() => {
+                    void live.refresh()
+                    void refreshChats()
+                  })
+                }}
+              >
+                {m === 'ask' ? 'Ask' : 'Act'}
+              </button>
+            ))}
+          </div>
           <select
             className="picker"
+            aria-label="Model"
             value={detail?.model ?? ''}
             onChange={(e) => {
               void call('chats.patch', chatId, { model: e.target.value }).then(() => live.refresh())
             }}
           >
-            <option value="">default model</option>
+            <option value="">Default model</option>
             {models.map((m) => (
               <option key={m.id} value={m.id}>
                 {m.display}
@@ -126,18 +176,20 @@ export function ChatView({ chatId }: { chatId: string }): React.JSX.Element {
           </select>
           <select
             className="picker"
+            aria-label="Effort"
             value={detail?.effort ?? ''}
             onChange={(e) => {
               void call('chats.patch', chatId, { effort: e.target.value }).then(() => live.refresh())
             }}
           >
-            <option value="">default effort</option>
+            <option value="">Default effort</option>
             {['low', 'medium', 'high', 'xhigh', 'max'].map((e2) => (
               <option key={e2} value={e2}>
                 {e2}
               </option>
             ))}
           </select>
+          {live.running ? <span className="options-note">applies to your next message</span> : null}
         </div>
       </header>
 
