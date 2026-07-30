@@ -3,7 +3,8 @@
 
 import { useEffect, useState } from 'react'
 import { useApp } from '../stores/app'
-import { call } from '../lib/ipc'
+import { call, on } from '../lib/ipc'
+import type { UpdateState } from '../../main/updater'
 
 export function SettingsScreen(): React.JSX.Element {
   const settings = useApp((s) => s.settings)
@@ -13,12 +14,15 @@ export function SettingsScreen(): React.JSX.Element {
   const [token, setToken] = useState('')
   const [pingResult, setPingResult] = useState<string | null>(null)
   const [version, setVersion] = useState('')
+  const [update, setUpdate] = useState<UpdateState | null>(null)
 
   useEffect(() => {
     if (settings) setBaseUrl(settings.baseUrl)
   }, [settings])
   useEffect(() => {
     void call('app.version').then(setVersion)
+    void call('update.state').then(setUpdate)
+    return on('push.update', setUpdate)
   }, [])
 
   const save = (): void => {
@@ -101,6 +105,29 @@ export function SettingsScreen(): React.JSX.Element {
         <span className={watchConnected ? 'ok' : 'bad'}>
           {watchConnected ? 'connected' : 'disconnected'}
         </span>
+      </div>
+      <div className="about-line update-line">
+        {update === null || update.status === 'none' ? (
+          <>
+            Up to date.{' '}
+            <button type="button" onClick={() => void call('update.check')}>
+              Check now
+            </button>
+          </>
+        ) : update.status === 'ready' ? (
+          <>
+            v{update.version} downloaded.{' '}
+            <button type="button" onClick={() => void call('update.install')}>
+              Restart to update
+            </button>
+          </>
+        ) : update.status === 'error' ? (
+          <span className="bad">Update check failed: {update.error}</span>
+        ) : (
+          <span className="dim">
+            {update.status === 'downloading' ? `Downloading v${update.version ?? ''}…` : 'Checking…'}
+          </span>
+        )}
       </div>
     </div>
   )
