@@ -32,9 +32,7 @@ import com.silencelen.huginn.data.ClientsInfo
 import com.silencelen.huginn.data.PushStatus
 import com.silencelen.huginn.data.LoginState
 import com.silencelen.huginn.data.RouteResolver
-import okhttp3.OkHttpClient
-import okhttp3.Request
-import java.util.concurrent.TimeUnit
+import com.silencelen.huginn.data.UriByteStream
 import com.silencelen.huginn.notify.SessionWatchWorker
 import com.silencelen.huginn.ui.LiveInput
 import com.silencelen.huginn.notify.AppLock
@@ -454,7 +452,7 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
                     cr.openAssetFileDescriptor(uri, "r")?.use { it.length }
                 }.getOrNull() ?: -1L
                 runCatching {
-                    client.uploadStream(mime, name, size) { cr.openInputStream(uri) }
+                    client.uploadStream(mime, name, UriByteStream(cr, uri, size))
                 }.fold(
                     // The HOST owns the size limit now, and says so in its own
                     // words — one place to change it, and no stale number here
@@ -603,25 +601,6 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
     val resolvingRoute: StateFlow<Boolean> = _resolvingRoute.asStateFlow()
 
     /**
-     * Probes a candidate. Any HTTP reply counts as reachable — a 401 still
-     * proves the daemon answered, and the point here is to find a live path,
-     * not to check the token.
-     */
-    private suspend fun probeRoute(url: String): Boolean = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
-        runCatching {
-            val client = OkHttpClient.Builder()
-                .connectTimeout(3, TimeUnit.SECONDS)
-                .readTimeout(3, TimeUnit.SECONDS)
-                .build()
-            val req = Request.Builder()
-                .url("${AppdRoutes.normalize(url)}/v1/sessions")
-                .head()
-                .build()
-            client.newCall(req).execute().use { true }
-        }.getOrDefault(false)
-    }
-
-    /**
      * Moves to the first reachable route. Leaves the current setting alone when
      * nothing answers — blanking it would turn "the network is down" into "the
      * app is misconfigured".
@@ -633,7 +612,7 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
                 return@launch
             }
             _resolvingRoute.value = true
-            val found = RouteResolver.resolve(AppdRoutes.candidates(baseUrlNow)) { probeRoute(it) }
+            val found = RouteResolver.resolve(AppdRoutes.candidates(baseUrlNow)) { client.probe(it) }
             _resolvingRoute.value = false
             when {
                 found == null ->

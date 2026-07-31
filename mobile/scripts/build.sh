@@ -37,7 +37,12 @@ flock "$LOCK" ./gradlew :core:jvmTest :core:testDebugUnitTest :app:testDebugUnit
 # DISCOVERED (a module split, a renamed source set, a task that silently has no
 # sources) exits 0 having run nothing. A floor catches that; it only ever needs
 # raising, never lowering, unless tests are deliberately deleted.
-KOTLIN_MIN=290   # 121 (:core jvm) + 121 (:core android) + 58 (:app), 2026-07-30
+# Raised when the HTTP layer moved into :core: SseTest could finally leave :app
+# (MockWebServer, JVM-only -> Ktor's multiplatform MockEngine) and brought
+# SseLinesTest, HuginnClientTest and SettingsCodecTest with it, so 42 more tests
+# now run TWICE. :app keeps the 49 whose subject genuinely needs Android or its
+# own classes.
+KOTLIN_MIN=375   # 163 (:core jvm) + 163 (:core android) + 49 (:app), 2026-07-30
 KOTLIN_COUNT=0
 for D in core/build/test-results/jvmTest \
          core/build/test-results/testDebugUnitTest \
