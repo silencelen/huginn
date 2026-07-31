@@ -8,6 +8,7 @@ import com.silencelen.huginn.data.RouteResolver
 import com.silencelen.huginn.data.Session
 import com.silencelen.huginn.data.Status
 import com.silencelen.huginn.data.Usage
+import com.silencelen.huginn.data.Watch
 import com.silencelen.huginn.data.WatchEvent
 import com.silencelen.huginn.desktop.update.DesktopUpdater
 import kotlinx.coroutines.CoroutineScope
@@ -130,6 +131,17 @@ class AppStore(
     private val _route = MutableStateFlow(settings.baseUrlNow())
     val route: StateFlow<String> = _route.asStateFlow()
 
+    /**
+     * Every watch digest, handed to the always-on layer (the notification router
+     * and the tray) on the watch loop's own coroutine.
+     *
+     * A callback rather than a StateFlow deliberately: a StateFlow CONFLATES equal
+     * values, so two consecutive digests that happened to compare equal would
+     * silently become one — and on this path a dropped digest is a notification
+     * that never fires.
+     */
+    var onDigest: ((Watch) -> Unit)? = null
+
     // -------------------------------------------------------------- loading
 
     suspend fun refreshChats() {
@@ -171,6 +183,10 @@ class AppStore(
         scope.launch { watchLoop() }
         scope.launch { presenceTicker() }
         updater.start(scope)
+        // Records stream connects/drops, update outcomes and uncaught errors into
+        // the ring buffer the Settings screen copies. Derived entirely from state
+        // this store already publishes — no second source of truth, no new poll.
+        com.silencelen.huginn.desktop.diag.AppLog.attach(this)
     }
 
     /**
@@ -230,9 +246,14 @@ class AppStore(
      * walking away from the desk leaves the daemon believing this client is a
      * delivery route until the 30-minute rotation. Dropping and re-opening the
      * stream when presence flips is what makes the claim true.
+     *
+     * Collected over [Presence.streamKey] rather than `present` itself, which
+     * carries that same presence flip AND the resume-from-sleep bump — sockets are
+     * black-holed by a suspend and hang until an idle timeout rather than failing.
+     * One counter, because the remedy for both is identical.
      */
     private suspend fun watchLoop() {
-        presence.present.collectLatest {
+        presence.streamKey.collectLatest {
             var backoffMs = MIN_BACKOFF_MS
             var hash: String? = null
             while (scope.isActive) {
@@ -249,6 +270,7 @@ class AppStore(
                             // lists carry more than it does, so re-fetch them.
                             refreshChats()
                             refreshSessions()
+                            onDigest?.invoke(ev.watch)
                         }
                         WatchEvent.Alive -> { sawAnything = true; _watchConnected.value = true }
                         WatchEvent.Rotated -> { sawAnything = true; rotated = true }

@@ -61,6 +61,14 @@ class DesktopSettings(private val file: File = defaultFile()) : HuginnSettings {
         val lastAlarmAt: Long = 0,
         val lastWatchError: String = "",
         val lastWatchErrorAt: Long = 0,
+        /**
+         * Desktop-only, and not part of [HuginnSettings]: the phone has no window
+         * to close. Default true because the whole point of the always-on layer is
+         * that closing the window does not stop the watch stream — but it is a
+         * SETTING rather than a rule, because an app that will not close is an app
+         * the owner cannot get rid of.
+         */
+        val closeToTray: Boolean = true,
     )
 
     private val json = Json { ignoreUnknownKeys = true; encodeDefaults = true; prettyPrint = true }
@@ -88,6 +96,7 @@ class DesktopSettings(private val file: File = defaultFile()) : HuginnSettings {
     private val _lastAlarmAt = MutableStateFlow(stored.lastAlarmAt)
     private val _lastWatchError = MutableStateFlow(stored.lastWatchError)
     private val _lastWatchErrorAt = MutableStateFlow(stored.lastWatchErrorAt)
+    private val _closeToTray = MutableStateFlow(stored.closeToTray)
 
     init {
         if (stored.clientId.isEmpty()) mutate { it.copy(clientId = "desktop-kt-${UUID.randomUUID()}") }
@@ -196,6 +205,21 @@ class DesktopSettings(private val file: File = defaultFile()) : HuginnSettings {
     //
     // HuginnClient takes `() -> String` providers, not a settings object, so it
     // can be built by anything holding the values. These are what feed them.
+
+    /**
+     * Close-to-tray. Desktop-only, so it is not on the [HuginnSettings] contract,
+     * and its setter is NOT suspend: it is toggled from a tray menu item, which
+     * has no coroutine scope of its own and no reason to acquire one to write a
+     * boolean into a file that is already held in memory.
+     */
+    val closeToTray: StateFlow<Boolean> = _closeToTray.asStateFlow()
+
+    fun setCloseToTray(value: Boolean) {
+        _closeToTray.value = value
+        mutate { it.copy(closeToTray = value) }
+    }
+
+    fun closeToTrayNow(): Boolean = _closeToTray.value
 
     fun baseUrlNow(): String = _baseUrl.value
     fun tokenNow(): String = _token.value
