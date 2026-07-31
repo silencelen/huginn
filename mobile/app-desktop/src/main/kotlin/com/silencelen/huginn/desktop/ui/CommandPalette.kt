@@ -2,6 +2,7 @@ package com.silencelen.huginn.desktop.ui
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -36,9 +37,12 @@ import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import com.silencelen.huginn.data.Chat
 import com.silencelen.huginn.data.Session
+import com.silencelen.huginn.desktop.ui.common.DeskType
+import com.silencelen.huginn.desktop.ui.common.Space
 
 /**
  * Ctrl+K over everything: every chat, every session, and the handful of verbs
@@ -94,7 +98,7 @@ fun CommandPalette(
                         color = MaterialTheme.colorScheme.onSurface,
                     ),
                     cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
-                    modifier = Modifier.fillMaxWidth().padding(16.dp)
+                    modifier = Modifier.fillMaxWidth().padding(Space.gutter)
                         .focusRequester(focus)
                         .onPreviewKeyEvent { e ->
                             if (e.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
@@ -144,17 +148,20 @@ private fun PaletteRow(item: PaletteItem, active: Boolean, onClick: () -> Unit) 
                 else MaterialTheme.colorScheme.surfaceContainerHigh,
             )
             .clickable(onClick = onClick)
-            .padding(horizontal = 16.dp, vertical = 8.dp),
+            // 16/4 rather than 16/8: the palette is a list you arrow through, so
+            // more rows in the same 360dp is strictly better, and the row is a
+            // single line of text.
+            .padding(horizontal = Space.gutter, vertical = Space.tight),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Text(
             item.label,
-            style = MaterialTheme.typography.bodyMedium,
+            style = DeskType.rowTitle,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
             modifier = Modifier.weight(1f),
         )
-        Spacer(Modifier.width(12.dp))
+        Spacer(Modifier.width(Space.wide))
         Muted(item.detail, maxLines = 1)
     }
 }
@@ -163,7 +170,15 @@ private fun PaletteRow(item: PaletteItem, active: Boolean, onClick: () -> Unit) 
 private fun MutableInteraction() =
     androidx.compose.foundation.interaction.MutableInteractionSource()
 
-/** The keyboard model, shown rather than remembered. */
+/**
+ * The input model, shown rather than remembered — BOTH halves of it.
+ *
+ * It used to list keys only, which quietly said the pointer was for clicking rows.
+ * On this client the pointer now carries the whole verb surface (right-click), the
+ * whole state legend (hover) and multi-select (Ctrl, Shift), and none of that is
+ * discoverable if nothing ever mentions it. Two columns, because they are two
+ * different hands.
+ */
 @Composable
 fun Cheatsheet(onDismiss: () -> Unit) {
     Box(
@@ -176,22 +191,35 @@ fun Cheatsheet(onDismiss: () -> Unit) {
             shape = RoundedCornerShape(10.dp),
             color = MaterialTheme.colorScheme.surfaceContainerHigh,
             tonalElevation = 8.dp,
+            modifier = Modifier.clickable(
+                indication = null,
+                interactionSource = remember { MutableInteraction() },
+            ) {},
         ) {
-            Column(Modifier.padding(24.dp)) {
-                Text("Keyboard", style = MaterialTheme.typography.titleSmall)
-                Spacer(Modifier.width(8.dp))
-                SHORTCUT_HELP.forEach { (keys, what) ->
-                    Row(Modifier.padding(top = 8.dp)) {
-                        Text(
-                            keys,
-                            style = MaterialTheme.typography.labelLarge,
-                            color = MaterialTheme.colorScheme.primary,
-                            modifier = Modifier.width(150.dp),
-                        )
-                        Muted(what)
-                    }
+            Column(Modifier.padding(Space.section)) {
+                Row(horizontalArrangement = Arrangement.spacedBy(Space.section)) {
+                    HelpColumn("Keyboard", SHORTCUT_HELP, keyWidth = 118.dp)
+                    HelpColumn("Pointer", POINTER_HELP, keyWidth = 118.dp)
                 }
-                Muted("Esc or F1 closes this.", Modifier.padding(top = 16.dp))
+                Muted("Esc or F1 closes this.", Modifier.padding(top = Space.gutter))
+            }
+        }
+    }
+}
+
+@Composable
+private fun HelpColumn(title: String, rows: List<Pair<String, String>>, keyWidth: Dp) {
+    Column {
+        Text(title, style = DeskType.paneTitle, color = MaterialTheme.colorScheme.onSurface)
+        rows.forEach { (keys, what) ->
+            Row(Modifier.padding(top = Space.unit)) {
+                Text(
+                    keys,
+                    style = DeskType.rowMeta,
+                    color = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.width(keyWidth),
+                )
+                Muted(what)
             }
         }
     }
