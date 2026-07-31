@@ -289,6 +289,12 @@ private fun ToolCard(ev: TranscriptEvent) {
     var open by rememberSaveable(ev.seq) { mutableStateOf(false) }
     val hasResult = !ev.result.isNullOrBlank()
     val failed = ev.ok == false
+    // Bound to locals: these are public properties of another module (:core), so
+    // the compiler will not smart-cast them inside a null check. A local also
+    // guarantees the null test and the read see the same value, which is what
+    // the smart-cast rule is protecting against.
+    val detail = ev.detail
+    val input = ev.input
     Surface(
         color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f),
         shape = RoundedCornerShape(8.dp),
@@ -313,10 +319,10 @@ private fun ToolCard(ev: TranscriptEvent) {
                     fontWeight = FontWeight.SemiBold,
                     color = if (failed) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant,
                 )
-                if (!ev.detail.isNullOrBlank()) {
+                if (!detail.isNullOrBlank()) {
                     Spacer(Modifier.width(6.dp))
                     Text(
-                        ev.detail,
+                        detail,
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.primary,
                         maxLines = 1,
@@ -334,12 +340,12 @@ private fun ToolCard(ev: TranscriptEvent) {
                     )
                 }
             }
-            if (!ev.input.isNullOrBlank()) {
+            if (!input.isNullOrBlank()) {
                 Spacer(Modifier.height(3.dp))
                 // A command must not wrap into ambiguity: scroll it instead.
                 Box(Modifier.horizontalScroll(rememberScrollState())) {
                     Text(
-                        highlighted(ev.input, langForTool(ev.name)),
+                        highlighted(input, langForTool(ev.name)),
                         style = MaterialTheme.typography.labelSmall,
                         fontFamily = FontFamily.Monospace,
                         color = MaterialTheme.colorScheme.onSurface,
@@ -375,6 +381,10 @@ private fun ToolCard(ev: TranscriptEvent) {
 @Composable
 private fun AskCard(ev: TranscriptEvent) {
     val ask = ev.ask ?: return
+    // Bound once: `result` is a public property of another module (:core) and so
+    // will not smart-cast, and this card tests it three times — a local keeps all
+    // three questions about the same value.
+    val result = ev.result
     Surface(
         color = MaterialTheme.colorScheme.surfaceContainerHigh,
         shape = RoundedCornerShape(10.dp),
@@ -399,7 +409,7 @@ private fun AskCard(ev: TranscriptEvent) {
             ask.questions.forEach { q ->
                 Spacer(Modifier.height(5.dp))
                 Text(q.question, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Medium)
-                if (ev.result.isNullOrBlank() && q.options.isNotEmpty()) {
+                if (result.isNullOrBlank() && q.options.isNotEmpty()) {
                     Spacer(Modifier.height(4.dp))
                     q.options.forEach { opt ->
                         Text(
@@ -412,10 +422,10 @@ private fun AskCard(ev: TranscriptEvent) {
                 }
             }
             // Answered: what came back matters more than what was offered.
-            if (!ev.result.isNullOrBlank()) {
+            if (!result.isNullOrBlank()) {
                 Spacer(Modifier.height(6.dp))
                 Text(
-                    "→ ${answeredSummary(ev.result)}",
+                    "→ ${answeredSummary(result)}",
                     style = MaterialTheme.typography.bodySmall,
                     fontWeight = FontWeight.SemiBold,
                     color = MaterialTheme.colorScheme.primary,

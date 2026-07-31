@@ -1,9 +1,9 @@
 package com.silencelen.huginn
 
 import com.silencelen.huginn.ui.Syntax
-import org.junit.Assert.assertEquals
-import org.junit.Assert.assertTrue
-import org.junit.Test
+import kotlin.test.assertEquals
+import kotlin.test.assertTrue
+import kotlin.test.Test
 
 /**
  * The highlighter is a lexer, so the tests care about two things: that the spans
@@ -36,8 +36,8 @@ class SyntaxTest {
         for (lang in listOf("bash", "kotlin", "json", "diff", null, "unknownlang")) {
             for (s in samples) {
                 for (sp in spansOf(s, lang)) {
-                    assertTrue("start in range for '$s'/$lang", sp.start in 0..s.length)
-                    assertTrue("end in range for '$s'/$lang", sp.end in sp.start..s.length)
+                    assertTrue(sp.start in 0..s.length, "start in range for '$s'/$lang")
+                    assertTrue(sp.end in sp.start..s.length, "end in range for '$s'/$lang")
                 }
             }
         }
@@ -52,7 +52,7 @@ class SyntaxTest {
     fun `an unterminated string does not swallow the following lines`() {
         val code = "echo \"oops\nls -la\n"
         val strings = textOf(code, "bash", Syntax.Tok.STRING)
-        assertTrue("string span must stop at the newline", strings.none { it.contains("ls -la") })
+        assertTrue(strings.none { it.contains("ls -la") }, "string span must stop at the newline")
     }
 
     @Test
@@ -68,14 +68,14 @@ class SyntaxTest {
         val code = "# deploy it\nrsync -av \"src/\" host:/dest   # trailing"
         assertEquals(listOf("# deploy it", "# trailing"), textOf(code, "bash", Syntax.Tok.COMMENT))
         assertEquals(listOf("\"src/\""), textOf(code, "bash", Syntax.Tok.STRING))
-        assertTrue("the -av flag should read as structure", textOf(code, "bash", Syntax.Tok.META).contains("-av"))
+        assertTrue(textOf(code, "bash", Syntax.Tok.META).contains("-av"), "the -av flag should read as structure")
     }
 
     @Test
     fun `shell keywords are recognised but ordinary words are not`() {
         val kw = textOf("if test -f x; then echo hi; fi", "bash", Syntax.Tok.KEYWORD)
         assertTrue(kw.containsAll(listOf("if", "then", "echo", "fi")))
-        assertTrue("a path is not a keyword", !kw.contains("x"))
+        assertTrue(!kw.contains("x"), "a path is not a keyword")
     }
 
     @Test

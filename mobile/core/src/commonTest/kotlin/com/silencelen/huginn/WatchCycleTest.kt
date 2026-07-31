@@ -1,9 +1,9 @@
 package com.silencelen.huginn
 
 import com.silencelen.huginn.notify.WatchCycle
-import org.junit.Assert.assertEquals
-import org.junit.Assert.assertTrue
-import org.junit.Test
+import kotlin.test.assertEquals
+import kotlin.test.assertTrue
+import kotlin.test.Test
 
 /**
  * The rule that decides whether a chat finished while nobody was looking.

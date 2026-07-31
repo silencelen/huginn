@@ -8,13 +8,17 @@ import com.silencelen.huginn.data.Watch
 import kotlinx.coroutines.flow.first
 
 /**
- * Turns one observation of huginn into notifications, if anything changed.
+ * Turns one observation of huginn into Android notifications, if anything changed.
  *
- * Shared deliberately by the streaming watcher and the Doze-proof alarm. They are
- * two ways of *arriving* at an observation and there is no reason for them to
- * disagree about what it means — but when each had its own copy of this logic they
- * did, and a bug fixed in one stayed alive in the other. There is one place to be
- * wrong now.
+ * The Android half of the watch cycle: what an observation MEANS lives in
+ * [WatchCycle] in :core — shared with the desktop client, and testable without a
+ * Context. What to do about it on this platform lives here, because posting and
+ * cancelling notifications needs one.
+ *
+ * Used by the streaming watcher and the Doze-proof alarm alike. They are two ways
+ * of *arriving* at an observation and there is no reason for them to disagree
+ * about what it means — but when each had its own copy of this logic they did, and
+ * a bug fixed in one stayed alive in the other. There is one place to be wrong now.
  *
  * The comparison baseline is PERSISTED rather than kept in memory, which is what
  * makes an alarm-only cycle useful: if the watcher was killed while the phone slept,
@@ -22,7 +26,7 @@ import kotlinx.coroutines.flow.first
  * now". Held in memory, that transition happened to a process that no longer exists
  * and would be lost.
  */
-object WatchCycle {
+object WatchNotifier {
 
     /**
      * How many freshly-waiting sessions still get their question fetched.
@@ -32,37 +36,6 @@ object WatchCycle {
      * more than their buttons.
      */
     private const val PROMPT_FETCH_CAP = 3
-
-    data class Outcome(
-        val sessionsNeeding: Set<String>,
-        val chatsRunning: Set<String>,
-        val notified: Int,
-        /** True when this was the very first look and everything was absorbed silently. */
-        val seeded: Boolean,
-    )
-
-    /**
-     * Which chats have finished since the previous observation.
-     *
-     * Two ways to notice, because each misses what the other catches. The run counter
-     * sees a chat that began and ended entirely inside one gap — invisible to the
-     * running set, and with a ten-minute background check that is ordinary rather
-     * than exotic. The edge covers a chat whose count was never recorded.
-     *
-     * A chat with no previous count contributes nothing: absent a baseline, its
-     * counter says only how many times it has ever run, and announcing that would
-     * turn a first look into a burst of notifications about history. Pure, and
-     * separate from [apply], so the rule can be tested without an Android context.
-     */
-    fun finishedSince(
-        runsBefore: Map<String, Long>,
-        runsNow: Map<String, Long>,
-        previouslyRunning: Set<String>,
-        running: Set<String>,
-    ): Set<String> {
-        val ranAgain = runsNow.filter { (id, now) -> (runsBefore[id] ?: now) < now }.keys
-        return ranAgain + (previouslyRunning - running)
-    }
 
     /**
      * Applies an observation, optionally fetching the pending question.
@@ -78,7 +51,7 @@ object WatchCycle {
         settings: SettingsStore,
         watch: Watch,
         client: HuginnClient? = null,
-    ): Outcome {
+    ): WatchCycle.Outcome {
         val needing = watch.sessions.filterValues { it == "attention" }.keys
         val running = watch.chats.filterValues { it.running }.keys
         val runsNow = watch.chats.mapValues { it.value.finishedRuns }
@@ -101,7 +74,7 @@ object WatchCycle {
             settings.setRunningChats(running)
             settings.setChatRuns(runsNow)
             settings.setWatchSeeded(true)
-            return Outcome(needing, running, notified = 0, seeded = true)
+            return WatchCycle.Outcome(needing, running, notified = 0, seeded = true)
         }
 
         var posted = 0
@@ -164,7 +137,7 @@ object WatchCycle {
         val previouslyRunning = settings.runningChats.first()
         val runsBefore = settings.chatRuns.first()
 
-        val finished = finishedSince(runsBefore, runsNow, previouslyRunning, running)
+        val finished = WatchCycle.finishedSince(runsBefore, runsNow, previouslyRunning, running)
 
         // Same rule for a chat whose finish the reader is already watching stream in.
         val watchingChat = finished.size == 1 && Foreground.showsChat(finished.first())
@@ -193,6 +166,6 @@ object WatchCycle {
         // of accumulating forever.
         if (runsNow != runsBefore) settings.setChatRuns(runsNow)
 
-        return Outcome(needing, running, notified = posted, seeded = false)
+        return WatchCycle.Outcome(needing, running, notified = posted, seeded = false)
     }
 }
