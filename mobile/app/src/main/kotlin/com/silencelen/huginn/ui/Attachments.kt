@@ -95,39 +95,12 @@ object Attachments {
         return rotated
     }
 
-    /**
-     * The line appended to the message so Claude knows there is something to look
-     * at and how. Phrased as a bracketed system-ish note rather than prose in the
-     * user's voice: the path is plumbing, not something the owner "said".
-     */
-    fun marker(path: String): String =
-        "[Attached image at $path — view it with the Read tool.]"
+    // The marker text and its human-readable inverse live in :core
+    // (AttachmentText): they must agree exactly with each other, and every client
+    // that can attach a file needs both. Delegated rather than re-exported so the
+    // call sites in this module did not have to move with them.
+    fun marker(path: String): String = AttachmentText.marker(path)
 
-    /** The same, for a non-image file; the name travels for context. */
-    fun fileMarker(path: String, name: String?, readable: Boolean = true): String {
-        val where = "$path${if (name.isNullOrBlank()) "" else " ($name)"}"
-        // Telling Claude to Read a binary is exactly how the old upload refusal
-        // justified itself: it comes back as mojibake and the answer is a shrug.
-        // Naming the right tool instead is what makes accepting the file safe.
-        return if (readable) "[Attached file at $where — view it with the Read tool.]"
-        else "[Attached file at $where — a binary; inspect it with shell tools " +
-            "(file, unzip, strings, sqlite3) rather than Read. Requires act mode.]"
-    }
-
-    /**
-     * The same marker, made fit for human eyes. The bracketed path is plumbing
-     * for Claude; a person reading their own message back should see that they
-     * sent a photo, not where the daemon happened to store it.
-     */
-    private val MARKER_RE = Regex("""\[Attached image at [^\]]+ — view it with the Read tool\.\]""")
-    private val FILE_RE = Regex("""\[Attached file at \S+( \(([^)]{1,80})\))? — [^\]]*\]""")
-
-    fun displayText(text: String): String {
-        if ('[' !in text) return text
-        val cleaned = text
-            .replace(MARKER_RE, "📷 Photo attached")
-            .replace(FILE_RE) { m -> "📎 " + (m.groupValues[2].ifBlank { "File attached" }) }
-            .trim()
-        return cleaned.ifBlank { "📷 Photo attached" }
-    }
+    fun fileMarker(path: String, name: String?, readable: Boolean = true): String =
+        AttachmentText.fileMarker(path, name, readable)
 }

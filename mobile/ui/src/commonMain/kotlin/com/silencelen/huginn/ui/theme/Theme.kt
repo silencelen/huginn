@@ -1,13 +1,16 @@
 package com.silencelen.huginn.ui.theme
 
-import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Typography
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.material3.lightColorScheme
+import androidx.compose.foundation.isSystemInDarkTheme
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.staticCompositionLocalOf
+import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
@@ -17,6 +20,12 @@ import androidx.compose.ui.unit.sp
 // terminal emulator. Dark is the primary target (this app is read at night, on a
 // phone, next to a laptop running the same sessions) but light is fully styled
 // because Android will hand us either.
+//
+// ONE declaration, for both clients. These eighteen colours previously existed
+// twice — once in app/ui/theme and once in app-desktop/desktop/theme — and the
+// second copy's own header said it would drift. Drift here is invisible until
+// someone puts a phone next to the laptop, which is the one comparison the whole
+// migration exists to make favourable.
 
 private val Ink = Color(0xFFE8E2DA)
 private val Bg = Color(0xFF12100F)
@@ -101,21 +110,65 @@ val LightSyntax = SyntaxColors(
 
 val LocalSyntaxColors = staticCompositionLocalOf { DarkSyntax }
 
-/** Terminal + code text. FontFamily.Monospace resolves to the device mono face. */
-val MonoStyle = TextStyle(fontFamily = FontFamily.Monospace, fontSize = 11.sp, lineHeight = 14.sp)
+/**
+ * Terminal + code text. `FontFamily.Monospace` resolves to whatever mono face the
+ * platform has.
+ *
+ * The two clients genuinely disagree about the SIZE and only about the size, so
+ * it is a theme parameter rather than a second renderer: a phone is read at
+ * reading distance, a desktop at arm's length. Everything downstream reads
+ * [LocalMonoStyle] and neither renderer knows which one it got.
+ *
+ * 15sp of leading, not the 14 the phone's `MonoStyle` declared: that constant was
+ * never referenced by anything on the phone, while the code card it would now
+ * feed has always drawn at 11/15 inline. Taking the value that was actually on
+ * screen is what makes this move invisible.
+ */
+val MonoStylePhone = TextStyle(fontFamily = FontFamily.Monospace, fontSize = 11.sp, lineHeight = 15.sp)
+val MonoStyleDesktop = TextStyle(fontFamily = FontFamily.Monospace, fontSize = 13.sp, lineHeight = 17.sp)
+
+val LocalMonoStyle = staticCompositionLocalOf { MonoStylePhone }
 
 private val HuginnTypography = Typography()
 
+/**
+ * @param darkTheme the phone follows the system; the desktop passes `true`
+ *   outright, because a light scheme nobody has asked for is a scheme nobody has
+ *   checked.
+ * @param monoStyle [MonoStylePhone] or [MonoStyleDesktop]; see above.
+ * @param rootSurface wrap the content in a [Surface]. **Load-bearing on desktop
+ *   and silent when missing.** Material3's `Text` falls back to
+ *   `LocalContentColor`, whose default is BLACK — `MaterialTheme` does not
+ *   provide it, `Surface` does — so without a Surface somewhere above it the
+ *   whole window renders black ink on a near-black background. The phone's root
+ *   is a `Scaffold`, which is a Surface already, so it passes `false` and keeps
+ *   exactly the layering it shipped.
+ */
 @Composable
 fun HuginnTheme(
     darkTheme: Boolean = isSystemInDarkTheme(),
+    monoStyle: TextStyle = MonoStylePhone,
+    rootSurface: Boolean = false,
     content: @Composable () -> Unit,
 ) {
-    CompositionLocalProvider(LocalSyntaxColors provides if (darkTheme) DarkSyntax else LightSyntax) {
+    CompositionLocalProvider(
+        LocalSyntaxColors provides if (darkTheme) DarkSyntax else LightSyntax,
+        LocalMonoStyle provides monoStyle,
+    ) {
         MaterialTheme(
             colorScheme = if (darkTheme) DarkColors else LightColors,
             typography = HuginnTypography,
-            content = content,
-        )
+        ) {
+            if (rootSurface) {
+                Surface(
+                    modifier = Modifier.fillMaxSize(),
+                    color = MaterialTheme.colorScheme.background,
+                    contentColor = MaterialTheme.colorScheme.onBackground,
+                    content = content,
+                )
+            } else {
+                content()
+            }
+        }
     }
 }
