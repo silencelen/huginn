@@ -35,7 +35,7 @@ enum class View { CHATS, SESSIONS, STATUS, SETTINGS }
 class AppStore(
     val settings: DesktopSettings,
     val presence: Presence,
-    private val scope: CoroutineScope,
+    val scope: CoroutineScope,
 ) {
 
     /**
@@ -55,6 +55,14 @@ class AppStore(
         clientIdProvider = { settings.clientIdNow() },
         canNotifyProvider = { settings.notifyEnabledNow() && presence.present.value },
     )
+
+    /**
+     * The tmux size lease, held at APP level because its release paths do not
+     * share a lifetime: leaving a session view is a composition event, minimizing
+     * is a window event, and being killed is neither. A per-view owner could only
+     * ever answer the first of those.
+     */
+    val paneLease = PaneLeaseHolder(client, scope)
 
     // ------------------------------------------------------------ navigation
 
