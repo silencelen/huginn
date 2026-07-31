@@ -228,6 +228,7 @@ older hook that writes only the bare state word is still accepted.
 ```bash
 scripts/ship.sh  [release|debug]   # build + scp to devserv + reindex + verify live
 scripts/build.sh [release|debug]   # tests + assemble only, no publish
+scripts/release-desktop.sh         # the Compose DESKTOP client -> /v1/desktop-kt
 ```
 
 **`ship.sh` is the default. Reach for `build.sh` only when you genuinely do not
@@ -248,6 +249,28 @@ Requires JDK 17 (`/usr/lib/jvm/java-17-openjdk-amd64`) and
   ship it.
 - **Debug** signs with the checked-in `app/debug.keystore`, so debug builds carry
   the same cert on every machine.
+
+### The desktop client
+
+`scripts/release-desktop.sh` builds `:app-desktop` for BOTH platforms on this
+Linux box and publishes them to huginn-appd's `/v1/desktop-kt`. Its version is
+`app-desktop/version.txt` and nothing else; the Gradle packaging, the generated
+`BuildInfo` the updater compares against, and the release gates all read it.
+
+The Windows installer is real, and no Windows machine is involved: `jpackage`
+cannot cross-compile, so the WINDOWS `jpackage.exe` runs under wine against a
+runtime image cross-linked from Windows jmods (cached at `/opt/jdk-win-x64`,
+re-fetched automatically), and Linux `makensis` wraps the result. The script
+proves the chain by installing the .exe under wine and launching what it
+installed.
+
+**`/v1/desktop-kt` is NOT `/v1/desktop`.** The latter is the Electron client's
+channel and the owner is running that client; publishing Compose artifacts there
+would offer a running application an update into a different program. The
+separation runs all the way down — separate serving directory, separate manifest,
+separate Windows install path and uninstall key — and the release script asserts
+the Electron channel is still intact on every run. See
+`docs/DESKTOP-MIGRATION.md` for what cutover involves.
 
 ## Modules
 

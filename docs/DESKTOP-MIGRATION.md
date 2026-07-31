@@ -111,6 +111,28 @@ against the `manifest.json` the release script already produces.
   re-show at the same geometry leaves the client believing it holds a lease the
   daemon does not have. Harmless in that direction (one spare `DELETE`); the
   client must never make the opposite assumption.
+- **`compose.desktop.currentOs` is not the whole Windows classpath.** Swapping
+  skiko for the windows-x64 variant is necessary but not sufficient: in a
+  PACKAGED app skiko does not load its native out of the jar at all — Compose
+  extracts `libskiko-*.so` beside the jars and passes
+  `-Dskiko.library.path=$APPDIR`. `createDistributable` does that for the host
+  platform for free; the wine path has to unzip `skiko-windows-x64.dll` (and
+  `icudtl.dat`) into the jpackage `--input` directory itself. Miss it and the
+  installer builds, installs and launches into a `RenderException` with no
+  renderer left to fall back to.
+- **jpackage puts every jar in `--input` on the classpath itself.** The Linux
+  `.cfg` Compose generates lists them explicitly, which reads as though the
+  plugin had to; it does not. The wine invocation needs `--main-jar` and nothing
+  else. (What Compose really adds are the three `java-options`, which the release
+  script copies verbatim out of the generated Linux `.cfg`.)
+- **`continue` inside an inline lambda needs language version 2.2.** This module
+  is on 2.1, so `runCatching { … }.getOrElse { …; continue }` — the obvious way
+  to write "try the next pinned route" — does not compile, and the error names a
+  language feature rather than the line's intent.
+- **`wine64` is not a command on this box.** wine 9.0 ships a single `/usr/bin/wine`
+  that runs 64-bit PE binaries; `wine64` exists only as `/usr/lib/wine/wine64`, not
+  on `PATH`. A script testing for `wine64` concludes wine is missing on a machine
+  that has it.
 
 ## Carry-over: behaviour the Compose desktop must not lose
 
@@ -187,5 +209,42 @@ verb unify into one control.
      The transcript merge left the Android view model for `:core` so both clients
      key rows on one identity rule; the two poll backoff ladders joined it, since a
      session that never prompted Claude 409s forever.
-4. **Packaging + updater** (chain above).
+4. **Packaging + updater** — done. `mobile/scripts/release-desktop.sh` builds
+   both installers on this box and publishes them to a channel of the Compose
+   client's own.
+   - **Windows**: `:app-desktop:windowsAppLibs` stages a Windows-x64 runtime
+     classpath — its OWN resolvable configuration, with the attributes copied
+     from `runtimeClasspath` rather than written out again, so it differs from
+     the Linux one in skiko and nothing else, and the task asserts that. Then
+     Windows `jlink.exe` under wine builds the runtime image, Windows
+     `jpackage.exe` under wine builds the app-image, and Linux `makensis` wraps
+     it. The jlink module list is READ OUT of the Linux runtime image's
+     `release` file rather than maintained a second time.
+   - **Linux**: Compose's own `packageDeb`.
+   - **Channel**: `/v1/desktop-kt`, served from `DATA_DIR/desktop-kt`, which the
+     Electron channel's code cannot reach. `/v1/desktop` is untouched, and the
+     release script asserts that on every run.
+   - **Updater**: `app-desktop/.../update/`, hand-rolled. Pinned feed, semver
+     compare, sha256 verified against what the manifest already carries, then
+     `Ready` and stop. Proven end to end by `:app-desktop:updaterProbe`, which
+     runs the real updater against the real channel as the release's last gate.
+   - **Not wired yet**: nothing calls `DesktopUpdater.start()` and the Settings
+     screen does not show update state. Both are small, and both are edits to
+     files phase 3c owned while this was built.
 5. **Parity, then retire Electron.**
+
+## Cutover: how the two channels stop being two
+
+NOT a directory rename — a rename is the exact accident the separation exists to
+prevent, and it would land on a client that is running. The order is:
+
+1. A final Electron release whose only change is a notice.
+2. One Compose release that BOTH starts publishing to `/v1/desktop` and has its
+   installer take over the Electron install path and uninstall key, so Windows
+   sees an upgrade rather than a second application. `UpdateFeed.PATH` changes in
+   that same release.
+3. `/v1/desktop-kt` retires once no installed client is still pinned to it.
+
+Until step 2, nothing writes across the line. An Electron client that "updates"
+into a Compose build has been replaced by a different application, silently,
+from its own update prompt.
