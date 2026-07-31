@@ -65,6 +65,7 @@ import com.silencelen.huginn.desktop.attach.attachmentDropTarget
 import com.silencelen.huginn.desktop.attach.composeMessage
 import com.silencelen.huginn.desktop.attach.rememberAttachmentController
 import com.silencelen.huginn.desktop.ui.chat.ChatTopBar
+import com.silencelen.huginn.ui.LocalTranscriptMetrics
 import com.silencelen.huginn.ui.FollowNewest
 import com.silencelen.huginn.ui.MarkdownText
 import com.silencelen.huginn.ui.NewestPill
@@ -254,14 +255,16 @@ fun ChatView(
                     }
 
                 else -> SelectionContainer {
-                    // The phone's chat rhythm, because the rows are the phone's
-                    // rows: they carry no outer margin of their own, so the gap
-                    // between them belongs to whoever lists them.
+                    // The rows are the phone's rows and carry no outer margin of
+                    // their own, so the gap between them belongs to whoever lists
+                    // them — and that gap is a density decision the shell owns,
+                    // not a property of a transcript row.
+                    val metrics = LocalTranscriptMetrics.current
                     LazyColumn(
                         Modifier.fillMaxSize().padding(horizontal = 16.dp),
                         state = listState,
-                        contentPadding = PaddingValues(vertical = 8.dp),
-                        verticalArrangement = Arrangement.spacedBy(9.dp),
+                        contentPadding = PaddingValues(vertical = metrics.rowPadding),
+                        verticalArrangement = Arrangement.spacedBy(metrics.rowSpacing),
                     ) {
                         items(rows.size, key = { rowKeys[it] }) { i ->
                             TranscriptRowItem(rows[i], onCopy = rememberCopy())
