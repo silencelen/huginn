@@ -1,5 +1,33 @@
 # Huginn Desktop changelog
 
+## 0.4.0
+
+**Copying works again.** 0.3.0's permission lockdown denied every browser
+permission, which swept up clipboard writes — so the terminal's Ctrl+C, the
+code-card Copy button and Copy diagnostics all silently copied nothing. Ctrl+C
+looked fine because the selection stayed highlighted. Clipboard writes are now
+allowed (and only those), every copy path reports whether it actually landed,
+and the terminal flashes "Copied" on success.
+
+**A real menu.** Replacing Electron's default one means Ctrl+R no longer
+reloads the window — that had been orphaning background work and stranding the
+tmux size lease — and Ctrl+W now means close to tray. Help carries check for
+updates, copy diagnostics, and open the log folder.
+
+**A resizable list pane** that remembers its width (drag the seam, double-click
+to reset), tooltips on the state dots, badges and counts, double-click to
+select a word and triple-click for a line in the terminal, and dropping
+selected text onto the composer now appends it instead of doing nothing.
+
+**Fixes you would have hit eventually.** A message sent as a run was ending
+started a run that streamed to nobody, so the answer only appeared if you
+reopened the chat. A desktop left idle kept telling the daemon it was still
+watching for up to half an hour, which suppressed the household Telegram
+fallback. Error banners now show the daemon's own words rather than
+"Error invoking remote method…", and whether a session has simply never
+prompted Claude is read from the real HTTP status instead of guessed from
+the wording of an error.
+
 ## 0.3.0
 
 **Fixes a 0.2.0 regression: the Screen tab was broken.** Keeping both session
