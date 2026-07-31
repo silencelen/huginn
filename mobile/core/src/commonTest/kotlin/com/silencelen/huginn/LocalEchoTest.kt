@@ -2,10 +2,10 @@ package com.silencelen.huginn
 
 import com.silencelen.huginn.ui.LocalEcho
 import com.silencelen.huginn.ui.LocalEcho.Echo
-import org.junit.Assert.assertEquals
-import org.junit.Assert.assertFalse
-import org.junit.Assert.assertTrue
-import org.junit.Test
+import kotlin.test.assertEquals
+import kotlin.test.assertFalse
+import kotlin.test.assertTrue
+import kotlin.test.Test
 
 /**
  * The judgment calls of optimistic echo. A wrong guess here is a ghost

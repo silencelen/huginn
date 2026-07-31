@@ -3,9 +3,9 @@ package com.silencelen.huginn
 import com.silencelen.huginn.ui.MdBlock
 import com.silencelen.huginn.ui.Markdown
 import com.silencelen.huginn.ui.tailRevision
-import org.junit.Assert.assertEquals
-import org.junit.Assert.assertTrue
-import org.junit.Test
+import kotlin.test.assertEquals
+import kotlin.test.assertTrue
+import kotlin.test.Test
 
 /**
  * The renderer only has to handle what Claude actually writes in an answer. The
@@ -75,7 +75,7 @@ class MarkdownTest {
     fun `inline styles are applied and their markers removed`() {
         val s = Markdown.inline("**bold** and *italic* and `code` and ~~gone~~")
         assertEquals("bold and italic and code and gone", s.text)
-        assertTrue("expected several styled spans", s.spanStyles.size >= 4)
+        assertTrue(s.spanStyles.size >= 4, "expected several styled spans")
     }
 
     @Test
@@ -135,14 +135,14 @@ class TailRevisionTest {
         val cappedCount = 600
         val before = tailRevision(4_939_818L, cappedCount, 120)
         val after = tailRevision(4_945_610L, cappedCount, 120)
-        assertTrue("a new byte of transcript must move the follower", before != after)
+        assertTrue(before != after, "a new byte of transcript must move the follower")
     }
 
     @Test
     fun `revision changes as a streaming answer grows without a new item`() {
         val a = tailRevision(1000L, 12, 40)
         val b = tailRevision(1000L, 12, 41)
-        assertTrue("each token must move the follower", a != b)
+        assertTrue(a != b, "each token must move the follower")
     }
 
     @Test
