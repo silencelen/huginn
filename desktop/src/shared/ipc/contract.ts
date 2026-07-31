@@ -150,6 +150,10 @@ export interface PushApi {
   'push.update': UpdateState
   /** Main asks the renderer to show a target (notification/tray/toast click). */
   'push.navigate': { view: 'chats' | 'sessions'; id: string }
+  /** A menu item the renderer owns the behaviour for. */
+  'push.command': {
+    command: 'palette' | 'settings' | 'status' | 'new-ask' | 'new-act' | 'diagnostics'
+  }
 }
 
 export type InvokeChannel = keyof InvokeApi

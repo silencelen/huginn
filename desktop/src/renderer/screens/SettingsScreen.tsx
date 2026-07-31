@@ -10,6 +10,7 @@ import { useEffect, useRef, useState } from 'react'
 import { useApp } from '../stores/app'
 import { call, on } from '../lib/ipc'
 import { ConfirmDialog } from '../components/common/Dialog'
+import { copyText } from '../components/common/clipboard'
 import type { UpdateState } from '../../main/updater'
 
 interface FieldNote {
@@ -408,8 +409,14 @@ export function SettingsScreen(): React.JSX.Element {
           type="button"
           onClick={() => {
             void call('diagnostics.text')
-              .then((text) => navigator.clipboard.writeText(text))
-              .then(() => setDiagNote({ ok: true, text: 'Copied to the clipboard' }))
+              .then((text) => copyText(text))
+              .then((ok) =>
+                setDiagNote(
+                  ok
+                    ? { ok: true, text: 'Copied to the clipboard' }
+                    : { ok: false, text: 'Could not reach the clipboard' },
+                ),
+              )
               .catch((e: unknown) => setDiagNote({ ok: false, text: errText(e) }))
           }}
         >

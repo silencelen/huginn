@@ -15,6 +15,7 @@ import type { AgentRun, AgentsInfo } from '../../../shared/api/types'
 import { plannedAgents } from '../../../shared/core/transcriptGroups'
 import { useApp } from '../../stores/app'
 import { call } from '../../lib/ipc'
+import { agentDotTip, agentsDoneTip, bgAgentsTip, bgShellsTip } from '../common/tips'
 
 /**
  * How long the strip advertises finished work. Android keeps agent rows for 45
@@ -61,13 +62,16 @@ function AgentSheet({
   return (
     <div className="agent-sheet">
       <div className="agent-row">
-        <span className="agent-line">
+        <span className="agent-line" data-tip={agentsDoneTip(done, total)}>
           {done} of {total} agent{total === 1 ? '' : 's'} done
         </span>
       </div>
       {list.map((a) => (
         <div key={a.id} className="agent-row">
-          <span className={`state-dot ${a.active ? 'dot-running' : 'dot-idle'}`} />
+          <span
+            className={`state-dot ${a.active ? 'dot-running' : 'dot-idle'}`}
+            data-tip={agentDotTip(a, info.serverTime)}
+          />
           <span className="agent-task">{taskLabel(a)}</span>
           {a.workflow !== null ? <span className="agent-wf">{a.workflow}</span> : null}
           <span className="agent-line">
@@ -185,13 +189,15 @@ export function WorkStrip({ name }: { name: string }): React.JSX.Element | null 
           <span className="workstrip-head dim">{settledHead}</span>
         )}
         {live && row.bgTask !== null ? (
-          <span className="workstrip-detail">
+          <span className="workstrip-detail" data-tip={bgShellsTip(row.bgShells, row.bgTask)}>
             ⚙ {row.bgTask}
             {row.bgShells > 1 ? ` +${row.bgShells - 1}` : ''}
           </span>
         ) : null}
         {live && row.bgAgents > 0 ? (
-          <span className="workstrip-detail">{row.bgAgents} agents</span>
+          <span className="workstrip-detail" data-tip={bgAgentsTip(row.bgAgents) ?? ''}>
+            {row.bgAgents} agents
+          </span>
         ) : null}
         <span className="workstrip-toggle">{open ? '▾' : '▸'}</span>
       </div>
