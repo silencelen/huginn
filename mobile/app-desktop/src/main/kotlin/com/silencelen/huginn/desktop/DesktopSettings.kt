@@ -69,6 +69,25 @@ class DesktopSettings(private val file: File = defaultFile()) : HuginnSettings {
          * the owner cannot get rid of.
          */
         val closeToTray: Boolean = true,
+
+        /**
+         * WHERE THE WINDOW WAS. Desktop-only for the obvious reason, and worth
+         * persisting for a less obvious one: this client is always-on and hides to
+         * the tray, so "restart" is rare and a window that reopens 1280×840 in the
+         * middle of the screen is a window the owner re-places by hand on exactly
+         * the occasions they are already annoyed — after a crash, after an update.
+         *
+         * -1 for x/y means "never placed": the window manager centres it, which is
+         * the right first-run answer and cannot be expressed as a coordinate.
+         */
+        val windowX: Int = -1,
+        val windowY: Int = -1,
+        val windowW: Int = WindowLayout.DEFAULT_W,
+        val windowH: Int = WindowLayout.DEFAULT_H,
+        val windowMaximized: Boolean = false,
+
+        /** The list/detail seam, in dp. See [Splitter.clamp]. */
+        val listWidth: Float = Splitter.DEFAULT,
     )
 
     private val json = Json { ignoreUnknownKeys = true; encodeDefaults = true; prettyPrint = true }
@@ -97,6 +116,10 @@ class DesktopSettings(private val file: File = defaultFile()) : HuginnSettings {
     private val _lastWatchError = MutableStateFlow(stored.lastWatchError)
     private val _lastWatchErrorAt = MutableStateFlow(stored.lastWatchErrorAt)
     private val _closeToTray = MutableStateFlow(stored.closeToTray)
+    private val _windowLayout = MutableStateFlow(
+        WindowLayout(stored.windowX, stored.windowY, stored.windowW, stored.windowH, stored.windowMaximized)
+    )
+    private val _listWidth = MutableStateFlow(Splitter.clamp(stored.listWidth))
 
     init {
         if (stored.clientId.isEmpty()) mutate { it.copy(clientId = "desktop-kt-${UUID.randomUUID()}") }
@@ -220,6 +243,49 @@ class DesktopSettings(private val file: File = defaultFile()) : HuginnSettings {
     }
 
     fun closeToTrayNow(): Boolean = _closeToTray.value
+
+    // ------------------------------------------------------- window + layout
+    //
+    // Both are written on every change and both are cheap to write (the file is a
+    // token, a URL and a handful of counters), but a DRAG is not one change — it
+    // is one per frame. The callers debounce; see Main.kt's window watcher and the
+    // splitter in Shell.kt. Persisting per frame would rewrite this file sixty
+    // times a second on a resize, which is the one way a settings file that also
+    // holds the token gets corrupted.
+
+    val windowLayout: StateFlow<WindowLayout> = _windowLayout.asStateFlow()
+
+    fun setWindowLayout(value: WindowLayout) {
+        if (value == _windowLayout.value) return
+        _windowLayout.value = value
+        mutate {
+            it.copy(
+                windowX = value.x,
+                windowY = value.y,
+                windowW = value.w,
+                windowH = value.h,
+                windowMaximized = value.maximized,
+            )
+        }
+    }
+
+    /** The list/detail seam, in dp. Always inside [Splitter]'s bounds. */
+    val listWidth: StateFlow<Float> = _listWidth.asStateFlow()
+
+    fun setListWidth(value: Float) {
+        val next = Splitter.clamp(value)
+        if (next == _listWidth.value) return
+        _listWidth.value = next
+        mutate { it.copy(listWidth = next) }
+    }
+
+    /** Drag, in dp of pointer travel. Clamped, so the seam stops rather than runs. */
+    fun nudgeListWidth(delta: Float) = setListWidth(_listWidth.value + delta)
+
+    /** Keyboard adjust: one coarse step. A drag is what fine adjustment is for. */
+    fun widenList() = nudgeListWidth(Splitter.STEP)
+    fun narrowList() = nudgeListWidth(-Splitter.STEP)
+    fun resetListWidth() = setListWidth(Splitter.DEFAULT)
 
     fun baseUrlNow(): String = _baseUrl.value
     fun tokenNow(): String = _token.value

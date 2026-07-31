@@ -218,11 +218,28 @@ class AppStore(
     }
 
     private fun note(t: Throwable) {
+        // A CANCELLATION IS NOT A FAULT. `pollLoop` and `watchLoop` both hang off
+        // `collectLatest`, which cancels the in-flight refresh every time presence
+        // flips — so walking away from the desk and back reliably put
+        // "Child of the scoped flow was cancelled" on screen, where it said nothing
+        // to the reader and sat on top of any real error underneath it. Caught here
+        // rather than at each call site because every one of them uses
+        // `runCatching`, which does not spare CancellationException either.
+        if (t is kotlinx.coroutines.CancellationException) return
         _error.value = when (t) {
             is HuginnClient.HuginnException -> t.message
             else -> t.message ?: "network error"
         }
     }
+
+    /**
+     * The same reporting path, for calls the SHELL makes rather than the poll loop:
+     * rename, delete, interrupt, end a session. Those go straight to the client
+     * from a context-menu item, and without this a failed one does nothing at all —
+     * the row stays, the reason is swallowed, and the reader is left to guess
+     * whether the click even registered.
+     */
+    fun noteError(t: Throwable) = note(t)
 
     // ------------------------------------------------------------- lifecycle
 
