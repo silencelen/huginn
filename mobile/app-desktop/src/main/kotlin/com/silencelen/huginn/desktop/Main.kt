@@ -41,8 +41,24 @@ fun main() = application {
 
     val windowState = rememberWindowState(size = DpSize(1280.dp, 840.dp))
 
+    // THE LAST-CHANCE RELEASE. Registered once, and deliberately not the only one:
+    // the ordinary paths (leaving the view, hiding the window, closing it) each
+    // release for themselves, and this is what covers everything that never
+    // reaches them — SIGTERM, a kill from a session manager, an exception on the
+    // way out. Without it a force-quit leaves the owner's tmux window pinned at
+    // this window's shape until the daemon's 90-second lease lapses.
+    remember {
+        Runtime.getRuntime().addShutdownHook(Thread { store.paneLease.releaseBlocking() })
+    }
+
     Window(
-        onCloseRequest = ::exitApplication,
+        onCloseRequest = {
+            // Before the process starts unwinding, while the client is certainly
+            // still usable. Doing it twice is free: the holder clears what it holds
+            // before the call, so the shutdown hook finds nothing left to do.
+            store.paneLease.releaseBlocking()
+            exitApplication()
+        },
         state = windowState,
         title = "Huginn",
         onKeyEvent = { e ->

@@ -109,14 +109,14 @@ fun Shell(store: AppStore) {
                     if (chatId != null) ChatView(store.client, chatId!!)
                     else Placeholder("Select a chat, or start one.")
 
-                // 3c: the pane-size lease and the prompt cards. The grid's LOGIC
-                // is in :core (TerminalGrid) and its PAINTER is now in :ui
-                // (TerminalCanvas + SkiaCellPainter, tested against a real skia
-                // surface), so what is left here is the lease lifecycle — and a
-                // half-built lease is worse than none, it pins tmux geometry.
-                View.SESSIONS ->
-                    if (sessionName != null) SessionPlaceholder(sessionName!!)
+                View.SESSIONS -> {
+                    // Hoisted rather than `sessionName!!`: a `by`-delegated value is
+                    // not smart-cast across the read, and `!!` on the owner's daily
+                    // driver is a crash waiting for a race.
+                    val open = sessionName
+                    if (open != null) SessionView(store, open)
                     else Placeholder("Select a session.")
+                }
 
                 View.STATUS -> StatusView(status, plan, usage, route, watchConnected)
                 View.SETTINGS -> SettingsView(store.settings, route, present, notifyEnabled)
@@ -194,14 +194,4 @@ private fun Splitter(onDrag: (Float) -> Unit) {
 @Composable
 private fun Placeholder(text: String) {
     Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { Muted(text) }
-}
-
-@Composable
-private fun SessionPlaceholder(name: String) {
-    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-        Column(horizontalAlignment = Alignment.CenterHorizontally) {
-            Text(name, style = MaterialTheme.typography.titleSmall)
-            Muted("terminal view lands in phase 3c", Modifier.padding(top = 6.dp))
-        }
-    }
 }
