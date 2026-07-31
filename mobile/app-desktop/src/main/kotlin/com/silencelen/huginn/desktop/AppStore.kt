@@ -95,6 +95,45 @@ class AppStore(
     fun openChat(id: String?) { _view.value = View.CHATS; _chatId.value = id }
     fun openSession(name: String?) { _view.value = View.SESSIONS; _sessionName.value = name }
 
+    /** Escape: close the open item, or fall back to the chats list. */
+    fun back() {
+        when (_view.value) {
+            View.CHATS -> if (_chatId.value != null) _chatId.value = null
+            View.SESSIONS -> if (_sessionName.value != null) _sessionName.value = null
+            else -> _view.value = View.CHATS
+        }
+    }
+
+    /**
+     * Move through the list the current view is showing. Bound to Alt+arrow
+     * rather than the bare arrows precisely so it keeps working while the
+     * composer has focus — walking chats without first clicking out of what you
+     * were typing is the whole point.
+     */
+    fun stepList(delta: Int) {
+        when (_view.value) {
+            View.CHATS -> {
+                val list = _chats.value
+                val i = com.silencelen.huginn.desktop.ui.stepIndex(
+                    list.indexOfFirst { it.id == _chatId.value },
+                    list.size,
+                    delta,
+                )
+                list.getOrNull(i)?.let { _chatId.value = it.id }
+            }
+            View.SESSIONS -> {
+                val list = _sessions.value
+                val i = com.silencelen.huginn.desktop.ui.stepIndex(
+                    list.indexOfFirst { it.name == _sessionName.value },
+                    list.size,
+                    delta,
+                )
+                list.getOrNull(i)?.let { _sessionName.value = it.name }
+            }
+            else -> Unit
+        }
+    }
+
     // ---------------------------------------------------------------- data
 
     private val _chats = MutableStateFlow<List<Chat>>(emptyList())
