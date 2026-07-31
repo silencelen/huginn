@@ -55,6 +55,24 @@ against the `manifest.json` the release script already produces.
 - **A test gate that only covers one module is worse than none.** After the
   `:core` split, `scripts/build.sh` ran 58 of 179 tests and reported green.
   It now runs both modules and asserts a test-count floor.
+- **`MaterialTheme` does not provide `LocalContentColor`; `Surface` does.**
+  Without a `Surface` at the root, every unstyled `Text` renders BLACK — black
+  ink on the app's near-black background, on every screen at once. Nothing
+  warns. The phone never hit it because its root has always been a Surface.
+- **`Modifier.weight` handed straight to `SelectionContainer`** let the scroll
+  area take the remaining height and the composer was then laid out past the
+  window's bottom edge and clipped away — a chat window with no way to type in
+  it, and nothing in the logs. Put the weight on a plain `Box` and wrap the
+  container inside it.
+- **Headless verification needs a headful JDK and `java.awt.headless=false`.**
+  `openjdk-17-jre-headless` has no `libawt_xawt.so`, so the app dies in skiko's
+  `Setup.init` with `UnsatisfiedLinkError`; and the Gradle daemon runs with
+  `java.awt.headless=true`, which `JavaExec` inherits, so the app dies in
+  `getGlobalDensity` claiming *"No X11 DISPLAY variable was set"* against a
+  perfectly good Xvfb. Both diagnoses point away from the real cause.
+  `:app-desktop` sets the property and re-exports `DISPLAY` on every JavaExec.
+- **Skiko cannot make a GL context under Xvfb** and falls back to software.
+  Fine for verification; it does mean the GPU path is never exercised headless.
 
 ## Carry-over: behaviour the Compose desktop must not lose
 
@@ -103,9 +121,18 @@ verb unify into one control.
 ## Phases
 
 1. **`:core` extracted** — done (commit `c0c3b18`). Shared logic has one home.
-2. **`HuginnClient` → Ktor**, settings multiplatform. Unlocks sharing the
-   whole data layer, and moves `SseTest` into shared code.
+2. **`HuginnClient` → Ktor**, settings multiplatform — done (commit `c506a60`).
+   Unlocks sharing the whole data layer, and moved `SseTest` into shared code.
 3. **Compose Desktop app** against `:core`, promoting shared composables into
    a `:ui` module used by both apps.
+   - **3a — the app** — done. `:app-desktop` (JVM, Compose 1.7.3, JDK 17):
+     three-pane shell, chats + sessions lists on a visibility-gated 5s poll,
+     the watch SSE stream, a chat that streams a live run, a status view, and
+     a JSON settings store of its own (NOT the Electron client's file).
+     Verified headless against the live daemon.
+   - **3b — `:ui`** — the theme first (it is duplicated verbatim right now and
+     will drift invisibly), then the markdown/code renderer, the transcript
+     rows, and the terminal grid. Then the session view, which needs the grid
+     and the pane-size lease together — a half-built lease is worse than none.
 4. **Packaging + updater** (chain above).
 5. **Parity, then retire Electron.**
