@@ -1,0 +1,111 @@
+# Desktop: Electron → Compose Multiplatform
+
+Decided 2026-07-30, after two spikes that both passed. The desktop client is
+moving from Electron/TypeScript to Compose Multiplatform, sharing one Kotlin
+codebase with the Android app. Electron is maintenance-only until parity, then
+retired.
+
+## Why
+
+The goal is one behaviour and one look on both, differing only by aspect
+ratio. Electron can only ever *imitate* the Android app, by hand, forever.
+Measured before the decision: of the Electron app's code, ~2,545 lines were
+line-for-line ports of 2,225 lines of Kotlin, ~2,100 lines were re-written
+versions of the same test suites, and ~5,900 lines re-drew a UI that already
+existed in Compose. Only ~2,500 lines were genuinely Electron.
+
+## What the spikes proved
+
+**KMP restructure works.** 14 files / 1,557 lines moved to `commonMain` with
+zero `expect`/`actual`; the Android app builds byte-identically and all 179
+tests pass. Compose Multiplatform publishes the same `androidx.compose.*`
+package names, so files using `Color` and `AnnotatedString` compile in common
+code unchanged, and no skiko lands in the APK.
+
+**Windows installers still build on huginn.** PRESTIGE is not required.
+Proven chain, with a real Compose app producing a working 63 MB installer:
+
+```
+Gradle (Linux) → jpackage.exe UNDER WINE (app-image, native .exe launcher)
+               → Linux makensis (installer)
+               → existing /v1/desktop channel
+```
+
+`jpackage` cannot cross-compile (its valid types on Linux are app-image, rpm,
+deb). Hydraulic Conveyor was rejected: it requires *public, unauthenticated*
+access to the update site, because Windows drives its updates through the OS
+MSIX engine where no Bearer token can be injected — and ours is Bearer-authed
+on the tailnet. update4j is archived. The updater is hand-rolled (~1-2 days)
+against the `manifest.json` the release script already produces.
+
+## Traps (each one cost real time to find)
+
+- **JUnit → kotlin.test argument order is silent.** JUnit is
+  `assertEquals(message, expected, actual)`; kotlin.test is
+  `assertEquals(expected, actual, message)`. With three `String` arguments it
+  compiles clean and asserts something different. Never convert with `sed`.
+- **`gradlew packageMsi` on Linux exits 0 and produces nothing** (`onlyIf`
+  false). Assert that artifacts exist; never trust the exit code.
+- **A global desktop target ships the wrong natives** — declaring
+  `compose.desktop.windows_x64` globally put `skiko-windows-x64` inside the
+  Linux `.deb`. Use per-target configurations.
+- **Smart casts stop working across the module boundary** for the
+  `if (!x.isNullOrBlank()) { use x }` idiom. Hoist to a local val; do not
+  reach for `!!` in code that runs on the owner's daily driver.
+- **A test gate that only covers one module is worse than none.** After the
+  `:core` split, `scripts/build.sh` ran 58 of 179 tests and reported green.
+  It now runs both modules and asserts a test-count floor.
+
+## Carry-over: behaviour the Compose desktop must not lose
+
+The Electron app was audited (four passes, 77 findings) and several of these
+were bought with real bugs. They are requirements, not preferences.
+
+### Security
+
+- **`huginn://answer` must require a fingerprint.** Without it, any local
+  process or clicked web link can approve whatever prompt is on the pane —
+  on a root-equivalent agent host.
+- **The server address must be allowlisted.** The Bearer token follows it on
+  every request; an arbitrary address hands the daemon token to a stranger.
+- **The update feed must be pinned**, never derived from a user setting.
+  Builds are unsigned, so whoever controls the feed controls what runs.
+- **Deny permissions, but allow clipboard writes.** Denying the lot broke
+  every copy in the app, silently, for a whole release.
+
+### Lifecycle
+
+- **Pause polling when the window is hidden.** The pane poll is what renews
+  the tmux size lease, so a hidden window can pin someone else's session to
+  desktop geometry indefinitely.
+- **A dropped stream must reattach**, not freeze a half-written answer. Use
+  the daemon's `?since=` contract; seed from `partialText` xor replay from
+  zero, never both (that renders the answer twice).
+- **Claim the notification route only when someone is actually there.**
+  Claiming while idle suppresses the household Telegram fallback. The claim
+  rides on request headers, so a parked SSE must be reconnected when the idle
+  state changes or the claim goes stale for up to 30 minutes.
+- **Release the pane-size lease** on view close, window close and quit.
+- **Treat a 409 answer as ordinary** (`gone` / `changed`): the click was
+  correct when it was offered. Report it; never retry.
+
+### Interface
+
+Desktop earns its own frame: a resizable three-pane layout, a command palette
+over everything, keyboard navigation that works from the composer, right-click
+menus, tooltips on the marks that carry state, word and line selection in the
+terminal, and local echo so typing does not wait for a round trip.
+
+House rules that outrank taste: no left accent bars on rows or cards; subtle
+in-vernacular state marks rather than loud badges; controls that do the same
+verb unify into one control.
+
+## Phases
+
+1. **`:core` extracted** — done (commit `c0c3b18`). Shared logic has one home.
+2. **`HuginnClient` → Ktor**, settings multiplatform. Unlocks sharing the
+   whole data layer, and moves `SseTest` into shared code.
+3. **Compose Desktop app** against `:core`, promoting shared composables into
+   a `:ui` module used by both apps.
+4. **Packaging + updater** (chain above).
+5. **Parity, then retire Electron.**
