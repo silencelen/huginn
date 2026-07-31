@@ -132,7 +132,7 @@ class HuginnMessagingService : FirebaseMessagingService() {
                 }
             }
             // Claim this session BEFORE reconciling. Otherwise the reconcile's own
-            // WatchCycle sees the same transition as fresh and posts a SECOND
+            // WatchNotifier sees the same transition as fresh and posts a SECOND
             // notification under the same per-session id — and its text is the
             // generic "Waiting for your answer" whenever its prompt fetch comes
             // back empty, silently replacing the question and its answer buttons.
@@ -251,7 +251,7 @@ class HuginnMessagingService : FirebaseMessagingService() {
             runCatching {
                 val watch = client.watch(knownHash = null, waitMs = 0)
                 settings.noteContact(System.currentTimeMillis())
-                WatchCycle.apply(context, settings, watch)
+                WatchNotifier.apply(context, settings, watch)
             }
         }
     }

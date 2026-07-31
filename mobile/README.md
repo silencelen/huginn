@@ -249,6 +249,22 @@ Requires JDK 17 (`/usr/lib/jvm/java-17-openjdk-amd64`) and
 - **Debug** signs with the checked-in `app/debug.keystore`, so debug builds carry
   the same cert on every machine.
 
+## Modules
+
+- **`:core`** — Kotlin Multiplatform (`androidTarget` + `jvm`), all of it in
+  `commonMain`: the wire models, route resolution, the ANSI/terminal-grid and
+  markdown/syntax renderers, and the pure UI rules (local echo, transcript
+  grouping, live-input diffing, voice loop, watch cycle). No Android imports, so
+  the desktop client can eventually consume the same code instead of the
+  hand-ported TypeScript in `desktop/src/shared/core/`.
+- **`:app`** — the Android application: everything that needs a `Context`, a
+  keystore, an IME, a notification channel or a Compose screen.
+
+Package names did not change in the split, so `:app` sources import shared types
+exactly as before. Compose Multiplatform is a `:core` dependency only, and pinned
+to 1.7.3 (1.8.x needs Kotlin 2.1.20+); on the Android target its artifacts
+delegate to AndroidX, so no skiko renderer reaches the APK.
+
 ## Testing
 
 There is no device and no `/dev/kvm` on huginn, so there is no instrumentation or
@@ -270,6 +286,15 @@ fed bytes captured from the real system rather than invented:
   reader (tailing, torn lines, garbage lines, tool/result pairing), sign-in URL
   extraction, and the ccusage field mapping.
 
+Most of these live in `:core`'s `commonTest` and run twice, once per target;
+`:app` keeps only the tests whose subject needs Android or a `MockWebServer`
+(`ApiContractTest`, `SseTest`, `ReattachPlanTest`, the notification-timing ones).
+`commonTest` uses `kotlin.test`, whose `assertEquals` takes the message LAST
+where JUnit takes it first — with three String arguments that difference compiles
+silently, so assertions there are converted by hand and never by `sed`.
+
 `scripts/build.sh` runs both suites before every APK, so a regression cannot
-reach the phone unnoticed. Both suites have been mutation-checked: a deliberate
-bug in the wide-character width and in the 256-colour lookup each failed them.
+reach the phone unnoticed; it asserts the test COUNT as well as the exit code,
+because a suite that stops being discovered exits 0 having run nothing. Both
+suites have been mutation-checked: a deliberate bug in the wide-character width
+and in the 256-colour lookup each failed them.

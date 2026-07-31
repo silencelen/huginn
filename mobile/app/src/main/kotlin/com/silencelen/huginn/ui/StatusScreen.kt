@@ -153,6 +153,10 @@ private fun diskColor(usedPercent: String?): androidx.compose.ui.graphics.Color?
  */
 @Composable
 private fun PlanSection(plan: Plan?) {
+    // Hoisted like `d` in UsageSection below: these are public properties of
+    // another module (:core), which the compiler will not smart-cast inside a
+    // null check. A local is a snapshot and reads as one value, not two.
+    val error = plan?.error
     when {
         plan == null -> Text(
             "Loading…",
@@ -160,8 +164,8 @@ private fun PlanSection(plan: Plan?) {
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             modifier = Modifier.padding(horizontal = 16.dp),
         )
-        plan.error != null && plan.limits.isEmpty() -> Text(
-            plan.error,
+        error != null && plan.limits.isEmpty() -> Text(
+            error,
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.error,
             modifier = Modifier.padding(horizontal = 16.dp),
@@ -252,6 +256,7 @@ private fun resetLabel(iso: String?): String? {
 @Composable
 private fun UsageSection(usage: Usage?) {
     val d = usage?.data
+    val error = usage?.error
     when {
         usage == null -> Text(
             "Loading…",
@@ -259,8 +264,8 @@ private fun UsageSection(usage: Usage?) {
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             modifier = Modifier.padding(horizontal = 16.dp),
         )
-        usage.error != null -> Text(
-            usage.error,
+        error != null -> Text(
+            error,
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.error,
             modifier = Modifier.padding(horizontal = 16.dp),

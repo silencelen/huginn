@@ -124,9 +124,6 @@ fun AutoScrollToNewest(
     return unseen
 }
 
-/** Everything that should make a follower move, including growth of the last item. */
-fun tailRevision(vararg parts: Any?): Any = parts.toList()
-
 /**
  * True when the end of the content is on screen. Slack absorbs content padding
  * and sub-pixel rounding, so "one pixel short" still counts as the bottom.

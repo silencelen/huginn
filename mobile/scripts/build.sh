@@ -26,7 +26,31 @@ esac
 LOCK=/tmp/huginn-app-gradle.lock
 
 echo "[build 1/3] unit tests"
-flock "$LOCK" ./gradlew :app:testDebugUnitTest
+# BOTH modules. Most of the logic lives in :core now, and `:app:testDebugUnitTest`
+# alone would run 58 of the 179 tests and still exit 0 — a green gate over an
+# untested app. :core is run for both its targets because a shared-code change
+# that only breaks one of them is exactly what a multiplatform module is for.
+flock "$LOCK" ./gradlew :core:jvmTest :core:testDebugUnitTest :app:testDebugUnitTest
+
+# The COUNT is asserted, not just the exit code — same reason as the server suite
+# below, and the same failure the line above describes: a suite that stops being
+# DISCOVERED (a module split, a renamed source set, a task that silently has no
+# sources) exits 0 having run nothing. A floor catches that; it only ever needs
+# raising, never lowering, unless tests are deliberately deleted.
+KOTLIN_MIN=290   # 121 (:core jvm) + 121 (:core android) + 58 (:app), 2026-07-30
+KOTLIN_COUNT=0
+for D in core/build/test-results/jvmTest \
+         core/build/test-results/testDebugUnitTest \
+         app/build/test-results/testDebugUnitTest; do
+  N="$(grep -ho 'tests="[0-9]*"' "$D"/*.xml 2>/dev/null \
+       | grep -oE '[0-9]+' | awk '{s+=$1} END {print s+0}')"
+  [ "${N:-0}" -gt 0 ] || { echo "[build] $D ran ZERO tests — refusing." >&2; exit 1; }
+  KOTLIN_COUNT=$((KOTLIN_COUNT + N))
+done
+[ "$KOTLIN_COUNT" -ge "$KOTLIN_MIN" ] \
+  || { echo "[build] kotlin tests ran $KOTLIN_COUNT, expected >= $KOTLIN_MIN — refusing." >&2; exit 1; }
+echo "[build] kotlin tests: $KOTLIN_COUNT passed"
+
 # The daemon's pure logic (pane parsing, prompt detection, transcript reading)
 # is tested with node's own runner; it gates the APK because the app is useless
 # against a broken server.

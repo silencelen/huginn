@@ -70,7 +70,7 @@ class SessionWatchWorker(
         // overlapping mechanisms safe: the comparison baseline is persisted, so
         // whichever of them notices a transition first consumes it, and the others
         // find nothing left to announce.
-        WatchCycle.apply(context, settings, watch, client)
+        WatchNotifier.apply(context, settings, watch, client)
         return Result.success()
     }
 
