@@ -61,10 +61,17 @@ import com.silencelen.huginn.data.TranscriptEvent
  *   0.9 on a phone reads as a bubble; 1.0 with a cap reads as a column.
  * @param userBubbleMaxWidth an absolute ceiling, or [Dp.Unspecified] for none.
  *   Unbounded on a 1280pt window, a two-word message becomes a 1200pt bar.
+ * @param rowSpacing the gap between transcript rows. The same rhythm that reads
+ *   as comfortable under a thumb reads as loose under a mouse, where the eye
+ *   travels further per screen and the reader is scanning rather than dwelling.
+ *   Defaults to the phone's value, so the phone is unchanged by this existing.
+ * @param rowPadding the transcript's own vertical padding, for the same reason.
  */
 data class TranscriptMetrics(
     val userBubbleFraction: Float = 0.9f,
     val userBubbleMaxWidth: Dp = Dp.Unspecified,
+    val rowSpacing: Dp = 9.dp,
+    val rowPadding: Dp = 8.dp,
 )
 
 val LocalTranscriptMetrics = staticCompositionLocalOf { TranscriptMetrics() }
