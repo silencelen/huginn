@@ -13,6 +13,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { TranscriptPage } from '../../shared/api/types'
 import { mergeTranscriptPage } from '../../shared/core/transcriptMerge'
+import { decodeWireError, humanError } from '../../shared/ipc/errors'
 import { call } from '../lib/ipc'
 
 const POLL_MS = 2_500
@@ -33,22 +34,15 @@ export interface TranscriptState {
 }
 
 /**
- * Electron's ipcMain.handle serializes a rejected HuginnHttpError down to its
- * message ("Error invoking remote method '…': HuginnHttpError: <server text>"),
- * so the status code is gone by the time it reaches the renderer. The daemon's
- * own error texts for the four never-ran shapes are matched instead, plus the
- * bare HTTP fallbacks HuginnHttpError uses when the server sent no text.
+ * "This has never prompted Claude" is a 404/409, not a failure — and the
+ * status now survives IPC (shared/ipc/errors), so this reads the real code
+ * instead of matching the daemon's prose. The old string match would have
+ * silently misclassified the day someone reworded an error.
  */
-const NEVER_RAN_MARKS = [
-  'no transcript recorded', // session 409: hook has not fired yet
-  'recorded transcript file is gone', // session 409: file vanished
-  'chat has not run yet', // chat 409: no claudeSessionId
-  'transcript not found', // chat 409: transcript file not located
-  'HTTP 404',
-  'HTTP 409',
-]
-
-const looksNeverRan = (msg: string): boolean => NEVER_RAN_MARKS.some((m) => msg.includes(m))
+const looksNeverRan = (msg: string): boolean => {
+  const wire = decodeWireError(msg)
+  return wire !== null && (wire.status === 404 || wire.status === 409)
+}
 
 export function useTranscript(
   kind: 'session' | 'chat',
@@ -99,7 +93,8 @@ export function useTranscript(
     } catch (e) {
       if (!aliveRef.current) return
       const msg = e instanceof Error ? e.message : String(e)
-      setError(msg)
+      // Show the daemon's own sentence, never Electron's plumbing prefix.
+      setError(humanError(msg))
       setNeverRan(looksNeverRan(msg))
       failuresRef.current += 1
     } finally {

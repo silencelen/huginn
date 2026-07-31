@@ -20,13 +20,17 @@ import { parseApiError } from '../../shared/api/types'
  *   dead socket, not a thinking model.
  * - watchStream: keepalive every 25s; same reasoning.
  */
-export type Tier = 'normal' | 'longPoll' | 'chatStream' | 'watchStream'
+export type Tier = 'normal' | 'longPoll' | 'chatStream' | 'watchStream' | 'upload'
 
 const TIERS: Record<Tier, { idleMs: number; totalMs: number | null }> = {
   normal: { idleMs: 30_000, totalMs: null },
   longPoll: { idleMs: 150_000, totalMs: 180_000 },
   chatStream: { idleMs: 60_000, totalMs: null },
   watchStream: { idleMs: 60_000, totalMs: null },
+  // No total cap: the daemon accepts up to 128MB, which over a relayed link
+  // can outlast longPoll's 180s and die mid-transfer. Idle timeout still
+  // catches a genuinely dead socket.
+  upload: { idleMs: 60_000, totalMs: null },
 }
 
 const CONNECT_MS = 8_000

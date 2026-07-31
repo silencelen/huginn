@@ -7,6 +7,7 @@ import { useEffect, useRef, useState } from 'react'
 import { fileMarker, imageMarker } from '../../../shared/core/attachmentMarker'
 import { isImageFile, transcodeImage } from '../../attach/transcode'
 import { call } from '../../lib/ipc'
+import { appendDropped } from './dropText'
 
 interface Attachment {
   label: string
@@ -31,6 +32,7 @@ export function Composer(props: {
   const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const pendingSave = useRef<{ key: string; value: string } | null>(null)
   const fileInput = useRef<HTMLInputElement | null>(null)
+  const inputEl = useRef<HTMLTextAreaElement | null>(null)
 
   useEffect(() => {
     let alive = true
@@ -171,6 +173,25 @@ export function Composer(props: {
     })()
   }
 
+  /**
+   * A drop that carried text rather than a file. Selected text from anywhere —
+   * a browser, the transcript, another editor — used to land on the composer
+   * and vanish, because the handler only ever looked at `files`.
+   */
+  const dropTextIn = (dropped: string): void => {
+    const next = appendDropped(text, dropped)
+    if (next === text) return
+    setText(next)
+    persist(next)
+    // Land the caret at the end, ready to keep typing around what arrived.
+    queueMicrotask(() => {
+      const el = inputEl.current
+      if (el === null) return
+      el.focus()
+      el.setSelectionRange(el.value.length, el.value.length)
+    })
+  }
+
   const showStop = props.running && text.trim() === '' && attachment === null
   return (
     <div
@@ -184,7 +205,11 @@ export function Composer(props: {
         e.preventDefault()
         setDragOver(false)
         const file = e.dataTransfer.files[0]
-        if (file !== undefined) attachFile(file)
+        if (file !== undefined) {
+          attachFile(file)
+          return
+        }
+        dropTextIn(e.dataTransfer.getData('text/plain'))
       }}
     >
       {attachment !== null ? (
@@ -215,6 +240,7 @@ export function Composer(props: {
         }}
       />
       <textarea
+        ref={inputEl}
         className="composer-input"
         rows={3}
         placeholder="Message huginn…"
