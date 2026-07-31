@@ -111,7 +111,16 @@ export class Chats {
         await this.client().request(routes.chatMessages(id), { method: 'POST', json: { text } }),
       )
       this.onListsChanged()
-      return { queued: boolOr(body.queued), position: intOr(body.position, 0) || null }
+      if (!boolOr(body.queued)) {
+        // The daemon answered `{running:true}` instead of `{queued}`: our local
+        // run was stale-true and the send actually STARTED a new run. Without
+        // this, that run streamed to nobody and the answer only appeared if
+        // the chat was reopened.
+        this.runs.delete(id)
+        void this.attachIfRunning(id).catch(() => {})
+        return { queued: false, position: null }
+      }
+      return { queued: true, position: intOr(body.position, 0) || null }
     }
     this.startRun(id, { method: 'POST', path: routes.chatMessages(id, true), json: { text } })
     this.onListsChanged()
@@ -276,6 +285,10 @@ export class Chats {
       case 'done':
         run.running = false
         run.handle = null
+        // Keep the last answer's events for a reattaching view, but do not
+        // hold every chat's 4000-event buffer for the life of a tray-resident
+        // process. The digest on disk is the durable record.
+        if (run.events.length > 400) run.events.splice(0, run.events.length - 400)
         this.onListsChanged()
         break
       case 'error':

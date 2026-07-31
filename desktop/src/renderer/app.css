@@ -1362,3 +1362,73 @@ textarea {
 .tab-hidden {
   display: none;
 }
+
+/* ---- resizable list pane ----
+   Appended, not edited into the block above: this file is shared, and an
+   override at the end of the cascade is a diff nobody else has to merge.
+   The grid stays declarative — only --list-w moves, set on .shell by App. */
+
+.shell {
+  position: relative;
+  --rail-w: 76px;
+  grid-template-columns: var(--rail-w) var(--list-w, 300px) 1fr;
+}
+
+/* Absolutely positioned rather than a fourth grid child, which would shift the
+   auto-placement the rest of the layout depends on. */
+.pane-splitter {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 9px;
+  margin-left: -4px;
+  z-index: 5;
+  cursor: col-resize;
+  /* The pane edge is already a border; the handle only shows while it is in
+     use, so a resting window has no extra line down the middle of it. */
+  background: transparent;
+}
+
+.pane-splitter::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 4px;
+  width: 1px;
+  background: transparent;
+  transition: background 120ms ease;
+}
+
+.pane-splitter:hover::after,
+.pane-splitter:focus-visible::after,
+.pane-splitter.dragging::after {
+  background: var(--accent);
+}
+
+.pane-splitter:focus-visible {
+  outline: none;
+}
+
+/* ---- tooltips ----
+   One element, portalled to the body by TooltipLayer. Above every other
+   surface (300 is the context menu) because it can be summoned over them, and
+   pointer-transparent so it never steals the hover that produced it. */
+
+.tip {
+  position: fixed;
+  z-index: 400;
+  pointer-events: none;
+  max-width: 280px;
+  padding: 6px 9px;
+  /* --bg-sel, not --bg-card: the tip floats over both the raised list pane and
+     the darker detail pane, and only the lighter of the two surfaces separates
+     from each of them. */
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg-sel);
+  color: var(--fg);
+  font-size: 12px;
+  line-height: 1.35;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.55);
+}

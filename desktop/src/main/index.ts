@@ -9,6 +9,7 @@ import { Sessions } from './appd/sessions'
 import { WatchLoop } from './appd/watch'
 import { registerIpc } from './ipc'
 import { initLog, log } from './log'
+import { installMenu } from './menu'
 import { activationFromArgv, type Activation } from './notify/activation'
 import { NotifyRouter, type NavTarget } from './notify/router'
 import { Settings } from './settings'
@@ -43,11 +44,20 @@ const broadcast = (channel: string, payload: unknown): void => {
 void app.whenReady().then(() => {
   initLog()
 
-  // Electron GRANTS permissions by default. This app needs none of them, and
-  // a renderer that displays remote content should never be one prompt away
-  // from the webcam or the microphone.
-  session.defaultSession.setPermissionRequestHandler((_wc, _permission, callback) => callback(false))
-  session.defaultSession.setPermissionCheckHandler(() => false)
+  // Electron GRANTS permissions by default, and a renderer that displays
+  // remote content should never be one prompt away from the webcam or the
+  // microphone. Everything is denied EXCEPT writing to the clipboard.
+  //
+  // Denying the lot was the first cut, and it silently broke every copy in
+  // the app: navigator.clipboard.writeText rejected, the terminal's Ctrl+C
+  // caught the rejection and did nothing, and the selection staying
+  // highlighted made it look like it had worked. Copying out is the whole
+  // point of a transcript you read.
+  const ALLOWED = new Set(['clipboard-sanitized-write'])
+  session.defaultSession.setPermissionRequestHandler((_wc, permission, callback) =>
+    callback(ALLOWED.has(permission)),
+  )
+  session.defaultSession.setPermissionCheckHandler((_wc, permission) => ALLOWED.has(permission))
 
   const settings = new Settings()
   closeToTray = () => settings.getCloseToTray()
@@ -222,6 +232,40 @@ void app.whenReady().then(() => {
     if (target !== null) router.onViewed(target)
   })
 
+  // A real menu replaces Electron's default, which bound Ctrl+R (reload —
+  // orphaning main-side subscriptions and stranding the tmux size lease) and
+  // Ctrl+W (destroy the window). Neither role is defined here, so the
+  // renderer no longer has to swallow them, and Ctrl+W becomes close-to-tray.
+  installMenu({
+    showWindow,
+    hideWindow: () => win?.hide(),
+    openPalette: () => {
+      showWindow()
+      broadcast('push.command', { command: 'palette' })
+    },
+    openSettings: () => {
+      showWindow()
+      broadcast('push.command', { command: 'settings' })
+    },
+    openStatus: () => {
+      showWindow()
+      broadcast('push.command', { command: 'status' })
+    },
+    newChat: (mode) => {
+      showWindow()
+      broadcast('push.command', { command: mode === 'act' ? 'new-act' : 'new-ask' })
+    },
+    checkForUpdates: () => updater.check(),
+    copyDiagnostics: () => {
+      showWindow()
+      broadcast('push.command', { command: 'diagnostics' })
+    },
+    quit: () => {
+      quitting = true
+      app.quit()
+    },
+  })
+
   watch.start()
   updater.start()
   tray.start()
@@ -241,6 +285,22 @@ void app.whenReady().then(() => {
   }
   powerMonitor.on('resume', resumeAll)
   powerMonitor.on('unlock-screen', resumeAll)
+
+  // The notify claim rides on request headers, but a parked SSE re-stamps its
+  // CONNECT-time header on every keepalive — so walking away from the desk
+  // left the daemon believing this desktop was still a delivery route (and
+  // holding the household Telegram fallback) until the 30-minute rotation.
+  // Reconnect the watch stream when the idle state crosses the threshold, so
+  // the claim it carries is the true one.
+  let wasIdle = false
+  setInterval(() => {
+    const idleNow = powerMonitor.getSystemIdleTime() >= 600
+    if (idleNow !== wasIdle) {
+      wasIdle = idleNow
+      log('info', 'notify', `claim now ${idleNow ? 'off (idle)' : 'on (at the keyboard)'}`)
+      watch.reset()
+    }
+  }, 60_000)
 
   app.on('before-quit', () => {
     quitting = true

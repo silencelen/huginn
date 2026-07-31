@@ -6,6 +6,10 @@ import { call } from './lib/ipc'
 import { useApp, wireAppStore, type Dest } from './stores/app'
 import { toDest, useShortcuts } from './hooks/useShortcuts'
 import { Cheatsheet, CommandPalette } from './components/common/CommandPalette'
+import { PaneSplitter } from './components/common/PaneSplitter'
+import { TooltipLayer } from './components/common/Tooltip'
+import { loadListWidth, saveListWidth } from './components/common/paneSplit'
+import { connectionTip } from './components/common/tips'
 import { ChatsList } from './screens/ChatsList'
 import { SessionsList } from './screens/SessionsList'
 import { ChatView } from './screens/ChatView'
@@ -75,8 +79,13 @@ export function App(): React.JSX.Element {
   }, [])
   useShortcuts({ openPalette, toggleCheatsheet, overlayOpen: palette || cheats })
 
+  // The list pane's width. Held here because the grid that uses it lives here;
+  // written to storage only when a drag ends, never on every mousemove.
+  const [listW, setListW] = useState(loadListWidth)
+  const showsList = dest.view === 'chats' || dest.view === 'sessions'
+
   return (
-    <div className="shell">
+    <div className="shell" style={{ '--list-w': `${listW}px` } as React.CSSProperties}>
       <nav className="rail">
         {RAIL.map((item) => (
           <div
@@ -90,7 +99,7 @@ export function App(): React.JSX.Element {
         <div
           className={`rail-item rail-bottom ${dest.view === 'settings' ? 'active' : ''}`}
           onClick={() => navigate({ view: 'settings' })}
-          title={watchConnected ? 'Connected' : 'Disconnected'}
+          data-tip={connectionTip(watchConnected)}
         >
           <span className={`conn-dot ${watchConnected ? 'ok' : 'bad'}`} />
           Settings
@@ -133,8 +142,15 @@ export function App(): React.JSX.Element {
         </main>
       )}
 
+      {/* Only where there is a seam to drag: status and settings span both
+          columns, so there is no list edge to put a handle on. */}
+      {showsList ? (
+        <PaneSplitter width={listW} onChange={setListW} onSettle={saveListWidth} />
+      ) : null}
+
       {palette ? <CommandPalette onClose={() => setPalette(false)} /> : null}
       {cheats ? <Cheatsheet onClose={() => setCheats(false)} /> : null}
+      <TooltipLayer />
     </div>
   )
 }
