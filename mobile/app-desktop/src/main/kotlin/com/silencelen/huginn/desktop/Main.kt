@@ -463,6 +463,13 @@ fun main(args: Array<String>) {
                     LocalTranscriptMetrics provides TranscriptMetrics(
                         userBubbleFraction = 1f,
                         userBubbleMaxWidth = 640.dp,
+                        // Tighter than the phone's 9/8. The same rhythm that
+                        // reads as comfortable under a thumb reads as loose
+                        // under a mouse, where the eye travels further per
+                        // screen and the reader is scanning rather than
+                        // dwelling. The phone keeps its own numbers by default.
+                        rowSpacing = 6.dp,
+                        rowPadding = 4.dp,
                     )
                 ) {
                     Shell(store)

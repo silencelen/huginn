@@ -82,6 +82,7 @@ import com.silencelen.huginn.desktop.ui.session.rememberModels
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
 import com.silencelen.huginn.data.ModelChoice
+import com.silencelen.huginn.ui.LocalTranscriptMetrics
 import com.silencelen.huginn.ui.FollowNewest
 import com.silencelen.huginn.ui.ModelLabels
 import com.silencelen.huginn.ui.NewestPill
@@ -382,12 +383,15 @@ private fun ConversationTab(controller: SessionController) {
             )
         }
         Box(Modifier.weight(1f)) {
+            // The gap between rows is a density decision the shell owns, not a
+            // property of a transcript row — same seam the chat view reads.
+            val metrics = LocalTranscriptMetrics.current
             SelectionContainer {
                 LazyColumn(
                     Modifier.fillMaxSize().padding(horizontal = 16.dp),
                     state = listState,
-                    contentPadding = PaddingValues(vertical = 8.dp),
-                    verticalArrangement = Arrangement.spacedBy(9.dp),
+                    contentPadding = PaddingValues(vertical = metrics.rowPadding),
+                    verticalArrangement = Arrangement.spacedBy(metrics.rowSpacing),
                 ) {
                     if (current.truncated) {
                         item("truncated") { Muted("Showing the most recent part of this session.") }
