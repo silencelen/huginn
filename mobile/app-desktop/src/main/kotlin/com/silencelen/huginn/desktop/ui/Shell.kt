@@ -119,7 +119,8 @@ fun Shell(store: AppStore) {
                 }
 
                 View.STATUS -> StatusView(status, plan, usage, route, watchConnected)
-                View.SETTINGS -> SettingsView(store.settings, route, present, notifyEnabled)
+                View.SETTINGS ->
+                    SettingsView(store.settings, route, present, notifyEnabled, store.updater)
             }
         }
     }
