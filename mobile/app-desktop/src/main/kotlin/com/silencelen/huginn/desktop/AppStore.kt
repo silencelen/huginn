@@ -9,6 +9,7 @@ import com.silencelen.huginn.data.Session
 import com.silencelen.huginn.data.Status
 import com.silencelen.huginn.data.Usage
 import com.silencelen.huginn.data.WatchEvent
+import com.silencelen.huginn.desktop.update.DesktopUpdater
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -55,6 +56,14 @@ class AppStore(
         clientIdProvider = { settings.clientIdNow() },
         canNotifyProvider = { settings.notifyEnabledNow() && presence.present.value },
     )
+
+    /**
+     * The self-updater. Deliberately NOT handed [settings]' base URL: its feed is
+     * pinned in UpdateFeed, because these builds are unsigned and whoever
+     * controls the feed controls what runs on this machine. It downloads and
+     * verifies; INSTALLING is a button, never a background decision.
+     */
+    val updater = DesktopUpdater(tokenProvider = { settings.tokenNow() })
 
     /**
      * The tmux size lease, held at APP level because its release paths do not
@@ -161,6 +170,7 @@ class AppStore(
         scope.launch { pollLoop() }
         scope.launch { watchLoop() }
         scope.launch { presenceTicker() }
+        updater.start(scope)
     }
 
     /**
