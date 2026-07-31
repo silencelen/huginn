@@ -45,7 +45,7 @@ const { decideSwitch, worstLimit } = require('./lib/autoswitch');
 const pushLib = require('./lib/pushtokens');
 const { trySender } = require('./lib/fcm');
 
-const VERSION = '2.50.0';
+const VERSION = '2.51.0';
 const PORT = Number(process.env.HUGINN_APPD_PORT || 8787);
 const DATA_DIR = process.env.HUGINN_APPD_DATA || '/var/lib/huginn-appd';
 const UPLOADS_DIR = path.join(DATA_DIR, 'uploads');
@@ -58,10 +58,16 @@ const UPLOAD_MAX_BYTES = 128 * 1024 * 1024;
 // values, or nothing at all, and exact-match punished the user for their file
 // manager's vocabulary.
 const { uploadExtFor, isReadable } = require('./lib/uploads');
-// The desktop app's update channel — feed ymls + installers served from
-// DATA_DIR/desktop, stocked by the desktop release script via local moves.
+// The desktop update channels — feed ymls + installers served from disk,
+// stocked by the desktop release scripts via local moves.
+//
+// TWO of them, and they must never converge while the Electron client is in
+// service: it polls /v1/desktop and installs what it finds, so a Compose build
+// landing there would replace a running application with a different one. See
+// the header of lib/desktop.js.
 const desktopLib = require('./lib/desktop');
 const DESKTOP_DIR = path.join(DATA_DIR, 'desktop');
+const DESKTOP_KT_DIR = path.join(DATA_DIR, 'desktop-kt');
 
 /**
  * Drops uploads old enough that no conversation is coming back for them.
@@ -2686,28 +2692,41 @@ const server = http.createServer(async (req, res) => {
     // Bearer header on the feed AND artifact GETs. This is the daemon's first
     // streaming-OUT path (uploads is the streaming-in precedent): an installer
     // is ~90 MB and must never transit the heap.
+    //
+    // One helper, both channels. The directory is the ONLY difference between
+    // them here; keeping that a parameter rather than a second copy of the route
+    // is what stops a future fix landing in one channel and not the other.
+    const serveDesktopArtifact = (dir, name) => {
+      const found = desktopLib.resolveArtifact(dir, name);
+      if (!found.ok) return sendErr(res, found.status, found.error);
+      res.writeHead(200, {
+        'Content-Type': found.contentType,
+        'Content-Length': found.size,
+      });
+      const stream = fs.createReadStream(found.file);
+      stream.pipe(res);
+      stream.on('error', () => { try { res.destroy(); } catch { } });
+    };
     if (req.method === 'GET' && p === '/v1/desktop/manifest') {
       const man = desktopLib.readManifest(DESKTOP_DIR);
       if (!man) return sendErr(res, 404, 'no desktop releases yet');
       return sendJson(res, 200, man);
     }
     if (req.method === 'GET' && (m = p.match(/^\/v1\/desktop\/([^/]+)$/))) {
-      const name = decodeURIComponent(m[1]);
-      // Safe by construction: no separator passes the regex, so the joined
-      // path cannot leave DESKTOP_DIR.
-      if (!desktopLib.validName(name)) return sendErr(res, 400, 'bad name');
-      const file = path.join(DESKTOP_DIR, name);
-      let st;
-      try { st = fs.statSync(file); } catch { return sendErr(res, 404, 'no such file'); }
-      if (!st.isFile()) return sendErr(res, 404, 'no such file');
-      res.writeHead(200, {
-        'Content-Type': desktopLib.contentTypeFor(name),
-        'Content-Length': st.size,
-      });
-      const stream = fs.createReadStream(file);
-      stream.pipe(res);
-      stream.on('error', () => { try { res.destroy(); } catch { } });
-      return;
+      return serveDesktopArtifact(DESKTOP_DIR, decodeURIComponent(m[1]));
+    }
+    // --- the Compose Multiplatform client's channel. Same contract, same auth,
+    // its OWN directory: /v1/desktop-kt, stocked by mobile/scripts/release-desktop.sh.
+    // The updater that reads it pins these paths at compile time (UpdateFeed.kt),
+    // because the builds are unsigned and whoever controls the feed controls what
+    // executes.
+    if (req.method === 'GET' && p === '/v1/desktop-kt/manifest') {
+      const man = desktopLib.readManifest(DESKTOP_KT_DIR);
+      if (!man) return sendErr(res, 404, 'no desktop-kt releases yet');
+      return sendJson(res, 200, man);
+    }
+    if (req.method === 'GET' && (m = p.match(/^\/v1\/desktop-kt\/([^/]+)$/))) {
+      return serveDesktopArtifact(DESKTOP_KT_DIR, decodeURIComponent(m[1]));
     }
 
     // --- attachments: a photo from the phone, landed where a chat can Read it
