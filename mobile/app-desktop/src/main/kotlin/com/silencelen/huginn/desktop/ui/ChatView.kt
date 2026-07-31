@@ -1,20 +1,27 @@
 package com.silencelen.huginn.desktop.ui
 
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material3.Button
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
@@ -23,6 +30,7 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -30,23 +38,22 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.KeyEventType
 import androidx.compose.ui.input.key.isCtrlPressed
 import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
-import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.unit.dp
-import com.silencelen.huginn.data.HuginnClient
-import com.silencelen.huginn.data.Message
-import com.silencelen.huginn.desktop.ChatController
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.dp
+import com.silencelen.huginn.data.DraftBook
+import com.silencelen.huginn.data.HuginnClient
 import com.silencelen.huginn.data.TranscriptEvent
-import com.silencelen.huginn.ui.MarkdownText
-import com.silencelen.huginn.ui.TranscriptEventItem
-import androidx.compose.runtime.collectAsState
+import com.silencelen.huginn.desktop.AppStore
+import com.silencelen.huginn.desktop.ChatController
 import com.silencelen.huginn.desktop.attach.AttachButton
 import com.silencelen.huginn.desktop.attach.AttachChip
 import com.silencelen.huginn.desktop.attach.AttachFilePicker
@@ -57,63 +64,169 @@ import com.silencelen.huginn.desktop.attach.appendDropped
 import com.silencelen.huginn.desktop.attach.attachmentDropTarget
 import com.silencelen.huginn.desktop.attach.composeMessage
 import com.silencelen.huginn.desktop.attach.rememberAttachmentController
+import com.silencelen.huginn.desktop.ui.chat.ChatTopBar
+import com.silencelen.huginn.ui.FollowNewest
+import com.silencelen.huginn.ui.MarkdownText
+import com.silencelen.huginn.ui.NewestPill
+import com.silencelen.huginn.ui.Suggest
+import com.silencelen.huginn.ui.SuggestionChips
+import com.silencelen.huginn.ui.TranscriptEventItem
+import com.silencelen.huginn.ui.TranscriptGroups
+import com.silencelen.huginn.ui.TranscriptRowItem
+import com.silencelen.huginn.ui.scrollToNewest
+import com.silencelen.huginn.ui.tailRevision
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.launch
 
 /**
- * One chat: the digest as the server tells it, then whatever the live run has
- * streamed on top.
+ * One chat: the session's real Claude Code transcript, plus whatever the live run
+ * has streamed on top of it.
  *
- * The partial answer is rendered as its OWN trailing block rather than being
- * merged into the digest. Merging is where the double-render bug lives: the
- * digest gains the finished text at the same moment the stream stops producing
- * it, and any overlap between the two shows up as a paragraph written twice.
+ * The history is rendered by the same code as a tmux session's conversation, so a
+ * chat shows thinking, tool results and subagent output rather than the flat
+ * digest this view used to draw. That was not a styling difference: the digest
+ * has no thinking records and no tool results in it at all, so no amount of
+ * rendering could have shown them.
+ *
+ * The partial answer is its OWN trailing block rather than being merged into the
+ * transcript. Merging is where the double-render bug lives: the transcript gains
+ * the finished text at the same moment the stream stops producing it, and any
+ * overlap between the two shows up as a paragraph written twice.
+ *
+ * @param store the app store, which owns the draft book and the navigation this
+ *   view needs when a chat is deleted underneath it. Defaulted rather than
+ *   required because `Shell` still constructs this from a bare client; passing
+ *   `store` there instead of `store.client` retires the default and the holder
+ *   behind it.
  */
 @Composable
-fun ChatView(client: HuginnClient, chatId: String) {
+fun ChatView(
+    client: HuginnClient,
+    chatId: String,
+    store: AppStore? = AppStore.current,
+) {
     val scope = rememberCoroutineScope()
     val controller = remember(chatId) { ChatController(client, chatId, scope) }
     // Keyed on the chat: switching chats must not carry a half-uploaded screenshot
     // into somebody else's conversation, and the old controller's upload is
     // cancelled with it.
     val attachments = rememberAttachmentController(client, scope, chatId)
+    val drafts = store?.drafts
+    val draftKey = DraftBook.chatKey(chatId)
+
     DisposableEffect(chatId) {
         controller.start()
-        onDispose { controller.close() }
+        onDispose {
+            controller.close()
+            // Leaving the chat is exactly when a debounced write is still in the
+            // air, and the composition scope that would have run it is being
+            // cancelled. The book belongs to the app for this reason.
+            drafts?.flush()
+        }
     }
 
     val detail by controller.detail.collectAsState()
+    val page by controller.page.collectAsState()
     val partial by controller.partial.collectAsState()
     val running by controller.running.collectAsState()
     val activity by controller.activity.collectAsState()
     val error by controller.error.collectAsState()
-    val queued by controller.queued.collectAsState()
+    val notice by controller.notice.collectAsState()
+    val deleted by controller.deleted.collectAsState()
+    val models by controller.models.collectAsState()
+    val suggestions by controller.suggestions.collectAsState()
     val pendingSend by controller.pendingSend.collectAsState()
 
-    var draft by remember(chatId) { mutableStateOf("") }
-    val listState = rememberLazyListState()
-    val messages = detail?.messages ?: emptyList()
-
-    // Follow the tail while an answer is being written. Keyed on the partial's
-    // LENGTH rather than its content so a 4000-delta burst schedules one scroll
-    // per frame instead of one per delta.
-    LaunchedEffect(messages.size, partial.length, pendingSend) {
-        val last = messages.size +
-            (if (pendingSend != null) 1 else 0) +
-            (if (partial.isNotEmpty()) 1 else 0)
-        if (last > 0) listState.animateScrollToItem(last - 1)
+    // A deleted chat must not stay on screen: the pane would be showing a
+    // conversation the daemon no longer has, and every action on it would 404.
+    // Its draft goes with it — the map is rewritten whole on every save, so an
+    // orphan is paid for on every keystroke in every other chat, forever.
+    LaunchedEffect(deleted) {
+        if (deleted) {
+            drafts?.clear(DraftBook.chatKey(chatId))
+            // The refresh runs on the APP's scope, not this effect's. Closing the
+            // view is the same frame that cancels the effect, so a refresh
+            // launched here dies at its first suspension point — and the store's
+            // runCatching then reports the cancellation as an error, which put
+            // "The coroutine scope left the composition" in the status bar every
+            // time a chat was deleted.
+            store?.let { s ->
+                s.scope.launch { s.refreshChats() }
+                s.openChat(null)
+            }
+        }
     }
 
+    // The draft, from the app's book when there is one. The fallback keeps this
+    // view usable when it is built without a store (nothing in the app does, but
+    // a composable that silently stops accepting typing is not a good failure).
+    val fallback = remember { MutableStateFlow(emptyMap<String, String>()) }
+    val draftMap by (drafts?.drafts ?: fallback).collectAsState()
+    val draft = draftMap[draftKey].orEmpty()
+    val setDraft: (String) -> Unit = { text ->
+        if (drafts != null) drafts.set(draftKey, text)
+        else fallback.value = fallback.value + (draftKey to text)
+    }
+    val clearDraft: () -> Unit = {
+        if (drafts != null) drafts.clear(draftKey)
+        else fallback.value = fallback.value - draftKey
+    }
+
+    val events = page?.events ?: emptyList()
+    val rows = remember(events) { TranscriptGroups.group(events) }
+    val rowKeys = remember(rows) { TranscriptGroups.keys(rows) }
+    val streaming = partial.isNotEmpty() || activity != null
+    val busy = running || streaming || pendingSend != null
+    val itemCount = rows.size + (if (pendingSend != null) 1 else 0) + (if (streaming) 1 else 0)
+
+    val listState = rememberLazyListState()
+    // partial.length is what makes a live answer follow: the item count does not
+    // change while tokens arrive into the same block.
+    val hasUnseen = FollowNewest(
+        listState = listState,
+        itemCount = itemCount,
+        revision = tailRevision(page?.nextOffset, events.size, partial.length, activity, pendingSend),
+        key = chatId,
+    )
+
+    // Suggestions are asked for by the CONTROLLER, at the turn boundary it can
+    // see (the transcript settled, nothing in flight) rather than from an effect
+    // here. A view that fetches on its own recomposition asks again every time
+    // the window regains focus, for an answer the daemon has already cached.
+
     Column(Modifier.fillMaxSize()) {
-        Header(detail?.title ?: chatId, detail?.mode, detail?.model, running, activity)
+        ChatTopBar(
+            title = detail?.title ?: "Untitled",
+            running = running,
+            activity = activity,
+            mode = detail?.mode,
+            model = detail?.model,
+            effort = detail?.effort,
+            models = models,
+            // Model, effort and mode are fixed when a run spawns, so offering to
+            // change them mid-turn would be offering something that cannot happen.
+            optionsEnabled = !busy,
+            onModel = { controller.setOptions(model = it) },
+            onEffort = { controller.setOptions(effort = it) },
+            onMode = { controller.setOptions(mode = it) },
+            onRename = { controller.rename(it) },
+            onDelete = { controller.delete() },
+        )
         HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
 
-        error?.let {
-            Text(
-                it,
-                style = MaterialTheme.typography.labelMedium,
-                color = MaterialTheme.colorScheme.error,
-                modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 6.dp),
-            )
+        notice?.let {
+            Row(
+                Modifier.fillMaxWidth().padding(start = 16.dp, end = 8.dp, top = 6.dp, bottom = 2.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    it,
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.error,
+                    modifier = Modifier.weight(1f),
+                )
+                TextButton(onClick = { controller.dismissNotice() }) { Text("dismiss") }
+            }
         }
 
         // The weight lives on a plain Box, NOT on the SelectionContainer. Handing
@@ -121,40 +234,73 @@ fun ChatView(client: HuginnClient, chatId: String) {
         // after the scroll area had already taken the remaining height, so it was
         // laid out past the bottom edge and clipped away entirely — a window with
         // no way to type in it, and nothing in the logs.
+        // Bound to a local: `error` is a delegated property, which does not smart
+        // cast, and `!!` on the owner's daily driver is a crash waiting for a race.
+        val loadError = error
         Box(Modifier.weight(1f)) {
-            SelectionContainer {
-                // The phone's chat rhythm, because the rows are now the phone's
-                // rows: they carry no outer margin of their own, so the gap
-                // between them belongs to whoever lists them.
-                LazyColumn(
-                    Modifier.fillMaxSize().padding(horizontal = 16.dp),
-                    state = listState,
-                    contentPadding = PaddingValues(vertical = 8.dp),
-                    verticalArrangement = Arrangement.spacedBy(9.dp),
-                ) {
-                    itemsIndexed(messages) { i, m -> MessageBlock(m, i) }
-                    pendingSend?.let { text ->
-                        item("pending") { MessageBlock(Message(type = "user", text = text), messages.size) }
+            when {
+                // NOT the empty state. A conversation that failed to load looks
+                // identical to one that has never run, and drawing history's
+                // absence when the history is merely unread reads as data loss.
+                loadError != null && !streaming -> LoadFailed(loadError) { controller.retry() }
+
+                page == null -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                    CircularProgressIndicator(strokeWidth = 2.dp)
+                }
+
+                events.isEmpty() && !streaming && pendingSend == null ->
+                    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                        NewChatHint(detail?.mode ?: "ask")
                     }
-                    if (partial.isNotEmpty()) {
-                        item("partial") { PartialBlock(partial) }
+
+                else -> SelectionContainer {
+                    // The phone's chat rhythm, because the rows are the phone's
+                    // rows: they carry no outer margin of their own, so the gap
+                    // between them belongs to whoever lists them.
+                    LazyColumn(
+                        Modifier.fillMaxSize().padding(horizontal = 16.dp),
+                        state = listState,
+                        contentPadding = PaddingValues(vertical = 8.dp),
+                        verticalArrangement = Arrangement.spacedBy(9.dp),
+                    ) {
+                        items(rows.size, key = { rowKeys[it] }) { i ->
+                            TranscriptRowItem(rows[i], onCopy = rememberCopy())
+                        }
+                        pendingSend?.let { text ->
+                            item("pending") {
+                                TranscriptEventItem(
+                                    TranscriptEvent(seq = -1, kind = "user", text = text),
+                                    onCopy = rememberCopy(),
+                                )
+                            }
+                        }
+                        if (streaming) {
+                            item("streaming") { StreamingBlock(partial, activity) }
+                        }
                     }
                 }
             }
         }
 
-        queued?.let {
-            Muted("queued behind the current run (#$it)", Modifier.padding(horizontal = 16.dp, vertical = 4.dp))
+        if (hasUnseen) {
+            NewestPill { scope.launch { listState.scrollToNewest(itemCount, animate = true) } }
+        }
+
+        // A suggestion FILLS the composer; it does not send. It yields to typing,
+        // to a live prompt and to a running turn — Suggest.visible is that rule,
+        // shared with the phone.
+        if (Suggest.visible(suggestions, busy, draft)) {
+            SuggestionChips(suggestions, onPick = setDraft)
         }
 
         HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
         Composer(
             draft = draft,
-            onDraft = { draft = it },
+            onDraft = setDraft,
+            onSent = clearDraft,
             attachments = attachments,
             scope = scope,
             running = running,
-            sendLabel = if (running) "Queue" else "Send",
             onStop = { controller.cancel() },
             onSend = { text -> controller.send(text) },
         )
@@ -170,15 +316,20 @@ fun ChatView(client: HuginnClient, chatId: String) {
  * and Claude's Read comes back "no such file" — the failure looks like the model
  * being unhelpful rather than like a race. [AttachmentController.take] is what
  * makes the wait a property of sending rather than of typing speed.
+ *
+ * [onSent] is separate from `onDraft("")` on purpose. Emptying the box is a
+ * keystroke and is debounced; SENDING must cancel that pending write, or it
+ * lands afterwards carrying the text that was just sent and the message
+ * reappears as a draft. That is a bug the Electron client actually shipped.
  */
 @Composable
 private fun Composer(
     draft: String,
     onDraft: (String) -> Unit,
+    onSent: () -> Unit,
     attachments: AttachmentController,
     scope: kotlinx.coroutines.CoroutineScope,
     running: Boolean,
-    sendLabel: String,
     onStop: () -> Unit,
     onSend: (String) -> Unit,
 ) {
@@ -196,7 +347,7 @@ private fun Composer(
     val submit: () -> Unit = {
         if (canSend) {
             val body = draft
-            onDraft("")
+            onSent()
             scope.launch {
                 val marker = attachments.take()
                 val full = composeMessage(body, marker)
@@ -267,89 +418,107 @@ private fun Composer(
                             else -> false
                         }
                     },
-                placeholder = { Text("Message…  (Ctrl+Enter to send · paste, drop or clip a file)") },
+                placeholder = {
+                    Text(
+                        if (running) "Send anyway — it will queue behind this turn"
+                        else "Message…  (Ctrl+Enter to send · paste, drop or clip a file)"
+                    )
+                },
                 textStyle = MaterialTheme.typography.bodyMedium,
             )
             if (running) TextButton(onClick = onStop) { Text("Stop") }
-            Button(onClick = submit, enabled = canSend) { Text(sendLabel) }
+            // ONE send button whatever the state. A separate "Queue" verb was a
+            // second control for the same act — the message goes to the same
+            // place, and the transcript says it is waiting.
+            Button(onClick = submit, enabled = canSend) { Text("Send") }
         }
     }
 }
 
+/** The turn currently arriving: markdown as it lands, then what it is doing. */
 @Composable
-private fun Header(title: String, mode: String?, model: String?, running: Boolean, activity: String?) {
-    Row(
-        Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 10.dp),
-        verticalAlignment = Alignment.CenterVertically,
+private fun StreamingBlock(partial: String, activity: String?) {
+    Column(Modifier.fillMaxWidth()) {
+        if (partial.isNotEmpty()) {
+            MarkdownText(partial, onCopy = rememberCopy())
+            Text(
+                "▍",
+                style = MaterialTheme.typography.bodyMedium,
+                fontWeight = FontWeight.Bold,
+                color = MaterialTheme.colorScheme.primary,
+            )
+        }
+        when {
+            // The run has started and said nothing yet. A slow pulse rather than a
+            // spinner: this is waiting on a model, not on a network.
+            activity == THINKING -> {
+                Spacer(Modifier.size(6.dp))
+                ThinkingLine()
+            }
+            activity != null -> {
+                Spacer(Modifier.size(6.dp))
+                TranscriptEventItem(
+                    TranscriptEvent(seq = -2, kind = "tool", name = activity, input = "running"),
+                    onCopy = rememberCopy(),
+                )
+            }
+        }
+    }
+}
+
+/** What the controller calls the gap between a run starting and its first token. */
+private const val THINKING = "thinking"
+
+@Composable
+private fun ThinkingLine() {
+    val transition = rememberInfiniteTransition(label = "thinking")
+    val alpha by transition.animateFloat(
+        initialValue = 0.35f,
+        targetValue = 1f,
+        animationSpec = infiniteRepeatable(tween(900), RepeatMode.Reverse),
+        label = "alpha",
+    )
+    Text(
+        "thinking",
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+        modifier = Modifier.alpha(alpha),
+    )
+}
+
+/** A chat that has never run. Says what this kind of chat can do, and nothing else. */
+@Composable
+private fun NewChatHint(mode: String) {
+    Column(
+        Modifier.padding(32.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(6.dp),
     ) {
-        if (running) StateDot(MaterialTheme.colorScheme.primary)
-        Text(title, style = MaterialTheme.typography.titleSmall, modifier = Modifier.weight(1f))
-        // State marks in the header's own vernacular: muted suffixes, not badges.
-        activity?.let { Muted("$it…", Modifier.padding(end = 10.dp)) }
-        mode?.let { Muted(it, Modifier.padding(end = 10.dp)) }
-        model?.let { Muted(it) }
-    }
-}
-
-/**
- * One message from the chat digest.
- *
- * The user bubble, the answer and the tool card are the PHONE's — `:ui` owns all
- * three now, and this file no longer has an opinion about how any of them look.
- * That is worth spelling out because the three it used to own were the classic
- * lookalike divergence: a different bubble radius, a different width rule, and a
- * tool call flattened to one muted line where the phone folds it into an openable
- * card. Anything that disagreed, the phone won.
- *
- * `result` and `error` stay here on purpose: they are not transcript content,
- * they are how a RUN ended, and `TranscriptEvent` has no kind for them.
- */
-@Composable
-private fun MessageBlock(m: Message, seq: Int) {
-    when (m.type) {
-        "user", "assistant", "tool" -> TranscriptEventItem(
-            TranscriptEvent(
-                seq = seq,
-                kind = m.type,
-                text = m.text,
-                name = m.name,
-                input = m.input,
-                ok = m.ok,
-            ),
-            onCopy = rememberCopy(),
-        )
-
-        "result" -> Muted(
-            buildString {
-                append(if (m.ok == false) "failed" else "done")
-                m.durationMs?.let { append(" · ${it / 1000}s") }
-                m.turns?.let { append(" · $it turns") }
-            },
-            Modifier.padding(vertical = 4.dp),
-        )
-
-        "error" -> Text(
-            m.text ?: "error",
-            style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.error,
-            modifier = Modifier.padding(vertical = 4.dp),
-        )
-
-        else -> Muted("${m.type}: ${m.text ?: ""}", Modifier.padding(vertical = 2.dp))
-    }
-}
-
-/** The answer currently being written. Marked so it reads as in-progress. */
-@Composable
-private fun PartialBlock(text: String) {
-    Column(Modifier.fillMaxWidth().padding(vertical = 6.dp)) {
-        MarkdownText(text, onCopy = rememberCopy())
+        Text(if (mode == "act") "Act mode" else "Ask mode", style = MaterialTheme.typography.titleMedium)
         Text(
-            "▍",
+            if (mode == "act") "Runs in ~/netplan with tools: files, commands, the web."
+            else "Reasoning and memory, no tools.",
             style = MaterialTheme.typography.bodyMedium,
-            fontWeight = FontWeight.Bold,
-            color = MaterialTheme.colorScheme.primary,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
+    }
+}
+
+/** History that exists and could not be read. Nothing polls a chat, so offer the way back. */
+@Composable
+private fun LoadFailed(message: String, onRetry: () -> Unit) {
+    Column(
+        Modifier.fillMaxSize().padding(32.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.Center,
+    ) {
+        Text("Could not load this conversation", style = MaterialTheme.typography.titleMedium)
+        Text(
+            message,
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        TextButton(onClick = onRetry) { Text("Try again") }
     }
 }
 

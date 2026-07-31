@@ -2,6 +2,7 @@ package com.silencelen.huginn.desktop
 
 import com.silencelen.huginn.data.AppdRoutes
 import com.silencelen.huginn.data.Chat
+import com.silencelen.huginn.data.DraftBook
 import com.silencelen.huginn.data.HuginnClient
 import com.silencelen.huginn.data.Plan
 import com.silencelen.huginn.data.RouteResolver
@@ -73,6 +74,19 @@ class AppStore(
      * ever answer the first of those.
      */
     val paneLease = PaneLeaseHolder(client, scope)
+
+    /**
+     * Unsent composer text, for every target at once.
+     *
+     * APP level, and for the same reason as the lease: the flush that matters
+     * happens as a view is torn down, so a book owned by that view would be
+     * cancelled at the exact moment it had work to do.
+     */
+    val drafts = DraftBook(settings, scope)
+
+    init {
+        current = this
+    }
 
     // ------------------------------------------------------------ navigation
 
@@ -217,6 +231,7 @@ class AppStore(
      * composition; each loop lives as long as [scope].
      */
     fun start() {
+        scope.launch { drafts.load() }
         scope.launch { resolveRoute() }
         scope.launch { pollLoop() }
         scope.launch { watchLoop() }
@@ -335,5 +350,19 @@ class AppStore(
         const val POLL_MS: Long = 5_000
         const val MIN_BACKOFF_MS: Long = 1_000
         const val MAX_BACKOFF_MS: Long = 30_000
+
+        /**
+         * The one store, for the one surface the shell still builds from a bare
+         * client.
+         *
+         * NOT a service locator, and it should not grow a second reader: `Shell`
+         * hands the store to every other view, and `ChatView` — which now needs
+         * the draft book and a way to close a chat it has just deleted — takes it
+         * as a defaulted parameter until that call site says `store` instead of
+         * `store.client`. One line there deletes this.
+         */
+        @Volatile
+        var current: AppStore? = null
+            private set
     }
 }
