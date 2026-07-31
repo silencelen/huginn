@@ -79,6 +79,27 @@ object TranscriptGroups {
         }
     }
 
+    /**
+     * How many agents the fan-out PLANNED, read off the TUI's own progress row
+     * ("0/4 agents done"), or null when no row says so.
+     *
+     * It has to come from here rather than from the agent files: a planned agent
+     * has no file until it starts, so counting files undercounts the total for
+     * exactly as long as the fan-out is interesting to look at — and the client's
+     * "1 of 2 agents" then sat beside the pane's own "1/6 agents done" and read as
+     * a different fan-out. Takes the largest total on screen, since several
+     * workflow rows can be present and the widest is the job.
+     *
+     * Null rather than 0 when nothing reports agents: the caller falls back to the
+     * file count, and a 0 would render "3 of 0 agents done".
+     */
+    fun plannedAgents(statusLines: List<String>): Int? =
+        statusLines
+            .mapNotNull { AGENTS_DONE.find(it)?.groupValues?.get(2)?.toIntOrNull() }
+            .maxOrNull()
+
+    private val AGENTS_DONE = Regex("(\\d+)\\s*/\\s*(\\d+)\\s+agents?\\s+done")
+
     fun group(events: List<TranscriptEvent>): List<Row> {
         val out = ArrayList<Row>(events.size)
         var run: MutableList<TranscriptEvent>? = null
