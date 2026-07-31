@@ -48,30 +48,10 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 
-/**
- * Appends an incremental page to the window already on screen, renumbering it so
- * `seq` is unique across the result.
- *
- * The daemon numbers each tail read from 0, so concatenated pages arrive with
- * REPEATED seqs — and seq is the identity the UI keys row state on. Two rows could
- * claim `seq = 3`, so opening one tool card opened the wrong one, and a row's
- * expansion followed whichever event later inherited its number. Renumbering makes
- * the identity mean what the callers assume it means; nothing client-side reads seq
- * as the server's own numbering.
- *
- * Capped, because a session left open on a busy day would otherwise grow this list
- * without limit and copy it whole on every poll.
- */
-internal fun mergeTranscript(
-    kept: List<TranscriptEvent>,
-    incoming: List<TranscriptEvent>,
-    cap: Int,
-): List<TranscriptEvent> {
-    if (kept.isEmpty()) return incoming.takeLast(cap)
-    var next = (kept.lastOrNull()?.seq ?: -1) + 1
-    val renumbered = incoming.map { it.copy(seq = next++) }
-    return (kept + renumbered).takeLast(cap)
-}
+// `mergeTranscript` moved to :core in phase 3c — same package, so every call site
+// here is unchanged. The desktop client needs the identical row-identity rule, and
+// two implementations of "which row is this" is the divergence this migration
+// exists to stop.
 
 /** What to show and where to resume when reattaching to a running chat. */
 internal data class Reattach(val seed: String, val since: Long)
@@ -1698,8 +1678,8 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     companion object {
-        /** Newest events kept in memory for one session view. */
-        private const val MAX_EVENTS = 600
+        /** Newest events kept in memory for one session view. Shared with the desktop. */
+        private const val MAX_EVENTS = MAX_TRANSCRIPT_EVENTS
 
         /** Reattach attempts after a chat stream drops with the run still going. */
         private const val CHAT_REATTACH_TRIES = 4

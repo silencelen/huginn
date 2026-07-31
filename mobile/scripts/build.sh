@@ -50,7 +50,13 @@ flock "$LOCK" ./gradlew :core:jvmTest :core:testDebugUnitTest :app:testDebugUnit
 # Raised again when :ui was extracted (phase 3b): the shared terminal grid walk
 # arrived with 7 tests of its own, asserted against a recording CellPainter plus
 # one real skia render.
-KOTLIN_MIN=382   # 163 (:core jvm) + 163 (:core android) + 49 (:app) + 7 (:ui jvm), 2026-07-30
+# Raised again for phase 3c (the desktop session view): the transcript merge left
+# the Android view model for :core, and the pane-size LEASE rule plus the two poll
+# backoff ladders arrived as pure, shared code. All three are safety properties —
+# a row identity that collides, a lease that is never released, a 409 retried
+# forever — so they are tested where both clients read them, which means the 25
+# new tests run TWICE.
+KOTLIN_MIN=432   # 188 (:core jvm) + 188 (:core android) + 49 (:app) + 7 (:ui jvm), 2026-07-30
 KOTLIN_COUNT=0
 for D in core/build/test-results/jvmTest \
          core/build/test-results/testDebugUnitTest \

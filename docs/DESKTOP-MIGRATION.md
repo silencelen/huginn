@@ -88,6 +88,29 @@ against the `manifest.json` the release script already produces.
   terminal grid walk for BOTH clients, so `scripts/build.sh` gained `:ui:jvmTest`
   and its floor went 375 → 382 the same day the module landed. The same lesson as
   the `:core` split, one module later.
+- **A per-view controller launched onto the app scope leaks a poll loop per
+  view.** Cancelling `SessionController` cancelled nothing, because its three
+  forever-loops belonged to a scope that outlives every view — and the leaked one
+  that matters is the screen supervisor, which goes on RE-ACQUIRING the tmux size
+  lease for a session nobody is looking at. It owns a `SupervisorJob` child of the
+  app's now. The RELEASE still has to run on the parent: the child is cancelled at
+  the exact moment the release is needed.
+- **The lease release must be `NonCancellable`.** Every release path is reached
+  from inside the `collectLatest` whose job is to be cancelled — hiding the window
+  cancels the collector that is releasing *because* the window was hidden. Without
+  it the coroutine dies at the suspension point mid-DELETE, having already cleared
+  its own record, and nothing left knows the window is still `manual`.
+- **A parked `/screen?wait=` re-captures with its OWN stale geometry.** When the
+  pane changes, the parked request calls `captureScreen` again with the `cols`/
+  `rows` it was started with — so a resize bounces the window through the old size
+  once before settling (verified: 86x30, 107x37, 86x30 inside 250 ms). Cancelling
+  the client request does not prevent it; the daemon has already applied the size.
+  Self-correcting, and cosmetic on a pane nobody is attached to.
+- **The daemon declines to lease a size that already matches**, deliberately —
+  "if we hold none, the size is somebody else's doing". So after a release, a
+  re-show at the same geometry leaves the client believing it holds a lease the
+  daemon does not have. Harmless in that direction (one spare `DELETE`); the
+  client must never make the opposite assumption.
 
 ## Carry-over: behaviour the Compose desktop must not lose
 
@@ -153,7 +176,16 @@ verb unify into one control.
      flag on the theme, `TranscriptMetrics` for bubble width, a `CellPainter`
      interface for the glyph blit — so a narrowed desktop window can be handed the
      phone's answer, which `expect`/`actual` could not express.
-   - **3c — the desktop session view**, which needs the grid and the pane-size
-     lease together — a half-built lease is worse than none.
+   - **3c — the desktop session view** — done. Conversation and Screen over one
+     controller, with the pane-size lease built and PROVEN first. Geometry is
+     reported only while the window is visible AND the Screen tab is selected, so
+     the conversation view never leases at all; `PaneLease` (pure, in `:core`) says
+     what may be held and `PaneLeaseHolder` (app-level, because the release paths
+     do not share a lifetime) hands it back release-first. All four exits verified
+     against the daemon by watching tmux go `manual` → `smallest`: leaving the
+     view, minimizing, closing the window, and SIGTERM through a shutdown hook.
+     The transcript merge left the Android view model for `:core` so both clients
+     key rows on one identity rule; the two poll backoff ladders joined it, since a
+     session that never prompted Claude 409s forever.
 4. **Packaging + updater** (chain above).
 5. **Parity, then retire Electron.**
