@@ -178,6 +178,21 @@ House rules that outrank taste: no left accent bars on rows or cards; subtle
 in-vernacular state marks rather than loud badges; controls that do the same
 verb unify into one control.
 
+## Status: the Electron client is DEPRECATED (2026-07-31)
+
+All five build phases are done and the Compose client is in real use on the
+owner's machine. **New feature work goes to `mobile/app-desktop`**; the Electron
+client at `desktop/` takes security and data-loss fixes only — see
+[`../desktop/DEPRECATED.md`](../desktop/DEPRECATED.md). For how to add something
+to both clients at once, see [`ADDING-A-FEATURE.md`](ADDING-A-FEATURE.md).
+
+**Not yet done, deliberately:** the owner's installed Electron client is still
+running and `/v1/desktop` still serves it. Retiring the *installed* app is the
+cutover described below, and it waits until the Compose client has more than a
+day of use behind it. A replacement trusted for an hour is not yet a
+replacement — and the cutover takes over the install path, so it is not a step
+that undoes itself.
+
 ## Phases
 
 1. **`:core` extracted** — done (commit `c0c3b18`). Shared logic has one home.

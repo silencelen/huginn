@@ -112,8 +112,9 @@ Yes — and that's the point. Huginn is `ssh` + `tmux` + `claude` with the sharp
 | [`server/`](server/) | `setup.sh`, the `cc` launcher, `huginn-status`, a tuned `tmux.conf` |
 | [`server/appd/`](server/appd/) | the phone daemon: sessions, chats, push, prompts-as-buttons over the tailnet |
 | [`client/`](client/) | `huginn.ps1` + `huginn.sh` + installers + an optional Termux detach button |
-| [`mobile/`](mobile/) | the Huginn Android app — a native client for everything `appd` serves ([changelog](mobile/CHANGELOG.md)) |
-| [`docs/`](docs/) | [Setup](docs/SETUP.md) · [Usage](docs/USAGE.md) · [Architecture](docs/ARCHITECTURE.md) · [FAQ](docs/FAQ.md) · [Security](docs/SECURITY.md) |
+| [`mobile/`](mobile/) | the Kotlin clients and the code they share: `:core` (logic + HTTP), `:ui` (Compose), `:app` (Android — [changelog](mobile/CHANGELOG.md)), `:app-desktop` (Windows/Linux — [changelog](mobile/app-desktop/CHANGELOG.md)) |
+| [`desktop/`](desktop/) | the Electron desktop client — **[deprecated](desktop/DEPRECATED.md)**, superseded by `mobile/app-desktop` |
+| [`docs/`](docs/) | [Setup](docs/SETUP.md) · [Usage](docs/USAGE.md) · [Architecture](docs/ARCHITECTURE.md) · [Adding a feature](docs/ADDING-A-FEATURE.md) · [Desktop migration](docs/DESKTOP-MIGRATION.md) · [FAQ](docs/FAQ.md) · [Security](docs/SECURITY.md) |
 
 ## 🧠 Memory (the other raven)
 
