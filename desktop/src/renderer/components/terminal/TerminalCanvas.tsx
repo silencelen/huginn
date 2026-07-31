@@ -14,12 +14,18 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } fr
 import { parse, type TermCell, type TermGrid } from '../../../shared/core/terminalGrid'
 import type { TermColor } from '../../../shared/core/ansiPalette'
 import { cellMetrics, cssColor, fontString, TERM_BG, TERM_FG } from './metrics'
+import { lineRangeAt, wordRangeAt } from './selection'
+import { copyText } from '../common/clipboard'
 
 const SELECTION_CSS = 'rgba(122,162,247,0.30)' // --accent at ~30%
 const CURSOR_CSS = '#7aa2f7' // --accent
 /** Pending local echo: accent-tinted and a shade transparent, so promised text
     is tellable from confirmed text without being hard to read. */
 const ECHO_CSS = 'rgba(122,162,247,0.85)'
+/** Backdrop for the "Copied" flash — --bg-card, near-opaque. */
+const FLASH_BG_CSS = 'rgba(28,35,43,0.94)'
+/** Long enough to read out of the corner of an eye, short enough to ignore. */
+const FLASH_MS = 900
 
 const isHttp = (u: string): boolean => /^https?:\/\//i.test(u)
 
@@ -68,6 +74,14 @@ export function TerminalCanvas({
   const canvasRef = useRef<HTMLCanvasElement | null>(null)
   const [sel, setSel] = useState<Sel | null>(null)
   const [hover, setHover] = useState<string | null>(null)
+  /**
+   * The "Copied" flash. The stamp is the state: it makes a second copy of the
+   * same selection restart the timer. Painted ON the canvas rather than layered
+   * over it in DOM — the terminal is one element by design (the scroll box's
+   * measurements depend on it), and a transient mark in the pane's own idiom
+   * belongs in the pane's own pixels.
+   */
+  const [flash, setFlash] = useState<number | null>(null)
   const dragRef = useRef<{ anchor: number; moved: boolean; downLink: string | null } | null>(null)
 
   const grid: TermGrid = useMemo(() => parse(lines, cols, TERM_FG, TERM_BG), [lines, cols])
@@ -110,8 +124,20 @@ export function TerminalCanvas({
       out.push(line.replace(/\s+$/, ''))
     }
     const text = out.join('\n')
-    if (text !== '') void navigator.clipboard.writeText(text).catch(() => {})
+    if (text === '') return
+    // Only on success: a flash that fires whether or not the clipboard took it
+    // is a lie the user only finds out about when they paste. (And it did fail,
+    // every time, until copyText — see components/common/clipboard.)
+    void copyText(text).then((ok) => {
+      if (ok) setFlash(Date.now())
+    })
   }, [sel, grid])
+
+  useEffect(() => {
+    if (flash === null) return
+    const t = setTimeout(() => setFlash(null), FLASH_MS)
+    return () => clearTimeout(t)
+  }, [flash])
 
   // Ctrl+C copies while a selection exists. Capture-phase on window so it wins
   // over the live-typing capture div (which would otherwise send C-c to the
@@ -133,6 +159,17 @@ export function TerminalCanvas({
     (e: React.MouseEvent<HTMLCanvasElement>): void => {
       if (e.button !== 0) return
       const off = offFromClient(e.clientX, e.clientY)
+
+      // Double/triple click. These take the whole gesture and install nothing:
+      // the preceding single click already ran its own mouseup (which cleared
+      // the selection), so returning here leaves the word or line standing —
+      // and leaves char-drag, on `detail === 1`, exactly as it was.
+      if (e.detail === 2 || e.detail >= 3) {
+        const range = e.detail === 2 ? wordRangeAt(grid, off) : lineRangeAt(grid, off)
+        setSel(range === null ? null : { a: range.from, h: range.to })
+        return
+      }
+
       dragRef.current = { anchor: off, moved: false, downLink: cellAtOff(off)?.link ?? null }
       setSel({ a: off, h: off })
       const onMove = (ev: MouseEvent): void => {
@@ -156,7 +193,7 @@ export function TerminalCanvas({
       window.addEventListener('mousemove', onMove)
       window.addEventListener('mouseup', onUp)
     },
-    [offFromClient, cellAtOff],
+    [offFromClient, cellAtOff, grid],
   )
 
   const onMouseMove = useCallback(
@@ -336,7 +373,40 @@ export function TerminalCanvas({
         }
       }
     }
-  }, [grid, fontPx, cursor, sel, hover, echo])
+
+    // "Copied": top-right of the part of this canvas that is actually ON SCREEN.
+    // THE BUG THIS FIXES: pinned to the canvas's own right edge it landed
+    // outside the scroller whenever the pane was wider than the window — which
+    // is most of the time — so the confirmation was invisible exactly when it
+    // was needed. The scroller is the clip; without one, the window is.
+    if (flash !== null && rows > 0) {
+      const r = canvas.getBoundingClientRect()
+      const clip = canvas.closest('.term-scroll')?.getBoundingClientRect() ?? {
+        left: 0,
+        top: 0,
+        right: window.innerWidth,
+        bottom: window.innerHeight,
+      }
+      const right = clamp(clip.right - r.left, 0, cssW)
+      const top = clamp(clip.top - r.top, 0, Math.max(0, cssH - 1))
+      const label = 'Copied'
+      ctx.font = fontString(m.fontPx, true, false)
+      const w = ctx.measureText(label).width + 16
+      const h = m.cellH + 2
+      const x = Math.max(2, right - w - 10)
+      const y = Math.min(top + 6, Math.max(0, cssH - h))
+      ctx.beginPath()
+      if (typeof ctx.roundRect === 'function') ctx.roundRect(x, y, w, h, 5)
+      else ctx.rect(x, y, w, h)
+      ctx.fillStyle = FLASH_BG_CSS
+      ctx.fill()
+      ctx.strokeStyle = CURSOR_CSS
+      ctx.lineWidth = 1
+      ctx.stroke()
+      ctx.fillStyle = CURSOR_CSS
+      ctx.fillText(label, x + 8, y + m.baseline)
+    }
+  }, [grid, fontPx, cursor, sel, hover, echo, flash])
 
   return (
     <canvas

@@ -9,9 +9,10 @@ import { buildDiagnostics } from './diagnostics'
 import { log } from './log'
 import { buildAttentionToast, winToastsUsable } from './notify/toasts-win'
 import type { InvokeApi } from '../shared/ipc/contract'
+import { encodeWireError } from '../shared/ipc/errors'
 import { parseUploadResult } from '../shared/api/types'
 import { routes } from '../shared/api/routes'
-import type { AppdClient } from './appd/client'
+import { HuginnHttpError, type AppdClient } from './appd/client'
 import type { Chats } from './appd/chats'
 import type { Host } from './appd/host'
 import type { Sessions } from './appd/sessions'
@@ -40,9 +41,18 @@ export function registerIpc(deps: IpcDeps): void {
   const { settings, chats, sessions, host, watch, updater } = deps
 
   const handle = <C extends keyof InvokeApi>(channel: C, fn: Handler<C>): void => {
-    ipcMain.handle(channel, (event, ...args) =>
-      fn(event.sender, ...(args as InvokeApi[C]['args'])),
-    )
+    ipcMain.handle(channel, async (event, ...args) => {
+      try {
+        return await fn(event.sender, ...(args as InvokeApi[C]['args']))
+      } catch (e) {
+        // Carry the HTTP status across a boundary that would otherwise drop
+        // it — the renderer used to guess from the daemon's error wording.
+        if (e instanceof HuginnHttpError) {
+          throw new Error(encodeWireError({ status: e.status, serverError: e.serverError }))
+        }
+        throw e
+      }
+    })
   }
 
   handle('app.version', () => app.getVersion())
@@ -99,7 +109,7 @@ export function registerIpc(deps: IpcDeps): void {
         method: 'POST',
         bodyStream: stream,
         contentLength: stat.size,
-        tier: 'longPoll',
+        tier: 'upload',
       }),
     )
   })
@@ -112,7 +122,7 @@ export function registerIpc(deps: IpcDeps): void {
         bodyStream: Readable.from(buf),
         contentType: body.contentType,
         contentLength: buf.length,
-        tier: 'longPoll',
+        tier: 'upload',
       }),
     )
   })

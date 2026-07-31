@@ -6,6 +6,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { ChatDetail, ChatEvent } from '../../shared/api/types'
 import type { SendOutcome } from '../../shared/ipc/contract'
+import { humanError } from '../../shared/ipc/errors'
 import { call, on } from '../lib/ipc'
 
 export interface ChatLive {
@@ -38,7 +39,7 @@ export function useChatStream(chatId: string | null): ChatLive {
       setDetail(await call('chats.get', chatId))
       setError(null)
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e))
+      setError(humanError(e instanceof Error ? e.message : String(e)))
     }
   }, [chatId])
 

@@ -4,6 +4,7 @@
 
 import { useState } from 'react'
 import { highlight, type Span } from '../../../shared/core/syntax'
+import { copyText } from '../common/clipboard'
 
 function colored(code: string, spans: Span[]): React.ReactNode[] {
   const parts: React.ReactNode[] = []
@@ -32,7 +33,11 @@ export function CodeCard({ code, lang }: { code: string; lang: string | null }):
           type="button"
           className="code-card-copy"
           onClick={() => {
-            void navigator.clipboard.writeText(code).then(() => {
+            // copyText, not navigator.clipboard directly: it falls back when
+            // the clipboard API is unavailable, and it reports whether the
+            // copy actually landed — the bare API version silently did nothing.
+            void copyText(code).then((ok) => {
+              if (!ok) return
               setCopied(true)
               setTimeout(() => setCopied(false), 1200)
             })
