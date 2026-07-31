@@ -2,12 +2,12 @@ package com.silencelen.huginn
 
 import androidx.compose.ui.graphics.Color
 import com.silencelen.huginn.ui.TerminalGrid
-import org.junit.Assert.assertEquals
-import org.junit.Assert.assertFalse
-import org.junit.Assert.assertNotNull
-import org.junit.Assert.assertNull
-import org.junit.Assert.assertTrue
-import org.junit.Test
+import kotlin.test.assertEquals
+import kotlin.test.assertFalse
+import kotlin.test.assertNotNull
+import kotlin.test.assertNull
+import kotlin.test.assertTrue
+import kotlin.test.Test
 
 private const val ESC = '\u001B'
 private const val BEL = '\u0007'
@@ -20,6 +20,17 @@ private fun esc(s: String) = s.replace("<E>", ESC.toString()).replace("<B>", BEL
  * panes on huginn (2026-07-27), including the OSC 8 hyperlinks Claude Code wraps
  * around file paths and the box-drawing/`●`/`❯` furniture that broke v1's
  * per-line rendering.
+ *
+ * ARGUMENT ORDER — the trap this file is the worst place in the repo for.
+ * These tests were JUnit before :core existed, and the two frameworks disagree:
+ *
+ *     JUnit        assertEquals(message, expected, actual)
+ *     kotlin.test  assertEquals(expected, actual, message)
+ *
+ * With three String arguments — which is exactly the shape of the cell-content
+ * assertions below — a mechanical port COMPILES CLEANLY and silently asserts
+ * something else (comparing the message against the expected value). Nothing
+ * catches it but reading. Never port an assertion here with sed.
  */
 class TerminalGridTest {
 
@@ -48,7 +59,7 @@ class TerminalGridTest {
     @Test
     fun `box drawing keeps its column so borders line up`() {
         val row = parse("─────x")
-        assertEquals("the 6th cell must be x, not shifted", "x", row[5].text)
+        assertEquals("x", row[5].text, "the 6th cell must be x, not shifted")
     }
 
     @Test
@@ -72,8 +83,8 @@ class TerminalGridTest {
         val row = parse("日x")
         assertEquals("日", row[0].text)
         assertTrue(row[0].wide)
-        assertEquals("the second half of a wide glyph draws nothing", "", row[1].text)
-        assertEquals("x sits in column 2, as the terminal placed it", "x", row[2].text)
+        assertEquals("", row[1].text, "the second half of a wide glyph draws nothing")
+        assertEquals("x", row[2].text, "x sits in column 2, as the terminal placed it")
     }
 
     @Test
@@ -112,7 +123,7 @@ class TerminalGridTest {
         val row = parse(esc("<E>[38;5;167m<E>[48;5;52mX<E>[39m<E>[49mY"))
         assertNotNull(row[0].bg)
         assertEquals(Ansi256(167), row[0].fg)
-        assertEquals("after the reset the default returns", FG, row[1].fg)
+        assertEquals(FG, row[1].fg, "after the reset the default returns")
         assertNull(row[1].bg)
     }
 

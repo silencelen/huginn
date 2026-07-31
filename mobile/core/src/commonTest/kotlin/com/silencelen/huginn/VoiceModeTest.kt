@@ -5,10 +5,10 @@ import com.silencelen.huginn.ui.VoiceLoop
 import com.silencelen.huginn.ui.VoiceLoop.Effect
 import com.silencelen.huginn.ui.VoiceLoop.Event
 import com.silencelen.huginn.ui.VoiceLoop.State
-import org.junit.Assert.assertEquals
-import org.junit.Assert.assertFalse
-import org.junit.Assert.assertTrue
-import org.junit.Test
+import kotlin.test.assertEquals
+import kotlin.test.assertFalse
+import kotlin.test.assertTrue
+import kotlin.test.Test
 
 /**
  * The conversation loop, exercised without a microphone or a speaker — which is

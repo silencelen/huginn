@@ -129,7 +129,7 @@ class WatchService : Service() {
                                 knownHash = ev.watch.hash
                                 latest = ev.watch
                                 settings.noteContact(System.currentTimeMillis())
-                                WatchCycle.apply(applicationContext, settings, ev.watch, client)
+                                WatchNotifier.apply(applicationContext, settings, ev.watch, client)
                                 update(ongoing("Watching huginn", summary(ev.watch)))
                             }
                             // Nothing changed, but the path is proven open — which is

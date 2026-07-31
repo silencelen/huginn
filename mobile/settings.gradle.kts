@@ -22,3 +22,5 @@ dependencyResolutionManagement {
 
 rootProject.name = "Huginn"
 include(":app")
+// Platform-free logic shared with the desktop client. See core/build.gradle.kts.
+include(":core")

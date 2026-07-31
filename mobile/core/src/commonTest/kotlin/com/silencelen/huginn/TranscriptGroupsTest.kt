@@ -2,10 +2,10 @@ package com.silencelen.huginn
 
 import com.silencelen.huginn.data.TranscriptEvent
 import com.silencelen.huginn.ui.TranscriptGroups
-import org.junit.Assert.assertEquals
-import org.junit.Assert.assertNull
-import org.junit.Assert.assertTrue
-import org.junit.Test
+import kotlin.test.assertEquals
+import kotlin.test.assertNull
+import kotlin.test.assertTrue
+import kotlin.test.Test
 
 /**
  * The folding rule for subagent runs. A wrong boundary here swallows events into

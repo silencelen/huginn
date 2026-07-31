@@ -3,10 +3,10 @@ package com.silencelen.huginn
 import com.silencelen.huginn.data.AppdRoutes
 import com.silencelen.huginn.data.RouteResolver
 import kotlinx.coroutines.test.runTest
-import org.junit.Assert.assertEquals
-import org.junit.Assert.assertNull
-import org.junit.Assert.assertTrue
-import org.junit.Test
+import kotlin.test.assertEquals
+import kotlin.test.assertNull
+import kotlin.test.assertTrue
+import kotlin.test.Test
 
 class AppdRoutesTest {
 
@@ -31,7 +31,7 @@ class AppdRoutesTest {
         val mesh = AppdRoutes.YGGDRASIL.url
         val c = AppdRoutes.candidates(mesh)
         assertEquals(AppdRoutes.normalize(mesh), c.first())
-        assertEquals("no duplicates", c.size, c.distinct().size)
+        assertEquals(c.size, c.distinct().size, "no duplicates")
         assertTrue(c.contains(AppdRoutes.normalize(AppdRoutes.TAILSCALE.url)))
     }
 

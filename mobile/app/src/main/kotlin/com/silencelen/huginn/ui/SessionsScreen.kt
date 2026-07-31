@@ -219,10 +219,15 @@ private fun SessionRow(
                 )
             }
 
-            if (!s.title.isNullOrBlank()) {
+            // Bound to a local first: `s.title` is a public property of another
+            // module (:core) now, so the compiler will not smart-cast it inside
+            // the null check — the value could in principle change between the
+            // test and the read. A local is a snapshot and needs no assertion.
+            val title = s.title
+            if (!title.isNullOrBlank()) {
                 Spacer(Modifier.height(3.dp))
                 Text(
-                    s.title,
+                    title,
                     style = MaterialTheme.typography.bodyMedium,
                     fontWeight = FontWeight.Medium,
                     maxLines = 2,

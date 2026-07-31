@@ -102,6 +102,9 @@ android {
 }
 
 dependencies {
+    // Wire models, parsers and the pure UI rules — same package names as before
+    // the extraction, so nothing in this module needed a new import.
+    implementation(project(":core"))
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.activity.compose)
     implementation(libs.androidx.lifecycle.runtime.ktx)
