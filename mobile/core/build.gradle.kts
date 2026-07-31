@@ -36,6 +36,20 @@ kotlin {
             api(libs.coroutines.core)
             api(compose.runtime)
             api(compose.ui)
+            // Also api: HuginnClient's constructor names HttpClientEngine, so a
+            // test — or the desktop client — can hand it one.
+            api(libs.ktor.client.core)
+        }
+        // The engine is the one part of the HTTP stack that CANNOT be common:
+        // ktor-client-okhttp publishes JVM variants only, so commonMain has no
+        // symbol for it. Hence the expect/actual in data/Platform.kt — two
+        // three-line files, rather than threading an engine parameter through
+        // the app's eight HuginnClient call sites.
+        androidMain.dependencies {
+            implementation(libs.ktor.client.okhttp)
+        }
+        jvmMain.dependencies {
+            implementation(libs.ktor.client.okhttp)
         }
         commonTest.dependencies {
             // kotlin.test, not JUnit: commonTest must compile for every target.
@@ -43,6 +57,9 @@ kotlin {
             // TerminalGridTest.kt before touching an assertion here.
             implementation(kotlin("test"))
             implementation(libs.coroutines.test)
+            // Why SseTest could finally leave :app: a mock engine that is itself
+            // multiplatform, so one source tests the SSE reader on both targets.
+            implementation(libs.ktor.client.mock)
         }
     }
 }

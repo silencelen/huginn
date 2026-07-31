@@ -11,9 +11,6 @@ import androidx.datastore.preferences.preferencesDataStore
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
-import kotlinx.serialization.builtins.MapSerializer
-import kotlinx.serialization.builtins.serializer
-import kotlinx.serialization.json.Json
 
 private val Context.dataStore by preferencesDataStore(name = "huginn_settings")
 
@@ -21,11 +18,21 @@ private val Context.dataStore by preferencesDataStore(name = "huginn_settings")
  * Server URL + bearer token. Both are user-supplied: the token is minted on the
  * host by the daemon's deploy script, so there is nothing to hardcode here.
  * Default URL is huginn's tailnet address, which is where the daemon binds.
+ *
+ * Android's implementation of [HuginnSettings], and it stays here on purpose.
+ * DataStore's own multiplatform API wants the file path spelled out, and this
+ * store's path is wherever `preferencesDataStore("huginn_settings")` has been
+ * putting it since 2.0 — on a phone that is in daily use, with the only copy of
+ * the owner's token in it. The interface moved to :core so a second client has
+ * something to implement; the FILE did not move, because a migration is a risk
+ * with no payoff until that client exists.
  */
-class SettingsStore(private val context: Context) {
+class SettingsStore(private val context: Context) : HuginnSettings {
     companion object {
-        const val DEFAULT_BASE_URL = "http://100.97.198.90:8787"
-        const val DEFAULT_FONT_SCALE = 9f
+        // Kept as aliases: these two names are read from a dozen call sites and
+        // from the settings screen's slider bounds. One definition, in :core.
+        const val DEFAULT_BASE_URL = HuginnSettings.DEFAULT_BASE_URL
+        const val DEFAULT_FONT_SCALE = HuginnSettings.DEFAULT_FONT_SCALE
         private val BASE_URL = stringPreferencesKey("base_url")
         private val ROUTE_PINNED = booleanPreferencesKey("appd_route_pinned")
         private val TOKEN = stringPreferencesKey("token")
@@ -56,7 +63,7 @@ class SettingsStore(private val context: Context) {
      * anything derived from the device, since its only job is to be the same
      * tomorrow as it is today.
      */
-    suspend fun clientId(): String {
+    override suspend fun clientId(): String {
         val existing = context.dataStore.data.map { it[CLIENT_ID] }.first()
         if (!existing.isNullOrBlank()) return existing
         val minted = java.util.UUID.randomUUID().toString()
@@ -74,9 +81,9 @@ class SettingsStore(private val context: Context) {
      * was asleep, which is the case this is all for. Persisting the fact of having
      * looked lets a restart COMPARE instead of forget.
      */
-    val watchSeeded: Flow<Boolean> = context.dataStore.data.map { it[SEEDED] ?: false }
+    override val watchSeeded: Flow<Boolean> = context.dataStore.data.map { it[SEEDED] ?: false }
 
-    suspend fun setWatchSeeded(value: Boolean) {
+    override suspend fun setWatchSeeded(value: Boolean) {
         context.dataStore.edit { it[SEEDED] = value }
     }
 
@@ -88,15 +95,11 @@ class SettingsStore(private val context: Context) {
      * that started and finished between two looks, and with a ten-minute background
      * check that is an ordinary occurrence rather than a corner case.
      */
-    val chatRuns: Flow<Map<String, Long>> = context.dataStore.data.map { prefs ->
-        val raw = prefs[CHAT_RUNS] ?: return@map emptyMap()
-        runCatching {
-            Json.decodeFromString(MapSerializer(String.serializer(), Long.serializer()), raw)
-        }.getOrDefault(emptyMap())
-    }
+    override val chatRuns: Flow<Map<String, Long>> =
+        context.dataStore.data.map { SettingsCodec.decodeChatRuns(it[CHAT_RUNS]) }
 
-    suspend fun setChatRuns(value: Map<String, Long>) {
-        val encoded = Json.encodeToString(MapSerializer(String.serializer(), Long.serializer()), value)
+    override suspend fun setChatRuns(value: Map<String, Long>) {
+        val encoded = SettingsCodec.encodeChatRuns(value)
         context.dataStore.edit { it[CHAT_RUNS] = encoded }
     }
 
@@ -148,35 +151,35 @@ class SettingsStore(private val context: Context) {
     }
 
     /** Delivery health, so "is this working?" is answerable without guessing. */
-    val lastContactAt: Flow<Long> = context.dataStore.data.map { it[LAST_CONTACT] ?: 0L }
-    val lastAlarmAt: Flow<Long> = context.dataStore.data.map { it[LAST_ALARM] ?: 0L }
-    val lastWatchError: Flow<String> = context.dataStore.data.map { it[LAST_ERROR] ?: "" }
-    val lastWatchErrorAt: Flow<Long> = context.dataStore.data.map { it[LAST_ERROR_AT] ?: 0L }
+    override val lastContactAt: Flow<Long> = context.dataStore.data.map { it[LAST_CONTACT] ?: 0L }
+    override val lastAlarmAt: Flow<Long> = context.dataStore.data.map { it[LAST_ALARM] ?: 0L }
+    override val lastWatchError: Flow<String> = context.dataStore.data.map { it[LAST_ERROR] ?: "" }
+    override val lastWatchErrorAt: Flow<Long> = context.dataStore.data.map { it[LAST_ERROR_AT] ?: 0L }
 
-    suspend fun noteContact(atMs: Long) {
+    override suspend fun noteContact(atMs: Long) {
         context.dataStore.edit { it[LAST_CONTACT] = atMs }
     }
 
-    suspend fun noteAlarm(atMs: Long) {
+    override suspend fun noteAlarm(atMs: Long) {
         context.dataStore.edit { it[LAST_ALARM] = atMs }
     }
 
-    suspend fun noteWatchError(message: String, atMs: Long) {
+    override suspend fun noteWatchError(message: String, atMs: Long) {
         context.dataStore.edit { it[LAST_ERROR] = message.take(120); it[LAST_ERROR_AT] = atMs }
     }
 
-    val baseUrl: Flow<String> = context.dataStore.data.map { it[BASE_URL] ?: DEFAULT_BASE_URL }
-    val token: Flow<String> = context.dataStore.data.map { it[TOKEN] ?: "" }
+    override val baseUrl: Flow<String> = context.dataStore.data.map { it[BASE_URL] ?: DEFAULT_BASE_URL }
+    override val token: Flow<String> = context.dataStore.data.map { it[TOKEN] ?: "" }
 
     /** Terminal text size in sp. Drives the column count reported to the server. */
-    val fontScale: Flow<Float> = context.dataStore.data.map { it[FONT_SCALE] ?: DEFAULT_FONT_SCALE }
+    override val fontScale: Flow<Float> = context.dataStore.data.map { it[FONT_SCALE] ?: DEFAULT_FONT_SCALE }
 
-    val notifyEnabled: Flow<Boolean> = context.dataStore.data.map { it[NOTIFY] ?: true }
+    override val notifyEnabled: Flow<Boolean> = context.dataStore.data.map { it[NOTIFY] ?: true }
 
     /** Continuous watching via the foreground service, rather than a 15-minute poll. */
-    val watchEnabled: Flow<Boolean> = context.dataStore.data.map { it[WATCH] ?: false }
+    override val watchEnabled: Flow<Boolean> = context.dataStore.data.map { it[WATCH] ?: false }
 
-    suspend fun setWatchEnabled(value: Boolean) {
+    override suspend fun setWatchEnabled(value: Boolean) {
         context.dataStore.edit { it[WATCH] = value }
     }
 
@@ -184,9 +187,9 @@ class SettingsStore(private val context: Context) {
      * Sessions already notified about, so the background poll fires on the
      * transition into needing-you rather than every 15 minutes forever.
      */
-    val notifiedSessions: Flow<Set<String>> = context.dataStore.data.map { it[NOTIFIED] ?: emptySet() }
+    override val notifiedSessions: Flow<Set<String>> = context.dataStore.data.map { it[NOTIFIED] ?: emptySet() }
 
-    suspend fun setBaseUrl(value: String) {
+    override suspend fun setBaseUrl(value: String) {
         context.dataStore.edit { it[BASE_URL] = value.trim() }
     }
 
@@ -194,33 +197,35 @@ class SettingsStore(private val context: Context) {
      * True when the route was chosen by hand, which stops auto-resolution from
      * moving off it. Typing a custom URL pins it implicitly.
      */
-    val routePinned: Flow<Boolean> = context.dataStore.data.map { it[ROUTE_PINNED] ?: false }
+    override val routePinned: Flow<Boolean> = context.dataStore.data.map { it[ROUTE_PINNED] ?: false }
 
     /**
      * Switches the active route. Written to the same key the background workers
      * already read, so a switch applies to notifications and the watch service
      * too, not just the foreground UI.
      */
-    suspend fun selectRoute(url: String, pinned: Boolean) {
+    override suspend fun selectRoute(url: String, pinned: Boolean) {
         context.dataStore.edit {
             it[BASE_URL] = url.trim()
             it[ROUTE_PINNED] = pinned
         }
     }
 
-    suspend fun setToken(value: String) {
+    override suspend fun setToken(value: String) {
         context.dataStore.edit { it[TOKEN] = value.trim() }
     }
 
-    suspend fun setFontScale(value: Float) {
-        context.dataStore.edit { it[FONT_SCALE] = value.coerceIn(5.5f, 22f) }
+    override suspend fun setFontScale(value: Float) {
+        context.dataStore.edit {
+            it[FONT_SCALE] = value.coerceIn(HuginnSettings.MIN_FONT_SCALE, HuginnSettings.MAX_FONT_SCALE)
+        }
     }
 
-    suspend fun setNotifyEnabled(value: Boolean) {
+    override suspend fun setNotifyEnabled(value: Boolean) {
         context.dataStore.edit { it[NOTIFY] = value }
     }
 
-    suspend fun setNotifiedSessions(value: Set<String>) {
+    override suspend fun setNotifiedSessions(value: Set<String>) {
         context.dataStore.edit { it[NOTIFIED] = value }
     }
 
@@ -229,9 +234,9 @@ class SettingsStore(private val context: Context) {
      * is has finished — which is the only way to notice completion without a push
      * channel, and it needs the previous observation to compare against.
      */
-    val runningChats: Flow<Set<String>> = context.dataStore.data.map { it[RUNNING_CHATS] ?: emptySet() }
+    override val runningChats: Flow<Set<String>> = context.dataStore.data.map { it[RUNNING_CHATS] ?: emptySet() }
 
-    suspend fun setRunningChats(value: Set<String>) {
+    override suspend fun setRunningChats(value: Set<String>) {
         context.dataStore.edit { it[RUNNING_CHATS] = value }
     }
 
@@ -242,16 +247,11 @@ class SettingsStore(private val context: Context) {
      * survive navigating away, and survive the process being killed while the
      * phone is in your pocket, which is exactly when it happens.
      */
-    val drafts: Flow<Map<String, String>> = context.dataStore.data.map { prefs ->
-        val raw = prefs[DRAFTS] ?: return@map emptyMap()
-        runCatching {
-            Json.decodeFromString(MapSerializer(String.serializer(), String.serializer()), raw)
-        }.getOrElse { emptyMap() }
-    }
+    override val drafts: Flow<Map<String, String>> =
+        context.dataStore.data.map { SettingsCodec.decodeDrafts(it[DRAFTS]) }
 
-    suspend fun setDrafts(value: Map<String, String>) {
-        val trimmed = value.filterValues { it.isNotEmpty() }
-        val encoded = Json.encodeToString(MapSerializer(String.serializer(), String.serializer()), trimmed)
+    override suspend fun setDrafts(value: Map<String, String>) {
+        val encoded = SettingsCodec.encodeDrafts(value)
         context.dataStore.edit { it[DRAFTS] = encoded }
     }
 }

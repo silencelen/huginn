@@ -18,7 +18,11 @@ activity-compose = "1.9.3"
 lifecycle = "2.8.7"
 coroutines = "1.9.0"
 kotlinx-serialization = "1.7.3"
-okhttp = "4.12.0"
+# The HTTP layer, and it lives in :core so both clients share one. 3.0.x needs
+# no Kotlin bump (same reasoning as compose-multiplatform above), and its OkHttp
+# engine pins okhttp 4.12.0 — the exact version this app shipped while it talked
+# to OkHttp directly, so nothing about the bytes on the wire changed with it.
+ktor = "3.0.3"
 datastore = "1.1.1"
 work = "2.10.0"
 
@@ -41,7 +45,17 @@ coroutines-core = { group = "org.jetbrains.kotlinx", name = "kotlinx-coroutines-
 coroutines-test = { group = "org.jetbrains.kotlinx", name = "kotlinx-coroutines-test", version.ref = "coroutines" }
 coroutines-android = { group = "org.jetbrains.kotlinx", name = "kotlinx-coroutines-android", version.ref = "coroutines" }
 kotlinx-serialization-json = { group = "org.jetbrains.kotlinx", name = "kotlinx-serialization-json", version.ref = "kotlinx-serialization" }
-okhttp = { group = "com.squareup.okhttp3", name = "okhttp", version.ref = "okhttp" }
+
+# ktor-client-core is multiplatform and lives in commonMain; the ENGINE is not,
+# so each target names its own (see core/src/*Main/.../Platform.*.kt). Both
+# targets pick OkHttp: keeping the engine the same on desktop as on the phone
+# means one set of timeout semantics to reason about rather than two.
+ktor-client-core = { group = "io.ktor", name = "ktor-client-core", version.ref = "ktor" }
+ktor-client-okhttp = { group = "io.ktor", name = "ktor-client-okhttp", version.ref = "ktor" }
+# The reason SseTest could finally move to commonTest: an engine that is itself
+# multiplatform, so the SSE reader is tested by the same source on both targets.
+ktor-client-mock = { group = "io.ktor", name = "ktor-client-mock", version.ref = "ktor" }
+
 androidx-datastore-preferences = { group = "androidx.datastore", name = "datastore-preferences", version.ref = "datastore" }
 androidx-work-runtime-ktx = { group = "androidx.work", name = "work-runtime-ktx", version.ref = "work" }
 
