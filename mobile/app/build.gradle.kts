@@ -105,6 +105,10 @@ dependencies {
     // Wire models, parsers and the pure UI rules — same package names as before
     // the extraction, so nothing in this module needed a new import.
     implementation(project(":core"))
+    // The shared LOOK: theme, markdown, transcript rows, terminal painter — the
+    // same composables the desktop client renders, under the same package names
+    // this module already used, so nothing here needed a new import.
+    implementation(project(":ui"))
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.activity.compose)
     implementation(libs.androidx.lifecycle.runtime.ktx)
