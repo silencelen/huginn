@@ -120,7 +120,9 @@ dependencies {
 
     implementation(libs.coroutines.android)
     implementation(libs.kotlinx.serialization.json)
-    implementation(libs.okhttp)
+    // No HTTP library named here, on purpose: every socket this app opens is
+    // opened by HuginnClient in :core, which brings its own (Ktor, over OkHttp).
+    // Naming one again would be a second way to reach the daemon.
     implementation(libs.androidx.datastore.preferences)
     // Background poll that notices when a session starts waiting on you.
     implementation(libs.androidx.work.runtime.ktx)
@@ -148,12 +150,15 @@ dependencies {
     debugImplementation(libs.compose.ui.tooling)
 
     // JVM unit tests. This host has no device and no KVM, so there is no
-    // instrumentation/emulator path: these tests are the only automated check on
-    // the two hand-rolled parsers (the ANSI renderer and the SSE reader), and
-    // they are fed bytes captured from the live daemon.
+    // instrumentation/emulator path: these tests are the only automated check the
+    // app gets. What is left here is what genuinely needs Android or this
+    // module's own classes; the parsers, the SSE reader and the ANSI renderer are
+    // tested in :core, against both targets.
+    //
+    // MockWebServer is gone with SseTest: the client is exercised through Ktor's
+    // MockEngine now, which is multiplatform, which is what let that suite move.
     testImplementation("junit:junit:4.13.2")
     testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.9.0")
-    testImplementation("com.squareup.okhttp3:mockwebserver:4.12.0")
 }
 
 // Export a built APK into dist/ under the stamped name
