@@ -38,6 +38,25 @@ class Presence(private val nowMs: () -> Long = System::currentTimeMillis) {
     private val _present = MutableStateFlow(false)
     val present: StateFlow<Boolean> = _present.asStateFlow()
 
+    /**
+     * Bumped whenever the long-lived streams must be DROPPED AND RE-OPENED. Two
+     * unrelated reasons, one signal, because the remedy is identical:
+     *
+     * - **[present] flipped.** The notify claim is stamped on the request when the
+     *   socket opens, and a parked SSE re-sends that same header on every
+     *   keepalive — so walking away from the desk leaves the daemon believing this
+     *   client is still a delivery route (and holding back the household Telegram
+     *   fallback) until the 30-minute rotation. Re-opening is what makes the claim
+     *   true. Note this is a monotonic counter, not the boolean: a StateFlow
+     *   conflates equal values, so a signal that only carried presence could not
+     *   also express "reconnect for a different reason".
+     * - **[noteResume].** Sleep black-holes every socket at once. Nothing errors
+     *   on wake; the connection simply hangs until an idle timeout fires, which is
+     *   up to three minutes of a client that looks attached and is not.
+     */
+    private val _streamKey = MutableStateFlow(0L)
+    val streamKey: StateFlow<Long> = _streamKey.asStateFlow()
+
     private var focused = false
     private var lastFocusedAt = 0L
 
@@ -63,8 +82,63 @@ class Presence(private val nowMs: () -> Long = System::currentTimeMillis) {
         recompute()
     }
 
+    /**
+     * The machine woke up. Drops and re-opens whatever is parked on a socket that
+     * no longer exists.
+     */
+    fun noteResume() {
+        _streamKey.value += 1
+    }
+
     private fun recompute() {
         val attended = focused || (lastFocusedAt > 0 && nowMs() - lastFocusedAt < graceMs)
-        _present.value = _visible.value && attended
+        val next = _visible.value && attended
+        if (next != _present.value) {
+            _present.value = next
+            _streamKey.value += 1
+        }
+    }
+}
+
+/**
+ * Notices that this machine was asleep.
+ *
+ * A plain JVM has no `powerMonitor.on('resume')`. What it does have is two clocks
+ * that disagree about a suspend, and either disagreement is proof enough:
+ *
+ * - **The monotonic clock skips.** `System.nanoTime()` does not advance across a
+ *   suspend on Linux, and in any case the JVM's threads are frozen — so a ticker
+ *   asked to run every 15 seconds finds that far longer has passed.
+ * - **The wall clock jumps.** Which also catches an NTP step or a hypervisor
+ *   restoring a snapshot, both of which black-hole sockets exactly the same way.
+ *
+ * Pure, so the threshold logic is testable without sleeping a test for an hour.
+ * The first tick only establishes a baseline and can never report a resume.
+ */
+class SleepDetector(
+    private val intervalMs: Long = 15_000,
+    /** How much longer than the interval a gap must be before it means "asleep". */
+    private val slackMs: Long = 45_000,
+) {
+    private var lastWallMs = 0L
+    private var lastMonoNs = 0L
+    private var seeded = false
+
+    fun tick(wallMs: Long, monoNs: Long): Boolean {
+        if (!seeded) {
+            seeded = true
+            lastWallMs = wallMs
+            lastMonoNs = monoNs
+            return false
+        }
+        val wallGap = wallMs - lastWallMs
+        val monoGap = (monoNs - lastMonoNs) / 1_000_000
+        lastWallMs = wallMs
+        lastMonoNs = monoNs
+        // Absolute value on the wall gap: a clock stepped BACKWARDS is the same
+        // evidence as one stepped forward, and only the forward case is obvious.
+        val wallJumped = kotlin.math.abs(wallGap) > intervalMs + slackMs
+        val monoJumped = monoGap > intervalMs + slackMs
+        return wallJumped || monoJumped
     }
 }
