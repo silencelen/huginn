@@ -108,7 +108,12 @@ if [ "$SKIP_TESTS" = 0 ]; then
 
   # The COUNT, not the exit code. A task that silently has no sources — a moved
   # source set, a renamed module — exits 0 having run nothing.
-  KOTLIN_MIN=408   # 382 (scripts/build.sh floor) + 26 (:app-desktop update suite), 2026-07-30
+  # Raised for the desktop-native pass: the right-click menus, the tooltip
+  # sentences, the multi-select model and the window/splitter restore are all
+  # pure decisions that fail SILENTLY when wrong (a menu that deletes four rows
+  # while reading "Delete", a window restored onto a monitor that is gone), so
+  # they are asserted rather than eyeballed. +28 in :app-desktop.
+  KOTLIN_MIN=436   # 382 (scripts/build.sh floor) + 54 (:app-desktop), 2026-07-31
   KOTLIN_COUNT=0
   for D in core/build/test-results/jvmTest \
            core/build/test-results/testDebugUnitTest \

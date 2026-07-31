@@ -25,6 +25,17 @@ enum class Shortcut {
     BACK,
     CHEATSHEET,
     HIDE_TO_TRAY,
+
+    /**
+     * The splitter, from the keyboard. A seam that can only be dragged is a seam
+     * that cannot be adjusted by someone whose hands are on the keys — which, in an
+     * app whose whole detail pane is a text composer, is most of the time. Bound to
+     * the bracket keys because that is where every editor puts "resize the sidebar"
+     * and muscle memory is worth more than a mnemonic.
+     */
+    SPLIT_NARROWER,
+    SPLIT_WIDER,
+    SPLIT_RESET,
 }
 
 /**
@@ -76,6 +87,12 @@ fun match(
         "3" -> Shortcut.VIEW_STATUS
         "COMMA" -> Shortcut.VIEW_SETTINGS
         "SLASH" -> Shortcut.CHEATSHEET
+        // Deliberately NOT suppressed while typing, like the list arrows above:
+        // resizing the pane you are reading is the one layout change you want
+        // without leaving the composer, and no editor puts a bracket on Ctrl.
+        "LBRACKET" -> Shortcut.SPLIT_NARROWER
+        "RBRACKET" -> Shortcut.SPLIT_WIDER
+        "BACKSLASH" -> Shortcut.SPLIT_RESET
         else -> null
     }
 }
@@ -94,6 +111,9 @@ fun keyName(key: androidx.compose.ui.input.key.Key): String? = when (key) {
     androidx.compose.ui.input.key.Key.Three -> "3"
     androidx.compose.ui.input.key.Key.Comma -> "COMMA"
     androidx.compose.ui.input.key.Key.Slash -> "SLASH"
+    androidx.compose.ui.input.key.Key.LeftBracket -> "LBRACKET"
+    androidx.compose.ui.input.key.Key.RightBracket -> "RBRACKET"
+    androidx.compose.ui.input.key.Key.Backslash -> "BACKSLASH"
     androidx.compose.ui.input.key.Key.Escape -> "ESCAPE"
     androidx.compose.ui.input.key.Key.F1 -> "F1"
     androidx.compose.ui.input.key.Key.DirectionUp -> "UP"
@@ -109,9 +129,20 @@ val SHORTCUT_HELP: List<Pair<String, String>> = listOf(
     "Ctrl N" to "New Ask chat",
     "Ctrl Shift N" to "New Act chat",
     "Alt ↑ / ↓" to "Previous / next in the list (works while typing)",
+    "Ctrl [ / ]" to "Narrower / wider list pane",
+    "Ctrl \\" to "Reset the list pane (or double-click the seam)",
     "Esc" to "Back to the list",
     "Ctrl Shift H" to "Hide to the tray",
     "F1" to "This list",
+)
+
+/** What the pointer can do that no key can. Shown beside the keyboard model. */
+val POINTER_HELP: List<Pair<String, String>> = listOf(
+    "Right-click" to "Open, rename, interrupt, delete — every verb, one menu",
+    "Ctrl click" to "Add a row to the selection",
+    "Shift click" to "Select everything between",
+    "Hover a dot" to "What the state is, and how long it has been that way",
+    "Double-click seam" to "Reset the list pane width",
 )
 
 // ------------------------------------------------------------------- palette

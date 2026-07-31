@@ -19,6 +19,9 @@ import androidx.compose.ui.window.TrayState
 import androidx.compose.ui.window.Window
 import androidx.compose.ui.window.application
 import androidx.compose.ui.window.isTraySupported
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.window.WindowPlacement
+import androidx.compose.ui.window.WindowPosition
 import androidx.compose.ui.window.rememberWindowState
 import com.silencelen.huginn.data.HuginnClient
 import com.silencelen.huginn.desktop.diag.NotifierSeam
@@ -44,6 +47,7 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.debounce
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import java.io.File
@@ -235,7 +239,45 @@ fun main(args: Array<String>) {
     val startupUrl = Activations.urlFromArgv(args)
 
     application {
-        val windowState = rememberWindowState(size = DpSize(1280.dp, 840.dp))
+        // WHERE IT WAS LAST TIME, sanity-checked against the screen it is opening
+        // on now. `WindowLayout.restore` is pure and tested because the failure it
+        // prevents is indistinguishable from a crash: a window restored onto a
+        // monitor that has since been unplugged simply never appears, and the
+        // process is running the whole time.
+        val restored = remember {
+            val screen = runCatching { java.awt.Toolkit.getDefaultToolkit().screenSize }.getOrNull()
+            WindowLayout.restore(
+                settings.windowLayout.value,
+                screen?.width ?: 0,
+                screen?.height ?: 0,
+            )
+        }
+        val windowState = rememberWindowState(
+            size = DpSize(restored.w.dp, restored.h.dp),
+            position = if (restored.placed) {
+                WindowPosition(restored.x.dp, restored.y.dp)
+            } else {
+                WindowPosition(Alignment.Center)
+            },
+            placement = if (restored.maximized) WindowPlacement.Maximized else WindowPlacement.Floating,
+        )
+
+        // Written back on a 700ms trailing edge. A resize is one change per FRAME,
+        // and this file also holds the daemon token — rewriting it sixty times a
+        // second through a rename is the one way that token gets truncated.
+        LaunchedEffect(Unit) {
+            snapshotFlow {
+                val p = windowState.position
+                WindowLayout(
+                    x = if (p.isSpecified) p.x.value.toInt() else WindowLayout.UNPLACED,
+                    y = if (p.isSpecified) p.y.value.toInt() else WindowLayout.UNPLACED,
+                    w = windowState.size.width.value.toInt(),
+                    h = windowState.size.height.value.toInt(),
+                    maximized = windowState.placement == WindowPlacement.Maximized,
+                )
+            }.debounce(700).collect { settings.setWindowLayout(it) }
+        }
+
         val visible by windowVisible.collectAsState()
         val summary by traySummary.collectAsState()
         val closeToTray by settings.closeToTray.collectAsState()
@@ -353,6 +395,12 @@ fun main(args: Array<String>) {
                     shortcut == Shortcut.BACK -> { store.back(); true }
                     shortcut == Shortcut.LIST_PREV -> { store.stepList(-1); true }
                     shortcut == Shortcut.LIST_NEXT -> { store.stepList(1); true }
+                    // The seam, from the keyboard. Clamping lives in the settings
+                    // store so a drag, a key press and a restored file all pass
+                    // through one set of bounds.
+                    shortcut == Shortcut.SPLIT_NARROWER -> { settings.narrowList(); true }
+                    shortcut == Shortcut.SPLIT_WIDER -> { settings.widenList(); true }
+                    shortcut == Shortcut.SPLIT_RESET -> { settings.resetListWidth(); true }
                     else -> false
                 }
             },
