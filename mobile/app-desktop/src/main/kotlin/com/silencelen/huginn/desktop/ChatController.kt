@@ -3,6 +3,9 @@ package com.silencelen.huginn.desktop
 import com.silencelen.huginn.data.ChatDetail
 import com.silencelen.huginn.data.ChatEvent
 import com.silencelen.huginn.data.HuginnClient
+import com.silencelen.huginn.data.ModelChoice
+import com.silencelen.huginn.data.TranscriptPage
+import com.silencelen.huginn.ui.SuggestionCue
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -13,8 +16,20 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 
 /**
- * The live layer of ONE open chat: the digest as the server tells it, plus
- * whatever the current run has streamed since.
+ * The live layer of ONE open chat: its transcript, its metadata, and whatever the
+ * current run has streamed since.
+ *
+ * THE HISTORY IS THE REAL CLAUDE CODE TRANSCRIPT, not the digest this daemon
+ * persists — the same source the phone reads, and the same source a tmux
+ * session's conversation is drawn from. The digest is a flat list of user /
+ * assistant / tool lines, so a client rendering it structurally cannot show
+ * thinking blocks, subagent groups or tool RESULTS: they are not in it. It is
+ * still fetched, for the things only it knows (whether a run is live, where its
+ * partial text ends, the model and effort that will apply to the next turn).
+ *
+ * The live SSE stream is still followed while a turn is in flight, because the
+ * transcript is only written as blocks complete and a chat should show tokens as
+ * they arrive.
  *
  * Created per open chat and cancelled when it closes, which is the whole reason
  * it is not part of [AppStore] — a run has a lifecycle and the store does not.
@@ -28,7 +43,11 @@ class ChatController(
     private val _detail = MutableStateFlow<ChatDetail?>(null)
     val detail: StateFlow<ChatDetail?> = _detail.asStateFlow()
 
-    /** The answer being written right now, before it lands in the digest. */
+    /** The conversation itself. Null until the first read settles. */
+    private val _page = MutableStateFlow<TranscriptPage?>(null)
+    val page: StateFlow<TranscriptPage?> = _page.asStateFlow()
+
+    /** The answer being written right now, before it lands in the transcript. */
     private val _partial = MutableStateFlow("")
     val partial: StateFlow<String> = _partial.asStateFlow()
 
@@ -39,49 +58,117 @@ class ChatController(
     private val _activity = MutableStateFlow<String?>(null)
     val activity: StateFlow<String?> = _activity.asStateFlow()
 
+    /**
+     * Why the CONVERSATION could not be read, when it could not.
+     *
+     * Kept apart from [notice] because they are drawn in different places for a
+     * reason the phone learned the hard way: a failed load that renders as the
+     * pristine empty state looks exactly like a chat that has never run, which
+     * reads as data loss. This one replaces the transcript; a notice never does.
+     */
     private val _error = MutableStateFlow<String?>(null)
     val error: StateFlow<String?> = _error.asStateFlow()
 
-    /** Position in the queue when a message landed behind a run in flight. */
-    private val _queued = MutableStateFlow<Int?>(null)
-    val queued: StateFlow<Int?> = _queued.asStateFlow()
+    /** The outcome of something the reader asked for — a refused delete, a failed rename. */
+    private val _notice = MutableStateFlow<String?>(null)
+    val notice: StateFlow<String?> = _notice.asStateFlow()
+    fun dismissNotice() { _notice.value = null }
+
+    /** Set once the chat is gone, so the shell can stop showing it. */
+    private val _deleted = MutableStateFlow(false)
+    val deleted: StateFlow<Boolean> = _deleted.asStateFlow()
+
+    /** Models the installed CLI offers, so the picker cannot go stale. */
+    private val _models = MutableStateFlow<List<ModelChoice>>(emptyList())
+    val models: StateFlow<List<ModelChoice>> = _models.asStateFlow()
 
     /**
-     * A message that has been posted but is not in the digest yet.
+     * A message that has been posted but is not in the transcript yet.
      *
-     * Without it the composer clears and NOTHING appears until the run finishes —
-     * the message the user just sent is simply not on screen while Claude answers
-     * it, which reads as the send having failed. The digest is still the rendered
-     * truth: this is cleared the moment a refresh comes back carrying the same
-     * text, so the bubble is replaced rather than duplicated.
+     * Without it the composer clears and NOTHING appears until the run's first
+     * block completes — the message the user just sent is simply not on screen
+     * while Claude answers it, which reads as the send having failed. The
+     * transcript is still the rendered truth: this is cleared the moment a read
+     * comes back carrying the same text, so the bubble is replaced rather than
+     * duplicated.
      */
     private val _pendingSend = MutableStateFlow<String?>(null)
     val pendingSend: StateFlow<String?> = _pendingSend.asStateFlow()
 
+    /** Suggested next messages. The rule for when to ask lives in `:core`. */
+    private val cue = SuggestionCue(scope) { client.chatSuggestions(chatId).suggestions }
+    val suggestions: StateFlow<List<String>> = cue.suggestions
+
     private var streamJob: Job? = null
+    private var loadJob: Job? = null
 
     /** Guards the reattach loop from becoming an unbounded retry against a dead route. */
     private var reattempts = 0
 
+    /**
+     * Everything that means "a turn is in flight". Suggestions, the queue tag and
+     * the composer's placeholder all key off it, so it is one definition rather
+     * than three that drift.
+     */
+    fun busy(): Boolean =
+        _running.value || _partial.value.isNotEmpty() || _activity.value != null || _pendingSend.value != null
+
     fun start() {
         scope.launch {
             refresh()
+            loadTranscript()
             attachIfRunning()
+        }
+        scope.launch {
+            runCatching { client.models() }.onSuccess { _models.value = it }
         }
     }
 
+    /** The metadata: running, mode, model, effort, and where a live run has got to. */
     suspend fun refresh() {
         runCatching { client.chat(chatId) }
             .onSuccess {
                 _detail.value = it
                 _running.value = it.running
-                _error.value = null
-                val pending = _pendingSend.value
-                if (pending != null && it.messages.any { m -> m.type == "user" && m.text == pending }) {
-                    _pendingSend.value = null
-                }
             }
-            .onFailure { _error.value = it.message ?: "could not load chat" }
+            .onFailure { _notice.value = it.message ?: "could not read this chat" }
+    }
+
+    /**
+     * Reads the conversation.
+     *
+     * A 409 is the ONLY failure that means "nothing here yet" — the chat exists
+     * and has never run. Everything else is a failure to read history that does
+     * exist, and must not be drawn as its absence.
+     */
+    fun loadTranscript() {
+        loadJob?.cancel()
+        loadJob = scope.launch {
+            runCatching { client.chatTranscript(chatId) }
+                .onSuccess {
+                    _page.value = it
+                    _error.value = null
+                    val pending = _pendingSend.value
+                    if (pending != null && it.events.any { e -> e.kind == "user" && e.text?.trim() == pending }) {
+                        _pendingSend.value = null
+                    }
+                    cue.onTurnBoundary(it.nextOffset, busy())
+                }
+                .onFailure { e ->
+                    val neverRan = e is HuginnClient.HuginnException && e.code == 409
+                    if (_page.value == null) {
+                        if (neverRan) _page.value = TranscriptPage()
+                        else _error.value = e.message ?: "could not load this conversation"
+                    }
+                }
+        }
+    }
+
+    /** Retries after a failure the reader can see. */
+    fun retry() {
+        _error.value = null
+        _page.value = null
+        loadTranscript()
     }
 
     /**
@@ -120,24 +207,26 @@ class ChatController(
         }
     }
 
-    /** Posts and follows the run. A chat already running QUEUES instead. */
+    /**
+     * Posts and follows the run. A chat already running QUEUES instead: the daemon
+     * holds the message and delivers it when the current run ends, and the
+     * transcript then carries it as a user message tagged `queued` — in place,
+     * where it was typed, rather than as a banner about a message that is not
+     * shown.
+     */
     fun send(text: String) {
         val body = text.trim()
         if (body.isEmpty()) return
+        cue.clear()
         scope.launch {
             if (_running.value) {
-                // Counted locally: the chat DIGEST does not carry a pending
-                // count (only the list row does), and re-fetching the list to
-                // learn a number the user is about to see anyway is a round trip
-                // for nothing.
                 runCatching { client.queueMessage(chatId, body) }
-                    .onSuccess { _queued.value = (_queued.value ?: 0) + 1; refresh() }
-                    .onFailure { _error.value = it.message ?: "could not queue" }
+                    .onSuccess { loadTranscript() }
+                    .onFailure { _notice.value = it.message ?: "could not queue that message" }
                 return@launch
             }
             _partial.value = ""
-            _error.value = null
-            _queued.value = null
+            _notice.value = null
             _pendingSend.value = body
             _running.value = true
             reattempts = 0
@@ -147,14 +236,55 @@ class ChatController(
 
     fun cancel() {
         scope.launch {
-            runCatching { client.cancelChat(chatId) }.onFailure { _error.value = it.message }
+            runCatching { client.cancelChat(chatId) }.onFailure { _notice.value = it.message }
             refresh()
+        }
+    }
+
+    /**
+     * Model, effort and mode for the NEXT turn — the daemon fixes the flags when a
+     * run spawns, so a turn already in flight keeps what it started with.
+     *
+     * An empty string clears the field back to the host's default, which is why
+     * these are `String?` (absent) rather than blank meaning absent.
+     */
+    fun setOptions(model: String? = null, effort: String? = null, mode: String? = null) {
+        scope.launch {
+            runCatching { client.updateChat(chatId, model = model, effort = effort, mode = mode) }
+                .onSuccess { _detail.value = it }
+                .onFailure { _notice.value = it.message ?: "could not change that" }
+        }
+    }
+
+    fun rename(title: String) {
+        val next = title.trim()
+        if (next.isEmpty()) return
+        scope.launch {
+            runCatching { client.renameChat(chatId, next) }
+                .onSuccess { refresh() }
+                .onFailure { _notice.value = it.message ?: "could not rename this chat" }
+        }
+    }
+
+    /**
+     * Deletes the chat. The daemon REFUSES while a run is active (409, "cancel
+     * first"), and that refusal is reported rather than swallowed: a delete button
+     * that silently does nothing is worse than one that says why it did not.
+     */
+    fun delete() {
+        scope.launch {
+            runCatching { client.deleteChat(chatId) }
+                .onSuccess { _deleted.value = true }
+                .onFailure { _notice.value = it.message ?: "could not delete this chat" }
         }
     }
 
     fun close() {
         streamJob?.cancel()
         streamJob = null
+        loadJob?.cancel()
+        loadJob = null
+        cue.clear()
     }
 
     /**
@@ -183,42 +313,55 @@ class ChatController(
                 refresh()
                 flow = reattachFlow() ?: break
             }
+            // Out of tries with the run still marked live: release the composer so
+            // the reader can act, and read whatever did land.
+            if (reattempts >= MAX_REATTACH) {
+                _running.value = false
+                _activity.value = null
+                _partial.value = ""
+                _pendingSend.value = null
+                loadTranscript()
+            }
         }
     }
 
     private suspend fun apply(ev: ChatEvent) {
         when (ev) {
             // The daemon persists the user's message BEFORE it starts the run, so
-            // this is the first moment the digest can carry it — and the earliest
-            // the optimistic bubble can be retired for the real one.
+            // this is the first moment the transcript can carry it — and the
+            // earliest the optimistic bubble can be retired for the real one.
             is ChatEvent.Started -> {
                 _running.value = true
                 _activity.value = "thinking"
-                refresh()
+                loadTranscript()
             }
             is ChatEvent.Delta -> { _partial.value += ev.text; _activity.value = null }
             is ChatEvent.Assistant -> {
-                // The digest is the rendered truth; the stream only says it grew.
+                // The block is complete and now in the transcript, which is the
+                // richer source: re-read rather than keeping a second copy.
                 _partial.value = ""
                 _activity.value = null
-                refresh()
+                loadTranscript()
             }
             is ChatEvent.ToolStart -> _activity.value = ev.name
-            is ChatEvent.Tool -> _activity.value = ev.name
-            is ChatEvent.Result -> _activity.value = null
+            is ChatEvent.Tool -> { _activity.value = null; loadTranscript() }
+            is ChatEvent.Result -> { _activity.value = null; loadTranscript() }
             is ChatEvent.Failure -> {
-                _error.value = ev.text
-                // NOT cleared here: a failure frame may precede a reattach, and
-                // blanking `running` would stop the reattach from happening.
+                _notice.value = ev.text
+                // `running` is NOT cleared here: a failure frame may precede a
+                // reattach, and blanking it would stop the reattach happening.
+                // The tool, however, is no longer running for US, whatever it is
+                // doing on huginn — left set, the view shows a spinner forever.
+                _activity.value = null
             }
             ChatEvent.Done -> {
                 _running.value = false
                 _activity.value = null
                 _partial.value = ""
-                _queued.value = null
                 _pendingSend.value = null
                 reattempts = 0
                 refresh()
+                loadTranscript()
             }
         }
     }
