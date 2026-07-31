@@ -45,8 +45,23 @@ class ShortcutsTest {
     fun `every cheat sheet row names a real binding`() {
         // The help text is the contract the user reads; it must not drift from
         // the table underneath it.
-        assertEquals(9, SHORTCUT_HELP.size)
+        assertEquals(11, SHORTCUT_HELP.size)
         assertTrue(SHORTCUT_HELP.all { it.first.isNotBlank() && it.second.isNotBlank() })
+        // The pointer half of the model. It is listed beside the keys because the
+        // verb surface, the state legend and multi-select all live on the mouse,
+        // and none of them is discoverable if nothing says so.
+        assertEquals(5, POINTER_HELP.size)
+        assertTrue(POINTER_HELP.all { it.first.isNotBlank() && it.second.isNotBlank() })
+    }
+
+    @Test
+    fun `the splitter is reachable from the keyboard, including while typing`() {
+        assertEquals(Shortcut.SPLIT_NARROWER, match(true, false, false, "LBRACKET"))
+        assertEquals(Shortcut.SPLIT_WIDER, match(true, false, false, "RBRACKET"))
+        assertEquals(Shortcut.SPLIT_RESET, match(true, false, false, "BACKSLASH"))
+        // Resizing the pane you are reading is the one layout change worth having
+        // without leaving the composer — the same argument as Alt+arrow.
+        assertEquals(Shortcut.SPLIT_WIDER, match(true, false, false, "RBRACKET", typing = true))
     }
 
     // ------------------------------------------------------------- palette
