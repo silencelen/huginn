@@ -75,12 +75,25 @@ import com.silencelen.huginn.desktop.attach.appendDropped
 import com.silencelen.huginn.desktop.attach.attachmentDropTarget
 import com.silencelen.huginn.desktop.attach.composeMessage
 import com.silencelen.huginn.desktop.attach.rememberAttachmentController
+import com.silencelen.huginn.desktop.ui.session.ControlAction
+import com.silencelen.huginn.desktop.ui.session.ControlPicker
+import com.silencelen.huginn.desktop.ui.session.WorkPanel
+import com.silencelen.huginn.desktop.ui.session.rememberModels
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
+import com.silencelen.huginn.data.ModelChoice
+import com.silencelen.huginn.ui.FollowNewest
+import com.silencelen.huginn.ui.ModelLabels
+import com.silencelen.huginn.ui.NewestPill
 import com.silencelen.huginn.ui.SkiaCellPainter
+import com.silencelen.huginn.ui.Suggest
+import com.silencelen.huginn.ui.SuggestionChips
+import com.silencelen.huginn.ui.SuggestionCue
 import com.silencelen.huginn.ui.TerminalCanvas
 import com.silencelen.huginn.ui.TerminalGrid
 import com.silencelen.huginn.ui.TranscriptGroups
 import com.silencelen.huginn.ui.TranscriptRowItem
+import com.silencelen.huginn.ui.scrollToNewest
 import com.silencelen.huginn.ui.tailRevision
 import com.silencelen.huginn.ui.theme.LocalMonoStyle
 
@@ -118,17 +131,40 @@ fun SessionView(store: AppStore, name: String) {
 
     val row = sessions.firstOrNull { it.name == name }
 
+    // WORKING, from the hook state rather than from anything on the screen. The
+    // TRANSCRIPT first and the sessions list only as a fallback: the list is polled
+    // by the shell and the transcript by this view, so the transcript is the live
+    // source in exactly the case the list has gone stale. On the phone a frozen
+    // answer here drove the wrong composer control — a Stop button on a finished
+    // session — and mis-timed the suggestions.
+    val working = (page?.state ?: row?.state) == "running"
+
+    // The composer's text lives HERE because three surfaces share it: the composer
+    // types it, a suggestion chip fills it, and the interrupt control appears only
+    // when it is empty.
+    var draft by remember(name) { mutableStateOf("") }
+    val viewScope = rememberCoroutineScope()
+
     Column(Modifier.fillMaxSize()) {
         SessionHeader(
             title = page?.title ?: row?.title ?: name,
             name = name,
-            model = page?.modelDisplay ?: page?.model ?: row?.liveModel,
-            mode = page?.permissionMode ?: row?.permissionMode,
+            // The pane reports the CURRENT model and mode; the transcript only
+            // knows what the last completed turn used, so a just-issued /model
+            // change would otherwise leave the mark showing the old value. Both of
+            // these carry a version; neither is a bare family name.
+            model = screen?.liveModel ?: page?.modelDisplay ?: page?.model ?: row?.liveModel,
+            effort = page?.effort,
+            mode = screen?.liveMode ?: page?.permissionMode ?: row?.permissionMode,
             state = row?.state,
             branch = page?.gitBranch,
             leased = controller.leasedHere && screen?.sizeLeased == true,
             cols = screen?.width,
             rows = screen?.height,
+            models = rememberModels(store.client),
+            // Slash commands go in as a submitted line, exactly as typed by hand.
+            onCommand = { controller.sendLine(it) },
+            onCycleMode = { controller.sendKeys(listOf("BTab")) },
         )
         TabStrip(tab) { controller.openTab(it) }
         HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
@@ -144,6 +180,45 @@ fun SessionView(store: AppStore, name: String) {
             }
         }
 
+        // THE CONVERSATION TAB'S OWN SURFACES, and deliberately not drawn on the
+        // Screen tab even though the phone's equivalents are one-tab only for
+        // reasons of thumb reach. Here it is arithmetic: everything below the
+        // weighted Box takes height from it, the Screen tab MEASURES that box into
+        // rows and columns, and reporting a new geometry resizes the owner's real
+        // tmux window. A work strip that appeared and vanished every turn would walk
+        // their pane through two shapes a turn. The pane also already shows its own
+        // status lines, which is most of what the strip says.
+        //
+        // Both are CALLED on either tab and draw nothing on the Screen tab, rather
+        // than being composed conditionally: their state is what makes them work —
+        // how long ago work was last seen, which turn was already asked about — and
+        // taking them out of the composition throws it away, so glancing at the
+        // pane mid-run and coming back would lose the strip that was the reason to
+        // look.
+        val onConversation = tab == SessionTab.CONVERSATION
+        WorkPanel(
+            name = name,
+            page = page,
+            screen = screen,
+            working = working,
+            client = store.client,
+            scope = viewScope,
+            draw = onConversation,
+        )
+
+        // Suggested next messages, at the turn boundary only. Asked for when the
+        // transcript grows while nothing is running; a live prompt outranks them,
+        // typing dismisses them, and picking one FILLS the composer.
+        val cue = remember(name) {
+            SuggestionCue(viewScope) { store.client.sessionSuggestions(name).suggestions }
+        }
+        DisposableEffect(name) { onDispose { cue.clear() } }
+        val suggestions by cue.suggestions.collectAsState()
+        LaunchedEffect(page?.nextOffset, working) { cue.onTurnBoundary(page?.nextOffset, working) }
+        if (onConversation && screen?.prompt == null && Suggest.visible(suggestions, working, draft)) {
+            SuggestionChips(suggestions, onPick = { draft = it })
+        }
+
         // THE PROMPT LIVES OUTSIDE THE TABS, which is the point: a question is the
         // one moment a reader must act, and making them find the Screen tab to
         // click "1" while reading that very question in the transcript is a tab
@@ -151,23 +226,43 @@ fun SessionView(store: AppStore, name: String) {
         // one card below both is the same promise with one copy of the code.
         screen?.prompt?.let { prompt -> PromptCard(controller, prompt) }
 
-        Composer(controller, store.client)
+        Composer(
+            controller = controller,
+            client = store.client,
+            draft = draft,
+            onDraft = { draft = it },
+            working = working,
+            scope = viewScope,
+        )
     }
 }
 
 // ------------------------------------------------------------------- chrome
 
+/**
+ * What this session IS, and — for the three facts that can be changed — the way
+ * to change them.
+ *
+ * The model, effort and mode marks are the controls. Displaying a value beside a
+ * separate control that sets it is the same verb twice, and a second bar of chips
+ * under the header would also cost height, which on the Screen tab is measured
+ * into rows and pushed to a real tmux window.
+ */
 @Composable
 private fun SessionHeader(
     title: String,
     name: String,
     model: String?,
+    effort: String?,
     mode: String?,
     state: String?,
     branch: String?,
     leased: Boolean,
     cols: Int?,
     rows: Int?,
+    models: List<ModelChoice>,
+    onCommand: (String) -> Unit,
+    onCycleMode: () -> Unit,
 ) {
     Row(
         Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 10.dp),
@@ -186,9 +281,12 @@ private fun SessionHeader(
         if (leased && cols != null && rows != null) {
             Muted("fitted ${cols}×${rows}", Modifier.padding(end = 10.dp))
         }
-        branch?.let { Muted(it, Modifier.padding(end = 10.dp)) }
-        mode?.let { Muted(it, Modifier.padding(end = 10.dp)) }
-        model?.let { Muted(it) }
+        branch?.let { Muted(it, Modifier.padding(end = 4.dp)) }
+        // Permission mode has no slash command that sets it; Shift+Tab cycles it,
+        // which is exactly what the key bar sends.
+        ControlAction(mode?.replaceFirstChar { it.uppercase() } ?: "Mode", onClick = onCycleMode)
+        ControlPicker(ModelLabels.effort(effort), ModelLabels.effortOptions()) { onCommand("/effort $it") }
+        ControlPicker(ModelLabels.model(model), ModelLabels.options(models)) { onCommand("/model $it") }
     }
 }
 
@@ -260,14 +358,17 @@ private fun ConversationTab(controller: SessionController) {
     val rows = remember(current.events) { TranscriptGroups.group(current.events) }
     val keys = remember(rows) { TranscriptGroups.keys(rows) }
     val listState = rememberLazyListState()
+    val scope = rememberCoroutineScope()
 
-    // Follow the tail. Keyed on nextOffset — bytes read, which strictly increases —
-    // rather than on the event count: the retained window is capped, so on a long
-    // session the count stops changing and following would silently stop with it.
+    // Follow the tail — as a LATCH, not as "scroll on every change". Keyed on
+    // nextOffset (bytes read, which strictly increases) rather than on the event
+    // count, because the retained window is capped and the count freezes on a long
+    // session. What this replaces scrolled to the last item on every revision, so a
+    // reader who scrolled up to read something older was dragged back to the bottom
+    // on the next poll tick — a conversation that cannot be read while it is live.
+    val itemCount = rows.size + if (current.truncated) 1 else 0
     val revision = tailRevision(current.nextOffset, rows.size, current.events.lastOrNull()?.text?.length)
-    LaunchedEffect(revision) {
-        if (rows.isNotEmpty()) listState.animateScrollToItem(rows.size - 1 + if (current.truncated) 1 else 0)
-    }
+    val unseen = FollowNewest(listState, itemCount, revision, key = controller.name)
 
     // A refresh that started failing after a page landed is a banner, not a
     // replacement: the transcript already on screen is still the best thing known.
@@ -303,6 +404,13 @@ private fun ConversationTab(controller: SessionController) {
                     }
                 }
             }
+        }
+        // Scrolling back to read something older must not look like the app has
+        // stopped following: without this the reader cannot tell "nothing new" from
+        // "not following". The pill lands with the SAME scroll the follower uses,
+        // or the latch never re-arms and the pill sticks.
+        if (unseen) {
+            NewestPill { scope.launch { listState.scrollToNewest(itemCount, animate = true) } }
         }
     }
 }
@@ -489,9 +597,14 @@ private fun KeyBar(controller: SessionController, live: Boolean, onToggleLive: (
                 Text("Live", style = MaterialTheme.typography.labelMedium)
             }
         }
+        // The phone's set, less the ones a desktop keyboard already sends itself
+        // while live. Shift+Tab is BTab and it is what cycles Claude Code's
+        // permission mode — leaving it out means the owner can only cycle forwards.
         listOf(
-            "Esc" to "Escape", "Tab" to "Tab", "↑" to "Up", "↓" to "Down",
-            "←" to "Left", "→" to "Right", "⏎" to "Enter", "^C" to "C-c", "^R" to "C-r",
+            "Esc" to "Escape", "Tab" to "Tab", "⇧Tab" to "BTab", "↑" to "Up", "↓" to "Down",
+            "←" to "Left", "→" to "Right", "⏎" to "Enter",
+            "^C" to "C-c", "^D" to "C-d", "^L" to "C-l", "^R" to "C-r",
+            "PgUp" to "PPage", "PgDn" to "NPage",
         ).forEach { (label, keyName) ->
             OutlinedButton(
                 onClick = { controller.sendKeys(listOf(keyName)) },
@@ -607,11 +720,19 @@ private fun PromptCard(controller: SessionController, prompt: PanePrompt) {
  * SPACE rather than a paragraph break — this text is TYPED into a pane, where a
  * newline is the submit key, so a blank line would send the message and leave the
  * marker on the next prompt.
+ *
+ * The draft is HOISTED: a suggestion chip fills it, and the interrupt control
+ * appears only while it is empty.
  */
 @Composable
-private fun Composer(controller: SessionController, client: HuginnClient) {
-    var draft by remember(controller.name) { mutableStateOf("") }
-    val scope = rememberCoroutineScope()
+private fun Composer(
+    controller: SessionController,
+    client: HuginnClient,
+    draft: String,
+    onDraft: (String) -> Unit,
+    working: Boolean,
+    scope: CoroutineScope,
+) {
     val attachments = rememberAttachmentController(client, scope, controller.name)
     val attachment by attachments.current.collectAsState()
     val failure by attachments.failure.collectAsState()
@@ -624,7 +745,7 @@ private fun Composer(controller: SessionController, client: HuginnClient) {
     val submit: () -> Unit = {
         if (canSend) {
             val body = draft
-            draft = ""
+            onDraft("")
             scope.launch {
                 val marker = attachments.take()
                 val full = composeMessage(body, marker, PANE_SEPARATOR)
@@ -643,7 +764,7 @@ private fun Composer(controller: SessionController, client: HuginnClient) {
         Modifier.fillMaxWidth()
             .attachmentDropTarget(
                 controller = attachments,
-                onText = { draft = appendDropped(draft, it) },
+                onText = { onDraft(appendDropped(draft, it)) },
                 onDragOver = { dragOver = it },
             )
             .background(
@@ -676,7 +797,7 @@ private fun Composer(controller: SessionController, client: HuginnClient) {
             AttachButton { picking = true }
             OutlinedTextField(
                 value = draft,
-                onValueChange = { draft = it },
+                onValueChange = onDraft,
                 // Cap before fill. `fillMaxWidth` hands DOWN fixed constraints and a
                 // `widthIn` inside those can only coerce into them, so the cap would be
                 // swallowed and a composer meant to stop at a reading measure would
@@ -696,6 +817,15 @@ private fun Composer(controller: SessionController, client: HuginnClient) {
                 placeholder = { Text("Send to the pane…  (Ctrl+Enter · paste, drop or clip a file)") },
                 textStyle = MaterialTheme.typography.bodyMedium,
             )
+            // Esc is how you stop Claude at the keyboard, so with nothing typed
+            // that is the action this composer should offer — and only then, since
+            // a Stop sitting beside half a written instruction is a keystroke away
+            // from throwing the instruction away.
+            if (working && draft.isBlank()) {
+                OutlinedButton(onClick = { controller.sendKeys(listOf("Escape")) }) {
+                    Text("Interrupt", color = MaterialTheme.colorScheme.error)
+                }
+            }
             Button(onClick = submit, enabled = canSend) { Text("Send") }
         }
     }
