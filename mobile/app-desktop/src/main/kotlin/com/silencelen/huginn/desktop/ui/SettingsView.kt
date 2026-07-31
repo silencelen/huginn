@@ -13,7 +13,9 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -24,7 +26,11 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import com.silencelen.huginn.data.AppdRoutes
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.width
 import com.silencelen.huginn.desktop.DesktopSettings
+import com.silencelen.huginn.desktop.update.DesktopUpdater
+import com.silencelen.huginn.desktop.update.UpdateState
 import kotlinx.coroutines.launch
 
 /**
@@ -37,7 +43,13 @@ import kotlinx.coroutines.launch
  * does not take is worse than one that says no.
  */
 @Composable
-fun SettingsView(settings: DesktopSettings, route: String, present: Boolean, notifyEnabled: Boolean) {
+fun SettingsView(
+    settings: DesktopSettings,
+    route: String,
+    present: Boolean,
+    notifyEnabled: Boolean,
+    updater: DesktopUpdater,
+) {
     val scope = rememberCoroutineScope()
     var url by remember(route) { mutableStateOf(route) }
     var token by remember { mutableStateOf(settings.tokenNow()) }
