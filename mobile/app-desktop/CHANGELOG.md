@@ -5,6 +5,60 @@ app and from the Electron desktop client. Its releases go to `/v1/desktop-kt`;
 the Electron client's go to `/v1/desktop` and the two never mix — see
 `scripts/release-desktop.sh`.
 
+## 0.3.0
+
+The polish release. The app worked; it did not yet feel finished. Three passes:
+what the phone can do and this could not, what a mouse-and-keyboard machine
+should have, and how densely the whole thing sits.
+
+### The chat was showing you less than the phone was
+
+It read the daemon's flat summary of a conversation, which contains no thinking
+records and no tool results — so no amount of rendering could have shown them.
+It now reads the same transcript the phone reads. Tool cards open onto what the
+tool actually returned, thinking appears, and a fan-out folds into one row you
+can expand.
+
+Suggestions exist now, in chats and in sessions: at the end of a turn, a few
+things you might say next, which fill the box rather than sending themselves.
+Drafts survive closing the app. Model, effort and mode can be changed, and go
+quiet mid-turn because the host fixes those when a run starts. Chats can be
+renamed and deleted, and when the host refuses — it will not delete a chat with
+a run in flight — it says so in its own words. A message sent while something is
+already running appears where it will land, marked as waiting.
+
+### The session view can show you what the work is doing
+
+A strip above the composer while a session is working: what it is doing, which
+background shells are still going and for how long, how many agents are out.
+Open it and each agent is there — what it was asked, what it is doing now, and
+once it settles, its own account of what it found. It stays for a few minutes
+after the work ends, because that is exactly when those conclusions become worth
+reading, and vanishing then would be the worst possible moment.
+
+### It behaves like a desktop program
+
+Right-click a chat or a session for everything you can do to it. Hover a state
+dot and it tells you which state and for how long. The window remembers its size
+and where the pane divider was. Ctrl and Shift select more than one row, and the
+menu addresses them together. Along the foot, a line that says which route you
+are on, whether the watch stream is attached, what is working, and what is
+waiting on a human — it replaced an error banner that used to shove the whole
+view down whenever the network hiccuped.
+
+### It sits more tightly
+
+List rows, the rail, the palette and the transcript itself are all closer than
+they were: the rhythm that reads as comfortable under a thumb reads as loose
+under a mouse, where the eye travels further and you are scanning rather than
+dwelling. The phone is untouched — it keeps its own spacing, and the difference
+is a setting the window chooses rather than two copies of the same screen.
+
+### Still not proven
+
+The same three as 0.2.0: Windows notifications, the answer buttons on them, and
+the interface on real graphics hardware.
+
 ## 0.2.0
 
 The release that makes this worth living in rather than looking at. Everything
