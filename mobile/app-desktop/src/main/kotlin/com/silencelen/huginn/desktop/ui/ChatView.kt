@@ -1,5 +1,6 @@
 package com.silencelen.huginn.desktop.ui
 
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.PaddingValues
@@ -46,6 +47,17 @@ import com.silencelen.huginn.data.TranscriptEvent
 import com.silencelen.huginn.ui.MarkdownText
 import com.silencelen.huginn.ui.TranscriptEventItem
 import androidx.compose.runtime.collectAsState
+import com.silencelen.huginn.desktop.attach.AttachButton
+import com.silencelen.huginn.desktop.attach.AttachChip
+import com.silencelen.huginn.desktop.attach.AttachFilePicker
+import com.silencelen.huginn.desktop.attach.AttachStatus
+import com.silencelen.huginn.desktop.attach.AttachmentController
+import com.silencelen.huginn.desktop.attach.AwtTransfer
+import com.silencelen.huginn.desktop.attach.appendDropped
+import com.silencelen.huginn.desktop.attach.attachmentDropTarget
+import com.silencelen.huginn.desktop.attach.composeMessage
+import com.silencelen.huginn.desktop.attach.rememberAttachmentController
+import kotlinx.coroutines.launch
 
 /**
  * One chat: the digest as the server tells it, then whatever the live run has
@@ -60,6 +72,10 @@ import androidx.compose.runtime.collectAsState
 fun ChatView(client: HuginnClient, chatId: String) {
     val scope = rememberCoroutineScope()
     val controller = remember(chatId) { ChatController(client, chatId, scope) }
+    // Keyed on the chat: switching chats must not carry a half-uploaded screenshot
+    // into somebody else's conversation, and the old controller's upload is
+    // cancelled with it.
+    val attachments = rememberAttachmentController(client, scope, chatId)
     DisposableEffect(chatId) {
         controller.start()
         onDispose { controller.close() }
@@ -132,31 +148,130 @@ fun ChatView(client: HuginnClient, chatId: String) {
         }
 
         HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+        Composer(
+            draft = draft,
+            onDraft = { draft = it },
+            attachments = attachments,
+            scope = scope,
+            running = running,
+            sendLabel = if (running) "Queue" else "Send",
+            onStop = { controller.cancel() },
+            onSend = { text -> controller.send(text) },
+        )
+    }
+}
+
+/**
+ * The composer, shared in shape with the session pane's: a chip for whatever is
+ * attached, a clip button, the box itself, and Send.
+ *
+ * A SEND WAITS FOR AN IN-FLIGHT UPLOAD. Posting the moment the button is pressed
+ * sends a message whose marker names a path the daemon has not finished writing,
+ * and Claude's Read comes back "no such file" — the failure looks like the model
+ * being unhelpful rather than like a race. [AttachmentController.take] is what
+ * makes the wait a property of sending rather than of typing speed.
+ */
+@Composable
+private fun Composer(
+    draft: String,
+    onDraft: (String) -> Unit,
+    attachments: AttachmentController,
+    scope: kotlinx.coroutines.CoroutineScope,
+    running: Boolean,
+    sendLabel: String,
+    onStop: () -> Unit,
+    onSend: (String) -> Unit,
+) {
+    val attachment by attachments.current.collectAsState()
+    val failure by attachments.failure.collectAsState()
+    var picking by remember { mutableStateOf(false) }
+    var dragOver by remember { mutableStateOf(false) }
+
+    // Hoisted so the enabled rule and the submit path agree: an attachment that
+    // FAILED is not something to send a message about, so it does not enable Send
+    // on its own — exactly the Electron rule.
+    val pending = attachment
+    val canSend = draft.isNotBlank() || (pending != null && pending.status != AttachStatus.FAILED)
+
+    val submit: () -> Unit = {
+        if (canSend) {
+            val body = draft
+            onDraft("")
+            scope.launch {
+                val marker = attachments.take()
+                val full = composeMessage(body, marker)
+                if (full.isNotEmpty()) onSend(full)
+            }
+        }
+    }
+
+    AttachFilePicker(picking) { file ->
+        picking = false
+        if (file != null) attachments.attachFile(file)
+    }
+
+    Column(
+        Modifier.fillMaxWidth()
+            .attachmentDropTarget(
+                controller = attachments,
+                onText = { onDraft(appendDropped(draft, it)) },
+                onDragOver = { dragOver = it },
+            )
+            .background(
+                if (dragOver) MaterialTheme.colorScheme.surfaceContainerHigh
+                else MaterialTheme.colorScheme.background
+            )
+            .padding(12.dp),
+    ) {
+        pending?.let {
+            Row(Modifier.fillMaxWidth().padding(bottom = 6.dp)) {
+                AttachChip(it) { attachments.clear() }
+            }
+            it.detail?.takeIf { _ -> it.status == AttachStatus.READY }?.let { note ->
+                Muted(note, Modifier.padding(bottom = 6.dp), maxLines = 2)
+            }
+        }
+        failure?.let {
+            Row(Modifier.fillMaxWidth().padding(bottom = 6.dp)) {
+                Text(
+                    it,
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.error,
+                    modifier = Modifier.weight(1f),
+                )
+                TextButton(onClick = { attachments.dismissFailure() }) { Text("dismiss") }
+            }
+        }
         Row(
-            Modifier.fillMaxWidth().padding(12.dp),
+            Modifier.fillMaxWidth(),
             verticalAlignment = Alignment.Bottom,
             horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
+            AttachButton { picking = true }
             OutlinedTextField(
                 value = draft,
-                onValueChange = { draft = it },
+                onValueChange = onDraft,
                 modifier = Modifier.weight(1f).heightIn(min = 56.dp, max = 160.dp)
                     // Ctrl+Enter sends; plain Enter is a newline. The opposite
                     // binding on a desktop composer sends half-written messages,
                     // and a chat message cannot be unsent.
+                    //
+                    // Ctrl+V is intercepted only when the clipboard holds an image
+                    // or a file: returning false lets the text field's own paste
+                    // run, and swallowing it would make Ctrl+V insert nothing.
                     .onPreviewKeyEvent { e ->
-                        if (e.type == KeyEventType.KeyDown && e.isCtrlPressed && e.key == Key.Enter) {
-                            controller.send(draft); draft = ""; true
-                        } else false
+                        when {
+                            e.type != KeyEventType.KeyDown -> false
+                            e.isCtrlPressed && e.key == Key.Enter -> { submit(); true }
+                            e.isCtrlPressed && e.key == Key.V -> AwtTransfer.consumeClipboard(attachments)
+                            else -> false
+                        }
                     },
-                placeholder = { Text("Message…  (Ctrl+Enter to send)") },
+                placeholder = { Text("Message…  (Ctrl+Enter to send · paste, drop or clip a file)") },
                 textStyle = MaterialTheme.typography.bodyMedium,
             )
-            if (running) TextButton(onClick = { controller.cancel() }) { Text("Stop") }
-            Button(
-                onClick = { controller.send(draft); draft = "" },
-                enabled = draft.isNotBlank(),
-            ) { Text(if (running) "Queue" else "Send") }
+            if (running) TextButton(onClick = onStop) { Text("Stop") }
+            Button(onClick = submit, enabled = canSend) { Text(sendLabel) }
         }
     }
 }

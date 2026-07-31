@@ -59,10 +59,23 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.compose.runtime.rememberCoroutineScope
+import com.silencelen.huginn.data.HuginnClient
 import com.silencelen.huginn.data.PanePrompt
 import com.silencelen.huginn.desktop.AppStore
 import com.silencelen.huginn.desktop.SessionController
 import com.silencelen.huginn.desktop.SessionTab
+import com.silencelen.huginn.desktop.attach.AttachButton
+import com.silencelen.huginn.desktop.attach.AttachChip
+import com.silencelen.huginn.desktop.attach.AttachFilePicker
+import com.silencelen.huginn.desktop.attach.AttachStatus
+import com.silencelen.huginn.desktop.attach.AwtTransfer
+import com.silencelen.huginn.desktop.attach.PANE_SEPARATOR
+import com.silencelen.huginn.desktop.attach.appendDropped
+import com.silencelen.huginn.desktop.attach.attachmentDropTarget
+import com.silencelen.huginn.desktop.attach.composeMessage
+import com.silencelen.huginn.desktop.attach.rememberAttachmentController
+import kotlinx.coroutines.launch
 import com.silencelen.huginn.ui.SkiaCellPainter
 import com.silencelen.huginn.ui.TerminalCanvas
 import com.silencelen.huginn.ui.TerminalGrid
@@ -138,7 +151,7 @@ fun SessionView(store: AppStore, name: String) {
         // one card below both is the same promise with one copy of the code.
         screen?.prompt?.let { prompt -> PromptCard(controller, prompt) }
 
-        Composer(controller)
+        Composer(controller, store.client)
     }
 }
 
@@ -588,39 +601,102 @@ private fun PromptCard(controller: SessionController, prompt: PanePrompt) {
  * A whole line at a time. Text and Enter travel in ONE request so nothing can
  * interleave between them, which is the difference between sending a message and
  * sending half a message and then a newline into whatever the pane became.
+ *
+ * Attachments work here too, and they are arguably more useful than in a chat: a
+ * session is where the long-running work happens. The marker is joined with a
+ * SPACE rather than a paragraph break — this text is TYPED into a pane, where a
+ * newline is the submit key, so a blank line would send the message and leave the
+ * marker on the next prompt.
  */
 @Composable
-private fun Composer(controller: SessionController) {
+private fun Composer(controller: SessionController, client: HuginnClient) {
     var draft by remember(controller.name) { mutableStateOf("") }
+    val scope = rememberCoroutineScope()
+    val attachments = rememberAttachmentController(client, scope, controller.name)
+    val attachment by attachments.current.collectAsState()
+    val failure by attachments.failure.collectAsState()
+    var picking by remember { mutableStateOf(false) }
+    var dragOver by remember { mutableStateOf(false) }
+
+    val pending = attachment
+    val canSend = draft.isNotBlank() || (pending != null && pending.status != AttachStatus.FAILED)
+
+    val submit: () -> Unit = {
+        if (canSend) {
+            val body = draft
+            draft = ""
+            scope.launch {
+                val marker = attachments.take()
+                val full = composeMessage(body, marker, PANE_SEPARATOR)
+                if (full.isNotEmpty()) controller.sendLine(full)
+            }
+        }
+    }
+
+    AttachFilePicker(picking) { file ->
+        picking = false
+        if (file != null) attachments.attachFile(file)
+    }
+
     HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
-    Row(
-        Modifier.fillMaxWidth().padding(12.dp),
-        verticalAlignment = Alignment.Bottom,
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    Column(
+        Modifier.fillMaxWidth()
+            .attachmentDropTarget(
+                controller = attachments,
+                onText = { draft = appendDropped(draft, it) },
+                onDragOver = { dragOver = it },
+            )
+            .background(
+                if (dragOver) MaterialTheme.colorScheme.surfaceContainerHigh
+                else MaterialTheme.colorScheme.background
+            )
+            .padding(12.dp),
     ) {
-        OutlinedTextField(
-            value = draft,
-            onValueChange = { draft = it },
-            // Cap before fill. `fillMaxWidth` hands DOWN fixed constraints and a
-            // `widthIn` inside those can only coerce into them, so the cap would be
-            // swallowed and a composer meant to stop at a reading measure would
-            // span the whole window.
-            modifier = Modifier.widthIn(max = 900.dp).weight(1f)
-                .heightIn(min = 56.dp, max = 160.dp)
-                // Ctrl+Enter sends; plain Enter is a newline. The opposite binding
-                // sends half-written instructions into a live agent session.
-                .onPreviewKeyEvent { e ->
-                    if (e.type == KeyEventType.KeyDown && e.isCtrlPressed && e.key == Key.Enter) {
-                        if (draft.isNotBlank()) { controller.sendLine(draft); draft = "" }
-                        true
-                    } else false
-                },
-            placeholder = { Text("Send to the pane…  (Ctrl+Enter)") },
-            textStyle = MaterialTheme.typography.bodyMedium,
-        )
-        Button(
-            onClick = { controller.sendLine(draft); draft = "" },
-            enabled = draft.isNotBlank(),
-        ) { Text("Send") }
+        pending?.let {
+            Row(Modifier.fillMaxWidth().padding(bottom = 6.dp)) {
+                AttachChip(it) { attachments.clear() }
+            }
+        }
+        failure?.let {
+            Row(Modifier.fillMaxWidth().padding(bottom = 6.dp)) {
+                Text(
+                    it,
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.error,
+                    modifier = Modifier.weight(1f),
+                )
+                TextButton(onClick = { attachments.dismissFailure() }) { Text("dismiss") }
+            }
+        }
+        Row(
+            Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.Bottom,
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            AttachButton { picking = true }
+            OutlinedTextField(
+                value = draft,
+                onValueChange = { draft = it },
+                // Cap before fill. `fillMaxWidth` hands DOWN fixed constraints and a
+                // `widthIn` inside those can only coerce into them, so the cap would be
+                // swallowed and a composer meant to stop at a reading measure would
+                // span the whole window.
+                modifier = Modifier.widthIn(max = 900.dp).weight(1f)
+                    .heightIn(min = 56.dp, max = 160.dp)
+                    // Ctrl+Enter sends; plain Enter is a newline. The opposite binding
+                    // sends half-written instructions into a live agent session.
+                    .onPreviewKeyEvent { e ->
+                        when {
+                            e.type != KeyEventType.KeyDown -> false
+                            e.isCtrlPressed && e.key == Key.Enter -> { submit(); true }
+                            e.isCtrlPressed && e.key == Key.V -> AwtTransfer.consumeClipboard(attachments)
+                            else -> false
+                        }
+                    },
+                placeholder = { Text("Send to the pane…  (Ctrl+Enter · paste, drop or clip a file)") },
+                textStyle = MaterialTheme.typography.bodyMedium,
+            )
+            Button(onClick = submit, enabled = canSend) { Text("Send") }
+        }
     }
 }

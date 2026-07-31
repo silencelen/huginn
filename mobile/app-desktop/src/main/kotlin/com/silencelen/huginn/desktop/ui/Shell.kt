@@ -58,8 +58,6 @@ fun Shell(store: AppStore) {
     val status by store.status.collectAsState()
     val plan by store.plan.collectAsState()
     val usage by store.usage.collectAsState()
-    val present by store.presence.present.collectAsState()
-    val notifyEnabled by store.settings.notifyEnabled.collectAsState(initial = true)
     val scope = rememberCoroutineScope()
 
     var listWidth by remember { mutableStateOf(300f) }
@@ -119,8 +117,11 @@ fun Shell(store: AppStore) {
                 }
 
                 View.STATUS -> StatusView(status, plan, usage, route, watchConnected)
-                View.SETTINGS ->
-                    SettingsView(store.settings, route, present, notifyEnabled, store.updater)
+                // The whole store: Settings now owns accounts, the update state and
+                // the diagnostics report, and each of those needs a different corner
+                // of it. Threading them in one at a time made adding a fact to the
+                // report a two-file change.
+                View.SETTINGS -> SettingsView(store)
             }
         }
     }
