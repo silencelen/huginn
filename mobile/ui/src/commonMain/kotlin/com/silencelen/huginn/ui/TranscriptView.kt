@@ -14,20 +14,19 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.HelpOutline
 import androidx.compose.material.icons.filled.AccountTree
 import androidx.compose.material.icons.filled.Build
-import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.ErrorOutline
 import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.Psychology
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -37,19 +36,38 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.text.AnnotatedString
-import androidx.compose.ui.text.SpanStyle
-import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import com.silencelen.huginn.data.TranscriptEvent
-import com.silencelen.huginn.ui.theme.LocalSyntaxColors
+
+/**
+ * The two measurements a transcript row cannot decide for itself, handed down by
+ * whichever shell is drawing it.
+ *
+ * A PARAMETER OBJECT rather than `expect`/`actual` or a `compact` flag: nothing
+ * here is a property of the operating system, it is a property of how wide the
+ * pane happens to be, and a desktop window narrowed to a phone's width should get
+ * the phone's answer. `expect`/`actual` could not express that; a composition
+ * local set by the shell can.
+ *
+ * @param userBubbleFraction how much of the row a user's own message may take.
+ *   0.9 on a phone reads as a bubble; 1.0 with a cap reads as a column.
+ * @param userBubbleMaxWidth an absolute ceiling, or [Dp.Unspecified] for none.
+ *   Unbounded on a 1280pt window, a two-word message becomes a 1200pt bar.
+ */
+data class TranscriptMetrics(
+    val userBubbleFraction: Float = 0.9f,
+    val userBubbleMaxWidth: Dp = Dp.Unspecified,
+)
+
+val LocalTranscriptMetrics = staticCompositionLocalOf { TranscriptMetrics() }
 
 /**
  * Renders one normalized transcript event. Shared by the session view and the
@@ -165,16 +183,28 @@ private fun SubagentsCard(group: TranscriptGroups.Row.Subagents, onCopy: (String
 
 @Composable
 private fun UserBubble(text: String, queued: Boolean = false) {
+    val metrics = LocalTranscriptMetrics.current
     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
         Surface(
             color = MaterialTheme.colorScheme.surfaceContainerHigh,
             shape = RoundedCornerShape(16.dp, 16.dp, 4.dp, 16.dp),
-            modifier = Modifier.fillMaxWidth(0.9f),
+            // ORDER IS LOAD-BEARING, and the wrong way round fails silently:
+            // `fillMaxWidth` hands DOWN fixed constraints, and a `widthIn` inside
+            // fixed constraints can only coerce into them — so the cap is ignored
+            // and the bubble spans the whole window. Measured on the desktop
+            // client, which is exactly where the cap is the only thing stopping a
+            // two-word message from becoming a 1200pt bar. Cap first, fill second.
+            modifier = Modifier
+                .then(
+                    if (metrics.userBubbleMaxWidth == Dp.Unspecified) Modifier
+                    else Modifier.widthIn(max = metrics.userBubbleMaxWidth)
+                )
+                .fillMaxWidth(metrics.userBubbleFraction),
         ) {
             Column(Modifier.padding(horizontal = 14.dp, vertical = 10.dp)) {
                 // Attachment markers render as what they mean, not where the file
                 // landed on the daemon.
-                Text(Attachments.displayText(text.trim()), style = MaterialTheme.typography.bodyMedium)
+                Text(AttachmentText.displayText(text.trim()), style = MaterialTheme.typography.bodyMedium)
                 // Sent while Claude was mid-turn: it is waiting its turn, which is
                 // worth saying so the message does not look ignored.
                 if (queued) {
@@ -504,39 +534,6 @@ private fun SystemNote(text: String) {
     )
 }
 
-/**
- * Applies syntax colour to a code string. The tokenizer is a lexer, so a missed
- * keyword costs a colour and nothing else; text is always rendered whole.
- */
-@Composable
-fun highlighted(code: String, lang: String?): AnnotatedString {
-    val c = LocalSyntaxColors.current
-    return remember(code, lang, c) {
-        val spans = Syntax.highlight(code, lang)
-        if (spans.isEmpty()) return@remember AnnotatedString(code)
-        buildAnnotatedString {
-            append(code)
-            spans.forEach { s ->
-                val color = when (s.tok) {
-                    Syntax.Tok.KEYWORD -> c.keyword
-                    Syntax.Tok.STRING -> c.string
-                    Syntax.Tok.NUMBER -> c.number
-                    Syntax.Tok.COMMENT -> c.comment
-                    Syntax.Tok.FUNCTION -> c.function
-                    Syntax.Tok.META -> c.meta
-                    Syntax.Tok.ADDED -> c.added
-                    Syntax.Tok.REMOVED -> c.removed
-                    Syntax.Tok.PLAIN, Syntax.Tok.PUNCT -> null
-                } ?: return@forEach
-                // Defensive: a stale span from a race would crash the render.
-                if (s.start in 0..code.length && s.end in s.start..code.length) {
-                    addStyle(SpanStyle(color = color), s.start, s.end)
-                }
-            }
-        }
-    }
-}
-
 /** What a tool's input is written in, for colouring purposes. */
 fun langForTool(name: String?): String = when (name) {
     "Bash", "BashOutput" -> "shell"
@@ -548,90 +545,3 @@ fun langForTool(name: String?): String = when (name) {
 fun resultLang(result: String): String =
     if (result.lineSequence().take(6).any { it.startsWith("+") || it.startsWith("-") || it.startsWith("@@") })
         "diff" else "plain"
-
-/** Markdown-rendered body text, with code fences as copyable scrollable cards. */
-@Composable
-fun MarkdownText(text: String, onCopy: (String) -> Unit) {
-    val blocks = remember(text) { Markdown.parse(text) }
-    Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-        blocks.forEach { b ->
-            when (b) {
-                is MdBlock.Paragraph -> Text(b.text, style = MaterialTheme.typography.bodyMedium)
-                is MdBlock.Heading -> Text(
-                    b.text,
-                    style = when (b.level) {
-                        1 -> MaterialTheme.typography.titleMedium
-                        2 -> MaterialTheme.typography.titleSmall
-                        else -> MaterialTheme.typography.bodyLarge
-                    },
-                    fontWeight = FontWeight.Bold,
-                )
-                is MdBlock.Bullet -> Row(Modifier.fillMaxWidth()) {
-                    Text(
-                        b.ordinal ?: "•",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.width(if (b.ordinal != null) 22.dp else 14.dp),
-                    )
-                    Text(b.text, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f))
-                }
-                is MdBlock.Quote -> Row(Modifier.fillMaxWidth()) {
-                    Box(
-                        Modifier
-                            .width(2.dp)
-                            .height(18.dp)
-                            .background(MaterialTheme.colorScheme.outline)
-                    )
-                    Spacer(Modifier.width(8.dp))
-                    Text(
-                        b.text,
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
-                is MdBlock.Code -> CodeCard(b, onCopy)
-                MdBlock.Rule -> HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
-            }
-        }
-    }
-}
-
-@Composable
-private fun CodeCard(b: MdBlock.Code, onCopy: (String) -> Unit) {
-    Surface(
-        color = MaterialTheme.colorScheme.surfaceContainerHigh,
-        shape = RoundedCornerShape(8.dp),
-        modifier = Modifier.fillMaxWidth(),
-    ) {
-        Column {
-            Row(
-                Modifier.fillMaxWidth().padding(start = 10.dp, end = 2.dp, top = 2.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Text(
-                    b.lang ?: "code",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-                Spacer(Modifier.weight(1f))
-                IconButton(onClick = { onCopy(b.code) }, modifier = Modifier.size(30.dp)) {
-                    Icon(
-                        Icons.Filled.ContentCopy,
-                        contentDescription = "Copy code",
-                        modifier = Modifier.size(14.dp),
-                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
-            }
-            Box(Modifier.horizontalScroll(rememberScrollState()).padding(start = 10.dp, end = 10.dp, bottom = 8.dp)) {
-                Text(
-                    highlighted(b.code, b.lang),
-                    fontFamily = FontFamily.Monospace,
-                    fontSize = 11.sp,
-                    lineHeight = 15.sp,
-                    color = MaterialTheme.colorScheme.onSurface,
-                )
-            }
-        }
-    }
-}

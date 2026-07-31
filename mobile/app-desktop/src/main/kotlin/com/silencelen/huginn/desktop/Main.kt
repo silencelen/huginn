@@ -1,5 +1,6 @@
 package com.silencelen.huginn.desktop
 
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.snapshotFlow
@@ -14,7 +15,10 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Window
 import androidx.compose.ui.window.application
 import androidx.compose.ui.window.rememberWindowState
-import com.silencelen.huginn.desktop.theme.HuginnDesktopTheme
+import com.silencelen.huginn.ui.LocalTranscriptMetrics
+import com.silencelen.huginn.ui.TranscriptMetrics
+import com.silencelen.huginn.ui.theme.HuginnTheme
+import com.silencelen.huginn.ui.theme.MonoStyleDesktop
 import com.silencelen.huginn.desktop.ui.Shell
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.SupervisorJob
@@ -71,6 +75,26 @@ fun main() = application {
 
         LaunchedEffect(Unit) { store.start() }
 
-        HuginnDesktopTheme { Shell(store) }
+        // The SAME theme the phone applies, told three things about this window:
+        // dark outright (a light scheme nobody has asked for is a scheme nobody
+        // has checked), mono two points larger (arm's length, not reading
+        // distance), and a root Surface — which is load-bearing and silent when
+        // missing, because `LocalContentColor` defaults to BLACK and only a
+        // Surface provides it. The phone's root is a Scaffold and needs none.
+        HuginnTheme(darkTheme = true, monoStyle = MonoStyleDesktop, rootSurface = true) {
+            // The one thing the shared transcript rows cannot work out for
+            // themselves: a bubble sized as 90% of a phone is a bubble; 90% of a
+            // 1280pt window is a bar. Full width with a reading-measure cap, set
+            // once here so every surface that renders transcript rows — chat now,
+            // the session view in 3c — gets the same answer.
+            CompositionLocalProvider(
+                LocalTranscriptMetrics provides TranscriptMetrics(
+                    userBubbleFraction = 1f,
+                    userBubbleMaxWidth = 640.dp,
+                )
+            ) {
+                Shell(store)
+            }
+        }
     }
 }

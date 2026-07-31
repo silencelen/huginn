@@ -104,8 +104,12 @@ fun TerminalScreen(
         echo = LocalEcho.frame(echo, prevCursor, cur)
         prevCursor = cur
     }
-    val metrics = remember(fontScale, density) {
-        CellMetrics(with(density) { fontScale.sp.toPx() })
+    // The glyph blit for this platform. The GRID WALK — runs, backgrounds,
+    // underlines, cursor, echo — lives in :ui and is the same code the desktop
+    // client draws with; only the blit is per-platform, and it is passed in
+    // rather than chosen by an expect/actual.
+    val painter = remember(fontScale, density) {
+        AndroidCellPainter(with(density) { fontScale.sp.toPx() })
     }
 
     Column(Modifier.fillMaxSize()) {
@@ -127,8 +131,8 @@ fun TerminalScreen(
                     }
                 }
         ) {
-            val cols = with(density) { (maxWidth.toPx() / metrics.cellWidth).toInt() }.coerceIn(20, 300)
-            val rows = with(density) { (maxHeight.toPx() / metrics.cellHeight).toInt() }.coerceIn(10, 200)
+            val cols = with(density) { (maxWidth.toPx() / painter.cellWidth).toInt() }.coerceIn(20, 300)
+            val rows = with(density) { (maxHeight.toPx() / painter.cellHeight).toInt() }.coerceIn(10, 200)
             LaunchedEffect(cols, rows) { onGeometry(cols, rows) }
 
             if (screen == null) {
@@ -172,7 +176,7 @@ fun TerminalScreen(
                     } else {
                         TerminalCanvas(
                             grid = historyGrid,
-                            metrics = metrics,
+                            painter = painter,
                             cursor = null,
                             cursorColor = MaterialTheme.colorScheme.primary,
                         )
@@ -182,7 +186,7 @@ fun TerminalScreen(
                     }
                     TerminalCanvas(
                         grid = grid,
-                        metrics = metrics,
+                        painter = painter,
                         cursor = screen.cursorX to screen.cursorY,
                         cursorColor = MaterialTheme.colorScheme.primary,
                         echo = if (liveTyping && echo.visible) echo.text else "",

@@ -109,10 +109,11 @@ fun Shell(store: AppStore) {
                     if (chatId != null) ChatView(store.client, chatId!!)
                     else Placeholder("Select a chat, or start one.")
 
-                // 3b: the terminal grid, the pane-size lease, prompt cards. The
-                // grid's LOGIC already lives in :core (TerminalGrid); what is
-                // missing is the desktop canvas and the lease lifecycle, and a
-                // half-built lease is worse than none — it pins tmux geometry.
+                // 3c: the pane-size lease and the prompt cards. The grid's LOGIC
+                // is in :core (TerminalGrid) and its PAINTER is now in :ui
+                // (TerminalCanvas + SkiaCellPainter, tested against a real skia
+                // surface), so what is left here is the lease lifecycle — and a
+                // half-built lease is worse than none, it pins tmux geometry.
                 View.SESSIONS ->
                     if (sessionName != null) SessionPlaceholder(sessionName!!)
                     else Placeholder("Select a session.")
@@ -200,7 +201,7 @@ private fun SessionPlaceholder(name: String) {
     Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
         Column(horizontalAlignment = Alignment.CenterHorizontally) {
             Text(name, style = MaterialTheme.typography.titleSmall)
-            Muted("terminal view lands in phase 3b", Modifier.padding(top = 6.dp))
+            Muted("terminal view lands in phase 3c", Modifier.padding(top = 6.dp))
         }
     }
 }

@@ -26,6 +26,10 @@ kotlin {
 
 dependencies {
     implementation(project(":core"))
+    // Theme, markdown, transcript rows and the terminal painter — rendered from
+    // the same source as the phone, which is the whole point of phase 3b. What is
+    // left in this module is the desktop FRAME: window, panes, key handling.
+    implementation(project(":ui"))
 
     // PER-TARGET, and this is a trap with teeth. `compose.desktop.windows_x64`
     // declared globally put skiko-windows-x64 inside a LINUX .deb during the
