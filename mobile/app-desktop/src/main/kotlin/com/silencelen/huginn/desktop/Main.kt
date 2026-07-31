@@ -47,6 +47,15 @@ import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import java.io.File
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.ui.input.key.isAltPressed
+import com.silencelen.huginn.desktop.ui.Cheatsheet
+import com.silencelen.huginn.desktop.ui.CommandPalette
+import com.silencelen.huginn.desktop.ui.PaletteItem
+import com.silencelen.huginn.desktop.ui.Shortcut
+import com.silencelen.huginn.desktop.ui.keyName
+import com.silencelen.huginn.desktop.ui.match
 
 /**
  * The Compose Multiplatform desktop client for huginn-appd.
@@ -231,6 +240,20 @@ fun main(args: Array<String>) {
         val summary by traySummary.collectAsState()
         val closeToTray by settings.closeToTray.collectAsState()
 
+        // The two keyboard-only surfaces. Held here rather than in the shell
+        // because the window's key handler has to know one is up: an overlay
+        // that lets shortcuts through navigates the app behind it while you
+        // are trying to type into it.
+        val paletteOpen = remember { mutableStateOf(false) }
+        val cheatsOpen = remember { mutableStateOf(false) }
+
+        fun newChat(mode: String) {
+            scope.launch {
+                runCatching { store.client.createChat(mode) }
+                    .onSuccess { store.openChat(it.id); store.refreshChats() }
+            }
+        }
+
         fun quit() {
             // Before the process starts unwinding, while the client is certainly
             // still usable. Doing it twice is free: the holder clears what it holds
@@ -300,20 +323,36 @@ fun main(args: Array<String>) {
             visible = visible,
             title = "Huginn",
             onKeyEvent = { e ->
-                if (e.type != KeyEventType.KeyDown || !e.isCtrlPressed) return@Window false
+                if (e.type != KeyEventType.KeyDown) return@Window false
+                // The table lives in ui/Shortcuts.kt so it can be tested; this
+                // only maps its answer to an action. An overlay swallows
+                // everything but its own dismissal — a palette that navigates
+                // the shell underneath it is a palette you cannot type in.
+                val overlay = paletteOpen.value || cheatsOpen.value
+                val shortcut = keyName(e.key)?.let {
+                    match(e.isCtrlPressed, e.isShiftPressed, e.isAltPressed, it)
+                }
                 when {
-                    // Ctrl+Shift+H: hide to tray. NOT a global hotkey — see the
-                    // note at the foot of this file; it only fires while the window
-                    // already has focus, which makes it a hide and not a summon.
-                    e.isShiftPressed && e.key == Key.H -> {
+                    overlay -> false
+                    shortcut == null -> false
+                    // Ctrl+Shift+H hides to tray. NOT a global hotkey — see the
+                    // note at the foot of this file; it fires only while the
+                    // window has focus, which makes it a hide and not a summon.
+                    shortcut == Shortcut.HIDE_TO_TRAY -> {
                         if (isTraySupported) windowVisible.value = false
                         true
                     }
-                    e.isShiftPressed -> false
-                    e.key == Key.One -> { store.openView(View.CHATS); true }
-                    e.key == Key.Two -> { store.openView(View.SESSIONS); true }
-                    e.key == Key.Three -> { store.openView(View.STATUS); true }
-                    e.key == Key.Comma -> { store.openView(View.SETTINGS); true }
+                    shortcut == Shortcut.PALETTE -> { paletteOpen.value = true; true }
+                    shortcut == Shortcut.CHEATSHEET -> { cheatsOpen.value = true; true }
+                    shortcut == Shortcut.VIEW_CHATS -> { store.openView(View.CHATS); true }
+                    shortcut == Shortcut.VIEW_SESSIONS -> { store.openView(View.SESSIONS); true }
+                    shortcut == Shortcut.VIEW_STATUS -> { store.openView(View.STATUS); true }
+                    shortcut == Shortcut.VIEW_SETTINGS -> { store.openView(View.SETTINGS); true }
+                    shortcut == Shortcut.NEW_ASK -> { newChat("ask"); true }
+                    shortcut == Shortcut.NEW_ACT -> { newChat("act"); true }
+                    shortcut == Shortcut.BACK -> { store.back(); true }
+                    shortcut == Shortcut.LIST_PREV -> { store.stepList(-1); true }
+                    shortcut == Shortcut.LIST_NEXT -> { store.stepList(1); true }
                     else -> false
                 }
             },
@@ -379,6 +418,29 @@ fun main(args: Array<String>) {
                     )
                 ) {
                     Shell(store)
+
+                    if (paletteOpen.value) {
+                        CommandPalette(
+                            chats = store.chats.collectAsState().value,
+                            sessions = store.sessions.collectAsState().value,
+                            onDismiss = { paletteOpen.value = false },
+                            onPick = { item ->
+                                paletteOpen.value = false
+                                when (item) {
+                                    is PaletteItem.OpenChat -> store.openChat(item.id)
+                                    is PaletteItem.OpenSession -> store.openSession(item.name)
+                                    is PaletteItem.Verb -> when (item.shortcut) {
+                                        Shortcut.NEW_ASK -> newChat("ask")
+                                        Shortcut.NEW_ACT -> newChat("act")
+                                        Shortcut.VIEW_STATUS -> store.openView(View.STATUS)
+                                        Shortcut.VIEW_SETTINGS -> store.openView(View.SETTINGS)
+                                        else -> Unit
+                                    }
+                                }
+                            },
+                        )
+                    }
+                    if (cheatsOpen.value) Cheatsheet { cheatsOpen.value = false }
                 }
             }
         }
