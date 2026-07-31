@@ -257,13 +257,25 @@ Requires JDK 17 (`/usr/lib/jvm/java-17-openjdk-amd64`) and
   grouping, live-input diffing, voice loop, watch cycle). No Android imports, so
   the desktop client can eventually consume the same code instead of the
   hand-ported TypeScript in `desktop/src/shared/core/`.
+- **`:ui`** — Compose Multiplatform (`androidTarget` + `jvm`), the shared LOOK:
+  the theme (one palette, one syntax set), the markdown/code renderer, the
+  transcript rows (user bubble, thinking, tool, ask, subagent group, orphan
+  result, system note) and the terminal grid painter. Both clients render these;
+  neither keeps a copy. Where the two genuinely differ it is a PARAMETER — a mono
+  text style and a root-Surface flag on the theme, a `TranscriptMetrics` for
+  bubble width, a `CellPainter` for the glyph blit — never an `expect`/`actual`,
+  so a window narrowed to a phone's width can be given the phone's answer.
 - **`:app`** — the Android application: everything that needs a `Context`, a
-  keystore, an IME, a notification channel or a Compose screen.
+  keystore, an IME, a notification channel, or a screen that only a phone has.
+- **`:app-desktop`** — the Compose Desktop client: a window, panes, key handling
+  and a settings file. See `docs/DESKTOP-MIGRATION.md`.
 
 Package names did not change in the split, so `:app` sources import shared types
-exactly as before. Compose Multiplatform is a `:core` dependency only, and pinned
-to 1.7.3 (1.8.x needs Kotlin 2.1.20+); on the Android target its artifacts
-delegate to AndroidX, so no skiko renderer reaches the APK.
+exactly as before. Compose Multiplatform is pinned to 1.7.3 (1.8.x needs Kotlin
+2.1.20+); on the Android target its artifacts delegate to AndroidX, so no skiko
+renderer reaches the APK — `:ui` cost the debug APK 15 KB of dex and not one new
+library (`classes.dex` and `classes2.dex` came out byte-identical across the
+extraction).
 
 ## Testing
 
@@ -286,9 +298,17 @@ fed bytes captured from the real system rather than invented:
   reader (tailing, torn lines, garbage lines, tool/result pairing), sign-in URL
   extraction, and the ccusage field mapping.
 
+- `:ui`'s `TerminalCanvasTest` — the grid WALK, against a `CellPainter` that
+  records instead of drawing: run coalescing, a run broken by a style change, an
+  over-wide glyph centred rather than shifting the row, a wide glyph spanning two
+  cells, and the echo clipped at the row's end. Plus one real skia render, which
+  is what catches a painter that resolves a proportional face or draws nothing.
+
 Most of these live in `:core`'s `commonTest` and run twice, once per target;
 `:app` keeps only the tests whose subject needs Android or a `MockWebServer`
 (`ApiContractTest`, `SseTest`, `ReattachPlanTest`, the notification-timing ones).
+`:ui` runs its suite on the jvm target only — a real `DrawScope` needs a real
+`ImageBitmap`, and on the Android target that is a stubbed `android.graphics.Bitmap`.
 `commonTest` uses `kotlin.test`, whose `assertEquals` takes the message LAST
 where JUnit takes it first — with three String arguments that difference compiles
 silently, so assertions there are converted by hand and never by `sed`.

@@ -73,6 +73,21 @@ against the `manifest.json` the release script already produces.
   `:app-desktop` sets the property and re-exports `DISPLAY` on every JavaExec.
 - **Skiko cannot make a GL context under Xvfb** and falls back to software.
   Fine for verification; it does mean the GPU path is never exercised headless.
+- **`fillMaxWidth` before `widthIn` silently swallows the cap.** `fillMaxWidth`
+  hands DOWN fixed constraints, and a `widthIn` inside fixed constraints can only
+  coerce into them — so a bubble meant to stop at a reading measure spanned the
+  whole 1280pt window instead, and nothing warned. Cap first, fill second. Found
+  by looking at a screenshot, not by a compiler.
+- **Moving composables across a module boundary is not free, but it is cheap.**
+  The extraction cost the debug APK 15 KB of dex (synthetic accessors, per-module
+  `ComposableSingletons`) and no new library: `classes.dex` and `classes2.dex`
+  came out byte-identical, which is also the proof that CMP's
+  `materialIconsExtended` resolved to the AndroidX artifact `:app` already had
+  rather than a second copy.
+- **A new shared module starts outside the test gate.** `:ui` now owns the
+  terminal grid walk for BOTH clients, so `scripts/build.sh` gained `:ui:jvmTest`
+  and its floor went 375 → 382 the same day the module landed. The same lesson as
+  the `:core` split, one module later.
 
 ## Carry-over: behaviour the Compose desktop must not lose
 
@@ -130,9 +145,15 @@ verb unify into one control.
      the watch SSE stream, a chat that streams a live run, a status view, and
      a JSON settings store of its own (NOT the Electron client's file).
      Verified headless against the live daemon.
-   - **3b — `:ui`** — the theme first (it is duplicated verbatim right now and
-     will drift invisibly), then the markdown/code renderer, the transcript
-     rows, and the terminal grid. Then the session view, which needs the grid
-     and the pane-size lease together — a half-built lease is worse than none.
+   - **3b — `:ui`** — done. A Compose Multiplatform module both clients render
+     from: the theme (one palette, one syntax set, `LocalMonoStyle` for the one
+     real difference), the markdown/code renderer, the transcript rows, and the
+     terminal grid painter. `:app` and `:app-desktop` each lost their copy. Where
+     the clients genuinely differ it is a parameter — mono size and a root-Surface
+     flag on the theme, `TranscriptMetrics` for bubble width, a `CellPainter`
+     interface for the glyph blit — so a narrowed desktop window can be handed the
+     phone's answer, which `expect`/`actual` could not express.
+   - **3c — the desktop session view**, which needs the grid and the pane-size
+     lease together — a half-built lease is worse than none.
 4. **Packaging + updater** (chain above).
 5. **Parity, then retire Electron.**

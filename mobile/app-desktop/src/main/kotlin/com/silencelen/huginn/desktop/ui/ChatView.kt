@@ -1,19 +1,17 @@
 package com.silencelen.huginn.desktop.ui
 
-import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material3.Button
 import androidx.compose.material3.HorizontalDivider
@@ -31,7 +29,6 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.KeyEventType
 import androidx.compose.ui.input.key.isCtrlPressed
@@ -43,7 +40,11 @@ import androidx.compose.ui.unit.dp
 import com.silencelen.huginn.data.HuginnClient
 import com.silencelen.huginn.data.Message
 import com.silencelen.huginn.desktop.ChatController
-import com.silencelen.huginn.desktop.theme.MonoStyle
+import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.text.AnnotatedString
+import com.silencelen.huginn.data.TranscriptEvent
+import com.silencelen.huginn.ui.MarkdownText
+import com.silencelen.huginn.ui.TranscriptEventItem
 import androidx.compose.runtime.collectAsState
 
 /**
@@ -106,10 +107,18 @@ fun ChatView(client: HuginnClient, chatId: String) {
         // no way to type in it, and nothing in the logs.
         Box(Modifier.weight(1f)) {
             SelectionContainer {
-                LazyColumn(Modifier.fillMaxSize().padding(horizontal = 16.dp), state = listState) {
-                    items(messages) { m -> MessageBlock(m) }
+                // The phone's chat rhythm, because the rows are now the phone's
+                // rows: they carry no outer margin of their own, so the gap
+                // between them belongs to whoever lists them.
+                LazyColumn(
+                    Modifier.fillMaxSize().padding(horizontal = 16.dp),
+                    state = listState,
+                    contentPadding = PaddingValues(vertical = 8.dp),
+                    verticalArrangement = Arrangement.spacedBy(9.dp),
+                ) {
+                    itemsIndexed(messages) { i, m -> MessageBlock(m, i) }
                     pendingSend?.let { text ->
-                        item("pending") { MessageBlock(Message(type = "user", text = text)) }
+                        item("pending") { MessageBlock(Message(type = "user", text = text), messages.size) }
                     }
                     if (partial.isNotEmpty()) {
                         item("partial") { PartialBlock(partial) }
@@ -167,32 +176,33 @@ private fun Header(title: String, mode: String?, model: String?, running: Boolea
     }
 }
 
+/**
+ * One message from the chat digest.
+ *
+ * The user bubble, the answer and the tool card are the PHONE's — `:ui` owns all
+ * three now, and this file no longer has an opinion about how any of them look.
+ * That is worth spelling out because the three it used to own were the classic
+ * lookalike divergence: a different bubble radius, a different width rule, and a
+ * tool call flattened to one muted line where the phone folds it into an openable
+ * card. Anything that disagreed, the phone won.
+ *
+ * `result` and `error` stay here on purpose: they are not transcript content,
+ * they are how a RUN ended, and `TranscriptEvent` has no kind for them.
+ */
 @Composable
-private fun MessageBlock(m: Message) {
+private fun MessageBlock(m: Message, seq: Int) {
     when (m.type) {
-        "user" -> Row(Modifier.fillMaxWidth().padding(vertical = 6.dp), horizontalArrangement = Arrangement.End) {
-            Box(
-                Modifier.widthIn(max = 640.dp)
-                    .clip(RoundedCornerShape(8.dp))
-                    .background(MaterialTheme.colorScheme.surfaceContainerHigh)
-                    .padding(horizontal = 12.dp, vertical = 8.dp),
-            ) {
-                Text(m.text ?: "", style = MaterialTheme.typography.bodyMedium)
-            }
-        }
-
-        "assistant" -> MarkdownView(m.text ?: "", Modifier.fillMaxWidth().padding(vertical = 6.dp))
-
-        // Tool calls are a trace, not content: one muted line each. The phone
-        // folds them into openable cards; that lives in :ui in 3b.
-        "tool" -> Row(Modifier.fillMaxWidth().padding(vertical = 2.dp)) {
-            Text(
-                "· ${m.name ?: "tool"}${m.input?.let { " $it" } ?: ""}",
-                style = MonoStyle,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                maxLines = 1,
-            )
-        }
+        "user", "assistant", "tool" -> TranscriptEventItem(
+            TranscriptEvent(
+                seq = seq,
+                kind = m.type,
+                text = m.text,
+                name = m.name,
+                input = m.input,
+                ok = m.ok,
+            ),
+            onCopy = rememberCopy(),
+        )
 
         "result" -> Muted(
             buildString {
@@ -218,7 +228,7 @@ private fun MessageBlock(m: Message) {
 @Composable
 private fun PartialBlock(text: String) {
     Column(Modifier.fillMaxWidth().padding(vertical = 6.dp)) {
-        MarkdownView(text)
+        MarkdownText(text, onCopy = rememberCopy())
         Text(
             "▍",
             style = MaterialTheme.typography.bodyMedium,
@@ -226,4 +236,16 @@ private fun PartialBlock(text: String) {
             color = MaterialTheme.colorScheme.primary,
         )
     }
+}
+
+/**
+ * Copy, for the code cards inside a rendered answer. Compose's own clipboard, not
+ * AWT's: the Electron client's release that denied every permission also denied
+ * clipboard writes, and every copy in the app failed silently for a whole
+ * release — the carry-over list names it as a requirement.
+ */
+@Composable
+private fun rememberCopy(): (String) -> Unit {
+    val clipboard = LocalClipboardManager.current
+    return remember(clipboard) { { text: String -> clipboard.setText(AnnotatedString(text)) } }
 }

@@ -30,7 +30,12 @@ echo "[build 1/3] unit tests"
 # alone would run 58 of the 179 tests and still exit 0 — a green gate over an
 # untested app. :core is run for both its targets because a shared-code change
 # that only breaks one of them is exactly what a multiplatform module is for.
-flock "$LOCK" ./gradlew :core:jvmTest :core:testDebugUnitTest :app:testDebugUnitTest
+#
+# :ui joined the list when it was extracted: it now owns the terminal grid walk
+# and the transcript rows for BOTH clients, so a break there breaks the phone.
+# Only its jvm target runs — the suite needs a real DrawScope, and on the Android
+# target ImageBitmap is a stubbed android.graphics.Bitmap in a unit test.
+flock "$LOCK" ./gradlew :core:jvmTest :core:testDebugUnitTest :app:testDebugUnitTest :ui:jvmTest
 
 # The COUNT is asserted, not just the exit code — same reason as the server suite
 # below, and the same failure the line above describes: a suite that stops being
@@ -42,11 +47,15 @@ flock "$LOCK" ./gradlew :core:jvmTest :core:testDebugUnitTest :app:testDebugUnit
 # SseLinesTest, HuginnClientTest and SettingsCodecTest with it, so 42 more tests
 # now run TWICE. :app keeps the 49 whose subject genuinely needs Android or its
 # own classes.
-KOTLIN_MIN=375   # 163 (:core jvm) + 163 (:core android) + 49 (:app), 2026-07-30
+# Raised again when :ui was extracted (phase 3b): the shared terminal grid walk
+# arrived with 7 tests of its own, asserted against a recording CellPainter plus
+# one real skia render.
+KOTLIN_MIN=382   # 163 (:core jvm) + 163 (:core android) + 49 (:app) + 7 (:ui jvm), 2026-07-30
 KOTLIN_COUNT=0
 for D in core/build/test-results/jvmTest \
          core/build/test-results/testDebugUnitTest \
-         app/build/test-results/testDebugUnitTest; do
+         app/build/test-results/testDebugUnitTest \
+         ui/build/test-results/jvmTest; do
   N="$(grep -ho 'tests="[0-9]*"' "$D"/*.xml 2>/dev/null \
        | grep -oE '[0-9]+' | awk '{s+=$1} END {print s+0}')"
   [ "${N:-0}" -gt 0 ] || { echo "[build] $D ran ZERO tests — refusing." >&2; exit 1; }
