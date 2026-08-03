@@ -16,6 +16,8 @@
 Unicode true
 !include "MUI2.nsh"
 !include "FileFunc.nsh"
+; ${If}/${EndIf} used by EnsureNotRunning below.
+!include "LogicLib.nsh"
 
 !ifndef APP_VERSION
   !error "APP_VERSION not defined — pass -DAPP_VERSION=x.y.z"
@@ -62,7 +64,75 @@ VIAddVersionKey "LegalCopyright" "${PUBLISHER}"
 !insertmacro MUI_UNPAGE_INSTFILES
 !insertmacro MUI_LANGUAGE "English"
 
+; ---------------------------------------------------------------- running app
+;
+; An update over a RUNNING app silently half-fails: Windows locks the executable
+; and the jars, so the payload wipe below leaves the old files in place and the
+; copy writes what it can. The owner hit exactly that going 0.2.0 -> 0.3.0 — the
+; installer neither closed the app nor said anything, and only worked once he
+; closed it himself.
+;
+; Two things make this less obvious than it looks:
+;
+;   * Asking the WINDOW to close is not enough. This app has close-to-tray, so a
+;     WM_CLOSE (which is all `taskkill` without /F sends) is handled as "hide",
+;     and the process keeps running with every file still locked.
+;   * So the graceful attempt is made first and given time, and only then is the
+;     process ended outright. A force-end skips the shutdown hook that returns
+;     any tmux pane to its own size — the daemon reclaims that within 90s on its
+;     own, which is why this is an acceptable last resort rather than a silent
+;     one.
+;
+; `tasklist`/`taskkill` are used rather than the nsProcess plugin so this stays
+; buildable by a stock Linux makensis with no plugin directory.
+
+!macro EnsureNotRunning UN
+Function ${UN}EnsureNotRunning
+  retry:
+    nsExec::ExecToStack 'cmd /c tasklist /FI "IMAGENAME eq ${APP_EXE}" /NH | find /I "${APP_EXE}"'
+    Pop $0
+    ${If} $0 != 0
+      Return                       ; not running — nothing to do
+    ${EndIf}
+
+    MessageBox MB_YESNOCANCEL|MB_ICONEXCLAMATION \
+      "${APP_NAME} is still running.$\r$\n$\r$\nIt has to close before these files can be replaced.$\r$\n$\r$\nYes — close it for me$\r$\nNo — I have closed it, try again$\r$\nCancel — stop here" \
+      /SD IDYES IDYES close IDNO retry
+    Abort "Cancelled: ${APP_NAME} is still running."
+
+  close:
+    ; Polite first: this posts WM_CLOSE, which a window without close-to-tray
+    ; would honour.
+    nsExec::ExecToLog 'taskkill /IM "${APP_EXE}"'
+    Pop $0
+    Sleep 2500
+    nsExec::ExecToStack 'cmd /c tasklist /FI "IMAGENAME eq ${APP_EXE}" /NH | find /I "${APP_EXE}"'
+    Pop $0
+    ${If} $0 == 0
+      ; Still there — it hid to the tray rather than exiting. End it, and its
+      ; children with it, or the runtime keeps the jars locked.
+      nsExec::ExecToLog 'taskkill /F /T /IM "${APP_EXE}"'
+      Pop $0
+      Sleep 1500
+    ${EndIf}
+
+    ; Prove it, rather than assuming the kill worked. A locked file discovered
+    ; halfway through the copy is a broken install with no message.
+    nsExec::ExecToStack 'cmd /c tasklist /FI "IMAGENAME eq ${APP_EXE}" /NH | find /I "${APP_EXE}"'
+    Pop $0
+    ${If} $0 == 0
+      MessageBox MB_RETRYCANCEL|MB_ICONSTOP \
+        "${APP_NAME} would not close.$\r$\n$\r$\nClose it from the tray, then Retry." \
+        /SD IDCANCEL IDRETRY retry
+      Abort "Cancelled: ${APP_NAME} could not be closed."
+    ${EndIf}
+FunctionEnd
+!macroend
+!insertmacro EnsureNotRunning ""
+!insertmacro EnsureNotRunning "un."
+
 Section "Install"
+  Call EnsureNotRunning
   SetOutPath "$INSTDIR"
   ; Wipe the previous payload first. An in-place overwrite leaves orphaned jars
   ; from the old release on the classpath, and two versions of the same library
@@ -93,6 +163,9 @@ Section "Install"
 SectionEnd
 
 Section "Uninstall"
+  ; Same lock problem, same answer: an uninstall over a running app leaves the
+  ; directory behind and the entry in Programs and Features.
+  Call un.EnsureNotRunning
   Delete "$SMPROGRAMS\${APP_NAME}\${APP_NAME}.lnk"
   Delete "$SMPROGRAMS\${APP_NAME}\Uninstall ${APP_NAME}.lnk"
   RMDir "$SMPROGRAMS\${APP_NAME}"

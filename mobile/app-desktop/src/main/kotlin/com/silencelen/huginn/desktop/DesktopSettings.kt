@@ -11,6 +11,9 @@ import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import java.io.File
 import java.util.UUID
+import java.nio.file.Files
+import java.nio.file.StandardCopyOption
+import java.nio.file.AtomicMoveNotSupportedException
 
 /**
  * The desktop half of [HuginnSettings]: one JSON file under the user config dir.
@@ -302,8 +305,14 @@ class DesktopSettings(private val file: File = defaultFile()) : HuginnSettings {
     private fun load(): Stored = runCatching {
         json.decodeFromString(Stored.serializer(), file.readText())
     }.getOrElse {
-        // First run, or a file half-written by a killed process. Losing drafts is
-        // recoverable; refusing to launch is not.
+        // First run, or a file half-written by a killed process. Refusing to
+        // launch is not an option — but neither is quietly starting fresh on top
+        // of a file that still holds the token. If there was ANYTHING here, keep
+        // a copy: the next save would otherwise overwrite the only record of it,
+        // and "my token vanished" is unanswerable without one.
+        if (file.exists() && file.length() > 0L) {
+            runCatching { file.copyTo(File(file.parentFile, file.name + ".corrupt"), overwrite = true) }
+        }
         Stored()
     }
 
@@ -314,20 +323,54 @@ class DesktopSettings(private val file: File = defaultFile()) : HuginnSettings {
         }
     }
 
+    /**
+     * Write, then swap. The swap is [Files.move], NOT [File.renameTo].
+     *
+     * THIS COST THE OWNER HIS TOKEN. `File.renameTo` is documented as platform
+     * dependent and on Windows it does NOT replace an existing destination — it
+     * simply returns false. So the first save (no file yet) worked and every save
+     * after it silently did nothing, because the boolean result was ignored and
+     * the whole block sat inside a `runCatching`. On Linux the same code is
+     * correct, which is exactly why no amount of testing here would have found
+     * it. `Files.move(REPLACE_EXISTING)` is correct on both.
+     *
+     * The failure is no longer swallowed either: a settings file that cannot be
+     * written is worth a line in the log, since the alternative is a person
+     * typing a token in three times and being told nothing.
+     */
     private fun save(value: Stored) {
-        runCatching {
+        try {
             file.parentFile?.mkdirs()
             val tmp = File(file.parentFile, file.name + ".tmp")
             tmp.writeText(json.encodeToString(Stored.serializer(), value))
             restrictToOwner(tmp)
-            // Atomic rename: a crash mid-write must not leave a truncated file
-            // where the token used to be.
-            tmp.renameTo(file)
+            try {
+                Files.move(
+                    tmp.toPath(), file.toPath(),
+                    StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE,
+                )
+            } catch (_: AtomicMoveNotSupportedException) {
+                // Some filesystems (and some network mounts) cannot do it
+                // atomically. A replaced file beats a file that never changes.
+                Files.move(tmp.toPath(), file.toPath(), StandardCopyOption.REPLACE_EXISTING)
+            }
             restrictToOwner(file)
+        } catch (t: Throwable) {
+            System.err.println("[huginn] could not write settings to ${file.absolutePath}: $t")
         }
     }
 
+    /**
+     * Owner-only, without making the file read-only.
+     *
+     * `setWritable(false, false)` sets the READ-ONLY ATTRIBUTE on Windows rather
+     * than clearing a group/other bit, which is the second half of how the token
+     * was lost: a read-only destination cannot be replaced. On Windows the file
+     * already sits under the user's own profile, so the POSIX dance is skipped
+     * entirely rather than being run for a permission model that is not there.
+     */
     private fun restrictToOwner(f: File) {
+        if (System.getProperty("os.name").orEmpty().startsWith("Windows", ignoreCase = true)) return
         f.setReadable(false, false); f.setWritable(false, false)
         f.setReadable(true, true); f.setWritable(true, true)
     }
