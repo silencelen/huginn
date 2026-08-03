@@ -27,6 +27,37 @@ const MARGIN = 20;
 const COOLDOWN_MS = 30 * 60 * 1000;
 
 /**
+ * Headroom for an account whose own token can no longer be asked.
+ *
+ * A stored access token expires within hours and this daemon does not implement
+ * the refresh flow, so /usage is readable for the ACTIVE account and for nothing
+ * else. Before this, every candidate therefore had unknown headroom and was
+ * skipped — which meant the switcher had nothing to switch to and could never
+ * fire, no matter how spent the active account got.
+ *
+ * The last reading taken while that account WAS active is enough, because an
+ * account nobody is using does not accrue usage:
+ *
+ *   * a limit whose window has since rolled over is back to zero — certain, not
+ *     estimated, since nothing ran against it in the meantime, and
+ *   * a limit still inside its window is at most what it was, so carrying the old
+ *     figure forward can only make the candidate look WORSE than it is.
+ *
+ * Both directions are conservative: this can pass over a fresh account, never
+ * switch to a spent one.
+ */
+function agedLimits(snapshot, now = Date.now()) {
+  const rows = (snapshot && Array.isArray(snapshot.limits)) ? snapshot.limits : [];
+  return rows.map((l) => {
+    const resets = l.resetsAt ? Date.parse(l.resetsAt) : NaN;
+    if (Number.isFinite(resets) && resets <= now) {
+      return { ...l, percent: 0, severity: 'normal', reset: true };
+    }
+    return { ...l, reset: false };
+  });
+}
+
+/**
  * The binding constraint: whichever limit is fullest. A weekly window at 100%
  * blocks just as hard as a session window at 100%, so all limits compete.
  */
@@ -74,4 +105,29 @@ function decideSwitch({ active, candidates, now, lastSwitchAt = 0,
   };
 }
 
-module.exports = { decideSwitch, worstLimit, THRESHOLD, MARGIN, COOLDOWN_MS };
+/**
+ * Why a tick did nothing, in the same order decideSwitch asks the questions.
+ * The switcher is invisible by design until it acts, which makes "it never
+ * fires" impossible to tell apart from "it is not needed yet" — so it says.
+ */
+function explain({ active, candidates, now, lastSwitchAt = 0,
+  threshold = THRESHOLD, margin = MARGIN, cooldownMs = COOLDOWN_MS }) {
+  if (!active) return 'no active account is identifiable';
+  const wait = cooldownMs - (now - lastSwitchAt);
+  if (wait > 0) return `cooling down for another ${Math.ceil(wait / 60000)} min`;
+  const w = worstLimit(active.limits);
+  if (!w) return 'the active account reports no usage figures';
+  if (w.percent < threshold) return `active account at ${w.percent}% (${w.label}), below the ${threshold}% threshold`;
+  const priced = (candidates || []).filter((c) => c && c.slug !== active.slug && worstLimit(c.limits));
+  if (!priced.length) {
+    const others = (candidates || []).filter((c) => c && c.slug !== active.slug).length;
+    return others
+      ? `no headroom known for any of the ${others} other account(s) — none has been active since the daemon started recording it`
+      : 'no other account is saved';
+  }
+  const best = priced.reduce((a, b) => (worstLimit(b.limits).percent < worstLimit(a.limits).percent ? b : a));
+  const bp = worstLimit(best.limits).percent;
+  return `freshest alternative is ${best.email || best.slug} at ${bp}%, not below the ${threshold - margin}% a switch is worth`;
+}
+
+module.exports = { decideSwitch, worstLimit, agedLimits, explain, THRESHOLD, MARGIN, COOLDOWN_MS };
