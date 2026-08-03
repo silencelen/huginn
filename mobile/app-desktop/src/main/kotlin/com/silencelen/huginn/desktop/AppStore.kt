@@ -18,6 +18,8 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.debounce
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 
@@ -90,7 +92,14 @@ class AppStore(
 
     // ------------------------------------------------------------ navigation
 
-    private val _view = MutableStateFlow(View.CHATS)
+    /**
+     * WHERE THE LAST SESSION LEFT OFF, read synchronously — [DesktopSettings]
+     * parses its file in its own constructor, so there is nothing to await and the
+     * first composition draws the right view rather than snapping to it a frame
+     * later. First run lands on Sessions; see [Landing] for why that is the
+     * default and why Status and Settings are not remembered.
+     */
+    private val _view = MutableStateFlow(settings.lastViewNow())
     val view: StateFlow<View> = _view.asStateFlow()
 
     private val _chatId = MutableStateFlow<String?>(null)
@@ -160,6 +169,15 @@ class AppStore(
     private val _listsLoaded = MutableStateFlow(false)
     val listsLoaded: StateFlow<Boolean> = _listsLoaded.asStateFlow()
 
+    /**
+     * The same, for sessions, and it is a SECOND flag rather than the same one:
+     * the sessions list was being told "loaded" by the chats fetch returning, so a
+     * cold start where chats answered and sessions did not drew "No sessions" —
+     * a confident claim about a list nothing had read yet.
+     */
+    private val _sessionsLoaded = MutableStateFlow(false)
+    val sessionsLoaded: StateFlow<Boolean> = _sessionsLoaded.asStateFlow()
+
     private val _status = MutableStateFlow<Status?>(null)
     val status: StateFlow<Status?> = _status.asStateFlow()
 
@@ -169,9 +187,16 @@ class AppStore(
     private val _usage = MutableStateFlow<Usage?>(null)
     val usage: StateFlow<Usage?> = _usage.asStateFlow()
 
-    private val _error = MutableStateFlow<String?>(null)
-    val error: StateFlow<String?> = _error.asStateFlow()
-    fun clearError() { _error.value = null }
+    /**
+     * What the client is failing at NOW. See [Faults] — the single nullable string
+     * this replaced was written on every failure and cleared only by a click, so
+     * one 401 pinned "unauthorized" to the status line for the rest of the run.
+     */
+    private val faults = Faults()
+    val error: StateFlow<String?> = faults.current
+
+    /** The click on the status line. Hides that message; a different one still shows. */
+    fun clearError() = faults.dismiss()
 
     /** Whether the watch stream is currently attached. The one honest liveness mark. */
     private val _watchConnected = MutableStateFlow(false)
@@ -199,25 +224,29 @@ class AppStore(
 
     suspend fun refreshChats() {
         runCatching { client.chats() }
-            .onSuccess { _chats.value = it; _listsLoaded.value = true }
-            .onFailure { note(it) }
+            // THE SUCCESS CLEARS THE FAULT. This line is the whole of the stale
+            // status bar fix: without it the bar accumulates rather than reports.
+            .onSuccess { _chats.value = it; _listsLoaded.value = true; faults.ok(Faults.CHATS) }
+            .onFailure { note(Faults.CHATS, it) }
     }
 
     suspend fun refreshSessions() {
         // preview=1: the list rows show what each session is doing, which is the
         // only thing that makes the list worth reading at a glance.
         runCatching { client.sessions(preview = true) }
-            .onSuccess { _sessions.value = it }
-            .onFailure { note(it) }
+            .onSuccess { _sessions.value = it; _sessionsLoaded.value = true; faults.ok(Faults.SESSIONS) }
+            .onFailure { note(Faults.SESSIONS, it) }
     }
 
     suspend fun refreshStatus() {
-        runCatching { client.status() }.onSuccess { _status.value = it }.onFailure { note(it) }
+        runCatching { client.status() }
+            .onSuccess { _status.value = it; faults.ok(Faults.STATUS) }
+            .onFailure { note(Faults.STATUS, it) }
         runCatching { client.plan() }.onSuccess { _plan.value = it }
         runCatching { client.usage() }.onSuccess { _usage.value = it }
     }
 
-    private fun note(t: Throwable) {
+    private fun note(source: String, t: Throwable) {
         // A CANCELLATION IS NOT A FAULT. `pollLoop` and `watchLoop` both hang off
         // `collectLatest`, which cancels the in-flight refresh every time presence
         // flips — so walking away from the desk and back reliably put
@@ -225,11 +254,18 @@ class AppStore(
         // to the reader and sat on top of any real error underneath it. Caught here
         // rather than at each call site because every one of them uses
         // `runCatching`, which does not spare CancellationException either.
+        //
+        // A cancellation is also NOT a success: it neither raises a fault nor
+        // clears one, so a refresh cut short by a presence flip leaves whatever was
+        // true before it exactly as it was.
         if (t is kotlinx.coroutines.CancellationException) return
-        _error.value = when (t) {
-            is HuginnClient.HuginnException -> t.message
-            else -> t.message ?: "network error"
-        }
+        faults.fail(
+            source,
+            when (t) {
+                is HuginnClient.HuginnException -> t.message
+                else -> t.message ?: "network error"
+            },
+        )
     }
 
     /**
@@ -239,7 +275,7 @@ class AppStore(
      * the row stays, the reason is swallowed, and the reader is left to guess
      * whether the click even registered.
      */
-    fun noteError(t: Throwable) = note(t)
+    fun noteError(t: Throwable) = note(Faults.ACTION, t)
 
     // ------------------------------------------------------------- lifecycle
 
@@ -253,6 +289,8 @@ class AppStore(
         scope.launch { pollLoop() }
         scope.launch { watchLoop() }
         scope.launch { presenceTicker() }
+        scope.launch { restoreLanding() }
+        scope.launch { rememberLanding() }
         updater.start(scope)
         // Records stream connects/drops, update outcomes and uncaught errors into
         // the ring buffer the Settings screen copies. Derived entirely from state
@@ -278,6 +316,58 @@ class AppStore(
     }
 
     /**
+     * Reopens the chat or session that was open last time — ONLY if it is still
+     * there.
+     *
+     * The view itself was restored synchronously at construction; this is the
+     * target, and it has to wait because "still there" is a question only the
+     * first list fetch can answer. A chat deleted from the phone overnight, or a
+     * session that ended, must not reopen into a pane addressing something the
+     * daemon does not have: both detail views recover from a target vanishing
+     * underneath them, but recovering from a state we chose to enter is a flash of
+     * a broken pane on every launch.
+     *
+     * It sets the id WITHOUT touching the view, so a reader who has already
+     * navigated somewhere in the second this took is not yanked back — and it
+     * gives up entirely if something is already open, which is what an activation
+     * (`huginn://open?...`) on the command line does before this can run.
+     */
+    private suspend fun restoreLanding() {
+        val chat = settings.lastChatIdNow()
+        val session = settings.lastSessionNameNow()
+        if (chat == null && session == null) return
+        // Bounded: an unreachable daemon must not leave this coroutine parked for
+        // the life of the app waiting for a list that is never coming.
+        val ready = kotlinx.coroutines.withTimeoutOrNull(LANDING_WAIT_MS) {
+            _listsLoaded.first { it }
+            _sessionsLoaded.first { it }
+            true
+        }
+        if (ready != true) return
+        if (chat != null && _chatId.value == null && _chats.value.any { it.id == chat }) {
+            _chatId.value = chat
+        }
+        if (session != null && _sessionName.value == null && _sessions.value.any { it.name == session }) {
+            _sessionName.value = session
+        }
+    }
+
+    /**
+     * Writes the position back, on a trailing edge.
+     *
+     * Debounced because Alt+↓ down a list is one of these per key repeat and this
+     * file also holds the token — the same argument as the window geometry watcher
+     * in `main`. Collected from the flows rather than written by `openChat` and
+     * friends so that every path arrives here: the keyboard walk mutates the ids
+     * directly, and a notification activation does not go through the shell at all.
+     */
+    private suspend fun rememberLanding() {
+        kotlinx.coroutines.flow.combine(_view, _chatId, _sessionName) { v, c, s -> Triple(v, c, s) }
+            .debounce(LANDING_WRITE_DEBOUNCE_MS)
+            .collect { (v, c, s) -> settings.setLanding(v, c, s) }
+    }
+
+    /**
      * The 5s list poll, GATED ON VISIBILITY.
      *
      * A hidden window that keeps polling is not just wasted traffic: the pane poll
@@ -293,6 +383,10 @@ class AppStore(
         presence.visible.collectLatest { visible ->
             if (!visible) return@collectLatest
             while (scope.isActive) {
+                // Before the fetches, so a fault raised by a source that has no
+                // poll behind it (a rename that 400'd) ages out on the app's own
+                // clock rather than waiting for a click that may never come.
+                faults.sweep()
                 refreshChats()
                 refreshSessions()
                 if (_view.value == View.STATUS) refreshStatus()
@@ -304,6 +398,9 @@ class AppStore(
     private suspend fun presenceTicker() {
         while (scope.isActive) {
             presence.tick()
+            // The poll stops while the window is hidden; this does not. A stale
+            // fault must not be waiting on screen when the window comes back.
+            faults.sweep()
             delay(30_000)
         }
     }
@@ -367,6 +464,12 @@ class AppStore(
         const val POLL_MS: Long = 5_000
         const val MIN_BACKOFF_MS: Long = 1_000
         const val MAX_BACKOFF_MS: Long = 30_000
+
+        /** How long the landing restore waits for the first lists before giving up. */
+        const val LANDING_WAIT_MS: Long = 15_000
+
+        /** Trailing edge for writing the position back. One key repeat is not a decision. */
+        const val LANDING_WRITE_DEBOUNCE_MS: Long = 800
 
         /**
          * The one store, for the one surface the shell still builds from a bare

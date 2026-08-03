@@ -91,6 +91,20 @@ class DesktopSettings(private val file: File = defaultFile()) : HuginnSettings {
 
         /** The list/detail seam, in dp. See [Splitter.clamp]. */
         val listWidth: Float = Splitter.DEFAULT,
+
+        /**
+         * WHERE THE WINDOW WAS LOOKING. Desktop-only, same argument as the window
+         * geometry above: this client hides to the tray rather than quitting, so a
+         * relaunch usually follows an update or a crash — the two occasions where
+         * being put back on the wrong screen is most annoying.
+         *
+         * Empty means "never recorded", which [Landing.parse] reads as its own
+         * default rather than as Chats. That is what makes an install that predates
+         * this field open on Sessions.
+         */
+        val lastView: String = "",
+        val lastChatId: String = "",
+        val lastSessionName: String = "",
     )
 
     private val json = Json { ignoreUnknownKeys = true; encodeDefaults = true; prettyPrint = true }
@@ -289,6 +303,43 @@ class DesktopSettings(private val file: File = defaultFile()) : HuginnSettings {
     fun widenList() = nudgeListWidth(Splitter.STEP)
     fun narrowList() = nudgeListWidth(-Splitter.STEP)
     fun resetListWidth() = setListWidth(Splitter.DEFAULT)
+
+    // ---------------------------------------------------------- landing
+    //
+    // Read synchronously at construction, which is what lets the store pick its
+    // opening view without a suspend — the window composes before any coroutine
+    // this app launches has run, and a view that snapped from Chats to Sessions a
+    // frame later would be worse than never restoring it.
+
+    fun lastViewNow(): View = Landing.parse(synchronized(lock) { stored.lastView })
+    fun lastChatIdNow(): String? = synchronized(lock) { stored.lastChatId }.takeIf { it.isNotEmpty() }
+    fun lastSessionNameNow(): String? =
+        synchronized(lock) { stored.lastSessionName }.takeIf { it.isNotEmpty() }
+
+    /**
+     * Records the position. NOT suspend and NOT written per navigation event — the
+     * caller debounces, because Alt+↓ down a session list is one of these per key
+     * repeat and this file also holds the token.
+     *
+     * A non-[Landing.persistable] view is dropped rather than stored: see the note
+     * on [Landing]. The ids are still recorded in that case, so glancing at
+     * Settings does not forget which session was open behind it.
+     */
+    fun setLanding(view: View, chatId: String?, sessionName: String?) {
+        val chat = chatId.orEmpty()
+        val session = sessionName.orEmpty()
+        // One critical section for the read AND the write: `mutate` takes the same
+        // (reentrant) lock, and a compare-then-write split across two of them is
+        // how the last writer wins with the wrong value.
+        synchronized(lock) {
+            val encoded = if (Landing.persistable(view)) Landing.encode(view) else stored.lastView
+            if (stored.lastView == encoded &&
+                stored.lastChatId == chat &&
+                stored.lastSessionName == session
+            ) return
+            mutate { it.copy(lastView = encoded, lastChatId = chat, lastSessionName = session) }
+        }
+    }
 
     fun baseUrlNow(): String = _baseUrl.value
     fun tokenNow(): String = _token.value
