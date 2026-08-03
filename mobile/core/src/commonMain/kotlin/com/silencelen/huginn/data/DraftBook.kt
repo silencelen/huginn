@@ -44,9 +44,39 @@ class DraftBook(
     /** True while there is a change the store has not been told about yet. */
     private var dirty = false
 
-    /** Reads what was persisted. Call once, before the first composer is drawn. */
+    /**
+     * Reads what was persisted. Call once, at app start.
+     *
+     * MERGES rather than assigns, because "before the first composer is drawn" is
+     * not something the caller can promise: this is launched on the app scope from
+     * `start()` while the window is already composing, so a composer can take a
+     * keystroke in the gap. A straight assignment throws that keystroke away, and
+     * what is on screen outranks what was on disk.
+     */
     suspend fun load() {
-        _drafts.value = settings.drafts.first()
+        val stored = settings.drafts.first()
+        val typed = _drafts.value
+        _drafts.value = if (typed.isEmpty()) stored else stored + typed
+    }
+
+    /**
+     * The target was renamed: the draft follows it.
+     *
+     * Half a typed message is worth keeping across a rename, and the old key would
+     * never be read again — so without this the text is not merely orphaned, it is
+     * paid for on every keystroke in every other target, forever. The phone has
+     * done this since sessions became renameable; this is the desktop's copy of
+     * the same rule.
+     */
+    fun move(from: String, to: String) {
+        if (from == to) return
+        val text = _drafts.value[from] ?: return
+        _drafts.value = _drafts.value.toMutableMap().apply {
+            remove(from)
+            if (text.isNotEmpty()) put(to, text)
+        }
+        dirty = true
+        writeNow()
     }
 
     operator fun get(key: String): String = _drafts.value[key].orEmpty()

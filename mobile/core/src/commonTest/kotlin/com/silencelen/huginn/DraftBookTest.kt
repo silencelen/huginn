@@ -137,6 +137,116 @@ class DraftBookTest {
         assertEquals("sess:x", DraftBook.sessionKey("x"))
     }
 
+    // ------------------------------------------------------- navigation
+    //
+    // The owner's report: "draft chats the user types and deleted between session
+    // or chat navigations". The desktop's session composer was holding its text in
+    // a Compose `remember`, which is discarded when the view leaves the
+    // composition — so every switch away lost it, on every platform, with nothing
+    // to do with the file. These are the properties that had to hold once the
+    // session composer moved onto this book.
+
+    @Test
+    fun `walking between targets keeps every draft, under its own key`() = runTest {
+        val settings = FakeSettings()
+        val book = DraftBook(settings, this)
+
+        // Type in a chat, leave for a session, type there, come back. This is the
+        // exact sequence the owner described, at the layer that has to survive it.
+        book.set(DraftBook.chatKey("c1"), "half a question")
+        book.flush()
+        book.set(DraftBook.sessionKey("jtyper"), "half an instruction")
+        book.flush()
+        advanceUntilIdle()
+
+        assertEquals("half a question", book[DraftBook.chatKey("c1")])
+        assertEquals("half an instruction", book[DraftBook.sessionKey("jtyper")])
+        assertEquals(
+            mapOf(
+                DraftBook.chatKey("c1") to "half a question",
+                DraftBook.sessionKey("jtyper") to "half an instruction",
+            ),
+            settings.writes.last(),
+        )
+    }
+
+    @Test
+    fun `a write in flight lands under the key it was typed in, not the one now open`() = runTest {
+        // The Electron bug, in its other form: the timer is scheduled while chat A
+        // is open and FIRES after the reader has moved to session B. The payload is
+        // read at write time, so both texts land where they belong and neither is
+        // written under the other's key.
+        val settings = FakeSettings()
+        val book = DraftBook(settings, this)
+
+        book.set(DraftBook.chatKey("c1"), "for the chat")
+        advanceTimeBy(DraftBook.DEBOUNCE_MS / 2)
+        book.set(DraftBook.sessionKey("s1"), "for the session")
+        advanceTimeBy(DraftBook.DEBOUNCE_MS + 1)
+        advanceUntilIdle()
+
+        assertEquals("for the chat", settings.writes.last()[DraftBook.chatKey("c1")])
+        assertEquals("for the session", settings.writes.last()[DraftBook.sessionKey("s1")])
+    }
+
+    @Test
+    fun `a draft typed before the load lands is not thrown away by it`() = runTest {
+        val settings = FakeSettings()
+        settings.seed(mapOf(DraftBook.chatKey("old") to "from disk"))
+        val book = DraftBook(settings, this)
+
+        // `load` is launched on the app scope from start(), while the window is
+        // already composing — a composer can take a keystroke in that gap, and an
+        // assigning load would silently swallow it.
+        book.set(DraftBook.sessionKey("s1"), "typed during startup")
+        book.load()
+
+        assertEquals("typed during startup", book[DraftBook.sessionKey("s1")], "the load clobbered live typing")
+        assertEquals("from disk", book[DraftBook.chatKey("old")])
+    }
+
+    @Test
+    fun `what is on screen outranks what was on disk`() = runTest {
+        // Same key on both sides. The phone wrote a draft for this session; the
+        // reader is mid-sentence in this window. The reader wins.
+        val settings = FakeSettings()
+        settings.seed(mapOf(K to "stale"))
+        val book = DraftBook(settings, this)
+
+        book.set(K, "being typed right now")
+        book.load()
+
+        assertEquals("being typed right now", book[K])
+    }
+
+    @Test
+    fun `a renamed target keeps its draft`() = runTest {
+        val settings = FakeSettings()
+        val book = DraftBook(settings, this)
+
+        book.set(DraftBook.sessionKey("old-name"), "half an instruction")
+        book.move(DraftBook.sessionKey("old-name"), DraftBook.sessionKey("new-name"))
+        advanceUntilIdle()
+
+        assertEquals("half an instruction", book[DraftBook.sessionKey("new-name")])
+        assertEquals("", book[DraftBook.sessionKey("old-name")], "the old key would never be read again")
+        // Written through, not merely held: the old key must not come back from
+        // disk on the next launch, paid for on every keystroke thereafter.
+        assertEquals(
+            mapOf(DraftBook.sessionKey("new-name") to "half an instruction"),
+            settings.writes.last(),
+        )
+    }
+
+    @Test
+    fun `moving a target with no draft writes nothing`() = runTest {
+        val settings = FakeSettings()
+        val book = DraftBook(settings, this)
+        book.move(DraftBook.sessionKey("a"), DraftBook.sessionKey("b"))
+        advanceUntilIdle()
+        assertEquals(0, settings.writes.size)
+    }
+
     private companion object {
         val K = DraftBook.chatKey("c1")
     }

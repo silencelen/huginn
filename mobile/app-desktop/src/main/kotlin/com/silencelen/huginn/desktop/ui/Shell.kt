@@ -47,6 +47,7 @@ import androidx.compose.ui.input.pointer.PointerIcon
 import androidx.compose.ui.input.pointer.pointerHoverIcon
 import androidx.compose.ui.unit.dp
 import com.silencelen.huginn.data.Chat
+import com.silencelen.huginn.data.DraftBook
 import com.silencelen.huginn.data.Session
 import com.silencelen.huginn.desktop.AppStore
 import com.silencelen.huginn.desktop.View
@@ -97,6 +98,10 @@ fun Shell(store: AppStore) {
     val chats by store.chats.collectAsState()
     val sessions by store.sessions.collectAsState()
     val loaded by store.listsLoaded.collectAsState()
+    // Its OWN flag. The sessions list used to be told "loaded" by the chats fetch
+    // returning, so a start where chats answered and sessions did not drew "No
+    // sessions" — a confident claim about a list nothing had read yet.
+    val sessionsLoaded by store.sessionsLoaded.collectAsState()
     val chatId by store.chatId.collectAsState()
     val sessionName by store.sessionName.collectAsState()
     val watchConnected by store.watchConnected.collectAsState()
@@ -192,7 +197,7 @@ fun Shell(store: AppStore) {
                             )
                             View.SESSIONS -> SessionsList(
                                 sessions = sessions,
-                                loaded = loaded,
+                                loaded = sessionsLoaded,
                                 activeName = sessionName,
                                 selection = sessionSel,
                                 onSelect = { sessionSel = it },
@@ -284,6 +289,15 @@ fun Shell(store: AppStore) {
                         }
                         is RenameTarget.OfSession -> act {
                             store.client.renameSession(target.id, next)
+                            // MOVED, not dropped. A session's draft is keyed by
+                            // name, so a rename orphans it under a key nothing
+                            // will ever read again — and half a typed instruction
+                            // is worth keeping across a rename. The phone has done
+                            // this since sessions became renameable.
+                            store.drafts.move(
+                                DraftBook.sessionKey(target.id),
+                                DraftBook.sessionKey(next),
+                            )
                             store.refreshSessions()
                             // The open session is addressed by name, so a rename
                             // that did not follow leaves the detail pane polling a
@@ -302,14 +316,22 @@ fun Shell(store: AppStore) {
                 onConfirm = {
                     confirming = null
                     when (target) {
+                        // The drafts go with the targets. The detail views already
+                        // clear the OPEN one when it vanishes underneath them, but
+                        // a multi-select delete from the list never opens the other
+                        // rows — and the draft map is rewritten whole on every
+                        // save, so an orphan is paid for on every keystroke in
+                        // every other target, forever.
                         is ConfirmTarget.DeleteChats -> act {
                             target.ids.forEach { store.client.deleteChat(it) }
+                            target.ids.forEach { store.drafts.clear(DraftBook.chatKey(it)) }
                             if (store.chatId.value in target.ids) store.openChat(null)
                             chatSel = Selection()
                             store.refreshChats()
                         }
                         is ConfirmTarget.KillSessions -> act {
                             target.names.forEach { store.client.killSession(it) }
+                            target.names.forEach { store.drafts.clear(DraftBook.sessionKey(it)) }
                             if (store.sessionName.value in target.names) store.openSession(null)
                             sessionSel = Selection()
                             store.refreshSessions()

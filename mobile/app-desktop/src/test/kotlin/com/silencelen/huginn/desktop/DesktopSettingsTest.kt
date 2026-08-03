@@ -108,6 +108,55 @@ class DesktopSettingsTest {
         assertTrue(salvage.readText().contains("the-only-copy"))
     }
 
+    // ------------------------------------------------------------- landing
+
+    @Test
+    fun `a fresh install opens on sessions`() {
+        // The owner's complaint, at the layer that answers it: nothing recorded
+        // must mean Sessions, not whichever View constant happens to be first.
+        // His own settings file predates the field and takes exactly this branch.
+        assertEquals(View.SESSIONS, DesktopSettings(freshFile()).lastViewNow())
+        assertEquals(null, DesktopSettings(freshFile()).lastChatIdNow())
+        assertEquals(null, DesktopSettings(freshFile()).lastSessionNameNow())
+    }
+
+    @Test
+    fun `the position survives a relaunch`() {
+        val file = freshFile()
+        DesktopSettings(file).setLanding(View.SESSIONS, chatId = "c9", sessionName = "jtyper")
+
+        val next = DesktopSettings(file)
+        assertEquals(View.SESSIONS, next.lastViewNow())
+        assertEquals("c9", next.lastChatIdNow())
+        assertEquals("jtyper", next.lastSessionNameNow())
+    }
+
+    @Test
+    fun `an errand does not become the landing view`() {
+        // Glancing at Status or Settings must not decide where the next launch
+        // opens — and must not forget what was open behind it either.
+        val file = freshFile()
+        val settings = DesktopSettings(file)
+        settings.setLanding(View.CHATS, chatId = "c1", sessionName = null)
+        settings.setLanding(View.SETTINGS, chatId = "c1", sessionName = null)
+        settings.setLanding(View.STATUS, chatId = "c1", sessionName = null)
+
+        val next = DesktopSettings(file)
+        assertEquals(View.CHATS, next.lastViewNow())
+        assertEquals("c1", next.lastChatIdNow())
+    }
+
+    @Test
+    fun `a closed target is recorded as closed`() {
+        // Escape out of a chat, then quit: the next launch opens the list, not the
+        // chat that was deliberately closed.
+        val file = freshFile()
+        val settings = DesktopSettings(file)
+        settings.setLanding(View.CHATS, chatId = "c1", sessionName = null)
+        settings.setLanding(View.CHATS, chatId = null, sessionName = null)
+        assertEquals(null, DesktopSettings(file).lastChatIdNow())
+    }
+
     @Test
     fun `a corrupt settings file does not cost the identity twice over`() {
         // A file half-written by a killed process should cost the settings, not
