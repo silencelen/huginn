@@ -479,6 +479,12 @@ private fun ScreenTab(controller: SessionController) {
     val painter = remember(monoPx) { SkiaCellPainter(monoPx) }
     val focus = remember { FocusRequester() }
 
+    // Take focus AFTER the click that turned live on has settled, not during it.
+    // Asking inside the button's own onClick raced the button acquiring focus from
+    // that very same click, and what lost the race was the first keystroke:
+    // enabling live and typing "ls" put "s" into the pane.
+    LaunchedEffect(live) { if (live) focus.requestFocus() }
+
     Column(Modifier.fillMaxSize()) {
         // "Blocked" means a resize is NEEDED and refused, not merely that somebody
         // is attached — so this banner cannot come back after it has been dealt
@@ -604,10 +610,7 @@ private fun ScreenTab(controller: SessionController) {
             }
         }
 
-        KeyBar(controller, live) {
-            live = !live
-            if (live) focus.requestFocus()
-        }
+        KeyBar(controller, live) { live = !live }
     }
 }
 
