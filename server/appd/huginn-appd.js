@@ -32,7 +32,7 @@ const {
 const { readTranscript, liveActivity } = require('./lib/transcript');
 const { summarizeUsage } = require('./lib/usage');
 const { normalizePlan } = require('./lib/plan');
-const { AccountStore, fingerprint } = require('./lib/accounts');
+const { AccountStore, fingerprint, normUuid } = require('./lib/accounts');
 const { formatModel, discoverModels, parseModelId } = require('./lib/models');
 const { pushPending, takePending, clearPending, queuedEvents } = require('./lib/chatqueue');
 const { digest } = require('./lib/watch');
@@ -41,11 +41,14 @@ const clientsLib = require('./lib/clients');
 const { taskDirFor, parsePs, scanTasks, extractBgIds } = require('./lib/tasks');
 const { agentsDirFor, listAgents } = require('./lib/agents');
 const { suggestionContext, buildPrompt, parseSuggestions } = require('./lib/suggest');
-const { decideSwitch, worstLimit } = require('./lib/autoswitch');
+const {
+  decideSwitch, worstLimit, agedLimits, explain: explainSwitch,
+  THRESHOLD: AUTOSWITCH_THRESHOLD,
+} = require('./lib/autoswitch');
 const pushLib = require('./lib/pushtokens');
 const { trySender } = require('./lib/fcm');
 
-const VERSION = '2.51.0';
+const VERSION = '2.52.0';
 const PORT = Number(process.env.HUGINN_APPD_PORT || 8787);
 const DATA_DIR = process.env.HUGINN_APPD_DATA || '/var/lib/huginn-appd';
 const UPLOADS_DIR = path.join(DATA_DIR, 'uploads');
@@ -1116,14 +1119,19 @@ let loginIntent = null;
  * reads disagreed. That is how two profiles ended up labelled as different
  * accounts while both tokens authenticated as the same one, which made the
  * headroom shown per account misleading. Resolving from the token cannot be
- * wrong. Cached by fingerprint, since it is a network round trip per account.
+ * wrong.
+ *
+ * The `uuid` this returns is the account's PERMANENT id, and it is the reason
+ * this call matters beyond labelling: refresh tokens rotate every few hours, so
+ * anything keyed on them treats one login as a new account several times a day.
+ * Cached by fingerprint — one round trip per token, not per read.
  */
-const emailByPrint = new Map();
-async function resolveEmail(creds) {
+const idByPrint = new Map();
+async function resolveIdentity(creds) {
   const print = fingerprint(creds);
   const token = creds && creds.claudeAiOauth && creds.claudeAiOauth.accessToken;
   if (!print || !token) return null;
-  if (emailByPrint.has(print)) return emailByPrint.get(print);
+  if (idByPrint.has(print)) return idByPrint.get(print);
   const ac = new AbortController();
   const timer = setTimeout(() => ac.abort(), 10_000);
   try {
@@ -1135,13 +1143,46 @@ async function resolveEmail(creds) {
       },
       signal: ac.signal,
     });
-    if (!resp.ok) return null;                 // expired token: keep the stored label
+    if (!resp.ok) return null;                 // expired token: keep what is stored
     const body = await resp.json();
-    const acct = body && (body.account || body);
-    const email = (acct && (acct.email_address || acct.email)) || null;
-    if (email) emailByPrint.set(print, email);
-    return email;
+    const acct = (body && (body.account || body)) || {};
+    const id = {
+      email: acct.email_address || acct.email || null,
+      uuid: normUuid(acct.uuid || acct.account_uuid),
+      taggedId: typeof acct.tagged_id === 'string' ? acct.tagged_id : null,
+      orgName: (acct.memberships && acct.memberships[0]
+        && acct.memberships[0].organization && acct.memberships[0].organization.name) || null,
+    };
+    if (id.email || id.uuid) idByPrint.set(print, id);
+    return id;
   } catch { return null; } finally { clearTimeout(timer); }
+}
+
+async function resolveEmail(creds) {
+  const id = await resolveIdentity(creds);
+  return (id && id.email) || null;
+}
+
+/**
+ * Saves credentials with the strongest identity available for them.
+ *
+ * Every save that goes through here survives a token rotation: the account uuid
+ * comes from the token itself, so the profile is updated in place instead of a
+ * fresh one appearing beside it. When the account cannot be reached the store
+ * falls back to the refresh-token fingerprint, which may leave a surplus profile
+ * behind — recoverable — rather than risk filing one login under another's name.
+ *
+ * `label` is only a fallback: the token's own answer is preferred wherever it
+ * is available, because it cannot be stale.
+ */
+async function saveIdentified(label, creds, extra = {}) {
+  if (!creds) return null;
+  const id = await resolveIdentity(creds);
+  return accounts.save((id && id.email) || label || null, creds, {
+    ...extra,
+    orgName: extra.orgName ?? (id && id.orgName) ?? null,
+    ...(id && id.uuid ? { accountUuid: id.uuid, taggedId: id.taggedId } : {}),
+  });
 }
 
 /**
@@ -1152,8 +1193,14 @@ async function resolveEmail(creds) {
  * Claude Code runs under it.
  */
 async function planForCredentials(creds) {
-  const token = creds && creds.claudeAiOauth && creds.claudeAiOauth.accessToken;
+  const o = (creds && creds.claudeAiOauth) || {};
+  const token = o.accessToken;
   if (!token) return null;
+  // An access token past its expiry cannot answer, and asking anyway is not free:
+  // this endpoint rate-limits per account, and a saved login that has been idle
+  // for days always has a dead token. Spending the allowance on those was
+  // starving the one read that matters — the ACTIVE account's.
+  if (typeof o.expiresAt === 'number' && o.expiresAt <= Date.now()) return null;
   const ac = new AbortController();
   const timer = setTimeout(() => ac.abort(), 10_000);
   try {
@@ -1579,12 +1626,19 @@ async function suggestionsFor(id, transcriptPath) {
  */
 async function performSwitch(slug) {
   const before = await accountStatus();
+  // Fold the outgoing account's CURRENT tokens into its own profile first. Its
+  // refresh token has almost certainly rotated since it was last written, and
+  // the snapshot activate() takes on the way out can only recognise a profile by
+  // that token — so without this the account being left is filed a second time,
+  // under a name nothing else knows.
+  await saveIdentified(before.email, accounts.readActive());
+
   const r = accounts.activate(slug, before.email);
   if (!r.ok) return { ok: false, error: r.error };
   const after = await accountStatus();
   const nowLive = accounts.readActive();
   if (nowLive && after.loggedIn && after.email) {
-    accounts.save(after.email, nowLive, after.orgName ? { orgName: after.orgName } : {});
+    await saveIdentified(after.email, nowLive, after.orgName ? { orgName: after.orgName } : {});
   }
   planCache.at = 0; planCache.data = null;
   log(`account switched: ${before.email || 'unknown'} -> ${after.email || 'unknown'}`);
@@ -1614,39 +1668,70 @@ function saveAutoswitch(st) {
 }
 
 let autoswitchBusy = false;
+// The last tick's reasoning, so "it never fires" can be told apart from "it has
+// not needed to yet" without reading the log.
+let autoswitchWhy = 'not run yet';
+
 async function autoswitchTick() {
   if (autoswitchBusy) return;
   const st = loadAutoswitch();
-  if (!st.enabled) return;
+  if (!st.enabled) { autoswitchWhy = 'disabled'; return; }
   autoswitchBusy = true;
   try {
+    // Keep the live login's profile in step with its rotating tokens, or it stops
+    // matching any stored record and this tick cannot tell which account is
+    // active at all.
+    await saveIdentified(null, accounts.readActive());
+
     const saved = accounts.list();
-    if (saved.length < 2) return;
+    if (saved.length < 2) { autoswitchWhy = 'only one account is saved'; return; }
     const activeRec = saved.find((a) => a.isActive);
-    if (!activeRec) return;
+    if (!activeRec) { autoswitchWhy = 'no saved profile matches the live credentials'; return; }
 
     // Cheap first look: only the active account's plan. Candidates are only
     // priced once the active one is actually hot.
     const activePlan = await planForCredentials(accounts.readActive());
+    if (activePlan) accounts.recordPlan(activeRec.slug, activePlan);
     const activeLimits = (activePlan && activePlan.limits) || [];
+    const active = { slug: activeRec.slug, email: activeRec.email, limits: activeLimits };
+
+    const threshold = typeof st.threshold === 'number' ? st.threshold : undefined;
     const w = worstLimit(activeLimits);
-    if (!w || w.percent < 95) return;
+    if (!w || w.percent < (threshold ?? 95)) {
+      autoswitchWhy = explainSwitch({ active, candidates: [], now: Date.now(), lastSwitchAt: st.lastSwitchAt || 0, threshold });
+      return;
+    }
 
     const candidates = [];
     for (const a of saved) {
       if (a.isActive) continue;
       const rec = accounts.readProfile(a.slug);
-      const plan = rec && await planForCredentials(rec.credentials);
-      candidates.push({ slug: a.slug, email: a.email, limits: (plan && plan.limits) || [] });
+      if (!rec) continue;
+      // Live figures if the stored token still authenticates, which it usually
+      // does not — an access token outlives its account's turn by hours at most.
+      // Otherwise the last reading taken while that account was active, aged
+      // forward; see agedLimits for why that is sound and which way it errs.
+      const plan = await planForCredentials(rec.credentials);
+      if (plan) accounts.recordPlan(a.slug, plan);
+      candidates.push({
+        slug: a.slug,
+        email: a.email,
+        limits: plan ? plan.limits : agedLimits(rec.lastPlan, Date.now()),
+      });
     }
 
     const d = decideSwitch({
-      active: { slug: activeRec.slug, email: activeRec.email, limits: activeLimits },
+      active,
       candidates,
       now: Date.now(),
       lastSwitchAt: st.lastSwitchAt || 0,
+      threshold,
     });
-    if (!d) return;
+    if (!d) {
+      autoswitchWhy = explainSwitch({ active, candidates, now: Date.now(), lastSwitchAt: st.lastSwitchAt || 0, threshold });
+      return;
+    }
+    autoswitchWhy = null;
 
     const r = await performSwitch(d.to);
     if (!r.ok) { log(`autoswitch: activate failed: ${r.error}`); return; }
@@ -1665,6 +1750,7 @@ async function autoswitchTick() {
     if (!push.sent) await deliverTelegram(`\u{1F501} Switched Claude account\n${text}`);
     log(`autoswitch: ${d.fromEmail} (${d.fromPercent}%) -> ${d.toEmail} (${d.toPercent}%)`);
   } catch (e) {
+    autoswitchWhy = `last tick failed: ${e.message}`;
     log('autoswitch: tick failed', e.message);
   } finally {
     autoswitchBusy = false;
@@ -2026,18 +2112,30 @@ const server = http.createServer(async (req, res) => {
         switches: st.switches || 0,
         last: st.last || null,
         accounts: accounts.list().length,
+        threshold: typeof st.threshold === 'number' ? st.threshold : AUTOSWITCH_THRESHOLD,
+        // Why the most recent look did nothing. Null while a switch is in hand.
+        idleBecause: autoswitchWhy,
       });
     }
     if (req.method === 'POST' && p === '/v1/autoswitch') {
       const body = JSON.parse(await readBody(req) || '{}');
       const st = loadAutoswitch();
       if (typeof body.enabled === 'boolean') st.enabled = body.enabled;
+      // The default fires at 95%, on the reasoning that a limit resetting in
+      // twenty minutes is not worth spending a fresh account on. That is a taste
+      // question, not a fact, so it is tunable without a deploy.
+      if (typeof body.threshold === 'number' && body.threshold >= 50 && body.threshold <= 100) {
+        st.threshold = Math.round(body.threshold);
+      }
       saveAutoswitch(st);
-      log(`autoswitch: ${st.enabled ? 'enabled' : 'disabled'}`);
+      log(`autoswitch: ${st.enabled ? 'enabled' : 'disabled'} at ${st.threshold ?? AUTOSWITCH_THRESHOLD}%`);
       // An immediate look, so enabling it against an already-dry account acts
       // now rather than in five minutes.
       if (st.enabled) autoswitchTick().catch(() => { });
-      return sendJson(res, 200, { enabled: !!st.enabled });
+      return sendJson(res, 200, {
+        enabled: !!st.enabled,
+        threshold: typeof st.threshold === 'number' ? st.threshold : AUTOSWITCH_THRESHOLD,
+      });
     }
 
     // --- has the phone actually been checking in? The whole point of recording
@@ -2181,11 +2279,13 @@ const server = http.createServer(async (req, res) => {
     // --- saved accounts
     if (req.method === 'GET' && p === '/v1/accounts') {
       const withPlan = u.searchParams.get('plan') === '1';
-      // Capture whatever is signed in right now. Keyed by its own fingerprint, so
-      // a stale email can mislabel but can never overwrite another account.
+      // Capture whatever is signed in right now, under the account uuid its own
+      // token reports. Claude Code rewrites this file with a fresh token pair
+      // every few hours; keyed on the tokens alone that produced a new profile on
+      // every rotation, thirteen of them for three logins.
       const acct = await accountStatus();
       const live = accounts.readActive();
-      if (live) accounts.save(acct.loggedIn ? acct.email : null, live,
+      if (live) await saveIdentified(acct.loggedIn ? acct.email : null, live,
         acct.orgName ? { orgName: acct.orgName } : {});
       // A finished sign-in leaves a `login` session sitting at a prompt; retire it
       // once the credentials have actually changed, so the sessions list is not
@@ -2197,22 +2297,39 @@ const server = http.createServer(async (req, res) => {
         }
         loginStartedFrom = null;
       }
-      const saved = accounts.list();
-      // Label each profile from its OWN token rather than from whatever is active.
-      await Promise.all(saved.map(async (a) => {
+      // Identify each profile from its OWN token rather than from whatever is
+      // active — and write back the uuid it reports, which is what keeps the
+      // profile in one piece the next time that token rotates. Sequential, since
+      // each of these can rewrite the store.
+      const answered = new Set();
+      for (const a of accounts.list()) {
         const rec = accounts.readProfile(a.slug);
-        if (!rec) return;
-        const real = await resolveEmail(rec.credentials);
-        if (real) {
-          a.email = real;
-          a.verified = true;
-          if (rec.email !== real) accounts.save(real, rec.credentials, { orgName: rec.orgName ?? null });
-        } else {
-          a.verified = false;
+        if (!rec) continue;
+        const id = await resolveIdentity(rec.credentials);
+        if (!id || !(id.email || id.uuid)) continue;
+        answered.add(id.uuid || a.slug);
+        if (rec.email !== id.email || normUuid(rec.accountUuid) !== id.uuid) {
+          accounts.save(id.email ?? rec.email, rec.credentials, {
+            orgName: rec.orgName ?? id.orgName ?? null,
+            ...(id.uuid ? { accountUuid: id.uuid, taggedId: id.taggedId } : {}),
+          });
         }
-      }));
-      // Two profiles resolving to one account is worth saying: switching between
-      // them changes nothing, and their "headroom" is the same bucket twice.
+      }
+      // Whatever a rotation or an offline stretch left behind, folded back into
+      // one profile per login. Idempotent, and a no-op on a settled store.
+      try { accounts.consolidate(); } catch (e) { log('accounts: consolidate failed', e.message); }
+
+      const saved = accounts.list();
+      // "Verified" stays a claim about THIS moment: the account's own token was
+      // asked just now and answered. A stored uuid is identity enough to file the
+      // profile under, but it is not a live proof that the login still works —
+      // and in practice only the active account holds a token fresh enough to
+      // answer at all.
+      for (const a of saved) a.verified = answered.has(a.accountUuid || a.slug);
+      // Only meaningful now for a profile the endpoint could never identify: with
+      // a uuid in hand, one login is one record and cannot appear twice. Two rows
+      // sharing an email means at least one of them was saved while this host
+      // could not reach the API, and switching between them may do nothing.
       const byEmail = new Map();
       for (const a of saved) {
         if (!a.email) continue;
@@ -2224,11 +2341,19 @@ const server = http.createServer(async (req, res) => {
         await Promise.all(saved.map(async (a) => {
           const rec = accounts.readProfile(a.slug);
           const pl = rec && await planForCredentials(rec.credentials);
+          if (pl) accounts.recordPlan(a.slug, pl);
+          // Only the ACTIVE account holds a token fresh enough to answer; for the
+          // others fall back to the last reading taken while they were, aged
+          // forward. Said plainly via planAgeSec rather than passed off as live.
+          const limits = pl ? pl.limits : agedLimits(rec && rec.lastPlan, Date.now());
+          const pick = (kind) => limits.find((l) => l.kind === kind)?.percent ?? null;
           // The weekly all-models figure is the one that decides whether an
           // account still has room.
-          const weekly = pl && pl.limits.find((l) => l.kind === 'weekly_all');
-          a.weeklyPercent = weekly ? weekly.percent : null;
-          a.sessionPercent = pl ? (pl.limits.find((l) => l.kind === 'session')?.percent ?? null) : null;
+          a.weeklyPercent = pick('weekly_all');
+          a.sessionPercent = pick('session');
+          a.planLive = !!pl;
+          a.planAgeSec = pl ? 0
+            : (rec && rec.lastPlan && rec.lastPlan.at ? Math.floor(Date.now() / 1000) - rec.lastPlan.at : null);
         }));
       }
       return sendJson(res, 200, { accounts: saved });
@@ -2262,7 +2387,7 @@ const server = http.createServer(async (req, res) => {
       // adding an account silently costs you the one you were using.
       const before = await accountStatus();
       const cur = accounts.readActive();
-      if (cur) accounts.save(before.loggedIn ? before.email : null, cur,
+      if (cur) await saveIdentified(before.loggedIn ? before.email : null, cur,
         before.orgName ? { orgName: before.orgName } : {});
       loginStartedFrom = fingerprint(cur);
       const existed = await sessionExists(name);
@@ -2323,7 +2448,7 @@ const server = http.createServer(async (req, res) => {
         if (fingerprint(accounts.readActive()) !== before) {
           const acct = await accountStatus();
           const live = accounts.readActive();
-          if (live) accounts.save(acct.loggedIn ? acct.email : null, live,
+          if (live) await saveIdentified(acct.loggedIn ? acct.email : null, live,
             acct.orgName ? { orgName: acct.orgName } : {});
           if (await sessionExists('login')) await run('tmux', ['kill-session', '-t', '=login']);
 
@@ -3047,6 +3172,16 @@ resolveBind().then(async (bind) => {
       log(`accounts: migrated ${migrated}, removed ${duplicates} duplicate(s) left by email-keyed storage`);
     }
   } catch (e) { log('accounts: migration failed', e.message); }
+  // Then fold the profiles that ROTATION produced — one login was filed afresh
+  // every few hours — onto the account uuid, which does not rotate. Surplus
+  // records are archived, not deleted.
+  try {
+    const c = accounts.consolidate();
+    if (c.merged || c.archived) {
+      log(`accounts: consolidated ${c.merged} login(s), archived ${c.archived} rotated profile(s)` +
+        `${c.failed ? `, ${c.failed} group(s) failed` : ''}`);
+    }
+  } catch (e) { log('accounts: consolidation failed', e.message); }
   server.listen(PORT, bind, () => log(`huginn-appd ${VERSION} listening on ${bind}:${PORT}`));
 }).catch((e) => { console.error('FATAL:', e.message); process.exit(1); });
 

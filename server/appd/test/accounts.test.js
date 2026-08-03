@@ -11,7 +11,10 @@ const assert = require('node:assert');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const { AccountStore, fingerprint, sameAccount } = require('../lib/accounts');
+const { AccountStore, fingerprint, sameAccount, normUuid, storedUuid } = require('../lib/accounts');
+
+const UUID_A = '79c777a4-d96e-4de2-b95e-bd1f1e758236';
+const UUID_B = 'e12d3fa9-fb80-4e4a-b286-36890d487fd4';
 
 function creds(refresh, extra = {}) {
   return {
@@ -195,6 +198,232 @@ test('stored profiles are not world readable', () => {
   assert.strictEqual(mode, 0o600, 'these are credentials');
 });
 
+// ---- identity that survives a rotating refresh token ------------------------
+//
+// The second way this store lost track of accounts (2026-08-03). Keying on the
+// credentials was safe but not stable: OAuth refresh tokens rotate every few
+// hours, so one login was filed afresh several times a day — 13 profiles for 3
+// real accounts, twelve holding tokens that no longer authenticated. The account
+// uuid is the fix precisely because it is the one identifier that does not move.
+
+test('a rotated refresh token updates the account in place, it does not add one', () => {
+  const { store } = newStore();
+  const id = { accountUuid: UUID_A };
+  const first = store.save('work@example.com', creds('r-1'), id);
+  const second = store.save('work@example.com', creds('r-2'), id);   // Claude Code refreshed
+
+  assert.strictEqual(first, second, 'the slug must not move when the token does');
+  const list = store.list();
+  assert.strictEqual(list.length, 1, 'one login is one profile, however often it rotates');
+  assert.strictEqual(
+    store.readProfile(first).credentials.claudeAiOauth.refreshToken, 'r-2',
+    'and it holds the CURRENT token, not the one that has been traded in',
+  );
+});
+
+test('rotation across many refreshes still leaves exactly one profile', () => {
+  // The shape of the live bug: a week of refreshes, one account.
+  const { store } = newStore();
+  for (let i = 0; i < 20; i++) store.save('work@example.com', creds(`r-${i}`), { accountUuid: UUID_A });
+  assert.strictEqual(store.list().length, 1);
+  assert.strictEqual(store.list()[0].accountUuid, UUID_A);
+});
+
+test('two different accounts never merge, however they are labelled', () => {
+  // The catastrophic direction. A wrong label must stay a wrong label.
+  const { store } = newStore();
+  store.save('work@example.com', creds('r-work'), { accountUuid: UUID_A });
+  store.save('work@example.com', creds('r-home'), { accountUuid: UUID_B });   // same label, other account
+
+  const list = store.list();
+  assert.strictEqual(list.length, 2, 'both logins must survive');
+  assert.deepStrictEqual(new Set(list.map((a) => a.accountUuid)), new Set([UUID_A, UUID_B]));
+  assert.strictEqual(store.readProfile(UUID_A).credentials.claudeAiOauth.refreshToken, 'r-work');
+  assert.strictEqual(store.readProfile(UUID_B).credentials.claudeAiOauth.refreshToken, 'r-home');
+});
+
+test('an account that cannot be identified is KEPT, never dropped', () => {
+  // No network, or an access token too old to ask with: the uuid is unknown and
+  // the fingerprint is all there is. A surplus profile is a nuisance; a missing
+  // one is a login the owner has to go and find again.
+  const { store } = newStore();
+  const offline = store.save('mystery@example.com', creds('r-unknown'));
+  assert.strictEqual(offline, fingerprint(creds('r-unknown')), 'falls back to the credentials');
+
+  store.save('work@example.com', creds('r-work'), { accountUuid: UUID_A });
+  store.consolidate();
+
+  assert.ok(store.readProfile(offline), 'the unidentified account is still here');
+  assert.strictEqual(store.list().length, 2);
+});
+
+test('learning the uuid later adopts the profile instead of duplicating it', () => {
+  // Saved while offline, identified once the API is reachable again.
+  const { store } = newStore();
+  const blind = store.save('work@example.com', creds('r-1'));
+  const known = store.save('work@example.com', creds('r-1'), { accountUuid: UUID_A });
+
+  assert.strictEqual(known, UUID_A);
+  assert.strictEqual(store.list().length, 1, 'the fingerprint-named copy must not linger');
+  assert.strictEqual(fs.existsSync(path.join(store.dir, `${blind}.json`)), false);
+});
+
+test('a uuid learned once is remembered when a later save cannot resolve it', () => {
+  const { store } = newStore();
+  store.save('work@example.com', creds('r-1'), { accountUuid: UUID_A });
+  // Same token, no identity to hand: the stored record still recognises it.
+  const again = store.save('work@example.com', creds('r-1'));
+  assert.strictEqual(again, UUID_A);
+  assert.strictEqual(store.list().length, 1);
+});
+
+test('a malformed uuid is not identity', () => {
+  assert.strictEqual(normUuid('not-a-uuid'), null);
+  assert.strictEqual(normUuid(''), null);
+  assert.strictEqual(normUuid(null), null);
+  assert.strictEqual(normUuid(UUID_A.toUpperCase()), UUID_A, 'case is not meaning');
+  const { store } = newStore();
+  const slug = store.save('work@example.com', creds('r-1'), { accountUuid: 'nonsense' });
+  assert.strictEqual(slug, fingerprint(creds('r-1')), 'falls back rather than trusting it');
+});
+
+// ---- consolidating what rotation already left behind ------------------------
+
+/** A record as the old scheme wrote it: fingerprint-named, uuid only in the block. */
+function rotated(store, refresh, email, uuid, savedAt, expiresAt) {
+  const rec = {
+    slug: fingerprint(creds(refresh)),
+    email,
+    savedAt,
+    firstSeen: savedAt,
+    oauthAccount: { accountUuid: uuid, emailAddress: email },
+    credentials: creds(refresh, { expiresAt }),
+  };
+  fs.writeFileSync(path.join(store.dir, `${rec.slug}.json`), JSON.stringify(rec), { mode: 0o600 });
+  return rec.slug;
+}
+
+test('consolidate folds a rotation history down to one profile per login', () => {
+  const { store } = newStore();
+  rotated(store, 'r-1', 'work@example.com', UUID_A, 100, 1000);
+  rotated(store, 'r-2', 'work@example.com', UUID_A, 200, 2000);
+  const newest = rotated(store, 'r-3', 'work@example.com', UUID_A, 300, 3000);
+  rotated(store, 'p-1', 'other@example.com', UUID_B, 150, 1500);
+
+  const r = store.consolidate();
+  assert.strictEqual(r.merged, 2, 'two logins, both re-keyed');
+  // Every old file is moved aside, including the one whose credentials survived
+  // into the new record — uniform, and one less special case to get wrong.
+  assert.strictEqual(r.archived, 4);
+
+  const list = store.list();
+  assert.strictEqual(list.length, 2);
+  assert.deepStrictEqual(new Set(list.map((a) => a.slug)), new Set([UUID_A, UUID_B]));
+  assert.strictEqual(
+    store.readProfile(UUID_A).credentials.claudeAiOauth.refreshToken, 'r-3',
+    'the FRESHEST credentials survive — the others no longer authenticate',
+  );
+  assert.strictEqual(store.readProfile(UUID_A).firstSeen, 100, 'and the login keeps its history');
+  assert.ok(newest, 'sanity');
+});
+
+test('consolidate archives what it folds in, so nothing is unrecoverable', () => {
+  const { store } = newStore();
+  rotated(store, 'r-1', 'work@example.com', UUID_A, 100, 1000);
+  rotated(store, 'r-2', 'work@example.com', UUID_A, 200, 2000);
+  store.consolidate();
+
+  const kept = fs.readdirSync(path.join(store.dir, 'superseded')).sort();
+  assert.strictEqual(kept.length, 2, 'the old profiles are moved aside, not deleted');
+  const tokens = kept.map((f) =>
+    JSON.parse(fs.readFileSync(path.join(store.dir, 'superseded', f), 'utf8'))
+      .credentials.claudeAiOauth.refreshToken);
+  assert.deepStrictEqual(new Set(tokens), new Set(['r-1', 'r-2']),
+    'a wrong grouping would still be handed back in full');
+});
+
+test('consolidate is idempotent', () => {
+  const { store } = newStore();
+  rotated(store, 'r-1', 'work@example.com', UUID_A, 100, 1000);
+  rotated(store, 'r-2', 'work@example.com', UUID_A, 200, 2000);
+
+  const first = store.consolidate();
+  assert.strictEqual(first.merged, 1);
+  const after = JSON.stringify(store.list());
+
+  const second = store.consolidate();
+  assert.deepStrictEqual(second, { groups: 0, merged: 0, archived: 0, failed: 0 },
+    'a settled store gives it nothing to do');
+  assert.strictEqual(JSON.stringify(store.list()), after);
+  assert.strictEqual(fs.readdirSync(path.join(store.dir, 'superseded')).length, 2, 'and it does not re-archive');
+});
+
+test('consolidate leaves a group alone when its members disagree about who they are', () => {
+  // The skew guard. If the identity block and the label ever came apart, the
+  // records carrying that uuid are not evidence of anything, and merging them
+  // would fold one account's tokens into another's profile.
+  const { store } = newStore();
+  rotated(store, 'r-1', 'work@example.com', UUID_A, 100, 1000);
+  const odd = {
+    slug: 'odd', email: 'someone-else@example.com', savedAt: 200, firstSeen: 200,
+    oauthAccount: { accountUuid: UUID_A, emailAddress: 'someone-else@example.com' },
+    credentials: creds('r-odd', { expiresAt: 9000 }),
+  };
+  fs.writeFileSync(path.join(store.dir, 'odd.json'), JSON.stringify(odd), { mode: 0o600 });
+
+  const r = store.consolidate();
+  assert.strictEqual(r.merged, 0);
+  assert.strictEqual(store.list().length, 2, 'both are still here, untouched');
+});
+
+test('consolidate ignores an identity block that contradicts its own label', () => {
+  // Half the guard, at the level below: a block naming a different person than
+  // the record is filed under is not identity, so it cannot group anything.
+  const { store } = newStore();
+  const rec = {
+    slug: 'x', email: 'work@example.com', savedAt: 10,
+    oauthAccount: { accountUuid: UUID_A, emailAddress: 'stale@example.com' },
+    credentials: creds('r-1'),
+  };
+  assert.strictEqual(storedUuid(rec), null);
+  fs.writeFileSync(path.join(store.dir, 'x.json'), JSON.stringify(rec), { mode: 0o600 });
+  assert.strictEqual(store.consolidate().merged, 0);
+  assert.strictEqual(store.list().length, 1);
+});
+
+test('consolidate keeps the account that is live', () => {
+  // The one outcome that would be noticed immediately: the owner signed in, and
+  // afterwards is not.
+  const { store, credPath } = newStore();
+  rotated(store, 'r-old', 'work@example.com', UUID_A, 100, 1000);
+  rotated(store, 'r-live', 'work@example.com', UUID_A, 300, 3000);
+  fs.writeFileSync(credPath, JSON.stringify(creds('r-live', { expiresAt: 3000 })));
+
+  store.consolidate();
+  const active = store.list().filter((a) => a.isActive);
+  assert.strictEqual(active.length, 1);
+  assert.strictEqual(active[0].slug, UUID_A);
+});
+
+// ---- headroom remembered across a token expiry ------------------------------
+
+test('a plan reading is remembered on the profile and survives rotation', () => {
+  const { store } = newStore();
+  const slug = store.save('work@example.com', creds('r-1'), { accountUuid: UUID_A });
+  store.recordPlan(slug, { limits: [{ kind: 'weekly_all', percent: 40, resetsAt: '2026-08-09T00:00:00Z' }] });
+
+  store.save('work@example.com', creds('r-2'), { accountUuid: UUID_A });   // refreshed
+  const rec = store.readProfile(UUID_A);
+  assert.strictEqual(rec.lastPlan.limits[0].percent, 40,
+    'the only headroom figure available once the stored token expires');
+});
+
+test('recording a plan for an unknown account is a no-op, not a new file', () => {
+  const { store } = newStore();
+  assert.strictEqual(store.recordPlan('nobody', { limits: [] }), false);
+  assert.deepStrictEqual(store.list(), []);
+});
+
 // ---- identity, which lives apart from the credentials ----------------------
 
 function newStoreWithConfig() {
@@ -279,4 +508,65 @@ test('a store with no config path still switches credentials', () => {
   store.save('personal@example.com', creds('r-home'));
   assert.strictEqual(store.activate(fingerprint(creds('r-home')), null).ok, true);
   assert.strictEqual(JSON.parse(fs.readFileSync(credPath, 'utf8')).claudeAiOauth.refreshToken, 'r-home');
+});
+
+test('migrate leaves a uuid-keyed store completely alone', () => {
+  // It deleted a live account once (2026-08-03): the cleanup pass assumed the
+  // record it had just saved was named after the fingerprint, so on a store that
+  // had moved to uuid names it removed the file it had only just written. The
+  // account came back from the archive; the property is now pinned here.
+  const { store } = newStore();
+  store.save('work@example.com', creds('r-work'), { accountUuid: UUID_A });
+  store.save('other@example.com', creds('r-other'), { accountUuid: UUID_B });
+  store.save('mystery@example.com', creds('r-unknown'));
+  const before = JSON.stringify(store.list());
+
+  assert.deepStrictEqual(store.migrate(), { migrated: 0, duplicates: 0 });
+  assert.strictEqual(store.list().length, 3, 'every account must still be here');
+  assert.strictEqual(JSON.stringify(store.list()), before);
+});
+
+test('migrate and consolidate can run in either order without losing an account', () => {
+  // Both run at every boot, back to back, over and over.
+  const { store } = newStore();
+  rotated(store, 'r-1', 'work@example.com', UUID_A, 100, 1000);
+  rotated(store, 'r-2', 'work@example.com', UUID_A, 200, 2000);
+  rotated(store, 'p-1', 'other@example.com', UUID_B, 150, 1500);
+  store.save('mystery@example.com', creds('r-unknown'));
+
+  for (let boot = 0; boot < 3; boot++) {
+    store.migrate();
+    store.consolidate();
+    const list = store.list();
+    assert.strictEqual(list.length, 3, `boot ${boot}: three logins, three profiles`);
+    assert.deepStrictEqual(
+      new Set(list.map((a) => a.email)),
+      new Set(['work@example.com', 'other@example.com', 'mystery@example.com']),
+    );
+  }
+});
+
+test('save never clears a record that names a different account', () => {
+  // The cleanup pass exists to remove stale copies of the login being written.
+  // If anything ever put a record naming somebody ELSE into that set, removing
+  // it would be the one mistake with no way back — so it is refused outright.
+  const { store } = newStore();
+  const other = store.save('other@example.com', creds('r-shared'), { accountUuid: UUID_B });
+  // Contrive the collision: the same refresh token, claimed by another account.
+  store.save('work@example.com', creds('r-shared'), { accountUuid: UUID_A });
+
+  assert.ok(store.readProfile(other), 'the other account is untouched');
+  assert.strictEqual(store.list().length, 2);
+});
+
+test('a superseded token pair is archived by save, not deleted', () => {
+  const { store } = newStore();
+  // A stray left by an offline save, later identified as an existing login.
+  const stray = store.save('work@example.com', creds('r-old'));
+  store.save('work@example.com', creds('r-old'), { accountUuid: UUID_A });   // adopts it
+  store.save('work@example.com', creds('r-new'), { accountUuid: UUID_A });   // rotates
+
+  assert.strictEqual(store.list().length, 1);
+  assert.strictEqual(store.readProfile(UUID_A).credentials.claudeAiOauth.refreshToken, 'r-new');
+  assert.strictEqual(fs.existsSync(path.join(store.dir, `${stray}.json`)), false);
 });

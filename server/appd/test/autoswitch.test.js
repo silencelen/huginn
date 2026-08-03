@@ -88,3 +88,88 @@ test('a session window at 100 triggers even with the week barely used', () => {
   assert.equal(d.to, 'b');
   assert.equal(d.fromLabel, 'Current session');
 });
+
+// ---- headroom for an account whose own token can no longer be asked ---------
+//
+// Why the switcher had never fired once in its life (found 2026-08-03). A stored
+// access token expires within hours, so /usage answers for the ACTIVE account and
+// for nothing else — every candidate reported unknown headroom, was skipped, and
+// the switcher had nothing to switch to no matter how spent the active one got.
+
+const { agedLimits, explain } = require('../lib/autoswitch');
+const iso = (ms) => new Date(ms).toISOString();
+
+test('a limit whose window has rolled over is back to zero', () => {
+  // Not an estimate: nothing ran against that account while it sat idle.
+  const aged = agedLimits({ limits: [{ kind: 'weekly_all', percent: 92, resetsAt: iso(NOW - 1000) }] }, NOW);
+  assert.equal(aged[0].percent, 0);
+  assert.equal(aged[0].reset, true);
+});
+
+test('a limit still inside its window keeps its figure', () => {
+  // An idle account cannot have got WORSE, so carrying the old number forward
+  // can only make it look less fresh than it is. That is the safe direction.
+  const aged = agedLimits({ limits: [{ kind: 'weekly_all', percent: 92, resetsAt: iso(NOW + 60_000) }] }, NOW);
+  assert.equal(aged[0].percent, 92);
+  assert.equal(aged[0].reset, false);
+});
+
+test('an exceeded window that has since reset is no longer exceeded', () => {
+  const aged = agedLimits({ limits: [{ percent: 100, severity: 'exceeded', resetsAt: iso(NOW - 1) }] }, NOW);
+  assert.equal(worstLimit(aged).percent, 0, 'severity must be cleared with the figure');
+});
+
+test('a limit with no reset time keeps its figure rather than being wished away', () => {
+  const aged = agedLimits({ limits: [{ percent: 88, resetsAt: null }] }, NOW);
+  assert.equal(aged[0].percent, 88);
+});
+
+test('no snapshot is no headroom, not zero headroom', () => {
+  // Assuming an unknown account is fresh would switch onto a spent one.
+  assert.deepEqual(agedLimits(null, NOW), []);
+  assert.deepEqual(agedLimits({ limits: null }, NOW), []);
+  assert.equal(worstLimit(agedLimits(null, NOW)), null);
+});
+
+test('a spent account switches to a candidate priced from a reset snapshot', () => {
+  // End to end: this is the case that could not happen before.
+  const stale = { limits: [{ kind: 'weekly_all', percent: 96, label: 'Current week', resetsAt: iso(NOW - 86_400_000) }] };
+  const d = decideSwitch({
+    active: acct('a', lim(97)),
+    candidates: [{ slug: 'b', email: 'b@x', limits: agedLimits(stale, NOW) }],
+    now: NOW,
+  });
+  assert.ok(d, 'the switcher can finally act');
+  assert.equal(d.to, 'b');
+  assert.equal(d.toPercent, 0);
+});
+
+// ---- saying why nothing happened -------------------------------------------
+
+test('an idle switcher explains itself in the operator terms', () => {
+  assert.match(
+    explain({ active: acct('a', lim(54, 'Current week')), candidates: [acct('b', lim(0))], now: NOW }),
+    /54%.*below the 95% threshold/,
+  );
+  assert.match(
+    explain({ active: acct('a', lim(97)), candidates: [{ slug: 'b', email: 'b@x', limits: [] }], now: NOW }),
+    /no headroom known/,
+  );
+  assert.match(
+    explain({ active: acct('a', lim(97)), candidates: [acct('b', lim(90))], now: NOW }),
+    /not below the 75%/,
+  );
+  assert.match(
+    explain({ active: acct('a', lim(97)), candidates: [], now: NOW, lastSwitchAt: NOW - 60_000 }),
+    /cooling down/,
+  );
+});
+
+test('a raised threshold is honoured by both the decision and its explanation', () => {
+  // The owner calls 54% "high"; the code calls 95% high. That is taste, so it is
+  // a knob — and the two must not be able to disagree about where it is set.
+  const args = { active: acct('a', lim(60)), candidates: [acct('b', lim(5))], now: NOW, threshold: 50 };
+  assert.ok(decideSwitch(args), 'fires once the bar is where the owner wants it');
+  assert.equal(decideSwitch({ ...args, threshold: 95 }), null);
+  assert.match(explain({ ...args, threshold: 95 }), /below the 95% threshold/);
+});
