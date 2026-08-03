@@ -60,6 +60,7 @@ import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.runtime.rememberCoroutineScope
+import com.silencelen.huginn.data.DraftBook
 import com.silencelen.huginn.data.HuginnClient
 import com.silencelen.huginn.data.PanePrompt
 import com.silencelen.huginn.desktop.AppStore
@@ -112,12 +113,19 @@ fun SessionView(store: AppStore, name: String) {
     val controller = remember(name) {
         SessionController(store.client, name, store.presence, store.paneLease, store.scope)
     }
+    val draftKey = DraftBook.sessionKey(name)
     DisposableEffect(name) {
         controller.start()
         // Disposal is one of the four ways the lease ends. The release itself is
         // launched on the APP scope inside close(), not on this composition's —
         // a coroutine started here would be cancelled before it reached the wire.
-        onDispose { controller.close() }
+        onDispose {
+            controller.close()
+            // Leaving is exactly when a debounced draft write is still in the air
+            // and this composition's scope is being cancelled. The book belongs to
+            // the app for that reason; this is the call that lands it.
+            store.drafts.flush()
+        }
     }
 
     val tab by controller.tab.collectAsState()
@@ -127,8 +135,15 @@ fun SessionView(store: AppStore, name: String) {
     val sessions by store.sessions.collectAsState()
 
     // The session ended under the viewer. Nothing here can be true any more, so
-    // leave rather than showing a pane that no longer exists.
-    LaunchedEffect(gone) { if (gone) store.openSession(null) }
+    // leave rather than showing a pane that no longer exists. Its draft goes with
+    // it: the map is rewritten whole on every save, so an orphan is paid for on
+    // every keystroke in every other target, forever.
+    LaunchedEffect(gone) {
+        if (gone) {
+            store.drafts.clear(draftKey)
+            store.openSession(null)
+        }
+    }
 
     val row = sessions.firstOrNull { it.name == name }
 
@@ -140,10 +155,22 @@ fun SessionView(store: AppStore, name: String) {
     // session — and mis-timed the suggestions.
     val working = (page?.state ?: row?.state) == "running"
 
-    // The composer's text lives HERE because three surfaces share it: the composer
-    // types it, a suggestion chip fills it, and the interrupt control appears only
-    // when it is empty.
-    var draft by remember(name) { mutableStateOf("") }
+    // THE COMPOSER'S TEXT COMES FROM THE APP'S DRAFT BOOK, not from a `remember`.
+    //
+    // It used to be `remember(name) { mutableStateOf("") }`, and that was the
+    // owner's "drafts get deleted between session or chat navigations": a
+    // composition-local value is discarded the moment this view leaves the
+    // composition — which is every switch to another session, and every click on
+    // Chats, Status or Settings. It never reached disk either, so the phone's
+    // session drafts and this client's were not the same drafts at all despite
+    // [DraftBook.sessionKey] existing in :core precisely to make them one.
+    //
+    // Three surfaces still share the value, which is why it is read here rather
+    // than inside the composer: the composer types it, a suggestion chip fills it,
+    // and the interrupt control appears only while it is empty.
+    val draftMap by store.drafts.drafts.collectAsState()
+    val draft = draftMap[draftKey].orEmpty()
+    val setDraft: (String) -> Unit = { store.drafts.set(draftKey, it) }
     val viewScope = rememberCoroutineScope()
 
     Column(Modifier.fillMaxSize()) {
@@ -217,7 +244,7 @@ fun SessionView(store: AppStore, name: String) {
         val suggestions by cue.suggestions.collectAsState()
         LaunchedEffect(page?.nextOffset, working) { cue.onTurnBoundary(page?.nextOffset, working) }
         if (onConversation && screen?.prompt == null && Suggest.visible(suggestions, working, draft)) {
-            SuggestionChips(suggestions, onPick = { draft = it })
+            SuggestionChips(suggestions, onPick = setDraft)
         }
 
         // THE PROMPT LIVES OUTSIDE THE TABS, which is the point: a question is the
@@ -231,7 +258,13 @@ fun SessionView(store: AppStore, name: String) {
             controller = controller,
             client = store.client,
             draft = draft,
-            onDraft = { draft = it },
+            onDraft = setDraft,
+            // Separate from `onDraft("")` on purpose: emptying the box is a
+            // keystroke and is DEBOUNCED, so a send that only did that would leave
+            // a timer in the air carrying the text just sent — and it would land
+            // afterwards and put the message back in the composer as a draft. That
+            // is a bug the Electron client actually shipped.
+            onSent = { store.drafts.clear(draftKey) },
             working = working,
             scope = viewScope,
         )
@@ -725,8 +758,10 @@ private fun PromptCard(controller: SessionController, prompt: PanePrompt) {
  * newline is the submit key, so a blank line would send the message and leave the
  * marker on the next prompt.
  *
- * The draft is HOISTED: a suggestion chip fills it, and the interrupt control
- * appears only while it is empty.
+ * The draft is HOISTED into the app's [com.silencelen.huginn.data.DraftBook]: a
+ * suggestion chip fills it, the interrupt control appears only while it is empty,
+ * and — the reason it is not a `remember` — it has to survive this view leaving
+ * the composition, which is what every navigation away from the session does.
  */
 @Composable
 private fun Composer(
@@ -734,6 +769,7 @@ private fun Composer(
     client: HuginnClient,
     draft: String,
     onDraft: (String) -> Unit,
+    onSent: () -> Unit,
     working: Boolean,
     scope: CoroutineScope,
 ) {
@@ -749,7 +785,7 @@ private fun Composer(
     val submit: () -> Unit = {
         if (canSend) {
             val body = draft
-            onDraft("")
+            onSent()
             scope.launch {
                 val marker = attachments.take()
                 val full = composeMessage(body, marker, PANE_SEPARATOR)
