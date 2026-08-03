@@ -48,7 +48,7 @@ const {
 const pushLib = require('./lib/pushtokens');
 const { trySender } = require('./lib/fcm');
 
-const VERSION = '2.52.0';
+const VERSION = '2.52.1';
 const PORT = Number(process.env.HUGINN_APPD_PORT || 8787);
 const DATA_DIR = process.env.HUGINN_APPD_DATA || '/var/lib/huginn-appd';
 const UPLOADS_DIR = path.join(DATA_DIR, 'uploads');
@@ -619,8 +619,12 @@ async function captureScreen(name, { cols = null, rows = null, history = 0, forc
 
 // Named keys the app may send. C-<letter> covered by regex; everything else
 // must be in this set. Anything not matching is rejected, not passed through.
+// IC is Insert. It was the one key the desktop client's mapper could produce
+// that this set did not name, and a rejection is not confined to the key that
+// caused it: the client coalesces a burst of keystrokes into ONE request, so a
+// single Insert took every character batched alongside it down with a 400.
 const NAMED_KEYS = new Set([
-  'Enter', 'Escape', 'Tab', 'BTab', 'Space', 'BSpace', 'DC',
+  'Enter', 'Escape', 'Tab', 'BTab', 'Space', 'BSpace', 'DC', 'IC',
   'Up', 'Down', 'Left', 'Right', 'Home', 'End', 'PPage', 'NPage',
 ]);
 function validKey(k) {
