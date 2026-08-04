@@ -172,12 +172,28 @@ function readBody(req, limit = 256 * 1024) {
 function readBodyRaw(req, limit = 256 * 1024) {
   return new Promise((resolve, reject) => {
     const chunks = []; let size = 0;
+    let over = false;
     req.on('data', (c) => {
+      if (over) return;
       size += c.length;
-      if (size > limit) { reject(new Error('body too large')); req.destroy(); return; }
+      if (size > limit) {
+        // DRAIN the rest rather than destroying the socket. Killing it here sent
+        // a bare TCP reset, so the caller saw a dropped connection instead of the
+        // 413 the route had ready — and the chat route's own "text too long"
+        // message became unreachable for anything over this cap, which is the
+        // case most likely to hit it. Nothing is buffered past the limit, so
+        // draining costs bandwidth already in flight and no memory.
+        over = true;
+        chunks.length = 0;
+        const e = new Error('body too large');
+        e.tooLarge = true;
+        req.resume();
+        req.on('end', () => reject(e));
+        return;
+      }
       chunks.push(c);
     });
-    req.on('end', () => resolve(Buffer.concat(chunks)));
+    req.on('end', () => { if (!over) resolve(Buffer.concat(chunks)); });
     req.on('error', reject);
   });
 }
@@ -2546,7 +2562,11 @@ const server = http.createServer(async (req, res) => {
       const { err, stderr } = await run('tmux',
         ['new-session', '-d', '-s', name, '-c', WORKDIR, 'claude; exec "$SHELL" -l']);
       if (err) return sendErr(res, 500, `tmux: ${stderr.trim() || err.message}`);
-      return sendJson(res, 201, { ok: true, name });
+      // What tmux called it, not what we asked for — same reason as the rename
+      // route below: a '.' is rewritten to '_' with a zero exit, and a client
+      // told the wrong name gets a 404 on everything it does next.
+      const q = await run('tmux', ['display-message', '-p', '-t', `=${name}`, '#S']);
+      return sendJson(res, 201, { ok: true, name: (q.stdout || '').trim() || name });
     }
 
     if ((m = p.match(/^\/v1\/sessions\/([A-Za-z0-9_][A-Za-z0-9_.-]{0,49})$/)) && req.method === 'DELETE') {
@@ -2684,10 +2704,24 @@ const server = http.createServer(async (req, res) => {
       if (to !== from && await sessionExists(to)) return sendErr(res, 409, `session '${to}' already exists`);
       const r = await run('tmux', ['rename-session', '-t', `=${from}`, to]);
       if (r.err) return sendErr(res, 404, `tmux: ${r.stderr.trim() || 'no such session'}`);
+      // Ask tmux what it ACTUALLY called the session rather than assuming it
+      // took the name we asked for. tmux silently rewrites '.' to '_' and still
+      // exits 0, so a rename to "my.session" left a live session named
+      // "my_session" while this route moved the state file to "my.session" and
+      // handed the client a name that 404s on every subsequent request. The
+      // orphaned state file is the worse half: it is the session -> transcript
+      // mapping, so the Conversation view — the app's primary surface — had
+      // nothing to read until the title hook happened to rewrite it, which for
+      // an idle session is never.
+      //
+      // Reading the name back rather than rejecting '.' keeps this correct for
+      // whatever character tmux decides to rewrite next.
+      const q = await run('tmux', ['display-message', '-p', '-t', `=${to}`, '#S']);
+      const actual = (q.stdout || '').trim() || to;
       // The state file is keyed by name; move it so state/transcript survive.
-      try { fs.renameSync(path.join(STATE_DIR, from), path.join(STATE_DIR, to)); } catch { }
-      if (leases.has(from)) { leases.set(to, leases.get(from)); leases.delete(from); }
-      return sendJson(res, 200, { ok: true, name: to });
+      try { fs.renameSync(path.join(STATE_DIR, from), path.join(STATE_DIR, actual)); } catch { }
+      if (leases.has(from)) { leases.set(actual, leases.get(from)); leases.delete(from); }
+      return sendJson(res, 200, { ok: true, name: actual });
     }
 
     if ((m = p.match(/^\/v1\/sessions\/([A-Za-z0-9_][A-Za-z0-9_.-]{0,49})\/keys$/)) && req.method === 'POST') {
@@ -2850,6 +2884,14 @@ const server = http.createServer(async (req, res) => {
         'Content-Length': found.size,
       });
       const stream = fs.createReadStream(found.file);
+      // Let the fd go when the client does. `pipe` only UNPIPES its source when
+      // the destination closes — it never destroys it — so an aborted download
+      // left the read handle open for the life of the process. These are ~90MB
+      // installers fetched by the self-updater over a mesh link, so a closed
+      // laptop or a dropped tunnel is ordinary; measured one leaked fd per abort,
+      // never reclaimed, each pinning the artifact's inode so a pruned release
+      // still occupied disk that `du` could not see.
+      res.on('close', () => stream.destroy());
       stream.pipe(res);
       stream.on('error', () => { try { res.destroy(); } catch { } });
     };
@@ -3143,6 +3185,9 @@ const server = http.createServer(async (req, res) => {
     return sendErr(res, 404, 'not found');
   } catch (e) {
     log('ERROR', req.method, p, e.message);
+    // A body over the cap is the client's mistake, not ours, and it now reaches
+    // them as a status instead of a reset socket.
+    if (!res.headersSent && e.tooLarge) return sendErr(res, 413, 'request body too large');
     if (!res.headersSent) return sendErr(res, 500, e.message);
     try { res.end(); } catch { }
   }
