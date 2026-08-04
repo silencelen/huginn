@@ -368,6 +368,25 @@ class AppStore(
     }
 
     /**
+     * Writes the position NOW, without waiting out the debounce.
+     *
+     * A trailing-edge writer always loses whatever happened inside its last
+     * window, and the change most likely to land there is the last one you make —
+     * open a session and quit straight away and the debounce is still counting
+     * when the process goes. The next launch then reopens the position from
+     * BEFORE the thing you were most recently looking at, which reads as the
+     * feature not working at all.
+     *
+     * Synchronous on purpose: both callers are exit paths, and a coroutine
+     * launched there would be racing the process. Safe to call twice — the
+     * shutdown hook runs after `quit()` on the ordinary path — because
+     * `setLanding` compares before it writes.
+     */
+    fun flushLanding() {
+        settings.setLanding(_view.value, _chatId.value, _sessionName.value)
+    }
+
+    /**
      * The 5s list poll, GATED ON VISIBILITY.
      *
      * A hidden window that keeps polling is not just wasted traffic: the pane poll
