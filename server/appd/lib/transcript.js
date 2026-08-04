@@ -200,10 +200,19 @@ function startsAtBoundary(path, start) {
   }
 }
 
-function readTranscript(path, { offset = null, limit = 400 } = {}) {
+function readTranscript(path, { offset = null, limit = 400, _resuming = null } = {}) {
   const st = fs.statSync(path);
   let start = offset;
   let truncated = false;
+  // Is the caller RESUMING a tail it has already read, or opening cold?
+  //
+  // It changes what an orphaned `remove` means (see the queue-operation case).
+  // `_resuming` exists because the cold-open windowing below calls this function
+  // recursively WITH an offset to probe window sizes; those probes are still
+  // part of a cold open and must not be classified as resumption.
+  const resuming = _resuming != null
+    ? _resuming
+    : (offset != null && offset >= 0 && offset <= st.size);
   if (start == null || start < 0 || start > st.size) {
     // Tail by EVENTS, not by a fixed byte count. A transcript row that Read an
     // image carries the whole image as base64 — megabytes per photo — so a
@@ -218,7 +227,7 @@ function readTranscript(path, { offset = null, limit = 400 } = {}) {
       start = Math.max(0, st.size - win);
       truncated = start > 0;
       if (start === 0) break;
-      const probe = readTranscript(path, { offset: start, limit });
+      const probe = readTranscript(path, { offset: start, limit, _resuming: false });
       if (probe.events.length >= Math.min(limit, MIN_TAIL_EVENTS)) break;
       win *= 2;
     }
@@ -257,6 +266,12 @@ function readTranscript(path, { offset = null, limit = 400 } = {}) {
 
   const out = {
     events: [],
+    // Text of queued messages DELIVERED in this window whose enqueue was in an
+    // earlier one. The reader already holds those bubbles, still badged
+    // `queued`; this is how it learns to drop the badge without the message
+    // being sent twice. Empty on a cold open, where the bubble is emitted
+    // outright instead.
+    deliveredQueued: [],
     nextOffset: start + consumed,
     truncated,
     title: null,
@@ -339,8 +354,29 @@ function readTranscript(path, { offset = null, limit = 400 } = {}) {
             out.events.push(ev);
           }
           else if (content.trim() && !machineText(content)) {
-            // The enqueue happened before the window we read.
-            out.events.push({ seq: ++seq, kind: 'user', ts, sidechain, text: content });
+            // The enqueue is outside this window, and what to do about that
+            // depends entirely on whether the reader has seen it already.
+            //
+            // COLD OPEN: it scrolled off the top. This is the only copy the
+            // reader will get, so emit it.
+            //
+            // RESUMING a tail: they have it — it arrived in an earlier page,
+            // badged `queued`. Emitting it again appended a SECOND identical
+            // bubble, and since the client merge is a plain concat with no
+            // reconciliation, the first copy also kept its badge. Two bubbles,
+            // one of them permanently claiming to be still waiting, on the
+            // primary conversation view of both clients. It fired on nearly
+            // every send-while-busy: the poll is 2.5s and real enqueue->remove
+            // gaps run to minutes, so the two records almost always land in
+            // different windows.
+            //
+            // `deliveredQueued` carries the news instead, so a client that
+            // understands it can drop the badge from the copy it already has.
+            if (!resuming) {
+              out.events.push({ seq: ++seq, kind: 'user', ts, sidechain, text: content });
+            } else {
+              out.deliveredQueued.push(content);
+            }
           }
         }
         // `dequeue` carries no content and just means the queue drained.
