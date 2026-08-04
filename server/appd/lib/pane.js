@@ -111,13 +111,40 @@ function detectPrompt(lines) {
   // Multi-question tab headers above the question text.
   const HEADER_RE = /^\s*([\u2610\u2611\u2612]\s|\u2190\s)/;
 
+  // Lines that mean the ORDINARY chrome is drawn below this run: the composer,
+  // the status line, the mode hint, a spinner. A live selector replaces all of
+  // that while it is up, so finding one means the numbered run above it is
+  // history rather than a question being asked now. This is the real test, and
+  // it is why the footer walk below can afford to be forgiving.
+  const isChrome = (line) =>
+    PROMPT_MARK_RE.test(line) || STATUS_RE.test(line) ||
+    MODE_HINT_RE.test(line) || SPINNER_RE.test(line);
+
+  // How many unrecognised lines may sit between the last option and the bottom.
+  // A selector footer is a couple of short help lines; prose under a stale list
+  // runs longer, and the chrome test above catches the common case outright.
+  const MAX_FOOTER_LINES = 4;
+
   // Step 1: from the bottom, walk up past the dialog's own furniture to the
-  // last option line. Anything else down there — a composer, a status line,
-  // prose — means the options are history, not a question being asked now.
+  // last option line. Ordinary chrome down there means the options are history.
+  //
+  // This used to reject ANY line it did not recognise as a hint or a rule, with
+  // HINT_RE listing the exact phrases Claude Code drew under a selector. Claude
+  // Code then drew different ones — "shift+tab to approve with this feedback",
+  // "ctrl+g to edit in Vim · ~/.claude/plans/….md" — and every plan approval and
+  // every edit permission stopped being detected at all. The owner saw questions
+  // vanish from both clients' conversation views and had to answer them through
+  // the raw tmux screen. Matching a list of sentences was the mistake; a footer
+  // is now allowed to say anything, in bounded quantity, as long as the chrome
+  // that marks a finished turn is absent.
   let i = lastContent;
+  let footerLines = 0;
   while (i >= floor && !OPTION_RE.test(plain[i])) {
     const t = plain[i].trim();
-    if (t && !HINT_RE.test(t) && !RULE_RE.test(plain[i])) return null;
+    if (t) {
+      if (isChrome(plain[i])) return null;
+      if (!HINT_RE.test(t) && !RULE_RE.test(plain[i]) && ++footerLines > MAX_FOOTER_LINES) return null;
+    }
     i--;
   }
   if (i < floor) return null;
