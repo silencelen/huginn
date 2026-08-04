@@ -80,7 +80,13 @@ case "$icon" in
   *)               st= ;;
 esac
 if [ -n "$st" ]; then
-  mkdir -p "$STATE_DIR" 2>/dev/null
+  # Owner-only: the file names enumerate every live session and each body carries
+  # that session's transcript path and cwd, i.e. the whole project layout. Under
+  # the default umask that lands 0755/0644 — harmless while huginn is single-user,
+  # a free handout to the first non-root account that exists. The umask covers the
+  # files this run creates; the chmod fixes a directory an earlier run left 0755.
+  umask 077
+  mkdir -p "$STATE_DIR" 2>/dev/null && chmod 700 "$STATE_DIR" 2>/dev/null
   if [ -n "$payload" ] && command -v jq >/dev/null 2>&1; then
     printf '%s' "$payload" | jq -c --arg st "$st" \
       '{state:$st, sessionId:(.session_id // null), transcript:(.transcript_path // null), cwd:(.cwd // null), ts:now|floor}' \
