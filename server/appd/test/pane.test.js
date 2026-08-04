@@ -626,3 +626,99 @@ test("an ASCII '>' caret at line start still counts", () => {
   assert.ok(p);
   assert.strictEqual(p.options[0].selected, true);
 });
+
+// ---------------------------------------------------------------- footers
+//
+// Claude Code draws its own help lines under a selector, and it changes them.
+// The detector used to require every such line to match one of four hard-coded
+// phrases and returned null on anything else — so when the wording moved, plan
+// approvals and edit permissions stopped being detected at all. Both clients
+// render their prompt card from this function, so the owner's questions vanished
+// from the conversation view on phone AND desktop and had to be answered through
+// the raw tmux screen.
+
+test('detectPrompt finds a plan approval under an unfamiliar footer', () => {
+  // A VERBATIM capture from a live pane, footer and all.
+  const lines = [
+    '   - Create                                                                     ↓',
+    '  ────────────────────────────────────────────────────────────────────────────────',
+    '   Claude has written up a plan and is ready to execute. Would you like to proceed?',
+    '',
+    '   ❯ 1. Yes, and use auto mode',
+    '     2. Yes, manually approve edits',
+    '     3. Tell Claude what to change',
+    '        shift+tab to approve with this feedback',
+    '',
+    '   ctrl+g to edit in Vim · ~/.claude/plans/create-a-file-called-fancy-cloud.md',
+  ];
+  const p = detectPrompt(lines);
+  assert.ok(p, 'a live plan approval must be detected');
+  assert.strictEqual(p.question, 'Claude has written up a plan and is ready to execute. Would you like to proceed?');
+  assert.strictEqual(p.options.length, 3);
+  assert.strictEqual(p.options[0].selected, true);
+  assert.strictEqual(p.options[1].label, 'Yes, manually approve edits');
+});
+
+test('detectPrompt finds an edit permission under its own footer', () => {
+  const lines = [
+    ' Create file',
+    ' hello.txt',
+    '╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌',
+    '  1 hi',
+    '╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌',
+    ' Do you want to create hello.txt?',
+    ' ❯ 1. Yes',
+    '   2. Yes, allow all edits during this session (shift+tab)',
+    '   3. No',
+    ' Esc to cancel · Tab to amend',
+  ];
+  const p = detectPrompt(lines);
+  assert.ok(p, 'a live edit permission must be detected');
+  assert.strictEqual(p.question, 'Do you want to create hello.txt?');
+  assert.strictEqual(p.options.length, 3);
+});
+
+test('a composer below the run still means the options are history', () => {
+  // The forgiving footer must not cost the false-positive protection: the
+  // composer being drawn is proof the turn is over. Note the mode line here
+  // even CONTAINS "shift+tab", which a phrase-matching fix would have accepted.
+  const lines = [
+    '● Here is what I would do next:',
+    '  1. Rotate the B2 keys',
+    '  2. Re-run the audit',
+    '',
+    '────────────────────────────────────────',
+    '❯ ',
+    '────────────────────────────────────────',
+    '  [andrev] Opus 5 · main',
+    '  ⏵⏵ auto mode on (shift+tab to cycle)',
+  ];
+  assert.strictEqual(detectPrompt(lines), null);
+});
+
+test('a status line below the run means the options are history', () => {
+  assert.strictEqual(detectPrompt([
+    'Pick:', '❯ 1. a', '  2. b', '  [seerr] Fable 5 · main',
+  ]), null);
+});
+
+test('a spinner below the run means the run is not a live question', () => {
+  assert.strictEqual(detectPrompt([
+    'Pick:', '❯ 1. a', '  2. b', '✻ Working…',
+  ]), null);
+});
+
+test('prose piled under a numbered list is still not a prompt', () => {
+  // The footer allowance is bounded, so an answer that happens to end in a list
+  // and then keeps talking does not become a set of buttons.
+  assert.strictEqual(detectPrompt([
+    'Here is the plan:',
+    '❯ 1. first',
+    '  2. second',
+    'Then I checked the logs and found the retry loop.',
+    'That accounts for the duplicate rows.',
+    'I also verified the backup completed.',
+    'The remaining question is whether to rotate the key.',
+    'I will wait for your call on that.',
+  ]), null);
+});
