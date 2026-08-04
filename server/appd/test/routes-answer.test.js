@@ -2,21 +2,17 @@
 // The first route-level test for huginn-appd, and the regression test for the
 // /answer fingerprint guard found in the 2026-08 audit (finding L1).
 //
-// WHY THIS LIVES OUTSIDE test/
+// THE FIRST ROUTE-LEVEL TEST FOR THE DAEMON.
 //
-// `test/*.test.js` is a gate: build.sh refuses to ship when it fails. One
-// assertion below describes behaviour the daemon does NOT have yet — the host
-// must REQUIRE a fingerprint rather than treat its absence as permission to skip
-// the check — so it is marked `skip` with the finding id on it. Un-skip it in
-// the same commit as the fix and move this whole directory under test/, at which
-// point appd finally has a route-level suite.
+// Everything else in test/ covers lib/*.js. Nothing loaded huginn-appd.js or
+// started its server, so a guard living in the 3,200-line route file could be
+// opt-in for months without a red build — which is exactly what happened to the
+// one below, and to the rename route beside it.
 //
-// The 385 tests in test/ cover lib/*.js only. Nothing there loads this daemon or
-// starts its server, which is why a guard living in huginn-appd.js could be
-// opt-in for months without a red build. The harness below is the missing half,
-// and it is cheap because the daemon was already built to be isolated:
+// The harness is cheap because the daemon was already built to be isolated:
 // HUGINN_APPD_PORT / _BIND / _DATA / _TOKEN_FILE give a throwaway instance that
-// cannot touch the running one, its accounts store, or its chats.
+// cannot touch the running one, its accounts store, or its chats. Add to it
+// whenever a route grows a rule worth keeping.
 //
 // SAFETY: this test never touches a real session. It creates its own tmux
 // session, draws a fake question into it with printf, answers THAT, and kills it.
@@ -154,7 +150,7 @@ test('an answer with no prompt on screen is refused as gone', async () => {
 // two assertions are that comment, executable. Un-skip with the fix.
 // ---------------------------------------------------------------------------
 
-test('an answer with NO fingerprint is refused', { skip: 'FINDING L1 — not fixed yet' }, async () => {
+test('an answer with NO fingerprint is refused', async () => {
   const { status } = await api(`/v1/sessions/${SESSION}/answer`, {
     method: 'POST',
     body: JSON.stringify({ option: 3 }),
@@ -162,7 +158,7 @@ test('an answer with NO fingerprint is refused', { skip: 'FINDING L1 — not fix
   assert.equal(status, 400, 'the host must require the fingerprint, not trust the client to send one');
 });
 
-test('an answer with an EMPTY fingerprint is refused', { skip: 'FINDING L1 — not fixed yet' }, async () => {
+test('an answer with an EMPTY fingerprint is refused', async () => {
   // Kept separate from the case above on purpose: `''` is the value FCM puts on
   // the wire when an alert has no fingerprint, and it fails a truthiness check
   // rather than a presence check. Anyone rewriting the guard as

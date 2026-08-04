@@ -48,7 +48,7 @@ const {
 const pushLib = require('./lib/pushtokens');
 const { trySender } = require('./lib/fcm');
 
-const VERSION = '2.52.2';
+const VERSION = '2.53.0';
 const PORT = Number(process.env.HUGINN_APPD_PORT || 8787);
 const DATA_DIR = process.env.HUGINN_APPD_DATA || '/var/lib/huginn-appd';
 const UPLOADS_DIR = path.join(DATA_DIR, 'uploads');
@@ -2751,7 +2751,24 @@ const server = http.createServer(async (req, res) => {
         });
       }
       const live = promptFingerprint(prompt);
-      if (body.fingerprint && body.fingerprint !== live) {
+      // REQUIRED, not merely honoured when offered. This used to read
+      // `if (body.fingerprint && body.fingerprint !== live)`, which made the
+      // whole check-and-act guard opt-in: a caller that omitted the field — or
+      // sent an empty string, which is equally falsy — got its digit typed into
+      // whatever question happened to be on the pane. Both were reachable from
+      // the shipping clients (HuginnClient omits the key for a null,
+      // AnswerReceiver turns a blank notification extra into null, and
+      // lib/fcm.js puts `String(fingerprint ?? '')` on the wire), so the
+      // guarantee this route's comment above describes did not exist.
+      //
+      // The empty-string case is called out separately in the tests because it
+      // is a JavaScript truthiness trap: `if (!body.fingerprint)` reads as a
+      // presence check and silently also accepts ''. The Electron client got
+      // this right in notify/activation.ts and rejects both; the host did not.
+      if (typeof body.fingerprint !== 'string' || body.fingerprint === '') {
+        return sendErr(res, 400, 'fingerprint required');
+      }
+      if (body.fingerprint !== live) {
         return sendJson(res, 409, {
           ok: false, reason: 'changed',
           error: 'the session is asking something else now',

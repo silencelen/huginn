@@ -185,6 +185,24 @@ function detectPrompt(lines) {
         ...(checked === null ? {} : { checked }),
       });
       firstIdx = j;
+      // The run STARTS at 1 — the contiguity check below requires it — so
+      // nothing above option 1 can belong to this dialog. Stopping here is what
+      // keeps a numbered PLAN BODY out of the run.
+      //
+      // Without it the walk kept climbing: the description-line rule two lines
+      // down treats any 2+-space indent as an option's description, a plan
+      // approval draws its question at indent-3, so the walk sailed past the
+      // question and started collecting the plan's own "1. … 2. …" steps as
+      // options. Contiguity then failed against the mixed run and the whole
+      // prompt was discarded — no card on the phone, none on the desktop, no
+      // options in the notification. Permission dialogs escaped only by accident,
+      // their question being at indent-1.
+      //
+      // Asking for a plan and getting numbered steps is the DEFAULT shape, so
+      // this was most plan approvals, and the owner had to answer them through
+      // the raw Screen tab. Found in the 2026-08 audit; fixtures for both shapes
+      // are in test/pane.test.js.
+      if (Number(m[2]) === 1) break;
       continue;
     }
     const t = plain[j].trim();

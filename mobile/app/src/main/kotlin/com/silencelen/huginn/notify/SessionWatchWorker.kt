@@ -288,7 +288,23 @@ class SessionWatchWorker(
                 builder.setStyle(NotificationCompat.BigTextStyle().bigText(text))
             }
 
-            if (session != null) {
+            // No fingerprint, no buttons — the desktop's rule, now shared.
+            //
+            // The fingerprint identifies the question these buttons were drawn for,
+            // and the host refuses an answer that no longer matches it. Offering a
+            // button without one used to mean the tap went through UNCHECKED (the
+            // host treated a missing fingerprint as permission to skip the guard),
+            // so it could answer whatever question had replaced it on the pane.
+            // The host requires one now, which turns the same situation into a
+            // button that visibly fails — and "an action button that sometimes does
+            // nothing is worse than no button", as AnswerReceiver's header puts it.
+            //
+            // Either way the honest thing is to leave them off. The notification
+            // still arrives, still carries the question, and still opens the
+            // session on tap. WindowsToastNotifier has said the same since it was
+            // written: "with none, there are no buttons at all rather than buttons
+            // that answer whatever is on the pane."
+            if (session != null && !fingerprint.isNullOrEmpty()) {
                 for (a in answers.take(MAX_ACTIONS)) {
                     val answerIntent = Intent(context, AnswerReceiver::class.java).apply {
                         action = AnswerReceiver.ACTION

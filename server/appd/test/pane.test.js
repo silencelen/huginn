@@ -659,6 +659,61 @@ test('detectPrompt finds a plan approval under an unfamiliar footer', () => {
   assert.strictEqual(p.options[1].label, 'Yes, manually approve edits');
 });
 
+// ------------------------------------------------- a numbered plan body
+//
+// The 2026-08-03 footer fix did not go far enough. The step-2 walk treats any
+// 2+-space indent as an option's DESCRIPTION line, so it climbed past the plan
+// approval's own question and started collecting the plan's numbered steps as
+// options; the 1..n contiguity check then discarded the whole prompt. Asking for
+// a plan and getting numbered steps is the DEFAULT shape, so this was most plan
+// approvals — and it failed exactly like the bug before it: no card on the
+// phone, none on the desktop, no options in the notification.
+//
+// Permission dialogs escaped only by accident. The indent of the question is
+// what decides it, and it VARIES in the wild: 3 spaces in the capture below,
+// 1 space in another taken the same way minutes later. That is precisely why
+// the fix does not key on indentation — the run starts at 1, so the walk stops
+// when it prepends option 1 and nothing above can belong to the dialog.
+
+test('a numbered plan body does not swallow the approval dialog', () => {
+  // VERBATIM from a live pane (16-step plan, ANSI stripped). This exact capture
+  // returned null before the fix.
+  const lines = [
+    '   6. Decide no trailing newline handling needed beyond default.',
+    '   7. Prepare the Write tool call.',
+    '   8. Set file_path to <cwd>/cloud.txt.',
+    '   9. Set content to hi.',
+    '   10. Execute the Write tool call.',
+    '   11. Confirm the tool reported success.',
+    '   12. List the directory to see cloud.txt.',
+    '   13. Read cloud.txt back.',
+    '   14. Verify the content equals hi.',
+    '   15. Confirm no other files were changed.',
+    '   16. Report completion to the user.',
+    '  ╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌',
+    '',
+    '',
+    '',
+    '',
+    '',
+    '  ──────────────────────────────────────────────────────────────────────────────────────────────────────────',
+    '   Claude has written up a plan and is ready to execute. Would you like to proceed?',
+    '',
+    '   ❯ 1. Yes, and use auto mode',
+    '     2. Yes, manually approve edits',
+    '     3. Tell Claude what to change',
+    '        shift+tab to approve with this feedback',
+    '',
+    '   ctrl+g to edit in Vim · ~/.claude/plans/linear-singing-wilkinson.md',
+  ];
+  const p = detectPrompt(lines);
+  assert.ok(p, 'a plan approval above a NUMBERED plan body must still be detected');
+  assert.strictEqual(p.options.length, 3);
+  assert.deepStrictEqual(p.options.map((o) => o.number), [1, 2, 3]);
+  assert.strictEqual(p.options[0].selected, true);
+  assert.match(p.question, /Would you like to proceed\?$/);
+});
+
 test('detectPrompt finds an edit permission under its own footer', () => {
   const lines = [
     ' Create file',
