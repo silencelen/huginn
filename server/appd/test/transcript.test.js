@@ -614,3 +614,61 @@ test('sequence numbers stay monotonic after a move', () => {
   assert.deepStrictEqual(seqs, [...seqs].sort((x, y) => x - y), `not monotonic: ${seqs}`);
   assert.strictEqual(new Set(seqs).size, seqs.length, 'duplicate seq would break list keys');
 });
+
+// ------------------------------------------------ a queued message, split
+//
+// The enqueue and the remove land in DIFFERENT tail windows on nearly every
+// send-while-busy: clients poll every 2.5s and real enqueue->remove gaps run to
+// minutes. What the orphaned `remove` should do depends on whether the reader
+// has already seen the enqueue, and the code used to re-emit the message either
+// way — so a tailing client got a SECOND identical bubble while the first kept
+// its `queued` badge, on the primary conversation view of both clients.
+
+test('resuming a tail does not duplicate a queued message delivered in a later window', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'tr-split-'));
+  const p = path.join(dir, 'session.jsonl');
+  const L = (o) => JSON.stringify(o) + '\n';
+  try {
+    fs.writeFileSync(p,
+      L({ type: 'user', message: { content: 'first question' } }) +
+      L({ type: 'assistant', message: { content: [{ type: 'text', text: 'working' }] } }) +
+      L({ type: 'queue-operation', operation: 'enqueue', content: 'also fix the header' }));
+    const page1 = readTranscript(p);
+    const queuedNow = page1.events.filter((e) => e.kind === 'user' && e.text === 'also fix the header');
+    assert.strictEqual(queuedNow.length, 1);
+    assert.strictEqual(queuedNow[0].queued, true, 'a waiting message is badged');
+
+    fs.appendFileSync(p,
+      L({ type: 'assistant', message: { content: [{ type: 'text', text: 'answer' }] } }) +
+      L({ type: 'queue-operation', operation: 'remove', content: 'also fix the header' }));
+    const page2 = readTranscript(p, { offset: page1.nextOffset });
+
+    const merged = page1.events.concat(page2.events);
+    const copies = merged.filter((e) => e.kind === 'user' && e.text === 'also fix the header');
+    assert.strictEqual(copies.length, 1, 'the reader already had this message; it must not arrive twice');
+    assert.deepStrictEqual(page2.deliveredQueued, ['also fix the header'],
+      'the delivery is reported instead, so the badge can be cleared');
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('a cold open still emits a queued message whose enqueue scrolled off', () => {
+  // The mirror case, and why the re-emit cannot simply be deleted: with no
+  // earlier page to hold it, this is the only copy the reader will ever get.
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'tr-cold-'));
+  const p = path.join(dir, 'session.jsonl');
+  const L = (o) => JSON.stringify(o) + '\n';
+  try {
+    fs.writeFileSync(p,
+      L({ type: 'queue-operation', operation: 'enqueue', content: 'the follow up' }) +
+      L({ type: 'queue-operation', operation: 'remove', content: 'the follow up' }));
+    const t = readTranscript(p);
+    const copies = t.events.filter((e) => e.kind === 'user' && e.text === 'the follow up');
+    assert.strictEqual(copies.length, 1);
+    assert.ok(!copies[0].queued, 'delivered, so not badged');
+    assert.deepStrictEqual(t.deliveredQueued, [], 'nothing to reconcile on a cold open');
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
