@@ -5,6 +5,72 @@ app and from the Electron desktop client. Its releases go to `/v1/desktop-kt`;
 the Electron client's go to `/v1/desktop` and the two never mix — see
 `scripts/release-desktop.sh`.
 
+## 0.3.1
+
+Nothing new. Six things that were wrong, five of them found by using the app
+rather than by reading it, and the worst of them a way to lose your token.
+
+### Live typing put junk in the pane
+
+Every capital letter and every shifted symbol arrived with a stray glyph in
+front of it: typing `ABC` into a live shell produced `￿A￿B￿C`. A bare
+Shift press has no character, and the platform says so with a code point that
+this app was reading as if it were one. Modifiers now send nothing. Because a
+held modifier repeats, a slow Shift was spraying rather than prefixing.
+
+Insert was refused by the host, and not quietly: keystrokes are batched into one
+request, so a single Insert took every character typed alongside it down with
+it. The host accepts it now, which means this release wants **huginn-appd
+2.52.1 or newer**.
+
+And the first keystroke after turning Live on was swallowed — the pane took
+focus a moment after the click that asked for it, and whatever you typed in
+between went nowhere. Turning Live on and typing `ls` put `s` in the pane.
+
+### Your token could disappear on update
+
+Saving settings replaced the file by renaming a temporary one over it, which on
+Windows does not replace anything, fails, and returns a value the app was
+ignoring. The first save worked because there was no file yet; every save after
+it silently did nothing. The visible cost was a token that vanished across an
+update. Settings are now swapped atomically, the file is left readable only by
+you, and a settings file that cannot be parsed is copied aside before defaults
+land on top of it rather than being overwritten with no trace.
+
+If your token went missing on the way here, enter it once more. It will stay
+this time.
+
+### The installer no longer half-installs over a running app
+
+Updating while the app was open left the old files locked and the new ones
+partly written, and said nothing about it. The installer now finds the running
+app, asks it to close, and — because this app hides to the tray rather than
+exiting — ends it outright if it will not. It refuses to continue rather than
+proceeding into a broken install.
+
+### Drafts, the status bar, and where the window opens
+
+A message half-typed into a session was discarded the moment you looked at
+anything else. Session drafts are now kept the way chat drafts already were:
+they survive switching, and they survive a restart. They follow a session that
+gets renamed, and they are cleaned up when one is killed.
+
+The bar along the foot had a single error slot that only a click could clear,
+so the first failure of a run pinned itself there for the rest of the session —
+which is why it could read `unauthorized` while you sat watching a session
+stream. Each source now reports its own state and a success clears it.
+
+The window opens where you left it: Chats or Sessions, and the thing you had
+open, if it is still there. Glancing at Status or Settings does not count, and
+an install that has never recorded a position opens on Sessions.
+
+### Still not proven
+
+The same as 0.3.0 — Windows notifications, the answer buttons on them, and the
+interface on real graphics hardware. The live-typing fixes above were verified
+by typing into a real pane on huginn, so they are proven on Linux and reasoned
+on Windows.
+
 ## 0.3.0
 
 The polish release. The app worked; it did not yet feel finished. Three passes:
