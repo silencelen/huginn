@@ -39,6 +39,30 @@ fun mergeTranscript(
 }
 
 /**
+ * Clears the `queued` badge from messages the daemon has since delivered.
+ *
+ * A message sent while Claude is mid-turn is written to the transcript only as
+ * queue-operation records: an `enqueue` when it is typed, a `remove` when it is
+ * delivered. Those two land in different tail windows on nearly every
+ * send-while-busy, so by the time the delivery is read the bubble is already on
+ * screen wearing a badge that is no longer true.
+ *
+ * Matching on text is what the daemon's own queue does — it is the only identity
+ * these records carry — so a message sent twice while busy is un-badged
+ * oldest-first, one per delivery, exactly as the daemon dequeues them.
+ */
+internal fun clearDelivered(
+    events: List<TranscriptEvent>,
+    delivered: List<String>,
+): List<TranscriptEvent> {
+    if (delivered.isEmpty()) return events
+    val remaining = delivered.toMutableList()
+    return events.map { ev ->
+        if (ev.queued && remaining.remove(ev.text)) ev.copy(queued = false) else ev
+    }
+}
+
+/**
  * Folds a tail page into the page already on screen.
  *
  * A tail read only reports session-level fields whose records happen to fall
@@ -63,7 +87,7 @@ fun mergeTranscriptPage(
 ): TranscriptPage {
     if (current == null) return page
     return page.copy(
-        events = mergeTranscript(current.events, page.events, cap),
+        events = mergeTranscript(clearDelivered(current.events, page.deliveredQueued), page.events, cap),
         title = page.title ?: current.title,
         model = page.model ?: current.model,
         modelDisplay = page.modelDisplay ?: current.modelDisplay,
