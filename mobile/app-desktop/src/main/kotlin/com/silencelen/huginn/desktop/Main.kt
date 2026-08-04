@@ -231,6 +231,10 @@ fun main(args: Array<String>) {
     Runtime.getRuntime().addShutdownHook(
         Thread {
             store.paneLease.releaseBlocking()
+            // Same argument as the lease: the debounced position writer is still
+            // counting when a SIGTERM arrives, so without this the last thing the
+            // owner opened is exactly what a force-quit forgets.
+            store.flushLanding()
             instance.close()
         }
     )
@@ -301,6 +305,7 @@ fun main(args: Array<String>) {
             // still usable. Doing it twice is free: the holder clears what it holds
             // before the call, so the shutdown hook finds nothing left to do.
             store.paneLease.releaseBlocking()
+            store.flushLanding()
             instance.close()
             notifier.close()
             exitApplication()

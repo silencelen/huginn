@@ -78,13 +78,54 @@ class DesktopUpdater(
     val installedVersion: String get() = currentVersion
 
     /**
-     * Launch check, then every [INTERVAL_MS]. Cancelling the returned job stops
-     * it; there is no other lifecycle to get wrong.
+     * Launch check, then every [INTERVAL_MS] — but sooner if the last one failed,
+     * and at once if the token changes. Cancelling the returned job stops it;
+     * there is no other lifecycle to get wrong.
+     *
+     * The plain four-hour loop this replaces made a solved problem keep looking
+     * unsolved. The app checks on launch, which on a fresh install is BEFORE the
+     * owner has typed a token, so the first pass fails with "no daemon token yet"
+     * — and then Settings said that for four hours after the token was entered
+     * and everything else in the app was plainly working. A wrong token that was
+     * then corrected read the same way, as a stale 401.
+     *
+     * So: a failed pass retries on a backoff instead of sleeping the full
+     * interval, and either kind of wait ends early when the token changes,
+     * because the token is the thing that was usually wrong.
      */
     fun start(scope: CoroutineScope): Job = scope.launch {
+        var backoff = RETRY_MS
         while (true) {
-            runCatching { check() }
-            delay(INTERVAL_MS)
+            val outcome = runCatching { check() }
+            // A thrown exception is a failed pass too. Reading only the returned
+            // state would treat a crash as a success and sleep four hours on it.
+            if (outcome.isFailure || outcome.getOrNull() is UpdateState.Error) {
+                waitOrTokenChange(backoff)
+                backoff = (backoff * 2).coerceAtMost(RETRY_MAX_MS)
+            } else {
+                backoff = RETRY_MS
+                waitOrTokenChange(INTERVAL_MS)
+            }
+        }
+    }
+
+    /**
+     * Sleeps, but wakes as soon as the token is different from the one the pass
+     * just ran with.
+     *
+     * Polled rather than collected from a flow so that this class keeps taking a
+     * plain `() -> String` and stays constructible in a test with no settings
+     * object at all. A comparison once a second against a string in memory is not
+     * a cost worth an abstraction.
+     */
+    private suspend fun waitOrTokenChange(total: Long) {
+        val was = tokenProvider().trim()
+        var waited = 0L
+        while (waited < total) {
+            val step = minOf(WAKE_MS, total - waited)
+            delay(step)
+            waited += step
+            if (tokenProvider().trim() != was) return
         }
     }
 
@@ -210,6 +251,21 @@ class DesktopUpdater(
     companion object {
         /** Four hours. The owner restarts this client far more often than that. */
         const val INTERVAL_MS: Long = 4 * 60 * 60 * 1000L
+
+        /**
+         * First retry after a failed pass, doubling to [RETRY_MAX_MS].
+         *
+         * It backs off rather than hammering because a check that fails usually
+         * keeps failing — an unreachable route, a daemon that is down — and each
+         * pass writes a line to the diagnostics log. Half a minute is quick
+         * enough that a fixed problem stops being reported as broken, and the cap
+         * keeps a genuinely dead feed from filling that log.
+         */
+        const val RETRY_MS: Long = 30 * 1000L
+        const val RETRY_MAX_MS: Long = 30 * 60 * 1000L
+
+        /** How often a wait looks at the token. */
+        const val WAKE_MS: Long = 1000L
 
         fun defaultCacheDir(): File {
             val base = System.getenv("XDG_CACHE_HOME")?.takeIf { it.isNotBlank() }
