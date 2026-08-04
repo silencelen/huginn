@@ -158,6 +158,17 @@ data class AskQuestion(
 @Serializable
 data class TranscriptPage(
     val events: List<TranscriptEvent> = emptyList(),
+    /**
+     * Text of queued messages DELIVERED in this window but enqueued in an earlier
+     * one — the bubble is already on screen, still badged as waiting, and only
+     * the badge needs clearing.
+     *
+     * The daemon used to re-send the whole message instead, which appended a
+     * second identical bubble and left the first badged forever. Empty on a cold
+     * open, where the message is emitted outright because there is no earlier
+     * copy to reconcile. Absent from daemons older than 2.53.0, hence the default.
+     */
+    val deliveredQueued: List<String> = emptyList(),
     val nextOffset: Long = 0,
     val truncated: Boolean = false,
     val title: String? = null,
