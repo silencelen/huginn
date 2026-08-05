@@ -29,6 +29,19 @@ the current truth; `AUDIT-REPORT.md` is the frozen record of what was found.
 | L29 | `USAGE.md` said `huginn -p` has "no tools" | corrected, with the measurement | re-tested: on this host `-p` also runs **Bash** — `id -un` → `root` |
 | L16 | `SECURITY.md`/`ARCHITECTURE.md` described a system with no daemon | both rewritten around the daemon | — |
 | L30 | `mobile/README` named the tailnet as the boundary | corrected: the bind is `0.0.0.0`, the token is the only gate | — |
+| L10 | the Windows installer never stamped the AUMID | `WinShell::SetLnkAUMI` on the Start Menu shortcut, plus an `AppUserModelId` DisplayName so the app is findable in Settings > Notifications | makensis compiles it, the compiler resolves all three WinShell exports; **Windows display itself still needs owner test 1** |
+| L31 | the release gate allowed publishing a DOWNGRADE | refuses anything not strictly newer, and refuses on AUMID drift or a missing plugin | — |
+| L33 | a message sent during an upload was lost on navigation | draft restored when a send is cancelled, with `ensureActive()` closing the cooperative-cancellation gap; both desktop composers | compiles; no UI-test harness exists for the composer path |
+| L17 | a mouse wheel could not break the auto-scroll latch | the decision is a pure `Follow` reducer; a wheel tick unlatches like a finger, a programmatic scroll never does | 8 new tests, one per historical bug; `:ui` 7 → 15 |
+
+On the vendored plugin: `packaging/plugins/x86-unicode/WinShell.dll` is a 3 KB
+binary checked into the tree. Provenance was verified independently, not taken on
+trust — byte-identical (sha256 `9be85b98…`) to electron-builder's own bundled
+copy on this host, exporting exactly `SetLnkAUMI` / `UninstAppUserModelId` /
+`UninstShortcut`, and already running on the owner's machine inside the Electron
+client. Hand-rolling the COM sequence was rejected because it could only be
+reasoned about here, never run, and a mistake in it fails silently — exactly like
+the bug it would replace.
 
 Note on L2: **not** `PrivateTmp`. tmux's socket is `/tmp/tmux-0/default`, so a
 private `/tmp` makes every session invisible while the daemon still answers
@@ -53,6 +66,9 @@ an account switch renames `~/.claude.json.huginn-tmp` over the config.
 - **~60 med/low from the 2026-07-28 mobile audit**, plus 16 of the 29 re-verified
   in this audit. None is urgent; they are listed in `findings-lanes.md` in
   severity order.
+- **`SessionView.kt` follow-ups are DONE** (they were flagged as out-of-scope by
+  the agent that fixed `ChatView`): both the lost-message fix and the wheel signal
+  are applied there too.
 - **Task #20** — the phone's duplicate copies of `WorkStrip`/`prettyModel`/etc.
   Confirmed still present and confirmed NOT diverged, so the deletion is safe
   mechanical work. A second instance was found: the reattach rule (contract C5)
