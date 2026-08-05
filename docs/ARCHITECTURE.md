@@ -1,23 +1,26 @@
 # Architecture
 
-Huginn is deliberately small — a few shell scripts and a tmux config. The value is the *pattern*, not the code.
+Huginn has a small core and an optional large half. The core — the `huginn` command, `cc`, a tmux config — is a few shell scripts, and there the value really is the *pattern*, not the code. The optional half is not small: `huginn-appd` is a root-owned Node daemon of roughly 6,700 lines that puts an HTTP surface on the host, and the Kotlin phone/desktop clients that talk to it are another ~33,000. Which half you deploy decides what your security model has to cover, so the two are kept separate throughout this document.
 
 ```
-   device A (laptop)         device B (phone)
-        │  huginn                 │  huginn
-        └──────────┬──────────────┘
-                   │  ssh -tt huginn cc       (the `huginn` command = a thin,
-                   │                            auto-reconnecting ssh wrapper)
-                   ▼
-        ┌─────────────────────────────┐
-        │   Huginn host (always-on)   │
-        │                             │
-        │   /usr/local/bin/cc  ──────────►  tmux session 'main'
-        │                             │        └─ claude (Claude Code)
-        │   ~/.tmux.conf              │
-        │   /usr/local/bin/huginn-status
-        └─────────────────────────────┘
+   terminal client                      app client
+   (laptop · phone · Termux)            (Android · desktop)
+        │  huginn                            │  HTTP + SSE, port 8787
+        │  ssh -tt huginn cc                 │  Authorization: Bearer <token>
+        └─────────────────┬──────────────────┘
+                          ▼
+        ┌─────────────────────────────────┐
+        │   Huginn host (always-on)       │
+        │                                 │
+        │   /usr/local/bin/cc  ─────────────►  tmux session 'main'
+        │   ~/.tmux.conf                  │       └─ claude (Claude Code)
+        │   /usr/local/bin/huginn-status  │             ▲
+        │                                 │             │ capture-pane
+        │   huginn-appd (root)  ────────────────────────┘ send-keys
+        └─────────────────────────────────┘
 ```
+
+Both clients end up at the same place: one Claude Code process in one tmux session. The terminal attaches to it; the app reads it with `capture-pane` (plus the session's Claude Code transcript) and drives it with `send-keys`.
 
 ## Pieces
 
@@ -25,12 +28,14 @@ Huginn is deliberately small — a few shell scripts and a tmux config. The valu
 - **`cc` (server)** — `tmux new-session -A` (attach-or-create). `cc solo` uses `tmux attach -d` to detach other clients on the way in. This is what makes sessions persistent and reattachable.
 - **`tmux.conf` (server)** — the multi-device ergonomics: `window-size smallest` (mirror fits the smaller screen), `Alt-d` detach, `Alt-o` detach-others, big scrollback, status-bar hints.
 - **`huginn-status` (server)** — a one-glance health summary.
+- **`huginn-appd` (server, optional)** — the daemon the apps talk to: sessions, headless chats, push notifications, prompts-as-buttons. Zero npm dependencies, Node ≥ 20, runs as **root**, listens on port 8787 (Tailscale address by default, `HUGINN_APPD_BIND` to change it) and requires `Authorization: Bearer <token>` on every route — the token in `/etc/huginn-appd/token`. It is the highest-privilege thing here and the one piece with a real threat model to read: [`SECURITY.md`](SECURITY.md).
+- **The Kotlin clients (`mobile/`, optional)** — `:core` (logic + HTTP) and `:ui` (Compose) shared by `:app` (Android) and `:app-desktop` (Windows/Linux). They hold no session state either; they render what the daemon reports and send keystrokes back. The older Electron client in `desktop/` is deprecated.
 
 ## Why it's shaped this way
 
 - **State lives on the host, not the client.** Every device is a thin viewer; nothing to sync. Close the laptop mid-task, open the phone, you're in the same place.
 - **tmux is the persistence + multi-client layer.** "Persistent session," "mirror," and "reattach" are all native tmux — Huginn just packages sensible defaults and a friendly command.
-- **SSH is the only transport.** No daemon, no web server, no ports beyond SSH. Add Tailscale/WireGuard for off-LAN and it works from anywhere.
+- **Two transports, and you choose how many you run.** The terminal path is SSH and nothing else — no daemon, no ports. The app path adds `huginn-appd` on 8787, because a phone cannot usefully hold a PTY: it needs structure (which session is asking a question, what the answer buttons are) rather than a character grid. Run only the first and the daemon half of [`SECURITY.md`](SECURITY.md) doesn't apply to you; run both and you have two credentials of equal power, on two different revocation paths. Either way, add Tailscale/WireGuard for off-LAN.
 - **Subscription auth is the cost story.** Claude Code can log in with a Max/Pro subscription — flat cost, no per-token billing — so an always-on agent you talk to all day doesn't run up an API bill. (API key still works if you prefer metered.)
 
 ## Client-side resilience
