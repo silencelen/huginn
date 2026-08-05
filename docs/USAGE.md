@@ -11,8 +11,8 @@
 | `huginn status` / `st` | health: uptime, auth (subscription), sessions, disk |
 | `huginn rename <old> <new>` / `mv` | rename a session (e.g. promote `main` to a name, freeing `main`) |
 | `huginn kill <name>` | end a session |
-| `huginn -p "question"` | one-shot **headless** query — reasoning only (no tools) |
-| `huginn -y "task"` | one-shot that **may use tools** (bash / files / web) |
+| `huginn -p "question"` | one-shot **headless** query — reads files; **not a sandbox**, see [Headless one-shots](#headless-one-shots) |
+| `huginn -y "task"` | one-shot that also grants the mutating tools (bash / files / web) |
 | `huginn usage [args]` / `cost` | Claude Code token/cost report ([ccusage]) — e.g. `usage monthly`, `session`, `blocks --live` |
 | `huginn usage <when>` | shortcut date range: `today` \| `yesterday` \| `week` \| `month` — e.g. `usage today`, `usage week session` |
 | `huginn update` | self-update the client from the repo (`gh` → `scp` fallback) |
@@ -70,6 +70,8 @@ The attach renames your terminal tab/window to **`huginn:<session>`** — so `hu
 
 ## Headless one-shots
 
-`huginn -p "..."` runs a single prompt and prints the answer (no tools — safe for quick questions). `huginn -y "..."` allows tools (bash/files/web) for "go do it" tasks. Both bill against whatever the host's Claude Code is authenticated with.
+`huginn -p "..."` runs a single prompt and prints the answer; `huginn -y "..."` is the "go do it" variant. The difference between them is the tool *grant* the client passes through: `-y` names `Bash Read Edit Write Glob Grep WebFetch`, `-p` names only the memory MCP — and neither names anything at all if the host carries no persona file. Both bill against whatever the host's Claude Code is authenticated with.
+
+> ⚠️ **Neither one is a sandbox, and `-p` is not "no tools".** `--allowedTools` **auto-approves** the tools it names — it does not restrict the ones it omits. Headless Claude Code already has the read-only tools (`Read`/`Glob`/`Grep`) with no grant at all, so `huginn -p` can read any file the host user can: your credentials, your `.env`s, every project on the box. And whether an *ungranted* tool runs is decided by the host's own permission settings (`~/.claude/settings.json`), not by the flag — with a permissive `permissions.defaultMode`, a `-p` one-shot will run `Bash` and `Write` too. (Measured on the author's host, where it did: `id -un` → `root`, and a file created.) Read `-p` as "no mutation *intended*", never "no mutation *possible*", and never reach for `--allowedTools` as a fence. It is a convenience, not a boundary.
 
 > Note: Claude Code refuses `--dangerously-skip-permissions` when running as **root**, so `-y` uses an explicit tool allowlist instead. Run the node as a non-root user if you want broader headless autonomy.

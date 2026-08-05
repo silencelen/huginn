@@ -142,15 +142,29 @@ server resizes the window to match, so Claude Code re-wraps to fit. See
 
 ```
 scp/rsync this repo to huginn, then:
-server/deploy.sh          # installs /opt/huginn-appd, mints the token, starts the unit
+# first time only -- deploy.sh READS the token, it does not create one:
+install -d -m 700 /etc/huginn-appd
+openssl rand -hex 32 > /etc/huginn-appd/token && chmod 600 /etc/huginn-appd/token
+
+server/appd/deploy.sh     # installs /opt/huginn-appd, restarts the unit, proves /v1/ping
 cat /etc/huginn-appd/token    # paste into the app's Settings
 ```
 
-`huginn-appd` binds **huginn's Tailscale address only** (`tailscale ip -4`) on port
-**8787** and requires `Authorization: Bearer <token>` on every route. Both matter:
-everything the daemon exposes is equivalent to root on huginn, so the tailnet is
-the network boundary and the token is the authorization one. The token is 32 random
-bytes in `/etc/huginn-appd/token` (0600), generated on first deploy.
+`huginn-appd` listens on port **8787** and requires `Authorization: Bearer <token>`
+on every route — 32 random bytes in `/etc/huginn-appd/token` (0600). The code binds
+`tailscale ip -4` by default, but **this deployment binds `0.0.0.0`**, via a systemd
+drop-in (`/etc/systemd/system/huginn-appd.service.d/override.conf`) so that
+`deploy.sh` rewriting the unit cannot silently revert it. That is deliberate: the
+phone reaches huginn over the Yggdrasil LAN gateway as well as the tailnet, and the
+mesh route arrives on the LAN address, not the tailscale one.
+
+The consequence is worth saying plainly, because the tailnet used to be doing half
+the work and no longer is: **there is no network boundary left.** The tailnet, the
+LAN and the mesh all reach the port, nothing rate-limits or locks out a wrong token,
+and everything the daemon exposes is equivalent to root on huginn — `/keys` types
+into a root Claude Code pane. The bearer token is the *only* gate. Treat it like a
+root SSH key: if a device carrying it is lost, rotate the file, restart the unit
+(the token is read once at startup) and re-paste it into every client.
 
 ### API
 
