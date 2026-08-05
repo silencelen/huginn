@@ -5,6 +5,70 @@ app and from the Electron desktop client. Its releases go to `/v1/desktop-kt`;
 the Electron client's go to `/v1/desktop` and the two never mix — see
 `scripts/release-desktop.sh`.
 
+## 0.3.2
+
+Windows notifications should work for the first time, questions come back to the
+conversation view, and a message you send while a file is uploading can no longer
+vanish.
+
+### Windows notifications never had an identity
+
+Windows files every notification under the calling app's identity and throws it
+away — silently, no error, nothing in any log — if that identity does not match an
+installed Start Menu shortcut. This app has always said it needed that stamp; the
+installer never applied it. So on Windows the toasts were almost certainly going
+nowhere, and worse than nowhere: while this app is open it tells the daemon it is
+handling notifications, which holds back the Telegram message that would otherwise
+have reached you. It swallowed the notice and the fallback.
+
+The installer now stamps the identity, and registers a name for it so the app
+appears in Settings > Notifications — being unable to find it there is the other
+way toasts disappear without saying anything.
+
+This one cannot be tested from the build host, because there is no Windows machine
+in the loop. If notifications still do not arrive after this update, that is worth
+knowing quickly.
+
+### Scrolling up in a live session no longer snaps back
+
+The follower stopped following when you dragged the list with a finger — which is
+the right rule on a phone, and meaningless with a mouse, because a wheel does not
+produce a drag. On the desktop it meant the latch could never be released: scroll
+up to read something while Claude is still typing and the next token pulls you
+back to the bottom. A wheel or trackpad scroll now counts as taking control, the
+same way a drag does.
+
+### A message sent during an upload could disappear
+
+Attach something large, type a message, press send, then switch to another chat
+or session while the upload is still going: the composer had already emptied, the
+send was cancelled with it, and the message was gone with nothing left to retry
+from. The text comes back to the composer now if the send cannot be completed.
+
+### The update section stops reporting a problem you already fixed
+
+The app checks for updates at launch — which on a fresh install is before you
+have typed a token, so the first check failed and Settings said "update check
+failed" for four hours no matter what you did about it. A failed check now
+retries within half a minute, backing off while the problem persists, and any
+wait ends the moment the token changes — because the token is the thing that
+was usually wrong.
+
+### Quitting no longer forgets the last thing you opened
+
+The remembered position is written on a short delay so that walking a list is
+not a disk write per key repeat — but that means the change most likely to be
+lost was the last one you made, the one just before quitting. Both ways out of
+the app now write it immediately.
+
+### Not in this release, but you already have it
+
+Questions and permission prompts had stopped appearing in the conversation view
+on desktop and phone alike, leaving the raw Screen tab as the only way to
+answer. That was the host reading the pane with an outdated idea of what Claude
+Code draws under a question, and it was fixed on the host (2.52.2) — both
+clients got it at once, no update required.
+
 ## 0.3.1
 
 Nothing new. Six things that were wrong, five of them found by using the app
