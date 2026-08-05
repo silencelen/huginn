@@ -1,5 +1,11 @@
 # Huginn ecosystem — full audit, 2026-08-04
 
+> **STATUS: remediated.** All 17 HIGH findings are fixed; `huginn-appd` 2.53.1 is
+> deployed. See **[REMEDIATION.md](REMEDIATION.md)** for what shipped, how each
+> was verified, what is still open, and two corrections to this report (L29 was
+> understated — `huginn -p` also runs Bash as root here; L13 was overstated).
+> This document is left as the frozen record of what was FOUND.
+
 Scope: everything the owner ships or depends on — the `huginn-appd` daemon, the
 Android app, the Compose Desktop app, the deprecated Electron client, the CLI and
 server glue, packaging, docs, tests, and the deployed state on huginn itself.
