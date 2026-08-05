@@ -1,5 +1,32 @@
 # Huginn changelog
 
+## 2.56.0 / appd 2.53.1 — 2026-08-04
+
+### A waiting message stops saying it is still waiting
+
+A message you type while Claude is mid-turn is queued, and it shows a badge that
+says so. The badge used to stay until you left the session and came back, because
+the host announced the delivery by sending the whole message a second time —
+which also meant the conversation briefly held two copies of it, the older one
+still marked as waiting. The host now reports just the delivery, and the badge
+clears where the message already is.
+
+You will only see the difference on a message sent while Claude is busy, which is
+exactly when it was wrong before.
+
+### Answer buttons only appear when they can be trusted
+
+The buttons on a "needs you" notification carry a fingerprint of the question they
+were drawn for, and the host refuses an answer whose fingerprint no longer
+matches — that is what stops a tap answering some *later* question that has taken
+its place. The host now requires that fingerprint rather than accepting an answer
+without one, so this release stops offering buttons in the rare case where there
+is none to send. The notification still arrives and still opens the session.
+
+Nothing you would have noticed: in practice the host never sends options without a
+fingerprint. This closes the gap on both sides rather than trusting that to stay
+true.
+
 ## 2.52.0 / appd 2.47.0 — 2026-07-30
 
 ### Any file can be sent now, including router backups
