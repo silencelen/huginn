@@ -1,13 +1,36 @@
 #!/bin/bash
 # huginn-status — quick health summary of the Huginn node. Invoked by `huginn status`.
-C=$(printf '\033[36m'); G=$(printf '\033[32m'); Z=$(printf '\033[0m')
-echo "${C}Huginn${Z} - $(hostname)"
-echo "  uptime    : $(uptime -p 2>/dev/null | sed 's/^up //')"
+#
+# PERF NOTE (2026-07-24): this used to call `claude mcp list` just to learn whether
+# MemPalace was reachable. That probe STARTS EVERY CONFIGURED MCP SERVER — including
+# an npx playwright download and a chain that SSHes to mimir and `docker run`s a
+# postgres-mcp container — so a read-only status check took ~18 s and created a
+# container on another host every time it ran. It now probes the one thing it
+# reports, directly over ssh, and finishes in well under a second.
+C=$(printf '\033[36m'); G=$(printf '\033[32m'); R=$(printf '\033[31m'); Y=$(printf '\033[33m'); Z=$(printf '\033[0m')
+MUNINN=root@192.168.2.118
+SSH_OPTS=(-o BatchMode=yes -o ConnectTimeout=3)
+
+echo "${C}Huginn${Z} (LXC 117) — $(hostname)"
+echo "  uptime    : $(uptime -p | sed 's/^up //')"
+echo "  load      : $(cut -d' ' -f1-3 /proc/loadavg) (on $(nproc) cores)"
 echo "  claude    : $(claude --version 2>/dev/null | head -1)"
-SUB=$(jq -r '.claudeAiOauth.subscriptionType // empty' "$HOME/.claude/.credentials.json" 2>/dev/null)
-if [ -n "$SUB" ]; then echo "  auth      : ${G}${SUB} subscription${Z}"; else echo "  auth      : api key / unknown"; fi
+SUB=$(jq -r '.claudeAiOauth.subscriptionType // empty' /root/.claude/.credentials.json 2>/dev/null)
+echo "  auth      : ${SUB:-api key / unknown} plan"
 N=$(tmux ls 2>/dev/null | wc -l)
 echo "  sessions  : ${N} running"
-tmux ls 2>/dev/null | sed 's/^/              - /'
+tmux ls 2>/dev/null | sed 's/^/                ・ /'
+
+# MemPalace: reachability + write-path health, without touching any MCP server.
+MP=$(ssh "${SSH_OPTS[@]}" "$MUNINN" '
+    if [ -e /home/silence/.mempalace/REBUILD_IN_PROGRESS ]; then echo "rebuilding"
+    elif systemctl is-active --quiet mempalace-daemon; then echo "daemon-active"
+    else echo "daemon-DOWN"; fi' 2>/dev/null)
+case "$MP" in
+  daemon-active) echo "  mempalace : ${G}connected${Z}  (muninn 192.168.2.118, write daemon active)" ;;
+  rebuilding)    echo "  mempalace : ${Y}index rebuild in progress${Z} (vector search disabled until it finishes)" ;;
+  daemon-DOWN)   echo "  mempalace : ${R}reachable but write daemon DOWN${Z} — writes are failing" ;;
+  *)             echo "  mempalace : ${R}NOT reachable${Z} (muninn 192.168.2.118)" ;;
+esac
+
 echo "  disk /    : $(df -h / | awk 'NR==2{print $5" used, "$4" free"}')"
-[ -n "${HUGINN_WORKDIR:-}" ] && echo "  workdir   : $HUGINN_WORKDIR"
