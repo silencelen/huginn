@@ -20,10 +20,12 @@ import java.util.concurrent.TimeUnit
  * HKCU\Software\Classes\huginn                      "URL Protocol" = ""
  * HKCU\Software\Classes\huginn\shell\open\command   (default) = "\"<exe>\" \"%1\""
  * ```
- * HKCU rather than HKLM so a per-user install needs no elevation. The same
- * installer must ALSO stamp [WindowsToastNotifier.AUMID] as `System.AppUserModel.ID`
- * on the Start Menu shortcut — the two are one feature: without the AUMID the
- * toast is dropped, without the scheme its buttons do nothing.
+ * HKCU rather than HKLM so a per-user install needs no elevation. The scheme half
+ * is still OUTSTANDING — this backstop is all there is. The AUMID half is DONE:
+ * the installer stamps [WindowsToastNotifier.AUMID] on the Start Menu shortcut it
+ * creates. The two are one feature (without the AUMID the toast is dropped,
+ * without the scheme its buttons do nothing), so they are worth checking
+ * together, but only one of them still needs an installer change.
  *
  * **Linux / deb.** Ship a `.desktop` file with `MimeType=x-scheme-handler/huginn;`
  * and let `update-desktop-database` pick it up. What [register] writes below is
