@@ -3,7 +3,19 @@
 The audit's findings, and what has actually been done about them. This file is
 the current truth; `AUDIT-REPORT.md` is the frozen record of what was found.
 
-**All 17 HIGH findings are addressed. `huginn-appd` 2.53.1 is deployed and live.**
+**All 17 HIGH findings are addressed, and everything is released:**
+
+| component | version | where |
+|---|---|---|
+| `huginn-appd` | **2.53.1** | deployed, live |
+| Compose desktop | **0.3.2** | `/v1/desktop-kt` |
+| Android app | **2.56.0** | devstore |
+| Electron desktop | 0.4.0 | `/v1/desktop` — deliberately untouched (contract C3) |
+
+The desktop release verified the AUMID fix is really in the installer
+(`stamps AUMID com.silencelen.huginn.desktop-kt on the Start Menu shortcut`) and
+the new drift guard confirmed the app's constant and the installer's agree before
+building anything.
 
 ---
 
@@ -79,6 +91,14 @@ an account switch renames `~/.claude.json.huginn-tmp` over the config.
   two unknowns are open.
 - **Compose desktop keyring** — assessed, not rediscovered; the plaintext-0600
   token is a documented trade-off with the same exposure as the SSH key beside it.
+
+## Sequencing note
+
+The daemon went out BEFORE the clients, which is only safe because the stricter
+`/answer` rule cannot orphan an installed app: a detected prompt always has ≥2
+options and `promptFingerprint` returns null only when there are none, so options
+imply a fingerprint and the shipped 2.55.0 could not draw a button the new host
+would reject. That was checked before deploying, not after.
 
 ## Needs the owner
 
