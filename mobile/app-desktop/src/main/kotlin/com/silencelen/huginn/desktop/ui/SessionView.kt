@@ -81,12 +81,14 @@ import com.silencelen.huginn.desktop.ui.session.ControlPicker
 import com.silencelen.huginn.desktop.ui.session.WorkPanel
 import com.silencelen.huginn.desktop.ui.session.rememberModels
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.launch
 import com.silencelen.huginn.data.ModelChoice
 import com.silencelen.huginn.ui.LocalTranscriptMetrics
 import com.silencelen.huginn.ui.FollowNewest
 import com.silencelen.huginn.ui.ModelLabels
 import com.silencelen.huginn.ui.NewestPill
+import com.silencelen.huginn.ui.onScrollInput
 import com.silencelen.huginn.ui.SkiaCellPainter
 import com.silencelen.huginn.ui.Suggest
 import com.silencelen.huginn.ui.SuggestionChips
@@ -265,6 +267,7 @@ fun SessionView(store: AppStore, name: String) {
             // afterwards and put the message back in the composer as a draft. That
             // is a bug the Electron client actually shipped.
             onSent = { store.drafts.clear(draftKey) },
+            onRestore = { setDraft(it) },
             working = working,
             scope = viewScope,
         )
@@ -402,7 +405,12 @@ private fun ConversationTab(controller: SessionController) {
     // on the next poll tick — a conversation that cannot be read while it is live.
     val itemCount = rows.size + if (current.truncated) 1 else 0
     val revision = tailRevision(current.nextOffset, rows.size, current.events.lastOrNull()?.text?.length)
-    val unseen = FollowNewest(listState, itemCount, revision, key = controller.name)
+    // A wheel tick is the reader taking the list, exactly as a drag is — and it
+    // emits no DragInteraction, so without this the latch could never be broken
+    // on a desktop: scrolling up to read something in a live session snapped back
+    // to the tail on the next token.
+    val scrolls = remember(controller.name) { mutableStateOf(0) }
+    val unseen = FollowNewest(listState, itemCount, revision, key = controller.name, scrolls = scrolls)
 
     // A refresh that started failing after a page landed is a banner, not a
     // replacement: the transcript already on screen is still the best thing known.
@@ -421,7 +429,7 @@ private fun ConversationTab(controller: SessionController) {
             val metrics = LocalTranscriptMetrics.current
             SelectionContainer {
                 LazyColumn(
-                    Modifier.fillMaxSize().padding(horizontal = 16.dp),
+                    Modifier.fillMaxSize().padding(horizontal = 16.dp).onScrollInput { scrolls.value++ },
                     state = listState,
                     contentPadding = PaddingValues(vertical = metrics.rowPadding),
                     verticalArrangement = Arrangement.spacedBy(metrics.rowSpacing),
@@ -773,6 +781,8 @@ private fun Composer(
     draft: String,
     onDraft: (String) -> Unit,
     onSent: () -> Unit,
+    /** Puts the text back when a send could not be delivered. See [submit]. */
+    onRestore: (String) -> Unit,
     working: Boolean,
     scope: CoroutineScope,
 ) {
@@ -789,10 +799,30 @@ private fun Composer(
         if (canSend) {
             val body = draft
             onSent()
+            var posted = false
             scope.launch {
-                val marker = attachments.take()
-                val full = composeMessage(body, marker, PANE_SEPARATOR)
-                if (full.isNotEmpty()) controller.sendLine(full)
+                try {
+                    val marker = attachments.take()
+                    val full = composeMessage(body, marker, PANE_SEPARATOR)
+                    // Cancellation is cooperative, so a scope killed while take()
+                    // was returning would otherwise reach a sendLine that never
+                    // runs and still count as sent.
+                    ensureActive()
+                    if (full.isNotEmpty()) controller.sendLine(full)
+                    posted = true
+                } finally {
+                    // take() parks for the whole upload on a scope that dies with
+                    // this view, so leaving the session mid-upload cancels the
+                    // send — and the box was emptied the moment it was pressed.
+                    // Without this the message is simply gone, with no error and
+                    // nothing left to retry from.
+                    //
+                    // Putting the text back is the only option here even in
+                    // principle: leaving also closes the controller, so a send
+                    // that tried to carry on regardless would be launching on a
+                    // scope that is already cancelled.
+                    if (!posted) onRestore(body)
+                }
             }
         }
     }

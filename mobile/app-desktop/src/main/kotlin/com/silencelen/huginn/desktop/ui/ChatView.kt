@@ -69,6 +69,7 @@ import com.silencelen.huginn.ui.LocalTranscriptMetrics
 import com.silencelen.huginn.ui.FollowNewest
 import com.silencelen.huginn.ui.MarkdownText
 import com.silencelen.huginn.ui.NewestPill
+import com.silencelen.huginn.ui.onScrollInput
 import com.silencelen.huginn.ui.Suggest
 import com.silencelen.huginn.ui.SuggestionChips
 import com.silencelen.huginn.ui.TranscriptEventItem
@@ -76,6 +77,7 @@ import com.silencelen.huginn.ui.TranscriptGroups
 import com.silencelen.huginn.ui.TranscriptRowItem
 import com.silencelen.huginn.ui.scrollToNewest
 import com.silencelen.huginn.ui.tailRevision
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.launch
 
@@ -172,6 +174,20 @@ fun ChatView(
         if (drafts != null) drafts.clear(draftKey)
         else fallback.value = fallback.value - draftKey
     }
+    // A send that never went out must not take the typing with it. The composer
+    // is emptied the instant Send is pressed — a box that stays full for the
+    // length of a 128 MB upload gets pressed a second time — so a send that is
+    // cancelled before it posts has to put the text back. Folded in rather than
+    // assigned: the composer stayed live and may have taken more typing since.
+    // Never for a chat that was deleted out from under the send, though: the
+    // delete path clears this draft on purpose, and a key whose chat can never be
+    // opened again is rewritten on every keystroke in every other chat, forever.
+    val restoreDraft: (String) -> Unit = { text ->
+        if (!controller.deleted.value) {
+            val typedSince = drafts?.get(draftKey) ?: fallback.value[draftKey].orEmpty()
+            setDraft(appendDropped(text, typedSince))
+        }
+    }
 
     val events = page?.events ?: emptyList()
     val rows = remember(events) { TranscriptGroups.group(events) }
@@ -181,6 +197,11 @@ fun ChatView(
     val itemCount = rows.size + (if (pendingSend != null) 1 else 0) + (if (streaming) 1 else 0)
 
     val listState = rememberLazyListState()
+    // The wheel is this client's finger. Without a count of real scroll input the
+    // follow latch has nothing a mouse can break — see FollowNewest — and reading
+    // back through a live conversation is impossible: every token yanks the view
+    // to the tail again.
+    val scrolls = remember(chatId) { mutableStateOf(0) }
     // partial.length is what makes a live answer follow: the item count does not
     // change while tokens arrive into the same block.
     val hasUnseen = FollowNewest(
@@ -188,6 +209,7 @@ fun ChatView(
         itemCount = itemCount,
         revision = tailRevision(page?.nextOffset, events.size, partial.length, activity, pendingSend),
         key = chatId,
+        scrolls = scrolls,
     )
 
     // Suggestions are asked for by the CONTROLLER, at the turn boundary it can
@@ -261,7 +283,8 @@ fun ChatView(
                     // not a property of a transcript row.
                     val metrics = LocalTranscriptMetrics.current
                     LazyColumn(
-                        Modifier.fillMaxSize().padding(horizontal = 16.dp),
+                        Modifier.fillMaxSize().padding(horizontal = 16.dp)
+                            .onScrollInput { scrolls.value++ },
                         state = listState,
                         contentPadding = PaddingValues(vertical = metrics.rowPadding),
                         verticalArrangement = Arrangement.spacedBy(metrics.rowSpacing),
@@ -301,6 +324,7 @@ fun ChatView(
             draft = draft,
             onDraft = setDraft,
             onSent = clearDraft,
+            onRestore = restoreDraft,
             attachments = attachments,
             scope = scope,
             running = running,
@@ -324,12 +348,17 @@ fun ChatView(
  * keystroke and is debounced; SENDING must cancel that pending write, or it
  * lands afterwards carrying the text that was just sent and the message
  * reappears as a draft. That is a bug the Electron client actually shipped.
+ *
+ * [onRestore] is the other half of that: clearing first is only safe when the
+ * work cannot be cancelled, and this work waits on an upload inside a scope that
+ * dies with the view.
  */
 @Composable
 private fun Composer(
     draft: String,
     onDraft: (String) -> Unit,
     onSent: () -> Unit,
+    onRestore: (String) -> Unit,
     attachments: AttachmentController,
     scope: kotlinx.coroutines.CoroutineScope,
     running: Boolean,
@@ -351,10 +380,25 @@ private fun Composer(
         if (canSend) {
             val body = draft
             onSent()
+            var posted = false
             scope.launch {
-                val marker = attachments.take()
-                val full = composeMessage(body, marker)
-                if (full.isNotEmpty()) onSend(full)
+                try {
+                    val marker = attachments.take()
+                    val full = composeMessage(body, marker)
+                    // Cancellation is cooperative, so a scope killed while take()
+                    // was returning would otherwise let this through to a launch
+                    // that never runs, and count as sent.
+                    ensureActive()
+                    if (full.isNotEmpty()) onSend(full)
+                    posted = true
+                } finally {
+                    // take() parks for the whole upload — up to 20s — on a scope
+                    // that dies with this view, so switching chats or closing the
+                    // chat mid-upload cancels the send. The draft is already
+                    // cleared by then: without this the message is simply gone,
+                    // with no error and nothing left to retry from.
+                    if (!posted) onRestore(body)
+                }
             }
         }
     }
