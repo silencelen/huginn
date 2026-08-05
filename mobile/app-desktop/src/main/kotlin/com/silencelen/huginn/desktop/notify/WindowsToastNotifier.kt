@@ -27,7 +27,12 @@ import java.util.concurrent.TimeUnit
  *    exact reason no notification ever appeared in the Electron client's field
  *    use before `setAppUserModelId` was added. The NSIS installer must stamp
  *    [AUMID] onto the shortcut it creates; nothing this process does at runtime
- *    can substitute for that.
+ *    can substitute for that. Releases 0.3.1 and earlier stamped NOTHING — the
+ *    hand-written installer that replaced electron-builder's lost the step, and
+ *    because the loss is invisible from this side (see [createOrNull]) it shipped
+ *    and reported itself healthy. `packaging/huginn-desktop-kt.nsi` stamps it
+ *    now, and `scripts/release-desktop.sh` refuses to publish an installer whose
+ *    stamped identity is not this exact string.
  * 2. **The `huginn` scheme registered**, or the buttons do nothing when clicked.
  * 3. **A packaged install.** Running from Gradle there is no shortcut and no
  *    identity, so [createOrNull] refuses rather than posting into a void.
@@ -157,6 +162,10 @@ class WindowsToastNotifier private constructor(private val script: File) : Notif
          * MUST equal the `System.AppUserModel.ID` the NSIS installer stamps on the
          * Start Menu shortcut. If the two ever disagree, Windows drops every toast
          * without an error and the client looks silent rather than broken.
+         *
+         * `release-desktop.sh` reads this literal out of this file and compares it
+         * to the one the compiled installer stamps, so the two cannot drift — but
+         * it reads it as TEXT. Keep it a plain string literal on one line.
          */
         const val AUMID: String = "com.silencelen.huginn.desktop-kt"
 
@@ -175,9 +184,16 @@ class WindowsToastNotifier private constructor(private val script: File) : Notif
             }.getOrNull() ?: return null
             val notifier = WindowsToastNotifier(script)
             // Probe ONCE, for real: load the WinRT types and construct a notifier
-            // for our AUMID. Anything that throws here (no WinRT, policy blocking
-            // PowerShell, an AUMID Windows will not accept) means this path would
-            // have swallowed notifications silently.
+            // for our AUMID. Anything that throws here — no WinRT, policy blocking
+            // PowerShell — means this path would have swallowed notifications
+            // silently, so we refuse it and take the balloon instead.
+            //
+            // What it does NOT cover, and cannot: an AUMID no shortcut carries.
+            // CreateToastNotifier accepts any string; the drop happens later, at
+            // display time, with a zero exit code. So `healthy` stays true and
+            // every post reports success while nothing reaches the screen. That
+            // hole is closed in the INSTALLER and gated in the release script,
+            // because there is nothing to test for here.
             val ok = notifier.run(listOf("-Action", "probe", "-Aumid", AUMID))
             return if (ok) notifier else null
         }

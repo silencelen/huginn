@@ -68,11 +68,24 @@ done
 
 VERSION=$(cat app-desktop/version.txt | tr -d '[:space:]')
 [ -n "$VERSION" ] || { echo "REFUSING: app-desktop/version.txt is empty" >&2; exit 1; }
+# x.y.z exactly. Step 6's prune finds a version inside a FILENAME with a
+# three-component regex, so a two-component version would produce artifacts the
+# prune cannot see and therefore never deletes — and the gate below cannot order
+# two versions it cannot parse.
+echo "$VERSION" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+$' \
+  || { echo "REFUSING: app-desktop/version.txt is '$VERSION', not x.y.z" >&2; exit 1; }
 BUILD=app-desktop/build
 WIN=$BUILD/windows
 DIST=$BUILD/release
 EXE="Huginn-Desktop-Setup-$VERSION.exe"
 DEB="huginn-desktop-kt_${VERSION}-1_amd64.deb"
+# The installer, the plugin that stamps the notification identity, and the file
+# that holds the identity itself. Named once: two gates and the makensis
+# invocation all reach for them, and the plugin path is DERIVED from the .nsi
+# path so it cannot end up pointing at a different tree.
+NSI=app-desktop/packaging/huginn-desktop-kt.nsi
+PLUGIN_DIR="$PWD/$(dirname "$NSI")/plugins/x86-unicode"
+NOTIFIER=app-desktop/src/main/kotlin/com/silencelen/huginn/desktop/notify/WindowsToastNotifier.kt
 LOG=${TMPDIR:-/tmp}/huginn-desktop-kt-release.log
 : > "$LOG"
 
@@ -86,14 +99,55 @@ echo "[1/7] gates"
 grep -q "^## $VERSION\$" app-desktop/CHANGELOG.md || {
   echo "REFUSING: app-desktop/CHANGELOG.md has no '## $VERSION' section" >&2; exit 1; }
 
-# Never overwrite what is already live: a client that has downloaded and verified
-# 0.2.0 would find different bytes under the same version and the same hash claim.
+# The toast identity, in the two files that must agree about it. A desktop app
+# has no notification identity of its own — it borrows the AUMID stamped on its
+# Start Menu shortcut — so the string the app hands to CreateToastNotifier and
+# the string the installer stamps are ONE FACT STORED TWICE. When they disagree,
+# or when nothing stamps at all, Windows accepts every toast and displays none of
+# them, with no error and a zero exit code, so nothing downstream can notice.
+# 0.3.1 shipped stamping nothing and reported itself healthy the whole time.
+KT_AUMID=$(sed -n 's/^ *const val AUMID: String = "\(.*\)"$/\1/p' "$NOTIFIER")
+NSI_AUMID=$(sed -n 's/^!define AUMID  *"\(.*\)"$/\1/p' "$NSI")
+[ -n "$KT_AUMID" ] || { echo "REFUSING: no AUMID constant found in $NOTIFIER" >&2; exit 1; }
+[ "$KT_AUMID" = "$NSI_AUMID" ] || {
+  echo "REFUSING: AUMID drift — the app posts as '$KT_AUMID', the installer stamps '$NSI_AUMID'" >&2
+  exit 1; }
+# Agreeing strings prove nothing if the stamp lands on a DIFFERENT shortcut than
+# the one the installer creates — that reintroduces the silent drop while every
+# other check here still passes.
+LNK=$(sed -n 's/^ *CreateShortCut \("\$SMPROGRAMS[^"]*\.lnk"\) .*/\1/p' "$NSI" | head -1)
+grep -qF "WinShell::SetLnkAUMI $LNK" "$NSI" || {
+  echo "REFUSING: $NSI does not stamp the AUMID on $LNK, the shortcut it creates" >&2; exit 1; }
+[ -f "$PLUGIN_DIR/WinShell.dll" ] || {
+  echo "REFUSING: $PLUGIN_DIR/WinShell.dll is missing — nothing can stamp the AUMID" >&2; exit 1; }
+echo "  toast identity: $KT_AUMID (app and installer agree)"
+
+# Never overwrite what is already live, and never publish BACKWARDS. Equality was
+# the original hazard — a client that has downloaded and verified 0.2.0 would
+# find different bytes under the same version and the same hash claim — but a
+# downgrade is that hazard plus a second one: step 6 prunes to the newest $KEEP
+# versions, so publishing 0.2.9 over a live 0.3.1 deletes 0.3.1's artifacts out
+# from under whoever is mid-download, and then offers every running client an
+# "update" that walks it backwards. version.txt is a one-line file edited by
+# hand and releases get cut from old checkouts; neither mistake is exotic.
 if [ -f "$TOKEN_FILE" ]; then
+  # `|| ''` because a manifest WITHOUT a version field makes `node -p` print the
+  # four-letter word "undefined", which is neither empty nor a version, and every
+  # test downstream of here would then be reasoning about a string that means
+  # nothing.
   LIVE=$(curl -sf -H "Authorization: Bearer $(cat "$TOKEN_FILE")" \
     "$BASE_URL$FEED/manifest" 2>/dev/null | node -p \
-    "try{JSON.parse(require('fs').readFileSync(0,'utf8')).version}catch{''}" || true)
-  if [ "$LIVE" = "$VERSION" ]; then
-    echo "REFUSING: $VERSION is already live on $BASE_URL$FEED" >&2; exit 1
+    "try{JSON.parse(require('fs').readFileSync(0,'utf8')).version||''}catch{''}" || true)
+  # An empty LIVE is the first release into a fresh channel — nothing to compare.
+  if [ -n "$LIVE" ]; then
+    # An unreadable live version means the channel is not in the state this
+    # script believes it is in, and guessing is how you overwrite something.
+    echo "$LIVE" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+$' || {
+      echo "REFUSING: $BASE_URL$FEED serves version '$LIVE', which is not x.y.z" >&2; exit 1; }
+    NEWEST=$(printf '%s\n%s\n' "$LIVE" "$VERSION" | sort -t. -k1,1n -k2,2n -k3,3n | tail -1)
+    if [ "$VERSION" = "$LIVE" ] || [ "$NEWEST" != "$VERSION" ]; then
+      echo "REFUSING: $VERSION is not newer than $LIVE, already live on $BASE_URL$FEED" >&2; exit 1
+    fi
   fi
 fi
 
@@ -239,18 +293,36 @@ if [ "$LINUX_ONLY" = 0 ]; then
   file "$APP_IMAGE/huginn-desktop-kt.exe" | grep -q 'PE32+ executable' || {
     echo "REFUSING: the app-image launcher is not a Windows PE binary" >&2; exit 1; }
 
-  "$MAKENSIS" -V2 \
+  # -V4 into a log of its own, not -V2 appended to the shared one. That is the
+  # only verbosity that prints the RESOLVED plugin calls, and the assertion below
+  # reads the stamped identity off the compiler instead of trusting the source it
+  # was supposed to come from. A relative -DPLUGIN_DIR would be accepted, add
+  # nothing, and fail as "Plugin not found" — hence the absolute path.
+  "$MAKENSIS" -V4 \
     -DAPP_VERSION="$VERSION" \
     -DSRC_DIR="$PWD/$APP_IMAGE" \
     -DOUT_FILE="$PWD/$WIN/out/$EXE" \
-    app-desktop/packaging/huginn-desktop-kt.nsi >> "$LOG" 2>&1 || {
-    tail -40 "$LOG"; echo "REFUSING: makensis failed (full log: $LOG)" >&2; exit 1; }
+    -DPLUGIN_DIR="$PLUGIN_DIR" \
+    "$NSI" > "$LOG.nsis" 2>&1 || {
+    cat "$LOG.nsis" >> "$LOG"; tail -40 "$LOG.nsis"
+    echo "REFUSING: makensis failed (full log: $LOG)" >&2; exit 1; }
+  cat "$LOG.nsis" >> "$LOG"
   [ -f "$WIN/out/$EXE" ] || { echo "REFUSING: $EXE was not produced" >&2; exit 1; }
   # PROVE it is what it claims to be, rather than trusting that makensis exited 0.
   file "$WIN/out/$EXE" | grep -q 'Nullsoft Installer self-extracting archive' || {
     file "$WIN/out/$EXE"; echo "REFUSING: $EXE is not an NSIS installer" >&2; exit 1; }
+
+  # The identity this installer will actually stamp, taken from the compiled
+  # instruction rather than the .nsi. This is the check that would have caught
+  # 0.3.1: an installer that stamps nothing builds, installs, launches and passes
+  # every other gate here, and then Windows drops each toast in silence. Empty
+  # means no SetLnkAUMI survived into the installer at all.
+  STAMPED=$(sed -n 's/^Plugin command: SetLnkAUMI .*\.lnk //p' "$LOG.nsis" | head -1)
+  [ "$STAMPED" = "$KT_AUMID" ] || {
+    echo "REFUSING: the installer stamps '$STAMPED', the app posts as '$KT_AUMID'" >&2; exit 1; }
   echo "  $EXE $(stat -c %s "$WIN/out/$EXE") bytes"
   echo "  $(file -b "$WIN/out/$EXE")"
+  echo "  stamps AUMID $STAMPED on the Start Menu shortcut"
 
   # ------------------------------------------------- 3b. run it, under wine
   #
@@ -385,7 +457,7 @@ done
 # It is the one failure in this script that would reach the owner's running
 # desktop app, so it is checked on every release.
 ELECTRON=$(curl -sf -H "Authorization: Bearer $TOKEN" "$BASE_URL/v1/desktop/manifest" \
-  | node -p "try{JSON.parse(require('fs').readFileSync(0,'utf8')).version}catch{''}" || true)
+  | node -p "try{JSON.parse(require('fs').readFileSync(0,'utf8')).version||''}catch{''}" || true)
 [ -n "$ELECTRON" ] || { echo "FAIL: /v1/desktop stopped serving a manifest" >&2; exit 1; }
 echo "  /v1/desktop still serves the Electron client: $ELECTRON (untouched)"
 

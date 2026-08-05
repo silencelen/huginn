@@ -28,12 +28,28 @@ Unicode true
 !ifndef OUT_FILE
   !error "OUT_FILE not defined — pass -DOUT_FILE=<path to the .exe to write>"
 !endif
+; The ONE plugin, checked in beside this file rather than installed into makensis
+; or read out of electron-builder's cache — plugins/README.md says why a binary is
+; in the tree at all. It comes from the script like every other path here because
+; it has to be ABSOLUTE: `!addplugindir` accepts a relative path, adds NOTHING,
+; and admits it only at -V4, so the resulting "Plugin not found" reads like a
+; missing DLL rather than a missing leading slash.
+!ifndef PLUGIN_DIR
+  !error "PLUGIN_DIR not defined — pass -DPLUGIN_DIR=<absolute path to packaging/plugins/x86-unicode>"
+!endif
+!addplugindir /x86-unicode "${PLUGIN_DIR}"
 
 !define APP_ID    "huginn-desktop-kt"
 !define APP_NAME  "Huginn Desktop (Compose)"
 !define APP_EXE   "huginn-desktop-kt.exe"
 !define PUBLISHER "silencelen"
 !define UNINST_KEY "Software\Microsoft\Windows\CurrentVersion\Uninstall\${APP_ID}"
+; MUST equal WindowsToastNotifier.AUMID, the string the app hands to
+; CreateToastNotifier. A desktop app has no notification identity of its own: it
+; borrows the one stamped on its Start Menu shortcut, and if the two strings
+; disagree Windows accepts every toast and shows none of them, with no error
+; anywhere. release-desktop.sh compares the two files so they cannot drift.
+!define AUMID     "com.silencelen.huginn.desktop-kt"
 
 Name "${APP_NAME} ${APP_VERSION}"
 OutFile "${OUT_FILE}"
@@ -83,8 +99,8 @@ VIAddVersionKey "LegalCopyright" "${PUBLISHER}"
 ;     own, which is why this is an acceptable last resort rather than a silent
 ;     one.
 ;
-; `tasklist`/`taskkill` are used rather than the nsProcess plugin so this stays
-; buildable by a stock Linux makensis with no plugin directory.
+; `tasklist`/`taskkill` are used rather than the nsProcess plugin: a job the
+; shipped Windows tools already do should not cost a second vendored binary.
 
 !macro EnsureNotRunning UN
 Function ${UN}EnsureNotRunning
@@ -157,8 +173,29 @@ Section "Install"
   IntFmt $0 "0x%08X" $0
   WriteRegDWORD HKCU "${UNINST_KEY}" "EstimatedSize" "$0"
 
+  ; ------------------------------------------------------ notification identity
+  ;
+  ; The shortcut is not a convenience here, it is the thing that makes toasts
+  ; work. Windows files a notification under the calling app's AppUserModelID and
+  ; discards it — no error, no log, the Show() call returns normally — when that
+  ; ID matches no installed Start Menu shortcut. Every "needs you" the desktop
+  ; client raises goes through that path, and the Telegram fallback is suppressed
+  ; while the desktop claims the notify route, so an unstamped shortcut is worse
+  ; than having no desktop notifier at all: it swallows the message AND the
+  ; fallback that would have reached him.
+  ;
+  ; This is not theory. The Electron client showed no notifications in field use
+  ; until its identity was set; the hand-written installer that replaced
+  ; electron-builder lost the step, and 0.3.1 shipped without it.
   CreateDirectory "$SMPROGRAMS\${APP_NAME}"
   CreateShortCut "$SMPROGRAMS\${APP_NAME}\${APP_NAME}.lnk" "$INSTDIR\${APP_EXE}"
+  WinShell::SetLnkAUMI "$SMPROGRAMS\${APP_NAME}\${APP_NAME}.lnk" "${AUMID}"
+  ; Names the identity for Action Center and for Settings > Notifications. Windows
+  ; will invent a label without it, but an app the owner cannot FIND in that list
+  ; is an app whose notifications he cannot check are enabled — and "notifications
+  ; are off for this app" is the other way toasts vanish in silence.
+  WriteRegStr HKCU "Software\Classes\AppUserModelId\${AUMID}" "DisplayName" "${APP_NAME}"
+
   CreateShortCut "$SMPROGRAMS\${APP_NAME}\Uninstall ${APP_NAME}.lnk" "$INSTDIR\Uninstall.exe"
 SectionEnd
 
@@ -166,6 +203,12 @@ Section "Uninstall"
   ; Same lock problem, same answer: an uninstall over a running app leaves the
   ; directory behind and the entry in Programs and Features.
   Call un.EnsureNotRunning
+  ; Unpin and de-register before deleting. A shortcut that is simply removed from
+  ; disk leaves its pinned tile and its jump-list history behind, still bound to
+  ; the AUMID, so a later reinstall inherits a half-remembered identity.
+  WinShell::UninstShortcut "$SMPROGRAMS\${APP_NAME}\${APP_NAME}.lnk"
+  WinShell::UninstAppUserModelId "${AUMID}"
+  DeleteRegKey HKCU "Software\Classes\AppUserModelId\${AUMID}"
   Delete "$SMPROGRAMS\${APP_NAME}\${APP_NAME}.lnk"
   Delete "$SMPROGRAMS\${APP_NAME}\Uninstall ${APP_NAME}.lnk"
   RMDir "$SMPROGRAMS\${APP_NAME}"
