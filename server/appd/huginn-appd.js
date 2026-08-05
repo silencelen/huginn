@@ -32,7 +32,7 @@ const {
 const { readTranscript, liveActivity } = require('./lib/transcript');
 const { summarizeUsage } = require('./lib/usage');
 const { normalizePlan } = require('./lib/plan');
-const { AccountStore, fingerprint, normUuid } = require('./lib/accounts');
+const { AccountStore, fingerprint, sameAccount, normUuid } = require('./lib/accounts');
 const { formatModel, discoverModels, parseModelId } = require('./lib/models');
 const { pushPending, takePending, clearPending, queuedEvents } = require('./lib/chatqueue');
 const { digest } = require('./lib/watch');
@@ -48,7 +48,7 @@ const {
 const pushLib = require('./lib/pushtokens');
 const { trySender } = require('./lib/fcm');
 
-const VERSION = '2.53.0';
+const VERSION = '2.53.1';
 const PORT = Number(process.env.HUGINN_APPD_PORT || 8787);
 const DATA_DIR = process.env.HUGINN_APPD_DATA || '/var/lib/huginn-appd';
 const UPLOADS_DIR = path.join(DATA_DIR, 'uploads');
@@ -1749,6 +1749,31 @@ async function autoswitchTick() {
     });
     if (!d) {
       autoswitchWhy = explainSwitch({ active, candidates, now: Date.now(), lastSwitchAt: st.lastSwitchAt || 0, threshold });
+      // Say so OUT LOUD when the account is at the threshold and we still cannot
+      // act, rather than only answering /v1/autoswitch when somebody thinks to
+      // ask. This is a feature whose whole job is to act unattended, so the one
+      // way it fails — armed, enabled, and with nothing it is allowed to switch
+      // to — otherwise announces itself as hitting a limit that was supposed to
+      // have been avoided. Candidates are priced with their STORED tokens and an
+      // expired one reports nothing, so a pool that has sat unused long enough
+      // simply empties, quietly.
+      //
+      // Only at the threshold, and once a day: below it there is nothing to warn
+      // about, and above it the reading changes every few minutes.
+      const worst = worstLimit(active.limits);
+      if (worst && worst.percent >= threshold) {
+        const lastWarn = st.lastIdleWarnAt || 0;
+        if (Date.now() - lastWarn > 24 * 60 * 60 * 1000) {
+          st.lastIdleWarnAt = Date.now();
+          saveAutoswitch(st);
+          const text = `${active.email || active.slug} is at ${worst.percent}% (${worst.label}) and ` +
+            `auto-switch could not move: ${autoswitchWhy}. Sign in to another account, or ` +
+            `open one of the saved ones once so its headroom can be read.`;
+          const push = await deliverPush({ kind: 'account_switch', title: 'Auto-switch is stuck', text, subject: active.slug });
+          if (!push.sent) await deliverTelegram(`\u{26A0} Auto-switch is stuck\n${text}`);
+          log(`autoswitch: STUCK at ${worst.percent}% — ${autoswitchWhy}`);
+        }
+      }
       return;
     }
     autoswitchWhy = null;
@@ -2476,7 +2501,19 @@ const server = http.createServer(async (req, res) => {
           // the check that catches "signed in the same account again", which is
           // the failure this whole flow exists to avoid.
           const captured = (live && await resolveEmail(live)) || acct.email || null;
-          const others = accounts.list().filter((a) => a.slug !== fingerprint(live));
+          // "Every profile that is not the one we just saved."
+          //
+          // Compared by CREDENTIALS, not by slug. This read
+          // `a.slug !== fingerprint(live)` while profiles are keyed by
+          // accountUuid, so the filter never matched anything: the new account
+          // stayed in `others`, was compared against itself, trivially had the
+          // same email, and every successful sign-in of a genuinely NEW account
+          // came back flagged `duplicate` — the one warning this flow exists to
+          // raise, cried on every use.
+          const others = accounts.list().filter((a) => {
+            const rec = accounts.readProfile(a.slug);
+            return !(rec && sameAccount(rec.credentials, live));
+          });
           const dupSlugs = [];
           for (const o of others) {
             const rec = accounts.readProfile(o.slug);
