@@ -1,7 +1,7 @@
 # FAQ
 
 ### Is this just `ssh` + `tmux`?
-Yes — packaged. Huginn is `ssh -t host tmux …` with multi-device-friendly tmux defaults, a one-word command (with subcommands + tab-completion) that works the same in PowerShell **and** bash/Termux, a container template, and a one-shot setup. No new protocol — just the sharp edges filed off.
+The `huginn` command, yes — packaged. It's `ssh -t host tmux …` with multi-device-friendly tmux defaults, a one-word command (with subcommands + tab-completion) that works the same in PowerShell **and** bash/Termux, a container template, and a one-shot setup. No new protocol — just the sharp edges filed off. The repo also ships the parts that *aren't* ssh + tmux and are opt-in: `huginn-appd` (an HTTP daemon on the host) and the Android/desktop apps that talk to it. Deploy those and the answer changes — see [`SECURITY.md`](SECURITY.md).
 
 ### Do I need a Claude Max/Pro subscription?
 No, but it's the point. Claude Code can log in with a **Max/Pro subscription** (flat cost — an always-on agent you talk to all day doesn't run up an API bill) **or** an `ANTHROPIC_API_KEY` (metered). Use whichever you have.
@@ -30,6 +30,9 @@ Yes. `huginn` is the `main` session; `huginn <name>` creates/attaches others. `h
 ### Where do sessions open (working directory)?
 `$HOME` by default. Set `export HUGINN_WORKDIR=/path/to/project` in the host login shell to change it.
 
+### Is `huginn -p` safe to point at an untrusted prompt? It has no tools, right?
+No — it has tools. `-p` and `-y` differ only in which tools the client *auto-approves*, and `--allowedTools` never restricts the ones it leaves out. Headless Claude Code gets `Read`/`Glob`/`Grep` for free, so a `-p` one-shot reads any file the host user can; and if the host's `~/.claude/settings.json` uses a permissive `permissions.defaultMode`, `-p` will run `Bash` and `Write` as well. Treat both flags as "an agent with your shell account", not as a sandbox. See [Usage → Headless one-shots](USAGE.md#headless-one-shots).
+
 ### My one-shot `huginn -y` won't run tools / says it needs permission.
 Claude Code refuses `--dangerously-skip-permissions` when running as **root**, so `-y` uses an explicit tool allowlist (`Bash Read Edit Write Glob Grep WebFetch`). For broader headless autonomy, run the node as a **non-root user**.
 
@@ -37,7 +40,7 @@ Claude Code refuses `--dangerously-skip-permissions` when running as **root**, s
 Add an MCP memory server to the host's Claude Code (`claude mcp add …`). That's the "Muninn" half — out of scope for this repo, but the hook is there. See [Architecture → Extending it](ARCHITECTURE.md#extending-it).
 
 ### Is it secure to run an AI agent on a server like this?
-It's as exposed as your SSH. Use key-only auth, restrict keys (e.g., Tailscale-only `from=` clauses), prefer a non-root user, and understand that anyone who can reach the session can drive Claude Code with whatever permissions it has. See [`SECURITY.md`](SECURITY.md).
+The terminal path is as exposed as your SSH: use key-only auth, restrict keys (e.g., Tailscale-only `from=` clauses), prefer a non-root user, and understand that anyone who can reach the session can drive Claude Code with whatever permissions it has. If you also deploy `huginn-appd` for the phone/desktop apps, you have a **second** credential of the same power — a bearer token on an HTTP port, held by every device you paste it into, and revoking an SSH key does nothing to it. Read [`SECURITY.md`](SECURITY.md) before exposing either.
 
 ### Windows: `huginn` isn't recognized after install.
 Reload your profile (`. $PROFILE`) or open a new PowerShell window. The installer appends a source line to `$PROFILE`.
