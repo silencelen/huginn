@@ -279,4 +279,23 @@ class HuginnClientTest {
         }
         override suspend fun close() { closed = true }
     }
+
+    @Test
+    fun `createSession returns the name tmux actually used, not the one asked for`() = runTest {
+        // tmux rewrites a '.' to '_' and still reports success, and the route's
+        // name rule lets one through — so the host reads the name back and
+        // reports it. Using the requested name instead is a 404 on every request
+        // the client makes afterwards.
+        val made = ok("""{"ok":true,"name":"my_session"}""").createSession("my.session")
+        assertEquals("my_session", made)
+    }
+
+    @Test
+    fun `createSession tolerates a host that reports no name`() = runTest {
+        // Older daemons echoed nothing useful; an empty string is handled by the
+        // callers rather than throwing here.
+        val made = ok("""{"ok":true}""").createSession("plain")
+        assertEquals("", made)
+    }
+
 }
