@@ -45,9 +45,15 @@ window narrowed to a phone's width then gets the phone's answer, which
 `expect`/`actual` cannot express because it is a runtime question, not a
 platform one.
 
-Reach for `expect`/`actual` only when the platform API itself differs — the
-HTTP engine, the IO dispatcher, the glyph blit. There are four in the whole
-project; that number should stay small.
+Reach for `expect`/`actual` only when the platform API itself differs — the HTTP
+engine and the IO dispatcher. There are **two** in the whole project, both in
+`:core/data/Platform.kt`; that number should stay small.
+
+The glyph blit is drawn the same way on both platforms but through different
+graphics APIs, and it is deliberately NOT `expect`/`actual`: it is a source-set
+split (`CellPainter.android.kt` / `CellPainter.jvm.kt`), which gives each side a
+whole file rather than forcing one signature to describe both. Prefer that shape
+when the platforms need different *code* rather than a different *value*.
 
 ## Where the shells legitimately own things
 
