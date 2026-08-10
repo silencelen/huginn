@@ -128,6 +128,7 @@ fun Shell(store: AppStore) {
     // subject, so "which one are we renaming" cannot get out of step with "is the
     // dialog up".
     var renaming by remember { mutableStateOf<RenameTarget?>(null) }
+    var namingSession by remember { mutableStateOf(false) }
     var confirming by remember { mutableStateOf<ConfirmTarget?>(null) }
 
     // Named `act` rather than `run`: a local function called `run` shadows
@@ -202,6 +203,7 @@ fun Shell(store: AppStore) {
                                 selection = sessionSel,
                                 onSelect = { sessionSel = it },
                                 onOpen = { store.openSession(it) },
+                                onNew = { namingSession = true },
                                 verbs = sessionVerbs,
                             )
                             else -> Unit
@@ -273,6 +275,25 @@ fun Shell(store: AppStore) {
                 onDismissError = { store.clearError() },
                 onOpenSession = { store.openSession(it) },
                 onClearSelection = { if (view == View.SESSIONS) sessionSel = Selection() else chatSel = Selection() },
+            )
+        }
+
+        if (namingSession) {
+            NewSessionDialog(
+                taken = sessions.map { it.name }.toSet(),
+                onDismiss = { namingSession = false },
+                onConfirm = { name ->
+                    namingSession = false
+                    act {
+                        // Open what tmux CALLED it. The host reads the name back
+                        // rather than echoing the request, because tmux rewrites
+                        // a '.' to '_' and still succeeds — opening the requested
+                        // name would 404 on everything after it.
+                        val made = store.client.createSession(name)
+                        store.refreshSessions()
+                        store.openSession(made)
+                    }
+                },
             )
         }
 
@@ -654,6 +675,54 @@ sealed interface RenameTarget {
 sealed interface ConfirmTarget {
     data class DeleteChats(val ids: List<String>) : ConfirmTarget
     data class KillSessions(val names: List<String>) : ConfirmTarget
+}
+
+/**
+ * Names a new tmux session.
+ *
+ * The desktop could list, open and kill sessions but never make one — the empty
+ * state said so out loud ("this client watches, it does not create them") while
+ * the phone had created them all along, so the only way to start a session from
+ * a desk was to SSH in.
+ *
+ * [taken] is checked here so an existing name is refused while it is being typed,
+ * rather than after a round trip that comes back 409.
+ */
+@Composable
+private fun NewSessionDialog(
+    taken: Set<String>,
+    onDismiss: () -> Unit,
+    onConfirm: (String) -> Unit,
+) {
+    var text by remember { mutableStateOf("") }
+    val canon = text.trim().lowercase()
+    val wellFormed = canon.matches(SESSION_NAME)
+    val clash = wellFormed && canon in taken
+    val ok = wellFormed && !clash
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("New session", style = MaterialTheme.typography.titleSmall) },
+        text = {
+            Column {
+                DialogField(text, ok || text.isEmpty()) { text = it }
+                Text(
+                    when {
+                        clash -> "There is already a session called $canon."
+                        else -> "Letters, digits, _ . and - ; starts with a letter or digit. " +
+                            "Claude Code starts in it automatically."
+                    },
+                    style = DeskType.rowMeta,
+                    color = if (clash) MaterialTheme.colorScheme.error
+                    else MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(top = Space.unit),
+                )
+            }
+        },
+        confirmButton = {
+            TextButton(enabled = ok, onClick = { onConfirm(canon) }) { Text("Create") }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
+    )
 }
 
 @Composable
