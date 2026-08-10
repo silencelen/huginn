@@ -76,6 +76,8 @@ import com.silencelen.huginn.desktop.attach.appendDropped
 import com.silencelen.huginn.desktop.attach.attachmentDropTarget
 import com.silencelen.huginn.desktop.attach.composeMessage
 import com.silencelen.huginn.desktop.attach.rememberAttachmentController
+import com.silencelen.huginn.desktop.ui.common.DeskType
+import com.silencelen.huginn.desktop.ui.common.Space
 import com.silencelen.huginn.desktop.ui.session.ControlAction
 import com.silencelen.huginn.desktop.ui.session.ControlPicker
 import com.silencelen.huginn.desktop.ui.session.WorkPanel
@@ -403,7 +405,9 @@ private fun ConversationTab(controller: SessionController) {
     // session. What this replaces scrolled to the last item on every revision, so a
     // reader who scrolled up to read something older was dragged back to the bottom
     // on the next poll tick — a conversation that cannot be read while it is live.
-    val itemCount = rows.size + if (current.truncated) 1 else 0
+    val hasEarlier by controller.hasEarlier.collectAsState()
+    val loadingHistory by controller.loadingHistory.collectAsState()
+    val itemCount = rows.size + if (hasEarlier) 1 else 0
     val revision = tailRevision(current.nextOffset, rows.size, current.events.lastOrNull()?.text?.length)
     // A wheel tick is the reader taking the list, exactly as a drag is — and it
     // emits no DragInteraction, so without this the latch could never be broken
@@ -434,8 +438,29 @@ private fun ConversationTab(controller: SessionController) {
                     contentPadding = PaddingValues(vertical = metrics.rowPadding),
                     verticalArrangement = Arrangement.spacedBy(metrics.rowSpacing),
                 ) {
-                    if (current.truncated) {
-                        item("truncated") { Muted("Showing the most recent part of this session.") }
+                    // The conversation IS the history, so the top of the list is
+                    // a way into it rather than an apology for its absence. It
+                    // used to read "Showing the most recent part of this session."
+                    // and stop there — on a long session that was a sliver (51
+                    // events out of 3452, measured) with no way to ask for the
+                    // rest. Only the Screen tab has a genuine excuse: a Claude
+                    // pane runs on the alternate screen and has no scrollback at
+                    // all.
+                    if (hasEarlier) {
+                        item("earlier") {
+                            Row(
+                                Modifier.fillMaxWidth().padding(vertical = Space.unit),
+                                horizontalArrangement = Arrangement.Center,
+                            ) {
+                                if (loadingHistory) {
+                                    Muted("Loading earlier messages…")
+                                } else {
+                                    TextButton(onClick = { controller.loadEarlier() }) {
+                                        Text("Load earlier messages", style = DeskType.rail)
+                                    }
+                                }
+                            }
+                        }
                     }
                     // KEYED on the group's own identity, not on position. The
                     // retained window drops events off the front, which shifts every

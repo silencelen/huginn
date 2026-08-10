@@ -102,3 +102,34 @@ fun mergeTranscriptPage(
         truncated = current.truncated,
     )
 }
+
+/**
+ * Puts an OLDER page in front of what is already on screen.
+ *
+ * The mirror of [mergeTranscriptPage], and the two differ in more than direction:
+ *
+ *  * the retained-window trim is dropped from the FRONT there and must not apply
+ *    here at all — trimming the oldest events off a page the reader just asked to
+ *    load is the one thing this function must never do;
+ *  * every session-level field belongs to the CURRENT page. An older page reports
+ *    the model, mode and state as they were minutes or days ago, and letting them
+ *    win would make scrolling up rewrite the header.
+ *
+ * `windowStart` is taken from the older page, because it is now the oldest thing
+ * in view and therefore the handle for reading further back.
+ */
+fun prependTranscriptPage(
+    current: TranscriptPage?,
+    older: TranscriptPage,
+): TranscriptPage {
+    if (current == null) return older
+    var next = 0
+    val renumbered = (older.events + current.events).map { it.copy(seq = next++) }
+    return current.copy(
+        events = renumbered,
+        windowStart = older.windowStart,
+        // Sticky in the other direction too: the reader has now seen further
+        // back, so "there is more above" is the older page's answer.
+        truncated = older.windowStart > 0L,
+    )
+}
