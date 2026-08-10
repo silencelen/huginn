@@ -243,9 +243,10 @@ that undoes itself.
      compare, sha256 verified against what the manifest already carries, then
      `Ready` and stop. Proven end to end by `:app-desktop:updaterProbe`, which
      runs the real updater against the real channel as the release's last gate.
-   - **Not wired yet**: nothing calls `DesktopUpdater.start()` and the Settings
-     screen does not show update state. Both are small, and both are edits to
-     files phase 3c owned while this was built.
+   - **Wired since 0.2.0**: `AppStore` starts the updater (`updater.start(scope)`)
+     and the Settings screen renders its state. The note that used to sit here
+     said neither was done, which was true only while phase 3c still owned those
+     files.
 5. **Parity, then retire Electron.**
 
 ## Cutover: how the two channels stop being two

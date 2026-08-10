@@ -6,8 +6,14 @@
 # Self-update with:  huginn update   (pulls this file from the repo; gh -> scp fallback)
 # Version: 0.6.0
 
-HUGINN_VERSION='0.6.0'
+HUGINN_VERSION='0.6.1'
 HUGINN_REPO='silencelen/huginn'
+# Where `huginn update` may fetch a replacement for THIS FILE, which it then
+# sources into the live shell. Pinned, and deliberately NOT $HUGINN_HOST:
+# that variable answers "which box do I drive", and letting it also answer
+# "whose code do I run" means a typo, a second host or a test alias silently
+# becomes a code source. Override needs HUGINN_UPDATE_HOST set on purpose.
+HUGINN_UPDATE_HOST_DEFAULT='huginn'
 
 # A session name is letters, digits, and underscore only - no '-', '*', spaces or
 # other shell-special characters. This keeps a typo'd flag (e.g. 'huginn --hlp')
@@ -110,7 +116,10 @@ huginn - remote Claude Code node.  aliases: rclaude, rcc
                                 e.g. huginn usage monthly | session | blocks | blocks --live
   huginn usage <when>         shortcut date range: today | yesterday | week | month
                                 e.g. huginn usage today | huginn usage week session
-  huginn update               self-update this client from the repo ($HUGINN_REPO)
+  huginn update               self-update this client from the repo ($HUGINN_REPO);
+                              without gh, from the PINNED $HUGINN_UPDATE_HOST mirror
+                              (never $HUGINN_HOST - that would make whichever box you
+                              point at a source of code this shell then runs)
   huginn version              show client version
   huginn help | ? | /help     this help
 
@@ -143,10 +152,17 @@ EOF
       fi
       if [ -z "$got" ]; then
         command -v gh >/dev/null 2>&1 || echo "  (gh not installed - using the scp fallback)"
+        # The mirror host is PINNED, not $H. This path downloads a shell script
+        # and the block below sources it, so the host it comes from is a trust
+        # root, not a convenience — and $HUGINN_HOST is routinely repointed at a
+        # test box or mistyped. Say which host is being trusted, every time.
+        local uh="${HUGINN_UPDATE_HOST:-$HUGINN_UPDATE_HOST_DEFAULT}"
+        [ "$uh" = "$HUGINN_UPDATE_HOST_DEFAULT" ] \
+          || echo "  (HUGINN_UPDATE_HOST is set - trusting $uh for this client's code)"
         # BatchMode: never drop into an interactive password prompt in the middle
         # of what reads as a non-interactive update.
-        if scp -o BatchMode=yes "$H:/usr/local/share/huginn-cli/huginn.sh" "$tmp"; then
-          got=1; echo "  pulled from $H mirror via scp"
+        if scp -o BatchMode=yes "$uh:/usr/local/share/huginn-cli/huginn.sh" "$tmp"; then
+          got=1; echo "  pulled from $uh mirror via scp"
         fi
       fi
       # Validate BEFORE installing. Sourcing a truncated download leaves the live
