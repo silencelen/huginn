@@ -200,8 +200,14 @@ function startsAtBoundary(path, start) {
   }
 }
 
-function readTranscript(path, { offset = null, limit = 400, _resuming = null } = {}) {
+function readTranscript(path, { offset = null, limit = 400, until = null, _resuming = null } = {}) {
   const st = fs.statSync(path);
+  // Where this window ENDS. Normally the end of the file; `until` walks backwards
+  // into history instead, and is how a reader gets the part of a conversation the
+  // tail cut off. Pass the PREVIOUS window's `windowStart` and the two abut
+  // exactly — no overlap to dedupe, no gap to notice — because a windowStart is
+  // always a record boundary.
+  const end = until == null ? st.size : Math.max(0, Math.min(until, st.size));
   let start = offset;
   let truncated = false;
   // Is the caller RESUMING a tail it has already read, or opening cold?
@@ -224,20 +230,26 @@ function readTranscript(path, { offset = null, limit = 400, _resuming = null } =
     // of events or spans the whole file.
     let win = TAIL_BYTES;
     for (;;) {
-      start = Math.max(0, st.size - win);
+      start = Math.max(0, end - win);
       truncated = start > 0;
       if (start === 0) break;
-      const probe = readTranscript(path, { offset: start, limit, _resuming: false });
-      if (probe.events.length >= Math.min(limit, MIN_TAIL_EVENTS)) break;
+      const probe = readTranscript(path, { offset: start, limit, until, _resuming: false });
+      // A TAIL only has to be worth showing — MIN_TAIL_EVENTS distinguishes "a
+      // screenful of conversation" from "half a base64 blob", and reading more
+      // than that costs a phone bytes it did not ask for. A HISTORY page is the
+      // opposite: it was asked for explicitly, and stopping at twelve events
+      // would make walking back through a long session a hundred round trips.
+      const want = until == null ? Math.min(limit, MIN_TAIL_EVENTS) : limit;
+      if (probe.events.length >= want) break;
       win *= 2;
     }
   }
 
   let buf = Buffer.alloc(0);
-  if (st.size > start) {
+  if (end > start) {
     const fd = fs.openSync(path, 'r');
     try {
-      const len = st.size - start;
+      const len = end - start;
       buf = Buffer.alloc(len);
       fs.readSync(fd, buf, 0, len, start);
     } finally { fs.closeSync(fd); }
@@ -246,7 +258,9 @@ function readTranscript(path, { offset = null, limit = 400, _resuming = null } =
   let consumed = buf.length;
   let text = buf.toString('utf8');
   // A concurrent writer can leave a partial final line; leave it for next time.
-  const lastNl = text.lastIndexOf('\n');
+  // Only at the LIVE end of the file — a window that stops at `until` ends on a
+  // record boundary we chose, so there is nothing half-written down there.
+  const lastNl = until != null ? text.length - 1 : text.lastIndexOf('\n');
   if (lastNl === -1) {
     if (offset != null) return emptyResult(start, truncated);
   } else if (lastNl !== text.length - 1) {
@@ -255,12 +269,17 @@ function readTranscript(path, { offset = null, limit = 400, _resuming = null } =
     text = text.slice(0, lastNl + 1);
   }
   let lines = text.split('\n').filter((l) => l.length > 0);
+  // Where the records below actually START, which is not `start` when the window
+  // opened mid-record. This is what a reader pages backwards with: hand it back
+  // as `until` and the next window ends exactly where this one begins.
+  let windowStart = start;
   // A tail read USUALLY starts mid-line, and that fragment is not JSON — but not
   // always: when the window lands exactly on a record boundary the first line is
   // whole, and dropping it unconditionally lost a real message from the top of
   // the view. Ask the file instead of assuming: the byte before the window is a
   // newline exactly when the window starts at a boundary.
   if (truncated && lines.length && offset == null && !startsAtBoundary(path, start)) {
+    windowStart = start + Buffer.byteLength(lines[0], 'utf8') + 1;
     lines = lines.slice(1);
   }
 
@@ -273,6 +292,12 @@ function readTranscript(path, { offset = null, limit = 400, _resuming = null } =
     // outright instead.
     deliveredQueued: [],
     nextOffset: start + consumed,
+    /**
+     * The byte this window's first record begins at. Zero means the reader is
+     * looking at the very start of the conversation; anything else is where to
+     * resume reading BACKWARDS, by passing it as `until`.
+     */
+    windowStart,
     truncated,
     title: null,
     permissionMode: null,
@@ -295,8 +320,20 @@ function readTranscript(path, { offset = null, limit = 400, _resuming = null } =
   // bubble. Two sends, three messages, one of them permanently "queued".
   const queued = new Map();
   let seq = 0;
+  // Which record each event came out of, by byte. Kept OUTSIDE the events so it
+  // never reaches the wire, and in a WeakMap rather than a parallel array
+  // because the queued-message handling below moves events around — an index
+  // would desync, an object identity cannot.
+  const recordAt = new WeakMap();
+  let lineOffset = windowStart;
 
   for (const line of lines) {
+    const eventsBefore = out.events.length;
+    const recordOffset = lineOffset;
+    lineOffset += Buffer.byteLength(line, 'utf8') + 1;
+    // `finally` because almost every branch below ends in `continue`; this has to
+    // run whichever way the record leaves.
+    try {
     let d;
     try { d = JSON.parse(line); } catch { continue; }
     const ts = d.timestamp ? Math.floor(Date.parse(d.timestamp) / 1000) || null : null;
@@ -500,6 +537,11 @@ function readTranscript(path, { offset = null, limit = 400, _resuming = null } =
       default:
         continue;
     }
+    } finally {
+      for (let k = eventsBefore; k < out.events.length; k++) {
+        recordAt.set(out.events[k], recordOffset);
+      }
+    }
   }
 
   // Anything STILL waiting floats to the bottom.
@@ -517,7 +559,17 @@ function readTranscript(path, { offset = null, limit = 400, _resuming = null } =
   }
 
   if (out.events.length > limit) {
-    out.events = out.events.slice(-limit);
+    const kept = out.events.slice(-limit);
+    // windowStart MOVES with the trim. It is the promise that paging backwards
+    // from it loses nothing, and dropping the oldest events while still pointing
+    // at the record they came from silently breaks that: the next page ends
+    // before them, so they are never returned by any page. Rare — across 400
+    // real transcripts on this host the trim never fired, the largest tail being
+    // 54 events against a limit of 400 — which is exactly why it would have gone
+    // unnoticed.
+    const firstKeptAt = recordAt.get(kept[0]);
+    if (firstKeptAt != null) out.windowStart = firstKeptAt;
+    out.events = kept;
     out.truncated = true;
   }
   // Renumbered last, so list keys stay monotonic after a float or a move. The
@@ -528,7 +580,7 @@ function readTranscript(path, { offset = null, limit = 400, _resuming = null } =
 
 function emptyResult(offset, truncated) {
   return {
-    events: [], nextOffset: offset, truncated,
+    events: [], deliveredQueued: [], nextOffset: offset, windowStart: offset, truncated,
     title: null, permissionMode: null, model: null, gitBranch: null, cwd: null,
     effort: null, lastActivityTs: null,
   };

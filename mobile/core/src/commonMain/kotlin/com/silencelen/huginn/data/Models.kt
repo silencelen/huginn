@@ -180,6 +180,13 @@ data class TranscriptPage(
      */
     val deliveredQueued: List<String> = emptyList(),
     val nextOffset: Long = 0,
+    /**
+     * The byte this page's first record begins at. Zero means the very start of
+     * the conversation is in view; anything else is what to pass as `until` to
+     * read the page before this one. Absent from daemons older than 2.54.0, where
+     * it reads as 0 and history simply is not offered.
+     */
+    val windowStart: Long = 0,
     val truncated: Boolean = false,
     val title: String? = null,
     val permissionMode: String? = null,
