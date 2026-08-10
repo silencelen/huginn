@@ -48,7 +48,7 @@ const {
 const pushLib = require('./lib/pushtokens');
 const { trySender } = require('./lib/fcm');
 
-const VERSION = '2.53.1';
+const VERSION = '2.54.0';
 const PORT = Number(process.env.HUGINN_APPD_PORT || 8787);
 const DATA_DIR = process.env.HUGINN_APPD_DATA || '/var/lib/huginn-appd';
 const UPLOADS_DIR = path.join(DATA_DIR, 'uploads');
@@ -2685,8 +2685,16 @@ const server = http.createServer(async (req, res) => {
       const offsetParam = u.searchParams.get('offset');
       const offsetNum = offsetParam == null ? null : Number(offsetParam);
       if (offsetNum !== null && !Number.isFinite(offsetNum)) return sendErr(res, 400, 'offset must be a number');
+      // `until` reads BACKWARDS: the window ends here instead of at the live end
+      // of the file. Pass the previous response's `windowStart` to walk into
+      // history a page at a time — without it a long session shows only its tail
+      // and there is no way to ask for the rest.
+      const untilParam = u.searchParams.get('until');
+      const untilNum = untilParam == null ? null : Number(untilParam);
+      if (untilNum !== null && !Number.isFinite(untilNum)) return sendErr(res, 400, 'until must be a number');
       const t = readTranscript(st.transcript, {
         offset: offsetNum,
+        until: untilNum,
         limit: Math.max(1, Math.min(800, Number(u.searchParams.get('limit')) || 400)),
       });
       return sendJson(res, 200, {
@@ -3133,8 +3141,14 @@ const server = http.createServer(async (req, res) => {
         const offsetParam = u.searchParams.get('offset');
         const offsetNum = offsetParam == null ? null : Number(offsetParam);
         if (offsetNum !== null && !Number.isFinite(offsetNum)) return sendErr(res, 400, 'offset must be a number');
+        // Same backwards read as the session route: a long chat has history above
+        // its tail and this is how a reader asks for it.
+        const untilParam = u.searchParams.get('until');
+        const untilNum = untilParam == null ? null : Number(untilParam);
+        if (untilNum !== null && !Number.isFinite(untilNum)) return sendErr(res, 400, 'until must be a number');
         const t = readTranscript(file, {
           offset: offsetNum,
+          until: untilNum,
           limit: Math.max(1, Math.min(800, Number(u.searchParams.get('limit')) || 400)),
         });
         // A headless run records its prompt as an enqueue with no matching
