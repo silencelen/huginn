@@ -672,3 +672,68 @@ test('a cold open still emits a queued message whose enqueue scrolled off', () =
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });
+
+// ------------------------------------------------- reading backwards
+//
+// A cold open reads only the tail, so a long session showed a fraction of itself
+// and said "the most recent part" with no way to ask for the rest — measured at
+// 51 of 3452 events on a real 28MB transcript. `until` walks back a page at a
+// time; the contract that makes it work is that a window's `windowStart` is a
+// record boundary, so consecutive pages ABUT: nothing is returned twice and, more
+// importantly, nothing falls in a gap between them.
+
+test('paging backwards with until reaches the start and loses nothing', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'tr-back-'));
+  const p = path.join(dir, 'session.jsonl');
+  try {
+    const lines = [];
+    for (let i = 0; i < 300; i++) {
+      lines.push(JSON.stringify({ type: 'user', message: { content: `message number ${i}` } }));
+      lines.push(JSON.stringify({
+        type: 'assistant',
+        message: { content: [{ type: 'text', text: `reply ${i} `.repeat(40) }] },
+      }));
+    }
+    fs.writeFileSync(p, lines.join('\n') + '\n');
+
+    const whole = readTranscript(p, { offset: 0, limit: 100000 });
+    assert.ok(whole.events.length > 400, 'fixture must be longer than one window');
+
+    let page = readTranscript(p);
+    assert.ok(page.truncated, 'the tail of this file must not be the whole of it');
+    const seen = [...page.events];
+    let until = page.windowStart;
+    let pages = 1;
+    while (until > 0 && pages < 200) {
+      const q = readTranscript(p, { until, limit: 200 });
+      if (!q.events.length && q.windowStart === until) break;
+      seen.unshift(...q.events);
+      until = q.windowStart;
+      pages++;
+    }
+    assert.strictEqual(until, 0, 'paging must reach the beginning of the file');
+    assert.ok(seen.length >= whole.events.length,
+      `paged ${seen.length} events but a whole-file read has ${whole.events.length} — a gap`);
+
+    // The specific thing a gap would lose: every user message must be somewhere.
+    const texts = new Set(seen.filter((e) => e.kind === 'user').map((e) => e.text));
+    for (let i = 0; i < 300; i++) {
+      assert.ok(texts.has(`message number ${i}`), `message ${i} fell into a gap between pages`);
+    }
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('windowStart is zero once the whole file is in view', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'tr-small-'));
+  const p = path.join(dir, 'session.jsonl');
+  try {
+    fs.writeFileSync(p, JSON.stringify({ type: 'user', message: { content: 'only message' } }) + '\n');
+    const t = readTranscript(p);
+    assert.strictEqual(t.windowStart, 0);
+    assert.strictEqual(t.truncated, false, 'nothing was cut off, so nothing should claim it was');
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});

@@ -9,6 +9,7 @@ import com.silencelen.huginn.data.TranscriptPage
 import com.silencelen.huginn.ui.LiveInput
 import com.silencelen.huginn.ui.LocalEcho
 import com.silencelen.huginn.ui.mergeTranscriptPage
+import com.silencelen.huginn.ui.prependTranscriptPage
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -16,6 +17,9 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.stateIn
+import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -139,6 +143,46 @@ class SessionController(
 
     private var geometryJob: Job? = null
     private var transcriptOffset: Long? = null
+
+    /**
+     * The byte the OLDEST page on screen begins at, and the handle for reading
+     * further back. Null until a page has landed; 0 once the whole conversation
+     * is in view.
+     */
+    private var historyStart: Long? = null
+
+    private val _loadingHistory = MutableStateFlow(false)
+    val loadingHistory: StateFlow<Boolean> = _loadingHistory.asStateFlow()
+
+    /** True while there is still conversation above what is on screen. */
+    val hasEarlier: StateFlow<Boolean> = _page
+        .map { (it?.windowStart ?: 0L) > 0L }
+        .stateIn(scope, SharingStarted.Eagerly, false)
+
+    /**
+     * Reads the page before the oldest one on screen and prepends it.
+     *
+     * The tail is all a cold open gets, and on a long session that is a sliver of
+     * it — measured at 51 events out of 3452 on a real transcript. Walking back
+     * one page at a time keeps each request small; the pages abut because a
+     * windowStart is a record boundary, so this neither duplicates nor skips.
+     */
+    fun loadEarlier() {
+        val until = historyStart ?: _page.value?.windowStart ?: return
+        if (until <= 0L || _loadingHistory.value) return
+        _loadingHistory.value = true
+        scope.launch {
+            runCatching { client.sessionTranscript(name, until = until) }
+                .onSuccess { older ->
+                    historyStart = older.windowStart
+                    _page.value = prependTranscriptPage(_page.value, older)
+                }
+                .onFailure { e ->
+                    _transcriptError.value = e.message ?: "could not read earlier history"
+                }
+            _loadingHistory.value = false
+        }
+    }
     private var prevCursor: Pair<Int, Int>? = null
     private var lastPromptFingerprint: String? = null
 
@@ -225,6 +269,9 @@ class SessionController(
                     .onSuccess { page ->
                         failures = 0
                         transcriptOffset = page.nextOffset
+                        // The first page defines where history begins; later tail
+                        // reads are BELOW it and must not move the handle.
+                        if (historyStart == null) historyStart = page.windowStart
                         _page.value = mergeTranscriptPage(_page.value, page)
                         _transcriptError.value = null
                         _neverRan.value = false

@@ -540,12 +540,34 @@ class HuginnClient(
     /** The individual agents behind a fan-out, for the work detail sheet. */
     suspend fun sessionAgents(name: String): AgentsInfo = decode(call("/v1/sessions/$name/agents"))
 
-    suspend fun sessionTranscript(name: String, offset: Long? = null, limit: Int = 400): TranscriptPage =
-        decode(call("/v1/sessions/$name/transcript?limit=$limit" + (offset?.let { "&offset=$it" } ?: "")))
+    /**
+     * [offset] tails forward from a byte already read; [until] reads BACKWARDS,
+     * returning the page that ends where the given one began.
+     *
+     * Pass a previous page's [TranscriptPage.windowStart] as [until] to walk into
+     * history. Consecutive pages abut exactly — a windowStart is always a record
+     * boundary — so nothing arrives twice and nothing falls between them.
+     */
+    suspend fun sessionTranscript(
+        name: String,
+        offset: Long? = null,
+        limit: Int = 400,
+        until: Long? = null,
+    ): TranscriptPage = decode(call(
+        "/v1/sessions/$name/transcript?limit=$limit" +
+            (offset?.let { "&offset=$it" } ?: "") + (until?.let { "&until=$it" } ?: ""),
+    ))
 
     /** The same, for a chat: a headless run writes an ordinary transcript too. */
-    suspend fun chatTranscript(id: String, offset: Long? = null, limit: Int = 400): TranscriptPage =
-        decode(call("/v1/chats/$id/transcript?limit=$limit" + (offset?.let { "&offset=$it" } ?: "")))
+    suspend fun chatTranscript(
+        id: String,
+        offset: Long? = null,
+        limit: Int = 400,
+        until: Long? = null,
+    ): TranscriptPage = decode(call(
+        "/v1/chats/$id/transcript?limit=$limit" +
+            (offset?.let { "&offset=$it" } ?: "") + (until?.let { "&until=$it" } ?: ""),
+    ))
 
     /** Literal text, then named keys (tmux send-keys names, server-validated). */
     suspend fun sendKeys(name: String, text: String? = null, keys: List<String> = emptyList()) {
