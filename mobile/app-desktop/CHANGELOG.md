@@ -5,6 +5,49 @@ app and from the Electron desktop client. Its releases go to `/v1/desktop-kt`;
 the Electron client's go to `/v1/desktop` and the two never mix — see
 `scripts/release-desktop.sh`.
 
+## 0.3.3
+
+Sessions can be started from here now, and the conversation is the whole
+conversation.
+
+### You can start a session without SSHing in
+
+The Sessions list could open, rename and end sessions but never make one — it
+even said so, in the empty state — so starting one from a desk meant logging into
+the host. There is a **+ New** button now. It refuses a name the host would
+refuse, and one that is already taken, while you type rather than after the
+round trip. Claude Code starts in the new session automatically.
+
+One thing worth knowing: tmux quietly rewrites some characters, so a session you
+call `notes.today` is really called `notes_today`. The app now follows the name
+tmux actually used rather than the one you typed — before this it would have
+opened a session that does not exist.
+
+### The Conversation tab holds the whole session
+
+It used to show the tail and say "Showing the most recent part of this session."
+On a long session that was a sliver — measured on a real transcript here, 51
+messages out of 3452 — and there was no way to ask for the rest.
+
+Scroll to the top and there is a **Load earlier messages** link, until you reach
+the beginning of the conversation. Each click fetches one page, so a long session
+stays quick to open.
+
+That warning belongs to the **Screen** tab, where it stays: a Claude pane runs on
+the terminal's alternate screen and genuinely has no scrollback. The transcript
+always had the full history — only the reader was capped.
+
+Needs **huginn-appd 2.54.0** or newer for the history.
+
+### Scrolling up in a live session no longer snaps back
+
+Reported in 0.3.2's notes as fixed; this is the release that carries it to the
+session view as well as the chat view.
+
+### A message sent during an upload could disappear, in sessions too
+
+Same as the chat fix in 0.3.2, applied to the session composer.
+
 ## 0.3.2
 
 Windows notifications should work for the first time, questions come back to the
