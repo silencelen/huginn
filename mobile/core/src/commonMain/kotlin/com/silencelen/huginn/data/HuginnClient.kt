@@ -440,9 +440,18 @@ class HuginnClient(
     suspend fun sessions(preview: Boolean = false): List<Session> =
         decode<SessionList>(call("/v1/sessions${if (preview) "?preview=1" else ""}")).sessions
 
-    suspend fun createSession(name: String) {
-        post("/v1/sessions", body = jsonBody("name" to name))
-    }
+    /**
+     * Creates a tmux session and returns the name it ACTUALLY got, which is not
+     * necessarily the one asked for.
+     *
+     * tmux rewrites some characters and still reports success — a '.' becomes
+     * '_' — and the route's own name rule allows them through. Opening the
+     * requested name rather than the returned one is a 404 on everything the
+     * client does next, which is why the host reads the name back from tmux
+     * instead of echoing the request.
+     */
+    suspend fun createSession(name: String): String =
+        decode<CreatedSession>(post("/v1/sessions", body = jsonBody("name" to name))).name
 
     suspend fun killSession(name: String) {
         call("/v1/sessions/$name", HttpMethod.Delete)

@@ -62,6 +62,16 @@ data class Session(
 )
 
 @Serializable
+data class CreatedSession(
+    /**
+     * The name tmux actually used. It can differ from the one requested — tmux
+     * rewrites a '.' to '_' and still succeeds — so this is what every later
+     * request must use.
+     */
+    val name: String = "",
+)
+
+@Serializable
 data class SessionList(val sessions: List<Session> = emptyList())
 
 /** A Claude Code choice prompt, lifted off the pane so it can become buttons. */
