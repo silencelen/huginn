@@ -197,15 +197,19 @@ fun SessionsList(
     selection: Selection,
     onSelect: (Selection) -> Unit,
     onOpen: (String) -> Unit,
+    onNew: () -> Unit,
     verbs: SessionVerbs,
 ) {
     Column(Modifier.fillMaxSize()) {
-        ListHeader("Sessions", sessions.size, selection.size) {}
+        ListHeader("Sessions", sessions.size, selection.size) {
+            TextButton(onClick = onNew) { Text("+ New", style = DeskType.rail) }
+        }
         if (sessions.isEmpty()) {
             if (loaded) {
                 EmptyBlock(
                     "No tmux sessions",
-                    "Sessions appear here as soon as one exists on the host; this client watches, it does not create them.",
+                    "New starts one on the host with Claude Code already running in it. " +
+                        "Sessions started from a terminal appear here too.",
                 )
             } else {
                 LoadingBlock("sessions")

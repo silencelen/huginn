@@ -966,7 +966,10 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
         }
         viewModelScope.launch {
             runCatching { client.createSession(canon) }
-                .onSuccess { refreshSessions(); onCreated(canon) }
+                // Open what tmux CALLED it, not what was asked for. The two can
+                // differ and the host now reports which; opening the requested
+                // name would 404 on everything done after it.
+                .onSuccess { made -> refreshSessions(); onCreated(made.ifBlank { canon }) }
                 .onFailure { _toast.value = errText(it) }
         }
     }
