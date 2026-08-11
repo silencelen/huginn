@@ -234,6 +234,8 @@ class SessionVerbs(
     val rename: (Session) -> Unit,
     val interrupt: (String) -> Unit,
     val copyName: (String) -> Unit,
+    /** Compact the session's context (types "/compact"). Not destructive. */
+    val compact: (String) -> Unit,
     /** Ask Claude to wrap up (and, host willing, end on settle). Not destructive. */
     val softEnd: (List<String>) -> Unit,
     val kill: (List<String>) -> Unit,
@@ -255,6 +257,9 @@ fun sessionMenu(session: Session, selection: Set<String>, verbs: SessionVerbs): 
         // rather than competing with it.
         HuginnMenuItem("Interrupt (Esc)") { verbs.interrupt(session.name) },
         HuginnMenuItem("Copy session name") { verbs.copyName(session.name) },
+        // The context manager: types "/compact" so the owner can reclaim context
+        // without opening the pane. Host guards a plain shell / waiting question.
+        HuginnMenuItem("Compact context") { verbs.compact(session.name) },
         // The graceful sibling of "End session": sends the wrap-up phrase, and the
         // host (auto-end on) ends the session once it settles. Red stays on the
         // kill — this one only sends a message.

@@ -232,7 +232,13 @@ private fun SessionRow(
                         else -> MaterialTheme.colorScheme.onSurfaceVariant
                     },
                 )
+                if (s.compacting) {
+                    Spacer(Modifier.width(8.dp))
+                    CompactingChip()
+                }
                 Spacer(Modifier.weight(1f))
+                // "ctx N%" next to the time; renders nothing when the host didn't report.
+                ContextBadge(s.contextPercent, Modifier.padding(end = 8.dp))
                 Text(
                     relTime(s.activityAt),
                     style = MaterialTheme.typography.labelSmall,
