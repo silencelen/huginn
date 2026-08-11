@@ -33,6 +33,7 @@ import androidx.compose.material3.SuggestionChip
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Tab
 import androidx.compose.material3.TabRow
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
@@ -93,6 +94,9 @@ fun SessionScreen(
     onForceResize: () -> Unit,
     onInterrupt: () -> Unit,
     onCopy: (String) -> Unit,
+    hasEarlier: Boolean = false,
+    loadingHistory: Boolean = false,
+    onLoadEarlier: () -> Unit = {},
     working: Boolean,
     attachment: HuginnViewModel.Attachment? = null,
     onAttach: (android.net.Uri) -> Unit = {},
@@ -141,6 +145,9 @@ fun SessionScreen(
                     onInterrupt = onInterrupt,
                     working = working,
                     onCopy = onCopy,
+                    hasEarlier = hasEarlier,
+                    loadingHistory = loadingHistory,
+                    onLoadEarlier = onLoadEarlier,
                 attachment = attachment,
                 onAttach = onAttach,
                 onAttachFile = onAttachFile,
@@ -195,6 +202,9 @@ private fun SessionConversation(
     onInterrupt: () -> Unit,
     working: Boolean,
     onCopy: (String) -> Unit,
+    hasEarlier: Boolean = false,
+    loadingHistory: Boolean = false,
+    onLoadEarlier: () -> Unit = {},
     attachment: HuginnViewModel.Attachment? = null,
     onAttach: (android.net.Uri) -> Unit = {},
     onAttachFile: (android.net.Uri) -> Unit = {},
@@ -240,13 +250,26 @@ private fun SessionConversation(
                 ),
                 verticalArrangement = Arrangement.spacedBy(9.dp),
             ) {
-                if (page.truncated) {
+                // The conversation IS the history, so the top of the list is a
+                // way into it rather than an apology for its absence. It used to
+                // read "Showing the most recent part of this session." and stop
+                // there — on a long session a sliver, measured at 51 events out
+                // of 3452, with no way to ask for the rest. Only the Screen tab
+                // has a real excuse: a Claude pane runs on the alternate screen
+                // and has no scrollback at all.
+                if (hasEarlier) {
                     item {
-                        Text(
-                            "Showing the most recent part of this session.",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
+                        Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
+                            if (loadingHistory) {
+                                Text(
+                                    "Loading earlier messages…",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            } else {
+                                TextButton(onClick = onLoadEarlier) { Text("Load earlier messages") }
+                            }
+                        }
                     }
                 }
                 items(rows.size, key = { rowKeys[it] }) { i -> TranscriptRowItem(rows[i], onCopy) }
