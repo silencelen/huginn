@@ -26,7 +26,7 @@ const os = require('node:os');
 const { execFile, spawn } = require('node:child_process');
 const {
   screenHash, previewLines, detectPrompt, promptFingerprint, multiToggleDigits,
-  parseSpinner, parseStatusExtras,
+  parseSpinner, parseStatusExtras, spinnerIsCompacting,
   extractLoginUrl, parseStatusLine, loginPaneState,
 } = require('./lib/pane');
 const { parseAskSidecar, fuseAskPrompt, degradedAskCard, parsePlanSidecar } = require('./lib/ask');
@@ -50,7 +50,7 @@ const pushLib = require('./lib/pushtokens');
 const { trySender } = require('./lib/fcm');
 const { createPending, stepSoftEnd } = require('./lib/softend');
 
-const VERSION = '2.57.0';
+const VERSION = '2.58.0';
 const PORT = Number(process.env.HUGINN_APPD_PORT || 8787);
 const DATA_DIR = process.env.HUGINN_APPD_DATA || '/var/lib/huginn-appd';
 const UPLOADS_DIR = path.join(DATA_DIR, 'uploads');
@@ -389,6 +389,11 @@ async function listSessions({ preview = false } = {}) {
       // the watch digest (see lib/watch) — a winding-down session must not wake
       // parked phones.
       softEnding: softEnds.has(name),
+      // Context-window pressure (filled from the pane on a preview list) and
+      // whether this session is compacting (cheap marker check, so it works even
+      // on the quick non-preview list).
+      contextPercent: null,
+      compacting: isCompacting(name),
       state: st.state ?? null,
       stateSince: st.stateSince ?? null,
       claudeSessionId: st.sessionId ?? null,
@@ -432,6 +437,10 @@ async function listSessions({ preview = false } = {}) {
         const st = parseStatusLine(paneLines);
         r.liveModel = st.model;
         r.liveMode = st.mode;
+        // Context-window pressure for the list's per-row meter, and whether this
+        // session is compacting right now.
+        r.contextPercent = st.contextPercent;
+        r.compacting = spinnerIsCompacting(parseSpinner(paneLines)) || isCompacting(r.name);
       }
     }));
   }
@@ -650,6 +659,17 @@ function readSidecar(kind, name) {
   catch { return null; }
 }
 
+/**
+ * Is the session compacting? huginn-claude-title touches
+ * STATE_DIR/compacting/<name> on PreCompact and removes it on PostCompact/Stop —
+ * a reliable, poll-independent signal (the pane spinner only shows it while a
+ * screen is being captured).
+ */
+function isCompacting(name) {
+  try { return fs.existsSync(path.join(STATE_DIR, 'compacting', name)); }
+  catch { return false; }
+}
+
 const SIDECAR_TTL_MS = 24 * 60 * 60 * 1000;
 
 /**
@@ -672,9 +692,31 @@ function promptFor(name, lines) {
 
   if (panePrompt && sidecar) {
     const fused = fuseAskPrompt(panePrompt, sidecar);
-    if (fused) prompt = { ...fused.prompt, fingerprint: promptFingerprint(fused.prompt) };
+    if (fused) {
+      if (fused.questionCount > 1) {
+        // A MULTI-PART AskUserQuestion (several questions in one call, answered
+        // through the TUI's tab strip) CANNOT be answered by a single digit:
+        // verified live 2026-08-11 that the digit-then-Enter path over-answers —
+        // the digit selects+advances and the Enter confirms the NEXT question's
+        // default too, so one button tap silently answers two questions and the
+        // dialog skids past the card (the owner hit this: every tap 409'd as the
+        // pane moved ahead). Until per-question stepping exists, serve it as a
+        // NON-answerable card that routes to the Screen tab rather than offering
+        // buttons that misfire. A fingerprint is still attached so a shipped
+        // client's tap reaches /answer, which returns 409 'undetected' and steers
+        // to the Screen tab (rather than a dead "no fingerprint" message).
+        const q0 = sidecar.questions[0];
+        const synthetic = {
+          question: q0.question,
+          options: q0.options.map((o, i) => ({ number: i + 1, label: o.label })),
+        };
+        ask = { ...degradedAskCard(sidecar, promptFingerprint(synthetic)), multiPart: true };
+      } else {
+        prompt = { ...fused.prompt, fingerprint: promptFingerprint(fused.prompt) };
+      }
+    }
   }
-  if (!prompt && panePrompt) {
+  if (!prompt && !ask && panePrompt) {
     prompt = { ...panePrompt, fingerprint: promptFingerprint(panePrompt) };
   }
   if (!prompt && sidecar) {
@@ -781,6 +823,11 @@ async function captureScreen(name, { cols = null, rows = null, history = 0, forc
     // the transcript is silent until whole blocks complete, which left the
     // conversation looking dead right after a message was sent.
     spinner: parseSpinner(lines),
+    // Compaction shows as its own live status ("Compacting conversation…"); flag
+    // it so the conversation view can say so distinctly rather than as generic
+    // spinner text. The hook-driven marker (below, via readSessionState) is the
+    // reliable poll-independent signal; this is the live-text fallback.
+    compacting: spinnerIsCompacting(parseSpinner(lines)) || isCompacting(name),
     // The TUI's own progress rows, split by lifetime: durable rows (workflow
     // phases, boards) render as-is; the transient per-tool row ("Running 2 shell
     // commands…") flaps in and out at tool speed, so the app updates it in place
@@ -790,9 +837,14 @@ async function captureScreen(name, { cols = null, rows = null, history = 0, forc
       return { statusLines: px.durable, transientLine: px.transient };
     })(),
     // The pane is the only CURRENT source for these; the transcript lags a turn.
+    // contextPercent is the huginn-statusline `ctx N%` (context-window pressure),
+    // which the old regex swallowed into `branch` — now parsed out for the meter.
     ...(() => {
       const st = parseStatusLine(lines);
-      return { liveModel: st.model, liveMode: st.mode, liveBranch: st.branch };
+      return {
+        liveModel: st.model, liveMode: st.mode, liveBranch: st.branch,
+        contextPercent: st.contextPercent,
+      };
     })(),
   };
 }
@@ -2942,9 +2994,10 @@ const server = http.createServer(async (req, res) => {
       const actual = (q.stdout || '').trim() || to;
       // The state file is keyed by name; move it so state/transcript survive.
       try { fs.renameSync(path.join(STATE_DIR, from), path.join(STATE_DIR, actual)); } catch { }
-      // Move the prompt sidecars too, or a fused prompt silently degrades to
-      // pane-only after a rename until the next question rewrites them.
-      for (const kind of ['ask', 'plan']) {
+      // Move the prompt sidecars + the compacting marker too, or a fused prompt
+      // silently degrades to pane-only after a rename until the next question
+      // rewrites them.
+      for (const kind of ['ask', 'plan', 'compacting']) {
         try { fs.renameSync(path.join(STATE_DIR, kind, from), path.join(STATE_DIR, kind, actual)); } catch { }
       }
       if (leases.has(from)) { leases.set(actual, leases.get(from)); leases.delete(from); }

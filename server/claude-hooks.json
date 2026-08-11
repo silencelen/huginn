@@ -18,6 +18,12 @@
   "SubagentStop": [
     { "hooks": [ { "type": "command", "command": "huginn-claude-title SubagentStop", "async": true, "timeout": 10 } ] }
   ],
+  "PreCompact": [
+    { "hooks": [ { "type": "command", "command": "huginn-claude-title PreCompact", "async": true, "timeout": 10 } ] }
+  ],
+  "PostCompact": [
+    { "hooks": [ { "type": "command", "command": "huginn-claude-title PostCompact", "async": true, "timeout": 10 } ] }
+  ],
   "SessionStart": [
     { "hooks": [ { "type": "command", "command": "huginn-claude-title SessionStart", "async": true, "timeout": 10 } ] }
   ],
