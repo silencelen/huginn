@@ -29,6 +29,7 @@ const {
   parseSpinner, parseStatusExtras,
   extractLoginUrl, parseStatusLine, loginPaneState,
 } = require('./lib/pane');
+const { parseAskSidecar, fuseAskPrompt, degradedAskCard, parsePlanSidecar } = require('./lib/ask');
 const { readTranscript, liveActivity } = require('./lib/transcript');
 const { summarizeUsage } = require('./lib/usage');
 const { normalizePlan } = require('./lib/plan');
@@ -49,7 +50,7 @@ const pushLib = require('./lib/pushtokens');
 const { trySender } = require('./lib/fcm');
 const { createPending, stepSoftEnd } = require('./lib/softend');
 
-const VERSION = '2.56.0';
+const VERSION = '2.57.0';
 const PORT = Number(process.env.HUGINN_APPD_PORT || 8787);
 const DATA_DIR = process.env.HUGINN_APPD_DATA || '/var/lib/huginn-appd';
 const UPLOADS_DIR = path.join(DATA_DIR, 'uploads');
@@ -641,6 +642,63 @@ async function peekHash(name) {
   return { hash: screenHash(lines.join('\n') + `|${cx},${cy}`) };
 }
 
+// A prompt sidecar the hook wrote (exact AskUserQuestion/ExitPlanMode input),
+// under STATE_DIR/{ask,plan}/<name>. Absent, unreadable, or malformed -> null,
+// which just drops to the pane-only path.
+function readSidecar(kind, name) {
+  try { return JSON.parse(fs.readFileSync(path.join(STATE_DIR, kind, name), 'utf8')); }
+  catch { return null; }
+}
+
+const SIDECAR_TTL_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * The one place "what question is on this pane" is decided, so /screen, /answer
+ * and the alert enrichment can never disagree about a label or a fingerprint.
+ *
+ * Fuses the hook's exact question with the pane's live run when both are present
+ * (correct, width-stable labels + the pane's caret); falls back to the pane
+ * alone; and, when the hook says a question waits but the pane scrape cannot read
+ * it (a wrap/preview/tab shape), returns a DEGRADED card so the client shows
+ * something rather than nothing. Also surfaces a pending plan approval.
+ *
+ * Returns { prompt, ask, planPending } — prompt carries its own fingerprint.
+ */
+function promptFor(name, lines) {
+  const panePrompt = detectPrompt(lines);
+  const sidecar = parseAskSidecar(readSidecar('ask', name));
+  let prompt = null;
+  let ask = null;
+
+  if (panePrompt && sidecar) {
+    const fused = fuseAskPrompt(panePrompt, sidecar);
+    if (fused) prompt = { ...fused.prompt, fingerprint: promptFingerprint(fused.prompt) };
+  }
+  if (!prompt && panePrompt) {
+    prompt = { ...panePrompt, fingerprint: promptFingerprint(panePrompt) };
+  }
+  if (!prompt && sidecar) {
+    // The hook has a question but the pane run is unreadable. Offer it as a
+    // degraded card only while the session is actually asking (state=attention)
+    // and the sidecar is fresh, so a stale file cannot resurrect buttons.
+    const st = readSessionState(name);
+    const fresh = sidecar.ts && (Date.now() - sidecar.ts * 1000) < SIDECAR_TTL_MS;
+    if (st && st.state === 'attention' && fresh) {
+      // Fingerprint over the hook labels, exactly as fusion would compute it, so
+      // that if the pane becomes readable between serve and answer the digit
+      // still validates against the same fingerprint.
+      const synthetic = {
+        question: sidecar.questions[0].question,
+        options: sidecar.questions[0].options.map((o, i) => ({ number: i + 1, label: o.label })),
+      };
+      ask = degradedAskCard(sidecar, promptFingerprint(synthetic));
+    }
+  }
+
+  const planPending = parsePlanSidecar(readSidecar('plan', name));
+  return { prompt, ask, planPending };
+}
+
 /**
  * @param name    session
  * @param opts.cols/rows  request this geometry (takes/renews a lease)
@@ -713,9 +771,11 @@ async function captureScreen(name, { cols = null, rows = null, history = 0, forc
     // One implementation of "which question is this" means an answer offered on a
     // lock screen and the check that validates it can never disagree about the
     // formatting; two implementations would eventually differ over a space.
-    prompt: (() => {
-      const pr = detectPrompt(lines);
-      return pr ? { ...pr, fingerprint: promptFingerprint(pr) } : null;
+    // promptFor fuses the hook sidecar in (correct, width-stable labels) and adds
+    // the degraded card / pending-plan fields.
+    ...(() => {
+      const pf = promptFor(name, lines);
+      return { prompt: pf.prompt, ask: pf.ask, planPending: pf.planPending };
     })(),
     // The moment-to-moment status ("Gallivanting… · 3m 15s") exists only here:
     // the transcript is silent until whole blocks complete, which left the
@@ -1975,13 +2035,16 @@ async function alertTickInner(st) {
   for (const a of alerts) {
     if (a.kind !== 'session_attention') continue;
     const screen = await captureScreen(a.subject);
-    const prompt = screen ? detectPrompt(screen.lines) : null;
+    // promptFor, not a second detectPrompt call: the notification's labels and
+    // fingerprint must be the FUSED ones, or a lock-screen answer would carry a
+    // fingerprint the /answer route (also fused) rejects as changed.
+    const prompt = screen ? promptFor(a.subject, screen.lines).prompt : null;
     if (!prompt) continue;                 // waiting on something unparsed; keep the plain text
     a.question = prompt.question || '';
     // A notification button is one tap; a multi-select answer is a SET. Buttons
     // are only offered when one tap can honestly answer.
     a.options = prompt.multiSelect ? [] : prompt.options.map((o) => ({ number: o.number, label: o.label }));
-    a.fingerprint = promptFingerprint(prompt);
+    a.fingerprint = prompt.fingerprint;
     if (a.question) a.text = a.question;
     log(`alerts: enriched ${a.subject} q=${JSON.stringify((a.question||'').slice(0,40))} opts=${(a.options||[]).length}`);
   }
@@ -2879,6 +2942,11 @@ const server = http.createServer(async (req, res) => {
       const actual = (q.stdout || '').trim() || to;
       // The state file is keyed by name; move it so state/transcript survive.
       try { fs.renameSync(path.join(STATE_DIR, from), path.join(STATE_DIR, actual)); } catch { }
+      // Move the prompt sidecars too, or a fused prompt silently degrades to
+      // pane-only after a rename until the next question rewrites them.
+      for (const kind of ['ask', 'plan']) {
+        try { fs.renameSync(path.join(STATE_DIR, kind, from), path.join(STATE_DIR, kind, actual)); } catch { }
+      }
       if (leases.has(from)) { leases.set(actual, leases.get(from)); leases.delete(from); }
       if (softEnds.has(from)) { softEnds.set(actual, softEnds.get(from)); softEnds.delete(from); }
       return sendJson(res, 200, { ok: true, name: actual });
@@ -2965,14 +3033,24 @@ const server = http.createServer(async (req, res) => {
       }
 
       const screen = await captureScreen(name);
-      const prompt = screen ? detectPrompt(screen.lines) : null;
+      const pf = screen ? promptFor(name, screen.lines) : { prompt: null, ask: null };
+      const prompt = pf.prompt;
       if (!prompt) {
+        // The hook may still say a question is waiting (a wrap/preview the pane
+        // scrape cannot read). Distinguish that from "gone" so the client can
+        // deep-link to the Screen tab instead of reporting the question vanished.
+        if (pf.ask) {
+          return sendJson(res, 409, {
+            ok: false, reason: 'undetected',
+            error: 'the question is on screen but not answerable from here — use the Screen tab',
+          });
+        }
         return sendJson(res, 409, {
           ok: false, reason: 'gone',
           error: 'that question is no longer on screen',
         });
       }
-      const live = promptFingerprint(prompt);
+      const live = prompt.fingerprint;
       // REQUIRED, not merely honoured when offered. This used to read
       // `if (body.fingerprint && body.fingerprint !== live)`, which made the
       // whole check-and-act guard opt-in: a caller that omitted the field — or
