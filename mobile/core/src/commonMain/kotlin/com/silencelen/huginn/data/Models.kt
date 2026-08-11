@@ -55,6 +55,10 @@ data class Session(
     val sizeLeased: Boolean = false,
     /** A soft end is pending: the session is winding down and may end itself. */
     val softEnding: Boolean = false,
+    /** Context-window pressure (0-100) from the pane statusline; null if unknown. */
+    val contextPercent: Int? = null,
+    /** The session is compacting its context right now. */
+    val compacting: Boolean = false,
     val claudeSessionId: String? = null,
     val hasTranscript: Boolean = false,
     /** Claude Code's own generated session title, far better than the tmux name. */
@@ -136,6 +140,12 @@ data class DegradedAsk(
     val questionCount: Int? = null,
     val answerable: Boolean = false,
     val fingerprint: String? = null,
+    /**
+     * A multi-part AskUserQuestion (several questions in one call). Its tab-strip
+     * flow can't be answered by a single button tap, so this card is read-only
+     * and directs to the Screen tab.
+     */
+    val multiPart: Boolean = false,
 )
 
 /** A plan approval is waiting (ExitPlanMode), with the plan text when the runtime shipped it. */
