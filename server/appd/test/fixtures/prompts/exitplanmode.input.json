@@ -1,0 +1,4 @@
+{
+  "plan": "# Plan: Add README.md describing this directory's files\n\n## Context\nThe working directory (`/tmp/claude-0/-root-netplan/e1ce6899-0e03-4598-9f39-089560767f1e/scratchpad/fixcap-home`) has no README. The user wants a README.md that describes the files present so anyone opening the directory understands its contents. Currently it holds a single file: `hello.txt` (5 bytes, containing the word \"hello\").\n\n## Steps\n1. Confirm the directory's current contents with `ls` (done: only `hello.txt` exists).\n2. Write `README.md` in the directory with a short title and a file listing that describes `hello.txt` (a plain-text file containing the single word \"hello\").\n3. Verify by reading `README.md` back and re-listing the directory to confirm both files are present.\n\n## Verification\n`ls` shows `README.md` and `hello.txt`; the README accurately describes every file present.\n",
+  "planFilePath": "/root/.claude/plans/plan-how-to-add-partitioned-globe.md"
+}
