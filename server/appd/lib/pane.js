@@ -452,7 +452,7 @@ function promptFingerprint(prompt) {
  * it had done nothing.
  */
 function parseStatusLine(lines) {
-  const out = { model: null, branch: null, mode: null };
+  const out = { model: null, branch: null, mode: null, contextPercent: null };
   const plain = lines.map((l) => stripAnsi(l).replace(/\s+$/, ''));
   for (let i = plain.length - 1; i >= 0 && i >= plain.length - 8; i--) {
     const t = plain[i].trim();
@@ -466,17 +466,43 @@ function parseStatusLine(lines) {
       const m = /^[⏵⏴⏸⏹▶]{1,2}\s*(.+?)\s+(?:mode\s+)?on\b/.exec(t);
       if (m) { out.mode = m[1].toLowerCase(); continue; }
     }
-    if (!out.model) {
-      // "[name] Model Name · branch · ..." — the model is the first field after
-      // the bracketed session name.
-      const m = /^\[[^\]]+\]\s+([^·]+?)(?:\s+·\s+([^·]+))?(?:\s+·|$)/.exec(t);
-      if (m) {
-        out.model = m[1].trim() || null;
-        out.branch = (m[2] || '').trim() || null;
+    if (out.model == null) {
+      // huginn-statusline.sh draws "[name] Model · ctx N% · branch ~N · ⚠ N …".
+      // The fields after the model are OPTIONAL and order-independent (ctx only
+      // when the harness reports a context window; the tree-session warning and
+      // the git branch may each be absent), so split on the ` · ` separators and
+      // classify — the old regex grabbed the SECOND field as the branch, which
+      // put "ctx N%" in `branch` and dropped both the real branch AND the context
+      // pressure the context meter needs.
+      const bracket = /^\[[^\]]+\]\s+(.+)$/.exec(t);
+      if (bracket) {
+        const fields = bracket[1].split(/\s+·\s+/).map((f) => f.trim()).filter(Boolean);
+        if (fields.length) {
+          out.model = fields[0] || null;
+          for (const f of fields.slice(1)) {
+            const cm = /^ctx\s+(\d+)%/.exec(f);
+            if (cm) { out.contextPercent = Number(cm[1]); continue; }
+            // The concurrency warning ("⚠ N sessions in this tree"), not a branch.
+            if (/^⚠/.test(f) || /sessions?\s+in\s+this\s+tree/i.test(f)) continue;
+            // The git branch, minus the "~N" dirty-count the statusline appends.
+            if (out.branch == null) out.branch = f.replace(/\s+~\d+\s*$/, '').trim() || null;
+          }
+        }
       }
     }
   }
   return out;
+}
+
+/**
+ * Is the session compacting its context right now? Claude Code draws
+ * "Compacting conversation…" as the live spinner while it does; that arrives via
+ * parseSpinner as the spinner string, so this reads it there. A dedicated
+ * PreCompact/PostCompact marker (huginn-claude-title) is the reliable,
+ * poll-independent signal the daemon layers on top for the sessions list.
+ */
+function spinnerIsCompacting(spinner) {
+  return !!spinner && /compact/i.test(spinner);
 }
 
 /**
@@ -547,6 +573,6 @@ function loginPaneState(lines) {
 
 module.exports = {
   screenHash, stripAnsi, previewLines, detectPrompt, promptFingerprint, multiToggleDigits,
-  parseSpinner, parseStatusExtras,
+  parseSpinner, parseStatusExtras, spinnerIsCompacting,
   extractLoginUrl, parseStatusLine, loginPaneState,
 };
