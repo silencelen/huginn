@@ -8,8 +8,13 @@
 # Debug ships are possible but must be asked for; release is the channel.
 set -euo pipefail
 
-REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-cd "$REPO_DIR"
+# The REPO ROOT (this script is at mobile/scripts/ship.sh → up TWO). It was `/..`
+# (one too shallow → mobile/), which made the .shiprc source below double to
+# mobile/mobile/scripts/.shiprc and silently skip (DEVSERV then unset), and the
+# github-release.sh call below miss the repo-root scripts/. Both read REPO_DIR as
+# the repo root, so that is what it must be; the mobile-relative work cd's in.
+REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+cd "$REPO_DIR/mobile"
 VARIANT="${1:-release}"
 
 # Where to publish — operator-specific, never hardcoded here. Comes from the
@@ -85,9 +90,12 @@ if [ "$VARIANT" = "release" ] && [ "${HUGINN_NO_GH_RELEASE:-}" != 1 ]; then
   cp "$APK" "$NICE"
   # The updater matches the APK asset by extension and verifies by sha256, so the
   # nice asset name and latest.json's internal apk name need not agree.
+  # $MANIFEST is mobile-relative (dist/latest.json); github-release.sh cd's to the
+  # repo root before it checks artifacts exist, so hand it an absolute path (as
+  # $NICE already is) or it refuses "does not exist".
   if "$REPO_DIR/scripts/github-release.sh" app "$VN" \
        "$NICE#Huginn $VN (signed APK, arm64-v8a)" \
-       "$MANIFEST#Release manifest (sha256, for in-app update)"; then
+       "$REPO_DIR/mobile/$MANIFEST#Release manifest (sha256, for in-app update)"; then
     echo "[ship] GitHub release app-v$VN updated (APK + latest.json)"
   else
     echo "[ship] WARNING: GitHub release failed — store publish above is unaffected; in-app update has no GitHub source for $VN" >&2
