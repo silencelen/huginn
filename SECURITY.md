@@ -11,7 +11,13 @@ Please include: what the issue is, how to reproduce it, and the impact. You'll g
 
 ## Scope
 
-Huginn is a thin wrapper over SSH + tmux + Claude Code. Most of your security posture comes from **how you deploy it** (SSH hardening, non-root user, key restrictions, network exposure). See [`docs/SECURITY.md`](docs/SECURITY.md) for the threat model and a hardening checklist before reporting deployment-config concerns.
+Two very different halves share this repo. The terminal core is a thin wrapper over
+SSH + tmux + Claude Code, where most of your security posture comes from **how you
+deploy it** (SSH hardening, non-root user, key restrictions, network exposure). The
+optional app half — `server/appd/` (a root daemon with an HTTP surface) and the
+`mobile/` clients — is real attack surface and squarely in scope; reports there are
+especially welcome. See [`docs/SECURITY.md`](docs/SECURITY.md) for the threat model
+and a hardening checklist before reporting deployment-config concerns.
 
 ## Supported versions
 

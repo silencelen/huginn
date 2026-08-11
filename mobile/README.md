@@ -1,23 +1,25 @@
-# Huginn (Android)
+# The Huginn apps (Android + desktop)
 
-A Claude-style phone app for the **huginn** agent node (LXC 117), published to the
-self-hosted [devstore](../dev-ledger/devstore). It replaces driving huginn through
-a tmux session in Termux: chats, the live sessions and their conversations, and a
-real terminal view, all over the tailnet.
-
-Two halves:
+Native clients for a Huginn node. They replace driving the host through a tmux
+session in Termux: chats, the live sessions and their conversations, and a real
+terminal view — over your tailnet/mesh. One Kotlin codebase builds both; the
+daemon they talk to lives at [`../server/appd/`](../server/appd/).
 
 | | |
 |---|---|
-| `app/` | Android client, Kotlin + Compose Material 3, package `com.silencelen.huginn` |
-| `server/` | `huginn-appd`, a zero-dependency Node daemon that runs on huginn |
+| `app/` | the Android client, Kotlin + Compose Material 3, package `com.silencelen.huginn` |
+| `app-desktop/` | the Compose Desktop client (Windows + Linux) |
+| `core/` · `ui/` | the shared halves both clients are built from — see [Modules](#modules) |
+| [`../server/appd/`](../server/appd/) | `huginn-appd`, the zero-dependency Node daemon on the host |
 
 ## What it does
 
-**Chats** are headless Claude Code turns that run on huginn in `~/netplan`,
-streamed token by token. Each chat picks a mode at creation, matching the CLI:
+**Chats** are headless Claude Code turns that run on the host in its configured
+working directory, streamed token by token. Each chat picks a mode at creation,
+matching the CLI:
 
-- **Ask** = `huginn -p`: reasoning, MemPalace memory, reading (files and the
+- **Ask** = `huginn -p`: reasoning, the host's memory tools if it carries any,
+  reading (files and the
   web via WebFetch/WebSearch) — and a hard deny on Bash/Edit/Write, because
   Claude Code's own safe-command heuristics are content-dependent and were
   measured approving one `curl | python3` and refusing its near-twin a minute
@@ -45,18 +47,21 @@ and tmux is the interaction, and each does what it is good at.
 
 **Attachments, and huginn is a share target.** The attach menu in either
 composer (chats and sessions share one implementation) offers the camera, the
-photo library, or any file huginn can genuinely read — PDFs and text formats;
-binaries that Read would print as garbage are refused at upload by an
-allowlist; the share sheet accepts text and images
+photo library, or **any file at all** — nothing is refused for its type. A
+readable format gets a "read it" marker; a binary (a tarball, a `.sqlite`, a
+UniFi backup) gets an "inspect with shell tools" marker, because the useful
+question is "may this be stored", not "can Read display it". The share sheet
+accepts text and images
 from any app, and asks where they should land: a new chat, an existing chat, or
 a session (the screenshot of an error belongs in the session already working on
-it). Staged as a draft at the destination, never auto-sent. Everything is transcoded to JPEG at
+it). Staged as a draft at the destination, never auto-sent. Photos are transcoded to JPEG at
 ≤2048px before upload, because Samsung cameras shoot HEIC, Claude's Read tool
 cannot open HEIC, and without transcoding the failure is a successful upload
 followed by a shrug. The photo rides the message as a bracketed path marker the
 model Reads; the app renders that marker back as "📷 Photo attached" rather
-than the daemon's storage path. Uploads land in `/var/lib/huginn-appd/uploads`
-(server-named, 20MB cap, pruned after 7 days).
+than the daemon's storage path. Uploads stream to `/var/lib/huginn-appd/uploads`
+as the bytes arrive (server-named, 128 MB cap enforced mid-stream, pruned after
+7 days) — the app imposes no size limit of its own, so the host owns the number.
 
 **Permission prompts become buttons.** A numbered question in the pane is
 detected and offered as tappable options in both views. Detection requires the
@@ -141,7 +146,7 @@ server resizes the window to match, so Claude Code re-wraps to fit. See
 ## Server
 
 ```
-scp/rsync this repo to huginn, then:
+scp/rsync this repo to the host, then:
 # first time only -- deploy.sh READS the token, it does not create one:
 install -d -m 700 /etc/huginn-appd
 openssl rand -hex 32 > /etc/huginn-appd/token && chmod 600 /etc/huginn-appd/token
@@ -152,10 +157,10 @@ cat /etc/huginn-appd/token    # paste into the app's Settings
 
 `huginn-appd` listens on port **8787** and requires `Authorization: Bearer <token>`
 on every route — 32 random bytes in `/etc/huginn-appd/token` (0600). The code binds
-`tailscale ip -4` by default, but **this deployment binds `0.0.0.0`**, via a systemd
+`tailscale ip -4` by default; **the author's deployment binds `0.0.0.0`**, via a systemd
 drop-in (`/etc/systemd/system/huginn-appd.service.d/override.conf`) so that
-`deploy.sh` rewriting the unit cannot silently revert it. That is deliberate: the
-phone reaches huginn over the Yggdrasil LAN gateway as well as the tailnet, and the
+`deploy.sh` rewriting the unit cannot silently revert it. That is deliberate there —
+the phone reaches the host over a second mesh as well as the tailnet, and the
 mesh route arrives on the LAN address, not the tailscale one.
 
 The consequence is worth saying plainly, because the tailnet used to be doing half
@@ -205,7 +210,11 @@ root SSH key: if a device carrying it is lost, rotate the file, restart the unit
 | POST | `/v1/chats/<id>/messages?stream=1` | posts and streams the run as SSE |
 | GET | `/v1/chats/<id>/stream?since=<seq>` | reattach to an in-flight run |
 | POST | `/v1/chats/<id>/cancel` | SIGTERM then SIGKILL |
-| POST | `/v1/uploads` | raw image bytes (jpeg/png/webp/gif, ≤20MB); server names the file, returns its path; pruned after 7 days |
+| POST | `/v1/uploads` | raw bytes, any type, ≤128MB (streamed to disk); server names the file, returns its path; pruned after 7 days |
+| GET | `/v1/models` | the pickable model list, discovered from the installed Claude Code binary |
+| POST | `/v1/account/login/code` | pastes the OAuth code into the login pane and waits for credentials to change |
+| GET | `/v1/account/login/state` | how the interactive sign-in is going |
+| GET | `/v1/desktop/manifest` · `/v1/desktop-kt/manifest` | the desktop clients' self-update feeds (Electron / Compose — [never the same channel](#the-desktop-client)) |
 | GET | `/v1/sessions/<name>/suggestions` | suggested next messages at a turn boundary (cached by transcript size) |
 | GET | `/v1/chats/<id>/suggestions` | the same, for a chat |
 | GET | `/v1/sessions/<name>/agents` | the individual agents behind a fan-out |
@@ -291,9 +300,10 @@ the Electron channel is still intact on every run. See
 - **`:core`** — Kotlin Multiplatform (`androidTarget` + `jvm`), all of it in
   `commonMain`: the wire models, route resolution, the ANSI/terminal-grid and
   markdown/syntax renderers, and the pure UI rules (local echo, transcript
-  grouping, live-input diffing, voice loop, watch cycle). No Android imports, so
-  the desktop client can eventually consume the same code instead of the
-  hand-ported TypeScript in `desktop/src/shared/core/`.
+  grouping, live-input diffing, voice loop, watch cycle). No Android imports —
+  which is what lets `:app-desktop` consume the same code the phone runs, instead
+  of the hand-ported TypeScript the deprecated Electron client keeps in
+  `desktop/src/shared/core/`.
 - **`:ui`** — Compose Multiplatform (`androidTarget` + `jvm`), the shared LOOK:
   the theme (one palette, one syntax set), the markdown/code renderer, the
   transcript rows (user bubble, thinking, tool, ask, subagent group, orphan
