@@ -73,18 +73,24 @@ fi
 
 # ------------------------------------------------- GitHub Release (best-effort)
 # Mirror the release to GitHub so the repo's Releases page carries the same APK
-# the store serves (tag app-v<versionName>, notes cut from mobile/CHANGELOG.md).
-# Best-effort by design: the store publish above is the release; a GitHub hiccup
-# must not turn a shipped build into a failed ship. Skip: HUGINN_NO_GH_RELEASE=1.
+# the store serves (tag app-v<versionName>, notes cut from mobile/CHANGELOG.md),
+# PLUS latest.json — the sha256 manifest the app's own in-app updater (PhoneUpdater)
+# verifies the APK against. Best-effort by design: the store publish above is the
+# release, and the external devstore updater still works, so a GitHub hiccup must
+# not fail a shipped build — it only means the IN-APP updater has nothing to find
+# for this version until GitHub recovers. Skip: HUGINN_NO_GH_RELEASE=1.
 if [ "$VARIANT" = "release" ] && [ "${HUGINN_NO_GH_RELEASE:-}" != 1 ]; then
   VN="$(grep -oE '"versionName":"[^"]+"' "$MANIFEST" | head -1 | cut -d'"' -f4)"
   NICE="$(mktemp -d)/Huginn-$VN.apk"
   cp "$APK" "$NICE"
+  # The updater matches the APK asset by extension and verifies by sha256, so the
+  # nice asset name and latest.json's internal apk name need not agree.
   if "$REPO_DIR/scripts/github-release.sh" app "$VN" \
-       "$NICE#Huginn $VN (signed APK, arm64-v8a)"; then
-    echo "[ship] GitHub release app-v$VN updated"
+       "$NICE#Huginn $VN (signed APK, arm64-v8a)" \
+       "$MANIFEST#Release manifest (sha256, for in-app update)"; then
+    echo "[ship] GitHub release app-v$VN updated (APK + latest.json)"
   else
-    echo "[ship] WARNING: GitHub release failed — store publish above is unaffected" >&2
+    echo "[ship] WARNING: GitHub release failed — store publish above is unaffected; in-app update has no GitHub source for $VN" >&2
   fi
   rm -rf "$(dirname "$NICE")"
 fi

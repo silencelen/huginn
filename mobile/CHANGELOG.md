@@ -1,5 +1,29 @@
 # Huginn changelog
 
+## 2.60.0 / appd 2.59.0 — 2026-08-11
+
+### Update the app from within the app
+
+Settings gains a **Software update** section: the app checks the project's public
+GitHub releases, and — on your tap — downloads a newer build, verifies its sha256,
+and hands it to the system installer. It is no longer tied to the devstore; the
+check never downloads on its own, and nothing installs without your confirmation
+and Android's own "install unknown apps" prompt.
+
+### Context used, and when a session is compacting
+
+A session now shows a "context used" reading (a small meter in the header, `ctx
+N%` in the list) and a **Compacting…** marker while it is rewriting its context.
+The session menu gains **Compact context**, which reclaims context from your
+phone without opening the pane.
+
+### Under the daemon (appd 2.59.0)
+
+A multi-question dialog that could not be answered from the desktop buttons now
+serves a card that sends you to the Screen tab instead of misfiring; the daemon
+also surfaces the context percentage and a compaction signal, and gained the
+`/compact` action the button above uses.
+
 ## 2.59.0 / appd 2.57.0 — 2026-08-11
 
 ### Wind down a session
