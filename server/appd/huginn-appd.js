@@ -48,7 +48,7 @@ const {
 const pushLib = require('./lib/pushtokens');
 const { trySender } = require('./lib/fcm');
 
-const VERSION = '2.55.0';
+const VERSION = '2.55.1';
 const PORT = Number(process.env.HUGINN_APPD_PORT || 8787);
 const DATA_DIR = process.env.HUGINN_APPD_DATA || '/var/lib/huginn-appd';
 const UPLOADS_DIR = path.join(DATA_DIR, 'uploads');
@@ -94,7 +94,14 @@ const WORKDIR = process.env.HUGINN_APPD_WORKDIR || process.env.HOME || '/root';
 // field. Empty/default on a generic host (the probe reports 'unconfigured');
 // a deployment that has one sets these via a systemd drop-in.
 const MEMPALACE_HOST = process.env.HUGINN_APPD_MEMPALACE_HOST || '';
-const MEMPALACE_MARKER = process.env.HUGINN_APPD_MEMPALACE_MARKER || '~/.mempalace/REBUILD_IN_PROGRESS';
+// The marker is interpolated into the ssh remote command, so it is validated to
+// a plain path charset here: the env is root-set (systemd drop-in), but a value
+// that COULD carry shell syntax should not exist at all (CodeQL flagged the
+// flow). A bad value disables the probe rather than reaching a shell.
+const MEMPALACE_MARKER = (() => {
+  const m = process.env.HUGINN_APPD_MEMPALACE_MARKER || '~/.mempalace/REBUILD_IN_PROGRESS';
+  return /^[A-Za-z0-9_.~/-]+$/.test(m) ? m : '';
+})();
 const MAX_CONCURRENT_RUNS = 3;
 const RUN_HARD_CAP_MS = 2 * 60 * 60 * 1000; // 2 h — safety net, not a feature
 
@@ -154,9 +161,13 @@ if (TOKEN.length < 32) { console.error('FATAL: token too short (<32 chars)'); pr
 
 function authorized(req) {
   const h = req.headers['authorization'] || '';
-  const m = /^Bearer\s+(.+)$/.exec(h);
-  if (!m) return false;
-  const got = Buffer.from(m[1]);
+  // String ops, not a regex: /^Bearer\s+(.+)$/ backtracked polynomially on a
+  // hostile many-spaces header, and this check runs PRE-auth on every request —
+  // exactly where a cheap DoS must not live (CodeQL js/polynomial-redos).
+  if (!h.startsWith('Bearer ')) return false;
+  const presented = h.slice(7).trim();
+  if (!presented) return false;
+  const got = Buffer.from(presented);
   const want = Buffer.from(TOKEN);
   return got.length === want.length && crypto.timingSafeEqual(got, want);
 }
@@ -1400,7 +1411,7 @@ async function claudeVersion() {
 
 let mpCache = { at: 0, value: 'unknown' };
 async function mempalaceState() {
-  if (!MEMPALACE_HOST) return 'unconfigured';
+  if (!MEMPALACE_HOST || !MEMPALACE_MARKER) return 'unconfigured';
   if (Date.now() - mpCache.at < 60_000) return mpCache.value;
   const { err, stdout } = await run('ssh',
     ['-o', 'BatchMode=yes', '-o', 'ConnectTimeout=3', MEMPALACE_HOST,
