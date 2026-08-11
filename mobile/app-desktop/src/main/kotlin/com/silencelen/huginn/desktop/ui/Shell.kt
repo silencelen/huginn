@@ -159,6 +159,7 @@ fun Shell(store: AppStore) {
         // would press, and it is what the menu item is named after.
         interrupt = { name -> act { store.client.sendKeys(name, keys = listOf("Escape")) } },
         copyName = { copy(it) },
+        softEnd = { names -> confirming = ConfirmTarget.SoftEndSessions(names) },
         kill = { names -> confirming = ConfirmTarget.KillSessions(names) },
     )
 
@@ -319,6 +320,10 @@ fun Shell(store: AppStore) {
                                 DraftBook.sessionKey(target.id),
                                 DraftBook.sessionKey(next),
                             )
+                            store.sentHistory.move(
+                                DraftBook.sessionKey(target.id),
+                                DraftBook.sessionKey(next),
+                            )
                             store.refreshSessions()
                             // The open session is addressed by name, so a rename
                             // that did not follow leaves the detail pane polling a
@@ -346,6 +351,7 @@ fun Shell(store: AppStore) {
                         is ConfirmTarget.DeleteChats -> act {
                             target.ids.forEach { store.client.deleteChat(it) }
                             target.ids.forEach { store.drafts.clear(DraftBook.chatKey(it)) }
+                            target.ids.forEach { store.sentHistory.clear(DraftBook.chatKey(it)) }
                             if (store.chatId.value in target.ids) store.openChat(null)
                             chatSel = Selection()
                             store.refreshChats()
@@ -353,8 +359,16 @@ fun Shell(store: AppStore) {
                         is ConfirmTarget.KillSessions -> act {
                             target.names.forEach { store.client.killSession(it) }
                             target.names.forEach { store.drafts.clear(DraftBook.sessionKey(it)) }
+                            target.names.forEach { store.sentHistory.clear(DraftBook.sessionKey(it)) }
                             if (store.sessionName.value in target.names) store.openSession(null)
                             sessionSel = Selection()
+                            store.refreshSessions()
+                        }
+                        // A soft end SENDS a message; the session lives on and may
+                        // even stay (a wrap-up question cancels the auto-end) — so
+                        // drafts and history are deliberately NOT cleared here.
+                        is ConfirmTarget.SoftEndSessions -> act {
+                            target.names.forEach { store.client.softEndSession(it) }
                             store.refreshSessions()
                         }
                     }
@@ -675,6 +689,8 @@ sealed interface RenameTarget {
 sealed interface ConfirmTarget {
     data class DeleteChats(val ids: List<String>) : ConfirmTarget
     data class KillSessions(val names: List<String>) : ConfirmTarget
+    /** A wrap-up request, not a destruction: the session ends only after it settles. */
+    data class SoftEndSessions(val names: List<String>) : ConfirmTarget
 }
 
 /**
@@ -807,7 +823,25 @@ private fun ConfirmDialog(target: ConfirmTarget, onDismiss: () -> Unit, onConfir
                     "End ${target.names.size}",
                 )
             }
+        is ConfirmTarget.SoftEndSessions ->
+            if (target.names.size == 1) {
+                Triple(
+                    "Wind down ${target.names.first()}?",
+                    "Sends Claude the wrap-up instruction (finish, commit, prepare to end). " +
+                        "If auto-end is on for the host, the session ends on its own once it settles; " +
+                        "a wrap-up question keeps it open.",
+                    "Send wrap-up",
+                )
+            } else {
+                Triple(
+                    "Wind down ${target.names.size} sessions?",
+                    "Each gets the wrap-up instruction and, with auto-end on, ends once it settles.",
+                    "Send wrap-up",
+                )
+            }
     }
+    // A wind-down sends a message; only the truly destructive verbs are red.
+    val destructive = target !is ConfirmTarget.SoftEndSessions
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text(title, style = MaterialTheme.typography.titleSmall) },
@@ -820,7 +854,11 @@ private fun ConfirmDialog(target: ConfirmTarget, onDismiss: () -> Unit, onConfir
         },
         confirmButton = {
             TextButton(onClick = onConfirm) {
-                Text(verb, color = MaterialTheme.colorScheme.error)
+                Text(
+                    verb,
+                    color = if (destructive) MaterialTheme.colorScheme.error
+                    else MaterialTheme.colorScheme.primary,
+                )
             }
         },
         dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },

@@ -81,14 +81,26 @@ class AnswerReceiver : BroadcastReceiver() {
             client.answerPrompt(session, option, fingerprint.ifBlank { null })
         }
         result.onSuccess { r ->
-            // Brief and self-cancelling: confirmation that the keystroke landed, not a
-            // new thing to deal with.
-            SessionWatchWorker.post(
-                app,
-                "Answered $session",
-                "${r.option}) ${r.label ?: label}",
-                session,
-            )
+            if (r.ok) {
+                // Brief and self-cancelling: confirmation that the keystroke landed,
+                // not a new thing to deal with.
+                SessionWatchWorker.post(
+                    app,
+                    "Answered $session",
+                    "${r.option}) ${r.label ?: label}",
+                    session,
+                )
+            } else {
+                // The client now decodes the host's 409 into a result (so the UI can
+                // steer on `reason`); an ok=false here is that refusal — the tap was
+                // correct when it was offered and the world changed underneath it.
+                SessionWatchWorker.post(
+                    app,
+                    "Not answered: $session",
+                    r.error ?: "The question moved on",
+                    session,
+                )
+            }
         }.onFailure { e ->
             val why = when {
                 e is HuginnClient.HuginnException && e.code == 409 ->

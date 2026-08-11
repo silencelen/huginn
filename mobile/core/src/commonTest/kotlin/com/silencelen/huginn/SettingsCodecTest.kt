@@ -58,4 +58,21 @@ class SettingsCodecTest {
         val drafts = mapOf("sess:cc-2.0" to "x", "chat:86ed1440-e7ad-4dc4" to "y")
         assertEquals(drafts, SettingsCodec.decodeDrafts(SettingsCodec.encodeDrafts(drafts)))
     }
+
+    @Test
+    fun `sent history round-trips, drops empty lists, and decodes garbage to empty`() {
+        val hist = mapOf(
+            "sess:a" to listOf("first", "second\nwith a newline", "third \"quoted\""),
+            "chat:b" to listOf("only one"),
+        )
+        assertEquals(hist, SettingsCodec.decodeSentHistory(SettingsCodec.encodeSentHistory(hist)))
+        assertEquals(
+            hist,
+            SettingsCodec.decodeSentHistory(
+                SettingsCodec.encodeSentHistory(hist + ("sess:empty" to emptyList())),
+            ),
+        )
+        assertTrue(SettingsCodec.decodeSentHistory(null).isEmpty())
+        assertTrue(SettingsCodec.decodeSentHistory("""{"sess:a":["unterminat""").isEmpty())
+    }
 }

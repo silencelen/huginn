@@ -41,7 +41,9 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.isAltPressed
 import androidx.compose.ui.input.key.isCtrlPressed
+import androidx.compose.ui.input.key.isMetaPressed
 import androidx.compose.ui.input.key.isShiftPressed
 import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onPreviewKeyEvent
@@ -68,6 +70,9 @@ import com.silencelen.huginn.desktop.attach.attachmentDropTarget
 import com.silencelen.huginn.desktop.attach.composeMessage
 import com.silencelen.huginn.desktop.attach.rememberAttachmentController
 import com.silencelen.huginn.desktop.ui.chat.ChatTopBar
+import com.silencelen.huginn.ui.HistoryWalk
+import com.silencelen.huginn.ui.handleHistoryKey
+import com.silencelen.huginn.ui.exitRecallIfDiverged
 import com.silencelen.huginn.ui.LocalTranscriptMetrics
 import com.silencelen.huginn.ui.FollowNewest
 import com.silencelen.huginn.ui.MarkdownText
@@ -177,6 +182,9 @@ fun ChatView(
         if (drafts != null) drafts.clear(draftKey)
         else fallback.value = fallback.value - draftKey
     }
+    val historyMap by (store?.sentHistory?.entries ?: remember { MutableStateFlow(emptyMap<String, List<String>>()) })
+        .collectAsState()
+    val history = historyMap[draftKey].orEmpty()
     // A send that never went out must not take the typing with it. The composer
     // is emptied the instant Send is pressed — a box that stays full for the
     // length of a 128 MB upload gets pressed a second time — so a send that is
@@ -328,6 +336,8 @@ fun ChatView(
             onDraft = setDraft,
             onSent = clearDraft,
             onRestore = restoreDraft,
+            history = history,
+            onRecord = { store?.sentHistory?.record(draftKey, it) },
             attachments = attachments,
             scope = scope,
             running = running,
@@ -362,6 +372,8 @@ private fun Composer(
     onDraft: (String) -> Unit,
     onSent: () -> Unit,
     onRestore: (String) -> Unit,
+    history: List<String>,
+    onRecord: (String) -> Unit,
     attachments: AttachmentController,
     scope: kotlinx.coroutines.CoroutineScope,
     running: Boolean,
@@ -379,9 +391,16 @@ private fun Composer(
     val pending = attachment
     val canSend = draft.isNotBlank() || (pending != null && pending.status != AttachStatus.FAILED)
 
+    // Up/Down recalls previously sent messages, like a shell. The reducer is in
+    // :core (HistoryWalk); this holds only the active walk. The composer is
+    // recreated per chat, so a plain remember resets it per conversation.
+    val recall = remember { mutableStateOf<HistoryWalk.Cursor?>(null) }
+
     val submit: () -> Unit = {
         if (canSend) {
             val body = draft
+            if (body.isNotBlank()) onRecord(body)      // recorded BEFORE the send can fail
+            recall.value = null
             onSent()
             var posted = false
             scope.launch {
@@ -470,7 +489,7 @@ private fun Composer(
             AttachButton { picking = true }
             OutlinedTextField(
                 value = field,
-                onValueChange = { field = it; onDraft(it.text) },
+                onValueChange = { field = it; onDraft(it.text); exitRecallIfDiverged(recall, it.text) },
                 modifier = Modifier.weight(1f).heightIn(min = 56.dp, max = 160.dp)
                     // ENTER SENDS. Shift+Enter is the newline, which is what every
                     // chat this sits beside does — and the reverse binding, which
@@ -492,6 +511,9 @@ private fun Composer(
                     // or a file: returning false lets the text field's own paste
                     // run, and swallowing it would make Ctrl+V insert nothing.
                     .onPreviewKeyEvent { e ->
+                        val bareArrowOrEsc = !e.isCtrlPressed && !e.isAltPressed &&
+                            !e.isMetaPressed && !e.isShiftPressed &&
+                            (e.key == Key.DirectionUp || e.key == Key.DirectionDown || e.key == Key.Escape)
                         when {
                             e.type != KeyEventType.KeyDown -> false
                             e.key == Key.Enter && e.isShiftPressed -> {
@@ -503,6 +525,10 @@ private fun Composer(
                             }
                             e.key == Key.Enter -> { submit(); true }
                             e.isCtrlPressed && e.key == Key.V -> AwtTransfer.consumeClipboard(attachments)
+                            bareArrowOrEsc -> handleHistoryKey(
+                                e.key, field, recall, history, suppressed = false,
+                                setField = { field = it }, onDraft = onDraft,
+                            )
                             else -> false
                         }
                     },

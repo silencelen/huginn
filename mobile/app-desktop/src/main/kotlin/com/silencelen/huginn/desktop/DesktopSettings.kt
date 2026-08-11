@@ -60,6 +60,8 @@ class DesktopSettings(private val file: File = defaultFile()) : HuginnSettings {
         /** Encoded by [SettingsCodec] rather than as a native map: same bytes as the phone writes. */
         val chatRuns: String = "",
         val drafts: String = "",
+        /** Sent-message history per target, for Up/Down recall (SettingsCodec-encoded). */
+        val sentHistory: String = "",
         val lastContactAt: Long = 0,
         val lastAlarmAt: Long = 0,
         val lastWatchError: String = "",
@@ -128,6 +130,7 @@ class DesktopSettings(private val file: File = defaultFile()) : HuginnSettings {
     private val _runningChats = MutableStateFlow(stored.runningChats.toSet())
     private val _chatRuns = MutableStateFlow(SettingsCodec.decodeChatRuns(stored.chatRuns))
     private val _drafts = MutableStateFlow(SettingsCodec.decodeDrafts(stored.drafts))
+    private val _sentHistory = MutableStateFlow(SettingsCodec.decodeSentHistory(stored.sentHistory))
     private val _lastContactAt = MutableStateFlow(stored.lastContactAt)
     private val _lastAlarmAt = MutableStateFlow(stored.lastAlarmAt)
     private val _lastWatchError = MutableStateFlow(stored.lastWatchError)
@@ -156,6 +159,7 @@ class DesktopSettings(private val file: File = defaultFile()) : HuginnSettings {
     override val runningChats: Flow<Set<String>> = _runningChats.asStateFlow()
     override val chatRuns: Flow<Map<String, Long>> = _chatRuns.asStateFlow()
     override val drafts: Flow<Map<String, String>> = _drafts.asStateFlow()
+    override val sentHistory: Flow<Map<String, List<String>>> = _sentHistory.asStateFlow()
     override val lastContactAt: Flow<Long> = _lastContactAt.asStateFlow()
     override val lastAlarmAt: Flow<Long> = _lastAlarmAt.asStateFlow()
     override val lastWatchError: Flow<String> = _lastWatchError.asStateFlow()
@@ -223,6 +227,11 @@ class DesktopSettings(private val file: File = defaultFile()) : HuginnSettings {
     override suspend fun setDrafts(value: Map<String, String>) {
         _drafts.value = value
         mutate { it.copy(drafts = SettingsCodec.encodeDrafts(value)) }
+    }
+
+    override suspend fun setSentHistory(value: Map<String, List<String>>) {
+        _sentHistory.value = value
+        mutate { it.copy(sentHistory = SettingsCodec.encodeSentHistory(value)) }
     }
 
     override suspend fun noteContact(atMs: Long) {

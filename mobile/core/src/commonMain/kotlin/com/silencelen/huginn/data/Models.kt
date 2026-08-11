@@ -30,6 +30,13 @@ data class Status(
     val disk: Disk? = null,
     val sessions: Int = 0,
     val chatsRunning: Int = 0,
+    /**
+     * The wrap-up phrase a soft end types into the pane, and whether the host
+     * auto-ends the session once it settles. Served so clients can show the
+     * exact wording instead of carrying a copy that drifts from the host.
+     */
+    val softEndPhrase: String? = null,
+    val softEndAuto: Boolean = false,
 )
 
 @Serializable
@@ -46,6 +53,8 @@ data class Session(
     val rows: Int = 0,
     val windowSize: String? = null,
     val sizeLeased: Boolean = false,
+    /** A soft end is pending: the session is winding down and may end itself. */
+    val softEnding: Boolean = false,
     val claudeSessionId: String? = null,
     val hasTranscript: Boolean = false,
     /** Claude Code's own generated session title, far better than the tmux name. */
@@ -82,6 +91,13 @@ data class PromptOption(
     val selected: Boolean = false,
     /** Multi-select checkbox state; null on rows that are not checkboxes. */
     val checked: Boolean? = null,
+    /**
+     * The option's explanation, carried when the host fused the hook's exact
+     * AskUserQuestion input (the pane scrape alone never has descriptions).
+     */
+    val description: String? = null,
+    /** A TUI-added row ("Type something.", "Chat about this"), not one of the question's own options. */
+    val extra: Boolean = false,
 )
 
 @Serializable
@@ -97,6 +113,49 @@ data class PanePrompt(
      * eventually disagree over a space and reject valid answers.
      */
     val fingerprint: String? = null,
+    /** Which of an N-question AskUserQuestion is showing (0-based), when known. */
+    val questionIndex: Int? = null,
+    val questionCount: Int? = null,
+    /** "hook" when the host fused the exact tool input; absent for pane-only. */
+    val source: String? = null,
+)
+
+/**
+ * A question the hook knows about but the pane scrape could not read (an exotic
+ * dialog shape). Rendered as a card so the user sees SOMETHING; answering goes
+ * through /answer, which re-checks the pane and refuses with reason=undetected
+ * when it still cannot see a live run — the client then opens the Screen tab.
+ */
+@Serializable
+data class DegradedAsk(
+    val question: String = "",
+    val header: String? = null,
+    val options: List<PromptOption> = emptyList(),
+    val multiSelect: Boolean = false,
+    val questionIndex: Int? = null,
+    val questionCount: Int? = null,
+    val answerable: Boolean = false,
+    val fingerprint: String? = null,
+)
+
+/** A plan approval is waiting (ExitPlanMode), with the plan text when the runtime shipped it. */
+@Serializable
+data class PlanPending(
+    val ts: Long? = null,
+    val plan: String? = null,
+    val planFilePath: String? = null,
+)
+
+/** What POST /v1/sessions/:name/soft-end reports back. */
+@Serializable
+data class SoftEndResult(
+    val ok: Boolean = false,
+    /** The wrap-up phrase the host actually typed into the pane. */
+    val phrase: String? = null,
+    /** Whether the host will auto-end the session once it settles. */
+    val auto: Boolean = false,
+    /** True when the session was mid-turn, so the phrase queued in the composer. */
+    val queued: Boolean = false,
 )
 
 @Serializable
@@ -118,6 +177,10 @@ data class Screen(
     /** Set when a long poll expired with no change; `lines` is then empty. */
     val unchanged: Boolean = false,
     val prompt: PanePrompt? = null,
+    /** Present when the hook has a question the pane scrape cannot read. */
+    val ask: DegradedAsk? = null,
+    /** Present while an ExitPlanMode approval is waiting. */
+    val planPending: PlanPending? = null,
     /** The live status line ("Gallivanting… · 3m 15s"), the only moment-to-moment signal. */
     val spinner: String? = null,
     /** The TUI's own durable progress rows: workflow phases, "Running N agents". */

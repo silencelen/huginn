@@ -10,6 +10,7 @@ import io.ktor.client.request.prepareRequest
 import io.ktor.client.request.request
 import io.ktor.client.request.setBody
 import io.ktor.client.request.url
+import io.ktor.client.statement.bodyAsBytes
 import io.ktor.client.statement.bodyAsChannel
 import io.ktor.client.statement.bodyAsText
 import io.ktor.http.ContentType
@@ -290,7 +291,7 @@ class HuginnClient(
             put("option", JsonPrimitive(option))
             fingerprint?.let { put("fingerprint", JsonPrimitive(it)) }
         }
-        return decode(post("/v1/sessions/$session/answer", body = body))
+        return answerCall(session, body)
     }
 
     /**
@@ -303,7 +304,25 @@ class HuginnClient(
             put("options", JsonArray(options.map { JsonPrimitive(it) }))
             fingerprint?.let { put("fingerprint", JsonPrimitive(it)) }
         }
-        return decode(post("/v1/sessions/$session/answer", body = body))
+        return answerCall(session, body)
+    }
+
+    /**
+     * The /answer route speaks in 409s — "changed", "gone", "undetected" — and
+     * each body is a full AnswerResult whose `reason` the UI steers on (an
+     * undetected answer opens the Screen tab). Throwing on the 409, as the plain
+     * `call` path does, reduced all of that to an error STRING: `ok=false`
+     * results were unreachable and every caller's reason handling was dead code.
+     * So the answer routes decode the 409 body instead of throwing; every other
+     * status still throws like any request.
+     */
+    private suspend fun answerCall(session: String, body: JsonObject): AnswerResult {
+        val resp = http.request { build("/v1/sessions/$session/answer", HttpMethod.Post, Tier.NORMAL, body) }
+        val text = resp.bodyAsText()
+        if (resp.status.isSuccess() || resp.status.value == 409) {
+            runCatching { decode<AnswerResult>(text) }.getOrNull()?.let { return it }
+        }
+        throw errorFrom(resp.status.value, text)
     }
 
     suspend fun autoswitch(): Autoswitch = decode(call("/v1/autoswitch"))
@@ -457,6 +476,18 @@ class HuginnClient(
         call("/v1/sessions/$name", HttpMethod.Delete)
     }
 
+    /**
+     * Soft end: the host types its wrap-up phrase into the pane so Claude can
+     * finish and commit; with auto-end on (the host default) the session then
+     * ends itself once it settles. Returns what was actually sent — the phrase
+     * is the HOST's, never a client copy. 409s when a question is waiting or
+     * when the pane has no recorded Claude state (it may be a plain shell).
+     */
+    suspend fun softEndSession(name: String, auto: Boolean? = null): SoftEndResult =
+        decode(post("/v1/sessions/$name/soft-end", body = buildJsonObject {
+            if (auto != null) put("auto", JsonPrimitive(auto))
+        }))
+
     suspend fun renameSession(from: String, to: String) {
         post("/v1/sessions/$from/rename", body = jsonBody("name" to to))
     }
@@ -529,6 +560,17 @@ class HuginnClient(
 
     suspend fun upload(bytes: ByteArray, mime: String, name: String? = null): UploadResult =
         uploadStream(mime, name, bytes.asByteStream())
+
+    /**
+     * Reads a stored upload back by its server-assigned basename — the chat
+     * history thumbnail path. 404 after a manual delete is expected; callers
+     * fall back to the "photo attached" placeholder.
+     */
+    suspend fun uploadBytes(name: String): ByteArray {
+        val resp = http.request { build("/v1/uploads/" + name.encodeURLParameter(), HttpMethod.Get, Tier.NORMAL, null) }
+        if (!resp.status.isSuccess()) throw errorFrom(resp.status.value, resp.bodyAsText())
+        return resp.bodyAsBytes()
+    }
 
     private fun uploadQuery(name: String?) = name?.let { "?name=" + it.encodeURLParameter() } ?: ""
 

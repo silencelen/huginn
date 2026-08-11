@@ -91,6 +91,17 @@ interface HuginnSettings {
     val drafts: Flow<Map<String, String>>
     suspend fun setDrafts(value: Map<String, String>)
 
+    // ----------------------------------------------------- sent history
+
+    /**
+     * Previously sent messages per target (same keys as [drafts]), oldest first,
+     * for Up/Down recall in the composer. DEFAULT members so a platform that has
+     * not opted into persisting it (the phone, today) compiles unchanged and
+     * simply forgets history across restarts; the desktop overrides both.
+     */
+    val sentHistory: Flow<Map<String, List<String>>> get() = kotlinx.coroutines.flow.flowOf(emptyMap())
+    suspend fun setSentHistory(value: Map<String, List<String>>) {}
+
     // ------------------------------------------------------- diagnostics
 
     val lastContactAt: Flow<Long>
@@ -126,6 +137,18 @@ object SettingsCodec {
     private val json = Json { ignoreUnknownKeys = true }
     private val strings = MapSerializer(String.serializer(), String.serializer())
     private val longs = MapSerializer(String.serializer(), Long.serializer())
+    private val stringLists = MapSerializer(
+        String.serializer(),
+        kotlinx.serialization.builtins.ListSerializer(String.serializer()),
+    )
+
+    fun decodeSentHistory(raw: String?): Map<String, List<String>> =
+        if (raw.isNullOrEmpty()) emptyMap()
+        else runCatching { json.decodeFromString(stringLists, raw) }.getOrDefault(emptyMap())
+
+    /** Empty lists are dropped: a target with no history needs no key. */
+    fun encodeSentHistory(value: Map<String, List<String>>): String =
+        json.encodeToString(stringLists, value.filterValues { it.isNotEmpty() })
 
     fun decodeDrafts(raw: String?): Map<String, String> =
         if (raw.isNullOrEmpty()) emptyMap()

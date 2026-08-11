@@ -56,7 +56,7 @@ flock "$LOCK" ./gradlew :core:jvmTest :core:testDebugUnitTest :app:testDebugUnit
 # a row identity that collides, a lease that is never released, a 409 retried
 # forever — so they are tested where both clients read them, which means the 25
 # new tests run TWICE.
-KOTLIN_MIN=432   # 188 (:core jvm) + 188 (:core android) + 49 (:app) + 7 (:ui jvm), 2026-07-30
+KOTLIN_MIN=622   # 276 (:core jvm) + 276 (:core android) + 49 (:app) + 21 (:ui jvm), 2026-08-11
 KOTLIN_COUNT=0
 for D in core/build/test-results/jvmTest \
          core/build/test-results/testDebugUnitTest \

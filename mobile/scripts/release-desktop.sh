@@ -167,7 +167,7 @@ if [ "$SKIP_TESTS" = 0 ]; then
   # pure decisions that fail SILENTLY when wrong (a menu that deletes four rows
   # while reading "Delete", a window restored onto a monitor that is gone), so
   # they are asserted rather than eyeballed. +28 in :app-desktop.
-  KOTLIN_MIN=436   # 382 (scripts/build.sh floor) + 54 (:app-desktop), 2026-07-31
+  KOTLIN_MIN=811   # 622 (scripts/build.sh floor) + 189 (:app-desktop), 2026-08-11
   KOTLIN_COUNT=0
   for D in core/build/test-results/jvmTest \
            core/build/test-results/testDebugUnitTest \

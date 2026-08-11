@@ -32,7 +32,13 @@ object AttachmentText {
             "(file, unzip, strings, sqlite3) rather than Read. Requires act mode.]"
     }
 
+    // MARKER_RE must stay byte-identical to what marker() writes: the Electron
+    // client (attachmentMarker.ts) and appd (humanizeUserText) carry copies of
+    // this exact wording, and the marker is the ONLY link between a message and
+    // its stored file. MARKER_PATH_RE is the same pattern with the path captured
+    // (lazily — server-named files never contain " — ").
     private val MARKER_RE = Regex("""\[Attached image at [^\]]+ — view it with the Read tool\.\]""")
+    private val MARKER_PATH_RE = Regex("""\[Attached image at ([^\]]+?) — view it with the Read tool\.\]""")
     private val FILE_RE = Regex("""\[Attached file at \S+( \(([^)]{1,80})\))? — [^\]]*\]""")
 
     /**
@@ -48,4 +54,26 @@ object AttachmentText {
             .trim()
         return cleaned.ifBlank { "📷 Photo attached" }
     }
+
+    /** Every image path the message's markers name, in order. */
+    fun imagePaths(text: String): List<String> {
+        if ('[' !in text) return emptyList()
+        return MARKER_PATH_RE.findAll(text).map { it.groupValues[1].trim() }.toList()
+    }
+
+    /**
+     * The server-assigned basename an upload is fetched back by. The GET is by
+     * NAME, not path, so a relocated data dir (HUGINN_APPD_DATA) does not orphan
+     * old messages. Null for a path with no filename.
+     */
+    fun uploadName(path: String): String? =
+        path.substringAfterLast('/').ifBlank { null }
+
+    /**
+     * The message text with its image markers removed — what renders BESIDE a
+     * thumbnail (the thumbnail already says "photo"). File markers stay; they
+     * have no thumbnail to speak for them.
+     */
+    fun stripImageMarkers(text: String): String =
+        text.replace(MARKER_RE, "").trim()
 }
