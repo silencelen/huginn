@@ -5,3 +5,9 @@ Thumbs.db
 *~
 .idea/
 .vscode/
+
+# Internal audit workpapers — never public (account identifiers, open findings)
+audits/
+
+# Per-operator ship configuration (see mobile/scripts/ship.sh)
+mobile/scripts/.shiprc
