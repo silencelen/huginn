@@ -57,11 +57,13 @@ fun SessionsScreen(
     onOpen: (String) -> Unit,
     onCreate: (String) -> Unit,
     onKill: (String) -> Unit,
+    onSoftEnd: (String) -> Unit = {},
     onRename: (String, String) -> Unit,
 ) {
     var showNew by remember { mutableStateOf(false) }
     var newName by remember { mutableStateOf("") }
     var confirmKill by remember { mutableStateOf<String?>(null) }
+    var confirmSoftEnd by remember { mutableStateOf<String?>(null) }
     var renaming by remember { mutableStateOf<String?>(null) }
     var renameTo by remember { mutableStateOf("") }
 
@@ -81,6 +83,7 @@ fun SessionsScreen(
                         selected = s.name == selectedName,
                         onOpen = { onOpen(s.name) },
                         onKill = { confirmKill = s.name },
+                        onSoftEnd = { confirmSoftEnd = s.name },
                         onRename = { renaming = s.name; renameTo = s.name },
                     )
                     HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
@@ -158,6 +161,23 @@ fun SessionsScreen(
             dismissButton = { TextButton(onClick = { confirmKill = null }) { Text("Cancel") } },
         )
     }
+
+    confirmSoftEnd?.let { name ->
+        AlertDialog(
+            onDismissRequest = { confirmSoftEnd = null },
+            title = { Text("Wind down $name?") },
+            text = {
+                Text(
+                    "Sends Claude the wrap-up instruction (finish, commit, prepare to end). " +
+                        "If auto-end is on for the host, the session ends on its own once it settles.",
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = { confirmSoftEnd = null; onSoftEnd(name) }) { Text("Send wrap-up") }
+            },
+            dismissButton = { TextButton(onClick = { confirmSoftEnd = null }) { Text("Cancel") } },
+        )
+    }
 }
 
 @Composable
@@ -166,6 +186,7 @@ private fun SessionRow(
     selected: Boolean,
     onOpen: () -> Unit,
     onKill: () -> Unit,
+    onSoftEnd: () -> Unit = {},
     onRename: () -> Unit,
 ) {
     var menu by remember { mutableStateOf(false) }
@@ -287,6 +308,10 @@ private fun SessionRow(
                     text = { Text("Rename") },
                     leadingIcon = { Icon(Icons.Filled.DriveFileRenameOutline, contentDescription = null) },
                     onClick = { menu = false; onRename() },
+                )
+                DropdownMenuItem(
+                    text = { Text("Wind down…") },
+                    onClick = { menu = false; onSoftEnd() },
                 )
                 DropdownMenuItem(
                     text = { Text("End session") },

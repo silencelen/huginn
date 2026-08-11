@@ -74,6 +74,17 @@ class SessionController(
     private val _tab = MutableStateFlow(SessionTab.CONVERSATION)
     val tab: StateFlow<SessionTab> = _tab.asStateFlow()
 
+    /**
+     * Live keyboard mode on the Screen tab. Hoisted here (it used to be local to
+     * the tab composable) so the composer — which sits OUTSIDE the tabs — can
+     * suppress its Up/Down history recall while every keystroke belongs to the
+     * pane. Per-visit, never persisted: it is a way of leaning in, not a
+     * configuration; a fresh controller (per session) starts with it off.
+     */
+    private val _live = MutableStateFlow(false)
+    val live: StateFlow<Boolean> = _live.asStateFlow()
+    fun setLive(value: Boolean) { _live.value = value }
+
     private val _page = MutableStateFlow<TranscriptPage?>(null)
     val page: StateFlow<TranscriptPage?> = _page.asStateFlow()
 
@@ -416,7 +427,9 @@ class SessionController(
      * practice; it exists so that a daemon which stops publishing one degrades to
      * "cannot answer" instead of "answers blind".
      */
-    fun answer(option: Int) = submitAnswer { fp -> client.answerPrompt(name, option, fp) }
+    fun answer(option: Int) = submitAnswer(_screen.value?.prompt?.fingerprint) { fp ->
+        client.answerPrompt(name, option, fp)
+    }
 
     /**
      * Multi-select. Sends the full DESIRED set; the host diffs it against the
@@ -424,11 +437,25 @@ class SessionController(
      * the owner may have half-answered in tmux and pressing every desired digit
      * would un-check exactly those.
      */
-    fun answerMulti(options: List<Int>) =
-        submitAnswer { fp -> client.answerPromptMulti(name, options.sorted(), fp) }
+    fun answerMulti(options: List<Int>) = submitAnswer(_screen.value?.prompt?.fingerprint) { fp ->
+        client.answerPromptMulti(name, options.sorted(), fp)
+    }
 
-    private fun submitAnswer(call: suspend (String) -> com.silencelen.huginn.data.AnswerResult) {
-        val fingerprint = _screen.value?.prompt?.fingerprint
+    /**
+     * An answer to the DEGRADED card — the hook knows the question but the pane
+     * scrape could not read the dialog. The host re-checks the live pane; if the
+     * run has become readable the fingerprints agree and the digit lands, else it
+     * refuses with reason=undetected and the Screen tab is where answering has to
+     * happen — so that refusal steers there.
+     */
+    fun answerDegraded(option: Int) = submitAnswer(_screen.value?.ask?.fingerprint) { fp ->
+        client.answerPrompt(name, option, fp)
+    }
+
+    private fun submitAnswer(
+        fingerprint: String?,
+        call: suspend (String) -> com.silencelen.huginn.data.AnswerResult,
+    ) {
         if (fingerprint.isNullOrEmpty()) {
             _answerNote.value = "This question carries no fingerprint, so it cannot be answered safely from here."
             return
@@ -439,7 +466,12 @@ class SessionController(
         scope.launch {
             runCatching { call(fingerprint) }
                 .onSuccess { r ->
-                    if (!r.ok) _answerNote.value = r.error ?: "The question moved on."
+                    if (!r.ok) {
+                        _answerNote.value = r.error ?: "The question moved on."
+                        // The dialog is on screen but unreadable to the scrape:
+                        // the Screen tab is the one place it CAN be answered.
+                        if (r.reason == "undetected") _tab.value = SessionTab.SCREEN
+                    }
                 }
                 // A 409 arrives here, carrying the daemon's own sentence. It is an
                 // ORDINARY outcome — the click was right when it was offered — so

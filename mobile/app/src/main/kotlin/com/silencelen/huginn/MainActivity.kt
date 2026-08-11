@@ -51,6 +51,7 @@ import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -84,6 +85,7 @@ import com.silencelen.huginn.ui.EmptyState
 import com.silencelen.huginn.ui.LiveInput
 import com.silencelen.huginn.ui.ChatsScreen
 import com.silencelen.huginn.ui.HuginnViewModel
+import com.silencelen.huginn.ui.LocalAttachmentImages
 import com.silencelen.huginn.ui.SessionScreen
 import com.silencelen.huginn.ui.SessionSubtitle
 import com.silencelen.huginn.ui.SessionsScreen
@@ -200,10 +202,17 @@ class MainActivity : FragmentActivity() {
                         },
                     )
                 } else {
-                    HuginnApp(
-                        target = openTarget.value,
-                        onLockNow = { lockError.value = null; AppLock.lockedNow = true; locked.value = true },
-                    )
+                    val vm: HuginnViewModel = viewModel(factory = HuginnViewModel.Factory)
+                    // Photo attachments render as real thumbnails in chat history;
+                    // without this (or against an old daemon) rows fall back to the
+                    // "photo attached" pill.
+                    CompositionLocalProvider(LocalAttachmentImages provides vm.attachmentImages) {
+                        HuginnApp(
+                            target = openTarget.value,
+                            onLockNow = { lockError.value = null; AppLock.lockedNow = true; locked.value = true },
+                            vm = vm,
+                        )
+                    }
                 }
             }
         }
@@ -533,6 +542,7 @@ fun HuginnApp(
     var renameChatTarget by remember { mutableStateOf<String?>(null) }    // chat id
     var renameText by remember { mutableStateOf("") }
     var killTarget by remember { mutableStateOf<String?>(null) }
+    var softEndTarget by remember { mutableStateOf<String?>(null) }
     var deleteChatTarget by remember { mutableStateOf<String?>(null) }
 
     val snackbar = remember { SnackbarHostState() }
@@ -704,6 +714,28 @@ fun HuginnApp(
             dismissButton = { TextButton(onClick = { killTarget = null }) { Text("Cancel") } },
         )
     }
+    softEndTarget?.let { name ->
+        AlertDialog(
+            onDismissRequest = { softEndTarget = null },
+            title = { Text("Wind down $name?") },
+            text = {
+                Text(
+                    "Sends Claude the wrap-up instruction (finish, commit, prepare to end). " +
+                        "If auto-end is on for the host, the session ends on its own once it settles; " +
+                        "a wrap-up question keeps it open.",
+                )
+            },
+            // Not destructive: this sends a message and the session lives on, so no
+            // navigation away and the default (primary) button colour.
+            confirmButton = {
+                TextButton(onClick = {
+                    vm.softEndSession(name)
+                    softEndTarget = null
+                }) { Text("Send wrap-up") }
+            },
+            dismissButton = { TextButton(onClick = { softEndTarget = null }) { Text("Cancel") } },
+        )
+    }
     deleteChatTarget?.let { id ->
         AlertDialog(
             onDismissRequest = { deleteChatTarget = null },
@@ -815,6 +847,7 @@ fun HuginnApp(
                 onOpen = { name -> dest = Dest.SessionView(name) },
                 onCreate = { name -> vm.createSession(name) { dest = Dest.SessionView(it) } },
                 onKill = { vm.killSession(it) },
+                onSoftEnd = { vm.softEndSession(it) },
                 onRename = { from, to -> vm.renameSession(from, to) },
             )
         }
@@ -1027,6 +1060,8 @@ fun HuginnApp(
                                                 onClick = { surfaceMenu = false; vm.forceFit() })
                                             DropdownMenuItem(text = { Text("Interrupt (Esc)") },
                                                 onClick = { surfaceMenu = false; vm.interruptSession(d.name) })
+                                            DropdownMenuItem(text = { Text("Wind down…") },
+                                                onClick = { surfaceMenu = false; softEndTarget = d.name })
                                             DropdownMenuItem(text = { Text("Kill session…") },
                                                 onClick = { surfaceMenu = false; killTarget = d.name })
                                         }

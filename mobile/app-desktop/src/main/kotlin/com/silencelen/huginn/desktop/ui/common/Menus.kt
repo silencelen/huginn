@@ -234,6 +234,8 @@ class SessionVerbs(
     val rename: (Session) -> Unit,
     val interrupt: (String) -> Unit,
     val copyName: (String) -> Unit,
+    /** Ask Claude to wrap up (and, host willing, end on settle). Not destructive. */
+    val softEnd: (List<String>) -> Unit,
     val kill: (List<String>) -> Unit,
 )
 
@@ -242,6 +244,7 @@ fun sessionMenu(session: Session, selection: Set<String>, verbs: SessionVerbs): 
     if (multi) {
         val names = selection.toList()
         return listOf(
+            HuginnMenuItem("Wind down ${selection.size} sessions") { verbs.softEnd(names) },
             HuginnMenuItem("End ${selection.size} sessions", destructive = true) { verbs.kill(names) },
         )
     }
@@ -252,6 +255,10 @@ fun sessionMenu(session: Session, selection: Set<String>, verbs: SessionVerbs): 
         // rather than competing with it.
         HuginnMenuItem("Interrupt (Esc)") { verbs.interrupt(session.name) },
         HuginnMenuItem("Copy session name") { verbs.copyName(session.name) },
+        // The graceful sibling of "End session": sends the wrap-up phrase, and the
+        // host (auto-end on) ends the session once it settles. Red stays on the
+        // kill — this one only sends a message.
+        HuginnMenuItem("Wind down…") { verbs.softEnd(listOf(session.name)) },
         HuginnMenuItem("End session", destructive = true) { verbs.kill(listOf(session.name)) },
     )
 }

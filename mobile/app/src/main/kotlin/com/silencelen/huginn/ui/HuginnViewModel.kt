@@ -109,6 +109,17 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
         tokenProvider = { tokenNow },
     )
 
+    /**
+     * Thumbnails for photo attachments in chat history. Built here (the client is
+     * private, so nothing outside can) and provided to the shared transcript
+     * renderer; app-scoped so decoded bitmaps survive scrolling and recomposition.
+     */
+    val attachmentImages: com.silencelen.huginn.ui.AttachmentImageLoader =
+        com.silencelen.huginn.ui.AttachmentImageLoader(
+            fetch = { client.uploadBytes(it) },
+            decoder = com.silencelen.huginn.ui.AndroidImageBytesDecoder(),
+        )
+
     // ---- shared UI state
 
     private val _baseUrl = MutableStateFlow(SettingsStore.DEFAULT_BASE_URL)
@@ -984,6 +995,23 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
                     clearDraft(sessionDraftKey(name))
                     clearAttachment(sessionDraftKey(name))
                     _toast.value = "Ended $name"; refreshSessions()
+                }
+                .onFailure { _toast.value = errText(it) }
+        }
+    }
+
+    /**
+     * Soft end: ask Claude to wrap up (and, with auto-end on, let the host end the
+     * session once it settles). The session lives on — a wrap-up question keeps it
+     * open — so drafts are deliberately NOT cleared. Reports what was sent.
+     */
+    fun softEndSession(name: String) {
+        viewModelScope.launch {
+            runCatching { client.softEndSession(name) }
+                .onSuccess { r ->
+                    _toast.value = if (r.auto) "Winding down $name — ends when it goes idle"
+                    else "Sent wrap-up to $name"
+                    refreshSessions()
                 }
                 .onFailure { _toast.value = errText(it) }
         }
