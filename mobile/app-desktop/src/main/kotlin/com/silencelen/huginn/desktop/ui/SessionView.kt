@@ -51,6 +51,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.KeyEventType
 import androidx.compose.ui.input.key.isCtrlPressed
+import androidx.compose.ui.input.key.isShiftPressed
 import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
@@ -58,6 +59,8 @@ import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.TextRange
+import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.unit.dp
 import androidx.compose.runtime.rememberCoroutineScope
 import com.silencelen.huginn.data.DraftBook
@@ -893,26 +896,49 @@ private fun Composer(
             horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
             AttachButton { picking = true }
+    // Same TextFieldValue as the chat composer, for the same reason: Shift+Enter
+    // has to insert the newline itself, and appending to the String is silently
+    // discarded by the field's own editing buffer. See ChatView for the detail.
+    var field by remember { mutableStateOf(TextFieldValue(draft)) }
+    if (field.text != draft) {
+        field = TextFieldValue(draft, TextRange(draft.length))
+    }
             OutlinedTextField(
-                value = draft,
-                onValueChange = onDraft,
+                value = field,
+                onValueChange = { field = it; onDraft(it.text) },
                 // Cap before fill. `fillMaxWidth` hands DOWN fixed constraints and a
                 // `widthIn` inside those can only coerce into them, so the cap would be
                 // swallowed and a composer meant to stop at a reading measure would
                 // span the whole window.
                 modifier = Modifier.widthIn(max = 900.dp).weight(1f)
                     .heightIn(min = 56.dp, max = 160.dp)
-                    // Ctrl+Enter sends; plain Enter is a newline. The opposite binding
-                    // sends half-written instructions into a live agent session.
+                    // ENTER SENDS, Shift+Enter is the newline — the same binding as
+                    // the chat composer, because two boxes in one app where Enter
+                    // means opposite things is worse than either choice. Ctrl+Enter
+                    // still sends, so the older habit keeps working. The newline is
+                    // inserted here because Compose maps nothing to Shift+Enter —
+                    // see the same block in ChatView for why it appends.
+                    //
+                    // This one does send into a LIVE agent session, which is the
+                    // argument the previous binding was making; it is answered by
+                    // the pane showing what arrived, and by Enter being what every
+                    // other composer in reach already does.
                     .onPreviewKeyEvent { e ->
                         when {
                             e.type != KeyEventType.KeyDown -> false
-                            e.isCtrlPressed && e.key == Key.Enter -> { submit(); true }
+                            e.key == Key.Enter && e.isShiftPressed -> {
+                                val at = field.selection.start
+                                val next = field.text.substring(0, at) + "\n" + field.text.substring(field.selection.end)
+                                field = TextFieldValue(next, TextRange(at + 1))
+                                onDraft(next)
+                                true
+                            }
+                            e.key == Key.Enter -> { submit(); true }
                             e.isCtrlPressed && e.key == Key.V -> AwtTransfer.consumeClipboard(attachments)
                             else -> false
                         }
                     },
-                placeholder = { Text("Send to the pane…  (Ctrl+Enter · paste, drop or clip a file)") },
+                placeholder = { Text("Send to the pane…  (Enter to send · Shift+Enter for a new line)") },
                 textStyle = MaterialTheme.typography.bodyMedium,
             )
             // Esc is how you stop Claude at the keyboard, so with nothing typed

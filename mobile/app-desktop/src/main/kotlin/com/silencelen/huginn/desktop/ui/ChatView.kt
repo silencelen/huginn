@@ -42,12 +42,15 @@ import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.KeyEventType
 import androidx.compose.ui.input.key.isCtrlPressed
+import androidx.compose.ui.input.key.isShiftPressed
 import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.TextRange
+import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.unit.dp
 import com.silencelen.huginn.data.DraftBook
 import com.silencelen.huginn.data.HuginnClient
@@ -445,14 +448,45 @@ private fun Composer(
             verticalAlignment = Alignment.Bottom,
             horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
+    // The field owns a TextFieldValue rather than a bare String, because it has
+    // to insert a newline AT THE CURSOR when Shift+Enter is pressed: Compose maps
+    // Enter to a newline but nothing to Shift+Enter, so once Enter is taken for
+    // send there is no newline left unless this puts one in.
+    //
+    // Appending to the String instead does NOT work, and fails in a way worth
+    // recording: OutlinedTextField(value: String) keeps its own editing buffer,
+    // so the next keystroke emits that buffer plus the new character and quietly
+    // discards the newline written behind its back. Measured — the message
+    // arrived as "AAABBBCCC" with every separator gone.
+    //
+    // The draft itself still lives in the drafts book, which restore-after-a-
+    // cancelled-send, dropped text and suggestion chips all write to; when one of
+    // them changes it underneath, this adopts the new text and puts the caret at
+    // the end.
+    var field by remember { mutableStateOf(TextFieldValue(draft)) }
+    if (field.text != draft) {
+        field = TextFieldValue(draft, TextRange(draft.length))
+    }
             AttachButton { picking = true }
             OutlinedTextField(
-                value = draft,
-                onValueChange = onDraft,
+                value = field,
+                onValueChange = { field = it; onDraft(it.text) },
                 modifier = Modifier.weight(1f).heightIn(min = 56.dp, max = 160.dp)
-                    // Ctrl+Enter sends; plain Enter is a newline. The opposite
-                    // binding on a desktop composer sends half-written messages,
-                    // and a chat message cannot be unsent.
+                    // ENTER SENDS. Shift+Enter is the newline, which is what every
+                    // chat this sits beside does — and the reverse binding, which
+                    // this had, reads as a broken send rather than as a deliberate
+                    // guard against half-written messages. Ctrl+Enter still sends,
+                    // so the older habit keeps working.
+                    //
+                    // The newline is inserted HERE rather than left to the field:
+                    // Compose maps Enter to a newline but nothing to Shift+Enter,
+                    // so once Enter is taken for send there is no newline left. It
+                    // APPENDS rather than splitting at the cursor, because the
+                    // value is a plain String owned by the drafts book — which
+                    // restore-after-a-cancelled-send and drag-dropped text also
+                    // write to. Holding a TextFieldValue to get the cursor means
+                    // keeping it in sync with those writers, and stale-snapshot
+                    // syncs are a bug this project has paid for more than once.
                     //
                     // Ctrl+V is intercepted only when the clipboard holds an image
                     // or a file: returning false lets the text field's own paste
@@ -460,7 +494,14 @@ private fun Composer(
                     .onPreviewKeyEvent { e ->
                         when {
                             e.type != KeyEventType.KeyDown -> false
-                            e.isCtrlPressed && e.key == Key.Enter -> { submit(); true }
+                            e.key == Key.Enter && e.isShiftPressed -> {
+                                val at = field.selection.start
+                                val next = field.text.substring(0, at) + "\n" + field.text.substring(field.selection.end)
+                                field = TextFieldValue(next, TextRange(at + 1))
+                                onDraft(next)
+                                true
+                            }
+                            e.key == Key.Enter -> { submit(); true }
                             e.isCtrlPressed && e.key == Key.V -> AwtTransfer.consumeClipboard(attachments)
                             else -> false
                         }
@@ -468,7 +509,7 @@ private fun Composer(
                 placeholder = {
                     Text(
                         if (running) "Send anyway — it will queue behind this turn"
-                        else "Message…  (Ctrl+Enter to send · paste, drop or clip a file)"
+                        else "Message…  (Enter to send · Shift+Enter for a new line · paste, drop or clip a file)"
                     )
                 },
                 textStyle = MaterialTheme.typography.bodyMedium,
