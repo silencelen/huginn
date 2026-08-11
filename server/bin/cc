@@ -3,7 +3,7 @@
 #   default : attach/create; if other devices are attached, the view mirrors (smallest screen wins)
 #   solo    : attach detaching ALL other clients -> resume as the sole client, full size
 # Detach with Alt-d (or Ctrl-b d); reattach from any device. New sessions start `claude` for you.
-# Working directory: $HUGINN_WORKDIR (default: $HOME/netplan, falling back to $HOME)
+# Working directory: $HUGINN_WORKDIR (default: $HOME)
 # Default TERM when the SSH client didn't send one (Windows OpenSSH has no $TERM):
 # without this, tmux aborts with "open terminal failed: not a terminal".
 export TERM="${TERM:-xterm-256color}"
@@ -32,7 +32,7 @@ fi
 # failure: `tmux new-session -c` exits in well under a second if the directory is
 # gone or on a stalled mount, and the client's reconnect loop would then churn
 # forever showing only "link dropped" while the real error scrolls past.
-WORKDIR="${HUGINN_WORKDIR:-$HOME/netplan}"
+WORKDIR="${HUGINN_WORKDIR:-$HOME}"
 [ -d "$WORKDIR" ] || { echo "cc: $WORKDIR is not available - opening in $HOME instead" >&2; WORKDIR="$HOME"; }
 # New sessions auto-launch Claude Code. With claude as the window's first program there
 # is no idle bash prompt to misread the terminal's device-attributes replies (the tmux 3.6

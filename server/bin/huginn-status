@@ -8,29 +8,35 @@
 # container on another host every time it ran. It now probes the one thing it
 # reports, directly over ssh, and finishes in well under a second.
 C=$(printf '\033[36m'); G=$(printf '\033[32m'); R=$(printf '\033[31m'); Y=$(printf '\033[33m'); Z=$(printf '\033[0m')
-MUNINN=root@192.168.2.118
+# Optional companion memory node ("Muninn"): set HUGINN_MEMPALACE_HOST
+# (user@host) and optionally HUGINN_MEMPALACE_MARKER (a rebuild-in-progress
+# marker file on that host) in the login environment to enable the probe.
+MEMPALACE_HOST="${HUGINN_MEMPALACE_HOST:-}"
+MEMPALACE_MARKER="${HUGINN_MEMPALACE_MARKER:-~/.mempalace/REBUILD_IN_PROGRESS}"
 SSH_OPTS=(-o BatchMode=yes -o ConnectTimeout=3)
 
-echo "${C}Huginn${Z} (LXC 117) — $(hostname)"
+echo "${C}Huginn${Z} — $(hostname)"
 echo "  uptime    : $(uptime -p | sed 's/^up //')"
 echo "  load      : $(cut -d' ' -f1-3 /proc/loadavg) (on $(nproc) cores)"
 echo "  claude    : $(claude --version 2>/dev/null | head -1)"
-SUB=$(jq -r '.claudeAiOauth.subscriptionType // empty' /root/.claude/.credentials.json 2>/dev/null)
+SUB=$(jq -r '.claudeAiOauth.subscriptionType // empty' "$HOME"/.claude/.credentials.json 2>/dev/null)
 echo "  auth      : ${SUB:-api key / unknown} plan"
 N=$(tmux ls 2>/dev/null | wc -l)
 echo "  sessions  : ${N} running"
 tmux ls 2>/dev/null | sed 's/^/                ・ /'
 
-# MemPalace: reachability + write-path health, without touching any MCP server.
-MP=$(ssh "${SSH_OPTS[@]}" "$MUNINN" '
-    if [ -e /home/silence/.mempalace/REBUILD_IN_PROGRESS ]; then echo "rebuilding"
-    elif systemctl is-active --quiet mempalace-daemon; then echo "daemon-active"
-    else echo "daemon-DOWN"; fi' 2>/dev/null)
-case "$MP" in
-  daemon-active) echo "  mempalace : ${G}connected${Z}  (muninn 192.168.2.118, write daemon active)" ;;
-  rebuilding)    echo "  mempalace : ${Y}index rebuild in progress${Z} (vector search disabled until it finishes)" ;;
-  daemon-DOWN)   echo "  mempalace : ${R}reachable but write daemon DOWN${Z} — writes are failing" ;;
-  *)             echo "  mempalace : ${R}NOT reachable${Z} (muninn 192.168.2.118)" ;;
-esac
+# Memory node: reachability + write-path health, without touching any MCP server.
+if [ -n "$MEMPALACE_HOST" ]; then
+  MP=$(ssh "${SSH_OPTS[@]}" "$MEMPALACE_HOST" "
+      if [ -e $MEMPALACE_MARKER ]; then echo rebuilding
+      elif systemctl is-active --quiet mempalace-daemon; then echo daemon-active
+      else echo daemon-DOWN; fi" 2>/dev/null)
+  case "$MP" in
+    daemon-active) echo "  mempalace : ${G}connected${Z}  ($MEMPALACE_HOST, write daemon active)" ;;
+    rebuilding)    echo "  mempalace : ${Y}index rebuild in progress${Z} (vector search disabled until it finishes)" ;;
+    daemon-DOWN)   echo "  mempalace : ${R}reachable but write daemon DOWN${Z} — writes are failing" ;;
+    *)             echo "  mempalace : ${R}NOT reachable${Z} ($MEMPALACE_HOST)" ;;
+  esac
+fi
 
 echo "  disk /    : $(df -h / | awk 'NR==2{print $5" used, "$4" free"}')"

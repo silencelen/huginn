@@ -45,6 +45,7 @@ install -m 0644 "$SRC"/lib/*.js "$DEST/lib/"
 systemctl restart huginn-appd
 sleep 2
 TOKEN="$(cat "$TOKEN_FILE")"
-PING="$(curl -sf -H "Authorization: Bearer $TOKEN" http://100.97.198.90:8787/v1/ping)"
+APPD_ADDR="${HUGINN_APPD_URL:-http://$(tailscale ip -4 2>/dev/null || echo 127.0.0.1):8787}"
+PING="$(curl -sf -H "Authorization: Bearer $TOKEN" "$APPD_ADDR/v1/ping")"
 echo "[deploy] $PING"
 grep -q '"ok":true' <<<"$PING" || { echo "[deploy] daemon did not come back healthy" >&2; exit 1; }

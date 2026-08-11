@@ -10,6 +10,22 @@ Format loosely follows [Keep a Changelog](https://keepachangelog.com/); versions
 
 ## [Unreleased]
 
+## [0.7.1] - 2026-08-10
+
+### Changed
+- **No hardcoded deployment values anywhere in the tree** (part of preparing the repo
+  to go public). The one-shots' remote working directory now follows the host's
+  `$HUGINN_WORKDIR` (default `$HOME`) instead of a hardcoded project directory; `cc`'s
+  default matches. `huginn-status`'s memory-node probe is opt-in via
+  `HUGINN_MEMPALACE_HOST`/`HUGINN_MEMPALACE_MARKER` and prints nothing when unset.
+  Alongside (appd 2.55.0): the daemon's working directory, memory-node probe, and
+  out-of-band alert script are environment-driven (`HUGINN_APPD_WORKDIR`,
+  `HUGINN_APPD_MEMPALACE_HOST`/`_MARKER`, `HUGINN_APPD_TELEGRAM_SCRIPT`) with generic
+  defaults — a deployment's real values belong in a systemd drop-in
+  (`server/appd/systemd.d/`). `ship.sh` reads its publish target from the environment
+  or a gitignored `.shiprc`; `release-desktop.sh` and `deploy.sh` derive the daemon
+  address from `tailscale ip -4` instead of a literal.
+
 ## [0.7.0] - 2026-08-10
 
 ### Added

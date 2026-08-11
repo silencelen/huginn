@@ -12,8 +12,12 @@ REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$REPO_DIR"
 VARIANT="${1:-release}"
 
-DEVSERV="${DEVSERV:-silence@100.82.119.122}"
-DEVSERV_DIR="${DEVSERV_DIR:-/home/silence/code/devstore/huginn}"
+# Where to publish — operator-specific, never hardcoded here. Comes from the
+# environment or the gitignored mobile/scripts/.shiprc (two lines:
+#   DEVSERV=user@host  and  DEVSERV_DIR=/path/to/store/huginn ).
+[ -f "$REPO_DIR/mobile/scripts/.shiprc" ] && . "$REPO_DIR/mobile/scripts/.shiprc"
+: "${DEVSERV:?set DEVSERV (user@host of your app store) or create mobile/scripts/.shiprc}"
+: "${DEVSERV_DIR:?set DEVSERV_DIR (the app directory on the store host) or create mobile/scripts/.shiprc}"
 DEVSTORE_ROOT="$(dirname "$DEVSERV_DIR")"
 PKG="com.silencelen.huginn"
 

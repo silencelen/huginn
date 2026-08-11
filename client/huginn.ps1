@@ -3,9 +3,9 @@
 #     if (Test-Path "$HOME\.huginn\huginn.ps1") { . "$HOME\.huginn\huginn.ps1" }
 # Targets the `huginn` SSH alias by default; override per-device with:  $env:HUGINN_HOST = 'my-host'
 # Self-update with:  huginn update   (pulls this file from the repo; gh -> scp fallback)
-# Version: 0.7.0
+# Version: 0.7.1
 
-$script:HUGINN_VERSION = '0.7.0'
+$script:HUGINN_VERSION = '0.7.1'
 $script:HUGINN_REPO    = 'silencelen/huginn'
 
 # A session name is letters, digits, and underscore only - no '-', '*', spaces or
@@ -238,7 +238,7 @@ function huginn {
     # a bare `claude -p` with NO persona and NO --allowedTools. Base64 puts only
     # [A-Za-z0-9+/=] on the command line, so 5.1 and 7.x behave identically.
     $remoteScript = @"
-cd ~/netplan 2>/dev/null || cd "`$HOME"
+cd "`${HUGINN_WORKDIR:-`$HOME}" 2>/dev/null || cd "`$HOME"
 P="`$(cat /usr/local/share/huginn-cli/persona.md 2>/dev/null)"
 if [ -n "`$P" ]; then
   echo '$esc' | claude -p --append-system-prompt "`$P" --allowedTools '$tools'
