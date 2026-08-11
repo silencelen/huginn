@@ -386,6 +386,14 @@ fun main(args: Array<String>) {
                     match(e.isCtrlPressed, e.isShiftPressed, e.isAltPressed, it)
                 }
                 when {
+                    // The cheatsheet installs no key handler of its own (the
+                    // palette does, which is why it already closes on Esc), so its
+                    // dismissal keys reach this Window handler. Honour the caption's
+                    // promise — "Esc or F1 closes this" — BEFORE the overlay branch
+                    // swallows every key. Esc (BACK) closes; F1 (CHEATSHEET) toggles.
+                    cheatsOpen.value && (shortcut == Shortcut.BACK || shortcut == Shortcut.CHEATSHEET) -> {
+                        cheatsOpen.value = false; true
+                    }
                     overlay -> false
                     shortcut == null -> false
                     // Ctrl+Shift+H hides to tray. NOT a global hotkey — see the
