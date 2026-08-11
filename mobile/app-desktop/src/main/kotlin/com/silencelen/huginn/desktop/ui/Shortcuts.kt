@@ -123,6 +123,8 @@ fun keyName(key: androidx.compose.ui.input.key.Key): String? = when (key) {
 
 /** One row of the cheat sheet, and the single source for what the app claims. */
 val SHORTCUT_HELP: List<Pair<String, String>> = listOf(
+    "Enter" to "Send the message you are typing",
+    "Shift Enter" to "New line instead of sending",
     "Ctrl K" to "Find a chat or session",
     "Ctrl 1 / 2 / 3" to "Chats / Sessions / Status",
     "Ctrl ," to "Settings",
