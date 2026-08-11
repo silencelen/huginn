@@ -463,33 +463,40 @@ ELECTRON=$(curl -sf -H "Authorization: Bearer $TOKEN" "$BASE_URL/v1/desktop/mani
 [ -n "$ELECTRON" ] || { echo "FAIL: /v1/desktop stopped serving a manifest" >&2; exit 1; }
 echo "  /v1/desktop still serves the Electron client: $ELECTRON (untouched)"
 
-# And finally through the CLIENT, not through curl — the updater itself fetches
-# the manifest from its PINNED feed, downloads the artifact and verifies the
-# sha256 the manifest carries. Nothing else proves those four programs agree.
-#
-# NEVER `gradle | tail` on a gate: the pipe's exit status is the LAST command's,
-# so a failing build reads as green. Redirect, then read the code.
-set +e
-$GRADLE -q :app-desktop:updaterProbe \
-  --args="--token-file $TOKEN_FILE --current 0.0.0 --expect $VERSION --cache-dir $BUILD/probe-cache" \
-  > "$LOG.probe" 2>&1
-PROBE_RC=$?
-set -e
-sed 's/^/  /' "$LOG.probe"; cat "$LOG.probe" >> "$LOG"
-[ "$PROBE_RC" = 0 ] || { echo "FAIL: the updater could not fetch and verify $VERSION" >&2; exit 1; }
-
-echo "== $VERSION live on $BASE_URL$FEED =="
-
-# ------------------------------------------------- GitHub Release (best-effort)
-# Mirror to GitHub: tag desktop-v<version>, notes from app-desktop/CHANGELOG.md,
-# the exact staged installers as assets. Best-effort — the channel publish above
-# is the release; a GitHub hiccup must not fail it. Skip: HUGINN_NO_GH_RELEASE=1.
+# ---------------------------------------- GitHub Release (the update source now)
+# Publish to GitHub FIRST, because the client probe below fetches from GitHub. Tag
+# desktop-v<version>, notes from app-desktop/CHANGELOG.md, and the installers PLUS
+# manifest.json — the sha256 authority the updater verifies each artifact against.
+# REQUIRED, not best-effort: the desktop updater now pulls from GitHub, so a
+# release that does not reach GitHub is a release no client can install. The appd
+# staging above stays only as the transition path for already-installed 0.5.x
+# clients (they still poll $FEED). Dev-only skip (also skips the probe):
+# HUGINN_NO_GH_RELEASE=1.
 if [ "${HUGINN_NO_GH_RELEASE:-}" != 1 ]; then
-  if scripts/github-release.sh desktop "$VERSION" \
-       "$CHANNEL_DIR/$EXE#Windows installer (NSIS, per-user)" \
-       "$CHANNEL_DIR/$DEB#Linux .deb (amd64)"; then
-    echo "GitHub release desktop-v$VERSION updated"
-  else
-    echo "WARNING: GitHub release failed — the $FEED publish above is unaffected" >&2
-  fi
+  scripts/github-release.sh desktop "$VERSION" \
+    "$DIST/manifest.json#Release manifest (per-artifact sha256)" \
+    "$CHANNEL_DIR/$EXE#Windows installer (NSIS, per-user)" \
+    "$CHANNEL_DIR/$DEB#Linux .deb (amd64)" \
+    || { echo "FAIL: GitHub release desktop-v$VERSION did not publish — the updater fetches from it" >&2; exit 1; }
+  echo "GitHub release desktop-v$VERSION published"
+  # Let the GitHub API's release listing settle before the client lists it.
+  sleep 5
+
+  # And finally through the CLIENT, not through curl — the updater itself lists the
+  # GitHub releases, fetches manifest.json from the newest desktop-v*, downloads the
+  # artifact and verifies the sha256 it carries. Nothing else proves those programs
+  # agree. No token: the GitHub feed is public.
+  #
+  # NEVER `gradle | tail` on a gate: the pipe's exit status is the LAST command's,
+  # so a failing build reads as green. Redirect, then read the code.
+  set +e
+  $GRADLE -q :app-desktop:updaterProbe \
+    --args="--current 0.0.0 --expect $VERSION --cache-dir $BUILD/probe-cache" \
+    > "$LOG.probe" 2>&1
+  PROBE_RC=$?
+  set -e
+  sed 's/^/  /' "$LOG.probe"; cat "$LOG.probe" >> "$LOG"
+  [ "$PROBE_RC" = 0 ] || { echo "FAIL: the updater could not fetch and verify $VERSION from GitHub" >&2; exit 1; }
 fi
+
+echo "== $VERSION published: GitHub desktop-v$VERSION (updater source) + $BASE_URL$FEED (0.5.x transition) =="
