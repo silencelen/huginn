@@ -1,0 +1,50 @@
+# CI for the pieces that are cheap and dependency-free on a hosted runner: the
+# daemon's node --test suite (zero npm dependencies — no install step at all)
+# and static checks over every shell surface.
+#
+# The Kotlin suites are NOT here yet: they need the Android SDK + Gradle caching
+# to be worth running in CI, and today they gate releases locally instead
+# (mobile/scripts/build.sh runs both suites and asserts the test COUNT before
+# any APK; release-desktop.sh likewise). Add a gradle job deliberately, not as
+# an afterthought.
+name: CI
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  daemon-tests:
+    name: huginn-appd tests (node --test)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: node --test server/appd/test/
+      - run: node --check server/appd/huginn-appd.js
+
+  shell:
+    name: shellcheck + syntax
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # bash -n proves it parses; shellcheck reviews it. The two clients are a
+      # sourced pair — huginn.ps1 has no parser on a Linux runner, so its check
+      # is the sync rule in CONTRIBUTING, not CI.
+      - run: |
+          bash -n client/huginn.sh client/install.sh server/setup.sh \
+                  server/appd/deploy.sh mobile/scripts/build.sh \
+                  mobile/scripts/ship.sh mobile/scripts/release-desktop.sh \
+                  scripts/github-release.sh assets/brand/generate.sh
+      - run: |
+          shellcheck -S warning client/huginn.sh server/setup.sh \
+                     server/bin/cc server/bin/huginn-status \
+                     server/appd/deploy.sh scripts/github-release.sh \
+                     || true   # advisory for now: the scripts predate shellcheck in CI;
+                               # tighten to enforcing once the existing findings are triaged
