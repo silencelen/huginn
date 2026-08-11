@@ -34,7 +34,7 @@ plugins {
 
 android {
     namespace = "com.silencelen.huginn"
-    compileSdk = 35
+    compileSdk = 37
 
     defaultConfig {
         applicationId = "com.silencelen.huginn"
