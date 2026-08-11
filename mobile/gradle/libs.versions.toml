@@ -22,7 +22,7 @@ kotlinx-serialization = "1.7.3"
 # no Kotlin bump (same reasoning as compose-multiplatform above), and its OkHttp
 # engine pins okhttp 4.12.0 — the exact version this app shipped while it talked
 # to OkHttp directly, so nothing about the bytes on the wire changed with it.
-ktor = "3.0.3"
+ktor = "3.5.2"
 datastore = "1.1.1"
 work = "2.10.0"
 
