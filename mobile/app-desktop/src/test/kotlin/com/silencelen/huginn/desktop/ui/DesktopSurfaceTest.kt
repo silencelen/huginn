@@ -88,7 +88,7 @@ class DesktopSurfaceTest {
         assertEquals(listOf("Delete 3 chats"), labelsOf(items))
 
         val sessions = sessionMenu(session(name = "b"), setOf("a", "b"), noSessionVerbs())
-        assertEquals(listOf("End 2 sessions"), labelsOf(sessions))
+        assertEquals(listOf("Wind down 2 sessions", "End 2 sessions"), labelsOf(sessions))
     }
 
     @Test
@@ -110,9 +110,21 @@ class DesktopSurfaceTest {
     @Test
     fun `a session menu names the key its interrupt sends`() {
         assertEquals(
-            listOf("Open", "Rename…", "Interrupt (Esc)", "Copy session name", "End session"),
+            listOf("Open", "Rename…", "Interrupt (Esc)", "Copy session name", "Wind down…", "End session"),
             labelsOf(sessionMenu(session(), emptySet(), noSessionVerbs())),
         )
+    }
+
+    @Test
+    fun `winding down is not marked destructive — only the hard end is`() {
+        // Wind down SENDS a message (the session may even stay open, if the
+        // wrap-up asks a question); red belongs to the verb that stops things.
+        val single = sessionMenu(session(), emptySet(), noSessionVerbs())
+            .filterIsInstance<HuginnMenuItem>()
+        assertEquals(listOf("End session"), single.filter { it.destructive }.map { it.label })
+        val multi = sessionMenu(session(name = "b"), setOf("a", "b"), noSessionVerbs())
+            .filterIsInstance<HuginnMenuItem>()
+        assertEquals(listOf("End 2 sessions"), multi.filter { it.destructive }.map { it.label })
     }
 
     @Test
@@ -339,6 +351,6 @@ class DesktopSurfaceTest {
         ChatVerbs(open, rename, stop, copyId, delete)
 
     private fun noSessionVerbs() = SessionVerbs(
-        open = {}, rename = {}, interrupt = {}, copyName = {}, kill = {},
+        open = {}, rename = {}, interrupt = {}, copyName = {}, softEnd = {}, kill = {},
     )
 }
