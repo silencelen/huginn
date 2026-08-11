@@ -1,0 +1,23 @@
+{
+  "questions": [
+    {
+      "question": "Pick a color?",
+      "header": "Color",
+      "options": [
+        {
+          "label": "Red",
+          "description": "The color red"
+        },
+        {
+          "label": "Green",
+          "description": "The color green"
+        },
+        {
+          "label": "Blue",
+          "description": "The color blue"
+        }
+      ],
+      "multiSelect": false
+    }
+  ]
+}
