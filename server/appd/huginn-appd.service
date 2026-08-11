@@ -10,7 +10,10 @@ Restart=on-failure
 RestartSec=3
 # tailscale IP may not be assignable yet right after boot — keep retrying.
 StartLimitIntervalSec=0
-WorkingDirectory=/root/netplan
+# Deployment-specific settings (bind address, chat working directory, memory-node
+# probe, alert delivery script) belong in a drop-in, NOT here — deploy.sh rewrites
+# this unit on every deploy. See systemd.d/README.md.
+WorkingDirectory=/root
 Environment=NODE_ENV=production
 # ccusage (and anything else resolving ~/.claude) needs HOME; systemd does not
 # set it, and without it ccusage exits with 'home directory is not set'.

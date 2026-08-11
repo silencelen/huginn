@@ -2,7 +2,7 @@
 // huginn-appd — HTTP/SSE backend for the Huginn Android app.
 //
 // Serves the phone a chat + session surface over the tailnet:
-//   * headless chats: spawns `claude -p --output-format stream-json` in ~/netplan
+//   * headless chats: spawns `claude -p --output-format stream-json` in WORKDIR
 //     (same persona + tool sets as `huginn -p` / `huginn -y`), streams deltas over
 //     SSE, persists a digested transcript per chat under /var/lib/huginn-appd.
 //   * tmux sessions: list (with the state the huginn-claude-title hook records in
@@ -48,7 +48,7 @@ const {
 const pushLib = require('./lib/pushtokens');
 const { trySender } = require('./lib/fcm');
 
-const VERSION = '2.54.0';
+const VERSION = '2.55.0';
 const PORT = Number(process.env.HUGINN_APPD_PORT || 8787);
 const DATA_DIR = process.env.HUGINN_APPD_DATA || '/var/lib/huginn-appd';
 const UPLOADS_DIR = path.join(DATA_DIR, 'uploads');
@@ -89,8 +89,12 @@ function pruneUploads(maxAgeMs = 7 * 24 * 60 * 60 * 1000) {
 const TOKEN_FILE = process.env.HUGINN_APPD_TOKEN_FILE || '/etc/huginn-appd/token';
 const STATE_DIR = '/run/huginn-claude-state';
 const PERSONA_FILE = '/usr/local/share/huginn-cli/persona.md';
-const WORKDIR = process.env.HUGINN_APPD_WORKDIR || '/root/netplan';
-const MUNINN = 'root@192.168.2.118';
+const WORKDIR = process.env.HUGINN_APPD_WORKDIR || process.env.HOME || '/root';
+// Optional companion memory node ("Muninn") — feeds the /v1/status mempalace
+// field. Empty/default on a generic host (the probe reports 'unconfigured');
+// a deployment that has one sets these via a systemd drop-in.
+const MEMPALACE_HOST = process.env.HUGINN_APPD_MEMPALACE_HOST || '';
+const MEMPALACE_MARKER = process.env.HUGINN_APPD_MEMPALACE_MARKER || '~/.mempalace/REBUILD_IN_PROGRESS';
 const MAX_CONCURRENT_RUNS = 3;
 const RUN_HARD_CAP_MS = 2 * 60 * 60 * 1000; // 2 h — safety net, not a feature
 
@@ -1396,10 +1400,11 @@ async function claudeVersion() {
 
 let mpCache = { at: 0, value: 'unknown' };
 async function mempalaceState() {
+  if (!MEMPALACE_HOST) return 'unconfigured';
   if (Date.now() - mpCache.at < 60_000) return mpCache.value;
   const { err, stdout } = await run('ssh',
-    ['-o', 'BatchMode=yes', '-o', 'ConnectTimeout=3', MUNINN,
-      'if [ -e /home/silence/.mempalace/REBUILD_IN_PROGRESS ]; then echo rebuilding; elif systemctl is-active --quiet mempalace-daemon; then echo ok; else echo daemon-down; fi'],
+    ['-o', 'BatchMode=yes', '-o', 'ConnectTimeout=3', MEMPALACE_HOST,
+      `if [ -e ${MEMPALACE_MARKER} ]; then echo rebuilding; elif systemctl is-active --quiet mempalace-daemon; then echo ok; else echo daemon-down; fi`],
     { timeout: 6_000 });
   mpCache = { at: Date.now(), value: err ? 'unreachable' : stdout.trim() || 'unknown' };
   return mpCache.value;
@@ -1439,7 +1444,9 @@ async function statusPayload() {
 // Telegram, which is already how this homelab reaches its owner.
 const ALERT_STATE = path.join(DATA_DIR, 'alerts.json');
 const ALERT_POLL_MS = 10_000;
-const TELEGRAM_SCRIPT = '/root/netplan/scripts/active/send-telegram.sh';
+// Optional out-of-band delivery script (anything accepting --message/--source).
+// Empty on a generic host — the fallback channel simply reports 'none'.
+const TELEGRAM_SCRIPT = process.env.HUGINN_APPD_TELEGRAM_SCRIPT || '';
 
 // ------------------------------------------------------- who is still listening
 //
@@ -2595,7 +2602,7 @@ const server = http.createServer(async (req, res) => {
       const name = canonName(body.name);
       if (!name) return sendErr(res, 400, 'invalid session name (letters, digits, underscore)');
       if (await sessionExists(name)) return sendErr(res, 409, `session '${name}' already exists`);
-      // Same shape as cc: open in ~/netplan, claude first, fall through to a shell.
+      // Same shape as cc: open in WORKDIR, claude first, fall through to a shell.
       const { err, stderr } = await run('tmux',
         ['new-session', '-d', '-s', name, '-c', WORKDIR, 'claude; exec "$SHELL" -l']);
       if (err) return sendErr(res, 500, `tmux: ${stderr.trim() || err.message}`);
