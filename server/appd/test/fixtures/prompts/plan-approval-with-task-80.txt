@@ -1,0 +1,35 @@
+     [2m[38;5;231m 4 [0m
+     [2m[38;5;231m 5 [0m[38;5;231m- `hello.txt` — plain-text file containing the single word "he[39m
+[38;5;153m▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔
+
+[39m  [38;5;73m──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────[39m
+   [1m[38;5;153mReady to code?[0m
+
+   Here is Claude's plan:
+  [38;5;239m╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌[39m
+   [1;3;4mPlan: Rename hello.txt to greeting.txt[0m
+
+   [1mContext[0m
+
+   The working directory ([38;5;153m/tmp/claude-0/-root-netplan/e1ce6899-0e03-4598-9f39-089560767f1e/scratchpad/fixcap-home[39m) contains [38;5;153mhello.txt[39m and a [38;5;153mREADME.md[39m
+   that describes it. The user wants [38;5;153mhello.txt[39m renamed to [38;5;153mgreeting.txt[39m; the README's file listing must stay accurate.
+
+   [1mSteps[0m
+
+   1. Rename the file: [38;5;153mmv hello.txt greeting.txt[39m.
+   2. Update the [38;5;153mhello.txt[39m entry in [38;5;153mREADME.md[39m to say [38;5;153mgreeting.txt[39m, then verify with [38;5;153mls[39m that the directory shows [38;5;153mgreeting.txt[39m and [38;5;153mREADME.md[39m only.
+
+   [1mVerification[0m
+
+   [38;5;153mls[39m shows [38;5;153mgreeting.txt[39m (no [38;5;153mhello.txt[39m); README lists [38;5;153mgreeting.txt[39m.
+  [38;5;239m╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌[39m
+
+  [38;5;73m──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────[39m
+   [38;5;246mClaude has written up a plan and is ready to execute. Would you like to proceed?[39m
+
+   [38;5;153m❯[39m [38;5;246m1. [38;5;153mYes, and use auto mode[39m
+     [38;5;246m2. [39mYes, manually approve edits
+     [38;5;246m3. Tell Claude what to change[39m
+        [38;5;246mshift+tab to approve with this feedback[39m
+
+   [38;5;246mctrl+g to edit in Vim · ~/.claude/plans/plan-how-to-add-partitioned-globe.md[39m

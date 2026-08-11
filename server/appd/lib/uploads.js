@@ -84,4 +84,40 @@ function isReadable(ext) {
   return READABLE_EXTS.has(String(ext || '').toLowerCase());
 }
 
-module.exports = { uploadExtFor, safeExt, isReadable, MIME_EXTS, READABLE_EXTS };
+const IMAGE_EXTS = new Set(['jpg', 'jpeg', 'png', 'webp', 'gif']);
+
+/**
+ * Whether a stored upload filename is an image. Used to (a) exempt images from
+ * the retention prune — they back chat-history thumbnails and are kept until
+ * manually deleted — and (b) decide the pruneable set. Reads the extension off
+ * the stored name, which the server assigned, so it is trustworthy.
+ */
+function isImageUpload(name) {
+  const n = String(name || '').toLowerCase();
+  const dot = n.lastIndexOf('.');
+  if (dot < 0) return false;
+  return IMAGE_EXTS.has(n.slice(dot + 1));
+}
+
+/**
+ * The Content-Type to SERVE a stored upload as. Deliberately conservative:
+ * a handful of known media types, and `application/octet-stream` for everything
+ * else. User-supplied bytes must never go out as an active type (text/html,
+ * image/svg+xml) — the GET route also sets X-Content-Type-Options: nosniff — so
+ * even a `.html` upload downloads rather than renders.
+ */
+const SERVE_TYPES = {
+  jpg: 'image/jpeg', jpeg: 'image/jpeg', png: 'image/png',
+  webp: 'image/webp', gif: 'image/gif', pdf: 'application/pdf',
+};
+function contentTypeForUpload(name) {
+  const n = String(name || '').toLowerCase();
+  const dot = n.lastIndexOf('.');
+  const ext = dot >= 0 ? n.slice(dot + 1) : '';
+  return SERVE_TYPES[ext] || 'application/octet-stream';
+}
+
+module.exports = {
+  uploadExtFor, safeExt, isReadable, isImageUpload, contentTypeForUpload,
+  MIME_EXTS, READABLE_EXTS, IMAGE_EXTS,
+};

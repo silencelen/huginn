@@ -47,9 +47,24 @@ function stripAnsi(line) {
 // carries the model and branch.
 const RULE_RE = /^[─-╿\s]+$/;                 // box-drawing only
 const PROMPT_MARK_RE = /^\s*[❯>]\s*/;              // '❯ ' input line
-const MODE_HINT_RE = /^\s*[⏵⏴]{1,2}\s/;       // '⏵⏵ auto mode on…'
+// '⏵⏵ auto mode on…', '⏸ manual mode on…', '⏸ plan mode on…'. The paused/plan
+// glyph ⏸ (U+23F8) and stop ⏹ (U+23F9) were missing, so a manual- or plan-mode
+// hint line was NOT recognised as chrome: it leaked into previews and spent one
+// of detectPrompt's four footer-line budget units (captured live 2026-08-10,
+// fixtures statusline-{manual,plan}).
+const MODE_HINT_RE = /^\s*[⏵⏴⏸⏹▶]{1,2}\s/;
 const STATUS_RE = /^\s*\[[^\]]+\]\s+\S/;                // '[andrev] Opus 5 · main'
-const SPINNER_RE = /^\s*[◀-◿✹✳✴✻-✽✶]\s/; // '◷ …', '✻ …'
+// The RUNNING-turn spinner, e.g. '✽ Gallivanting…', '◷ …'. ENUMERATED, not a
+// range: the old class was [◀-◿…] = U+25C0–U+25FF, which swept in the TUI's
+// progress-row glyphs ◯ (workflow) and ◐◑◒◓ (phase) as well as the spinner.
+// isChrome() uses this to decide a numbered run above it is a finished turn's
+// history — so a workflow progress row drawn under a live plan-approval dialog
+// was read as chrome and the whole prompt was discarded (no buttons on either
+// client). Now only the true spinner glyphs: the sparkle/asterisk class shared
+// with LIVE_STATUS_RE plus the four clock glyphs ◴◵◶◷; the progress/board/effort
+// glyphs ◯◐◑◒◓◉⧉ are deliberately excluded (captured live 2026-08-10, fixture
+// plan-approval-with-task).
+const SPINNER_RE = /^\s*[✢✦✧✳✴✶✷✸✹✺✻✼✽◴◵◶◷·∙∗*+]\s/;
 
 /**
  * The most recent lines that say something about what the session is doing,
@@ -215,6 +230,12 @@ function detectPrompt(lines) {
     break;
   }
   if (opts.length < 2) return null;
+  // A real dialog is small: AskUserQuestion caps at 4 options and the TUI adds
+  // at most "Type something" + "Chat about this" (so <=6), a permission dialog
+  // ~4. Ten or more contiguous numbered rows with one caret is a numbered
+  // document — a plan body, a markdown list — not a prompt. Refusing it also
+  // retires the never-tested multi-digit send path for options >= 10.
+  if (opts.length > 9) return null;
   // Must be 1..n contiguous, else this is prose that happens to have numbers.
   for (let k = 0; k < opts.length; k++) {
     if (opts[k].number !== k + 1) return null;
@@ -225,21 +246,45 @@ function detectPrompt(lines) {
   // tapping the resulting button types a digit into Claude's composer.
   if (opts.filter((o) => o.selected).length !== 1) return null;
 
-  // Question: nearest non-empty line above the run that is not furniture and
-  // not a tab header ("\u2610 Banner color") from a multi-question dialog.
+  // The multi-question tab strip, e.g. "\u2190  \u2610 Database  \u2611 Cache  \u2714 Submit  \u2192".
+  // Skipped when hunting the question, but returned so the fusion layer can tell
+  // WHICH of an N-question AskUserQuestion is on screen (its options alone can be
+  // ambiguous between sibling questions with identical choices). Additive: absent
+  // for ordinary single-question dialogs.
+  const headers = [];
+  for (let k = firstIdx - 1; k >= floor; k--) {
+    if (!HEADER_RE.test(plain[k])) continue;
+    for (const part of plain[k].trim().split(/\s{2,}/)) {
+      const hm = /^([\u2610\u2611\u2612])\s+(.+)$/.exec(part.trim());
+      if (hm && !/^submit$/i.test(hm[2].trim())) {
+        headers.push({ label: hm[2].trim(), checked: hm[1] !== '\u2610' });
+      }
+    }
+  }
+
+  // Question: the nearest line above the run that is not furniture or a tab
+  // header. But a built-in dialog draws PROSE between its question and its
+  // options \u2014 the trust dialog's OSC-8 "Security guide" link and a
+  // "Claude can read/edit/execute\u2026" notice sit directly above the options, so
+  // "nearest" picked the link text as the question. An AskUserQuestion question
+  // ENDS with '?' and the built-in ones CONTAIN one, so a line bearing a '?'
+  // beats the merely-nearest (captured live 2026-08-10, fixture trust-dialog).
   let question = '';
+  let questionFallback = '';
   for (let k = firstIdx - 1; k >= floor; k--) {
     const t = plain[k].trim();
     if (!t || RULE_RE.test(plain[k]) || HEADER_RE.test(plain[k])) continue;
-    question = t.slice(0, 240);
-    break;
+    if (!questionFallback) questionFallback = t.slice(0, 240);
+    if (t.includes('?')) { question = t.slice(0, 240); break; }
   }
+  if (!question) question = questionFallback;
   return {
     question,
     options: opts,
     // Any checkbox present means the dialog wants a SET, and answering it takes
     // the toggle-review-submit dance rather than digit-and-Enter.
     multiSelect: opts.some((o) => typeof o.checked === 'boolean'),
+    ...(headers.length ? { headers } : {}),
   };
 }
 
@@ -413,7 +458,12 @@ function parseStatusLine(lines) {
     const t = plain[i].trim();
     if (!t) continue;
     if (!out.mode) {
-      const m = /^[⏵⏴⏸⏹▶]{1,2}\s*(\w+)\s+mode\s+on/.exec(t);
+      // Most modes read "<word> mode on" (auto/manual/plan), but accept-edits
+      // reads "accept edits on" — no "mode", two words. The old `(\w+)\s+mode`
+      // matched neither the space nor the missing "mode", so accept-edits gave
+      // liveMode: null. Lazy multi-word capture with an optional "mode" covers
+      // both (captured live 2026-08-10, fixture statusline-plan).
+      const m = /^[⏵⏴⏸⏹▶]{1,2}\s*(.+?)\s+(?:mode\s+)?on\b/.exec(t);
       if (m) { out.mode = m[1].toLowerCase(); continue; }
     }
     if (!out.model) {

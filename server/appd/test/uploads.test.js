@@ -6,7 +6,30 @@
 
 const { test } = require('node:test');
 const assert = require('node:assert');
-const { uploadExtFor, safeExt, isReadable } = require('../lib/uploads');
+const { uploadExtFor, safeExt, isReadable, isImageUpload, contentTypeForUpload } = require('../lib/uploads');
+
+test('isImageUpload recognises the image extensions and nothing else', () => {
+  for (const n of ['up-1-ab.jpg', 'img-2-cd.jpeg', 'x.png', 'y.webp', 'z.gif', 'A.PNG']) {
+    assert.equal(isImageUpload(n), true, n);
+  }
+  for (const n of ['up-1-ab.pdf', 'backup.unifi', 'notes.txt', 'noext', 'x.zip', '']) {
+    assert.equal(isImageUpload(n), false, n);
+  }
+});
+
+test('contentTypeForUpload maps known media and defaults to octet-stream', () => {
+  assert.equal(contentTypeForUpload('a.jpg'), 'image/jpeg');
+  assert.equal(contentTypeForUpload('a.jpeg'), 'image/jpeg');
+  assert.equal(contentTypeForUpload('a.png'), 'image/png');
+  assert.equal(contentTypeForUpload('a.webp'), 'image/webp');
+  assert.equal(contentTypeForUpload('a.gif'), 'image/gif');
+  assert.equal(contentTypeForUpload('a.pdf'), 'application/pdf');
+  // Active types must NOT be served as themselves — they download.
+  assert.equal(contentTypeForUpload('evil.html'), 'application/octet-stream');
+  assert.equal(contentTypeForUpload('evil.svg'), 'application/octet-stream');
+  assert.equal(contentTypeForUpload('data.csv'), 'application/octet-stream');
+  assert.equal(contentTypeForUpload('noext'), 'application/octet-stream');
+});
 
 test('the mimes the field actually produced are accepted', () => {
   assert.equal(uploadExtFor('text/plain', 'notes.txt'), 'txt');

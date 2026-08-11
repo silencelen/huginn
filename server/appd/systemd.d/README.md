@@ -11,6 +11,24 @@ being edited into the unit.
 Not tracked here but present on the live host: `override.conf`, which sets
 `HUGINN_APPD_BIND=0.0.0.0` for the Yggdrasil LAN gateway.
 
+## Environment the daemon reads
+
+Set any of these in a drop-in `[Service]` block (`Environment=KEY=value`):
+
+| var | default | what |
+|---|---|---|
+| `HUGINN_APPD_PORT` | `8787` | listen port |
+| `HUGINN_APPD_BIND` | resolved | listen address (`0.0.0.0` on this host) |
+| `HUGINN_APPD_DATA` | `/var/lib/huginn-appd` | data root (uploads, chats, desktop channels) |
+| `HUGINN_APPD_TOKEN_FILE` | `/etc/huginn-appd/token` | bearer token file |
+| `HUGINN_APPD_WORKDIR` | `$HOME` | cwd for spawned `claude` chats |
+| `HUGINN_APPD_SOFT_END_PHRASE` | "Finish outstanding items, commit your work, and prepare to end the session." | the wrap-up a soft end types into the pane |
+| `HUGINN_APPD_SOFT_END_AUTO` | on (`0` disables) | after a soft end, end the session automatically once it settles; `0` = phrase only, end it yourself |
+| `HUGINN_APPD_UPLOAD_KEEP_DAYS` | `7` | retention for NON-image uploads; images are never pruned (they back chat-history thumbnails) |
+| `HUGINN_APPD_STATE_DIR` | `/run/huginn-claude-state` | hook state dir — a test knob; do not change in production |
+| `HUGINN_APPD_MEMPALACE_HOST` / `_MARKER` | unset | optional companion memory node probe |
+| `HUGINN_APPD_TELEGRAM_SCRIPT` | unset | optional Telegram relay for alerts |
+
 Install or update:
 
 ```sh

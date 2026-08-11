@@ -1,0 +1,27 @@
+{
+  "questions": [
+    {
+      "question": "Which deployment strategy should we use for the staging rollout this weekend?",
+      "header": "Deploy",
+      "options": [
+        {
+          "label": "Blue-green with an automated smoke-test gate before cutting traffic over to the new pods",
+          "description": "Safest but slowest; needs double capacity during the switch."
+        },
+        {
+          "label": "Rolling update",
+          "description": "Fast, no extra capacity, brief mixed-version window."
+        },
+        {
+          "label": "Recreate",
+          "description": "Brief downtime while pods restart."
+        }
+      ],
+      "multiSelect": false
+    }
+  ],
+  "answers": {
+    "Which deployment strategy should we use for the staging rollout this weekend?": "Rolling update"
+  },
+  "annotations": {}
+}
