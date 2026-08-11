@@ -47,8 +47,9 @@ const {
 } = require('./lib/autoswitch');
 const pushLib = require('./lib/pushtokens');
 const { trySender } = require('./lib/fcm');
+const { createPending, stepSoftEnd } = require('./lib/softend');
 
-const VERSION = '2.55.1';
+const VERSION = '2.56.0';
 const PORT = Number(process.env.HUGINN_APPD_PORT || 8787);
 const DATA_DIR = process.env.HUGINN_APPD_DATA || '/var/lib/huginn-appd';
 const UPLOADS_DIR = path.join(DATA_DIR, 'uploads');
@@ -60,7 +61,7 @@ const UPLOAD_MAX_BYTES = 128 * 1024 * 1024;
 // and .csv files: Android providers report mimes like text/comma-separated-
 // values, or nothing at all, and exact-match punished the user for their file
 // manager's vocabulary.
-const { uploadExtFor, isReadable } = require('./lib/uploads');
+const { uploadExtFor, isReadable, contentTypeForUpload, isImageUpload } = require('./lib/uploads');
 // The desktop update channels — feed ymls + installers served from disk,
 // stocked by the desktop release scripts via local moves.
 //
@@ -72,22 +73,35 @@ const desktopLib = require('./lib/desktop');
 const DESKTOP_DIR = path.join(DATA_DIR, 'desktop');
 const DESKTOP_KT_DIR = path.join(DATA_DIR, 'desktop-kt');
 
+// How long a NON-IMAGE upload is kept. Images are exempt entirely (see below):
+// chat history renders them as thumbnails read back from here, and a photo
+// vanishing after a week would silently turn a message's picture back into a
+// "photo attached" placeholder — the owner's doctrine is manual deletion, not a
+// timer. Env-tunable for a deployment that wants a cap.
+const UPLOAD_KEEP_DAYS = Math.max(1, Number(process.env.HUGINN_APPD_UPLOAD_KEEP_DAYS) || 7);
+
 /**
- * Drops uploads old enough that no conversation is coming back for them.
- * Run on each upload rather than a timer: a dir that only grows when the
- * feature is used only needs sweeping then.
+ * Drops non-image uploads old enough that no conversation is coming back for
+ * them. IMAGES ARE NEVER PRUNED — they back the chat-history thumbnails and are
+ * small transcoded JPEGs; only manual deletion removes them. Run on each upload
+ * rather than a timer: a dir that only grows when the feature is used only needs
+ * sweeping then.
  */
-function pruneUploads(maxAgeMs = 7 * 24 * 60 * 60 * 1000) {
+function pruneUploads(maxAgeMs = UPLOAD_KEEP_DAYS * 24 * 60 * 60 * 1000) {
   let names = [];
   try { names = fs.readdirSync(UPLOADS_DIR); } catch { return; }
   const cutoff = Date.now() - maxAgeMs;
   for (const n of names) {
+    if (isImageUpload(n)) continue;                 // kept until manually deleted
     const f = path.join(UPLOADS_DIR, n);
     try { if (fs.statSync(f).mtimeMs < cutoff) fs.unlinkSync(f); } catch { /* raced; fine */ }
   }
 }
 const TOKEN_FILE = process.env.HUGINN_APPD_TOKEN_FILE || '/etc/huginn-appd/token';
-const STATE_DIR = '/run/huginn-claude-state';
+// A test knob only in production (the default is fixed): the route tests point it
+// at a scratch dir so they never write state files into the live daemon's
+// watched directory on the same host.
+const STATE_DIR = process.env.HUGINN_APPD_STATE_DIR || '/run/huginn-claude-state';
 const PERSONA_FILE = '/usr/local/share/huginn-cli/persona.md';
 const WORKDIR = process.env.HUGINN_APPD_WORKDIR || process.env.HOME || '/root';
 // Optional companion memory node ("Muninn") — feeds the /v1/status mempalace
@@ -370,6 +384,10 @@ async function listSessions({ preview = false } = {}) {
       rows: Number(h),
       windowSize: wsize || null,
       sizeLeased: leases.has(name),
+      // A soft end is pending: clients can badge the row as winding down. NOT in
+      // the watch digest (see lib/watch) — a winding-down session must not wake
+      // parked phones.
+      softEnding: softEnds.has(name),
       state: st.state ?? null,
       stateSince: st.stateSince ?? null,
       claudeSessionId: st.sessionId ?? null,
@@ -509,6 +527,77 @@ setInterval(() => {
     if (l.expiresAt <= now) releaseSize(name).catch(() => { });
   }
 }, LEASE_SWEEP_MS).unref();
+
+// ---- soft end / hard end ---------------------------------------------------
+//
+// A HARD end kills the tmux session outright. A SOFT end types a wrap-up phrase
+// into the pane ("finish, commit, prepare to end") so Claude can land its work,
+// and — when auto-end is on — the session is killed once it settles. The auto
+// watcher lives in lib/softend.js (pure); this is the I/O around it.
+
+// The 150ms beat between typed text and the Enter that submits it: text+Enter in
+// one burst can read to the TUI as a paste that INSERTS the newline instead of
+// submitting. Named once so /keys and the soft-end share the same value.
+const SUBMIT_BEAT_MS = 150;
+
+const SOFT_END_PHRASE = process.env.HUGINN_APPD_SOFT_END_PHRASE ||
+  'Finish outstanding items, commit your work, and prepare to end the session.';
+// Auto-end is ON by default (owner decision 2026-08-10): after the phrase lands,
+// the session ends on its own the next time it settles. A deployment that wants
+// "phrase only, I end it myself" sets HUGINN_APPD_SOFT_END_AUTO=0 in a drop-in.
+const SOFT_END_AUTO = process.env.HUGINN_APPD_SOFT_END_AUTO !== '0';
+
+const softEnds = new Map(); // session name -> pending record (lib/softend)
+
+/** Type a line into a pane and submit it, with the anti-paste beat before Enter. */
+async function sendLineToPane(name, text) {
+  const a = await run('tmux', ['send-keys', '-t', `=${name}:`, '-l', '--', text]);
+  if (a.err) return a;
+  await sleep(SUBMIT_BEAT_MS);
+  return run('tmux', ['send-keys', '-t', `=${name}:`, 'Enter']);
+}
+
+/**
+ * The one hard-end path. Kills the session AND cleans up what a bare
+ * `tmux kill-session` used to leak: the /run state file (Claude's SessionEnd
+ * hook never fires on a kill, so nothing else removes it) and the pane-size
+ * lease. Used by the DELETE route and by the auto-end.
+ */
+async function hardEndSession(name) {
+  const { err, stderr } = await run('tmux', ['kill-session', '-t', `=${name}`]);
+  if (err) return { err, stderr };
+  try { fs.unlinkSync(path.join(STATE_DIR, name)); } catch { /* already gone */ }
+  await releaseSize(name).catch(() => { });
+  softEnds.delete(name);
+  return { err: null };
+}
+
+/** One pass over the pending soft ends; kills the ones that have settled. */
+async function softEndTick() {
+  if (!softEnds.size) return;
+  const now = Date.now();
+  for (const [name, pending] of [...softEnds]) {
+    const st = readSessionState(name);
+    const { pending: next, action } = stepSoftEnd(pending, st ? st.state : null, now);
+    if (action === 'kill') {
+      log(`soft-end: ${name} settled, ending`);
+      await hardEndSession(name).catch((e) => log(`soft-end kill ${name} failed: ${e.message}`));
+    } else if (action === 'cancel') {
+      log(`soft-end: ${name} asked a question, auto-end cancelled`);
+      softEnds.delete(name);
+    } else if (action === 'expire') {
+      log(`soft-end: ${name} never started a run, auto-end dropped`);
+      softEnds.delete(name);
+    } else {
+      softEnds.set(name, next);
+    }
+  }
+}
+
+// A floor tick independent of the alert watcher: auto-end must not be coupled to
+// whether alerts are enabled. The state-file fs.watch also calls softEndTick for
+// sub-second response (wired where alertTick is).
+setInterval(() => { softEndTick().catch(() => { }); }, 10_000).unref();
 
 /**
  * Releases EVERY window left at a manual size, across all sessions. Runs at
@@ -1444,6 +1533,10 @@ async function statusPayload() {
     disk,
     sessions: sessions.length,
     chatsRunning: activeRuns.size,
+    // So clients can show the exact wrap-up wording (and whether ending is
+    // automatic) without carrying their own copy that could drift from the host.
+    softEndPhrase: SOFT_END_PHRASE,
+    softEndAuto: SOFT_END_AUTO,
   };
 }
 
@@ -2041,6 +2134,9 @@ function startStateWatch() {
       watchDebounce = setTimeout(() => {
         watchDebounce = null;
         alertTick().catch((e) => log('alerts: watch tick failed', e.message));
+        // Same state change drives auto-end, so a settled session is killed
+        // within the debounce window rather than on the 10s floor tick.
+        softEndTick().catch((e) => log('soft-end: watch tick failed', e.message));
       }, 120);
       watchDebounce.unref();
     });
@@ -2626,7 +2722,7 @@ const server = http.createServer(async (req, res) => {
 
     if ((m = p.match(/^\/v1\/sessions\/([A-Za-z0-9_][A-Za-z0-9_.-]{0,49})$/)) && req.method === 'DELETE') {
       const name = m[1];
-      const { err, stderr } = await run('tmux', ['kill-session', '-t', `=${name}`]);
+      const { err, stderr } = await hardEndSession(name);
       if (err) return sendErr(res, 404, `tmux: ${stderr.trim() || 'no such session'}`);
       return sendJson(res, 200, { ok: true });
     }
@@ -2784,6 +2880,7 @@ const server = http.createServer(async (req, res) => {
       // The state file is keyed by name; move it so state/transcript survive.
       try { fs.renameSync(path.join(STATE_DIR, from), path.join(STATE_DIR, actual)); } catch { }
       if (leases.has(from)) { leases.set(actual, leases.get(from)); leases.delete(from); }
+      if (softEnds.has(from)) { softEnds.set(actual, softEnds.get(from)); softEnds.delete(from); }
       return sendJson(res, 200, { ok: true, name: actual });
     }
 
@@ -2813,6 +2910,34 @@ const server = http.createServer(async (req, res) => {
         }
       }
       return sendJson(res, 200, { ok: true });
+    }
+
+    // --- soft end: type a wrap-up phrase, and (when auto) end on settle
+    if ((m = p.match(/^\/v1\/sessions\/([A-Za-z0-9_][A-Za-z0-9_.-]{0,49})\/soft-end$/)) && req.method === 'POST') {
+      const name = m[1];
+      if (!(await sessionExists(name))) return sendErr(res, 404, 'no such session');
+      const body = JSON.parse(await readBody(req) || '{}');
+      const st = readSessionState(name);
+      // A question is already waiting: typing prose into a numbered prompt is
+      // lost or misread. Answer it first (same reasoning as /answer's guard).
+      if (st && st.state === 'attention') {
+        return sendErr(res, 409, 'answer the waiting question first, then end the session');
+      }
+      // No state file means the hook has never seen a Claude turn here — the pane
+      // may be a plain shell, where the phrase would EXECUTE as a command. Refuse
+      // unless the caller insists.
+      if (!st && !body.force) {
+        return sendErr(res, 409, 'no Claude state recorded for this session — it may be a plain shell; pass force to send anyway');
+      }
+      const phrase = (typeof body.phrase === 'string' && body.phrase.trim())
+        ? body.phrase.slice(0, 8000) : SOFT_END_PHRASE;
+      const auto = typeof body.auto === 'boolean' ? body.auto : SOFT_END_AUTO;
+      const queued = !!(st && st.state === 'running'); // mid-turn text queues in the composer
+      const r = await sendLineToPane(name, phrase);
+      if (r.err) return sendErr(res, 500, `tmux: ${(r.stderr || '').trim()}`);
+      if (auto) softEnds.set(name, createPending(Date.now()));
+      else softEnds.delete(name);
+      return sendJson(res, 200, { ok: true, phrase, auto, queued });
     }
 
     // --- answering a question from a notification, without opening the app
@@ -2939,12 +3064,13 @@ const server = http.createServer(async (req, res) => {
     // One helper, both channels. The directory is the ONLY difference between
     // them here; keeping that a parameter rather than a second copy of the route
     // is what stops a future fix landing in one channel and not the other.
-    const serveDesktopArtifact = (dir, name) => {
+    const serveArtifact = (dir, name, extraHeaders = null) => {
       const found = desktopLib.resolveArtifact(dir, name);
       if (!found.ok) return sendErr(res, found.status, found.error);
       res.writeHead(200, {
-        'Content-Type': found.contentType,
+        'Content-Type': (extraHeaders && extraHeaders['Content-Type']) || found.contentType,
         'Content-Length': found.size,
+        ...(extraHeaders || {}),
       });
       const stream = fs.createReadStream(found.file);
       // Let the fd go when the client does. `pipe` only UNPIPES its source when
@@ -2964,7 +3090,7 @@ const server = http.createServer(async (req, res) => {
       return sendJson(res, 200, man);
     }
     if (req.method === 'GET' && (m = p.match(/^\/v1\/desktop\/([^/]+)$/))) {
-      return serveDesktopArtifact(DESKTOP_DIR, decodeURIComponent(m[1]));
+      return serveArtifact(DESKTOP_DIR, decodeURIComponent(m[1]));
     }
     // --- the Compose Multiplatform client's channel. Same contract, same auth,
     // its OWN directory: /v1/desktop-kt, stocked by mobile/scripts/release-desktop.sh.
@@ -2977,7 +3103,23 @@ const server = http.createServer(async (req, res) => {
       return sendJson(res, 200, man);
     }
     if (req.method === 'GET' && (m = p.match(/^\/v1\/desktop-kt\/([^/]+)$/))) {
-      return serveDesktopArtifact(DESKTOP_KT_DIR, decodeURIComponent(m[1]));
+      return serveArtifact(DESKTOP_KT_DIR, decodeURIComponent(m[1]));
+    }
+
+    // --- an uploaded file, served back so chat history can show a real
+    // thumbnail instead of a "photo attached" placeholder. Auth like every route
+    // (the global gate above). resolveArtifact's validName rejects every path
+    // separator and dotfile, so the name cannot escape UPLOADS_DIR — the same
+    // by-construction defence the desktop channels rely on. Served with a
+    // conservative type and nosniff: these are user-supplied bytes and must never
+    // render as an active type. A 404 after a manual delete is expected; the
+    // client falls back to the placeholder.
+    if (req.method === 'GET' && (m = p.match(/^\/v1\/uploads\/([^/]+)$/))) {
+      const name = decodeURIComponent(m[1]);
+      return serveArtifact(UPLOADS_DIR, name, {
+        'Content-Type': contentTypeForUpload(name),
+        'X-Content-Type-Options': 'nosniff',
+      });
     }
 
     // --- attachments: a photo from the phone, landed where a chat can Read it
@@ -3299,6 +3441,11 @@ resolveBind().then(async (bind) => {
   reconcileInterruptedRuns();
   deliverOrphanedQueues();
   if (loadAlertState().enabled) { startAlertWatcher(); log('alerts: watcher resumed'); }
+  // The state-dir watch drives auto soft-end too, which must respond within a
+  // second regardless of whether alerts are enabled — so start it here rather
+  // than only inside startAlertWatcher. Idempotent (guards on stateWatcher), and
+  // its alertTick call is a cheap no-op while alerts are off.
+  startStateWatch();
   // Re-key any profile still stored under the old email-derived name, and clear
   // the duplicates that scheme produced.
   try {

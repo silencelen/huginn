@@ -1,0 +1,50 @@
+[48;5;237m  [38;5;231mdescription = "Strict, no comments.", preview = a 4-line sample JSON [39m
+  [38;5;231mconfig with server object and port 8787.[39m
+[38;5;153m[49m▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔
+
+[39m  [38;5;73m─────────────────────────────────────────────────────────────────────────[39m
+   [1m[38;5;153mReady to code?[0m
+
+   Here is Claude's plan:
+  [38;5;239m╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌[39m
+   [1;3;4mPlan: Add README.md describing this directory's files[0m
+
+   [1mContext[0m
+
+   The working directory ([38;5;153m/tmp/claude-0/-root-netplan/e1ce6899-0e03-4598-9[39m
+   [38;5;153mf39-089560767f1e/scratchpad/fixcap-home[39m) has no README. The user wants
+   a README.md that describes the files present so anyone opening the
+   directory understands its contents. Currently it holds a single file:
+   [38;5;153mhello.txt[39m (5 bytes, containing the word "hello").
+
+   [1mSteps[0m
+
+   1. Confirm the directory's current contents with [38;5;153mls[39m (done: only
+   [38;5;153mhello.txt[39m exists).
+   2. Write [38;5;153mREADME.md[39m in the directory with a short title and a file
+   listing that describes [38;5;153mhello.txt[39m (a plain-text file containing the
+   single word "hello").
+   3. Verify by reading [38;5;153mREADME.md[39m back and re-listing the directory to
+   confirm both files are present.
+
+   [1mVerification[0m
+
+   [38;5;153mls[39m shows [38;5;153mREADME.md[39m and [38;5;153mhello.txt[39m; the README accurately describes every
+   file present.
+  [38;5;239m╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌[39m
+
+
+
+
+
+  [38;5;73m─────────────────────────────────────────────────────────────────────────[39m
+   [38;5;246mClaude has written up a plan and is ready to execute. Would you like to[39m
+   [38;5;246mproceed?[39m
+
+   [38;5;153m❯[39m [38;5;246m1. [38;5;153mYes, and use auto mode[39m
+     [38;5;246m2. [39mYes, manually approve edits
+     [38;5;246m3. Tell Claude what to change[39m
+        [38;5;246mshift+tab to approve with this feedback[39m
+
+   [38;5;246mctrl+g to edit in Vim · [39m
+   [38;5;246m~/.claude/plans/plan-how-to-add-partitioned-globe.md[39m

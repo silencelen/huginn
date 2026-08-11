@@ -1,0 +1,2 @@
+[38;5;114m[49m●[39m [1mWrite[0m(]8;id=7tkt4s;file:///tmp/claude-0/-root-netplan/e1ce6899-0e03-4598-9f39-089560767f1e/scratchpad/fixcap-home/hello.txt\hello.txt]8;;\)
+  [38;5;73m⏸ plan mode on[38;5;246m (shift+tab to cycle) · ← for agents[39m
