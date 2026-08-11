@@ -76,7 +76,7 @@ fun ChatsScreen(
                         TextButton(onClick = onOpenSettings) { Text("Open Settings") }
                     }
                 } else {
-                    EmptyState("No chats yet", "Start one and huginn answers from the netplan tree.")
+                    EmptyState("No chats yet", "Start one and huginn answers from the host.")
                 }
             }
         } else {

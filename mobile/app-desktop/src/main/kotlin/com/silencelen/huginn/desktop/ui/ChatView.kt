@@ -584,7 +584,7 @@ private fun NewChatHint(mode: String) {
     ) {
         Text(if (mode == "act") "Act mode" else "Ask mode", style = MaterialTheme.typography.titleMedium)
         Text(
-            if (mode == "act") "Runs in ~/netplan with tools: files, commands, the web."
+            if (mode == "act") "Runs on the host with tools: files, commands, the web."
             else "Reasoning and memory, no tools.",
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,

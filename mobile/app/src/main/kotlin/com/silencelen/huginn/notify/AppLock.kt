@@ -11,7 +11,7 @@ import androidx.fragment.app.FragmentActivity
  * Locking the app behind the device's own credential.
  *
  * This app is a remote hand on huginn: whoever holds an unlocked phone can run
- * commands in ~/netplan and read every session. The device lock already guards
+ * commands on the host and read every session. The device lock already guards
  * that, but a phone handed over unlocked — a passenger picking music, a child
  * with a game — is an ordinary event, and this is not an ordinary app to leave
  * open in it.

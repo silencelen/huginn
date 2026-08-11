@@ -68,7 +68,7 @@ fun SessionsScreen(
     Box(Modifier.fillMaxSize()) {
         if (sessions.isEmpty()) {
             Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.Center) {
-                EmptyState("No sessions", "Create one and it opens Claude Code in ~/netplan, same as cc.")
+                EmptyState("No sessions", "Create one and it opens Claude Code on the host, same as cc.")
             }
         } else {
             LazyColumn(
@@ -110,7 +110,7 @@ fun SessionsScreen(
                     )
                     Spacer(Modifier.height(8.dp))
                     Text(
-                        "Letters, digits and underscore. Opens Claude Code in ~/netplan.",
+                        "Letters, digits and underscore. Opens Claude Code on the host.",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )

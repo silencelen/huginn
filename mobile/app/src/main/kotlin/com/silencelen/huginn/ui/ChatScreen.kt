@@ -157,7 +157,7 @@ fun ChatScreen(
             Box(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
                 EmptyState(
                     if (mode == "act") "Act mode" else "Ask mode",
-                    if (mode == "act") "Runs in ~/netplan with tools: files, commands, the web."
+                    if (mode == "act") "Runs on the host with tools: files, commands, the web."
                     else "Reasoning and memory, no tools.",
                 )
             }
