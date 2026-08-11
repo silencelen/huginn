@@ -50,7 +50,9 @@ import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.isAltPressed
 import androidx.compose.ui.input.key.isCtrlPressed
+import androidx.compose.ui.input.key.isMetaPressed
 import androidx.compose.ui.input.key.isShiftPressed
 import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onPreviewKeyEvent
@@ -65,7 +67,6 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.runtime.rememberCoroutineScope
 import com.silencelen.huginn.data.DraftBook
 import com.silencelen.huginn.data.HuginnClient
-import com.silencelen.huginn.data.PanePrompt
 import com.silencelen.huginn.desktop.AppStore
 import com.silencelen.huginn.desktop.SessionController
 import com.silencelen.huginn.desktop.SessionTab
@@ -89,11 +90,16 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.launch
 import com.silencelen.huginn.data.ModelChoice
+import com.silencelen.huginn.ui.DegradedAskCard
+import com.silencelen.huginn.ui.HistoryWalk
+import com.silencelen.huginn.ui.exitRecallIfDiverged
+import com.silencelen.huginn.ui.handleHistoryKey
 import com.silencelen.huginn.ui.LocalTranscriptMetrics
 import com.silencelen.huginn.ui.FollowNewest
 import com.silencelen.huginn.ui.ModelLabels
 import com.silencelen.huginn.ui.NewestPill
 import com.silencelen.huginn.ui.onScrollInput
+import com.silencelen.huginn.ui.PromptCard
 import com.silencelen.huginn.ui.SkiaCellPainter
 import com.silencelen.huginn.ui.Suggest
 import com.silencelen.huginn.ui.SuggestionChips
@@ -178,6 +184,8 @@ fun SessionView(store: AppStore, name: String) {
     val draftMap by store.drafts.drafts.collectAsState()
     val draft = draftMap[draftKey].orEmpty()
     val setDraft: (String) -> Unit = { store.drafts.set(draftKey, it) }
+    val historyMap by store.sentHistory.entries.collectAsState()
+    val history = historyMap[draftKey].orEmpty()
     val viewScope = rememberCoroutineScope()
 
     Column(Modifier.fillMaxSize()) {
@@ -259,7 +267,38 @@ fun SessionView(store: AppStore, name: String) {
         // click "1" while reading that very question in the transcript is a tab
         // switch charged for nothing. The phone puts it in both tabs deliberately;
         // one card below both is the same promise with one copy of the code.
-        screen?.prompt?.let { prompt -> PromptCard(controller, prompt) }
+        //
+        // The card itself is the SHARED one (:ui PromptCards.kt) — one
+        // implementation for both shells; only the answer plumbing stays here.
+        // When the pane scrape cannot read the dialog but the hook knows a
+        // question is waiting, the degraded card renders instead of nothing;
+        // its answers verify against the live pane and steer to the Screen tab
+        // when that verification cannot see a run (reason=undetected).
+        val answering by controller.answering.collectAsState()
+        val answerNote by controller.answerNote.collectAsState()
+        val prompt = screen?.prompt
+        if (prompt != null) {
+            Box(Modifier.padding(horizontal = 12.dp, vertical = 6.dp)) {
+                PromptCard(
+                    prompt = prompt,
+                    answering = answering,
+                    note = answerNote,
+                    onAnswer = controller::answer,
+                    onAnswerMulti = controller::answerMulti,
+                )
+            }
+        } else {
+            screen?.ask?.let { ask ->
+                Box(Modifier.padding(horizontal = 12.dp, vertical = 6.dp)) {
+                    DegradedAskCard(
+                        ask = ask,
+                        answering = answering,
+                        note = answerNote,
+                        onAnswer = controller::answerDegraded,
+                    )
+                }
+            }
+        }
 
         Composer(
             controller = controller,
@@ -273,6 +312,8 @@ fun SessionView(store: AppStore, name: String) {
             // is a bug the Electron client actually shipped.
             onSent = { store.drafts.clear(draftKey) },
             onRestore = { setDraft(it) },
+            history = history,
+            onRecord = { store.sentHistory.record(draftKey, it) },
             working = working,
             scope = viewScope,
         )
@@ -506,7 +547,10 @@ private fun ScreenTab(controller: SessionController) {
     val scrollback by controller.scrollback.collectAsState()
     val loadingScrollback by controller.loadingScrollback.collectAsState()
     val echo by controller.echo.collectAsState()
-    var live by remember(controller.name) { mutableStateOf(false) }
+    // Hoisted to the controller (was a local var) so the composer — outside the
+    // tabs — can suppress its Up/Down history recall while live mode owns the
+    // keys. Per-session reset is preserved: the controller instance is per-name.
+    val live by controller.live.collectAsState()
 
     val density = LocalDensity.current
     val fg = MaterialTheme.colorScheme.onSurface
@@ -646,7 +690,7 @@ private fun ScreenTab(controller: SessionController) {
             }
         }
 
-        KeyBar(controller, live) { live = !live }
+        KeyBar(controller, live) { controller.setLive(!live) }
     }
 }
 
@@ -691,99 +735,6 @@ private fun KeyBar(controller: SessionController, live: Boolean, onToggleLive: (
     }
 }
 
-// -------------------------------------------------------------------- prompt
-
-/**
- * A detected choice prompt, as buttons.
- *
- * Every answer carries the fingerprint the host published with the question — the
- * host refuses an answer whose pane has moved on, and it has to, because this card
- * renders a polled screen that may be seconds old. A refusal comes back as a 409
- * with the daemon's own sentence: an ORDINARY outcome, since the click was right
- * when it was offered. It is reported and never retried.
- */
-@Composable
-private fun PromptCard(controller: SessionController, prompt: PanePrompt) {
-    val answering by controller.answering.collectAsState()
-    val note by controller.answerNote.collectAsState()
-
-    // Seeded from what the dialog already shows, so a question half-answered in
-    // tmux is not silently discarded. Keyed on the question and the option count
-    // rather than on the whole prompt: re-seeding when only the checkbox states
-    // move under the poll would stomp a selection being made right now.
-    val chosen = remember(prompt.question, prompt.options.size) {
-        mutableStateListOf<Int>().apply {
-            prompt.options.filter { it.checked == true }.forEach { add(it.number) }
-        }
-    }
-
-    Surface(
-        color = MaterialTheme.colorScheme.surfaceContainerHigh,
-        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
-        modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 6.dp),
-    ) {
-        Column(Modifier.padding(12.dp)) {
-            Text(prompt.question, style = MaterialTheme.typography.bodyMedium)
-            Spacer(Modifier.height(8.dp))
-            prompt.options.forEach { option ->
-                val checkable = prompt.multiSelect && option.checked != null
-                if (checkable) {
-                    Row(
-                        Modifier.fillMaxWidth()
-                            .clickable(enabled = !answering) {
-                                if (chosen.contains(option.number)) chosen.remove(option.number)
-                                else chosen.add(option.number)
-                            }
-                            .padding(vertical = 2.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        Checkbox(checked = chosen.contains(option.number), onCheckedChange = null)
-                        Text(
-                            "${option.number}.  ${option.label}",
-                            style = MaterialTheme.typography.bodyMedium,
-                            modifier = Modifier.padding(start = 6.dp),
-                        )
-                    }
-                } else {
-                    // Single answer: one click IS the answer, no confirm step.
-                    val highlighted = option.selected && !prompt.multiSelect
-                    val label = "${option.number}.  ${option.label}"
-                    val mod = Modifier.fillMaxWidth().padding(vertical = 2.dp)
-                    if (highlighted) {
-                        Button(onClick = { controller.answer(option.number) }, enabled = !answering, modifier = mod) {
-                            Text(label)
-                        }
-                    } else {
-                        OutlinedButton(onClick = { controller.answer(option.number) }, enabled = !answering, modifier = mod) {
-                            Text(label)
-                        }
-                    }
-                }
-            }
-            if (prompt.multiSelect) {
-                Button(
-                    onClick = { controller.answerMulti(chosen.toList()) },
-                    enabled = !answering,
-                    modifier = Modifier.fillMaxWidth().padding(top = 6.dp),
-                ) {
-                    Text(
-                        if (chosen.isEmpty()) "Answer with none selected"
-                        else "Answer with ${chosen.size} selected",
-                    )
-                }
-            }
-            note?.let {
-                Text(
-                    it,
-                    style = MaterialTheme.typography.labelMedium,
-                    color = MaterialTheme.colorScheme.error,
-                    modifier = Modifier.padding(top = 6.dp),
-                )
-            }
-        }
-    }
-}
-
 // ------------------------------------------------------------------ composer
 
 /**
@@ -811,6 +762,8 @@ private fun Composer(
     onSent: () -> Unit,
     /** Puts the text back when a send could not be delivered. See [submit]. */
     onRestore: (String) -> Unit,
+    history: List<String>,
+    onRecord: (String) -> Unit,
     working: Boolean,
     scope: CoroutineScope,
 ) {
@@ -823,9 +776,19 @@ private fun Composer(
     val pending = attachment
     val canSend = draft.isNotBlank() || (pending != null && pending.status != AttachStatus.FAILED)
 
+    // Sent-history recall. Suppressed while the Screen tab has live keyboard on:
+    // there every keystroke, arrows included, belongs to the pane. The composer
+    // is click-refocusable even then, so the guard is still required.
+    val recall = remember { mutableStateOf<HistoryWalk.Cursor?>(null) }
+    val tab by controller.tab.collectAsState()
+    val live by controller.live.collectAsState()
+    val historySuppressed = tab == SessionTab.SCREEN && live
+
     val submit: () -> Unit = {
         if (canSend) {
             val body = draft
+            if (body.isNotBlank()) onRecord(body)
+            recall.value = null
             onSent()
             var posted = false
             scope.launch {
@@ -905,7 +868,7 @@ private fun Composer(
     }
             OutlinedTextField(
                 value = field,
-                onValueChange = { field = it; onDraft(it.text) },
+                onValueChange = { field = it; onDraft(it.text); exitRecallIfDiverged(recall, it.text) },
                 // Cap before fill. `fillMaxWidth` hands DOWN fixed constraints and a
                 // `widthIn` inside those can only coerce into them, so the cap would be
                 // swallowed and a composer meant to stop at a reading measure would
@@ -924,6 +887,9 @@ private fun Composer(
                     // the pane showing what arrived, and by Enter being what every
                     // other composer in reach already does.
                     .onPreviewKeyEvent { e ->
+                        val bareArrowOrEsc = !e.isCtrlPressed && !e.isAltPressed &&
+                            !e.isMetaPressed && !e.isShiftPressed &&
+                            (e.key == Key.DirectionUp || e.key == Key.DirectionDown || e.key == Key.Escape)
                         when {
                             e.type != KeyEventType.KeyDown -> false
                             e.key == Key.Enter && e.isShiftPressed -> {
@@ -935,6 +901,10 @@ private fun Composer(
                             }
                             e.key == Key.Enter -> { submit(); true }
                             e.isCtrlPressed && e.key == Key.V -> AwtTransfer.consumeClipboard(attachments)
+                            bareArrowOrEsc -> handleHistoryKey(
+                                e.key, field, recall, history, suppressed = historySuppressed,
+                                setField = { field = it }, onDraft = onDraft,
+                            )
                             else -> false
                         }
                     },

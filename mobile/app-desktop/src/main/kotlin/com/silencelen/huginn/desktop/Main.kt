@@ -38,6 +38,7 @@ import com.silencelen.huginn.desktop.tray.RavenMark
 import com.silencelen.huginn.desktop.tray.TrayIcons
 import com.silencelen.huginn.desktop.tray.TrayModel
 import com.silencelen.huginn.desktop.ui.Shell
+import com.silencelen.huginn.ui.LocalAttachmentImages
 import com.silencelen.huginn.ui.LocalTranscriptMetrics
 import com.silencelen.huginn.ui.TranscriptMetrics
 import com.silencelen.huginn.ui.theme.HuginnTheme
@@ -480,7 +481,10 @@ fun main(args: Array<String>) {
                         // dwelling. The phone keeps its own numbers by default.
                         rowSpacing = 6.dp,
                         rowPadding = 4.dp,
-                    )
+                    ),
+                    // Photo attachments render as real thumbnails; without this
+                    // (or against an old daemon) the rows fall back to the pill.
+                    LocalAttachmentImages provides store.attachmentImages,
                 ) {
                     Shell(store)
 

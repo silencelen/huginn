@@ -68,6 +68,35 @@ class HuginnClientTest {
         assertEquals("http://appd.test/v1/ping", seen.single().url.toString())
     }
 
+    // ------------------------------------------------- soft end + uploads
+
+    @Test
+    fun `softEndSession posts to the soft-end route and decodes the report`() = runTest {
+        val r = ok("""{"ok":true,"phrase":"Finish up.","auto":true,"queued":false}""")
+            .softEndSession("jtyper")
+        assertEquals("http://appd.test/v1/sessions/jtyper/soft-end", seen.single().url.toString())
+        assertEquals("POST", seen.single().method.value)
+        assertTrue(r.ok)
+        assertTrue(r.auto)
+        assertFalse(r.queued)
+        assertEquals("Finish up.", r.phrase)
+    }
+
+    @Test
+    fun `uploadBytes fetches by name, with auth, returning the raw bytes`() = runTest {
+        val payload = byteArrayOf(1, 2, 3, 4)
+        val got = client { respond(payload) }.uploadBytes("up-1-ab.jpg")
+        assertEquals("http://appd.test/v1/uploads/up-1-ab.jpg", seen.single().url.toString())
+        assertEquals("Bearer test-token", seen.single().headers[HttpHeaders.Authorization])
+        assertTrue(payload.contentEquals(got))
+    }
+
+    @Test
+    fun `uploadBytes surfaces a 404 as an exception (pruned or deleted file)`() = runTest {
+        val c = client { respondError(HttpStatusCode.NotFound, """{"error":"not found"}""") }
+        assertFailsWith<Exception> { c.uploadBytes("up-gone.jpg") }
+    }
+
     @Test
     fun `the client id and notify headers are sent only when they say something`() = runTest {
         // The plain UI client must NOT claim to be a background listener: the host

@@ -3,6 +3,9 @@ package com.silencelen.huginn.desktop
 import com.silencelen.huginn.data.AppdRoutes
 import com.silencelen.huginn.data.Chat
 import com.silencelen.huginn.data.DraftBook
+import com.silencelen.huginn.data.SentHistory
+import com.silencelen.huginn.ui.AttachmentImageLoader
+import com.silencelen.huginn.ui.SkiaImageBytesDecoder
 import com.silencelen.huginn.data.HuginnClient
 import com.silencelen.huginn.data.Plan
 import com.silencelen.huginn.data.RouteResolver
@@ -85,6 +88,16 @@ class AppStore(
      * cancelled at the exact moment it had work to do.
      */
     val drafts = DraftBook(settings, scope)
+
+    /** Sent-message history per target, for the composers' Up/Down recall. */
+    val sentHistory = SentHistory(settings, scope)
+
+    /**
+     * Thumbnails for photo attachments in chat history. App level so decoded
+     * bitmaps survive scrolling and view switches; provided to the shared
+     * transcript renderer via [com.silencelen.huginn.ui.LocalAttachmentImages].
+     */
+    val attachmentImages = AttachmentImageLoader({ client.uploadBytes(it) }, SkiaImageBytesDecoder())
 
     init {
         current = this
@@ -285,6 +298,7 @@ class AppStore(
      */
     fun start() {
         scope.launch { drafts.load() }
+        scope.launch { sentHistory.load() }
         scope.launch { resolveRoute() }
         scope.launch { pollLoop() }
         scope.launch { watchLoop() }
