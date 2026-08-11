@@ -1,25 +1,34 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!-- Status-bar icon: silhouette only, single colour, as Android tints and
-     shrinks it to ~24dp. The raven head from the launcher, simplified. -->
+     shrinks it to ~24dp. The brand raven (assets/brand/raven.svg) without the
+     eye hole — a 2-unit hole is sub-pixel at status-bar size, just noise. -->
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
         android:width="24dp"
         android:height="24dp"
-        android:viewportWidth="24"
-        android:viewportHeight="24">
-    <path
-        android:fillColor="#FFFFFF"
-        android:pathData="M6,15.5
-                          C4.7,13.6 4.7,10.6 6.5,9
-                          C8,7.6 10.4,6.9 12.1,7.6
-                          L13.3,8.1
-                          L20.5,11
-                          C21,11.2 21,11.7 20.5,11.9
-                          L13.3,13.1
-                          C12.9,15.2 11.6,16.9 9.5,17.8
-                          C8.3,18.3 7,18 6,15.5
-                          Z
-                          M11.5,10.6
-                          m-0.9,0
-                          a0.9,0.9 0 1,0 1.8,0
-                          a0.9,0.9 0 1,0 -1.8,0" />
+        android:viewportWidth="108"
+        android:viewportHeight="108">
+    <group
+        android:translateX="2"
+        android:translateY="11">
+        <path
+            android:fillColor="#FFFFFF"
+            android:pathData="M94,32
+                              C87,27.5 80,25.8 74,25.5
+                              C72.5,19.5 64,17 58.5,19.3
+                              C54,21.3 51,24 48,27
+                              C41,32.5 35,37.5 30,42
+                              L10,60
+                              L16,69
+                              L37,54
+                              C40,58.5 45,61.5 51,62.5
+                              C58,63.3 64,60 67,55.5
+                              C70.3,50.3 71.8,45.2 70,41
+                              L67.8,40.2
+                              L71.3,37.8
+                              L68.8,36.2
+                              L72,34.8
+                              C79,34.6 86,34.2 93,33.6
+                              C94.6,33 94.6,32.5 94,32
+                              Z" />
+    </group>
 </vector>

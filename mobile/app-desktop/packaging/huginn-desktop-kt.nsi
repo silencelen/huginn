@@ -73,6 +73,16 @@ VIAddVersionKey "FileVersion" "${APP_VERSION}"
 VIAddVersionKey "ProductVersion" "${APP_VERSION}"
 VIAddVersionKey "LegalCopyright" "${PUBLISHER}"
 
+; The brand raven (packaging/huginn.ico, from assets/brand/generate.sh) on the
+; installer and uninstaller themselves. The installed app's own icon comes from
+; jpackage --icon; this covers the Setup exe the owner double-clicks. Absolute,
+; like PLUGIN_DIR and for the same reason.
+!ifndef ICON_FILE
+  !error "ICON_FILE not defined — pass -DICON_FILE=<absolute path to packaging/huginn.ico>"
+!endif
+!define MUI_ICON   "${ICON_FILE}"
+!define MUI_UNICON "${ICON_FILE}"
+
 !define MUI_ABORTWARNING
 !insertmacro MUI_PAGE_DIRECTORY
 !insertmacro MUI_PAGE_INSTFILES

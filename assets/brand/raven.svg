@@ -1,9 +1,10 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 108 108">
-  <!-- App-icon master: the dark raven on the bone tile. Derives the devstore
-       listing icon, the Windows .ico and the Linux .png. The raven is dark and
-       the tile light — a bone-white raven is not a raven. See raven.svg for the
-       canonical path; keep the two in sync. -->
-  <rect width="108" height="108" fill="#E8E2DA"/>
+  <!-- Huginn brand mark: a raven, profile facing right. Odin's thought-raven.
+       Feathers-over-feet perched posture on purpose: legs turn to mud at 16px.
+       ONE path, clockwise from the bill tip; the eye is an evenodd hole so the
+       mark works on any background. Ink #161310, bone #E8E2DA.
+       Canonical source — every icon on every platform derives from this path.
+       Regenerate derived assets with generate.sh in this directory. -->
   <g transform="translate(2,11)">
     <path fill="#161310" fill-rule="evenodd" d="
       M94,32
