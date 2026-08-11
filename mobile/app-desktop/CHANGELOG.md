@@ -14,6 +14,31 @@ the Electron client's go to `/v1/desktop` and the two never mix — see
      refusal is deliberate — it is what stops a release going out with no notes.
      ─────────────────────────────────────────────────────────────────────────── -->
 
+## 0.6.0
+
+### Updates come from GitHub now
+
+The desktop client updates itself from the project's public GitHub releases
+instead of the private daemon feed — huginn is a public project, so its updates
+are not siloed to it. The safety property is unchanged: the source is still a
+compile-time constant (the repo, never a Settings value), the download is HTTPS,
+and every installer is verified against the sha256 in the release manifest before
+it can be run. An already-installed 0.5.x client updates to this version over the
+old feed, once; from here on it is GitHub.
+
+### Context used, and when a session is compacting
+
+The session header shows a "context used" meter (it tints when the window is
+nearly full), and both the list and the header show a **Compacting…** marker
+while a session is rewriting its context. The session menu gains **Compact
+context**, which reclaims context without opening the pane.
+
+### Multi-part questions point you the right way
+
+A question that carries several parts can't be answered by one button tap, so its
+card now says so and offers to jump to the Screen tab, where the parts are stepped
+through — instead of a button that quietly answers the wrong thing.
+
 ## 0.5.0
 
 ### Wind down a session
