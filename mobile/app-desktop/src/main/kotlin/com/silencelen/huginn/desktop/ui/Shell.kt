@@ -159,6 +159,10 @@ fun Shell(store: AppStore) {
         // would press, and it is what the menu item is named after.
         interrupt = { name -> act { store.client.sendKeys(name, keys = listOf("Escape")) } },
         copyName = { copy(it) },
+        // No confirm dialog: compaction is cheap and reversible-in-effect (it only
+        // rewrites context). Success is silent — the Compacting… marker appears
+        // when it starts; a 409 (waiting question / plain shell) surfaces its note.
+        compact = { name -> act { store.client.compactSession(name) } },
         softEnd = { names -> confirming = ConfirmTarget.SoftEndSessions(names) },
         kill = { names -> confirming = ConfirmTarget.KillSessions(names) },
     )
