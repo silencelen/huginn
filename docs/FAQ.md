@@ -3,6 +3,15 @@
 ### Is this just `ssh` + `tmux`?
 The `huginn` command, yes — packaged. It's `ssh -t host tmux …` with multi-device-friendly tmux defaults, a one-word command (with subcommands + tab-completion) that works the same in PowerShell **and** bash/Termux, a container template, and a one-shot setup. No new protocol — just the sharp edges filed off. The repo also ships the parts that *aren't* ssh + tmux and are opt-in: `huginn-appd` (an HTTP daemon on the host) and the Android/desktop apps that talk to it. Deploy those and the answer changes — see [`SECURITY.md`](SECURITY.md).
 
+### Is there a phone app / desktop app?
+Yes — optional, in `mobile/`: an **Android app** and a **Windows/Linux desktop app** built
+from one Kotlin codebase, with streaming chats, structured session views (built from the
+real Claude Code transcript, not screen-scraping), push notifications, and permission
+prompts as buttons — including on the Android lock screen. They talk to `huginn-appd`, a
+daemon you deploy on the host ([Setup → the daemon + the apps](SETUP.md#4-optional-the-daemon--the-apps)).
+There's no app-store listing; you build them from the repo ([`mobile/README.md`](../mobile/README.md)).
+Deploying the daemon changes your security posture — read [`SECURITY.md`](SECURITY.md) first.
+
 ### Do I need a Claude Max/Pro subscription?
 No, but it's the point. Claude Code can log in with a **Max/Pro subscription** (flat cost — an always-on agent you talk to all day doesn't run up an API bill) **or** an `ANTHROPIC_API_KEY` (metered). Use whichever you have.
 

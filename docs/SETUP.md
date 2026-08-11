@@ -1,6 +1,7 @@
 # Setup
 
-Three parts: a **host**, the **server install**, and the **client** on each device.
+Three parts: a **host**, the **server install**, and the **client** on each device —
+plus an optional fourth, the [daemon + apps](#4-optional-the-daemon--the-apps).
 
 ## 1. Host
 
@@ -54,6 +55,31 @@ Put the host and each device on [Tailscale](https://tailscale.com), then set the
 
 ### Optional: phone detach button
 On the phone, `bash client/termux-detach-button.sh` adds a one-tap **DTACH** key to Termux's keyboard row.
+
+## 4. Optional: the daemon + the apps
+
+The terminal path above needs nothing but SSH. The **Android and desktop apps** need one
+more piece on the host: `huginn-appd`, an HTTP daemon the apps talk to. **Read
+[`SECURITY.md`](SECURITY.md) first** — the daemon is a second root-equivalent credential.
+
+On the host, in the repo checkout:
+```bash
+# one time: create the bearer token the apps will authenticate with
+install -d -m 700 /etc/huginn-appd
+openssl rand -hex 32 > /etc/huginn-appd/token && chmod 600 /etc/huginn-appd/token
+
+server/appd/deploy.sh          # installs /opt/huginn-appd, starts the unit, proves /v1/ping
+cat /etc/huginn-appd/token     # paste this into each app's Settings
+```
+
+By default it binds the host's **Tailscale address** on port 8787 (override with a
+`HUGINN_APPD_BIND` drop-in — see [`../server/appd/systemd.d/`](../server/appd/systemd.d/)).
+
+Then the clients: build the **Android app** with `mobile/scripts/build.sh` (or
+`ship.sh` if you run a self-hosted app store), and the **Windows/Linux desktop app**
+with `mobile/scripts/release-desktop.sh` — both build on a Linux host, the Windows
+installer included. Details, requirements, and what the apps do:
+[`../mobile/README.md`](../mobile/README.md).
 
 ## Verify
 ```

@@ -17,10 +17,12 @@
 ### 🐦‍⬛ Thought, on call from anywhere.
 
 **One command to reach a persistent [Claude Code](https://docs.anthropic.com/en/docs/claude-code) session running on your own server — from your laptop, desktop, or phone.**
+**Plus native Android and desktop apps: chats, live session views, and permission prompts answered from your lock screen.**
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 ![Host: Debian | Ubuntu](https://img.shields.io/badge/host-Debian%20%7C%20Ubuntu-A81D33)
-![Clients: PowerShell | bash | Termux](https://img.shields.io/badge/clients-PowerShell%20%7C%20bash%20%7C%20Termux-2ea44f)
+![Terminal: PowerShell | bash | Termux](https://img.shields.io/badge/terminal-PowerShell%20%7C%20bash%20%7C%20Termux-2ea44f)
+![Apps: Android | Windows | Linux](https://img.shields.io/badge/apps-Android%20%7C%20Windows%20%7C%20Linux-3DDC84)
 ![Built for: Claude Code](https://img.shields.io/badge/built%20for-Claude%20Code-D97757)
 ![Made with: bash + tmux](https://img.shields.io/badge/made%20with-bash%20%2B%20tmux-1f425f)
 ![PRs welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)
@@ -61,8 +63,9 @@ PS C:\> huginn solo
 | 🪞 **Mirror or solo** | Two devices mirror each other (fit the smaller screen); one keystroke (`Alt-o`) detaches the rest to go full-screen. An auto-reconnect picks the right mode for you. |
 | 🏷️ **Live status tabs** | `huginn costtracking` labels the terminal tab `costtracking` (Windows Terminal / iTerm / Termux) **with a live state icon** — 🔄 working · ✋ needs you (permission/input) · ✅ waiting for your next prompt — so you can tell at a glance, across tabs, which session wants you. Restored when you leave. |
 | 💸 **Subscription, not metered** | Log Claude Code into your **Max/Pro** plan — flat cost, no per-token billing. (API key works too.) |
-| 🔌 **No daemon, no ports** | Just SSH. Add Tailscale/WireGuard and it works from anywhere. |
-| 🪶 **Tiny** | A few shell scripts + a tmux config. The value is the *pattern*. |
+| 🔌 **No daemon, no ports** | Just SSH. Add Tailscale/WireGuard and it works from anywhere. (The apps below are the opt-in exception.) |
+| 📲 **Native apps, opt-in** | An Android app and a Windows/Linux desktop app (one shared Kotlin codebase) with streaming chats, structured session views, push notifications, and permission prompts as tappable buttons — [see below](#-the-apps-optional). |
+| 🪶 **Tiny core** | The terminal path is a few shell scripts + a tmux config. The value is the *pattern*. |
 
 ## 🚀 Quick start
 
@@ -95,6 +98,8 @@ huginn update        self-update this client from the repo
 huginn help          full reference
 ```
 
+**5. Optional — the apps:** deploy the daemon and build the Android / desktop clients — see [`mobile/README.md`](mobile/README.md) and [the apps](#-the-apps-optional) below.
+
 ## ⌨️ In a session
 
 | Key | Action |
@@ -104,6 +109,33 @@ huginn help          full reference
 | `Ctrl-b [` | scroll back |
 
 The status bar shows these hints on the left. Full reference: [`docs/USAGE.md`](docs/USAGE.md).
+
+## 📱 The apps (optional)
+
+The terminal is the core; the apps are the comfortable way to live with it. One Kotlin
+codebase (`mobile/`) builds both an **Android app** and a **Windows/Linux desktop app**,
+talking to `huginn-appd` — a zero-dependency Node daemon on the host — over HTTP + SSE:
+
+- **Chats** — headless Claude turns streamed token by token, in *ask* (read-only-intent)
+  or *act* (tools) mode, with attachments (camera / photos / any file, transcoded and
+  streamed up to 128 MB).
+- **Sessions** — every tmux session, twice: a **Conversation** view built from the real
+  Claude Code transcript (thinking, tool calls, subagents — structure, not screen-scraping)
+  and a **Screen** view of the live pane, resized to your device while you watch.
+- **Prompts become buttons.** A numbered permission question in the pane turns into
+  tappable options — in the app *and* on the Android lock screen, fingerprint-checked
+  host-side so a stale tap can never answer a question you didn't see.
+- **Notifications that survive a sleeping phone** — high-priority FCM (measured tens of
+  milliseconds into deep Doze), an alarm fallback, and optional Telegram from the host;
+  stale alerts take themselves down when you answer elsewhere.
+- **Desktop niceties** — tray with live state, `Ctrl+K` palette, keyboard-first
+  navigation, self-updating installers for Windows and a `.deb` for Linux, all built on
+  a Linux host (Windows installer included — jpackage under wine, no Windows box needed).
+
+Start at [`mobile/README.md`](mobile/README.md) for what they do and how to build them,
+and read [`docs/SECURITY.md`](docs/SECURITY.md) **before** deploying the daemon — it is a
+second root-equivalent credential and the docs treat it that way. The older Electron
+desktop client ([`desktop/`](desktop/)) is deprecated in favor of the Compose one.
 
 ## 🤔 Isn't this just `ssh` + `tmux`?
 
