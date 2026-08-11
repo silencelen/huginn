@@ -1,5 +1,5 @@
 {
-  "_comment": "Huginn terminal-title hooks. Merge this into ~/.claude/settings.json's \"hooks\" object (setup.sh does this for you). Drives huginn-claude-title, which shows Claude's state in the tab title. All async so they never add latency to a turn; they no-op outside tmux.",
+  "_comment": "Huginn hooks. Merge this into ~/.claude/settings.json's \"hooks\" object (setup.sh does this for you). Drives huginn-claude-title, which shows Claude's state in the tab title, writes the per-session state file huginn-appd reads, and writes the AskUserQuestion/ExitPlanMode prompt sidecars huginn-appd fuses with its pane scrape. PostToolUse is the primary sidecar clear, so keep it. All async so they never add latency to a turn; they no-op outside tmux.",
   "UserPromptSubmit": [
     { "hooks": [ { "type": "command", "command": "huginn-claude-title UserPromptSubmit", "async": true, "timeout": 10 } ] }
   ],
@@ -14,6 +14,9 @@
   ],
   "Stop": [
     { "hooks": [ { "type": "command", "command": "huginn-claude-title Stop", "async": true, "timeout": 10 } ] }
+  ],
+  "SubagentStop": [
+    { "hooks": [ { "type": "command", "command": "huginn-claude-title SubagentStop", "async": true, "timeout": 10 } ] }
   ],
   "SessionStart": [
     { "hooks": [ { "type": "command", "command": "huginn-claude-title SessionStart", "async": true, "timeout": 10 } ] }

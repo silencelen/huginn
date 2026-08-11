@@ -100,6 +100,63 @@ else
   rm -f "$STATE_DIR/$sess" "$STATE_DIR/$sess.tmp" 2>/dev/null
 fi
 
+# --- prompt sidecars: exact AskUserQuestion / ExitPlanMode tool inputs -------
+#
+# huginn-appd FUSES these with its pane scrape. The pane only shows a label
+# truncated to the window width — a wrapped option loses its tail, a previewed
+# one gains the neighbouring column — so the buttons drawn from the pane alone
+# can be wrong or absent, and the width-dependent text even changes the answer
+# fingerprint. The hook has the exact `tool_input`; writing it here lets the
+# daemon serve correct labels while still taking liveness + the selection caret
+# from the pane.
+#
+# Subdirectories, not "<sess>.ask" suffixes: a session may legitimately be named
+# "x.ask", and appd's fs.watch on STATE_DIR is non-recursive but every event that
+# touches a sidecar also rewrites the flat state file above, so ticks still fire.
+#
+# Written on the PreToolUse that RAISES the dialog (which fires just before it
+# renders — appd waits for the pane to catch up). Cleared the moment it can no
+# longer be on screen: the tool's own PostToolUse (answered / approved), a new
+# UserPromptSubmit (the composer replaced it, e.g. after an Esc-interrupt — the
+# reliable signal, since Stop does not always fire on interrupt), Stop (turn
+# ended), and SessionEnd. Deliberately NOT cleared on a DIFFERENT tool's
+# PreToolUse: a background agent's tool calls fire PreToolUse in this same
+# session while a main-thread question waits, and clearing there would rip a live
+# sidecar away. A missed clear only ever leaves a stale sidecar, which fusion
+# neutralises by requiring a matching live pane run; it can never invent buttons.
+#
+# JSON only — without jq there is nothing to fuse and the pane path stands alone.
+if command -v jq >/dev/null 2>&1; then
+  ASK_DIR="$STATE_DIR/ask"
+  PLAN_DIR="$STATE_DIR/plan"
+  _write_sidecar() {   # $1 = dir, $2 = tool
+    umask 077
+    mkdir -p "$1" 2>/dev/null && chmod 700 "$1" 2>/dev/null
+    printf '%s' "$payload" | jq -c --arg tool "$2" \
+      '{v:1, tool:$tool, sessionId:(.session_id // null), ts:now|floor, input:(.tool_input // null)}' \
+      > "$1/$sess.tmp" 2>/dev/null \
+      && mv -f "$1/$sess.tmp" "$1/$sess" 2>/dev/null
+  }
+  _clear_sidecars() {
+    rm -f "$ASK_DIR/$sess" "$ASK_DIR/$sess.tmp" "$PLAN_DIR/$sess" "$PLAN_DIR/$sess.tmp" 2>/dev/null
+  }
+  case "$event" in
+    PreToolUse)
+      tool_name="$(printf '%s' "$payload" | jq -r '.tool_name // empty' 2>/dev/null)"
+      case "$tool_name" in
+        AskUserQuestion) _write_sidecar "$ASK_DIR" AskUserQuestion ;;
+        ExitPlanMode)    _write_sidecar "$PLAN_DIR" ExitPlanMode ;;
+      esac ;;
+    PostToolUse)
+      tool_name="$(printf '%s' "$payload" | jq -r '.tool_name // empty' 2>/dev/null)"
+      case "$tool_name" in
+        AskUserQuestion) rm -f "$ASK_DIR/$sess" "$ASK_DIR/$sess.tmp" 2>/dev/null ;;
+        ExitPlanMode)    rm -f "$PLAN_DIR/$sess" "$PLAN_DIR/$sess.tmp" 2>/dev/null ;;
+      esac ;;
+    UserPromptSubmit|Stop|SessionEnd) _clear_sidecars ;;
+  esac
+fi
+
 [ -n "$tty" ] && [ -w "$tty" ] || exit 0
 
 if [ -n "$icon" ]; then title="$icon $sess"; else title="$sess"; fi
