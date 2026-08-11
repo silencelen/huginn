@@ -479,3 +479,17 @@ sed 's/^/  /' "$LOG.probe"; cat "$LOG.probe" >> "$LOG"
 [ "$PROBE_RC" = 0 ] || { echo "FAIL: the updater could not fetch and verify $VERSION" >&2; exit 1; }
 
 echo "== $VERSION live on $BASE_URL$FEED =="
+
+# ------------------------------------------------- GitHub Release (best-effort)
+# Mirror to GitHub: tag desktop-v<version>, notes from app-desktop/CHANGELOG.md,
+# the exact staged installers as assets. Best-effort — the channel publish above
+# is the release; a GitHub hiccup must not fail it. Skip: HUGINN_NO_GH_RELEASE=1.
+if [ "${HUGINN_NO_GH_RELEASE:-}" != 1 ]; then
+  if scripts/github-release.sh desktop "$VERSION" \
+       "$CHANNEL_DIR/$EXE#Windows installer (NSIS, per-user)" \
+       "$CHANNEL_DIR/$DEB#Linux .deb (amd64)"; then
+    echo "GitHub release desktop-v$VERSION updated"
+  else
+    echo "WARNING: GitHub release failed — the $FEED publish above is unaffected" >&2
+  fi
+fi

@@ -60,6 +60,26 @@ ground rules differ by half:
   (the Android vector drawables, the desktop's `RavenMark.kt`). Change the path, chase
   the list.
 
+## Cutting a release
+
+Each component versions independently and its changelog is the source of the
+release notes — write the `## <version>` section first, or the tooling refuses:
+
+- **CLI / server core**: bump both `client/huginn.{sh,ps1}` (they stay in
+  lockstep), add the `CHANGELOG.md` section, then
+  `scripts/github-release.sh core X.Y.Z` (tags `vX.Y.Z`, cuts the GitHub
+  release from the section).
+- **Android app**: `mobile/scripts/ship.sh` — publishes to the store *and*
+  mirrors to GitHub (`app-vX.Y.Z` + the signed APK) automatically.
+- **Compose desktop**: `mobile/scripts/release-desktop.sh` — publishes to the
+  update channel *and* mirrors to GitHub (`desktop-vX.Y.Z` + both installers).
+- **Daemon**: deploys are not releases; when a version is worth marking,
+  `scripts/github-release.sh appd X.Y.Z` (notes via
+  `HUGINN_RELEASE_NOTES_FILE` if there's no changelog section).
+
+The GitHub mirror is best-effort by design: the store/channel publish is the
+release, and a GitHub outage must not fail it.
+
 ## Workflow
 
 1. Fork → branch → change.
