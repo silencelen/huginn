@@ -26,7 +26,17 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
-      - run: node --test server/appd/test/
+      # Explicit glob, same as deploy.sh: a bare directory arg is MODULE_NOT_FOUND
+      # to node --test, and a glob matching nothing would exit 0 having run zero
+      # tests — so the count is asserted too, exactly like the deploy gate.
+      # Redirect, never pipe: `| tee` under bash-without-pipefail returns tee's 0
+      # and a red suite reads green.
+      - run: |
+          node --test server/appd/test/*.test.js > /tmp/appd-tests.tap 2>&1 && RC=0 || RC=$?
+          cat /tmp/appd-tests.tap
+          [ "$RC" -eq 0 ] || exit "$RC"
+          PASSED=$(grep -oE '^# pass [0-9]+' /tmp/appd-tests.tap | grep -oE '[0-9]+')
+          [ "${PASSED:-0}" -gt 0 ] || { echo "zero tests ran"; exit 1; }
       - run: node --check server/appd/huginn-appd.js
 
   shell:
