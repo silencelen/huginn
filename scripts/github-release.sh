@@ -19,6 +19,15 @@
 # re-uploaded with --clobber. A missing tag is created at HEAD (override with
 # HUGINN_RELEASE_REF=<commit>) and pushed.
 #
+# Retro-cutting an old version (measured 2026-08-10): the Releases page sorts and
+# dates each release by `createdAt`, which GitHub derives from the TAG OBJECT's
+# tagger date — so create the tag with
+#   GIT_COMMITTER_DATE=<the commit's own date> git tag -a vX.Y.Z <commit>
+# and the release lands at its authentic point in the timeline. `publishedAt` is
+# stamped by GitHub at publish time and cannot be backdated (API-visible only).
+# NOTE: deleting a tag out from under an existing release turns that release into
+# a DRAFT — re-dating means delete release -> retag -> re-run this script.
+#
 # The "Latest" badge follows the core component by default (that is what the
 # README leads with); HUGINN_RELEASE_LATEST=1/0 overrides either way.
 #
