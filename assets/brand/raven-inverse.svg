@@ -1,11 +1,8 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 108 108">
-  <!-- App-icon master: the dark raven on the bone tile. Derives the devstore
-       listing icon, the Windows .ico and the Linux .png. The raven is dark and
-       the tile light — a bone-white raven is not a raven. See raven.svg for the
-       canonical path; keep the two in sync. -->
-  <rect width="108" height="108" fill="#E8E2DA"/>
+  <!-- The mark in bone, for dark surfaces (dark-theme README, terminals,
+       monochrome trays). Same path as raven.svg; keep in sync. -->
   <g transform="translate(2,11)">
-    <path fill="#161310" fill-rule="evenodd" d="
+    <path fill="#E8E2DA" fill-rule="evenodd" d="
       M94,32
       C87,27.5 80,25.8 74,25.5
       C72.5,19.5 64,17 58.5,19.3

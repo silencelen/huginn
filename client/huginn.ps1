@@ -3,9 +3,9 @@
 #     if (Test-Path "$HOME\.huginn\huginn.ps1") { . "$HOME\.huginn\huginn.ps1" }
 # Targets the `huginn` SSH alias by default; override per-device with:  $env:HUGINN_HOST = 'my-host'
 # Self-update with:  huginn update   (pulls this file from the repo; gh -> scp fallback)
-# Version: 0.6.0
+# Version: 0.7.0
 
-$script:HUGINN_VERSION = '0.6.0'
+$script:HUGINN_VERSION = '0.7.0'
 $script:HUGINN_REPO    = 'silencelen/huginn'
 
 # A session name is letters, digits, and underscore only - no '-', '*', spaces or
@@ -90,9 +90,17 @@ function huginn {
   if ($args.Count -eq 0) {
     _Huginn-Attach -H $H
   } elseif ($args[0] -in '?','help','/help','-h','--help') {
-    Write-Host @"
+    # Banner in a SINGLE-quoted here-string: the art must reach the terminal
+    # verbatim, and in an expandable one PowerShell would treat its punctuation
+    # as escapes. The body below stays expandable for $script:HUGINN_REPO.
+    Write-Host @'
 
-huginn - remote Claude Code node.  aliases: rclaude, rcc
+        _
+       (o)==-   huginn - remote Claude Code node.  aliases: rclaude, rcc
+       //\
+    =~/_/
+'@
+    Write-Host @"
 
   huginn                      attach/create the live 'main' session (run claude inside)
   huginn <name>               a separate named session

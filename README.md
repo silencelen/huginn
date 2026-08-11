@@ -1,5 +1,10 @@
 <div align="center">
 
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="assets/brand/raven-inverse.svg">
+  <img src="assets/brand/raven.svg" alt="The Huginn raven" width="120">
+</picture>
+
 <pre>
 ██╗  ██╗██╗   ██╗ ██████╗ ██╗███╗   ██╗███╗   ██╗
 ██║  ██║██║   ██║██╔════╝ ██║████╗  ██║████╗  ██║

@@ -2,4 +2,7 @@
 <resources>
     <color name="huginn_bg">#12100F</color>
     <color name="huginn_ink">#E8E2DA</color>
+    <!-- Launcher tile only. The brand mark is a DARK raven on a bone tile
+         (assets/brand/raven-tile.svg); the app chrome above stays dark. -->
+    <color name="huginn_tile">#E8E2DA</color>
 </resources>

@@ -214,6 +214,11 @@ compose.desktop {
             packageVersion = appVersion
             description = "Huginn desktop client"
             vendor = "silencelen"
+            linux {
+                // The .desktop entry's icon (menus, docks). Generated from
+                // assets/brand/raven-tile.svg by assets/brand/generate.sh.
+                iconFile.set(project.file("packaging/huginn.png"))
+            }
             // The jlink runtime image is minimal by default. java.net.http and
             // java.sql are not needed (Ktor uses OkHttp, no JDBC), but Ktor's
             // OkHttp engine and the coroutines debug agent both want
