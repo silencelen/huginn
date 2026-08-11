@@ -1,9 +1,69 @@
 # Changelog
 
-All notable changes to this project are documented here. Format loosely follows
-[Keep a Changelog](https://keepachangelog.com/); versions use [SemVer](https://semver.org/).
+All notable changes to the **terminal client + server core** (`client/`, `server/`)
+are documented here. The other components version independently and keep their own
+changelogs: the Android app ([`mobile/CHANGELOG.md`](mobile/CHANGELOG.md)), the
+Compose desktop client ([`mobile/app-desktop/CHANGELOG.md`](mobile/app-desktop/CHANGELOG.md)),
+and the deprecated Electron client ([`desktop/CHANGELOG.md`](desktop/CHANGELOG.md)).
+Format loosely follows [Keep a Changelog](https://keepachangelog.com/); versions use
+[SemVer](https://semver.org/).
 
 ## [Unreleased]
+
+## [0.7.0] - 2026-08-10
+
+### Added
+- **The raven.** Huginn's brand is now one dark raven mark everywhere — and the CLI
+  got its share: a small ASCII raven on the help screen in both clients. The canonical
+  vector lives at [`assets/brand/raven.svg`](assets/brand/raven.svg); the Android and
+  desktop apps shipped matching icons the same day (launcher/status-bar, window/taskbar/
+  tray/installer).
+
+### Changed
+- The two clients' version numbers are aligned again (`huginn.ps1` had drifted to
+  reporting 0.6.0 while `huginn.sh` was 0.6.1).
+
+## [0.6.1] - 2026-08-10
+
+### Fixed
+- **`huginn update` no longer trusts whichever host you point at.** The `scp` fallback
+  used to fetch replacement *code* from `$HUGINN_HOST` — a user-settable variable that
+  answers "which box do I drive", routinely repointed at test boxes or mistyped. Fetching
+  now comes from a **pinned** `$HUGINN_UPDATE_HOST` (default: the `huginn` alias), which
+  never follows `$HUGINN_HOST`; overriding it must be deliberate, and the update names the
+  host it trusted on every run.
+
+## [0.6.0] - 2026-07-24
+
+Fixes found by an adversarially-verified review of the huginn node.
+
+### Fixed
+- **Exact tmux targets (`-t =name`).** tmux resolves targets by exact match, then
+  *prefix*, then glob — and a unique prefix resolves silently, so `huginn kill andvari`
+  could destroy a session named `andvariautofill`. Kill, rename, and the reconnect
+  client-count all anchor with `=` now; a typo fails loudly instead of hitting a
+  neighbor.
+- **Reconnect no longer resurrects a killed session.** Killing a session from one device
+  while another's reconnect loop was mid-backoff used to recreate it (with a brand-new
+  `claude` quietly burning quota). The loop checks `has-session` first and exits cleanly
+  when the session is gone.
+- **Fast-fail on instant failures**, bounded by duration rather than exit code: three
+  consecutive sub-5-second exits stop the loop and point at the real error instead of
+  scrolling it away with endless "link dropped" retries.
+- **Safer self-update in both clients**: syntax-check before install, `.bak` of the
+  previous version, `gh` exit code checked, no BOM written on the PowerShell path,
+  `scp -o BatchMode=yes` so a keyless device fails instead of prompting mid-update.
+- PowerShell 5.1: `-p`/`-y` one-shots base64-encode the remote script (5.1 mangles
+  embedded quotes when marshalling native arguments, which silently dropped the persona
+  *and* the tool grant).
+- Session names validated on `kill`/`rename`; the bash reconnect backoff no longer
+  overshoots its 15s cap.
+
+### Changed
+- Jittered reconnect backoff (±25%) — every tab shares one tunnel, and an unjittered
+  schedule made all of them re-handshake on the identical second after a relay flap.
+- `ConnectTimeout=10`, so an unreachable host reports promptly instead of appearing
+  frozen for minutes.
 
 ## [0.5.0] - 2026-07-01
 
@@ -16,6 +76,14 @@ All notable changes to this project are documented here. Format loosely follows
   Date math runs server-side via GNU `date`, so behavior is identical regardless of the
   client OS/date flavor. Tab completion (bash + PowerShell) offers the new keywords after
   `usage`/`cost`/`ccusage`.
+
+## [0.4.1] - 2026-06-23
+
+### Fixed
+- **Session names are case-insensitive.** `huginn Test` and `huginn test` now resolve to
+  the same tmux session instead of silently creating two. Names are lowercased before any
+  tmux-facing call in both clients, and host-side `cc` lowercases too as a backstop for
+  older clients.
 
 ## [0.4.0] - 2026-06-18
 
@@ -129,6 +197,13 @@ Initial public release.
 - **Provisioning**: Proxmox LXC template + a generic "any Debian/Ubuntu host" guide.
 - **Docs**: README, Setup, Usage, Architecture, FAQ, Security model, Contributing.
 
-[Unreleased]: https://github.com/silencelen/huginn/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/silencelen/huginn/compare/v0.7.0...HEAD
+[0.7.0]: https://github.com/silencelen/huginn/compare/v0.6.1...v0.7.0
+[0.6.1]: https://github.com/silencelen/huginn/compare/v0.6.0...v0.6.1
+[0.6.0]: https://github.com/silencelen/huginn/compare/v0.5.0...v0.6.0
+[0.5.0]: https://github.com/silencelen/huginn/compare/v0.4.1...v0.5.0
+[0.4.1]: https://github.com/silencelen/huginn/compare/v0.4.0...v0.4.1
+[0.4.0]: https://github.com/silencelen/huginn/compare/v0.3.0...v0.4.0
+[0.3.0]: https://github.com/silencelen/huginn/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/silencelen/huginn/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/silencelen/huginn/releases/tag/v0.1.0
