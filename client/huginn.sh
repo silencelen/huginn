@@ -6,7 +6,7 @@
 # Self-update with:  huginn update   (pulls this file from the repo; gh -> scp fallback)
 # Version: 0.7.1
 
-HUGINN_VERSION='0.7.1'
+HUGINN_VERSION='0.8.0'
 HUGINN_REPO='silencelen/huginn'
 # Where `huginn update` may fetch a replacement for THIS FILE, which it then
 # sources into the live shell. Pinned, and deliberately NOT $HUGINN_HOST:
@@ -30,6 +30,16 @@ _huginn_tmux_target() { printf '=%s' "$1"; }
 # and 'test' resolve to the same session (tmux itself is case-sensitive). Canonicalized
 # here for every tmux-facing path AND again server-side in cc as the backstop.
 _huginn_canon_name() { printf '%s' "${1,,}"; }
+
+# Reach huginn-appd, which listens on the HOST's loopback. The bearer token is
+# root-only on the host, so the call runs THERE (over the ssh alias) and only the
+# result comes back — the token never touches a client device. $1=method $2=path.
+# Prints the raw JSON body; non-zero exit on any HTTP error or an unreachable
+# daemon, which the callers use to fall back.
+_huginn_appd() {
+  local H="${HUGINN_HOST:-huginn}"
+  ssh -T "$H" "curl -sf -X $1 -H \"Authorization: Bearer \$(cat /etc/huginn-appd/token 2>/dev/null)\" \"http://127.0.0.1:8787$2\"" 2>/dev/null
+}
 
 # --- auto-reconnecting attach ---
 # The session lives in tmux ON the host, so a dropped link (laptop sleep, wifi
@@ -117,7 +127,9 @@ EOF
   huginn list | ls            list sessions + attach status
   huginn status | st          health: uptime, auth, sessions, disk
   huginn rename <old> <new>   rename a session (alias: mv)
-  huginn kill <name>          end a session
+  huginn end <name>           soft end: ask Claude to wrap up + commit, then
+                              (if auto-end is on) end it once it goes idle
+  huginn kill <name>          hard end: stop the session now
   huginn -p "question"        one-shot headless query (reasoning + memory, read-only)
   huginn -y "task"            one-shot that may use tools (bash/files/web + memory)
   huginn usage [args]         Claude Code token/cost report (ccusage; default: daily)
@@ -232,16 +244,45 @@ EOF
       [ -n "$2" ] || { echo "usage: huginn kill <name>" >&2; return 1; }
       _huginn_valid_name "$2" || { echo "huginn: invalid session name '$2' (use letters, digits, underscore; no - or *)" >&2; return 1; }
       local kn; kn="$(_huginn_canon_name "$2")"
-      # '=' anchor: without it 'huginn kill andvari' kills 'andvariautofill'.
-      ssh -T "$H" "tmux kill-session -t '$(_huginn_tmux_target "$kn")' && echo 'killed: $kn'" ;;
+      # Prefer the daemon's DELETE: it also removes the orphaned /run state file
+      # and releases the pane lease, which a bare tmux kill-session leaves behind
+      # (Claude's SessionEnd hook never fires on a kill). Fall back to tmux if the
+      # daemon is unreachable — kill must work even when appd is down.
+      # '=' anchor on the fallback: without it 'huginn kill andvari' kills 'andvariautofill'.
+      if _huginn_appd DELETE "/v1/sessions/$kn" >/dev/null 2>&1; then
+        echo "killed: $kn"
+      else
+        ssh -T "$H" "tmux kill-session -t '$(_huginn_tmux_target "$kn")' && echo 'killed: $kn'"
+      fi ;;
+    end)
+      [ -n "$2" ] || { echo "usage: huginn end <name>" >&2; return 1; }
+      _huginn_valid_name "$2" || { echo "huginn: invalid session name '$2' (use letters, digits, underscore; no - or *)" >&2; return 1; }
+      local en; en="$(_huginn_canon_name "$2")"
+      # Soft end: ask Claude to wrap up (finish, commit, prepare to end) and — when
+      # auto-end is on for the host — end the session once it settles. This is a
+      # DAEMON feature (it types into the pane and watches state), so there is no
+      # tmux fallback; the phrase is whatever the host is configured to send.
+      local r; r="$(_huginn_appd POST "/v1/sessions/$en/soft-end")" || {
+        echo "huginn: soft-end failed for '$en' (is huginn-appd running? is the session a live Claude pane?)" >&2; return 1; }
+      local phrase auto; phrase="$(printf '%s' "$r" | sed -n 's/.*"phrase":"\([^"]*\)".*/\1/p')"
+      printf '%s' "$r" | grep -q '"auto":true' && auto=' (auto-ends when it goes idle)' || auto=''
+      echo "soft-ended '$en': sent \"${phrase:-wrap-up phrase}\"${auto}" ;;
     -p|-y)
       local mode="$1"; shift
       [ "$#" -gt 0 ] || { echo "usage: huginn $mode \"your prompt\"" >&2; return 1; }
       local q="$*"; q=${q//\'/\'\\\'\'}            # POSIX single-quote escape
-      local tools="mcp__mempalace"
-      [ "$mode" = "-y" ] && tools="Bash Read Edit Write Glob Grep WebFetch mcp__mempalace"
+      # Kept in step with huginn-appd's ask/act tool sets (server/appd TOOLS/
+      # DISALLOWED): -p is read-only reasoning + web + memory, -y may also mutate.
+      # The DISALLOWED deny-list is the real fence — --allowedTools only
+      # auto-approves, so without it a -p query could still be granted Bash.
+      local tools disallow
+      if [ "$mode" = "-y" ]; then
+        tools="Bash Read Edit Write Glob Grep WebFetch WebSearch mcp__mempalace"; disallow=""
+      else
+        tools="mcp__mempalace WebFetch WebSearch"; disallow="Bash Edit Write NotebookEdit"
+      fi
       # Persona-aware: if the host carries persona.md, inject it + memory tools; else plain headless query.
-      ssh -T "$H" "cd \"\${HUGINN_WORKDIR:-\$HOME}\" 2>/dev/null || cd \"\$HOME\"; P=\"\$(cat /usr/local/share/huginn-cli/persona.md 2>/dev/null)\"; if [ -n \"\$P\" ]; then echo '$q' | claude -p --append-system-prompt \"\$P\" --allowedTools '$tools'; else echo '$q' | claude -p; fi" ;;
+      ssh -T "$H" "cd \"\${HUGINN_WORKDIR:-\$HOME}\" 2>/dev/null || cd \"\$HOME\"; P=\"\$(cat /usr/local/share/huginn-cli/persona.md 2>/dev/null)\"; D=''; [ -n '$disallow' ] && D=\"--disallowedTools '$disallow'\"; if [ -n \"\$P\" ]; then echo '$q' | claude -p --append-system-prompt \"\$P\" --allowedTools '$tools' \$D; else echo '$q' | claude -p; fi" ;;
     *)
       _huginn_valid_name "$1" || { echo "huginn: invalid session name '$1' (use letters, digits, underscore; no - or *). Did you mean a subcommand? Try 'huginn help'." >&2; return 1; }
       _huginn_attach "$H" "$1" ;;
@@ -270,13 +311,13 @@ _huginn_complete() {
   local cur prev cmds
   cur="${COMP_WORDS[COMP_CWORD]}"
   prev="${COMP_WORDS[COMP_CWORD-1]}"
-  cmds="list ls status st solo rename mv kill -p -y usage cost update version help"
+  cmds="list ls status st solo rename mv kill end -p -y usage cost update version help"
   if [ "$COMP_CWORD" -eq 1 ]; then
     # first word: subcommands + live session names (bare name attaches to it)
     mapfile -t COMPREPLY < <(compgen -W "$cmds $(_huginn_sessions)" -- "$cur")
   else
     case "$prev" in
-      kill|solo|rename|mv)   # these take an existing session name
+      kill|end|solo|rename|mv)   # these take an existing session name
         mapfile -t COMPREPLY < <(compgen -W "$(_huginn_sessions)" -- "$cur") ;;
       usage|cost|ccusage)    # date shortcuts + raw report names
         mapfile -t COMPREPLY < <(compgen -W "today yesterday week month daily monthly weekly session blocks statusline" -- "$cur") ;;
