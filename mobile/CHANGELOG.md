@@ -1,5 +1,35 @@
 # Huginn changelog
 
+## 2.57.0 / appd 2.54.0 — 2026-08-10
+
+### The conversation holds the whole session
+
+The Conversation tab showed the most recent part and said so, with no way to ask
+for the rest. On a long session that was a sliver — measured on a real transcript
+here, 51 messages out of 3452.
+
+Scroll to the top and there is **Load earlier messages**, one page per tap, until
+you reach the beginning. That warning belongs to the **Screen** tab, where it
+stays and is true: a Claude pane runs on the terminal's alternate screen and has
+no scrollback at all. The transcript always held the full history; only the
+reader was capped.
+
+Needs huginn-appd 2.54.0, which is deployed.
+
+### Things that used to go blank a few seconds after opening a session
+
+The model control fell back to a placeholder, and the composer showed Send on a
+session that was working (or Stop on one that had finished). Both were the same
+cause: the screen keeps session details that a transcript update does not repeat,
+and this app was quietly dropping four of them each time it caught up — including
+the one the Send/Stop control is derived from. Worst on a folded phone, where the
+sessions list is not on screen to correct it.
+
+### A delivered message stops saying it is still waiting
+
+2.56.0's notes claimed this and were wrong: the fix landed in shared code that
+this app was not using. It is genuinely fixed now.
+
 ## 2.56.0 / appd 2.53.1 — 2026-08-04
 
 ### A waiting message stops saying it is still waiting
