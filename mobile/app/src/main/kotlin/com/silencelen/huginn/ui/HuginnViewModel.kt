@@ -44,6 +44,9 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.SharingStarted
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
@@ -1153,11 +1156,49 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
+    /**
+     * The byte the OLDEST page on screen begins at, and the handle for reading
+     * further back. Null until a page lands; 0 once the whole conversation is in
+     * view.
+     */
+    private var historyStart: Long? = null
+
+    private val _loadingHistory = MutableStateFlow(false)
+    val loadingHistory: StateFlow<Boolean> = _loadingHistory.asStateFlow()
+
+    /** True while there is still conversation above what is on screen. */
+    val hasEarlier: StateFlow<Boolean> = _transcript
+        .map { (it?.windowStart ?: 0L) > 0L }
+        .stateIn(viewModelScope, SharingStarted.Eagerly, false)
+
+    /**
+     * Reads the page before the oldest one on screen and puts it in front.
+     *
+     * A cold open only gets the tail, and on a long session that is a sliver of
+     * it — 51 events out of 3452 on a real transcript here. Pages abut, because
+     * a windowStart is a record boundary, so this neither repeats nor skips.
+     */
+    fun loadEarlierTranscript(name: String) {
+        val until = historyStart ?: _transcript.value?.windowStart ?: return
+        if (until <= 0L || _loadingHistory.value) return
+        _loadingHistory.value = true
+        viewModelScope.launch {
+            runCatching { client.sessionTranscript(name, until = until) }
+                .onSuccess { older ->
+                    historyStart = older.windowStart
+                    _transcript.value = prependTranscriptPage(_transcript.value, older)
+                }
+                .onFailure { _toast.value = errText(it) }
+            _loadingHistory.value = false
+        }
+    }
+
     /** Tails the session's Claude transcript: the structured conversation view. */
     fun startTranscriptPolling(name: String) {
         transcriptJob?.cancel()
         _transcript.value = null
         _transcriptError.value = null
+        historyStart = null
         transcriptJob = viewModelScope.launch {
             var offset: Long? = null
             while (isActive) {
@@ -1165,27 +1206,20 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
                 r.onSuccess { page ->
                     _transcriptError.value = null
                     offset = page.nextOffset
-                    val cur = _transcript.value
-                    _transcript.value = if (cur == null) page
-                    else page.copy(
-                        // Keep what the tail read no longer carries. Bounded:
-                        // a session left open on a busy day would otherwise grow
-                        // this list without limit, copying it whole every poll.
-                        events = mergeTranscript(cur.events, page.events, MAX_EVENTS),
-                        // A tail read only reports fields whose records happen to
-                        // fall inside it, so EVERY session-level field has to be
-                        // carried forward or it reverts to null seconds after the
-                        // screen opens. Missing `effort` here is exactly why the
-                        // effort control kept falling back to a placeholder.
-                        title = page.title ?: cur.title,
-                        model = page.model ?: cur.model,
-                        effort = page.effort ?: cur.effort,
-                        gitBranch = page.gitBranch ?: cur.gitBranch,
-                        permissionMode = page.permissionMode ?: cur.permissionMode,
-                        cwd = page.cwd ?: cur.cwd,
-                        lastActivityTs = page.lastActivityTs ?: cur.lastActivityTs,
-                        truncated = cur.truncated,
-                    )
+                    // The first page decides where history begins; every tail
+                    // read after it is BELOW that and must not move the handle.
+                    if (historyStart == null) historyStart = page.windowStart
+                    // :core's merge, not a copy of it. This was hand-rolled here
+                    // and had quietly fallen behind the shared one in ways the
+                    // screen could see: it dropped `state`, `modelDisplay`,
+                    // `mode` and `claudeSessionId` on every tail read that did not
+                    // happen to contain those records — so the model control fell
+                    // back to a placeholder and the Send/Stop flag, which is
+                    // derived from `state`, reverted seconds after the screen
+                    // opened. It also never learned to clear the `queued` badge
+                    // when the daemon reported a delivery, so a message that had
+                    // landed went on claiming to be waiting.
+                    _transcript.value = mergeTranscriptPage(_transcript.value, page, MAX_EVENTS)
                 }.onFailure { e ->
                     if (_transcript.value == null) {
                         _transcriptError.value = when {
