@@ -45,7 +45,13 @@ class ShortcutsTest {
     fun `every cheat sheet row names a real binding`() {
         // The help text is the contract the user reads; it must not drift from
         // the table underneath it.
-        assertEquals(11, SHORTCUT_HELP.size)
+        //
+        // Two rows — Enter and Shift+Enter — are deliberately NOT in the Shortcut
+        // table: they are handled inside the composers, because what Enter means
+        // depends on having focus in a text field. They are listed here anyway,
+        // since "how do I send this" is the first thing anyone needs and the last
+        // place they would look is a table of window-level shortcuts.
+        assertEquals(13, SHORTCUT_HELP.size)
         assertTrue(SHORTCUT_HELP.all { it.first.isNotBlank() && it.second.isNotBlank() })
         // The pointer half of the model. It is listed beside the keys because the
         // verb surface, the state legend and multi-select all live on the mouse,
