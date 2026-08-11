@@ -58,6 +58,8 @@ fun SessionControls(
     models: List<ModelChoice>,
     onCommand: (String) -> Unit,
     onCycleMode: () -> Unit,
+    contextPercent: Int? = null,
+    compacting: Boolean = false,
 ) {
     Surface(color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)) {
         Row(
@@ -68,6 +70,11 @@ fun SessionControls(
             horizontalArrangement = Arrangement.spacedBy(6.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
+            // Status readouts lead so they stay visible if the controls scroll:
+            // the "Compacting…" marker and the "context used" meter (both render
+            // nothing when there's nothing to say).
+            if (compacting) CompactingChip()
+            ContextMeter(contextPercent)
             PickerChip(
                 label = prettyModel(model),
                 options = modelOptions(models),

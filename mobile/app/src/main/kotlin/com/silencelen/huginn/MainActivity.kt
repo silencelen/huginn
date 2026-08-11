@@ -1060,6 +1060,8 @@ fun HuginnApp(
                                                 onClick = { surfaceMenu = false; vm.forceFit() })
                                             DropdownMenuItem(text = { Text("Interrupt (Esc)") },
                                                 onClick = { surfaceMenu = false; vm.interruptSession(d.name) })
+                                            DropdownMenuItem(text = { Text("Compact context") },
+                                                onClick = { surfaceMenu = false; vm.compactSession(d.name) })
                                             DropdownMenuItem(text = { Text("Wind down…") },
                                                 onClick = { surfaceMenu = false; softEndTarget = d.name })
                                             DropdownMenuItem(text = { Text("Kill session…") },

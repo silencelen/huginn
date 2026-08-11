@@ -168,6 +168,16 @@ data class SoftEndResult(
     val queued: Boolean = false,
 )
 
+/** What POST /v1/sessions/:name/compact reports back (the "context manager" action). */
+@Serializable
+data class CompactResult(
+    val ok: Boolean = false,
+    /** The command the host typed — always "/compact". */
+    val sent: String? = null,
+    /** True when the session was mid-turn, so /compact queued until the turn ends. */
+    val queued: Boolean = false,
+)
+
 @Serializable
 data class Screen(
     val width: Int = 80,
@@ -201,6 +211,10 @@ data class Screen(
     val liveModel: String? = null,
     val liveMode: String? = null,
     val liveBranch: String? = null,
+    /** Context-window pressure (0-100) from the statusline; null if unknown. */
+    val contextPercent: Int? = null,
+    /** The session is compacting its context right now. */
+    val compacting: Boolean = false,
 )
 
 /**

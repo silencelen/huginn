@@ -82,6 +82,7 @@ import com.silencelen.huginn.desktop.attach.composeMessage
 import com.silencelen.huginn.desktop.attach.rememberAttachmentController
 import com.silencelen.huginn.desktop.ui.common.DeskType
 import com.silencelen.huginn.desktop.ui.common.Space
+import com.silencelen.huginn.desktop.ui.common.Tip
 import com.silencelen.huginn.desktop.ui.session.ControlAction
 import com.silencelen.huginn.desktop.ui.session.ControlPicker
 import com.silencelen.huginn.desktop.ui.session.WorkPanel
@@ -90,6 +91,8 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.launch
 import com.silencelen.huginn.data.ModelChoice
+import com.silencelen.huginn.ui.CompactingChip
+import com.silencelen.huginn.ui.ContextMeter
 import com.silencelen.huginn.ui.DegradedAskCard
 import com.silencelen.huginn.ui.HistoryWalk
 import com.silencelen.huginn.ui.exitRecallIfDiverged
@@ -201,6 +204,10 @@ fun SessionView(store: AppStore, name: String) {
             mode = screen?.liveMode ?: page?.permissionMode ?: row?.permissionMode,
             state = row?.state,
             branch = page?.gitBranch,
+            // Live pane first (it moves every poll); the list row is the fallback
+            // for the instant before the first screen arrives.
+            contextPercent = screen?.contextPercent ?: row?.contextPercent,
+            compacting = screen?.compacting ?: row?.compacting ?: false,
             leased = controller.leasedHere && screen?.sizeLeased == true,
             cols = screen?.width,
             rows = screen?.height,
@@ -295,6 +302,9 @@ fun SessionView(store: AppStore, name: String) {
                         answering = answering,
                         note = answerNote,
                         onAnswer = controller::answerDegraded,
+                        // A multi-part question can't be tapped from here — jump to
+                        // the Screen tab, where its parts are stepped through.
+                        onOpenScreen = { controller.openTab(SessionTab.SCREEN) },
                     )
                 }
             }
@@ -340,6 +350,8 @@ private fun SessionHeader(
     mode: String?,
     state: String?,
     branch: String?,
+    contextPercent: Int?,
+    compacting: Boolean,
     leased: Boolean,
     cols: Int?,
     rows: Int?,
@@ -358,6 +370,14 @@ private fun SessionHeader(
         Text(title, style = MaterialTheme.typography.titleSmall)
         Muted(name, Modifier.padding(start = 10.dp))
         Spacer(Modifier.weight(1f))
+        if (compacting) CompactingChip(Modifier.padding(end = 10.dp))
+        // "Context window used" — the readout Claude auto-compacts against; sits
+        // with the other status marks, only when the host reported a percentage.
+        if (contextPercent != null) {
+            Tip("Context window used") {
+                ContextMeter(contextPercent, Modifier.padding(end = 10.dp))
+            }
+        }
         // Geometry only matters while WE are holding the window to our shape —
         // saying so is the honest way to show that this window is doing something
         // to somebody else's terminal.

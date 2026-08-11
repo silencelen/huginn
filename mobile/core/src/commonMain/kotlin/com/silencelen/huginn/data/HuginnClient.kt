@@ -488,6 +488,15 @@ class HuginnClient(
             if (auto != null) put("auto", JsonPrimitive(auto))
         }))
 
+    /**
+     * Compact the session's context (the "context manager" action): the host
+     * types "/compact" into the pane so the owner can reclaim context from a
+     * phone/desktop. 409s when a question is waiting or the pane has no recorded
+     * Claude state (a plain shell would run "/compact" as a command).
+     */
+    suspend fun compactSession(name: String): CompactResult =
+        decode(post("/v1/sessions/$name/compact", body = buildJsonObject {}))
+
     suspend fun renameSession(from: String, to: String) {
         post("/v1/sessions/$from/rename", body = jsonBody("name" to to))
     }

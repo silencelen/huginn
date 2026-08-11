@@ -49,6 +49,8 @@ import com.silencelen.huginn.desktop.ui.common.LoadingBlock
 import com.silencelen.huginn.desktop.ui.common.RowMenu
 import com.silencelen.huginn.desktop.ui.common.Selection
 import com.silencelen.huginn.desktop.ui.common.SessionVerbs
+import com.silencelen.huginn.ui.CompactingChip
+import com.silencelen.huginn.ui.ContextBadge
 import com.silencelen.huginn.desktop.ui.common.Space
 import com.silencelen.huginn.desktop.ui.common.Tints
 import com.silencelen.huginn.desktop.ui.common.Tip
@@ -263,6 +265,9 @@ private fun SessionRow(
                 overflow = TextOverflow.Ellipsis,
                 modifier = Modifier.weight(1f),
             )
+            // A session mid-compaction gets the marker on the first line, where it
+            // reads at a glance in the Conversations list.
+            if (session.compacting) CompactingChip(Modifier.padding(start = Space.unit))
             Tip(timeTip("Last pane activity", session.activityAt, now)) {
                 Muted(relTime(session.activityAt), Modifier.padding(start = Space.unit))
             }
@@ -280,6 +285,13 @@ private fun SessionRow(
             if (work.isNotEmpty()) {
                 Tip(work) {
                     Muted(bgLabel(session.bgShells, session.bgAgents), Modifier.padding(end = Space.unit))
+                }
+            }
+            // "ctx N%" sits with the row's other metadata, only when the host
+            // reported a percentage (no statusline / not a Claude pane → absent).
+            if (session.contextPercent != null) {
+                Tip("Context window used") {
+                    ContextBadge(session.contextPercent, Modifier.padding(end = Space.unit))
                 }
             }
             session.preview.firstOrNull()?.trim()?.takeIf { it.isNotEmpty() }?.let {

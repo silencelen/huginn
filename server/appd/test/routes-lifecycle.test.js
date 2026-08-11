@@ -150,6 +150,64 @@ test('soft-end 404s an unknown session', async () => {
   assert.equal(status, 404);
 });
 
+test('compact types the /compact command when idle', async () => {
+  const name = mkSession('cmpz');
+  writeState(name, 'idle');
+  const { status, body } = await api(`/v1/sessions/${name}/compact`, {
+    method: 'POST', body: JSON.stringify({}),
+  });
+  assert.equal(status, 200);
+  assert.equal(body.sent, '/compact');
+  assert.equal(body.queued, false);
+  await wait(300);
+  assert.match(capture(name), /\/compact/);
+});
+
+test('compact reports queued mid-turn', async () => {
+  const name = mkSession('cmpq');
+  writeState(name, 'running');            // a turn is in flight
+  const { status, body } = await api(`/v1/sessions/${name}/compact`, {
+    method: 'POST', body: JSON.stringify({}),
+  });
+  assert.equal(status, 200);
+  assert.equal(body.queued, true, 'mid-turn /compact queues until the turn ends');
+});
+
+test('compact refuses while a question is waiting', async () => {
+  const name = mkSession('cmpa');
+  writeState(name, 'attention');
+  const { status } = await api(`/v1/sessions/${name}/compact`, {
+    method: 'POST', body: JSON.stringify({}),
+  });
+  assert.equal(status, 409, 'a digit-prompt must not receive "/compact" as prose');
+});
+
+test('compact refuses a pane with no Claude state', async () => {
+  const name = mkSession('cmps');           // no state file written
+  const { status } = await api(`/v1/sessions/${name}/compact`, {
+    method: 'POST', body: JSON.stringify({}),
+  });
+  assert.equal(status, 409, 'a plain shell would RUN "/compact" as a command');
+});
+
+test('a fresh compacting marker reads as compacting; a stale one does not', async () => {
+  const name = mkSession('cmpk');
+  writeState(name, 'idle');
+  const dir = path.join(stateDir, 'compacting');
+  fs.mkdirSync(dir, { recursive: true });
+  const marker = path.join(dir, name);
+
+  fs.writeFileSync(marker, '');             // PreCompact just fired
+  let r = await api(`/v1/sessions/${name}/screen`);
+  assert.equal(r.body.compacting, true);
+
+  // If PostCompact never fires, the marker must not pin "Compacting…" forever.
+  const old = Date.now() / 1000 - 10 * 60;  // 10 min ago; TTL is 5
+  fs.utimesSync(marker, old, old);
+  r = await api(`/v1/sessions/${name}/screen`);
+  assert.equal(r.body.compacting, false, 'a marker older than the TTL is stale, not stuck');
+});
+
 test('auto soft-end kills the session once idle has held', async () => {
   const name = mkSession('auto');
   writeState(name, 'running');

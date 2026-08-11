@@ -83,6 +83,17 @@ class HuginnClientTest {
     }
 
     @Test
+    fun `compactSession posts to the compact route and decodes queued`() = runTest {
+        val r = ok("""{"ok":true,"sent":"/compact","queued":true}""")
+            .compactSession("jtyper")
+        assertEquals("http://appd.test/v1/sessions/jtyper/compact", seen.single().url.toString())
+        assertEquals("POST", seen.single().method.value)
+        assertTrue(r.ok)
+        assertTrue(r.queued)
+        assertEquals("/compact", r.sent)
+    }
+
+    @Test
     fun `uploadBytes fetches by name, with auth, returning the raw bytes`() = runTest {
         val payload = byteArrayOf(1, 2, 3, 4)
         val got = client { respond(payload) }.uploadBytes("up-1-ab.jpg")

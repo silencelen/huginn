@@ -1017,6 +1017,22 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
+    /**
+     * Compact the session's context (the "context manager" action): types
+     * "/compact" into the pane. 409s when a question is waiting or the pane has no
+     * recorded Claude state (a plain shell would run "/compact" as a command).
+     */
+    fun compactSession(name: String) {
+        viewModelScope.launch {
+            runCatching { client.compactSession(name) }
+                .onSuccess { r ->
+                    _toast.value = if (r.queued) "Compacting $name after this turn" else "Compacting $name…"
+                    refreshSessions()
+                }
+                .onFailure { _toast.value = errText(it) }
+        }
+    }
+
     fun renameSession(from: String, to: String) {
         val canon = to.trim().lowercase()
         // Matches what the daemon will route to (NAME_RE): a leading alphanumeric

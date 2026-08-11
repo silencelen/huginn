@@ -110,7 +110,7 @@ class DesktopSurfaceTest {
     @Test
     fun `a session menu names the key its interrupt sends`() {
         assertEquals(
-            listOf("Open", "Rename…", "Interrupt (Esc)", "Copy session name", "Wind down…", "End session"),
+            listOf("Open", "Rename…", "Interrupt (Esc)", "Copy session name", "Compact context", "Wind down…", "End session"),
             labelsOf(sessionMenu(session(), emptySet(), noSessionVerbs())),
         )
     }
@@ -351,6 +351,6 @@ class DesktopSurfaceTest {
         ChatVerbs(open, rename, stop, copyId, delete)
 
     private fun noSessionVerbs() = SessionVerbs(
-        open = {}, rename = {}, interrupt = {}, copyName = {}, softEnd = {}, kill = {},
+        open = {}, rename = {}, interrupt = {}, copyName = {}, compact = {}, softEnd = {}, kill = {},
     )
 }
