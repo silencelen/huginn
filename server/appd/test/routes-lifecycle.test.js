@@ -292,6 +292,40 @@ test('screen fuses the hook sidecar: hook labels + descriptions, TUI extras flag
   assert.match(body.prompt.fingerprint, /^[0-9a-f]{12}$/);
 });
 
+test('a multi-part AskUserQuestion is NOT tappable — served as a Screen-tab card', async () => {
+  // Three questions in one call. The pane shows question 1; the sidecar carries
+  // all three. Fusion detects questionCount>1 and must NOT offer buttons (the
+  // digit path over-answers), instead a read-only ask card that /answer refuses
+  // so the client routes to the Screen tab.
+  const name = mkSessionWithPane('mq', [
+    '←  ☐ Fruit  ☐ Color  ☐ Size  ✔ Submit  →', '',
+    'Pick a fruit?', '',
+    '❯ 1. Apple', '  2. Banana',
+    '  3. Type something.', '  4. Chat about this', '',
+    'Enter to select · Esc to cancel',
+  ].join('\\n'));
+  writeAskSidecar(name, [
+    { question: 'Pick a fruit?', header: 'Fruit', multiSelect: false,
+      options: [{ label: 'Apple' }, { label: 'Banana' }] },
+    { question: 'Pick a color?', header: 'Color', multiSelect: false,
+      options: [{ label: 'Red' }, { label: 'Green' }] },
+    { question: 'Pick a size?', header: 'Size', multiSelect: false,
+      options: [{ label: 'Small' }, { label: 'Large' }] },
+  ]);
+  await wait(400);
+  const { body } = await api(`/v1/sessions/${name}/screen`);
+  assert.equal(body.prompt, null, 'a multi-part question must not be a tappable prompt');
+  assert.ok(body.ask, 'it is offered as a read-only ask card');
+  assert.equal(body.ask.multiPart, true);
+
+  // A tap reaches /answer and is refused as undetected → client opens Screen tab.
+  const ans = await api(`/v1/sessions/${name}/answer`, {
+    method: 'POST', body: JSON.stringify({ option: 1, fingerprint: body.ask.fingerprint }),
+  });
+  assert.equal(ans.status, 409);
+  assert.equal(ans.body.reason, 'undetected');
+});
+
 test('a sidecar with no readable pane run and attention state yields a degraded card', async () => {
   const name = mkSession('degraded');
   // A pane the detector cannot read as a run (just prose), so fusion has no run.

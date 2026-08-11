@@ -40,7 +40,7 @@ fi
 
 icon=
 case "$event" in
-  UserPromptSubmit|PreToolUse|PostToolUse|SubagentStop) icon="$ICON_RUN" ;;
+  UserPromptSubmit|PreToolUse|PostToolUse|SubagentStop|PreCompact|PostCompact) icon="$ICON_RUN" ;;
   Stop|SessionStart)                                    icon="$ICON_IDLE" ;;
   Notification)
     # permission/input request -> needs you; post-turn idle nudge -> waiting; else attention.
@@ -99,6 +99,21 @@ if [ -n "$st" ]; then
 else
   rm -f "$STATE_DIR/$sess" "$STATE_DIR/$sess.tmp" 2>/dev/null
 fi
+
+# --- compaction marker ------------------------------------------------------
+# PreCompact starts it, PostCompact/Stop/SessionEnd clear it. huginn-appd reads
+# STATE_DIR/compacting/<sess> to show a "compacting…" indicator reliably (the
+# pane spinner only shows it while a screen is actually being captured). No jq
+# needed — it is presence-only.
+COMPACT_DIR="$STATE_DIR/compacting"
+case "$event" in
+  PreCompact)
+    umask 077
+    mkdir -p "$COMPACT_DIR" 2>/dev/null && chmod 700 "$COMPACT_DIR" 2>/dev/null
+    : > "$COMPACT_DIR/$sess" 2>/dev/null ;;
+  PostCompact|Stop|SessionEnd)
+    rm -f "$COMPACT_DIR/$sess" 2>/dev/null ;;
+esac
 
 # --- prompt sidecars: exact AskUserQuestion / ExitPlanMode tool inputs -------
 #
