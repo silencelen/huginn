@@ -581,7 +581,7 @@ fun SettingsScreen(
         Spacer(Modifier.height(8.dp))
         Text("What this app can do", style = MaterialTheme.typography.titleMedium)
         Text(
-            "Chats run on huginn as headless Claude Code turns in ~/netplan. Ask mode has memory " +
+            "Chats run on the host as headless Claude Code turns in its working directory. Ask mode has memory " +
                 "and no tools; Act mode can read, write, run commands and fetch the web. Sessions are " +
                 "the real tmux sessions, so a session you open here is the same one your laptop attaches " +
                 "to; its conversation is read from the session's own Claude Code transcript, and the " +
