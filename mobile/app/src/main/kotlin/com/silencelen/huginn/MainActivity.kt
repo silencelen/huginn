@@ -463,6 +463,8 @@ fun HuginnApp(
     val chatEffort by vm.chatEffort.collectAsState()
     val models by vm.models.collectAsState()
     val transcript by vm.transcript.collectAsState()
+    val hasEarlier by vm.hasEarlier.collectAsState()
+    val loadingHistory by vm.loadingHistory.collectAsState()
     val transcriptError by vm.transcriptError.collectAsState()
     val drafts by vm.drafts.collectAsState()
     val account by vm.account.collectAsState()
@@ -892,6 +894,9 @@ fun HuginnApp(
                 onAttachFile = { vm.attachFile(it, HuginnViewModel.sessionDraftKey(name)) },
                 onClearAttachment = { vm.clearAttachment(HuginnViewModel.sessionDraftKey(name)) },
                 onCopy = { vm.copy(it) },
+                hasEarlier = hasEarlier,
+                loadingHistory = loadingHistory,
+                onLoadEarlier = { vm.loadEarlierTranscript(name) },
             )
         }
         val statusPane: @Composable () -> Unit = {
