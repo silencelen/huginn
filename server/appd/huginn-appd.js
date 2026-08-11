@@ -50,7 +50,7 @@ const pushLib = require('./lib/pushtokens');
 const { trySender } = require('./lib/fcm');
 const { createPending, stepSoftEnd } = require('./lib/softend');
 
-const VERSION = '2.58.0';
+const VERSION = '2.59.0';
 const PORT = Number(process.env.HUGINN_APPD_PORT || 8787);
 const DATA_DIR = process.env.HUGINN_APPD_DATA || '/var/lib/huginn-appd';
 const UPLOADS_DIR = path.join(DATA_DIR, 'uploads');
@@ -664,10 +664,19 @@ function readSidecar(kind, name) {
  * STATE_DIR/compacting/<name> on PreCompact and removes it on PostCompact/Stop —
  * a reliable, poll-independent signal (the pane spinner only shows it while a
  * screen is being captured).
+ *
+ * Backstopped by the marker's mtime: if PostCompact somehow never fires (a
+ * crash, a killed compaction), the marker would otherwise pin "Compacting…" on
+ * forever. No real compaction runs for minutes, so a marker older than the TTL
+ * is treated as stale. The live smoke on 2026-08-11 showed the marker still
+ * present ~6s after /compact, which is why the honest signal needs this guard.
  */
+const COMPACTING_TTL_MS = 5 * 60 * 1000;
 function isCompacting(name) {
-  try { return fs.existsSync(path.join(STATE_DIR, 'compacting', name)); }
-  catch { return false; }
+  try {
+    const st = fs.statSync(path.join(STATE_DIR, 'compacting', name));
+    return (Date.now() - st.mtimeMs) < COMPACTING_TTL_MS;
+  } catch { return false; }
 }
 
 const SIDECAR_TTL_MS = 24 * 60 * 60 * 1000;
@@ -3059,6 +3068,31 @@ const server = http.createServer(async (req, res) => {
       if (auto) softEnds.set(name, createPending(Date.now()));
       else softEnds.delete(name);
       return sendJson(res, 200, { ok: true, phrase, auto, queued });
+    }
+
+    // --- manual context compaction (the "context manager" action)
+    //
+    // Sends the "/compact" slash command into the pane so the owner can reclaim
+    // context from a phone/desktop the same way they would at the keyboard. Same
+    // two guards as /soft-end: refuse when no Claude turn has been recorded (a
+    // plain shell would RUN "/compact" as a command), and never fire while a
+    // question is waiting (it would be typed into the numbered prompt). Sending
+    // mid-turn is allowed — Claude Code queues the command and compacts when the
+    // turn ends — and reported back as `queued` so the client can say so.
+    if ((m = p.match(/^\/v1\/sessions\/([A-Za-z0-9_][A-Za-z0-9_.-]{0,49})\/compact$/)) && req.method === 'POST') {
+      const name = m[1];
+      if (!(await sessionExists(name))) return sendErr(res, 404, 'no such session');
+      const st = readSessionState(name);
+      if (!st) {
+        return sendErr(res, 409, 'no Claude state recorded for this session — it may be a plain shell');
+      }
+      if (st.state === 'attention') {
+        return sendErr(res, 409, 'answer the waiting question first, then compact');
+      }
+      const queued = st.state === 'running';
+      const r = await sendLineToPane(name, '/compact');
+      if (r.err) return sendErr(res, 500, `tmux: ${(r.stderr || '').trim()}`);
+      return sendJson(res, 200, { ok: true, sent: '/compact', queued });
     }
 
     // --- answering a question from a notification, without opening the app

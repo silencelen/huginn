@@ -120,6 +120,8 @@ fun SessionScreen(
             // Slash commands go in as a submitted line, exactly as typed by hand.
             onCommand = { onSendText(it, true) },
             onCycleMode = { onSendKeys(listOf("BTab")) },
+            contextPercent = screen?.contextPercent,
+            compacting = screen?.compacting ?: false,
         )
         Box(Modifier.weight(1f)) {
             if (tab == 0) {

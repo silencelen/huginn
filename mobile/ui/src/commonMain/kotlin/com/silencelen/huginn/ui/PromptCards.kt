@@ -114,6 +114,12 @@ fun PromptCard(
  * dialog (an exotic shape). The buttons still work: the host re-checks the live
  * pane at answer time and refuses with its own sentence when it still cannot see
  * the run — at which point the shell's callback steers to the Screen tab.
+ *
+ * A MULTI-PART question ([DegradedAsk.multiPart]) is the exception: it is
+ * answered through the TUI's tab strip, which a single button tap cannot drive
+ * (the tap over-answers and the host 409s). So we render it read-only and point
+ * the owner at the Screen tab — [onOpenScreen] jumps there directly when the
+ * shell can, otherwise the message alone tells them where to go.
  */
 @Composable
 fun DegradedAskCard(
@@ -121,6 +127,7 @@ fun DegradedAskCard(
     answering: Boolean = false,
     note: String? = null,
     onAnswer: (Int) -> Unit,
+    onOpenScreen: (() -> Unit)? = null,
 ) {
     CardShell {
         QuestionHeader(
@@ -128,6 +135,35 @@ fun DegradedAskCard(
             questionIndex = ask.questionIndex,
             questionCount = ask.questionCount,
         )
+        if (ask.multiPart) {
+            Text(
+                "This question has more than one part. Answer it on the Screen tab — " +
+                    "the parts are stepped through there.",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(top = 2.dp),
+            )
+            Spacer(Modifier.height(8.dp))
+            // Read-only: the first part's choices, shown for context, NOT tappable
+            // (a tap can't answer a tab-strip dialog from here).
+            Column(verticalArrangement = Arrangement.spacedBy(1.dp)) {
+                ask.options.forEach { option ->
+                    Text(
+                        "${option.number}.  ${option.label}",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
+            onOpenScreen?.let {
+                Button(
+                    onClick = it,
+                    modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
+                ) { Text("Answer on the Screen tab") }
+            }
+            NoteLine(note)
+            return@CardShell
+        }
         Text(
             "The dialog is on screen but not readable from here — answers are verified against the live screen.",
             style = MaterialTheme.typography.labelSmall,
