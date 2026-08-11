@@ -10,6 +10,17 @@ Format loosely follows [Keep a Changelog](https://keepachangelog.com/); versions
 
 ## [Unreleased]
 
+### Added
+- **A GitHub release pipeline** (`scripts/github-release.sh`): one repo, four
+  independently-versioned components, so tags are namespaced — `vX.Y.Z` is the
+  CLI/server core, `app-vX.Y.Z` the Android app, `desktop-vX.Y.Z` the Compose
+  desktop client, `appd-vX.Y.Z` the daemon. Notes are cut from the component's
+  changelog section (a release with no changelog section is refused); artifacts
+  attach with display labels; runs entirely locally via `gh` — no Actions.
+  `ship.sh` and `release-desktop.sh` now mirror every release to GitHub
+  automatically (best-effort — a GitHub hiccup never fails a shipped release;
+  `HUGINN_NO_GH_RELEASE=1` skips).
+
 ## [0.7.1] - 2026-08-10
 
 ### Changed
@@ -213,7 +224,8 @@ Initial public release.
 - **Provisioning**: Proxmox LXC template + a generic "any Debian/Ubuntu host" guide.
 - **Docs**: README, Setup, Usage, Architecture, FAQ, Security model, Contributing.
 
-[Unreleased]: https://github.com/silencelen/huginn/compare/v0.7.0...HEAD
+[Unreleased]: https://github.com/silencelen/huginn/compare/v0.7.1...HEAD
+[0.7.1]: https://github.com/silencelen/huginn/compare/v0.7.0...v0.7.1
 [0.7.0]: https://github.com/silencelen/huginn/compare/v0.6.1...v0.7.0
 [0.6.1]: https://github.com/silencelen/huginn/compare/v0.6.0...v0.6.1
 [0.6.0]: https://github.com/silencelen/huginn/compare/v0.5.0...v0.6.0

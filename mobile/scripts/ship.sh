@@ -70,3 +70,21 @@ else
   echo "[ship] FAIL index versionCode '$LIVE_VC' != expected '$EXPECTED_VC'" >&2
   exit 1
 fi
+
+# ------------------------------------------------- GitHub Release (best-effort)
+# Mirror the release to GitHub so the repo's Releases page carries the same APK
+# the store serves (tag app-v<versionName>, notes cut from mobile/CHANGELOG.md).
+# Best-effort by design: the store publish above is the release; a GitHub hiccup
+# must not turn a shipped build into a failed ship. Skip: HUGINN_NO_GH_RELEASE=1.
+if [ "$VARIANT" = "release" ] && [ "${HUGINN_NO_GH_RELEASE:-}" != 1 ]; then
+  VN="$(grep -oE '"versionName":"[^"]+"' "$MANIFEST" | head -1 | cut -d'"' -f4)"
+  NICE="$(mktemp -d)/Huginn-$VN.apk"
+  cp "$APK" "$NICE"
+  if "$REPO_DIR/scripts/github-release.sh" app "$VN" \
+       "$NICE#Huginn $VN (signed APK, arm64-v8a)"; then
+    echo "[ship] GitHub release app-v$VN updated"
+  else
+    echo "[ship] WARNING: GitHub release failed — store publish above is unaffected" >&2
+  fi
+  rm -rf "$(dirname "$NICE")"
+fi
