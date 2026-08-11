@@ -243,3 +243,72 @@ test('uploads GET requires auth', async () => {
   assert.equal(res.status, 401);
   res.body?.cancel?.();
 });
+
+// --- ask-sidecar fusion at the route layer ---------------------------------
+
+function writeAskSidecar(name, questions) {
+  fs.mkdirSync(path.join(stateDir, 'ask'), { recursive: true });
+  fs.writeFileSync(path.join(stateDir, 'ask', name),
+    JSON.stringify({ v: 1, tool: 'AskUserQuestion', sessionId: 's', ts: Math.floor(Date.now() / 1000),
+      input: { questions } }));
+}
+const COLOR_Q = [{
+  question: 'Pick a color?', header: 'Color', multiSelect: false,
+  options: [
+    { label: 'Red', description: 'warm' },
+    { label: 'Green', description: 'calm' },
+    { label: 'Blue', description: 'cool' },
+  ],
+}];
+const COLOR_PANE = [
+  'Pick a color?', '',
+  '❯ 1. Red', '  2. Green', '  3. Blue',
+  '  4. Type something.', '  5. Chat about this', '',
+  'Enter to select · Esc to cancel',
+].join('\\n');
+
+// A session whose pane already shows `paneText` (printf runs, then cat holds so
+// the shell prompt never draws under it — a shell prompt reads as chrome and
+// correctly makes detectPrompt call the run history).
+function mkSessionWithPane(suffix, paneText) {
+  const name = `${PFX}-${suffix}`;
+  sh('tmux', ['new-session', '-d', '-s', name, '-c', tmp, '-x', '100', '-y', '30',
+    `sh -c 'printf "${paneText}\\n"; cat'`]);
+  madeSessions.add(name);
+  return name;
+}
+
+test('screen fuses the hook sidecar: hook labels + descriptions, TUI extras flagged', async () => {
+  const name = mkSessionWithPane('fuse', COLOR_PANE);
+  writeAskSidecar(name, COLOR_Q);
+  await wait(500);
+  const { status, body } = await api(`/v1/sessions/${name}/screen`);
+  assert.equal(status, 200);
+  assert.ok(body.prompt, 'a prompt should be detected');
+  assert.equal(body.prompt.source, 'hook', 'the sidecar should have been fused in');
+  assert.deepEqual(body.prompt.options.slice(0, 3).map((o) => o.label), ['Red', 'Green', 'Blue']);
+  assert.equal(body.prompt.options[0].description, 'warm', 'hook descriptions come through');
+  assert.ok(body.prompt.options.slice(3).every((o) => o.extra === true), 'Type something / Chat about this flagged');
+  assert.match(body.prompt.fingerprint, /^[0-9a-f]{12}$/);
+});
+
+test('a sidecar with no readable pane run and attention state yields a degraded card', async () => {
+  const name = mkSession('degraded');
+  // A pane the detector cannot read as a run (just prose), so fusion has no run.
+  sh('tmux', ['send-keys', '-t', `=${name}:`, 'printf "thinking about it...\\n"', 'Enter']);
+  writeState(name, 'attention');
+  writeAskSidecar(name, COLOR_Q);
+  await wait(400);
+  const { body } = await api(`/v1/sessions/${name}/screen`);
+  assert.equal(body.prompt, null, 'no live run to answer directly');
+  assert.ok(body.ask, 'the degraded card should be present');
+  assert.equal(body.ask.answerable, false);
+  assert.equal(body.ask.question, 'Pick a color?');
+
+  // Answering it with no live run is refused distinctly so the client deep-links.
+  const ans = await api(`/v1/sessions/${name}/answer`, {
+    method: 'POST', body: JSON.stringify({ option: 1, fingerprint: body.ask.fingerprint }),
+  });
+  assert.equal(ans.status, 409);
+  assert.equal(ans.body.reason, 'undetected');
+});
