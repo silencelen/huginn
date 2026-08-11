@@ -1,5 +1,31 @@
 # Huginn changelog
 
+## 2.59.0 / appd 2.57.0 — 2026-08-11
+
+### Wind down a session
+
+The session menu (both the row menu and the open-session menu) gains **Wind
+down…** beside "Kill": it asks Claude to wrap up and commit, and — when the host
+has auto-end on — the session ends itself once it settles. It only sends a
+message, so it is not destructive.
+
+### Photo thumbnails
+
+A photo you attached now shows as a real thumbnail in the chat history instead of
+a "photo attached" line, read back from the host (it falls back to the line if
+the file has been removed there).
+
+### Sharper question buttons
+
+The buttons for a Claude question now carry the exact option text and its
+description, fused on the host from what Claude actually asked rather than
+reconstructed from the on-screen width — so a long option is no longer clipped,
+and an answer no longer bounces because the pane re-wrapped underneath it.
+
+Alongside (appd 2.57.0, deployed): soft-end/auto-end on the host, the prompt
+sidecars + fusion this release renders, and photo uploads served back for the
+thumbnails.
+
 ## 2.58.0 — 2026-08-10
 
 ### The raven
