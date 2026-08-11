@@ -14,6 +14,38 @@ the Electron client's go to `/v1/desktop` and the two never mix — see
      refusal is deliberate — it is what stops a release going out with no notes.
      ─────────────────────────────────────────────────────────────────────────── -->
 
+## 0.5.0
+
+### Wind down a session
+
+Alongside "End session" the session menu now has **Wind down…**: it sends Claude
+a wrap-up instruction (finish outstanding items, commit, prepare to end) and —
+when the host has auto-end on — the session ends itself once it settles. A
+wrap-up that turns into a question keeps the session open. It only sends a
+message, so unlike End it is not destructive and your draft is left alone.
+
+### Questions read right, every time
+
+The question card is rebuilt on the host's fused prompt: the exact option text
+(no longer whatever fitted the pane width), the one-line description under each
+option, and an "N of N" marker when a dialog carries more than one question. When
+Claude asks something the host cannot read off the screen at all, a card still
+appears; answering it verifies against the live screen and, if it has to, sends
+you to the Screen tab. A multi-select toggled directly in tmux is no longer
+reverted when you press Answer.
+
+### Photo thumbnails
+
+A photo you attached shows as an actual thumbnail in the history, not a "photo
+attached" line. (It falls back to the line if the file has been removed on the
+host.)
+
+### Up and down through what you have sent
+
+The composer remembers what you have sent, per chat and per session: Up and Down
+walk back through it like a shell, and it survives a restart. On the Screen tab
+with live keyboard on, the arrows go to the pane as before.
+
 ## 0.4.0
 
 ### The raven
