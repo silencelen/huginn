@@ -34,6 +34,7 @@ import com.silencelen.huginn.desktop.notify.Notifiers
 import com.silencelen.huginn.desktop.notify.SchemeRegistrar
 import com.silencelen.huginn.desktop.notify.SingleInstance
 import com.silencelen.huginn.desktop.notify.TargetKind
+import com.silencelen.huginn.desktop.tray.RavenMark
 import com.silencelen.huginn.desktop.tray.TrayIcons
 import com.silencelen.huginn.desktop.tray.TrayModel
 import com.silencelen.huginn.desktop.ui.Shell
@@ -369,6 +370,10 @@ fun main(args: Array<String>) {
             state = windowState,
             visible = visible,
             title = "Huginn",
+            // The taskbar/window-switcher identity. The installed .ico/.png only
+            // covers shortcuts; the running window shows what the process hands
+            // AWT, which without this is Java's coffee cup.
+            icon = RavenMark.windowIcon(),
             onKeyEvent = { e ->
                 if (e.type != KeyEventType.KeyDown) return@Window false
                 // The table lives in ui/Shortcuts.kt so it can be tested; this

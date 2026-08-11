@@ -279,6 +279,7 @@ if [ "$LINUX_ONLY" = 0 ]; then
     --app-version "$VERSION" \
     --description "Huginn desktop client" \
     --vendor silencelen \
+    --icon "$(winepath -w "$PWD/app-desktop/packaging/huginn.ico")" \
     --input "$(winepath -w "$PWD/$WIN/lib")" \
     --main-jar "app-desktop-$VERSION.jar" \
     --main-class com.silencelen.huginn.desktop.MainKt \
@@ -303,6 +304,7 @@ if [ "$LINUX_ONLY" = 0 ]; then
     -DSRC_DIR="$PWD/$APP_IMAGE" \
     -DOUT_FILE="$PWD/$WIN/out/$EXE" \
     -DPLUGIN_DIR="$PLUGIN_DIR" \
+    -DICON_FILE="$PWD/app-desktop/packaging/huginn.ico" \
     "$NSI" > "$LOG.nsis" 2>&1 || {
     cat "$LOG.nsis" >> "$LOG"; tail -40 "$LOG.nsis"
     echo "REFUSING: makensis failed (full log: $LOG)" >&2; exit 1; }

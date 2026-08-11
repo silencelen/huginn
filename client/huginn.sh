@@ -4,9 +4,9 @@
 #     [ -f ~/.huginn/huginn.sh ] && source ~/.huginn/huginn.sh
 # Targets the `huginn` SSH alias by default; override per-device with:  export HUGINN_HOST=my-host
 # Self-update with:  huginn update   (pulls this file from the repo; gh -> scp fallback)
-# Version: 0.6.0
+# Version: 0.7.0
 
-HUGINN_VERSION='0.6.1'
+HUGINN_VERSION='0.7.0'
 HUGINN_REPO='silencelen/huginn'
 # Where `huginn update` may fetch a replacement for THIS FILE, which it then
 # sources into the live shell. Pinned, and deliberately NOT $HUGINN_HOST:
@@ -99,9 +99,17 @@ huginn() {
       _huginn_attach "$H"
       ;;
     '?'|help|/help|-h|--help)
-      cat <<EOF
+      # The banner rides its own QUOTED heredoc: the art's backslashes and
+      # punctuation must reach the terminal verbatim, while the body heredoc
+      # below stays unquoted so $HUGINN_REPO/$HUGINN_UPDATE_HOST expand.
+      cat <<'EOF'
 
-huginn - remote Claude Code node.  aliases: rclaude, rcc
+        _
+       (o)==-   huginn - remote Claude Code node.  aliases: rclaude, rcc
+       //\
+    =~/_/
+EOF
+      cat <<EOF
 
   huginn                      attach/create the live 'main' session (run claude inside)
   huginn <name>               a separate named session
