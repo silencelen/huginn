@@ -1,17 +1,33 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 108 108">
-  <rect width="108" height="108" fill="#12100F"/>
-  <!-- Raven head in profile facing right: elongated skull, heavy downcurved bill,
-       throat sloping back into the neck. One shape, no floating parts. -->
-  <path fill="#E8E2DA" d="
-    M30,72
-    C24,62 24,48 32,40
-    C39,33 50,30 58,33
-    L64,36
-    L90,47
-    C92,48 92,50 90,51
-    L64,55
-    C62,64 56,72 46,76
-    C40,78 34,77 30,72
-    Z"/>
-  <circle cx="52" cy="44" r="3.6" fill="#12100F"/>
+  <!-- App-icon master: the dark raven on the bone tile. Derives the devstore
+       listing icon, the Windows .ico and the Linux .png. The raven is dark and
+       the tile light — a bone-white raven is not a raven. See raven.svg for the
+       canonical path; keep the two in sync. -->
+  <rect width="108" height="108" fill="#E8E2DA"/>
+  <g transform="translate(2,11)">
+    <path fill="#161310" fill-rule="evenodd" d="
+      M94,32
+      C87,27.5 80,25.8 74,25.5
+      C72.5,19.5 64,17 58.5,19.3
+      C54,21.3 51,24 48,27
+      C41,32.5 35,37.5 30,42
+      L10,60
+      L16,69
+      L37,54
+      C40,58.5 45,61.5 51,62.5
+      C58,63.3 64,60 67,55.5
+      C70.3,50.3 71.8,45.2 70,41
+      L67.8,40.2
+      L71.3,37.8
+      L68.8,36.2
+      L72,34.8
+      C79,34.6 86,34.2 93,33.6
+      C94.6,33 94.6,32.5 94,32
+      Z
+      M64.5,25.5
+      m-2,0
+      a2,2 0 1,0 4,0
+      a2,2 0 1,0 -4,0
+      Z"/>
+  </g>
 </svg>

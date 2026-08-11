@@ -1,30 +1,48 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- Raven head in profile facing right: Huginn, Odin's thought-raven. One shape,
-     so nothing detaches at small sizes. Kept inside the 66dp adaptive-icon safe
-     zone (the launcher mask crops the outer 18dp on every side) so the bill tip
-     survives a circular mask. Mirrors assets/icon.svg, which is what the devstore
-     listing shows; change both together. -->
+<!-- The Huginn raven: perched, profile facing right, dark ink on the bone tile.
+     One path so nothing detaches at small sizes; the eye is an evenOdd hole so
+     it shows the background through it. The group centers the mark at (54,54)
+     scaled 0.72, which keeps the bill and tail tips inside the 66dp adaptive-icon
+     safe circle (the launcher mask crops the outer 18dp on every side).
+     Canonical path: assets/brand/raven.svg — change both together, and
+     assets/brand/generate.sh for the rasters. -->
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
         android:width="108dp"
         android:height="108dp"
         android:viewportWidth="108"
         android:viewportHeight="108">
-    <path
-        android:fillColor="#E8E2DA"
-        android:pathData="M32,70
-                          C27,61 27,49 34,42
-                          C40,36 50,33 57,36
-                          L62,38
-                          L84,47
-                          C86,48 86,50 84,51
-                          L62,54
-                          C60,62 55,69 46,73
-                          C41,75 36,74 32,70
-                          Z" />
-    <path
-        android:fillColor="#12100F"
-        android:pathData="M52,45
-                          m-3.4,0
-                          a3.4,3.4 0 1,0 6.8,0
-                          a3.4,3.4 0 1,0 -6.8,0" />
+    <group
+        android:pivotX="52"
+        android:pivotY="43"
+        android:scaleX="0.72"
+        android:scaleY="0.72"
+        android:translateX="2"
+        android:translateY="11">
+        <path
+            android:fillColor="#161310"
+            android:fillType="evenOdd"
+            android:pathData="M94,32
+                              C87,27.5 80,25.8 74,25.5
+                              C72.5,19.5 64,17 58.5,19.3
+                              C54,21.3 51,24 48,27
+                              C41,32.5 35,37.5 30,42
+                              L10,60
+                              L16,69
+                              L37,54
+                              C40,58.5 45,61.5 51,62.5
+                              C58,63.3 64,60 67,55.5
+                              C70.3,50.3 71.8,45.2 70,41
+                              L67.8,40.2
+                              L71.3,37.8
+                              L68.8,36.2
+                              L72,34.8
+                              C79,34.6 86,34.2 93,33.6
+                              C94.6,33 94.6,32.5 94,32
+                              Z
+                              M64.5,25.5
+                              m-2,0
+                              a2,2 0 1,0 4,0
+                              a2,2 0 1,0 -4,0
+                              Z" />
+    </group>
 </vector>

@@ -1,5 +1,20 @@
 # Huginn changelog
 
+## 2.58.0 — 2026-08-10
+
+### The raven
+
+Huginn is Odin's thought-raven, and now the icon is one: a dark raven, drawn as
+a single silhouette, on a bone tile. The old mark read as a waterfowl head and
+was light-on-dark — a bone-white raven is not a raven.
+
+Everywhere the app shows an identity, it is the same bird now: the launcher
+icon (with a proper Android 13 themed/monochrome variant, which the old icon
+never had), the status-bar notification silhouette, and the devstore listing.
+The canonical mark lives at `assets/brand/raven.svg`; every platform's icon
+derives from that one path, so the phone, the desktop client and the CLI all
+say Huginn the same way.
+
 ## 2.57.0 / appd 2.54.0 — 2026-08-10
 
 ### The conversation holds the whole session

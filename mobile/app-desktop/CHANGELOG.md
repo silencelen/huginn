@@ -14,7 +14,19 @@ the Electron client's go to `/v1/desktop` and the two never mix — see
      refusal is deliberate — it is what stops a release going out with no notes.
      ─────────────────────────────────────────────────────────────────────────── -->
 
-## Unreleased
+## 0.4.0
+
+### The raven
+
+The Huginn raven — the same dark mark the phone app now carries — everywhere
+this client shows an identity: the window and taskbar icon (which until now was
+Java's default coffee cup), the Windows installer and its Start Menu shortcut,
+the .deb's desktop entry, and the tray. The tray keeps its state colours
+(grey idle, blue working, amber attention) but the dot is a raven now; attention
+additionally carries a badge dot so it still reads on a monochrome tray theme.
+Window and tray icons stay drawn in code rather than shipped as files, so they
+cannot go missing from a package; the installer icons come from
+`packaging/huginn.ico` / `huginn.png`, generated from `assets/brand/`.
 
 ### Enter sends
 
