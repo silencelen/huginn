@@ -1,3 +1,11 @@
+// INTERIM (AGP 9 migration): build-script deprecations are compile errors under
+// Gradle 9 + Kotlin 2.3. The DSL these hit (kotlinOptions, sourceSets.srcDirs,
+// Project.android accessor) still WORKS with android.newDsl=false/builtInKotlin=false
+// set in gradle.properties; the forward fix is the new ApplicationExtension DSL +
+// migrating :core/:ui to com.android.kotlin.multiplatform.library, tracked as a
+// follow-up. Suppressing here keeps the app building on the new toolchain meanwhile.
+@file:Suppress("DEPRECATION")
+
 import java.security.MessageDigest
 import java.time.OffsetDateTime
 import java.util.Properties
@@ -91,14 +99,19 @@ android {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
     }
-    kotlinOptions {
-        jvmTarget = "17"
-    }
     buildFeatures {
         compose = true
     }
     sourceSets["main"].kotlin.srcDirs("src/main/kotlin")
     sourceSets["test"].kotlin.srcDirs("src/test/kotlin")
+}
+
+// jvmTarget under the classic kotlin-android plugin (android.builtInKotlin=false):
+// kotlinOptions is a hard-deprecated error in Kotlin 2.3, compilerOptions is the DSL.
+kotlin {
+    compilerOptions {
+        jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17)
+    }
 }
 
 dependencies {
