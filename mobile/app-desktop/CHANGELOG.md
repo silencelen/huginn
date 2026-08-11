@@ -5,6 +5,26 @@ app and from the Electron desktop client. Its releases go to `/v1/desktop-kt`;
 the Electron client's go to `/v1/desktop` and the two never mix — see
 `scripts/release-desktop.sh`.
 
+<!-- ───────────────────────────────────────────────────────────────────────────
+     UNRELEASED — merge this into the next version's section.
+
+     `release-desktop.sh` greps for `^## <version>$` and REFUSES to build without
+     it, so this heading cannot ship as-is: rename it to the version being cut
+     (and fold these notes in with whatever else that release carries). That
+     refusal is deliberate — it is what stops a release going out with no notes.
+     ─────────────────────────────────────────────────────────────────────────── -->
+
+## Unreleased
+
+### Enter sends
+
+Both composers wanted Ctrl+Enter to send and treated a plain Enter as a newline.
+That was deliberate once — a guard against firing off half-written messages — but
+it reads as a broken send, because every other chat you use sends on Enter.
+
+Enter sends now, in chats and sessions alike. Shift+Enter gives you a new line,
+and Ctrl+Enter still sends if that is what your hands have learned.
+
 ## 0.3.3
 
 Sessions can be started from here now, and the conversation is the whole
