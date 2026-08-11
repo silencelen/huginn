@@ -6,7 +6,6 @@ import io.ktor.client.plugins.HttpTimeout
 import io.ktor.client.request.header
 import io.ktor.client.request.prepareGet
 import io.ktor.client.statement.bodyAsChannel
-import io.ktor.client.statement.bodyAsText
 import io.ktor.http.isSuccess
 import io.ktor.utils.io.readAvailable
 import kotlinx.coroutines.Dispatchers
@@ -14,26 +13,23 @@ import kotlinx.coroutines.withContext
 import java.io.File
 
 /**
- * The two things the updater needs off the network, behind an interface so the
- * decision logic can be tested without one.
+ * Streams a release artifact to disk, behind an interface so the decision logic
+ * can be tested without a socket.
  *
- * NOT [com.silencelen.huginn.data.HuginnClient]: that class is the daemon's API
- * surface and takes its base URL from a `() -> String` provider fed by user
- * settings — precisely the thing the feed must not be derived from. Keeping the
- * updater on its own tiny client means there is no call path by which a changed
- * setting can move where an installer comes from.
+ * The small text fetches (the releases list, the manifest) go through
+ * [com.silencelen.huginn.update.ReleaseFeed]; this is only the large binary
+ * download, which needs platform File I/O and a public (no-auth) GitHub asset
+ * URL. NOT [com.silencelen.huginn.data.HuginnClient]: that class's base URL is
+ * user-editable, and where an installer comes from must never move with it.
  */
 interface UpdateHttp {
-    /** @throws UpdateHttpException on any non-2xx, carrying the status. */
-    suspend fun getText(url: String, token: String): String
-
     /**
      * Streams [url] into [dest]. Never buffers the whole body — an installer is
      * ~90 MB and this runs in a UI process's heap.
      *
      * @param onProgress bytes-so-far and total (-1 when the server did not say).
      */
-    suspend fun download(url: String, token: String, dest: File, onProgress: (Long, Long) -> Unit)
+    suspend fun download(url: String, dest: File, onProgress: (Long, Long) -> Unit)
 }
 
 class UpdateHttpException(val status: Int, message: String) : Exception(message)
@@ -42,28 +38,16 @@ class KtorUpdateHttp(
     private val client: HttpClient = HttpClient(huginnHttpEngine()) {
         install(HttpTimeout) {
             connectTimeoutMillis = 8_000
-            // Generous: a 90 MB installer over the tailnet from a phone hotspot
-            // is minutes, and a timeout that kills it halfway is an update that
-            // can never complete on a slow link.
+            // Generous: a 90 MB installer over a slow link is minutes, and a
+            // timeout that kills it halfway is an update that can never complete.
             requestTimeoutMillis = 30 * 60_000
             socketTimeoutMillis = 60_000
         }
     },
 ) : UpdateHttp {
 
-    override suspend fun getText(url: String, token: String): String = withContext(Dispatchers.IO) {
-        client.prepareGet(url) { header("Authorization", "Bearer $token") }.execute { resp ->
-            val body = resp.bodyAsText()
-            if (!resp.status.isSuccess()) {
-                throw UpdateHttpException(resp.status.value, "${resp.status.value}: ${body.take(200)}")
-            }
-            body
-        }
-    }
-
     override suspend fun download(
         url: String,
-        token: String,
         dest: File,
         onProgress: (Long, Long) -> Unit,
     ) = withContext(Dispatchers.IO) {
@@ -73,7 +57,11 @@ class KtorUpdateHttp(
         // be re-downloaded forever — or, worse, be there under a name something
         // else trusts.
         val part = File(dest.parentFile, dest.name + ".part")
-        client.prepareGet(url) { header("Authorization", "Bearer $token") }.execute { resp ->
+        client.prepareGet(url) {
+            // GitHub's asset endpoint 302s to a CDN; Ktor follows it. A UA keeps
+            // GitHub from rejecting the request.
+            header("User-Agent", com.silencelen.huginn.update.GithubReleases.USER_AGENT)
+        }.execute { resp ->
             if (!resp.status.isSuccess()) {
                 throw UpdateHttpException(resp.status.value, "${resp.status.value} fetching ${dest.name}")
             }

@@ -1,55 +1,49 @@
 package com.silencelen.huginn.desktop.update
 
+import com.silencelen.huginn.update.GithubReleases
 import kotlinx.coroutines.runBlocking
 import java.io.File
 import kotlin.system.exitProcess
 
 /**
- * Drives [DesktopUpdater] once, headlessly, against the REAL channel, and prints
- * what happened.
+ * Drives [DesktopUpdater] once, headlessly, against the REAL GitHub releases, and
+ * prints what happened.
  *
  * This exists because the unit tests cannot prove the thing that actually breaks.
- * They prove semver, parsing, hashing and feed pinning against fixtures; what
- * they cannot prove is that the daemon serves the manifest the release script
- * wrote, at the path the client asks for, with the auth it sends, and that the
- * bytes that come back hash to what the manifest claims. Every one of those is a
- * different program's opinion, and the only way to check they agree is to make
- * the request.
+ * They prove semver, parsing, hashing and release-picking against fixtures; what
+ * they cannot prove is that the published release carries the manifest the script
+ * wrote, under the asset names it claims, and that the bytes GitHub serves hash
+ * to what the manifest says. Every one of those is a different system's opinion,
+ * and the only way to check they agree is to make the request.
  *
- * Run by scripts/release-desktop.sh as its last gate, after the wire check —
- * verifying through the client rather than through curl, because curl is not
- * what will be running on the owner's machine.
+ * Run by scripts/release-desktop.sh as its last gate, AFTER the GitHub release is
+ * published — verifying through the client rather than through curl, because curl
+ * is not what will be running on the owner's machine.
  *
- * Usage: --token-file <path> [--current <version>] [--platform <key>]
- *        [--cache-dir <dir>] [--expect <version>]
+ * Usage: [--current <version>] [--platform <key>] [--cache-dir <dir>]
+ *        [--expect <version>] [--repo <owner/name>]
  */
 object UpdaterProbe {
 
     @JvmStatic
     fun main(args: Array<String>) {
         val opts = parse(args)
-        val tokenFile = opts["token-file"] ?: "/etc/huginn-appd/token"
-        val token = runCatching { File(tokenFile).readText().trim() }.getOrElse {
-            fail("cannot read token from $tokenFile: ${it.message}")
-        }
-        if (token.length < 16) fail("token in $tokenFile looks empty")
 
-        // Defaults to a version older than anything that has ever been released,
-        // so the probe genuinely exercises the download + verify path instead of
-        // reporting "up to date" and proving nothing.
+        // Defaults to a version older than anything ever released, so the probe
+        // genuinely exercises the download + verify path instead of reporting
+        // "up to date" and proving nothing.
         val current = opts["current"] ?: "0.0.0"
         val platform = opts["platform"] ?: UpdatePlatform.current() ?: fail("unknown platform")
         val cacheDir = File(opts["cache-dir"] ?: DesktopUpdater.defaultCacheDir().path)
+        val repo = opts["repo"] ?: GithubReleases.REPO
 
         println("[probe] installed=$current platform=$platform cache=$cacheDir")
-        // Each base printed WITH the path — a joined list with the path appended
-        // once reads as though only the last base carried it.
-        println("[probe] pinned feeds: " + UpdateFeed.PINNED_BASES.joinToString(", ") { it + UpdateFeed.PATH })
+        println("[probe] source: github.com/$repo releases (${GithubReleases.DESKTOP_TAG_PREFIX}*)")
 
         val updater = DesktopUpdater(
             currentVersion = current,
-            tokenProvider = { token },
             platform = platform,
+            feed = GithubReleases(repo = repo),
             cacheDir = cacheDir,
             // Never on this path. The probe proves fetch + verify; running an
             // installer is a user action and a headless gate must not be one.
@@ -65,7 +59,7 @@ object UpdaterProbe {
                 println("[probe]   sha256 ${Sha256.ofFile(state.file)} (verified against the manifest)")
                 val want = opts["expect"]
                 if (want != null && want != state.version) {
-                    fail("expected version $want, feed offered ${state.version}")
+                    fail("expected version $want, release offered ${state.version}")
                 }
                 println("[probe] OK")
                 // EXPLICIT. The Ktor/OkHttp client this built holds a dispatcher
@@ -75,7 +69,7 @@ object UpdaterProbe {
                 // hang and invites someone to kill the release.
                 exitProcess(0)
             }
-            is UpdateState.UpToDate -> fail("feed had nothing newer than $current — the probe proved nothing")
+            is UpdateState.UpToDate -> fail("release had nothing newer than $current — the probe proved nothing")
             is UpdateState.Error -> fail(state.message)
             else -> fail("ended in $state")
         }

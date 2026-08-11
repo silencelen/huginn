@@ -1,18 +1,21 @@
-package com.silencelen.huginn.desktop.update
+package com.silencelen.huginn.update
 
 /**
  * Just enough semver to answer one question: is the version on the feed newer
  * than the one running?
  *
  * Deliberately not a full semver implementation. The only versions this ever
- * compares are ones the release script wrote out of `version.txt`, and a
- * dependency (or a hand-rolled 200-line parser) for `MAJOR.MINOR.PATCH` would be
- * more code than the thing it decides.
+ * compares are ones a release script wrote out of a `version.txt` / gradle
+ * `versionName`, and a dependency (or a hand-rolled 200-line parser) for
+ * `MAJOR.MINOR.PATCH` would be more code than the thing it decides.
  *
  * The comparison is NUMERIC per component, which is the entire reason this
  * exists: `"0.10.0" > "0.9.0"` is false as strings and true as versions, and
  * a string compare here means the app stops updating the moment a minor number
  * reaches ten — silently, and looking perfectly healthy.
+ *
+ * Lives in :core so the desktop and phone updaters compare versions the same
+ * way; each shell owns only its platform's download and install.
  */
 object Semver {
 

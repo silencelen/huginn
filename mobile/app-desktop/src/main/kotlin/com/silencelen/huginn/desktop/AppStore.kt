@@ -65,12 +65,14 @@ class AppStore(
     )
 
     /**
-     * The self-updater. Deliberately NOT handed [settings]' base URL: its feed is
-     * pinned in UpdateFeed, because these builds are unsigned and whoever
-     * controls the feed controls what runs on this machine. It downloads and
-     * verifies; INSTALLING is a button, never a background decision.
+     * The self-updater. Deliberately NOT handed [settings]' base URL: it pulls
+     * from the pinned public GitHub repo (GithubReleases.REPO), because these
+     * builds are unsigned and whoever controls the feed controls what runs on
+     * this machine — so the source is a compile-time constant, never a setting.
+     * It downloads and verifies (sha256); INSTALLING is a button, never a
+     * background decision.
      */
-    val updater = DesktopUpdater(tokenProvider = { settings.tokenNow() })
+    val updater = DesktopUpdater()
 
     /**
      * The tmux size lease, held at APP level because its release paths do not

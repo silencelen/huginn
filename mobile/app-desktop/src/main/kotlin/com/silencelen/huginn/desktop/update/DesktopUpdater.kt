@@ -1,5 +1,12 @@
 package com.silencelen.huginn.desktop.update
 
+import com.silencelen.huginn.update.GithubReleaseIndex
+import com.silencelen.huginn.update.GithubReleases
+import com.silencelen.huginn.update.ReleaseFeed
+import com.silencelen.huginn.update.Semver
+import com.silencelen.huginn.update.UpdateArtifact
+import com.silencelen.huginn.update.UpdateManifest
+import com.silencelen.huginn.update.UpdateManifestCodec
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -43,28 +50,28 @@ sealed interface UpdateState {
 }
 
 /**
- * Checks the pinned channel on launch and every four hours, downloads a newer
- * build, verifies the hash the manifest carries, and stops.
+ * Checks the pinned public GitHub repo on launch and every four hours, downloads
+ * a newer build, verifies the hash the release manifest carries, and stops.
  *
- * Hand-rolled because there is nothing to adopt: electron-updater has no JVM
- * equivalent, and Hydraulic Conveyor — the one product that does this properly
- * for Compose Desktop — drives Windows updates through the OS MSIX engine, which
- * cannot be given a Bearer header, so it requires a PUBLIC unauthenticated update
- * site. This channel is Bearer-authed on the tailnet and is going to stay that
- * way. update4j is archived.
+ * The source moved from a Bearer-authed private tailnet feed to GitHub releases
+ * now that huginn is a public project (the owner's ask: "pulling from the latest
+ * git releases … isn't siloed to our private devstore"). The security property
+ * is preserved, not dropped: [GithubReleases.REPO] is a compile-time constant
+ * (the new trust anchor — a Settings typo still cannot move where an installer
+ * comes from), the fetch is HTTPS, and [Sha256] still gates every artifact before
+ * it can be named installable, because these builds are unsigned.
  *
- * Everything security-relevant is deliberately small and testable in isolation:
- * [UpdateFeed] pins where bytes may come from, [Semver] decides whether they are
- * newer, [Sha256] decides whether they are intact, and this class only sequences
- * them. Nothing here parses, hashes or compares by hand.
+ * Everything security-relevant stays small and testable in isolation:
+ * [ReleaseFeed] is where bytes may come from, [GithubReleaseIndex] picks which
+ * release, [Semver] decides whether it is newer, [Sha256] decides whether it is
+ * intact, and this class only sequences them.
  */
 class DesktopUpdater(
     private val currentVersion: String = BuildInfo.VERSION,
-    /** The daemon token. Same one every other request carries; the FEED is pinned, the token is not a secret to it. */
-    private val tokenProvider: () -> String,
     private val platform: String? = UpdatePlatform.current(),
+    private val feed: ReleaseFeed = GithubReleases(),
     private val http: UpdateHttp = KtorUpdateHttp(),
-    private val bases: List<String> = UpdateFeed.PINNED_BASES,
+    private val tagPrefix: String = GithubReleases.DESKTOP_TAG_PREFIX,
     private val cacheDir: File = defaultCacheDir(),
     private val isWindows: Boolean = System.getProperty("os.name").orEmpty().lowercase().startsWith("windows"),
     /** Injected so a test never spawns anything. Returns false when the launch failed. */
@@ -77,21 +84,14 @@ class DesktopUpdater(
     /** For the Settings screen: what this build believes it is. */
     val installedVersion: String get() = currentVersion
 
+    /** For the Settings screen: the repo updates come from, shown never editable. */
+    val sourceRepo: String get() = feed.repo
+
     /**
-     * Launch check, then every [INTERVAL_MS] — but sooner if the last one failed,
-     * and at once if the token changes. Cancelling the returned job stops it;
-     * there is no other lifecycle to get wrong.
-     *
-     * The plain four-hour loop this replaces made a solved problem keep looking
-     * unsolved. The app checks on launch, which on a fresh install is BEFORE the
-     * owner has typed a token, so the first pass fails with "no daemon token yet"
-     * — and then Settings said that for four hours after the token was entered
-     * and everything else in the app was plainly working. A wrong token that was
-     * then corrected read the same way, as a stale 401.
-     *
-     * So: a failed pass retries on a backoff instead of sleeping the full
-     * interval, and either kind of wait ends early when the token changes,
-     * because the token is the thing that was usually wrong.
+     * Launch check, then every [INTERVAL_MS] — sooner if the last one failed.
+     * Cancelling the returned job stops it; there is no other lifecycle to get
+     * wrong. Unlike the old private feed there is no token to wait on: GitHub is
+     * public, so the first pass on a fresh install can already succeed.
      */
     fun start(scope: CoroutineScope): Job = scope.launch {
         var backoff = RETRY_MS
@@ -100,32 +100,12 @@ class DesktopUpdater(
             // A thrown exception is a failed pass too. Reading only the returned
             // state would treat a crash as a success and sleep four hours on it.
             if (outcome.isFailure || outcome.getOrNull() is UpdateState.Error) {
-                waitOrTokenChange(backoff)
+                delay(backoff)
                 backoff = (backoff * 2).coerceAtMost(RETRY_MAX_MS)
             } else {
                 backoff = RETRY_MS
-                waitOrTokenChange(INTERVAL_MS)
+                delay(INTERVAL_MS)
             }
-        }
-    }
-
-    /**
-     * Sleeps, but wakes as soon as the token is different from the one the pass
-     * just ran with.
-     *
-     * Polled rather than collected from a flow so that this class keeps taking a
-     * plain `() -> String` and stays constructible in a test with no settings
-     * object at all. A comparison once a second against a string in memory is not
-     * a cost worth an abstraction.
-     */
-    private suspend fun waitOrTokenChange(total: Long) {
-        val was = tokenProvider().trim()
-        var waited = 0L
-        while (waited < total) {
-            val step = minOf(WAKE_MS, total - waited)
-            delay(step)
-            waited += step
-            if (tokenProvider().trim() != was) return
         }
     }
 
@@ -133,58 +113,52 @@ class DesktopUpdater(
      * One pass. Safe to call from a "check now" button; the state it leaves
      * behind is the return value too, so a caller need not observe the flow.
      *
-     * Once [UpdateState.Ready], further checks are a no-op unless the feed has
+     * Once [UpdateState.Ready], further checks are a no-op unless the release has
      * moved on again — re-downloading 90 MB every four hours while the owner has
      * not restarted yet is the kind of thing nobody notices until the link bill.
      */
     suspend fun check(): UpdateState {
-        val token = tokenProvider().trim()
-        if (token.isEmpty()) return fail("no daemon token yet")
         val plat = platform ?: return fail("no build for this platform")
 
         _state.value = UpdateState.Checking
-        var lastError: String? = null
-        for (base in bases) {
-            // Belt and braces: `bases` is a constant, but this class is
-            // constructible with another list and the refusal must live at the
-            // point of use, not only at the point of declaration.
-            if (!UpdateFeed.isPinned(base)) return fail(UpdateFeed.REFUSED)
-            // Not `.getOrElse { … continue }`: `continue` inside an inline lambda
-            // needs language version 2.2 and this module is on 2.1.
-            val fetched = runCatching { http.getText(UpdateFeed.manifestUrl(base), token) }
-            val failure = fetched.exceptionOrNull()
-            if (failure != null) {
-                lastError = failure.message ?: failure.toString()
-                continue // this route is down; the other pinned one may not be
-            }
-            val text = fetched.getOrThrow()
-
-            val manifest = UpdateManifestCodec.parseOrNull(text)
-                ?: return fail("update feed returned something that is not a manifest")
-
-            if (!Semver.isNewer(manifest.version, currentVersion)) {
-                return settle(UpdateState.UpToDate(currentVersion))
-            }
-            val artifact = manifest.artifactFor(plat)
-                ?: return fail("release ${manifest.version} has no $plat build")
-
-            val ready = _state.value as? UpdateState.Ready
-            if (ready != null && ready.version == manifest.version && Sha256.matches(ready.file, artifact.sha256)) {
-                return ready // already fetched and verified; wait for the human
-            }
-            return download(base, token, manifest, artifact)
+        val releases = runCatching { feed.list() }
+            .getOrElse { return fail("could not reach GitHub releases: ${it.message}") }
+        val release = GithubReleaseIndex.newest(releases, tagPrefix)
+            ?: return fail("no $tagPrefix release published yet")
+        val tagVersion = GithubReleaseIndex.versionOf(release, tagPrefix)
+        if (!Semver.isNewer(tagVersion, currentVersion)) {
+            return settle(UpdateState.UpToDate(currentVersion))
         }
-        return fail(lastError ?: "no pinned update route answered")
+
+        val manifestAsset = release.asset(MANIFEST_NAME)
+            ?: return fail("release $tagVersion has no $MANIFEST_NAME — cannot verify it, so it is refused")
+        val text = runCatching { feed.getText(manifestAsset.browserDownloadUrl) }
+            .getOrElse { return fail("could not fetch the release manifest: ${it.message}") }
+        val manifest = UpdateManifestCodec.parseOrNull(text)
+            ?: return fail("the release manifest was not readable")
+
+        // The tag says newer; the manifest is the authority on the artifact + its
+        // hash. Guard against a manifest that is somehow NOT newer than us.
+        if (!Semver.isNewer(manifest.version, currentVersion)) {
+            return settle(UpdateState.UpToDate(currentVersion))
+        }
+        val artifact = manifest.artifactFor(plat)
+            ?: return fail("release ${manifest.version} has no $plat build")
+        val asset = release.asset(artifact.file)
+            ?: return fail("release ${manifest.version} lists ${artifact.file} but does not carry it")
+
+        val ready = _state.value as? UpdateState.Ready
+        if (ready != null && ready.version == manifest.version && Sha256.matches(ready.file, artifact.sha256)) {
+            return ready // already fetched and verified; wait for the human
+        }
+        return download(asset.browserDownloadUrl, manifest, artifact)
     }
 
     private suspend fun download(
-        base: String,
-        token: String,
+        url: String,
         manifest: UpdateManifest,
         artifact: UpdateArtifact,
     ): UpdateState {
-        val url = runCatching { UpdateFeed.artifactUrl(base, artifact.file) }
-            .getOrElse { return fail(it.message ?: UpdateFeed.REFUSED) }
         val dest = File(cacheDir, artifact.file)
 
         // Already on disk from an earlier run, and still the right bytes.
@@ -194,7 +168,7 @@ class DesktopUpdater(
 
         _state.value = UpdateState.Downloading(manifest.version, 0, artifact.size)
         runCatching {
-            http.download(url, token, dest) { seen, total ->
+            http.download(url, dest) { seen, total ->
                 _state.value = UpdateState.Downloading(
                     manifest.version, seen, if (total > 0) total else artifact.size,
                 )
@@ -249,23 +223,21 @@ class DesktopUpdater(
     private fun fail(message: String): UpdateState = settle(UpdateState.Error(message))
 
     companion object {
+        /** The manifest asset every release carries — the sha256 authority. */
+        const val MANIFEST_NAME: String = "manifest.json"
+
         /** Four hours. The owner restarts this client far more often than that. */
         const val INTERVAL_MS: Long = 4 * 60 * 60 * 1000L
 
         /**
-         * First retry after a failed pass, doubling to [RETRY_MAX_MS].
-         *
-         * It backs off rather than hammering because a check that fails usually
-         * keeps failing — an unreachable route, a daemon that is down — and each
-         * pass writes a line to the diagnostics log. Half a minute is quick
-         * enough that a fixed problem stops being reported as broken, and the cap
-         * keeps a genuinely dead feed from filling that log.
+         * First retry after a failed pass, doubling to [RETRY_MAX_MS]. Backs off
+         * rather than hammering the GitHub API (unauthenticated, 60/hr): a check
+         * that fails usually keeps failing, and each pass writes a diagnostics
+         * line. Half a minute is quick enough that a fixed problem stops being
+         * reported as broken; the cap keeps a dead feed from filling that log.
          */
         const val RETRY_MS: Long = 30 * 1000L
         const val RETRY_MAX_MS: Long = 30 * 60 * 1000L
-
-        /** How often a wait looks at the token. */
-        const val WAKE_MS: Long = 1000L
 
         fun defaultCacheDir(): File {
             val base = System.getenv("XDG_CACHE_HOME")?.takeIf { it.isNotBlank() }
