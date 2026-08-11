@@ -26,6 +26,7 @@ import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.TextButton
 import com.silencelen.huginn.data.Account
 import com.silencelen.huginn.data.AppdRoutes
+import com.silencelen.huginn.update.AppUpdateState
 import com.silencelen.huginn.data.SavedAccount
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -91,6 +92,12 @@ fun SettingsScreen(
     onSelectRoute: (String) -> Unit,
     onResolveRoute: () -> Unit,
     onUnpinRoute: () -> Unit,
+    updateState: com.silencelen.huginn.update.AppUpdateState,
+    installedVersion: String,
+    updateRepo: String,
+    onCheckUpdate: () -> Unit,
+    onDownloadUpdate: () -> Unit,
+    onInstallUpdate: () -> Unit,
 ) {
     var confirmSignOut by remember { mutableStateOf(false) }
     var forgetTarget by remember { mutableStateOf<SavedAccount?>(null) }
@@ -579,6 +586,16 @@ fun SettingsScreen(
         }
 
         Spacer(Modifier.height(8.dp))
+        UpdateSection(
+            state = updateState,
+            installedVersion = installedVersion,
+            repo = updateRepo,
+            onCheck = onCheckUpdate,
+            onDownload = onDownloadUpdate,
+            onInstall = onInstallUpdate,
+        )
+
+        Spacer(Modifier.height(8.dp))
         Text("What this app can do", style = MaterialTheme.typography.titleMedium)
         Text(
             "Chats run on the host as headless Claude Code turns in its working directory. Ask mode has memory " +
@@ -626,6 +643,73 @@ fun SettingsScreen(
             },
             dismissButton = { TextButton(onClick = { confirmSignOut = false }) { Text("Cancel") } },
         )
+    }
+}
+
+/**
+ * Self-update, from the public GitHub releases. Three explicit steps — check,
+ * download, install — so a background check never spends the owner's data and an
+ * APK never installs without two taps and the system's own confirmation.
+ */
+@Composable
+private fun UpdateSection(
+    state: AppUpdateState,
+    installedVersion: String,
+    repo: String,
+    onCheck: () -> Unit,
+    onDownload: () -> Unit,
+    onInstall: () -> Unit,
+) {
+    Text("Software update", style = MaterialTheme.typography.titleMedium)
+    Text(
+        "Installed ${installedVersion.ifBlank { "—" }}  ·  updates from github.com/$repo",
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+    )
+    when (state) {
+        is AppUpdateState.Idle ->
+            OutlinedButton(onClick = onCheck) { Text("Check for updates") }
+
+        is AppUpdateState.Checking ->
+            Text("Checking…", style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant)
+
+        is AppUpdateState.UpToDate -> {
+            Text("Up to date.", style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.primary)
+            OutlinedButton(onClick = onCheck) { Text("Check again") }
+        }
+
+        is AppUpdateState.Available -> {
+            Text("Update available: ${state.versionName}",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.primary)
+            if (state.notes.isNotBlank()) {
+                Text(state.notes, style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 8)
+            }
+            val mb = if (state.size > 0) "  (${state.size / 1_000_000} MB)" else ""
+            Button(onClick = onDownload) { Text("Download update$mb") }
+        }
+
+        is AppUpdateState.Downloading -> {
+            val pct = state.fraction?.let { " ${(it * 100).toInt()}%" } ?: ""
+            Text("Downloading…$pct", style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+
+        is AppUpdateState.Ready -> {
+            Text("Version ${state.versionName} downloaded and verified.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.primary)
+            Button(onClick = onInstall) { Text("Install and restart") }
+        }
+
+        is AppUpdateState.Error -> {
+            Text(state.message, style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.error)
+            OutlinedButton(onClick = onCheck) { Text("Try again") }
+        }
     }
 }
 

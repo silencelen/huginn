@@ -120,6 +120,21 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
             decoder = com.silencelen.huginn.ui.AndroidImageBytesDecoder(),
         )
 
+    /**
+     * Self-update from the public GitHub releases (not the private devstore).
+     * Find/download/install are three explicit steps — see [PhoneUpdater].
+     */
+    private val updater = com.silencelen.huginn.update.PhoneUpdater.forApp(getApplication())
+    val updateState: StateFlow<com.silencelen.huginn.update.AppUpdateState> = updater.state
+    val installedVersion: String get() = updater.installedVersion
+    val updateSourceRepo: String get() = updater.sourceRepo
+
+    fun checkForUpdate() { viewModelScope.launch { updater.check() } }
+    fun downloadUpdate() { viewModelScope.launch { updater.download() } }
+    fun installUpdate() {
+        if (!updater.install()) _toast.value = "Could not start the installer"
+    }
+
     // ---- shared UI state
 
     private val _baseUrl = MutableStateFlow(SettingsStore.DEFAULT_BASE_URL)
