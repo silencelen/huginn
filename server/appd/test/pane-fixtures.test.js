@@ -94,6 +94,20 @@ test('wrapped labels: both widths detect the same STRUCTURE (but not the same la
   assert.notEqual(wf, nf, 'pane-only fingerprints differ by width (fusion fixes this)');
 });
 
+test('a tall single-question dialog at a narrow width still detects — option 1 is not dropped', () => {
+  // 3 options with wrapping descriptions run past 24 rows at 64 cols. The old
+  // fixed `lastContent - 24` lookback put option 1 outside the window, so the
+  // run started at option 2, the 1..n contiguity check failed, and the whole
+  // prompt was discarded — served to the owner only as the degraded "answer on
+  // the Screen tab" card for an ordinary single question (2026-08-11).
+  const p = detectPrompt(load('ask-tall-desc-64.txt'));
+  assert.ok(p, 'the tall narrow dialog must be detected');
+  assert.equal(p.options[0].number, 1, 'the run starts at option 1');
+  assert.ok(p.options.length >= 3, 'all of the real options are present');
+  assert.match(p.question, /approach/i, 'the question above the run is read, not lost past the window');
+  assert.equal(p.options.filter((o) => o.selected).length, 1, 'exactly one caret');
+});
+
 test('parseStatusLine reads a single-word mode (manual)', () => {
   const s = parseStatusLine(load('statusline-manual-80.txt'));
   assert.equal(s.mode, 'manual');

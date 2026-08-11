@@ -111,14 +111,23 @@ function previewLines(lines, max = 3) {
  */
 function detectPrompt(lines) {
   const plain = lines.map((l) => stripAnsi(l).replace(/\s+$/, ''));
-  // Ignore anything well above the last non-empty row; the AskUserQuestion
-  // dialog is tall (per-option descriptions), so the window is generous.
   let lastContent = -1;
   for (let i = plain.length - 1; i >= 0; i--) {
     if (plain[i].trim()) { lastContent = i; break; }
   }
   if (lastContent < 0) return null;
-  const floor = Math.max(0, lastContent - 24);
+  // Look over the WHOLE captured pane, not a fixed lookback. captureScreen
+  // captures the visible pane only (no `-S` scrollback), so there is nothing
+  // above to climb into by accident, and the run is bounded structurally (it
+  // stops AT option 1 and at the first non-indented line — the question). The
+  // old `lastContent - 24` cap dropped option 1 whenever the dialog ran taller
+  // than 24 rows: a 3-4 option AskUserQuestion with wrapping descriptions does
+  // exactly that at a narrow pane width (verified: fine to 72 cols, option 1
+  // falls off the window at 64), so the run started at option 2, the "must be
+  // 1..n contiguous" check failed, and the whole prompt was discarded — which
+  // the owner hit as a real single-question dialog served only as the degraded
+  // "answer on the Screen tab" card. Fixture: ask-tall-desc-64.txt.
+  const floor = 0;
 
   const OPTION_RE = /^(\s*)(?:[\u276F>]\s*)?(\d{1,2})[.)]\s+(\S.*)$/;
   // The selector's own help line, drawn under the options.
