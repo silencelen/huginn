@@ -951,7 +951,9 @@ fun HuginnApp(
             // Re-read on every visit rather than once: the Doze exemption is held
             // by the system and can be revoked outside this app, so a cached
             // "granted" would keep reassuring long after it stopped being true.
-            LaunchedEffect(Unit) { vm.refreshAccount(); vm.refreshDelivery(); vm.refreshAutoswitch() }
+            // The update check is check-only (no download), so it never spends data.
+            LaunchedEffect(Unit) { vm.refreshAccount(); vm.refreshDelivery(); vm.refreshAutoswitch(); vm.checkForUpdate() }
+            val updateState by vm.updateState.collectAsState()
             SettingsScreen(
                 baseUrl = baseUrl,
                 token = token,
@@ -1009,6 +1011,12 @@ fun HuginnApp(
                 onSelectRoute = { vm.selectRoute(it) },
                 onResolveRoute = { vm.resolveRoute() },
                 onUnpinRoute = { vm.unpinRoute() },
+                updateState = updateState,
+                installedVersion = vm.installedVersion,
+                updateRepo = vm.updateSourceRepo,
+                onCheckUpdate = { vm.checkForUpdate() },
+                onDownloadUpdate = { vm.downloadUpdate() },
+                onInstallUpdate = { vm.installUpdate() },
             )
         }
 

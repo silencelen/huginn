@@ -3,4 +3,7 @@
      by us after upload. Nothing outside the app's own storage is ever shared. -->
 <paths>
     <cache-path name="captures" path="captures/" />
+    <!-- Where a downloaded, sha256-verified update APK lives until the system
+         installer reads it (PhoneUpdater). App cache only. -->
+    <cache-path name="updates" path="updates/" />
 </paths>
