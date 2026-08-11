@@ -473,8 +473,11 @@ echo "  /v1/desktop still serves the Electron client: $ELECTRON (untouched)"
 # clients (they still poll $FEED). Dev-only skip (also skips the probe):
 # HUGINN_NO_GH_RELEASE=1.
 if [ "${HUGINN_NO_GH_RELEASE:-}" != 1 ]; then
-  scripts/github-release.sh desktop "$VERSION" \
-    "$DIST/manifest.json#Release manifest (per-artifact sha256)" \
+  # `../scripts/` — this script cd'd to mobile/ (top); github-release.sh lives at
+  # the repo-root scripts/. Absolute artifact paths ($CHANNEL_DIR), because
+  # github-release.sh cd's to the repo root before it checks they exist.
+  ../scripts/github-release.sh desktop "$VERSION" \
+    "$CHANNEL_DIR/manifest.json#Release manifest (per-artifact sha256)" \
     "$CHANNEL_DIR/$EXE#Windows installer (NSIS, per-user)" \
     "$CHANNEL_DIR/$DEB#Linux .deb (amd64)" \
     || { echo "FAIL: GitHub release desktop-v$VERSION did not publish — the updater fetches from it" >&2; exit 1; }
