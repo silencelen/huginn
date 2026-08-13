@@ -33,6 +33,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -61,8 +62,16 @@ fun ChatsScreen(
     onNew: (String) -> Unit,
     onDelete: (String) -> Unit,
     onOpenSettings: () -> Unit,
+    /**
+     * The home-screen widget's quick chat: a value that CHANGED asks this screen
+     * to open the new-chat question, exactly as tapping the button would. A seq
+     * rather than a flag so a second widget tap re-asks after the first was
+     * dismissed; 0 means nobody asked.
+     */
+    newChatRequest: Int = 0,
 ) {
     var showNew by remember { mutableStateOf(false) }
+    LaunchedEffect(newChatRequest) { if (newChatRequest > 0) showNew = true }
 
     Box(Modifier.fillMaxSize()) {
         if (chats.isEmpty() && !loading) {
