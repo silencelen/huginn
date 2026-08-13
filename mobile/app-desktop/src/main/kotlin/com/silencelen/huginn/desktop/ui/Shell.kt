@@ -19,13 +19,20 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.Chat
+import androidx.compose.material.icons.outlined.Settings
+import androidx.compose.material.icons.outlined.Speed
+import androidx.compose.material.icons.outlined.Terminal
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -43,6 +50,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.pointer.PointerIcon
 import androidx.compose.ui.input.pointer.pointerHoverIcon
 import androidx.compose.ui.unit.dp
@@ -397,14 +405,19 @@ private fun NavRail(
         Modifier.width(Frame.railWidth).fillMaxHeight()
             .background(MaterialTheme.colorScheme.surfaceVariant)
             .padding(vertical = Space.unit),
-        horizontalAlignment = Alignment.Start,
+        horizontalAlignment = Alignment.CenterHorizontally,
     ) {
-        // COUNTS, and they are the reason this rail is no longer three words in a
-        // 104×800 void. A count is the cheapest true fact about a list and the one
-        // the rail was already the right place for; the attention mark beside
-        // "Sessions" is the same dot the row uses, because a second vocabulary for
-        // the same state is how a legend becomes necessary.
+        // ICONS with counts; the words live on hover. The rail used to SAY
+        // "Chats / Sessions / Status" beside a list pane whose own header says
+        // the same word — the same fact twice in adjacent columns (owner,
+        // 2026-08-12). The icon carries the destination, the tooltip and the
+        // icon's contentDescription carry the word, and the two facts the rail
+        // was already the right place for stay: a count is the cheapest true
+        // fact about a list, and the attention mark beside the terminal is the
+        // same dot the row uses, because a second vocabulary for the same
+        // state is how a legend becomes necessary.
         RailItem(
+            icon = Icons.Outlined.Chat,
             label = "Chats",
             count = chats,
             active = current == View.CHATS,
@@ -412,6 +425,7 @@ private fun NavRail(
             mark = if (chatsRunning > 0) MaterialTheme.colorScheme.primary else null,
         ) { onSelect(View.CHATS) }
         RailItem(
+            icon = Icons.Outlined.Terminal,
             label = "Sessions",
             count = sessions,
             active = current == View.SESSIONS,
@@ -419,31 +433,37 @@ private fun NavRail(
             mark = if (sessionsWaiting > 0) MaterialTheme.colorScheme.error else null,
         ) { onSelect(View.SESSIONS) }
         RailItem(
+            icon = Icons.Outlined.Speed,
             label = "Status",
             count = 0,
             active = current == View.STATUS,
-            tip = "Host, plan headroom and token usage",
+            tip = "Status · host, plan headroom and token usage",
             mark = null,
         ) { onSelect(View.STATUS) }
 
         Spacer(Modifier.weight(1f))
         RailItem(
+            icon = Icons.Outlined.Settings,
             label = "Settings",
             count = 0,
             active = current == View.SETTINGS,
-            tip = "Server, accounts, notifications, diagnostics",
+            tip = "Settings · server, accounts, notifications, diagnostics",
             mark = null,
         ) { onSelect(View.SETTINGS) }
     }
 }
 
 /**
- * A rail row. Selection is a surface tint and ink weight, NOT a left accent bar —
- * house rule, and the reason is that an accent bar is the single most legible tell
- * of a generated interface.
+ * A rail item: the icon says where, the count says how much, the dot says "needs
+ * you" — and the WORD lives in the tooltip and the icon's contentDescription,
+ * because on the rail it only ever repeated the header of the pane it opened.
+ * Selection is a surface tint and ink weight, NOT a left accent bar — house rule,
+ * and the reason is that an accent bar is the single most legible tell of a
+ * generated interface.
  */
 @Composable
 private fun RailItem(
+    icon: ImageVector,
     label: String,
     count: Int,
     active: Boolean,
@@ -454,7 +474,7 @@ private fun RailItem(
     val interaction = remember { MutableInteractionSource() }
     val hovered by interaction.collectIsHoveredAsState()
     Tip(tip) {
-        Row(
+        Column(
             Modifier.fillMaxWidth()
                 // The SAME "where you are" wash the open list row uses: one mark
                 // with one meaning across the whole frame, rather than a grey here
@@ -469,21 +489,29 @@ private fun RailItem(
                 .hoverable(interaction)
                 .pointerHoverIcon(PointerIcon(Cursor(Cursor.HAND_CURSOR)))
                 .clickable(interactionSource = interaction, indication = null, onClick = onClick)
-                .padding(horizontal = Space.wide, vertical = Space.unit),
-            verticalAlignment = Alignment.CenterVertically,
+                .padding(vertical = Space.unit),
+            horizontalAlignment = Alignment.CenterHorizontally,
         ) {
-            Text(
-                label,
-                style = DeskType.rail,
-                color = if (active) MaterialTheme.colorScheme.onSurface
-                else MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-            Spacer(Modifier.weight(1f))
-            mark?.let {
-                Box(Modifier.size(Frame.markDot).clip(CircleShape).background(it))
-                Spacer(Modifier.width(Space.tight))
+            Box {
+                Icon(
+                    icon,
+                    contentDescription = label,
+                    modifier = Modifier.size(20.dp),
+                    tint = if (active) MaterialTheme.colorScheme.onSurface
+                    else MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                // The mark rides the icon's shoulder rather than taking a row of
+                // its own: same dot, same meaning, no second line to pay for.
+                mark?.let {
+                    Box(
+                        Modifier.align(Alignment.TopEnd)
+                            .offset(x = Space.hair, y = -Space.hair)
+                            .size(Frame.markDot).clip(CircleShape).background(it)
+                    )
+                }
             }
             if (count > 0) {
+                Spacer(Modifier.height(Space.hair))
                 Text(
                     "$count",
                     style = DeskType.rowMeta,
