@@ -2,4 +2,6 @@
     <string name="app_name">Huginn</string>
     <string name="widget_fleet_label">Huginn sessions</string>
     <string name="widget_fleet_description">Your sessions at a glance: who needs you, what is working, and a quick way to start a chat.</string>
+    <string name="widget_ask_label">Ask huginn</string>
+    <string name="widget_ask_description">A search bar for huginn: tap, type a question, and it becomes a chat.</string>
 </resources>
