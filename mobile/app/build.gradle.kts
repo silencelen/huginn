@@ -45,7 +45,7 @@ android {
         // devstore fleet convention. HUGINN_VERSIONCODE overrides for pinned builds.
         versionCode   = System.getenv("HUGINN_VERSIONCODE")?.toIntOrNull()
             ?: (System.currentTimeMillis() / 1000L - 1_767_225_600L).toInt()
-        versionName   = "2.60.0"
+        versionName   = "2.61.0"
 
         // Single-ABI for smaller APK; phone is arm64-v8a.
         ndk { abiFilters += listOf("arm64-v8a") }
@@ -143,6 +143,10 @@ dependencies {
     implementation(libs.androidx.datastore.preferences)
     // Background poll that notices when a session starts waiting on you.
     implementation(libs.androidx.work.runtime.ktx)
+    // The home-screen widget (FleetWidget): the session fleet on the launcher,
+    // drawn from the snapshot every watch observation records.
+    implementation(libs.androidx.glance.appwidget)
+    implementation(libs.androidx.glance.material3)
 
     // FCM. The one transport that reaches a phone asleep with the app closed, in
     // seconds rather than at the next alarm — everything else here either waits for

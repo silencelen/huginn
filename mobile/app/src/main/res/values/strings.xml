@@ -1,3 +1,5 @@
 <resources>
     <string name="app_name">Huginn</string>
+    <string name="widget_fleet_label">Huginn sessions</string>
+    <string name="widget_fleet_description">Your sessions at a glance: who needs you, what is working, and a quick way to start a chat.</string>
 </resources>

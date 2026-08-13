@@ -5,6 +5,7 @@ import androidx.core.app.NotificationManagerCompat
 import com.silencelen.huginn.data.HuginnClient
 import com.silencelen.huginn.data.SettingsStore
 import com.silencelen.huginn.data.Watch
+import com.silencelen.huginn.widget.FleetWidget
 import kotlinx.coroutines.flow.first
 
 /**
@@ -52,6 +53,12 @@ object WatchNotifier {
         watch: Watch,
         client: HuginnClient? = null,
     ): WatchCycle.Outcome {
+        // The widget's snapshot, recorded on EVERY observation and before the
+        // seeding shortcut below: the very first look carries no transitions
+        // worth announcing, but it is exactly as good a picture of the fleet as
+        // any later one, and a freshly placed widget should not wait for the
+        // second observation to say something.
+        recordFleet(context, settings, watch)
         val needing = watch.sessions.filterValues { it == "attention" }.keys
         val running = watch.chats.filterValues { it.running }.keys
         val runsNow = watch.chats.mapValues { it.value.finishedRuns }
@@ -167,5 +174,19 @@ object WatchNotifier {
         if (runsNow != runsBefore) settings.setChatRuns(runsNow)
 
         return WatchCycle.Outcome(needing, running, notified = posted, seeded = false)
+    }
+
+    /**
+     * Persists the widget's view of this observation and redraws the widget.
+     *
+     * Inside [apply] so every path an observation arrives by feeds the widget
+     * for free; public and separate so a widget-initiated refresh with
+     * notifications switched OFF can still record what it saw without running
+     * the announcing half — the widget staying current must never override a
+     * silence the owner chose.
+     */
+    suspend fun recordFleet(context: Context, settings: SettingsStore, watch: Watch) {
+        settings.setFleetSnapshot(Fleet.encode(Fleet.snapshot(watch, System.currentTimeMillis())))
+        FleetWidget.update(context)
     }
 }
