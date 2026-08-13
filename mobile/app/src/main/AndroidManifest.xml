@@ -164,5 +164,29 @@
                 android:name="android.appwidget.provider"
                 android:resource="@xml/fleet_widget_info" />
         </receiver>
+
+        <!-- The ask bar: a search-bar widget that opens AskActivity. -->
+        <receiver
+            android:name=".widget.AskWidgetReceiver"
+            android:exported="true"
+            android:label="@string/widget_ask_label">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+            </intent-filter>
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/ask_widget_info" />
+        </receiver>
+
+        <!-- The ask bar's overlay: a text field over the launcher, keyboard up.
+             Not exported — only this app's own widget PendingIntent opens it.
+             Excluded from Recents because it is a moment, not a place: after a
+             send (or a dismissal) there is nothing to come back to. -->
+        <activity
+            android:name=".widget.AskActivity"
+            android:exported="false"
+            android:excludeFromRecents="true"
+            android:theme="@style/Theme.Huginn.Ask"
+            android:windowSoftInputMode="adjustResize|stateVisible" />
     </application>
 </manifest>
