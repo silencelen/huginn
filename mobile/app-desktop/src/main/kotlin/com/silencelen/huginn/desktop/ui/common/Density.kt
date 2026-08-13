@@ -50,8 +50,8 @@ object Space {
  * geometry of the window itself, and each one is a decision rather than a gap.
  */
 object Frame {
-    /** The nav rail. Wide enough for "Sessions" plus a count, and no wider. */
-    val railWidth = 104.dp
+    /** The nav rail. An icon column — the words live on hover — and no wider. */
+    val railWidth = 52.dp
 
     // The list pane's width is not here: it is persisted state, so its bounds live
     // with the thing that stores them (`com.silencelen.huginn.desktop.Splitter`).
@@ -123,7 +123,7 @@ object DeskType {
     val rowMeta: TextStyle
         @Composable get() = MaterialTheme.typography.labelSmall.copy(fontSize = 11.sp, lineHeight = 14.sp)
 
-    /** The nav rail's items. */
+    /** A compact control label: the list headers' "+ New" buttons, inline loads. */
     val rail: TextStyle
         @Composable get() = MaterialTheme.typography.labelMedium
 

@@ -14,6 +14,19 @@ the Electron client's go to `/v1/desktop` and the two never mix — see
      refusal is deliberate — it is what stops a release going out with no notes.
      ─────────────────────────────────────────────────────────────────────────── -->
 
+## 0.7.0
+
+### The rail speaks icon
+
+The nav rail's text tabs — Chats, Sessions, Status — repeated the header of
+the very pane they opened: two adjacent columns saying the same word. Each tab
+is now an icon (a chat bubble, a terminal, a gauge; Settings keeps its gear at
+the foot), with the word on hover and in the accessibility description, and
+the rail slims from 104dp to 52dp — the width goes to the panes that carry
+actual content. Everything the rail already told you stays: the count under
+the icon, the attention dot (now riding the icon's shoulder), and the same
+selection wash the open list row uses.
+
 ## 0.6.0
 
 ### Updates come from GitHub now
