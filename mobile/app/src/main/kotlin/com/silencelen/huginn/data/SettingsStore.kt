@@ -55,6 +55,20 @@ class SettingsStore(private val context: Context) : HuginnSettings {
         private val LAST_ALARM = longPreferencesKey("last_alarm_at")
         private val LAST_ERROR = stringPreferencesKey("last_watch_error")
         private val LAST_ERROR_AT = longPreferencesKey("last_watch_error_at")
+        private val FLEET = stringPreferencesKey("fleet_snapshot")
+    }
+
+    /**
+     * The home-screen widget's copy of the last observation, encoded by
+     * [com.silencelen.huginn.notify.Fleet]. Cached rather than fetched at render
+     * time: a widget draws whenever the launcher asks it to, including with the
+     * host unreachable, and it should draw the last truth it saw — dated — not
+     * an error.
+     */
+    val fleetSnapshot: Flow<String> = context.dataStore.data.map { it[FLEET] ?: "" }
+
+    suspend fun setFleetSnapshot(encoded: String) {
+        context.dataStore.edit { it[FLEET] = encoded }
     }
 
     /**
