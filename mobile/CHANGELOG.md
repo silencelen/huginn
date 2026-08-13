@@ -1,5 +1,16 @@
 # Huginn changelog
 
+## 2.62.0 — 2026-08-12
+
+### The ask bar
+
+A second widget: a search-bar for huginn, the launcher's quick-search shape.
+Tap it and a thin overlay opens over the home screen with the keyboard already
+up — type a question, pick Ask or Act, hit send, and it becomes a chat you land
+in as the answer streams. Nothing is created on the host until you actually
+send, and the overlay honours the app lock: it is a second doorway into
+free-text-to-the-host, so it demands the same unlock the front door does.
+
 ## 2.61.0 — 2026-08-12
 
 ### The fleet on your home screen

@@ -5,4 +5,14 @@
         <item name="android:navigationBarColor">@color/huginn_bg</item>
         <item name="android:windowBackground">@color/huginn_bg</item>
     </style>
+
+    <!-- The ask overlay (AskActivity): transparent window so the launcher stays
+         visible behind the scrim — the overlay is a sheet over the home screen,
+         not an app opening. -->
+    <style name="Theme.Huginn.Ask" parent="android:Theme.Material.NoActionBar">
+        <item name="android:windowBackground">@android:color/transparent</item>
+        <item name="android:windowIsTranslucent">true</item>
+        <item name="android:statusBarColor">@android:color/transparent</item>
+        <item name="android:navigationBarColor">@android:color/transparent</item>
+    </style>
 </resources>
