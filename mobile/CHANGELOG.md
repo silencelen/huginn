@@ -1,5 +1,23 @@
 # Huginn changelog
 
+## 2.61.0 — 2026-08-12
+
+### The fleet on your home screen
+
+A home-screen widget shows the session fleet without opening the app: who needs
+you first, what is working, what is waiting, plus how many chats are running.
+Tap a session to open it; tap **New chat** to land in the app with the ask/act
+question already open; the arrow refreshes on demand.
+
+The widget draws the last observation the app recorded — every path an
+observation arrives by (push, stream, alarm, background poll) feeds it, so it
+stays current without a watcher of its own, and an "as of" time says exactly how
+fresh what you are looking at is. Placement and a half-hour system tick also
+refetch on their own, so the widget keeps working even with notifications
+switched off. Resizing it taller shows more sessions.
+
+No daemon change: appd stays at 2.59.x.
+
 ## 2.60.0 / appd 2.59.0 — 2026-08-11
 
 ### Update the app from within the app

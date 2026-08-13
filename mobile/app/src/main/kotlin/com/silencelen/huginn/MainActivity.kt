@@ -94,6 +94,7 @@ import com.silencelen.huginn.ui.ShareTargetSheet
 import com.silencelen.huginn.ui.SignInDialog
 import com.silencelen.huginn.ui.StatusScreen
 import com.silencelen.huginn.ui.theme.HuginnTheme
+import com.silencelen.huginn.widget.FleetWidget
 
 class MainActivity : FragmentActivity() {
 
@@ -123,6 +124,7 @@ class MainActivity : FragmentActivity() {
     private fun readTarget(intent: Intent?) {
         val session = intent?.getStringExtra(SessionWatchWorker.EXTRA_SESSION)
         val chat = intent?.getStringExtra(SessionWatchWorker.EXTRA_CHAT)
+        val newChat = intent?.getBooleanExtra(FleetWidget.EXTRA_NEW_CHAT, false) == true
         // The system share sheet. Text and images arrive as different extras of
         // the same action, and either one means "start a chat about this".
         var shareText: String? = null
@@ -144,8 +146,8 @@ class MainActivity : FragmentActivity() {
         // Only when there is something to go to. A plain launcher tap carries
         // none of these, and overwriting the target with nulls would yank the
         // reader out of wherever they already were.
-        if (session != null || chat != null || shareText != null || shareImage != null) {
-            openTarget.value = OpenTarget(session, chat, ++targetSeq, shareText, shareImage)
+        if (session != null || chat != null || shareText != null || shareImage != null || newChat) {
+            openTarget.value = OpenTarget(session, chat, ++targetSeq, shareText, shareImage, newChat)
             // CONSUMED. getIntent() keeps returning the launching intent forever,
             // so without stripping it every activity recreation — rotate, fold,
             // unlock, theme change — re-read the same extras and navigated again,
@@ -154,6 +156,7 @@ class MainActivity : FragmentActivity() {
             intent?.apply {
                 removeExtra(SessionWatchWorker.EXTRA_SESSION)
                 removeExtra(SessionWatchWorker.EXTRA_CHAT)
+                removeExtra(FleetWidget.EXTRA_NEW_CHAT)
                 removeExtra(Intent.EXTRA_TEXT)
                 removeExtra(Intent.EXTRA_SUBJECT)
                 removeExtra(Intent.EXTRA_STREAM)
@@ -339,6 +342,8 @@ data class OpenTarget(
     val shareText: String? = null,
     /** An image shared in; staged as the new chat's attachment. */
     val shareImage: Uri? = null,
+    /** The widget's quick chat: land on Chats with the new-chat question open. */
+    val newChat: Boolean = false,
 )
 
 /**
@@ -398,6 +403,9 @@ fun HuginnApp(
     var dest by rememberSaveable(stateSaver = DestSaver) { mutableStateOf<Dest>(Dest.Sessions) }
     var sessionTab by rememberSaveable { mutableStateOf(0) }
     var pendingShare by remember { mutableStateOf<OpenTarget?>(null) }
+    // The widget's quick chat, handed to ChatsScreen as the target's seq so a
+    // second tap on the widget re-opens the question a first tap dismissed.
+    var newChatAsk by remember { mutableStateOf(0) }
 
     // What is on screen, published for notification suppression: a buzz about the
     // conversation the reader is already watching carries nothing. Cleared when
@@ -433,6 +441,14 @@ fun HuginnApp(
                 // constructed here has not asked to load; without this it opens empty.
                 vm.openChat(t.chat)
                 dest = Dest.Chat(t.chat)
+            }
+            t.newChat -> {
+                // The widget's quick chat lands on Chats with the ask/act question
+                // already open — creation still costs one deliberate tap, so a
+                // stray touch on the launcher cannot mint empty chats on the host.
+                tab = 0
+                dest = Dest.Chats
+                newChatAsk = t.seq
             }
             t.shareText != null || t.shareImage != null -> {
                 // Something shared in from another app. Where it lands is the
@@ -780,6 +796,7 @@ fun HuginnApp(
                 onNew = { mode -> vm.newChat(mode) { id -> vm.openChat(id); dest = Dest.Chat(id) } },
                 onDelete = { vm.deleteChat(it) },
                 onOpenSettings = { dest = Dest.Settings },
+                newChatRequest = newChatAsk,
             )
         }
         val chatDetail: @Composable (String) -> Unit = { id ->

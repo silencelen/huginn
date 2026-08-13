@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The fleet widget. updatePeriodMillis is a 30-minute BACKSTOP, not the feed:
+     real updates ride every observation (push, stream, alarm, worker) through
+     WatchNotifier. The tick exists so a widget on a phone with notifications
+     switched off still refetches on its own while the device is awake. -->
+<appwidget-provider xmlns:android="http://schemas.android.com/apk/res/android"
+    android:minWidth="180dp"
+    android:minHeight="110dp"
+    android:targetCellWidth="3"
+    android:targetCellHeight="2"
+    android:resizeMode="horizontal|vertical"
+    android:widgetCategory="home_screen"
+    android:updatePeriodMillis="1800000"
+    android:description="@string/widget_fleet_description" />
