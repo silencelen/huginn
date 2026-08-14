@@ -12,7 +12,7 @@ cd "$(dirname "$0")/.."
 
 DESKTOP_DIR=/var/lib/huginn-appd/desktop
 TOKEN_FILE=/etc/huginn-appd/token
-BASE_URL=${HUGINN_APPD_URL:-http://100.97.198.90:8787}
+BASE_URL=${HUGINN_APPD_URL:-http://$(tailscale ip -4 2>/dev/null || echo 127.0.0.1):8787}
 KEEP=2
 
 LINUX_ONLY=0

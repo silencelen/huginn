@@ -249,7 +249,7 @@ older hook that writes only the bare state word is still accepted.
 ## Build and ship
 
 ```bash
-scripts/ship.sh  [release|debug]   # build + scp to devserv + reindex + verify live
+scripts/ship.sh  [release|debug]   # build + publish to your store host + reindex + verify live
 scripts/build.sh [release|debug]   # tests + assemble only, no publish
 scripts/release-desktop.sh         # the Compose DESKTOP client -> /v1/desktop-kt
 ```
@@ -267,7 +267,7 @@ Requires JDK 17 (`/usr/lib/jvm/java-17-openjdk-amd64`) and
 - `versionCode` = seconds since 2026-01-01, computed in Gradle (devstore fleet
   convention); `HUGINN_VERSIONCODE` pins it.
 - **Release** signs with `~/.huginn-app/keystore.properties` (alias
-  `huginn-release`, backed up to `devserv:~/backups/huginn-app-keystore/`).
+  `huginn-release`, backed up off-box — see `.shiprc` for your publish target).
   Without that file the release APK builds unsigned and both scripts refuse to
   ship it.
 - **Debug** signs with the checked-in `app/debug.keystore`, so debug builds carry
