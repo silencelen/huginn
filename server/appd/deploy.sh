@@ -49,3 +49,19 @@ APPD_ADDR="${HUGINN_APPD_URL:-http://$(tailscale ip -4 2>/dev/null || echo 127.0
 PING="$(curl -sf -H "Authorization: Bearer $TOKEN" "$APPD_ADDR/v1/ping")"
 echo "[deploy] $PING"
 grep -q '"ok":true' <<<"$PING" || { echo "[deploy] daemon did not come back healthy" >&2; exit 1; }
+
+# Mirror the release to GitHub, like ship.sh and release-desktop.sh already do.
+# Without this appd was the only component whose public Releases page did not track
+# what is actually deployed -- it silently reached 2.59.1 while appd-v2.55.0 was the
+# newest published. Best-effort by design: the daemon is already live and healthy
+# above, so a GitHub hiccup must not fail a good deploy. Skip: HUGINN_NO_GH_RELEASE=1.
+if [ "${HUGINN_NO_GH_RELEASE:-}" != 1 ]; then
+  VER="$(grep -m1 "^const VERSION" "$SRC/huginn-appd.js" | sed "s/.*'\(.*\)'.*/\1/")"
+  REPO_ROOT="$(cd "$SRC/../.." && pwd)"
+  if [ -n "$VER" ] && "$REPO_ROOT/scripts/github-release.sh" appd "$VER"; then
+    echo "[deploy] GitHub release appd-v$VER updated"
+  else
+    echo "[deploy] WARNING: GitHub release failed for appd ${VER:-?} — the deploy above is unaffected." >&2
+    echo "[deploy]          Most likely server/appd/CHANGELOG.md has no '## $VER' section: write the notes, then re-run." >&2
+  fi
+fi
