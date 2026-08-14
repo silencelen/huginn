@@ -27,6 +27,9 @@
 #
 # Usage: scripts/release-desktop.sh [--linux-only] [--skip-tests] [--skip-wine-install]
 set -euo pipefail
+# Capture the repo root BEFORE the cd: $0 is relative, so re-resolving dirname "$0"
+# after changing directory points nowhere (that broke the test-floors sourcing).
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "$(dirname "$0")/.."          # -> mobile/
 
 CHANNEL_DIR=/var/lib/huginn-appd/desktop-kt
@@ -167,7 +170,7 @@ if [ "$SKIP_TESTS" = 0 ]; then
   # pure decisions that fail SILENTLY when wrong (a menu that deletes four rows
   # while reading "Delete", a window restored onto a monitor that is gone), so
   # they are asserted rather than eyeballed. +28 in :app-desktop.
-  . "$(cd "$(dirname "$0")/../.." && pwd)/scripts/test-floors.env"
+  . "$REPO_ROOT/scripts/test-floors.env"
   KOTLIN_MIN=$(( KOTLIN_SHARED_MIN + DESKTOP_EXTRA_MIN ))   # computed, never hand-summed
   KOTLIN_COUNT=0
   for D in core/build/test-results/jvmTest \

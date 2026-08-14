@@ -54,8 +54,11 @@ echo "[3/4] both clients expose the same verbs (parity by verb)"
 # huginn.sh writes cases as alternations (`list|ls)`, `status|st)`), so match the
 # verb as a case ALTERNATIVE, not as a bare `verb)`.
 for v in end kill solo rename list status usage update version help; do
-  a=$(grep -cE "(^|[|'\"/[:space:]])$v(\||\))" client/huginn.sh)
-  b=$(grep -cE "'$v'" client/huginn.ps1)
+  # Match the DISPATCH, not a mention: huginn.ps1 lists every verb in its
+  # completion array too, so grepping "'$v'" passes even with the branch deleted
+  # (verified by removing the `end` branch: still 2 matches, still green).
+  a=$(grep -cE "^[[:space:]]+([a-z'?/-]+\|)*$v(\||\))" client/huginn.sh)
+  b=$(grep -cE "\\\$args\[0\] -(eq|in) [^;]*'$v'" client/huginn.ps1)
   [ "$a" -gt 0 ] && [ "$b" -gt 0 ] && ok "verb $v" || bad "verb $v missing (sh=$a ps1=$b)"
 done
 
