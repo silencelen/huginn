@@ -10,7 +10,36 @@ Format loosely follows [Keep a Changelog](https://keepachangelog.com/); versions
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-08-14
+
 ### Added
+- **`huginn end <name>` — a soft end.** Asks Claude to wrap up and commit, and (when
+  auto-end is on for the host) ends the session once it goes idle. `huginn kill` remains
+  the hard end. This is a daemon feature — it types into the pane and watches state — so
+  there is no tmux fallback.
+- **A shared appd reach helper in both clients.** The bearer token is root-only on the
+  host, so the call runs there over the ssh alias and only the result comes back; the
+  token never touches a client device.
+
+### Changed
+- **`huginn kill` now prefers the daemon's `DELETE /v1/sessions/<name>`**, which also
+  clears the orphaned `/run` state file and releases the pane lease that a bare
+  `tmux kill-session` leaves behind (Claude's SessionEnd hook never fires on a kill).
+  Falls back to tmux when the daemon is unreachable — kill must work even when appd is down.
+- **Windows parity.** `huginn.ps1` gains `end`, the appd helper, the DELETE-preferring
+  `kill`, and the ask/act tool fence, so both clients expose the same verbs at the same
+  version. The two version constants and this changelog head are now the release gate.
+
+### Fixed
+- **`huginn -p` never actually denied anything.** The deny-list was assembled into a
+  remote shell variable and then expanded unquoted, so `claude` received `'Bash`, `Edit`,
+  `Write`, `NotebookEdit'` — literal quote characters, no valid tool name — and the fence
+  the code documents as "the real fence" was inert. `--allowedTools` only auto-approves,
+  so a read-only `-p` query could still be granted Bash. The flag is now built client-side
+  and interpolated so its quoting is bash syntax on the host. Anyone who ran
+  `huginn update` after the soft-end work landed has the broken form; update again.
+
+### Infrastructure
 - **A GitHub release pipeline** (`scripts/github-release.sh`): one repo, four
   independently-versioned components, so tags are namespaced — `vX.Y.Z` is the
   CLI/server core, `app-vX.Y.Z` the Android app, `desktop-vX.Y.Z` the Compose

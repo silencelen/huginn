@@ -275,14 +275,19 @@ EOF
       # DISALLOWED): -p is read-only reasoning + web + memory, -y may also mutate.
       # The DISALLOWED deny-list is the real fence — --allowedTools only
       # auto-approves, so without it a -p query could still be granted Bash.
-      local tools disallow
+      # The flag is assembled HERE and interpolated into the remote command, so the
+      # quoting is bash SYNTAX on the host. Building it into a remote variable and
+      # expanding it unquoted (the 0.8.0 pre-release form) word-split it into
+      # `'Bash` `Edit` `Write` `NotebookEdit'` — literal quotes, no valid tool name,
+      # so nothing was actually denied.
+      local tools dflag
       if [ "$mode" = "-y" ]; then
-        tools="Bash Read Edit Write Glob Grep WebFetch WebSearch mcp__mempalace"; disallow=""
+        tools="Bash Read Edit Write Glob Grep WebFetch WebSearch mcp__mempalace"; dflag=""
       else
-        tools="mcp__mempalace WebFetch WebSearch"; disallow="Bash Edit Write NotebookEdit"
+        tools="mcp__mempalace WebFetch WebSearch"; dflag="--disallowedTools 'Bash Edit Write NotebookEdit'"
       fi
       # Persona-aware: if the host carries persona.md, inject it + memory tools; else plain headless query.
-      ssh -T "$H" "cd \"\${HUGINN_WORKDIR:-\$HOME}\" 2>/dev/null || cd \"\$HOME\"; P=\"\$(cat /usr/local/share/huginn-cli/persona.md 2>/dev/null)\"; D=''; [ -n '$disallow' ] && D=\"--disallowedTools '$disallow'\"; if [ -n \"\$P\" ]; then echo '$q' | claude -p --append-system-prompt \"\$P\" --allowedTools '$tools' \$D; else echo '$q' | claude -p; fi" ;;
+      ssh -T "$H" "cd \"\${HUGINN_WORKDIR:-\$HOME}\" 2>/dev/null || cd \"\$HOME\"; P=\"\$(cat /usr/local/share/huginn-cli/persona.md 2>/dev/null)\"; if [ -n \"\$P\" ]; then echo '$q' | claude -p --append-system-prompt \"\$P\" --allowedTools '$tools' $dflag; else echo '$q' | claude -p; fi" ;;
     *)
       _huginn_valid_name "$1" || { echo "huginn: invalid session name '$1' (use letters, digits, underscore; no - or *). Did you mean a subcommand? Try 'huginn help'." >&2; return 1; }
       _huginn_attach "$H" "$1" ;;
