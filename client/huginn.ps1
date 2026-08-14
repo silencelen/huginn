@@ -3,9 +3,9 @@
 #     if (Test-Path "$HOME\.huginn\huginn.ps1") { . "$HOME\.huginn\huginn.ps1" }
 # Targets the `huginn` SSH alias by default; override per-device with:  $env:HUGINN_HOST = 'my-host'
 # Self-update with:  huginn update   (pulls this file from the repo; gh -> scp fallback)
-# Version: 0.7.1
+# Version: 0.8.0
 
-$script:HUGINN_VERSION = '0.7.1'
+$script:HUGINN_VERSION = '0.8.0'
 $script:HUGINN_REPO    = 'silencelen/huginn'
 
 # A session name is letters, digits, and underscore only - no '-', '*', spaces or
@@ -22,6 +22,23 @@ function _Huginn-CanonName { param([string]$Name) return $Name.ToLower() }
 # 'andvariautofill', and 'huginn solo jt' would evict the real client of 'jtyper'.
 # Anchoring with '=' forces exact match (tmux(1) "exact-match").
 function _Huginn-TmuxTarget { param([string]$Name) return "=$Name" }
+
+# Reach huginn-appd, which listens on the HOST's loopback. The bearer token is
+# root-only on the host, so the call runs THERE (over the ssh alias) and only the
+# result comes back - the token never touches a client device.
+# Base64 for the same reason as the -p/-y path below: PS 5.1 mangles embedded
+# double quotes when marshalling to a native exe, and this command carries both
+# quotes and a $(...) that must be evaluated on the host.
+# Returns the raw body on success (possibly empty) or $null on any HTTP error /
+# unreachable daemon, which callers use to fall back.
+function _Huginn-Appd {
+  param([string]$H, [string]$Method, [string]$Path)
+  $remote = 'curl -sf -X ' + $Method + ' -H "Authorization: Bearer $(cat /etc/huginn-appd/token 2>/dev/null)" "http://127.0.0.1:8787' + $Path + '"'
+  $b64 = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($remote))
+  $out = ssh -T -o BatchMode=yes -o ConnectTimeout=10 $H "echo $b64 | base64 -d | bash -s" 2>$null
+  if ($LASTEXITCODE -ne 0) { return $null }
+  return ($out -join '')
+}
 
 # --- auto-reconnecting attach ---
 # The session lives in tmux ON the host, so a dropped link (laptop sleep, wifi
@@ -108,7 +125,9 @@ function huginn {
   huginn list | ls            list sessions + attach status
   huginn status | st          health: uptime, auth, sessions, disk
   huginn rename <old> <new>   rename a session (alias: mv)
-  huginn kill <name>          end a session
+  huginn end <name>           soft end: ask Claude to wrap up + commit, then
+                              (if auto-end is on) end it once it goes idle
+  huginn kill <name>          hard end: stop the session now
   huginn -p "question"        one-shot headless query (reasoning + memory, read-only)
   huginn -y "task"            one-shot that may use tools (bash/files/web + memory)
   huginn usage [args]         Claude Code token/cost report (ccusage; default: daily)
@@ -222,12 +241,46 @@ function huginn {
     if ($args.Count -lt 2) { Write-Host "usage: huginn kill <name>"; return }
     if (-not (_Huginn-ValidName $args[1])) { Write-Host "huginn: invalid session name '$($args[1])' (use letters, digits, underscore; no - or *)" -ForegroundColor Red; return }
     $kn = _Huginn-CanonName $args[1]
-    # '=' anchor: without it 'huginn kill andvari' kills 'andvariautofill'.
-    ssh -T $H "tmux kill-session -t '$(_Huginn-TmuxTarget $kn)' && echo 'killed: $kn'"
+    # Prefer the daemon's DELETE: it also removes the orphaned /run state file and
+    # releases the pane lease, which a bare tmux kill-session leaves behind (Claude's
+    # SessionEnd hook never fires on a kill). Fall back to tmux when the daemon is
+    # unreachable - kill must work even when appd is down.
+    # '=' anchor on the fallback: without it 'huginn kill andvari' kills 'andvariautofill'.
+    if ($null -ne (_Huginn-Appd -H $H -Method 'DELETE' -Path "/v1/sessions/$kn")) {
+      Write-Host "killed: $kn"
+    } else {
+      ssh -T $H "tmux kill-session -t '$(_Huginn-TmuxTarget $kn)' && echo 'killed: $kn'"
+    }
+  } elseif ($args[0] -eq 'end') {
+    if ($args.Count -lt 2) { Write-Host "usage: huginn end <name>"; return }
+    if (-not (_Huginn-ValidName $args[1])) { Write-Host "huginn: invalid session name '$($args[1])' (use letters, digits, underscore; no - or *)" -ForegroundColor Red; return }
+    $en = _Huginn-CanonName $args[1]
+    # Soft end: ask Claude to wrap up (finish, commit, prepare to end) and - when
+    # auto-end is on for the host - end the session once it settles. This is a DAEMON
+    # feature (it types into the pane and watches state), so there is no tmux fallback;
+    # the phrase is whatever the host is configured to send.
+    $r = _Huginn-Appd -H $H -Method 'POST' -Path "/v1/sessions/$en/soft-end"
+    if ($null -eq $r) { Write-Host "huginn: soft-end failed for '$en' (is huginn-appd running? is the session a live Claude pane?)" -ForegroundColor Red; return }
+    $phrase = 'wrap-up phrase'; $auto = ''
+    try {
+      $j = $r | ConvertFrom-Json
+      if ($j.phrase) { $phrase = $j.phrase }
+      if ($j.auto)   { $auto = ' (auto-ends when it goes idle)' }
+    } catch {}
+    Write-Host "soft-ended '$en': sent `"$phrase`"$auto"
   } elseif ($args[0] -eq '-p' -or $args[0] -eq '-y') {
     if ($args.Count -lt 2) { Write-Host "usage: huginn $($args[0]) ""your prompt"""; return }
     $q = ($args[1..($args.Count - 1)] -join ' '); $esc = $q -replace "'", "'\''"  # POSIX single-quote escape
-    $tools = if ($args[0] -eq '-y') { "Bash Read Edit Write Glob Grep WebFetch mcp__mempalace" } else { "mcp__mempalace" }
+    # Kept in step with huginn-appd's ask/act tool sets (server/appd TOOLS/
+    # DISALLOWED): -p is read-only reasoning + web + memory, -y may also mutate.
+    # The DISALLOWED deny-list is the real fence - --allowedTools only auto-approves,
+    # so without it a -p query could still be granted Bash.
+    # The flag is assembled HERE and interpolated into the remote script, so its
+    # quoting is bash SYNTAX on the host. Assembling it in a remote variable and
+    # expanding that unquoted word-splits it into `'Bash` `Edit` `Write`
+    # `NotebookEdit'` - literal quotes, no valid tool name, nothing actually denied.
+    $tools = if ($args[0] -eq '-y') { "Bash Read Edit Write Glob Grep WebFetch WebSearch mcp__mempalace" } else { "mcp__mempalace WebFetch WebSearch" }
+    $dflag = if ($args[0] -eq '-y') { '' } else { "--disallowedTools 'Bash Edit Write NotebookEdit'" }
     # Persona-aware: if the host carries persona.md, inject it + memory tools; else plain headless query.
     #
     # The remote script is base64'd rather than passed as a quoted argument.
@@ -241,7 +294,7 @@ function huginn {
 cd "`${HUGINN_WORKDIR:-`$HOME}" 2>/dev/null || cd "`$HOME"
 P="`$(cat /usr/local/share/huginn-cli/persona.md 2>/dev/null)"
 if [ -n "`$P" ]; then
-  echo '$esc' | claude -p --append-system-prompt "`$P" --allowedTools '$tools'
+  echo '$esc' | claude -p --append-system-prompt "`$P" --allowedTools '$tools' $dflag
 else
   echo '$esc' | claude -p
 fi
@@ -271,14 +324,14 @@ function _Huginn-Sessions {
 }
 Register-ArgumentCompleter -CommandName huginn, rclaude, rcc -ScriptBlock {
   param($word, $ast, $pos)
-  $cmds = 'list', 'status', 'solo', 'rename', 'kill', '-p', '-y', 'usage', 'cost', 'update', 'version', 'help'
+  $cmds = 'list', 'status', 'solo', 'rename', 'kill', 'end', '-p', '-y', 'usage', 'cost', 'update', 'version', 'help'
   # tokens already typed after the command name, excluding the partial word being completed
   $typed = @($ast.CommandElements | Select-Object -Skip 1 | ForEach-Object { $_.ToString() })
   if ($word -and $typed.Count -ge 1) { $typed = @($typed | Select-Object -SkipLast 1) }
   $prev = if ($typed.Count -ge 1) { $typed[-1] } else { '' }
   if ($typed.Count -eq 0) {
     $candidates = $cmds + @(_Huginn-Sessions)          # first word: subcommands + sessions
-  } elseif ($prev -in 'kill', 'solo', 'rename', 'mv') {
+  } elseif ($prev -in 'kill', 'end', 'solo', 'rename', 'mv') {
     $candidates = @(_Huginn-Sessions)                  # these take an existing session name
   } elseif ($prev -in 'usage', 'cost', 'ccusage') {
     $candidates = 'today', 'yesterday', 'week', 'month', 'daily', 'monthly', 'weekly', 'session', 'blocks', 'statusline'
