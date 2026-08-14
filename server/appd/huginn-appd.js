@@ -50,7 +50,7 @@ const pushLib = require('./lib/pushtokens');
 const { trySender } = require('./lib/fcm');
 const { createPending, stepSoftEnd } = require('./lib/softend');
 
-const VERSION = '2.59.1';
+const VERSION = '2.59.2';
 const PORT = Number(process.env.HUGINN_APPD_PORT || 8787);
 const DATA_DIR = process.env.HUGINN_APPD_DATA || '/var/lib/huginn-appd';
 const UPLOADS_DIR = path.join(DATA_DIR, 'uploads');
@@ -134,8 +134,14 @@ const TOOLS = {
   // WebFetch/WebSearch are granted to ask explicitly: reads over the network fit
   // the same line, and without them a "what's the weather Saturday" falls back
   // to Bash-curl and the coin-flip below.
-  ask: 'mcp__mempalace WebFetch WebSearch',
-  act: 'Bash Read Edit Write Glob Grep WebFetch WebSearch mcp__mempalace',
+  //
+  // Skill is granted to BOTH: a skill is markdown instructions, not a capability —
+  // invoking one cannot exceed the tools already granted, and ask's deny list still
+  // holds. Without it the host's 23 project skills are invisible to phone and
+  // desktop chats, which was the state until 2026-08-14. They load only because
+  // HUGINN_APPD_WORKDIR points at the project; skills are cwd-scoped.
+  ask: 'Skill mcp__mempalace WebFetch WebSearch',
+  act: 'Skill Bash Read Edit Write Glob Grep WebFetch WebSearch mcp__mempalace',
 };
 
 // The deny half, which allowedTools cannot express. Measured 2026-07-28, one

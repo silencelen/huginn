@@ -9,6 +9,16 @@ appeared only as a side-note on the app releases it happened to ship with. Three
 undocumented, and the notes-cutting matcher could fuse two sections when an app and an appd
 version number collided. Entries below are reconstructed from the shipping commits.
 
+## 2.59.2 — 2026-08-14
+
+### Added
+- **`Skill` is granted to both ask and act chats**, so phone and desktop conversations can
+  reach the host's project skills (23 of them) instead of re-deriving what they already
+  document. A skill is markdown instructions rather than a capability: invoking one cannot
+  exceed the tools already granted, and ask mode's deny list is untouched. They resolve only
+  because `HUGINN_APPD_WORKDIR` points at the project — skills are cwd-scoped, verified by a
+  headless run outside the project seeing none of them.
+
 ## 2.59.1 — 2026-08-11
 
 ### Fixed
