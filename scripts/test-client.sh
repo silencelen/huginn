@@ -42,6 +42,13 @@ CL_V=$(grep -m1 -oE '^## \[[0-9]+\.[0-9]+\.[0-9]+\]' CHANGELOG.md | tr -d '#[] '
 [ "$SH_V" = "$CL_V" ] \
   && ok "changelog head matches ($CL_V)" \
   || bad "changelog head is $CL_V but the clients say $SH_V — write the notes, or bump"
+# The header COMMENT is what `huginn-sync` prints as the mirror's version, so a stale
+# one misreports what devices just received. It sat at 0.7.1 through the 0.8.0 cut.
+for f in client/huginn.sh client/huginn.ps1; do
+  HDR=$(grep -m1 -oE '^# Version: [0-9]+\.[0-9]+\.[0-9]+' "$f" | grep -oE '[0-9]+\.[0-9]+\.[0-9]+')
+  [ "$HDR" = "$SH_V" ] && ok "$f header comment says $HDR" \
+    || bad "$f header comment says ${HDR:-none}, constant says $SH_V"
+done
 
 echo "[3/4] both clients expose the same verbs (parity by verb)"
 # huginn.sh writes cases as alternations (`list|ls)`, `status|st)`), so match the

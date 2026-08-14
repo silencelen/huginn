@@ -4,7 +4,7 @@
 #     [ -f ~/.huginn/huginn.sh ] && source ~/.huginn/huginn.sh
 # Targets the `huginn` SSH alias by default; override per-device with:  export HUGINN_HOST=my-host
 # Self-update with:  huginn update   (pulls this file from the repo; gh -> scp fallback)
-# Version: 0.7.1
+# Version: 0.8.0
 
 HUGINN_VERSION='0.8.0'
 HUGINN_REPO='silencelen/huginn'
