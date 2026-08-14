@@ -7,7 +7,7 @@
 #   core    -> v<version>          (the CLI + server core; CHANGELOG.md)
 #   app     -> app-v<version>      (Android;    mobile/CHANGELOG.md)
 #   desktop -> desktop-v<version>  (Compose;    mobile/app-desktop/CHANGELOG.md)
-#   appd    -> appd-v<version>     (the daemon; notes via HUGINN_RELEASE_NOTES_FILE)
+#   appd    -> appd-v<version>     (the daemon; server/appd/CHANGELOG.md)
 #
 # Release notes are CUT FROM THE COMPONENT'S CHANGELOG (the section whose `## `
 # heading carries the version), so the changelog stays the single place notes are
@@ -48,7 +48,7 @@ case "$COMPONENT" in
   core)    TAG="v$VERSION";         TITLE="huginn-cli v$VERSION";      CHANGELOG=CHANGELOG.md ;;
   app)     TAG="app-v$VERSION";     TITLE="Huginn (Android) $VERSION"; CHANGELOG=mobile/CHANGELOG.md ;;
   desktop) TAG="desktop-v$VERSION"; TITLE="Huginn Desktop $VERSION";   CHANGELOG=mobile/app-desktop/CHANGELOG.md ;;
-  appd)    TAG="appd-v$VERSION";    TITLE="huginn-appd $VERSION";      CHANGELOG=mobile/CHANGELOG.md ;;
+  appd)    TAG="appd-v$VERSION";    TITLE="huginn-appd $VERSION";      CHANGELOG=server/appd/CHANGELOG.md ;;
   *) echo "REFUSING: unknown component '$COMPONENT'" >&2; exit 2 ;;
 esac
 
