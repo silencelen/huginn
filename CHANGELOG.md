@@ -10,6 +10,17 @@ Format loosely follows [Keep a Changelog](https://keepachangelog.com/); versions
 
 ## [Unreleased]
 
+## [0.8.1] - 2026-08-14
+
+### Added
+- **`huginn -p` and `-y` can now use the host's skills.** Both modes grant `Skill`, so a
+  one-shot query can load `remote-ops`, `incident-triage`, `mempalace-ops` and the rest
+  instead of re-deriving what they already document. A skill is markdown instructions, not
+  a capability: invoking one cannot exceed the tools already granted, and `-p` keeps its
+  deny list (`Bash Edit Write NotebookEdit`), so the ask/act line has not moved.
+  Skills are cwd-scoped and resolve because the host runs these in `$HUGINN_WORKDIR`
+  (`/root/netplan`) — verified by a headless run outside the project seeing none of them.
+
 ## [0.8.0] - 2026-08-14
 
 ### Added
