@@ -58,6 +58,13 @@ grep -q '"ok":true' <<<"$PING" || { echo "[deploy] daemon did not come back heal
 # above, so a GitHub hiccup must not fail a good deploy. Skip: HUGINN_NO_GH_RELEASE=1.
 if [ "${HUGINN_NO_GH_RELEASE:-}" != 1 ]; then
   VER="$(grep -m1 "^const VERSION" "$SRC/huginn-appd.js" | sed "s/.*'\(.*\)'.*/\1/")"
+  # We install from the working tree, but github-release.sh tags HEAD. Publishing
+  # from a dirty appd tree would point appd-vX.Y.Z at bits that were never deployed
+  # — the exact drift this publish step exists to remove.
+  if ! git -C "$SRC" diff --quiet HEAD -- "$SRC" 2>/dev/null; then
+    echo "[deploy] appd tree is dirty — deployed, but NOT publishing a release for $VER (commit first)." >&2
+    VER=""
+  fi
   REPO_ROOT="$(cd "$SRC/../.." && pwd)"
   if [ -n "$VER" ] && "$REPO_ROOT/scripts/github-release.sh" appd "$VER"; then
     echo "[deploy] GitHub release appd-v$VER updated"
