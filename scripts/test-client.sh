@@ -92,14 +92,14 @@ STUB
   grep -q -- "--disallowedTools 'Bash Edit Write NotebookEdit'" <<<"$P" \
     && ok "-p carries a correctly quoted deny-list" \
     || bad "-p deny-list is malformed: $(grep -o -- '--disallowedTools.*' <<<"$P" | head -1)"
-  grep -q -- "--allowedTools 'mcp__mempalace WebFetch WebSearch'" <<<"$P" \
-    && ok "-p allow-list is read-only + web + memory" || bad "-p allow-list wrong"
+  grep -q -- "--allowedTools 'Skill mcp__mempalace WebFetch WebSearch'" <<<"$P" \
+    && ok "-p allow-list is read-only + web + memory + Skill" || bad "-p allow-list wrong"
 
   Y=$(emit 'huginn -y "q"')
   grep -q -- "--disallowedTools" <<<"$Y" \
     && bad "-y must NOT carry a deny-list" || ok "-y carries no deny-list"
-  grep -q -- "--allowedTools 'Bash Read Edit Write Glob Grep WebFetch WebSearch mcp__mempalace'" <<<"$Y" \
-    && ok "-y allow-list may mutate" || bad "-y allow-list wrong"
+  grep -q -- "--allowedTools 'Skill Bash Read Edit Write Glob Grep WebFetch WebSearch mcp__mempalace'" <<<"$Y" \
+    && ok "-y allow-list may mutate (+ Skill)" || bad "-y allow-list wrong"
 
   E=$(emit 'huginn end testsess')
   grep -q "POST .*/v1/sessions/testsess/soft-end" <<<"$E" \

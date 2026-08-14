@@ -3,9 +3,9 @@
 #     if (Test-Path "$HOME\.huginn\huginn.ps1") { . "$HOME\.huginn\huginn.ps1" }
 # Targets the `huginn` SSH alias by default; override per-device with:  $env:HUGINN_HOST = 'my-host'
 # Self-update with:  huginn update   (pulls this file from the repo; gh -> scp fallback)
-# Version: 0.8.0
+# Version: 0.8.1
 
-$script:HUGINN_VERSION = '0.8.0'
+$script:HUGINN_VERSION = '0.8.1'
 $script:HUGINN_REPO    = 'silencelen/huginn'
 
 # A session name is letters, digits, and underscore only - no '-', '*', spaces or
@@ -279,7 +279,7 @@ function huginn {
     # quoting is bash SYNTAX on the host. Assembling it in a remote variable and
     # expanding that unquoted word-splits it into `'Bash` `Edit` `Write`
     # `NotebookEdit'` - literal quotes, no valid tool name, nothing actually denied.
-    $tools = if ($args[0] -eq '-y') { "Bash Read Edit Write Glob Grep WebFetch WebSearch mcp__mempalace" } else { "mcp__mempalace WebFetch WebSearch" }
+    $tools = if ($args[0] -eq '-y') { "Skill Bash Read Edit Write Glob Grep WebFetch WebSearch mcp__mempalace" } else { "Skill mcp__mempalace WebFetch WebSearch" }
     $dflag = if ($args[0] -eq '-y') { '' } else { "--disallowedTools 'Bash Edit Write NotebookEdit'" }
     # Persona-aware: if the host carries persona.md, inject it + memory tools; else plain headless query.
     #
