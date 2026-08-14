@@ -167,7 +167,8 @@ if [ "$SKIP_TESTS" = 0 ]; then
   # pure decisions that fail SILENTLY when wrong (a menu that deletes four rows
   # while reading "Delete", a window restored onto a monitor that is gone), so
   # they are asserted rather than eyeballed. +28 in :app-desktop.
-  KOTLIN_MIN=811   # 622 (scripts/build.sh floor) + 189 (:app-desktop), 2026-08-11
+  . "$(cd "$(dirname "$0")/../.." && pwd)/scripts/test-floors.env"
+  KOTLIN_MIN=$(( KOTLIN_SHARED_MIN + DESKTOP_EXTRA_MIN ))   # computed, never hand-summed
   KOTLIN_COUNT=0
   for D in core/build/test-results/jvmTest \
            core/build/test-results/testDebugUnitTest \
@@ -190,8 +191,8 @@ if [ "$SKIP_TESTS" = 0 ]; then
     tail -30 "$NODE_LOG"; echo "REFUSING: server tests failed" >&2; exit 1; }
   NODE_COUNT="$(grep -oE '^# pass [0-9]+' "$NODE_LOG" | grep -oE '[0-9]+' || echo 0)"
   rm -f "$NODE_LOG"
-  [ "${NODE_COUNT:-0}" -ge 300 ] \
-    || { echo "REFUSING: server tests reported $NODE_COUNT passes, expected >= 300" >&2; exit 1; }
+  [ "${NODE_COUNT:-0}" -ge "$APPD_MIN" ] \
+    || { echo "REFUSING: server tests reported $NODE_COUNT passes, expected >= $APPD_MIN" >&2; exit 1; }
   echo "  server tests: $NODE_COUNT passed"
 
   # The phone is built from the same :core and :ui. A desktop release that broke

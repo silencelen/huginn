@@ -17,13 +17,30 @@ KEEP=2
 
 LINUX_ONLY=0
 SKIP_TESTS=0
+DEPRECATED_OK=0
 for arg in "$@"; do
   case "$arg" in
     --linux-only) LINUX_ONLY=1 ;;
     --skip-tests) SKIP_TESTS=1 ;;
+    --deprecated-i-know) DEPRECATED_OK=1 ;;
     *) echo "unknown flag: $arg" >&2; exit 2 ;;
   esac
 done
+
+# The Electron client is DEPRECATED — security fixes only; the Compose desktop
+# client (mobile/scripts/release-desktop.sh, /v1/desktop-kt) is the live one.
+# This script is also the WEAKER fork of the two: its version gate is
+# equality-only where the Compose one blocks downgrades and unparseable versions,
+# and its prune matches versions by substring — exactly the bug the Compose
+# prune's own comment warns about ("1.0.0" is a substring of "11.0.0"). Rather
+# than backport piecemeal into a script that should stop being run, it refuses
+# unless you say the quiet part out loud.
+if [ "$DEPRECATED_OK" != 1 ]; then
+  echo "REFUSING: huginn-desktop (Electron) is deprecated — security fixes only." >&2
+  echo "  The live desktop client is Compose: mobile/scripts/release-desktop.sh" >&2
+  echo "  If this really is a security fix, re-run with --deprecated-i-know." >&2
+  exit 1
+fi
 
 VERSION=$(node -p "require('./package.json').version")
 echo "== releasing huginn-desktop $VERSION =="

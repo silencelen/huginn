@@ -19,7 +19,8 @@ node --test "$SRC"/test/*.test.js > "$TEST_LOG" 2>&1 || {
   tail -40 "$TEST_LOG"; echo "[deploy] REFUSING: appd tests failed (full log: $TEST_LOG)" >&2; exit 1; }
 PASSED="$(grep -oE '^# pass [0-9]+' "$TEST_LOG" | grep -oE '[0-9]+' || echo 0)"
 rm -f "$TEST_LOG"
-[ "${PASSED:-0}" -gt 0 ] || { echo "[deploy] REFUSING: appd tests ran ZERO tests" >&2; exit 1; }
+. "$(cd "$SRC/../.." && pwd)/scripts/test-floors.env"
+[ "${PASSED:-0}" -ge "$APPD_MIN" ] || { echo "[deploy] REFUSING: appd tests ran $PASSED, expected >= $APPD_MIN" >&2; exit 1; }
 echo "[deploy] appd tests: $PASSED passed"
 
 # lib/*.js is covered by the suite above; the entry point is only spawned by it, so
