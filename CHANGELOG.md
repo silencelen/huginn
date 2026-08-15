@@ -10,6 +10,17 @@ Format loosely follows [Keep a Changelog](https://keepachangelog.com/); versions
 
 ## [Unreleased]
 
+## [0.8.2] - 2026-08-14
+
+### Security
+- **`huginn update` on Windows no longer fetches replacement code from `$HUGINN_HOST`.** The scp
+  fallback pulled `huginn.ps1` from whichever host the client was pointed at, and that file is
+  then loaded into the shell — so `HUGINN_HOST`, which answers "which box do I drive", was also
+  answering "whose code do I run". A typo, a second host or a test alias silently became a code
+  source. It now uses the pinned `HUGINN_UPDATE_HOST` (default `huginn`) and announces the host
+  when overridden. This shipped for `huginn.sh` in 0.6.1; the PowerShell client never got it.
+  `test-client.sh` now asserts both clients pin it, so the two cannot diverge again.
+
 ## [0.8.1] - 2026-08-14
 
 ### Added
