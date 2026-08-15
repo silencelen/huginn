@@ -3,10 +3,17 @@
 #     if (Test-Path "$HOME\.huginn\huginn.ps1") { . "$HOME\.huginn\huginn.ps1" }
 # Targets the `huginn` SSH alias by default; override per-device with:  $env:HUGINN_HOST = 'my-host'
 # Self-update with:  huginn update   (pulls this file from the repo; gh -> scp fallback)
-# Version: 0.8.1
+# Version: 0.8.2
 
-$script:HUGINN_VERSION = '0.8.1'
+$script:HUGINN_VERSION = '0.8.2'
 $script:HUGINN_REPO    = 'silencelen/huginn'
+# Where `huginn update` may fetch a replacement for THIS FILE, which is then loaded
+# into the shell. Pinned, and deliberately NOT $HUGINN_HOST: that variable answers
+# "which box do I drive", and letting it also answer "whose code do I run" means a
+# typo, a second host or a test alias silently becomes a code source. Override needs
+# HUGINN_UPDATE_HOST set on purpose. (Ported from huginn.sh, where this shipped in
+# 0.6.1 -- the PowerShell client kept fetching from $HUGINN_HOST until 0.8.2.)
+$script:HUGINN_UPDATE_HOST_DEFAULT = 'huginn'
 
 # A session name is letters, digits, and underscore only - no '-', '*', spaces or
 # other shell-special characters. This keeps a typo'd flag (e.g. 'huginn --hlp')
@@ -178,8 +185,15 @@ function huginn {
     if (-not $got) {
       # BatchMode so a device without an authorized key fails instead of silently
       # dropping into a password prompt mid-"update".
-      scp -o BatchMode=yes "${H}:/usr/local/share/huginn-cli/huginn.ps1" $tmp
-      if ($LASTEXITCODE -eq 0) { $got = $true; Write-Host "  pulled from $H mirror via scp" -ForegroundColor Green }
+      # The downloaded file is loaded into the shell, so the host it comes from is a
+      # trust root, not just a transport. Say which host is being trusted when it is
+      # not the pinned default.
+      $uh = if ($env:HUGINN_UPDATE_HOST) { $env:HUGINN_UPDATE_HOST } else { $script:HUGINN_UPDATE_HOST_DEFAULT }
+      if ($uh -ne $script:HUGINN_UPDATE_HOST_DEFAULT) {
+        Write-Host "  (HUGINN_UPDATE_HOST is set - trusting $uh for this client's code)" -ForegroundColor Yellow
+      }
+      scp -o BatchMode=yes "${uh}:/usr/local/share/huginn-cli/huginn.ps1" $tmp
+      if ($LASTEXITCODE -eq 0) { $got = $true; Write-Host "  pulled from $uh mirror via scp" -ForegroundColor Green }
     }
     # Validate before installing: a truncated download that overwrites the live
     # client leaves every future shell broken, with no copy to fall back to.
