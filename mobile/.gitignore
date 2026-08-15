@@ -15,3 +15,8 @@ dist/CHANGELOG.md
 # IDE noise
 .idea/
 *.iml
+
+# Firebase config is PER-DEPLOYMENT. The values are not secret -- an APK carries
+# them all in its string resources -- but they name one specific Firebase project,
+# so the tree ships only the .example and each deployment drops its own beside it.
+app/google-services.json
