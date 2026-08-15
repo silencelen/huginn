@@ -264,6 +264,12 @@ every other device on an older version while the work looks finished — and sin
 Requires JDK 17 (`/usr/lib/jvm/java-17-openjdk-amd64`) and
 `/opt/android-sdk` with `platforms/android-35` + `build-tools/35.0.0`.
 
+- **Firebase config is not in the tree.** `app/google-services.json` is
+  per-deployment and gitignored; copy `app/google-services.json.example` and fill it
+  from your own Firebase project (an Android app registered for package
+  `com.silencelen.huginn`). The values are not secret -- every APK carries them --
+  but they name one specific project, so each deployment brings its own. Without the
+  file the Google Services Gradle plugin fails the build.
 - `versionCode` = seconds since 2026-01-01, computed in Gradle (devstore fleet
   convention); `HUGINN_VERSIONCODE` pins it.
 - **Release** signs with `~/.huginn-app/keystore.properties` (alias
