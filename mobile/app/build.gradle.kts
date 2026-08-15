@@ -29,6 +29,8 @@ plugins {
     alias(libs.plugins.kotlin.compose)
     alias(libs.plugins.kotlin.serialization)
     // Reads app/google-services.json and generates the Firebase config resources.
+    // That file is untracked and per-deployment: copy google-services.json.example
+    // and fill it from your own Firebase project (see mobile/README.md).
     alias(libs.plugins.google.services)
 }
 
@@ -151,7 +153,9 @@ dependencies {
     // FCM. The one transport that reaches a phone asleep with the app closed, in
     // seconds rather than at the next alarm — everything else here either waits for
     // a beat or arrives on a different app. Needs app/google-services.json, which is
-    // NOT a secret: the same values ship inside every copy of the APK.
+    // untracked and per-deployment. Its values are not secret -- every APK carries
+    // them in its string resources -- but they name one specific Firebase project,
+    // so the tree ships only google-services.json.example.
     // The androidx prompt rather than the framework one: the framework prompt
     // silently failed on the target device — the lock never visibly engaged —
     // and the library exists precisely to absorb those OEM differences.

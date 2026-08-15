@@ -56,6 +56,44 @@ for a in "${ARTIFACTS[@]}"; do
   [ -f "${a%%#*}" ] || { echo "REFUSING: artifact '${a%%#*}' does not exist" >&2; exit 1; }
 done
 
+# ---------------------------------------------------------------- identity gate
+# A built artifact can carry deployment identity the TREE no longer does: the
+# Google Services plugin compiles google-services.json into the APK's string
+# resources, so an APK names its Firebase project even though the repo stopped
+# doing so. Uploading one to a public release would quietly undo that.
+#
+# The denylist lives OUTSIDE the tree on purpose -- a list of strings-not-to-publish
+# is itself the leak once committed. Absent => the gate is a no-op, so a fresh
+# clone still releases; present => it fails CLOSED, including if `strings` is gone.
+DENY_SRC="${HUGINN_RELEASE_DENY_FILE:-/etc/huginn-appd/release-deny.txt}"
+if [ -s "$DENY_SRC" ] && [ "${#ARTIFACTS[@]}" -gt 0 ]; then
+  DENY="$(mktemp)"
+  # Blank lines and comments stripped: a single empty pattern would match every
+  # artifact and turn a security gate into an unconditional refusal.
+  grep -vE '^[[:space:]]*(#|$)' "$DENY_SRC" > "$DENY" || true
+  if [ -s "$DENY" ]; then
+    command -v strings >/dev/null || {
+      echo "REFUSING: $DENY_SRC exists but 'strings' is not installed -- cannot" >&2
+      echo "          scan artifacts, and this gate does not fail open" >&2
+      rm -f "$DENY"; exit 1; }
+    for a in "${ARTIFACTS[@]}"; do
+      f="${a%%#*}"
+      # Decide on CONTENT, never on the pipeline's exit status. `strings | grep -q`
+      # takes SIGPIPE when grep short-circuits on a hit, and under `set -o pipefail`
+      # that reports the pipeline as FAILED -- so the gate would pass an artifact
+      # exactly when it found something. `grep -c` reads to EOF and yields a count.
+      hits="$(strings -a "$f" 2>/dev/null | grep -cFf "$DENY" || true)"
+      if [ "${hits:-0}" -gt 0 ]; then
+        echo "REFUSING: '$f' matches $hits line(s) in $DENY_SRC" >&2
+        echo "          Deployment identity must not ship in a public release asset." >&2
+        rm -f "$DENY"; exit 1
+      fi
+    done
+    echo "[gh-release] identity gate: ${#ARTIFACTS[@]} artifact(s) clean"
+  fi
+  rm -f "$DENY"
+fi
+
 # ---------------------------------------------------------------- notes
 NOTES="$(mktemp)"; trap 'rm -f "$NOTES"' EXIT
 if [ -n "${HUGINN_RELEASE_NOTES_FILE:-}" ]; then
