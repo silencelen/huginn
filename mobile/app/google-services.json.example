@@ -1,13 +1,13 @@
 {
   "project_info": {
-    "project_number": "338810988125",
-    "project_id": "huginn-push-monahan",
-    "storage_bucket": "huginn-push-monahan.firebasestorage.app"
+    "project_number": "000000000000",
+    "project_id": "your-firebase-project",
+    "storage_bucket": "your-firebase-project.firebasestorage.app"
   },
   "client": [
     {
       "client_info": {
-        "mobilesdk_app_id": "1:338810988125:android:e37aa309e952220277cfb4",
+        "mobilesdk_app_id": "1:000000000000:android:0000000000000000000000",
         "android_client_info": {
           "package_name": "com.silencelen.huginn"
         }
@@ -15,7 +15,7 @@
       "oauth_client": [],
       "api_key": [
         {
-          "current_key": "AIzaSyBjsJz3DcgQLytFOEMSZYRmiajBRB6gf-c"
+          "current_key": "YOUR_FIREBASE_ANDROID_API_KEY"
         }
       ],
       "services": {
