@@ -20,7 +20,7 @@ ok()   { echo "  ok    $*"; }
 bad()  { echo "  FAIL  $*" >&2; FAIL=1; }
 skip() { echo "  SKIP  $*  <-- not a pass" >&2; }
 
-echo "[1/4] syntax"
+echo "[1/5] syntax"
 bash -n client/huginn.sh && ok "huginn.sh parses" || bad "huginn.sh does not parse"
 if command -v pwsh >/dev/null 2>&1; then
   if pwsh -NoProfile -Command '
@@ -32,7 +32,7 @@ else
   skip "huginn.ps1 parse (no pwsh)"
 fi
 
-echo "[2/4] the two version constants agree with each other and the changelog"
+echo "[2/5] the two version constants agree with each other and the changelog"
 SH_V=$(grep -m1 "^HUGINN_VERSION=" client/huginn.sh | sed "s/.*'\(.*\)'.*/\1/")
 PS_V=$(grep -m1 "HUGINN_VERSION = " client/huginn.ps1 | sed "s/.*'\(.*\)'.*/\1/")
 CL_V=$(grep -m1 -oE '^## \[[0-9]+\.[0-9]+\.[0-9]+\]' CHANGELOG.md | tr -d '#[] ')
@@ -50,19 +50,23 @@ for f in client/huginn.sh client/huginn.ps1; do
     || bad "$f header comment says ${HDR:-none}, constant says $SH_V"
 done
 
-echo "[3/4] both clients expose the same verbs (parity by verb)"
+echo "[3/5] both clients expose the same verbs (parity by verb)"
 # huginn.sh writes cases as alternations (`list|ls)`, `status|st)`), so match the
 # verb as a case ALTERNATIVE, not as a bare `verb)`.
 for v in end kill solo rename list status usage update version help; do
   # Match the DISPATCH, not a mention: huginn.ps1 lists every verb in its
   # completion array too, so grepping "'$v'" passes even with the branch deleted
   # (verified by removing the `end` branch: still 2 matches, still green).
-  a=$(grep -cE "^[[:space:]]+([a-z'?/-]+\|)*$v(\||\))" client/huginn.sh)
+  # Scope to the huginn() DISPATCHER. Unscoped, this also matched _huginn_complete's
+  # `case "$prev"` labels (kill|end|solo|rename|mv), so a whole verb branch could be
+  # deleted and the gate stayed green — the same decoy already fixed for the ps1 side.
+  a=$(awk '/^huginn\(\) \{/,/^\}/' client/huginn.sh \
+        | grep -cE "^[[:space:]]+([a-z'?/*-]+\|)*$v(\||\))")
   b=$(grep -cE "\\\$args\[0\] -(eq|in) [^;]*'$v'" client/huginn.ps1)
   [ "$a" -gt 0 ] && [ "$b" -gt 0 ] && ok "verb $v" || bad "verb $v missing (sh=$a ps1=$b)"
 done
 
-echo "[4/4] what the PowerShell client actually SENDS"
+echo "[4/5] what the PowerShell client actually SENDS"
 if ! command -v pwsh >/dev/null 2>&1; then
   skip "ps1 behaviour (no pwsh)"
 else
@@ -117,6 +121,41 @@ STUB
   grep -q "invalid session name" <<<"$B" \
     && ok "end rejects a non-conforming name" || bad "end accepted 'bad-name'"
 fi
+
+echo "[5/5] what the POSIX client actually SENDS"
+# huginn.sh is the client the 0.8.0 deny-list bug actually shipped to, and nothing
+# here exercised it — [4/5] drives only huginn.ps1. Same stub-ssh technique; huginn.sh
+# passes a plain argv string rather than a base64 payload, so the stub logs argv.
+T2=$(mktemp -d)
+cat > "$T2/ssh" <<'STUB'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >> "$SSH_LOG"
+grep -q 'soft-end' <<<"$*" && echo '{"ok":true,"phrase":"WRAPUP","auto":true}'
+exit 0
+STUB
+chmod +x "$T2/ssh"
+
+semit () { export SSH_LOG="$T2/log"; : > "$SSH_LOG"
+           ( export PATH="$T2:$PATH"
+             . "$PWD/client/huginn.sh" >/dev/null 2>&1
+             eval "$1" ) >"$T2/out" 2>&1
+           cat "$SSH_LOG"; }
+
+SP=$(semit 'huginn -p "q"')
+grep -q -- "--disallowedTools 'Bash Edit Write NotebookEdit'" <<<"$SP" \
+  && ok "sh: -p carries a correctly quoted deny-list" \
+  || bad "sh: -p deny-list malformed/missing"
+grep -q -- "--allowedTools 'Skill mcp__mempalace WebFetch WebSearch'" <<<"$SP" \
+  && ok "sh: -p allow-list matches the ps1 client" || bad "sh: -p allow-list differs from ps1"
+
+SY=$(semit 'huginn -y "q"')
+if grep -q -- "--disallowedTools" <<<"$SY"; then bad "sh: -y must NOT carry a deny-list"; else ok "sh: -y carries no deny-list"; fi
+
+SE=$(semit 'huginn end testsess')
+grep -q "soft-end" <<<"$SE" && ok "sh: end reaches the soft-end route" || bad "sh: end sent nothing matching soft-end"
+SK=$(semit 'huginn kill testsess')
+grep -q "DELETE" <<<"$SK" && ok "sh: kill prefers the daemon DELETE" || bad "sh: kill did not use DELETE"
+rm -rf "$T2"
 
 echo
 [ "$FAIL" = 0 ] && echo "client gates: PASS" || { echo "client gates: FAIL" >&2; exit 1; }
