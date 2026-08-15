@@ -61,7 +61,10 @@ if [ "${HUGINN_NO_GH_RELEASE:-}" != 1 ]; then
   # We install from the working tree, but github-release.sh tags HEAD. Publishing
   # from a dirty appd tree would point appd-vX.Y.Z at bits that were never deployed
   # — the exact drift this publish step exists to remove.
-  if ! git -C "$SRC" diff --quiet HEAD -- "$SRC" 2>/dev/null; then
+  # `git diff HEAD` sees modifications but NOT untracked files, so a brand-new
+  # lib/*.js would be installed and then tagged as if it were in the commit.
+  # --porcelain covers both.
+  if [ -n "$(git -C "$SRC" status --porcelain -- "$SRC" 2>/dev/null)" ]; then
     echo "[deploy] appd tree is dirty — deployed, but NOT publishing a release for $VER (commit first)." >&2
     VER=""
   fi
