@@ -1,6 +1,9 @@
 # Drop-ins for `huginn-appd.service`
 
-`deploy.sh` rewrites the unit file, so anything that must survive a deploy lives
+`deploy.sh` does NOT touch the unit — verified 2026-08-14: it installs huginn-appd.js
+and lib/*.js and restarts, nothing more, so a direct edit is not reverted. Drop-ins are
+still the right home for policy (they survive a future unit reinstall and keep the
+unit itself generic), so anything that must survive a deploy lives
 here and is installed to `/etc/systemd/system/huginn-appd.service.d/` instead of
 being edited into the unit.
 
