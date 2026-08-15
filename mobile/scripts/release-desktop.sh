@@ -480,10 +480,14 @@ if [ "${HUGINN_NO_GH_RELEASE:-}" != 1 ]; then
   # `../scripts/` — this script cd'd to mobile/ (top); github-release.sh lives at
   # the repo-root scripts/. Absolute artifact paths ($CHANNEL_DIR), because
   # github-release.sh cd's to the repo root before it checks they exist.
-  ../scripts/github-release.sh desktop "$VERSION" \
-    "$CHANNEL_DIR/manifest.json#Release manifest (per-artifact sha256)" \
-    "$CHANNEL_DIR/$EXE#Windows installer (NSIS, per-user)" \
-    "$CHANNEL_DIR/$DEB#Linux .deb (amd64)" \
+  # Build the artifact list to match what was actually staged. --linux-only skips the
+  # Windows installer at :375 and in the staging loop, but this list demanded it
+  # unconditionally and github-release.sh refuses a missing artifact — so a
+  # --linux-only run hard-failed HERE, after the live channel had already been updated.
+  GH_ARTIFACTS=("$CHANNEL_DIR/manifest.json#Release manifest (per-artifact sha256)"
+                "$CHANNEL_DIR/$DEB#Linux .deb (amd64)")
+  [ "$LINUX_ONLY" = 1 ] || GH_ARTIFACTS+=("$CHANNEL_DIR/$EXE#Windows installer (NSIS, per-user)")
+  ../scripts/github-release.sh desktop "$VERSION" "${GH_ARTIFACTS[@]}" \
     || { echo "FAIL: GitHub release desktop-v$VERSION did not publish — the updater fetches from it" >&2; exit 1; }
   echo "GitHub release desktop-v$VERSION published"
   # Let the GitHub API's release listing settle before the client lists it.

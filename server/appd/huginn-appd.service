@@ -13,7 +13,10 @@ StartLimitIntervalSec=0
 # Deployment-specific settings (bind address, chat working directory, memory-node
 # probe, alert delivery script) belong in a drop-in, NOT here — deploy.sh rewrites
 # this unit on every deploy. See systemd.d/README.md.
-WorkingDirectory=/root
+# /root/netplan, not /root: appd resolves the host's project skills from its working
+# directory, so a bare /root silently removes all 23 of them from phone/desktop chats.
+# The live unit was hand-corrected to this; the repo lagged until 2026-08-14.
+WorkingDirectory=/root/netplan
 Environment=NODE_ENV=production
 # ccusage (and anything else resolving ~/.claude) needs HOME; systemd does not
 # set it, and without it ccusage exits with 'home directory is not set'.

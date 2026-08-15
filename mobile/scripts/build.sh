@@ -91,10 +91,15 @@ if command -v node >/dev/null 2>&1; then
   NODE_LOG="$(mktemp)"
   node --test "$APPD_DIR"/test/*.test.js | tee "$NODE_LOG"
   NODE_RC="${PIPESTATUS[0]}"
-  NODE_COUNT="$(grep -oE '^# tests [0-9]+' "$NODE_LOG" | grep -oE '[0-9]+' || echo 0)"
+  # '# pass', not '# tests': the latter counts failures too. Matches deploy.sh and
+  # release-desktop.sh so all three gates measure the same thing.
+  NODE_COUNT="$(grep -oE '^# pass [0-9]+' "$NODE_LOG" | grep -oE '[0-9]+' || echo 0)"
   rm -f "$NODE_LOG"
   [ "$NODE_RC" = 0 ] || { echo "[build] server tests failed" >&2; exit 1; }
-  [ "${NODE_COUNT:-0}" -gt 0 ] || { echo "[build] server tests ran ZERO tests — refusing." >&2; exit 1; }
+  # Honour the shared floor. This said `-gt 0` while test-floors.env — which this
+  # script already sources — sets APPD_MIN=300 and says "never edit a copy in a
+  # script". A >0 gate accepts a suite that lost 99% of its tests.
+  [ "${NODE_COUNT:-0}" -ge "$APPD_MIN" ] || { echo "[build] server tests ran $NODE_COUNT, expected >= $APPD_MIN — refusing." >&2; exit 1; }
   echo "[build] server tests: $NODE_COUNT passed"
 fi
 
