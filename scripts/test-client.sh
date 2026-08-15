@@ -50,6 +50,17 @@ for f in client/huginn.sh client/huginn.ps1; do
     || bad "$f header comment says ${HDR:-none}, constant says $SH_V"
 done
 
+# `update` overwrites the file that is then loaded into the shell, so its download
+# host is a trust root. huginn.sh pinned it in 0.6.1; huginn.ps1 kept using
+# $HUGINN_HOST until 0.8.2 — nothing noticed for two minor versions.
+echo "[2b/5] both clients pin the update trust root"
+for f in client/huginn.sh client/huginn.ps1; do
+  grep -q 'HUGINN_UPDATE_HOST' "$f" && ok "$f pins HUGINN_UPDATE_HOST" \
+    || bad "$f fetches update code from an unpinned host"
+done
+grep -q 'scp .*\${H}:' client/huginn.ps1 && bad "huginn.ps1 still scps from \$HUGINN_HOST" \
+  || ok "huginn.ps1 does not scp from \$HUGINN_HOST"
+
 echo "[3/5] both clients expose the same verbs (parity by verb)"
 # huginn.sh writes cases as alternations (`list|ls)`, `status|st)`), so match the
 # verb as a case ALTERNATIVE, not as a bare `verb)`.
