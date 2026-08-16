@@ -8,7 +8,7 @@ biometric = "1.1.0"
 # the request codes the modern activity-result launcher generates.
 fragment = "1.8.5"
 kotlin = "2.3.21"
-compose-bom = "2024.12.01"
+compose-bom = "2026.08.00"
 # Compose Multiplatform, used ONLY by :core so shared code can name
 # androidx.compose.ui types (Color, AnnotatedString) from commonMain. Pinned to
 # 1.7.x deliberately: 1.8.x requires Kotlin 2.1.20+, and bumping Kotlin is a
