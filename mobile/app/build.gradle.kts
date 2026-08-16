@@ -183,7 +183,7 @@ dependencies {
     // MockWebServer is gone with SseTest: the client is exercised through Ktor's
     // MockEngine now, which is multiplatform, which is what let that suite move.
     testImplementation("junit:junit:4.13.2")
-    testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.9.0")
+    testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.11.0")
 }
 
 // Export a built APK into dist/ under the stamped name
