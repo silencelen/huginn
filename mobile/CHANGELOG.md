@@ -1,5 +1,22 @@
 # Huginn changelog
 
+## 2.63.0 — 2026-08-15
+
+### Push moves to a new Firebase project
+
+The app registers for push against a different Firebase project now. Nothing
+about push changes in use, but the move invalidates the old registration: the
+first launch after updating mints a fresh token and re-registers it with the
+daemon, and until that happens the host has no way to reach this device. If a
+notification seems to go missing right after the update, open the app once.
+
+The reason is that a Firebase project id is permanent — it cannot be renamed,
+only replaced — and the old one carried a name with no business being in a
+public repository. The config file that names it has left the tree as well: it
+is per-deployment now, with a google-services.json.example to fill in from your
+own project. The key the new project issues is restricted to this package and
+its signing certificates, which the old one never was.
+
 ## 2.62.0 — 2026-08-12
 
 ### The ask bar
