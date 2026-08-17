@@ -4,9 +4,9 @@
 #     [ -f ~/.huginn/huginn.sh ] && source ~/.huginn/huginn.sh
 # Targets the `huginn` SSH alias by default; override per-device with:  export HUGINN_HOST=my-host
 # Self-update with:  huginn update   (pulls this file from the repo; gh -> scp fallback)
-# Version: 0.8.2
+# Version: 0.8.3
 
-HUGINN_VERSION='0.8.2'
+HUGINN_VERSION='0.8.3'
 HUGINN_REPO='silencelen/huginn'
 # Where `huginn update` may fetch a replacement for THIS FILE, which it then
 # sources into the live shell. Pinned, and deliberately NOT $HUGINN_HOST:
@@ -39,6 +39,64 @@ _huginn_canon_name() { printf '%s' "${1,,}"; }
 _huginn_appd() {
   local H="${HUGINN_HOST:-huginn}"
   ssh -T "$H" "curl -sf -X $1 -H \"Authorization: Bearer \$(cat /etc/huginn-appd/token 2>/dev/null)\" \"http://127.0.0.1:8787$2\"" 2>/dev/null
+}
+
+# --- desktop download links ---
+# The Compose desktop client ships as a PUBLIC GitHub release (tag desktop-v<ver>),
+# and that is also where the installed app's own self-updater fetches from — so the
+# link printed here is the real distribution source, not a mirror that can drift.
+# Deliberately NOT the daemon's /v1/desktop-kt: it serves the same bytes, but every
+# route on it needs the host's bearer token and a browser has no way to send one.
+# That also makes `desktop` the one verb that works from a device which cannot reach
+# the host at all — it is a GitHub fetch, not an ssh.
+
+# GET a URL as text. curl -> wget -> the host (which always has both), so a stock
+# Windows/Termux shell without curl still resolves the link instead of erroring.
+_huginn_get() {
+  if command -v curl >/dev/null 2>&1; then
+    curl -sfL --max-time 20 "$1"
+  elif command -v wget >/dev/null 2>&1; then
+    wget -qO- --timeout=20 "$1"
+  else
+    ssh -T -o BatchMode=yes -o ConnectTimeout=10 "${HUGINN_HOST:-huginn}" "curl -sfL --max-time 20 '$1'" 2>/dev/null
+  fi
+}
+
+# Newest desktop-v* release, printed as: <tag>\n<manifest json>.
+# Filtered by TAG rather than read from /releases/latest, because four components
+# publish into this one feed (v*, app-v*, appd-v*, desktop-v*) and "latest" is
+# simply whichever shipped last — usually not the desktop.
+# Unauthenticated API, so 60 requests/hour per IP; this is one call per invocation.
+_huginn_desktop_release() {
+  local tag json
+  tag="$(_huginn_get "https://api.github.com/repos/$HUGINN_REPO/releases?per_page=60" | tr -d '\n' \
+        | grep -o '"tag_name"[[:space:]]*:[[:space:]]*"desktop-v[^"]*"' | head -1 \
+        | sed 's/.*"\(desktop-v[^"]*\)".*/\1/')"
+  [ -n "$tag" ] || return 1
+  # manifest.json is a release ASSET (the same one the updater verifies sha256
+  # against), so the filenames come from the release itself — nothing here has to
+  # guess how electron-builder or jpackage named an artifact.
+  json="$(_huginn_get "https://github.com/$HUGINN_REPO/releases/download/$tag/manifest.json" | tr -d '\n')"
+  [ -n "$json" ] || return 1
+  printf '%s\n%s\n' "$tag" "$json"
+}
+
+# The {...} value of one platform key, and scalar reads within it. Scoped in two
+# steps on purpose: a single regex over the whole manifest would match the LAST
+# "file" in it, i.e. the wrong platform's.
+_huginn_json_obj() { printf '%s' "$1" | sed -n "s/.*\"$2\"[[:space:]]*:[[:space:]]*{\([^{}]*\)}.*/\1/p"; }
+_huginn_json_str() { printf '%s' "$1" | sed -n "s/.*\"$2\"[[:space:]]*:[[:space:]]*\"\([^\"]*\)\".*/\1/p"; }
+_huginn_json_num() { printf '%s' "$1" | sed -n "s/.*\"$2\"[[:space:]]*:[[:space:]]*\([0-9][0-9]*\).*/\1/p"; }
+
+# Which artifact THIS machine could actually run. Empty is a normal answer: on a
+# phone (Termux) or a Mac there is no desktop build, and the useful behaviour there
+# is to print both links so they can be sent to a laptop — not to fail.
+_huginn_desktop_platform() {
+  case "$(uname -o 2>/dev/null)" in Android*) return ;; esac
+  case "$(uname -s 2>/dev/null)" in
+    Linux*)                        echo 'linux-x64' ;;
+    MINGW*|MSYS*|CYGWIN*|Windows*) echo 'windows-x64' ;;
+  esac
 }
 
 # --- auto-reconnecting attach ---
@@ -136,6 +194,8 @@ EOF
                                 e.g. huginn usage monthly | session | blocks | blocks --live
   huginn usage <when>         shortcut date range: today | yesterday | week | month
                                 e.g. huginn usage today | huginn usage week session
+  huginn desktop              download links for the latest Huginn Desktop build
+  huginn desktop win|linux    just that platform's url, bare, for scripting
   huginn update               self-update this client from the repo ($HUGINN_REPO);
                               without gh, from the PINNED $HUGINN_UPDATE_HOST mirror
                               (never $HUGINN_HOST - that would make whichever box you
@@ -205,6 +265,53 @@ EOF
       ;;
     list|ls)   ssh -T "$H" "tmux ls 2>/dev/null || echo '(no sessions running)'" ;;
     status|st) ssh -T "$H" huginn-status ;;
+    desktop)
+      local want=''
+      case "${2:-}" in
+        ''|both|all)             want='' ;;
+        win|windows|exe)         want='windows-x64' ;;
+        linux|deb|debian|ubuntu) want='linux-x64' ;;
+        *) echo "usage: huginn desktop [windows|linux]" >&2; return 1 ;;
+      esac
+      local rel tag man
+      rel="$(_huginn_desktop_release)" || {
+        echo "huginn: could not read the desktop release feed (offline, or GitHub rate-limited this IP)." >&2
+        echo "  Browse it: https://github.com/$HUGINN_REPO/releases" >&2
+        return 1; }
+      tag="${rel%%$'\n'*}"; man="${rel#*$'\n'}"
+      local base ver here obj file
+      base="https://github.com/$HUGINN_REPO/releases/download/$tag"
+      ver="$(_huginn_json_str "$man" version)"
+      here="$(_huginn_desktop_platform)"
+      # With a platform named, print the BARE url and nothing else, so it composes:
+      #   curl -fLO "$(huginn desktop linux)"
+      if [ -n "$want" ]; then
+        obj="$(_huginn_json_obj "$man" "$want")"
+        file="$(_huginn_json_str "$obj" file)"
+        [ -n "$file" ] || { echo "huginn: $tag has no $want build" >&2; return 1; }
+        echo "$base/$file"
+        return 0
+      fi
+      local p label sz sha mark linux_file=''
+      printf '\n  Huginn Desktop %s   (%s)\n\n' "${ver:-?}" "$tag"
+      for p in windows-x64 linux-x64; do
+        obj="$(_huginn_json_obj "$man" "$p")"
+        file="$(_huginn_json_str "$obj" file)"
+        [ -n "$file" ] || continue
+        [ "$p" = 'linux-x64' ] && linux_file="$file"
+        case "$p" in windows-x64) label='Windows' ;; *) label='Linux  ' ;; esac
+        [ "$p" = "$here" ] && mark='   <- this machine' || mark=''
+        sz="$(_huginn_json_num "$obj" size)"; sha="$(_huginn_json_str "$obj" sha256)"
+        printf '  %s  %s%s\n' "$label" "$base/$file" "$mark"
+        printf '           %s   sha256 %s\n' \
+          "$(awk -v b="${sz:-0}" 'BEGIN{printf "%6.1f MB", b/1048576}')" "${sha:0:16}..."
+      done
+      case "$here" in
+        linux-x64)   printf '\n  install:  curl -fLO %s/%s && sudo dpkg -i %s\n' "$base" "$linux_file" "$linux_file" ;;
+        windows-x64) printf '\n  install:  run the .exe (per-user NSIS installer, no admin needed)\n' ;;
+        *)           printf '\n  (no desktop build for this machine - these links are for your laptop)\n' ;;
+      esac
+      printf '  An installed client self-updates from this same feed.\n\n' ;;
     usage|cost|ccusage)
       shift                                         # ccusage report; default 'daily'. -tt for tables + --live.
       # Full history (back to 2026-01) is layered server-side by the /usr/local/bin/ccusage
@@ -316,7 +423,7 @@ _huginn_complete() {
   local cur prev cmds
   cur="${COMP_WORDS[COMP_CWORD]}"
   prev="${COMP_WORDS[COMP_CWORD-1]}"
-  cmds="list ls status st solo rename mv kill end -p -y usage cost update version help"
+  cmds="list ls status st solo rename mv kill end -p -y usage cost desktop update version help"
   if [ "$COMP_CWORD" -eq 1 ]; then
     # first word: subcommands + live session names (bare name attaches to it)
     mapfile -t COMPREPLY < <(compgen -W "$cmds $(_huginn_sessions)" -- "$cur")
@@ -326,6 +433,8 @@ _huginn_complete() {
         mapfile -t COMPREPLY < <(compgen -W "$(_huginn_sessions)" -- "$cur") ;;
       usage|cost|ccusage)    # date shortcuts + raw report names
         mapfile -t COMPREPLY < <(compgen -W "today yesterday week month daily monthly weekly session blocks statusline" -- "$cur") ;;
+      desktop)
+        mapfile -t COMPREPLY < <(compgen -W "windows linux both" -- "$cur") ;;
       today|yesterday|week|month)   # optional report-type override after a date shortcut
         mapfile -t COMPREPLY < <(compgen -W "daily monthly weekly session blocks statusline" -- "$cur") ;;
       *) COMPREPLY=() ;;
