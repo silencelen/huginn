@@ -3,9 +3,9 @@
 #     if (Test-Path "$HOME\.huginn\huginn.ps1") { . "$HOME\.huginn\huginn.ps1" }
 # Targets the `huginn` SSH alias by default; override per-device with:  $env:HUGINN_HOST = 'my-host'
 # Self-update with:  huginn update   (pulls this file from the repo; gh -> scp fallback)
-# Version: 0.8.2
+# Version: 0.8.3
 
-$script:HUGINN_VERSION = '0.8.2'
+$script:HUGINN_VERSION = '0.8.3'
 $script:HUGINN_REPO    = 'silencelen/huginn'
 # Where `huginn update` may fetch a replacement for THIS FILE, which is then loaded
 # into the shell. Pinned, and deliberately NOT $HUGINN_HOST: that variable answers
@@ -45,6 +45,51 @@ function _Huginn-Appd {
   $out = ssh -T -o BatchMode=yes -o ConnectTimeout=10 $H "echo $b64 | base64 -d | bash -s" 2>$null
   if ($LASTEXITCODE -ne 0) { return $null }
   return ($out -join '')
+}
+
+# --- desktop download links ---
+# The Compose desktop client ships as a PUBLIC GitHub release (tag desktop-v<ver>),
+# and that is also where the installed app's own self-updater fetches from - so the
+# link printed here is the real distribution source, not a mirror that can drift.
+# Deliberately NOT the daemon's /v1/desktop-kt: it serves the same bytes, but every
+# route on it needs the host's bearer token and a browser has no way to send one.
+# That also makes `desktop` the one verb that works from a machine which cannot
+# reach the host at all - it is a GitHub fetch, not an ssh.
+function _Huginn-Get {
+  param([string]$Url)
+  # PS 5.1 still negotiates TLS 1.0 by default on some Windows builds; GitHub
+  # requires 1.2, so the request fails with a bare "could not create SSL/TLS
+  # secure channel" that reads like an outage. Set it per call, not globally.
+  try { [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12 } catch {}
+  try {
+    # -UseBasicParsing: without it PS 5.1 hands the body to the IE engine, which
+    # throws on a machine where IE was never first-run.
+    $r = Invoke-WebRequest -Uri $Url -UseBasicParsing -TimeoutSec 20 -ErrorAction Stop
+  } catch { return $null }
+  $c = $r.Content
+  # A release asset is served as application/octet-stream, and PS 5.1 hands back
+  # byte[] rather than a string for a non-text type - ConvertFrom-Json chokes on it.
+  if ($c -is [byte[]]) { $c = [Text.Encoding]::UTF8.GetString($c) }
+  return $c
+}
+
+# The newest desktop-v* release as @{ tag = ...; manifest = <object> }, or $null.
+# Filtered by TAG rather than read from /releases/latest, because four components
+# publish into this one feed (v*, app-v*, appd-v*, desktop-v*) and "latest" is
+# simply whichever shipped last - usually not the desktop.
+# Unauthenticated API, so 60 requests/hour per IP; this is one call per invocation.
+function _Huginn-DesktopRelease {
+  $body = _Huginn-Get "https://api.github.com/repos/$script:HUGINN_REPO/releases?per_page=60"
+  if (-not $body) { return $null }
+  try { $releases = $body | ConvertFrom-Json } catch { return $null }
+  $tag = ($releases | Where-Object { $_.tag_name -like 'desktop-v*' } | Select-Object -First 1).tag_name
+  if (-not $tag) { return $null }
+  # manifest.json is a release ASSET (the same one the updater verifies sha256
+  # against), so the filenames come from the release itself - nothing here has to
+  # guess how jpackage or the NSIS step named an artifact.
+  $man = _Huginn-Get "https://github.com/$script:HUGINN_REPO/releases/download/$tag/manifest.json"
+  if (-not $man) { return $null }
+  try { return @{ tag = $tag; manifest = ($man | ConvertFrom-Json) } } catch { return $null }
 }
 
 # --- auto-reconnecting attach ---
@@ -141,6 +186,8 @@ function huginn {
                                 e.g. huginn usage monthly | session | blocks | blocks --live
   huginn usage <when>         shortcut date range: today | yesterday | week | month
                                 e.g. huginn usage today | huginn usage week session
+  huginn desktop              download links for the latest Huginn Desktop build
+  huginn desktop win|linux    just that platform's url, bare, for scripting
   huginn update               self-update this client from the repo ($script:HUGINN_REPO)
   huginn version              show client version
   huginn help | ? | /help     this help
@@ -218,6 +265,57 @@ function huginn {
     ssh -T $H "tmux ls 2>/dev/null || echo '(no sessions running)'"
   } elseif ($args[0] -eq 'status' -or $args[0] -eq 'st') {
     ssh -T $H huginn-status
+  } elseif ($args[0] -eq 'desktop') {
+    $arg = if ($args.Count -gt 1) { "$($args[1])".ToLower() } else { '' }
+    $want = switch ($arg) {
+      { $_ -in '', 'both', 'all' }              { ''; break }
+      { $_ -in 'win', 'windows', 'exe' }        { 'windows-x64'; break }
+      { $_ -in 'linux', 'deb', 'debian', 'ubuntu' } { 'linux-x64'; break }
+      default { 'BAD' }
+    }
+    if ($want -eq 'BAD') { Write-Host "usage: huginn desktop [windows|linux]" -ForegroundColor Red; return }
+    $rel = _Huginn-DesktopRelease
+    if (-not $rel) {
+      Write-Host "huginn: could not read the desktop release feed (offline, or GitHub rate-limited this IP)." -ForegroundColor Red
+      Write-Host "  Browse it: https://github.com/$script:HUGINN_REPO/releases" -ForegroundColor DarkGray
+      return
+    }
+    $base = "https://github.com/$script:HUGINN_REPO/releases/download/$($rel.tag)"
+    $arts = $rel.manifest.artifacts
+    # PS 5.1 has no $IsWindows (it is PowerShell Core's), and it only runs on Windows.
+    $here = if ($null -eq $IsWindows) { 'windows-x64' }
+            elseif ($IsWindows) { 'windows-x64' }
+            elseif ($IsLinux)   { 'linux-x64' }
+            else { '' }   # macOS: no desktop build
+    # With a platform named, emit the BARE url down the pipeline and nothing else,
+    # so it composes:  curl -fLO (huginn desktop linux)
+    if ($want) {
+      $a = $arts.$want
+      if (-not $a) { Write-Host "huginn: $($rel.tag) has no $want build" -ForegroundColor Red; return }
+      return "$base/$($a.file)"
+    }
+    Write-Host ""
+    Write-Host "  Huginn Desktop $($rel.manifest.version)   ($($rel.tag))"
+    Write-Host ""
+    foreach ($p in @('windows-x64', 'linux-x64')) {
+      $a = $arts.$p
+      if (-not $a) { continue }
+      $label = if ($p -eq 'windows-x64') { 'Windows' } else { 'Linux  ' }
+      $mark  = if ($p -eq $here) { '   <- this machine' } else { '' }
+      Write-Host "  $label  $base/$($a.file)$mark"
+      Write-Host ("           {0,6:N1} MB   sha256 {1}..." -f ($a.size / 1MB), $a.sha256.Substring(0, 16)) -ForegroundColor DarkGray
+    }
+    Write-Host ""
+    if ($here -eq 'windows-x64') {
+      Write-Host "  install:  run the .exe (per-user NSIS installer, no admin needed)"
+    } elseif ($here -eq 'linux-x64') {
+      $deb = $arts.'linux-x64'.file
+      Write-Host "  install:  curl -fLO $base/$deb && sudo dpkg -i $deb"
+    } else {
+      Write-Host "  (no desktop build for this machine - these links are for your laptop)"
+    }
+    Write-Host "  An installed client self-updates from this same feed." -ForegroundColor DarkGray
+    Write-Host ""
   } elseif ($args[0] -eq 'usage' -or $args[0] -eq 'cost' -or $args[0] -eq 'ccusage') {
     # Full history is layered server-side by the /usr/local/bin/ccusage wrapper on huginn - keep this bare.
     $kw = if ($args.Count -gt 1) { $args[1] } else { $null }
@@ -338,7 +436,7 @@ function _Huginn-Sessions {
 }
 Register-ArgumentCompleter -CommandName huginn, rclaude, rcc -ScriptBlock {
   param($word, $ast, $pos)
-  $cmds = 'list', 'status', 'solo', 'rename', 'kill', 'end', '-p', '-y', 'usage', 'cost', 'update', 'version', 'help'
+  $cmds = 'list', 'status', 'solo', 'rename', 'kill', 'end', '-p', '-y', 'usage', 'cost', 'desktop', 'update', 'version', 'help'
   # tokens already typed after the command name, excluding the partial word being completed
   $typed = @($ast.CommandElements | Select-Object -Skip 1 | ForEach-Object { $_.ToString() })
   if ($word -and $typed.Count -ge 1) { $typed = @($typed | Select-Object -SkipLast 1) }
@@ -351,6 +449,8 @@ Register-ArgumentCompleter -CommandName huginn, rclaude, rcc -ScriptBlock {
     $candidates = 'today', 'yesterday', 'week', 'month', 'daily', 'monthly', 'weekly', 'session', 'blocks', 'statusline'
   } elseif ($prev -in 'today', 'yesterday', 'week', 'month') {
     $candidates = 'daily', 'monthly', 'weekly', 'session', 'blocks', 'statusline'
+  } elseif ($prev -eq 'desktop') {
+    $candidates = 'windows', 'linux', 'both'
   } else {
     $candidates = @()
   }

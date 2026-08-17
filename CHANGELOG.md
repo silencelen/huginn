@@ -10,6 +10,27 @@ Format loosely follows [Keep a Changelog](https://keepachangelog.com/); versions
 
 ## [Unreleased]
 
+## [0.8.3] - 2026-08-16
+
+### Added
+- **`huginn desktop` — the download link for the latest Huginn Desktop build.** Prints the
+  version, both platform installers with their size and sha256, and marks the one this machine
+  can run; `huginn desktop windows` / `huginn desktop linux` print that url bare, so it composes
+  (`curl -fLO "$(huginn desktop linux)"`). Until now the only way to get the installer onto a new
+  machine was to know the tag naming and hand-build a GitHub URL.
+
+  The link points at the **GitHub release** (`desktop-v<version>`), which is where the installed
+  client's own updater fetches from — so the link and the self-update path are the same source
+  and cannot drift apart. Filenames are read from the release's `manifest.json` asset (the sha256
+  authority the updater verifies against), not guessed from a naming convention. It is
+  deliberately **not** the daemon's `/v1/desktop-kt`: that serves the same bytes, but every route
+  on it needs the host's bearer token and a browser cannot send one. So this is also the one verb
+  that works from a machine that cannot reach the host at all — a GitHub fetch, no ssh.
+
+  Tag-filtered rather than read from `/releases/latest`: four components publish into one feed
+  (`v*`, `app-v*`, `appd-v*`, `desktop-v*`) and "latest" is whichever shipped last, usually not
+  the desktop.
+
 ## [0.8.2] - 2026-08-14
 
 ### Security

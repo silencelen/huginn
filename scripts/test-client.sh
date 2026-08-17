@@ -20,7 +20,7 @@ ok()   { echo "  ok    $*"; }
 bad()  { echo "  FAIL  $*" >&2; FAIL=1; }
 skip() { echo "  SKIP  $*  <-- not a pass" >&2; }
 
-echo "[1/5] syntax"
+echo "[1/6] syntax"
 bash -n client/huginn.sh && ok "huginn.sh parses" || bad "huginn.sh does not parse"
 if command -v pwsh >/dev/null 2>&1; then
   if pwsh -NoProfile -Command '
@@ -32,7 +32,7 @@ else
   skip "huginn.ps1 parse (no pwsh)"
 fi
 
-echo "[2/5] the two version constants agree with each other and the changelog"
+echo "[2/6] the two version constants agree with each other and the changelog"
 SH_V=$(grep -m1 "^HUGINN_VERSION=" client/huginn.sh | sed "s/.*'\(.*\)'.*/\1/")
 PS_V=$(grep -m1 "HUGINN_VERSION = " client/huginn.ps1 | sed "s/.*'\(.*\)'.*/\1/")
 CL_V=$(grep -m1 -oE '^## \[[0-9]+\.[0-9]+\.[0-9]+\]' CHANGELOG.md | tr -d '#[] ')
@@ -53,7 +53,7 @@ done
 # `update` overwrites the file that is then loaded into the shell, so its download
 # host is a trust root. huginn.sh pinned it in 0.6.1; huginn.ps1 kept using
 # $HUGINN_HOST until 0.8.2 — nothing noticed for two minor versions.
-echo "[2b/5] both clients pin the update trust root"
+echo "[2b/6] both clients pin the update trust root"
 for f in client/huginn.sh client/huginn.ps1; do
   grep -q 'HUGINN_UPDATE_HOST' "$f" && ok "$f pins HUGINN_UPDATE_HOST" \
     || bad "$f fetches update code from an unpinned host"
@@ -61,10 +61,10 @@ done
 grep -q 'scp .*\${H}:' client/huginn.ps1 && bad "huginn.ps1 still scps from \$HUGINN_HOST" \
   || ok "huginn.ps1 does not scp from \$HUGINN_HOST"
 
-echo "[3/5] both clients expose the same verbs (parity by verb)"
+echo "[3/6] both clients expose the same verbs (parity by verb)"
 # huginn.sh writes cases as alternations (`list|ls)`, `status|st)`), so match the
 # verb as a case ALTERNATIVE, not as a bare `verb)`.
-for v in end kill solo rename list status usage update version help; do
+for v in end kill solo rename list status desktop usage update version help; do
   # Match the DISPATCH, not a mention: huginn.ps1 lists every verb in its
   # completion array too, so grepping "'$v'" passes even with the branch deleted
   # (verified by removing the `end` branch: still 2 matches, still green).
@@ -77,7 +77,7 @@ for v in end kill solo rename list status usage update version help; do
   [ "$a" -gt 0 ] && [ "$b" -gt 0 ] && ok "verb $v" || bad "verb $v missing (sh=$a ps1=$b)"
 done
 
-echo "[4/5] what the PowerShell client actually SENDS"
+echo "[4/6] what the PowerShell client actually SENDS"
 if ! command -v pwsh >/dev/null 2>&1; then
   skip "ps1 behaviour (no pwsh)"
 else
@@ -133,9 +133,9 @@ STUB
     && ok "end rejects a non-conforming name" || bad "end accepted 'bad-name'"
 fi
 
-echo "[5/5] what the POSIX client actually SENDS"
+echo "[5/6] what the POSIX client actually SENDS"
 # huginn.sh is the client the 0.8.0 deny-list bug actually shipped to, and nothing
-# here exercised it — [4/5] drives only huginn.ps1. Same stub-ssh technique; huginn.sh
+# here exercised it — [4/6] drives only huginn.ps1. Same stub-ssh technique; huginn.sh
 # passes a plain argv string rather than a base64 payload, so the stub logs argv.
 T2=$(mktemp -d)
 cat > "$T2/ssh" <<'STUB'
@@ -166,6 +166,35 @@ SE=$(semit 'huginn end testsess')
 grep -q "soft-end" <<<"$SE" && ok "sh: end reaches the soft-end route" || bad "sh: end sent nothing matching soft-end"
 SK=$(semit 'huginn kill testsess')
 grep -q "DELETE" <<<"$SK" && ok "sh: kill prefers the daemon DELETE" || bad "sh: kill did not use DELETE"
+
+echo "[6/6] desktop links come from GitHub, and reach it WITHOUT the host"
+# The whole point of the verb is that it works on a machine that cannot ssh here
+# (that is why it does not use /v1/desktop-kt, whose every route needs the token).
+# Both halves are asserted: the url is right, AND the stub ssh log stayed empty.
+# Live network — SKIP LOUDLY when GitHub is unreachable rather than reporting a
+# green run that tested nothing.
+if ! curl -sfL --max-time 15 -o /dev/null "https://api.github.com/repos/silencelen/huginn/releases?per_page=1"; then
+  skip "desktop link checks (GitHub unreachable from here)"
+else
+  SD=$(semit 'huginn desktop linux')      # SD = what went over ssh; $T2/out = stdout
+  URL=$(cat "$T2/out")
+  grep -qE '^https://github\.com/silencelen/huginn/releases/download/desktop-v[0-9.]+/huginn-desktop-kt_.*\.deb$' <<<"$URL" \
+    && ok "sh: desktop linux prints one bare release url ($URL)" \
+    || bad "sh: desktop linux printed: $URL"
+  [ -z "$SD" ] && ok "sh: desktop reached GitHub without touching the host" \
+    || bad "sh: desktop sent something over ssh: $SD"
+  if command -v pwsh >/dev/null 2>&1; then
+    PD=$(emit 'huginn desktop windows')
+    PURL=$(tr -d '\r' < "$T/out")
+    grep -qE '^https://github\.com/silencelen/huginn/releases/download/desktop-v[0-9.]+/Huginn-Desktop-Setup-.*\.exe$' <<<"$PURL" \
+      && ok "ps1: desktop windows prints one bare release url ($PURL)" \
+      || bad "ps1: desktop windows printed: $PURL"
+    [ -z "$PD" ] && ok "ps1: desktop reached GitHub without touching the host" \
+      || bad "ps1: desktop sent something over ssh: $PD"
+  else
+    skip "ps1 desktop checks (no pwsh)"
+  fi
+fi
 rm -rf "$T2"
 
 echo
