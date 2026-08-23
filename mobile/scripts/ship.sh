@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
-# Build and publish Huginn to the self-hosted devstore on devserv:
+# Build and publish Huginn. Releases go to GitHub; devstore pulls them from there.
 #   1. scripts/build.sh (tests + assemble + signature check)
-#   2. scp the APK + latest.json (+ CHANGELOG.md, icon.png) to the app's dir
-#   3. run the server's update-index.sh
-#   4. verify the served index.json really carries this versionCode
+#   2. cut the GitHub Release (APK + latest.json) — THIS is the publish
+#   3. nudge devserv to pull it now, and confirm the served index caught up
+#
+# Devstore pulls from GitHub Releases; nothing is scp'd on the release path.
 #
 # Debug ships are possible but must be asked for; release is the channel.
 set -euo pipefail
@@ -52,53 +53,70 @@ UPLOADS=("$APK")
 [ -f CHANGELOG.md ] && { cp CHANGELOG.md dist/CHANGELOG.md; UPLOADS+=(dist/CHANGELOG.md); }
 [ -f assets/icon.png ] && UPLOADS+=(assets/icon.png)
 
-echo "[ship 2/4] uploading $(basename "$APK") to $DEVSERV:$DEVSERV_DIR/"
+# ---------------------------------------------------------------------------
+# RELEASE PATH: publish to GitHub. That is the whole publish.
+#
+# Devstore PULLS from GitHub Releases now (devserv: devstore-sync.timer, every
+# 15 min) instead of being pushed to. This inverts what used to happen here —
+# the scp to devserv was the release and GitHub was a best-effort mirror — which
+# is exactly how andvari 0.25.0 came to be released on every channel while the
+# owner's phone sat on 0.24.0: one scp nobody ran. One publish now, and this is
+# it. Do not re-add an scp; two publish paths is how the two sources drift.
+# ---------------------------------------------------------------------------
+VN="$(grep -oE '"versionName":"[^"]+"' "$MANIFEST" | head -1 | cut -d'"' -f4)"
+
+if [ "$VARIANT" = "release" ]; then
+  echo "[ship 2/3] publishing GitHub release app-v$VN"
+  TMPD="$(mktemp -d)"
+  # The updater matches the APK asset by extension and verifies by sha256, so
+  # the nice asset name and latest.json's internal apk name need not agree —
+  # devstore-sync renames the asset to whatever the manifest calls it.
+  cp "$APK" "$TMPD/Huginn-$VN.apk"
+  # latest.json is load-bearing twice: the in-app PhoneUpdater verifies the APK
+  # against its sha256, AND devstore-sync mirrors it verbatim as the store
+  # manifest. A release without it is skipped by the store, loudly. It is not
+  # optional and this step is no longer best-effort.
+  if ! "$REPO_DIR/scripts/github-release.sh" app "$VN" \
+         "$TMPD/Huginn-$VN.apk#Huginn $VN (signed APK, arm64-v8a)" \
+         "$REPO_DIR/mobile/$MANIFEST#Release manifest (sha256, for in-app + devstore update)"; then
+    rm -rf "$TMPD"
+    echo "[ship] FAIL GitHub release app-v$VN failed — NOTHING is published. Fix and re-run." >&2
+    exit 1
+  fi
+  rm -rf "$TMPD"
+  echo "[ship] GitHub release app-v$VN published (APK + latest.json)"
+
+  # A nudge, not a publish path: the timer would pick this up within 15 minutes
+  # anyway. If devserv is unreachable the release still stands and the store
+  # self-corrects on its own — that is the entire point of going pull-based.
+  echo "[ship 3/3] nudging devstore to pull now"
+  if ssh -o BatchMode=yes -o ConnectTimeout=10 "$DEVSERV" \
+       "'$DEVSTORE_ROOT/devstore-sync.sh' --app huginn" 2>&1 | sed 's/^/  /'; then
+    EXPECTED_VC="$(grep -oE '"versionCode":[0-9]+' "$MANIFEST" | head -1 | cut -d: -f2)"
+    DEVSTORE_BASE="http://${DEVSERV#*@}:8083"
+    LIVE_VC="$(curl -sS --max-time 8 "$DEVSTORE_BASE/index.json" \
+        | python3 -c "import json,sys; print(json.load(sys.stdin)['apps'].get('$PKG',{}).get('versionCode',''))" || true)"
+    if [ -n "$EXPECTED_VC" ] && [ "$EXPECTED_VC" = "$LIVE_VC" ]; then
+      echo "[ship] OK  $PKG @ versionCode $EXPECTED_VC is live on devstore"
+    else
+      echo "[ship] NOTE devstore shows '$LIVE_VC', expected '$EXPECTED_VC' — the timer will reconcile; check devstore-sync logs on devserv if it does not." >&2
+    fi
+  else
+    echo "[ship] NOTE could not reach devserv to nudge it; the quarter-hourly timer will pull this release on its own." >&2
+  fi
+  exit 0
+fi
+
+# ---------------------------------------------------------------------------
+# DEBUG PATH: still a direct push, because a debug build is not a release and
+# never gets a GitHub Release cut for it. app.json is deliberately NOT pushed —
+# it carries the devstore-sync `source` block, and scp'ing a build-time copy
+# over it would silently revert huginn to push-only.
+# ---------------------------------------------------------------------------
+echo "[ship 2/3] (debug) uploading $(basename "$APK") to $DEVSERV:$DEVSERV_DIR/"
 ssh -o BatchMode=yes -o ConnectTimeout=10 "$DEVSERV" "mkdir -p '$DEVSERV_DIR'"
 scp -o BatchMode=yes -o ConnectTimeout=10 "${UPLOADS[@]}" "$DEVSERV:$DEVSERV_DIR/"
-# app.json holds the constants update-index.sh merges with latest.json.
-scp -o BatchMode=yes -o ConnectTimeout=10 dist/app.json "$DEVSERV:$DEVSERV_DIR/app.json"
-# The served manifest is always latest.json regardless of variant.
 scp -o BatchMode=yes -o ConnectTimeout=10 "$MANIFEST" "$DEVSERV:$DEVSERV_DIR/latest.json"
 
-echo "[ship 3/4] refreshing the devstore index"
+echo "[ship 3/3] (debug) refreshing the devstore index"
 ssh -o BatchMode=yes -o ConnectTimeout=10 "$DEVSERV" "cd '$DEVSTORE_ROOT' && ./update-index.sh" | sed 's/^/  /'
-
-echo "[ship 4/4] verifying the live index"
-EXPECTED_VC="$(grep -oE '"versionCode":[0-9]+' "$MANIFEST" | head -1 | cut -d: -f2)"
-DEVSTORE_BASE="http://${DEVSERV#*@}:8083"
-LIVE_VC="$(curl -sS --max-time 8 "$DEVSTORE_BASE/index.json" \
-    | python3 -c "import json,sys; print(json.load(sys.stdin)['apps'].get('$PKG',{}).get('versionCode',''))")"
-if [ -n "$EXPECTED_VC" ] && [ "$EXPECTED_VC" = "$LIVE_VC" ]; then
-  echo "[ship] OK  $PKG @ versionCode $EXPECTED_VC is live"
-  echo "[ship]     $DEVSTORE_BASE/$(basename "$DEVSERV_DIR")/$APK_NAME"
-else
-  echo "[ship] FAIL index versionCode '$LIVE_VC' != expected '$EXPECTED_VC'" >&2
-  exit 1
-fi
-
-# ------------------------------------------------- GitHub Release (best-effort)
-# Mirror the release to GitHub so the repo's Releases page carries the same APK
-# the store serves (tag app-v<versionName>, notes cut from mobile/CHANGELOG.md),
-# PLUS latest.json — the sha256 manifest the app's own in-app updater (PhoneUpdater)
-# verifies the APK against. Best-effort by design: the store publish above is the
-# release, and the external devstore updater still works, so a GitHub hiccup must
-# not fail a shipped build — it only means the IN-APP updater has nothing to find
-# for this version until GitHub recovers. Skip: HUGINN_NO_GH_RELEASE=1.
-if [ "$VARIANT" = "release" ] && [ "${HUGINN_NO_GH_RELEASE:-}" != 1 ]; then
-  VN="$(grep -oE '"versionName":"[^"]+"' "$MANIFEST" | head -1 | cut -d'"' -f4)"
-  NICE="$(mktemp -d)/Huginn-$VN.apk"
-  cp "$APK" "$NICE"
-  # The updater matches the APK asset by extension and verifies by sha256, so the
-  # nice asset name and latest.json's internal apk name need not agree.
-  # $MANIFEST is mobile-relative (dist/latest.json); github-release.sh cd's to the
-  # repo root before it checks artifacts exist, so hand it an absolute path (as
-  # $NICE already is) or it refuses "does not exist".
-  if "$REPO_DIR/scripts/github-release.sh" app "$VN" \
-       "$NICE#Huginn $VN (signed APK, arm64-v8a)" \
-       "$REPO_DIR/mobile/$MANIFEST#Release manifest (sha256, for in-app update)"; then
-    echo "[ship] GitHub release app-v$VN updated (APK + latest.json)"
-  else
-    echo "[ship] WARNING: GitHub release failed — store publish above is unaffected; in-app update has no GitHub source for $VN" >&2
-  fi
-  rm -rf "$(dirname "$NICE")"
-fi
