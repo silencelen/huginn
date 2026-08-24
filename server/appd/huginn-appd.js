@@ -52,7 +52,7 @@ const pushLib = require('./lib/pushtokens');
 const { trySender } = require('./lib/fcm');
 const { createPending, stepSoftEnd } = require('./lib/softend');
 
-const VERSION = '2.62.0';
+const VERSION = '2.63.0';
 const PORT = Number(process.env.HUGINN_APPD_PORT || 8787);
 const DATA_DIR = process.env.HUGINN_APPD_DATA || '/var/lib/huginn-appd';
 const UPLOADS_DIR = path.join(DATA_DIR, 'uploads');
@@ -1120,6 +1120,81 @@ function hostNameFor(host) {
   return ((deviceState.devices || {})[host] || {}).name || 'a removed device';
 }
 
+/**
+ * A remote chat's conversation, built from what the device streamed back.
+ *
+ * THE BUG THIS FIXES: a chat's reader renders Claude's OWN transcript file, found
+ * by session id under this host's ~/.claude/projects. A run that happened on
+ * another machine wrote that file THERE, so the lookup found nothing and the
+ * conversation rendered empty — no answer, and the user's own message gone too —
+ * while the chat list row still showed the text, because that comes from meta.
+ * A working feature that looked like it had swallowed your message.
+ *
+ * The daemon already holds everything it needs: every event the device posted was
+ * fed through handleClaudeEvent and appended to messages.jsonl. So a remote chat
+ * reads from there instead, in the same shape and honouring the same paging
+ * contract — the reader pages by `offset` and appends what comes back, so
+ * returning the whole conversation on every poll would duplicate it on screen.
+ * Here the offset is a message INDEX rather than a byte position; the client
+ * never inspects it, it only hands it back.
+ *
+ * Deliberately does NOT fall back to a local file for a remote chat. Session ids
+ * are uuids and a collision is fantastically unlikely, but "show this machine's
+ * transcript for a conversation that happened somewhere else" is the kind of
+ * wrong that would be very hard to see and very bad to read.
+ */
+function transcriptFromMessages(meta, { offset = null, until = null, limit = 400 } = {}) {
+  const msgs = loadMsgs(meta.id);
+  const total = msgs.length;
+
+  let start; let end;
+  if (until != null) {
+    end = Math.max(0, Math.min(until, total));
+    start = Math.max(0, end - limit);
+  } else if (offset != null) {
+    start = Math.max(0, Math.min(offset, total));
+    end = total;
+  } else {
+    end = total;
+    start = Math.max(0, total - limit);
+  }
+
+  let seq = 0;
+  const events = [];
+  for (const m of msgs.slice(start, end)) {
+    const ts = m.ts ?? null;
+    if (m.type === 'user') {
+      events.push({ seq: ++seq, kind: 'user', ts, sidechain: false, text: m.text || '' });
+    } else if (m.type === 'assistant') {
+      events.push({ seq: ++seq, kind: 'assistant', ts, sidechain: false, text: m.text || '' });
+    } else if (m.type === 'tool') {
+      events.push({ seq: ++seq, kind: 'tool', ts, sidechain: false, name: m.name || '', input: m.input || '' });
+    } else if (m.type === 'error') {
+      // `system`, not `error`: the readers know six kinds and error is not one of
+      // them, so an error event would render as nothing at all — which is exactly
+      // the silence this whole function exists to remove.
+      events.push({ seq: ++seq, kind: 'system', ts, sidechain: false, text: m.text || '' });
+    }
+    // `result` carries cost and turn counts, which the local reader does not emit
+    // as an event either. Left out so both paths render the same conversation.
+  }
+
+  return {
+    events,
+    deliveredQueued: [],
+    nextOffset: end,
+    windowStart: start,
+    truncated: start > 0,
+    title: meta.title ?? null,
+    permissionMode: null,
+    model: meta.model ?? null,
+    gitBranch: null,
+    cwd: null,
+    effort: meta.effort ?? null,
+    lastActivityTs: total ? (msgs[total - 1].ts ?? null) : null,
+  };
+}
+
 function listChats() {
   let ids = [];
   try { ids = fs.readdirSync(CHATS_DIR); } catch { /* empty */ }
@@ -1136,7 +1211,9 @@ function listChats() {
       m.pending = Array.isArray(m.pending) ? m.pending.length : 0;
       // Claude Code generates a real title for its own sessions; it reads far
       // better than the truncated first message this daemon falls back to.
-      if (m.claudeSessionId) {
+      // Not for a remote chat: that session's file is on the other machine, so
+      // this can only find nothing — or, once, something that is not it.
+      if (m.claudeSessionId && (!m.host || m.host === 'local')) {
         const f = findTranscriptFile(m.claudeSessionId);
         if (f) {
           try {
@@ -4453,6 +4530,39 @@ const server = http.createServer(async (req, res) => {
       // normal Claude Code transcript, so a chat gets thinking and subagent
       // output for free instead of only the digest this daemon persisted.
       if (req.method === 'GET' && sub === '/transcript') {
+        const remote = !!(meta.host && meta.host !== 'local');
+        // Checked BEFORE claudeSessionId: a remote chat should show the message
+        // you just sent while the device is still picking the job up, and the
+        // session id only arrives with the run's first event.
+        if (remote) {
+          // ABSENCE FIRST, then validity. `Number(null)` is 0, not NaN, so a
+          // finite-check on a missing param reads as "0" — which made both offset
+          // and until zero on an ordinary read, and `until` wins, so the window
+          // collapsed to nothing and the conversation came back empty. Exactly
+          // the symptom this route is here to fix.
+          const num = (name) => {
+            const raw = u.searchParams.get(name);
+            if (raw == null) return null;
+            const n = Number(raw);
+            return Number.isFinite(n) ? n : null;
+          };
+          const t = transcriptFromMessages(meta, {
+            offset: num('offset'),
+            until: num('until'),
+            limit: Math.max(1, Math.min(800, Number(u.searchParams.get('limit')) || 400)),
+          });
+          return sendJson(res, 200, {
+            ...t,
+            events: t.events.concat(queuedEvents(meta, t.events.length)),
+            modelDisplay: formatModel(t.model),
+            running: meta.running,
+            mode: meta.mode,
+            claudeSessionId: meta.claudeSessionId ?? null,
+            host: meta.host,
+            hostName: hostNameFor(meta.host),
+            pending: (meta.pending || []).length,
+          });
+        }
         if (!meta.claudeSessionId) return sendErr(res, 409, 'chat has not run yet');
         const file = findTranscriptFile(meta.claudeSessionId);
         if (!file) return sendErr(res, 409, 'transcript not found for this chat');
