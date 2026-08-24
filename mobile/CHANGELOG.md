@@ -1,5 +1,27 @@
 # Huginn changelog
 
+## 2.68.0 — 2026-08-24
+
+### Added
+- **A Devices screen.** Until now the phone could only *pick* a machine in the new-chat dialog —
+  it could not see which machines were enrolled, what each would allow, whether one was locked
+  or running, or take an enrolment away. All of that was desktop-only. Now it is in Settings →
+  Devices, with Ask here / Act here / Forget on every machine.
+  - **In Settings, not the bottom bar.** Chats, Sessions, Rounds and Status are the daily loop;
+    how many machines are enrolled is something you look at when you are changing it. A fifth
+    bar slot would have cost one of the four a place it earns every day.
+  - **Act is offered from what a machine will do RIGHT NOW**, not from what it is enrolled at, so
+    a locked machine does not show a button that always fails.
+  - **Forget asks first, and says what it does not do**: huginn stops offering that machine work,
+    but nothing reaches onto the machine — a runner still going there will enrol again. The
+    desktop does not confirm and does not need to; a phone is a pocketful of mis-taps.
+  - The rows are one composable shared with the desktop, so a device cannot read as one thing on
+    a laptop and another in a pocket. It says "own, look while locked" rather than just "look" —
+    showing only the second makes a correctly-configured machine look misconfigured.
+  - No scope control anywhere on the screen, and one line under the list saying why: what a
+    machine will do is set on the machine. A control here would be a lie about where the decision
+    is made, and the lie would only surface the day it mattered.
+
 ## 2.67.0 — 2026-08-24
 
 ### Changed
