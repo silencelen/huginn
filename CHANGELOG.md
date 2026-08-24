@@ -10,6 +10,19 @@ Format loosely follows [Keep a Changelog](https://keepachangelog.com/); versions
 
 ## [Unreleased]
 
+## [0.10.1] - 2026-08-24
+
+### Fixed
+- **`huginn-device unit` printed the wrong shape of unit for the machines it is for.** It only
+  offered a systemd *user* unit — one person's session, which needs `loginctl enable-linger` to
+  survive a logout and is not up until somebody has logged in at least once. That is exactly
+  wrong for a headless box, which is the whole reason the headless runner exists. `unit --system`
+  now prints a system unit, and the user variant says which one you probably want and why.
+- Both units set `HOME` explicitly. A system unit derives it from `User=`, which is right until
+  somebody changes `User=` — and the runner finds *both* its own config and Claude's credentials
+  under it, so a wrong HOME is a machine that enrols and then cannot log in. That reads as a
+  broken Claude login rather than a wrong unit file, which is a long afternoon.
+
 ## [0.10.0] - 2026-08-24
 
 ### Added
