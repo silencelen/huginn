@@ -57,6 +57,7 @@ import androidx.compose.ui.unit.dp
 import com.silencelen.huginn.data.DraftBook
 import com.silencelen.huginn.data.HuginnClient
 import com.silencelen.huginn.data.TranscriptEvent
+import com.silencelen.huginn.ui.SealedNote
 import com.silencelen.huginn.desktop.AppStore
 import com.silencelen.huginn.desktop.ChatController
 import com.silencelen.huginn.desktop.attach.AttachButton
@@ -332,6 +333,8 @@ fun ChatView(
 
         HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
         Composer(
+            // Same rule as the phone, read off the detail this view already holds.
+            sealedRun = detail?.closed == true,
             draft = draft,
             onDraft = setDraft,
             onSent = clearDraft,
@@ -368,6 +371,7 @@ fun ChatView(
  */
 @Composable
 private fun Composer(
+    sealedRun: Boolean = false,
     draft: String,
     onDraft: (String) -> Unit,
     onSent: () -> Unit,
@@ -380,6 +384,10 @@ private fun Composer(
     onStop: () -> Unit,
     onSend: (String) -> Unit,
 ) {
+    if (sealedRun) {
+        SealedNote(Modifier.fillMaxWidth())
+        return
+    }
     val attachment by attachments.current.collectAsState()
     val failure by attachments.failure.collectAsState()
     var picking by remember { mutableStateOf(false) }

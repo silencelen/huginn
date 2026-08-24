@@ -28,6 +28,7 @@ import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.MonitorHeart
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Schedule
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Terminal
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -84,6 +85,7 @@ import com.silencelen.huginn.ui.ChatScreen
 import com.silencelen.huginn.ui.EmptyState
 import com.silencelen.huginn.ui.LiveInput
 import com.silencelen.huginn.ui.ChatsScreen
+import com.silencelen.huginn.ui.RoundsScreen
 import com.silencelen.huginn.ui.HuginnViewModel
 import com.silencelen.huginn.ui.LocalAttachmentImages
 import com.silencelen.huginn.ui.SessionScreen
@@ -265,6 +267,7 @@ internal fun backFrom(dest: Dest, tab: Int): Dest? = when (dest) {
     is Dest.Settings -> when (tab) {
         0 -> Dest.Chats
         1 -> Dest.Sessions
+        3 -> Dest.Rounds
         else -> Dest.Status
     }
     else -> null
@@ -355,6 +358,7 @@ data class OpenTarget(
 internal fun destToKey(d: Dest): String = when (d) {
     is Dest.Chats -> "chats"
     is Dest.Chat -> "chat:${d.id}"
+    is Dest.Rounds -> "rounds"
     is Dest.Sessions -> "sessions"
     is Dest.SessionView -> "session:${d.name}"
     is Dest.Status -> "status"
@@ -365,6 +369,7 @@ internal fun destToKey(d: Dest): String = when (d) {
 internal fun keyToDest(v: String): Dest = when {
     v == "chats" -> Dest.Chats
     v.startsWith("chat:") -> Dest.Chat(v.removePrefix("chat:"))
+    v == "rounds" -> Dest.Rounds
     v == "sessions" -> Dest.Sessions
     v.startsWith("session:") -> Dest.SessionView(v.removePrefix("session:"))
     v == "status" -> Dest.Status
@@ -380,6 +385,7 @@ internal val DestSaver = androidx.compose.runtime.saveable.Saver<Dest, String>(
 internal sealed interface Dest {
     data object Chats : Dest
     data class Chat(val id: String) : Dest
+    data object Rounds : Dest
     data object Sessions : Dest
     data class SessionView(val name: String) : Dest
     data object Status : Dest
@@ -463,6 +469,7 @@ fun HuginnApp(
 
     val chats by vm.chats.collectAsState()
     val rounds by vm.rounds.collectAsState()
+    val chatSealed by vm.chatSealed.collectAsState()
     // Recomputed on every recomposition, which the chat/round refresh already
     // drives. A Round row says "in 4h", not "in 3h 59m", so a clock that ticks
     // only when the data does is precise enough and costs nothing.
@@ -647,6 +654,7 @@ fun HuginnApp(
         dest = when (i) {
             0 -> Dest.Chats
             1 -> Dest.Sessions
+            3 -> Dest.Rounds
             else -> Dest.Status
         }
         vm.refreshAll()
@@ -661,6 +669,7 @@ fun HuginnApp(
     val title = when (val d = dest) {
         is Dest.Chats -> "Huginn"
         is Dest.Chat -> chatTitle ?: "Chat"
+        is Dest.Rounds -> "Rounds"
         is Dest.Sessions -> "Sessions"
         is Dest.SessionView -> transcript?.title ?: d.name
         is Dest.Status -> "Status"
@@ -786,7 +795,10 @@ fun HuginnApp(
             is Dest.Chats, is Dest.Chat -> 0
             is Dest.Sessions, is Dest.SessionView -> 1
             is Dest.Status -> 2
-            is Dest.Settings -> 3
+            is Dest.Rounds -> 3
+            // Four, not three: Rounds took 3, and Settings has no bar item of its
+            // own so its number only has to be distinct.
+            is Dest.Settings -> 4
         }
 
         // Each surface once, as a lambda, so the narrow and wide layouts are
@@ -794,15 +806,6 @@ fun HuginnApp(
         val chatsPane: @Composable (Boolean) -> Unit = { twoPane ->
             ChatsScreen(
                 chats = chats,
-                rounds = rounds,
-                nowMs = nowMs,
-                // No Round detail screen yet: opening a Round means reading what it
-                // last said, which is the reason anyone taps it.
-                onOpenRound = { r ->
-                    r.lastRun?.chatId?.let { id -> vm.openChat(id); dest = Dest.Chat(id) }
-                },
-                onRunRound = { r -> vm.runRound(r.id) },
-                onSetRoundEnabled = { r, on -> vm.setRoundEnabled(r.id, on) },
                 loading = loading,
                 connected = connected,
                 selectedId = if (twoPane) (dest as? Dest.Chat)?.id else null,
@@ -811,6 +814,23 @@ fun HuginnApp(
                 onDelete = { vm.deleteChat(it) },
                 onOpenSettings = { dest = Dest.Settings },
                 newChatRequest = newChatAsk,
+            )
+        }
+        // Its own destination now, not a strip on top of the chat list. A Round is
+        // not a conversation and the chat list is not where you go looking for one;
+        // sharing that screen made both of them read as the other's preamble.
+        val roundsPane: @Composable () -> Unit = {
+            RoundsScreen(
+                rounds = rounds,
+                nowMs = nowMs,
+                loading = loading,
+                connected = connected,
+                onOpenRound = { r ->
+                    r.lastRun?.chatId?.let { id -> vm.openChat(id); dest = Dest.Chat(id) }
+                },
+                onRunRound = { r -> vm.runRound(r.id) },
+                onSetRoundEnabled = { r, on -> vm.setRoundEnabled(r.id, on) },
+                onOpenSettings = { dest = Dest.Settings },
             )
         }
         val chatDetail: @Composable (String) -> Unit = { id ->
@@ -840,6 +860,7 @@ fun HuginnApp(
                 vm.maybeSuggestChat(id, chatPage, chatBusy)
             }
             ChatScreen(
+                sealedRun = chatSealed,
                 page = chatPage,
                 error = chatError,
                 onRetry = { vm.retryChatTranscript(id) },
@@ -1140,6 +1161,12 @@ fun HuginnApp(
                             label = { Text("Sessions") },
                         )
                         NavigationBarItem(
+                            selected = section == 3,
+                            onClick = { onTab(3) },
+                            icon = { Icon(Icons.Filled.Schedule, contentDescription = null) },
+                            label = { Text("Rounds") },
+                        )
+                        NavigationBarItem(
                             selected = section == 2,
                             onClick = { onTab(2) },
                             icon = { Icon(Icons.Filled.MonitorHeart, contentDescription = null) },
@@ -1174,6 +1201,12 @@ fun HuginnApp(
                             label = { Text("Sessions") },
                         )
                         NavigationRailItem(
+                            selected = section == 3,
+                            onClick = { onTab(3) },
+                            icon = { Icon(Icons.Filled.Schedule, contentDescription = null) },
+                            label = { Text("Rounds") },
+                        )
+                        NavigationRailItem(
                             selected = section == 2,
                             onClick = { onTab(2) },
                             icon = { Icon(Icons.Filled.MonitorHeart, contentDescription = null) },
@@ -1181,7 +1214,7 @@ fun HuginnApp(
                         )
                         Spacer(Modifier.weight(1f))
                         NavigationRailItem(
-                            selected = section == 3,
+                            selected = section == 4,
                             onClick = { dest = Dest.Settings },
                             icon = { Icon(Icons.Filled.Settings, contentDescription = "Settings") },
                             label = { Text("Settings") },
@@ -1197,6 +1230,7 @@ fun HuginnApp(
                             is Dest.Chat -> chatDetail(d.id)
                             is Dest.Sessions -> sessionsPane(false)
                             is Dest.SessionView -> sessionDetail(d.name)
+                            is Dest.Rounds -> roundsPane()
                             is Dest.Status -> statusPane()
                             is Dest.Settings -> settingsPane()
                         }
@@ -1226,6 +1260,11 @@ fun HuginnApp(
                             }
                             // Reading surfaces: full width helps nobody at 900dp, so
                             // they keep a readable measure, centred.
+                            // A reading surface like Status: full width helps nobody
+                            // at 900dp, so it keeps a readable measure, centred.
+                            is Dest.Rounds -> Box(Modifier.fillMaxSize(), contentAlignment = androidx.compose.ui.Alignment.TopCenter) {
+                                Box(Modifier.widthIn(max = 840.dp)) { roundsPane() }
+                            }
                             is Dest.Status -> Box(Modifier.fillMaxSize(), contentAlignment = androidx.compose.ui.Alignment.TopCenter) {
                                 Box(Modifier.widthIn(max = 840.dp)) { statusPane() }
                             }

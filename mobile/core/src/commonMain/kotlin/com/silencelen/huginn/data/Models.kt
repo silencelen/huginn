@@ -379,6 +379,24 @@ data class Chat(
     val running: Boolean = false,
     /** Messages waiting for the current run to finish. */
     val pending: Int = 0,
+    /** A device id, or "local"/null for the huginn host itself. */
+    val host: String? = null,
+    /**
+     * The machine's NAME, resolved by the daemon. A client that looked this up
+     * itself would print a bare uuid for a device since unenrolled.
+     */
+    val hostName: String? = null,
+    /**
+     * A finished Round run: readable forever, closed to new messages. The daemon
+     * refuses a send with 409, so this is what lets the UI say so first.
+     *
+     * Named `closed` rather than `sealed`: the wire field is "sealed", but that is
+     * a Kotlin modifier keyword and a property called it would need backticks at
+     * every use site. One @SerialName is cheaper than that everywhere.
+     */
+    @SerialName("sealed") val closed: Boolean = false,
+    val endedAt: Long? = null,
+    val roundId: String? = null,
 )
 
 @Serializable
@@ -413,6 +431,12 @@ data class ChatDetail(
     val turns: Int = 0,
     val running: Boolean = false,
     val messages: List<Message> = emptyList(),
+    val host: String? = null,
+    val hostName: String? = null,
+    @SerialName("sealed") val closed: Boolean = false,
+    val endedAt: Long? = null,
+    val roundId: String? = null,
+    val roundGoalMet: Boolean? = null,
     val partialText: String? = null,
     /**
      * Where [partialText] ends in the run's event stream, so a reattach can ask
@@ -776,6 +800,17 @@ data class RoundItem(
 data class RoundRun(
     /** Epoch SECONDS, unlike [Round.nextRunAt]. */
     val at: Long = 0,
+    /**
+     * Whether the run reached the Round's stated goal. Null = the Round set no
+     * goal, or the run did not say — which is NOT the same as failing, and must
+     * not be rendered as one.
+     */
+    val goalMet: Boolean? = null,
+    /**
+     * What the run actually claimed, before an unmet goal promoted [status].
+     * Carried so "it said ok but had not finished" stays visible.
+     */
+    val reportedStatus: String? = null,
     /** The chat this run happened in. Openable like any other. */
     val chatId: String? = null,
     /** ok | attention | action | unknown */
@@ -793,6 +828,11 @@ data class Round(
     val id: String,
     val title: String = "",
     val prompt: String = "",
+    /**
+     * What "done" means for this Round, as a completion test. Empty is legitimate:
+     * a Round that reports on something has no finish line to cross.
+     */
+    val goal: String = "",
     val enabled: Boolean = true,
     val mode: String = "ask",
     val model: String? = null,
