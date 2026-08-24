@@ -14,6 +14,14 @@ the Electron client's go to `/v1/desktop` and the two never mix — see
      refusal is deliberate — it is what stops a release going out with no notes.
      ─────────────────────────────────────────────────────────────────────────── -->
 
+## 0.8.4
+
+### Changed
+- The device rows are now the same composable the phone draws, which gained a confirm-before-
+  forget and a line saying where scope is actually set. The desktop keeps its own empty state,
+  since "turn on the toggle in Settings" is advice only this app can give — and it now also
+  names `huginn device on` for machines that have no desktop app at all.
+
 ## 0.8.3
 
 ### Changed

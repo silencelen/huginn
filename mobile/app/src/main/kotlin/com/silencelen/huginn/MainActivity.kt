@@ -85,6 +85,7 @@ import com.silencelen.huginn.ui.ChatScreen
 import com.silencelen.huginn.ui.EmptyState
 import com.silencelen.huginn.ui.LiveInput
 import com.silencelen.huginn.ui.ChatsScreen
+import com.silencelen.huginn.ui.DevicesScreen
 import com.silencelen.huginn.ui.RoundsScreen
 import com.silencelen.huginn.ui.HuginnViewModel
 import com.silencelen.huginn.ui.LocalAttachmentImages
@@ -264,6 +265,9 @@ class MainActivity : FragmentActivity() {
 internal fun backFrom(dest: Dest, tab: Int): Dest? = when (dest) {
     is Dest.SessionView -> Dest.Sessions
     is Dest.Chat -> Dest.Chats
+    // Back to where it was opened from, not to a tab: Devices is only reachable
+    // through Settings, so Settings is the only honest answer.
+    is Dest.Devices -> Dest.Settings
     is Dest.Settings -> when (tab) {
         0 -> Dest.Chats
         1 -> Dest.Sessions
@@ -359,6 +363,7 @@ internal fun destToKey(d: Dest): String = when (d) {
     is Dest.Chats -> "chats"
     is Dest.Chat -> "chat:${d.id}"
     is Dest.Rounds -> "rounds"
+    is Dest.Devices -> "devices"
     is Dest.Sessions -> "sessions"
     is Dest.SessionView -> "session:${d.name}"
     is Dest.Status -> "status"
@@ -370,6 +375,7 @@ internal fun keyToDest(v: String): Dest = when {
     v == "chats" -> Dest.Chats
     v.startsWith("chat:") -> Dest.Chat(v.removePrefix("chat:"))
     v == "rounds" -> Dest.Rounds
+    v == "devices" -> Dest.Devices
     v == "sessions" -> Dest.Sessions
     v.startsWith("session:") -> Dest.SessionView(v.removePrefix("session:"))
     v == "status" -> Dest.Status
@@ -386,6 +392,8 @@ internal sealed interface Dest {
     data object Chats : Dest
     data class Chat(val id: String) : Dest
     data object Rounds : Dest
+    /** A child of Settings, not a bar item — see DevicesScreen for why. */
+    data object Devices : Dest
     data object Sessions : Dest
     data class SessionView(val name: String) : Dest
     data object Status : Dest
@@ -661,7 +669,8 @@ fun HuginnApp(
         vm.refreshAll()
     }
 
-    val isChild = dest is Dest.Chat || dest is Dest.SessionView || dest is Dest.Settings
+    val isChild = dest is Dest.Chat || dest is Dest.SessionView || dest is Dest.Settings ||
+        dest is Dest.Devices
     // The system gesture, going where the arrow goes. Without this the commonest
     // gesture on the phone closed the app from every child screen.
     androidx.activity.compose.BackHandler(enabled = isChild) {
@@ -671,6 +680,7 @@ fun HuginnApp(
         is Dest.Chats -> "Huginn"
         is Dest.Chat -> chatTitle ?: "Chat"
         is Dest.Rounds -> "Rounds"
+        is Dest.Devices -> "Devices"
         is Dest.Sessions -> "Sessions"
         is Dest.SessionView -> transcript?.title ?: d.name
         is Dest.Status -> "Status"
@@ -798,8 +808,9 @@ fun HuginnApp(
             is Dest.Status -> 2
             is Dest.Rounds -> 3
             // Four, not three: Rounds took 3, and Settings has no bar item of its
-            // own so its number only has to be distinct.
-            is Dest.Settings -> 4
+            // own so its number only has to be distinct. Devices shares it because
+            // it IS Settings as far as the rail's highlight is concerned.
+            is Dest.Settings, is Dest.Devices -> 4
         }
 
         // Each surface once, as a lambda, so the narrow and wide layouts are
@@ -1006,6 +1017,23 @@ fun HuginnApp(
                 usage = usage,
             )
         }
+        val devicesPane: @Composable () -> Unit = {
+            DevicesScreen(
+                devices = devices,
+                loading = loading,
+                connected = connected,
+                onStart = { d, mode ->
+                    // Straight into the chat it just made: starting work on a
+                    // machine and then being left on a list of machines is the
+                    // moment the feature reads as not having worked.
+                    vm.newChat(mode, host = d.id) { id -> vm.openChat(id); dest = Dest.Chat(id) }
+                },
+                onForget = { vm.forgetDevice(it.id) },
+                onOpenSettings = { dest = Dest.Settings },
+                onStartPolling = { vm.startDevicesPolling() },
+                onStopPolling = { vm.stopDevicesPolling() },
+            )
+        }
         val settingsPane: @Composable () -> Unit = {
             // Re-read on every visit rather than once: the Doze exemption is held
             // by the system and can be revoked outside this app, so a cached
@@ -1026,6 +1054,8 @@ fun HuginnApp(
                 onRefreshDelivery = { vm.refreshDelivery() },
                 onTestPush = { vm.sendTestPush() },
                 onAlertsMode = { vm.setAlertsMode(it) },
+                deviceCount = devices.size,
+                onOpenDevices = { vm.refreshDevices(); dest = Dest.Devices },
                 appLock = appLock,
                 appLockAvailable = remember { AppLock.canLock(context) },
                 onAppLock = { vm.setAppLock(it) },
@@ -1238,6 +1268,7 @@ fun HuginnApp(
                             is Dest.Sessions -> sessionsPane(false)
                             is Dest.SessionView -> sessionDetail(d.name)
                             is Dest.Rounds -> roundsPane()
+                            is Dest.Devices -> devicesPane()
                             is Dest.Status -> statusPane()
                             is Dest.Settings -> settingsPane()
                         }
@@ -1277,6 +1308,9 @@ fun HuginnApp(
                             }
                             is Dest.Settings -> Box(Modifier.fillMaxSize(), contentAlignment = androidx.compose.ui.Alignment.TopCenter) {
                                 Box(Modifier.widthIn(max = 840.dp)) { settingsPane() }
+                            }
+                            is Dest.Devices -> Box(Modifier.fillMaxSize(), contentAlignment = androidx.compose.ui.Alignment.TopCenter) {
+                                Box(Modifier.widthIn(max = 840.dp)) { devicesPane() }
                             }
                         }
                     }
