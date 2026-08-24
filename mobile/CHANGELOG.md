@@ -1,5 +1,25 @@
 # Huginn changelog
 
+## 2.64.0 — 2026-08-23
+
+### Added
+- **Rounds on the phone.** The host's scheduled work now sits above the chat list: what each
+  Round is, when it next goes out, and what it last found — the report itself on a full-width
+  line rather than a truncated fragment, because the report is the point of the feature.
+  Tapping a Round opens the run behind it; the switch pauses it; Run now fires it.
+  State is one small dot beside the title, in the app's own palette, and the quiet states are
+  drawn smaller as well as duller so a screen of healthy Rounds recedes.
+- A host with Rounds and no conversations no longer reads as empty. It is set up, not empty,
+  and "No chats yet" would have hidden the only thing it had.
+
+### Fixed
+- **A reused session name showed the DEAD session's conversation.** The daemon could briefly
+  serve a previous session's transcript for a reused tmux name, and the merge APPENDED it — so
+  a one-second window on the host became a permanent artefact on screen. `claudeSessionId` is
+  now the window's identity: when it changes the view resets instead of appending, and the read
+  offset and history handle are dropped with it (they are positions in a file this session never
+  wrote). Self-healing regardless of what the daemon says.
+
 ## 2.63.0 — 2026-08-15
 
 ### Push moves to a new Firebase project

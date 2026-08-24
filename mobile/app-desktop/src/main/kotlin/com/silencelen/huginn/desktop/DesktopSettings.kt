@@ -76,6 +76,29 @@ class DesktopSettings(private val file: File = defaultFile()) : HuginnSettings {
         val closeToTray: Boolean = true,
 
         /**
+         * THIS MACHINE AS A DEVICE. Off by default and it must stay that way: this
+         * is the switch that lets another machine run commands here, and a feature
+         * that arrives already on is a feature nobody consented to.
+         *
+         * The scope is stored as its wire word rather than an enum ordinal, so a
+         * file written by a build that knew about a fourth scope still reads as
+         * something — and DevicePolicy.parse turns anything it does not recognise
+         * into the narrowest one rather than the widest.
+         */
+        val deviceEnabled: Boolean = false,
+        val deviceId: String = "",
+        val deviceScope: String = "look",
+        /** Where a `work`-scoped run starts. Not a sandbox — see DevicePolicy. */
+        val deviceRoot: String = "",
+        /**
+         * An explicit path to the CLI, for the case PATH does not carry it — a
+         * Windows app launched from a shortcut does not always inherit the shell's
+         * PATH, and "could not start claude" with no way to point at it is a dead
+         * end rather than a bug report.
+         */
+        val deviceClaudePath: String = "",
+
+        /**
          * WHERE THE WINDOW WAS. Desktop-only for the obvious reason, and worth
          * persisting for a less obvious one: this client is always-on and hides to
          * the tray, so "restart" is rare and a window that reopens 1280×840 in the
@@ -136,6 +159,10 @@ class DesktopSettings(private val file: File = defaultFile()) : HuginnSettings {
     private val _lastWatchError = MutableStateFlow(stored.lastWatchError)
     private val _lastWatchErrorAt = MutableStateFlow(stored.lastWatchErrorAt)
     private val _closeToTray = MutableStateFlow(stored.closeToTray)
+    private val _deviceEnabled = MutableStateFlow(stored.deviceEnabled)
+    private val _deviceScope = MutableStateFlow(stored.deviceScope)
+    private val _deviceRoot = MutableStateFlow(stored.deviceRoot)
+    private val _deviceClaudePath = MutableStateFlow(stored.deviceClaudePath)
     private val _windowLayout = MutableStateFlow(
         WindowLayout(stored.windowX, stored.windowY, stored.windowW, stored.windowH, stored.windowMaximized)
     )
@@ -262,6 +289,51 @@ class DesktopSettings(private val file: File = defaultFile()) : HuginnSettings {
      * boolean into a file that is already held in memory.
      */
     val closeToTray: StateFlow<Boolean> = _closeToTray.asStateFlow()
+
+    // ------------------------------------------------- this machine as a device
+    //
+    // Read by DeviceRunner on a loop rather than collected: it is a long-lived
+    // background loop, not a composition, and `*Now()` keeps the reads honest
+    // about being point-in-time.
+
+    val deviceEnabled: StateFlow<Boolean> = _deviceEnabled.asStateFlow()
+    val deviceScope: StateFlow<String> = _deviceScope.asStateFlow()
+    val deviceRoot: StateFlow<String> = _deviceRoot.asStateFlow()
+    val deviceClaudePath: StateFlow<String> = _deviceClaudePath.asStateFlow()
+
+    fun deviceEnabledNow(): Boolean = _deviceEnabled.value
+    fun deviceScopeNow(): String = _deviceScope.value
+    fun deviceRootNow(): String = _deviceRoot.value
+    fun deviceClaudePathNow(): String = _deviceClaudePath.value
+    fun deviceIdNow(): String = stored.deviceId
+
+    fun setDeviceEnabled(value: Boolean) {
+        _deviceEnabled.value = value
+        mutate { it.copy(deviceEnabled = value) }
+    }
+
+    fun setDeviceScope(value: String) {
+        _deviceScope.value = value
+        mutate { it.copy(deviceScope = value) }
+    }
+
+    fun setDeviceRoot(value: String) {
+        _deviceRoot.value = value
+        mutate { it.copy(deviceRoot = value) }
+    }
+
+    fun setDeviceClaudePath(value: String) {
+        _deviceClaudePath.value = value
+        mutate { it.copy(deviceClaudePath = value) }
+    }
+
+    /**
+     * The enrolment id the daemon gave this machine. Persisted so a restart
+     * re-enrols as the SAME device instead of leaving a ghost in the list.
+     */
+    fun setDeviceId(value: String) {
+        mutate { it.copy(deviceId = value) }
+    }
 
     fun setCloseToTray(value: Boolean) {
         _closeToTray.value = value

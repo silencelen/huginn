@@ -2,6 +2,10 @@ package com.silencelen.huginn.desktop
 
 import com.silencelen.huginn.data.AppdRoutes
 import com.silencelen.huginn.data.Chat
+import com.silencelen.huginn.data.Device
+import com.silencelen.huginn.data.Round
+import com.silencelen.huginn.desktop.device.DeviceRunner
+import com.silencelen.huginn.desktop.update.BuildInfo
 import com.silencelen.huginn.data.DraftBook
 import com.silencelen.huginn.data.SentHistory
 import com.silencelen.huginn.ui.AttachmentImageLoader
@@ -27,7 +31,7 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 
 /** Which of the four destinations the window is showing. */
-enum class View { CHATS, SESSIONS, STATUS, SETTINGS }
+enum class View { CHATS, SESSIONS, ROUNDS, DEVICES, STATUS, SETTINGS }
 
 /**
  * App-level state: navigation, the two lists, the status snapshot, and the watch
@@ -177,6 +181,38 @@ class AppStore(
     private val _chats = MutableStateFlow<List<Chat>>(emptyList())
     val chats: StateFlow<List<Chat>> = _chats.asStateFlow()
 
+    /** The host's scheduled work. Polled with the lists, because the rail shows its count. */
+    private val _rounds = MutableStateFlow<List<Round>>(emptyList())
+    val rounds: StateFlow<List<Round>> = _rounds.asStateFlow()
+
+    /**
+     * This machine offering itself as a place to run work.
+     *
+     * Lives on the store rather than in `main` so Settings can read its status
+     * without the composition holding a second reference to something with a
+     * lifecycle. Constructed always, STARTED only when the setting says so —
+     * see [syncDeviceRunner].
+     */
+    /** Machines enrolled with the daemon, including this one once it is offered. */
+    private val _devices = MutableStateFlow<List<Device>>(emptyList())
+    val devices: StateFlow<List<Device>> = _devices.asStateFlow()
+
+    val deviceRunner: DeviceRunner by lazy {
+        DeviceRunner(client, settings, scope, BuildInfo.VERSION)
+    }
+
+    /**
+     * Brings the runner into line with the setting, in both directions.
+     *
+     * Called once at startup and again on every toggle, so turning it off really
+     * does stop it: a runner left holding a long poll would keep this machine in
+     * the device list, and a device that is listed but will not run anything is
+     * worse than one that is absent.
+     */
+    fun syncDeviceRunner() {
+        if (settings.deviceEnabledNow()) deviceRunner.start() else deviceRunner.stop()
+    }
+
     private val _sessions = MutableStateFlow<List<Session>>(emptyList())
     val sessions: StateFlow<List<Session>> = _sessions.asStateFlow()
 
@@ -243,6 +279,53 @@ class AppStore(
             // status bar fix: without it the bar accumulates rather than reports.
             .onSuccess { _chats.value = it; _listsLoaded.value = true; faults.ok(Faults.CHATS) }
             .onFailure { note(Faults.CHATS, it) }
+    }
+
+    /**
+     * Deliberately does NOT raise a fault on failure. A daemon older than Rounds
+     * 404s here forever, and a status bar that permanently reports a missing
+     * feature as a fault is how a reader learns to stop reading it.
+     */
+    suspend fun refreshRounds() {
+        runCatching { client.rounds() }.onSuccess { _rounds.value = it }
+    }
+
+    /** Silent on failure for the same reason as rounds: an older daemon 404s here. */
+    suspend fun refreshDevices() {
+        runCatching { client.devices() }.onSuccess { _devices.value = it }
+    }
+
+    /**
+     * Opens a chat that runs on [deviceId].
+     *
+     * The daemon refuses here if the machine is asleep or too narrowly scoped, and
+     * that refusal is the useful moment to hear it — so the error surfaces as a
+     * fault rather than being swallowed.
+     */
+    suspend fun startChatOn(deviceId: String, mode: String) {
+        runCatching { client.createChat(mode, host = deviceId) }
+            .onSuccess { made -> openChat(made.id); openView(View.CHATS); refreshChats() }
+            .onFailure { note(Faults.CHATS, it) }
+    }
+
+    suspend fun forgetDevice(id: String) {
+        runCatching { client.deleteDevice(id) }
+            .onSuccess { refreshDevices() }
+            .onFailure { note(Faults.CHATS, it) }
+    }
+
+    suspend fun runRound(id: String) {
+        runCatching { client.runRound(id) }
+            .onSuccess { refreshRounds() }
+            .onFailure { note(Faults.CHATS, it) }
+    }
+
+    suspend fun setRoundEnabled(id: String, enabled: Boolean) {
+        // Optimistic, then corrected by the server's own answer.
+        _rounds.value = _rounds.value.map { if (it.id == id) it.copy(enabled = enabled) else it }
+        runCatching { client.updateRound(id, enabled = enabled) }
+            .onSuccess { updated -> _rounds.value = _rounds.value.map { if (it.id == id) updated else it } }
+            .onFailure { note(Faults.CHATS, it); refreshRounds() }
     }
 
     suspend fun refreshSessions() {
@@ -424,6 +507,12 @@ class AppStore(
                 faults.sweep()
                 refreshChats()
                 refreshSessions()
+                refreshRounds()
+                refreshDevices()
+                // Cheap and idempotent: start()/stop() on an already-correct runner
+                // is a no-op, and this way the runner survives a settings file
+                // edited underneath the app as well as a toggle in the UI.
+                syncDeviceRunner()
                 if (_view.value == View.STATUS) refreshStatus()
                 delay(POLL_MS)
             }
