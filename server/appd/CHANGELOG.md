@@ -9,6 +9,25 @@ appeared only as a side-note on the app releases it happened to ship with. Three
 undocumented, and the notes-cutting matcher could fuse two sections when an app and an appd
 version number collided. Entries below are reconstructed from the shipping commits.
 
+## 2.63.0 — 2026-08-24
+
+### Fixed
+- **A chat that ran on another machine came back EMPTY.** The reader renders Claude's own
+  transcript file, located by session id under *this* host's `~/.claude/projects` — but a run on
+  a device wrote that file on the device. The lookup found nothing, so the conversation showed
+  no answer and no user message either, while the chat list row still showed the text (that
+  comes from meta). A working feature that looked like it had swallowed the message.
+  A remote chat now reads from `messages.jsonl`, which already held every event the device
+  streamed back, in the same shape and honouring the same paging contract — the reader hands
+  `offset` back and APPENDS what returns, so returning everything each poll would have doubled
+  the conversation on screen. It renders before the device even picks the job up, so the
+  message you just sent is visible while it is still queued.
+- A device's failure is now readable in the conversation rather than only in the list. Errors
+  are recorded as `error`, and the readers know six kinds — `error` is not one — so it was
+  rendering as nothing at all.
+- A remote chat no longer hunts this host for a title by session id: that file is on the other
+  machine, so the lookup can only find nothing, or once find something that is not it.
+
 ## 2.62.0 — 2026-08-24
 
 ### Fixed
