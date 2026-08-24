@@ -10,6 +10,45 @@ Format loosely follows [Keep a Changelog](https://keepachangelog.com/); versions
 
 ## [Unreleased]
 
+## [0.10.0] - 2026-08-24
+
+### Added
+- **`huginn device` — this machine, offered to Huginn.** `huginn devices` (plural) is the host's
+  list of machines; `huginn device` (singular) is the one you are typing on. `on` enrols it,
+  `off` withdraws it, `status` says what it offers and what the daemon sees, `unit` prints a
+  systemd unit. This is the headless half of the desktop app's "Give Huginn access to this PC"
+  toggle — for a server, a Pi or a build box, which has no desktop app and nobody sitting at it.
+  - Enrolment takes the bearer token and the daemon's address over the **ssh link this machine
+    has already been trusted on**. Nothing is widened: anyone who can ssh to the host can read
+    that token anyway. What it removes is a credential pasted by hand between two terminals.
+  - The address comes from `$SSH_CONNECTION`'s third field — the one this machine *just* reached
+    the host on — rather than guessing on its behalf between a LAN address, a tailnet name and
+    whatever `hostname` says.
+- **`client/huginn-device`** — the runner. Node, no dependencies, in the daemon's own style. Node
+  because a device must hold a long poll open, stream a child's stdout, batch it upward every
+  half second *and* notice a cancel arriving in the reply to one of those batches; shell can be
+  beaten into that shape, but not into one anybody should debug at 3am. The dependency is free:
+  `claude` is itself a Node program, so any machine that qualifies as a device already has it.
+  Fetched on demand rather than carried inside `huginn.sh`, because most devices are clients and
+  never offer themselves — and validated with `node --check` before it is installed, since a
+  truncated download that a service then restarts every ten seconds is worse than no runner.
+
+### Changed
+- **One policy, three programs.** What a remote request may do to a machine now lives once, in
+  `shared/device-policy.json`. The Kotlin runner in the desktop app reads a generated table, the
+  headless runner has the policy compiled into it by the same generator, and the daemon takes
+  the scope lattice from it too. `scripts/gen-device-policy.js` expands all of that plus
+  `shared/device-policy-cases.json` — every `(scope, locked, mode)` and the exact argv it must
+  produce. **Both runners are asserted against the matrix rather than against each other**, since
+  two implementations can be wrong in the same way and a table a person can read cannot be wrong
+  quietly. The failure this prevents is silent: a runner that granted `Bash` where the policy
+  says `look` would behave perfectly right up until the day it mattered.
+- A headless machine reports **no lock state**, because the honest answer is that nobody is ever
+  sitting at it. The desktop runner drops to read-only while the screen is locked; there is no
+  equivalent here and none is faked. So the scope in the config file is the scope in force at
+  3am — which is why the default is `work` and not `own`, and why `huginn device on` says so out
+  loud when you widen it.
+
 ## [0.9.0] - 2026-08-24
 
 ### Added

@@ -9,6 +9,20 @@ appeared only as a side-note on the app releases it happened to ship with. Three
 undocumented, and the notes-cutting matcher could fuse two sections when an app and an appd
 version number collided. Entries below are reconstructed from the shipping commits.
 
+## 2.64.0 — 2026-08-24
+
+### Changed
+- **The scope lattice is no longer written down here.** `lib/devices.js` reads it from a
+  generated table cut from `shared/device-policy.json`, the same file the two device runners
+  read. This daemon never sends tool grants and never will — but it does hold the same ordering
+  the runners hold, to decide whether to *offer* work at all, and a lattice that disagreed by one
+  position would have it offering work every device refuses (looks broken) or withholding work a
+  device would have taken (looks dead). Both failures are silent.
+- `server/appd/test/device-policy-cases.test.js` asserts the generated files still match the
+  policy, drives the headless runner over the shared case matrix, and checks this daemon's
+  pre-check agrees with it about every refusal. It binds no ports, so it has no range in the
+  allocation table.
+
 ## 2.63.0 — 2026-08-24
 
 ### Fixed
