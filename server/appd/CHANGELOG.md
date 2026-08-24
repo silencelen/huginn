@@ -9,6 +9,78 @@ appeared only as a side-note on the app releases it happened to ship with. Three
 undocumented, and the notes-cutting matcher could fuse two sections when an app and an appd
 version number collided. Entries below are reconstructed from the shipping commits.
 
+## 2.60.0 — 2026-08-23
+
+### Added
+- **Rounds — work this host does on a schedule, and the report it comes back with.**
+  A Round is not a new execution engine: it creates a chat and posts one message to it, so
+  every transcript, SSE stream, cancel button and push notification a chat already had
+  applies to a scheduled run for free. `/v1/rounds` CRUD plus `/run`, a 30 s tick against a
+  persisted `nextRunAt` (no cron, survives restarts), one chat per run so a wedged week
+  cannot poison the next.
+  - **Structured schedules, not cron strings** (`daily`/`weekly`/`monthly`/`interval` with an
+    IANA zone), resolved through `Intl`. The briefing cron once ran at 2pm for months because
+    its hours were written as if UTC on a box in `America/Los_Angeles`; a schedule that
+    carries its own zone cannot drift into that. The cadence renders itself ("Sundays at
+    7:00 PM") so no client owns a second copy of the rules.
+  - **An output contract, parsed rather than quoted.** A Round's prompt carries a fenced
+    `huginn-report` block (status / headline / items each with a suggested next step) and the
+    daemon reads it out of the run. Same lesson as the briefing's move to
+    `--output-format json`: success has to be a FLAG, not a guess. A missing or malformed
+    block is recorded as `unknown` + `malformed` rather than dropped, because a broken
+    contract that goes silent looks exactly like a clean week.
+  - Rails for unattended work: `ask` mode unless asked otherwise, `notifyWhen` defaulting to
+    `attention`, overlap skip, missed-fire skip with a `catchUp` opt-in, a 15-minute per-Round
+    cap rather than the 2 h global one, and a busy pool deferring to the next tick.
+  - Reports go down the EXISTING delivery funnel — push first, Telegram only when the app has
+    gone quiet — rather than inventing a second policy beside the one in `lib/clients`.
+  - A Round's run chats are hidden from `/v1/chats`. Listing them would have announced every
+    scheduled run twice: once as `chat_finished` from the alert watcher, once as its report.
+- **Devices — other machines that can run a chat in their context.** `/v1/devices` to enrol
+  and list, a long-poll for work, batched results back, and a `host` field on a chat that
+  decides where it runs. Local spawns as before; remote hands the same argv shape to the
+  device, which streams the same stream-json back, so the transcript store, SSE, push and
+  prompt-cards are untouched.
+  - **The daemon sends a request, never a permission.** No tool grants travel in a work item;
+    the device builds its own argv from its own scope. Otherwise one leaked bearer token would
+    stop meaning "this host" and start meaning "the owner's PC". There is a test asserting the
+    absence.
+  - Pull, not push: a device needs no inbound port and no static address, so a laptop away
+    from home behaves exactly like the desktop next door.
+  - Results arrive in batches with an explicit terminal frame, not as one long chunked upload:
+    a home network drops, and a dropped stream is indistinguishable from a finished run.
+  - A Round can name a device, which is the thing neither feature could do alone.
+
+### Fixed
+- **A reused tmux session name served the DEAD session's conversation.** State files under
+  `/run/huginn-claude-state` are keyed by session NAME, and the name outlives the session:
+  Claude's `SessionEnd` hook is what removes the file and that hook never fires on a kill.
+  Measured on the author's host, 24 state files existed for 5 live sessions, the oldest a
+  month dead. Reuse one of those names and the transcript route served the corpse while the
+  screen tab — which scrapes the live pane and cannot lie — showed the real session.
+  `session_created` now separates them, and the create route clears what the last holder of a
+  name left behind, including the `ask`/`plan`/`compacting` sidecars.
+- **`display-message` was trusted in two ways it cannot be.** A bare `=name` target returns an
+  EMPTY string with exit 0 — every format field blank, no error — so it needs the trailing
+  colon; and unlike `has-session` it exits 0 for a session that does not exist. The returned
+  `#{session_name}` is now the proof the target resolved. The same trap had been sitting in the
+  create route's `#S` readback since it was written, silently falling through to the requested
+  name, so its "what tmux actually called it" safeguard had never once worked.
+- **The tmux server is now started in its own scope** (`systemd-run --scope`, only when no
+  server is running). It used to daemonise from `POST /v1/sessions` and inherit this unit's
+  cgroup, which made `systemctl restart huginn-appd` a SIGTERM to every Claude Code session on
+  the box — a routine deploy would have killed them all and reported success. Also ends the
+  `ProtectSystem=strict` inheritance that made `/opt` read-only inside app-created sessions.
+  A `KillMode=process` drop-in is the floor under this on the live host.
+
+### Changed
+- Run-close bookkeeping moved out of the spawn's own handler into `settleRun`, so a run that
+  happened on another machine reaches the same ending. It carries three separately-learned
+  lessons — the durable finish mark, the Round hand-off, cancel-means-stop — and a second copy
+  for the remote path would have drifted from it within a release.
+- One implementation of "stop this run" (`cancelRun`), shared by the cancel route and a Round
+  timeout.
+
 ## 2.59.2 — 2026-08-14
 
 ### Added

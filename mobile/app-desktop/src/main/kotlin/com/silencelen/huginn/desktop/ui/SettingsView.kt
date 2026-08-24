@@ -10,11 +10,13 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
+import com.silencelen.huginn.desktop.device.LockProbe
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -138,6 +140,8 @@ fun SettingsView(store: AppStore) {
             Modifier.padding(top = 6.dp, start = 4.dp),
             maxLines = 2,
         )
+
+        DeviceSection(store)
 
         UpdateSection(store)
         DiagnosticsSection(store)
@@ -539,6 +543,107 @@ private fun DiagnosticsSection(store: AppStore) {
 }
 
 // ------------------------------------------------------------------ plumbing
+
+@Composable
+private fun DeviceSection(store: AppStore) {
+    val settings = store.settings
+    val enabled by settings.deviceEnabled.collectAsState()
+    val scopeWire by settings.deviceScope.collectAsState()
+    val root by settings.deviceRoot.collectAsState()
+    val claudePath by settings.deviceClaudePath.collectAsState()
+    val status by store.deviceRunner.status.collectAsState()
+
+    SectionHeader("Give Huginn access to this PC")
+
+    Muted(
+        "Lets huginn run work here, in this machine's own context. Nothing listens " +
+            "on a port: this app asks huginn for work and posts the results back, so " +
+            "it works the same on a laptop away from home.",
+        maxLines = 4,
+    )
+
+    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(top = 10.dp)) {
+        Switch(
+            checked = enabled,
+            onCheckedChange = { settings.setDeviceEnabled(it); store.syncDeviceRunner() },
+        )
+        Text(
+            if (enabled) "Available to huginn" else "Off",
+            Modifier.padding(start = 12.dp),
+            style = MaterialTheme.typography.bodyMedium,
+        )
+    }
+
+    // The status is the honest bit: "enrolled, waiting for work" and "claude was
+    // not found here" are the two things the owner will actually need to see, and
+    // neither is guessable from the toggle.
+    Muted(status.note, Modifier.padding(top = 6.dp, start = 4.dp), maxLines = 3)
+
+    if (enabled) {
+        SectionHeader("What it may do")
+        for ((wire, label, blurb) in SCOPE_CHOICES) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier.padding(top = 4.dp),
+            ) {
+                RadioButton(
+                    selected = scopeWire == wire,
+                    onClick = { settings.setDeviceScope(wire) },
+                )
+                Column(Modifier.padding(start = 6.dp)) {
+                    Text(label, style = MaterialTheme.typography.bodyMedium)
+                    Muted(blurb, maxLines = 2)
+                }
+            }
+        }
+
+        // Said plainly rather than implied by the word "work": overstating a fence
+        // is worse than not having one.
+        Muted(
+            "Work starts in the folder below. That is where a run begins, not a " +
+                "sandbox — a command that is allowed to run can leave any folder.",
+            Modifier.padding(top = 8.dp, start = 4.dp),
+            maxLines = 3,
+        )
+
+        OutlinedTextField(
+            value = root,
+            onValueChange = { settings.setDeviceRoot(it) },
+            label = { Text("Folder for Work runs") },
+            singleLine = true,
+            modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
+        )
+
+        OutlinedTextField(
+            value = claudePath,
+            onValueChange = { settings.setDeviceClaudePath(it) },
+            label = { Text("Path to claude (leave blank to use PATH)") },
+            singleLine = true,
+            modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
+        )
+
+        Muted(
+            if (LockProbe.supported()) {
+                if (status.locked) {
+                    "This machine reads as locked, so it is read-only until someone unlocks it."
+                } else {
+                    "While the screen is locked, this machine drops to Look and refuses Act."
+                }
+            } else {
+                "Lock detection is not available on this platform, so this machine " +
+                    "reports itself as locked and will only ever Look."
+            },
+            Modifier.padding(top = 10.dp, start = 4.dp),
+            maxLines = 3,
+        )
+    }
+}
+
+private val SCOPE_CHOICES = listOf(
+    Triple("look", "Look", "Read files and search. No commands, no changes."),
+    Triple("work", "Work", "Read, change and run commands, starting in the folder below."),
+    Triple("own", "Own", "The whole machine."),
+)
 
 @Composable
 private fun SectionHeader(text: String) {

@@ -86,6 +86,9 @@ fun mergeTranscriptPage(
     cap: Int = MAX_TRANSCRIPT_EVENTS,
 ): TranscriptPage {
     if (current == null) return page
+    // A different Claude session under the same tmux name is a different
+    // conversation, not more of this one. Appending would weld them together.
+    if (isTranscriptRestart(current, page)) return page.copy(events = emptyList(), truncated = false)
     return page.copy(
         events = mergeTranscript(clearDelivered(current.events, page.deliveredQueued), page.events, cap),
         title = page.title ?: current.title,
@@ -101,6 +104,30 @@ fun mergeTranscriptPage(
         lastActivityTs = page.lastActivityTs ?: current.lastActivityTs,
         truncated = current.truncated,
     )
+}
+
+/**
+ * True when [page] reports a DIFFERENT Claude session than the one on screen.
+ *
+ * tmux session names are reusable, and the daemon keys a session's state on the
+ * name, so a name that changes hands can briefly serve the previous holder's
+ * transcript. The daemon has its own guard for that, but this one is what makes
+ * the client self-healing: the identity is reported on every page — from the
+ * session's state file, so it arrives even when the tail window is empty — and
+ * a change in it means everything already on screen belongs to a conversation
+ * that has ended.
+ *
+ * Null on either side is NOT a restart. A session that has not prompted Claude
+ * yet reports no id at all, and treating that as a change would clear the view
+ * every time a page arrived before the first hook fired.
+ *
+ * Callers must also drop their read offset: it is a byte position in the OLD
+ * transcript file and means nothing in the new one.
+ */
+fun isTranscriptRestart(current: TranscriptPage?, page: TranscriptPage): Boolean {
+    val had = current?.claudeSessionId ?: return false
+    val now = page.claudeSessionId ?: return false
+    return had != now
 }
 
 /**

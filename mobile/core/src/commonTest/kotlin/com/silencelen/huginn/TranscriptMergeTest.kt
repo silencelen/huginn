@@ -4,9 +4,11 @@ import com.silencelen.huginn.data.TranscriptEvent
 import com.silencelen.huginn.data.TranscriptPage
 import com.silencelen.huginn.ui.MAX_TRANSCRIPT_EVENTS
 import com.silencelen.huginn.ui.mergeTranscript
+import com.silencelen.huginn.ui.isTranscriptRestart
 import com.silencelen.huginn.ui.mergeTranscriptPage
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertSame
 import kotlin.test.assertTrue
 
@@ -133,5 +135,50 @@ class TranscriptMergeTest {
         // A tail read says nothing about the head that was dropped.
         val first = TranscriptPage(truncated = true)
         assertTrue(mergeTranscriptPage(first, TranscriptPage(truncated = false)).truncated)
+    }
+
+    @Test
+    fun aDifferentClaudeSessionReplacesTheViewInsteadOfAppending() {
+        // The reported bug: a tmux name reused by a NEW session served the dead
+        // session's transcript, and the merge welded the two together.
+        val dead = TranscriptPage(events = listOf(ev(0, "from the dead session")),
+            claudeSessionId = "session-one", nextOffset = 900)
+        val fresh = TranscriptPage(events = listOf(ev(0, "from the new one")),
+            claudeSessionId = "session-two", nextOffset = 12)
+
+        val merged = mergeTranscriptPage(dead, fresh)
+        assertEquals(emptyList(), merged.events,
+            "a page read at the OLD file's offset is not the new session's history")
+        assertEquals("session-two", merged.claudeSessionId)
+        assertEquals(12L, merged.nextOffset)
+    }
+
+    @Test
+    fun sameClaudeSessionStillAppends() {
+        val first = TranscriptPage(events = listOf(ev(0)), claudeSessionId = "session-one")
+        val tail = TranscriptPage(events = listOf(ev(0, "more")), claudeSessionId = "session-one")
+        assertEquals(2, mergeTranscriptPage(first, tail).events.size)
+    }
+
+    @Test
+    fun aMissingIdentityIsNotARestart() {
+        // A session that has not prompted Claude yet reports no id at all, and a
+        // tail read can arrive before the first hook has written one. Treating
+        // either as a change would clear the view on an ordinary poll.
+        val known = TranscriptPage(events = listOf(ev(0)), claudeSessionId = "session-one")
+        val anonymous = TranscriptPage(events = listOf(ev(0, "more")), claudeSessionId = null)
+        assertFalse(isTranscriptRestart(known, anonymous))
+        assertFalse(isTranscriptRestart(TranscriptPage(claudeSessionId = null), known))
+        assertFalse(isTranscriptRestart(null, known))
+        assertEquals(2, mergeTranscriptPage(known, anonymous).events.size)
+    }
+
+    @Test
+    fun restartIsReportedSoCallersCanDropTheirOffset() {
+        // The offset is a byte position in the OLD transcript file; carrying it
+        // into the new one reads from a position that means nothing there.
+        val a = TranscriptPage(claudeSessionId = "session-one")
+        val b = TranscriptPage(claudeSessionId = "session-two")
+        assertTrue(isTranscriptRestart(a, b))
     }
 }

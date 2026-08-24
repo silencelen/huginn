@@ -631,13 +631,184 @@ class HuginnClient(
 
     // ------------------------------------------------------------- chats
 
+    // ---- devices: other machines that can run a chat in their context
+
+    suspend fun devices(): List<Device> = decode<DeviceList>(call("/v1/devices")).devices
+
+    suspend fun device(id: String): Device = decode(call("/v1/devices/$id"))
+
+    suspend fun deleteDevice(id: String) {
+        call("/v1/devices/$id", HttpMethod.Delete)
+    }
+
+    /**
+     * Enrols this machine, or re-enrols it.
+     *
+     * Passing the id back is what keeps a restart from leaving a ghost in the
+     * list; the daemon keeps the original enrolment date and updates the rest.
+     */
+    suspend fun registerDevice(
+        name: String,
+        platform: String,
+        scope: String,
+        id: String? = null,
+        root: String? = null,
+        version: String? = null,
+        locked: Boolean = false,
+    ): Device = decode(
+        post("/v1/devices", body = buildJsonObject {
+            put("name", JsonPrimitive(name))
+            put("platform", JsonPrimitive(platform))
+            put("scope", JsonPrimitive(scope))
+            put("locked", JsonPrimitive(locked))
+            if (id != null) put("id", JsonPrimitive(id))
+            if (root != null) put("root", JsonPrimitive(root))
+            if (version != null) put("version", JsonPrimitive(version))
+        }),
+    )
+
+    /** Still here, and this is what I am willing to do now. */
+    suspend fun deviceBeat(
+        id: String,
+        locked: Boolean? = null,
+        scope: String? = null,
+        version: String? = null,
+    ): BeatResult = decode(
+        post("/v1/devices/$id/beat", body = buildJsonObject {
+            locked?.let { put("locked", JsonPrimitive(it)) }
+            scope?.let { put("scope", JsonPrimitive(it)) }
+            version?.let { put("version", JsonPrimitive(it)) }
+        }),
+    )
+
+    /**
+     * Waits for the next job, up to [waitS] seconds. Null means nothing came.
+     *
+     * Tier.WATCH, because this connection is SUPPOSED to be silent for most of its
+     * life — the normal read timeout would tear down a healthy poll and make the
+     * device look like it kept dropping off.
+     */
+    suspend fun pollWork(id: String, waitS: Int = 25, locked: Boolean? = null): DeviceWork? {
+        val q = StringBuilder("/v1/devices/$id/work?wait=$waitS")
+        if (locked != null) q.append("&locked=").append(if (locked) "1" else "0")
+        return decode<WorkEnvelope>(call(q.toString(), tier = Tier.WATCH)).work
+    }
+
+    /**
+     * Posts results for a run.
+     *
+     * Batches, not one long chunked upload: a home network drops, and a dropped
+     * stream is indistinguishable from a finished run. Short posts with an explicit
+     * terminal frame make the ending something this device states.
+     */
+    suspend fun postWorkEvents(
+        deviceId: String,
+        workId: String,
+        lines: List<String>,
+        done: Boolean = false,
+        exitCode: Int? = null,
+        error: String? = null,
+        locked: Boolean? = null,
+    ): EventsAck = decode(
+        post("/v1/devices/$deviceId/work/$workId/events", body = buildJsonObject {
+            put("lines", JsonArray(lines.map { JsonPrimitive(it) }))
+            if (done) put("done", JsonPrimitive(true))
+            exitCode?.let { put("exitCode", JsonPrimitive(it)) }
+            error?.let { put("error", JsonPrimitive(it)) }
+            locked?.let { put("locked", JsonPrimitive(it)) }
+        }),
+    )
+
+    // ---- rounds: work the host does on a schedule
+
+    suspend fun rounds(): List<Round> = decode<RoundList>(call("/v1/rounds")).rounds
+
+    suspend fun round(id: String): Round = decode(call("/v1/rounds/$id"))
+
+    /**
+     * Sent field by field rather than by serialising [RoundSchedule] whole: the
+     * daemon validates the shape per kind, and an `interval` carrying a stray
+     * `days: []` or a `weekly` carrying a null `everyMinutes` is a request that
+     * says more than it means.
+     */
+    private fun scheduleJson(s: RoundSchedule): JsonObject = buildJsonObject {
+        put("kind", JsonPrimitive(s.kind))
+        s.at?.let { put("at", JsonPrimitive(it)) }
+        s.tz?.let { put("tz", JsonPrimitive(it)) }
+        if (s.days.isNotEmpty()) put("days", JsonArray(s.days.map { JsonPrimitive(it) }))
+        if (s.dates.isNotEmpty()) put("dates", JsonArray(s.dates.map { JsonPrimitive(it) }))
+        s.everyMinutes?.let { put("everyMinutes", JsonPrimitive(it)) }
+    }
+
+    suspend fun createRound(
+        title: String,
+        prompt: String,
+        schedule: RoundSchedule,
+        mode: String = "ask",
+        notifyWhen: String = "attention",
+        model: String? = null,
+        effort: String? = null,
+        catchUp: Boolean = false,
+    ): Round = decode(
+        post("/v1/rounds", body = buildJsonObject {
+            put("title", JsonPrimitive(title))
+            put("prompt", JsonPrimitive(prompt))
+            put("schedule", scheduleJson(schedule))
+            put("mode", JsonPrimitive(mode))
+            put("notifyWhen", JsonPrimitive(notifyWhen))
+            if (model != null) put("model", JsonPrimitive(model))
+            if (effort != null) put("effort", JsonPrimitive(effort))
+            if (catchUp) put("catchUp", JsonPrimitive(true))
+        }),
+    )
+
+    /** Only what is passed is changed; anything omitted is left alone. */
+    suspend fun updateRound(
+        id: String,
+        enabled: Boolean? = null,
+        title: String? = null,
+        prompt: String? = null,
+        schedule: RoundSchedule? = null,
+        mode: String? = null,
+        notifyWhen: String? = null,
+        catchUp: Boolean? = null,
+    ): Round = decode(
+        call("/v1/rounds/$id", HttpMethod.Patch, body = buildJsonObject {
+            enabled?.let { put("enabled", JsonPrimitive(it)) }
+            title?.let { put("title", JsonPrimitive(it)) }
+            prompt?.let { put("prompt", JsonPrimitive(it)) }
+            schedule?.let { put("schedule", scheduleJson(it)) }
+            mode?.let { put("mode", JsonPrimitive(it)) }
+            notifyWhen?.let { put("notifyWhen", JsonPrimitive(it)) }
+            catchUp?.let { put("catchUp", JsonPrimitive(it)) }
+        }),
+    )
+
+    suspend fun deleteRound(id: String) {
+        call("/v1/rounds/$id", HttpMethod.Delete)
+    }
+
+    /** Fires the Round now. The report arrives the same way a scheduled one does. */
+    suspend fun runRound(id: String): RoundRunStarted = decode(post("/v1/rounds/$id/run"))
+
     suspend fun chats(): List<Chat> = decode<ChatList>(call("/v1/chats")).chats
 
-    suspend fun createChat(mode: String, model: String? = null, effort: String? = null): Chat {
+    /**
+     * @param host a device id, or null for this host. Checked at CREATION rather
+     *   than at the first message, so "that machine is asleep" is answered by the
+     *   button that made the chat instead of by a message that seems to vanish.
+     */
+    suspend fun createChat(
+        mode: String,
+        model: String? = null,
+        effort: String? = null,
+        host: String? = null,
+    ): Chat {
         val body = buildJsonObject {
             put("mode", JsonPrimitive(mode))
             if (model != null) put("model", JsonPrimitive(model))
             if (effort != null) put("effort", JsonPrimitive(effort))
+            if (host != null) put("host", JsonPrimitive(host))
         }
         return decode(post("/v1/chats", body = body))
     }

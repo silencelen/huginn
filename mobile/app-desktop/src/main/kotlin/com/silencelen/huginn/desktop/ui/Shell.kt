@@ -27,6 +27,8 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Chat
+import androidx.compose.material.icons.outlined.Computer
+import androidx.compose.material.icons.outlined.Schedule
 import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material.icons.outlined.Speed
 import androidx.compose.material.icons.outlined.Terminal
@@ -56,6 +58,8 @@ import androidx.compose.ui.input.pointer.pointerHoverIcon
 import androidx.compose.ui.unit.dp
 import com.silencelen.huginn.data.Chat
 import com.silencelen.huginn.data.DraftBook
+import com.silencelen.huginn.data.Device
+import com.silencelen.huginn.data.Round
 import com.silencelen.huginn.data.Session
 import com.silencelen.huginn.desktop.AppStore
 import com.silencelen.huginn.desktop.View
@@ -105,6 +109,8 @@ fun Shell(store: AppStore) {
     val view by store.view.collectAsState()
     val chats by store.chats.collectAsState()
     val sessions by store.sessions.collectAsState()
+    val rounds by store.rounds.collectAsState()
+    val devices by store.devices.collectAsState()
     val loaded by store.listsLoaded.collectAsState()
     // Its OWN flag. The sessions list used to be told "loaded" by the chats fetch
     // returning, so a start where chats answered and sessions did not drew "No
@@ -186,6 +192,12 @@ fun Shell(store: AppStore) {
                     chatsRunning = chats.count { it.running },
                     sessions = sessions.size,
                     sessionsWaiting = sessions.count { it.state == "attention" },
+                    rounds = rounds.size,
+                    roundsWanting = rounds.count { it.lastRun?.status == "action" },
+                    roundsRunning = rounds.count { it.running },
+                    devices = devices.size,
+                    devicesOnline = devices.count { it.online },
+                    devicesBusy = devices.count { it.running },
                     onSelect = { store.openView(it) },
                 )
                 VerticalDivider(color = MaterialTheme.colorScheme.outlineVariant)
@@ -267,6 +279,11 @@ fun Shell(store: AppStore) {
                             }
                         }
 
+                        // Full width, like Status: a Round row already carries its
+                        // report, so there is no detail half to split off.
+                        View.ROUNDS -> RoundsPane(store)
+                        View.DEVICES -> DevicesPane(store)
+
                         View.STATUS -> StatusView(status, plan, usage, route, watchConnected)
                         // The whole store: Settings now owns accounts, the update
                         // state and the diagnostics report, and each of those needs
@@ -283,6 +300,8 @@ fun Shell(store: AppStore) {
                 notifyEnabled = notifyEnabled,
                 chats = chats,
                 sessions = sessions,
+                rounds = rounds,
+                devices = devices,
                 selected = if (view == View.SESSIONS) sessionSel.size else chatSel.size,
                 error = error,
                 onDismissError = { store.clearError() },
@@ -399,6 +418,12 @@ private fun NavRail(
     chatsRunning: Int,
     sessions: Int,
     sessionsWaiting: Int,
+    rounds: Int,
+    roundsWanting: Int,
+    roundsRunning: Int,
+    devices: Int,
+    devicesOnline: Int,
+    devicesBusy: Int,
     onSelect: (View) -> Unit,
 ) {
     Column(
@@ -432,6 +457,31 @@ private fun NavRail(
             tip = railCountTip("sessions", sessions, sessionsWaiting, "waiting on you"),
             mark = if (sessionsWaiting > 0) MaterialTheme.colorScheme.error else null,
         ) { onSelect(View.SESSIONS) }
+        RailItem(
+            icon = Icons.Outlined.Schedule,
+            label = "Rounds",
+            count = rounds,
+            active = current == View.ROUNDS,
+            tip = railCountTip("rounds", rounds, roundsWanting, "needing you"),
+            // The same two-colour vocabulary the rows above use, for the same
+            // reason: a third meaning for a dot would need a legend.
+            mark = when {
+                roundsWanting > 0 -> MaterialTheme.colorScheme.error
+                roundsRunning > 0 -> MaterialTheme.colorScheme.primary
+                else -> null
+            },
+        ) { onSelect(View.ROUNDS) }
+        RailItem(
+            icon = Icons.Outlined.Computer,
+            label = "Devices",
+            count = devices,
+            active = current == View.DEVICES,
+            tip = railCountTip("devices", devices, devicesOnline, "reachable"),
+            // Busy is the only state worth a mark here. "Offline" is the normal
+            // condition of a laptop and marking it would leave the rail permanently
+            // lit for something nobody needs to do anything about.
+            mark = if (devicesBusy > 0) MaterialTheme.colorScheme.primary else null,
+        ) { onSelect(View.DEVICES) }
         RailItem(
             icon = Icons.Outlined.Speed,
             label = "Status",
@@ -588,6 +638,8 @@ private fun StatusLine(
     notifyEnabled: Boolean,
     chats: List<Chat>,
     sessions: List<Session>,
+    rounds: List<Round>,
+    devices: List<Device>,
     selected: Int,
     error: String?,
     onDismissError: () -> Unit,
@@ -681,6 +733,8 @@ private fun StatusLine(
                 when (view) {
                     View.CHATS -> "${chats.size} chats"
                     View.SESSIONS -> "${sessions.size} sessions"
+                    View.ROUNDS -> "${rounds.size} rounds"
+                    View.DEVICES -> "${devices.size} devices"
                     View.STATUS -> "status"
                     View.SETTINGS -> "settings"
                 },

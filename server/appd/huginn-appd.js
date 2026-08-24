@@ -39,6 +39,8 @@ const { pushPending, takePending, clearPending, queuedEvents } = require('./lib/
 const { digest } = require('./lib/watch');
 const { decideAlerts, routeAlerts, telegramText, pruneSent, carryRunStarts } = require('./lib/alerts');
 const clientsLib = require('./lib/clients');
+const roundsLib = require('./lib/rounds');
+const devicesLib = require('./lib/devices');
 const { taskDirFor, parsePs, scanTasks, extractBgIds } = require('./lib/tasks');
 const { agentsDirFor, listAgents } = require('./lib/agents');
 const { suggestionContext, buildPrompt, parseSuggestions } = require('./lib/suggest');
@@ -50,7 +52,7 @@ const pushLib = require('./lib/pushtokens');
 const { trySender } = require('./lib/fcm');
 const { createPending, stepSoftEnd } = require('./lib/softend');
 
-const VERSION = '2.59.2';
+const VERSION = '2.60.0';
 const PORT = Number(process.env.HUGINN_APPD_PORT || 8787);
 const DATA_DIR = process.env.HUGINN_APPD_DATA || '/var/lib/huginn-appd';
 const UPLOADS_DIR = path.join(DATA_DIR, 'uploads');
@@ -299,16 +301,76 @@ function readSessionState(name) {
   if (raw[0] === '{') {
     try {
       const o = JSON.parse(raw);
-      return {
+      return ofThisIncarnation(name, {
         state: o.state || null,
         sessionId: o.sessionId || null,
         transcript: o.transcript || null,
         cwd: o.cwd || null,
         stateSince: o.ts || mtime,
-      };
+      });
     } catch { /* fall through to the bare-word path */ }
   }
-  return { state: raw, sessionId: null, transcript: null, cwd: null, stateSince: mtime };
+  return ofThisIncarnation(name,
+    { state: raw, sessionId: null, transcript: null, cwd: null, stateSince: mtime });
+}
+
+/**
+ * When each live tmux session was created, learned from the tmux calls the routes
+ * already make rather than from an extra one.
+ *
+ * The state file is keyed by session NAME, and a name outlives the session that
+ * owned it: Claude's SessionEnd hook is what removes the file, and that hook never
+ * fires on a kill (see hardEndSession). Measured on the author's host, 24 state
+ * files existed for 5 live sessions — the oldest a month dead. Reuse one of those
+ * names and every reader keyed on the name alone is handed the CORPSE: the app's
+ * conversation tab rendered a session that had ended weeks earlier while the
+ * screen tab, which scrapes the live pane and cannot lie, showed the real one.
+ *
+ * `session_created` separates them exactly. Anything written before the session
+ * that currently holds the name was born belongs to a previous incarnation.
+ */
+const sessionBorn = new Map();   // name -> epoch seconds
+
+function rememberBorn(name, created) {
+  const n = Number(created);
+  if (Number.isFinite(n) && n > 0) sessionBorn.set(name, n);
+}
+
+/**
+ * Drops state belonging to a PREVIOUS session of this name; passes everything
+ * else through untouched.
+ *
+ * Deliberately permissive when the birth time is unknown: a name we have not
+ * listed or probed yet keeps its state rather than being blanked on a guess.
+ * Every route that reads state gates on sessionExists() first, and that call
+ * records the birth time, so the unknown case is the cold start and little else.
+ * The hook always writes AFTER tmux has created the session, so a live session's
+ * own state can never look older than its birth — `<` is strict for the case
+ * where both land in the same second.
+ */
+function ofThisIncarnation(name, st) {
+  if (!st) return null;
+  const born = sessionBorn.get(name);
+  if (!born || !st.stateSince) return st;
+  return st.stateSince < born ? null : st;
+}
+
+/**
+ * Every per-name file the hook may have left behind. Used both when ending a
+ * session and when creating one, because those are the two moments a name changes
+ * hands — and the create side is what closes the window between a new session
+ * starting and its first hook firing.
+ */
+function clearSessionState(name) {
+  for (const f of [
+    path.join(STATE_DIR, name),
+    path.join(STATE_DIR, 'ask', name),
+    path.join(STATE_DIR, 'plan', name),
+    path.join(STATE_DIR, 'compacting', name),
+  ]) {
+    try { fs.unlinkSync(f); } catch { /* already gone */ }
+  }
+  sessionBorn.delete(name);
 }
 
 // One ps snapshot serves every caller inside its window; the sessions list and
@@ -370,9 +432,14 @@ async function listSessions({ preview = false } = {}) {
     return null;
   }
   const rows = [];
+  const seen = new Set();
   for (const line of stdout.trim().split('\n')) {
     if (!line) continue;
     const [name, created, attached, activity, windows, w, h, wsize, sessActivity, panePid] = line.split('\t');
+    // Before the state read below, which needs it to tell this session's state
+    // from that of a dead session that had the same name.
+    rememberBorn(name, created);
+    seen.add(name);
     // Still listed, never silently hidden: a monitoring app that drops a session
     // from the list is worse than one that cannot open it, because the reader
     // concludes it is gone. Logged once per listing so an unopenable row has an
@@ -412,6 +479,11 @@ async function listSessions({ preview = false } = {}) {
       bgTask: null,
     });
   }
+
+  // A successful listing is the complete set of live sessions, so anything else
+  // in the map has ended. Pruning matters because a NEW session of a pruned name
+  // must be born-stamped afresh rather than inheriting its predecessor's stamp.
+  for (const name of [...sessionBorn.keys()]) if (!seen.has(name)) sessionBorn.delete(name);
 
   if (preview) {
     // Background work rides along so the LIST can say a session is not stalled:
@@ -455,9 +527,80 @@ async function listSessions({ preview = false } = {}) {
   return rows;
 }
 
+/**
+ * The scope the tmux server should live in, so that a session's lifetime is not
+ * tied to this daemon's.
+ */
+const TMUX_SCOPE = 'huginn-tmux';
+
+/**
+ * Make sure the tmux server exists OUTSIDE this daemon's cgroup before a session
+ * is created in it.
+ *
+ * `tmux new-session` starts the server if none is running, and the server
+ * daemonises from that call — inheriting whatever cgroup and mount namespace the
+ * caller had. When the caller is this daemon, two things follow that nobody asked
+ * for, and both were measured on the author's host (2026-08-23):
+ *
+ *   * `systemctl restart huginn-appd` with the default KillMode=control-group
+ *     SIGTERMs the whole cgroup, so a routine deploy killed the tmux server and
+ *     every Claude Code session on the box — and reported success. A KillMode
+ *     drop-in is the floor under this; putting the server somewhere else is the
+ *     actual fix.
+ *   * the sessions inherit ProtectSystem=strict, so /opt is READ-ONLY inside them
+ *     while the host itself is perfectly writable — an EROFS that costs an hour
+ *     every time somebody meets it for the first time.
+ *
+ * A transient scope answers both: the server owns its own cgroup and gets the
+ * host's real namespace, and every session the server forks afterwards belongs to
+ * the SERVER, not to us.
+ *
+ * A running server is left exactly where it is. Cgroup membership is per-process,
+ * so moving a live server would strand every session's processes behind it — the
+ * migration has to happen when there is nothing to migrate.
+ *
+ * Best effort by design: if systemd-run is unavailable or refuses, the old
+ * inherited-server behaviour still works. Degraded is better than no sessions.
+ */
+async function ensureTmuxServerScope() {
+  const probe = await run('tmux', ['ls']);
+  // Only "no server running" means there is nothing there. Any other failure is a
+  // failure to OBSERVE, and starting a second server on a bad read is worse than
+  // doing nothing.
+  if (!probe.err || !/no server running/i.test(probe.stderr || '')) return;
+
+  const r = await run('systemd-run',
+    ['--scope', '--quiet', '--collect', `--unit=${TMUX_SCOPE}`, 'tmux', 'start-server']);
+  if (r.err) {
+    log(`tmux: could not start the server in its own scope (${(r.stderr || r.err.message || '').trim().slice(0, 120)}); it will inherit this daemon's`);
+    return;
+  }
+  log(`tmux: server started in ${TMUX_SCOPE}.scope, independent of this daemon`);
+}
+
 async function sessionExists(name) {
-  const { err } = await run('tmux', ['has-session', '-t', `=${name}`]);
-  return !err;
+  // display-message, not has-session: the same single call answers "does it
+  // exist" and "when was it created", and every state read downstream needs the
+  // second answer to know whether the state belongs to THIS session.
+  //
+  // TWO tmux traps here, both measured, both silent:
+  //
+  //   * the target needs the TRAILING COLON. `-t '=name'` resolves as a session
+  //     target with no client to expand formats against, and tmux answers with an
+  //     EMPTY string and exit 0 — every format field blank, no error anywhere.
+  //   * exit status cannot answer existence. Unlike has-session, display-message
+  //     exits 0 for a session that does not exist, again returning blanks. Trusted
+  //     naively it reports every name as live, which turns the create route's
+  //     "already exists" check into a permanent 409.
+  //
+  // So the returned NAME is the answer: tmux echoing back the session it actually
+  // resolved is the only proof the target hit something, and it costs no extra call.
+  const { err, stdout } = await run('tmux',
+    ['display-message', '-p', '-t', `=${name}:`, '#{session_name}\t#{session_created}']);
+  const [found, created] = (err ? '' : (stdout || '')).trim().split('\t');
+  if (found !== name) { sessionBorn.delete(name); return false; }
+  rememberBorn(name, created);
+  return true;
 }
 
 // ---- pane sizing, as an expiring lease -------------------------------------
@@ -582,7 +725,7 @@ async function sendLineToPane(name, text) {
 async function hardEndSession(name) {
   const { err, stderr } = await run('tmux', ['kill-session', '-t', `=${name}`]);
   if (err) return { err, stderr };
-  try { fs.unlinkSync(path.join(STATE_DIR, name)); } catch { /* already gone */ }
+  clearSessionState(name);
   await releaseSize(name).catch(() => { });
   softEnds.delete(name);
   return { err: null };
@@ -941,6 +1084,11 @@ function chatStates() {
   for (const id of ids) {
     const m = loadMeta(id);
     if (!m) continue;
+    // A Round's run reports itself, through its Round. Leaving it here would
+    // announce every scheduled run TWICE — once as "a chat finished" from the
+    // alert watcher and once as the report — and two notifications for one event
+    // is how a reader learns to ignore the channel.
+    if (m.roundId) continue;
     out.push({
       id: m.id,
       title: m.title ?? null,
@@ -965,7 +1113,10 @@ function listChats() {
   const metas = [];
   for (const id of ids) {
     const m = loadMeta(id);
-    if (m) {
+    // Round runs live under their Round, not in the conversation list (see
+    // chatStates). They are still openable by id, which is how a report's
+    // "show me the run" link works.
+    if (m && !m.roundId) {
       m.running = activeRuns.has(id);
       // A count, not the texts: the list needs "2 waiting", not the messages.
       m.pending = Array.isArray(m.pending) ? m.pending.length : 0;
@@ -1120,44 +1271,10 @@ function startRun(meta, userText) {
 
   proc.on('close', (code) => {
     clearTimeout(killer);
-    const ts = Math.floor(Date.now() / 1000);
-    if (!run_.sawResult) {
-      // Crashed / killed / cancelled with no result event — record what we know.
-      const errText = run_.cancelled ? 'cancelled' : `claude exited ${code}${errBuf ? `: ${errBuf.slice(-500)}` : ''}`;
-      if (run_.assistantText) appendMsg(chatId, { type: 'assistant', text: run_.assistantText, ts, partial: true });
-      appendMsg(chatId, { type: 'error', text: errText, ts });
-      run_.emit('error', { text: errText });
-      updateMeta(chatId, (m) => { m.updatedAt = ts; m.lastSnippet = errText.slice(0, 120); });
-    }
-    // Recorded before anything else observes the finish. A completed run has to
-    // leave a durable mark: the alert watcher runs on a timer and cannot be relied
-    // on to catch the instant `running` goes false — a five-second run slipped
-    // straight through a ten-second tick and was never reported.
-    updateMeta(chatId, (m) => {
-      m.finishedRuns = (m.finishedRuns || 0) + 1;
-      m.finishedAt = ts;
-      delete m.runStartedAt;                  // this run is accounted for
+    settleRun(run_, {
+      exitCode: code,
+      failureText: `claude exited ${code}${errBuf ? `: ${errBuf.slice(-500)}` : ''}`,
     });
-    run_.emit('done', { exitCode: code });
-    run_.finish();
-    log(`chat ${chatId} run finished (exit ${code})`);
-
-    const fresh = loadMeta(chatId);
-    if (fresh) {
-      if (run_.cancelled) {
-        // Cancel means stop. Respawning from the queue would make the stop
-        // button start the very thing it was pressed to end.
-        const dropped = clearPending(fresh);
-        if (dropped) { saveMeta(fresh); log(`chat ${chatId} dropped ${dropped} queued message(s) on cancel`); }
-      } else {
-        const next = takePending(fresh);
-        if (next) {
-          saveMeta(fresh);
-          log(`chat ${chatId} delivering queued message(s)`);
-          startQueuedRun(fresh, next);
-        }
-      }
-    }
   });
 
   log(`chat ${chatId} run started (mode=${meta.mode}, resume=${meta.claudeSessionId || 'new'})`);
@@ -1281,8 +1398,625 @@ async function readLoginState() {
  * active — and when it did, the messages were already erased from disk: silently
  * destroyed, after the sender had been told they were queued.
  */
+/**
+ * Everything that must happen when a run ends — WHEREVER it ran.
+ *
+ * Extracted from the spawn's own close handler when runs became able to happen on
+ * another machine. It is not a tidy-up: three separately-learned lessons live in
+ * here and none of them are guessable from outside, so a second copy for the
+ * remote path would have drifted from this one within a release.
+ *
+ * @param failureText what to record when the run produced no result event. The
+ *   caller knows why it ended — an exit code and stderr locally, a device's own
+ *   report or its silence remotely — and only the caller can say it in a way that
+ *   means anything to a reader.
+ */
+function settleRun(run_, { exitCode = null, failureText = null } = {}) {
+  const chatId = run_.chatId;
+  const ts = Math.floor(Date.now() / 1000);
+
+  if (!run_.sawResult) {
+    // Crashed / killed / cancelled with no result event — record what we know.
+    const errText = run_.cancelled ? 'cancelled' : (failureText || 'the run ended without a result');
+    if (run_.assistantText) appendMsg(chatId, { type: 'assistant', text: run_.assistantText, ts, partial: true });
+    appendMsg(chatId, { type: 'error', text: errText, ts });
+    run_.emit('error', { text: errText });
+    updateMeta(chatId, (m) => { m.updatedAt = ts; m.lastSnippet = errText.slice(0, 120); });
+  }
+  // Recorded before anything else observes the finish. A completed run has to
+  // leave a durable mark: the alert watcher runs on a timer and cannot be relied
+  // on to catch the instant `running` goes false — a five-second run slipped
+  // straight through a ten-second tick and was never reported.
+  updateMeta(chatId, (m) => {
+    m.finishedRuns = (m.finishedRuns || 0) + 1;
+    m.finishedAt = ts;
+    delete m.runStartedAt;                  // this run is accounted for
+  });
+  run_.emit('done', { exitCode });
+  run_.finish();
+  log(`chat ${chatId} run finished (exit ${exitCode})`);
+
+  const fresh = loadMeta(chatId);
+  if (fresh) {
+    // A Round's run ends when its chat's run ends; the report is whatever it
+    // left in the transcript. Before the queue logic below, because a Round
+    // never queues and this must happen even if that changes.
+    if (fresh.roundId) {
+      try { finishRoundRun(fresh, run_.cancelled ? 'cancelled' : null); }
+      catch (e) { log(`round run ${chatId} could not be recorded: ${e.message}`); }
+    }
+    if (run_.cancelled) {
+      // Cancel means stop. Respawning from the queue would make the stop
+      // button start the very thing it was pressed to end.
+      const dropped = clearPending(fresh);
+      if (dropped) { saveMeta(fresh); log(`chat ${chatId} dropped ${dropped} queued message(s) on cancel`); }
+    } else {
+      const next = takePending(fresh);
+      if (next) {
+        saveMeta(fresh);
+        log(`chat ${chatId} delivering queued message(s)`);
+        startQueuedRun(fresh, next);
+      }
+    }
+  }
+}
+
+// ------------------------------------------------------------------ devices
+//
+// Another machine that can run a chat in ITS context. See lib/devices for the
+// scope model and why the daemon sends a request rather than a permission.
+//
+// The transport is the device's choice of moment, not ours: it long-polls for
+// work and POSTs results back, so it needs no inbound port, no static address and
+// no hole in anyone's firewall. A laptop on hotel wi-fi works exactly as well as
+// the desktop in the next room, which is the whole reason this is pull and not a
+// push from here.
+
+const DEVICES_FILE = path.join(DATA_DIR, 'devices.json');
+
+let deviceState = (() => {
+  try {
+    const o = JSON.parse(fs.readFileSync(DEVICES_FILE, 'utf8'));
+    // A file that parses is not a file that is USABLE: an empty object, or one
+    // hand-edited into a different shape, would make the first registration throw
+    // inside the request handler instead of starting from empty.
+    if (o && typeof o === 'object' && o.devices && typeof o.devices === 'object') return o;
+  } catch { /* absent or unreadable */ }
+  return devicesLib.emptyState();
+})();
+
+function saveDevices() {
+  try { fs.writeFileSync(DEVICES_FILE, JSON.stringify(deviceState, null, 2)); }
+  catch (e) { log(`devices: could not persist (${e.message})`); }
+}
+
+/** Work handed out but not yet finished, and the runs behind it. */
+const deviceQueues = new Map();   // deviceId -> [workItem]
+const deviceWaiters = new Map();  // deviceId -> [{ respond, timer }]
+const remoteRuns = new Map();     // workId -> { run_, deviceId, chatId, lastHeard, startedAt }
+
+const MAX_WORK_QUEUE = 5;
+const WORK_WAIT_DEFAULT_S = 25;
+const WORK_WAIT_MAX_S = 60;
+
+/**
+ * How long a started remote run may go without a word before it is declared
+ * lost.
+ *
+ * A device posts events as they arrive, so silence is not "thinking" — a tool
+ * call that takes four minutes still produces its start event immediately. The
+ * failure this catches is the one with no other signal at all: the machine slept,
+ * lost its network, or was shut down mid-run, and the chat would otherwise sit
+ * `running` forever with nothing coming.
+ */
+const REMOTE_SILENCE_MS = 5 * 60 * 1000;
+
+function queueWork(deviceId, item) {
+  const q = deviceQueues.get(deviceId) || [];
+  q.push(item);
+  deviceQueues.set(deviceId, q);
+  // A parked poll is woken rather than left to time out: the difference between
+  // "starts now" and "starts in up to 25 seconds" is the difference between the
+  // feature feeling remote and feeling broken.
+  const waiters = deviceWaiters.get(deviceId) || [];
+  const w = waiters.shift();
+  deviceWaiters.set(deviceId, waiters);
+  if (w) {
+    clearTimeout(w.timer);
+    w.respond(q.shift() || null);
+    deviceQueues.set(deviceId, q);
+  }
+}
+
+/**
+ * Parks a poll until there is work or the wait ends.
+ *
+ * @returns a `drop` that UNPARKS it. Not optional: a device that hangs up
+ * mid-poll leaves a response nobody can write to, and if queueWork later hands
+ * that waiter an item the item is silently swallowed — a job that was created,
+ * accepted, and then simply never ran. So the disconnect handler must be able to
+ * take the waiter out of the running.
+ */
+function parkWaiter(deviceId, waitS, respond) {
+  const entry = { respond, timer: null };
+  const drop = () => {
+    clearTimeout(entry.timer);
+    deviceWaiters.set(deviceId, (deviceWaiters.get(deviceId) || []).filter((x) => x !== entry));
+  };
+  entry.timer = setTimeout(() => { drop(); respond(null); },
+    Math.max(1, Math.min(WORK_WAIT_MAX_S, waitS)) * 1000);
+  const waiters = deviceWaiters.get(deviceId) || [];
+  waiters.push(entry);
+  deviceWaiters.set(deviceId, waiters);
+  return drop;
+}
+
+/** Runs this device currently owns. One at a time, so a machine is never flooded. */
+function activeRunFor(deviceId) {
+  for (const r of remoteRuns.values()) if (r.deviceId === deviceId) return r;
+  return null;
+}
+
+/**
+ * A run that happens on another machine.
+ *
+ * Deliberately does NOT consume MAX_CONCURRENT_RUNS: that limit exists because
+ * each local run is a `claude -p` on THIS host, and a run on the owner's PC costs
+ * this host a map entry. The bound that matters instead is one active run per
+ * device, so a queue of Rounds cannot pile four simultaneous jobs onto one laptop.
+ */
+function startRemoteRun(meta, userText) {
+  const chatId = meta.id;
+  if (activeRuns.has(chatId)) return { error: 'chat already has an active run', code: 409 };
+
+  const deviceId = meta.host;
+  const device = (deviceState.devices || {})[deviceId];
+  const now = Date.now();
+  const verdict = devicesLib.canRun(device, meta.mode, now);
+  if (!verdict.ok) return { error: verdict.reason, code: 409 };
+  if (activeRunFor(deviceId)) return { error: `${device.name} is already running something`, code: 409 };
+  if ((deviceQueues.get(deviceId) || []).length >= MAX_WORK_QUEUE) {
+    return { error: `${device.name} has too much work queued`, code: 429 };
+  }
+
+  const ts = Math.floor(now / 1000);
+  appendMsg(chatId, { type: 'user', text: userText, ts });
+  updateMeta(chatId, (m) => {
+    m.updatedAt = ts;
+    m.lastSnippet = humanizeUserText(userText).slice(0, 120);
+    m.runStartedAt = ts;
+  });
+
+  const run_ = new Run(chatId);
+  activeRuns.set(chatId, run_);
+  const workId = crypto.randomUUID();
+  run_.remote = { deviceId, workId };
+
+  // No persona and no tool list. The device appends its own operating posture and
+  // builds its own argv — see lib/devices. What travels is the request.
+  const item = devicesLib.workItem({
+    id: workId,
+    chatId,
+    prompt: userText,
+    mode: meta.mode,
+    model: meta.model,
+    effort: meta.effort,
+    resumeSessionId: meta.claudeSessionId,
+    roundId: meta.roundId,
+    now,
+  });
+  remoteRuns.set(workId, { run_, deviceId, chatId, lastHeard: now, startedAt: now });
+  queueWork(deviceId, item);
+  run_.emit('started', { chatId, ts, host: deviceId });
+  log(`chat ${chatId} queued to device ${device.name} (work ${workId})`);
+  return { run: run_ };
+}
+
+/** Ends a remote run that will never report again. */
+function loseRemoteRun(workId, why) {
+  const entry = remoteRuns.get(workId);
+  if (!entry) return;
+  remoteRuns.delete(workId);
+  const name = ((deviceState.devices || {})[entry.deviceId] || {}).name || entry.deviceId;
+  log(`chat ${entry.chatId} lost its run on ${name}: ${why}`);
+  settleRun(entry.run_, { exitCode: null, failureText: `${name}: ${why}` });
+}
+
+/**
+ * One pass over the runs devices owe us an answer for.
+ *
+ * Silence is the only failure a remote run can have that produces no message of
+ * its own, so it is the only one that needs a clock.
+ */
+function devicesTick() {
+  const now = Date.now();
+  for (const [workId, entry] of [...remoteRuns]) {
+    if (now - entry.lastHeard > REMOTE_SILENCE_MS) {
+      loseRemoteRun(workId, `no word for ${Math.round((now - entry.lastHeard) / 60_000)} minutes`);
+    } else if (now - entry.startedAt > RUN_HARD_CAP_MS) {
+      loseRemoteRun(workId, 'passed the hard run cap');
+    }
+  }
+  const before = Object.keys(deviceState.devices || {}).length;
+  devicesLib.pruneDevices(deviceState, now);
+  if (Object.keys(deviceState.devices || {}).length !== before) saveDevices();
+}
+setInterval(() => { try { devicesTick(); } catch (e) { log('devices: tick failed', e.message); } }, 30_000).unref();
+
+/** Stop a run: ask, then insist. Shared by the cancel route and a Round timeout. */
+function cancelRun(run_) {
+  run_.cancelled = true;
+  try { run_.proc.kill('SIGTERM'); } catch { }
+  setTimeout(() => { try { run_.proc.kill('SIGKILL'); } catch { } }, 5000).unref();
+}
+
+// ------------------------------------------------------------------- rounds
+//
+// Scheduled work, built ON the chat machinery above rather than beside it. A
+// Round fires by creating a chat and posting one message to it, so the transcript,
+// the SSE stream, the cancel button, the model controls and the push notification
+// a chat already has all apply to a scheduled run for free. What Rounds add is the
+// cadence, the output contract, and a record of what came back.
+//
+// ONE CHAT PER RUN, not one resumed thread: a wedged week cannot poison the next,
+// a timeout is scoped to the run it belongs to, and each report opens clean.
+// Week-over-week continuity is MemPalace's job, not this file's.
+
+const ROUNDS_DIR = path.join(DATA_DIR, 'rounds');
+fs.mkdirSync(ROUNDS_DIR, { recursive: true });
+
+const UUID_RE = /^[0-9a-f-]{36}$/;
+const NOTIFY_WHEN = ['always', 'attention', 'never'];
+const MAX_RUN_HISTORY = 10;
+const MAX_ROUND_PROMPT = 20_000;
+/**
+ * Default per-Round cap. The global RUN_HARD_CAP_MS is two hours, which is a
+ * safety net for a person who is watching; a scheduled run that wedges would
+ * otherwise hold one of three pool slots until long after its report was any use.
+ */
+const DEFAULT_ROUND_TIMEOUT_S = 15 * 60;
+
+function roundPath(id) { return path.join(ROUNDS_DIR, `${id}.json`); }
+
+function loadRound(id) {
+  if (!UUID_RE.test(String(id || ''))) return null;
+  try { return JSON.parse(fs.readFileSync(roundPath(id), 'utf8')); } catch { return null; }
+}
+function saveRound(r) {
+  fs.writeFileSync(roundPath(r.id), JSON.stringify(r, null, 2));
+  return r;
+}
+function listRounds() {
+  let files = [];
+  try { files = fs.readdirSync(ROUNDS_DIR); } catch { return []; }
+  const out = [];
+  for (const f of files) {
+    if (!f.endsWith('.json')) continue;
+    const r = loadRound(f.slice(0, -5));
+    if (r) out.push(r);
+  }
+  // Soonest first: the list answers "what happens next" before "what exists".
+  out.sort((a, b) => (a.nextRunAt || Infinity) - (b.nextRunAt || Infinity));
+  return out;
+}
+/** Reload, change, save — same reason as updateMeta: never write back a stale snapshot. */
+function updateRound(id, mutate) {
+  const r = loadRound(id);
+  if (!r) return null;
+  mutate(r);
+  r.updatedAt = Math.floor(Date.now() / 1000);
+  return saveRound(r);
+}
+
+/** The record plus what a client would otherwise have to derive for itself. */
+function roundView(r) {
+  return {
+    ...r,
+    // Rendered here so the phone, the desktop and a Telegram line cannot disagree
+    // about what "Sundays at 7:00 PM" means.
+    cadence: roundsLib.describeSchedule(r.schedule),
+    running: !!(r.currentChatId && activeRuns.has(r.currentChatId)),
+    host: r.host || 'local',
+    // Resolved here for the same reason as the cadence: a client that looked this
+    // up itself would show a bare uuid for a device that has been unenrolled.
+    hostName: (r.host && r.host !== 'local')
+      ? (((deviceState.devices || {})[r.host] || {}).name || 'a removed device')
+      : null,
+  };
+}
+
+function clampRoundTimeout(v) {
+  const n = Number(v);
+  if (!Number.isFinite(n)) return DEFAULT_ROUND_TIMEOUT_S;
+  return Math.max(60, Math.min(7200, Math.floor(n)));
+}
+
+/**
+ * Resolves and checks where a Round should run.
+ *
+ * Checks the device's ENROLLED scope, not its lock state and not whether it is
+ * awake: a Round scheduled for next Sunday must not be refused because the laptop
+ * is asleep on Tuesday. What is worth refusing now is the permanent kind of
+ * wrong — an `act` Round pinned to a device that is only ever allowed to look,
+ * which would otherwise fail every single week with nobody watching.
+ */
+function placeRound(rawHost, mode) {
+  if (typeof rawHost !== 'string' || !rawHost || rawHost === 'local') return { host: 'local' };
+  const dev = (deviceState.devices || {})[rawHost];
+  if (!dev) return { error: 'no such device' };
+  const needed = devicesLib.MODE_NEEDS[mode] || 'work';
+  if (!devicesLib.scopeAtLeast(dev.scope, needed)) {
+    return { error: `${dev.name} is enrolled as "${dev.scope}", which cannot run ${mode}` };
+  }
+  return { host: rawHost };
+}
+
+function buildRound(body) {
+  const title = typeof body.title === 'string' ? body.title.trim().slice(0, 80) : '';
+  if (!title) return { error: 'title required' };
+  const prompt = typeof body.prompt === 'string' ? body.prompt.trim() : '';
+  if (!prompt) return { error: 'prompt required' };
+  if (prompt.length > MAX_ROUND_PROMPT) return { error: 'prompt too long' };
+  const sched = roundsLib.validateSchedule(body.schedule);
+  if (!sched.ok) return { error: sched.error };
+  const placed = placeRound(body.host, body.mode === 'act' ? 'act' : 'ask');
+  if (placed.error) return { error: placed.error };
+
+  const now = Math.floor(Date.now() / 1000);
+  return {
+    round: {
+      v: 1,
+      id: crypto.randomUUID(),
+      title,
+      prompt,
+      enabled: body.enabled !== false,
+      // `ask` unless asked otherwise, deliberately: an unattended 3am run holding
+      // Bash and Write is a different risk class from one that can only read, and
+      // nothing about wanting something on a schedule implies consent to the second.
+      mode: body.mode === 'act' ? 'act' : 'ask',
+      // Where it runs. A Round on a Device is the thing neither feature could do
+      // alone: work that happens on a schedule, in another machine's context.
+      host: placed.host,
+      model: validModel(body.model),
+      effort: validEffort(body.effort),
+      schedule: sched.schedule,
+      notifyWhen: NOTIFY_WHEN.includes(body.notifyWhen) ? body.notifyWhen : 'attention',
+      catchUp: body.catchUp === true,
+      timeoutSec: clampRoundTimeout(body.timeoutSec),
+      createdAt: now,
+      updatedAt: now,
+      nextRunAt: roundsLib.nextFireAt(sched.schedule, Date.now()),
+      currentChatId: null,
+      lastRun: null,
+      runs: [],
+    },
+  };
+}
+
+function applyRoundPatch(round, body) {
+  const r = { ...round };
+  if ('title' in body) {
+    const t = typeof body.title === 'string' ? body.title.trim().slice(0, 80) : '';
+    if (!t) return { error: 'title cannot be empty' };
+    r.title = t;
+  }
+  if ('prompt' in body) {
+    const p = typeof body.prompt === 'string' ? body.prompt.trim() : '';
+    if (!p) return { error: 'prompt cannot be empty' };
+    if (p.length > MAX_ROUND_PROMPT) return { error: 'prompt too long' };
+    r.prompt = p;
+  }
+  if ('schedule' in body) {
+    const s = roundsLib.validateSchedule(body.schedule);
+    if (!s.ok) return { error: s.error };
+    r.schedule = s.schedule;
+    // Re-armed immediately: keeping the old slot would fire once more on a
+    // cadence the owner has just replaced, which reads as the edit not working.
+    r.nextRunAt = roundsLib.nextFireAt(s.schedule, Date.now());
+  }
+  if ('enabled' in body) {
+    r.enabled = body.enabled !== false;
+    // Re-enabling arms from NOW. A Round switched off for a month would otherwise
+    // come back with a slot deep in the past and fire immediately on resume.
+    if (r.enabled && (!r.nextRunAt || r.nextRunAt <= Date.now())) {
+      r.nextRunAt = roundsLib.nextFireAt(r.schedule, Date.now());
+    }
+  }
+  if ('mode' in body) r.mode = body.mode === 'act' ? 'act' : 'ask';
+  if ('host' in body || 'mode' in body) {
+    // Re-checked together, because widening the mode can invalidate a host that
+    // was fine for the old one — an `act` Round on a look-scope device would fail
+    // every week, silently, at 3am.
+    const placed = placeRound('host' in body ? body.host : r.host, r.mode);
+    if (placed.error) return { error: placed.error };
+    r.host = placed.host;
+  }
+  if ('model' in body) r.model = validModel(body.model);
+  if ('effort' in body) r.effort = validEffort(body.effort);
+  if ('notifyWhen' in body && NOTIFY_WHEN.includes(body.notifyWhen)) r.notifyWhen = body.notifyWhen;
+  if ('catchUp' in body) r.catchUp = body.catchUp === true;
+  if ('timeoutSec' in body) r.timeoutSec = clampRoundTimeout(body.timeoutSec);
+  r.updatedAt = Math.floor(Date.now() / 1000);
+  return { round: r };
+}
+
+/**
+ * One run of a Round: a fresh chat, one message, the output contract appended.
+ *
+ * A refusal is not a failure. The run pool is shared with the owner's own chats,
+ * so a Round that cannot start right now waits for the next tick rather than
+ * burning its slot — this reports the reason and leaves the arming to the caller.
+ */
+function fireRound(round, { manual = false } = {}) {
+  if (round.currentChatId && activeRuns.has(round.currentChatId)) {
+    return { error: 'previous run is still going', code: 409 };
+  }
+  const now = Math.floor(Date.now() / 1000);
+  const meta = {
+    id: crypto.randomUUID(),
+    title: `${round.title} · ${new Date(now * 1000).toISOString().slice(0, 10)}`.slice(0, 80),
+    mode: round.mode === 'act' ? 'act' : 'ask',
+    model: round.model || null,
+    effort: round.effort || null,
+    createdAt: now,
+    updatedAt: now,
+    claudeSessionId: null,
+    lastSnippet: null,
+    turns: 0,
+    // What makes this chat a Round's run rather than a conversation: the close
+    // handler reads it to decide whether a report is owed, and the chat list
+    // reads it to stay out of the way.
+    roundId: round.id,
+    roundStartedAt: now,
+    roundManual: !!manual,
+    // The chat carries the placement; startRunAnywhere reads it and nothing about
+    // firing a Round needs to know that devices exist.
+    host: round.host || 'local',
+  };
+  saveMeta(meta);
+
+  const started = startRunAnywhere(meta, roundsLib.promptFor(round));
+  if (started && started.error) {
+    // startRun checks the pool before it writes anything, so nothing but the meta
+    // exists yet and the chat can be withdrawn completely — better than leaving
+    // an empty run in the history of every Round that ever hit a busy minute.
+    try { fs.rmSync(chatDir(meta.id), { recursive: true, force: true }); } catch { }
+    return started;
+  }
+  updateRound(round.id, (r) => { r.currentChatId = meta.id; r.lastFiredAt = now; });
+  log(`round ${round.id} (${round.title}) fired into chat ${meta.id}${manual ? ' (manual)' : ''}`);
+  return { chatId: meta.id };
+}
+
+/**
+ * A Round's run has ended: read what it said, record it, decide whether that is
+ * worth interrupting somebody for.
+ *
+ * Always records something. A run that failed to format its report has usually
+ * still done the work, and going silent would make a broken contract look like a
+ * clean week — the worst failure here, because nobody goes looking for a report
+ * they were never told was missing.
+ */
+function finishRoundRun(meta, failure) {
+  const round = loadRound(meta.roundId);
+  if (!round) return;                    // the Round was deleted mid-run; the chat stands alone
+
+  const msgs = loadMsgs(meta.id);
+  let text = '';
+  let lastError = null;
+  for (const m of msgs) {
+    if (m.type === 'assistant' && m.text) text = m.text;
+    if (m.type === 'error' && m.text) lastError = m.text;
+  }
+
+  let report;
+  if (failure) report = roundsLib.errorReport(failure);
+  else if (!text && lastError) report = roundsLib.errorReport(lastError);
+  else report = roundsLib.parseReport(text) || roundsLib.fallbackReport(text);
+
+  const at = Math.floor(Date.now() / 1000);
+  const run = {
+    at,
+    chatId: meta.id,
+    status: report.status,
+    headline: report.headline,
+    items: report.items,
+    malformed: report.malformed,
+    manual: !!meta.roundManual,
+    durationSec: meta.roundStartedAt ? at - meta.roundStartedAt : null,
+  };
+  updateRound(round.id, (r) => {
+    r.lastRun = run;
+    r.runs = [run, ...(Array.isArray(r.runs) ? r.runs : [])].slice(0, MAX_RUN_HISTORY);
+    if (r.currentChatId === meta.id) r.currentChatId = null;
+  });
+  // On the chat too, so opening a past run shows its verdict without re-parsing.
+  updateMeta(meta.id, (m) => { m.roundStatus = report.status; m.roundHeadline = report.headline; });
+  log(`round ${round.id} run ${meta.id} -> ${report.status}: ${report.headline.slice(0, 80)}`);
+
+  if (roundsLib.shouldNotify(round.notifyWhen, report.status)) {
+    deliverRoundReport(round, report, meta.id)
+      .catch((e) => log(`round ${round.id}: report delivery failed (${e.message})`));
+  }
+}
+
+const ROUND_MARK = { ok: '✅', attention: '⚠️', action: '🔴', unknown: '❓' };
+
+/**
+ * Push first, Telegram only if the app did not get it.
+ *
+ * Not a new delivery policy — this is the rule the alert watcher already applies,
+ * and the reason it exists is written in lib/clients: "a duplicate of every alert
+ * on two channels is worse than one channel: the reader learns to ignore both".
+ * A weekly report arriving twice is exactly what would train that habit.
+ */
+async function deliverRoundReport(round, report, chatId) {
+  const pushed = await deliverPush({
+    kind: 'round_report',
+    key: `round:${round.id}:${chatId}`,
+    subject: round.title,
+    title: round.title,
+    text: report.headline,
+  });
+  if (pushed.sent > 0 || clientsLib.appOnline(clientState, Date.now())) {
+    log(`round ${round.id}: telegram held (${pushed.sent > 0 ? 'pushed to the app' : 'app checked in recently'})`);
+    return;
+  }
+  const lines = [`${ROUND_MARK[report.status] || ROUND_MARK.unknown} ${round.title}`, report.headline];
+  // A handful of items, each with its next step. Statements only — there is no
+  // reply path on that channel, so a question would arrive as noise.
+  for (const it of report.items.slice(0, 5)) {
+    lines.push(`• ${it.title}${it.suggest ? ` — ${it.suggest}` : ''}`);
+  }
+  await deliverTelegram(lines.join('\n'));
+}
+
+/**
+ * One pass over every Round. Cheap by construction: a few small JSON reads, and
+ * no tmux, no network and no spawn unless something is actually due.
+ */
+async function roundsTick() {
+  const now = Date.now();
+  for (const round of listRounds()) {
+    // A wedged run holds a pool slot the owner's own chats need.
+    if (round.currentChatId) {
+      const active = activeRuns.get(round.currentChatId);
+      const meta = active ? loadMeta(round.currentChatId) : null;
+      const capMs = clampRoundTimeout(round.timeoutSec) * 1000;
+      if (active && meta && meta.roundStartedAt && now - meta.roundStartedAt * 1000 > capMs) {
+        log(`round ${round.id}: run ${round.currentChatId} passed ${capMs / 1000}s, cancelling`);
+        cancelRun(active);
+        continue;
+      }
+    }
+
+    const d = roundsLib.dueDecision(round, now);
+    // Re-armed BEFORE firing, so a crash between the two cannot leave a Round
+    // firing on every tick forever.
+    if (d.nextRunAt !== round.nextRunAt) updateRound(round.id, (r) => { r.nextRunAt = d.nextRunAt; });
+    if (d.reason === 'missed') {
+      log(`round ${round.id}: missed its slot by ${Math.round(d.lateBy / 60_000)}m, skipped (catchUp off)`);
+    }
+    if (!d.run) continue;
+
+    const started = fireRound(loadRound(round.id) || round);
+    if (started.error) log(`round ${round.id}: could not start (${started.error})`);
+  }
+}
+setInterval(() => { roundsTick().catch((e) => log('rounds: tick failed', e.message)); }, 30_000).unref();
+
+/**
+ * Starts a run wherever the chat says it belongs.
+ *
+ * One seam, so every caller — a message from a phone, a queued message, a Round
+ * firing — reaches a device without knowing that devices exist.
+ */
+function startRunAnywhere(meta, text) {
+  return (meta.host && meta.host !== 'local') ? startRemoteRun(meta, text) : startRun(meta, text);
+}
+
 function startQueuedRun(meta, text) {
-  const started = startRun(meta, text);
+  const started = startRunAnywhere(meta, text);
   if (!started || !started.error) return started;
   // Restored at the FRONT, so it stays ahead of anything queued since, and as a
   // single entry because takePending already joined the batch into one prompt.
@@ -2839,6 +3573,13 @@ const server = http.createServer(async (req, res) => {
       const name = canonName(body.name);
       if (!name) return sendErr(res, 400, 'invalid session name (letters, digits, underscore)');
       if (await sessionExists(name)) return sendErr(res, 409, `session '${name}' already exists`);
+      // Whatever the last holder of this name left behind goes now, before the new
+      // session can be observed. The born-time guard would reject it anyway, but
+      // deleting it here closes the window rather than papering over it.
+      clearSessionState(name);
+      // Before the session exists, never after: the server's cgroup is decided by
+      // whoever starts it, and that is a one-time choice per server lifetime.
+      await ensureTmuxServerScope();
       // Same shape as cc: open in WORKDIR, claude first, fall through to a shell.
       const { err, stderr } = await run('tmux',
         ['new-session', '-d', '-s', name, '-c', WORKDIR, 'claude; exec "$SHELL" -l']);
@@ -2846,7 +3587,7 @@ const server = http.createServer(async (req, res) => {
       // What tmux called it, not what we asked for — same reason as the rename
       // route below: a '.' is rewritten to '_' with a zero exit, and a client
       // told the wrong name gets a 404 on everything it does next.
-      const q = await run('tmux', ['display-message', '-p', '-t', `=${name}`, '#S']);
+      const q = await run('tmux', ['display-message', '-p', '-t', `=${name}:`, '#S']);
       return sendJson(res, 201, { ok: true, name: (q.stdout || '').trim() || name });
     }
 
@@ -3350,16 +4091,205 @@ const server = http.createServer(async (req, res) => {
       return sendJson(res, 200, { ok: true, path: file, bytes, ext, readable });
     }
 
+    // ---- devices: other machines that can run a chat in their context
+    if (req.method === 'GET' && p === '/v1/devices') {
+      const now = Date.now();
+      const list = Object.entries(deviceState.devices || {})
+        .map(([id, d]) => ({
+          ...devicesLib.deviceView(id, d, now),
+          running: !!activeRunFor(id),
+          queued: (deviceQueues.get(id) || []).length,
+        }))
+        .sort((a, b) => Number(b.online) - Number(a.online) || a.name.localeCompare(b.name));
+      return sendJson(res, 200, { devices: list });
+    }
+
+    if (req.method === 'POST' && p === '/v1/devices') {
+      const body = JSON.parse(await readBody(req) || '{}');
+      const now = Date.now();
+      const built = devicesLib.validateRegistration(body, now);
+      if (!built.ok) return sendErr(res, 400, built.error);
+
+      // Re-registering under the same id keeps the id, so a device that restarts
+      // does not accumulate ghosts in the list. A device with no id gets one.
+      const id = /^[0-9a-f-]{36}$/.test(String(body.id || '')) ? body.id : crypto.randomUUID();
+      const existing = (deviceState.devices || {})[id];
+      deviceState.devices[id] = existing
+        ? { ...existing, ...built.device, registeredAt: existing.registeredAt }
+        : built.device;
+      saveDevices();
+      log(`device ${built.device.name} registered (${id}, scope=${built.device.scope})`);
+      return sendJson(res, 201, devicesLib.deviceView(id, deviceState.devices[id], now));
+    }
+
+    if ((m = p.match(/^\/v1\/devices\/([0-9a-f-]{36})(\/.*)?$/))) {
+      const devId = m[1]; const dsub = m[2] || '';
+      const device = (deviceState.devices || {})[devId];
+      if (!device) return sendErr(res, 404, 'no such device');
+      const now = Date.now();
+
+      if (req.method === 'GET' && dsub === '') {
+        return sendJson(res, 200, {
+          ...devicesLib.deviceView(devId, device, now),
+          running: !!activeRunFor(devId),
+          queued: (deviceQueues.get(devId) || []).length,
+        });
+      }
+
+      if (req.method === 'DELETE' && dsub === '') {
+        // Unenrolling does not reach onto the machine — nothing here can. It
+        // stops work being offered; the runner on the far end is stopped there.
+        delete deviceState.devices[devId];
+        saveDevices();
+        deviceQueues.delete(devId);
+        const live = activeRunFor(devId);
+        if (live) loseRemoteRun(live.run_.remote.workId, 'the device was removed');
+        return sendJson(res, 200, { ok: true });
+      }
+
+      // The device saying it is still there, and what it is willing to do now.
+      if (req.method === 'POST' && dsub === '/beat') {
+        const body = JSON.parse(await readBody(req) || '{}');
+        devicesLib.noteSeen(deviceState, devId, now, body);
+        saveDevices();
+        return sendJson(res, 200, {
+          ok: true,
+          effectiveScope: devicesLib.effectiveScope(deviceState.devices[devId]),
+        });
+      }
+
+      // The long poll. Answers at once when there is work, otherwise holds until
+      // there is or the wait runs out — so a device learns about a job in the
+      // moment it is created without polling in a loop.
+      if (req.method === 'GET' && dsub === '/work') {
+        const lockedParam = u.searchParams.get('locked');
+        devicesLib.noteSeen(deviceState, devId, now, {
+          locked: lockedParam === '1' ? true : (lockedParam === '0' ? false : undefined),
+        });
+        const q = deviceQueues.get(devId) || [];
+        if (q.length) {
+          const item = q.shift();
+          deviceQueues.set(devId, q);
+          const entry = remoteRuns.get(item.id);
+          if (entry) entry.lastHeard = Date.now();
+          return sendJson(res, 200, { work: item });
+        }
+        const waitS = Number(u.searchParams.get('wait')) || WORK_WAIT_DEFAULT_S;
+        let answered = false;
+        const drop = parkWaiter(devId, waitS, (item) => {
+          if (answered) return;
+          answered = true;
+          if (item) {
+            const entry = remoteRuns.get(item.id);
+            if (entry) entry.lastHeard = Date.now();
+          }
+          sendJson(res, 200, { work: item || null });
+        });
+        // Unparked, not just flagged: a flag alone would let queueWork hand this
+        // dead response a job and drop it on the floor.
+        req.on('close', () => { answered = true; drop(); });
+        return undefined;
+      }
+
+      // Results, in batches. NOT one long chunked POST: a home network drops, and
+      // a dropped stream is indistinguishable from a finished run. Short posts
+      // with an explicit terminal frame make the ending something the device SAYS
+      // rather than something we infer.
+      if ((m = dsub.match(/^\/work\/([0-9a-f-]{36})\/events$/)) && req.method === 'POST') {
+        const workId = m[1];
+        const entry = remoteRuns.get(workId);
+        if (!entry) return sendErr(res, 404, 'no such run');
+        if (entry.deviceId !== devId) return sendErr(res, 403, 'that run belongs to another device');
+
+        const body = JSON.parse(await readBody(req) || '{}');
+        entry.lastHeard = Date.now();
+        devicesLib.noteSeen(deviceState, devId, entry.lastHeard, body);
+
+        const meta = loadMeta(entry.chatId);
+        if (meta) {
+          for (const line of Array.isArray(body.lines) ? body.lines : []) {
+            let ev;
+            try { ev = typeof line === 'string' ? JSON.parse(line) : line; } catch { continue; }
+            try { handleClaudeEvent(meta, entry.run_, ev); }
+            catch (e) { log(`device ${devId} sent an event we could not handle: ${e.message}`); }
+          }
+        }
+
+        if (body.done === true) {
+          remoteRuns.delete(workId);
+          settleRun(entry.run_, {
+            exitCode: Number.isFinite(body.exitCode) ? body.exitCode : null,
+            failureText: body.error ? String(body.error).slice(0, 500) : null,
+          });
+          return sendJson(res, 200, { ok: true, done: true });
+        }
+        // The one thing a device needs told mid-run: stop. It kills its own child
+        // and posts a terminal frame, so the ending still comes from the device.
+        return sendJson(res, 200, { ok: true, cancel: !!entry.run_.cancelled });
+      }
+
+      return sendErr(res, 404, 'no such device route');
+    }
+
+    // ---- rounds: work this host does on a schedule
+    if (req.method === 'GET' && p === '/v1/rounds') {
+      return sendJson(res, 200, { rounds: listRounds().map(roundView) });
+    }
+    if (req.method === 'POST' && p === '/v1/rounds') {
+      const body = JSON.parse(await readBody(req) || '{}');
+      const built = buildRound(body);
+      if (built.error) return sendErr(res, 400, built.error);
+      return sendJson(res, 201, roundView(saveRound(built.round)));
+    }
+    if ((m = p.match(/^\/v1\/rounds\/([0-9a-f-]{36})(\/.*)?$/))) {
+      const roundId = m[1]; const rsub = m[2] || '';
+      const round = loadRound(roundId);
+      if (!round) return sendErr(res, 404, 'no such round');
+
+      if (req.method === 'GET' && rsub === '') return sendJson(res, 200, roundView(round));
+
+      if (req.method === 'PATCH' && rsub === '') {
+        const body = JSON.parse(await readBody(req) || '{}');
+        const patched = applyRoundPatch(round, body);
+        if (patched.error) return sendErr(res, 400, patched.error);
+        return sendJson(res, 200, roundView(saveRound(patched.round)));
+      }
+      if (req.method === 'DELETE' && rsub === '') {
+        // The Round goes; its past runs are ordinary chats and are left alone, so
+        // deleting a schedule never destroys the reports it already produced.
+        try { fs.unlinkSync(roundPath(roundId)); } catch { /* already gone */ }
+        return sendJson(res, 200, { ok: true });
+      }
+      if (req.method === 'POST' && rsub === '/run') {
+        const started = fireRound(round, { manual: true });
+        if (started.error) return sendErr(res, started.code || 500, started.error);
+        return sendJson(res, 202, { ok: true, chatId: started.chatId });
+      }
+      return sendErr(res, 404, 'no such round route');
+    }
+
     if (req.method === 'GET' && p === '/v1/chats') return sendJson(res, 200, { chats: listChats() });
 
     if (req.method === 'POST' && p === '/v1/chats') {
       const body = JSON.parse(await readBody(req) || '{}');
       const mode = body.mode === 'act' ? 'act' : 'ask';
       const now = Math.floor(Date.now() / 1000);
+      // WHERE this chat runs, decided once and for the chat's life. Checked here
+      // rather than at first message so "that machine is asleep" is answered by
+      // the button that made the chat, not by a message that seems to vanish.
+      let host = 'local';
+      if (typeof body.host === 'string' && body.host && body.host !== 'local') {
+        const dev = (deviceState.devices || {})[body.host];
+        if (!dev) return sendErr(res, 404, 'no such device');
+        const verdict = devicesLib.canRun(dev, mode, Date.now());
+        if (!verdict.ok) return sendErr(res, 409, verdict.reason);
+        host = body.host;
+      }
       const meta = {
         id: crypto.randomUUID(),
         title: (typeof body.title === 'string' && body.title.trim().slice(0, 80)) || null,
         mode,
+        host,
         model: validModel(body.model),
         effort: validEffort(body.effort),
         createdAt: now,
@@ -3435,7 +4365,9 @@ const server = http.createServer(async (req, res) => {
           if (!q.ok) return sendErr(res, q.code, q.error);
           return sendJson(res, 202, { ok: true, queued: true, position: q.position });
         }
-        const started = startRun(meta, text);
+        // Anywhere, not here: a chat pinned to a device must reach that device
+        // whether the message came from a phone, a queue drain or a Round.
+        const started = startRunAnywhere(meta, text);
         if (started.error) return sendErr(res, started.code, started.error);
         // Auto-title from the first message, through updateMeta.
         //
@@ -3534,9 +4466,7 @@ const server = http.createServer(async (req, res) => {
         // clobbering shape.
         updateMeta(id, (fresh) => { clearPending(fresh); });
         if (!run_) return sendErr(res, 409, 'no active run');
-        run_.cancelled = true;
-        try { run_.proc.kill('SIGTERM'); } catch { }
-        setTimeout(() => { try { run_.proc.kill('SIGKILL'); } catch { } }, 5000).unref();
+        cancelRun(run_);
         return sendJson(res, 200, { ok: true });
       }
       if (req.method === 'PATCH' && sub === '') {

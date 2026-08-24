@@ -14,6 +14,41 @@ the Electron client's go to `/v1/desktop` and the two never mix — see
      refusal is deliberate — it is what stops a release going out with no notes.
      ─────────────────────────────────────────────────────────────────────────── -->
 
+## 0.8.0
+
+### Give Huginn access to this PC
+
+This machine can now offer itself to huginn as a place to run work — the feature the desktop
+client was always the right home for, because it is already installed, already trusted, and
+already running.
+
+- **A Devices destination.** Every machine enrolled with the daemon, what it is willing to do,
+  and the one control that matters here: start something on it. Ask here, Act here, Forget.
+  Not a management console — a device's settings live ON that device, which is the point of the
+  scope model — so this reads state and starts work.
+- **The runner, in Settings.** One switch, a scope (Look / Work / Own), the folder a Work run
+  starts in, and an optional path to the CLI for when `PATH` does not carry it. Off by default
+  and it stays that way: a feature that arrives already on is one nobody consented to.
+  - Nothing listens on a port. The app asks huginn for work and posts results back, so a laptop
+    away from home behaves exactly like the desktop next door.
+  - **The argv is built here, from this machine's own scope.** The daemon sends a request and no
+    authority; if it sent tool grants, whoever held its bearer token would hold this computer.
+  - **Locked means read-only.** While the screen is locked the machine drops to Look and refuses
+    Act — not because a lock screen is a boundary, but because nobody is there to catch a bad
+    call. Windows and Linux are detected; where detection is unavailable the machine reports
+    itself as locked and will only ever Look, and Settings says so rather than leaving you to
+    wonder why Act is refused.
+  - Work scope is stated plainly as **the folder a run starts in, not a sandbox** — a command
+    that is allowed to run can leave any folder, and overstating a fence is worse than not
+    having one.
+- **A Rounds destination.** The host's scheduled work, its cadence in words, what it last found,
+  and Run now. Full width, because a Round row already carries its whole report.
+
+### Fixed
+- **A reused session name showed the DEAD session's conversation.** Same fix as the phone: a
+  changed `claudeSessionId` now resets the transcript window instead of appending to it, and the
+  read offset goes with it.
+
 ## 0.7.0
 
 ### The rail speaks icon

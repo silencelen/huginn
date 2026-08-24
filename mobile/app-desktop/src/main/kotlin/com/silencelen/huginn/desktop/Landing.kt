@@ -38,6 +38,12 @@ object Landing {
     fun encode(view: View): String = when (view) {
         View.CHATS -> "chats"
         View.SESSIONS -> "sessions"
+        // Encodable but NOT persistable, deliberately. Rounds is a place you visit
+        // to read a report, not a place to be returned to on every launch — and a
+        // window that opens on a schedule list answers a question nobody asked
+        // first thing. Kept here so `parse` and `encode` stay mutual inverses.
+        View.ROUNDS -> "rounds"
+        View.DEVICES -> "devices"
         // Never written — the caller filters on [persistable] — but an encoder that
         // silently produced "chats" for Settings would be a landing bug nobody
         // could read off the file.
@@ -54,6 +60,8 @@ object Landing {
     fun parse(raw: String?): View = when (raw?.trim()?.lowercase()) {
         "chats" -> View.CHATS
         "sessions" -> View.SESSIONS
+        "rounds" -> View.ROUNDS
+        "devices" -> View.DEVICES
         else -> DEFAULT
     }
 }

@@ -30,6 +30,7 @@ import com.silencelen.huginn.data.Autoswitch
 import com.silencelen.huginn.data.Alerts
 import com.silencelen.huginn.data.ClientsInfo
 import com.silencelen.huginn.data.PushStatus
+import com.silencelen.huginn.data.Round
 import com.silencelen.huginn.data.LoginState
 import com.silencelen.huginn.data.RouteResolver
 import com.silencelen.huginn.data.UriByteStream
@@ -159,6 +160,14 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
 
     private val _chats = MutableStateFlow<List<Chat>>(emptyList())
     val chats: StateFlow<List<Chat>> = _chats.asStateFlow()
+
+    /**
+     * The host's scheduled work. Refreshed alongside chats rather than on its own
+     * timer: a Round changes at most every few minutes, and a second poll would
+     * buy nothing but battery.
+     */
+    private val _rounds = MutableStateFlow<List<Round>>(emptyList())
+    val rounds: StateFlow<List<Round>> = _rounds.asStateFlow()
 
     private val _loading = MutableStateFlow(false)
     val loading: StateFlow<Boolean> = _loading.asStateFlow()
@@ -941,6 +950,10 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
                 }
             runCatching { client.sessions(preview = true) }.onSuccess { _sessions.value = it }
             runCatching { client.chats() }.onSuccess { _chats.value = it }
+            // Silent on failure like the two above: a daemon too old to know about
+            // Rounds 404s here, and that must leave the rest of the screen working
+            // rather than raising an error about a feature the user never asked for.
+            runCatching { client.rounds() }.onSuccess { _rounds.value = it }
             _loading.value = false
         }
     }
@@ -982,6 +995,42 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
             runCatching { client.chats() }
                 .onSuccess { _chats.value = it }
                 .onFailure { _toast.value = errText(it) }
+        }
+    }
+
+    // ------------------------------------------------------------ rounds
+
+    fun refreshRounds() {
+        viewModelScope.launch {
+            awaitReady()
+            runCatching { client.rounds() }.onSuccess { _rounds.value = it }
+        }
+    }
+
+    /**
+     * Fires a Round now. The report arrives exactly as a scheduled one does — as a
+     * notification and a row on this screen — so there is nothing to navigate to
+     * and nothing to wait on here.
+     */
+    fun runRound(id: String) {
+        viewModelScope.launch {
+            awaitReady()
+            runCatching { client.runRound(id) }
+                .onSuccess { _toast.value = "Running now"; refreshRounds() }
+                .onFailure { _toast.value = errText(it) }
+        }
+    }
+
+    fun setRoundEnabled(id: String, enabled: Boolean) {
+        // Optimistic, because a switch that waits for a round trip feels broken on
+        // a phone. The refresh below is what makes it true; a failure puts the
+        // server's answer back and says why.
+        _rounds.value = _rounds.value.map { if (it.id == id) it.copy(enabled = enabled) else it }
+        viewModelScope.launch {
+            awaitReady()
+            runCatching { client.updateRound(id, enabled = enabled) }
+                .onSuccess { updated -> _rounds.value = _rounds.value.map { if (it.id == id) updated else it } }
+                .onFailure { _toast.value = errText(it); refreshRounds() }
         }
     }
 
@@ -1264,10 +1313,20 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
                 val r = runCatching { client.sessionTranscript(name, offset) }
                 r.onSuccess { page ->
                     _transcriptError.value = null
-                    offset = page.nextOffset
-                    // The first page decides where history begins; every tail
-                    // read after it is BELOW that and must not move the handle.
-                    if (historyStart == null) historyStart = page.windowStart
+                    // The tmux name now belongs to a different Claude session, so
+                    // both handles into the old transcript are void: the offset is
+                    // a byte position in a file this session never wrote, and the
+                    // history handle points into its history. Start over; the next
+                    // poll reads the new session's tail from scratch.
+                    if (isTranscriptRestart(_transcript.value, page)) {
+                        offset = null
+                        historyStart = null
+                    } else {
+                        offset = page.nextOffset
+                        // The first page decides where history begins; every tail
+                        // read after it is BELOW that and must not move the handle.
+                        if (historyStart == null) historyStart = page.windowStart
+                    }
                     // :core's merge, not a copy of it. This was hand-rolled here
                     // and had quietly fallen behind the shared one in ways the
                     // screen could see: it dropped `state`, `modelDisplay`,
