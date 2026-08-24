@@ -1,0 +1,75 @@
+#!/usr/bin/env bash
+# huginn-devices — the machines that have offered themselves to huginn.
+#
+# Host-side for the same reasons as huginn-rounds beside it: one renderer, both
+# clients thin, and the bearer token never leaves this machine.
+set -u
+
+TOKEN_FILE=/etc/huginn-appd/token
+[ -s "$TOKEN_FILE" ] || { echo "huginn-devices: no appd token at $TOKEN_FILE" >&2; exit 1; }
+
+BODY="$(curl -sf -m 10 -H "Authorization: Bearer $(cat "$TOKEN_FILE")" \
+  http://127.0.0.1:8787/v1/devices 2>/dev/null)" || {
+  echo "huginn-devices: huginn-appd is not answering on 127.0.0.1:8787" >&2
+  echo "                (systemctl status huginn-appd)" >&2
+  exit 1
+}
+
+python3 -c '
+import json, sys, time
+
+d = json.loads(sys.argv[1])
+devs = d.get("devices", [])
+if not devs:
+    print()
+    print("  No devices enrolled.")
+    print()
+    print("  A device is another machine that can run a chat in ITS context.")
+    print("  Turn on \"Give Huginn access to this PC\" in the desktop client on")
+    print("  the machine you want to offer, and it appears here.")
+    print()
+    sys.exit(0)
+
+def ago(ms):
+    if not ms:
+        return "never"
+    s = time.time() - ms / 1000.0
+    if s < 60:    return "%ds ago" % s
+    if s < 3600:  return "%dm ago" % (s // 60)
+    if s < 86400: return "%dh ago" % (s // 3600)
+    return "%dd ago" % (s // 86400)
+
+print()
+for x in devs:
+    # Enrolled scope AND what it will do right now, when they differ: "own,
+    # read-only while locked" is a different situation from "enrolled read-only",
+    # and showing only the second makes a locked machine look misconfigured.
+    scope = x.get("scope", "?")
+    eff = x.get("effectiveScope", scope)
+    scope_txt = scope if scope == eff else "%s -> %s while locked" % (scope, eff)
+
+    if x.get("running"):
+        state = "RUNNING a job"
+    elif not x.get("online"):
+        state = "not reachable  (last seen %s)" % ago(x.get("lastSeen"))
+    elif x.get("queued"):
+        state = "%d queued" % x["queued"]
+    else:
+        state = "idle"
+
+    print("  %-1s %s" % ("*" if x.get("online") else " ", x.get("name", "?")))
+    print("      %s  .  %s  .  %s" % (x.get("platform", "?"), scope_txt, state))
+    extra = []
+    if x.get("version"):
+        extra.append("v%s" % x["version"])
+    if x.get("root"):
+        # Said plainly, because the word "work" invites the wrong assumption.
+        extra.append("work runs in %s (not a sandbox)" % x["root"])
+    if extra:
+        print("      %s" % "  .  ".join(extra))
+    print()
+
+on = sum(1 for x in devs if x.get("online"))
+print("  %d device%s, %d reachable" % (len(devs), "" if len(devs) == 1 else "s", on))
+print()
+' "$BODY"

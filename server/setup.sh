@@ -58,6 +58,8 @@ install_script() {
 }
 install_script "$HERE/bin/cc"                  /usr/local/bin/cc
 install_script "$HERE/bin/huginn-status"       /usr/local/bin/huginn-status
+install_script "$HERE/bin/huginn-rounds"       /usr/local/bin/huginn-rounds
+install_script "$HERE/bin/huginn-devices"      /usr/local/bin/huginn-devices
 install_script "$HERE/bin/huginn-claude-title" /usr/local/bin/huginn-claude-title
 
 # tmux config — installed for root by default; for a non-root login user, copy
