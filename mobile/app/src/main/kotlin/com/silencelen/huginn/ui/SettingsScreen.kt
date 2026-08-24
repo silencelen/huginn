@@ -68,6 +68,8 @@ fun SettingsScreen(
     onRequestDozeExemption: () -> Unit,
     onRefreshDelivery: () -> Unit,
     onTestPush: () -> Unit,
+    deviceCount: Int,
+    onOpenDevices: () -> Unit,
     appLock: Boolean,
     appLockAvailable: Boolean,
     onAppLock: (Boolean) -> Unit,
@@ -267,6 +269,29 @@ fun SettingsScreen(
                 }
                 OutlinedButton(onClick = onTestAlert) { Text("Send a test") }
             }
+        }
+
+        Spacer(Modifier.height(8.dp))
+        Text("Devices", style = MaterialTheme.typography.titleMedium)
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+            Column(Modifier.weight(1f)) {
+                Text(
+                    when (deviceCount) {
+                        0 -> "No machines enrolled"
+                        1 -> "1 machine can run work in its own context"
+                        else -> "$deviceCount machines can run work in their own context"
+                    },
+                    style = MaterialTheme.typography.bodyMedium,
+                )
+                Text(
+                    "Your PC, a server, a build box. A machine offers ITSELF and decides what " +
+                        "it will allow — this phone can see them, start work on one, and " +
+                        "withdraw an enrolment.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            OutlinedButton(onClick = onOpenDevices) { Text("Manage") }
         }
 
         Spacer(Modifier.height(8.dp))
