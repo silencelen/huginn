@@ -10,6 +10,29 @@ Format loosely follows [Keep a Changelog](https://keepachangelog.com/); versions
 
 ## [Unreleased]
 
+## [0.9.0] - 2026-08-24
+
+### Added
+- **`huginn rounds` and `huginn devices`.** The phone and the desktop could both see the host's
+  scheduled work and the machines enrolled to run chats; from a terminal neither existed. On a
+  product whose premise is that the terminal is the real surface, that was the wrong gap to
+  leave open.
+
+  `rounds` prints each round's cadence, when it next goes out, what it last found and the items
+  it raised -- including **DID NOT FINISH** when a run admitted it missed its goal, which is the
+  one fact a cheerful headline can hide. `devices` prints each machine's platform, its enrolled
+  scope and what it will actually do right now (they differ while a machine is locked), whether
+  it is reachable, and the folder a `work` run starts in -- labelled plainly as not a sandbox.
+
+  **Both are rendered ON THE HOST**, by `huginn-rounds` and `huginn-devices` beside the existing
+  `huginn-status`, and both clients just run them over ssh. That keeps one implementation of
+  what a round looks like instead of one per client -- these two files have already drifted over
+  a single version constant, and this has far more fields to drift over. It also keeps the
+  property that the bearer token never leaves the host: the clients reach appd by ssh'ing here
+  and reading `/etc/huginn-appd/token` locally, and nothing about these verbs teaches a laptop
+  a new credential.
+
+
 ## [0.8.3] - 2026-08-16
 
 ### Added

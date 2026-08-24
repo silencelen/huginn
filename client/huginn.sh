@@ -4,9 +4,9 @@
 #     [ -f ~/.huginn/huginn.sh ] && source ~/.huginn/huginn.sh
 # Targets the `huginn` SSH alias by default; override per-device with:  export HUGINN_HOST=my-host
 # Self-update with:  huginn update   (pulls this file from the repo; gh -> scp fallback)
-# Version: 0.8.3
+# Version: 0.9.0
 
-HUGINN_VERSION='0.8.3'
+HUGINN_VERSION='0.9.0'
 HUGINN_REPO='silencelen/huginn'
 # Where `huginn update` may fetch a replacement for THIS FILE, which it then
 # sources into the live shell. Pinned, and deliberately NOT $HUGINN_HOST:
@@ -187,6 +187,8 @@ EOF
   huginn rename <old> <new>   rename a session (alias: mv)
   huginn end <name>           soft end: ask Claude to wrap up + commit, then
                               (if auto-end is on) end it once it goes idle
+  huginn rounds               what this host does on a schedule, and what it found
+  huginn devices              machines that can run a chat in their own context
   huginn kill <name>          hard end: stop the session now
   huginn -p "question"        one-shot headless query (reasoning + memory, read-only)
   huginn -y "task"            one-shot that may use tools (bash/files/web + memory)
@@ -265,6 +267,12 @@ EOF
       ;;
     list|ls)   ssh -T "$H" "tmux ls 2>/dev/null || echo '(no sessions running)'" ;;
     status|st) ssh -T "$H" huginn-status ;;
+    # Rendered ON THE HOST, exactly like huginn-status above. Both clients run the
+    # same renderer, so there is one implementation of "what a round looks like"
+    # rather than one per client. These two files have already drifted over a
+    # single version constant; this has far more fields to drift over.
+    rounds|round) ssh -T "$H" huginn-rounds ;;
+    devices|device) ssh -T "$H" huginn-devices ;;
     desktop)
       local want=''
       case "${2:-}" in
@@ -423,7 +431,7 @@ _huginn_complete() {
   local cur prev cmds
   cur="${COMP_WORDS[COMP_CWORD]}"
   prev="${COMP_WORDS[COMP_CWORD-1]}"
-  cmds="list ls status st solo rename mv kill end -p -y usage cost desktop update version help"
+  cmds="list ls status st rounds devices solo rename mv kill end -p -y usage cost desktop update version help"
   if [ "$COMP_CWORD" -eq 1 ]; then
     # first word: subcommands + live session names (bare name attaches to it)
     mapfile -t COMPREPLY < <(compgen -W "$cmds $(_huginn_sessions)" -- "$cur")
