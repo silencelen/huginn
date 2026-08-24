@@ -462,6 +462,11 @@ fun HuginnApp(
     }
 
     val chats by vm.chats.collectAsState()
+    val rounds by vm.rounds.collectAsState()
+    // Recomputed on every recomposition, which the chat/round refresh already
+    // drives. A Round row says "in 4h", not "in 3h 59m", so a clock that ticks
+    // only when the data does is precise enough and costs nothing.
+    val nowMs = System.currentTimeMillis()
     val sessions by vm.sessions.collectAsState()
     val status by vm.status.collectAsState()
     val statusError by vm.statusError.collectAsState()
@@ -789,6 +794,15 @@ fun HuginnApp(
         val chatsPane: @Composable (Boolean) -> Unit = { twoPane ->
             ChatsScreen(
                 chats = chats,
+                rounds = rounds,
+                nowMs = nowMs,
+                // No Round detail screen yet: opening a Round means reading what it
+                // last said, which is the reason anyone taps it.
+                onOpenRound = { r ->
+                    r.lastRun?.chatId?.let { id -> vm.openChat(id); dest = Dest.Chat(id) }
+                },
+                onRunRound = { r -> vm.runRound(r.id) },
+                onSetRoundEnabled = { r, on -> vm.setRoundEnabled(r.id, on) },
                 loading = loading,
                 connected = connected,
                 selectedId = if (twoPane) (dest as? Dest.Chat)?.id else null,
