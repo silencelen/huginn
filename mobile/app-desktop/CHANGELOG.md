@@ -14,6 +14,18 @@ the Electron client's go to `/v1/desktop` and the two never mix — see
      refusal is deliberate — it is what stops a release going out with no notes.
      ─────────────────────────────────────────────────────────────────────────── -->
 
+## 0.8.5
+
+### Added
+- **New round, and Edit on every row.** The Rounds pane could show and run scheduled jobs but not
+  make one — that needed curl. The editor replaces the list rather than floating over it: it is a
+  form with seven decisions in it, and a dialog would put half of them behind a scrollbar inside
+  a scrollbar. Shared with the phone, so a schedule cannot be written two different ways.
+- Clicking a Round that has never run opens the Round instead of doing nothing.
+
+### Fixed
+- The empty state told you to "create one from the daemon". You can create one from here now.
+
 ## 0.8.4
 
 ### Changed
