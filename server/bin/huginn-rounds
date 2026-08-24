@@ -1,0 +1,104 @@
+#!/usr/bin/env bash
+# huginn-rounds — what this host does on a schedule, as text.
+#
+# HOST-SIDE ON PURPOSE, like huginn-status beside it. Both CLI clients (bash and
+# PowerShell) just run this over ssh, so the rendering exists ONCE. A client that
+# formatted the JSON itself would be a second implementation to keep in step, and
+# the two would drift the first time a field was added — which is exactly what
+# already happened to the two clients' version constants.
+#
+# It also means the token never leaves this machine: the clients reach appd by
+# ssh'ing here and reading /etc/huginn-appd/token locally, and this keeps that
+# property rather than teaching a laptop a new credential.
+set -u
+
+TOKEN_FILE=/etc/huginn-appd/token
+[ -s "$TOKEN_FILE" ] || { echo "huginn-rounds: no appd token at $TOKEN_FILE" >&2; exit 1; }
+
+BODY="$(curl -sf -m 10 -H "Authorization: Bearer $(cat "$TOKEN_FILE")" \
+  http://127.0.0.1:8787/v1/rounds 2>/dev/null)" || {
+  echo "huginn-rounds: huginn-appd is not answering on 127.0.0.1:8787" >&2
+  echo "               (systemctl status huginn-appd)" >&2
+  exit 1
+}
+
+# JSON in argv, not on stdin: this script may itself be fed from a pipe, and a
+# heredoc'd python competing for stdin is a bug that only shows up under ssh.
+python3 -c '
+import json, sys, time
+
+d = json.loads(sys.argv[1])
+rounds = d.get("rounds", [])
+if not rounds:
+    print()
+    print("  No rounds yet. A round is work this host does on a schedule and")
+    print("  reports back on -- create one from the phone or desktop client.")
+    print()
+    sys.exit(0)
+
+# The same vocabulary the apps use, so a round does not mean one thing on a
+# screen and another in a terminal.
+WORD = {"ok": "all clear", "attention": "worth a look",
+        "action": "NEEDS YOU", "unknown": "unclear"}
+MARK = {"ok": " ", "attention": "!", "action": "!!", "unknown": "?"}
+
+def ago(sec):
+    if not sec:
+        return ""
+    d = time.time() - sec
+    if d < 60:   return "just now"
+    if d < 3600: return "%dm ago" % (d // 60)
+    if d < 86400:return "%dh ago" % (d // 3600)
+    return "%dd ago" % (d // 86400)
+
+def until(ms):
+    if not ms:
+        return "not scheduled"
+    d = ms / 1000.0 - time.time()
+    if d <= 0:    return "due now"
+    if d < 3600:  return "in %dm" % (d // 60)
+    if d < 86400: return "in %dh" % (d // 3600)
+    return "in %d days" % (d // 86400)
+
+print()
+for r in rounds:
+    last = r.get("lastRun") or {}
+    st = last.get("status")
+    mark = MARK.get(st, "-") if last else "-"
+    state = "paused" if not r.get("enabled") else ("RUNNING" if r.get("running") else until(r.get("nextRunAt")))
+
+    print("  %-2s %s" % (mark, r.get("title", "?")))
+    where = r.get("hostName") or "this host"
+    print("       %s  .  %s  .  %s  .  on %s"
+          % (r.get("cadence", "?"), state, r.get("mode", "ask"), where))
+
+    if last:
+        bits = [WORD.get(st, st or "?"), ago(last.get("at"))]
+        n = len(last.get("items") or [])
+        if n:
+            bits.append("%d item%s" % (n, "" if n == 1 else "s"))
+        # An unmet goal is the one fact a cheerful headline can hide, so it is
+        # said here rather than left to the reader to infer.
+        if last.get("goalMet") is False:
+            bits.append("DID NOT FINISH")
+        elif last.get("goalMet") is True:
+            bits.append("goal met")
+        if last.get("malformed"):
+            bits.append("no report block")
+        print("       %s" % "  .  ".join(b for b in bits if b))
+        head = (last.get("headline") or "").strip()
+        if head:
+            print("       %s" % head[:100])
+        for it in (last.get("items") or [])[:5]:
+            print("         - %s" % (it.get("title") or "")[:88])
+            sug = (it.get("suggest") or "").strip()
+            if sug:
+                print("           -> %s" % sug[:86])
+    else:
+        print("       not run yet")
+    print()
+
+n = len(rounds)
+print("  %d round%s" % (n, "" if n == 1 else "s"))
+print()
+' "$BODY"
