@@ -40,6 +40,7 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.silencelen.huginn.data.Chat
+import com.silencelen.huginn.ui.HostBadge
 import com.silencelen.huginn.data.Session
 import com.silencelen.huginn.desktop.ui.common.ChatVerbs
 import com.silencelen.huginn.desktop.ui.common.DeskType
@@ -167,6 +168,13 @@ private fun ChatRow(
                 overflow = TextOverflow.Ellipsis,
                 modifier = Modifier.weight(1f),
             )
+            // Where it runs, when that is not here. Ahead of the act mark, because
+            // which MACHINE a chat is changing matters more than that it can.
+            if (chat.host != null && chat.host != "local") {
+                Tip("This chat runs on ${chat.hostName ?: "another machine"}, not on huginn") {
+                    HostBadge(chat.host, chat.hostName, Modifier.padding(start = Space.tight))
+                }
+            }
             if (chat.mode == "act") {
                 Tip("Act mode — this chat can run commands and change files on the host") {
                     Muted("act", Modifier.padding(start = Space.tight))
