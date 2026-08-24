@@ -1053,6 +1053,51 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
+    private var devicesPollJob: Job? = null
+
+    /**
+     * Live while the Devices screen is open, and only then.
+     *
+     * Slower than the Rounds tick because it is watching for a different kind of
+     * change: a machine going quiet is a three-minute judgement at the daemon
+     * anyway, so polling faster would only redraw the same answer. Whether a
+     * device is RUNNING moves quickly, which is why it polls at all.
+     */
+    fun startDevicesPolling() {
+        devicesPollJob?.cancel()
+        devicesPollJob = viewModelScope.launch {
+            awaitReady()
+            while (isActive) {
+                runCatching { client.devices() }.onSuccess { _devices.value = it }
+                delay(15_000)
+            }
+        }
+    }
+
+    fun stopDevicesPolling() {
+        devicesPollJob?.cancel()
+        devicesPollJob = null
+    }
+
+    /**
+     * Stops offering a machine work.
+     *
+     * Deliberately not called "remove": nothing here reaches onto that machine and
+     * nothing can. A runner still running on the far side will enrol again within
+     * the minute, which is correct — the machine grants its own access — and the
+     * confirmation on the way in says so.
+     */
+    fun forgetDevice(id: String) {
+        val name = _devices.value.firstOrNull { it.id == id }?.name ?: "that device"
+        _devices.value = _devices.value.filterNot { it.id == id }
+        viewModelScope.launch {
+            awaitReady()
+            runCatching { client.deleteDevice(id) }
+                .onSuccess { _toast.value = "Huginn will not send work to $name"; refreshDevices() }
+                .onFailure { _toast.value = errText(it); refreshDevices() }
+        }
+    }
+
     /**
      * Fires a Round now. The report arrives exactly as a scheduled one does — as a
      * notification and a row on this screen — so there is nothing to navigate to
