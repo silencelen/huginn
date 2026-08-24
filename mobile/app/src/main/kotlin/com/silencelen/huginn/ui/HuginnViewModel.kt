@@ -1018,6 +1018,41 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
+    private var roundsPollJob: Job? = null
+
+    /**
+     * Polls only while the Rounds tab is on screen, the same shape as the sessions
+     * poller — the app-wide refresh runs on resume, which meant tapping Run now
+     * left the row showing last week's verdict until you pulled to refresh.
+     *
+     * Ten seconds, not five: a Round changes at human speed and the row's own
+     * times are rounded to minutes, so anything faster redraws identical text.
+     */
+    fun startRoundsPolling() {
+        roundsPollJob?.cancel()
+        roundsPollJob = viewModelScope.launch {
+            awaitReady()
+            while (isActive) {
+                runCatching { client.rounds() }.onSuccess { _rounds.value = it }
+                delay(10_000)
+            }
+        }
+    }
+
+    fun stopRoundsPolling() {
+        roundsPollJob?.cancel()
+        roundsPollJob = null
+    }
+
+    /** Read once when the new-chat dialog opens, so a machine enrolled since the
+     *  last app-wide refresh is actually offerable. */
+    fun refreshDevices() {
+        viewModelScope.launch {
+            awaitReady()
+            runCatching { client.devices() }.onSuccess { _devices.value = it }
+        }
+    }
+
     /**
      * Fires a Round now. The report arrives exactly as a scheduled one does — as a
      * notification and a row on this screen — so there is nothing to navigate to
