@@ -29,6 +29,7 @@ import com.silencelen.huginn.data.AgentsInfo
 import com.silencelen.huginn.data.Autoswitch
 import com.silencelen.huginn.data.Alerts
 import com.silencelen.huginn.data.ClientsInfo
+import com.silencelen.huginn.data.Device
 import com.silencelen.huginn.data.PushStatus
 import com.silencelen.huginn.data.Round
 import com.silencelen.huginn.data.LoginState
@@ -168,6 +169,15 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
      */
     private val _rounds = MutableStateFlow<List<Round>>(emptyList())
     val rounds: StateFlow<List<Round>> = _rounds.asStateFlow()
+
+    /**
+     * Machines that have offered themselves to huginn.
+     *
+     * Refreshed with the lists rather than on its own timer: a device changes
+     * state at human speed, and a second poll would buy nothing but battery.
+     */
+    private val _devices = MutableStateFlow<List<Device>>(emptyList())
+    val devices: StateFlow<List<Device>> = _devices.asStateFlow()
 
     private val _loading = MutableStateFlow(false)
     val loading: StateFlow<Boolean> = _loading.asStateFlow()
@@ -954,6 +964,7 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
             // Rounds 404s here, and that must leave the rest of the screen working
             // rather than raising an error about a feature the user never asked for.
             runCatching { client.rounds() }.onSuccess { _rounds.value = it }
+            runCatching { client.devices() }.onSuccess { _devices.value = it }
             _loading.value = false
         }
     }
@@ -1683,9 +1694,16 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    fun newChat(mode: String, onCreated: (String) -> Unit) {
+    /**
+     * @param host a device id, or null for this host.
+     *
+     * The daemon refuses at CREATION if that machine is asleep or too narrowly
+     * scoped, and its refusal names which — so it is surfaced as-is rather than
+     * being rewritten into something vaguer here.
+     */
+    fun newChat(mode: String, host: String? = null, onCreated: (String) -> Unit) {
         viewModelScope.launch {
-            runCatching { client.createChat(mode) }
+            runCatching { client.createChat(mode, host = host) }
                 .onSuccess { refreshChats(); onCreated(it.id) }
                 .onFailure { _toast.value = errText(it) }
         }
