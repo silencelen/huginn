@@ -1,0 +1,48 @@
+{
+  "_comment": [
+    "What a remote request is allowed to become on a machine that has offered",
+    "itself to Huginn. THE SINGLE SOURCE — three programs need to agree about",
+    "this and they are written in three languages:",
+    "",
+    "  the Compose desktop runner   (Kotlin, com.silencelen.huginn.device)",
+    "  the headless runner          (Node,   client/huginn-device)",
+    "  the daemon's pre-check       (Node,   server/appd/lib/devices.js)",
+    "",
+    "The first two BUILD THE ARGV — they are the enforcement. The third only",
+    "decides whether to bother offering the work, so a person is told 'that",
+    "machine is locked' at the moment they ask rather than a minute later.",
+    "",
+    "Kept declarative because the failure mode of drift is not a wrong pixel: a",
+    "runner that granted Bash where this file says look would be a silent hole in",
+    "the fence around somebody's personal computer, and nothing would look wrong.",
+    "scripts/gen-device-policy.js expands this into the Kotlin table, the headless",
+    "runner's embedded copy, and the case matrix both implementations are tested",
+    "against. server/appd/test/device-policy-cases.test.js fails if any of them has",
+    "drifted from this file — which is why deploy.sh cannot ship a drifted daemon."
+  ],
+
+  "scopes": ["look", "work", "own"],
+
+  "modeNeeds": { "ask": "look", "act": "work" },
+
+  "lockDropsTo": "look",
+
+  "streamFlags": ["-p", "--output-format", "stream-json", "--verbose", "--include-partial-messages"],
+
+  "tools": {
+    "look": {
+      "_comment": "Note what is not here: no Bash. And it is DENIED as well as un-granted, because Claude Code's safe-Bash classification is content-dependent — two near-identical commands a minute apart were approved and then refused. From the far end that reads as a fence that works and then does not. Deny is deterministic.",
+      "allowed": ["Skill", "Read", "Glob", "Grep", "WebFetch", "WebSearch"],
+      "denied": ["Bash", "Edit", "Write", "NotebookEdit"]
+    },
+    "act": {
+      "allowed": ["Skill", "Bash", "Read", "Edit", "Write", "Glob", "Grep", "WebFetch", "WebSearch"],
+      "denied": []
+    }
+  },
+
+  "refusals": {
+    "locked": "this machine is locked, so it is read-only until someone unlocks it",
+    "scope": "this machine is set to {scope}, which cannot run {mode}"
+  }
+}

@@ -34,10 +34,21 @@
  * Ordered, because "is this request within scope" is a comparison and a set of
  * unrelated strings cannot answer it.
  */
-const SCOPES = ['look', 'work', 'own'];
+/**
+ * The lattice comes from shared/device-policy.json, via a generated table.
+ *
+ * Not because this daemon needs the tool lists — it never sends them, and that
+ * is the point — but because it holds the SAME ordering the two runners hold,
+ * and a lattice that disagreed by one position would have this daemon offering
+ * work every device refuses, or withholding work a device would have taken. One
+ * looks broken; the other looks dead. Both are silent.
+ */
+const table = require('./device-policy-table');
+
+const SCOPES = table.SCOPES;
 
 /** Modes a chat can ask for, and the narrowest scope that can honour each. */
-const MODE_NEEDS = { ask: 'look', act: 'work' };
+const MODE_NEEDS = table.MODE_NEEDS;
 
 const NAME_RE = /^[A-Za-z0-9][A-Za-z0-9 ._-]{0,39}$/;
 const PLATFORMS = ['windows', 'linux', 'macos', 'other'];
@@ -67,7 +78,7 @@ function validateRegistration(raw, now) {
     return { ok: false, error: 'name must be 1-40 chars of letters, digits, space, dot, dash or underscore' };
   }
   const platform = PLATFORMS.includes(b.platform) ? b.platform : 'other';
-  const scope = SCOPES.includes(b.scope) ? b.scope : 'look';
+  const scope = SCOPES.includes(b.scope) ? b.scope : SCOPES[0];
   return {
     ok: true,
     device: {
@@ -102,8 +113,10 @@ function validateRegistration(raw, now) {
  * holding the file system.
  */
 function effectiveScope(device) {
-  if (!device) return 'look';
-  return device.locked ? 'look' : (SCOPES.includes(device.scope) ? device.scope : 'look');
+  if (!device) return table.LOCK_DROPS_TO;
+  return device.locked
+    ? table.LOCK_DROPS_TO
+    : (SCOPES.includes(device.scope) ? device.scope : SCOPES[0]);
 }
 
 /** Whether `scope` is at least as wide as `needed`. */
