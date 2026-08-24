@@ -3,9 +3,9 @@
 #     if (Test-Path "$HOME\.huginn\huginn.ps1") { . "$HOME\.huginn\huginn.ps1" }
 # Targets the `huginn` SSH alias by default; override per-device with:  $env:HUGINN_HOST = 'my-host'
 # Self-update with:  huginn update   (pulls this file from the repo; gh -> scp fallback)
-# Version: 0.9.0
+# Version: 0.10.0
 
-$script:HUGINN_VERSION = '0.9.0'
+$script:HUGINN_VERSION = '0.10.0'
 $script:HUGINN_REPO    = 'silencelen/huginn'
 # Where `huginn update` may fetch a replacement for THIS FILE, which is then loaded
 # into the shell. Pinned, and deliberately NOT $HUGINN_HOST: that variable answers
@@ -268,8 +268,74 @@ function huginn {
   } elseif ($args[0] -eq 'rounds' -or $args[0] -eq 'round') {
     # Same host-side renderer the bash client calls; see huginn.sh.
     ssh -T $H huginn-rounds
-  } elseif ($args[0] -eq 'devices' -or $args[0] -eq 'device') {
+  } elseif ($args[0] -eq 'devices') {
     ssh -T $H huginn-devices
+  } elseif ($args[0] -eq 'device') {
+    # Plural is the host's list of machines; SINGULAR is the one you are typing
+    # on - offering it to Huginn as a place to run work, the way the desktop
+    # app's "Give Huginn access to this PC" toggle does. Different question, and
+    # answered in a different place: `devices` renders on the host, this never
+    # leaves the machine.
+    #
+    # The runner is a small Node program fetched on demand (client/huginn-device;
+    # that file says why Node and not more shell). Node is free here: claude is
+    # itself a Node program, so any machine that can do the work already has it.
+    $sub = if ($args.Count -ge 2) { $args[1] } else { 'status' }
+    $rest = if ($args.Count -ge 3) { $args[2..($args.Count-1)] } else { @() }
+    $runner = Join-Path $HOME '.huginn/huginn-device'
+    if (-not (Get-Command node -ErrorAction SilentlyContinue)) {
+      Write-Host "huginn device: needs node - which any machine that can run claude already has"
+    } elseif ($sub -eq 'on' -or $sub -eq 'enrol' -or $sub -eq 'enroll' -or $sub -eq 'update') {
+      $dir = Join-Path $HOME '.config/huginn'
+      New-Item -ItemType Directory -Force -Path (Split-Path $runner) | Out-Null
+      New-Item -ItemType Directory -Force -Path $dir | Out-Null
+      if ($sub -eq 'update' -or -not (Test-Path $runner)) {
+        # PINNED, exactly like `huginn update` and for the same reason: this
+        # downloads code a service will then run in a loop, so the host it comes
+        # from is a trust root, never $HUGINN_HOST.
+        $uh = if ($env:HUGINN_UPDATE_HOST) { $env:HUGINN_UPDATE_HOST } else { $script:HUGINN_UPDATE_HOST_DEFAULT }
+        $tmp = "$runner.tmp"
+        $got = $false
+        if (Get-Command gh -ErrorAction SilentlyContinue) {
+          gh api "repos/$script:HUGINN_REPO/contents/client/huginn-device" -H "Accept: application/vnd.github.raw" > $tmp 2>$null
+          if ((Test-Path $tmp) -and (Get-Item $tmp).Length -gt 0) { $got = $true }
+        }
+        if (-not $got) {
+          scp -o BatchMode=yes "${uh}:/usr/local/share/huginn-cli/huginn-device" $tmp 2>$null
+          if ((Test-Path $tmp) -and (Get-Item $tmp).Length -gt 0) { $got = $true }
+        }
+        # Validate BEFORE installing: a truncated download that a service then
+        # restarts every ten seconds is worse than no runner at all.
+        if ($got) { node --check $tmp 2>$null; if ($LASTEXITCODE -ne 0) { $got = $false } }
+        if ($got) { Move-Item -Force $tmp $runner } else {
+          Remove-Item -Force -ErrorAction SilentlyContinue $tmp
+          Write-Host "huginn device: could not fetch the runner (gh and the mirror both failed)"
+        }
+      }
+      if ($sub -eq 'update') {
+        if (Test-Path $runner) { Write-Host "huginn device: runner is now $(node $runner version)" }
+      } elseif (Test-Path $runner) {
+        # The token and the address, both over the ssh link this machine has
+        # ALREADY been trusted on. Nothing is widened: anyone who can ssh to the
+        # host can read that file anyway. What it removes is a bearer token
+        # pasted by hand between two terminals.
+        $tokfile = Join-Path $dir 'appd-token'
+        if (-not (Test-Path $tokfile)) {
+          $tok = (ssh -T $H 'cat /etc/huginn-appd/token') -join ''
+          if ($tok.Trim()) { Set-Content -NoNewline -Path $tokfile -Value $tok.Trim() }
+          else { Write-Host "huginn device: could not read the appd token from $H" }
+        }
+        # $SSH_CONNECTION's third field is the address THIS machine just reached
+        # the host on, which is exactly the one its daemon should be dialled at.
+        $srv = ((ssh -T $H 'echo $SSH_CONNECTION') -split '\s+')[2]
+        if ($srv) { node $runner on --url "http://${srv}:8787" @rest }
+        else { Write-Host "huginn device: could not work out how to reach $H's daemon" }
+      }
+    } elseif (Test-Path $runner) {
+      node $runner $sub @rest
+    } else {
+      Write-Host "huginn device: this machine is not set up as a device - run: huginn device on"
+    }
   } elseif ($args[0] -eq 'desktop') {
     $arg = if ($args.Count -gt 1) { "$($args[1])".ToLower() } else { '' }
     $want = switch ($arg) {
@@ -441,7 +507,7 @@ function _Huginn-Sessions {
 }
 Register-ArgumentCompleter -CommandName huginn, rclaude, rcc -ScriptBlock {
   param($word, $ast, $pos)
-  $cmds = 'list', 'status', 'rounds', 'devices', 'solo', 'rename', 'kill', 'end', '-p', '-y', 'usage', 'cost', 'desktop', 'update', 'version', 'help'
+  $cmds = 'list', 'status', 'rounds', 'devices', 'device', 'solo', 'rename', 'kill', 'end', '-p', '-y', 'usage', 'cost', 'desktop', 'update', 'version', 'help'
   # tokens already typed after the command name, excluding the partial word being completed
   $typed = @($ast.CommandElements | Select-Object -Skip 1 | ForEach-Object { $_.ToString() })
   if ($word -and $typed.Count -ge 1) { $typed = @($typed | Select-Object -SkipLast 1) }

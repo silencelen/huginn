@@ -12,6 +12,12 @@ import com.silencelen.huginn.data.DeviceWork
  * meaning "the homelab" and start meaning "my PC". Widening what a device will do
  * requires touching the device.
  *
+ * The RULES are here; the TABLE they read is [DevicePolicyTable], generated from
+ * `shared/device-policy.json`. There is a second runner — Node, for headless
+ * machines with no desktop app — which reads that same policy at runtime, and the
+ * two are asserted against one shared case matrix. A device must not mean
+ * something different depending on what kind of machine it is.
+ *
  * Pure, so the argv a remote request turns into can be asserted in a test rather
  * than discovered in a log after the fact.
  */
@@ -29,20 +35,22 @@ object DevicePolicy {
 
     fun wire(scope: DeviceScope): String = scope.name.lowercase()
 
+    private fun rank(scope: DeviceScope): Int = DevicePolicyTable.SCOPES.indexOf(wire(scope))
+
     /**
      * The scope in force right now.
      *
-     * A locked machine drops to [DeviceScope.LOOK]. Not because a lock screen is a
-     * security boundary — it is not — but because nobody is sitting there. A
-     * full-scope run with its owner watching is a different proposition from the
-     * same run at 3am, and this process is the only one that knows which is true.
+     * A locked machine drops to `look`. Not because a lock screen is a security
+     * boundary — it is not — but because nobody is sitting there. A full-scope run
+     * with its owner watching is a different proposition from the same run at 3am,
+     * and this process is the only one that knows which is true.
      */
     fun effective(scope: DeviceScope, locked: Boolean): DeviceScope =
-        if (locked) DeviceScope.LOOK else scope
+        if (locked) parse(DevicePolicyTable.LOCK_DROPS_TO) else scope
 
     /** Whether a mode can run at this scope. `act` mutates; `look` does not permit that. */
     fun allows(scope: DeviceScope, mode: String): Boolean =
-        if (mode == "act") scope != DeviceScope.LOOK else true
+        rank(scope) >= rank(parse(DevicePolicyTable.MODE_NEEDS[mode] ?: "work"))
 
     /**
      * Why a request is being refused, in words a person can act on.
@@ -55,25 +63,13 @@ object DevicePolicy {
         val eff = effective(scope, locked)
         if (allows(eff, mode)) return null
         return if (locked) {
-            "this machine is locked, so it is read-only until someone unlocks it"
+            DevicePolicyTable.REFUSAL_LOCKED
         } else {
-            "this machine is set to ${wire(scope)}, which cannot run $mode"
+            DevicePolicyTable.REFUSAL_SCOPE
+                .replace("{scope}", wire(scope))
+                .replace("{mode}", mode)
         }
     }
-
-    /**
-     * Read-only tools. Note what is NOT here: no Bash.
-     *
-     * Bash is denied rather than merely un-granted, which is the same lesson the
-     * daemon's own ask mode learned the hard way — Claude Code's safe-Bash
-     * classification is content-dependent, so two near-identical commands one
-     * minute apart were approved and then refused. From the far end that reads as
-     * a fence that works and then doesn't. Deny is deterministic.
-     */
-    private const val LOOK_ALLOWED = "Skill Read Glob Grep WebFetch WebSearch"
-    private const val LOOK_DENIED = "Bash Edit Write NotebookEdit"
-
-    private const val ACT_ALLOWED = "Skill Bash Read Edit Write Glob Grep WebFetch WebSearch"
 
     /**
      * The argv a work item becomes on this machine.
@@ -97,15 +93,20 @@ object DevicePolicy {
     ): List<String> {
         val eff = effective(scope, locked)
         val act = work.mode == "act" && allows(eff, "act")
-        val argv = mutableListOf(
-            "-p", "--output-format", "stream-json", "--verbose", "--include-partial-messages",
-        )
+        val argv = DevicePolicyTable.STREAM_FLAGS.toMutableList()
         work.model?.takeIf { it.isNotBlank() }?.let { argv += listOf("--model", it) }
         work.effort?.takeIf { it.isNotBlank() }?.let { argv += listOf("--effort", it) }
         work.resumeSessionId?.takeIf { it.isNotBlank() }?.let { argv += listOf("--resume", it) }
         persona?.takeIf { it.isNotBlank() }?.let { argv += listOf("--append-system-prompt", it) }
-        argv += listOf("--allowedTools", if (act) ACT_ALLOWED else LOOK_ALLOWED)
-        if (!act) argv += listOf("--disallowedTools", LOOK_DENIED)
+        argv += listOf(
+            "--allowedTools",
+            if (act) DevicePolicyTable.ACT_ALLOWED else DevicePolicyTable.LOOK_ALLOWED,
+        )
+        // Denied as well as un-granted — see the note in shared/device-policy.json.
+        // Claude Code's safe-Bash classification is content-dependent, so an
+        // un-granted Bash is a fence that works and then does not.
+        val denied = if (act) DevicePolicyTable.ACT_DENIED else DevicePolicyTable.LOOK_DENIED
+        if (denied.isNotEmpty()) argv += listOf("--disallowedTools", denied)
         return argv
     }
 

@@ -4,9 +4,9 @@
 #     [ -f ~/.huginn/huginn.sh ] && source ~/.huginn/huginn.sh
 # Targets the `huginn` SSH alias by default; override per-device with:  export HUGINN_HOST=my-host
 # Self-update with:  huginn update   (pulls this file from the repo; gh -> scp fallback)
-# Version: 0.9.0
+# Version: 0.10.0
 
-HUGINN_VERSION='0.9.0'
+HUGINN_VERSION='0.10.0'
 HUGINN_REPO='silencelen/huginn'
 # Where `huginn update` may fetch a replacement for THIS FILE, which it then
 # sources into the live shell. Pinned, and deliberately NOT $HUGINN_HOST:
@@ -14,6 +14,90 @@ HUGINN_REPO='silencelen/huginn'
 # "whose code do I run" means a typo, a second host or a test alias silently
 # becomes a code source. Override needs HUGINN_UPDATE_HOST set on purpose.
 HUGINN_UPDATE_HOST_DEFAULT='huginn'
+
+# --- this machine, as a device --------------------------------------------
+# `huginn devices` (plural) lists the machines the host knows about. `huginn
+# device` (singular) is about the one you are typing on: offering it to Huginn as
+# a place to run work, the way the desktop app's "Give Huginn access to this PC"
+# toggle does — for machines that have no desktop app and nobody sitting at them.
+#
+# The runner itself is a separate small Node program (client/huginn-device; that
+# file says why Node and not more shell). It is fetched on demand rather than
+# carried inside this one, because most devices are clients and never offer
+# themselves, and a client that never enrols should not be shipping a daemon.
+_huginn_device_runner() { printf '%s' "$HOME/.huginn/huginn-device"; }
+
+_huginn_device_fetch() {
+  local dest tmp got= uh
+  dest="$(_huginn_device_runner)"
+  [ "${1:-}" = force ] || [ ! -s "$dest" ] || return 0
+  mkdir -p "$HOME/.huginn"; tmp="$dest.tmp"
+  if command -v gh >/dev/null 2>&1; then
+    gh api "repos/$HUGINN_REPO/contents/client/huginn-device" \
+      -H "Accept: application/vnd.github.raw" >"$tmp" 2>/dev/null && [ -s "$tmp" ] && got=1
+  fi
+  if [ -z "$got" ]; then
+    # PINNED, exactly like `huginn update` and for the same reason: this
+    # downloads code that a systemd unit will then run in a loop, so the host it
+    # comes from is a trust root and not a convenience. Never $HUGINN_HOST.
+    uh="${HUGINN_UPDATE_HOST:-$HUGINN_UPDATE_HOST_DEFAULT}"
+    scp -o BatchMode=yes "$uh:/usr/local/share/huginn-cli/huginn-device" "$tmp" >/dev/null 2>&1 && got=1
+  fi
+  [ -n "$got" ] || {
+    echo "huginn device: could not fetch the runner (gh and the mirror both failed)" >&2
+    rm -f "$tmp"; return 1; }
+  # Validate BEFORE installing, same as the client's own update. A truncated
+  # download that systemd then restarts every ten seconds is worse than none.
+  if ! node --check "$tmp" 2>/dev/null; then
+    echo "huginn device: the downloaded runner failed its syntax check - keeping what is here" >&2
+    rm -f "$tmp"; return 1; fi
+  mv -f "$tmp" "$dest"; chmod 0755 "$dest"
+}
+
+_huginn_device() {
+  local H="${HUGINN_HOST:-huginn}" runner sub dir srv
+  runner="$(_huginn_device_runner)"
+  sub="${1:-status}"; [ $# -gt 0 ] && shift
+  command -v node >/dev/null 2>&1 || {
+    echo "huginn device: needs node - which any machine that can run claude already has," >&2
+    echo "               since claude is itself a node program" >&2
+    return 1; }
+  case "$sub" in
+    on|enrol|enroll)
+      _huginn_device_fetch "${HUGINN_DEVICE_REFRESH:+force}" || return 1
+      dir="${HUGINN_DEVICE_DIR:-$HOME/.config/huginn}"
+      mkdir -p "$dir"; chmod 700 "$dir" 2>/dev/null
+      # The token and the address, both taken over the ssh link this machine has
+      # ALREADY been trusted on. Nothing is widened by this: anyone who can ssh to
+      # the host can read that file anyway. What it removes is a bearer token
+      # pasted by hand between two terminals, which is how tokens end up in
+      # scrollback and in pastes.
+      if [ ! -s "$dir/appd-token" ]; then
+        if ssh -T "$H" 'cat /etc/huginn-appd/token' >"$dir/appd-token.tmp" 2>/dev/null \
+           && [ -s "$dir/appd-token.tmp" ]; then
+          mv -f "$dir/appd-token.tmp" "$dir/appd-token"; chmod 600 "$dir/appd-token"
+        else
+          rm -f "$dir/appd-token.tmp"
+          echo "huginn device: could not read the appd token from $H" >&2; return 1
+        fi
+      fi
+      # $SSH_CONNECTION's third field is the address THIS machine just reached the
+      # host on, which is exactly the one its daemon should be dialled at - better
+      # than choosing on the device's behalf between a LAN address, a tailnet name
+      # and whatever `hostname` happens to say.
+      srv="$(ssh -T "$H" 'echo $SSH_CONNECTION' 2>/dev/null | awk '{print $3}')"
+      [ -n "$srv" ] || { echo "huginn device: could not work out how to reach $H's daemon" >&2; return 1; }
+      node "$runner" on --url "http://$srv:8787" "$@"
+      ;;
+    update)
+      _huginn_device_fetch force && echo "huginn device: runner is now $(node "$runner" version)" ;;
+    *)
+      [ -s "$runner" ] || {
+        echo "huginn device: this machine is not set up as a device - run: huginn device on" >&2
+        return 1; }
+      node "$runner" "$sub" "$@" ;;
+  esac
+}
 
 # A session name is letters, digits, and underscore only - no '-', '*', spaces or
 # other shell-special characters. This keeps a typo'd flag (e.g. 'huginn --hlp')
@@ -189,6 +273,10 @@ EOF
                               (if auto-end is on) end it once it goes idle
   huginn rounds               what this host does on a schedule, and what it found
   huginn devices              machines that can run a chat in their own context
+  huginn device [status]      what THIS machine offers huginn, and what huginn sees
+  huginn device on            offer this machine  [--scope look|work|own] [--root DIR]
+  huginn device off           stop offering it
+  huginn device unit          print a systemd unit that keeps the runner up
   huginn kill <name>          hard end: stop the session now
   huginn -p "question"        one-shot headless query (reasoning + memory, read-only)
   huginn -y "task"            one-shot that may use tools (bash/files/web + memory)
@@ -272,7 +360,11 @@ EOF
     # rather than one per client. These two files have already drifted over a
     # single version constant; this has far more fields to drift over.
     rounds|round) ssh -T "$H" huginn-rounds ;;
-    devices|device) ssh -T "$H" huginn-devices ;;
+    devices) ssh -T "$H" huginn-devices ;;
+    # Plural is the host's list of machines; SINGULAR is the one you are typing
+    # on. Different question, different place it is answered - `devices` renders
+    # on the host, `device` never leaves this machine.
+    device) _huginn_device "${@:2}" ;;
     desktop)
       local want=''
       case "${2:-}" in
@@ -431,7 +523,7 @@ _huginn_complete() {
   local cur prev cmds
   cur="${COMP_WORDS[COMP_CWORD]}"
   prev="${COMP_WORDS[COMP_CWORD-1]}"
-  cmds="list ls status st rounds devices solo rename mv kill end -p -y usage cost desktop update version help"
+  cmds="list ls status st rounds devices device solo rename mv kill end -p -y usage cost desktop update version help"
   if [ "$COMP_CWORD" -eq 1 ]; then
     # first word: subcommands + live session names (bare name attaches to it)
     mapfile -t COMPREPLY < <(compgen -W "$cmds $(_huginn_sessions)" -- "$cur")
@@ -443,6 +535,10 @@ _huginn_complete() {
         mapfile -t COMPREPLY < <(compgen -W "today yesterday week month daily monthly weekly session blocks statusline" -- "$cur") ;;
       desktop)
         mapfile -t COMPREPLY < <(compgen -W "windows linux both" -- "$cur") ;;
+      device)
+        mapfile -t COMPREPLY < <(compgen -W "status on off unit update serve" -- "$cur") ;;
+      --scope)
+        mapfile -t COMPREPLY < <(compgen -W "look work own" -- "$cur") ;;
       today|yesterday|week|month)   # optional report-type override after a date shortcut
         mapfile -t COMPREPLY < <(compgen -W "daily monthly weekly session blocks statusline" -- "$cur") ;;
       *) COMPREPLY=() ;;

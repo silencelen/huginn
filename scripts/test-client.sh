@@ -64,7 +64,7 @@ grep -q 'scp .*\${H}:' client/huginn.ps1 && bad "huginn.ps1 still scps from \$HU
 echo "[3/6] both clients expose the same verbs (parity by verb)"
 # huginn.sh writes cases as alternations (`list|ls)`, `status|st)`), so match the
 # verb as a case ALTERNATIVE, not as a bare `verb)`.
-for v in end kill solo rename list status rounds devices desktop usage update version help; do
+for v in end kill solo rename list status rounds devices device desktop usage update version help; do
   # Match the DISPATCH, not a mention: huginn.ps1 lists every verb in its
   # completion array too, so grepping "'$v'" passes even with the branch deleted
   # (verified by removing the `end` branch: still 2 matches, still green).

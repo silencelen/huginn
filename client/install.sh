@@ -26,6 +26,10 @@ fi
 # 3. install the command + wire the profile
 mkdir -p "$HOME/.huginn"
 cp "$HERE/huginn.sh" "$HOME/.huginn/huginn.sh"
+# The device runner rides along when installing from a clone, so `huginn device
+# on` has nothing to fetch. It is inert until this machine is actually enrolled —
+# most devices are clients and never offer themselves.
+[ -f "$HERE/huginn-device" ] && install -m 0755 "$HERE/huginn-device" "$HOME/.huginn/huginn-device"
 RC="$HOME/.bashrc"; touch "$RC"
 grep -q '.huginn/huginn.sh' "$RC" || echo '[ -f ~/.huginn/huginn.sh ] && source ~/.huginn/huginn.sh' >> "$RC"
 # shellcheck disable=SC1090
