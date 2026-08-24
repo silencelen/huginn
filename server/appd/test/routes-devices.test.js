@@ -1,0 +1,363 @@
+'use strict';
+// Route-level tests for Devices, including a whole remote run.
+//
+// THE TEST IS THE DEVICE. Because the transport is a pull — register, long-poll,
+// post results — a device is nothing but a sequence of HTTP calls, so the entire
+// remote path can be exercised with no runner, no second machine and no real
+// `claude` anywhere. That is a property of the design worth noticing: a transport
+// a test can impersonate is a transport that can be debugged with curl.
+//
+// SAFETY: no local runs are ever started here, so no `claude` is spawned. Every
+// chat these tests make is pinned to a device that only exists in this file.
+
+const { test, before, after } = require('node:test');
+const assert = require('node:assert');
+const { spawn } = require('node:child_process');
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
+const crypto = require('node:crypto');
+
+const PORT = 9930 + (process.pid % 25);
+const BASE = `http://127.0.0.1:${PORT}`;
+
+let tmp, token, daemon;
+
+async function api(pathname, init = {}) {
+  const res = await fetch(BASE + pathname, {
+    ...init,
+    headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json', ...(init.headers || {}) },
+  });
+  let body = null;
+  try { body = await res.json(); } catch { /* no body */ }
+  return { status: res.status, body };
+}
+const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+
+/** Enrols a device, as its runner would on startup. */
+async function enrol(over = {}) {
+  const { status, body } = await api('/v1/devices', {
+    method: 'POST',
+    body: JSON.stringify({ name: 'PRESTIGE', platform: 'windows', scope: 'work', ...over }),
+  });
+  assert.equal(status, 201, JSON.stringify(body));
+  return body;
+}
+
+/** A chat pinned to a device. Never local, so nothing spawns here. */
+async function chatOn(deviceId, mode = 'act') {
+  return api('/v1/chats', { method: 'POST', body: JSON.stringify({ mode, host: deviceId }) });
+}
+
+async function send(chatId, text = 'have a look') {
+  return api(`/v1/chats/${chatId}/messages`, { method: 'POST', body: JSON.stringify({ text }) });
+}
+
+/** The device picking up its next job. */
+async function poll(deviceId, waitS = 2) {
+  return api(`/v1/devices/${deviceId}/work?wait=${waitS}`);
+}
+
+async function postEvents(deviceId, workId, lines, extra = {}) {
+  return api(`/v1/devices/${deviceId}/work/${workId}/events`, {
+    method: 'POST',
+    body: JSON.stringify({ lines: lines.map((l) => JSON.stringify(l)), ...extra }),
+  });
+}
+
+const assistant = (text) => ({ type: 'assistant', message: { content: [{ type: 'text', text }] } });
+
+/**
+ * A report block with REAL newlines. Built from char codes rather than escaped:
+ * a literal backslash-n never matches the daemon's fence regex, and the failure
+ * reads as "the parser is broken" rather than "the test wrote the wrong bytes".
+ */
+const FENCE = String.fromCharCode(96, 96, 96);
+const NL = String.fromCharCode(10);
+const REPORT = (json) => FENCE + 'huginn-report' + NL + json + NL + FENCE;
+
+before(async () => {
+  tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'appd-dev-'));
+  token = crypto.randomBytes(32).toString('hex');
+  fs.writeFileSync(path.join(tmp, 'token'), token, { mode: 0o600 });
+  fs.mkdirSync(path.join(tmp, 'data'));
+  fs.mkdirSync(path.join(tmp, 'state'));
+
+  daemon = spawn(process.execPath, [path.join(__dirname, '..', 'huginn-appd.js')], {
+    env: {
+      ...process.env,
+      HUGINN_APPD_PORT: String(PORT),
+      HUGINN_APPD_BIND: '127.0.0.1',
+      HUGINN_APPD_DATA: path.join(tmp, 'data'),
+      HUGINN_APPD_TOKEN_FILE: path.join(tmp, 'token'),
+      HUGINN_APPD_STATE_DIR: path.join(tmp, 'state'),
+      HUGINN_APPD_WORKDIR: tmp,
+    },
+    stdio: 'ignore',
+  });
+  daemon.on('error', (e) => { throw e; });
+  for (let i = 0; i < 100; i++) {
+    try { if ((await api('/v1/ping')).status === 200) break; } catch { /* not up */ }
+    await wait(100);
+  }
+});
+
+after(() => {
+  if (daemon) daemon.kill('SIGTERM');
+  if (tmp) fs.rmSync(tmp, { recursive: true, force: true });
+});
+
+// ------------------------------------------------------------- enrolment
+
+test('a device enrols and reports what it will do', async () => {
+  const d = await enrol();
+  assert.equal(d.name, 'PRESTIGE');
+  assert.equal(d.platform, 'windows');
+  assert.equal(d.scope, 'work');
+  assert.equal(d.effectiveScope, 'work');
+  assert.equal(d.online, true);
+  assert.match(d.id, /^[0-9a-f-]{36}$/);
+});
+
+test('an unknown scope enrols as look, not as own', async () => {
+  const d = await enrol({ name: 'sketchy', scope: 'root' });
+  assert.equal(d.scope, 'look', 'the narrowest, never the widest');
+});
+
+test('a nameless device is refused', async () => {
+  const r = await api('/v1/devices', { method: 'POST', body: JSON.stringify({ scope: 'own' }) });
+  assert.equal(r.status, 400);
+  assert.match(r.body.error, /name/);
+});
+
+test('re-enrolling under the same id does not leave a ghost', async () => {
+  const first = await enrol({ name: 'restarts' });
+  const again = await api('/v1/devices', {
+    method: 'POST',
+    body: JSON.stringify({ id: first.id, name: 'restarts', scope: 'own' }),
+  });
+  assert.equal(again.status, 201);
+  assert.equal(again.body.id, first.id);
+  assert.equal(again.body.registeredAt, first.registeredAt, 'the original enrolment date survives');
+  assert.equal(again.body.scope, 'own', 'but what it is willing to do is updated');
+
+  const list = await api('/v1/devices');
+  assert.equal(list.body.devices.filter((x) => x.name === 'restarts').length, 1);
+});
+
+// ------------------------------------------------------------------ lock
+
+test('a locked device is read-only, and says so where it matters', async () => {
+  const d = await enrol({ name: 'locker', scope: 'own' });
+  const beat = await api(`/v1/devices/${d.id}/beat`, { method: 'POST', body: JSON.stringify({ locked: true }) });
+  assert.equal(beat.status, 200);
+  assert.equal(beat.body.effectiveScope, 'look');
+
+  const refused = await chatOn(d.id, 'act');
+  assert.equal(refused.status, 409);
+  assert.match(refused.body.error, /locked/, 'the reason distinguishes "unlock it" from "widen the scope"');
+
+  // ask still works while locked: reading is what look means.
+  const allowed = await chatOn(d.id, 'ask');
+  assert.equal(allowed.status, 201);
+
+  await api(`/v1/devices/${d.id}/beat`, { method: 'POST', body: JSON.stringify({ locked: false }) });
+  assert.equal((await chatOn(d.id, 'act')).status, 201, 'unlocking restores it');
+});
+
+test('a look-scope device cannot be given act work at all', async () => {
+  const d = await enrol({ name: 'looker', scope: 'look' });
+  const r = await chatOn(d.id, 'act');
+  assert.equal(r.status, 409);
+  assert.match(r.body.error, /look/);
+});
+
+test('a chat cannot be pinned to a device that does not exist', async () => {
+  const r = await chatOn(crypto.randomUUID(), 'ask');
+  assert.equal(r.status, 404);
+});
+
+// ------------------------------------------------------------ a whole run
+
+test('a run happens on the device and comes back through the same pipeline', async () => {
+  const d = await enrol({ name: 'runner' });
+  const chat = await chatOn(d.id, 'act');
+  assert.equal(chat.status, 201);
+  assert.equal(chat.body.host, d.id, 'the chat records where it runs');
+
+  assert.equal((await send(chat.body.id, 'audit the build')).status, 202);
+
+  const picked = await poll(d.id);
+  assert.equal(picked.status, 200);
+  const work = picked.body.work;
+  assert.ok(work, 'the device was handed the job');
+  assert.equal(work.chatId, chat.body.id);
+  assert.equal(work.mode, 'act');
+  assert.match(work.prompt, /audit the build/);
+
+  // THE load-bearing assertion of this file: the daemon hands over a request and
+  // no authority. If a tool grant ever rides along, one leaked bearer token stops
+  // meaning "this host" and starts meaning "the owner's PC".
+  const flat = JSON.stringify(work).toLowerCase();
+  for (const forbidden of ['allowedtools', 'disallowedtools', 'permission', 'sudo', 'scope']) {
+    assert.ok(!flat.includes(forbidden), `work must not carry ${forbidden}: ${flat}`);
+  }
+
+  // The device streams back exactly what a local `claude -p` would have printed.
+  const mid = await postEvents(d.id, work.id, [assistant('I looked. It builds.')]);
+  assert.equal(mid.status, 200);
+  assert.equal(mid.body.cancel, false);
+
+  const open = await api(`/v1/chats/${chat.body.id}`);
+  assert.equal(open.body.running, true, 'still in flight');
+  assert.ok(open.body.messages.some((m) => m.type === 'assistant' && /It builds/.test(m.text || '')),
+    'the remote answer is in the transcript, written by the same handler as a local one');
+
+  const done = await postEvents(d.id, work.id, [{ type: 'result', is_error: false }],
+    { done: true, exitCode: 0 });
+  assert.equal(done.status, 200);
+  assert.equal(done.body.done, true);
+
+  const after_ = await api(`/v1/chats/${chat.body.id}`);
+  assert.equal(after_.body.running, false, 'settled');
+  assert.equal(after_.body.finishedRuns, 1, 'and it left the durable finish mark');
+});
+
+test('the long poll wakes the moment work exists', async () => {
+  // The difference between "starts now" and "starts within 25 seconds" is the
+  // difference between the feature feeling remote and feeling broken.
+  const d = await enrol({ name: 'waker' });
+  const chat = await chatOn(d.id, 'ask');
+  const parked = poll(d.id, 10);
+  await wait(300);
+  await send(chat.body.id, 'wake up');
+
+  const answered = await parked;
+  assert.equal(answered.status, 200);
+  assert.ok(answered.body.work, 'the parked poll was handed the new job, not left to time out');
+  assert.equal(answered.body.work.chatId, chat.body.id);
+
+  await postEvents(d.id, answered.body.work.id, [{ type: 'result', is_error: false }],
+    { done: true, exitCode: 0 });
+});
+
+test('an idle poll comes back empty rather than hanging', async () => {
+  const d = await enrol({ name: 'idler' });
+  const started = Date.now();
+  const r = await poll(d.id, 1);
+  assert.equal(r.status, 200);
+  assert.equal(r.body.work, null);
+  assert.ok(Date.now() - started >= 900, 'it actually waited');
+});
+
+test('one machine is never asked to run two things at once', async () => {
+  const d = await enrol({ name: 'single' });
+  const a = await chatOn(d.id, 'ask');
+  const b = await chatOn(d.id, 'ask');
+  assert.equal((await send(a.body.id, 'first')).status, 202);
+
+  const second = await send(b.body.id, 'second');
+  assert.equal(second.status, 409);
+  assert.match(second.body.error, /already running/);
+
+  // Finishing the first frees the machine.
+  const work = (await poll(d.id)).body.work;
+  await postEvents(d.id, work.id, [{ type: 'result', is_error: false }], { done: true, exitCode: 0 });
+  assert.equal((await send(b.body.id, 'second, again')).status, 202);
+  const w2 = (await poll(d.id)).body.work;
+  await postEvents(d.id, w2.id, [{ type: 'result', is_error: false }], { done: true, exitCode: 0 });
+});
+
+test('results are only accepted from the device that owns the run', async () => {
+  const owner = await enrol({ name: 'owner' });
+  const other = await enrol({ name: 'other' });
+  const chat = await chatOn(owner.id, 'ask');
+  await send(chat.body.id, 'mine');
+  const work = (await poll(owner.id)).body.work;
+
+  const stolen = await postEvents(other.id, work.id, [assistant('I am not that device')]);
+  assert.equal(stolen.status, 403);
+
+  const unknown = await postEvents(owner.id, crypto.randomUUID(), [assistant('nothing')]);
+  assert.equal(unknown.status, 404);
+
+  await postEvents(owner.id, work.id, [{ type: 'result', is_error: false }], { done: true, exitCode: 0 });
+});
+
+test('a device reporting failure records it rather than a silent success', async () => {
+  const d = await enrol({ name: 'failer' });
+  const chat = await chatOn(d.id, 'ask');
+  await send(chat.body.id, 'break');
+  const work = (await poll(d.id)).body.work;
+
+  await postEvents(d.id, work.id, [], { done: true, exitCode: 1, error: 'claude is not installed there' });
+  const open = await api(`/v1/chats/${chat.body.id}`);
+  assert.equal(open.body.running, false);
+  assert.ok(open.body.messages.some((m) => m.type === 'error' && /not installed/.test(m.text || '')),
+    "the reason reaches the transcript, in the device's own words");
+});
+
+test('removing a device stops work being offered to it', async () => {
+  const d = await enrol({ name: 'doomed' });
+  assert.equal((await api(`/v1/devices/${d.id}`, { method: 'DELETE' })).status, 200);
+  assert.equal((await api(`/v1/devices/${d.id}`)).status, 404);
+  assert.equal((await chatOn(d.id, 'ask')).status, 404);
+});
+
+// --------------------------------------------------- a Round on a Device
+
+test('a Round can name a device, and refuses one that could never run it', async () => {
+  const looker = await enrol({ name: 'weekly-looker', scope: 'look' });
+  const worker = await enrol({ name: 'weekly-worker', scope: 'work' });
+  const schedule = { kind: 'weekly', days: [0], at: '19:00', tz: 'America/Los_Angeles' };
+
+  const refused = await api('/v1/rounds', {
+    method: 'POST',
+    body: JSON.stringify({ title: 'nightly build', prompt: 'build it', schedule, mode: 'act', host: looker.id }),
+  });
+  assert.equal(refused.status, 400);
+  assert.match(refused.body.error, /cannot run act/);
+
+  const ok = await api('/v1/rounds', {
+    method: 'POST',
+    body: JSON.stringify({ title: 'nightly build', prompt: 'build it', schedule, mode: 'act', host: worker.id }),
+  });
+  assert.equal(ok.status, 201);
+  assert.equal(ok.body.host, worker.id);
+  assert.equal(ok.body.hostName, 'weekly-worker', 'named, so no client resolves an id itself');
+});
+
+test("a Round's manual run lands on its device, not on this host", async () => {
+  // Step 6 of the release, and it costs nothing: the Round puts its placement on
+  // the chat, and the same seam every other caller uses does the rest.
+  const d = await enrol({ name: 'round-host' });
+  const made = await api('/v1/rounds', {
+    method: 'POST',
+    body: JSON.stringify({
+      title: 'remote check', prompt: 'check the disk', mode: 'act', host: d.id,
+      schedule: { kind: 'weekly', days: [0], at: '19:00', tz: 'America/Los_Angeles' },
+    }),
+  });
+  assert.equal(made.status, 201);
+
+  const fired = await api(`/v1/rounds/${made.body.id}/run`, { method: 'POST' });
+  assert.equal(fired.status, 202);
+
+  const work = (await poll(d.id)).body.work;
+  assert.ok(work, 'the scheduled job was handed to the device');
+  assert.equal(work.chatId, fired.body.chatId);
+  assert.equal(work.roundId, made.body.id, 'and it knows which Round it belongs to');
+  assert.match(work.prompt, /check the disk/);
+  assert.match(work.prompt, /huginn-report/, 'the output contract travels with it');
+
+  // Report back as the device would, and the Round records it like any other.
+  await postEvents(d.id, work.id, [
+    assistant(REPORT('{"status":"ok","headline":"disk is fine"}')),
+    { type: 'result', is_error: false },
+  ], { done: true, exitCode: 0 });
+
+  const round = await api(`/v1/rounds/${made.body.id}`);
+  assert.equal(round.body.lastRun.status, 'ok');
+  assert.equal(round.body.lastRun.headline, 'disk is fine');
+  assert.equal(round.body.lastRun.malformed, false);
+});

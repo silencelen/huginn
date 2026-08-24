@@ -742,3 +742,162 @@ sealed interface WatchEvent {
     data object Rotated : WatchEvent
     data class Failure(val message: String) : WatchEvent
 }
+
+// ------------------------------------------------------------------- rounds
+
+/**
+ * A Round's cadence. Structured rather than a cron string so it can be rendered
+ * and picked; the human-readable form is [Round.cadence], produced by the daemon.
+ */
+@Serializable
+data class RoundSchedule(
+    /** daily | weekly | monthly | interval */
+    val kind: String = "daily",
+    /** "HH:MM", 24-hour, in [tz]. Absent for `interval`. */
+    val at: String? = null,
+    val tz: String? = null,
+    /** 0 = Sunday. `weekly` only. */
+    val days: List<Int> = emptyList(),
+    /** 1-31. `monthly` only. */
+    val dates: List<Int> = emptyList(),
+    val everyMinutes: Int? = null,
+)
+
+/** One thing a Round found that needs a decision or an action. */
+@Serializable
+data class RoundItem(
+    val title: String = "",
+    val detail: String = "",
+    /** The next step, so acting on an item does not start from a blank page. */
+    val suggest: String = "",
+)
+
+@Serializable
+data class RoundRun(
+    /** Epoch SECONDS, unlike [Round.nextRunAt]. */
+    val at: Long = 0,
+    /** The chat this run happened in. Openable like any other. */
+    val chatId: String? = null,
+    /** ok | attention | action | unknown */
+    val status: String = "unknown",
+    val headline: String = "",
+    val items: List<RoundItem> = emptyList(),
+    /** The run produced no usable report block; the headline is a quote instead. */
+    val malformed: Boolean = false,
+    val manual: Boolean = false,
+    val durationSec: Long? = null,
+)
+
+@Serializable
+data class Round(
+    val id: String,
+    val title: String = "",
+    val prompt: String = "",
+    val enabled: Boolean = true,
+    val mode: String = "ask",
+    val model: String? = null,
+    val effort: String? = null,
+    val schedule: RoundSchedule = RoundSchedule(),
+    /** always | attention | never */
+    val notifyWhen: String = "attention",
+    val catchUp: Boolean = false,
+    val timeoutSec: Long = 900,
+    val createdAt: Long = 0,
+    val updatedAt: Long = 0,
+    /**
+     * Epoch MILLIseconds — the daemon schedules in ms even though its record
+     * timestamps are in seconds. Mixing the two silently renders "in 55 years".
+     */
+    val nextRunAt: Long? = null,
+    val currentChatId: String? = null,
+    val lastRun: RoundRun? = null,
+    val runs: List<RoundRun> = emptyList(),
+    /**
+     * "Sundays at 7:00 PM", rendered BY THE DAEMON. The zone rules it fires by
+     * live there, so a client that re-derived this could disagree with the thing
+     * actually holding the schedule.
+     */
+    val cadence: String = "",
+    val running: Boolean = false,
+)
+
+@Serializable
+data class RoundList(val rounds: List<Round> = emptyList())
+
+@Serializable
+data class RoundRunStarted(val ok: Boolean = false, val chatId: String? = null)
+
+// ------------------------------------------------------------------ devices
+
+/**
+ * Another machine that can run a chat in its context.
+ *
+ * [scope] is what it is enrolled to do; [effectiveScope] is what it will do right
+ * now — they differ when the machine is locked. Show both: "own, read-only while
+ * locked" is a different situation from "enrolled read-only", and collapsing them
+ * makes the second look like a bug.
+ */
+@Serializable
+data class Device(
+    val id: String,
+    val name: String = "",
+    /** windows | linux | macos | other */
+    val platform: String = "other",
+    /** look | work | own */
+    val scope: String = "look",
+    val effectiveScope: String = "look",
+    val locked: Boolean = false,
+    /** Where a `work`-scoped run starts. Not a sandbox — see DevicePolicy. */
+    val root: String? = null,
+    val version: String? = null,
+    val online: Boolean = false,
+    /** Epoch MILLIseconds, like Round.nextRunAt and unlike the record timestamps. */
+    val lastSeen: Long? = null,
+    val registeredAt: Long? = null,
+    val running: Boolean = false,
+    val queued: Int = 0,
+)
+
+@Serializable
+data class DeviceList(val devices: List<Device> = emptyList())
+
+/**
+ * One job for a device.
+ *
+ * Note what is absent: no tool list, no permissions, no scope. This is a REQUEST.
+ * The device turns it into an argv using its own policy, which is the whole
+ * security story — see DevicePolicy.
+ */
+@Serializable
+data class DeviceWork(
+    val id: String,
+    val chatId: String,
+    val prompt: String = "",
+    val mode: String = "ask",
+    val model: String? = null,
+    val effort: String? = null,
+    val resumeSessionId: String? = null,
+    val roundId: String? = null,
+    val issuedAt: Long = 0,
+)
+
+/** The long poll's answer: a job, or nothing this time round. */
+@Serializable
+data class WorkEnvelope(val work: DeviceWork? = null)
+
+@Serializable
+data class BeatResult(val ok: Boolean = false, val effectiveScope: String = "look")
+
+/**
+ * The daemon's answer to a batch of results.
+ *
+ * [cancel] is the one thing a device needs told mid-run. It kills its own child
+ * and posts a terminal frame, so the ending is still something the device SAYS
+ * rather than something the daemon infers from a dropped connection.
+ */
+@Serializable
+data class EventsAck(
+    val ok: Boolean = false,
+    val done: Boolean = false,
+    val cancel: Boolean = false,
+)

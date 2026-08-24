@@ -8,6 +8,7 @@ import com.silencelen.huginn.data.Screen
 import com.silencelen.huginn.data.TranscriptPage
 import com.silencelen.huginn.ui.LiveInput
 import com.silencelen.huginn.ui.LocalEcho
+import com.silencelen.huginn.ui.isTranscriptRestart
 import com.silencelen.huginn.ui.mergeTranscriptPage
 import com.silencelen.huginn.ui.prependTranscriptPage
 import kotlinx.coroutines.CoroutineScope
@@ -279,10 +280,19 @@ class SessionController(
                 runCatching { client.sessionTranscript(name, transcriptOffset) }
                     .onSuccess { page ->
                         failures = 0
-                        transcriptOffset = page.nextOffset
-                        // The first page defines where history begins; later tail
-                        // reads are BELOW it and must not move the handle.
-                        if (historyStart == null) historyStart = page.windowStart
+                        // Same tmux name, different Claude session: both handles
+                        // into the old transcript are void (the offset is a byte
+                        // position in a file this session never wrote), so drop
+                        // them and let the next poll read the new tail.
+                        if (isTranscriptRestart(_page.value, page)) {
+                            transcriptOffset = null
+                            historyStart = null
+                        } else {
+                            transcriptOffset = page.nextOffset
+                            // The first page defines where history begins; later tail
+                            // reads are BELOW it and must not move the handle.
+                            if (historyStart == null) historyStart = page.windowStart
+                        }
                         _page.value = mergeTranscriptPage(_page.value, page)
                         _transcriptError.value = null
                         _neverRan.value = false
