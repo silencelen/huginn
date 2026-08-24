@@ -1,0 +1,546 @@
+#!/usr/bin/env node
+'use strict';
+// huginn-device — offer THIS machine to Huginn as a place to run work.
+//
+// The headless half of "give Huginn access to this PC". The desktop client has a
+// runner built in with a toggle in Settings; a server, a Pi or a build box has no
+// desktop app and no one to click the toggle, so it gets this instead: the same
+// protocol, the same policy, run by systemd.
+//
+// WHY NODE, on a machine where the rest of the client is shell. A device has to
+// hold a 25-second long poll open, stream a child's stdout, batch it upward every
+// half second AND notice a cancel arriving in the reply to one of those batches —
+// four things at once. Shell can be beaten into that shape with fifos and
+// background jobs; the result is not something anyone should have to debug at
+// 3am. And the dependency is free: `claude` is itself a Node program, so any
+// machine that qualifies as a device already has Node on it.
+//
+// THE TRANSPORT IS A PULL. This opens outbound connections and listens on
+// nothing. That is why it works identically on a box in the next room and a
+// laptop on hotel wi-fi, and why offering a machine needs no firewall change.
+//
+// WHAT THE DAEMON MAY DO TO THIS MACHINE is decided HERE, by the policy below —
+// never by what arrives on the wire. A work item carries a request and no
+// authority. See shared/device-policy.json for the reasoning.
+
+const fs = require('fs');
+const os = require('os');
+const path = require('path');
+const http = require('http');
+const https = require('https');
+const readline = require('readline');
+const { spawn } = require('child_process');
+
+const VERSION = '0.10.0';
+
+// ---8<--- GENERATED POLICY — scripts/gen-device-policy.js — DO NOT EDIT ---8<---
+const POLICY = {
+  "scopes": [
+    "look",
+    "work",
+    "own"
+  ],
+  "modeNeeds": {
+    "ask": "look",
+    "act": "work"
+  },
+  "lockDropsTo": "look",
+  "streamFlags": [
+    "-p",
+    "--output-format",
+    "stream-json",
+    "--verbose",
+    "--include-partial-messages"
+  ],
+  "tools": {
+    "look": {
+      "allowed": [
+        "Skill",
+        "Read",
+        "Glob",
+        "Grep",
+        "WebFetch",
+        "WebSearch"
+      ],
+      "denied": [
+        "Bash",
+        "Edit",
+        "Write",
+        "NotebookEdit"
+      ]
+    },
+    "act": {
+      "allowed": [
+        "Skill",
+        "Bash",
+        "Read",
+        "Edit",
+        "Write",
+        "Glob",
+        "Grep",
+        "WebFetch",
+        "WebSearch"
+      ],
+      "denied": []
+    }
+  },
+  "refusals": {
+    "locked": "this machine is locked, so it is read-only until someone unlocks it",
+    "scope": "this machine is set to {scope}, which cannot run {mode}"
+  }
+};
+// ---8<--- END GENERATED POLICY ---8<---
+
+// ------------------------------------------------------------------ config
+//
+// Two files, deliberately. The token is a credential and lives on its own with
+// 0600, the way the host keeps /etc/huginn-appd/token; the rest is settings a
+// person edits. Putting a bearer token inside a config file people hand-edit is
+// how tokens end up in pastes and in git.
+
+const CONF_DIR = process.env.HUGINN_DEVICE_DIR
+  || path.join(os.homedir(), '.config', 'huginn');
+const CONF_FILE = path.join(CONF_DIR, 'device.json');
+const TOKEN_FILE = path.join(CONF_DIR, 'appd-token');
+
+const DEFAULTS = {
+  url: 'http://127.0.0.1:8787',
+  name: null,
+  // `work` and not `own`, because a default is what people keep. Widening is a
+  // decision somebody should make on purpose, on this machine.
+  scope: 'work',
+  root: null,
+  claude: 'claude',
+};
+
+function loadConf() {
+  let raw = {};
+  try { raw = JSON.parse(fs.readFileSync(CONF_FILE, 'utf8')); } catch { /* first run */ }
+  const c = { ...DEFAULTS, ...raw };
+  c.name = c.name || os.hostname().slice(0, 40) || 'this machine';
+  return c;
+}
+
+function saveConf(c) {
+  fs.mkdirSync(CONF_DIR, { recursive: true, mode: 0o700 });
+  fs.writeFileSync(CONF_FILE, JSON.stringify(c, null, 2) + '\n', { mode: 0o600 });
+}
+
+function token() {
+  const t = (process.env.HUGINN_APPD_TOKEN || '').trim();
+  if (t) return t;
+  try { return fs.readFileSync(TOKEN_FILE, 'utf8').trim(); } catch { return ''; }
+}
+
+function platform() {
+  const p = process.platform;
+  if (p === 'win32') return 'windows';
+  if (p === 'darwin') return 'macos';
+  if (p === 'linux') return 'linux';
+  return 'other';
+}
+
+// ------------------------------------------------------------------ policy
+//
+// The same rules as the Kotlin runner in the desktop app, reading the same
+// table. Both are asserted against shared/device-policy-cases.json, so a request
+// cannot come out differently depending on which kind of machine it landed on.
+
+const rank = (s) => POLICY.scopes.indexOf(s);
+
+function parseScope(raw) {
+  const s = String(raw ?? '').trim().toLowerCase();
+  // Unrecognised is the NARROWEST, never the widest: a typo in a config file must
+  // not be a privilege escalation.
+  return POLICY.scopes.includes(s) ? s : POLICY.scopes[0];
+}
+
+const effectiveScope = (scope, locked) => (locked ? POLICY.lockDropsTo : parseScope(scope));
+
+const allows = (scope, mode) => rank(parseScope(scope)) >= rank(POLICY.modeNeeds[mode] ?? 'work');
+
+function refusal(scope, locked, mode) {
+  if (allows(effectiveScope(scope, locked), mode)) return null;
+  return locked
+    ? POLICY.refusals.locked
+    : POLICY.refusals.scope.replace('{scope}', parseScope(scope)).replace('{mode}', mode);
+}
+
+function argvFor(work, scope, locked, persona) {
+  const act = work.mode === 'act' && allows(effectiveScope(scope, locked), 'act');
+  const argv = POLICY.streamFlags.slice();
+  if (work.model) argv.push('--model', work.model);
+  if (work.effort) argv.push('--effort', work.effort);
+  if (work.resumeSessionId) argv.push('--resume', work.resumeSessionId);
+  if (persona) argv.push('--append-system-prompt', persona);
+  const t = POLICY.tools[act ? 'act' : 'look'];
+  argv.push('--allowedTools', t.allowed.join(' '));
+  if (t.denied.length) argv.push('--disallowedTools', t.denied.join(' '));
+  return argv;
+}
+
+// ⚠ WORK IS NOT A JAIL. The difference between `work` and `own` is the directory
+// a run starts in, not a kernel boundary — a granted Bash can leave any directory
+// and no flag Claude Code takes will stop it. The fences that are real are the
+// scope gate above and, on a machine with a screen, the lock rule.
+function cwdFor(scope, locked, root) {
+  const home = os.homedir() || process.cwd();
+  const r = (root || '').trim();
+  return effectiveScope(scope, locked) === 'work' && r ? r : home;
+}
+
+/**
+ * Is somebody sitting at this machine?
+ *
+ * On a desktop the runner asks the session manager and drops to read-only while
+ * the screen is locked. Here the honest answer is that NOBODY IS EVER SITTING
+ * HERE — a headless box has no session to lock — so there is no lock state to
+ * report and none is reported.
+ *
+ * Which means the scope in the config file is the scope in force at 3am. That is
+ * not a gap to paper over with a fake lock signal; it is the reason `own` is not
+ * the default here and the reason `enrol` says so out loud.
+ */
+const locked = () => false;
+
+// -------------------------------------------------------------------- http
+
+function api(method, p, body, { timeoutMs = 20000 } = {}) {
+  const conf = loadConf();
+  const u = new URL(p, conf.url);
+  const mod = u.protocol === 'https:' ? https : http;
+  const payload = body === undefined ? null : Buffer.from(JSON.stringify(body));
+  const tok = token();
+  if (!tok) return Promise.reject(new Error(`no appd token — put one in ${TOKEN_FILE}`));
+
+  return new Promise((resolve, reject) => {
+    const req = mod.request(u, {
+      method,
+      headers: {
+        Authorization: `Bearer ${tok}`,
+        ...(payload ? { 'Content-Type': 'application/json', 'Content-Length': payload.length } : {}),
+      },
+      timeout: timeoutMs,
+    }, (res) => {
+      let out = '';
+      res.setEncoding('utf8');
+      res.on('data', (c) => { out += c; });
+      res.on('end', () => {
+        if (res.statusCode >= 400) {
+          return reject(new Error(`${method} ${u.pathname} → ${res.statusCode} ${out.slice(0, 200)}`));
+        }
+        try { resolve(out ? JSON.parse(out) : {}); } catch (e) { reject(e); }
+      });
+    });
+    req.on('timeout', () => req.destroy(new Error('timed out')));
+    req.on('error', reject);
+    if (payload) req.write(payload);
+    req.end();
+  });
+}
+
+// ------------------------------------------------------------------ enrol
+
+async function enrol(conf) {
+  const dev = await api('POST', '/v1/devices', {
+    id: conf.id || undefined,
+    name: conf.name,
+    platform: platform(),
+    scope: parseScope(conf.scope),
+    root: conf.root || null,
+    version: VERSION,
+    locked: locked(),
+  });
+  if (dev.id !== conf.id) { conf.id = dev.id; saveConf(conf); }
+  return dev.id;
+}
+
+// -------------------------------------------------------------------- work
+
+/**
+ * One job.
+ *
+ * Results go up in BATCHES with an explicit terminal frame, not one long chunked
+ * upload. A home network drops, and a dropped stream is indistinguishable from a
+ * finished run — so the ending is something this machine SAYS, not something the
+ * daemon infers from silence. Each batch is also where a cancel comes back, which
+ * makes the flush interval the worst-case latency of the stop button.
+ */
+function runWork(id, work, conf) {
+  return new Promise((resolve) => {
+    const scope = parseScope(conf.scope);
+    const lock = locked();
+
+    const why = refusal(scope, lock, work.mode);
+    if (why) {
+      // Refused HERE, by the machine, and said out loud. The daemon pre-checks the
+      // same rule so a person hears it at the moment they ask — but this is the
+      // check that decides, because this is the process holding the file system.
+      log(`refused ${work.id}: ${why}`);
+      api('POST', `/v1/devices/${id}/work/${work.id}/events`,
+        { lines: [], done: true, error: why, locked: lock })
+        .catch(() => {}).then(resolve);
+      return;
+    }
+
+    const argv = argvFor(work, scope, lock);
+    const cwd = cwdFor(scope, lock, conf.root);
+    log(`running ${work.id} (${work.mode}) in ${cwd}`);
+
+    let child;
+    try {
+      child = spawn(conf.claude || 'claude', argv, { cwd, stdio: ['pipe', 'pipe', 'pipe'] });
+    } catch (e) {
+      return finish(`could not start claude on ${conf.name}: ${e.message}`);
+    }
+
+    let pending = [];
+    let cancelled = false;
+    let done = false;
+
+    const flush = setInterval(async () => {
+      if (!pending.length || done) return;
+      const batch = pending; pending = [];
+      try {
+        const ack = await api('POST', `/v1/devices/${id}/work/${work.id}/events`,
+          { lines: batch, locked: lock });
+        if (ack && ack.cancel && !cancelled) { cancelled = true; child.kill(); }
+      } catch (e) {
+        // Put them back: a blip mid-run must not silently eat the answer.
+        pending = batch.concat(pending);
+        log(`batch failed (will retry): ${e.message}`);
+      }
+    }, 500);
+
+    readline.createInterface({ input: child.stdout })
+      .on('line', (line) => { if (line.trim()) pending.push(line); });
+
+    // Claude's stderr is not stream-json and the daemon cannot read it, but it is
+    // where a startup failure explains itself — so it is kept for the ending
+    // rather than discarded into the void.
+    let errTail = '';
+    child.stderr.on('data', (c) => { errTail = (errTail + c).slice(-500); });
+
+    child.on('error', (e) => finish(
+      e.code === 'ENOENT'
+        // By a wide margin the most likely first-run failure, and worth saying
+        // precisely: this text lands in the chat, and "claude is not on this
+        // machine's PATH" is actionable where "spawn failed" is not.
+        ? `claude is not on ${conf.name}'s PATH (set "claude" in ${CONF_FILE} to its full path)`
+        : `could not start claude on ${conf.name}: ${e.message}`));
+
+    child.on('close', (code) => finish(
+      cancelled ? `cancelled on ${conf.name}`
+        : code === 0 ? null
+          : `claude exited ${code} on ${conf.name}${errTail ? `: ${errTail.trim().slice(-200)}` : ''}`,
+      code));
+
+    // A spawn that failed leaves a stream whose 'error' would be unhandled, and an
+    // unhandled stream error takes the whole runner down over a missing binary.
+    child.stdin.on('error', () => {});
+    child.stdin.end(work.prompt);
+
+    async function finish(error, exitCode = null) {
+      if (done) return;
+      done = true;
+      clearInterval(flush);
+      const tail = pending; pending = [];
+      try {
+        await api('POST', `/v1/devices/${id}/work/${work.id}/events`,
+          { lines: tail, done: true, exitCode, error, locked: lock });
+      } catch (e) {
+        log(`could not report the ending of ${work.id}: ${e.message}`);
+      }
+      log(`finished ${work.id}${error ? ` — ${error}` : ''}`);
+      resolve();
+    }
+  });
+}
+
+// -------------------------------------------------------------------- loop
+
+async function serve() {
+  let beat = null;
+  for (;;) {
+    const conf = loadConf();
+    try {
+      const id = await enrol(conf);
+      log(`enrolled as ${conf.name} (${parseScope(conf.scope)}) → ${conf.url}`);
+
+      // Separate from the poll because they answer different questions: the poll
+      // asks "is there work", the beat says "I am still here, and this is what I
+      // will do now". A device that only polled would look present but never
+      // report a change in what it is willing to do.
+      clearInterval(beat);
+      beat = setInterval(() => {
+        api('POST', `/v1/devices/${id}/beat`, {
+          locked: locked(), scope: parseScope(loadConf().scope), version: VERSION,
+        }).catch(() => {});
+      }, 60000);
+
+      let failures = 0;
+      for (;;) {
+        let work;
+        try {
+          // Long poll. The daemon holds this open until there is work or the wait
+          // runs out, so a job is picked up in the moment it is created.
+          const r = await api('GET', `/v1/devices/${id}/work?wait=25&locked=${locked() ? 1 : 0}`,
+            undefined, { timeoutMs: 40000 });
+          work = r.work;
+          failures = 0;
+        } catch (e) {
+          // A blip on one poll is not a reason to re-enrol, and re-enrolling on
+          // every hiccup is what turns a flaky link into a stream of registrations.
+          failures += 1;
+          if (failures >= 5) throw e;
+          log(`poll failed (${failures}/5): ${e.message}`);
+          await sleep(3000);
+          continue;
+        }
+        if (work) await runWork(id, work, loadConf());
+      }
+    } catch (e) {
+      // Never fatal. A daemon that is down, a token that was rotated, a box that
+      // suspended — all of these are "try again shortly". A runner that gave up on
+      // the first failure would need somebody to notice and restart it.
+      clearInterval(beat);
+      log(`not reaching huginn: ${e.message} — retrying in 15s`);
+      await sleep(15000);
+    }
+  }
+}
+
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+const log = (m) => console.log(`[huginn-device] ${new Date().toISOString()} ${m}`);
+
+// ------------------------------------------------------------------ status
+
+async function status() {
+  const conf = loadConf();
+  console.log('');
+  console.log(`  ${conf.name}  (${platform()})`);
+  console.log(`    offering    ${parseScope(conf.scope)}${parseScope(conf.scope) === 'own' ? '  — the whole machine, always: nothing here can tell when nobody is looking' : ''}`);
+  console.log(`    work runs in ${cwdFor(conf.scope, false, conf.root)} (not a sandbox)`);
+  console.log(`    huginn      ${conf.url}`);
+  console.log(`    claude      ${conf.claude}`);
+  console.log(`    config      ${CONF_FILE}`);
+  console.log(`    token       ${token() ? TOKEN_FILE : 'MISSING — see `huginn device on`'}`);
+  if (!conf.id) {
+    console.log('');
+    console.log('    Not enrolled yet.  Run:  huginn device on');
+    console.log('');
+    return;
+  }
+  try {
+    const d = await api('GET', `/v1/devices/${conf.id}`);
+    console.log('');
+    console.log(`    huginn sees it as ${d.online ? 'reachable' : 'NOT reachable'}`
+      + `, scope ${d.scope}${d.scope === d.effectiveScope ? '' : ` (→ ${d.effectiveScope} right now)`}`
+      + `${d.running ? ', running a job' : d.queued ? `, ${d.queued} queued` : ''}`);
+  } catch (e) {
+    console.log('');
+    console.log(`    could not ask huginn: ${e.message}`);
+  }
+  console.log('');
+}
+
+// -------------------------------------------------------------------- main
+
+async function main() {
+  const cmd = process.argv[2] || 'help';
+  const conf = loadConf();
+
+  if (!POLICY && cmd !== 'help' && cmd !== 'version') {
+    // No silent default. A runner with no policy does not get to guess one.
+    console.error('huginn-device: no policy compiled in — this file was not generated correctly.');
+    console.error('               Run: node scripts/gen-device-policy.js');
+    process.exit(2);
+  }
+
+  switch (cmd) {
+    case 'enrol': case 'enroll': case 'on': {
+      // Flags, so `huginn device on --scope own --root /srv` is one command.
+      const args = process.argv.slice(3);
+      for (let i = 0; i < args.length; i += 1) {
+        const v = args[i + 1];
+        if (args[i] === '--scope' && v) { conf.scope = parseScope(v); i += 1; }
+        else if (args[i] === '--root' && v) { conf.root = v; i += 1; }
+        else if (args[i] === '--url' && v) { conf.url = v; i += 1; }
+        else if (args[i] === '--name' && v) { conf.name = v.slice(0, 40); i += 1; }
+        else if (args[i] === '--claude' && v) { conf.claude = v; i += 1; }
+      }
+      saveConf(conf);
+      const id = await enrol(loadConf());
+      console.log(`Enrolled ${conf.name} as "${parseScope(conf.scope)}" (${id}).`);
+      if (parseScope(conf.scope) !== 'look') {
+        // Said at the moment somebody widens it, not buried in a doc.
+        console.log('');
+        console.log('  This machine has no screen to lock, so it cannot tell when nobody is');
+        console.log('  watching — a desktop drops to read-only while locked and this cannot.');
+        console.log(`  "${parseScope(conf.scope)}" here means "${parseScope(conf.scope)}", at 3am, unattended.`);
+      }
+      console.log('');
+      console.log('  Start it:   systemctl --user enable --now huginn-device');
+      console.log('  Unit text:  huginn-device unit');
+      break;
+    }
+    case 'off': {
+      if (!conf.id) { console.log('Not enrolled.'); break; }
+      await api('DELETE', `/v1/devices/${conf.id}`).catch((e) => console.error(e.message));
+      delete conf.id;
+      saveConf(conf);
+      // Said plainly, because "removed" would be a lie: nothing here reaches onto
+      // the machine, and a runner still running would simply re-enrol.
+      console.log('Removed from huginn. Stop the runner too:');
+      console.log('  systemctl --user disable --now huginn-device');
+      break;
+    }
+    case 'serve': case 'run': await serve(); break;
+    case 'status': await status(); break;
+    case 'unit': {
+      const self = fs.realpathSync(process.argv[1]);
+      console.log(`# ~/.config/systemd/user/huginn-device.service
+[Unit]
+Description=Offer this machine to Huginn as a place to run work
+After=network-online.target
+
+[Service]
+ExecStart=${process.execPath} ${self} serve
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=default.target`);
+      break;
+    }
+    case 'print-argv': {
+      // For scripts/test-device-policy.sh: this runner, driven over the shared case
+      // matrix, so it and the Kotlin one are held to the same table.
+      const [scope, lockedArg, mode] = process.argv.slice(3);
+      const lock = lockedArg === 'true' || lockedArg === '1';
+      const work = { id: 'w', chatId: 'c', prompt: 'p', mode };
+      process.stdout.write(JSON.stringify({
+        effectiveScope: effectiveScope(scope, lock),
+        refusal: refusal(scope, lock, mode),
+        argv: argvFor(work, scope, lock),
+        cwd: cwdFor(scope, lock, '/root-dir') === '/root-dir' ? 'root' : 'home',
+      }));
+      break;
+    }
+    case 'version': console.log(VERSION); break;
+    default:
+      console.log(`huginn-device ${VERSION} — offer this machine to Huginn.
+
+  huginn-device on [--scope look|work|own] [--root DIR] [--url URL]
+                              enrol this machine and save the settings
+  huginn-device off           stop offering it (and stop the service)
+  huginn-device serve         the runner itself; this is what systemd starts
+  huginn-device status        what this machine offers, and what huginn sees
+  huginn-device unit          print a systemd user unit for it
+
+  Settings:  ${CONF_FILE}
+  Token:     ${TOKEN_FILE}   (0600; the same token /etc/huginn-appd/token holds)`);
+  }
+}
+
+main().catch((e) => { console.error(`huginn-device: ${e.message}`); process.exit(1); });
