@@ -1,5 +1,22 @@
 # Huginn changelog
 
+## 2.65.0 — 2026-08-24
+
+### Changed
+- **Rounds has its own tab.** It was a band above the chat list, which made each of them read
+  as the other's preamble — a Round is not a conversation: it has a cadence, a goal and a
+  verdict. It now sits in the bottom bar between Sessions and Status, with the same list on a
+  wide screen kept to a readable measure rather than stretched.
+
+### Added
+- **A finished round says so instead of offering a composer.** The run is one turn against its
+  goal, and afterwards it is kept for reading only. The input is replaced by a note, because a
+  send would be refused by the host anyway.
+- **"Did not finish" on a round that missed its goal**, ahead of the headline — a headline can be
+  perfectly cheerful while the job was not done.
+- **A chat that runs on another machine is badged with its name.** Only when it is not this
+  host: a badge on every row is a badge that says nothing.
+
 ## 2.64.0 — 2026-08-23
 
 ### Added

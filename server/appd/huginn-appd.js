@@ -52,7 +52,7 @@ const pushLib = require('./lib/pushtokens');
 const { trySender } = require('./lib/fcm');
 const { createPending, stepSoftEnd } = require('./lib/softend');
 
-const VERSION = '2.60.0';
+const VERSION = '2.61.0';
 const PORT = Number(process.env.HUGINN_APPD_PORT || 8787);
 const DATA_DIR = process.env.HUGINN_APPD_DATA || '/var/lib/huginn-appd';
 const UPLOADS_DIR = path.join(DATA_DIR, 'uploads');
@@ -1107,6 +1107,19 @@ function chatStates() {
   return out;
 }
 
+/**
+ * The name of the machine a chat runs on, or null for this host.
+ *
+ * Resolved here rather than in each client: a client that looked this up itself
+ * would print a bare uuid for a device that has since been unenrolled, and the
+ * whole point of the label is that a person can tell at a glance where something
+ * is happening.
+ */
+function hostNameFor(host) {
+  if (!host || host === 'local') return null;
+  return ((deviceState.devices || {})[host] || {}).name || 'a removed device';
+}
+
 function listChats() {
   let ids = [];
   try { ids = fs.readdirSync(CHATS_DIR); } catch { /* empty */ }
@@ -1118,6 +1131,7 @@ function listChats() {
     // "show me the run" link works.
     if (m && !m.roundId) {
       m.running = activeRuns.has(id);
+      m.hostName = hostNameFor(m.host);
       // A count, not the texts: the list needs "2 waiting", not the messages.
       m.pending = Array.isArray(m.pending) ? m.pending.length : 0;
       // Claude Code generates a real title for its own sessions; it reads far
@@ -1439,11 +1453,18 @@ function settleRun(run_, { exitCode = null, failureText = null } = {}) {
   const fresh = loadMeta(chatId);
   if (fresh) {
     // A Round's run ends when its chat's run ends; the report is whatever it
-    // left in the transcript. Before the queue logic below, because a Round
-    // never queues and this must happen even if that changes.
+    // left in the transcript.
     if (fresh.roundId) {
       try { finishRoundRun(fresh, run_.cancelled ? 'cancelled' : null); }
       catch (e) { log(`round run ${chatId} could not be recorded: ${e.message}`); }
+      // And then it is OVER. Draining a queue into a sealed run would reopen the
+      // very thing that just ended, so anything waiting is dropped here instead.
+      const waiting = clearPending(fresh);
+      if (waiting) {
+        saveMeta(fresh);
+        log(`round run ${chatId} dropped ${waiting} queued message(s): the run is closed`);
+      }
+      return;
     }
     if (run_.cancelled) {
       // Cancel means stop. Respawning from the queue would make the stop
@@ -1669,6 +1690,7 @@ const UUID_RE = /^[0-9a-f-]{36}$/;
 const NOTIFY_WHEN = ['always', 'attention', 'never'];
 const MAX_RUN_HISTORY = 10;
 const MAX_ROUND_PROMPT = 20_000;
+const MAX_ROUND_GOAL = 500;
 /**
  * Default per-Round cap. The global RUN_HARD_CAP_MS is two hours, which is a
  * safety net for a person who is watching; a scheduled run that wedges would
@@ -1757,6 +1779,7 @@ function buildRound(body) {
   const prompt = typeof body.prompt === 'string' ? body.prompt.trim() : '';
   if (!prompt) return { error: 'prompt required' };
   if (prompt.length > MAX_ROUND_PROMPT) return { error: 'prompt too long' };
+  const goal = typeof body.goal === 'string' ? body.goal.trim().slice(0, MAX_ROUND_GOAL) : '';
   const sched = roundsLib.validateSchedule(body.schedule);
   if (!sched.ok) return { error: sched.error };
   const placed = placeRound(body.host, body.mode === 'act' ? 'act' : 'ask');
@@ -1769,6 +1792,11 @@ function buildRound(body) {
       id: crypto.randomUUID(),
       title,
       prompt,
+      // What "done" means for this Round, as a completion test. Optional, because
+      // a Round that just reports on something has no finish line to cross — but
+      // when it is set, the run is asked whether it got there and an honest no is
+      // reported rather than smoothed over.
+      goal,
       enabled: body.enabled !== false,
       // `ask` unless asked otherwise, deliberately: an unattended 3am run holding
       // Bash and Write is a different risk class from one that can only read, and
@@ -1821,6 +1849,9 @@ function applyRoundPatch(round, body) {
     if (r.enabled && (!r.nextRunAt || r.nextRunAt <= Date.now())) {
       r.nextRunAt = roundsLib.nextFireAt(r.schedule, Date.now());
     }
+  }
+  if ('goal' in body) {
+    r.goal = typeof body.goal === 'string' ? body.goal.trim().slice(0, MAX_ROUND_GOAL) : '';
   }
   if ('mode' in body) r.mode = body.mode === 'act' ? 'act' : 'ask';
   if ('host' in body || 'mode' in body) {
@@ -1915,10 +1946,15 @@ function finishRoundRun(meta, failure) {
   else report = roundsLib.parseReport(text) || roundsLib.fallbackReport(text);
 
   const at = Math.floor(Date.now() / 1000);
+  const status = roundsLib.effectiveStatus(report);
   const run = {
     at,
     chatId: meta.id,
-    status: report.status,
+    status,
+    // Kept alongside, so "it said ok but had not finished" stays visible rather
+    // than being flattened into the status it was promoted to.
+    reportedStatus: report.status,
+    goalMet: report.goalMet,
     headline: report.headline,
     items: report.items,
     malformed: report.malformed,
@@ -1931,10 +1967,20 @@ function finishRoundRun(meta, failure) {
     if (r.currentChatId === meta.id) r.currentChatId = null;
   });
   // On the chat too, so opening a past run shows its verdict without re-parsing.
-  updateMeta(meta.id, (m) => { m.roundStatus = report.status; m.roundHeadline = report.headline; });
-  log(`round ${round.id} run ${meta.id} -> ${report.status}: ${report.headline.slice(0, 80)}`);
+  // `sealed` is the auto-end: a Round's run is one turn against a stated goal and
+  // then it is over. The conversation stays readable forever — that is the whole
+  // point of keeping it — but it stops being something anyone can continue, so a
+  // scheduled job cannot quietly become an open chat nobody meant to start.
+  updateMeta(meta.id, (m) => {
+    m.roundStatus = status;
+    m.roundHeadline = report.headline;
+    m.roundGoalMet = report.goalMet;
+    m.sealed = true;
+    m.endedAt = at;
+  });
+  log(`round ${round.id} run ${meta.id} -> ${status}${report.goalMet === false ? ' (goal NOT met)' : ''}: ${report.headline.slice(0, 80)}`);
 
-  if (roundsLib.shouldNotify(round.notifyWhen, report.status)) {
+  if (roundsLib.shouldNotify(round.notifyWhen, status)) {
     deliverRoundReport(round, report, meta.id)
       .catch((e) => log(`round ${round.id}: report delivery failed (${e.message})`));
   }
@@ -1956,7 +2002,9 @@ async function deliverRoundReport(round, report, chatId) {
     key: `round:${round.id}:${chatId}`,
     subject: round.title,
     title: round.title,
-    text: report.headline,
+    // An unmet goal is said out loud in the notification itself. It is the one
+    // fact a headline can be perfectly cheerful about while being wrong.
+    text: report.goalMet === false ? `did not finish — ${report.headline}` : report.headline,
   });
   if (pushed.sent > 0 || clientsLib.appOnline(clientState, Date.now())) {
     log(`round ${round.id}: telegram held (${pushed.sent > 0 ? 'pushed to the app' : 'app checked in recently'})`);
@@ -4313,6 +4361,7 @@ const server = http.createServer(async (req, res) => {
         const run_ = activeRuns.get(id);
         return sendJson(res, 200, {
           ...meta,
+          hostName: hostNameFor(meta.host),
           pending: (meta.pending || []).length,
           messages: loadMsgs(id),
           // partial text of an in-flight turn so a cold open shows progress
@@ -4331,6 +4380,12 @@ const server = http.createServer(async (req, res) => {
         return sendJson(res, 200, { ok: true });
       }
       if (req.method === 'POST' && sub === '/messages') {
+        // Sealed means finished: a Round's run answered its goal and closed. It is
+        // kept so it can be read, not continued — and refusing here is what makes
+        // "auto end" true rather than merely a label on a row.
+        if (meta.sealed) {
+          return sendErr(res, 409, 'this run has finished and is kept for review — start a new chat to continue');
+        }
         const body = JSON.parse(await readBody(req) || '{}');
         const text = typeof body.text === 'string' ? body.text.trim() : '';
         if (!text) return sendErr(res, 400, 'text required');

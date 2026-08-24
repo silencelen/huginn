@@ -82,6 +82,8 @@ fun ChatScreen(
     voiceReady: Boolean,
     onVoicePermission: () -> Unit,
     draft: String,
+    /** A finished Round run: readable, but closed to new messages. */
+    sealedRun: Boolean = false,
     onDraft: (String) -> Unit,
     onSend: (String) -> Unit,
     onCancel: () -> Unit,
@@ -208,6 +210,7 @@ fun ChatScreen(
         }
 
         Composer(
+            sealedRun = sealedRun,
             draft = draft,
             onDraft = onDraft,
             sending = sending,
@@ -273,6 +276,7 @@ private fun ThinkingLine() {
 
 @Composable
 private fun Composer(
+    sealedRun: Boolean = false,
     draft: String,
     onDraft: (String) -> Unit,
     sending: Boolean,
@@ -287,6 +291,18 @@ private fun Composer(
     onAttachFile: (android.net.Uri) -> Unit = {},
     onClearAttachment: () -> Unit = {},
 ) {
+    // REPLACED, not disabled beside a note. The daemon refuses a send to a sealed
+    // run with 409, and offering an input that cannot deliver is the kind of small
+    // dishonesty that makes a working feature feel broken. Returning early here
+    // rather than at the call site keeps the decision in one place, and the scope
+    // of the `return` unambiguous.
+    if (sealedRun) {
+        // navigationBarsPadding, like the Surface below it: the Scaffold sets
+        // contentWindowInsets to zero precisely because every composer owns its own
+        // inset, so a replacement that forgot it would sit under the system bar.
+        SealedNote(Modifier.fillMaxWidth().navigationBarsPadding())
+        return
+    }
     Surface(color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f)) {
       Column {
         AttachmentBar(attachment, onClearAttachment)

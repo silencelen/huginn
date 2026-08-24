@@ -1584,6 +1584,16 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
     private val _chatMode = MutableStateFlow("ask")
     val chatMode: StateFlow<String> = _chatMode.asStateFlow()
 
+    /**
+     * Whether the open chat is a finished Round run.
+     *
+     * Read from the chat's own meta, NOT from the chats list: a Round's runs are
+     * deliberately absent from that list, so looking them up there would find
+     * nothing and every sealed run would render as still open.
+     */
+    private val _chatSealed = MutableStateFlow(false)
+    val chatSealed: StateFlow<Boolean> = _chatSealed.asStateFlow()
+
     private val _chatModel = MutableStateFlow<String?>(null)
     val chatModel: StateFlow<String?> = _chatModel.asStateFlow()
 
@@ -1626,6 +1636,7 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
             _chatModel.value = meta?.model
             _chatEffort.value = meta?.effort
             _chatTitle.value = meta?.title
+            _chatSealed.value = meta?.closed == true
             // A chat that has never run has no transcript yet; that is not an error.
             loadChatTranscript(id)
             attachIfRunning(id, meta)

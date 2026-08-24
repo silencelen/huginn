@@ -99,6 +99,31 @@ fun roundSubtitle(round: Round, nowMs: Long): String {
  */
 fun roundLastLine(round: Round): String {
     val last = round.lastRun ?: return "No runs yet"
-    val prefix = if (last.malformed) "Unreported: " else ""
+    // Order matters: an unmet goal is the more important of the two, because a
+    // headline can be perfectly cheerful while the job was not done.
+    val prefix = when {
+        last.goalMet == false -> "Did not finish: "
+        last.malformed -> "Unreported: "
+        else -> ""
+    }
     return prefix + last.headline.ifBlank { "(no headline)" }
 }
+
+/**
+ * Where a chat is running, for a reader — or null when it is this host.
+ *
+ * Null rather than "local" on purpose: the overwhelmingly common case needs no
+ * label at all, and badging every ordinary chat with "huginn" would make the one
+ * that IS somewhere else stop standing out. A badge that is always on says
+ * nothing.
+ */
+fun chatHostLabel(host: String?, hostName: String?): String? {
+    if (host.isNullOrBlank() || host == "local") return null
+    return hostName?.takeIf { it.isNotBlank() } ?: "another machine"
+}
+
+/** The one line a sealed run shows instead of a composer. */
+fun sealedNote(round: Boolean = true): String =
+    if (round) "This round has finished. It is kept here for review."
+    else "This conversation is closed."
+

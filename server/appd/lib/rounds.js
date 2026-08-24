@@ -202,20 +202,37 @@ the operator; prose above it is kept in the chat but is not the report.
 
 \`\`\`huginn-report
 {"status":"ok","headline":"one line, under 90 characters, what you found",
+ "goalMet":true,
  "items":[{"title":"short label","detail":"what is wrong","suggest":"the next step"}]}
 \`\`\`
 
 status  ok = nothing needs anyone · attention = worth knowing · action = something needs doing
+goalMet did you actually reach the goal stated above? Answer honestly — a false
+        here is USEFUL, and is reported as needing attention rather than hidden.
+        Omit it only if this round stated no goal.
 items   ONLY things needing a decision or an action, each with a concrete next step.
         A clean run has an empty list — do not invent items to fill it.
 headline stands alone: it is what arrives as a notification, with no context around it.
 
+This run gets ONE turn. It ends when you stop, and the conversation is then closed
+and kept for review — there is no second message coming, so finish the job or say
+plainly in the report what stopped you.
+
 Write the block LAST and do not discuss it. A missing or malformed block is
 reported as "unknown" with a truncated quote of whatever you said last.`;
 
-/** The prompt as the Round's run actually receives it. */
+/**
+ * The prompt as the Round's run actually receives it.
+ *
+ * The goal goes FIRST and is stated as a completion test rather than a topic. A
+ * scheduled run has nobody to ask "is this enough?", so the only thing that can
+ * tell it when to stop is a sentence written in advance saying what done looks
+ * like.
+ */
 function promptFor(round) {
-  return `${String(round.prompt || '').trim()}\n${REPORT_CONTRACT}`;
+  const goal = String(round.goal || '').trim();
+  const head = goal ? `GOAL — this run is done when: ${goal}\n\n` : '';
+  return `${head}${String(round.prompt || '').trim()}\n${REPORT_CONTRACT}`;
 }
 
 function cleanItem(raw) {
@@ -255,6 +272,10 @@ function parseReport(text) {
   return {
     status: STATUSES.includes(o.status) ? o.status : 'unknown',
     headline,
+    // Tri-state on purpose: true, false, and "did not say". A Round with no goal
+    // has nothing to answer, and coercing that to false would report every one of
+    // them as having failed.
+    goalMet: typeof o.goalMet === 'boolean' ? o.goalMet : null,
     items: Array.isArray(o.items) ? o.items.slice(0, 20).map(cleanItem).filter(Boolean) : [],
     malformed: false,
   };
@@ -273,6 +294,7 @@ function fallbackReport(text, why = 'no huginn-report block') {
   return {
     status: 'unknown',
     headline: flat ? flat.slice(0, 120) : `run produced no output (${why})`,
+    goalMet: null,
     items: [],
     malformed: true,
   };
@@ -280,7 +302,27 @@ function fallbackReport(text, why = 'no huginn-report block') {
 
 /** A run that never got as far as an answer. */
 function errorReport(why) {
-  return { status: 'action', headline: `run failed: ${String(why || 'unknown error').slice(0, 100)}`, items: [], malformed: true };
+  return {
+    status: 'action',
+    headline: `run failed: ${String(why || 'unknown error').slice(0, 100)}`,
+    goalMet: false,
+    items: [],
+    malformed: true,
+  };
+}
+
+/**
+ * The status a Round's row should actually show.
+ *
+ * A run that says "ok" while admitting it did not reach its goal has not had a
+ * clean week — it has quietly not done the job, which is the failure most worth
+ * surfacing because nothing else about it looks wrong. So an unmet goal lifts a
+ * clean status to `attention`; it never lowers anything.
+ */
+function effectiveStatus(report) {
+  if (!report) return 'unknown';
+  if (report.goalMet === false && report.status === 'ok') return 'attention';
+  return report.status;
 }
 
 /**
@@ -327,5 +369,6 @@ module.exports = {
   KINDS, MISSED_GRACE_MS, STATUSES, REPORT_CONTRACT,
   partsIn, offsetMs, epochForWallClock,
   nextFireAt, validateSchedule, describeSchedule, clockWords,
-  promptFor, parseReport, fallbackReport, errorReport, shouldNotify, dueDecision,
+  promptFor, parseReport, fallbackReport, errorReport, effectiveStatus,
+  shouldNotify, dueDecision,
 };
