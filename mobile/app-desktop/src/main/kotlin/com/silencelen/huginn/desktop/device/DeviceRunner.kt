@@ -64,14 +64,28 @@ class DeviceRunner(
     @Volatile
     private var current: Process? = null
 
+    /**
+     * IDEMPOTENT, and that is the whole point.
+     *
+     * This is called from the app's 5-second poll so the runner self-heals if the
+     * setting changes underneath it. The first version cancelled unconditionally
+     * and started a fresh job — which meant the loop was torn down every five
+     * seconds and could NEVER hold a 25-second long poll open. Measured against
+     * the live host: 518 registrations in 45 minutes and 4 work polls, so every
+     * job queued to that machine sat untouched until the daemon declared it
+     * silent. It looked healthy the whole time, because registering and beating
+     * are short requests that always succeeded.
+     */
     fun start() {
-        job?.cancel()
+        if (job?.isActive == true) return
         job = scope.launch { supervise() }
     }
 
     fun stop() {
         job?.cancel()
         job = null
+        // The child does not die with the coroutine: a cancelled `stream()` stops
+        // reading, but the process it spawned keeps running with nobody listening.
         current?.destroy()
         _status.value = DeviceStatus(note = "Off")
     }
@@ -127,8 +141,24 @@ class DeviceRunner(
         }
 
         try {
+            var failures = 0
             while (scope.isActive && settings.deviceEnabledNow()) {
-                val work = client.pollWork(id, waitS = 25, locked = LockProbe.locked())
+                // Caught HERE rather than letting it reach supervise(): a blip on
+                // one poll is not a reason to re-enrol, and re-enrolling on every
+                // hiccup is what turns a flaky link into a stream of registrations.
+                val work = try {
+                    val w = client.pollWork(id, waitS = 25, locked = LockProbe.locked())
+                    failures = 0
+                    w
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    failures += 1
+                    if (failures >= 5) throw e          // genuinely broken: re-enrol
+                    _status.value = _status.value.copy(note = "Retrying: ${short(e)}")
+                    delay(3_000)
+                    continue
+                }
                 if (work == null) continue
                 runWork(id, work)
             }

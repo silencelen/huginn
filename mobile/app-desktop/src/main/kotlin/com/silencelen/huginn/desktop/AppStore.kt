@@ -204,10 +204,12 @@ class AppStore(
     /**
      * Brings the runner into line with the setting, in both directions.
      *
-     * Called once at startup and again on every toggle, so turning it off really
-     * does stop it: a runner left holding a long poll would keep this machine in
-     * the device list, and a device that is listed but will not run anything is
-     * worse than one that is absent.
+     * Called from the 5-second poll, so [DeviceRunner.start] MUST be idempotent —
+     * an earlier version of this comment claimed it already was, and it was not:
+     * start() cancelled and relaunched, so the runner was rebuilt every five
+     * seconds and never held a long poll open long enough to be given work.
+     * Turning it off really does stop it, which matters because a device that is
+     * listed but will not run anything is worse than one that is absent.
      */
     fun syncDeviceRunner() {
         if (settings.deviceEnabledNow()) deviceRunner.start() else deviceRunner.stop()
@@ -509,9 +511,9 @@ class AppStore(
                 refreshSessions()
                 refreshRounds()
                 refreshDevices()
-                // Cheap and idempotent: start()/stop() on an already-correct runner
-                // is a no-op, and this way the runner survives a settings file
-                // edited underneath the app as well as a toggle in the UI.
+                // Cheap, because start() returns immediately when the runner is
+                // already going. This way it survives a settings file edited
+                // underneath the app as well as a toggle in the UI.
                 syncDeviceRunner()
                 if (_view.value == View.STATUS) refreshStatus()
                 delay(POLL_MS)
