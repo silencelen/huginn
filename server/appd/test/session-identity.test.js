@@ -22,7 +22,20 @@ const os = require('node:os');
 const path = require('node:path');
 const crypto = require('node:crypto');
 
-const PORT = 9960 + (process.pid % 30);
+// PORT ALLOCATION — every file here binds a real socket and `node --test` runs
+// the files CONCURRENTLY, so these ranges must not overlap. They did: this file
+// and routes-lifecycle both sat inside 9700-9949, and the suite passed four times
+// before failing 16 tests on an unlucky pair of pids. The width is what makes a
+// range, not the base, so both are fixed here:
+//
+//   routes-answer      8788 + pid%900   ->  8788-9687
+//   routes-lifecycle   9700 + pid%100   ->  9700-9799
+//   routes-rounds      9800 + pid%60    ->  9800-9859
+//   routes-devices     9870 + pid%50    ->  9870-9919
+//   session-identity   9930 + pid%40    ->  9930-9969
+//
+// Adding a file? Take the next free block and extend this table, in every file.
+const PORT = 9930 + (process.pid % 40);
 const BASE = `http://127.0.0.1:${PORT}`;
 const PFX = `ident-${process.pid}`;
 
