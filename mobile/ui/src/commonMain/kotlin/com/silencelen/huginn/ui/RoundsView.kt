@@ -41,6 +41,8 @@ fun RoundsSection(
     onOpenRound: (Round) -> Unit,
     onRunNow: (Round) -> Unit,
     onSetEnabled: (Round, Boolean) -> Unit,
+    /** Null hides the control, for a surface that cannot edit. */
+    onEdit: ((Round) -> Unit)? = null,
     modifier: Modifier = Modifier,
     header: String? = "ROUNDS",
 ) {
@@ -63,6 +65,7 @@ fun RoundsSection(
                 onOpen = { onOpenRound(round) },
                 onRunNow = { onRunNow(round) },
                 onSetEnabled = { onSetEnabled(round, it) },
+                onEdit = onEdit?.let { f -> { f(round) } },
             )
         }
     }
@@ -75,6 +78,7 @@ private fun RoundRow(
     onOpen: () -> Unit,
     onRunNow: () -> Unit,
     onSetEnabled: (Boolean) -> Unit,
+    onEdit: (() -> Unit)?,
 ) {
     val status = roundStatusOf(round.lastRun?.status)
     Surface(
@@ -160,6 +164,10 @@ private fun RoundRow(
                 TextButton(onClick = onRunNow, enabled = !round.running && round.enabled) {
                     Text(if (round.running) "Running" else "Run now")
                 }
+                // A word, not a pencil. The row already carries a status mark and
+                // a verdict; an icon here would be a second thing to decode in a
+                // place where the text is doing the work.
+                onEdit?.let { TextButton(onClick = it) { Text("Edit") } }
             }
         }
     }

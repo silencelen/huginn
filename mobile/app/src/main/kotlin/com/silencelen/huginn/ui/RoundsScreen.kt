@@ -6,7 +6,12 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Add
+import androidx.compose.material3.ExtendedFloatingActionButton
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -36,7 +41,9 @@ fun RoundsScreen(
     onOpenRound: (Round) -> Unit,
     onRunRound: (Round) -> Unit,
     onSetRoundEnabled: (Round, Boolean) -> Unit,
+    onEditRound: (Round) -> Unit,
     onOpenSettings: () -> Unit,
+    onNewRound: () -> Unit,
     onStartPolling: () -> Unit = {},
     onStopPolling: () -> Unit = {},
 ) {
@@ -83,9 +90,19 @@ fun RoundsScreen(
                         onOpenRound = onOpenRound,
                         onRunNow = onRunRound,
                         onSetEnabled = onSetRoundEnabled,
+                        onEdit = onEditRound,
                     )
                 }
             }
         }
+
+        // The whole point of this release: until now a Round could only be made
+        // with curl, so the feature was real and unreachable.
+        ExtendedFloatingActionButton(
+            onClick = onNewRound,
+            modifier = Modifier.align(Alignment.BottomEnd).padding(16.dp),
+            icon = { Icon(Icons.Filled.Add, contentDescription = null) },
+            text = { Text("New round") },
+        )
     }
 }
