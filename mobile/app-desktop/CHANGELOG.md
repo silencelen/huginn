@@ -14,6 +14,22 @@ the Electron client's go to `/v1/desktop` and the two never mix — see
      refusal is deliberate — it is what stops a release going out with no notes.
      ─────────────────────────────────────────────────────────────────────────── -->
 
+## 0.8.2
+
+### Fixed
+- **This machine was enrolling but never being given work.** The runner is kept in step with
+  its setting from the app's five-second poll, and `start()` cancelled and relaunched
+  unconditionally — so the loop was torn down every five seconds and could never hold a
+  25-second long poll open. Measured against the live host: **518 registrations in 45 minutes
+  and 4 work polls**, with every job queued to this machine sitting untouched until the daemon
+  declared it silent. It looked healthy throughout, because registering and beating are short
+  requests that always succeeded; only the one request that is *supposed* to be silent was
+  being killed. `start()` is now idempotent.
+- A transient poll failure no longer costs the enrolment — it is caught at the poll rather
+  than unwinding to a re-enrol, so a flaky link stops producing a stream of registrations.
+- Stopping the runner destroys the child it spawned. A cancelled coroutine stops reading, but
+  the process it started keeps running with nobody listening.
+
 ## 0.8.1
 
 ### Added
