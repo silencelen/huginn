@@ -740,25 +740,38 @@ class HuginnClient(
         s.everyMinutes?.let { put("everyMinutes", JsonPrimitive(it)) }
     }
 
+    /**
+     * @param goal what "done" means, as a completion test the run is asked to
+     *   answer. Empty is legitimate — a Round that reports on something has no
+     *   finish line — but it is the difference between a report and a verdict,
+     *   so it is second in the list rather than buried at the end.
+     * @param host a device id, or null for the huginn host. Checked at CREATION
+     *   rather than at 3am on a Sunday: an `act` Round pinned to a look-only
+     *   machine is refused now instead of failing every week with nobody watching.
+     */
     suspend fun createRound(
         title: String,
         prompt: String,
         schedule: RoundSchedule,
+        goal: String = "",
         mode: String = "ask",
         notifyWhen: String = "attention",
         model: String? = null,
         effort: String? = null,
         catchUp: Boolean = false,
+        host: String? = null,
     ): Round = decode(
         post("/v1/rounds", body = buildJsonObject {
             put("title", JsonPrimitive(title))
             put("prompt", JsonPrimitive(prompt))
             put("schedule", scheduleJson(schedule))
+            if (goal.isNotBlank()) put("goal", JsonPrimitive(goal))
             put("mode", JsonPrimitive(mode))
             put("notifyWhen", JsonPrimitive(notifyWhen))
             if (model != null) put("model", JsonPrimitive(model))
             if (effort != null) put("effort", JsonPrimitive(effort))
             if (catchUp) put("catchUp", JsonPrimitive(true))
+            if (host != null) put("host", JsonPrimitive(host))
         }),
     )
 
@@ -769,18 +782,25 @@ class HuginnClient(
         title: String? = null,
         prompt: String? = null,
         schedule: RoundSchedule? = null,
+        goal: String? = null,
         mode: String? = null,
         notifyWhen: String? = null,
         catchUp: Boolean? = null,
+        host: String? = null,
     ): Round = decode(
         call("/v1/rounds/$id", HttpMethod.Patch, body = buildJsonObject {
             enabled?.let { put("enabled", JsonPrimitive(it)) }
             title?.let { put("title", JsonPrimitive(it)) }
             prompt?.let { put("prompt", JsonPrimitive(it)) }
             schedule?.let { put("schedule", scheduleJson(it)) }
+            // Sent even when blank, unlike create: clearing a goal is a real edit,
+            // and "omit what you do not mean to change" makes blank the only way
+            // to say "this Round no longer has a finish line".
+            goal?.let { put("goal", JsonPrimitive(it)) }
             mode?.let { put("mode", JsonPrimitive(it)) }
             notifyWhen?.let { put("notifyWhen", JsonPrimitive(it)) }
             catchUp?.let { put("catchUp", JsonPrimitive(it)) }
+            host?.let { put("host", JsonPrimitive(it)) }
         }),
     )
 

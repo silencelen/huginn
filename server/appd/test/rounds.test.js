@@ -321,3 +321,50 @@ test('a disabled Round neither runs nor re-arms', () => {
   assert.equal(d.run, false);
   assert.equal(d.nextRunAt, NOW - 1000, 'left where it was, so enabling does not lose the slot');
 });
+
+// ---------------------------------------------------------- a default zone
+
+test('a schedule with no zone takes the one it is given', () => {
+  // The shared UI code is multiplatform and has no calendar, so a client cannot
+  // always name a zone. An absent one means the host's — which is where the
+  // Round fires and whose DST rules it obeys.
+  const r = R.validateSchedule({ kind: 'weekly', days: [0], at: '19:00' }, LA);
+  assert.equal(r.ok, true, r.error);
+  assert.equal(r.schedule.tz, LA);
+});
+
+test('a zone the client DID name wins over the default', () => {
+  const r = R.validateSchedule({ kind: 'daily', at: '07:00', tz: 'Europe/London' }, LA);
+  assert.equal(r.ok, true, r.error);
+  assert.equal(r.schedule.tz, 'Europe/London');
+});
+
+test('a blank zone is an absent one, not an invalid one', () => {
+  // "   " arriving from a text field must fall back rather than fail: the user
+  // did not name a zone, and telling them their zone is malformed is a lie.
+  for (const tz of ['', '   ', null, undefined]) {
+    const r = R.validateSchedule({ kind: 'daily', at: '07:00', tz }, LA);
+    assert.equal(r.ok, true, `tz=${JSON.stringify(tz)}: ${r.error}`);
+    assert.equal(r.schedule.tz, LA);
+  }
+});
+
+test('no zone anywhere is still refused', () => {
+  // The default makes a zone easy to supply, not optional. A schedule with no
+  // zone cannot be fired at a time, and storing one would be storing a bug.
+  const r = R.validateSchedule({ kind: 'daily', at: '07:00' }, null);
+  assert.equal(r.ok, false);
+  assert.match(r.error, /tz/);
+});
+
+test('a nonsense zone is refused even as the default', () => {
+  const r = R.validateSchedule({ kind: 'daily', at: '07:00' }, 'Mars/Olympus_Mons');
+  assert.equal(r.ok, false);
+});
+
+test('an interval schedule needs no zone at all', () => {
+  // It counts minutes; there is no wall clock to place, so no zone to get wrong.
+  const r = R.validateSchedule({ kind: 'interval', everyMinutes: 30 });
+  assert.equal(r.ok, true, r.error);
+  assert.equal(r.schedule.tz, undefined);
+});
