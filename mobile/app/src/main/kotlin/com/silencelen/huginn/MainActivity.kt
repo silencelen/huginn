@@ -808,6 +808,7 @@ fun HuginnApp(
             ChatsScreen(
                 chats = chats,
                 devices = devices,
+                onOpenNewChat = { vm.refreshDevices() },
                 loading = loading,
                 connected = connected,
                 selectedId = if (twoPane) (dest as? Dest.Chat)?.id else null,
@@ -835,6 +836,8 @@ fun HuginnApp(
                 onRunRound = { r -> vm.runRound(r.id) },
                 onSetRoundEnabled = { r, on -> vm.setRoundEnabled(r.id, on) },
                 onOpenSettings = { dest = Dest.Settings },
+                onStartPolling = { vm.startRoundsPolling() },
+                onStopPolling = { vm.stopRoundsPolling() },
             )
         }
         val chatDetail: @Composable (String) -> Unit = { id ->
