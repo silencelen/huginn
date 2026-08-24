@@ -3,9 +3,9 @@
 #     if (Test-Path "$HOME\.huginn\huginn.ps1") { . "$HOME\.huginn\huginn.ps1" }
 # Targets the `huginn` SSH alias by default; override per-device with:  $env:HUGINN_HOST = 'my-host'
 # Self-update with:  huginn update   (pulls this file from the repo; gh -> scp fallback)
-# Version: 0.8.3
+# Version: 0.9.0
 
-$script:HUGINN_VERSION = '0.8.3'
+$script:HUGINN_VERSION = '0.9.0'
 $script:HUGINN_REPO    = 'silencelen/huginn'
 # Where `huginn update` may fetch a replacement for THIS FILE, which is then loaded
 # into the shell. Pinned, and deliberately NOT $HUGINN_HOST: that variable answers
@@ -265,6 +265,11 @@ function huginn {
     ssh -T $H "tmux ls 2>/dev/null || echo '(no sessions running)'"
   } elseif ($args[0] -eq 'status' -or $args[0] -eq 'st') {
     ssh -T $H huginn-status
+  } elseif ($args[0] -eq 'rounds' -or $args[0] -eq 'round') {
+    # Same host-side renderer the bash client calls; see huginn.sh.
+    ssh -T $H huginn-rounds
+  } elseif ($args[0] -eq 'devices' -or $args[0] -eq 'device') {
+    ssh -T $H huginn-devices
   } elseif ($args[0] -eq 'desktop') {
     $arg = if ($args.Count -gt 1) { "$($args[1])".ToLower() } else { '' }
     $want = switch ($arg) {
@@ -436,7 +441,7 @@ function _Huginn-Sessions {
 }
 Register-ArgumentCompleter -CommandName huginn, rclaude, rcc -ScriptBlock {
   param($word, $ast, $pos)
-  $cmds = 'list', 'status', 'solo', 'rename', 'kill', 'end', '-p', '-y', 'usage', 'cost', 'desktop', 'update', 'version', 'help'
+  $cmds = 'list', 'status', 'rounds', 'devices', 'solo', 'rename', 'kill', 'end', '-p', '-y', 'usage', 'cost', 'desktop', 'update', 'version', 'help'
   # tokens already typed after the command name, excluding the partial word being completed
   $typed = @($ast.CommandElements | Select-Object -Skip 1 | ForEach-Object { $_.ToString() })
   if ($word -and $typed.Count -ge 1) { $typed = @($typed | Select-Object -SkipLast 1) }
