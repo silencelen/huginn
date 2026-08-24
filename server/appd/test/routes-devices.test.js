@@ -241,6 +241,55 @@ test('a run happens on the device and comes back through the same pipeline', asy
   assert.equal(after_.body.finishedRuns, 1, 'and it left the durable finish mark');
 });
 
+test("a remote chat's conversation is readable, though its transcript is on the other machine", async () => {
+  // The bug: a chat's reader renders Claude's own transcript file, found under
+  // THIS host's ~/.claude/projects. A run on another machine wrote that file
+  // there, so the conversation came back empty — no answer, and the user's own
+  // message gone with it — while the chat list still showed the text.
+  const d = await enrol({ name: 'reader' });
+  const chat = await chatOn(d.id, 'ask');
+  await send(chat.body.id, 'say something back');
+
+  // Visible BEFORE the device has even picked it up: no session id exists yet,
+  // and the old code refused with "chat has not run yet".
+  const early = await api(`/v1/chats/${chat.body.id}/transcript`);
+  assert.equal(early.status, 200);
+  assert.ok(early.body.events.some((e) => e.kind === 'user' && /say something back/.test(e.text || '')),
+    'the message you just sent is on screen while the job is still queued');
+
+  const work = (await poll(d.id)).body.work;
+  await postEvents(d.id, work.id, [assistant('here you go')]);
+  await postEvents(d.id, work.id, [{ type: 'result', is_error: false }], { done: true, exitCode: 0 });
+
+  const full = await api(`/v1/chats/${chat.body.id}/transcript`);
+  assert.equal(full.status, 200);
+  const kinds = full.body.events.map((e) => e.kind);
+  assert.ok(kinds.includes('user') && kinds.includes('assistant'), JSON.stringify(kinds));
+  assert.ok(full.body.events.some((e) => e.kind === 'assistant' && /here you go/.test(e.text || '')));
+  assert.equal(full.body.hostName, 'reader', 'and it says where it ran');
+
+  // The paging contract, which is the easy thing to get wrong: the reader hands
+  // the offset back and APPENDS what returns, so a second read at the same
+  // offset must be empty or the conversation doubles on screen.
+  const again = await api(`/v1/chats/${chat.body.id}/transcript?offset=${full.body.nextOffset}`);
+  assert.equal(again.status, 200);
+  assert.deepEqual(again.body.events, [], 'a tail read past the end returns nothing');
+});
+
+test('a device failure is READABLE in the conversation, not just in the list', async () => {
+  // Errors are recorded as type `error`, and the readers know six kinds — error
+  // is not one of them — so emitting it as-is would render as nothing at all.
+  const d = await enrol({ name: 'failreader' });
+  const chat = await chatOn(d.id, 'ask');
+  await send(chat.body.id, 'this will fail');
+  const work = (await poll(d.id)).body.work;
+  await postEvents(d.id, work.id, [], { done: true, exitCode: 1, error: 'claude is not installed there' });
+
+  const t = await api(`/v1/chats/${chat.body.id}/transcript`);
+  assert.ok(t.body.events.some((e) => /not installed/.test(e.text || '')),
+    'the reason is in the conversation, in a kind the reader draws');
+});
+
 test('the long poll wakes the moment work exists', async () => {
   // The difference between "starts now" and "starts within 25 seconds" is the
   // difference between the feature feeling remote and feeling broken.
