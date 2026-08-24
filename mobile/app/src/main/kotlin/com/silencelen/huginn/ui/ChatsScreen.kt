@@ -30,6 +30,7 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -45,6 +46,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.silencelen.huginn.data.Chat
+import com.silencelen.huginn.data.Device
 
 /**
  * Home surface: every headless conversation with huginn, newest first. "Ask" runs
@@ -55,11 +57,14 @@ import com.silencelen.huginn.data.Chat
 @Composable
 fun ChatsScreen(
     chats: List<Chat>,
+    /** Machines a chat can be started on. Empty is the ordinary case. */
+    devices: List<Device> = emptyList(),
     loading: Boolean,
     connected: Boolean?,
     selectedId: String? = null,
     onOpen: (String) -> Unit,
-    onNew: (String) -> Unit,
+    /** (mode, host) — host is null for this machine. */
+    onNew: (String, String?) -> Unit,
     onDelete: (String) -> Unit,
     onOpenSettings: () -> Unit,
     /**
@@ -71,7 +76,11 @@ fun ChatsScreen(
     newChatRequest: Int = 0,
 ) {
     var showNew by remember { mutableStateOf(false) }
+    // Null = this host. Reset whenever the dialog opens, so a machine picked once
+    // does not silently become the default for every chat afterwards.
+    var newHost by remember { mutableStateOf<String?>(null) }
     LaunchedEffect(newChatRequest) { if (newChatRequest > 0) showNew = true }
+    LaunchedEffect(showNew) { if (showNew) newHost = null }
 
     Box(Modifier.fillMaxSize()) {
         if (chats.isEmpty() && !loading) {
@@ -121,23 +130,106 @@ fun ChatsScreen(
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
+                    // Only when there is a choice to make. With nothing enrolled,
+                    // "where" is not a question and asking it would be noise on
+                    // the one dialog every chat goes through.
+                    if (devices.isNotEmpty()) {
+                        Text(
+                            "WHERE IT RUNS",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.padding(top = 10.dp),
+                        )
+                        HostChoice(
+                            label = "This host",
+                            detail = "huginn",
+                            selected = newHost == null,
+                            enabled = true,
+                            onClick = { newHost = null },
+                        )
+                        devices.forEach { d ->
+                            HostChoice(
+                                label = d.name,
+                                // The reason it cannot be picked, not just that it
+                                // cannot: "asleep" and "read-only" need different
+                                // actions from whoever is reading.
+                                detail = when {
+                                    !d.online -> "not reachable"
+                                    d.locked -> "locked \u2014 Ask only"
+                                    else -> "${d.platform} \u00b7 ${d.effectiveScope}"
+                                },
+                                selected = newHost == d.id,
+                                enabled = d.online,
+                                onClick = { newHost = d.id },
+                            )
+                        }
+                    }
                 }
             },
             confirmButton = {
-                TextButton(onClick = { showNew = false; onNew("act") }) {
+                // Act is disabled for a machine that will only Look. The daemon
+                // would refuse anyway; refusing here means the answer arrives
+                // before the tap rather than after it.
+                val actOk = newHost == null ||
+                    devices.firstOrNull { it.id == newHost }?.effectiveScope != "look"
+                TextButton(
+                    onClick = { showNew = false; onNew("act", newHost) },
+                    enabled = actOk,
+                ) {
                     Icon(Icons.Filled.Bolt, contentDescription = null, modifier = Modifier.size(18.dp))
                     Spacer(Modifier.width(6.dp))
                     Text("Act")
                 }
             },
             dismissButton = {
-                TextButton(onClick = { showNew = false; onNew("ask") }) {
+                TextButton(onClick = { showNew = false; onNew("ask", newHost) }) {
                     Icon(Icons.Filled.Chat, contentDescription = null, modifier = Modifier.size(18.dp))
                     Spacer(Modifier.width(6.dp))
                     Text("Ask")
                 }
             },
         )
+    }
+}
+
+
+/**
+ * One machine in the new-chat dialog.
+ *
+ * A radio rather than a dropdown: the list is short, and where something runs is
+ * worth seeing all of at once rather than behind a tap. Unreachable machines stay
+ * VISIBLE but unselectable, with the reason — hiding them would leave the reader
+ * wondering whether a device they enrolled had disappeared.
+ */
+@Composable
+private fun HostChoice(
+    label: String,
+    detail: String,
+    selected: Boolean,
+    enabled: Boolean,
+    onClick: () -> Unit,
+) {
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .clickable(enabled = enabled, onClick = onClick)
+            .padding(vertical = 2.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        RadioButton(selected = selected, onClick = onClick, enabled = enabled)
+        Column(Modifier.padding(start = 4.dp)) {
+            Text(
+                label,
+                style = MaterialTheme.typography.bodyMedium,
+                color = if (enabled) MaterialTheme.colorScheme.onSurface
+                else MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Text(
+                detail,
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
     }
 }
 

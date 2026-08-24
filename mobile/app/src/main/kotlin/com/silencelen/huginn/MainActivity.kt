@@ -469,6 +469,7 @@ fun HuginnApp(
 
     val chats by vm.chats.collectAsState()
     val rounds by vm.rounds.collectAsState()
+    val devices by vm.devices.collectAsState()
     val chatSealed by vm.chatSealed.collectAsState()
     // Recomputed on every recomposition, which the chat/round refresh already
     // drives. A Round row says "in 4h", not "in 3h 59m", so a clock that ticks
@@ -806,11 +807,14 @@ fun HuginnApp(
         val chatsPane: @Composable (Boolean) -> Unit = { twoPane ->
             ChatsScreen(
                 chats = chats,
+                devices = devices,
                 loading = loading,
                 connected = connected,
                 selectedId = if (twoPane) (dest as? Dest.Chat)?.id else null,
                 onOpen = { id -> vm.openChat(id); dest = Dest.Chat(id) },
-                onNew = { mode -> vm.newChat(mode) { id -> vm.openChat(id); dest = Dest.Chat(id) } },
+                onNew = { mode, host ->
+                    vm.newChat(mode, host) { id -> vm.openChat(id); dest = Dest.Chat(id) }
+                },
                 onDelete = { vm.deleteChat(it) },
                 onOpenSettings = { dest = Dest.Settings },
                 newChatRequest = newChatAsk,

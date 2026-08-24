@@ -1,5 +1,17 @@
 # Huginn changelog
 
+## 2.66.0 — 2026-08-24
+
+### Added
+- **Start a chat on another machine, from the phone.** New chat now asks where it runs when
+  any machine is enrolled — this host, or one of them. Machines that cannot take the job stay
+  VISIBLE but unselectable with the reason, because "asleep" and "read-only" need different
+  actions from whoever is reading, and hiding a device you enrolled would just look like it
+  had disappeared. Act is disabled for a machine that will only Look: the host would refuse
+  anyway, so the answer arrives before the tap rather than after it.
+- The question only appears when there is a choice to make. With nothing enrolled, "where"
+  is not a question, and asking it on the one dialog every chat goes through would be noise.
+
 ## 2.65.0 — 2026-08-24
 
 ### Changed
