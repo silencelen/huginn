@@ -210,6 +210,11 @@ test('a run happens on the device and comes back through the same pipeline', asy
 
   const open = await api(`/v1/chats/${chat.body.id}`);
   assert.equal(open.body.running, true, 'still in flight');
+  // The NAME, resolved by the daemon. A client that looked this up itself would
+  // print a bare uuid for a device that had since been unenrolled.
+  assert.equal(open.body.hostName, 'runner', 'the chat says which machine it runs on');
+  const listed = (await api('/v1/chats')).body.chats.find((c) => c.id === chat.body.id);
+  assert.equal(listed.hostName, 'runner', 'and so does the list row');
   assert.ok(open.body.messages.some((m) => m.type === 'assistant' && /It builds/.test(m.text || '')),
     'the remote answer is in the transcript, written by the same handler as a local one');
 

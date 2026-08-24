@@ -14,6 +14,17 @@ the Electron client's go to `/v1/desktop` and the two never mix — see
      refusal is deliberate — it is what stops a release going out with no notes.
      ─────────────────────────────────────────────────────────────────────────── -->
 
+## 0.8.1
+
+### Added
+- **A chat that runs on another machine is badged with its name**, ahead of the act mark —
+  which machine a chat is changing matters more than that it can. Only ever drawn for a remote
+  chat; the common case needs no label, and marking every row would stop the unusual one
+  standing out.
+- **A finished round replaces its composer with a note.** The run has ended and is kept for
+  reading; the host refuses a send with 409, so offering an input that cannot deliver would be
+  a small dishonesty.
+
 ## 0.8.0
 
 ### Give Huginn access to this PC

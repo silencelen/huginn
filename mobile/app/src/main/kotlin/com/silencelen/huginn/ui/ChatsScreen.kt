@@ -45,7 +45,6 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.silencelen.huginn.data.Chat
-import com.silencelen.huginn.data.Round
 
 /**
  * Home surface: every headless conversation with huginn, newest first. "Ask" runs
@@ -56,15 +55,6 @@ import com.silencelen.huginn.data.Round
 @Composable
 fun ChatsScreen(
     chats: List<Chat>,
-    rounds: List<Round> = emptyList(),
-    /**
-     * Passed in rather than read here: ":ui" is multiplatform and has no clock,
-     * and the Round rows describe times relative to now.
-     */
-    nowMs: Long = 0L,
-    onOpenRound: (Round) -> Unit = {},
-    onRunRound: (Round) -> Unit = {},
-    onSetRoundEnabled: (Round, Boolean) -> Unit = { _, _ -> },
     loading: Boolean,
     connected: Boolean?,
     selectedId: String? = null,
@@ -84,10 +74,7 @@ fun ChatsScreen(
     LaunchedEffect(newChatRequest) { if (newChatRequest > 0) showNew = true }
 
     Box(Modifier.fillMaxSize()) {
-        // Rounds count as content: a host with a schedule and no conversations is
-        // set up, not empty, and telling it "No chats yet" would hide the one thing
-        // it does have.
-        if (chats.isEmpty() && rounds.isEmpty() && !loading) {
+        if (chats.isEmpty() && !loading) {
             Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.Center) {
                 if (connected == false) {
                     EmptyState(
@@ -103,19 +90,6 @@ fun ChatsScreen(
             }
         } else {
             LazyColumn(Modifier.fillMaxSize(), contentPadding = androidx.compose.foundation.layout.PaddingValues(bottom = 88.dp)) {
-                if (rounds.isNotEmpty()) {
-                    item(key = "rounds") {
-                        RoundsSection(
-                            rounds = rounds,
-                            nowMs = nowMs,
-                            onOpenRound = onOpenRound,
-                            onRunNow = onRunRound,
-                            onSetEnabled = onSetRoundEnabled,
-                            modifier = Modifier.padding(bottom = 10.dp),
-                        )
-                        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
-                    }
-                }
                 items(chats, key = { it.id }) { chat ->
                     ChatRow(
                         chat,
@@ -206,6 +180,13 @@ private fun ChatRow(chat: Chat, selected: Boolean, onOpen: () -> Unit, onDelete:
                     overflow = TextOverflow.Ellipsis,
                     modifier = Modifier.weight(1f, fill = false),
                 )
+                // Where it runs, when that is not here. Before the act bolt, because
+                // "this is happening on another machine" is the bigger fact about a
+                // row than which tools it holds.
+                if (chat.host != null && chat.host != "local") {
+                    Spacer(Modifier.width(6.dp))
+                    HostBadge(chat.host, chat.hostName)
+                }
                 if (chat.mode == "act") {
                     Spacer(Modifier.width(6.dp))
                     Icon(

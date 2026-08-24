@@ -222,6 +222,52 @@ test('the contract rides on the prompt', () => {
   assert.match(p, /huginn-report/);
 });
 
+test('a goal is stated FIRST, as a completion test', () => {
+  // A scheduled run has nobody to ask "is this enough?", so the only thing that
+  // can tell it when to stop is a sentence written in advance.
+  const p = R.promptFor({ prompt: 'Review the week.', goal: 'every alert is triaged' });
+  assert.match(p, /^GOAL — this run is done when: every alert is triaged/);
+  assert.ok(p.indexOf('GOAL') < p.indexOf('Review the week.'), 'before the task, not after it');
+});
+
+test('a Round with no goal gets no goal line', () => {
+  // Reporting on something is a legitimate Round with no finish line to cross.
+  assert.ok(!R.promptFor({ prompt: 'Just look.' }).includes('GOAL'));
+  assert.ok(!R.promptFor({ prompt: 'Just look.', goal: '   ' }).includes('GOAL'));
+});
+
+test('goalMet is tri-state: yes, no, and did not say', () => {
+  const yes = R.parseReport('```huginn-report\n{"status":"ok","headline":"h","goalMet":true}\n```');
+  const no = R.parseReport('```huginn-report\n{"status":"ok","headline":"h","goalMet":false}\n```');
+  const quiet = R.parseReport('```huginn-report\n{"status":"ok","headline":"h"}\n```');
+  assert.equal(yes.goalMet, true);
+  assert.equal(no.goalMet, false);
+  assert.equal(quiet.goalMet, null, 'a Round with no goal has nothing to answer');
+  // Coercing "did not say" to false would report every goal-less Round as failed.
+  assert.notEqual(quiet.goalMet, false);
+});
+
+test('a non-boolean goalMet is not believed', () => {
+  const r = R.parseReport('```huginn-report\n{"status":"ok","headline":"h","goalMet":"yes"}\n```');
+  assert.equal(r.goalMet, null);
+});
+
+test('an unmet goal lifts a clean status, and never lowers a dirty one', () => {
+  // The failure most worth surfacing: a run that says "ok" while admitting it did
+  // not do the job. Nothing else about it looks wrong.
+  assert.equal(R.effectiveStatus({ status: 'ok', goalMet: false }), 'attention');
+  assert.equal(R.effectiveStatus({ status: 'ok', goalMet: true }), 'ok');
+  assert.equal(R.effectiveStatus({ status: 'ok', goalMet: null }), 'ok');
+  assert.equal(R.effectiveStatus({ status: 'action', goalMet: false }), 'action', 'never downgraded');
+  assert.equal(R.effectiveStatus({ status: 'attention', goalMet: true }), 'attention');
+  assert.equal(R.effectiveStatus(null), 'unknown');
+});
+
+test('a failed run reports its goal as unmet', () => {
+  assert.equal(R.errorReport('claude exited 1').goalMet, false);
+  assert.equal(R.fallbackReport('some prose').goalMet, null, 'but a formatting miss is not a claim');
+});
+
 // ------------------------------------------------------------------ notify
 
 test('notifyWhen decides, and unknown always reaches a human', () => {

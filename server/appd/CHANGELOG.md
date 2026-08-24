@@ -9,6 +9,30 @@ appeared only as a side-note on the app releases it happened to ship with. Three
 undocumented, and the notes-cutting matcher could fuse two sections when an app and an appd
 version number collided. Entries below are reconstructed from the shipping commits.
 
+## 2.61.0 — 2026-08-24
+
+### Added
+- **A Round can state its goal, and is asked whether it reached it.** The goal goes at the
+  front of the prompt as a completion test — a scheduled run has nobody to ask "is this
+  enough?", so the only thing that can tell it when to stop is a sentence written in advance.
+  The report answers with `goalMet`, which is tri-state on purpose: true, false, and *did not
+  say*. A Round with no goal has nothing to answer, and coercing that to false would report
+  every one of them as having failed.
+- **An unmet goal is promoted, never hidden.** A run that says `ok` while admitting it did not
+  finish has not had a clean week — it has quietly not done the job, which is the failure most
+  worth surfacing precisely because nothing else about it looks wrong. So `ok` + `goalMet:false`
+  reports as `attention`, the notification says "did not finish", and `reportedStatus` keeps
+  what the run actually claimed. Promotion only ever raises: `action` is never softened.
+- **A finished run is SEALED.** One turn against a stated goal and then it is over: the chat is
+  kept and readable forever, and refuses new messages with 409. Both clients replace the
+  composer with a note rather than disabling it beside one — offering an input that cannot
+  deliver is the kind of small dishonesty that makes a working feature feel broken. A queue
+  waiting on a sealed run is dropped rather than drained, since draining it would reopen the
+  thing that just ended.
+- **A chat says which machine it runs on.** `host` and a daemon-resolved `hostName` on both the
+  list row and the detail, so a remote chat is obvious at a glance. Resolved server-side because
+  a client looking it up itself would print a bare uuid for a device since unenrolled.
+
 ## 2.60.0 — 2026-08-23
 
 ### Added

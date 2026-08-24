@@ -45,11 +45,14 @@ process.stdin.on('end', () => {
     text = F + 'huginn-report' + NL + '{this is not json}' + NL + F;
   } else {
     const status = (inp.match(/EMIT_STATUS:(\\w+)/) || [])[1] || 'ok';
-    const body = JSON.stringify({
+    const obj = {
       status,
       headline: 'stub report for ' + status,
       items: status === 'ok' ? [] : [{ title: 'a thing', detail: 'it happened', suggest: 'do the thing' }],
-    });
+    };
+    if (inp.includes('EMIT_GOAL_MISS')) obj.goalMet = false;
+    else if (inp.includes('EMIT_GOAL_HIT')) obj.goalMet = true;
+    const body = JSON.stringify(obj);
     text = 'Here is what I found.' + NL + NL + F + 'huginn-report' + NL + body + NL + F;
   }
   console.log(JSON.stringify({ type: 'system', subtype: 'init', session_id: 'stub-' + process.pid }));
@@ -271,6 +274,62 @@ test('a second run cannot start while the first is going', async () => {
   // which case a second run is legitimate. Both are correct; a 500 is not.
   assert.ok([202, 409].includes(second.status), `got ${second.status}`);
   await waitForRun(r.id);
+});
+
+test('a goal is carried into the run and answered', async () => {
+  const r = await mkRound({
+    title: 'goal hit',
+    prompt: 'Do the thing. EMIT_STATUS:ok EMIT_GOAL_HIT',
+    goal: 'the thing is done',
+  });
+  assert.equal(r.goal, 'the thing is done');
+
+  await api(`/v1/rounds/${r.id}/run`, { method: 'POST' });
+  const done = await waitForRun(r.id);
+  assert.equal(done.lastRun.goalMet, true);
+  assert.equal(done.lastRun.status, 'ok');
+});
+
+test('a run that admits it missed its goal is not reported as a clean week', async () => {
+  // The whole point: "ok" plus "I did not finish" must not read as fine.
+  const r = await mkRound({
+    title: 'goal miss',
+    prompt: 'Try. EMIT_STATUS:ok EMIT_GOAL_MISS',
+    goal: 'the thing is done',
+  });
+  await api(`/v1/rounds/${r.id}/run`, { method: 'POST' });
+  const done = await waitForRun(r.id);
+  assert.equal(done.lastRun.goalMet, false);
+  assert.equal(done.lastRun.status, 'attention', 'promoted');
+  assert.equal(done.lastRun.reportedStatus, 'ok', 'and what it actually claimed is still visible');
+});
+
+test("a finished run is SEALED: kept for review, closed to new messages", async () => {
+  const r = await mkRound({ title: 'sealed', prompt: 'Check. EMIT_STATUS:ok' });
+  const fired = await api(`/v1/rounds/${r.id}/run`, { method: 'POST' });
+  await waitForRun(r.id);
+  const chatId = fired.body.chatId;
+
+  // Readable — that is what "available for review" means.
+  const open = await api(`/v1/chats/${chatId}`);
+  assert.equal(open.status, 200);
+  assert.equal(open.body.sealed, true);
+  assert.ok(open.body.endedAt > 0);
+  assert.ok(open.body.messages.length > 0, 'the conversation is still there');
+
+  // But not continuable. Without this, "auto end" is a label on a row.
+  const more = await api(`/v1/chats/${chatId}/messages`, {
+    method: 'POST', body: JSON.stringify({ text: 'and another thing' }),
+  });
+  assert.equal(more.status, 409);
+  assert.match(more.body.error, /review/);
+});
+
+test('an ordinary chat is never sealed', async () => {
+  // The seal belongs to Rounds. A conversation the owner started stays open.
+  const { body } = await api('/v1/chats', { method: 'POST', body: JSON.stringify({ mode: 'ask' }) });
+  const open = await api(`/v1/chats/${body.id}`);
+  assert.ok(!open.body.sealed);
 });
 
 test('deleting a Round leaves the reports it already produced', async () => {
