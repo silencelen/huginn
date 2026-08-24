@@ -31,7 +31,7 @@ const https = require('https');
 const readline = require('readline');
 const { spawn } = require('child_process');
 
-const VERSION = '0.10.0';
+const VERSION = '0.10.1';
 
 // ---8<--- GENERATED POLICY — scripts/gen-device-policy.js — DO NOT EDIT ---8<---
 const POLICY = {
@@ -427,7 +427,10 @@ async function status() {
   console.log(`    token       ${token() ? TOKEN_FILE : 'MISSING — see `huginn device on`'}`);
   if (!conf.id) {
     console.log('');
-    console.log('    Not enrolled yet.  Run:  huginn device on');
+    // Its OWN name, not `huginn device on`. The CLI wrapper is a convenience a
+    // headless box may well not have, and telling somebody to run a command that
+    // is not installed is worse than telling them nothing.
+    console.log('    Not enrolled yet.  Run:  huginn-device on');
     console.log('');
     return;
   }
@@ -480,8 +483,12 @@ async function main() {
         console.log(`  "${parseScope(conf.scope)}" here means "${parseScope(conf.scope)}", at 3am, unattended.`);
       }
       console.log('');
-      console.log('  Start it:   systemctl --user enable --now huginn-device');
-      console.log('  Unit text:  huginn-device unit');
+      console.log('  Start it, on a machine somebody uses:');
+      console.log('    huginn-device unit > ~/.config/systemd/user/huginn-device.service');
+      console.log('    systemctl --user enable --now huginn-device');
+      console.log('  On a headless machine, where nobody logs in:');
+      console.log('    huginn-device unit --system > /etc/systemd/system/huginn-device.service');
+      console.log('    systemctl enable --now huginn-device');
       break;
     }
     case 'off': {
@@ -491,21 +498,49 @@ async function main() {
       saveConf(conf);
       // Said plainly, because "removed" would be a lie: nothing here reaches onto
       // the machine, and a runner still running would simply re-enrol.
-      console.log('Removed from huginn. Stop the runner too:');
-      console.log('  systemctl --user disable --now huginn-device');
+      console.log('Removed from huginn. Stop the runner too, or it enrols again:');
+      console.log('  systemctl disable --now huginn-device          (system unit)');
+      console.log('  systemctl --user disable --now huginn-device   (user unit)');
       break;
     }
     case 'serve': case 'run': await serve(); break;
     case 'status': await status(); break;
     case 'unit': {
       const self = fs.realpathSync(process.argv[1]);
-      console.log(`# ~/.config/systemd/user/huginn-device.service
+      const system = process.argv.includes('--system');
+      const who = os.userInfo();
+      // HOME is set explicitly rather than left to systemd. A system unit derives
+      // it from User=, which is usually right and silently is not the moment
+      // anyone changes User= — and this program finds BOTH its config and claude's
+      // credentials under it, so a wrong HOME is a runner that enrols and then
+      // cannot log in, which reads as a broken login rather than a wrong unit.
+      console.log(system
+        ? `# /etc/systemd/system/huginn-device.service
+# A whole machine offering itself, not one person's session: no lingering to
+# arrange, and it is up before anyone logs in. This is the headless shape.
 [Unit]
 Description=Offer this machine to Huginn as a place to run work
 After=network-online.target
 
 [Service]
 ExecStart=${process.execPath} ${self} serve
+User=${who.username}
+Environment=HOME=${who.homedir}
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target`
+        : `# ~/.config/systemd/user/huginn-device.service
+# One person's session. Needs \`loginctl enable-linger ${who.username}\` to
+# survive logout \u2014 on a machine with nobody logging in, use: huginn-device unit --system
+[Unit]
+Description=Offer this machine to Huginn as a place to run work
+After=network-online.target
+
+[Service]
+ExecStart=${process.execPath} ${self} serve
+Environment=HOME=${who.homedir}
 Restart=always
 RestartSec=10
 
@@ -536,7 +571,8 @@ WantedBy=default.target`);
   huginn-device off           stop offering it (and stop the service)
   huginn-device serve         the runner itself; this is what systemd starts
   huginn-device status        what this machine offers, and what huginn sees
-  huginn-device unit          print a systemd user unit for it
+  huginn-device unit          print a systemd USER unit (one person's session)
+  huginn-device unit --system print a systemd SYSTEM unit (a headless machine)
 
   Settings:  ${CONF_FILE}
   Token:     ${TOKEN_FILE}   (0600; the same token /etc/huginn-appd/token holds)`);
