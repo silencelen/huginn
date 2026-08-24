@@ -336,6 +336,15 @@ test("a finished run is SEALED: kept for review, closed to new messages", async 
   });
   assert.equal(more.status, 409);
   assert.match(more.body.error, /review/);
+
+  // And nothing offers to send one either. A suggestion chip FILLS THE COMPOSER,
+  // so on a sealed run it is a control that cannot do the thing it offers —
+  // caught by driving the real phone, where a finished round showed "This round
+  // has finished" directly above two perfectly tappable suggestions.
+  const sug = await api(`/v1/chats/${chatId}/suggestions`);
+  assert.equal(sug.status, 200);
+  assert.deepEqual(sug.body.suggestions, []);
+  assert.equal(sug.body.reason, 'sealed');
 });
 
 test('an ordinary chat is never sealed', async () => {

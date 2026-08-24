@@ -11,6 +11,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
@@ -36,7 +37,16 @@ fun RoundsScreen(
     onRunRound: (Round) -> Unit,
     onSetRoundEnabled: (Round, Boolean) -> Unit,
     onOpenSettings: () -> Unit,
+    onStartPolling: () -> Unit = {},
+    onStopPolling: () -> Unit = {},
 ) {
+    // Tied to the screen, not to the app: nothing polls Rounds while you are
+    // reading a chat, and the list is live while you are looking at it.
+    DisposableEffect(Unit) {
+        onStartPolling()
+        onDispose { onStopPolling() }
+    }
+
     Box(Modifier.fillMaxSize()) {
         if (rounds.isEmpty() && !loading) {
             Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.Center) {

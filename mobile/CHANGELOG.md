@@ -1,5 +1,23 @@
 # Huginn changelog
 
+## 2.67.0 — 2026-08-24
+
+### Changed
+- **A round's Pause is a button, not a switch.** It was a filled Switch riding the title row,
+  which on a dark list was the loudest thing on screen — louder than the status mark and the
+  report it sits beside — for a control you touch about twice a year. Pausing is not a mode you
+  set, it is a thing you do, so it now reads as a word next to Run now, at the same weight.
+- **Rounds stay live while you are looking at them.** The list refreshed only on resume or a
+  manual pull, so tapping Run now left the row showing the previous verdict. It now polls while
+  the Rounds tab is on screen and stops when you leave, the same shape as the sessions poller.
+- The status dot sits on the round's TITLE rather than centred between title and cadence, where
+  it read as floating between the two and belonging to neither.
+
+### Fixed
+- A machine enrolled since the last refresh is now offerable: the new-chat dialog reads the
+  device list as it opens, instead of showing whatever was known at resume.
+- A finished round no longer shows suggestion chips above its "kept for review" note.
+
 ## 2.66.0 — 2026-08-24
 
 ### Added

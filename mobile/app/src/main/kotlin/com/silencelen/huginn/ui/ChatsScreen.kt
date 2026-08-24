@@ -65,6 +65,8 @@ fun ChatsScreen(
     onOpen: (String) -> Unit,
     /** (mode, host) — host is null for this machine. */
     onNew: (String, String?) -> Unit,
+    /** The dialog is opening: a good moment to find out what machines exist. */
+    onOpenNewChat: () -> Unit = {},
     onDelete: (String) -> Unit,
     onOpenSettings: () -> Unit,
     /**
@@ -80,7 +82,7 @@ fun ChatsScreen(
     // does not silently become the default for every chat afterwards.
     var newHost by remember { mutableStateOf<String?>(null) }
     LaunchedEffect(newChatRequest) { if (newChatRequest > 0) showNew = true }
-    LaunchedEffect(showNew) { if (showNew) newHost = null }
+    LaunchedEffect(showNew) { if (showNew) { newHost = null; onOpenNewChat() } }
 
     Box(Modifier.fillMaxSize()) {
         if (chats.isEmpty() && !loading) {

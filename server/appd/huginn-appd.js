@@ -52,7 +52,7 @@ const pushLib = require('./lib/pushtokens');
 const { trySender } = require('./lib/fcm');
 const { createPending, stepSoftEnd } = require('./lib/softend');
 
-const VERSION = '2.61.0';
+const VERSION = '2.62.0';
 const PORT = Number(process.env.HUGINN_APPD_PORT || 8787);
 const DATA_DIR = process.env.HUGINN_APPD_DATA || '/var/lib/huginn-appd';
 const UPLOADS_DIR = path.join(DATA_DIR, 'uploads');
@@ -4487,6 +4487,11 @@ const server = http.createServer(async (req, res) => {
       }
 
       if (req.method === 'GET' && sub === '/suggestions') {
+        // A sealed run takes no more messages, and a suggestion is an offer to
+        // SEND one — the chip fills a composer that is not there. Found by driving
+        // the phone: a finished round showed "This round has finished" above two
+        // perfectly tappable suggestions.
+        if (meta.sealed) return sendJson(res, 200, { suggestions: [], reason: 'sealed' });
         // Mid-run suggestions would guess at a reply still being written.
         if (meta.running || activeRuns.has(id)) return sendJson(res, 200, { suggestions: [], reason: 'running' });
         if (!meta.claudeSessionId) return sendJson(res, 200, { suggestions: [], reason: 'no transcript' });

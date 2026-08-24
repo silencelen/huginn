@@ -14,6 +14,15 @@ the Electron client's go to `/v1/desktop` and the two never mix — see
      refusal is deliberate — it is what stops a release going out with no notes.
      ─────────────────────────────────────────────────────────────────────────── -->
 
+## 0.8.3
+
+### Changed
+- A round's Pause is a word beside Run now rather than a filled Switch, and the status dot sits
+  on the title line. Shared with the phone — one composable, both clients.
+
+### Fixed
+- A finished round no longer shows suggestion chips above its "kept for review" note.
+
 ## 0.8.2
 
 ### Fixed

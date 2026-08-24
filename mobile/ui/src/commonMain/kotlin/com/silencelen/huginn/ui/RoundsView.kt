@@ -10,8 +10,6 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
-import androidx.compose.material3.Switch
-import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -89,7 +87,10 @@ private fun RoundRow(
     ) {
         Column(Modifier.padding(start = 14.dp, end = 6.dp, top = 10.dp, bottom = 6.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                StatusDot(status)
+                // Nudged to the TITLE's line rather than the centre of the
+                // title+cadence column: centred on the pair it reads as floating
+                // between them, belonging to neither.
+                StatusDot(status, Modifier.align(Alignment.Top).padding(top = 7.dp))
                 Column(
                     Modifier
                         .padding(start = 10.dp)
@@ -114,11 +115,6 @@ private fun RoundRow(
                         overflow = TextOverflow.Ellipsis,
                     )
                 }
-                Switch(
-                    checked = round.enabled,
-                    onCheckedChange = onSetEnabled,
-                    colors = SwitchDefaults.colors(),
-                )
             }
 
             Text(
@@ -151,8 +147,17 @@ private fun RoundRow(
                         .weight(1f)
                         .padding(start = 2.dp),
                 )
-                // Same verb the daemon uses, and it says exactly what happens.
-                TextButton(onClick = onRunNow, enabled = !round.running) {
+                // Both controls as words, at the same weight, in the same place.
+                // This was a filled Switch riding the title row, which on a dark
+                // list was the loudest thing on screen — louder than the status
+                // mark and the report it is meant to be read alongside — for
+                // something you touch about twice a year. Pausing is not a mode
+                // you set, it is a thing you do, so it reads like the other thing
+                // you can do here.
+                TextButton(onClick = { onSetEnabled(!round.enabled) }) {
+                    Text(if (round.enabled) "Pause" else "Resume")
+                }
+                TextButton(onClick = onRunNow, enabled = !round.running && round.enabled) {
                     Text(if (round.running) "Running" else "Run now")
                 }
             }
@@ -166,7 +171,7 @@ private fun RoundRow(
  * and dark, because every value comes from the scheme rather than a literal.
  */
 @Composable
-private fun StatusDot(status: RoundStatus) {
+private fun StatusDot(status: RoundStatus, modifier: Modifier = Modifier) {
     val color: Color = when (status) {
         RoundStatus.ACTION -> MaterialTheme.colorScheme.error
         RoundStatus.ATTENTION -> MaterialTheme.colorScheme.primary
@@ -178,5 +183,5 @@ private fun StatusDot(status: RoundStatus) {
     // healthy Rounds recedes and the one that wants something stands out
     // without any of them being loud.
     val size = if (status == RoundStatus.OK || status == RoundStatus.NEVER_RUN) 6.dp else 8.dp
-    Surface(color = color, shape = CircleShape, modifier = Modifier.size(size)) {}
+    Surface(color = color, shape = CircleShape, modifier = modifier.size(size)) {}
 }

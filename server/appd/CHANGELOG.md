@@ -9,6 +9,16 @@ appeared only as a side-note on the app releases it happened to ship with. Three
 undocumented, and the notes-cutting matcher could fuse two sections when an app and an appd
 version number collided. Entries below are reconstructed from the shipping commits.
 
+## 2.62.0 — 2026-08-24
+
+### Fixed
+- **A sealed run no longer offers suggestions.** A suggestion chip FILLS THE COMPOSER, and a
+  finished round has none — so the chips were controls that could not do the thing they
+  offered. Found by driving the real phone: "This round has finished. It is kept here for
+  review." was rendering directly above two perfectly tappable suggestions. `/suggestions` now
+  answers `{ suggestions: [], reason: "sealed" }`, which fixes every client at once and saves
+  generating them.
+
 ## 2.61.0 — 2026-08-24
 
 ### Added
