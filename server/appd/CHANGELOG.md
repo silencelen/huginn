@@ -9,6 +9,21 @@ appeared only as a side-note on the app releases it happened to ship with. Three
 undocumented, and the notes-cutting matcher could fuse two sections when an app and an appd
 version number collided. Entries below are reconstructed from the shipping commits.
 
+## 2.65.0 — 2026-08-24
+
+### Changed
+- **A schedule with no zone now means THIS HOST's zone.** `validateSchedule` takes a default and
+  `buildRound` passes `Intl`'s resolved zone; a client that knows its own still sends it and
+  still wins. The shared Round editor is multiplatform and has no calendar to ask, so without
+  this it could not have produced a valid schedule at all. Read from `Intl` rather than `$TZ`
+  because that is the same source the wall-clock arithmetic resolves through — the zone a Round
+  is stored with and the zone it fires by cannot then disagree.
+- **A zone is still required, just easy to supply.** Blank, whitespace and absent all fall back;
+  a nonsense zone is still refused, and no zone anywhere is still refused. A schedule with no
+  zone cannot be fired at a time, and storing one would be storing a bug.
+- Editing a Round's schedule falls back to **that Round's own zone** before the host's, so
+  changing the time on a Round written in another zone does not silently move it.
+
 ## 2.64.0 — 2026-08-24
 
 ### Changed

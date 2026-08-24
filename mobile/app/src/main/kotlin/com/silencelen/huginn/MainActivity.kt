@@ -86,6 +86,7 @@ import com.silencelen.huginn.ui.EmptyState
 import com.silencelen.huginn.ui.LiveInput
 import com.silencelen.huginn.ui.ChatsScreen
 import com.silencelen.huginn.ui.DevicesScreen
+import com.silencelen.huginn.ui.RoundEditScreen
 import com.silencelen.huginn.ui.RoundsScreen
 import com.silencelen.huginn.ui.HuginnViewModel
 import com.silencelen.huginn.ui.LocalAttachmentImages
@@ -268,6 +269,7 @@ internal fun backFrom(dest: Dest, tab: Int): Dest? = when (dest) {
     // Back to where it was opened from, not to a tab: Devices is only reachable
     // through Settings, so Settings is the only honest answer.
     is Dest.Devices -> Dest.Settings
+    is Dest.RoundEdit -> Dest.Rounds
     is Dest.Settings -> when (tab) {
         0 -> Dest.Chats
         1 -> Dest.Sessions
@@ -363,6 +365,7 @@ internal fun destToKey(d: Dest): String = when (d) {
     is Dest.Chats -> "chats"
     is Dest.Chat -> "chat:${d.id}"
     is Dest.Rounds -> "rounds"
+    is Dest.RoundEdit -> "roundedit:${d.id ?: ""}"
     is Dest.Devices -> "devices"
     is Dest.Sessions -> "sessions"
     is Dest.SessionView -> "session:${d.name}"
@@ -375,6 +378,7 @@ internal fun keyToDest(v: String): Dest = when {
     v == "chats" -> Dest.Chats
     v.startsWith("chat:") -> Dest.Chat(v.removePrefix("chat:"))
     v == "rounds" -> Dest.Rounds
+    v.startsWith("roundedit:") -> Dest.RoundEdit(v.removePrefix("roundedit:").ifEmpty { null })
     v == "devices" -> Dest.Devices
     v == "sessions" -> Dest.Sessions
     v.startsWith("session:") -> Dest.SessionView(v.removePrefix("session:"))
@@ -392,6 +396,8 @@ internal sealed interface Dest {
     data object Chats : Dest
     data class Chat(val id: String) : Dest
     data object Rounds : Dest
+    /** null = writing a new one. A child of Rounds either way. */
+    data class RoundEdit(val id: String?) : Dest
     /** A child of Settings, not a bar item — see DevicesScreen for why. */
     data object Devices : Dest
     data object Sessions : Dest
@@ -670,7 +676,7 @@ fun HuginnApp(
     }
 
     val isChild = dest is Dest.Chat || dest is Dest.SessionView || dest is Dest.Settings ||
-        dest is Dest.Devices
+        dest is Dest.Devices || dest is Dest.RoundEdit
     // The system gesture, going where the arrow goes. Without this the commonest
     // gesture on the phone closed the app from every child screen.
     androidx.activity.compose.BackHandler(enabled = isChild) {
@@ -680,6 +686,7 @@ fun HuginnApp(
         is Dest.Chats -> "Huginn"
         is Dest.Chat -> chatTitle ?: "Chat"
         is Dest.Rounds -> "Rounds"
+        is Dest.RoundEdit -> if (d.id == null) "New round" else "Edit round"
         is Dest.Devices -> "Devices"
         is Dest.Sessions -> "Sessions"
         is Dest.SessionView -> transcript?.title ?: d.name
@@ -806,7 +813,7 @@ fun HuginnApp(
             is Dest.Chats, is Dest.Chat -> 0
             is Dest.Sessions, is Dest.SessionView -> 1
             is Dest.Status -> 2
-            is Dest.Rounds -> 3
+            is Dest.Rounds, is Dest.RoundEdit -> 3
             // Four, not three: Rounds took 3, and Settings has no bar item of its
             // own so its number only has to be distinct. Devices shares it because
             // it IS Settings as far as the rail's highlight is concerned.
@@ -842,10 +849,17 @@ fun HuginnApp(
                 loading = loading,
                 connected = connected,
                 onOpenRound = { r ->
-                    r.lastRun?.chatId?.let { id -> vm.openChat(id); dest = Dest.Chat(id) }
+                    // The report if there is one; otherwise the Round itself. A
+                    // schedule that has not fired yet used to swallow the tap
+                    // entirely, which reads as a broken row.
+                    val chat = r.lastRun?.chatId
+                    if (chat != null) { vm.openChat(chat); dest = Dest.Chat(chat) }
+                    else dest = Dest.RoundEdit(r.id)
                 },
                 onRunRound = { r -> vm.runRound(r.id) },
                 onSetRoundEnabled = { r, on -> vm.setRoundEnabled(r.id, on) },
+                onEditRound = { r -> dest = Dest.RoundEdit(r.id) },
+                onNewRound = { vm.refreshDevices(); dest = Dest.RoundEdit(null) },
                 onOpenSettings = { dest = Dest.Settings },
                 onStartPolling = { vm.startRoundsPolling() },
                 onStopPolling = { vm.stopRoundsPolling() },
@@ -1015,6 +1029,20 @@ fun HuginnApp(
                 chatsRunning = chats.count { it.running },
                 plan = plan,
                 usage = usage,
+            )
+        }
+        val roundEditPane: @Composable (String?) -> Unit = { id ->
+            RoundEditScreen(
+                // Looked up from the live list rather than carried in the
+                // destination, so a Round edited here is the one the poll is
+                // holding — a stale copy in a nav argument would silently write
+                // back whatever it was when the screen opened.
+                existing = id?.let { rid -> rounds.firstOrNull { it.id == rid } },
+                devices = devices,
+                onCreate = { d, cb -> vm.createRound(d, cb) },
+                onSave = { rid, d, cb -> vm.saveRound(rid, d, cb) },
+                onDelete = { rid, cb -> vm.deleteRound(rid, cb) },
+                onDone = { dest = Dest.Rounds },
             )
         }
         val devicesPane: @Composable () -> Unit = {
@@ -1268,6 +1296,7 @@ fun HuginnApp(
                             is Dest.Sessions -> sessionsPane(false)
                             is Dest.SessionView -> sessionDetail(d.name)
                             is Dest.Rounds -> roundsPane()
+                            is Dest.RoundEdit -> roundEditPane(d.id)
                             is Dest.Devices -> devicesPane()
                             is Dest.Status -> statusPane()
                             is Dest.Settings -> settingsPane()
@@ -1302,6 +1331,9 @@ fun HuginnApp(
                             // at 900dp, so it keeps a readable measure, centred.
                             is Dest.Rounds -> Box(Modifier.fillMaxSize(), contentAlignment = androidx.compose.ui.Alignment.TopCenter) {
                                 Box(Modifier.widthIn(max = 840.dp)) { roundsPane() }
+                            }
+                            is Dest.RoundEdit -> Box(Modifier.fillMaxSize(), contentAlignment = androidx.compose.ui.Alignment.TopCenter) {
+                                Box(Modifier.widthIn(max = 840.dp)) { roundEditPane(d.id) }
                             }
                             is Dest.Status -> Box(Modifier.fillMaxSize(), contentAlignment = androidx.compose.ui.Alignment.TopCenter) {
                                 Box(Modifier.widthIn(max = 840.dp)) { statusPane() }

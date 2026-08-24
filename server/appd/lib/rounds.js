@@ -112,7 +112,16 @@ function isKnownZone(tz) {
 }
 
 /** @returns {{ok: true, schedule: object} | {ok: false, error: string}} */
-function validateSchedule(raw) {
+/**
+ * @param defaultTz used when the caller names no zone.
+ *
+ * A schedule cannot fire without one, and a client cannot always produce one:
+ * the shared UI code is multiplatform and has no calendar. So an absent zone
+ * means THIS HOST's zone — which is where the Round fires and whose DST rules it
+ * obeys, so it is the honest default rather than a guess. A client that does know
+ * its own zone still sends it and still wins.
+ */
+function validateSchedule(raw, defaultTz = null) {
   const s = raw && typeof raw === 'object' ? raw : {};
   if (!KINDS.includes(s.kind)) return { ok: false, error: `schedule.kind must be one of ${KINDS.join(', ')}` };
 
@@ -125,8 +134,9 @@ function validateSchedule(raw) {
   }
 
   if (!AT_RE.test(String(s.at || ''))) return { ok: false, error: 'schedule.at must be "HH:MM" (24-hour)' };
-  if (!isKnownZone(s.tz)) return { ok: false, error: 'schedule.tz must be an IANA zone, e.g. America/Los_Angeles' };
-  const out = { kind: s.kind, at: s.at, tz: s.tz };
+  const tz = (typeof s.tz === 'string' && s.tz.trim()) ? s.tz.trim() : defaultTz;
+  if (!isKnownZone(tz)) return { ok: false, error: 'schedule.tz must be an IANA zone, e.g. America/Los_Angeles' };
+  const out = { kind: s.kind, at: s.at, tz };
 
   if (s.kind === 'weekly') {
     const days = Array.isArray(s.days) ? [...new Set(s.days.map(Number))].sort((a, b) => a - b) : [];

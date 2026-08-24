@@ -1,5 +1,33 @@
 # Huginn changelog
 
+## 2.69.0 — 2026-08-24
+
+### Added
+- **You can write a Round.** Until now `createRound` existed in the client library and nothing
+  called it, so a scheduled job could only be made with curl — the feature was real and
+  unreachable. There is a New round button on the Rounds tab, an Edit on every row, and a
+  full-screen form: name, what it should do, how you will know it finished, when, what it may
+  do, where it runs, and who to tell.
+  - **Full screen, not a sheet.** Seven decisions do not fit in half a phone without putting
+    scrolling inside scrolling.
+  - **The goal field explains itself where it sits**: with one, each run answers whether it got
+    there, and a run that did not is flagged even when it sounds pleased with itself.
+  - **Choosing "Change things" says so out loud** — it runs unattended, nobody will be watching,
+    and it will not stop to ask. Wanting something on a schedule is not consent to that.
+  - A device is only offerable for an `act` Round if its **enrolled** scope allows it — not what
+    it will do this second, or a Round for next Sunday would be un-pickable because the laptop is
+    locked on a Tuesday.
+  - A live cadence line under the picker ("Sun at 7:00 PM"), so a wrong schedule is wrong
+    visibly rather than after a save that discards the typing.
+  - Tapping a Round that has never run now opens the Round instead of swallowing the tap.
+
+### Fixed
+- **The app never knew which machine a Round ran on.** The daemon has always sent `host` and
+  `hostName`; the model simply lacked the fields, so every Round read as local however it was
+  placed — and a Round on a Device is the one thing neither feature can do alone.
+- `createRound` did not send `goal` **at all**, so a Round written by a client could never have
+  had a finish line. It and `host` now go with it.
+
 ## 2.68.0 — 2026-08-24
 
 ### Added

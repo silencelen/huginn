@@ -1099,6 +1099,78 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     /**
+     * This phone's IANA zone, handed to the daemon when a Round is written here.
+     *
+     * The shared editor is multiplatform and has no calendar, so it never names a
+     * zone itself; without this the daemon falls back to the HOST's, which is
+     * usually the same and quietly is not when it isn't. Sent from the platform
+     * layer, which is the only place that knows.
+     */
+    private fun deviceZone(): String? =
+        runCatching { java.util.TimeZone.getDefault().id?.takeIf { it.isNotBlank() } }.getOrNull()
+
+    /**
+     * @param onResult null on success, otherwise the reason — the daemon's words,
+     *   not ours. It validates the same schedule this form does, and when the two
+     *   disagree its answer is the real one.
+     */
+    fun createRound(draft: RoundDraft, onResult: (String?) -> Unit) {
+        viewModelScope.launch {
+            awaitReady()
+            runCatching {
+                client.createRound(
+                    title = draft.title.trim(),
+                    prompt = draft.prompt.trim(),
+                    schedule = draft.toSchedule(deviceZone()),
+                    goal = draft.goal.trim(),
+                    mode = draft.mode,
+                    notifyWhen = draft.notifyWhen,
+                    host = draft.host.takeIf { it != "local" },
+                )
+            }.onSuccess { refreshRounds(); onResult(null) }
+                .onFailure { onResult(errText(it)) }
+        }
+    }
+
+    fun saveRound(id: String, draft: RoundDraft, onResult: (String?) -> Unit) {
+        viewModelScope.launch {
+            awaitReady()
+            runCatching {
+                client.updateRound(
+                    id = id,
+                    title = draft.title.trim(),
+                    prompt = draft.prompt.trim(),
+                    schedule = draft.toSchedule(deviceZone()),
+                    // Sent even when blank: clearing a goal is a real edit, and
+                    // omitting it would make "this no longer has a finish line"
+                    // impossible to say.
+                    goal = draft.goal.trim(),
+                    mode = draft.mode,
+                    notifyWhen = draft.notifyWhen,
+                    host = draft.host,
+                )
+            }.onSuccess { refreshRounds(); onResult(null) }
+                .onFailure { onResult(errText(it)) }
+        }
+    }
+
+    fun deleteRound(id: String, onResult: (String?) -> Unit) {
+        viewModelScope.launch {
+            awaitReady()
+            runCatching { client.deleteRound(id) }
+                .onSuccess {
+                    // The schedule goes; its past runs are ordinary chats and are
+                    // left alone, so deleting a Round never destroys the reports it
+                    // already produced.
+                    _toast.value = "Round deleted"
+                    refreshRounds()
+                    onResult(null)
+                }
+                .onFailure { onResult(errText(it)) }
+        }
+    }
+
+    /**
      * Fires a Round now. The report arrives exactly as a scheduled one does — as a
      * notification and a row on this screen — so there is nothing to navigate to
      * and nothing to wait on here.

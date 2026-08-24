@@ -4,6 +4,8 @@ import com.silencelen.huginn.data.AppdRoutes
 import com.silencelen.huginn.data.Chat
 import com.silencelen.huginn.data.Device
 import com.silencelen.huginn.data.Round
+import com.silencelen.huginn.ui.RoundDraft
+import com.silencelen.huginn.ui.toSchedule
 import com.silencelen.huginn.desktop.device.DeviceRunner
 import com.silencelen.huginn.desktop.update.BuildInfo
 import com.silencelen.huginn.data.DraftBook
@@ -321,6 +323,50 @@ class AppStore(
             .onSuccess { refreshRounds() }
             .onFailure { note(Faults.CHATS, it) }
     }
+
+    /**
+     * This machine's IANA zone, sent when a Round is written here.
+     *
+     * The shared editor is multiplatform and has no calendar, so it never names a
+     * zone; without this the daemon falls back to the HOST's, which is usually the
+     * same and quietly is not when it isn't.
+     */
+    private fun deviceZone(): String? =
+        runCatching { java.util.TimeZone.getDefault().id?.takeIf { it.isNotBlank() } }.getOrNull()
+
+    /** @return null on success, otherwise the daemon's reason — not ours. */
+    suspend fun createRound(draft: RoundDraft): String? =
+        runCatching {
+            client.createRound(
+                title = draft.title.trim(),
+                prompt = draft.prompt.trim(),
+                schedule = draft.toSchedule(deviceZone()),
+                goal = draft.goal.trim(),
+                mode = draft.mode,
+                notifyWhen = draft.notifyWhen,
+                host = draft.host.takeIf { it != "local" },
+            )
+        }.fold({ refreshRounds(); null }, { it.message ?: "Could not create it" })
+
+    suspend fun saveRound(id: String, draft: RoundDraft): String? =
+        runCatching {
+            client.updateRound(
+                id = id,
+                title = draft.title.trim(),
+                prompt = draft.prompt.trim(),
+                schedule = draft.toSchedule(deviceZone()),
+                // Sent even when blank: clearing a goal is a real edit.
+                goal = draft.goal.trim(),
+                mode = draft.mode,
+                notifyWhen = draft.notifyWhen,
+                host = draft.host,
+            )
+        }.fold({ refreshRounds(); null }, { it.message ?: "Could not save it" })
+
+    /** The schedule goes; the reports it already wrote are chats and stay. */
+    suspend fun deleteRound(id: String): String? =
+        runCatching { client.deleteRound(id) }
+            .fold({ refreshRounds(); null }, { it.message ?: "Could not delete it" })
 
     suspend fun setRoundEnabled(id: String, enabled: Boolean) {
         // Optimistic, then corrected by the server's own answer.

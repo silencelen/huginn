@@ -859,6 +859,21 @@ data class Round(
      */
     val cadence: String = "",
     val running: Boolean = false,
+    /**
+     * Which machine it runs on: a device id, or "local" for the huginn host.
+     *
+     * The daemon has always sent this and these two fields were simply missing
+     * here, so every Round read as local however it was actually placed — a
+     * Round on a Device is the one thing neither feature could do alone, and it
+     * was invisible in both clients.
+     */
+    val host: String = "local",
+    /**
+     * The device's name, resolved BY THE DAEMON — for the same reason as
+     * [cadence]. A client that looked it up itself would print a bare uuid for a
+     * device that has since been unenrolled, rather than saying so.
+     */
+    val hostName: String? = null,
 )
 
 @Serializable

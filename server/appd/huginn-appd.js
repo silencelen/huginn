@@ -52,7 +52,7 @@ const pushLib = require('./lib/pushtokens');
 const { trySender } = require('./lib/fcm');
 const { createPending, stepSoftEnd } = require('./lib/softend');
 
-const VERSION = '2.64.0';
+const VERSION = '2.65.0';
 const PORT = Number(process.env.HUGINN_APPD_PORT || 8787);
 const DATA_DIR = process.env.HUGINN_APPD_DATA || '/var/lib/huginn-appd';
 const UPLOADS_DIR = path.join(DATA_DIR, 'uploads');
@@ -1850,6 +1850,22 @@ function placeRound(rawHost, mode) {
   return { host: rawHost };
 }
 
+/**
+ * This host's IANA zone, used when a client names none.
+ *
+ * Read from Intl rather than $TZ or /etc/timezone, because Intl is the same
+ * source `lib/rounds.js` resolves wall-clock times through — so the zone a Round
+ * is stored with and the zone it is fired by cannot disagree. Falls back to UTC,
+ * which is wrong for a person but never invalid, so a schedule still saves.
+ */
+function hostZone() {
+  try {
+    return Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
+  } catch {
+    return 'UTC';
+  }
+}
+
 function buildRound(body) {
   const title = typeof body.title === 'string' ? body.title.trim().slice(0, 80) : '';
   if (!title) return { error: 'title required' };
@@ -1857,7 +1873,7 @@ function buildRound(body) {
   if (!prompt) return { error: 'prompt required' };
   if (prompt.length > MAX_ROUND_PROMPT) return { error: 'prompt too long' };
   const goal = typeof body.goal === 'string' ? body.goal.trim().slice(0, MAX_ROUND_GOAL) : '';
-  const sched = roundsLib.validateSchedule(body.schedule);
+  const sched = roundsLib.validateSchedule(body.schedule, hostZone());
   if (!sched.ok) return { error: sched.error };
   const placed = placeRound(body.host, body.mode === 'act' ? 'act' : 'ask');
   if (placed.error) return { error: placed.error };
@@ -1912,7 +1928,7 @@ function applyRoundPatch(round, body) {
     r.prompt = p;
   }
   if ('schedule' in body) {
-    const s = roundsLib.validateSchedule(body.schedule);
+    const s = roundsLib.validateSchedule(body.schedule, round.schedule?.tz || hostZone());
     if (!s.ok) return { error: s.error };
     r.schedule = s.schedule;
     // Re-armed immediately: keeping the old slot would fire once more on a
