@@ -69,7 +69,11 @@ for r in rounds:
 
     print("  %-2s %s" % (mark, r.get("title") or "?"))
     where = r.get("hostName") or "this host"
-    # Same trap as huginn-devices: present-but-null defeats .get's default.
+    # Same trap as huginn-devices: a present-but-null key defeats the default
+    # argument of .get. NOTE: no apostrophes anywhere in this block — the whole
+    # program is inside a single-quoted python3 -c, so one closes it and the
+    # shell starts parsing python. Extracting this block to test it CANNOT
+    # catch that; only running the real script can.
     print("       %s  .  %s  .  %s  .  on %s"
           % (r.get("cadence") or "?", state, r.get("mode") or "ask", where))
 
