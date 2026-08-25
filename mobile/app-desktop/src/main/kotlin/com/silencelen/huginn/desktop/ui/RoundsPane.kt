@@ -122,7 +122,9 @@ fun RoundsPane(store: AppStore) {
             },
             onRunNow = { r -> scope.launch { store.runRound(r.id) } },
             onSetEnabled = { r, on -> scope.launch { store.setRoundEnabled(r.id, on) } },
-            onEdit = { r -> editing = r },
+            // Same reason as the phone: the editor needs a device list to draw
+            // where-it-runs, and a stale empty one hides it for every Round.
+            onEdit = { r -> scope.launch { store.refreshDevices() }; editing = r },
         )
     }
 }

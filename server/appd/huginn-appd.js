@@ -52,7 +52,7 @@ const pushLib = require('./lib/pushtokens');
 const { trySender } = require('./lib/fcm');
 const { createPending, stepSoftEnd } = require('./lib/softend');
 
-const VERSION = '2.67.0';
+const VERSION = '2.68.0';
 const PORT = Number(process.env.HUGINN_APPD_PORT || 8787);
 const DATA_DIR = process.env.HUGINN_APPD_DATA || '/var/lib/huginn-appd';
 const UPLOADS_DIR = path.join(DATA_DIR, 'uploads');
@@ -1908,7 +1908,11 @@ function placeRound(rawHost, mode) {
   if (typeof rawHost !== 'string' || !rawHost || rawHost === 'local') return { host: 'local' };
   const dev = (deviceState.devices || {})[rawHost];
   if (!dev) return { error: 'no such device' };
-  const needed = devicesLib.MODE_NEEDS[mode] || 'work';
+  // Own-property, like canRun: MODE_NEEDS is a plain object and inherited keys
+  // answer with a function, which only refused here by accident of indexOf.
+  const needed = (Object.prototype.hasOwnProperty.call(devicesLib.MODE_NEEDS, mode)
+    && typeof devicesLib.MODE_NEEDS[mode] === 'string') ? devicesLib.MODE_NEEDS[mode] : null;
+  if (needed === null) return { error: `cannot run ${JSON.stringify(String(mode)).slice(0, 20)} anywhere` };
   if (!devicesLib.scopeAtLeast(dev.scope, needed)) {
     return { error: `${dev.name} is enrolled as "${dev.scope}", which cannot run ${mode}` };
   }
@@ -2013,12 +2017,28 @@ function applyRoundPatch(round, body) {
   }
   if ('mode' in body) r.mode = body.mode === 'act' ? 'act' : 'ask';
   if ('host' in body || 'mode' in body) {
+    const wanted = 'host' in body ? body.host : r.host;
     // Re-checked together, because widening the mode can invalidate a host that
     // was fine for the old one — an `act` Round on a look-scope device would fail
     // every week, silently, at 3am.
-    const placed = placeRound('host' in body ? body.host : r.host, r.mode);
-    if (placed.error) return { error: placed.error };
-    r.host = placed.host;
+    const placed = placeRound(wanted, r.mode);
+    if (placed.error) {
+      // ⚠ EXCEPT when the machine is simply GONE and the owner is not moving the
+      // Round anywhere. Both clients send `host` on every save, so a device that
+      // was unenrolled made EVERY edit fail — including changing only the title —
+      // with an error naming something the person did not touch, and their typing
+      // discarded. If it was the only device the clients hide the where-it-runs
+      // chips entirely, so there was no way to move the Round back to this host:
+      // permanently uneditable, while Pause/Resume still worked so the row looked
+      // alive. A Round pointing at a machine that no longer exists cannot fire,
+      // and since the tick now RECORDS every refusal that is visible every time
+      // it tries. Being unable to fix it is the worse failure.
+      const unchanged = wanted === r.host;
+      const gone = typeof wanted === 'string' && wanted !== 'local' && !((deviceState.devices || {})[wanted]);
+      if (!(unchanged && gone)) return { error: placed.error };
+    } else {
+      r.host = placed.host;
+    }
   }
   if ('model' in body) r.model = validModel(body.model);
   if ('effort' in body) r.effort = validEffort(body.effort);
@@ -2187,20 +2207,25 @@ const ROUND_MARK = { ok: '✅', attention: '⚠️', action: '🔴', unknown: '�
  * A weekly report arriving twice is exactly what would train that habit.
  */
 async function deliverRoundReport(round, report, chatId) {
+  // ⚠ BUILT ONCE, USED BY BOTH CHANNELS. These were computed separately and
+  // disagreed: push led with "did not finish — " while Telegram indexed the
+  // REPORTED status, so an `ok` report with goalMet false — the single case the
+  // design calls out as most worth surfacing — arrived as a green tick and a
+  // clean sentence. On the channel used exactly when the app is NOT there to
+  // show the warning row. Same event, two channels, opposite verdicts.
+  const { status, text } = roundsLib.reportDisplay(report);
   const pushed = await deliverPush({
     kind: 'round_report',
     key: `round:${round.id}:${chatId}`,
     subject: round.title,
     title: round.title,
-    // An unmet goal is said out loud in the notification itself. It is the one
-    // fact a headline can be perfectly cheerful about while being wrong.
-    text: report.goalMet === false ? `did not finish — ${report.headline}` : report.headline,
+    text,
   });
   if (pushed.sent > 0 || clientsLib.appOnline(clientState, Date.now())) {
     log(`round ${round.id}: telegram held (${pushed.sent > 0 ? 'pushed to the app' : 'app checked in recently'})`);
     return;
   }
-  const lines = [`${ROUND_MARK[report.status] || ROUND_MARK.unknown} ${round.title}`, report.headline];
+  const lines = [`${ROUND_MARK[status] || ROUND_MARK.unknown} ${round.title}`, text];
   // A handful of items, each with its next step. Statements only — there is no
   // reply path on that channel, so a question would arrive as noise.
   for (const it of report.items.slice(0, 5)) {

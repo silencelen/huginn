@@ -294,3 +294,47 @@ test('a mode nobody defined is refused rather than mapped to a scope', async () 
     assert.strictEqual(devices.canRun(box, 'ask', now).ok, true, `${scope} refused ask`);
   }
 });
+
+// ───────────────────────── the surfaces must agree with each other
+
+test('a round pinned to a machine that is gone can still be edited', async () => {
+  // Both clients send `host` on EVERY save, so a removed device made every edit
+  // fail — including changing only the title — with an error naming something the
+  // person did not touch. If it was the only device the editor hid the
+  // where-it-runs chips too, so there was no way to move the Round back here.
+  const d = await enrol('doomedhost');
+  const r = await mkRound({ host: d.id });
+  await api(`/v1/devices/${d.id}`, { method: 'DELETE' });
+
+  const renamed = await api(`/v1/rounds/${r.id}`, { method: 'PATCH',
+    body: JSON.stringify({ title: 'renamed after the machine went', host: d.id, mode: 'ask' }) });
+  assert.strictEqual(renamed.status, 200,
+    `an edit was refused because of a machine that is gone: ${JSON.stringify(renamed.body)}`);
+  assert.strictEqual(renamed.body.title, 'renamed after the machine went');
+  assert.strictEqual(renamed.body.host, d.id, 'the edit silently re-homed the round');
+
+  // And it can be brought back to this host.
+  const home = await api(`/v1/rounds/${r.id}`, { method: 'PATCH', body: JSON.stringify({ host: 'local' }) });
+  assert.strictEqual(home.status, 200);
+  assert.strictEqual(home.body.host, 'local');
+});
+
+test('moving a round ONTO a device that does not exist is still refused', async () => {
+  // The other half: the escape hatch above must not become a way to pin a Round
+  // to something that was never there.
+  const r = await mkRound();
+  const bad = await api(`/v1/rounds/${r.id}`, { method: 'PATCH',
+    body: JSON.stringify({ host: '00000000-0000-0000-0000-000000000000' }) });
+  assert.strictEqual(bad.status, 400, 'a round was pinned to a device that does not exist');
+});
+
+test('an act round cannot be widened onto a look-only device', async () => {
+  // The check the escape hatch must not weaken: the device is still THERE, so a
+  // mode change that it cannot honour is a real error the owner can act on.
+  const d = await enrol('lookonly', 'look');
+  const r = await mkRound({ host: d.id, mode: 'ask' });
+  const widened = await api(`/v1/rounds/${r.id}`, { method: 'PATCH',
+    body: JSON.stringify({ mode: 'act', host: d.id }) });
+  assert.strictEqual(widened.status, 400, 'an act round was pinned to a look-only machine');
+  assert.match(JSON.stringify(widened.body), /look/);
+});
