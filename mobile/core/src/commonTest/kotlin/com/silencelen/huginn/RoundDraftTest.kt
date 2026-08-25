@@ -82,10 +82,15 @@ class RoundDraftTest {
 
         val interval = ok.copy(kind = "interval", everyMinutes = "90").toSchedule("America/Los_Angeles")
         assertEquals(90, interval.everyMinutes)
-        // No zone and no time: an interval counts minutes, so there is no wall
-        // clock to place and nothing for a zone to get wrong.
-        assertNull(interval.tz)
+        // No TIME: an interval counts minutes, so there is no wall clock to place.
         assertNull(interval.at)
+        // But it DOES carry the zone, and this assertion used to say the opposite.
+        // The old reasoning — "nothing for a zone to get wrong" — was true of how
+        // an interval FIRES and wrong about what happens when somebody toggles a
+        // round to Interval and back: the editor seeds from schedule.tz, so
+        // dropping it moved a 9:00 AM Asia/Tokyo round to the editing device's
+        // zone, unrecoverably. Carried, not used.
+        assertEquals("America/Los_Angeles", interval.tz)
     }
 
     @Test
