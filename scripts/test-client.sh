@@ -277,6 +277,32 @@ grep -q '11111111-1111-1111-1111-111111111111' "$TD/device.json" \
   || bad "off destroyed the only handle that can remove the row"
 rm -rf "$TD"
 
+# ⚠ THE SIZE RULES, which decide whether a run's whole answer survives. A device
+# streams stream-json with --include-partial-messages, so ONE line can carry a
+# whole tool_result. Over the daemon's body cap the POST came back 413 and the
+# WHOLE BATCH was lost — and if the terminal frame was in it, its retry was
+# identically 413, so the ending could never be delivered: the chat sat running
+# forever and the machine was blocked from every other job. Silent, permanent,
+# and reserved for the runs with the most to say.
+node -e '
+const assert = require("assert");
+const r = require("/opt/huginn/client/huginn-device");
+const big = JSON.stringify({ type: "user", message: { content: [{ type: "tool_result", content: "x".repeat(400000) }] } });
+const small = r.shrinkLine(big);
+assert.ok(Buffer.byteLength(small) <= r.MAX_LINE_BYTES, "an oversized line was not shrunk");
+const ev = JSON.parse(small);                       // still a valid event, not a fragment
+assert.equal(ev.type, "user", "shrinking lost the event type");
+assert.ok(JSON.stringify(ev).includes("were dropped"), "the truncation is not admitted");
+const lines = Array.from({ length: 12 }, (_, i) => JSON.stringify({ n: i, pad: "y".repeat(30000) }));
+const batches = r.batchLines(lines);
+assert.ok(batches.length > 1, "12 x 30KB should not be one batch");
+for (const b of batches) assert.ok(Buffer.byteLength(JSON.stringify(b)) <= r.MAX_BATCH_BYTES, "a batch exceeds the budget");
+const order = batches.flat().map((l) => JSON.parse(l).n);
+assert.deepEqual(order, [...Array(12).keys()], "batching reordered the output");
+assert.deepEqual(r.batchLines([]), [], "an empty tail should post nothing");
+' && ok "output is batched, shrunk in place, and kept in order" \
+   || bad "the size rules do not hold — a large answer can still be lost"
+
 echo "[8/8] what is actually DEPLOYED on this host, vs what is in the tree"
 # ⚠ WHY THIS EXISTS. On 2026-08-25 the live headless device (brokkr) was found
 # running the PRE-SECURITY-FIX runner — `allows()` failing open on an unknown

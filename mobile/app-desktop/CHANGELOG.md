@@ -1,5 +1,16 @@
 # Huginn Desktop changelog
 
+## 0.8.14
+
+- **Forget now asks first**, as the phone already did. It sat directly beside
+  "Ask here" and "Act here" and fired immediately — and what it does is easy to
+  misread: the machine comes back with the same id under a minute later, because
+  a runner that is still running simply re-enrols. So the button looked like it
+  had done nothing, when what it had actually done was kill whatever that device
+  was running. Same words as the phone's dialog, deliberately.
+- A device that has not asked for work since huginn restarted reads "free? not
+  asked for work since huginn restarted" rather than "idle".
+
 ## 0.8.13
 
 - **"Mark done" on a round that has reported something** — the status mark goes
