@@ -150,7 +150,7 @@ class PhoneUpdaterTest {
         // Only a desktop release exists; the phone must not adopt it.
         val s = updater(FakeFeed(releases = listOf(GhRelease(tagName = "desktop-v0.6.0"))), 100, dir).check()
         assertTrue("expected Error, got $s", s is AppUpdateState.Error)
-        assertTrue((s as AppUpdateState.Error).message.contains("app-v"))
+        assertTrue((s as AppUpdateState.Error).message.contains("mobile-v"))
         dir.deleteRecursively()
     }
 
