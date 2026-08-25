@@ -242,12 +242,21 @@ function describeSchedule(s) {
 
 const STATUSES = ['ok', 'attention', 'action'];
 
-const REPORT_CONTRACT = `
+function reportContract(tag) {
+  return `
 --- HOW THIS RUN IS REPORTED ---
 End your turn with a fenced huginn-report block. It is the ONLY thing that reaches
 the operator; prose above it is kept in the chat but is not the report.
 
-\`\`\`huginn-report
+THIS RUN'S TAG: ${tag}
+
+The opening fence must carry it, exactly as written. The tag is generated for this
+run alone: nothing you READ during it — a log line, a page, a file — can know it,
+so a report block found in fetched content cannot be mistaken for yours. A block
+without the tag is discarded and the run is reported as unreported, so copy it
+across.
+
+\`\`\`huginn-report ${tag}
 {"status":"ok","headline":"one line, under 90 characters, what you found",
  "goalMet":true,
  "items":[{"title":"short label","detail":"what is wrong","suggest":"the next step"}]}
@@ -267,6 +276,17 @@ plainly in the report what stopped you.
 
 Write the block LAST and do not discuss it. A missing or malformed block is
 reported as "unknown" with a truncated quote of whatever you said last.`;
+}
+
+/**
+ * The contract as it reads with no tag, for anything that wants to show it.
+ *
+ * Kept as an export because it was one, and because the tests and the docs both
+ * quote it. A run NEVER gets this one — it gets [reportContract] with its own
+ * tag — but the two must stay the same text or the instructions people read stop
+ * matching the instructions runs receive.
+ */
+const REPORT_CONTRACT = reportContract('<tag>');
 
 /**
  * The prompt as the Round's run actually receives it.
@@ -276,10 +296,11 @@ reported as "unknown" with a truncated quote of whatever you said last.`;
  * tell it when to stop is a sentence written in advance saying what done looks
  * like.
  */
-function promptFor(round) {
+function promptFor(round, tag = null) {
   const goal = String(round.goal || '').trim();
   const head = goal ? `GOAL — this run is done when: ${goal}\n\n` : '';
-  return `${head}${String(round.prompt || '').trim()}\n${REPORT_CONTRACT}`;
+  const contract = tag ? reportContract(tag) : REPORT_CONTRACT;
+  return `${head}${String(round.prompt || '').trim()}\n${contract}`;
 }
 
 /** Items beyond this are dropped; [oneReport] records how many there really were. */
@@ -335,7 +356,7 @@ function cleanItem(raw) {
   };
 }
 
-const OPEN_FENCE = /^ {0,3}(`{3,})huginn-report[ \t]*$/;
+const OPEN_FENCE = /^ {0,3}(`{3,})huginn-report(?:[ \t]+([A-Za-z0-9_-]{1,64}))?[ \t]*$/;
 const CLOSE_FENCE = /^ {0,3}(`{3,})[ \t]*$/;
 
 /**
@@ -370,15 +391,19 @@ const CLOSE_FENCE = /^ {0,3}(`{3,})[ \t]*$/;
  */
 function reportBlocks(text) {
   const out = [];
-  let fence = null; let body = null;
+  let fence = null; let body = null; let tag = null;
   for (const line of String(text).split(/\r?\n/)) {
     if (fence === null) {
       const m = OPEN_FENCE.exec(line);
-      if (m) { fence = m[1]; body = []; }
+      if (m) { fence = m[1]; tag = m[2] || null; body = []; }
       continue;
     }
     const c = CLOSE_FENCE.exec(line);
-    if (c && c[1].length >= fence.length) { out.push(body.join('\n')); fence = null; body = null; continue; }
+    if (c && c[1].length >= fence.length) {
+      out.push({ body: body.join('\n'), tag });
+      fence = null; body = null; tag = null;
+      continue;
+    }
     body.push(line);
   }
   return out;
@@ -426,14 +451,36 @@ const CONTRACT_HEADLINE = 'one line, under 90 characters, what you found';
  * answer, so the walk continues past it rather than stopping — the run's actual
  * report is the one written before the explanation.
  */
-function parseReport(text) {
+function parseReport(text, tag = null) {
   if (typeof text !== 'string' || !text) return null;
-  const blocks = reportBlocks(text);
+  const blocks = reportBlocks(text).filter((b) => (tag ? b.tag === tag : true));
   for (let i = blocks.length - 1; i >= 0; i--) {
-    const r = oneReport(blocks[i]);
+    const r = oneReport(blocks[i].body);
     if (r) return r;
   }
   return null;
+}
+
+/**
+ * Whether the run wrote a report block that was NOT tagged for this run.
+ *
+ * ⚠ THIS IS THE INJECTION SIGNAL AND IT MUST NOT BE SWALLOWED. A round exists to
+ * go and read things — a log, a page, a mailbox — and everything it reads is
+ * text somebody else may have written. A report block planted in that content
+ * used to be indistinguishable from the run's own, and the attacker's best
+ * outcome was not a lie but SILENCE: forge `{"status":"ok"}` and shouldNotify
+ * returns false, so a round that found something real says nothing at all and
+ * the row shows a clean green week.
+ *
+ * The tag is minted per run and appears only in the prompt, so content written
+ * before the run cannot carry it. An untagged block is therefore either
+ * something the run read, or the run forgetting its own contract — and both are
+ * worth a person's attention, which is why this returns a reason rather than
+ * quietly dropping the block.
+ */
+function untaggedReport(text, tag) {
+  if (!tag) return false;
+  return reportBlocks(text).some((b) => b.tag !== tag);
 }
 
 function oneReport(raw) {
@@ -609,5 +656,5 @@ module.exports = {
   promptFor, parseReport, fallbackReport, errorReport, effectiveStatus,
   shouldNotify, dueDecision,
   reportBlocks, fenceOpensAt, stripFences, oneLine, safeText,
-  MAX_ITEMS, CONTRACT_HEADLINE,
+  MAX_ITEMS, CONTRACT_HEADLINE, reportContract, untaggedReport,
 };

@@ -9,6 +9,50 @@ appeared only as a side-note on the app releases it happened to ship with. Three
 undocumented, and the notes-cutting matcher could fuse two sections when an app and an appd
 version number collided. Entries below are reconstructed from the shipping commits.
 
+## 2.70.0 — 2026-08-25
+
+### Fixed — a report block a run READ is no longer accepted as its answer
+
+A Round exists to go and read things: a log, a page, a mailbox, a repo. All of it
+is text somebody else may have written, and a fenced `huginn-report` block sitting
+in that content used to be indistinguishable from the run's own answer.
+
+The interesting part is what the attacker's best outcome was. Not a lie — SILENCE.
+`{"status":"ok","goalMet":true}` makes `shouldNotify` return false, so a round
+that found something real would say nothing at all, and the row would show a clean
+green week. Nobody goes looking for a report they were never told was missing.
+
+Each run now gets a tag, minted when it fires and appearing only in its prompt:
+
+```
+THIS RUN'S TAG: a7f3c91b2d
+```
+
+The opening fence must carry it. Content written before the run cannot know it, so
+a planted block is discarded no matter where it appears — ordering is not a
+defence, because injected text chooses where it appears. A block without the tag
+is reported as `unknown` with the reason said plainly, which NOTIFIES: the failure
+direction is noise, never a forged clean week. That also covers the run simply
+forgetting its own contract.
+
+The tag rides in the work item, so a run on a Device is covered by the same fence
+with no client change — and a device is the clearest case for why it exists, since
+the machine holding the file system is the one reading the logs.
+
+Runs recorded before this shipped have no tag, and an untagged block is still
+accepted for them: refusing one with nothing to compare against would have turned
+every round in flight at deploy time into a malformed report.
+
+⚠ The tag is stated on a line of its own because the first wording buried it in
+prose, and the test stub — matching `huginn-report ([A-Za-z0-9_-]+)` — captured the
+word `block` out of "a fenced huginn-report block". A model reading the same prose
+could have made the same mistake.
+
+605 tests, floor raised to 600. Verified by disabling only the tag filter: four
+tests fail, including the end-to-end one. A fifth passed either way — the planted
+block happened to come first — and is kept, annotated, as the scenario rather than
+as proof.
+
 ## 2.69.0 — 2026-08-25
 
 ### Fixed — the report channel
