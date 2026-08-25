@@ -14,6 +14,32 @@ the Electron client's go to `/v1/desktop` and the two never mix — see
      refusal is deliberate — it is what stops a release going out with no notes.
      ─────────────────────────────────────────────────────────────────────────── -->
 
+## 0.8.7
+
+### Fixed
+- **The live pane kept resizing the owner's real terminal, and everything attached to it saw it.**
+  Reported as wrong wrapping, jumping, garbled content and live typing not working — on the phone
+  and the desktop at once, which is the tell: they share the tmux window, so one client reporting
+  a bad geometry breaks it for both.
+  - **A question resized the terminal, twice per question.** The prompt card was a SIBLING of the
+    box that measures itself into tmux rows, so it took ~16 rows on the phone (~9 on the desktop)
+    the moment Claude asked something and gave them back when it was answered. The pane re-wrapped
+    under the reader exactly while they were trying to read the thing being asked. It is now an
+    overlay over the pane — same card, same promise that a question is always answerable, zero rows.
+  - **The copy buttons shipped in the last release did the same thing**, and worse: they were
+    conditional on the pane having text, so they came and went with the content and walked the pane
+    between two shapes. Moved into the tab strip, which is above the measured box entirely.
+  - **Clicking a copy button stopped live typing.** The button took keyboard focus from the pane,
+    and nothing gave it back. The trailing slot is now out of the focus order.
+  - **The screen-error banner flapped sub-second.** It cleared on every successful poll, so one
+    failed keystroke shrank the terminal and the next poll grew it back — two real resizes out of a
+    transient hiccup. Overlaid.
+  - The tab strip's height is now pinned, so a trailing action cannot change it by the 4dp that was
+    enough to cost a row.
+- **The screen menu shifted under your finger.** Read live, a URL scrolling on or off the pane
+  inserted or removed the FIRST item while the menu was open, moving everything below it by a row —
+  a tap aimed at "Wind down…" could land on "Kill session…". The link list is snapshotted on open.
+
 ## 0.8.6
 
 ### Added
