@@ -10,6 +10,36 @@ Format loosely follows [Keep a Changelog](https://keepachangelog.com/); versions
 
 ## [Unreleased]
 
+## [0.10.3] - 2026-08-25
+
+### Fixed — one oversized line could lose a remote run's entire answer
+
+A device runs claude with `--output-format stream-json --verbose
+--include-partial-messages`, so a SINGLE line can carry a whole tool_result or a
+whole final answer — a Read of a big file, a chatty Bash, a long report. Over the
+daemon's body cap the POST came back 413, and:
+
+1. the **whole batch** was lost, not just the oversized line;
+2. if the terminal frame was in that batch it could **never** be delivered, because
+   the retry is identically 413 — so the chat sat `running` forever and the machine
+   was blocked from every other job;
+3. the chat was then blamed on "no word for 5 minutes".
+
+Silent, permanent, and reserved for the runs with the most to say. The runner now
+keeps itself under the limit rather than discovering it: no batch is ever built too
+large, an oversized line is **shrunk in place** (keeping its event type, with a
+marker where the content was) rather than dropped, and **the terminal frame is
+posted alone**, so whatever else happens the ending can land. The daemon's events
+route also accepts a megabyte now, which helps a runner too old to know better.
+
+- **A permanent rejection is no longer retried forever.** Any error re-queued the
+  batch, so after a daemon restart — when the run is simply gone — the runner
+  hammered a 404 twice a second for as long as its child lived. A 400/403/404/413
+  now ends the job.
+- **The runner is importable**, so the size rules can be tested at all. Until now the
+  one part of the file that could silently destroy output was the part nothing could
+  reach without starting a runner; `scripts/test-client.sh` drives it directly.
+
 ## [0.10.2] - 2026-08-25
 
 ### Fixed — the headless runner, which had no gate at all
