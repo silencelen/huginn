@@ -552,3 +552,86 @@ test('an unknown round id is a 404, not a crash', async () => {
   assert.equal((await api(`/v1/rounds/${id}/run`, { method: 'POST' })).status, 404);
   assert.equal((await api('/v1/rounds/not-a-uuid')).status, 404);
 });
+
+// ------------------------------------------- what happens to what was queued
+
+test('a message sent during a Round run is refused, not swallowed', async () => {
+  // ⚠ WHAT THIS ACTUALLY GUARDS, having been checked rather than assumed. The
+  // breaker filed this as "accepted with a 202 saying queued, then destroyed
+  // with no word to the sender and no trace in the chat" — the same failure the
+  // chat route had already fixed for the cancel window, where it wrote down why
+  // it was unacceptable: "worse than being told to wait".
+  //
+  // Probed against the daemon: a Round's chat REFUSES the send outright, with a
+  // sentence that says what to do instead. So the bad path is prevented upstream
+  // and there is nothing to drop. settleRun's drop sites were made honest anyway
+  // — they now write what was dropped into the transcript rather than only
+  // logging a count — because that is depth, not a fix, and the difference is
+  // worth being clear about.
+  //
+  // The test is written both ways round: a 409 must be ACTIONABLE, and if anyone
+  // ever makes these chats queue instead, the second branch is what catches the
+  // silent drop.
+  const r = await mkRound({ title: 'queued', prompt: 'Take a moment. SLOW' });
+  const fired = await api(`/v1/rounds/${r.id}/run`, { method: 'POST' });
+  const chatId = fired.body.chatId;
+  await wait(200);
+  const sent = await api(`/v1/chats/${chatId}/messages`, {
+    method: 'POST', body: JSON.stringify({ text: 'a thought I had while it ran' }),
+  });
+
+  if (sent.status !== 202) {
+    assert.equal(sent.status, 409, `a send during a Round run should be refused, got ${sent.status}`);
+    assert.ok(/new chat|review/i.test(sent.body.error || ''),
+      `the refusal must say what to do instead: ${JSON.stringify(sent.body)}`);
+    await waitForRun(r.id);
+    return;
+  }
+  // It was queued after all — then it must not vanish.
+  await waitForRun(r.id);
+  await wait(400);
+  const page = (await api(`/v1/chats/${chatId}/transcript`)).body;
+  const events = page.events || page.messages || [];
+  const note = events.find((e) => (e.text || '').includes('was not delivered'));
+  assert.ok(note, 'a queued message was destroyed with no trace in the chat');
+  assert.match(note.text, /a thought I had while it ran/,
+    'the note does not quote the message, which is the only copy left');
+});
+
+test('run transcripts do not outlive the history that points at them', async () => {
+  // ⚠ finishRoundRun promised the conversation "stays readable forever", and
+  // after the 11th run the chat id was evicted from runs[] — while round chats
+  // are filtered out of /v1/chats by design, so there was no other path to it.
+  // Not openable, not listable, not deletable: a daily Round left ~355 orphan
+  // transcript directories a year, invisible and impossible to count against.
+  const r = await mkRound({ title: 'many runs', prompt: 'Check. EMIT_STATUS:ok' });
+  const seen = [];
+  for (let i = 0; i < 12; i += 1) {
+    const f = await api(`/v1/rounds/${r.id}/run`, { method: 'POST' });
+    assert.equal(f.status, 202, `fire ${i} was refused`);
+    seen.push(f.body.chatId);
+    // ⚠ Waited on currentChatId, NOT on runs.length. Once the history caps at
+    // MAX_RUN_HISTORY the length stops changing, so a length-based wait returned
+    // instantly from run 10 onward and the next fire hit "previous run is still
+    // going" — the test failing for its own impatience rather than for the bug.
+    const until = Date.now() + 20000;
+    while (Date.now() < until) {
+      const b = (await api(`/v1/rounds/${r.id}`)).body;
+      if (!b.currentChatId && (b.runs || []).length > 0) break;
+      await wait(100);
+    }
+  }
+  const body = (await api(`/v1/rounds/${r.id}`)).body;
+  assert.equal(body.runs.length, 10, 'history should cap at MAX_RUN_HISTORY');
+  const kept = new Set(body.runs.map((x) => x.chatId));
+  const evicted = seen.filter((id) => !kept.has(id));
+  assert.ok(evicted.length >= 1, 'nothing was evicted, so this proves nothing');
+  for (const id of evicted) {
+    assert.equal(fs.existsSync(path.join(tmp, 'data', 'chats', id)), false,
+      `evicted run ${id} left an unreachable transcript on disk`);
+  }
+  for (const id of kept) {
+    assert.equal(fs.existsSync(path.join(tmp, 'data', 'chats', id)), true,
+      `run ${id} is still in the history but its transcript was pruned`);
+  }
+});
