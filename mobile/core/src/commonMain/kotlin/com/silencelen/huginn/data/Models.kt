@@ -817,6 +817,16 @@ data class RoundRun(
     val status: String = "unknown",
     val headline: String = "",
     val items: List<RoundItem> = emptyList(),
+    /**
+     * How many items the run actually reported, which is NOT [items].size once
+     * the daemon's cap of 20 bites. A round that found 500 things showed "20
+     * items" on the line directly under a headline saying 500, and the number an
+     * operator acts on was the wrong one of the two on the same screen.
+     *
+     * 0 from a daemon too old to send it — [itemCountWords] falls back to the
+     * list length, which is what that daemon meant by the field anyway.
+     */
+    val itemsTotal: Int = 0,
     /** The run produced no usable report block; the headline is a quote instead. */
     val malformed: Boolean = false,
     val manual: Boolean = false,

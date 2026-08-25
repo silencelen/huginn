@@ -261,6 +261,60 @@ test('an unparseable block is malformed, not silently dropped', async () => {
   assert.ok(!done.lastRun.headline.includes('```'), 'and does not echo a fence at the reader');
 });
 
+/** The title the daemon gave a run's chat, read from the store. */
+function chatTitle(chatId) {
+  return JSON.parse(fs.readFileSync(
+    path.join(tmp, 'data', 'chats', chatId, 'meta.json'), 'utf8')).title;
+}
+
+/** YYYY-MM-DD as `tz` reads this instant. */
+function dateIn(tz) {
+  return new Intl.DateTimeFormat('en-CA', { timeZone: tz, year: 'numeric', month: '2-digit', day: '2-digit' })
+    .format(new Date());
+}
+
+test("a run's chat is dated in the Round's own zone, not UTC", async () => {
+  // The title was `new Date(now * 1000).toISOString().slice(0, 10)`. An evening
+  // round in America/Los_Angeles is 7 hours into the NEXT UTC day, so the Sunday
+  // 19:00 round produced a chat titled Monday — the one date it never ran on —
+  // and every evening round on this host was filed under tomorrow.
+  //
+  // Two zones 25 hours apart, fired at the same instant. Their calendar dates
+  // can never be equal, so this cannot pass by accident on a lucky hour, and it
+  // could not have passed at all while both were rendered in UTC.
+  const east = await mkRound({
+    title: 'kiritimati', prompt: 'Check. EMIT_STATUS:ok',
+    schedule: { kind: 'weekly', days: [0], at: '19:00', tz: 'Pacific/Kiritimati' },
+  });
+  const west = await mkRound({
+    title: 'midway', prompt: 'Check. EMIT_STATUS:ok',
+    schedule: { kind: 'weekly', days: [0], at: '19:00', tz: 'Pacific/Midway' },
+  });
+
+  const beforeE = dateIn('Pacific/Kiritimati');
+  const beforeW = dateIn('Pacific/Midway');
+  const fe = await api(`/v1/rounds/${east.id}/run`, { method: 'POST' });
+  const fw = await api(`/v1/rounds/${west.id}/run`, { method: 'POST' });
+  assert.equal(fe.status, 202);
+  assert.equal(fw.status, 202);
+  const afterE = dateIn('Pacific/Kiritimati');
+  const afterW = dateIn('Pacific/Midway');
+
+  const te = chatTitle(fe.body.chatId);
+  const tw = chatTitle(fw.body.chatId);
+  const de = te.split(' · ')[1];
+  const dw = tw.split(' · ')[1];
+
+  // Either side of a midnight crossed between computing and firing is fine; a
+  // date from the wrong zone is not.
+  assert.ok([beforeE, afterE].includes(de), `${de} is not Kiritimati's date (${beforeE})`);
+  assert.ok([beforeW, afterW].includes(dw), `${dw} is not Midway's date (${beforeW})`);
+  assert.notEqual(de, dw, 'both were rendered in the same zone, which is the bug');
+
+  await waitForRun(east.id);
+  await waitForRun(west.id);
+});
+
 test("a Round's run is not one of the owner's conversations", async () => {
   const r = await mkRound({ title: 'hidden', prompt: 'Check. EMIT_STATUS:ok' });
   const fired = await api(`/v1/rounds/${r.id}/run`, { method: 'POST' });

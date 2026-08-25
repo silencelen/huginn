@@ -42,6 +42,26 @@ WORD = {"ok": "all clear", "attention": "worth a look",
         "action": "NEEDS YOU", "unknown": "unclear"}
 MARK = {"ok": " ", "attention": "!", "action": "!!", "unknown": "?"}
 
+# ONE definition, used on every string that reaches the screen.
+#
+# A terminal executes some of what it is handed. Report text is written by a
+# model, and a model writes what it read -- a log line, a fetched page -- so a
+# round title of "Nightly scan" followed by ESC [ 2K CR "ALL CLEAR" erased its own
+# line and reprinted, and this listing showed ALL CLEAR for a round holding a DISK
+# FULL headline and two action items. A newline in a short label split one finding
+# into two rows just as well.
+#
+# The daemon now strips these at store time too. Both, deliberately: an older
+# daemon and a hand-edited store are each real, and the renderer is the last place
+# that can still be sure.
+CTRL = dict.fromkeys(list(range(0, 32)) + list(range(127, 160)), 32)
+
+def clean(v, n=0):
+    if not isinstance(v, str):
+        return ""
+    out = " ".join(v.translate(CTRL).split())
+    return out[:n] if n else out
+
 def ago(sec):
     if not sec:
         return ""
@@ -58,6 +78,7 @@ def until(ms):
     if d <= 0:    return "due now"
     if d < 3600:  return "in %dm" % (d // 60)
     if d < 86400: return "in %dh" % (d // 3600)
+    if d < 172800: return "tomorrow"
     return "in %d days" % (d // 86400)
 
 print()
@@ -65,23 +86,41 @@ for r in rounds:
     last = r.get("lastRun") or {}
     st = last.get("status")
     mark = MARK.get(st, "-") if last else "-"
-    state = "paused" if not r.get("enabled") else ("RUNNING" if r.get("running") else until(r.get("nextRunAt")))
+    # RUNNING first. A round that is executing at this moment is executing
+    # whatever its enabled flag says -- and disabling one mid-run is exactly how
+    # you get here, so the state most worth seeing was the one being hidden.
+    if r.get("running"):
+        state = "RUNNING"
+    elif not r.get("enabled"):
+        state = "paused"
+    else:
+        state = until(r.get("nextRunAt"))
 
-    print("  %-2s %s" % (mark, r.get("title") or "?"))
-    where = r.get("hostName") or "this host"
+    print("  %-2s %s" % (mark, clean(r.get("title")) or "?"))
+    where = clean(r.get("hostName")) or "this host"
     # Same trap as huginn-devices: a present-but-null key defeats the default
     # argument of .get. NOTE: no apostrophes anywhere in this block — the whole
     # program is inside a single-quoted python3 -c, so one closes it and the
     # shell starts parsing python. Extracting this block to test it CANNOT
     # catch that; only running the real script can.
     print("       %s  .  %s  .  %s  .  on %s"
-          % (r.get("cadence") or "?", state, r.get("mode") or "ask", where))
+          % (clean(r.get("cadence")) or "?", state, clean(r.get("mode")) or "ask", where))
 
     if last:
         bits = [WORD.get(st) or st or "unclear", ago(last.get("at"))]
-        n = len(last.get("items") or [])
-        if n:
-            bits.append("%d item%s" % (n, "" if n == 1 else "s"))
+        shown = len(last.get("items") or [])
+        # The daemon keeps 20 and records how many there really were. Printing
+        # the kept count as the authoritative one put "20 items" directly under
+        # a headline saying 500, and the number an operator acts on was the
+        # wrong one of the two on the same screen.
+        total = last.get("itemsTotal")
+        if not isinstance(total, int) or total < shown:
+            total = shown
+        if total:
+            if total > shown:
+                bits.append("%d items, showing %d" % (total, shown))
+            else:
+                bits.append("%d item%s" % (total, "" if total == 1 else "s"))
         # An unmet goal is the one fact a cheerful headline can hide, so it is
         # said here rather than left to the reader to infer.
         if last.get("goalMet") is False:
@@ -91,14 +130,14 @@ for r in rounds:
         if last.get("malformed"):
             bits.append("no report block")
         print("       %s" % "  .  ".join(b for b in bits if b))
-        head = (last.get("headline") or "").strip()
+        head = clean(last.get("headline"), 100)
         if head:
-            print("       %s" % head[:100])
+            print("       %s" % head)
         for it in (last.get("items") or [])[:5]:
-            print("         - %s" % (it.get("title") or "")[:88])
-            sug = (it.get("suggest") or "").strip()
+            print("         - %s" % clean(it.get("title"), 88))
+            sug = clean(it.get("suggest"), 86)
             if sug:
-                print("           -> %s" % sug[:86])
+                print("           -> %s" % sug)
     else:
         print("       not run yet")
     print()
