@@ -1184,6 +1184,31 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
+    /**
+     * "I have read this and dealt with it", or Undo.
+     *
+     * Optimistic like the pause switch, for the same reason: the point of the
+     * control is that the red goes away, and a control that waits for a round
+     * trip to do the one thing it exists for feels broken.
+     */
+    fun acknowledgeRound(id: String, acknowledged: Boolean) {
+        val stamp = if (acknowledged) System.currentTimeMillis() / 1000 else null
+        _rounds.value = _rounds.value.map { r ->
+            // ⚠ A local val, not `r.lastRun` twice: it is a public property of
+            // another module, so Kotlin will not smart-cast it after the null
+            // check — the compiler cannot prove :core did not change it in
+            // between. The same shape fails identically in the desktop store.
+            val run = r.lastRun
+            if (r.id == id && run != null) r.copy(lastRun = run.copy(acknowledgedAt = stamp)) else r
+        }
+        viewModelScope.launch {
+            awaitReady()
+            runCatching { client.ackRound(id, acknowledged) }
+                .onSuccess { updated -> _rounds.value = _rounds.value.map { if (it.id == id) updated else it } }
+                .onFailure { _toast.value = errText(it); refreshRounds() }
+        }
+    }
+
     fun setRoundEnabled(id: String, enabled: Boolean) {
         // Optimistic, because a switch that waits for a round trip feels broken on
         // a phone. The refresh below is what makes it true; a failure puts the
