@@ -20,7 +20,7 @@ ok()   { echo "  ok    $*"; }
 bad()  { echo "  FAIL  $*" >&2; FAIL=1; }
 skip() { echo "  SKIP  $*  <-- not a pass" >&2; }
 
-echo "[1/7] syntax"
+echo "[1/8] syntax"
 bash -n client/huginn.sh && ok "huginn.sh parses" || bad "huginn.sh does not parse"
 if command -v pwsh >/dev/null 2>&1; then
   if pwsh -NoProfile -Command '
@@ -32,7 +32,7 @@ else
   skip "huginn.ps1 parse (no pwsh)"
 fi
 
-echo "[2/7] the two version constants agree with each other and the changelog"
+echo "[2/8] the two version constants agree with each other and the changelog"
 SH_V=$(grep -m1 "^HUGINN_VERSION=" client/huginn.sh | sed "s/.*'\(.*\)'.*/\1/")
 PS_V=$(grep -m1 "HUGINN_VERSION = " client/huginn.ps1 | sed "s/.*'\(.*\)'.*/\1/")
 CL_V=$(grep -m1 -oE '^## \[[0-9]+\.[0-9]+\.[0-9]+\]' CHANGELOG.md | tr -d '#[] ')
@@ -53,7 +53,7 @@ done
 # `update` overwrites the file that is then loaded into the shell, so its download
 # host is a trust root. huginn.sh pinned it in 0.6.1; huginn.ps1 kept using
 # $HUGINN_HOST until 0.8.2 — nothing noticed for two minor versions.
-echo "[2b/7] both clients pin the update trust root"
+echo "[2b/8] both clients pin the update trust root"
 for f in client/huginn.sh client/huginn.ps1; do
   grep -q 'HUGINN_UPDATE_HOST' "$f" && ok "$f pins HUGINN_UPDATE_HOST" \
     || bad "$f fetches update code from an unpinned host"
@@ -61,7 +61,7 @@ done
 grep -q 'scp .*\${H}:' client/huginn.ps1 && bad "huginn.ps1 still scps from \$HUGINN_HOST" \
   || ok "huginn.ps1 does not scp from \$HUGINN_HOST"
 
-echo "[3/7] both clients expose the same verbs (parity by verb)"
+echo "[3/8] both clients expose the same verbs (parity by verb)"
 # huginn.sh writes cases as alternations (`list|ls)`, `status|st)`), so match the
 # verb as a case ALTERNATIVE, not as a bare `verb)`.
 for v in end kill solo rename list status rounds devices device desktop usage update version help; do
@@ -77,7 +77,7 @@ for v in end kill solo rename list status rounds devices device desktop usage up
   [ "$a" -gt 0 ] && [ "$b" -gt 0 ] && ok "verb $v" || bad "verb $v missing (sh=$a ps1=$b)"
 done
 
-echo "[4/7] what the PowerShell client actually SENDS"
+echo "[4/8] what the PowerShell client actually SENDS"
 if ! command -v pwsh >/dev/null 2>&1; then
   skip "ps1 behaviour (no pwsh)"
 else
@@ -133,7 +133,7 @@ STUB
     && ok "end rejects a non-conforming name" || bad "end accepted 'bad-name'"
 fi
 
-echo "[5/7] what the POSIX client actually SENDS"
+echo "[5/8] what the POSIX client actually SENDS"
 # huginn.sh is the client the 0.8.0 deny-list bug actually shipped to, and nothing
 # here exercised it — [4/6] drives only huginn.ps1. Same stub-ssh technique; huginn.sh
 # passes a plain argv string rather than a base64 payload, so the stub logs argv.
@@ -167,7 +167,7 @@ grep -q "soft-end" <<<"$SE" && ok "sh: end reaches the soft-end route" || bad "s
 SK=$(semit 'huginn kill testsess')
 grep -q "DELETE" <<<"$SK" && ok "sh: kill prefers the daemon DELETE" || bad "sh: kill did not use DELETE"
 
-echo "[6/7] desktop links come from GitHub, and reach it WITHOUT the host"
+echo "[6/8] desktop links come from GitHub, and reach it WITHOUT the host"
 # The whole point of the verb is that it works on a machine that cannot ssh here
 # (that is why it does not use /v1/desktop-kt, whose every route needs the token).
 # Both halves are asserted: the url is right, AND the stub ssh log stayed empty.
@@ -210,7 +210,7 @@ else
 fi
 rm -rf "$T2"
 
-echo "[7/7] the headless runner (client/huginn-device)"
+echo "[7/8] the headless runner (client/huginn-device)"
 # WHY THIS SECTION EXISTS: the runner had no gate at all, and every defect it
 # shipped had the same shape — it reported success, or the wrong reason, on a
 # machine with NOBODY SITTING AT IT. That is the one place a misleading message
@@ -276,6 +276,32 @@ grep -q '11111111-1111-1111-1111-111111111111' "$TD/device.json" \
   && ok "off keeps the id, so it can be run again" \
   || bad "off destroyed the only handle that can remove the row"
 rm -rf "$TD"
+
+echo "[8/8] what is actually DEPLOYED on this host, vs what is in the tree"
+# ⚠ WHY THIS EXISTS. On 2026-08-25 the live headless device (brokkr) was found
+# running the PRE-SECURITY-FIX runner — `allows()` failing open on an unknown
+# mode, and `--resume` fed unvalidated into argv — while reporting version
+# 0.10.1, the same number as the fixed code. The fixes were committed, released
+# and tested; they had simply never been copied to /usr/local/share/huginn-cli,
+# which is what devices install FROM. A version string is not evidence of
+# content, and nothing compared the two.
+#
+# Same shape as server/bin: /usr/local/bin/huginn-{rounds,devices} are COPIES,
+# not symlinks, and `huginn-sync` does not carry them, so they drift silently.
+#
+# Skips LOUDLY off this host rather than failing on somebody else's machine.
+DRIFT=0
+check_deployed () {   # $1 = repo path, $2 = installed path
+  if [ ! -f "$2" ]; then skip "not installed here: $2"; return; fi
+  if cmp -s "$1" "$2"; then ok "deployed matches tree: $2"
+  else bad "DEPLOYED IS STALE: $2 differs from $1"; DRIFT=1; fi
+}
+check_deployed client/huginn-device      /usr/local/share/huginn-cli/huginn-device
+check_deployed client/huginn.sh          /usr/local/share/huginn-cli/huginn.sh
+check_deployed client/huginn.ps1         /usr/local/share/huginn-cli/huginn.ps1
+check_deployed server/bin/huginn-rounds  /usr/local/bin/huginn-rounds
+check_deployed server/bin/huginn-devices /usr/local/bin/huginn-devices
+[ "$DRIFT" -eq 0 ] || echo "       (install the ones above, or devices keep receiving the old file)" >&2
 
 echo
 [ "$FAIL" = 0 ] && echo "client gates: PASS" || { echo "client gates: FAIL" >&2; exit 1; }
