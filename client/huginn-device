@@ -31,7 +31,7 @@ const https = require('https');
 const readline = require('readline');
 const { spawn } = require('child_process');
 
-const VERSION = '0.11.0';
+const VERSION = '0.12.0';
 
 // ---8<--- GENERATED POLICY — scripts/gen-device-policy.js — DO NOT EDIT ---8<---
 const POLICY = {
@@ -284,6 +284,12 @@ function refusal(scope, locked, mode) {
 const engineRefusal = (mode, hasEngine) =>
   (mode === 'generate' && !hasEngine) ? POLICY.refusals.engine : null;
 
+/** How an engine path becomes a spawn: a .js engine runs through node. */
+const execFor = (engineBin, argv) =>
+  String(engineBin).endsWith('.js')
+    ? [process.execPath, [engineBin, ...argv]]
+    : [engineBin, argv];
+
 function argvFor(work, scope, locked, persona) {
   // A granted generate argv is the bare stream flags plus the request: no tool
   // flags (the shim has no tool surface — absence is the fence), no --effort,
@@ -395,7 +401,19 @@ async function enrol(conf) {
     root: conf.root || null,
     version: VERSION,
     locked: locked(),
+    // Display-only advertisement (what a serving row says it serves). The
+    // daemon renders it untrusted; it is never routing authority.
+    models: Array.isArray(conf.models) ? conf.models : undefined,
   });
+  // ⚠ THE SCOPE ECHO IS THE FENCE against an old daemon. An appd without the
+  // generate rung files an unknown scope as its own floor — which would
+  // silently enrol a SERVING machine as a read-only CLAUDE device, the exact
+  // misenrolment the exclusive scope exists to prevent. The scope this runner
+  // asked for must be the scope the daemon heard, or nothing is offered.
+  if (parseScope(conf.scope) === 'generate' && dev.scope !== 'generate') {
+    throw new Error(`the daemon did not recognise scope "generate" (it answered "${dev.scope}") — update huginn-appd before enrolling a serving machine`);
+  }
+  if (dev.llmSlug && conf.llmSlug !== dev.llmSlug) { conf.llmSlug = dev.llmSlug; saveConf(conf); }
   if (dev.id !== conf.id) { conf.id = dev.id; saveConf(conf); }
   return dev.id;
 }
@@ -538,11 +556,13 @@ function runWork(id, work, conf) {
     }
 
     // Which engine: the claude CLI for ask/act, the llm shim for generate. The
-    // dispatch is by MODE, never by scope — the scope fence already ran.
-    const bin = work.mode === 'generate' ? conf.llm : (conf.claude || 'claude');
+    // dispatch is by MODE, never by scope — the scope fence already ran. A .js
+    // engine spawns through node: Windows cannot spawn a script directly, and
+    // shell:true is not acceptable for an argv near a prompt.
+    const [bin, fullArgv] = execFor(work.mode === 'generate' ? conf.llm : (conf.claude || 'claude'), argv);
     let child;
     try {
-      child = spawn(bin, argv, { cwd, stdio: ['pipe', 'pipe', 'pipe'] });
+      child = spawn(bin, fullArgv, { cwd, stdio: ['pipe', 'pipe', 'pipe'] });
     } catch (e) {
       return finish(`could not start ${work.mode === 'generate' ? 'the local engine' : 'claude'} on ${conf.name}: ${e.message}`);
     }
@@ -950,6 +970,6 @@ if (require.main === module) {
   module.exports = {
     VERSION, MAX_LINE_BYTES, MAX_BATCH_BYTES,
     shrinkLine, batchLines, parseFlags, tokenOrWhy, cwdFor, effectiveScope, allows, argvFor,
-    engineRefusal,
+    engineRefusal, execFor,
   };
 }

@@ -64,7 +64,7 @@ grep -q 'scp .*\${H}:' client/huginn.ps1 && bad "huginn.ps1 still scps from \$HU
 echo "[3/8] both clients expose the same verbs (parity by verb)"
 # huginn.sh writes cases as alternations (`list|ls)`, `status|st)`), so match the
 # verb as a case ALTERNATIVE, not as a bare `verb)`.
-for v in end kill solo rename list status rounds devices device desktop usage update version help; do
+for v in end kill solo rename list status rounds devices device local desktop usage update version help; do
   # Match the DISPATCH, not a mention: huginn.ps1 lists every verb in its
   # completion array too, so grepping "'$v'" passes even with the branch deleted
   # (verified by removing the `end` branch: still 2 matches, still green).
@@ -303,6 +303,50 @@ assert.deepEqual(r.batchLines([]), [], "an empty tail should post nothing");
 ' && ok "output is batched, shrunk in place, and kept in order" \
    || bad "the size rules do not hold — a large answer can still be lost"
 
+echo "[local/8] the local tier: manager, shim, manifest, units"
+node --check client/huginn-local && ok "huginn-local parses" || bad "huginn-local does not parse"
+node --check client/huginn-llm-shim && ok "huginn-llm-shim parses" || bad "huginn-llm-shim does not parse"
+
+LOCAL_V=$(grep -m1 "^const VERSION = " client/huginn-local | sed "s/.*'\(.*\)'.*/\1/")
+SHIM_V=$(grep -m1 "^const VERSION = " client/huginn-llm-shim | sed "s/.*'\(.*\)'.*/\1/")
+[ "$LOCAL_V" = "$SH_V" ] && ok "huginn-local says $LOCAL_V, same as the core" \
+  || bad "huginn-local says $LOCAL_V but the core says $SH_V — they ship as one release"
+[ "$SHIM_V" = "$SH_V" ] && ok "huginn-llm-shim says $SHIM_V, same as the core" \
+  || bad "huginn-llm-shim says $SHIM_V but the core says $SH_V — they ship as one release"
+
+# The embedded pins ARE the gated-bump mechanism; drift here means somebody
+# edited one side without the generator, which is the road to an unreviewed
+# runtime landing on a serving machine.
+node scripts/gen-local-manifest.js --check >/dev/null \
+  && ok "the embedded manifest matches shared/local-runtime.json" \
+  || bad "manifest drift — run: node scripts/gen-local-manifest.js and READ the diff"
+
+# The device-unit lesson, re-applied: a unit that drops the env var that moves
+# its own files is a service that loops forever while systemd calls it healthy.
+UNIT_LLM=$(HUGINN_LOCAL_DIR=/tmp/hl-gate node client/huginn-local unit --system --which llm)
+echo "$UNIT_LLM" | grep -q 'Environment=HUGINN_LOCAL_DIR=/tmp/hl-gate' \
+  && ok "the llm unit pins HUGINN_LOCAL_DIR" || bad "the llm unit drops HUGINN_LOCAL_DIR"
+echo "$UNIT_LLM" | grep -q 'Environment=HOME=' \
+  && ok "the llm unit pins HOME" || bad "the llm unit drops HOME"
+UNIT_RUN=$(HUGINN_LOCAL_DIR=/tmp/hl-gate node client/huginn-local unit --system --which runner)
+echo "$UNIT_RUN" | grep -q 'Environment=HUGINN_DEVICE_DIR=/tmp/hl-gate/device' \
+  && ok "the runner unit pins HUGINN_DEVICE_DIR" || bad "the runner unit drops HUGINN_DEVICE_DIR"
+
+HUGINN_LOCAL_DIR=/tmp/hl-gate node client/huginn-local on --clsas=G8 >/dev/null 2>&1
+[ $? -eq 2 ] && ok "an unknown flag is refused, not ignored" || bad "an unknown flag was swallowed"
+
+# The shim's own suite carries the contract verifier — the dialect
+# handleClaudeEvent consumes, asserted frame by frame.
+SHIM_OUT=$(node --test scripts/test-llm-shim.js 2>&1)
+SHIM_PASS=$(echo "$SHIM_OUT" | grep -m1 '^# pass' | grep -oE '[0-9]+')
+SHIM_FAIL=$(echo "$SHIM_OUT" | grep -m1 '^# fail' | grep -oE '[0-9]+')
+if [ "${SHIM_FAIL:-1}" = 0 ] && [ "${SHIM_PASS:-0}" -ge 10 ]; then
+  ok "shim suite: $SHIM_PASS passed (incl. the stream-json contract verifier)"
+else
+  bad "shim suite: pass=${SHIM_PASS:-?} fail=${SHIM_FAIL:-?}"
+  echo "$SHIM_OUT" | grep -A4 'not ok' | head -20 >&2
+fi
+
 echo "[8/8] what is actually DEPLOYED on this host, vs what is in the tree"
 # ⚠ WHY THIS EXISTS. On 2026-08-25 the live headless device (brokkr) was found
 # running the PRE-SECURITY-FIX runner — `allows()` failing open on an unknown
@@ -325,6 +369,8 @@ check_deployed () {   # $1 = repo path, $2 = installed path
 check_deployed client/huginn-device      /usr/local/share/huginn-cli/huginn-device
 check_deployed client/huginn.sh          /usr/local/share/huginn-cli/huginn.sh
 check_deployed client/huginn.ps1         /usr/local/share/huginn-cli/huginn.ps1
+check_deployed client/huginn-local       /usr/local/share/huginn-cli/huginn-local
+check_deployed client/huginn-llm-shim    /usr/local/share/huginn-cli/huginn-llm-shim
 check_deployed server/bin/huginn-rounds  /usr/local/bin/huginn-rounds
 check_deployed server/bin/huginn-devices /usr/local/bin/huginn-devices
 [ "$DRIFT" -eq 0 ] || echo "       (install the ones above, or devices keep receiving the old file)" >&2
