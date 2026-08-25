@@ -35,6 +35,8 @@ object DevicePolicy {
 
     fun wire(scope: DeviceScope): String = scope.name.lowercase()
 
+    private val SESSION_ID = Regex("^[0-9a-fA-F-]{36}$")
+
     private fun rank(scope: DeviceScope): Int = DevicePolicyTable.SCOPES.indexOf(wire(scope))
 
     /**
@@ -48,9 +50,18 @@ object DevicePolicy {
     fun effective(scope: DeviceScope, locked: Boolean): DeviceScope =
         if (locked) parse(DevicePolicyTable.LOCK_DROPS_TO) else scope
 
-    /** Whether a mode can run at this scope. `act` mutates; `look` does not permit that. */
-    fun allows(scope: DeviceScope, mode: String): Boolean =
-        rank(scope) >= rank(parse(DevicePolicyTable.MODE_NEEDS[mode] ?: "work"))
+    /**
+     * Whether a mode can run at this scope. `act` mutates; `look` does not permit that.
+     *
+     * ⚠ AN UNKNOWN MODE IS REFUSED, not mapped to a default. A Kotlin Map has no
+     * prototype so the JS failure mode cannot happen here, but the old `?: "work"`
+     * meant a mode this code has never heard of ran on any machine enrolled at
+     * work or own. A mode it cannot reason about is one it must not run.
+     */
+    fun allows(scope: DeviceScope, mode: String): Boolean {
+        val need = DevicePolicyTable.MODE_NEEDS[mode] ?: return false
+        return rank(scope) >= rank(parse(need))
+    }
 
     /**
      * Why a request is being refused, in words a person can act on.
@@ -96,7 +107,11 @@ object DevicePolicy {
         val argv = DevicePolicyTable.STREAM_FLAGS.toMutableList()
         work.model?.takeIf { it.isNotBlank() }?.let { argv += listOf("--model", it) }
         work.effort?.takeIf { it.isNotBlank() }?.let { argv += listOf("--effort", it) }
-        work.resumeSessionId?.takeIf { it.isNotBlank() }?.let { argv += listOf("--resume", it) }
+        // ⚠ A UUID, or nothing. `--resume` takes its value optionally, so a string
+        // beginning with "--" does not become the session id — it becomes the next
+        // FLAG. The value originates in an event the far end posted, and this
+        // machine builds its own argv, so it validates rather than assuming.
+        work.resumeSessionId?.takeIf { SESSION_ID.matches(it) }?.let { argv += listOf("--resume", it) }
         persona?.takeIf { it.isNotBlank() }?.let { argv += listOf("--append-system-prompt", it) }
         argv += listOf(
             "--allowedTools",

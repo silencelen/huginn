@@ -226,3 +226,71 @@ test('deleting a round stops the work it is doing right now', async () => {
   assert.ok(chat && chat.running === false,
     'the orphaned run is still going — delete left it holding a slot with no surface to stop it');
 });
+
+// ───────────────────────── the fence around somebody's personal computer
+
+test('a session id that is really a flag never reaches the device', async () => {
+  // `--resume` takes its value OPTIONALLY, so a string starting with "--" does
+  // not become the session id — it becomes the next flag. The value arrives
+  // inside an init event the DEVICE posts and is echoed back to it verbatim, so
+  // an unvalidated string here is authority travelling inside a request.
+  const d = await enrol('resumebox');
+  const c = await mkChat(d.id, 'ask');
+  await say(c.id, 'first turn');
+  const w = await poll(d.id, 3);
+  assert.ok(w, 'no work handed over');
+  await api(`/v1/devices/${d.id}/work/${w.id}/events`, { method: 'POST', body: JSON.stringify({
+    lines: [line({ type: 'system', subtype: 'init', session_id: '--dangerously-skip-permissions' }),
+      ASSISTANT('hello')],
+  }) });
+  await api(`/v1/devices/${d.id}/work/${w.id}/events`, { method: 'POST',
+    body: JSON.stringify({ lines: [], done: true, exitCode: 0 }) });
+  await wait(400);
+
+  const chat = (await api(`/v1/chats/${c.id}`)).body;
+  assert.notStrictEqual(chat.claudeSessionId, '--dangerously-skip-permissions',
+    'a flag was stored as this chat\'s session id');
+
+  // And the next turn must not carry it into an argv position.
+  await say(c.id, 'second turn');
+  const w2 = await poll(d.id, 3);
+  assert.ok(w2, 'no second work item');
+  assert.ok(!String(w2.resumeSessionId || '').startsWith('--'),
+    `a flag reached the device as a resume id: ${JSON.stringify(w2.resumeSessionId)}`);
+});
+
+test('a real session id still rides along, or resuming would silently stop working', async () => {
+  // The other half of the fix: validation that rejects everything is not a fix.
+  const d = await enrol('resumeok');
+  const c = await mkChat(d.id, 'ask');
+  await say(c.id, 'first');
+  const w = await poll(d.id, 3);
+  const realId = '4f1c2b8a-9d3e-4a71-8b52-6c0f7e1a2d94';
+  await api(`/v1/devices/${d.id}/work/${w.id}/events`, { method: 'POST', body: JSON.stringify({
+    lines: [line({ type: 'system', subtype: 'init', session_id: realId }), ASSISTANT('hi')] }) });
+  await api(`/v1/devices/${d.id}/work/${w.id}/events`, { method: 'POST',
+    body: JSON.stringify({ lines: [], done: true, exitCode: 0 }) });
+  await wait(400);
+  await say(c.id, 'second');
+  const w2 = await poll(d.id, 3);
+  assert.strictEqual(w2.resumeSessionId, realId, 'a valid session id was dropped');
+});
+
+test('a mode nobody defined is refused rather than mapped to a scope', async () => {
+  // `MODE_NEEDS.constructor` is a FUNCTION on any plain object. The daemon
+  // refused these by accident of indexOf; now it refuses them on purpose, and
+  // says something that does not echo the caller's own string back.
+  const devices = require('../lib/devices');
+  const now = Date.now();
+  for (const scope of ['look', 'work', 'own']) {
+    const box = { name: 'box', scope, locked: false, lastSeen: now };
+    for (const mode of ['constructor', 'toString', '__proto__', 'hasOwnProperty', '']) {
+      const v = devices.canRun(box, mode, now);
+      assert.strictEqual(v.ok, false, `${scope} accepted mode ${JSON.stringify(mode)}`);
+      assert.ok(!v.reason.includes(mode) || mode === '',
+        `the refusal echoed the caller's string: ${v.reason}`);
+    }
+    // and the two real ones still behave
+    assert.strictEqual(devices.canRun(box, 'ask', now).ok, true, `${scope} refused ask`);
+  }
+});

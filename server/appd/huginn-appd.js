@@ -52,7 +52,7 @@ const pushLib = require('./lib/pushtokens');
 const { trySender } = require('./lib/fcm');
 const { createPending, stepSoftEnd } = require('./lib/softend');
 
-const VERSION = '2.66.0';
+const VERSION = '2.67.0';
 const PORT = Number(process.env.HUGINN_APPD_PORT || 8787);
 const DATA_DIR = process.env.HUGINN_APPD_DATA || '/var/lib/huginn-appd';
 const UPLOADS_DIR = path.join(DATA_DIR, 'uploads');
@@ -1377,7 +1377,14 @@ function handleClaudeEvent(meta, run_, ev) {
   const chatId = meta.id;
   switch (ev.type) {
     case 'system': {
-      if (ev.subtype === 'init' && ev.session_id && !meta.claudeSessionId) {
+      // ⚠ A SESSION ID IS A UUID. This value arrives inside an event a DEVICE
+      // posts, is stored verbatim, and rides back to that machine as the value of
+      // `--resume`. `--resume` takes its value optionally, so a string beginning
+      // with `--` does not become the id — it becomes the NEXT FLAG. An
+      // unvalidated string in flag position is authority travelling inside a
+      // request, and a work item is defined as carrying a request and no
+      // authority. Anything that is not a uuid is simply not a session.
+      if (ev.subtype === 'init' && isSessionId(ev.session_id) && !meta.claudeSessionId) {
         meta.claudeSessionId = ev.session_id;           // for this run
         updateMeta(chatId, (m) => { if (!m.claudeSessionId) m.claudeSessionId = ev.session_id; });
       }
@@ -2339,6 +2346,11 @@ function reconcileInterruptedRound(meta) {
   if (!meta.roundId) return;
   try { finishRoundRun(meta, 'huginn-appd restarted while this was running'); }
   catch (e) { log(`round run ${meta.id} could not be recorded after restart: ${e.message}`); }
+}
+
+/** A Claude session id, and nothing that could be read as a flag. */
+function isSessionId(v) {
+  return typeof v === 'string' && /^[0-9a-fA-F-]{36}$/.test(v);
 }
 
 function reconcileInterruptedRuns() {

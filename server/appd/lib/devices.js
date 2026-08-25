@@ -137,7 +137,13 @@ function scopeAtLeast(scope, needed) {
 function canRun(device, mode, now) {
   if (!device) return { ok: false, reason: 'no such device' };
   if (!isOnline(device, now)) return { ok: false, reason: `${device.name} has not checked in` };
-  const needed = MODE_NEEDS[mode] || 'work';
+  // ⚠ Own-property, and refused outright when it is not one. `MODE_NEEDS` is a
+  // plain object, so `MODE_NEEDS.constructor` is a function: this used to refuse
+  // by accident (indexOf of a function is -1) rather than on purpose, and echoed
+  // the caller's own string back in the reason.
+  const needed = (Object.prototype.hasOwnProperty.call(MODE_NEEDS, mode) && typeof MODE_NEEDS[mode] === 'string')
+    ? MODE_NEEDS[mode] : null;
+  if (needed === null) return { ok: false, reason: `${device.name} was asked for something it does not recognise` };
   const scope = effectiveScope(device);
   if (!scopeAtLeast(scope, needed)) {
     return {

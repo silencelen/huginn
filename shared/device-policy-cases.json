@@ -9,7 +9,11 @@
     "unchanged whatever the scope, and are covered by DevicePolicyTest.",
     "A refused case still carries an argv on purpose. The refusal is the first",
     "fence and the runner never spawns — but if it ever did, the argv it would",
-    "have used must still be the read-only one. Two fences, both asserted."
+    "have used must still be the read-only one. Two fences, both asserted.",
+    "Modes nobody defined (constructor, __proto__, \"\") are here deliberately:",
+    "they are inherited properties of any plain object, so a table built from",
+    "JSON answers them with a function, and one runner read that as \"allowed at",
+    "every scope\". Every row for them must be a refusal."
   ],
   "cases": [
     {
@@ -54,6 +58,126 @@
     },
     {
       "scope": "look",
+      "locked": false,
+      "mode": "constructor",
+      "effectiveScope": "look",
+      "actGranted": false,
+      "refusal": "this machine is set to look, which cannot run constructor",
+      "cwd": "home",
+      "argv": [
+        "-p",
+        "--output-format",
+        "stream-json",
+        "--verbose",
+        "--include-partial-messages",
+        "--allowedTools",
+        "Skill Read Glob Grep WebFetch WebSearch",
+        "--disallowedTools",
+        "Bash Edit Write NotebookEdit"
+      ]
+    },
+    {
+      "scope": "look",
+      "locked": false,
+      "mode": "toString",
+      "effectiveScope": "look",
+      "actGranted": false,
+      "refusal": "this machine is set to look, which cannot run toString",
+      "cwd": "home",
+      "argv": [
+        "-p",
+        "--output-format",
+        "stream-json",
+        "--verbose",
+        "--include-partial-messages",
+        "--allowedTools",
+        "Skill Read Glob Grep WebFetch WebSearch",
+        "--disallowedTools",
+        "Bash Edit Write NotebookEdit"
+      ]
+    },
+    {
+      "scope": "look",
+      "locked": false,
+      "mode": "__proto__",
+      "effectiveScope": "look",
+      "actGranted": false,
+      "refusal": "this machine is set to look, which cannot run __proto__",
+      "cwd": "home",
+      "argv": [
+        "-p",
+        "--output-format",
+        "stream-json",
+        "--verbose",
+        "--include-partial-messages",
+        "--allowedTools",
+        "Skill Read Glob Grep WebFetch WebSearch",
+        "--disallowedTools",
+        "Bash Edit Write NotebookEdit"
+      ]
+    },
+    {
+      "scope": "look",
+      "locked": false,
+      "mode": "hasOwnProperty",
+      "effectiveScope": "look",
+      "actGranted": false,
+      "refusal": "this machine is set to look, which cannot run hasOwnProperty",
+      "cwd": "home",
+      "argv": [
+        "-p",
+        "--output-format",
+        "stream-json",
+        "--verbose",
+        "--include-partial-messages",
+        "--allowedTools",
+        "Skill Read Glob Grep WebFetch WebSearch",
+        "--disallowedTools",
+        "Bash Edit Write NotebookEdit"
+      ]
+    },
+    {
+      "scope": "look",
+      "locked": false,
+      "mode": "valueOf",
+      "effectiveScope": "look",
+      "actGranted": false,
+      "refusal": "this machine is set to look, which cannot run valueOf",
+      "cwd": "home",
+      "argv": [
+        "-p",
+        "--output-format",
+        "stream-json",
+        "--verbose",
+        "--include-partial-messages",
+        "--allowedTools",
+        "Skill Read Glob Grep WebFetch WebSearch",
+        "--disallowedTools",
+        "Bash Edit Write NotebookEdit"
+      ]
+    },
+    {
+      "scope": "look",
+      "locked": false,
+      "mode": "",
+      "effectiveScope": "look",
+      "actGranted": false,
+      "refusal": "this machine is set to look, which cannot run ",
+      "cwd": "home",
+      "argv": [
+        "-p",
+        "--output-format",
+        "stream-json",
+        "--verbose",
+        "--include-partial-messages",
+        "--allowedTools",
+        "Skill Read Glob Grep WebFetch WebSearch",
+        "--disallowedTools",
+        "Bash Edit Write NotebookEdit"
+      ]
+    },
+    {
+      "scope": "look",
       "locked": true,
       "mode": "ask",
       "effectiveScope": "look",
@@ -93,6 +217,126 @@
       ]
     },
     {
+      "scope": "look",
+      "locked": true,
+      "mode": "constructor",
+      "effectiveScope": "look",
+      "actGranted": false,
+      "refusal": "this machine is locked, so it is read-only until someone unlocks it",
+      "cwd": "home",
+      "argv": [
+        "-p",
+        "--output-format",
+        "stream-json",
+        "--verbose",
+        "--include-partial-messages",
+        "--allowedTools",
+        "Skill Read Glob Grep WebFetch WebSearch",
+        "--disallowedTools",
+        "Bash Edit Write NotebookEdit"
+      ]
+    },
+    {
+      "scope": "look",
+      "locked": true,
+      "mode": "toString",
+      "effectiveScope": "look",
+      "actGranted": false,
+      "refusal": "this machine is locked, so it is read-only until someone unlocks it",
+      "cwd": "home",
+      "argv": [
+        "-p",
+        "--output-format",
+        "stream-json",
+        "--verbose",
+        "--include-partial-messages",
+        "--allowedTools",
+        "Skill Read Glob Grep WebFetch WebSearch",
+        "--disallowedTools",
+        "Bash Edit Write NotebookEdit"
+      ]
+    },
+    {
+      "scope": "look",
+      "locked": true,
+      "mode": "__proto__",
+      "effectiveScope": "look",
+      "actGranted": false,
+      "refusal": "this machine is locked, so it is read-only until someone unlocks it",
+      "cwd": "home",
+      "argv": [
+        "-p",
+        "--output-format",
+        "stream-json",
+        "--verbose",
+        "--include-partial-messages",
+        "--allowedTools",
+        "Skill Read Glob Grep WebFetch WebSearch",
+        "--disallowedTools",
+        "Bash Edit Write NotebookEdit"
+      ]
+    },
+    {
+      "scope": "look",
+      "locked": true,
+      "mode": "hasOwnProperty",
+      "effectiveScope": "look",
+      "actGranted": false,
+      "refusal": "this machine is locked, so it is read-only until someone unlocks it",
+      "cwd": "home",
+      "argv": [
+        "-p",
+        "--output-format",
+        "stream-json",
+        "--verbose",
+        "--include-partial-messages",
+        "--allowedTools",
+        "Skill Read Glob Grep WebFetch WebSearch",
+        "--disallowedTools",
+        "Bash Edit Write NotebookEdit"
+      ]
+    },
+    {
+      "scope": "look",
+      "locked": true,
+      "mode": "valueOf",
+      "effectiveScope": "look",
+      "actGranted": false,
+      "refusal": "this machine is locked, so it is read-only until someone unlocks it",
+      "cwd": "home",
+      "argv": [
+        "-p",
+        "--output-format",
+        "stream-json",
+        "--verbose",
+        "--include-partial-messages",
+        "--allowedTools",
+        "Skill Read Glob Grep WebFetch WebSearch",
+        "--disallowedTools",
+        "Bash Edit Write NotebookEdit"
+      ]
+    },
+    {
+      "scope": "look",
+      "locked": true,
+      "mode": "",
+      "effectiveScope": "look",
+      "actGranted": false,
+      "refusal": "this machine is locked, so it is read-only until someone unlocks it",
+      "cwd": "home",
+      "argv": [
+        "-p",
+        "--output-format",
+        "stream-json",
+        "--verbose",
+        "--include-partial-messages",
+        "--allowedTools",
+        "Skill Read Glob Grep WebFetch WebSearch",
+        "--disallowedTools",
+        "Bash Edit Write NotebookEdit"
+      ]
+    },
+    {
       "scope": "work",
       "locked": false,
       "mode": "ask",
@@ -132,6 +376,126 @@
     },
     {
       "scope": "work",
+      "locked": false,
+      "mode": "constructor",
+      "effectiveScope": "work",
+      "actGranted": false,
+      "refusal": "this machine is set to work, which cannot run constructor",
+      "cwd": "root",
+      "argv": [
+        "-p",
+        "--output-format",
+        "stream-json",
+        "--verbose",
+        "--include-partial-messages",
+        "--allowedTools",
+        "Skill Read Glob Grep WebFetch WebSearch",
+        "--disallowedTools",
+        "Bash Edit Write NotebookEdit"
+      ]
+    },
+    {
+      "scope": "work",
+      "locked": false,
+      "mode": "toString",
+      "effectiveScope": "work",
+      "actGranted": false,
+      "refusal": "this machine is set to work, which cannot run toString",
+      "cwd": "root",
+      "argv": [
+        "-p",
+        "--output-format",
+        "stream-json",
+        "--verbose",
+        "--include-partial-messages",
+        "--allowedTools",
+        "Skill Read Glob Grep WebFetch WebSearch",
+        "--disallowedTools",
+        "Bash Edit Write NotebookEdit"
+      ]
+    },
+    {
+      "scope": "work",
+      "locked": false,
+      "mode": "__proto__",
+      "effectiveScope": "work",
+      "actGranted": false,
+      "refusal": "this machine is set to work, which cannot run __proto__",
+      "cwd": "root",
+      "argv": [
+        "-p",
+        "--output-format",
+        "stream-json",
+        "--verbose",
+        "--include-partial-messages",
+        "--allowedTools",
+        "Skill Read Glob Grep WebFetch WebSearch",
+        "--disallowedTools",
+        "Bash Edit Write NotebookEdit"
+      ]
+    },
+    {
+      "scope": "work",
+      "locked": false,
+      "mode": "hasOwnProperty",
+      "effectiveScope": "work",
+      "actGranted": false,
+      "refusal": "this machine is set to work, which cannot run hasOwnProperty",
+      "cwd": "root",
+      "argv": [
+        "-p",
+        "--output-format",
+        "stream-json",
+        "--verbose",
+        "--include-partial-messages",
+        "--allowedTools",
+        "Skill Read Glob Grep WebFetch WebSearch",
+        "--disallowedTools",
+        "Bash Edit Write NotebookEdit"
+      ]
+    },
+    {
+      "scope": "work",
+      "locked": false,
+      "mode": "valueOf",
+      "effectiveScope": "work",
+      "actGranted": false,
+      "refusal": "this machine is set to work, which cannot run valueOf",
+      "cwd": "root",
+      "argv": [
+        "-p",
+        "--output-format",
+        "stream-json",
+        "--verbose",
+        "--include-partial-messages",
+        "--allowedTools",
+        "Skill Read Glob Grep WebFetch WebSearch",
+        "--disallowedTools",
+        "Bash Edit Write NotebookEdit"
+      ]
+    },
+    {
+      "scope": "work",
+      "locked": false,
+      "mode": "",
+      "effectiveScope": "work",
+      "actGranted": false,
+      "refusal": "this machine is set to work, which cannot run ",
+      "cwd": "root",
+      "argv": [
+        "-p",
+        "--output-format",
+        "stream-json",
+        "--verbose",
+        "--include-partial-messages",
+        "--allowedTools",
+        "Skill Read Glob Grep WebFetch WebSearch",
+        "--disallowedTools",
+        "Bash Edit Write NotebookEdit"
+      ]
+    },
+    {
+      "scope": "work",
       "locked": true,
       "mode": "ask",
       "effectiveScope": "look",
@@ -154,6 +518,126 @@
       "scope": "work",
       "locked": true,
       "mode": "act",
+      "effectiveScope": "look",
+      "actGranted": false,
+      "refusal": "this machine is locked, so it is read-only until someone unlocks it",
+      "cwd": "home",
+      "argv": [
+        "-p",
+        "--output-format",
+        "stream-json",
+        "--verbose",
+        "--include-partial-messages",
+        "--allowedTools",
+        "Skill Read Glob Grep WebFetch WebSearch",
+        "--disallowedTools",
+        "Bash Edit Write NotebookEdit"
+      ]
+    },
+    {
+      "scope": "work",
+      "locked": true,
+      "mode": "constructor",
+      "effectiveScope": "look",
+      "actGranted": false,
+      "refusal": "this machine is locked, so it is read-only until someone unlocks it",
+      "cwd": "home",
+      "argv": [
+        "-p",
+        "--output-format",
+        "stream-json",
+        "--verbose",
+        "--include-partial-messages",
+        "--allowedTools",
+        "Skill Read Glob Grep WebFetch WebSearch",
+        "--disallowedTools",
+        "Bash Edit Write NotebookEdit"
+      ]
+    },
+    {
+      "scope": "work",
+      "locked": true,
+      "mode": "toString",
+      "effectiveScope": "look",
+      "actGranted": false,
+      "refusal": "this machine is locked, so it is read-only until someone unlocks it",
+      "cwd": "home",
+      "argv": [
+        "-p",
+        "--output-format",
+        "stream-json",
+        "--verbose",
+        "--include-partial-messages",
+        "--allowedTools",
+        "Skill Read Glob Grep WebFetch WebSearch",
+        "--disallowedTools",
+        "Bash Edit Write NotebookEdit"
+      ]
+    },
+    {
+      "scope": "work",
+      "locked": true,
+      "mode": "__proto__",
+      "effectiveScope": "look",
+      "actGranted": false,
+      "refusal": "this machine is locked, so it is read-only until someone unlocks it",
+      "cwd": "home",
+      "argv": [
+        "-p",
+        "--output-format",
+        "stream-json",
+        "--verbose",
+        "--include-partial-messages",
+        "--allowedTools",
+        "Skill Read Glob Grep WebFetch WebSearch",
+        "--disallowedTools",
+        "Bash Edit Write NotebookEdit"
+      ]
+    },
+    {
+      "scope": "work",
+      "locked": true,
+      "mode": "hasOwnProperty",
+      "effectiveScope": "look",
+      "actGranted": false,
+      "refusal": "this machine is locked, so it is read-only until someone unlocks it",
+      "cwd": "home",
+      "argv": [
+        "-p",
+        "--output-format",
+        "stream-json",
+        "--verbose",
+        "--include-partial-messages",
+        "--allowedTools",
+        "Skill Read Glob Grep WebFetch WebSearch",
+        "--disallowedTools",
+        "Bash Edit Write NotebookEdit"
+      ]
+    },
+    {
+      "scope": "work",
+      "locked": true,
+      "mode": "valueOf",
+      "effectiveScope": "look",
+      "actGranted": false,
+      "refusal": "this machine is locked, so it is read-only until someone unlocks it",
+      "cwd": "home",
+      "argv": [
+        "-p",
+        "--output-format",
+        "stream-json",
+        "--verbose",
+        "--include-partial-messages",
+        "--allowedTools",
+        "Skill Read Glob Grep WebFetch WebSearch",
+        "--disallowedTools",
+        "Bash Edit Write NotebookEdit"
+      ]
+    },
+    {
+      "scope": "work",
+      "locked": true,
+      "mode": "",
       "effectiveScope": "look",
       "actGranted": false,
       "refusal": "this machine is locked, so it is read-only until someone unlocks it",
@@ -210,6 +694,126 @@
     },
     {
       "scope": "own",
+      "locked": false,
+      "mode": "constructor",
+      "effectiveScope": "own",
+      "actGranted": false,
+      "refusal": "this machine is set to own, which cannot run constructor",
+      "cwd": "home",
+      "argv": [
+        "-p",
+        "--output-format",
+        "stream-json",
+        "--verbose",
+        "--include-partial-messages",
+        "--allowedTools",
+        "Skill Read Glob Grep WebFetch WebSearch",
+        "--disallowedTools",
+        "Bash Edit Write NotebookEdit"
+      ]
+    },
+    {
+      "scope": "own",
+      "locked": false,
+      "mode": "toString",
+      "effectiveScope": "own",
+      "actGranted": false,
+      "refusal": "this machine is set to own, which cannot run toString",
+      "cwd": "home",
+      "argv": [
+        "-p",
+        "--output-format",
+        "stream-json",
+        "--verbose",
+        "--include-partial-messages",
+        "--allowedTools",
+        "Skill Read Glob Grep WebFetch WebSearch",
+        "--disallowedTools",
+        "Bash Edit Write NotebookEdit"
+      ]
+    },
+    {
+      "scope": "own",
+      "locked": false,
+      "mode": "__proto__",
+      "effectiveScope": "own",
+      "actGranted": false,
+      "refusal": "this machine is set to own, which cannot run __proto__",
+      "cwd": "home",
+      "argv": [
+        "-p",
+        "--output-format",
+        "stream-json",
+        "--verbose",
+        "--include-partial-messages",
+        "--allowedTools",
+        "Skill Read Glob Grep WebFetch WebSearch",
+        "--disallowedTools",
+        "Bash Edit Write NotebookEdit"
+      ]
+    },
+    {
+      "scope": "own",
+      "locked": false,
+      "mode": "hasOwnProperty",
+      "effectiveScope": "own",
+      "actGranted": false,
+      "refusal": "this machine is set to own, which cannot run hasOwnProperty",
+      "cwd": "home",
+      "argv": [
+        "-p",
+        "--output-format",
+        "stream-json",
+        "--verbose",
+        "--include-partial-messages",
+        "--allowedTools",
+        "Skill Read Glob Grep WebFetch WebSearch",
+        "--disallowedTools",
+        "Bash Edit Write NotebookEdit"
+      ]
+    },
+    {
+      "scope": "own",
+      "locked": false,
+      "mode": "valueOf",
+      "effectiveScope": "own",
+      "actGranted": false,
+      "refusal": "this machine is set to own, which cannot run valueOf",
+      "cwd": "home",
+      "argv": [
+        "-p",
+        "--output-format",
+        "stream-json",
+        "--verbose",
+        "--include-partial-messages",
+        "--allowedTools",
+        "Skill Read Glob Grep WebFetch WebSearch",
+        "--disallowedTools",
+        "Bash Edit Write NotebookEdit"
+      ]
+    },
+    {
+      "scope": "own",
+      "locked": false,
+      "mode": "",
+      "effectiveScope": "own",
+      "actGranted": false,
+      "refusal": "this machine is set to own, which cannot run ",
+      "cwd": "home",
+      "argv": [
+        "-p",
+        "--output-format",
+        "stream-json",
+        "--verbose",
+        "--include-partial-messages",
+        "--allowedTools",
+        "Skill Read Glob Grep WebFetch WebSearch",
+        "--disallowedTools",
+        "Bash Edit Write NotebookEdit"
+      ]
+    },
+    {
+      "scope": "own",
       "locked": true,
       "mode": "ask",
       "effectiveScope": "look",
@@ -232,6 +836,126 @@
       "scope": "own",
       "locked": true,
       "mode": "act",
+      "effectiveScope": "look",
+      "actGranted": false,
+      "refusal": "this machine is locked, so it is read-only until someone unlocks it",
+      "cwd": "home",
+      "argv": [
+        "-p",
+        "--output-format",
+        "stream-json",
+        "--verbose",
+        "--include-partial-messages",
+        "--allowedTools",
+        "Skill Read Glob Grep WebFetch WebSearch",
+        "--disallowedTools",
+        "Bash Edit Write NotebookEdit"
+      ]
+    },
+    {
+      "scope": "own",
+      "locked": true,
+      "mode": "constructor",
+      "effectiveScope": "look",
+      "actGranted": false,
+      "refusal": "this machine is locked, so it is read-only until someone unlocks it",
+      "cwd": "home",
+      "argv": [
+        "-p",
+        "--output-format",
+        "stream-json",
+        "--verbose",
+        "--include-partial-messages",
+        "--allowedTools",
+        "Skill Read Glob Grep WebFetch WebSearch",
+        "--disallowedTools",
+        "Bash Edit Write NotebookEdit"
+      ]
+    },
+    {
+      "scope": "own",
+      "locked": true,
+      "mode": "toString",
+      "effectiveScope": "look",
+      "actGranted": false,
+      "refusal": "this machine is locked, so it is read-only until someone unlocks it",
+      "cwd": "home",
+      "argv": [
+        "-p",
+        "--output-format",
+        "stream-json",
+        "--verbose",
+        "--include-partial-messages",
+        "--allowedTools",
+        "Skill Read Glob Grep WebFetch WebSearch",
+        "--disallowedTools",
+        "Bash Edit Write NotebookEdit"
+      ]
+    },
+    {
+      "scope": "own",
+      "locked": true,
+      "mode": "__proto__",
+      "effectiveScope": "look",
+      "actGranted": false,
+      "refusal": "this machine is locked, so it is read-only until someone unlocks it",
+      "cwd": "home",
+      "argv": [
+        "-p",
+        "--output-format",
+        "stream-json",
+        "--verbose",
+        "--include-partial-messages",
+        "--allowedTools",
+        "Skill Read Glob Grep WebFetch WebSearch",
+        "--disallowedTools",
+        "Bash Edit Write NotebookEdit"
+      ]
+    },
+    {
+      "scope": "own",
+      "locked": true,
+      "mode": "hasOwnProperty",
+      "effectiveScope": "look",
+      "actGranted": false,
+      "refusal": "this machine is locked, so it is read-only until someone unlocks it",
+      "cwd": "home",
+      "argv": [
+        "-p",
+        "--output-format",
+        "stream-json",
+        "--verbose",
+        "--include-partial-messages",
+        "--allowedTools",
+        "Skill Read Glob Grep WebFetch WebSearch",
+        "--disallowedTools",
+        "Bash Edit Write NotebookEdit"
+      ]
+    },
+    {
+      "scope": "own",
+      "locked": true,
+      "mode": "valueOf",
+      "effectiveScope": "look",
+      "actGranted": false,
+      "refusal": "this machine is locked, so it is read-only until someone unlocks it",
+      "cwd": "home",
+      "argv": [
+        "-p",
+        "--output-format",
+        "stream-json",
+        "--verbose",
+        "--include-partial-messages",
+        "--allowedTools",
+        "Skill Read Glob Grep WebFetch WebSearch",
+        "--disallowedTools",
+        "Bash Edit Write NotebookEdit"
+      ]
+    },
+    {
+      "scope": "own",
+      "locked": true,
+      "mode": "",
       "effectiveScope": "look",
       "actGranted": false,
       "refusal": "this machine is locked, so it is read-only until someone unlocks it",
