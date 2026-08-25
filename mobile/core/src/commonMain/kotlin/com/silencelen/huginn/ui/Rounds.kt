@@ -26,12 +26,36 @@ fun roundStatusOf(status: String?): RoundStatus = when (status) {
  * Written from the reader's side, not the system's: a person wants to know
  * whether anything needs them, not which enum case the daemon chose.
  */
-fun roundStatusLabel(s: RoundStatus): String = when (s) {
-    RoundStatus.OK -> "All clear"
-    RoundStatus.ATTENTION -> "Worth a look"
-    RoundStatus.ACTION -> "Needs you"
-    RoundStatus.UNKNOWN -> "Unclear"
-    RoundStatus.NEVER_RUN -> "Not run yet"
+fun roundStatusLabel(s: RoundStatus, acknowledged: Boolean = false): String {
+    // A read report says so instead of repeating its verdict. The verdict is not
+    // rewritten — it was true when it was written and still is — but a row that
+    // goes on saying "Needs you" about something already dealt with teaches the
+    // reader to stop believing the words.
+    if (acknowledged) return "read"
+    return when (s) {
+        RoundStatus.OK -> "All clear"
+        RoundStatus.ATTENTION -> "Worth a look"
+        RoundStatus.ACTION -> "Needs you"
+        RoundStatus.UNKNOWN -> "Unclear"
+        RoundStatus.NEVER_RUN -> "Not run yet"
+    }
+}
+
+/** Whether this run's report has been read and dealt with. */
+fun isAcknowledged(run: RoundRun?): Boolean = (run?.acknowledgedAt ?: 0L) > 0L
+
+/**
+ * Whether to offer "Mark done" at all.
+ *
+ * Not on a clean run: there is nothing to acknowledge on an all-clear, and a
+ * control that appears on every row is one nobody reads — the same reasoning as
+ * the host badge and the Carry on door. Not on one already marked, which shows
+ * "Undo" instead.
+ */
+fun canAcknowledge(round: Round?): Boolean {
+    val run = round?.lastRun ?: return false
+    if (isAcknowledged(run)) return false
+    return roundStatusOf(run.status) != RoundStatus.OK
 }
 
 private const val MIN = 60_000L

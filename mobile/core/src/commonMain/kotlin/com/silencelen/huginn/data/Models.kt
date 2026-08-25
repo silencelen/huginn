@@ -827,6 +827,17 @@ data class RoundRun(
      * list length, which is what that daemon meant by the field anyway.
      */
     val itemsTotal: Int = 0,
+    /**
+     * When somebody read this report and said they had dealt with it, in epoch
+     * SECONDS. Null until they do.
+     *
+     * ⚠ ON THE RUN, NOT ON THE ROUND, and that is the whole design. [Round.lastRun]
+     * is replaced wholesale when a Round fires again, so next week's report
+     * arrives un-acknowledged for free. Held on the Round it would need code to
+     * remember to clear it, and that code would eventually not run — leaving a
+     * Round permanently quiet about findings nobody had seen.
+     */
+    val acknowledgedAt: Long? = null,
     /** The run produced no usable report block; the headline is a quote instead. */
     val malformed: Boolean = false,
     val manual: Boolean = false,

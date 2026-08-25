@@ -43,6 +43,8 @@ fun RoundsSection(
     onSetEnabled: (Round, Boolean) -> Unit,
     /** Null hides the control, for a surface that cannot edit. */
     onEdit: ((Round) -> Unit)? = null,
+    /** "I have read this and dealt with it." Null hides it, same rule as [onEdit]. */
+    onAcknowledge: ((Round, Boolean) -> Unit)? = null,
     modifier: Modifier = Modifier,
     header: String? = "ROUNDS",
 ) {
@@ -66,6 +68,7 @@ fun RoundsSection(
                 onRunNow = { onRunNow(round) },
                 onSetEnabled = { onSetEnabled(round, it) },
                 onEdit = onEdit?.let { f -> { f(round) } },
+                onAcknowledge = onAcknowledge?.let { f -> { ack: Boolean -> f(round, ack) } },
             )
         }
     }
@@ -79,8 +82,10 @@ private fun RoundRow(
     onRunNow: () -> Unit,
     onSetEnabled: (Boolean) -> Unit,
     onEdit: (() -> Unit)?,
+    onAcknowledge: ((Boolean) -> Unit)? = null,
 ) {
     val status = roundStatusOf(round.lastRun?.status)
+    val acked = isAcknowledged(round.lastRun)
     Surface(
         color = MaterialTheme.colorScheme.surfaceVariant,
         contentColor = MaterialTheme.colorScheme.onSurface,
@@ -94,7 +99,7 @@ private fun RoundRow(
                 // Nudged to the TITLE's line rather than the centre of the
                 // title+cadence column: centred on the pair it reads as floating
                 // between them, belonging to neither.
-                StatusDot(status, Modifier.align(Alignment.Top).padding(top = 7.dp))
+                StatusDot(status, acked, Modifier.align(Alignment.Top).padding(top = 7.dp))
                 Column(
                     Modifier
                         .padding(start = 10.dp)
@@ -119,6 +124,18 @@ private fun RoundRow(
                         overflow = TextOverflow.Ellipsis,
                     )
                 }
+                // Beside the mark it clears, rather than down among Pause and Run
+                // now: those act on the SCHEDULE, this acts on the report, and
+                // the dot on this line is the thing it turns off.
+                //
+                // Appears only when there is something to answer — never on a
+                // clean run — so it is not a fourth permanent control, and it
+                // shows up at the moment it means something.
+                if (onAcknowledge != null && (acked || canAcknowledge(round))) {
+                    TextButton(onClick = { onAcknowledge(!acked) }) {
+                        Text(if (acked) "Undo" else "Mark done")
+                    }
+                }
             }
 
             Text(
@@ -138,7 +155,7 @@ private fun RoundRow(
             ) {
                 Text(
                     listOfNotNull(
-                        roundStatusLabel(status).takeIf { round.lastRun != null },
+                        roundStatusLabel(status, acked).takeIf { round.lastRun != null },
                         agoWords(round.lastRun?.at, nowMs).takeIf { it.isNotBlank() },
                         itemCountWords(round.lastRun),
                     ).joinToString(" · "),
@@ -178,8 +195,13 @@ private fun RoundRow(
  * and dark, because every value comes from the scheme rather than a literal.
  */
 @Composable
-private fun StatusDot(status: RoundStatus, modifier: Modifier = Modifier) {
-    val color: Color = when (status) {
+private fun StatusDot(status: RoundStatus, acknowledged: Boolean = false, modifier: Modifier = Modifier) {
+    // A report that has been dealt with draws like a clean one. The verdict is
+    // not rewritten anywhere — it is still what the row says it was — but the
+    // MARK is the thing that pulls the eye across a list, and leaving it lit for
+    // something already handled is how a screen of Rounds stops being scannable.
+    val effective = if (acknowledged) RoundStatus.OK else status
+    val color: Color = when (effective) {
         RoundStatus.ACTION -> MaterialTheme.colorScheme.error
         RoundStatus.ATTENTION -> MaterialTheme.colorScheme.primary
         RoundStatus.OK -> MaterialTheme.colorScheme.onSurfaceVariant
@@ -189,6 +211,6 @@ private fun StatusDot(status: RoundStatus, modifier: Modifier = Modifier) {
     // The quiet states are drawn SMALLER as well as duller, so a screen of
     // healthy Rounds recedes and the one that wants something stands out
     // without any of them being loud.
-    val size = if (status == RoundStatus.OK || status == RoundStatus.NEVER_RUN) 6.dp else 8.dp
+    val size = if (effective == RoundStatus.OK || effective == RoundStatus.NEVER_RUN) 6.dp else 8.dp
     Surface(color = color, shape = CircleShape, modifier = modifier.size(size)) {}
 }

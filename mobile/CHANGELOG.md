@@ -1,5 +1,22 @@
 # Huginn changelog
 
+## 2.77.0 — 2026-08-25
+
+### Added
+- **"Mark done" on a round that has reported something.** The status mark goes
+  quiet and the line reads "read"; the report stays exactly as it was and is still
+  fully readable. Undo puts it back.
+
+  A report saying "Needs you" is true when written and stays true forever, so the
+  red mark outlived the work it was about — the only thing that would clear it was
+  the next run, which for still-open findings said the same thing again.
+
+  The control sits beside the dot it turns off rather than down among Pause and
+  Run now: those act on the schedule, this acts on the report. It appears only
+  when there is something to answer, so it is not a fourth permanent control.
+
+  Marking is remembered against that RUN, so the next report arrives unanswered.
+
 ## 2.76.0 — 2026-08-25
 
 ### Fixed

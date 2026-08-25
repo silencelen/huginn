@@ -85,7 +85,13 @@ print()
 for r in rounds:
     last = r.get("lastRun") or {}
     st = last.get("status")
-    mark = MARK.get(st, "-") if last else "-"
+    # A report that has been read and dealt with goes quiet. The status itself is
+    # not rewritten -- it was true when it was written and still is; what changes
+    # is that somebody has answered it. Recorded on the RUN, so the next fire
+    # arrives un-acknowledged with no code to remember.
+    ack = last.get("acknowledgedAt")
+    acked = isinstance(ack, (int, float)) and ack > 0
+    mark = ("-" if acked else MARK.get(st, "-")) if last else "-"
     # RUNNING first. A round that is executing at this moment is executing
     # whatever its enabled flag says -- and disabling one mid-run is exactly how
     # you get here, so the state most worth seeing was the one being hidden.
@@ -107,7 +113,7 @@ for r in rounds:
           % (clean(r.get("cadence")) or "?", state, clean(r.get("mode")) or "ask", where))
 
     if last:
-        bits = [WORD.get(st) or st or "unclear", ago(last.get("at"))]
+        bits = ["read" if acked else (WORD.get(st) or st or "unclear"), ago(last.get("at"))]
         shown = len(last.get("items") or [])
         # The daemon keeps 20 and records how many there really were. Printing
         # the kept count as the authoritative one put "20 items" directly under

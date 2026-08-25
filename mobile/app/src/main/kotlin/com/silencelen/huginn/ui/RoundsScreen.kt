@@ -42,6 +42,8 @@ fun RoundsScreen(
     onRunRound: (Round) -> Unit,
     onSetRoundEnabled: (Round, Boolean) -> Unit,
     onEditRound: (Round) -> Unit,
+    /** "I have read this and dealt with it." Null hides the control. */
+    onAcknowledgeRound: ((Round, Boolean) -> Unit)? = null,
     onOpenSettings: () -> Unit,
     onNewRound: () -> Unit,
     onStartPolling: () -> Unit = {},
@@ -91,6 +93,7 @@ fun RoundsScreen(
                         onRunNow = onRunRound,
                         onSetEnabled = onSetRoundEnabled,
                         onEdit = onEditRound,
+                        onAcknowledge = onAcknowledgeRound,
                     )
                 }
             }

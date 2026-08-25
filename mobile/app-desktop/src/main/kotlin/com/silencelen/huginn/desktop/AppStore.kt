@@ -383,6 +383,22 @@ class AppStore(
         runCatching { client.deleteRound(id) }
             .fold({ refreshRounds(); null }, { it.message ?: "Could not delete it" })
 
+    /** "I have read this and dealt with it", or Undo. Optimistic, then corrected. */
+    suspend fun acknowledgeRound(id: String, acknowledged: Boolean) {
+        val stamp = if (acknowledged) System.currentTimeMillis() / 1000 else null
+        _rounds.value = _rounds.value.map { r ->
+            // ⚠ A local val, not `r.lastRun` twice: it is a public property of
+            // another module, so Kotlin will not smart-cast it after the null
+            // check — the compiler cannot prove :core did not change it in
+            // between. The same shape fails identically in the desktop store.
+            val run = r.lastRun
+            if (r.id == id && run != null) r.copy(lastRun = run.copy(acknowledgedAt = stamp)) else r
+        }
+        runCatching { client.ackRound(id, acknowledged) }
+            .onSuccess { updated -> _rounds.value = _rounds.value.map { if (it.id == id) updated else it } }
+            .onFailure { note(Faults.CHATS, it); refreshRounds() }
+    }
+
     suspend fun setRoundEnabled(id: String, enabled: Boolean) {
         // Optimistic, then corrected by the server's own answer.
         _rounds.value = _rounds.value.map { if (it.id == id) it.copy(enabled = enabled) else it }

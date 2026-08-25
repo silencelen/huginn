@@ -590,6 +590,31 @@ function effectiveStatus(report) {
 }
 
 /**
+ * Whether a run's report has been read and dealt with.
+ *
+ * ⚠ THE ACKNOWLEDGEMENT LIVES ON THE RUN, NOT ON THE ROUND, and that is the
+ * whole design. `lastRun` is replaced wholesale when a Round fires again, so a
+ * new report arrives un-acknowledged for free — there is no way to mark a Round
+ * "done" and have it stay quiet through next week's findings. Storing this on the
+ * Round would need code to remember to clear it, and that code would eventually
+ * not run.
+ *
+ * A clean `ok` run is never offered the control: there is nothing to acknowledge
+ * on an all-clear, and a button that appears on every row is a button nobody
+ * reads.
+ */
+function isAcknowledged(run) {
+  return !!run && typeof run.acknowledgedAt === 'number' && run.acknowledgedAt > 0;
+}
+
+/** Whether there is a report here that a person could mark as dealt with. */
+function canAcknowledge(run) {
+  if (!run) return false;
+  if (isAcknowledged(run)) return false;
+  return effectiveStatus(run) !== 'ok';
+}
+
+/**
  * Whether this report is worth interrupting somebody for.
  *
  * `attention` is the default rather than `always` because the weekly jobs this
@@ -655,6 +680,7 @@ module.exports = {
   nextFireAt, validateSchedule, describeSchedule, clockWords,
   promptFor, parseReport, fallbackReport, errorReport, effectiveStatus,
   shouldNotify, dueDecision,
+  isAcknowledged, canAcknowledge,
   reportBlocks, fenceOpensAt, stripFences, oneLine, safeText,
   MAX_ITEMS, CONTRACT_HEADLINE, reportContract, untaggedReport,
 };
