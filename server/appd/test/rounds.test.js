@@ -368,3 +368,127 @@ test('an interval schedule needs no zone at all', () => {
   assert.equal(r.ok, true, r.error);
   assert.equal(r.schedule.tz, undefined);
 });
+
+// ------------------------------------------------- one verdict, every channel
+
+test('a promoted report reads the same on every channel', () => {
+  // The failure this closes: push led with "did not finish" while Telegram
+  // indexed the REPORTED status, so an ok-but-unfinished round arrived as a green
+  // tick and a clean sentence — on the channel used exactly when the app is not
+  // there to show the warning row. Same event, two channels, opposite verdicts.
+  const d = R.reportDisplay({ status: 'ok', goalMet: false, headline: 'looked fine to me', items: [] });
+  assert.equal(d.status, 'attention', 'the promotion did not reach the display status');
+  assert.match(d.text, /^did not finish — /);
+});
+
+test('an honest all-clear is not dressed up as a problem', () => {
+  const d = R.reportDisplay({ status: 'ok', goalMet: true, headline: 'all clear', items: [] });
+  assert.equal(d.status, 'ok');
+  assert.equal(d.text, 'all clear');
+});
+
+test('a goal nobody set is not a failure', () => {
+  // goalMet null means the Round stated no goal, or the run did not say. Neither
+  // is "did not finish", and rendering it as one would make every goal-less Round
+  // look broken.
+  const d = R.reportDisplay({ status: 'ok', goalMet: null, headline: 'nothing to report', items: [] });
+  assert.equal(d.status, 'ok');
+  assert.equal(d.text, 'nothing to report');
+});
+
+test('a promotion only ever raises', () => {
+  const d = R.reportDisplay({ status: 'action', goalMet: false, headline: 'disk full', items: [] });
+  assert.equal(d.status, 'action', 'action was softened to attention');
+});
+
+// ------------------------------------ the gap that begins at local midnight
+
+// ⚠ NOT `localDow` — this file already has one, returning the weekday INDEX, and
+// a second function declaration silently overwrites the first. Redeclaring it
+// handed every existing test a string where it expected a number, and three
+// invariants failed for a reason that had nothing to do with what they assert.
+/** The local calendar day an instant falls on, in `tz`. */
+function localDayName(tz, ms) {
+  return new Date(ms).toLocaleString('en-US',
+    { timeZone: tz, year: 'numeric', month: 'numeric', day: 'numeric' });
+}
+/** The weekday as a short NAME, for messages a person reads. */
+function localDowName(tz, ms) {
+  return new Date(ms).toLocaleString('en-US', { timeZone: tz, weekday: 'short' });
+}
+
+// America/Havana, America/Santiago and Atlantic/Azores start their spring-forward
+// at 00:00 local. A wall time that does not exist used to resolve to 23:xx the
+// PREVIOUS day — a different date, weekday and day-of-month — so a midnight Round
+// ran twice on one day and never on the transition day, a Sunday Round fired on
+// Saturday, and a monthly-on-the-8th fired on the 7th. Silent everywhere, because
+// the cadence is rendered from the schedule and the schedule was never wrong.
+const MIDNIGHT_GAP = [
+  ['America/Havana', Date.UTC(2026, 2, 1)],
+  ['America/Santiago', Date.UTC(2026, 8, 1)],
+  ['Atlantic/Azores', Date.UTC(2026, 2, 20)],
+];
+
+for (const [tz, from] of MIDNIGHT_GAP) {
+  test(`${tz}: a midnight daily fires once per local day across its gap`, () => {
+    let t = from; const days = [];
+    for (let i = 0; i < 12; i++) { t = R.nextFireAt({ kind: 'daily', at: '00:00', tz }, t); days.push(localDayName(tz, t)); t += 1000; }
+    assert.equal(new Set(days).size, days.length, `a local day fired twice: ${days.join(' | ')}`);
+  });
+
+  test(`${tz}: a midnight WEEKLY round stays on its weekday`, () => {
+    let t = from;
+    for (let i = 0; i < 6; i++) {
+      t = R.nextFireAt({ kind: 'weekly', days: [0], at: '00:00', tz }, t);
+      assert.equal(localDowName(tz, t), 'Sun', `fired on ${localDowName(tz, t)} while the row says Sundays`);
+      t += 1000;
+    }
+  });
+
+  test(`${tz}: a midnight MONTHLY round stays on its date`, () => {
+    let t = from;
+    for (let i = 0; i < 4; i++) {
+      t = R.nextFireAt({ kind: 'monthly', dates: [8], at: '00:00', tz }, t);
+      assert.match(localDayName(tz, t), /\/8\//, `fired on ${localDayName(tz, t)} for a round set to the 8th`);
+      t += 1000;
+    }
+  });
+}
+
+test('the zones that were already right did not move', () => {
+  // The fix changes which side of a transition an impossible wall time resolves
+  // to. Everything else must be untouched — including the eastern-offset gaps
+  // (Cairo) and the half- and three-quarter-hour zones.
+  for (const tz of ['America/Los_Angeles', 'Europe/London', 'Africa/Cairo',
+    'Pacific/Chatham', 'Australia/Lord_Howe', 'Asia/Kathmandu', 'UTC']) {
+    let t = Date.UTC(2026, 0, 1); const days = [];
+    for (let i = 0; i < 400; i++) { t = R.nextFireAt({ kind: 'daily', at: '09:00', tz }, t); days.push(localDayName(tz, t)); t += 1000; }
+    assert.equal(new Set(days).size, days.length, `${tz} repeated a day`);
+  }
+});
+
+// ------------------------------------------- an interval keeps its zone
+
+test('switching to an interval does not destroy the zone', () => {
+  // It does not USE the zone — but dropping it destroyed it, and the editor seeds
+  // itself from schedule.tz, so a Round toggled to Interval and back came out in
+  // whatever zone the editing device was in. Eight hours out, unrecoverable.
+  const r = R.validateSchedule({ kind: 'interval', everyMinutes: 60, tz: 'Asia/Tokyo' }, 'America/Los_Angeles');
+  assert.equal(r.ok, true, r.error);
+  assert.equal(r.schedule.tz, 'Asia/Tokyo');
+  assert.equal(r.schedule.everyMinutes, 60);
+});
+
+test('an interval with no zone takes the default, like every other kind', () => {
+  const r = R.validateSchedule({ kind: 'interval', everyMinutes: 60 }, LA);
+  assert.equal(r.ok, true, r.error);
+  assert.equal(r.schedule.tz, LA);
+});
+
+test('an interval is not REFUSED over a zone it never uses', () => {
+  // Carrying the zone must not make it a validation gate: an interval counts
+  // minutes and has no wall clock to place, so a bad zone is irrelevant to it.
+  const r = R.validateSchedule({ kind: 'interval', everyMinutes: 60, tz: 'Not/AZone' }, null);
+  assert.equal(r.ok, true, JSON.stringify(r));
+  assert.equal(r.schedule.tz, undefined);
+});

@@ -72,7 +72,35 @@ function offsetMs(tz, epochMs) {
 function epochForWallClock(tz, y, mo, d, h, mi) {
   const naive = Date.UTC(y, mo - 1, d, h, mi, 0);
   const first = naive - offsetMs(tz, naive);
-  return naive - offsetMs(tz, first);
+  const t = naive - offsetMs(tz, first);
+  // The two-pass above is right for every wall-clock time that EXISTS. One class
+  // does not: the hour a spring-forward deletes.
+  //
+  // ⚠ AND WHEN THAT GAP BEGINS AT LOCAL MIDNIGHT, the resolution lands on the
+  // PREVIOUS local day — 23:xx — which is a different date, a different weekday
+  // and a different day-of-month. America/Havana, America/Santiago and
+  // Atlantic/Azores all do this. A "Daily at 12:00 AM" Round then ran twice on
+  // one calendar day and not at all on the transition day; "Sundays at 12:00 AM"
+  // fired on SATURDAY while the row still read Sundays; "Monthly on the 8th"
+  // fired on the 7th. Silent on every surface, because the daemon renders the
+  // cadence from the schedule and the schedule was never wrong.
+  //
+  // So: if the instant does not land on the day that was asked for, take the
+  // other candidate — the far side of the transition, which is the first instant
+  // that day actually has. Eastern-offset gaps already resolve forward and keep
+  // their date, which is why Cairo, Chatham, Troll and Lord Howe were correct.
+  if (onDay(tz, t, y, mo, d)) return t;
+  if (onDay(tz, first, y, mo, d)) return first;
+  // Neither side is on the right day, which should not happen for any real zone.
+  // Later of the two: a Round that fires late is recoverable, one that fires on
+  // the wrong date is a job silently running on a day nobody scheduled.
+  return Math.max(t, first);
+}
+
+/** Whether an instant falls on this local calendar day in `tz`. */
+function onDay(tz, ms, y, mo, d) {
+  const p = partsIn(tz, ms);
+  return p.y === y && p.mo === mo && p.d === d;
 }
 
 /**
@@ -130,7 +158,16 @@ function validateSchedule(raw, defaultTz = null) {
     if (!Number.isInteger(n) || n < MIN_INTERVAL_MIN || n > MAX_INTERVAL_MIN) {
       return { ok: false, error: `schedule.everyMinutes must be ${MIN_INTERVAL_MIN}-${MAX_INTERVAL_MIN}` };
     }
-    return { ok: true, schedule: { kind: 'interval', everyMinutes: n } };
+    // ⚠ THE ZONE IS KEPT even though an interval does not use it. Dropping it
+    // DESTROYED it: `toDraft()` seeds the editor from `schedule.tz`, so a Round
+    // toggled to Interval and back came out in whatever zone the editing device
+    // happened to be in — a `9:00 AM Asia/Tokyo` Round landing on Los Angeles,
+    // eight hours out, with no way to recover the original because it was gone.
+    // Carried, not used; the cost is one field and it makes the toggle lossless.
+    const tz = (typeof s.tz === 'string' && s.tz.trim()) ? s.tz.trim() : defaultTz;
+    const out = { kind: 'interval', everyMinutes: n };
+    if (isKnownZone(tz)) out.tz = tz;
+    return { ok: true, schedule: out };
   }
 
   if (!AT_RE.test(String(s.at || ''))) return { ok: false, error: 'schedule.at must be "HH:MM" (24-hour)' };
@@ -375,8 +412,28 @@ function dueDecision(round, nowMs) {
   return { run: false, nextRunAt: nextFireAt(round.schedule, nowMs), lateBy, reason: 'missed' };
 }
 
+/**
+ * How a report READS, for every channel that announces it.
+ *
+ * ⚠ ONE FUNCTION BECAUSE THERE WERE TWO, AND THEY DISAGREED. The push led with
+ * "did not finish — " while the Telegram fallback indexed the REPORTED status,
+ * so an `ok` report with `goalMet:false` — the single case this design calls out
+ * as most worth surfacing — arrived as a green tick and a clean sentence. On the
+ * channel used exactly when the app is not there to show the warning row.
+ *
+ * `status` is the EFFECTIVE one, so a promotion reaches every surface; `text`
+ * carries the unmet goal in words, because a headline can be perfectly cheerful
+ * about a job that did not finish.
+ */
+function reportDisplay(report) {
+  return {
+    status: effectiveStatus(report),
+    text: report.goalMet === false ? `did not finish — ${report.headline}` : report.headline,
+  };
+}
+
 module.exports = {
-  KINDS, MISSED_GRACE_MS, STATUSES, REPORT_CONTRACT,
+  KINDS, MISSED_GRACE_MS, STATUSES, REPORT_CONTRACT, reportDisplay,
   partsIn, offsetMs, epochForWallClock,
   nextFireAt, validateSchedule, describeSchedule, clockWords,
   promptFor, parseReport, fallbackReport, errorReport, effectiveStatus,
