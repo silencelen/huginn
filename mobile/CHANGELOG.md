@@ -1,5 +1,13 @@
 # Huginn changelog
 
+## 2.76.0 — 2026-08-25
+
+### Fixed
+- **A round that found more than the daemon keeps now says both numbers** —
+  "500 items, showing 20" — instead of rendering the kept count as if it were the
+  whole story. The two used to contradict each other on one screen, with the
+  headline saying 500 and the line directly beneath it saying 20.
+
 ## 2.75.0 — 2026-08-25
 
 ### Fixed

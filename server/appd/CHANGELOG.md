@@ -9,6 +9,53 @@ appeared only as a side-note on the app releases it happened to ship with. Three
 undocumented, and the notes-cutting matcher could fuse two sections when an app and an appd
 version number collided. Entries below are reconstructed from the shipping commits.
 
+## 2.69.0 — 2026-08-25
+
+### Fixed — the report channel
+
+Six defects in the path between what a run says and what a person reads. They all
+fail the same direction: every one made a run look BETTER than it was.
+
+- **A fenced command inside an item no longer destroys the report.** The parser was
+  a non-greedy regex, so it stopped at the first ``` anywhere — including one
+  inside a JSON string. The contract asks every item for "the next step", and for
+  an ops round the next step is a command, so writing the most useful possible
+  item cut the block, failed the JSON parse, and threw away the status, the
+  headline and every item; the operator was then buzzed with `unknown`, which
+  reads like a broken run rather than the thing that needed them. Replaced with a
+  line scanner: a closing fence is a line that is nothing but backticks, which is
+  CommonMark's own rule and is exactly what separates a real terminator from a
+  quoted one, because JSON cannot hold a literal newline inside a string.
+- **The contract quoted back is no longer a valid report.** `REPORT_CONTRACT`
+  contains a syntactically complete example, so a run that wrote its real report
+  and then quoted the instructions to explain itself had the placeholder win under
+  "the last block wins" — delivering template text as the answer AND, because the
+  forged status was `ok`, silencing the notification entirely. A real `action`
+  report vanished behind a clean green row.
+- **A run cut off mid-block no longer puts JSON debris in the notification.** The
+  fallback's fence stripper was the same non-greedy regex, so half a JSON object
+  arrived as the notification text.
+- **Escape sequences and newlines are stripped from single-line fields.** Report
+  text is written by a model and a model writes what it read — a log line, a
+  fetched page — and a terminal executes some of what it is handed. A round titled
+  `Nightly scan` + ESC[2K + CR + `ALL CLEAR` erased its own line and reprinted, so
+  `huginn rounds` showed ALL CLEAR for a round holding a DISK FULL headline and
+  two action items. Titles, headlines and item titles are single-line by contract;
+  `detail` and `suggest` keep their newlines and lose only the characters that
+  move a cursor.
+- **A capped report records how many items there really were.** 500 findings
+  rendered as "20 items" directly under a headline saying 500 — two contradicting
+  numbers on one screen, and the one an operator acts on was the wrong one.
+- **A run's chat is dated in the Round's own zone.** The title used
+  `toISOString()`, so an evening round in America/Los_Angeles — 7 hours into the
+  next UTC day — was filed under tomorrow every time. The Sunday 19:00 round
+  produced a chat titled Monday, the one date it never ran on.
+
+Also in the host renderers: a round executing right now no longer prints "paused"
+if it was disabled mid-run, and "in 1 days" is now "tomorrow".
+
+597 tests, floor raised to 595.
+
 ## 2.68.0 — 2026-08-25
 
 ### Fixed
