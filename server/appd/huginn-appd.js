@@ -52,7 +52,7 @@ const pushLib = require('./lib/pushtokens');
 const { trySender } = require('./lib/fcm');
 const { createPending, stepSoftEnd } = require('./lib/softend');
 
-const VERSION = '2.70.1';
+const VERSION = '2.71.0';
 const PORT = Number(process.env.HUGINN_APPD_PORT || 8787);
 const DATA_DIR = process.env.HUGINN_APPD_DATA || '/var/lib/huginn-appd';
 const UPLOADS_DIR = path.join(DATA_DIR, 'uploads');
@@ -4659,6 +4659,43 @@ const server = http.createServer(async (req, res) => {
         const started = fireRound(round, { manual: true });
         if (started.error) return sendErr(res, started.code || 500, started.error);
         return sendJson(res, 202, { ok: true, chatId: started.chatId });
+      }
+      /**
+       * "I have read this and dealt with it."
+       *
+       * ⚠ THE GAP THIS FILLS: a report that says `action` is TRUE the moment it
+       * is written and stays true forever, because nothing could ever say
+       * otherwise. The row held a red mark about findings the owner had already
+       * read, worked through, and in some cases fixed — and the only thing that
+       * would clear it was the next run, which for still-open findings simply
+       * said `action` again. A signal that cannot be answered stops being a
+       * signal.
+       *
+       * Recorded on the RUN, so firing again clears it with no code to remember.
+       * The report itself is untouched: this marks that somebody has seen it, and
+       * never edits what it said.
+       */
+      if (req.method === 'POST' && rsub === '/ack') {
+        const body = JSON.parse(await readBody(req) || '{}');
+        const ack = body.acknowledged !== false;
+        // ⚠ Re-read AFTER the await. `round` was loaded before the body was
+        // read, and a run can finish in that window — writing the stale snapshot
+        // back would resurrect the previous report over the new one. Same defect
+        // that erased a Round's seal and its just-recorded run.
+        const fresh = loadRound(roundId);
+        if (!fresh) return sendErr(res, 404, 'no such round');
+        if (!fresh.lastRun) return sendErr(res, 409, 'this round has no report to mark');
+        const at = ack ? Math.floor(Date.now() / 1000) : null;
+        const updated = updateRound(roundId, (r) => {
+          if (!r.lastRun) return;
+          r.lastRun.acknowledgedAt = at;
+          // And in the history, matched by the chat the run happened in, so the
+          // two copies of one run cannot disagree about whether it was read.
+          const twin = (Array.isArray(r.runs) ? r.runs : [])
+            .find((x) => x && x.chatId === r.lastRun.chatId && x.at === r.lastRun.at);
+          if (twin) twin.acknowledgedAt = at;
+        });
+        return sendJson(res, 200, updated || fresh);
       }
       return sendErr(res, 404, 'no such round route');
     }

@@ -492,3 +492,29 @@ test('an interval is not REFUSED over a zone it never uses', () => {
   assert.equal(r.ok, true, JSON.stringify(r));
   assert.equal(r.schedule.tz, undefined);
 });
+
+// ---------------------------------------------------------------- read state
+
+test('an acknowledgement is a fact about a RUN, not about a Round', () => {
+  // The design in one assertion: there is no round-level flag to get stale,
+  // because the thing that carries it is replaced every time a Round fires.
+  assert.equal(R.isAcknowledged(null), false);
+  assert.equal(R.isAcknowledged({ status: 'action' }), false);
+  assert.equal(R.isAcknowledged({ status: 'action', acknowledgedAt: 0 }), false);
+  assert.equal(R.isAcknowledged({ status: 'action', acknowledgedAt: 1787649475 }), true);
+});
+
+test('a clean run is never offered the control', () => {
+  // Nothing to acknowledge on an all-clear, and a control that appears on every
+  // row is a control nobody reads.
+  assert.equal(R.canAcknowledge({ status: 'ok', goalMet: true }), false);
+  assert.equal(R.canAcknowledge({ status: 'action' }), true);
+  assert.equal(R.canAcknowledge({ status: 'attention' }), true);
+  assert.equal(R.canAcknowledge({ status: 'unknown', malformed: true }), true);
+  // An `ok` that did not reach its goal is PROMOTED to attention, and the offer
+  // follows the promoted status rather than the claimed one — otherwise the one
+  // report most worth answering is the one you cannot answer.
+  assert.equal(R.canAcknowledge({ status: 'ok', goalMet: false }), true);
+  // Already marked: the control becomes Undo, which is a different question.
+  assert.equal(R.canAcknowledge({ status: 'action', acknowledgedAt: 1787649475 }), false);
+});

@@ -5,7 +5,9 @@ import com.silencelen.huginn.data.RoundItem
 import com.silencelen.huginn.data.RoundRun
 import com.silencelen.huginn.ui.RoundStatus
 import com.silencelen.huginn.ui.agoWords
+import com.silencelen.huginn.ui.canAcknowledge
 import com.silencelen.huginn.ui.itemCountWords
+import com.silencelen.huginn.ui.isAcknowledged
 import com.silencelen.huginn.ui.roundLastLine
 import com.silencelen.huginn.ui.roundStatusLabel
 import com.silencelen.huginn.ui.roundStatusOf
@@ -13,6 +15,7 @@ import com.silencelen.huginn.ui.roundSubtitle
 import com.silencelen.huginn.ui.untilWords
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
@@ -149,5 +152,45 @@ class RoundsTest {
         // would be a number to read where there is nothing to say.
         assertNull(itemCountWords(RoundRun(status = "ok", headline = "all clear")))
         assertNull(itemCountWords(null))
+    }
+
+    @Test
+    fun `a read report says so instead of repeating its verdict`() {
+        // ⚠ THE GAP THIS FILLS: a report saying `action` is true the moment it is
+        // written and stays true forever, because nothing could ever say
+        // otherwise. The row held a red mark about findings already read and
+        // worked through, and the only thing that would clear it was the next
+        // run -- which for still-open findings said `action` again. A signal that
+        // cannot be answered stops being a signal.
+        assertEquals("Needs you", roundStatusLabel(RoundStatus.ACTION))
+        assertEquals("read", roundStatusLabel(RoundStatus.ACTION, acknowledged = true))
+        // The verdict is NOT rewritten anywhere -- it was true when written and
+        // still is. What changes is that somebody has answered it.
+        assertEquals("read", roundStatusLabel(RoundStatus.UNKNOWN, acknowledged = true))
+    }
+
+    @Test
+    fun `an acknowledgement belongs to a run, so a new report arrives unread`() {
+        // The design in one assertion. lastRun is replaced wholesale when a Round
+        // fires, so this clears itself; held on the Round it would need code to
+        // remember, and that code would eventually not run.
+        val read = round(last = RoundRun(at = now / 1000, status = "action", headline = "h",
+            acknowledgedAt = now / 1000))
+        assertTrue(isAcknowledged(read.lastRun))
+        assertFalse(canAcknowledge(read), "already marked - the control becomes Undo")
+
+        val fresh = read.copy(lastRun = RoundRun(at = now / 1000, status = "action", headline = "next week"))
+        assertFalse(isAcknowledged(fresh.lastRun), "a NEW report inherited the old acknowledgement")
+        assertTrue(canAcknowledge(fresh))
+    }
+
+    @Test
+    fun `a clean run is never offered the control`() {
+        // Nothing to acknowledge on an all-clear, and a control on every row is
+        // a control nobody reads -- the same rule as the host badge.
+        assertFalse(canAcknowledge(round(last = RoundRun(at = now / 1000, status = "ok", headline = "clear"))))
+        assertFalse(canAcknowledge(round(last = null)), "nothing has happened yet")
+        assertFalse(canAcknowledge(null))
+        assertTrue(canAcknowledge(round(last = RoundRun(at = now / 1000, status = "attention", headline = "h"))))
     }
 }

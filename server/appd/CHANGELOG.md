@@ -9,6 +9,34 @@ appeared only as a side-note on the app releases it happened to ship with. Three
 undocumented, and the notes-cutting matcher could fuse two sections when an app and an appd
 version number collided. Entries below are reconstructed from the shipping commits.
 
+## 2.71.0 — 2026-08-25
+
+### Added — a report can be marked as read
+
+`POST /v1/rounds/:id/ack`, body `{"acknowledged": true|false}`.
+
+A report that says `action` is true the moment it is written and stays true
+forever, because nothing could ever say otherwise. So a row held a red mark about
+findings that had already been read, worked through, and in some cases fixed — and
+the only thing that would ever clear it was the next run, which for still-open
+findings simply said `action` again. **A signal that cannot be answered stops being
+a signal**, and a row that goes on saying "Needs you" about something handled
+teaches its reader to stop believing the words.
+
+⚠ **The mark lives on the RUN, not on the Round**, and that is the whole design.
+`lastRun` is replaced wholesale when a Round fires again, so next week's report
+arrives unanswered for free. Held on the Round it would need code to remember to
+clear it, and that code would eventually not run — leaving a Round permanently
+quiet about findings nobody had seen. The history copy is updated too, matched by
+chat and timestamp, so one run cannot carry two answers about whether it was read.
+
+The report itself is never edited: this records that somebody saw it. A clean `ok`
+run is not offered the control at all — there is nothing to acknowledge on an
+all-clear — but an `ok` that admits it missed its goal is, because promotion to
+`attention` is exactly the case most worth answering.
+
+610 tests, floor raised to 605.
+
 ## 2.70.1 — 2026-08-25
 
 ### Fixed — the item count fix from 2.69.0 shipped doing nothing
