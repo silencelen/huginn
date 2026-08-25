@@ -251,50 +251,6 @@ fun SessionView(store: AppStore, name: String) {
                 SessionTab.CONVERSATION -> ConversationTab(controller)
                 SessionTab.SCREEN -> ScreenTab(controller)
             }
-
-            // ⚠⚠ AN OVERLAY, NOT A SIBLING, AND IT MUST STAY ONE. The Screen tab
-            // inside this box measures ITS OWN HEIGHT INTO TMUX ROWS. As a sibling
-            // below this box, the prompt card cost ~9 rows the moment Claude asked
-            // a question and gave them back when it was answered — a real resize of
-            // the owner's terminal, twice per question, seen by every client
-            // attached to that session. The pane re-wrapped under the reader
-            // exactly while they were trying to read the thing being asked.
-            //
-            // It still lives outside the TAB SWITCH, which was always the point: a
-            // question is the one moment a reader must act, and making them find
-            // the Screen tab to click "1" while reading that question in the
-            // transcript is a tab switch charged for nothing.
-            //
-            // The card itself is the SHARED one (:ui PromptCards.kt) — one
-            // implementation for both shells; only the answer plumbing stays here.
-            // When the pane scrape cannot read the dialog but the hook knows a
-            // question is waiting, the degraded card renders instead of nothing.
-            val prompt = screen?.prompt
-            if (prompt != null) {
-                Box(Modifier.align(Alignment.BottomCenter).padding(horizontal = 12.dp, vertical = 6.dp)) {
-                    PromptCard(
-                        prompt = prompt,
-                        answering = answering,
-                        note = answerNote,
-                        onAnswer = controller::answer,
-                        onAnswerMulti = controller::answerMulti,
-                    )
-                }
-            } else {
-                screen?.ask?.let { ask ->
-                    Box(Modifier.align(Alignment.BottomCenter).padding(horizontal = 12.dp, vertical = 6.dp)) {
-                        DegradedAskCard(
-                            ask = ask,
-                            answering = answering,
-                            note = answerNote,
-                            onAnswer = controller::answerDegraded,
-                            // A multi-part question can't be tapped from here — jump
-                            // to the Screen tab, where its parts are stepped through.
-                            onOpenScreen = { controller.openTab(SessionTab.SCREEN) },
-                        )
-                    }
-                }
-            }
         }
 
         // THE CONVERSATION TAB'S OWN SURFACES, and deliberately not drawn on the
@@ -348,6 +304,48 @@ fun SessionView(store: AppStore, name: String) {
         // question is waiting, the degraded card renders instead of nothing;
         // its answers verify against the live pane and steer to the Screen tab
         // when that verification cannot see a run (reason=undetected).
+        // BELOW THE PANE, NOT OVER IT. Overlaying stopped the resize but hid the
+        // terminal and the controls underneath — one problem traded for another.
+        // It sits here and genuinely costs viewport height; what makes that safe is
+        // that ScreenTab HOLDS its geometry report while a question is up, so the
+        // terminal keeps its own shape and simply scrolls inside a shorter window.
+        //
+        // It still lives outside the TAB SWITCH, which was always the point: a
+        // question is the one moment a reader must act, and making them find the
+        // Screen tab to click "1" while reading that question in the transcript is
+        // a tab switch charged for nothing.
+        //
+        // The card itself is the SHARED one (:ui PromptCards.kt) — one
+        // implementation for both shells; only the answer plumbing stays here.
+        // When the pane scrape cannot read the dialog but the hook knows a question
+        // is waiting, the degraded card renders instead of nothing.
+        val prompt = screen?.prompt
+        if (prompt != null) {
+            Box(Modifier.padding(horizontal = 12.dp, vertical = 6.dp)) {
+                PromptCard(
+                    prompt = prompt,
+                    answering = answering,
+                    note = answerNote,
+                    onAnswer = controller::answer,
+                    onAnswerMulti = controller::answerMulti,
+                )
+            }
+        } else {
+            screen?.ask?.let { ask ->
+                Box(Modifier.padding(horizontal = 12.dp, vertical = 6.dp)) {
+                    DegradedAskCard(
+                        ask = ask,
+                        answering = answering,
+                        note = answerNote,
+                        onAnswer = controller::answerDegraded,
+                        // A multi-part question can't be tapped from here — jump to
+                        // the Screen tab, where its parts are stepped through.
+                        onOpenScreen = { controller.openTab(SessionTab.SCREEN) },
+                    )
+                }
+            }
+        }
+
         Composer(
             controller = controller,
             client = store.client,
@@ -696,9 +694,18 @@ private fun ScreenTab(controller: SessionController) {
             // Reporting this is what takes the lease. Debounced in the controller,
             // because a desktop window changes size on every frame of a drag and
             // each distinct size is a real tmux resize on someone's terminal.
+            // ⚠⚠ A PROMPT MAY TAKE LAYOUT SPACE. IT MAY NOT CHANGE THE REPORTED
+            // GEOMETRY. Two different things, and conflating them cost two
+            // releases: as a plain sibling the prompt card resized the owner's real
+            // terminal twice per question, and as an overlay it stopped resizing
+            // anything but covered the terminal and the controls instead. So the
+            // card sits below and the viewport genuinely shrinks — and this report
+            // is HELD while it is up, so tmux never hears about it and the pane
+            // scrolls inside the shorter window instead of re-wrapping.
             val cols = with(density) { (maxWidth.toPx() / painter.cellWidth).toInt() }
             val rows = with(density) { (maxHeight.toPx() / painter.cellHeight).toInt() }
-            LaunchedEffect(cols, rows) { controller.setGeometry(cols, rows) }
+            val promptUp = screen?.prompt != null || screen?.ask != null
+            LaunchedEffect(cols, rows, promptUp) { if (!promptUp) controller.setGeometry(cols, rows) }
 
             // Overlaid rather than stacked above, for the same reason as the prompt
             // card: the controller clears this on every SUCCESSFUL poll, so as a
