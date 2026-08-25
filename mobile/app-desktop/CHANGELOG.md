@@ -1,5 +1,10 @@
 # Huginn Desktop changelog
 
+## 0.8.12
+
+- A round that reports more findings than the daemon keeps now says both numbers
+  — "500 items, showing 20" — rather than showing the kept count as the total.
+
 The Compose Multiplatform desktop client, versioned separately from the phone
 app and from the Electron desktop client. Its releases go to `/v1/desktop-kt`;
 the Electron client's go to `/v1/desktop` and the two never mix — see

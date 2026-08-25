@@ -140,8 +140,7 @@ private fun RoundRow(
                     listOfNotNull(
                         roundStatusLabel(status).takeIf { round.lastRun != null },
                         agoWords(round.lastRun?.at, nowMs).takeIf { it.isNotBlank() },
-                        round.lastRun?.items?.size?.takeIf { it > 0 }
-                            ?.let { if (it == 1) "1 item" else "$it items" },
+                        itemCountWords(round.lastRun),
                     ).joinToString(" · "),
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
