@@ -52,7 +52,7 @@ const pushLib = require('./lib/pushtokens');
 const { trySender } = require('./lib/fcm');
 const { createPending, stepSoftEnd } = require('./lib/softend');
 
-const VERSION = '2.72.0';
+const VERSION = '2.73.0';
 const PORT = Number(process.env.HUGINN_APPD_PORT || 8787);
 const DATA_DIR = process.env.HUGINN_APPD_DATA || '/var/lib/huginn-appd';
 const UPLOADS_DIR = path.join(DATA_DIR, 'uploads');
@@ -250,16 +250,38 @@ const EFFORT_LEVELS = new Set(['low', 'medium', 'high', 'xhigh', 'max']);
 /**
  * A family alias, or a full versioned id. Both reach an argv, so the shape is
  * checked rather than the string trusted.
+ *
+ * Decision, not coercion: absent, null or empty means "the host default", a
+ * known id passes, and an unknown NON-EMPTY id is an error the route must send
+ * back as a 400. The old validModel returned null for unknown ids, which meant
+ * "host default" — so a typo'd or foreign model id silently changed which model
+ * answered. Silently substituting an engine for the one somebody named is the
+ * failure class this whole file is built to refuse; do not reintroduce a
+ * silent-null validator here.
  */
-function validModel(v) {
-  if (typeof v !== 'string') return null;
+function modelDecision(v) {
+  if (v === undefined || v === null) return { model: null };
+  if (typeof v !== 'string') {
+    return { error: 'model must be a string id from /v1/models, or omitted for the default' };
+  }
   const s = v.trim().toLowerCase();
-  if (!/^[a-z0-9-]{2,60}$/.test(s)) return null;
-  if (MODEL_ALIASES.has(s)) return s;
-  return parseModelId(s) ? s : null;
+  if (s === '') return { model: null };
+  if (!/^[a-z0-9-]{2,60}$/.test(s)) {
+    return { error: `${JSON.stringify(String(v)).slice(0, 40)} is not a model id (2-60 chars of a-z, 0-9, dash)` };
+  }
+  if (MODEL_ALIASES.has(s) || parseModelId(s)) return { model: s };
+  return { error: `unknown model ${JSON.stringify(s)}: use an id from /v1/models, or omit it for the default` };
 }
-function validEffort(v) {
-  return typeof v === 'string' && EFFORT_LEVELS.has(v.toLowerCase()) ? v.toLowerCase() : null;
+/** Same matrix as modelDecision: absent or empty clears, unknown non-empty refuses. */
+function effortDecision(v) {
+  if (v === undefined || v === null) return { effort: null };
+  if (typeof v !== 'string') {
+    return { error: 'effort must be one of low, medium, high, xhigh, max, or omitted for the default' };
+  }
+  const s = v.trim().toLowerCase();
+  if (s === '') return { effort: null };
+  if (EFFORT_LEVELS.has(s)) return { effort: s };
+  return { error: `unknown effort ${JSON.stringify(s.slice(0, 20))}: one of low, medium, high, xhigh, max` };
 }
 
 // Session names: the cc contract — letters/digits/underscore, canonically lowercase.
@@ -2033,6 +2055,10 @@ function buildRound(body) {
   if (!sched.ok) return { error: sched.error };
   const placed = placeRound(body.host, body.mode === 'act' ? 'act' : 'ask');
   if (placed.error) return { error: placed.error };
+  const mv = modelDecision(body.model);
+  if (mv.error) return { error: mv.error };
+  const ev = effortDecision(body.effort);
+  if (ev.error) return { error: ev.error };
 
   const now = Math.floor(Date.now() / 1000);
   return {
@@ -2054,8 +2080,8 @@ function buildRound(body) {
       // Where it runs. A Round on a Device is the thing neither feature could do
       // alone: work that happens on a schedule, in another machine's context.
       host: placed.host,
-      model: validModel(body.model),
-      effort: validEffort(body.effort),
+      model: mv.model,
+      effort: ev.effort,
       schedule: sched.schedule,
       notifyWhen: NOTIFY_WHEN.includes(body.notifyWhen) ? body.notifyWhen : 'attention',
       catchUp: body.catchUp === true,
@@ -2127,8 +2153,17 @@ function applyRoundPatch(round, body) {
       r.host = placed.host;
     }
   }
-  if ('model' in body) r.model = validModel(body.model);
-  if ('effort' in body) r.effort = validEffort(body.effort);
+  // `r` is a discarded copy, so an error return here leaves the round untouched.
+  if ('model' in body) {
+    const mv = modelDecision(body.model);
+    if (mv.error) return { error: mv.error };
+    r.model = mv.model;
+  }
+  if ('effort' in body) {
+    const ev = effortDecision(body.effort);
+    if (ev.error) return { error: ev.error };
+    r.effort = ev.effort;
+  }
   if ('notifyWhen' in body && NOTIFY_WHEN.includes(body.notifyWhen)) r.notifyWhen = body.notifyWhen;
   if ('catchUp' in body) r.catchUp = body.catchUp === true;
   if ('timeoutSec' in body) r.timeoutSec = clampRoundTimeout(body.timeoutSec);
@@ -4819,6 +4854,12 @@ const server = http.createServer(async (req, res) => {
 
     if (req.method === 'POST' && p === '/v1/chats') {
       const body = JSON.parse(await readBody(req) || '{}');
+      // Decided before anything is built: an unknown model or effort id is a 400
+      // at the button, never a silent fall-through to the host default.
+      const mv = modelDecision(body.model);
+      if (mv.error) return sendErr(res, 400, mv.error);
+      const ev = effortDecision(body.effort);
+      if (ev.error) return sendErr(res, 400, ev.error);
       const mode = body.mode === 'act' ? 'act' : 'ask';
       const now = Math.floor(Date.now() / 1000);
       // WHERE this chat runs, decided once and for the chat's life. Checked here
@@ -4837,8 +4878,8 @@ const server = http.createServer(async (req, res) => {
         title: roundsLib.oneLine(body.title, 80) || null,
         mode,
         host,
-        model: validModel(body.model),
-        effort: validEffort(body.effort),
+        model: mv.model,
+        effort: ev.effort,
         createdAt: now,
         updatedAt: now,
         claudeSessionId: null,
@@ -5063,6 +5104,18 @@ const server = http.createServer(async (req, res) => {
       }
       if (req.method === 'PATCH' && sub === '') {
         const body = JSON.parse(await readBody(req) || '{}');
+        // Validated BEFORE the mutator runs: a 400 PATCH must not half-apply the
+        // rest of the body, and the updateMeta callback cannot return an error.
+        let mv = null;
+        if ('model' in body) {
+          mv = modelDecision(body.model);
+          if (mv.error) return sendErr(res, 400, mv.error);
+        }
+        let ev = null;
+        if ('effort' in body) {
+          ev = effortDecision(body.effort);
+          if (ev.error) return sendErr(res, 400, ev.error);
+        }
         // Applied to a RELOADED meta for the same reason as the queue branch: the
         // snapshot above predates the readBody await, and saving it back reverted
         // whatever the run recorded meanwhile. The worst case was specific and
@@ -5076,8 +5129,8 @@ const server = http.createServer(async (req, res) => {
           }
           // Model and effort apply to the NEXT turn; an in-flight run keeps what
           // it started with, since the flags are fixed at spawn.
-          if ('model' in body) { fresh.model = validModel(body.model); changed = true; }
-          if ('effort' in body) { fresh.effort = validEffort(body.effort); changed = true; }
+          if (mv) { fresh.model = mv.model; changed = true; }
+          if (ev) { fresh.effort = ev.effort; changed = true; }
           if ('mode' in body) { fresh.mode = body.mode === 'act' ? 'act' : 'ask'; changed = true; }
         });
         if (!updated) return sendErr(res, 404, 'no such chat');
