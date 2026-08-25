@@ -14,6 +14,23 @@
 - Release titles now name the platform: **Huginn Mobile 2.73.0 (Android)**, alongside
   Huginn Desktop (Windows, Linux), Huginn CLI (Linux, macOS, Windows) and huginn-appd (server).
 
+### Fixed
+- **A round that says "Needs you" now has somewhere to go.** Tapping one opened its run — which is
+  SEALED, and said only "This round has finished. It is kept here for review." Everything in that
+  chain was individually right: "Needs you" is a claim about the world, not about the conversation,
+  and sealing a finished run is correct. What was missing was a door between them.
+  A sealed run whose report left something to do now offers **Carry on**, opening a fresh chat on
+  the same machine, in the same mode, with the report already in the composer — as a DRAFT, never
+  a sent message, because a round can be `act` and sending on a tap meant as reading would start
+  unattended work. First thing to consume `RoundItem.suggest`, which was added for exactly this.
+  An all-clear round with no items gets no button.
+- **Editing a Round no longer moves it to your timezone.** The draft behind the editor carried no
+  zone, so opening a Round set for 07:30 Europe/London on a device in Los Angeles and saving it
+  UNCHANGED rewrote it eight hours out. Invisible too: the editor never showed a zone, and "7:30"
+  reads as correct in every zone on earth. The Round's own zone is now carried through the editor
+  untouched, the device's zone is only a default for a NEW round, and the cadence line names the
+  clock — `Every day at 7:30 AM - Europe/London`.
+
 ## 2.72.0 — 2026-08-25
 
 ### Fixed
