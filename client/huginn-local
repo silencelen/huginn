@@ -1,0 +1,1027 @@
+#!/usr/bin/env node
+'use strict';
+// huginn-local — activation and lifecycle of the local-AI tier on THIS machine.
+//
+// Version: 0.12.0
+//
+// `huginn local on` follows the device-enrolment grammar exactly: consent →
+// fetch pinned → validate → install → enrol. This file is the manager the shell
+// wrapper hands over to; it owns hardware-class detection, the disk gate, the
+// pinned downloads (sha256-verified before unpack, always), the service
+// install (systemd on Linux, WinSW on Windows — both must survive a reboot
+// with nobody logged in, which is the whole point), the llama-swap config, the
+// api key, and the second device row (<host>-llm at scope generate).
+//
+// THE PINS ARE EMBEDDED, not fetched: scripts/gen-local-manifest.js writes the
+// manifest between the markers below, so the one file a machine installs
+// carries its own pins and a runtime or model bump is by construction a
+// reviewed cli-v* release. The named failure mode this prevents: a routine
+// upstream patch silently degrading a GPU box to CPU with no error.
+//
+// WHAT ACTIVATION REFUSES TO AUTOMATE (detect and instruct, never bundle):
+// GPU drivers (vendor EULA + admin + reboot), anything needing a reboot,
+// exposing any port beyond loopback, and third-party runtimes whose terms
+// forbid redistribution — adapter mode WRAPS an existing Ollama/LM Studio, it
+// never installs one.
+//
+// Failure discipline: every step reports individually; a failing step stops
+// the sequence and says what was done and what was not. `off` never claims
+// what it did not do. Nothing here prints "removed" over a failure.
+
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
+const http = require('node:http');
+const https = require('node:https');
+const crypto = require('node:crypto');
+const { spawnSync, spawn } = require('node:child_process');
+
+const VERSION = '0.12.0';
+
+// ---8<--- BEGIN GENERATED MANIFEST — scripts/gen-local-manifest.js — DO NOT EDIT ---8<---
+const MANIFEST = {
+  "manifestVersion": 1,
+  "llamaCpp": {
+    "release": "b10628",
+    "urlBase": "https://github.com/ggml-org/llama.cpp/releases/download/b10628/",
+    "serverBinary": {
+      "linux": "llama-b10628/llama-server",
+      "win32": "llama-server.exe"
+    },
+    "assets": {
+      "linux-x64": {
+        "name": "llama-b10628-bin-ubuntu-x64.tar.gz",
+        "sha256": "ad504cb670be83fbfb2039fff645bb10308b7e26370a284167fd99b2f2a3df72",
+        "bytes": 16291880
+      },
+      "linux-arm64": {
+        "name": "llama-b10628-bin-ubuntu-arm64.tar.gz",
+        "sha256": "0482ddec0d0335979d85dceda3aa5035ac732a628c639c66da0b67137c178b6e",
+        "bytes": 13041378
+      },
+      "win-x64-cpu": {
+        "name": "llama-b10628-bin-win-cpu-x64.zip",
+        "sha256": "220aac2ac04ca9d73b124fec005dca1d9ebd99dcdfc1b023b58c3a99865fce6d",
+        "bytes": 18067727
+      },
+      "win-x64-cuda": {
+        "name": "llama-b10628-bin-win-cuda-12.4-x64.zip",
+        "sha256": "3226cab6eaede7f4827502ca29aaf54839b20c9deab240443aec4b3741a61cbc",
+        "bytes": 250464723
+      },
+      "win-cudart": {
+        "name": "cudart-llama-bin-win-cuda-12.4-x64.zip",
+        "sha256": "8c79a9b226de4b3cacfd1f83d24f962d0773be79f1e7b75c6af4ded7e32ae1d6",
+        "bytes": 391443627
+      }
+    }
+  },
+  "llamaSwap": {
+    "version": "v251",
+    "urlBase": "https://github.com/mostlygeek/llama-swap/releases/download/v251/",
+    "assets": {
+      "linux-x64": {
+        "name": "llama-swap_251_linux_amd64.tar.gz",
+        "sha256": "85bd7f231f5777ff6b8b787a794f825678b8d042cd4484044516a58ecdc7622b",
+        "bytes": 13052453
+      },
+      "linux-arm64": {
+        "name": "llama-swap_251_linux_arm64.tar.gz",
+        "sha256": "777bfa16b2ef6a78ad36f1e0c28b5dd4adda1dc0cc9aea32b6fba8e1c5a41de9",
+        "bytes": 12284196
+      },
+      "win-x64": {
+        "name": "llama-swap_251_windows_amd64.zip",
+        "sha256": "f91ebc3bbf3e6b2d96a5c0e8c6967755a336734b3b8b7447b1a36cde670aee5f",
+        "bytes": 13373344
+      }
+    }
+  },
+  "winsw": {
+    "version": "v2.12.0",
+    "url": "https://github.com/winsw/winsw/releases/download/v2.12.0/WinSW-x64.exe",
+    "sha256": "05b82d46ad331cc16bdc00de5c6332c1ef818df8ceefcd49c726553209b3a0da",
+    "bytes": 18243033
+  },
+  "models": {
+    "G8": [
+      {
+        "slug": "qwen3-8b",
+        "display": "Qwen3 8B",
+        "role": "chat",
+        "ctx": 16384,
+        "gpu": true,
+        "repo": "Qwen/Qwen3-8B-GGUF",
+        "file": "Qwen3-8B-Q4_K_M.gguf",
+        "sha256": "d98cdcbd03e17ce47681435b5150e34c1417f50b5c0019dd560e4882c5745785",
+        "bytes": 5027783488,
+        "license": "Apache-2.0"
+      },
+      {
+        "slug": "nomic-embed",
+        "display": "Nomic Embed",
+        "role": "embed",
+        "ctx": 2048,
+        "gpu": false,
+        "repo": "nomic-ai/nomic-embed-text-v1.5-GGUF",
+        "file": "nomic-embed-text-v1.5.Q8_0.gguf",
+        "sha256": "3e24342164b3d94991ba9692fdc0dd08e3fd7362e0aacc396a9a5c54a544c3b7",
+        "bytes": 146146432,
+        "license": "Apache-2.0"
+      }
+    ],
+    "C": [
+      {
+        "slug": "qwen3-4b",
+        "display": "Qwen3 4B",
+        "role": "chat",
+        "ctx": 8192,
+        "gpu": false,
+        "repo": "Qwen/Qwen3-4B-GGUF",
+        "file": "Qwen3-4B-Q4_K_M.gguf",
+        "sha256": "7485fe6f11af29433bc51cab58009521f205840f5b4ae3a32fa7f92e8534fdf5",
+        "bytes": 2497280256,
+        "license": "Apache-2.0"
+      },
+      {
+        "slug": "nomic-embed",
+        "display": "Nomic Embed",
+        "role": "embed",
+        "ctx": 2048,
+        "gpu": false,
+        "repo": "nomic-ai/nomic-embed-text-v1.5-GGUF",
+        "file": "nomic-embed-text-v1.5.Q8_0.gguf",
+        "sha256": "3e24342164b3d94991ba9692fdc0dd08e3fd7362e0aacc396a9a5c54a544c3b7",
+        "bytes": 146146432,
+        "license": "Apache-2.0"
+      }
+    ],
+    "A": [
+      {
+        "slug": "qwen3-1p7b",
+        "display": "Qwen3 1.7B",
+        "role": "chat",
+        "ctx": 8192,
+        "gpu": false,
+        "repo": "Qwen/Qwen3-1.7B-GGUF",
+        "file": "Qwen3-1.7B-Q8_0.gguf",
+        "sha256": "061b54daade076b5d3362dac252678d17da8c68f07560be70818cace6590cb1a",
+        "bytes": 1834426016,
+        "license": "Apache-2.0"
+      },
+      {
+        "slug": "nomic-embed",
+        "display": "Nomic Embed",
+        "role": "embed",
+        "ctx": 2048,
+        "gpu": false,
+        "repo": "nomic-ai/nomic-embed-text-v1.5-GGUF",
+        "file": "nomic-embed-text-v1.5.Q8_0.gguf",
+        "sha256": "3e24342164b3d94991ba9692fdc0dd08e3fd7362e0aacc396a9a5c54a544c3b7",
+        "bytes": 146146432,
+        "license": "Apache-2.0"
+      }
+    ]
+  }
+};
+// ---8<--- END GENERATED MANIFEST ---8<---
+
+// ------------------------------------------------------------------ paths
+
+function localDir() {
+  if (process.env.HUGINN_LOCAL_DIR) return process.env.HUGINN_LOCAL_DIR;
+  return process.platform === 'win32'
+    ? path.join(process.env.ProgramData || 'C:\\ProgramData', 'huginn-local')
+    : path.join(os.homedir(), '.config', 'huginn-local');
+}
+const P = (...xs) => path.join(localDir(), ...xs);
+
+function loadConf() {
+  try { return JSON.parse(fs.readFileSync(P('local.json'), 'utf8')); } catch { return null; }
+}
+function saveConf(conf) {
+  fs.mkdirSync(localDir(), { recursive: true });
+  const tmp = P('local.json.tmp');
+  fs.writeFileSync(tmp, JSON.stringify(conf, null, 2) + '\n', { mode: 0o600 });
+  fs.renameSync(tmp, P('local.json'));
+}
+
+// ------------------------------------------------------------------ flags
+
+/**
+ * `--flag value` AND `--flag=value`, anything unrecognised REFUSED with exit 2.
+ * The --scpoe lesson: a silently ignored flag prints success over the exact
+ * thing the operator asked for and did not get.
+ */
+function parseFlags(argv, known) {
+  const flags = {};
+  for (let i = 0; i < argv.length; i++) {
+    const a = argv[i];
+    if (!a.startsWith('--')) return { error: `unexpected argument "${a}"` };
+    const eq = a.indexOf('=');
+    const name = (eq >= 0 ? a.slice(2, eq) : a.slice(2));
+    if (!known.includes(name)) return { error: `unknown flag "--${name}"` };
+    if (eq >= 0) { flags[name] = a.slice(eq + 1); continue; }
+    if (['yes', 'system', 'json', 'purge-models'].includes(name)) { flags[name] = true; continue; }
+    const v = argv[++i];
+    if (v === undefined) return { error: `--${name} needs a value` };
+    flags[name] = v;
+  }
+  return { flags };
+}
+
+// -------------------------------------------------------------- detection
+
+function gpus() {
+  const r = spawnSync('nvidia-smi', ['--query-gpu=memory.total,uuid,name', '--format=csv,noheader,nounits'], { encoding: 'utf8' });
+  if (r.error || r.status !== 0) return [];
+  return r.stdout.trim().split('\n').filter(Boolean).map((l) => {
+    const [mem, uuid, ...name] = l.split(',').map((s) => s.trim());
+    return { memMiB: Number(mem) || 0, uuid, name: name.join(',') };
+  });
+}
+
+function hasAvx2() {
+  if (process.platform !== 'linux') return true; // probed by the binary itself at validate time
+  try { return /\bavx2\b/.test(fs.readFileSync('/proc/cpuinfo', 'utf8')); } catch { return false; }
+}
+
+const GIB = 1024 * 1024 * 1024;
+
+/**
+ * The chosen device and class are ALWAYS printed; a refusal names the floor
+ * that failed. `--class` may narrow, never widen. G16 hardware is reported but
+ * installs the G8 plan (no 14B row ships until a real G16 use exists).
+ */
+function detectClass(env = {}) {
+  const g = env.gpus ?? gpus();
+  const ram = env.ram ?? os.totalmem();
+  const arch = env.arch ?? process.arch;
+  const platform = env.platform ?? process.platform;
+  const avx2 = env.avx2 ?? hasAvx2();
+  const big = g.filter((x) => x.memMiB >= 7680);
+  if (big.length >= 2) return { cls: 'G16', plan: 'G8', gpu: big[0], platform, note: 'two capable GPUs found; serving the G8 plan on one card (no 14B row is pinned yet)' };
+  if (big.length === 1) return { cls: 'G8', plan: 'G8', gpu: big[0], platform };
+  if (g.length) {
+    return { refuse: `a GPU is present (${g[0].name}, ${Math.round(g[0].memMiB / 1024)} GiB) but below the 7.5 GiB floor — CPU classes need AVX2 x86 or arm64 with enough RAM` };
+  }
+  if (arch === 'arm64') {
+    return ram >= 7 * GIB ? { cls: 'A', plan: 'A', platform }
+      : { refuse: `arm64 with ${(ram / GIB).toFixed(1)} GiB RAM is below the 7 GiB floor for the A class` };
+  }
+  if (arch === 'x64') {
+    if (!avx2) return { refuse: 'this CPU has no AVX2, which the pinned llama-server build requires — the local tier refuses rather than degrades' };
+    return ram >= 7.5 * GIB ? { cls: 'C', plan: 'C', platform }
+      : { refuse: `x86 with ${(ram / GIB).toFixed(1)} GiB RAM is below the 7.5 GiB floor for the C class` };
+  }
+  return { refuse: `unsupported architecture "${arch}"` };
+}
+
+/** Which runtime assets this platform+plan needs. Linux GPU is refused honestly. */
+function planFor(det, manifest = MANIFEST) {
+  const plan = det.plan;
+  const models = manifest.models[plan];
+  if (!models) return { error: `no pinned models for class ${plan}` };
+  const wantGpu = plan.startsWith('G');
+  let llamaKey;
+  if (process.platform === 'win32') llamaKey = wantGpu ? 'win-x64-cuda' : 'win-x64-cpu';
+  else if (process.platform === 'linux') {
+    if (wantGpu) return { error: 'no pinned CUDA build exists for Linux yet — GPU serving is Windows-only in this release' };
+    llamaKey = process.arch === 'arm64' ? 'linux-arm64' : 'linux-x64';
+  } else return { error: `unsupported platform "${process.platform}"` };
+  const swapKey = process.platform === 'win32' ? 'win-x64' : (process.arch === 'arm64' ? 'linux-arm64' : 'linux-x64');
+  const downloads = [
+    { kind: 'llama', ...manifest.llamaCpp.assets[llamaKey], url: manifest.llamaCpp.urlBase + manifest.llamaCpp.assets[llamaKey].name },
+    ...(llamaKey === 'win-x64-cuda'
+      ? [{ kind: 'cudart', ...manifest.llamaCpp.assets['win-cudart'], url: manifest.llamaCpp.urlBase + manifest.llamaCpp.assets['win-cudart'].name }]
+      : []),
+    { kind: 'swap', ...manifest.llamaSwap.assets[swapKey], url: manifest.llamaSwap.urlBase + manifest.llamaSwap.assets[swapKey].name },
+    ...(process.platform === 'win32'
+      ? [{ kind: 'winsw', name: 'WinSW-x64.exe', sha256: manifest.winsw.sha256, bytes: manifest.winsw.bytes, url: manifest.winsw.url }]
+      : []),
+    ...models.map((m) => ({ kind: 'model', name: m.file, sha256: m.sha256, bytes: m.bytes, url: `https://huggingface.co/${m.repo}/resolve/main/${m.file}` })),
+  ];
+  return { plan, models, downloads, llamaKey };
+}
+
+/** BEFORE any download: need + 2 GiB headroom, both numbers printed. */
+function diskGate(needBytes, freeBytes) {
+  const need = needBytes + 2 * GIB;
+  return {
+    ok: freeBytes >= need,
+    line: `need ${(need / GIB).toFixed(1)} GiB (incl. 2 GiB headroom), have ${(freeBytes / GIB).toFixed(1)} GiB free at ${localDir()}`,
+  };
+}
+
+function freeBytes() {
+  try { const s = fs.statfsSync(localDir()); return s.bavail * s.bsize; }
+  catch { try { const s = fs.statfsSync(path.dirname(localDir())); return s.bavail * s.bsize; } catch { return 0; } }
+}
+
+// ------------------------------------------------------------- downloads
+
+function sha256File(file) {
+  const h = crypto.createHash('sha256');
+  const fd = fs.openSync(file, 'r');
+  const buf = Buffer.alloc(4 * 1024 * 1024);
+  let n;
+  while ((n = fs.readSync(fd, buf, 0, buf.length)) > 0) h.update(buf.subarray(0, n));
+  fs.closeSync(fd);
+  return h.digest('hex');
+}
+
+function fetchToFile(url, dest, redirects = 0) {
+  return new Promise((resolve, reject) => {
+    if (redirects > 5) return reject(new Error(`too many redirects for ${url}`));
+    const mod = url.startsWith('https:') ? https : http;
+    mod.get(url, { headers: { 'user-agent': 'huginn-local' } }, (res) => {
+      if ([301, 302, 303, 307, 308].includes(res.statusCode)) {
+        res.resume();
+        return resolve(fetchToFile(res.headers.location, dest, redirects + 1));
+      }
+      if (res.statusCode !== 200) { res.resume(); return reject(new Error(`${url} answered ${res.statusCode}`)); }
+      const out = fs.createWriteStream(dest);
+      const total = Number(res.headers['content-length'] || 0);
+      let got = 0, lastPct = -10;
+      res.on('data', (c) => {
+        got += c.length;
+        if (total) {
+          const pct = Math.floor((got / total) * 100);
+          if (pct >= lastPct + 10) { lastPct = pct; process.stdout.write(`\r    ${path.basename(dest)}: ${pct}%   `); }
+        }
+      });
+      res.pipe(out);
+      out.on('finish', () => { process.stdout.write('\r'); out.close(() => resolve()); });
+      out.on('error', reject);
+      res.on('error', reject);
+    }).on('error', reject);
+  });
+}
+
+/** Download to .dl.tmp, verify sha256 against the pin, then move into place. */
+async function fetchVerified(d, destDir) {
+  fs.mkdirSync(destDir, { recursive: true });
+  const dest = path.join(destDir, d.name);
+  if (fs.existsSync(dest) && sha256File(dest) === d.sha256) {
+    console.log(`  kept    ${d.name} (already present, hash matches)`);
+    return dest;
+  }
+  const tmp = dest + '.dl.tmp';
+  console.log(`  fetch   ${d.name} (${(d.bytes / (1024 * 1024)).toFixed(0)} MB)`);
+  await fetchToFile(d.url, tmp);
+  const got = sha256File(tmp);
+  if (got !== d.sha256) {
+    fs.unlinkSync(tmp);
+    throw new Error(`${d.name}: sha256 mismatch — expected ${d.sha256}, got ${got}. The pin refuses it; nothing was installed.`);
+  }
+  fs.renameSync(tmp, dest);
+  console.log(`  ok      ${d.name} sha256 verified`);
+  return dest;
+}
+
+function unpack(archive, destDir) {
+  fs.mkdirSync(destDir, { recursive: true });
+  if (archive.endsWith('.tar.gz')) {
+    const r = spawnSync('tar', ['-xzf', archive, '-C', destDir], { encoding: 'utf8' });
+    if (r.status !== 0) throw new Error(`tar failed on ${archive}: ${r.stderr}`);
+  } else if (archive.endsWith('.zip')) {
+    if (process.platform === 'win32') {
+      const r = spawnSync('powershell.exe', ['-NoProfile', '-Command',
+        `Expand-Archive -LiteralPath "${archive}" -DestinationPath "${destDir}" -Force`], { encoding: 'utf8' });
+      if (r.status !== 0) throw new Error(`Expand-Archive failed on ${archive}: ${r.stderr}`);
+    } else {
+      const r = spawnSync('unzip', ['-oq', archive, '-d', destDir], { encoding: 'utf8' });
+      if (r.status !== 0) throw new Error(`unzip failed on ${archive}: ${r.stderr}`);
+    }
+  } else {
+    throw new Error(`no unpacker for ${archive}`);
+  }
+}
+
+// -------------------------------------------------------------- llama-swap
+
+function serverBinaryPath(manifest = MANIFEST) {
+  const rel = manifest.llamaCpp.serverBinary[process.platform === 'win32' ? 'win32' : 'linux'];
+  return path.join(P('runtime', `llama-${manifest.llamaCpp.release}`), rel);
+}
+
+function swapBinaryPath(manifest = MANIFEST) {
+  const name = process.platform === 'win32' ? 'llama-swap.exe' : 'llama-swap';
+  return path.join(P('runtime', `llama-swap-${manifest.llamaSwap.version}`), name);
+}
+
+/**
+ * GENERATED — the banner says so in the file itself. One entry per pinned
+ * model; the chat model gets the class TTL (VRAM is surrendered when idle —
+ * the serving box may be somebody's gaming PC), the embedder a short one.
+ */
+function swapYamlFor(conf, models, manifest = MANIFEST) {
+  const server = serverBinaryPath(manifest);
+  const lines = [
+    `# GENERATED by huginn-local v${VERSION} — do not hand-edit; regenerated by 'huginn local on|update'.`,
+    'healthCheckTimeout: 300',
+    'models:',
+  ];
+  for (const m of models) {
+    const gpuArgs = m.gpu ? ' -ngl 99 --flash-attn on' : ' -ngl 0';
+    const env = (m.gpu && conf.gpuUuid) ? `\n    env:\n      - "CUDA_VISIBLE_DEVICES=${conf.gpuUuid}"` : '';
+    const embed = m.role === 'embed' ? ' --embedding' : '';
+    lines.push(
+      `  "${m.slug}":`,
+      `    name: "${m.display} - ${conf.deviceName || os.hostname()}"`,
+      `    cmd: >`,
+      `      ${server}`,
+      `      --host 127.0.0.1 --port \${PORT}`,
+      `      --api-key-file ${P('api-key')}`,
+      `      -m ${P('models', m.file)}`,
+      `      -c ${m.ctx}${gpuArgs}${embed}${env}`,
+      `    ttl: ${m.role === 'embed' ? 300 : 900}`,
+    );
+  }
+  return lines.join('\n') + '\n';
+}
+
+function mintKey() {
+  const file = P('api-key');
+  if (fs.existsSync(file) && fs.readFileSync(file, 'utf8').trim()) return file; // idempotent
+  fs.mkdirSync(localDir(), { recursive: true });
+  fs.writeFileSync(file, crypto.randomBytes(32).toString('hex') + '\n', { mode: 0o600 });
+  if (process.platform === 'win32') {
+    spawnSync('icacls', [file, '/inheritance:r', '/grant', 'SYSTEM:R', '/grant', 'Administrators:F'], { encoding: 'utf8' });
+  }
+  return file;
+}
+
+function readKey() {
+  try { return fs.readFileSync(P('api-key'), 'utf8').trim() || null; } catch { return null; }
+}
+
+// --------------------------------------------------------------- services
+
+const LLM_SERVICE = 'huginn-local-llm';
+const RUNNER_SERVICE = 'huginn-local-runner';
+
+/**
+ * Both units pin HOME and HUGINN_LOCAL_DIR (and the runner HUGINN_DEVICE_DIR):
+ * the device-unit lesson — a unit that pins HOME in a six-line comment and
+ * then drops the variable that moves the same files produces a service that
+ * loops forever while systemd reports it healthy.
+ */
+function unitText(which, { system = false, user = os.userInfo().username, home = os.homedir(), dir = localDir(), node = process.execPath, runner = path.join(os.homedir(), '.huginn', 'huginn-device'), manifest = MANIFEST } = {}) {
+  if (which === 'llm') {
+    return `[Unit]
+Description=Huginn local model server (llama-swap fronting llama-server, loopback only)
+After=network-online.target
+
+[Service]
+ExecStart=${swapBinaryPath(manifest)} --config ${path.join(dir, 'llama-swap.yaml')} --listen 127.0.0.1:8748
+${system ? `User=${user}\n` : ''}Environment=HOME=${home}
+Environment=HUGINN_LOCAL_DIR=${dir}
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=${system ? 'multi-user.target' : 'default.target'}
+`;
+  }
+  return `[Unit]
+Description=Offer this machine's local models to Huginn (device runner + llm shim)
+After=network-online.target ${LLM_SERVICE}.service
+
+[Service]
+ExecStart=${node} ${runner} serve
+${system ? `User=${user}\n` : ''}Environment=HOME=${home}
+Environment=HUGINN_DEVICE_DIR=${path.join(dir, 'device')}
+Environment=HUGINN_LOCAL_DIR=${dir}
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=${system ? 'multi-user.target' : 'default.target'}
+`;
+}
+
+function winswXml(which, { dir = localDir(), node = process.execPath, manifest = MANIFEST } = {}) {
+  if (which === 'llm') {
+    return `<service>
+  <id>${LLM_SERVICE}</id>
+  <name>Huginn local model server</name>
+  <description>llama-swap fronting llama-server on 127.0.0.1:8748 for the huginn local tier</description>
+  <executable>${swapBinaryPath(manifest)}</executable>
+  <arguments>--config "${path.join(dir, 'llama-swap.yaml')}" --listen 127.0.0.1:8748</arguments>
+  <env name="HUGINN_LOCAL_DIR" value="${dir}"/>
+  <onfailure action="restart" delay="10 sec"/>
+  <log mode="roll-by-size"><sizeThreshold>10240</sizeThreshold><keepFiles>4</keepFiles></log>
+</service>
+`;
+  }
+  return `<service>
+  <id>${RUNNER_SERVICE}</id>
+  <name>Huginn local runner (device + llm shim)</name>
+  <description>Offers this machine's local models to Huginn over an outbound long-poll</description>
+  <executable>${node}</executable>
+  <arguments>"${path.join(dir, 'bin', 'huginn-device.js')}" serve</arguments>
+  <env name="HOME" value="${dir}"/>
+  <env name="HUGINN_DEVICE_DIR" value="${path.join(dir, 'device')}"/>
+  <env name="HUGINN_LOCAL_DIR" value="${dir}"/>
+  <onfailure action="restart" delay="10 sec"/>
+  <log mode="roll-by-size"><sizeThreshold>10240</sizeThreshold><keepFiles>4</keepFiles></log>
+</service>
+`;
+}
+
+function sysctl(args, { user = false } = {}) {
+  const base = user ? ['--user'] : [];
+  return spawnSync('systemctl', [...base, ...args], { encoding: 'utf8' });
+}
+
+function installServiceLinux(which, { system }) {
+  const name = which === 'llm' ? LLM_SERVICE : RUNNER_SERVICE;
+  const file = system
+    ? `/etc/systemd/system/${name}.service`
+    : path.join(os.homedir(), '.config', 'systemd', 'user', `${name}.service`);
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(file, unitText(which, { system }));
+  let r = sysctl(['daemon-reload'], { user: !system });
+  if (r.status !== 0) throw new Error(`daemon-reload failed: ${r.stderr}`);
+  r = sysctl(['enable', '--now', name], { user: !system });
+  if (r.status !== 0) throw new Error(`enable --now ${name} failed: ${r.stderr}\nManual: systemctl ${system ? '' : '--user '}enable --now ${name}`);
+  console.log(`  service ${name} enabled (${file})`);
+}
+
+function installServiceWindows(which) {
+  const name = which === 'llm' ? LLM_SERVICE : RUNNER_SERVICE;
+  const dir = P('runtime', 'winsw');
+  fs.mkdirSync(dir, { recursive: true });
+  const exe = path.join(dir, `${name}.exe`);
+  fs.copyFileSync(P('runtime', 'WinSW-x64.exe'), exe);
+  fs.writeFileSync(path.join(dir, `${name}.xml`), winswXml(which));
+  let r = spawnSync(exe, ['install'], { encoding: 'utf8' });
+  if (r.status !== 0 && !/already exists/i.test(r.stderr + r.stdout)) {
+    throw new Error(`WinSW install ${name} failed: ${r.stderr || r.stdout}`);
+  }
+  r = spawnSync(exe, ['start'], { encoding: 'utf8' });
+  if (r.status !== 0 && !/already.*started|already running/i.test(r.stderr + r.stdout)) {
+    throw new Error(`WinSW start ${name} failed: ${r.stderr || r.stdout}`);
+  }
+  console.log(`  service ${name} installed + started (WinSW, LocalSystem)`);
+}
+
+function serviceState(which, conf) {
+  const name = which === 'llm' ? LLM_SERVICE : RUNNER_SERVICE;
+  if (process.platform === 'win32') {
+    const exe = P('runtime', 'winsw', `${name}.exe`);
+    if (!fs.existsSync(exe)) return 'not installed';
+    const r = spawnSync(exe, ['status'], { encoding: 'utf8' });
+    return (r.stdout || '').trim() || 'unknown';
+  }
+  const r = sysctl(['is-active', name], { user: !(conf && conf.systemUnits) });
+  return (r.stdout || '').trim() || 'not installed';
+}
+
+// ----------------------------------------------------------------- health
+
+function getJson(url, key) {
+  return new Promise((resolve) => {
+    const mod = url.startsWith('https:') ? https : http;
+    const req = mod.get(url, { headers: key ? { authorization: `Bearer ${key}` } : {} }, (res) => {
+      let text = '';
+      res.setEncoding('utf8');
+      res.on('data', (c) => { if (text.length < 65536) text += c; });
+      res.on('end', () => {
+        try { resolve({ status: res.statusCode, body: JSON.parse(text) }); }
+        catch { resolve({ status: res.statusCode, body: null }); }
+      });
+    });
+    req.on('error', (e) => resolve({ status: 0, error: e.message }));
+    req.setTimeout(8000, () => { req.destroy(); resolve({ status: 0, error: 'timeout' }); });
+  });
+}
+
+/**
+ * Health means reading the model-list BODY and requiring it nonempty — never a
+ * TCP connect (the empty-daemon trap: a healthy-looking endpoint serving
+ * nothing). Auth is asserted, not assumed: a keyless completions request must
+ * be refused, or the loopback bind is the only fence and that is said.
+ */
+async function health(conf) {
+  const base = conf.mode === 'adapter' ? conf.adapter.url : `http://127.0.0.1:${conf.port}`;
+  const key = conf.mode === 'adapter' ? (conf.adapter.key || null) : readKey();
+  const listPath = conf.mode === 'adapter' && conf.adapter.kind === 'ollama' ? '/api/tags' : '/v1/models';
+  const r = await getJson(base + listPath, key);
+  const list = r.body && (r.body.data || r.body.models);
+  const names = Array.isArray(list)
+    ? list.map((m) => m.id || m.name || m.model).filter(Boolean) : [];
+  return { reachable: r.status > 0, status: r.status, models: names, base };
+}
+
+// -------------------------------------------------------------- enrolment
+
+function runnerPath() {
+  const machine = P('bin', 'huginn-device.js');
+  if (fs.existsSync(machine)) return machine;
+  return path.join(os.homedir(), '.huginn', 'huginn-device');
+}
+
+function enrolDevice(conf, models) {
+  const devDir = P('device');
+  fs.mkdirSync(devDir, { recursive: true });
+  const devConf = path.join(devDir, 'device.json');
+  let existing = {};
+  try { existing = JSON.parse(fs.readFileSync(devConf, 'utf8')); } catch { /* fresh */ }
+  // Scope is seeded in the CONFIG, deliberately not passed as a flag: the
+  // enrol verb refuses `--scope generate` from a hand (a typo'd claude
+  // enrolment must never land on the serving rung); this file is how `huginn
+  // local on` says it on purpose.
+  fs.writeFileSync(devConf, JSON.stringify({
+    ...existing,
+    url: conf.url,
+    name: conf.deviceName,
+    scope: 'generate',
+    // The ENGINE knob: generate work spawns conf.llm (the shim), never
+    // conf.claude — the runner's engine dispatch is by mode, and this row's
+    // scope refuses every claude mode anyway.
+    llm: P('bin', 'huginn-llm-shim.js'),
+    models: models.map((m) => ({ slug: m.slug, display: m.display })),
+  }, null, 2) + '\n', { mode: 0o600 });
+  const r = spawnSync(process.execPath, [runnerPath(), 'on'], {
+    encoding: 'utf8',
+    env: { ...process.env, HUGINN_DEVICE_DIR: devDir },
+  });
+  process.stdout.write(r.stdout || '');
+  process.stderr.write(r.stderr || '');
+  if (r.status !== 0) throw new Error('enrolment failed — see above; the services are installed but this machine is not offered to huginn yet');
+  const after = JSON.parse(fs.readFileSync(devConf, 'utf8'));
+  return { llmSlug: after.llmSlug || null, id: after.id || null };
+}
+
+// -------------------------------------------------------------------- on
+
+async function cmdOn(flags) {
+  if (!MANIFEST) { console.error('this file was not generated correctly — run: node scripts/gen-local-manifest.js'); process.exit(2); }
+  const det = detectClass();
+  if (det.refuse && !flags.adapter) { console.error(`refused: ${det.refuse}`); process.exit(1); }
+  if (flags.class) {
+    const order = { A: 0, C: 1, G8: 2, G16: 3 };
+    if (!(flags.class in order)) { console.error(`unknown class "${flags.class}" — one of: G8, G16, C, A`); process.exit(2); }
+    if (!det.refuse && order[flags.class] > order[det.cls]) {
+      console.error(`--class may narrow, never widen: detected ${det.cls}, asked for ${flags.class}`);
+      process.exit(1);
+    }
+    det.cls = flags.class; det.plan = flags.class === 'G16' ? 'G8' : flags.class;
+  }
+  const hostname = os.hostname().toLowerCase().replace(/[^a-z0-9-]/g, '-').replace(/-+/g, '-').replace(/^-|-$/g, '').slice(0, 34) || 'machine';
+  const conf = loadConf() || {};
+  conf.deviceName = flags.name || conf.deviceName || `${hostname}-llm`;
+  conf.url = flags.url || conf.url;
+  if (!conf.url) { console.error('no daemon url — the shell wrapper passes --url (run: huginn local on)'); process.exit(2); }
+
+  if (flags.adapter) {
+    // ---- adapter mode: wrap what already serves; install nothing heavy
+    const kind = String(flags.adapter).toLowerCase();
+    if (!['ollama', 'lmstudio'].includes(kind)) { console.error(`unknown adapter "${flags.adapter}" — ollama or lmstudio`); process.exit(2); }
+    const url = flags['adapter-url'] || (kind === 'ollama' ? 'http://127.0.0.1:11434' : 'http://127.0.0.1:1234');
+    const host = new URL(url).hostname;
+    if (!['127.0.0.1', 'localhost', '::1'].includes(host)) {
+      console.error(`refused: the adapter must be on loopback (got ${host}) — the local tier's contract is loopback-only`);
+      process.exit(1);
+    }
+    conf.mode = 'adapter';
+    conf.adapter = { kind, url, key: flags['adapter-key'] || null };
+    const h = await health(conf);
+    if (!h.models.length) {
+      console.error(`refused: ${url} ${h.reachable ? `answered but serves NO models — an alive endpoint with an empty list is the trap, not a healthy install` : `is not answering (${h.error || h.status})`}`);
+      process.exit(1);
+    }
+    conf.class = det.refuse ? 'adapter' : det.cls;
+    conf.modelsBySlug = {};
+    const models = h.models.slice(0, 16).map((n) => {
+      const slug = n.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 30);
+      conf.modelsBySlug[slug] = { file: n, display: n };
+      return { slug, display: n };
+    });
+    conf.defaultModel = models[0].slug;
+    console.log(`adapter ${kind} at ${url}: ${h.models.length} model(s) — ${h.models.slice(0, 4).join(', ')}${h.models.length > 4 ? ', …' : ''}`);
+    installShimCopy();
+    if (!flags.yes && !(await consent(`Wrap the existing ${kind} at ${url}, install the runner service, and offer "${conf.deviceName}" to huginn at ${conf.url}?`))) process.exit(1);
+    saveConf(conf);
+    installRunnerService(flags);
+    const e = enrolDevice(conf, models);
+    conf.llmSlug = e.llmSlug; saveConf(conf);
+    console.log(`\nOn. ${conf.deviceName} serves ${models.length} adapter model(s) to huginn.`);
+    return;
+  }
+
+  // ---- managed mode
+  const plan = planFor(det);
+  if (plan.error) { console.error(`refused: ${plan.error}`); process.exit(1); }
+  const needBytes = plan.downloads.reduce((s, d) => s + d.bytes, 0);
+  const gate = diskGate(needBytes, freeBytes());
+  console.log(`class ${det.cls}${det.cls !== plan.plan ? ` (serving the ${plan.plan} plan)` : ''}${det.gpu ? ` — GPU ${det.gpu.name} (${det.gpu.uuid})` : ''}`);
+  if (det.note) console.log(`  ${det.note}`);
+  console.log(`  ${gate.line}`);
+  if (!gate.ok) { console.error('refused: not enough disk'); process.exit(1); }
+
+  console.log('\nThe plan:');
+  for (const d of plan.downloads) console.log(`  ${(d.bytes / (1024 * 1024)).toFixed(0).padStart(6)} MB  ${d.name}`);
+  console.log(`  services ${LLM_SERVICE} + ${RUNNER_SERVICE}${process.platform === 'win32' ? ' (WinSW, LocalSystem)' : (flags.system ? ' (systemd, system)' : ' (systemd, user — needs linger)')}`);
+  console.log(`  llama-swap on 127.0.0.1:8748, api key at ${P('api-key')} — loopback only, authenticated`);
+  console.log(`  device row "${conf.deviceName}" at scope generate → ${conf.url}`);
+  if (!flags.yes && !(await consent('Install all of the above?'))) process.exit(1);
+
+  conf.mode = 'managed';
+  conf.class = det.cls;
+  conf.port = 8748;
+  conf.gpuUuid = flags['gpu-uuid'] || (det.gpu ? det.gpu.uuid : null);
+  conf.systemUnits = process.platform === 'win32' ? true : !!flags.system;
+
+  // 1-2: fetch + verify + unpack runtimes
+  for (const d of plan.downloads.filter((x) => x.kind !== 'model')) {
+    const file = await fetchVerified(d, P('runtime', '.dl'));
+    if (d.kind === 'llama') unpack(file, P('runtime', `llama-${MANIFEST.llamaCpp.release}`));
+    if (d.kind === 'cudart') unpack(file, path.dirname(serverBinaryPath()));
+    if (d.kind === 'swap') unpack(file, P('runtime', `llama-swap-${MANIFEST.llamaSwap.version}`));
+    if (d.kind === 'winsw') fs.copyFileSync(file, P('runtime', 'WinSW-x64.exe'));
+  }
+  // The win zip is flat; the linux tar carries a version dir — normalise so
+  // serverBinaryPath() resolves on both.
+  if (process.platform === 'win32') {
+    const flat = P('runtime', `llama-${MANIFEST.llamaCpp.release}`, 'llama-server.exe');
+    if (!fs.existsSync(flat)) throw new Error('llama-server.exe not found after unpack — the archive layout changed; refuse and re-pin');
+  } else if (!fs.existsSync(serverBinaryPath())) {
+    throw new Error('llama-server not found after unpack — the archive layout changed; refuse and re-pin');
+  }
+  // 3: models
+  for (const d of plan.downloads.filter((x) => x.kind === 'model')) await fetchVerified(d, P('models'));
+  // 4: key + config + yaml
+  mintKey();
+  conf.modelsBySlug = {};
+  for (const m of plan.models) conf.modelsBySlug[m.slug] = { file: m.file, display: m.display, ctx: m.ctx, gpu: m.gpu };
+  conf.defaultModel = plan.models.find((m) => m.role === 'chat').slug;
+  fs.writeFileSync(P('llama-swap.yaml'), swapYamlFor(conf, plan.models));
+  installShimCopy();
+  saveConf(conf);
+  // 5: services
+  if (process.platform === 'win32') { installServiceWindows('llm'); } else { installServiceLinux('llm', { system: !!flags.system }); }
+  // 6: health, honestly
+  let h = null;
+  for (let i = 0; i < 30; i++) { h = await health(conf); if (h.models.length) break; await new Promise((r) => setTimeout(r, 2000)); }
+  if (!h.models.length) throw new Error(`the model server came up but lists no models (${JSON.stringify(h)}) — NOT healthy; fix before enrolling`);
+  console.log(`  serving ${h.models.join(', ')}`);
+  const keyless = await getJson(`http://127.0.0.1:${conf.port}/v1/models`, null);
+  if (keyless.status === 200) console.log('  note: the front door answers without the key on the model LIST; completions are key-gated by llama-server itself');
+  // 7: runner service + enrol
+  installRunnerService(flags);
+  const e = enrolDevice(conf, plan.models);
+  conf.llmSlug = e.llmSlug;
+  conf.installed = {
+    llamaTag: MANIFEST.llamaCpp.release, swapVersion: MANIFEST.llamaSwap.version,
+    models: plan.models.map((m) => m.slug), manifestHash: manifestHash(),
+  };
+  saveConf(conf);
+  console.log(`\nOn. class ${conf.class}, ${plan.models.length} model(s), device "${conf.deviceName}"${conf.llmSlug ? ` (slug ${conf.llmSlug})` : ''}.`);
+}
+
+function installShimCopy() {
+  const src = process.env.HUGINN_SHIM_SOURCE || path.join(os.homedir(), '.huginn', 'huginn-llm-shim');
+  if (!fs.existsSync(src)) throw new Error(`the shim is not at ${src} — run through the shell wrapper (huginn local on), which fetches it`);
+  fs.mkdirSync(P('bin'), { recursive: true });
+  fs.copyFileSync(src, P('bin', 'huginn-llm-shim.js'));
+  const runnerSrc = path.join(os.homedir(), '.huginn', 'huginn-device');
+  if (fs.existsSync(runnerSrc)) fs.copyFileSync(runnerSrc, P('bin', 'huginn-device.js'));
+}
+
+function installRunnerService(flags) {
+  if (process.platform === 'win32') installServiceWindows('runner');
+  else installServiceLinux('runner', { system: !!flags.system });
+}
+
+function consent(question) {
+  return new Promise((resolve) => {
+    process.stdout.write(`${question} [y/N] `);
+    process.stdin.setEncoding('utf8');
+    process.stdin.once('data', (d) => { process.stdin.pause(); resolve(/^y(es)?$/i.test(String(d).trim())); });
+  });
+}
+
+function manifestHash() {
+  return crypto.createHash('sha256').update(JSON.stringify(MANIFEST)).digest('hex').slice(0, 16);
+}
+
+// ------------------------------------------------------------------- off
+
+async function cmdOff(flags) {
+  const conf = loadConf();
+  if (!conf) { console.error('not set up — nothing to turn off'); process.exit(1); }
+  let failed = 0;
+  const step = (name, fn) => {
+    try { fn(); console.log(`  ok      ${name}`); }
+    catch (e) { failed += 1; console.error(`  FAILED  ${name}: ${e.message}`); }
+  };
+  // Runner first, so nothing re-enrols while the rest comes down.
+  if (process.platform === 'win32') {
+    for (const which of ['runner', 'llm']) {
+      const name = which === 'runner' ? RUNNER_SERVICE : LLM_SERVICE;
+      const exe = P('runtime', 'winsw', `${name}.exe`);
+      if (fs.existsSync(exe)) {
+        step(`stop ${name}`, () => { const r = spawnSync(exe, ['stop'], { encoding: 'utf8' }); if (r.status !== 0 && !/not.*started|stopped/i.test(r.stderr + r.stdout)) throw new Error(r.stderr || r.stdout); });
+        step(`uninstall ${name}`, () => { const r = spawnSync(exe, ['uninstall'], { encoding: 'utf8' }); if (r.status !== 0) throw new Error(r.stderr || r.stdout); });
+      }
+    }
+  } else {
+    for (const name of [RUNNER_SERVICE, LLM_SERVICE]) {
+      step(`disable ${name}`, () => {
+        const r = sysctl(['disable', '--now', name], { user: !conf.systemUnits });
+        if (r.status !== 0 && !/does not exist|not loaded/i.test(r.stderr)) throw new Error(r.stderr.trim());
+      });
+    }
+  }
+  // Deregister — inherits the device-off honesty: a DELETE failure keeps the
+  // id and exits nonzero, and this command then does NOT proceed to deletions.
+  const r = spawnSync(process.execPath, [runnerPath(), 'off'], {
+    encoding: 'utf8', env: { ...process.env, HUGINN_DEVICE_DIR: P('device') },
+  });
+  process.stdout.write(r.stdout || ''); process.stderr.write(r.stderr || '');
+  if (r.status !== 0) {
+    console.error('\nStill enrolled at the daemon — services are down; run `huginn local off` again when huginn is reachable.');
+    process.exit(1);
+  }
+  if (flags['purge-models']) {
+    if (!flags.yes) {
+      const sure = await new Promise((res) => {
+        process.stdout.write(`Type "delete" to remove ${P('models')} and ${P('sessions')}: `);
+        process.stdin.setEncoding('utf8');
+        process.stdin.once('data', (d) => { process.stdin.pause(); res(String(d).trim() === 'delete'); });
+      });
+      if (!sure) { console.log('kept the models.'); process.exit(failed ? 1 : 0); }
+    }
+    step('purge models + sessions', () => { fs.rmSync(P('models'), { recursive: true, force: true }); fs.rmSync(P('sessions'), { recursive: true, force: true }); });
+  } else {
+    let kept = 0;
+    try { kept = fs.readdirSync(P('models')).length; } catch { /* none */ }
+    if (kept) console.log(`off, not gone: ${kept} model file(s) remain at ${P('models')} — remove with: huginn local off --purge-models`);
+  }
+  if (failed) { console.error(`\n${failed} step(s) failed — NOT fully off.`); process.exit(1); }
+  console.log('\nOff.');
+}
+
+// ---------------------------------------------------------------- status
+
+async function statusInfo() {
+  const conf = loadConf();
+  if (!conf) return { setup: false };
+  const h = await health(conf).catch(() => ({ reachable: false, models: [] }));
+  let shimVersion = null;
+  try {
+    const r = spawnSync(process.execPath, [P('bin', 'huginn-llm-shim.js'), '--version'], { encoding: 'utf8' });
+    shimVersion = (r.stdout || '').trim() || null;
+  } catch { /* absent */ }
+  let sessions = 0;
+  try { sessions = fs.readdirSync(P('sessions')).length; } catch { /* none */ }
+  return {
+    setup: true,
+    mode: conf.mode, class: conf.class, deviceName: conf.deviceName, llmSlug: conf.llmSlug || null,
+    port: conf.port || null, adapter: conf.adapter || null,
+    services: { llm: conf.mode === 'adapter' ? 'n/a (adapter)' : serviceState('llm', conf), runner: serviceState('runner', conf) },
+    engine: { reachable: h.reachable, models: h.models, base: h.base },
+    models: Object.keys(conf.modelsBySlug || {}),
+    defaultModel: conf.defaultModel || null,
+    shimVersion,
+    sessions,
+    installed: conf.installed || null,
+  };
+}
+
+async function cmdStatus(flags) {
+  const s = await statusInfo();
+  if (flags.json) { process.stdout.write(JSON.stringify(s) + '\n'); return; }
+  if (!s.setup) { console.log('not set up — run: huginn local on'); return; }
+  console.log(`mode        ${s.mode} (class ${s.class})`);
+  console.log(`device      ${s.deviceName}${s.llmSlug ? ` (slug ${s.llmSlug})` : ''}`);
+  console.log(`services    llm: ${s.services.llm} · runner: ${s.services.runner}`);
+  console.log(`engine      ${s.engine.reachable ? `serving ${s.engine.models.length} model(s): ${s.engine.models.join(', ')}` : 'NOT ANSWERING'} at ${s.engine.base || '?'}`);
+  console.log(`shim        ${s.shimVersion || 'not installed'}`);
+  console.log(`sessions    ${s.sessions} file(s)`);
+  if (s.installed) console.log(`pins        llama.cpp ${s.installed.llamaTag} · llama-swap ${s.installed.swapVersion} · manifest ${s.installed.manifestHash}`);
+}
+
+// ---------------------------------------------------------------- update
+
+async function cmdUpdate(flags) {
+  if (!MANIFEST) { console.error('this file was not generated correctly'); process.exit(2); }
+  const conf = loadConf();
+  if (!conf) { console.error('not set up — run: huginn local on'); process.exit(1); }
+  installShimCopy();
+  console.log('  shim + runner copies refreshed from ~/.huginn');
+  if (conf.mode === 'adapter') { console.log('adapter mode: nothing else to update.'); return; }
+  if (conf.installed && conf.installed.manifestHash === manifestHash()) {
+    console.log(`pins unchanged (manifest ${manifestHash()}) — done.`);
+    return;
+  }
+  console.log(`pins changed: ${conf.installed ? conf.installed.manifestHash : '(none)'} → ${manifestHash()}`);
+  const det = detectClass();
+  det.cls = conf.class; det.plan = conf.class === 'G16' ? 'G8' : conf.class;
+  const plan = planFor(det);
+  if (plan.error) { console.error(`refused: ${plan.error}`); process.exit(1); }
+  const needBytes = plan.downloads.reduce((s, d) => s + d.bytes, 0);
+  const gate = diskGate(needBytes, freeBytes());
+  console.log(`  ${gate.line}`);
+  if (!gate.ok) { console.error('refused: not enough disk'); process.exit(1); }
+  if (!flags.yes && !(await consent('Download and switch to the new pins?'))) process.exit(1);
+  for (const d of plan.downloads.filter((x) => x.kind !== 'model')) {
+    const file = await fetchVerified(d, P('runtime', '.dl'));
+    if (d.kind === 'llama') unpack(file, P('runtime', `llama-${MANIFEST.llamaCpp.release}`));
+    if (d.kind === 'cudart') unpack(file, path.dirname(serverBinaryPath()));
+    if (d.kind === 'swap') unpack(file, P('runtime', `llama-swap-${MANIFEST.llamaSwap.version}`));
+    if (d.kind === 'winsw') fs.copyFileSync(file, P('runtime', 'WinSW-x64.exe'));
+  }
+  for (const d of plan.downloads.filter((x) => x.kind === 'model')) await fetchVerified(d, P('models'));
+  conf.modelsBySlug = {};
+  for (const m of plan.models) conf.modelsBySlug[m.slug] = { file: m.file, display: m.display, ctx: m.ctx, gpu: m.gpu };
+  conf.defaultModel = plan.models.find((m) => m.role === 'chat').slug;
+  fs.writeFileSync(P('llama-swap.yaml'), swapYamlFor(conf, plan.models));
+  if (process.platform === 'win32') {
+    const exe = P('runtime', 'winsw', `${LLM_SERVICE}.exe`);
+    spawnSync(exe, ['restart'], { encoding: 'utf8' });
+  } else {
+    sysctl(['restart', LLM_SERVICE], { user: !conf.systemUnits });
+  }
+  let h = null;
+  for (let i = 0; i < 30; i++) { h = await health(conf); if (h.models.length) break; await new Promise((r) => setTimeout(r, 2000)); }
+  if (!h.models.length) { console.error('the updated server lists NO models — the previous runtime generation is still on disk; investigate before deleting anything'); process.exit(1); }
+  conf.installed = { llamaTag: MANIFEST.llamaCpp.release, swapVersion: MANIFEST.llamaSwap.version, models: plan.models.map((m) => m.slug), manifestHash: manifestHash() };
+  saveConf(conf);
+  console.log(`updated: serving ${h.models.join(', ')}`);
+}
+
+// ---------------------------------------------------------------- doctor
+
+async function cmdDoctor() {
+  const s = await statusInfo();
+  if (!s.setup) { console.log('not set up.'); return; }
+  await cmdStatus({});
+  console.log('\ndoctor:');
+  const shim = P('bin', 'huginn-llm-shim.js');
+  const r = spawnSync(process.execPath, [shim, '--contract-check'], { encoding: 'utf8' });
+  const frames = (r.stdout || '').trim().split('\n').filter(Boolean);
+  const okShape = r.status === 0 && frames.length >= 3
+    && frames[0].includes('"subtype":"init"') && frames[frames.length - 1].includes('"type":"result"');
+  console.log(`  ${okShape ? 'ok    ' : 'FAIL  '}shim --contract-check (${frames.length} frames)`);
+  const gate = diskGate(0, freeBytes());
+  console.log(`  ok    disk: ${gate.line}`);
+  const g = gpus();
+  console.log(`  ok    gpu: ${g.length ? g.map((x) => `${x.name} ${Math.round(x.memMiB / 1024)}GiB`).join(', ') : 'none visible'}`);
+  for (const [kind, url] of [['ollama', 'http://127.0.0.1:11434/api/tags'], ['lmstudio', 'http://127.0.0.1:1234/v1/models']]) {
+    const probe = await getJson(url, null);
+    const list = probe.body && (probe.body.models || probe.body.data);
+    if (Array.isArray(list)) console.log(`  note  an existing ${kind} serves ${list.length} model(s) here — adapter mode can wrap it`);
+  }
+}
+
+// ------------------------------------------------------------------- main
+
+function usage() {
+  console.log(`huginn-local ${VERSION} — serve local AI models to Huginn from this machine.
+
+  huginn local on     [--class G8|G16|C|A] [--gpu-uuid U] [--name N] [--yes] [--system]
+                      [--adapter ollama|lmstudio [--adapter-url URL] [--adapter-key K]]
+  huginn local off    [--purge-models] [--yes]
+  huginn local status [--json]
+  huginn local unit   [--system] [--which llm|runner]
+  huginn local update [--yes]
+  huginn local doctor`);
+}
+
+async function main() {
+  const cmd = process.argv[2];
+  const rest = process.argv.slice(3);
+  const known = ['class', 'gpu-uuid', 'name', 'url', 'yes', 'system', 'json', 'adapter', 'adapter-url', 'adapter-key', 'purge-models', 'which'];
+  const parsed = parseFlags(rest, known);
+  if (parsed.error) { console.error(`huginn-local ${cmd || ''}: ${parsed.error}`); process.exit(2); }
+  const flags = parsed.flags;
+  switch (cmd) {
+    case 'on': await cmdOn(flags); break;
+    case 'off': await cmdOff(flags); break;
+    case 'status': await cmdStatus(flags); break;
+    case 'update': await cmdUpdate(flags); break;
+    case 'doctor': await cmdDoctor(flags); break;
+    case 'unit': {
+      const which = flags.which || 'llm';
+      if (!['llm', 'runner'].includes(which)) { console.error('--which llm|runner'); process.exit(2); }
+      process.stdout.write(unitText(which, { system: !!flags.system }));
+      break;
+    }
+    case 'version': console.log(VERSION); break;
+    default: usage(); process.exit(cmd ? 2 : 0);
+  }
+}
+
+if (require.main === module) {
+  main().catch((e) => { console.error(`huginn-local: ${e.message}`); process.exit(1); });
+} else {
+  module.exports = {
+    VERSION, MANIFEST, parseFlags, detectClass, planFor, diskGate, swapYamlFor,
+    unitText, winswXml, mintKey, localDir, statusInfo, manifestHash,
+    LLM_SERVICE, RUNNER_SERVICE,
+  };
+}

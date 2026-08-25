@@ -52,7 +52,7 @@ const pushLib = require('./lib/pushtokens');
 const { trySender } = require('./lib/fcm');
 const { createPending, stepSoftEnd } = require('./lib/softend');
 
-const VERSION = '2.74.0';
+const VERSION = '2.75.0';
 const PORT = Number(process.env.HUGINN_APPD_PORT || 8787);
 const DATA_DIR = process.env.HUGINN_APPD_DATA || '/var/lib/huginn-appd';
 const UPLOADS_DIR = path.join(DATA_DIR, 'uploads');
@@ -272,6 +272,30 @@ function modelDecision(v) {
   if (MODEL_ALIASES.has(s) || parseModelId(s)) return { model: s };
   return { error: `unknown model ${JSON.stringify(s)}: use an id from /v1/models, or omit it for the default` };
 }
+/**
+ * The local-model family: composite ids `local-<llmSlug>-<modelSlug>`, where
+ * the llmSlug was minted by THIS daemon at the device's generate enrolment.
+ * Resolution keys on that daemon-minted slug — the device-declared model list
+ * gates only which rows exist, and the shim's own strict mapping is the final
+ * fence. Picking a local row IS the host choice.
+ */
+const isLocalFamily = (id) => typeof id === 'string' && id.startsWith('local-');
+
+function resolveLocalModel(rawId) {
+  const modelId = String(rawId || '').trim().toLowerCase();
+  for (const [devId, d] of Object.entries(deviceState.devices || {})) {
+    if (d.scope !== 'generate' || !d.llmSlug) continue;
+    const prefix = `local-${d.llmSlug}-`;
+    if (!modelId.startsWith(prefix)) continue;
+    const slug = modelId.slice(prefix.length);
+    if ((d.models || []).some((x) => x.slug === slug)) {
+      return { deviceId: devId, device: d, slug, id: modelId };
+    }
+    return { error: `${d.name} does not serve "${slug}" — it advertises: ${(d.models || []).map((x) => x.slug).join(', ') || '(nothing)'}` };
+  }
+  return { error: 'no enrolled machine serves this model — its machine may have been unenrolled' };
+}
+
 /** Same matrix as modelDecision: absent or empty clears, unknown non-empty refuses. */
 function effortDecision(v) {
   if (v === undefined || v === null) return { effort: null };
@@ -1460,7 +1484,10 @@ function handleClaudeEvent(meta, run_, ev) {
         type: 'result',
         ok: !ev.is_error,
         durationMs: ev.duration_ms ?? null,
-        costUsd: ev.total_cost_usd ?? null,
+        // A local-family run never records spend: the shim reports 0, but the
+        // gate is on ENGINE IDENTITY, not on the number — a lying frame must
+        // not be able to bill a free run to the subscription's ledger.
+        costUsd: isLocalFamily(meta.model) ? null : (ev.total_cost_usd ?? null),
         turns: ev.num_turns ?? null,
         ts,
       };
@@ -1813,7 +1840,11 @@ function startRemoteRun(meta, userText) {
   const deviceId = meta.host;
   const device = (deviceState.devices || {})[deviceId];
   const now = Date.now();
-  const verdict = devicesLib.canRun(device, meta.mode, now);
+  // The WORK ITEM's mode: a local-family chat rides as generate — the mode the
+  // exclusive scope serves and the argv sheds tools/persona/effort for. The
+  // chat-level wire never carries generate; this is where the daemon translates.
+  const workMode = isLocalFamily(meta.model) ? 'generate' : meta.mode;
+  const verdict = devicesLib.canRun(device, workMode, now);
   if (!verdict.ok) return { error: verdict.reason, code: 409 };
   if (activeRunFor(deviceId)) return { error: `${device.name} is already running something`, code: 409 };
   if ((deviceQueues.get(deviceId) || []).length >= MAX_WORK_QUEUE) {
@@ -1839,7 +1870,7 @@ function startRemoteRun(meta, userText) {
     id: workId,
     chatId,
     prompt: userText,
-    mode: meta.mode,
+    mode: workMode,
     model: meta.model,
     effort: meta.effort,
     resumeSessionId: meta.claudeSessionId,
@@ -2055,6 +2086,9 @@ function buildRound(body) {
   if (!sched.ok) return { error: sched.error };
   const placed = placeRound(body.host, body.mode === 'act' ? 'act' : 'ask');
   if (placed.error) return { error: placed.error };
+  // Rounds run unattended and their report contract assumes a model that holds
+  // it under injection pressure — the panel's unanimous answer: never local.
+  if (isLocalFamily(body.model)) return { error: 'local models serve chats only — a Round needs a Claude model' };
   const mv = modelDecision(body.model);
   if (mv.error) return { error: mv.error };
   const ev = effortDecision(body.effort);
@@ -2155,6 +2189,7 @@ function applyRoundPatch(round, body) {
   }
   // `r` is a discarded copy, so an error return here leaves the round untouched.
   if ('model' in body) {
+    if (isLocalFamily(body.model)) return { error: 'local models serve chats only — a Round needs a Claude model' };
     const mv = modelDecision(body.model);
     if (mv.error) return { error: mv.error };
     r.model = mv.model;
@@ -2181,6 +2216,12 @@ function applyRoundPatch(round, body) {
 function fireRound(round, { manual = false } = {}) {
   if (round.currentChatId && activeRuns.has(round.currentChatId)) {
     return { error: 'previous run is still going', code: 409 };
+  }
+  // Defensive: only reachable by hand-editing the round file — both write
+  // paths refuse the local family. The tick records this refusal as an
+  // attention run, so the bypass fails closed AND visibly.
+  if (isLocalFamily(round.model)) {
+    return { error: 'this Round names a local model, which Rounds refuse — edit it to a Claude model', code: 400 };
   }
   const now = Math.floor(Date.now() / 1000);
   const meta = {
@@ -3797,7 +3838,15 @@ const server = http.createServer(async (req, res) => {
     if (req.method === 'GET' && p === '/v1/models') {
       const bin = process.env.HUGINN_CLAUDE_BIN ||
         '/usr/lib/node_modules/@anthropic-ai/claude-code/bin/claude.exe';
-      return sendJson(res, 200, { models: await discoverModels(bin) });
+      const models = await discoverModels(bin);
+      // Local rows are OPT-IN (?local=1): an old client would render them and
+      // then 400 on every pick, so a client asks for them when it knows how to
+      // treat them. Computed per request from the registry — no cache, because
+      // `available` is time-dependent and a cache would lie.
+      if (u.searchParams.get('local') === '1') {
+        return sendJson(res, 200, { models: models.concat(devicesLib.localModelRows(deviceState, Date.now())) });
+      }
+      return sendJson(res, 200, { models });
     }
 
     // --- account
@@ -4623,11 +4672,23 @@ const server = http.createServer(async (req, res) => {
       // does not accumulate ghosts in the list. A device with no id gets one.
       const id = /^[0-9a-f-]{36}$/.test(String(body.id || '')) ? body.id : crypto.randomUUID();
       const existing = (deviceState.devices || {})[id];
+      // The llmSlug is minted HERE, once, at a generate enrolment, and echoed in
+      // the response — agreement by handshake, never parallel derivation, and it
+      // survives renames because every local-model row id embeds it.
+      if (built.device.scope === 'generate') {
+        built.device.llmSlug = (existing && existing.llmSlug) || devicesLib.mintLlmSlug(
+          built.device.name, id,
+          Object.entries(deviceState.devices || {})
+            .filter(([k]) => k !== id).map(([, d]) => d.llmSlug).filter(Boolean),
+        );
+      } else if (existing && existing.llmSlug) {
+        built.device.llmSlug = existing.llmSlug;
+      }
       deviceState.devices[id] = existing
         ? { ...existing, ...built.device, registeredAt: existing.registeredAt }
         : built.device;
       saveDevices();
-      log(`device ${built.device.name} registered (${id}, scope=${built.device.scope})`);
+      log(`device ${built.device.name} registered (${id}, scope=${built.device.scope}${built.device.llmSlug ? `, llm=${built.device.llmSlug}` : ''})`);
       return sendJson(res, 201, devicesLib.deviceView(id, deviceState.devices[id], now));
     }
 
@@ -4854,6 +4915,37 @@ const server = http.createServer(async (req, res) => {
 
     if (req.method === 'POST' && p === '/v1/chats') {
       const body = JSON.parse(await readBody(req) || '{}');
+      // A LOCAL-family model first: picking the row IS the host choice, so the
+      // daemon resolves the machine itself, forces ask-mode, and refuses at the
+      // button when the machine cannot serve — never a silent fall-through.
+      if (isLocalFamily(body.model)) {
+        const r = resolveLocalModel(body.model);
+        if (r.error) return sendErr(res, 400, r.error);
+        if (typeof body.host === 'string' && body.host && body.host !== 'local' && body.host !== r.deviceId) {
+          return sendErr(res, 400, `this model runs on ${r.device.name} — the model row already chooses the machine`);
+        }
+        if (body.mode === 'act') return sendErr(res, 400, 'local models run ask-only — switch to Ask');
+        const served = devicesLib.canServe(r.device, Date.now());
+        if (!served.ok) return sendErr(res, 409, served.reason);
+        const evL = effortDecision(body.effort);
+        if (evL.error) return sendErr(res, 400, evL.error);
+        const nowL = Math.floor(Date.now() / 1000);
+        const metaL = {
+          id: crypto.randomUUID(),
+          title: roundsLib.oneLine(body.title, 80) || null,
+          mode: 'ask',
+          host: r.deviceId,
+          model: r.id,
+          effort: evL.effort,
+          createdAt: nowL,
+          updatedAt: nowL,
+          claudeSessionId: null,
+          lastSnippet: null,
+          turns: 0,
+        };
+        saveMeta(metaL);
+        return sendJson(res, 201, metaL);
+      }
       // Decided before anything is built: an unknown model or effort id is a 400
       // at the button, never a silent fall-through to the host default.
       const mv = modelDecision(body.model);
@@ -5107,7 +5199,27 @@ const server = http.createServer(async (req, res) => {
         // Validated BEFORE the mutator runs: a 400 PATCH must not half-apply the
         // rest of the body, and the updateMeta callback cannot return an error.
         let mv = null;
-        if ('model' in body) {
+        // A local-family chat is pinned to its machine for life: the model row
+        // WAS the host choice, so the only legal model change is another model
+        // on the same machine, and act-mode can never arrive.
+        if (isLocalFamily(meta.model)) {
+          if (body.mode === 'act') {
+            return sendErr(res, 409, `this chat runs on ${hostNameFor(meta.host) || 'a local model'}, which is ask-only`);
+          }
+          if ('model' in body) {
+            if (!isLocalFamily(body.model)) {
+              return sendErr(res, 409, 'this chat is pinned to its machine — start a new chat to use Claude');
+            }
+            const r = resolveLocalModel(body.model);
+            if (r.error) return sendErr(res, 400, r.error);
+            if (r.deviceId !== meta.host) {
+              return sendErr(res, 409, 'start a new chat to use a different machine');
+            }
+            mv = { model: r.id };
+          }
+        } else if ('model' in body && isLocalFamily(body.model)) {
+          return sendErr(res, 409, 'a local model is a machine choice — start a new chat to move there');
+        } else if ('model' in body) {
           mv = modelDecision(body.model);
           if (mv.error) return sendErr(res, 400, mv.error);
         }
