@@ -282,40 +282,173 @@ function promptFor(round) {
   return `${head}${String(round.prompt || '').trim()}\n${REPORT_CONTRACT}`;
 }
 
+/** Items beyond this are dropped; [oneReport] records how many there really were. */
+const MAX_ITEMS = 20;
+
+// C0 and C1 controls plus DEL. Kept as one definition because two copies of a
+// character class is how one renderer ends up stripping ESC and the other not.
+const CTRL_ALL = /[\u0000-\u001f\u007f-\u009f]/g;
+const CTRL_KEEP_NL = /[\u0000-\u0009\u000b-\u001f\u007f-\u009f]/g;
+
+/**
+ * A value that will be shown as ONE line: controls gone, whitespace collapsed.
+ *
+ * ⚠ Report text is written by a model, and a model writes what it read — a log
+ * line, a fetched page, a filename. So this is not only reachable by whoever
+ * holds the API token, and the terminal is a renderer that EXECUTES some of what
+ * it is handed. A round titled
+ *
+ *     Nightly scan\x1b[2K\rALL CLEAR
+ *
+ * erases its own line and reprints, so `huginn rounds` showed ALL CLEAR for a
+ * round holding a DISK FULL headline and two action items. A newline in a "short
+ * label" split one finding into two rows just as effectively.
+ *
+ * Stripped at STORE time rather than only at render time because these three
+ * fields are single-line by contract — a headline that "stands alone as a
+ * notification" has no legitimate newline in it — and because the daemon is not
+ * the only thing that ever prints them. The renderers strip again anyway: an
+ * older daemon and a hand-edited store are both real.
+ */
+function oneLine(v, max) {
+  if (typeof v !== 'string') return '';
+  return v.replace(CTRL_ALL, ' ').replace(/\s+/g, ' ').trim().slice(0, max);
+}
+
+/**
+ * Free text that may legitimately run to several lines — a next step is often a
+ * command block. Newlines survive; everything that moves a cursor does not.
+ */
+function safeText(v, max) {
+  if (typeof v !== 'string') return '';
+  return v.replace(CTRL_KEEP_NL, ' ').replace(/[ \t]+/g, ' ').trim().slice(0, max);
+}
+
 function cleanItem(raw) {
   if (!raw || typeof raw !== 'object') return null;
-  const title = typeof raw.title === 'string' ? raw.title.trim().slice(0, 120) : '';
+  const title = oneLine(raw.title, 120);
   if (!title) return null;
   return {
     title,
-    detail: typeof raw.detail === 'string' ? raw.detail.trim().slice(0, 1000) : '',
-    suggest: typeof raw.suggest === 'string' ? raw.suggest.trim().slice(0, 500) : '',
+    detail: safeText(raw.detail, 1000),
+    suggest: safeText(raw.suggest, 500),
   };
 }
+
+const OPEN_FENCE = /^ {0,3}(`{3,})huginn-report[ \t]*$/;
+const CLOSE_FENCE = /^ {0,3}(`{3,})[ \t]*$/;
+
+/**
+ * Every CLOSED huginn-report block in a run's text, in order.
+ *
+ * ⚠ THIS IS A LINE SCANNER AND NOT A REGEX ON PURPOSE, and the regex it replaced
+ * was the single most damaging bug in the report channel.
+ *
+ *     /```huginn-report[ \t]*\r?\n([\s\S]*?)```/g
+ *
+ * The non-greedy tail stops at the first ``` ANYWHERE, including one inside a
+ * JSON string. The report contract asks every item for "the next step", and for
+ * an ops round the next step is a command — so the moment a run wrote
+ *
+ *     {"status":"action","headline":"PBS sync failing 6 days",
+ *      "items":[{"title":"...","suggest":"run:\n```bash\nproxmox-backup-manager sync\n```"}]}
+ *
+ * the block was cut at that inner fence, JSON.parse failed, and the whole report
+ * — action status, headline, every item — was replaced by a fallback that
+ * notifies as "unknown". The operator got a line that reads like a broken run
+ * instead of the thing that actually needed them. The most likely report to
+ * destroy was the one that mattered most.
+ *
+ * A closing fence is a line that is NOTHING BUT backticks, which is CommonMark's
+ * own rule. That is exactly what distinguishes the real terminator from a fence
+ * inside a string: JSON cannot contain a literal newline inside a string, so a
+ * quoted ``` is always mid-line and can never be mistaken for the end.
+ *
+ * An UNTERMINATED block is not returned — it is not a block, it is a run that
+ * stopped mid-sentence — but [fenceOpensAt] lets the fallback cut it off the
+ * prose so half a JSON object cannot become somebody's notification.
+ */
+function reportBlocks(text) {
+  const out = [];
+  let fence = null; let body = null;
+  for (const line of String(text).split(/\r?\n/)) {
+    if (fence === null) {
+      const m = OPEN_FENCE.exec(line);
+      if (m) { fence = m[1]; body = []; }
+      continue;
+    }
+    const c = CLOSE_FENCE.exec(line);
+    if (c && c[1].length >= fence.length) { out.push(body.join('\n')); fence = null; body = null; continue; }
+    body.push(line);
+  }
+  return out;
+}
+
+/** Where an unterminated report block starts, or -1. Used to cut debris off prose. */
+function fenceOpensAt(text) {
+  const lines = String(text).split(/\r?\n/);
+  let at = -1; let fence = null; let pos = 0;
+  for (const line of lines) {
+    if (fence === null) {
+      const m = OPEN_FENCE.exec(line);
+      if (m) { fence = m[1]; at = pos; }
+    } else {
+      const c = CLOSE_FENCE.exec(line);
+      if (c && c[1].length >= fence.length) { fence = null; at = -1; }
+    }
+    pos += line.length + 1;
+  }
+  return fence === null ? -1 : at;
+}
+
+/**
+ * The headline in REPORT_CONTRACT's own example.
+ *
+ * ⚠ The instructions are a syntactically complete report. `parseReport` run on
+ * the contract itself used to return it verbatim — status ok, goalMet true, one
+ * item — so a run that wrote its real report and THEN quoted the contract back to
+ * explain itself had the placeholder win under "the last block wins". Two things
+ * failed at once: literal template text arrived as the answer, and because the
+ * forged status was `ok`, `shouldNotify` returned false, so a real `action`
+ * report vanished in total silence behind a clean green row.
+ *
+ * Matched as an exact literal rather than guessed at. This is not a heuristic
+ * about what placeholders look like — it is this file recognising its own text.
+ */
+const CONTRACT_HEADLINE = 'one line, under 90 characters, what you found';
 
 /**
  * The report out of a finished run's text, or null if it did not produce one.
  *
- * The LAST block wins. A run that reasons out loud may quote the contract back,
- * or write a draft block and then a corrected one; the final one is the answer,
- * exactly as the last word of any turn is.
+ * The last REAL block wins. A run that reasons out loud may write a draft block
+ * and then a corrected one; the final one is the answer, exactly as the last word
+ * of any turn is. But a block that is only the contract being quoted is not an
+ * answer, so the walk continues past it rather than stopping — the run's actual
+ * report is the one written before the explanation.
  */
 function parseReport(text) {
   if (typeof text !== 'string' || !text) return null;
-  const re = /```huginn-report[ \t]*\r?\n([\s\S]*?)```/g;
-  let last = null; let m;
-  while ((m = re.exec(text)) !== null) last = m[1];
-  if (last === null) return null;
+  const blocks = reportBlocks(text);
+  for (let i = blocks.length - 1; i >= 0; i--) {
+    const r = oneReport(blocks[i]);
+    if (r) return r;
+  }
+  return null;
+}
 
+function oneReport(raw) {
   let o;
-  try { o = JSON.parse(last); } catch { return null; }
+  try { o = JSON.parse(raw); } catch { return null; }
   if (!o || typeof o !== 'object' || Array.isArray(o)) return null;
 
-  const headline = typeof o.headline === 'string' ? o.headline.trim().slice(0, 120) : '';
+  const headline = oneLine(o.headline, 120);
   // A block with no headline is not a report: the headline IS the notification,
   // and delivering an empty one would be a buzz that says nothing.
   if (!headline) return null;
+  if (headline === CONTRACT_HEADLINE) return null;
 
+  const rawItems = Array.isArray(o.items) ? o.items : [];
+  const items = rawItems.slice(0, MAX_ITEMS).map(cleanItem).filter(Boolean);
   return {
     status: STATUSES.includes(o.status) ? o.status : 'unknown',
     headline,
@@ -323,7 +456,12 @@ function parseReport(text) {
     // has nothing to answer, and coercing that to false would report every one of
     // them as having failed.
     goalMet: typeof o.goalMet === 'boolean' ? o.goalMet : null,
-    items: Array.isArray(o.items) ? o.items.slice(0, 20).map(cleanItem).filter(Boolean) : [],
+    items,
+    // How many the run actually reported, which is NOT items.length once the cap
+    // bites. Without this a round that found 500 things showed "20 items" on the
+    // line under a headline saying 500, and the count — the number an operator
+    // acts on — was the wrong one of the two.
+    itemsTotal: rawItems.length,
     malformed: false,
   };
 }
@@ -337,23 +475,55 @@ function parseReport(text) {
  * looking for a report they were never told was missing.
  */
 function fallbackReport(text, why = 'no huginn-report block') {
-  const flat = String(text || '').replace(/```[\s\S]*?```/g, ' ').replace(/\s+/g, ' ').trim();
+  let src = String(text || '');
+  // Cut an unterminated report block off the end FIRST. A run killed mid-block
+  // leaves `{"status":"action","headline":"…` with no closing fence, and the old
+  // stripper — the same non-greedy regex that broke the parser — left it in, so
+  // the operator was buzzed with half a JSON object as the notification text.
+  const open = fenceOpensAt(src);
+  if (open >= 0) src = src.slice(0, open);
+  // Then every closed fenced block, by the same line rule the parser uses, so a
+  // fence quoted inside one cannot make the stripper leave the other half behind.
+  src = stripFences(src);
+  const flat = oneLine(src, 120);
   return {
     status: 'unknown',
-    headline: flat ? flat.slice(0, 120) : `run produced no output (${why})`,
+    headline: flat || `run produced no output (${why})`,
     goalMet: null,
     items: [],
+    itemsTotal: 0,
     malformed: true,
   };
+}
+
+/** Removes every closed fenced block, matching fences by CommonMark's line rule. */
+function stripFences(text) {
+  const out = []; let fence = null; let held = [];
+  for (const line of String(text).split(/\r?\n/)) {
+    if (fence === null) {
+      const m = /^ {0,3}(`{3,})/.exec(line);
+      if (m) { fence = m[1]; held = [line]; continue; }
+      out.push(line);
+      continue;
+    }
+    held.push(line);
+    const c = CLOSE_FENCE.exec(line);
+    if (c && c[1].length >= fence.length) { fence = null; held = []; }
+  }
+  // An unterminated fence at this point is prose that happened to start with
+  // backticks, not a block — keeping it is kinder than deleting the only text.
+  for (const l of held) out.push(l);
+  return out.join('\n');
 }
 
 /** A run that never got as far as an answer. */
 function errorReport(why) {
   return {
     status: 'action',
-    headline: `run failed: ${String(why || 'unknown error').slice(0, 100)}`,
+    headline: `run failed: ${oneLine(why, 100) || 'unknown error'}`,
     goalMet: false,
     items: [],
+    itemsTotal: 0,
     malformed: true,
   };
 }
@@ -438,4 +608,6 @@ module.exports = {
   nextFireAt, validateSchedule, describeSchedule, clockWords,
   promptFor, parseReport, fallbackReport, errorReport, effectiveStatus,
   shouldNotify, dueDecision,
+  reportBlocks, fenceOpensAt, stripFences, oneLine, safeText,
+  MAX_ITEMS, CONTRACT_HEADLINE,
 };

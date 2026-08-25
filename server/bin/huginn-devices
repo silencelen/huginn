@@ -40,6 +40,14 @@ def ago(ms):
     return "%dd ago" % (s // 86400)
 
 print()
+CTRL = dict.fromkeys(list(range(0, 32)) + list(range(127, 160)), 32)
+
+def clean(v, n=0):
+    if not isinstance(v, str):
+        return ""
+    out = " ".join(v.translate(CTRL).split())
+    return out[:n] if n else out
+
 for x in devs:
     # Enrolled scope AND what it will do right now, when they differ: "own,
     # read-only while locked" is a different situation from "enrolled read-only",
@@ -59,14 +67,18 @@ for x in devs:
 
     # `or "?"`, not `.get(k, "?")`: the default only covers a MISSING key, and a
     # key that is present-but-null sails straight through it and prints "None".
-    print("  %-1s %s" % ("*" if x.get("online") else " ", x.get("name") or "?"))
-    print("      %s  .  %s  .  %s" % (x.get("platform") or "?", scope_txt, state))
+    print("  %-1s %s" % ("*" if x.get("online") else " ", clean(x.get("name")) or "?"))
+    print("      %s  .  %s  .  %s" % (clean(x.get("platform")) or "?", scope_txt, state))
     extra = []
-    if x.get("version"):
-        extra.append("v%s" % x["version"])
-    if x.get("root"):
+    # A device names ITSELF: root and version are whatever the far machine sent,
+    # capped at 300 and 40 bytes and never inspected. Both land in a terminal.
+    ver = clean(x.get("version"), 40)
+    if ver:
+        extra.append("v%s" % ver)
+    root = clean(x.get("root"), 200)
+    if root:
         # Said plainly, because the word "work" invites the wrong assumption.
-        extra.append("work runs in %s (not a sandbox)" % x["root"])
+        extra.append("work runs in %s (not a sandbox)" % root)
     if extra:
         print("      %s" % "  .  ".join(extra))
     print()
