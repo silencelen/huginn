@@ -4,9 +4,9 @@
 #     [ -f ~/.huginn/huginn.sh ] && source ~/.huginn/huginn.sh
 # Targets the `huginn` SSH alias by default; override per-device with:  export HUGINN_HOST=my-host
 # Self-update with:  huginn update   (pulls this file from the repo; gh -> scp fallback)
-# Version: 0.10.1
+# Version: 0.10.2
 
-HUGINN_VERSION='0.10.1'
+HUGINN_VERSION='0.10.2'
 HUGINN_REPO='silencelen/huginn'
 # Where `huginn update` may fetch a replacement for THIS FILE, which it then
 # sources into the live shell. Pinned, and deliberately NOT $HUGINN_HOST:
@@ -74,7 +74,7 @@ _huginn_device() {
       # scrollback and in pastes.
       if [ ! -s "$dir/appd-token" ]; then
         if ssh -T "$H" 'cat /etc/huginn-appd/token' >"$dir/appd-token.tmp" 2>/dev/null \
-           && [ -s "$dir/appd-token.tmp" ]; then
+           && [ -n "$(tr -d '[:space:]' <"$dir/appd-token.tmp" 2>/dev/null)" ]; then
           mv -f "$dir/appd-token.tmp" "$dir/appd-token"; chmod 600 "$dir/appd-token"
         else
           rm -f "$dir/appd-token.tmp"
@@ -151,12 +151,25 @@ _huginn_get() {
 # publish into this one feed (v*, app-v*, appd-v*, desktop-v*) and "latest" is
 # simply whichever shipped last — usually not the desktop.
 # Unauthenticated API, so 60 requests/hour per IP; this is one call per invocation.
+#
+# ⚠ THE WINNER IS DECIDED ON SEMVER, NOT ON FEED POSITION. This took the FIRST
+# desktop-v* tag in the response, on the assumption that GitHub returns releases
+# newest-first. It does not — verified 2026-08-25, with desktop-v0.8.9 (created
+# 04:10) ahead of desktop-v0.8.13 (created 09:39) in the same page. So
+# `huginn desktop linux` handed out an installer FOUR versions stale and looked
+# entirely healthy doing it, because the url was well-formed and did exist.
+#
+# The Kotlin updater already got this right (GithubReleaseIndex.newest picks
+# maxWith Semver.compare, and its comment says the winner is decided on semver of
+# the tail); the shell clients simply never learned the same lesson.
 _huginn_desktop_release() {
-  local tag json
-  tag="$(_huginn_get "https://api.github.com/repos/$HUGINN_REPO/releases?per_page=60" | tr -d '\n' \
-        | grep -o '"tag_name"[[:space:]]*:[[:space:]]*"desktop-v[^"]*"' | head -1 \
-        | sed 's/.*"\(desktop-v[^"]*\)".*/\1/')"
-  [ -n "$tag" ] || return 1
+  local tag ver json
+  ver="$(_huginn_get "https://api.github.com/repos/$HUGINN_REPO/releases?per_page=60" | tr -d '\n' \
+        | grep -o '"tag_name"[[:space:]]*:[[:space:]]*"desktop-v[^"]*"' \
+        | sed 's/.*"desktop-v\([^"]*\)".*/\1/' \
+        | sort -t. -k1,1n -k2,2n -k3,3n | tail -1)"
+  [ -n "$ver" ] || return 1
+  tag="desktop-v$ver"
   # manifest.json is a release ASSET (the same one the updater verifies sha256
   # against), so the filenames come from the release itself — nothing here has to
   # guess how electron-builder or jpackage named an artifact.

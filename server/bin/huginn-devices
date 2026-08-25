@@ -76,9 +76,17 @@ for x in devs:
     if ver:
         extra.append("v%s" % ver)
     root = clean(x.get("root"), 200)
-    if root:
+    # ⚠ ONLY AT work SCOPE, because that is the only scope that uses it. The
+    # policy matrix starts an `own` run in the account home directory, and this
+    # line printed the enrolled root regardless -- so the host named a directory
+    # that ran nothing, while the machine itself said something different. The
+    # runner now says so at enrolment too; both ends had to change, because
+    # either one alone leaves the two disagreeing.
+    if root and x.get("effectiveScope") == "work":
         # Said plainly, because the word "work" invites the wrong assumption.
         extra.append("work runs in %s (not a sandbox)" % root)
+    elif root:
+        extra.append("work runs in the account home dir (--root %s applies at work scope)" % root)
     if extra:
         print("      %s" % "  .  ".join(extra))
     print()

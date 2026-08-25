@@ -3,9 +3,9 @@
 #     if (Test-Path "$HOME\.huginn\huginn.ps1") { . "$HOME\.huginn\huginn.ps1" }
 # Targets the `huginn` SSH alias by default; override per-device with:  $env:HUGINN_HOST = 'my-host'
 # Self-update with:  huginn update   (pulls this file from the repo; gh -> scp fallback)
-# Version: 0.10.1
+# Version: 0.10.2
 
-$script:HUGINN_VERSION = '0.10.1'
+$script:HUGINN_VERSION = '0.10.2'
 $script:HUGINN_REPO    = 'silencelen/huginn'
 # Where `huginn update` may fetch a replacement for THIS FILE, which is then loaded
 # into the shell. Pinned, and deliberately NOT $HUGINN_HOST: that variable answers
@@ -82,7 +82,14 @@ function _Huginn-DesktopRelease {
   $body = _Huginn-Get "https://api.github.com/repos/$script:HUGINN_REPO/releases?per_page=60"
   if (-not $body) { return $null }
   try { $releases = $body | ConvertFrom-Json } catch { return $null }
-  $tag = ($releases | Where-Object { $_.tag_name -like 'desktop-v*' } | Select-Object -First 1).tag_name
+  # ⚠ Highest SEMVER, not first in the feed. GitHub does not return releases
+  # newest-first — verified 2026-08-25 with desktop-v0.8.9 ahead of
+  # desktop-v0.8.13 in the same page — so this handed out an installer four
+  # versions stale while looking perfectly healthy, because the url was
+  # well-formed and did exist. The Kotlin updater already picked by semver.
+  $tag = ($releases | Where-Object { $_.tag_name -like 'desktop-v*' } |
+            Sort-Object { try { [version]($_.tag_name -replace '^desktop-v','') } catch { [version]'0.0.0' } } |
+            Select-Object -Last 1).tag_name
   if (-not $tag) { return $null }
   # manifest.json is a release ASSET (the same one the updater verifies sha256
   # against), so the filenames come from the release itself - nothing here has to
