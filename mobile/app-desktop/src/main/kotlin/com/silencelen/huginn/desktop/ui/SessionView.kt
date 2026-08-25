@@ -57,6 +57,7 @@ import androidx.compose.ui.input.key.isShiftPressed
 import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
+import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.AnnotatedString
@@ -216,17 +217,83 @@ fun SessionView(store: AppStore, name: String) {
             onCommand = { controller.sendLine(it) },
             onCycleMode = { controller.sendKeys(listOf("BTab")) },
         )
-        TabStrip(tab) { controller.openTab(it) }
+        val paneClipboard = LocalClipboardManager.current
+        val paneCopy: (String) -> Unit = remember(paneClipboard) {
+            { t -> paneClipboard.setText(AnnotatedString(t)) }
+        }
+        TabStrip(tab, { controller.openTab(it) }) {
+            // Only on the Screen tab, and only when the pane holds something. The
+            // conversation has its own selection and needs none of this.
+            if (tab == SessionTab.SCREEN && com.silencelen.huginn.ui.hasCopyableText(screen)) {
+                val paneLinks = com.silencelen.huginn.ui.linksOn(screen)
+                when {
+                    paneLinks.size == 1 ->
+                        TextButton(onClick = { paneCopy(paneLinks[0]) }) { Text("Copy link") }
+                    paneLinks.size > 1 ->
+                        TextButton(onClick = { paneCopy(paneLinks.joinToString("\n")) }) {
+                            Text("Copy ${paneLinks.size} links")
+                        }
+                }
+                TextButton(onClick = { paneCopy(com.silencelen.huginn.ui.screenText(screen)) }) { Text("Copy screen") }
+            }
+        }
         HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
 
         // Weight on a plain Box, never on the scrolling container itself: handing
         // it straight to a SelectionContainer let the scroll area take the whole
         // remaining height and the composer was laid out past the bottom edge and
         // clipped away — a session with no way to type into it, and nothing logged.
+        val answering by controller.answering.collectAsState()
+        val answerNote by controller.answerNote.collectAsState()
+
         Box(Modifier.weight(1f).fillMaxWidth()) {
             when (tab) {
                 SessionTab.CONVERSATION -> ConversationTab(controller)
                 SessionTab.SCREEN -> ScreenTab(controller)
+            }
+
+            // ⚠⚠ AN OVERLAY, NOT A SIBLING, AND IT MUST STAY ONE. The Screen tab
+            // inside this box measures ITS OWN HEIGHT INTO TMUX ROWS. As a sibling
+            // below this box, the prompt card cost ~9 rows the moment Claude asked
+            // a question and gave them back when it was answered — a real resize of
+            // the owner's terminal, twice per question, seen by every client
+            // attached to that session. The pane re-wrapped under the reader
+            // exactly while they were trying to read the thing being asked.
+            //
+            // It still lives outside the TAB SWITCH, which was always the point: a
+            // question is the one moment a reader must act, and making them find
+            // the Screen tab to click "1" while reading that question in the
+            // transcript is a tab switch charged for nothing.
+            //
+            // The card itself is the SHARED one (:ui PromptCards.kt) — one
+            // implementation for both shells; only the answer plumbing stays here.
+            // When the pane scrape cannot read the dialog but the hook knows a
+            // question is waiting, the degraded card renders instead of nothing.
+            val prompt = screen?.prompt
+            if (prompt != null) {
+                Box(Modifier.align(Alignment.BottomCenter).padding(horizontal = 12.dp, vertical = 6.dp)) {
+                    PromptCard(
+                        prompt = prompt,
+                        answering = answering,
+                        note = answerNote,
+                        onAnswer = controller::answer,
+                        onAnswerMulti = controller::answerMulti,
+                    )
+                }
+            } else {
+                screen?.ask?.let { ask ->
+                    Box(Modifier.align(Alignment.BottomCenter).padding(horizontal = 12.dp, vertical = 6.dp)) {
+                        DegradedAskCard(
+                            ask = ask,
+                            answering = answering,
+                            note = answerNote,
+                            onAnswer = controller::answerDegraded,
+                            // A multi-part question can't be tapped from here — jump
+                            // to the Screen tab, where its parts are stepped through.
+                            onOpenScreen = { controller.openTab(SessionTab.SCREEN) },
+                        )
+                    }
+                }
             }
         }
 
@@ -281,35 +348,6 @@ fun SessionView(store: AppStore, name: String) {
         // question is waiting, the degraded card renders instead of nothing;
         // its answers verify against the live pane and steer to the Screen tab
         // when that verification cannot see a run (reason=undetected).
-        val answering by controller.answering.collectAsState()
-        val answerNote by controller.answerNote.collectAsState()
-        val prompt = screen?.prompt
-        if (prompt != null) {
-            Box(Modifier.padding(horizontal = 12.dp, vertical = 6.dp)) {
-                PromptCard(
-                    prompt = prompt,
-                    answering = answering,
-                    note = answerNote,
-                    onAnswer = controller::answer,
-                    onAnswerMulti = controller::answerMulti,
-                )
-            }
-        } else {
-            screen?.ask?.let { ask ->
-                Box(Modifier.padding(horizontal = 12.dp, vertical = 6.dp)) {
-                    DegradedAskCard(
-                        ask = ask,
-                        answering = answering,
-                        note = answerNote,
-                        onAnswer = controller::answerDegraded,
-                        // A multi-part question can't be tapped from here — jump to
-                        // the Screen tab, where its parts are stepped through.
-                        onOpenScreen = { controller.openTab(SessionTab.SCREEN) },
-                    )
-                }
-            }
-        }
-
         Composer(
             controller = controller,
             client = store.client,
@@ -394,10 +432,31 @@ private fun SessionHeader(
 }
 
 @Composable
-private fun TabStrip(current: SessionTab, onSelect: (SessionTab) -> Unit) {
-    Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp)) {
+private fun TabStrip(
+    current: SessionTab,
+    onSelect: (SessionTab) -> Unit,
+    /**
+     * Actions for the tab in view. HERE and not in the tab's own content, because
+     * this row sits ABOVE the weighted box that the Screen tab measures into tmux
+     * rows — anything drawn inside that box's column resizes the owner's terminal.
+     */
+    trailing: @Composable () -> Unit = {},
+) {
+    // HEIGHT PINNED. A TextButton is 40.dp and a TabItem is ~36.dp, so a trailing
+    // action appearing would grow this row by 4.dp — and everything below it is the
+    // box that measures itself into tmux rows, so even that much is a real resize
+    // of somebody's terminal. Pinned, the trailing slot is free.
+    Row(
+        Modifier.fillMaxWidth().height(40.dp).padding(horizontal = 12.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
         TabItem("Conversation", current == SessionTab.CONVERSATION) { onSelect(SessionTab.CONVERSATION) }
         TabItem("Screen", current == SessionTab.SCREEN) { onSelect(SessionTab.SCREEN) }
+        Box(Modifier.weight(1f))
+        // Out of the focus order: the Screen tab holds keyboard focus so live keys
+        // reach the pane, and a button that took focus on click would silently stop
+        // typing from working until the reader clicked the pane again.
+        Box(Modifier.focusProperties { canFocus = false }) { trailing() }
     }
 }
 
@@ -585,31 +644,14 @@ private fun ScreenTab(controller: SessionController) {
     // enabling live and typing "ls" put "s" into the pane.
     LaunchedEffect(live) { if (live) focus.requestFocus() }
 
-    val paneClipboard = LocalClipboardManager.current
-    val paneCopy: (String) -> Unit = remember(paneClipboard) {
-        { t -> paneClipboard.setText(AnnotatedString(t)) }
-    }
-
+    // ⚠ NOTHING MAY BE ADDED TO THIS COLUMN ABOVE THE PANE. The BoxWithConstraints
+    // below takes weight(1f) from it and MEASURES ITS OWN HEIGHT INTO TMUX ROWS,
+    // so a strip here shrinks the owner's real terminal — and a strip that comes
+    // and goes with the content walks it between two shapes, resizing every client
+    // attached to that session, phone included. The copy actions shipped here in
+    // 0.8.6 and did exactly that; they now live in the TabStrip, which is above
+    // this whole column and outside the measured box.
     Column(Modifier.fillMaxSize()) {
-        // The pane is a canvas, so there is nothing to select with a mouse either
-        // — the same gap the phone had. Quiet, right-aligned, and only drawn when
-        // there is something to take.
-        val paneLinks = com.silencelen.huginn.ui.linksOn(screen)
-        if (com.silencelen.huginn.ui.hasCopyableText(screen)) {
-            Row(
-                Modifier.fillMaxWidth().padding(horizontal = 12.dp),
-                horizontalArrangement = Arrangement.End,
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                when {
-                    paneLinks.size == 1 -> TextButton(onClick = { paneCopy(paneLinks[0]) }) { Text("Copy link") }
-                    paneLinks.size > 1 -> TextButton(onClick = { paneCopy(paneLinks.joinToString("\n")) }) {
-                        Text("Copy ${paneLinks.size} links")
-                    }
-                }
-                TextButton(onClick = { paneCopy(com.silencelen.huginn.ui.screenText(screen)) }) { Text("Copy screen") }
-            }
-        }
         // "Blocked" means a resize is NEEDED and refused, not merely that somebody
         // is attached — so this banner cannot come back after it has been dealt
         // with. Forcing is offered, never taken: the resize would shrink a terminal
@@ -629,15 +671,6 @@ private fun ScreenTab(controller: SessionController) {
                 TextButton(onClick = { controller.fitAnyway() }) { Text("Fit anyway") }
             }
         }
-        error?.let {
-            Muted(
-                it,
-                Modifier.fillMaxWidth()
-                    .background(MaterialTheme.colorScheme.surfaceVariant)
-                    .padding(horizontal = 16.dp, vertical = 5.dp),
-            )
-        }
-
         BoxWithConstraints(
             Modifier.weight(1f).fillMaxWidth().background(bg)
                 .focusRequester(focus)
@@ -666,6 +699,20 @@ private fun ScreenTab(controller: SessionController) {
             val cols = with(density) { (maxWidth.toPx() / painter.cellWidth).toInt() }
             val rows = with(density) { (maxHeight.toPx() / painter.cellHeight).toInt() }
             LaunchedEffect(cols, rows) { controller.setGeometry(cols, rows) }
+
+            // Overlaid rather than stacked above, for the same reason as the prompt
+            // card: the controller clears this on every SUCCESSFUL poll, so as a
+            // sibling one failed keystroke resized the terminal down and the next
+            // poll a moment later resized it back — two real tmux resizes out of a
+            // transient hiccup.
+            error?.let {
+                Muted(
+                    it,
+                    Modifier.align(Alignment.TopCenter).fillMaxWidth()
+                        .background(MaterialTheme.colorScheme.surfaceVariant)
+                        .padding(horizontal = 16.dp, vertical = 5.dp),
+                )
+            }
 
             val s = screen
             if (s == null) {

@@ -135,6 +135,24 @@ fun TerminalScreen(
             val rows = with(density) { (maxHeight.toPx() / painter.cellHeight).toInt() }.coerceIn(10, 200)
             LaunchedEffect(cols, rows) { onGeometry(cols, rows) }
 
+        // ⚠⚠ THE PROMPT CARD IS AN OVERLAY, NOT A SIBLING, AND MUST STAY ONE.
+        // The box it floats over takes weight(1f) and MEASURES ITSELF INTO TMUX
+        // ROWS. As a sibling this card cost ~16 rows the moment Claude asked a
+        // question and gave them back when it was answered — a real resize of the
+        // owner's terminal, twice per question, seen by every attached client. The
+        // pane re-wrapped under the reader exactly while they were trying to read
+        // the thing being asked. Overlaying costs nothing and keeps the promise
+        // that a question is always answerable from here.
+            //
+            // A detected choice prompt becomes buttons. This is the single biggest
+            // phone win over a terminal: answering "1/2/3" without hunting for
+            // digits on a soft keyboard while the TUI redraws under your thumb.
+            screen?.prompt?.let { prompt ->
+                Box(Modifier.align(Alignment.BottomCenter).padding(8.dp)) {
+                    PromptCard(prompt, onAnswerPrompt, onAnswerMulti)
+                }
+            }
+
             if (screen == null) {
                 Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                     CircularProgressIndicator(strokeWidth = 2.dp)
@@ -193,13 +211,6 @@ fun TerminalScreen(
                     )
                 }
             }
-        }
-
-        // A detected choice prompt becomes buttons. This is the single biggest
-        // phone win over a terminal: answering "1/2/3" without hunting for digits
-        // on a soft keyboard while the TUI redraws under your thumb.
-        screen?.prompt?.let { prompt ->
-            PromptCard(prompt, onAnswerPrompt, onAnswerMulti)
         }
 
         KeyRow(onSendKeys, liveTyping, onToggleLive = { liveTyping = !liveTyping })
