@@ -52,7 +52,7 @@ const pushLib = require('./lib/pushtokens');
 const { trySender } = require('./lib/fcm');
 const { createPending, stepSoftEnd } = require('./lib/softend');
 
-const VERSION = '2.68.0';
+const VERSION = '2.69.0';
 const PORT = Number(process.env.HUGINN_APPD_PORT || 8787);
 const DATA_DIR = process.env.HUGINN_APPD_DATA || '/var/lib/huginn-appd';
 const UPLOADS_DIR = path.join(DATA_DIR, 'uploads');
@@ -1935,8 +1935,19 @@ function hostZone() {
   }
 }
 
+/** YYYY-MM-DD as the round's own zone reads it. */
+function runDateIn(round, ms) {
+  const tz = (round && round.schedule && round.schedule.tz) || hostZone();
+  try {
+    const p = roundsLib.partsIn(tz, ms);
+    return `${p.y}-${String(p.mo).padStart(2, '0')}-${String(p.d).padStart(2, '0')}`;
+  } catch {
+    return new Date(ms).toISOString().slice(0, 10);
+  }
+}
+
 function buildRound(body) {
-  const title = typeof body.title === 'string' ? body.title.trim().slice(0, 80) : '';
+  const title = roundsLib.oneLine(body.title, 80);
   if (!title) return { error: 'title required' };
   const prompt = typeof body.prompt === 'string' ? body.prompt.trim() : '';
   if (!prompt) return { error: 'prompt required' };
@@ -1986,7 +1997,7 @@ function buildRound(body) {
 function applyRoundPatch(round, body) {
   const r = { ...round };
   if ('title' in body) {
-    const t = typeof body.title === 'string' ? body.title.trim().slice(0, 80) : '';
+    const t = roundsLib.oneLine(body.title, 80);
     if (!t) return { error: 'title cannot be empty' };
     r.title = t;
   }
@@ -2063,7 +2074,11 @@ function fireRound(round, { manual = false } = {}) {
   const now = Math.floor(Date.now() / 1000);
   const meta = {
     id: crypto.randomUUID(),
-    title: `${round.title} · ${new Date(now * 1000).toISOString().slice(0, 10)}`.slice(0, 80),
+    // The date the OPERATOR was living in when it fired, not UTC. An evening
+    // round in America/Los_Angeles is 7 hours into the next UTC day, so every
+    // single run of it was filed under tomorrow — the Sunday 19:00 round
+    // produced a chat titled Monday, which is the one date it never ran on.
+    title: `${round.title} · ${runDateIn(round, now * 1000)}`.slice(0, 80),
     mode: round.mode === 'act' ? 'act' : 'ask',
     model: round.model || null,
     effort: round.effort || null,
@@ -4648,7 +4663,7 @@ const server = http.createServer(async (req, res) => {
       }
       const meta = {
         id: crypto.randomUUID(),
-        title: (typeof body.title === 'string' && body.title.trim().slice(0, 80)) || null,
+        title: roundsLib.oneLine(body.title, 80) || null,
         mode,
         host,
         model: validModel(body.model),
@@ -4885,8 +4900,8 @@ const server = http.createServer(async (req, res) => {
         // --resume and the chat lost its entire conversation history.
         let changed = false;
         const updated = updateMeta(id, (fresh) => {
-          if (typeof body.title === 'string' && body.title.trim()) {
-            fresh.title = body.title.trim().slice(0, 80); changed = true;
+          if (roundsLib.oneLine(body.title, 80)) {
+            fresh.title = roundsLib.oneLine(body.title, 80); changed = true;
           }
           // Model and effort apply to the NEXT turn; an in-flight run keeps what
           // it started with, since the flags are fixed at spawn.

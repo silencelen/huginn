@@ -1,6 +1,7 @@
 package com.silencelen.huginn.ui
 
 import com.silencelen.huginn.data.Round
+import com.silencelen.huginn.data.RoundRun
 
 /**
  * How a Round's last run reads at a glance.
@@ -158,6 +159,27 @@ fun followUpDraft(round: Round): String {
     }
     if (run.items.isNotEmpty()) b.append("\n")
     return b.toString()
+}
+
+/**
+ * "4 items", or "500 items, showing 20" when the daemon kept only some.
+ *
+ * Null rather than "0 items" for a clean run: an empty list is the normal
+ * outcome of a healthy round, and a zero on the row would be a number to read
+ * where there is nothing to say.
+ *
+ * The two-number form exists because the cap is invisible otherwise. A run that
+ * reported 500 findings rendered as "20 items" directly beneath its own headline
+ * saying 500 — two contradicting numbers on one screen, with no way to tell
+ * which was real, and the one an operator would act on was the wrong one.
+ */
+fun itemCountWords(run: RoundRun?): String? {
+    if (run == null) return null
+    val shown = run.items.size
+    val total = if (run.itemsTotal > shown) run.itemsTotal else shown
+    if (total == 0) return null
+    if (total > shown) return "$total items, showing $shown"
+    return if (total == 1) "1 item" else "$total items"
 }
 
 /**
