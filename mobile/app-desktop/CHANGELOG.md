@@ -14,6 +14,14 @@ the Electron client's go to `/v1/desktop` and the two never mix — see
      refusal is deliberate — it is what stops a release going out with no notes.
      ─────────────────────────────────────────────────────────────────────────── -->
 
+## 0.8.6
+
+### Added
+- **Copy link / Copy screen on the Screen tab.** The pane is a canvas, so there was nothing to
+  select with a mouse either — the same gap the phone had, and the same fix, from the same shared
+  code. A wrapped URL is rejoined using the pane's real column count; the screen copy reflows
+  nothing.
+
 ## 0.8.5
 
 ### Added

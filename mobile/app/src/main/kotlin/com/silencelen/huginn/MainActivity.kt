@@ -87,6 +87,8 @@ import com.silencelen.huginn.ui.LiveInput
 import com.silencelen.huginn.ui.ChatsScreen
 import com.silencelen.huginn.ui.DevicesScreen
 import com.silencelen.huginn.ui.RoundEditScreen
+import com.silencelen.huginn.ui.linksOn
+import com.silencelen.huginn.ui.screenText
 import com.silencelen.huginn.ui.RoundsScreen
 import com.silencelen.huginn.ui.HuginnViewModel
 import com.silencelen.huginn.ui.LocalAttachmentImages
@@ -1179,6 +1181,22 @@ fun HuginnApp(
                                 DropdownMenu(expanded = surfaceMenu, onDismissRequest = { surfaceMenu = false }) {
                                     when (val d = dest) {
                                         is Dest.SessionView -> {
+                                            // Getting text back OUT of the pane, which until now
+                                            // could be read and nothing else. Links first and only
+                                            // when there are some: a wrapped URL is the case a
+                                            // person cannot solve any other way — they cannot
+                                            // retype 450 characters, and selecting it would hand
+                                            // back the rows the terminal broke it into.
+                                            val links = linksOn(screen)
+                                            if (links.size == 1) {
+                                                DropdownMenuItem(text = { Text("Copy link") },
+                                                    onClick = { surfaceMenu = false; vm.copy(links[0], "link") })
+                                            } else if (links.size > 1) {
+                                                DropdownMenuItem(text = { Text("Copy ${links.size} links") },
+                                                    onClick = { surfaceMenu = false; vm.copy(links.joinToString("\n"), "links") })
+                                            }
+                                            DropdownMenuItem(text = { Text("Copy screen") },
+                                                onClick = { surfaceMenu = false; vm.copy(screenText(screen), "screen") })
                                             DropdownMenuItem(text = { Text("Rename session") },
                                                 onClick = { surfaceMenu = false; renameTarget = d.name; renameText = d.name })
                                             DropdownMenuItem(text = { Text("Fit pane to phone") },

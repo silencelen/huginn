@@ -1,5 +1,21 @@
 # Huginn changelog
 
+## 2.70.0 — 2026-08-24
+
+### Added
+- **You can get text back out of the screen view.** It could render a live pane and offered no
+  way to take anything from it. Found the hard way: a 450-character sign-in URL on a headless
+  machine, visible on screen and impossible to use.
+  - **Copy link**, and it undoes the wrap. A terminal breaks a long URL across rows, so even a
+    text-selection gesture would have handed back five fragments with newlines in them. The
+    unwrap is exact rather than a guess — the pane reports its own column count, and a row that
+    reaches it is one the terminal broke, not one the writer ended.
+  - **Copy screen** copies what is *there*, with no reflowing. A terminal draws in columns, and a
+    copy that silently rejoined its rows would corrupt every table, tree and progress bar on it.
+    Only the link copy undoes a wrap, and only inside the link.
+  - Offered only when there is something to take, and named for what it will give you: "Copy
+    link", or "Copy 3 links" when the pane holds more than one.
+
 ## 2.69.0 — 2026-08-24
 
 ### Added
