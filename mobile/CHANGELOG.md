@@ -1,5 +1,19 @@
 # Huginn changelog
 
+## 2.73.0 — 2026-08-25
+
+### Changed
+- **This build accepts both `mobile-v` and `app-v` release tags, and that is the whole point of
+  it.** A tag prefix is an UPDATE CHANNEL, not a label: a client only knows the prefix it was
+  built with, so renaming one does not fail loudly — the old client keeps checking, matches
+  nothing, and reports "up to date" forever, with nothing able to tell it the new name.
+  So the rename is sequenced. This release goes out under the OLD tag, so every phone already in
+  the field can still find it; once it is installed, that phone understands both. Only then does
+  publishing switch to `mobile-v`. Nothing is ever orphaned, and no release has to carry a
+  duplicate 56 MB APK under two tags.
+- Release titles now name the platform: **Huginn Mobile 2.73.0 (Android)**, alongside
+  Huginn Desktop (Windows, Linux), Huginn CLI (Linux, macOS, Windows) and huginn-appd (server).
+
 ## 2.72.0 — 2026-08-25
 
 ### Fixed
