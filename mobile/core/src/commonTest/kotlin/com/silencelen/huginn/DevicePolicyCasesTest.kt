@@ -27,6 +27,96 @@ class DevicePolicyCasesTest {
 
     private val cases = listOf(
         Case(
+            scope = "generate", locked = false, mode = "ask",
+            effective = "generate", refusal = "this machine is set to generate, which cannot run ask",
+            cwd = "home", argv = listOf("-p", "--output-format", "stream-json", "--verbose", "--include-partial-messages", "--allowedTools", "Skill Read Glob Grep WebFetch WebSearch", "--disallowedTools", "Bash Edit Write NotebookEdit"),
+        ),
+        Case(
+            scope = "generate", locked = false, mode = "act",
+            effective = "generate", refusal = "this machine is set to generate, which cannot run act",
+            cwd = "home", argv = listOf("-p", "--output-format", "stream-json", "--verbose", "--include-partial-messages", "--allowedTools", "Skill Read Glob Grep WebFetch WebSearch", "--disallowedTools", "Bash Edit Write NotebookEdit"),
+        ),
+        Case(
+            scope = "generate", locked = false, mode = "generate",
+            effective = "generate", refusal = null,
+            cwd = "home", argv = listOf("-p", "--output-format", "stream-json", "--verbose", "--include-partial-messages"),
+        ),
+        Case(
+            scope = "generate", locked = false, mode = "constructor",
+            effective = "generate", refusal = "this machine is set to generate, which cannot run constructor",
+            cwd = "home", argv = listOf("-p", "--output-format", "stream-json", "--verbose", "--include-partial-messages", "--allowedTools", "Skill Read Glob Grep WebFetch WebSearch", "--disallowedTools", "Bash Edit Write NotebookEdit"),
+        ),
+        Case(
+            scope = "generate", locked = false, mode = "toString",
+            effective = "generate", refusal = "this machine is set to generate, which cannot run toString",
+            cwd = "home", argv = listOf("-p", "--output-format", "stream-json", "--verbose", "--include-partial-messages", "--allowedTools", "Skill Read Glob Grep WebFetch WebSearch", "--disallowedTools", "Bash Edit Write NotebookEdit"),
+        ),
+        Case(
+            scope = "generate", locked = false, mode = "__proto__",
+            effective = "generate", refusal = "this machine is set to generate, which cannot run __proto__",
+            cwd = "home", argv = listOf("-p", "--output-format", "stream-json", "--verbose", "--include-partial-messages", "--allowedTools", "Skill Read Glob Grep WebFetch WebSearch", "--disallowedTools", "Bash Edit Write NotebookEdit"),
+        ),
+        Case(
+            scope = "generate", locked = false, mode = "hasOwnProperty",
+            effective = "generate", refusal = "this machine is set to generate, which cannot run hasOwnProperty",
+            cwd = "home", argv = listOf("-p", "--output-format", "stream-json", "--verbose", "--include-partial-messages", "--allowedTools", "Skill Read Glob Grep WebFetch WebSearch", "--disallowedTools", "Bash Edit Write NotebookEdit"),
+        ),
+        Case(
+            scope = "generate", locked = false, mode = "valueOf",
+            effective = "generate", refusal = "this machine is set to generate, which cannot run valueOf",
+            cwd = "home", argv = listOf("-p", "--output-format", "stream-json", "--verbose", "--include-partial-messages", "--allowedTools", "Skill Read Glob Grep WebFetch WebSearch", "--disallowedTools", "Bash Edit Write NotebookEdit"),
+        ),
+        Case(
+            scope = "generate", locked = false, mode = "",
+            effective = "generate", refusal = "this machine is set to generate, which cannot run ",
+            cwd = "home", argv = listOf("-p", "--output-format", "stream-json", "--verbose", "--include-partial-messages", "--allowedTools", "Skill Read Glob Grep WebFetch WebSearch", "--disallowedTools", "Bash Edit Write NotebookEdit"),
+        ),
+        Case(
+            scope = "generate", locked = true, mode = "ask",
+            effective = "generate", refusal = "this machine is set to generate, which cannot run ask",
+            cwd = "home", argv = listOf("-p", "--output-format", "stream-json", "--verbose", "--include-partial-messages", "--allowedTools", "Skill Read Glob Grep WebFetch WebSearch", "--disallowedTools", "Bash Edit Write NotebookEdit"),
+        ),
+        Case(
+            scope = "generate", locked = true, mode = "act",
+            effective = "generate", refusal = "this machine is set to generate, which cannot run act",
+            cwd = "home", argv = listOf("-p", "--output-format", "stream-json", "--verbose", "--include-partial-messages", "--allowedTools", "Skill Read Glob Grep WebFetch WebSearch", "--disallowedTools", "Bash Edit Write NotebookEdit"),
+        ),
+        Case(
+            scope = "generate", locked = true, mode = "generate",
+            effective = "generate", refusal = null,
+            cwd = "home", argv = listOf("-p", "--output-format", "stream-json", "--verbose", "--include-partial-messages"),
+        ),
+        Case(
+            scope = "generate", locked = true, mode = "constructor",
+            effective = "generate", refusal = "this machine is set to generate, which cannot run constructor",
+            cwd = "home", argv = listOf("-p", "--output-format", "stream-json", "--verbose", "--include-partial-messages", "--allowedTools", "Skill Read Glob Grep WebFetch WebSearch", "--disallowedTools", "Bash Edit Write NotebookEdit"),
+        ),
+        Case(
+            scope = "generate", locked = true, mode = "toString",
+            effective = "generate", refusal = "this machine is set to generate, which cannot run toString",
+            cwd = "home", argv = listOf("-p", "--output-format", "stream-json", "--verbose", "--include-partial-messages", "--allowedTools", "Skill Read Glob Grep WebFetch WebSearch", "--disallowedTools", "Bash Edit Write NotebookEdit"),
+        ),
+        Case(
+            scope = "generate", locked = true, mode = "__proto__",
+            effective = "generate", refusal = "this machine is set to generate, which cannot run __proto__",
+            cwd = "home", argv = listOf("-p", "--output-format", "stream-json", "--verbose", "--include-partial-messages", "--allowedTools", "Skill Read Glob Grep WebFetch WebSearch", "--disallowedTools", "Bash Edit Write NotebookEdit"),
+        ),
+        Case(
+            scope = "generate", locked = true, mode = "hasOwnProperty",
+            effective = "generate", refusal = "this machine is set to generate, which cannot run hasOwnProperty",
+            cwd = "home", argv = listOf("-p", "--output-format", "stream-json", "--verbose", "--include-partial-messages", "--allowedTools", "Skill Read Glob Grep WebFetch WebSearch", "--disallowedTools", "Bash Edit Write NotebookEdit"),
+        ),
+        Case(
+            scope = "generate", locked = true, mode = "valueOf",
+            effective = "generate", refusal = "this machine is set to generate, which cannot run valueOf",
+            cwd = "home", argv = listOf("-p", "--output-format", "stream-json", "--verbose", "--include-partial-messages", "--allowedTools", "Skill Read Glob Grep WebFetch WebSearch", "--disallowedTools", "Bash Edit Write NotebookEdit"),
+        ),
+        Case(
+            scope = "generate", locked = true, mode = "",
+            effective = "generate", refusal = "this machine is set to generate, which cannot run ",
+            cwd = "home", argv = listOf("-p", "--output-format", "stream-json", "--verbose", "--include-partial-messages", "--allowedTools", "Skill Read Glob Grep WebFetch WebSearch", "--disallowedTools", "Bash Edit Write NotebookEdit"),
+        ),
+        Case(
             scope = "look", locked = false, mode = "ask",
             effective = "look", refusal = null,
             cwd = "home", argv = listOf("-p", "--output-format", "stream-json", "--verbose", "--include-partial-messages", "--allowedTools", "Skill Read Glob Grep WebFetch WebSearch", "--disallowedTools", "Bash Edit Write NotebookEdit"),
@@ -34,6 +124,11 @@ class DevicePolicyCasesTest {
         Case(
             scope = "look", locked = false, mode = "act",
             effective = "look", refusal = "this machine is set to look, which cannot run act",
+            cwd = "home", argv = listOf("-p", "--output-format", "stream-json", "--verbose", "--include-partial-messages", "--allowedTools", "Skill Read Glob Grep WebFetch WebSearch", "--disallowedTools", "Bash Edit Write NotebookEdit"),
+        ),
+        Case(
+            scope = "look", locked = false, mode = "generate",
+            effective = "look", refusal = "this machine is set to look, which cannot run generate",
             cwd = "home", argv = listOf("-p", "--output-format", "stream-json", "--verbose", "--include-partial-messages", "--allowedTools", "Skill Read Glob Grep WebFetch WebSearch", "--disallowedTools", "Bash Edit Write NotebookEdit"),
         ),
         Case(
@@ -73,37 +168,42 @@ class DevicePolicyCasesTest {
         ),
         Case(
             scope = "look", locked = true, mode = "act",
-            effective = "look", refusal = "this machine is locked, so it is read-only until someone unlocks it",
+            effective = "look", refusal = "this machine is set to look, which cannot run act",
+            cwd = "home", argv = listOf("-p", "--output-format", "stream-json", "--verbose", "--include-partial-messages", "--allowedTools", "Skill Read Glob Grep WebFetch WebSearch", "--disallowedTools", "Bash Edit Write NotebookEdit"),
+        ),
+        Case(
+            scope = "look", locked = true, mode = "generate",
+            effective = "look", refusal = "this machine is set to look, which cannot run generate",
             cwd = "home", argv = listOf("-p", "--output-format", "stream-json", "--verbose", "--include-partial-messages", "--allowedTools", "Skill Read Glob Grep WebFetch WebSearch", "--disallowedTools", "Bash Edit Write NotebookEdit"),
         ),
         Case(
             scope = "look", locked = true, mode = "constructor",
-            effective = "look", refusal = "this machine is locked, so it is read-only until someone unlocks it",
+            effective = "look", refusal = "this machine is set to look, which cannot run constructor",
             cwd = "home", argv = listOf("-p", "--output-format", "stream-json", "--verbose", "--include-partial-messages", "--allowedTools", "Skill Read Glob Grep WebFetch WebSearch", "--disallowedTools", "Bash Edit Write NotebookEdit"),
         ),
         Case(
             scope = "look", locked = true, mode = "toString",
-            effective = "look", refusal = "this machine is locked, so it is read-only until someone unlocks it",
+            effective = "look", refusal = "this machine is set to look, which cannot run toString",
             cwd = "home", argv = listOf("-p", "--output-format", "stream-json", "--verbose", "--include-partial-messages", "--allowedTools", "Skill Read Glob Grep WebFetch WebSearch", "--disallowedTools", "Bash Edit Write NotebookEdit"),
         ),
         Case(
             scope = "look", locked = true, mode = "__proto__",
-            effective = "look", refusal = "this machine is locked, so it is read-only until someone unlocks it",
+            effective = "look", refusal = "this machine is set to look, which cannot run __proto__",
             cwd = "home", argv = listOf("-p", "--output-format", "stream-json", "--verbose", "--include-partial-messages", "--allowedTools", "Skill Read Glob Grep WebFetch WebSearch", "--disallowedTools", "Bash Edit Write NotebookEdit"),
         ),
         Case(
             scope = "look", locked = true, mode = "hasOwnProperty",
-            effective = "look", refusal = "this machine is locked, so it is read-only until someone unlocks it",
+            effective = "look", refusal = "this machine is set to look, which cannot run hasOwnProperty",
             cwd = "home", argv = listOf("-p", "--output-format", "stream-json", "--verbose", "--include-partial-messages", "--allowedTools", "Skill Read Glob Grep WebFetch WebSearch", "--disallowedTools", "Bash Edit Write NotebookEdit"),
         ),
         Case(
             scope = "look", locked = true, mode = "valueOf",
-            effective = "look", refusal = "this machine is locked, so it is read-only until someone unlocks it",
+            effective = "look", refusal = "this machine is set to look, which cannot run valueOf",
             cwd = "home", argv = listOf("-p", "--output-format", "stream-json", "--verbose", "--include-partial-messages", "--allowedTools", "Skill Read Glob Grep WebFetch WebSearch", "--disallowedTools", "Bash Edit Write NotebookEdit"),
         ),
         Case(
             scope = "look", locked = true, mode = "",
-            effective = "look", refusal = "this machine is locked, so it is read-only until someone unlocks it",
+            effective = "look", refusal = "this machine is set to look, which cannot run ",
             cwd = "home", argv = listOf("-p", "--output-format", "stream-json", "--verbose", "--include-partial-messages", "--allowedTools", "Skill Read Glob Grep WebFetch WebSearch", "--disallowedTools", "Bash Edit Write NotebookEdit"),
         ),
         Case(
@@ -115,6 +215,11 @@ class DevicePolicyCasesTest {
             scope = "work", locked = false, mode = "act",
             effective = "work", refusal = null,
             cwd = "root", argv = listOf("-p", "--output-format", "stream-json", "--verbose", "--include-partial-messages", "--allowedTools", "Skill Bash Read Edit Write Glob Grep WebFetch WebSearch"),
+        ),
+        Case(
+            scope = "work", locked = false, mode = "generate",
+            effective = "work", refusal = "this machine is set to work, which cannot run generate",
+            cwd = "root", argv = listOf("-p", "--output-format", "stream-json", "--verbose", "--include-partial-messages", "--allowedTools", "Skill Read Glob Grep WebFetch WebSearch", "--disallowedTools", "Bash Edit Write NotebookEdit"),
         ),
         Case(
             scope = "work", locked = false, mode = "constructor",
@@ -157,33 +262,38 @@ class DevicePolicyCasesTest {
             cwd = "home", argv = listOf("-p", "--output-format", "stream-json", "--verbose", "--include-partial-messages", "--allowedTools", "Skill Read Glob Grep WebFetch WebSearch", "--disallowedTools", "Bash Edit Write NotebookEdit"),
         ),
         Case(
+            scope = "work", locked = true, mode = "generate",
+            effective = "look", refusal = "this machine is set to work, which cannot run generate",
+            cwd = "home", argv = listOf("-p", "--output-format", "stream-json", "--verbose", "--include-partial-messages", "--allowedTools", "Skill Read Glob Grep WebFetch WebSearch", "--disallowedTools", "Bash Edit Write NotebookEdit"),
+        ),
+        Case(
             scope = "work", locked = true, mode = "constructor",
-            effective = "look", refusal = "this machine is locked, so it is read-only until someone unlocks it",
+            effective = "look", refusal = "this machine is set to work, which cannot run constructor",
             cwd = "home", argv = listOf("-p", "--output-format", "stream-json", "--verbose", "--include-partial-messages", "--allowedTools", "Skill Read Glob Grep WebFetch WebSearch", "--disallowedTools", "Bash Edit Write NotebookEdit"),
         ),
         Case(
             scope = "work", locked = true, mode = "toString",
-            effective = "look", refusal = "this machine is locked, so it is read-only until someone unlocks it",
+            effective = "look", refusal = "this machine is set to work, which cannot run toString",
             cwd = "home", argv = listOf("-p", "--output-format", "stream-json", "--verbose", "--include-partial-messages", "--allowedTools", "Skill Read Glob Grep WebFetch WebSearch", "--disallowedTools", "Bash Edit Write NotebookEdit"),
         ),
         Case(
             scope = "work", locked = true, mode = "__proto__",
-            effective = "look", refusal = "this machine is locked, so it is read-only until someone unlocks it",
+            effective = "look", refusal = "this machine is set to work, which cannot run __proto__",
             cwd = "home", argv = listOf("-p", "--output-format", "stream-json", "--verbose", "--include-partial-messages", "--allowedTools", "Skill Read Glob Grep WebFetch WebSearch", "--disallowedTools", "Bash Edit Write NotebookEdit"),
         ),
         Case(
             scope = "work", locked = true, mode = "hasOwnProperty",
-            effective = "look", refusal = "this machine is locked, so it is read-only until someone unlocks it",
+            effective = "look", refusal = "this machine is set to work, which cannot run hasOwnProperty",
             cwd = "home", argv = listOf("-p", "--output-format", "stream-json", "--verbose", "--include-partial-messages", "--allowedTools", "Skill Read Glob Grep WebFetch WebSearch", "--disallowedTools", "Bash Edit Write NotebookEdit"),
         ),
         Case(
             scope = "work", locked = true, mode = "valueOf",
-            effective = "look", refusal = "this machine is locked, so it is read-only until someone unlocks it",
+            effective = "look", refusal = "this machine is set to work, which cannot run valueOf",
             cwd = "home", argv = listOf("-p", "--output-format", "stream-json", "--verbose", "--include-partial-messages", "--allowedTools", "Skill Read Glob Grep WebFetch WebSearch", "--disallowedTools", "Bash Edit Write NotebookEdit"),
         ),
         Case(
             scope = "work", locked = true, mode = "",
-            effective = "look", refusal = "this machine is locked, so it is read-only until someone unlocks it",
+            effective = "look", refusal = "this machine is set to work, which cannot run ",
             cwd = "home", argv = listOf("-p", "--output-format", "stream-json", "--verbose", "--include-partial-messages", "--allowedTools", "Skill Read Glob Grep WebFetch WebSearch", "--disallowedTools", "Bash Edit Write NotebookEdit"),
         ),
         Case(
@@ -195,6 +305,11 @@ class DevicePolicyCasesTest {
             scope = "own", locked = false, mode = "act",
             effective = "own", refusal = null,
             cwd = "home", argv = listOf("-p", "--output-format", "stream-json", "--verbose", "--include-partial-messages", "--allowedTools", "Skill Bash Read Edit Write Glob Grep WebFetch WebSearch"),
+        ),
+        Case(
+            scope = "own", locked = false, mode = "generate",
+            effective = "own", refusal = "this machine is set to own, which cannot run generate",
+            cwd = "home", argv = listOf("-p", "--output-format", "stream-json", "--verbose", "--include-partial-messages", "--allowedTools", "Skill Read Glob Grep WebFetch WebSearch", "--disallowedTools", "Bash Edit Write NotebookEdit"),
         ),
         Case(
             scope = "own", locked = false, mode = "constructor",
@@ -237,33 +352,398 @@ class DevicePolicyCasesTest {
             cwd = "home", argv = listOf("-p", "--output-format", "stream-json", "--verbose", "--include-partial-messages", "--allowedTools", "Skill Read Glob Grep WebFetch WebSearch", "--disallowedTools", "Bash Edit Write NotebookEdit"),
         ),
         Case(
+            scope = "own", locked = true, mode = "generate",
+            effective = "look", refusal = "this machine is set to own, which cannot run generate",
+            cwd = "home", argv = listOf("-p", "--output-format", "stream-json", "--verbose", "--include-partial-messages", "--allowedTools", "Skill Read Glob Grep WebFetch WebSearch", "--disallowedTools", "Bash Edit Write NotebookEdit"),
+        ),
+        Case(
             scope = "own", locked = true, mode = "constructor",
-            effective = "look", refusal = "this machine is locked, so it is read-only until someone unlocks it",
+            effective = "look", refusal = "this machine is set to own, which cannot run constructor",
             cwd = "home", argv = listOf("-p", "--output-format", "stream-json", "--verbose", "--include-partial-messages", "--allowedTools", "Skill Read Glob Grep WebFetch WebSearch", "--disallowedTools", "Bash Edit Write NotebookEdit"),
         ),
         Case(
             scope = "own", locked = true, mode = "toString",
-            effective = "look", refusal = "this machine is locked, so it is read-only until someone unlocks it",
+            effective = "look", refusal = "this machine is set to own, which cannot run toString",
             cwd = "home", argv = listOf("-p", "--output-format", "stream-json", "--verbose", "--include-partial-messages", "--allowedTools", "Skill Read Glob Grep WebFetch WebSearch", "--disallowedTools", "Bash Edit Write NotebookEdit"),
         ),
         Case(
             scope = "own", locked = true, mode = "__proto__",
-            effective = "look", refusal = "this machine is locked, so it is read-only until someone unlocks it",
+            effective = "look", refusal = "this machine is set to own, which cannot run __proto__",
             cwd = "home", argv = listOf("-p", "--output-format", "stream-json", "--verbose", "--include-partial-messages", "--allowedTools", "Skill Read Glob Grep WebFetch WebSearch", "--disallowedTools", "Bash Edit Write NotebookEdit"),
         ),
         Case(
             scope = "own", locked = true, mode = "hasOwnProperty",
-            effective = "look", refusal = "this machine is locked, so it is read-only until someone unlocks it",
+            effective = "look", refusal = "this machine is set to own, which cannot run hasOwnProperty",
             cwd = "home", argv = listOf("-p", "--output-format", "stream-json", "--verbose", "--include-partial-messages", "--allowedTools", "Skill Read Glob Grep WebFetch WebSearch", "--disallowedTools", "Bash Edit Write NotebookEdit"),
         ),
         Case(
             scope = "own", locked = true, mode = "valueOf",
-            effective = "look", refusal = "this machine is locked, so it is read-only until someone unlocks it",
+            effective = "look", refusal = "this machine is set to own, which cannot run valueOf",
             cwd = "home", argv = listOf("-p", "--output-format", "stream-json", "--verbose", "--include-partial-messages", "--allowedTools", "Skill Read Glob Grep WebFetch WebSearch", "--disallowedTools", "Bash Edit Write NotebookEdit"),
         ),
         Case(
             scope = "own", locked = true, mode = "",
-            effective = "look", refusal = "this machine is locked, so it is read-only until someone unlocks it",
+            effective = "look", refusal = "this machine is set to own, which cannot run ",
+            cwd = "home", argv = listOf("-p", "--output-format", "stream-json", "--verbose", "--include-partial-messages", "--allowedTools", "Skill Read Glob Grep WebFetch WebSearch", "--disallowedTools", "Bash Edit Write NotebookEdit"),
+        ),
+        Case(
+            scope = "root", locked = false, mode = "ask",
+            effective = "generate", refusal = "this machine is set to generate, which cannot run ask",
+            cwd = "home", argv = listOf("-p", "--output-format", "stream-json", "--verbose", "--include-partial-messages", "--allowedTools", "Skill Read Glob Grep WebFetch WebSearch", "--disallowedTools", "Bash Edit Write NotebookEdit"),
+        ),
+        Case(
+            scope = "root", locked = false, mode = "act",
+            effective = "generate", refusal = "this machine is set to generate, which cannot run act",
+            cwd = "home", argv = listOf("-p", "--output-format", "stream-json", "--verbose", "--include-partial-messages", "--allowedTools", "Skill Read Glob Grep WebFetch WebSearch", "--disallowedTools", "Bash Edit Write NotebookEdit"),
+        ),
+        Case(
+            scope = "root", locked = false, mode = "generate",
+            effective = "generate", refusal = null,
+            cwd = "home", argv = listOf("-p", "--output-format", "stream-json", "--verbose", "--include-partial-messages"),
+        ),
+        Case(
+            scope = "root", locked = false, mode = "constructor",
+            effective = "generate", refusal = "this machine is set to generate, which cannot run constructor",
+            cwd = "home", argv = listOf("-p", "--output-format", "stream-json", "--verbose", "--include-partial-messages", "--allowedTools", "Skill Read Glob Grep WebFetch WebSearch", "--disallowedTools", "Bash Edit Write NotebookEdit"),
+        ),
+        Case(
+            scope = "root", locked = false, mode = "toString",
+            effective = "generate", refusal = "this machine is set to generate, which cannot run toString",
+            cwd = "home", argv = listOf("-p", "--output-format", "stream-json", "--verbose", "--include-partial-messages", "--allowedTools", "Skill Read Glob Grep WebFetch WebSearch", "--disallowedTools", "Bash Edit Write NotebookEdit"),
+        ),
+        Case(
+            scope = "root", locked = false, mode = "__proto__",
+            effective = "generate", refusal = "this machine is set to generate, which cannot run __proto__",
+            cwd = "home", argv = listOf("-p", "--output-format", "stream-json", "--verbose", "--include-partial-messages", "--allowedTools", "Skill Read Glob Grep WebFetch WebSearch", "--disallowedTools", "Bash Edit Write NotebookEdit"),
+        ),
+        Case(
+            scope = "root", locked = false, mode = "hasOwnProperty",
+            effective = "generate", refusal = "this machine is set to generate, which cannot run hasOwnProperty",
+            cwd = "home", argv = listOf("-p", "--output-format", "stream-json", "--verbose", "--include-partial-messages", "--allowedTools", "Skill Read Glob Grep WebFetch WebSearch", "--disallowedTools", "Bash Edit Write NotebookEdit"),
+        ),
+        Case(
+            scope = "root", locked = false, mode = "valueOf",
+            effective = "generate", refusal = "this machine is set to generate, which cannot run valueOf",
+            cwd = "home", argv = listOf("-p", "--output-format", "stream-json", "--verbose", "--include-partial-messages", "--allowedTools", "Skill Read Glob Grep WebFetch WebSearch", "--disallowedTools", "Bash Edit Write NotebookEdit"),
+        ),
+        Case(
+            scope = "root", locked = false, mode = "",
+            effective = "generate", refusal = "this machine is set to generate, which cannot run ",
+            cwd = "home", argv = listOf("-p", "--output-format", "stream-json", "--verbose", "--include-partial-messages", "--allowedTools", "Skill Read Glob Grep WebFetch WebSearch", "--disallowedTools", "Bash Edit Write NotebookEdit"),
+        ),
+        Case(
+            scope = "root", locked = true, mode = "ask",
+            effective = "generate", refusal = "this machine is set to generate, which cannot run ask",
+            cwd = "home", argv = listOf("-p", "--output-format", "stream-json", "--verbose", "--include-partial-messages", "--allowedTools", "Skill Read Glob Grep WebFetch WebSearch", "--disallowedTools", "Bash Edit Write NotebookEdit"),
+        ),
+        Case(
+            scope = "root", locked = true, mode = "act",
+            effective = "generate", refusal = "this machine is set to generate, which cannot run act",
+            cwd = "home", argv = listOf("-p", "--output-format", "stream-json", "--verbose", "--include-partial-messages", "--allowedTools", "Skill Read Glob Grep WebFetch WebSearch", "--disallowedTools", "Bash Edit Write NotebookEdit"),
+        ),
+        Case(
+            scope = "root", locked = true, mode = "generate",
+            effective = "generate", refusal = null,
+            cwd = "home", argv = listOf("-p", "--output-format", "stream-json", "--verbose", "--include-partial-messages"),
+        ),
+        Case(
+            scope = "root", locked = true, mode = "constructor",
+            effective = "generate", refusal = "this machine is set to generate, which cannot run constructor",
+            cwd = "home", argv = listOf("-p", "--output-format", "stream-json", "--verbose", "--include-partial-messages", "--allowedTools", "Skill Read Glob Grep WebFetch WebSearch", "--disallowedTools", "Bash Edit Write NotebookEdit"),
+        ),
+        Case(
+            scope = "root", locked = true, mode = "toString",
+            effective = "generate", refusal = "this machine is set to generate, which cannot run toString",
+            cwd = "home", argv = listOf("-p", "--output-format", "stream-json", "--verbose", "--include-partial-messages", "--allowedTools", "Skill Read Glob Grep WebFetch WebSearch", "--disallowedTools", "Bash Edit Write NotebookEdit"),
+        ),
+        Case(
+            scope = "root", locked = true, mode = "__proto__",
+            effective = "generate", refusal = "this machine is set to generate, which cannot run __proto__",
+            cwd = "home", argv = listOf("-p", "--output-format", "stream-json", "--verbose", "--include-partial-messages", "--allowedTools", "Skill Read Glob Grep WebFetch WebSearch", "--disallowedTools", "Bash Edit Write NotebookEdit"),
+        ),
+        Case(
+            scope = "root", locked = true, mode = "hasOwnProperty",
+            effective = "generate", refusal = "this machine is set to generate, which cannot run hasOwnProperty",
+            cwd = "home", argv = listOf("-p", "--output-format", "stream-json", "--verbose", "--include-partial-messages", "--allowedTools", "Skill Read Glob Grep WebFetch WebSearch", "--disallowedTools", "Bash Edit Write NotebookEdit"),
+        ),
+        Case(
+            scope = "root", locked = true, mode = "valueOf",
+            effective = "generate", refusal = "this machine is set to generate, which cannot run valueOf",
+            cwd = "home", argv = listOf("-p", "--output-format", "stream-json", "--verbose", "--include-partial-messages", "--allowedTools", "Skill Read Glob Grep WebFetch WebSearch", "--disallowedTools", "Bash Edit Write NotebookEdit"),
+        ),
+        Case(
+            scope = "root", locked = true, mode = "",
+            effective = "generate", refusal = "this machine is set to generate, which cannot run ",
+            cwd = "home", argv = listOf("-p", "--output-format", "stream-json", "--verbose", "--include-partial-messages", "--allowedTools", "Skill Read Glob Grep WebFetch WebSearch", "--disallowedTools", "Bash Edit Write NotebookEdit"),
+        ),
+        Case(
+            scope = "constructor", locked = false, mode = "ask",
+            effective = "generate", refusal = "this machine is set to generate, which cannot run ask",
+            cwd = "home", argv = listOf("-p", "--output-format", "stream-json", "--verbose", "--include-partial-messages", "--allowedTools", "Skill Read Glob Grep WebFetch WebSearch", "--disallowedTools", "Bash Edit Write NotebookEdit"),
+        ),
+        Case(
+            scope = "constructor", locked = false, mode = "act",
+            effective = "generate", refusal = "this machine is set to generate, which cannot run act",
+            cwd = "home", argv = listOf("-p", "--output-format", "stream-json", "--verbose", "--include-partial-messages", "--allowedTools", "Skill Read Glob Grep WebFetch WebSearch", "--disallowedTools", "Bash Edit Write NotebookEdit"),
+        ),
+        Case(
+            scope = "constructor", locked = false, mode = "generate",
+            effective = "generate", refusal = null,
+            cwd = "home", argv = listOf("-p", "--output-format", "stream-json", "--verbose", "--include-partial-messages"),
+        ),
+        Case(
+            scope = "constructor", locked = false, mode = "constructor",
+            effective = "generate", refusal = "this machine is set to generate, which cannot run constructor",
+            cwd = "home", argv = listOf("-p", "--output-format", "stream-json", "--verbose", "--include-partial-messages", "--allowedTools", "Skill Read Glob Grep WebFetch WebSearch", "--disallowedTools", "Bash Edit Write NotebookEdit"),
+        ),
+        Case(
+            scope = "constructor", locked = false, mode = "toString",
+            effective = "generate", refusal = "this machine is set to generate, which cannot run toString",
+            cwd = "home", argv = listOf("-p", "--output-format", "stream-json", "--verbose", "--include-partial-messages", "--allowedTools", "Skill Read Glob Grep WebFetch WebSearch", "--disallowedTools", "Bash Edit Write NotebookEdit"),
+        ),
+        Case(
+            scope = "constructor", locked = false, mode = "__proto__",
+            effective = "generate", refusal = "this machine is set to generate, which cannot run __proto__",
+            cwd = "home", argv = listOf("-p", "--output-format", "stream-json", "--verbose", "--include-partial-messages", "--allowedTools", "Skill Read Glob Grep WebFetch WebSearch", "--disallowedTools", "Bash Edit Write NotebookEdit"),
+        ),
+        Case(
+            scope = "constructor", locked = false, mode = "hasOwnProperty",
+            effective = "generate", refusal = "this machine is set to generate, which cannot run hasOwnProperty",
+            cwd = "home", argv = listOf("-p", "--output-format", "stream-json", "--verbose", "--include-partial-messages", "--allowedTools", "Skill Read Glob Grep WebFetch WebSearch", "--disallowedTools", "Bash Edit Write NotebookEdit"),
+        ),
+        Case(
+            scope = "constructor", locked = false, mode = "valueOf",
+            effective = "generate", refusal = "this machine is set to generate, which cannot run valueOf",
+            cwd = "home", argv = listOf("-p", "--output-format", "stream-json", "--verbose", "--include-partial-messages", "--allowedTools", "Skill Read Glob Grep WebFetch WebSearch", "--disallowedTools", "Bash Edit Write NotebookEdit"),
+        ),
+        Case(
+            scope = "constructor", locked = false, mode = "",
+            effective = "generate", refusal = "this machine is set to generate, which cannot run ",
+            cwd = "home", argv = listOf("-p", "--output-format", "stream-json", "--verbose", "--include-partial-messages", "--allowedTools", "Skill Read Glob Grep WebFetch WebSearch", "--disallowedTools", "Bash Edit Write NotebookEdit"),
+        ),
+        Case(
+            scope = "constructor", locked = true, mode = "ask",
+            effective = "generate", refusal = "this machine is set to generate, which cannot run ask",
+            cwd = "home", argv = listOf("-p", "--output-format", "stream-json", "--verbose", "--include-partial-messages", "--allowedTools", "Skill Read Glob Grep WebFetch WebSearch", "--disallowedTools", "Bash Edit Write NotebookEdit"),
+        ),
+        Case(
+            scope = "constructor", locked = true, mode = "act",
+            effective = "generate", refusal = "this machine is set to generate, which cannot run act",
+            cwd = "home", argv = listOf("-p", "--output-format", "stream-json", "--verbose", "--include-partial-messages", "--allowedTools", "Skill Read Glob Grep WebFetch WebSearch", "--disallowedTools", "Bash Edit Write NotebookEdit"),
+        ),
+        Case(
+            scope = "constructor", locked = true, mode = "generate",
+            effective = "generate", refusal = null,
+            cwd = "home", argv = listOf("-p", "--output-format", "stream-json", "--verbose", "--include-partial-messages"),
+        ),
+        Case(
+            scope = "constructor", locked = true, mode = "constructor",
+            effective = "generate", refusal = "this machine is set to generate, which cannot run constructor",
+            cwd = "home", argv = listOf("-p", "--output-format", "stream-json", "--verbose", "--include-partial-messages", "--allowedTools", "Skill Read Glob Grep WebFetch WebSearch", "--disallowedTools", "Bash Edit Write NotebookEdit"),
+        ),
+        Case(
+            scope = "constructor", locked = true, mode = "toString",
+            effective = "generate", refusal = "this machine is set to generate, which cannot run toString",
+            cwd = "home", argv = listOf("-p", "--output-format", "stream-json", "--verbose", "--include-partial-messages", "--allowedTools", "Skill Read Glob Grep WebFetch WebSearch", "--disallowedTools", "Bash Edit Write NotebookEdit"),
+        ),
+        Case(
+            scope = "constructor", locked = true, mode = "__proto__",
+            effective = "generate", refusal = "this machine is set to generate, which cannot run __proto__",
+            cwd = "home", argv = listOf("-p", "--output-format", "stream-json", "--verbose", "--include-partial-messages", "--allowedTools", "Skill Read Glob Grep WebFetch WebSearch", "--disallowedTools", "Bash Edit Write NotebookEdit"),
+        ),
+        Case(
+            scope = "constructor", locked = true, mode = "hasOwnProperty",
+            effective = "generate", refusal = "this machine is set to generate, which cannot run hasOwnProperty",
+            cwd = "home", argv = listOf("-p", "--output-format", "stream-json", "--verbose", "--include-partial-messages", "--allowedTools", "Skill Read Glob Grep WebFetch WebSearch", "--disallowedTools", "Bash Edit Write NotebookEdit"),
+        ),
+        Case(
+            scope = "constructor", locked = true, mode = "valueOf",
+            effective = "generate", refusal = "this machine is set to generate, which cannot run valueOf",
+            cwd = "home", argv = listOf("-p", "--output-format", "stream-json", "--verbose", "--include-partial-messages", "--allowedTools", "Skill Read Glob Grep WebFetch WebSearch", "--disallowedTools", "Bash Edit Write NotebookEdit"),
+        ),
+        Case(
+            scope = "constructor", locked = true, mode = "",
+            effective = "generate", refusal = "this machine is set to generate, which cannot run ",
+            cwd = "home", argv = listOf("-p", "--output-format", "stream-json", "--verbose", "--include-partial-messages", "--allowedTools", "Skill Read Glob Grep WebFetch WebSearch", "--disallowedTools", "Bash Edit Write NotebookEdit"),
+        ),
+        Case(
+            scope = "__proto__", locked = false, mode = "ask",
+            effective = "generate", refusal = "this machine is set to generate, which cannot run ask",
+            cwd = "home", argv = listOf("-p", "--output-format", "stream-json", "--verbose", "--include-partial-messages", "--allowedTools", "Skill Read Glob Grep WebFetch WebSearch", "--disallowedTools", "Bash Edit Write NotebookEdit"),
+        ),
+        Case(
+            scope = "__proto__", locked = false, mode = "act",
+            effective = "generate", refusal = "this machine is set to generate, which cannot run act",
+            cwd = "home", argv = listOf("-p", "--output-format", "stream-json", "--verbose", "--include-partial-messages", "--allowedTools", "Skill Read Glob Grep WebFetch WebSearch", "--disallowedTools", "Bash Edit Write NotebookEdit"),
+        ),
+        Case(
+            scope = "__proto__", locked = false, mode = "generate",
+            effective = "generate", refusal = null,
+            cwd = "home", argv = listOf("-p", "--output-format", "stream-json", "--verbose", "--include-partial-messages"),
+        ),
+        Case(
+            scope = "__proto__", locked = false, mode = "constructor",
+            effective = "generate", refusal = "this machine is set to generate, which cannot run constructor",
+            cwd = "home", argv = listOf("-p", "--output-format", "stream-json", "--verbose", "--include-partial-messages", "--allowedTools", "Skill Read Glob Grep WebFetch WebSearch", "--disallowedTools", "Bash Edit Write NotebookEdit"),
+        ),
+        Case(
+            scope = "__proto__", locked = false, mode = "toString",
+            effective = "generate", refusal = "this machine is set to generate, which cannot run toString",
+            cwd = "home", argv = listOf("-p", "--output-format", "stream-json", "--verbose", "--include-partial-messages", "--allowedTools", "Skill Read Glob Grep WebFetch WebSearch", "--disallowedTools", "Bash Edit Write NotebookEdit"),
+        ),
+        Case(
+            scope = "__proto__", locked = false, mode = "__proto__",
+            effective = "generate", refusal = "this machine is set to generate, which cannot run __proto__",
+            cwd = "home", argv = listOf("-p", "--output-format", "stream-json", "--verbose", "--include-partial-messages", "--allowedTools", "Skill Read Glob Grep WebFetch WebSearch", "--disallowedTools", "Bash Edit Write NotebookEdit"),
+        ),
+        Case(
+            scope = "__proto__", locked = false, mode = "hasOwnProperty",
+            effective = "generate", refusal = "this machine is set to generate, which cannot run hasOwnProperty",
+            cwd = "home", argv = listOf("-p", "--output-format", "stream-json", "--verbose", "--include-partial-messages", "--allowedTools", "Skill Read Glob Grep WebFetch WebSearch", "--disallowedTools", "Bash Edit Write NotebookEdit"),
+        ),
+        Case(
+            scope = "__proto__", locked = false, mode = "valueOf",
+            effective = "generate", refusal = "this machine is set to generate, which cannot run valueOf",
+            cwd = "home", argv = listOf("-p", "--output-format", "stream-json", "--verbose", "--include-partial-messages", "--allowedTools", "Skill Read Glob Grep WebFetch WebSearch", "--disallowedTools", "Bash Edit Write NotebookEdit"),
+        ),
+        Case(
+            scope = "__proto__", locked = false, mode = "",
+            effective = "generate", refusal = "this machine is set to generate, which cannot run ",
+            cwd = "home", argv = listOf("-p", "--output-format", "stream-json", "--verbose", "--include-partial-messages", "--allowedTools", "Skill Read Glob Grep WebFetch WebSearch", "--disallowedTools", "Bash Edit Write NotebookEdit"),
+        ),
+        Case(
+            scope = "__proto__", locked = true, mode = "ask",
+            effective = "generate", refusal = "this machine is set to generate, which cannot run ask",
+            cwd = "home", argv = listOf("-p", "--output-format", "stream-json", "--verbose", "--include-partial-messages", "--allowedTools", "Skill Read Glob Grep WebFetch WebSearch", "--disallowedTools", "Bash Edit Write NotebookEdit"),
+        ),
+        Case(
+            scope = "__proto__", locked = true, mode = "act",
+            effective = "generate", refusal = "this machine is set to generate, which cannot run act",
+            cwd = "home", argv = listOf("-p", "--output-format", "stream-json", "--verbose", "--include-partial-messages", "--allowedTools", "Skill Read Glob Grep WebFetch WebSearch", "--disallowedTools", "Bash Edit Write NotebookEdit"),
+        ),
+        Case(
+            scope = "__proto__", locked = true, mode = "generate",
+            effective = "generate", refusal = null,
+            cwd = "home", argv = listOf("-p", "--output-format", "stream-json", "--verbose", "--include-partial-messages"),
+        ),
+        Case(
+            scope = "__proto__", locked = true, mode = "constructor",
+            effective = "generate", refusal = "this machine is set to generate, which cannot run constructor",
+            cwd = "home", argv = listOf("-p", "--output-format", "stream-json", "--verbose", "--include-partial-messages", "--allowedTools", "Skill Read Glob Grep WebFetch WebSearch", "--disallowedTools", "Bash Edit Write NotebookEdit"),
+        ),
+        Case(
+            scope = "__proto__", locked = true, mode = "toString",
+            effective = "generate", refusal = "this machine is set to generate, which cannot run toString",
+            cwd = "home", argv = listOf("-p", "--output-format", "stream-json", "--verbose", "--include-partial-messages", "--allowedTools", "Skill Read Glob Grep WebFetch WebSearch", "--disallowedTools", "Bash Edit Write NotebookEdit"),
+        ),
+        Case(
+            scope = "__proto__", locked = true, mode = "__proto__",
+            effective = "generate", refusal = "this machine is set to generate, which cannot run __proto__",
+            cwd = "home", argv = listOf("-p", "--output-format", "stream-json", "--verbose", "--include-partial-messages", "--allowedTools", "Skill Read Glob Grep WebFetch WebSearch", "--disallowedTools", "Bash Edit Write NotebookEdit"),
+        ),
+        Case(
+            scope = "__proto__", locked = true, mode = "hasOwnProperty",
+            effective = "generate", refusal = "this machine is set to generate, which cannot run hasOwnProperty",
+            cwd = "home", argv = listOf("-p", "--output-format", "stream-json", "--verbose", "--include-partial-messages", "--allowedTools", "Skill Read Glob Grep WebFetch WebSearch", "--disallowedTools", "Bash Edit Write NotebookEdit"),
+        ),
+        Case(
+            scope = "__proto__", locked = true, mode = "valueOf",
+            effective = "generate", refusal = "this machine is set to generate, which cannot run valueOf",
+            cwd = "home", argv = listOf("-p", "--output-format", "stream-json", "--verbose", "--include-partial-messages", "--allowedTools", "Skill Read Glob Grep WebFetch WebSearch", "--disallowedTools", "Bash Edit Write NotebookEdit"),
+        ),
+        Case(
+            scope = "__proto__", locked = true, mode = "",
+            effective = "generate", refusal = "this machine is set to generate, which cannot run ",
+            cwd = "home", argv = listOf("-p", "--output-format", "stream-json", "--verbose", "--include-partial-messages", "--allowedTools", "Skill Read Glob Grep WebFetch WebSearch", "--disallowedTools", "Bash Edit Write NotebookEdit"),
+        ),
+        Case(
+            scope = "", locked = false, mode = "ask",
+            effective = "generate", refusal = "this machine is set to generate, which cannot run ask",
+            cwd = "home", argv = listOf("-p", "--output-format", "stream-json", "--verbose", "--include-partial-messages", "--allowedTools", "Skill Read Glob Grep WebFetch WebSearch", "--disallowedTools", "Bash Edit Write NotebookEdit"),
+        ),
+        Case(
+            scope = "", locked = false, mode = "act",
+            effective = "generate", refusal = "this machine is set to generate, which cannot run act",
+            cwd = "home", argv = listOf("-p", "--output-format", "stream-json", "--verbose", "--include-partial-messages", "--allowedTools", "Skill Read Glob Grep WebFetch WebSearch", "--disallowedTools", "Bash Edit Write NotebookEdit"),
+        ),
+        Case(
+            scope = "", locked = false, mode = "generate",
+            effective = "generate", refusal = null,
+            cwd = "home", argv = listOf("-p", "--output-format", "stream-json", "--verbose", "--include-partial-messages"),
+        ),
+        Case(
+            scope = "", locked = false, mode = "constructor",
+            effective = "generate", refusal = "this machine is set to generate, which cannot run constructor",
+            cwd = "home", argv = listOf("-p", "--output-format", "stream-json", "--verbose", "--include-partial-messages", "--allowedTools", "Skill Read Glob Grep WebFetch WebSearch", "--disallowedTools", "Bash Edit Write NotebookEdit"),
+        ),
+        Case(
+            scope = "", locked = false, mode = "toString",
+            effective = "generate", refusal = "this machine is set to generate, which cannot run toString",
+            cwd = "home", argv = listOf("-p", "--output-format", "stream-json", "--verbose", "--include-partial-messages", "--allowedTools", "Skill Read Glob Grep WebFetch WebSearch", "--disallowedTools", "Bash Edit Write NotebookEdit"),
+        ),
+        Case(
+            scope = "", locked = false, mode = "__proto__",
+            effective = "generate", refusal = "this machine is set to generate, which cannot run __proto__",
+            cwd = "home", argv = listOf("-p", "--output-format", "stream-json", "--verbose", "--include-partial-messages", "--allowedTools", "Skill Read Glob Grep WebFetch WebSearch", "--disallowedTools", "Bash Edit Write NotebookEdit"),
+        ),
+        Case(
+            scope = "", locked = false, mode = "hasOwnProperty",
+            effective = "generate", refusal = "this machine is set to generate, which cannot run hasOwnProperty",
+            cwd = "home", argv = listOf("-p", "--output-format", "stream-json", "--verbose", "--include-partial-messages", "--allowedTools", "Skill Read Glob Grep WebFetch WebSearch", "--disallowedTools", "Bash Edit Write NotebookEdit"),
+        ),
+        Case(
+            scope = "", locked = false, mode = "valueOf",
+            effective = "generate", refusal = "this machine is set to generate, which cannot run valueOf",
+            cwd = "home", argv = listOf("-p", "--output-format", "stream-json", "--verbose", "--include-partial-messages", "--allowedTools", "Skill Read Glob Grep WebFetch WebSearch", "--disallowedTools", "Bash Edit Write NotebookEdit"),
+        ),
+        Case(
+            scope = "", locked = false, mode = "",
+            effective = "generate", refusal = "this machine is set to generate, which cannot run ",
+            cwd = "home", argv = listOf("-p", "--output-format", "stream-json", "--verbose", "--include-partial-messages", "--allowedTools", "Skill Read Glob Grep WebFetch WebSearch", "--disallowedTools", "Bash Edit Write NotebookEdit"),
+        ),
+        Case(
+            scope = "", locked = true, mode = "ask",
+            effective = "generate", refusal = "this machine is set to generate, which cannot run ask",
+            cwd = "home", argv = listOf("-p", "--output-format", "stream-json", "--verbose", "--include-partial-messages", "--allowedTools", "Skill Read Glob Grep WebFetch WebSearch", "--disallowedTools", "Bash Edit Write NotebookEdit"),
+        ),
+        Case(
+            scope = "", locked = true, mode = "act",
+            effective = "generate", refusal = "this machine is set to generate, which cannot run act",
+            cwd = "home", argv = listOf("-p", "--output-format", "stream-json", "--verbose", "--include-partial-messages", "--allowedTools", "Skill Read Glob Grep WebFetch WebSearch", "--disallowedTools", "Bash Edit Write NotebookEdit"),
+        ),
+        Case(
+            scope = "", locked = true, mode = "generate",
+            effective = "generate", refusal = null,
+            cwd = "home", argv = listOf("-p", "--output-format", "stream-json", "--verbose", "--include-partial-messages"),
+        ),
+        Case(
+            scope = "", locked = true, mode = "constructor",
+            effective = "generate", refusal = "this machine is set to generate, which cannot run constructor",
+            cwd = "home", argv = listOf("-p", "--output-format", "stream-json", "--verbose", "--include-partial-messages", "--allowedTools", "Skill Read Glob Grep WebFetch WebSearch", "--disallowedTools", "Bash Edit Write NotebookEdit"),
+        ),
+        Case(
+            scope = "", locked = true, mode = "toString",
+            effective = "generate", refusal = "this machine is set to generate, which cannot run toString",
+            cwd = "home", argv = listOf("-p", "--output-format", "stream-json", "--verbose", "--include-partial-messages", "--allowedTools", "Skill Read Glob Grep WebFetch WebSearch", "--disallowedTools", "Bash Edit Write NotebookEdit"),
+        ),
+        Case(
+            scope = "", locked = true, mode = "__proto__",
+            effective = "generate", refusal = "this machine is set to generate, which cannot run __proto__",
+            cwd = "home", argv = listOf("-p", "--output-format", "stream-json", "--verbose", "--include-partial-messages", "--allowedTools", "Skill Read Glob Grep WebFetch WebSearch", "--disallowedTools", "Bash Edit Write NotebookEdit"),
+        ),
+        Case(
+            scope = "", locked = true, mode = "hasOwnProperty",
+            effective = "generate", refusal = "this machine is set to generate, which cannot run hasOwnProperty",
+            cwd = "home", argv = listOf("-p", "--output-format", "stream-json", "--verbose", "--include-partial-messages", "--allowedTools", "Skill Read Glob Grep WebFetch WebSearch", "--disallowedTools", "Bash Edit Write NotebookEdit"),
+        ),
+        Case(
+            scope = "", locked = true, mode = "valueOf",
+            effective = "generate", refusal = "this machine is set to generate, which cannot run valueOf",
+            cwd = "home", argv = listOf("-p", "--output-format", "stream-json", "--verbose", "--include-partial-messages", "--allowedTools", "Skill Read Glob Grep WebFetch WebSearch", "--disallowedTools", "Bash Edit Write NotebookEdit"),
+        ),
+        Case(
+            scope = "", locked = true, mode = "",
+            effective = "generate", refusal = "this machine is set to generate, which cannot run ",
             cwd = "home", argv = listOf("-p", "--output-format", "stream-json", "--verbose", "--include-partial-messages", "--allowedTools", "Skill Read Glob Grep WebFetch WebSearch", "--disallowedTools", "Bash Edit Write NotebookEdit"),
         ),
     )

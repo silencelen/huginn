@@ -78,7 +78,14 @@ function validateRegistration(raw, now) {
     return { ok: false, error: 'name must be 1-40 chars of letters, digits, space, dot, dash or underscore' };
   }
   const platform = PLATFORMS.includes(b.platform) ? b.platform : 'other';
-  const scope = SCOPES.includes(b.scope) ? b.scope : SCOPES[0];
+  // Normalised the way both runners normalise (trim, lowercase), closing a
+  // case-sensitivity divergence. ABSENT means the enrol default (look, a
+  // read-only claude device, as it always has); JUNK floors to SCOPES[0] —
+  // generate, the exclusive rung — which can run nothing a claude device runs.
+  const rawScope = typeof b.scope === 'string' ? b.scope.trim().toLowerCase() : '';
+  const scope = rawScope
+    ? (SCOPES.includes(rawScope) ? rawScope : SCOPES[0])
+    : table.ENROL_DEFAULT;
   return {
     ok: true,
     device: {
@@ -114,16 +121,34 @@ function validateRegistration(raw, now) {
  */
 function effectiveScope(device) {
   if (!device) return table.LOCK_DROPS_TO;
-  return device.locked
-    ? table.LOCK_DROPS_TO
-    : (SCOPES.includes(device.scope) ? device.scope : SCOPES[0]);
+  const enrolled = SCOPES.includes(device.scope) ? device.scope : SCOPES[0];
+  // An exclusive scope ignores the lock drop: a generate run mutates nothing,
+  // so there is nothing for a lock to withdraw — and dropping generate to look
+  // would sideways-GRANT ask, a claude mode the row has no engine for. (This
+  // also fixed a latent widen: a locked junk-scope device used to LIFT to look.)
+  if (table.EXCLUSIVE_SCOPES.includes(enrolled)) return enrolled;
+  return device.locked ? table.LOCK_DROPS_TO : enrolled;
 }
 
-/** Whether `scope` is at least as wide as `needed`. */
+/** Whether `scope` is at least as wide as `needed`. Internal — see scopeCovers. */
 function scopeAtLeast(scope, needed) {
   const a = SCOPES.indexOf(scope);
   const b = SCOPES.indexOf(needed);
   return a >= 0 && b >= 0 && a >= b;
+}
+
+/**
+ * Whether `scope` can honour `needed` — THE exported comparison, and the only
+ * one, so no caller can bypass exclusivity with raw lattice math. An exclusive
+ * rung (generate) matches only itself, in both directions: rank ordering alone
+ * would let `own` satisfy generate, and a claude engine would answer a
+ * local-model request — the silent substitution this design bans.
+ */
+function scopeCovers(scope, needed) {
+  if (table.EXCLUSIVE_SCOPES.includes(needed) || table.EXCLUSIVE_SCOPES.includes(scope)) {
+    return scope === needed;
+  }
+  return scopeAtLeast(scope, needed);
 }
 
 /**
@@ -144,11 +169,16 @@ function canRun(device, mode, now) {
   const needed = (Object.prototype.hasOwnProperty.call(MODE_NEEDS, mode) && typeof MODE_NEEDS[mode] === 'string')
     ? MODE_NEEDS[mode] : null;
   if (needed === null) return { ok: false, reason: `${device.name} was asked for something it does not recognise` };
+  const enrolled = SCOPES.includes(device.scope) ? device.scope : SCOPES[0];
   const scope = effectiveScope(device);
-  if (!scopeAtLeast(scope, needed)) {
+  if (!scopeCovers(scope, needed)) {
+    // Blame the lock only when unlocking would actually help — the enrolled
+    // scope covers the mode and only the lock-drop is in the way. Anything
+    // else names the scope, because the scope is what somebody would change.
+    const lockedBlame = device.locked && scopeCovers(enrolled, needed);
     return {
       ok: false,
-      reason: device.locked
+      reason: lockedBlame
         ? `${device.name} is locked, so it is read-only until someone unlocks it`
         : `${device.name} is enrolled as "${device.scope}", which cannot run ${mode}`,
     };
@@ -208,7 +238,9 @@ function workItem({ id, chatId, prompt, mode, model, effort, resumeSessionId, ro
     id,
     chatId,
     prompt,
-    mode: mode === 'act' ? 'act' : 'ask',
+    // generate rides through: relabelling it as ask would be silent engine
+    // substitution inside our own daemon. Anything else unknown coerces to ask.
+    mode: (mode === 'act' || mode === 'generate') ? mode : 'ask',
     model: model || null,
     effort: effort || null,
     resumeSessionId: resumeSessionId || null,
@@ -219,6 +251,6 @@ function workItem({ id, chatId, prompt, mode, model, effort, resumeSessionId, ro
 
 module.exports = {
   SCOPES, MODE_NEEDS, FRESH_MS, FORGET_MS,
-  emptyState, validateRegistration, effectiveScope, scopeAtLeast,
+  emptyState, validateRegistration, effectiveScope, scopeCovers,
   canRun, isOnline, noteSeen, pruneDevices, deviceView, workItem,
 };

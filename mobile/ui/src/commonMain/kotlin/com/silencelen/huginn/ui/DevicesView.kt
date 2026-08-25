@@ -19,6 +19,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.silencelen.huginn.data.Device
+import com.silencelen.huginn.device.DevicePolicy
 
 /**
  * The machines that have offered themselves to huginn.
@@ -127,11 +128,13 @@ private fun DeviceRow(device: Device, onStart: (String) -> Unit, onForget: () ->
                 // fails is worse than no button at all.
                 TextButton(
                     onClick = { onStart("ask") },
-                    enabled = device.online && !device.running,
+                    enabled = device.online && !device.running &&
+                        DevicePolicy.allows(DevicePolicy.parse(device.effectiveScope), "ask"),
                 ) { Text("Ask here") }
                 TextButton(
                     onClick = { onStart("act") },
-                    enabled = device.online && !device.running && device.effectiveScope != "look",
+                    enabled = device.online && !device.running &&
+                        DevicePolicy.allows(DevicePolicy.parse(device.effectiveScope), "act"),
                 ) { Text("Act here") }
                 TextButton(onClick = onForget) { Text("Forget") }
             }

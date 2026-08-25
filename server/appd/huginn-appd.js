@@ -52,7 +52,7 @@ const pushLib = require('./lib/pushtokens');
 const { trySender } = require('./lib/fcm');
 const { createPending, stepSoftEnd } = require('./lib/softend');
 
-const VERSION = '2.73.0';
+const VERSION = '2.74.0';
 const PORT = Number(process.env.HUGINN_APPD_PORT || 8787);
 const DATA_DIR = process.env.HUGINN_APPD_DATA || '/var/lib/huginn-appd';
 const UPLOADS_DIR = path.join(DATA_DIR, 'uploads');
@@ -2011,7 +2011,7 @@ function placeRound(rawHost, mode) {
   const needed = (Object.prototype.hasOwnProperty.call(devicesLib.MODE_NEEDS, mode)
     && typeof devicesLib.MODE_NEEDS[mode] === 'string') ? devicesLib.MODE_NEEDS[mode] : null;
   if (needed === null) return { error: `cannot run ${JSON.stringify(String(mode)).slice(0, 20)} anywhere` };
-  if (!devicesLib.scopeAtLeast(dev.scope, needed)) {
+  if (!devicesLib.scopeCovers(dev.scope, needed)) {
     return { error: `${dev.name} is enrolled as "${dev.scope}", which cannot run ${mode}` };
   }
   return { host: rawHost };

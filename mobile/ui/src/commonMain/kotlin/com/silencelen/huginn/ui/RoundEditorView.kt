@@ -25,6 +25,7 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.silencelen.huginn.data.Device
+import com.silencelen.huginn.device.DevicePolicy
 
 /**
  * Writing a Round.
@@ -215,8 +216,10 @@ fun RoundEditor(
                         label = { Text(d.name) },
                         // Its ENROLLED scope, not what it will do this second: a
                         // Round for next Sunday must not be un-pickable because the
-                        // laptop happens to be locked on a Tuesday.
-                        enabled = draft.mode != "act" || d.scope != "look",
+                        // laptop happens to be locked on a Tuesday. The policy
+                        // answers, not a hand-rolled comparison — a generate-scope
+                        // serving row must never read as a place a Round runs.
+                        enabled = DevicePolicy.allows(DevicePolicy.parse(d.scope), draft.mode),
                     )
                 }
                 // The machine it names is not in the list. Shown, selected, and

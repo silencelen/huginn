@@ -9,7 +9,9 @@
 // at the moment somebody asks instead of a minute later in a transcript.
 
 module.exports = {
-  SCOPES: ["look","work","own"],
-  MODE_NEEDS: {"ask":"look","act":"work"},
+  SCOPES: ["generate","look","work","own"],
+  MODE_NEEDS: {"ask":"look","act":"work","generate":"generate"},
   LOCK_DROPS_TO: "look",
+  EXCLUSIVE_SCOPES: ["generate"],
+  ENROL_DEFAULT: "look",
 };

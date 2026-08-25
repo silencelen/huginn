@@ -21,16 +21,19 @@ import com.silencelen.huginn.data.DeviceWork
  * Pure, so the argv a remote request turns into can be asserted in a test rather
  * than discovered in a log after the fact.
  */
-enum class DeviceScope { LOOK, WORK, OWN }
+enum class DeviceScope { GENERATE, LOOK, WORK, OWN }
 
 object DevicePolicy {
 
     fun parse(raw: String?): DeviceScope = when (raw?.trim()?.lowercase()) {
         "own" -> DeviceScope.OWN
         "work" -> DeviceScope.WORK
-        // Anything unrecognised is the NARROWEST, never the widest. A typo in a
-        // settings file must not be a privilege escalation.
-        else -> DeviceScope.LOOK
+        "look" -> DeviceScope.LOOK
+        // Anything unrecognised is the FLOOR — generate, the exclusive rung. A
+        // junk scope can run nothing a claude device runs, and no claude engine
+        // will ever serve generate, so a typo in a settings file is a dead row
+        // rather than a privilege escalation in either direction.
+        else -> DeviceScope.GENERATE
     }
 
     fun wire(scope: DeviceScope): String = scope.name.lowercase()
@@ -38,6 +41,16 @@ object DevicePolicy {
     private val SESSION_ID = Regex("^[0-9a-fA-F-]{36}$")
 
     private fun rank(scope: DeviceScope): Int = DevicePolicyTable.SCOPES.indexOf(wire(scope))
+
+    /**
+     * An EXCLUSIVE scope (generate) matches only itself, in both directions: a
+     * generate device runs only generate work, and generate work runs only on a
+     * generate device. Rank ordering alone would let `own` satisfy generate —
+     * and this machine would spawn claude to answer a local-model request, the
+     * silent engine substitution the policy bans both ways.
+     */
+    private fun exclusive(scope: DeviceScope): Boolean =
+        DevicePolicyTable.EXCLUSIVE_SCOPES.contains(wire(scope))
 
     /**
      * The scope in force right now.
@@ -48,7 +61,10 @@ object DevicePolicy {
      * and this process is the only one that knows which is true.
      */
     fun effective(scope: DeviceScope, locked: Boolean): DeviceScope =
-        if (locked) parse(DevicePolicyTable.LOCK_DROPS_TO) else scope
+        // Exclusive scopes ignore the lock drop: a generate run mutates nothing,
+        // so a lock has nothing to withdraw — and dropping generate to look would
+        // sideways-GRANT ask, a claude mode this row has no engine for.
+        if (locked && !exclusive(scope)) parse(DevicePolicyTable.LOCK_DROPS_TO) else scope
 
     /**
      * Whether a mode can run at this scope. `act` mutates; `look` does not permit that.
@@ -60,7 +76,9 @@ object DevicePolicy {
      */
     fun allows(scope: DeviceScope, mode: String): Boolean {
         val need = DevicePolicyTable.MODE_NEEDS[mode] ?: return false
-        return rank(scope) >= rank(parse(need))
+        val n = parse(need)
+        if (exclusive(n) || exclusive(scope)) return scope == n
+        return rank(scope) >= rank(n)
     }
 
     /**
@@ -73,7 +91,11 @@ object DevicePolicy {
     fun refusal(scope: DeviceScope, locked: Boolean, mode: String): String? {
         val eff = effective(scope, locked)
         if (allows(eff, mode)) return null
-        return if (locked) {
+        // The lock is blamed only when unlocking would actually HELP — the
+        // enrolled scope allows the mode and only the lock-drop is in the way.
+        // Everything else names the scope, because the scope is what a person
+        // would have to change.
+        return if (locked && allows(scope, mode)) {
             DevicePolicyTable.REFUSAL_LOCKED
         } else {
             DevicePolicyTable.REFUSAL_SCOPE
@@ -81,6 +103,17 @@ object DevicePolicy {
                 .replace("{mode}", mode)
         }
     }
+
+    /**
+     * The engine fence — the one rule the policy table cannot hold, because it
+     * cannot see which binary a runner would spawn. Generate work needs a local
+     * model engine; a runner without one refuses, and never falls through to
+     * claude. The Compose desktop runner NEVER has one — serving must survive
+     * logout, so it is always the headless service's job — and passes
+     * hasEngine = false unconditionally.
+     */
+    fun engineRefusal(mode: String, hasEngine: Boolean): String? =
+        if (mode == "generate" && !hasEngine) DevicePolicyTable.REFUSAL_ENGINE else null
 
     /**
      * The argv a work item becomes on this machine.
@@ -103,6 +136,17 @@ object DevicePolicy {
         persona: String? = null,
     ): List<String> {
         val eff = effective(scope, locked)
+        // A granted generate argv is the bare stream flags plus the request: no
+        // tool flags (the shim has no tool surface — absence is the fence), no
+        // --effort, and NO persona — huginn's context never rides to a serving
+        // box. A REFUSED generate row falls through and carries the look argv,
+        // per the two-fences rule.
+        if (work.mode == "generate" && allows(eff, "generate")) {
+            val gen = DevicePolicyTable.STREAM_FLAGS.toMutableList()
+            work.model?.takeIf { it.isNotBlank() }?.let { gen += listOf("--model", it) }
+            work.resumeSessionId?.takeIf { SESSION_ID.matches(it) }?.let { gen += listOf("--resume", it) }
+            return gen
+        }
         val act = work.mode == "act" && allows(eff, "act")
         val argv = DevicePolicyTable.STREAM_FLAGS.toMutableList()
         work.model?.takeIf { it.isNotBlank() }?.let { argv += listOf("--model", it) }

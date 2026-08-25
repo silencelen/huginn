@@ -18,12 +18,45 @@
     "scripts/gen-device-policy.js expands this into the Kotlin table, the headless",
     "runner's embedded copy, and the case matrix both implementations are tested",
     "against. server/appd/test/device-policy-cases.test.js fails if any of them has",
-    "drifted from this file — which is why deploy.sh cannot ship a drifted daemon."
+    "drifted from this file — which is why deploy.sh cannot ship a drifted daemon.",
+    "",
+    "GENERATE, the local-inference rung, added 2026-08-25 (Kvasir P2):",
+    "  - SCOPES[0] and EXCLUSIVE. An exclusive rung matches only itself, both ways:",
+    "    a generate device runs ONLY generate work, and generate work runs ONLY on a",
+    "    generate device. Plain rank ordering would let `own` satisfy generate and a",
+    "    claude engine would serve a local-model request — the silent substitution",
+    "    this design bans in both directions.",
+    "  - THE FLOOR. An unparseable scope floors to generate in all three programs:",
+    "    a scope nobody can reason about may run nothing a claude device runs, and",
+    "    no claude engine will ever serve generate. An ABSENT scope at registration",
+    "    defaults to enrolDefault (look), not the floor — saying nothing means a",
+    "    read-only claude device, as it always has.",
+    "  - LOCK. Exclusive scopes IGNORE lockDropsTo: a locked generate device keeps",
+    "    serving generate. The lock rule exists to stop unwatched MUTATION, and a",
+    "    generate run touches no files and grants no tools, so there is nothing for",
+    "    a lock to withdraw — and dropping generate to look would sideways-GRANT ask,",
+    "    a claude mode this row has no engine for. The drop would widen, not narrow.",
+    "  - ARGV. streamFlags + --model + --resume only. No tool flags (the shim has no",
+    "    tools to grant or deny), no --append-system-prompt (no context leaves this",
+    "    host for the serving box), no --effort. A REFUSED generate row still carries",
+    "    the look argv: if a refused row ever spawned anyway, the engine would be",
+    "    claude, so the argv it must not exceed is the read-only claude one.",
+    "  - refusals.engine is said by a RUNNER whose engine cannot serve the mode",
+    "    (desktop always; headless when conf.llm is unset). The policy cannot see",
+    "    which binary sits at the far end, so that last fence lives in the runner",
+    "    and is unit-tested per runner rather than matrix-tested. Said here so both",
+    "    runners say the same words.",
+    "  - Future scopes must DECIDE exclusivity explicitly: a rung left out of",
+    "    exclusiveScopes inherits plain-rank semantics, silently."
   ],
 
-  "scopes": ["look", "work", "own"],
+  "scopes": ["generate", "look", "work", "own"],
 
-  "modeNeeds": { "ask": "look", "act": "work" },
+  "exclusiveScopes": ["generate"],
+
+  "enrolDefault": "look",
+
+  "modeNeeds": { "ask": "look", "act": "work", "generate": "generate" },
 
   "lockDropsTo": "look",
 
@@ -43,6 +76,7 @@
 
   "refusals": {
     "locked": "this machine is locked, so it is read-only until someone unlocks it",
-    "scope": "this machine is set to {scope}, which cannot run {mode}"
+    "scope": "this machine is set to {scope}, which cannot run {mode}",
+    "engine": "this machine has no local model engine, so it cannot run generate"
   }
 }
