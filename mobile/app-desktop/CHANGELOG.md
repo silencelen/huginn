@@ -1,5 +1,18 @@
 # Huginn Desktop changelog
 
+## 0.9.0
+
+- **Local models in the chat model menu** (shared with the phone): rows named
+  after the serving machine, Ask-only chats that say so, no effort control for
+  a model that has none, and session menus that never offer what a session
+  cannot run.
+- **Settings gains "Serve local AI from this PC"** — a door to the same
+  manager the `huginn local` command drives: live status of what this machine
+  serves, and a stop control. Setting up stays a terminal act on the machine
+  itself, and serving is never remotely flippable.
+- The Devices screen explains a serving machine instead of offering it
+  Ask/Act buttons that could never work.
+
 ## 0.8.15
 
 - **A Round's model and effort can now be changed after creation** — the

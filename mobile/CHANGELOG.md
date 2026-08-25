@@ -1,5 +1,18 @@
 # Huginn changelog
 
+## 2.80.0 — 2026-08-25
+
+### Added
+- **Local models in the chat model menu.** A machine serving local AI (the
+  huginn local tier) now shows its models as rows named after the machine —
+  picking one is picking the machine. Local chats are Ask-only and say so; the
+  effort control is absent for them (a local model has no effort knob).
+  Session model menus never offer local rows: a session control types into a
+  live Claude pane, where a local model could never work.
+- **The Devices screen explains a serving machine**: what it serves, whether it
+  is reachable, and how to chat with it — with no Ask-or-Act-here buttons,
+  which could never work there.
+
 ## 2.79.0 — 2026-08-25
 
 ### Fixed

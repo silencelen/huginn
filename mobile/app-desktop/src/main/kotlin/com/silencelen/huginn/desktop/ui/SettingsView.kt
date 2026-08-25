@@ -41,6 +41,7 @@ import com.silencelen.huginn.data.Autoswitch
 import com.silencelen.huginn.data.SavedAccount
 import com.silencelen.huginn.desktop.AppStore
 import com.silencelen.huginn.desktop.DesktopSettings
+import com.silencelen.huginn.desktop.LocalServe
 import com.silencelen.huginn.desktop.diag.AppLog
 import com.silencelen.huginn.desktop.diag.NotifierSeam
 import com.silencelen.huginn.desktop.update.UpdateState
@@ -142,6 +143,7 @@ fun SettingsView(store: AppStore) {
         )
 
         DeviceSection(store)
+        LocalServeSection()
 
         UpdateSection(store)
         DiagnosticsSection(store)
@@ -644,6 +646,86 @@ private val SCOPE_CHOICES = listOf(
     Triple("work", "Work", "Read, change and run commands, starting in the folder below."),
     Triple("own", "Own", "The whole machine."),
 )
+
+/**
+ * The local-AI tier on THIS machine — a door to the same fetched manager the
+ * `huginn local` verb drives (one implementation, two doors). The app holds no
+ * serving state of its own: the services belong to systemd/WinSW, this section
+ * only asks and relays. Serving is never remotely flippable — this section
+ * exists only on the machine itself, which is the whole doctrine.
+ */
+@Composable
+private fun LocalServeSection() {
+    val scope = rememberCoroutineScope()
+    var status by remember { mutableStateOf<LocalServe.Status?>(null) }
+    var error by remember { mutableStateOf<String?>(null) }
+    var busy by remember { mutableStateOf(false) }
+    var log by remember { mutableStateOf(listOf<String>()) }
+    val fetched = remember { LocalServe.managerFile().isFile }
+
+    fun refresh() {
+        scope.launch {
+            LocalServe.status()
+                .onSuccess { status = it; error = null }
+                .onFailure { status = null; error = it.message }
+        }
+    }
+    LaunchedEffect(Unit) { if (fetched) refresh() }
+
+    SectionHeader("Serve local AI from this PC")
+    Muted(
+        "Runs small AI models here and offers them in huginn's chat model menus. " +
+            "Everything serves on this machine only (127.0.0.1), key-gated, and can " +
+            "only be set up or stopped from this machine — never remotely.",
+        maxLines = 4,
+    )
+
+    if (!fetched) {
+        // No switch wired to nothing: setting up downloads ~5 GB of pinned
+        // engine and model files, and the consent for that lives in the
+        // terminal flow that fetches the manager in the first place.
+        Muted(
+            "Not set up. From this machine's terminal:  huginn local on   " +
+                "(optional, ~5 GB, chosen for this machine's hardware)",
+            Modifier.padding(top = 8.dp, start = 4.dp),
+            maxLines = 3,
+        )
+        return
+    }
+
+    val s = status
+    Muted(
+        when {
+            error != null -> "The manager did not answer: $error"
+            s == null -> "Asking…"
+            !s.setup -> "Installed but not set up — run: huginn local on"
+            s.engine.reachable && s.engine.models.isNotEmpty() ->
+                "Serving ${s.engine.models.joinToString(", ")} (class ${s.cls ?: "?"}) as \"${s.deviceName ?: "?"}\"."
+            else -> "Set up as \"${s.deviceName ?: "?"}\" but the engine is NOT answering — services: " +
+                "llm ${s.services.llm ?: "?"}, runner ${s.services.runner ?: "?"}"
+        },
+        Modifier.padding(top = 8.dp, start = 4.dp),
+        maxLines = 3,
+    )
+
+    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(top = 6.dp)) {
+        TextButton(onClick = { refresh() }, enabled = !busy) { Text("Refresh") }
+        if (s?.setup == true) {
+            TextButton(
+                onClick = {
+                    busy = true; log = emptyList()
+                    scope.launch {
+                        LocalServe.run("off") { line -> log = (log + line).takeLast(8) }
+                        busy = false; refresh()
+                    }
+                },
+                enabled = !busy,
+            ) { Text("Stop serving") }
+        }
+    }
+    // The manager's own words, raw: if it ever lies, the lie is inspectable.
+    log.forEach { Muted(it, Modifier.padding(start = 8.dp), maxLines = 1) }
+}
 
 @Composable
 private fun SectionHeader(text: String) {

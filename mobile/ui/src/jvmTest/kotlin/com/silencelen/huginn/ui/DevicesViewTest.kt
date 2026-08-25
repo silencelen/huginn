@@ -1,6 +1,7 @@
 package com.silencelen.huginn.ui
 
 import com.silencelen.huginn.data.Device
+import com.silencelen.huginn.data.DeviceModel
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -72,5 +73,41 @@ class DevicesViewTest {
             "windows · own, look while locked · idle · v0.8.3",
             describeDevice(device(scope = "own", effective = "look", version = "0.8.3")),
         )
+    }
+
+    // ------------------------------------------------------ the serving row
+
+    private fun servingDevice(
+        online: Boolean = true,
+        running: Boolean = false,
+        models: List<DeviceModel> = listOf(DeviceModel("qwen3-8b", "Qwen3 8B")),
+    ) = Device(
+        id = "d2", name = "datatreex-llm", platform = "windows",
+        scope = "generate", effectiveScope = "generate",
+        online = online, running = running, version = "0.12.1",
+        llmSlug = "datatreex-llm", models = models,
+    )
+
+    @Test
+    fun aServingRowSaysWhatItIsAndNeverMentionsTheLock() {
+        assertEquals(
+            "windows · serves local models · Qwen3 8B · serving · v0.12.1",
+            describeDevice(servingDevice()),
+        )
+        // Exclusive scopes ignore the lock drop, so a locked clause would be a
+        // claim about behaviour that never changes.
+        assertFalse(describeDevice(servingDevice()).contains("locked"))
+    }
+
+    @Test
+    fun aServingRowIsHonestAboutReachabilityAndWork() {
+        assertTrue(describeDevice(servingDevice(online = false)).contains("not reachable"))
+        assertTrue(describeDevice(servingDevice(running = true)).contains("generating"))
+    }
+
+    @Test
+    fun aServingRowWithNoCatalogStillReads() {
+        val line = describeDevice(servingDevice(models = emptyList()))
+        assertTrue(line.contains("serves local models"), line)
     }
 }
