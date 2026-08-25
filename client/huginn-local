@@ -2,7 +2,7 @@
 'use strict';
 // huginn-local — activation and lifecycle of the local-AI tier on THIS machine.
 //
-// Version: 0.12.0
+// Version: 0.12.1
 //
 // `huginn local on` follows the device-enrolment grammar exactly: consent →
 // fetch pinned → validate → install → enrol. This file is the manager the shell
@@ -36,7 +36,7 @@ const https = require('node:https');
 const crypto = require('node:crypto');
 const { spawnSync, spawn } = require('node:child_process');
 
-const VERSION = '0.12.0';
+const VERSION = '0.12.1';
 
 // ---8<--- BEGIN GENERATED MANIFEST — scripts/gen-local-manifest.js — DO NOT EDIT ---8<---
 const MANIFEST = {
@@ -705,9 +705,11 @@ async function cmdOn(flags) {
     installShimCopy();
     if (!flags.yes && !(await consent(`Wrap the existing ${kind} at ${url}, install the runner service, and offer "${conf.deviceName}" to huginn at ${conf.url}?`))) process.exit(1);
     saveConf(conf);
-    installRunnerService(flags);
+    // Enrol before the runner service starts — see the managed branch: the
+    // service's own enrolment must find the id already on disk.
     const e = enrolDevice(conf, models);
     conf.llmSlug = e.llmSlug; saveConf(conf);
+    installRunnerService(flags);
     console.log(`\nOn. ${conf.deviceName} serves ${models.length} adapter model(s) to huginn.`);
     return;
   }
@@ -770,9 +772,12 @@ async function cmdOn(flags) {
   console.log(`  serving ${h.models.join(', ')}`);
   const keyless = await getJson(`http://127.0.0.1:${conf.port}/v1/models`, null);
   if (keyless.status === 200) console.log('  note: the front door answers without the key on the model LIST; completions are key-gated by llama-server itself');
-  // 7: runner service + enrol
-  installRunnerService(flags);
+  // 7: enrol FIRST, then start the runner service. The service's own poll loop
+  // also enrols, and starting it before the id exists races two registrations
+  // into two device rows — found live on the first real install: the second
+  // enrolment saw the first one's slug as taken and hash-suffixed itself.
   const e = enrolDevice(conf, plan.models);
+  installRunnerService(flags);
   conf.llmSlug = e.llmSlug;
   conf.installed = {
     llamaTag: MANIFEST.llamaCpp.release, swapVersion: MANIFEST.llamaSwap.version,
