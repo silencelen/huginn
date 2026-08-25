@@ -1,6 +1,8 @@
 package com.silencelen.huginn
 
 import com.silencelen.huginn.data.ChatList
+import com.silencelen.huginn.data.DeviceList
+import com.silencelen.huginn.data.RoundList
 import com.silencelen.huginn.data.Screen
 import com.silencelen.huginn.data.SessionList
 import com.silencelen.huginn.data.Status
@@ -101,4 +103,57 @@ class ApiContractTest {
         val s = json.decodeFromString<Screen>("""{"width":80,"height":24,"somethingNew":true}""")
         assertEquals(80, s.width)
     }
+    // ---------------------------------------------------------- Rounds + Devices
+    //
+    // ⚠ CAPTURED 2026-08-25, because until then this file's fixtures predated both
+    // features. Its own KDoc says this is "the only automated check that the app
+    // and the daemon still agree on the wire format" — and the two newest features,
+    // the ones most likely to have a field renamed, were the two it did not cover.
+
+    @Test
+    fun `rounds decode with the fields the list and the report depend on`() {
+        val list = json.decodeFromString<RoundList>(fixture("rounds.json"))
+        assertTrue("expected at least one round", list.rounds.isNotEmpty())
+        val r = list.rounds.first()
+        assertTrue("title must survive", r.title.isNotBlank())
+        // The daemon renders the cadence; the clients never re-derive it, so an
+        // empty one here is a blank line under every row.
+        assertTrue("cadence must decode", r.cadence.isNotBlank())
+        assertNotNull("schedule must decode", r.schedule)
+        assertTrue("nextRunAt drives the countdown", r.nextRunAt != null && r.nextRunAt!! > 0)
+
+        val run = r.lastRun
+        assertNotNull("a round that has run must decode its lastRun", run)
+        assertTrue("status must decode", run!!.status.isNotBlank())
+        assertTrue("the headline IS the notification", run.headline.isNotBlank())
+        assertTrue("at is epoch SECONDS", run.at > 0)
+        // Added 2026-08-25; a rename would silently take the row back to showing
+        // the capped count as if it were the whole story.
+        assertTrue("itemsTotal must decode", run.itemsTotal >= run.items.size)
+        // Added 2026-08-25; a rename means Mark done stops sticking, with no error.
+        assertNotNull("acknowledgedAt must decode", run.acknowledgedAt)
+        run.items.firstOrNull()?.let {
+            assertTrue("an item's next step is what Carry on is built from", it.suggest.isNotBlank())
+        }
+    }
+
+    @Test
+    fun `devices decode with the scope fields the controls depend on`() {
+        val list = json.decodeFromString<DeviceList>(fixture("devices.json"))
+        assertTrue("expected at least one device", list.devices.isNotEmpty())
+        val d = list.devices.first()
+        assertTrue("name must survive", d.name.isNotBlank())
+        assertTrue("platform must decode", d.platform.isNotBlank())
+        assertTrue("scope must decode", d.scope.isNotBlank())
+        // ⚠ effectiveScope is what enables "Act here", not the enrolled scope. A
+        // rename would leave the button reading the wrong field, which is the one
+        // place on this screen where being wrong widens what a machine will do.
+        assertTrue("effectiveScope must decode", d.effectiveScope.isNotBlank())
+        assertEquals(
+            "every device must report an effectiveScope",
+            list.devices.size,
+            list.devices.count { it.effectiveScope.isNotBlank() },
+        )
+    }
+
 }
