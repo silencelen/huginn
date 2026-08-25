@@ -88,6 +88,7 @@ import com.silencelen.huginn.ui.ChatsScreen
 import com.silencelen.huginn.ui.DevicesScreen
 import com.silencelen.huginn.ui.RoundEditScreen
 import com.silencelen.huginn.ui.linksOn
+import com.silencelen.huginn.ui.worthContinuing
 import com.silencelen.huginn.ui.screenText
 import com.silencelen.huginn.ui.RoundsScreen
 import com.silencelen.huginn.ui.HuginnViewModel
@@ -893,7 +894,14 @@ fun HuginnApp(
             LaunchedEffect(chatPage?.nextOffset, chatBusy) {
                 vm.maybeSuggestChat(id, chatPage, chatBusy)
             }
+            // The Round this chat is the run of, found by the run itself rather
+            // than by a field on the chat: it is the same lookup the Rounds list
+            // does to open it, so the two cannot disagree about which is which.
+            val fromRound = rounds.firstOrNull { it.lastRun?.chatId == id }
             ChatScreen(
+                onContinueRound = fromRound
+                    ?.takeIf { chatSealed && worthContinuing(it) }
+                    ?.let { r -> { vm.continueRound(r) { newId -> vm.openChat(newId); dest = Dest.Chat(newId) } } },
                 sealedRun = chatSealed,
                 page = chatPage,
                 error = chatError,
@@ -1041,6 +1049,7 @@ fun HuginnApp(
                 // back whatever it was when the screen opened.
                 existing = id?.let { rid -> rounds.firstOrNull { it.id == rid } },
                 devices = devices,
+                deviceTz = vm.deviceZone(),
                 onCreate = { d, cb -> vm.createRound(d, cb) },
                 onSave = { rid, d, cb -> vm.saveRound(rid, d, cb) },
                 onDelete = { rid, cb -> vm.deleteRound(rid, cb) },
@@ -1187,7 +1196,13 @@ fun HuginnApp(
                                             // person cannot solve any other way — they cannot
                                             // retype 450 characters, and selecting it would hand
                                             // back the rows the terminal broke it into.
-                                            val links = linksOn(screen)
+                                            // SNAPSHOT ON OPEN. Read live, a URL
+                                            // scrolling on or off the pane inserts
+                                            // or removes the FIRST item while the
+                                            // menu is open — shifting every item
+                                            // below it by a row, so a tap aimed at
+                                            // "Wind down…" lands on "Kill session…".
+                                            val links = remember(surfaceMenu) { linksOn(vm.screen.value) }
                                             if (links.size == 1) {
                                                 DropdownMenuItem(text = { Text("Copy link") },
                                                     onClick = { surfaceMenu = false; vm.copy(links[0], "link") })
@@ -1196,7 +1211,7 @@ fun HuginnApp(
                                                     onClick = { surfaceMenu = false; vm.copy(links.joinToString("\n"), "links") })
                                             }
                                             DropdownMenuItem(text = { Text("Copy screen") },
-                                                onClick = { surfaceMenu = false; vm.copy(screenText(screen), "screen") })
+                                                onClick = { surfaceMenu = false; vm.copy(screenText(vm.screen.value), "screen") })
                                             DropdownMenuItem(text = { Text("Rename session") },
                                                 onClick = { surfaceMenu = false; renameTarget = d.name; renameText = d.name })
                                             DropdownMenuItem(text = { Text("Fit pane to phone") },
