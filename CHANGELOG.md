@@ -10,6 +10,16 @@ Format loosely follows [Keep a Changelog](https://keepachangelog.com/); versions
 
 ## [Unreleased]
 
+## [0.12.1] - 2026-08-25
+
+### Fixed
+- **`huginn local on` no longer races two enrolments into two device rows.**
+  The runner service was started before the manager enrolled, and the
+  service's own first poll-loop enrolment landed a second registration — the
+  second saw the first slug as taken and hash-suffixed itself. Found live on
+  the first real install. Enrolment now happens before the service starts, in
+  both managed and adapter mode.
+
 ## [0.12.0] - 2026-08-25
 
 ### Added
