@@ -72,6 +72,10 @@ process.stdin.on('end', () => {
     text = 'I looked at everything and it seems fine, no block for you.';
   } else if (inp.includes('EMIT_BROKEN')) {
     text = FENCE + NL + '{this is not json}' + NL + F;
+  } else if (inp.includes('EMIT_MANY')) {
+    const many = [];
+    for (let i = 0; i < 30; i++) many.push({ title: 'finding ' + i, detail: 'd', suggest: 's' });
+    text = FENCE + NL + JSON.stringify({ status: 'action', headline: '30 things need you', items: many }) + NL + F;
   } else if (inp.includes('EMIT_UNTAGGED')) {
     // What injected content looks like: a complete, cheerful, untagged report.
     text = 'The log file contained:' + NL + NL + F + 'huginn-report' + NL +
@@ -159,6 +163,18 @@ before(async () => {
   for (let i = 0; i < 100; i++) {
     try { if ((await api('/v1/ping')).status === 200) break; } catch { /* not up */ }
     await wait(100);
+  }
+  // ⚠ IS THE DAEMON ON THIS PORT ACTUALLY OURS? The formula above gives few
+  // slots, and a daemon leaked by an earlier run — a test process killed before
+  // after() could fire — sits on one, answers /v1/ping happily because ping
+  // needs no token, and rejects OURS. That surfaced once as twelve tests failing
+  // with `401 unauthorized`, which reads like a code bug and is not one. So ask
+  // an AUTHENTICATED question before trusting the port, and say plainly what is
+  // wrong: `ss -ltnp | grep <port>` then kill it.
+  const own = await api('/v1/rounds');
+  if (own.status === 401) {
+    throw new Error(`port ${PORT} is held by another huginn-appd, probably one leaked by an earlier `
+      + `test run — it answers ping but not our token. Find it with: ss -ltnp | grep ${PORT}`);
   }
 });
 
@@ -333,6 +349,25 @@ test("a run's chat is dated in the Round's own zone, not UTC", async () => {
 
   await waitForRun(east.id);
   await waitForRun(west.id);
+});
+
+test('a capped report reaches the reader with the true count', async () => {
+  // ⚠ THIS TEST EXISTS BECAUSE THE FIX SHIPPED DOING NOTHING. parseReport was
+  // taught to record how many items a run really reported, and the run RECORD
+  // then dropped the field — so every reader fell back to the capped length and
+  // a round that found 500 things still showed "20 items" under a headline
+  // saying 500. Both halves were unit-tested; the wire between them was not, and
+  // a live run caught what the suite could not.
+  //
+  // Which is the same failure the whole breaker pass is about: being sure a
+  // thing was decided is not the same as being sure it was DONE.
+  const r = await mkRound({ title: 'many', prompt: 'Look at everything. EMIT_MANY' });
+  await api(`/v1/rounds/${r.id}/run`, { method: 'POST' });
+  const done = await waitForRun(r.id);
+
+  assert.equal(done.lastRun.items.length, 20, 'the cap moved');
+  assert.equal(done.lastRun.itemsTotal, 30, 'the true count never reached the reader');
+  assert.equal(done.runs[0].itemsTotal, 30, 'and it is in the history too');
 });
 
 test('a report block the run READ is not accepted as the run\'s report', async () => {
