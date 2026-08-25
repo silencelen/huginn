@@ -932,6 +932,17 @@ data class Device(
     val registeredAt: Long? = null,
     val running: Boolean = false,
     val queued: Int = 0,
+    /**
+     * True when this daemon has not heard the device ASK FOR WORK since it
+     * started, so whether it is free is not something it can currently say.
+     *
+     * ⚠ Reachable is not the same as free, and the daemon used to answer the
+     * second question with the first. Its map of running remote work is
+     * in-memory, so restarting it wipes that — while the far machine is still
+     * running its claude and is single-job: it will not poll again until that
+     * child exits, minutes or hours later.
+     */
+    val awaitingPoll: Boolean = false
 )
 
 @Serializable

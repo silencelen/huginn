@@ -1,5 +1,21 @@
 # Huginn changelog
 
+## 2.78.0 — 2026-08-25
+
+### Changed
+- A device that has not asked for work since huginn restarted now reads
+  **"free? not asked for work since huginn restarted"** rather than "idle".
+  Reachable and free are different questions, and the row was answering the
+  second with the first — which is how work got handed to a machine that was
+  still finishing an earlier job.
+
+### Fixed
+- The wire-contract test — the only automated check that the app and the daemon
+  still agree on the payload shape — had no Round and no Device fixture. Its
+  fixtures were captured before either feature existed, so the two most likely
+  to have a field renamed were the two it did not cover. Both are captured now,
+  including the report's item count and its read state.
+
 ## 2.77.0 — 2026-08-25
 
 ### Added

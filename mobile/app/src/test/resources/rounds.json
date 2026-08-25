@@ -1,0 +1,110 @@
+{
+  "rounds": [
+    {
+      "v": 1,
+      "id": "12ceb69d-7404-4d36-861e-a4c4e42705cf",
+      "title": "a scheduled job 0",
+      "prompt": "what this run is asked to do",
+      "goal": "what done looks like",
+      "enabled": true,
+      "mode": "ask",
+      "host": "local",
+      "model": null,
+      "effort": null,
+      "schedule": {
+        "kind": "weekly",
+        "at": "19:00",
+        "tz": "America/Los_Angeles",
+        "days": [
+          0
+        ]
+      },
+      "notifyWhen": "never",
+      "catchUp": false,
+      "timeoutSec": 900,
+      "createdAt": 1787677381,
+      "updatedAt": 1787677392,
+      "nextRunAt": 1788141600000,
+      "currentChatId": null,
+      "lastRun": {
+        "at": 1787677390,
+        "chatId": "9eea3f9a-8523-49eb-8f03-977512c50e23",
+        "status": "action",
+        "reportedStatus": "action",
+        "goalMet": true,
+        "headline": "one line about what it found",
+        "items": [
+          {
+            "title": "a finding 0",
+            "detail": "what is wrong",
+            "suggest": "the next step"
+          }
+        ],
+        "itemsTotal": 1,
+        "malformed": false,
+        "manual": true,
+        "durationSec": 9,
+        "acknowledgedAt": 1787677392
+      },
+      "runs": [
+        {
+          "at": 1787677390,
+          "chatId": "9eea3f9a-8523-49eb-8f03-977512c50e23",
+          "status": "action",
+          "reportedStatus": "action",
+          "goalMet": true,
+          "headline": "one line about what it found",
+          "items": [
+            {
+              "title": "a finding",
+              "detail": "d",
+              "suggest": "s"
+            }
+          ],
+          "itemsTotal": 1,
+          "malformed": false,
+          "manual": true,
+          "durationSec": 9,
+          "acknowledgedAt": 1787677392
+        }
+      ],
+      "lastFiredAt": 1787677381,
+      "cadence": "Sundays at 7:00 PM",
+      "running": false,
+      "hostName": null
+    },
+    {
+      "v": 1,
+      "id": "f483edc0-8835-4e03-ae30-e35e31b187b7",
+      "title": "a scheduled job 1",
+      "prompt": "what this run is asked to do",
+      "enabled": true,
+      "mode": "act",
+      "model": null,
+      "effort": null,
+      "schedule": {
+        "kind": "weekly",
+        "at": "19:00",
+        "tz": "America/Los_Angeles",
+        "days": [
+          0
+        ]
+      },
+      "notifyWhen": "attention",
+      "catchUp": false,
+      "timeoutSec": 1200,
+      "createdAt": 1787537503,
+      "updatedAt": 1787557055,
+      "nextRunAt": 1788141600000,
+      "currentChatId": null,
+      "lastRun": null,
+      "runs": [],
+      "lastFiredAt": 1787556640,
+      "goal": "what done looks like",
+      "cadence": "Sundays at 7:00 PM",
+      "running": false,
+      "host": "local",
+      "hostName": null
+    }
+  ]
+}

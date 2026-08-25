@@ -1,0 +1,52 @@
+{
+  "devices": [
+    {
+      "id": "6d1c40cb-c731-4413-bf2e-808c24e5cee6",
+      "name": "A-LAPTOP",
+      "platform": "linux",
+      "scope": "work",
+      "effectiveScope": "work",
+      "locked": false,
+      "root": "/a/work/root",
+      "version": "0.10.2",
+      "online": true,
+      "lastSeen": 1787677374439,
+      "registeredAt": 1787618976800,
+      "running": false,
+      "queued": 0,
+      "awaitingPoll": false
+    },
+    {
+      "id": "4d0707b1-48a0-41f1-a8bb-fa65a266c0d2",
+      "name": "a-server",
+      "platform": "windows",
+      "scope": "look",
+      "effectiveScope": "look",
+      "locked": false,
+      "root": null,
+      "version": "0.8.13",
+      "online": true,
+      "lastSeen": 1787677372058,
+      "registeredAt": 1787676281105,
+      "running": false,
+      "queued": 0,
+      "awaitingPoll": false
+    },
+    {
+      "id": "e7b1ea43-a7f3-4cdd-a9bb-c9f8ae0baf43",
+      "name": "A-DESKTOP",
+      "platform": "windows",
+      "scope": "own",
+      "effectiveScope": "own",
+      "locked": false,
+      "root": "/a/work/root",
+      "version": "0.8.12",
+      "online": false,
+      "lastSeen": 1787650839760,
+      "registeredAt": 1787552247668,
+      "running": false,
+      "queued": 0,
+      "awaitingPoll": true
+    }
+  ]
+}

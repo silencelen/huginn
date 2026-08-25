@@ -6,8 +6,13 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -31,6 +36,13 @@ import kotlinx.coroutines.launch
 fun DevicesPane(store: AppStore) {
     val devices by store.devices.collectAsState()
     val scope = rememberCoroutineScope()
+    // ⚠ ASKS FIRST, as the phone already did. Forget sat directly beside "Ask
+    // here" and "Act here" in the shared row and fired immediately — and what it
+    // does is easy to misread: the machine comes back with the SAME id under a
+    // minute later, because a runner that is still running simply re-enrols. So
+    // the button looked like it had done nothing, when what it had actually done
+    // was kill whatever that device was running.
+    var forgetTarget by remember { mutableStateOf<com.silencelen.huginn.data.Device?>(null) }
 
     if (devices.isEmpty()) {
         Column(
@@ -58,8 +70,31 @@ fun DevicesPane(store: AppStore) {
         DevicesSection(
             devices = devices,
             onStart = { d, mode -> scope.launch { store.startChatOn(d.id, mode) } },
-            onForget = { d -> scope.launch { store.forgetDevice(d.id) } },
+            onForget = { d -> forgetTarget = d },
             header = null,
+        )
+    }
+
+    forgetTarget?.let { d ->
+        AlertDialog(
+            onDismissRequest = { forgetTarget = null },
+            title = { Text("Forget ${d.name}?") },
+            // The same words as the phone, deliberately: two dialogs describing
+            // one action differently is how people learn to distrust both.
+            text = {
+                Text(
+                    "Huginn stops offering it work. Nothing changes on ${d.name} itself — " +
+                        "if its runner is still going it will enrol again. Stop it there to " +
+                        "make this stick.",
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    val t = d; forgetTarget = null
+                    scope.launch { store.forgetDevice(t.id) }
+                }) { Text("Forget") }
+            },
+            dismissButton = { TextButton(onClick = { forgetTarget = null }) { Text("Cancel") } },
         )
     }
 }

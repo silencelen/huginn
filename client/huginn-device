@@ -31,7 +31,7 @@ const https = require('https');
 const readline = require('readline');
 const { spawn } = require('child_process');
 
-const VERSION = '0.10.2';
+const VERSION = '0.10.3';
 
 // ---8<--- GENERATED POLICY — scripts/gen-device-policy.js — DO NOT EDIT ---8<---
 const POLICY = {
@@ -359,6 +359,88 @@ async function enrol(conf) {
  * daemon infers from silence. Each batch is also where a cancel comes back, which
  * makes the flush interval the worst-case latency of the stop button.
  */
+/**
+ * The daemon caps a request body, and a batch that exceeds it is rejected whole.
+ *
+ * ⚠⚠ THIS LOST ENTIRE ANSWERS. A device runs claude with
+ * `--output-format stream-json --verbose --include-partial-messages`, so ONE
+ * line can carry a whole tool_result or a whole final answer — a Read of a big
+ * file, a chatty Bash, a long report. Over the cap the POST came back 413 and:
+ *
+ *   1. the whole batch was lost, not just the oversized line;
+ *   2. if the terminal frame was in that batch it could NEVER be delivered, since
+ *      the retry is identically 413 — so the chat sat `running` forever and this
+ *      machine was blocked from every other job;
+ *   3. the chat was then blamed on "no word for 5 minutes".
+ *
+ * The failure was silent, permanent, and reserved for the runs with the most to
+ * say. So the RUNNER keeps itself under the limit rather than discovering it: no
+ * batch is ever built too large, an oversized line is shrunk in place with a
+ * marker where the content was, and the terminal frame is posted ALONE so that
+ * whatever else happens, the ending can always land.
+ */
+const MAX_LINE_BYTES = 128 * 1024;
+const MAX_BATCH_BYTES = 192 * 1024;
+
+const bytes = (x) => Buffer.byteLength(typeof x === 'string' ? x : JSON.stringify(x));
+
+/** Truncates every long string inside a parsed event, in place. */
+function trimStrings(node, budget, seen = new Set()) {
+  if (!node || typeof node !== 'object' || seen.has(node)) return;
+  seen.add(node);
+  for (const [k, v] of Object.entries(node)) {
+    if (typeof v === 'string' && v.length > budget) {
+      node[k] = `${v.slice(0, budget)}\n\n[… ${v.length - budget} more characters were too large to send and were dropped]`;
+    } else if (v && typeof v === 'object') {
+      trimStrings(v, budget, seen);
+    }
+  }
+}
+
+/**
+ * A line small enough to send, keeping its own event type wherever possible.
+ *
+ * Shrinking in place beats substituting a note: a truncated tool_result still
+ * renders as a tool_result with most of its content, where a replacement would
+ * lose the shape and everything in it.
+ */
+function shrinkLine(line) {
+  if (bytes(line) <= MAX_LINE_BYTES) return line;
+  let ev;
+  try { ev = JSON.parse(line); } catch { ev = null; }
+  if (ev) {
+    for (const budget of [32768, 8192, 1024, 200]) {
+      trimStrings(ev, budget);
+      const out = JSON.stringify(ev);
+      if (bytes(out) <= MAX_LINE_BYTES) return out;
+    }
+  }
+  // Unparseable, or structurally huge whatever we do. Said as assistant text so
+  // it is VISIBLE in the transcript: a silently missing event is the thing this
+  // whole function exists to stop.
+  return JSON.stringify({
+    type: 'assistant',
+    message: { content: [{ type: 'text',
+      text: `[one output event of ${bytes(line)} bytes was too large to send and was dropped]` }] },
+  });
+}
+
+/** Splits lines into batches that will each fit, preserving order. */
+function batchLines(lines) {
+  const out = []; let cur = []; let size = 0;
+  for (const raw of lines) {
+    const line = shrinkLine(raw);
+    const n = bytes(line) + 2;
+    if (cur.length && size + n > MAX_BATCH_BYTES) { out.push(cur); cur = []; size = 0; }
+    cur.push(line); size += n;
+  }
+  if (cur.length) out.push(cur);
+  return out;
+}
+
+/** True when the daemon will never accept this again, however many times we try. */
+const permanent = (e) => / → (40[034]|413) /.test(String(e && e.message));
+
 function runWork(id, work, conf) {
   return new Promise((resolve) => {
     const scope = parseScope(conf.scope);
@@ -401,17 +483,33 @@ function runWork(id, work, conf) {
     let cancelled = false;
     let done = false;
 
+    let flushing = false;
     const flush = setInterval(async () => {
-      if (!pending.length || done) return;
+      if (!pending.length || done || flushing) return;
+      flushing = true;
       const batch = pending; pending = [];
       try {
-        const ack = await api('POST', `/v1/devices/${id}/work/${work.id}/events`,
-          { lines: batch, locked: lock });
-        if (ack && ack.cancel && !cancelled) { cancelled = true; child.kill(); }
+        for (const chunk of batchLines(batch)) {
+          const ack = await api('POST', `/v1/devices/${id}/work/${work.id}/events`,
+            { lines: chunk, locked: lock });
+          if (ack && ack.cancel && !cancelled) { cancelled = true; child.kill(); }
+        }
       } catch (e) {
-        // Put them back: a blip mid-run must not silently eat the answer.
-        pending = batch.concat(pending);
-        log(`batch failed (will retry): ${e.message}`);
+        if (permanent(e)) {
+          // ⚠ NOT RETRYABLE, and retrying was its own bug: after a daemon
+          // restart the run is simply gone, and the old code re-queued the batch
+          // and hammered the 404 twice a second for as long as the child lived.
+          // There is nothing left to deliver these to.
+          log(`giving up on ${work.id}: ${e.message}`);
+          cancelled = true;
+          try { child.kill(); } catch { /* already gone */ }
+        } else {
+          // Put them back: a blip mid-run must not silently eat the answer.
+          pending = batch.concat(pending);
+          log(`batch failed (will retry): ${e.message}`);
+        }
+      } finally {
+        flushing = false;
       }
     }, 500);
 
@@ -450,9 +548,23 @@ function runWork(id, work, conf) {
       done = true;
       clearInterval(flush);
       const tail = pending; pending = [];
+      // ⚠ THE TAIL FIRST, THEN THE ENDING ALONE. These used to go in one POST,
+      // so an oversized tail took the terminal frame down with it — and its retry
+      // was identically 413, meaning the ending could NEVER be delivered. The
+      // chat sat `running` forever and this machine was blocked from every other
+      // job. The ending is a few hundred bytes and now travels by itself, so the
+      // worst a huge tail can cost is the tail.
+      for (const chunk of batchLines(tail)) {
+        try {
+          await api('POST', `/v1/devices/${id}/work/${work.id}/events`, { lines: chunk, locked: lock });
+        } catch (e) {
+          log(`could not send part of the output of ${work.id}: ${e.message}`);
+          if (permanent(e)) break;
+        }
+      }
       try {
         await api('POST', `/v1/devices/${id}/work/${work.id}/events`,
-          { lines: tail, done: true, exitCode, error, locked: lock });
+          { lines: [], done: true, exitCode, error, locked: lock });
       } catch (e) {
         log(`could not report the ending of ${work.id}: ${e.message}`);
       }
@@ -736,4 +848,17 @@ WantedBy=default.target`);
   }
 }
 
-main().catch((e) => { console.error(`huginn-device: ${e.message}`); process.exit(1); });
+// Run when invoked, importable when not.
+//
+// ⚠ SO THE SIZE RULES CAN BE TESTED. batchLines/shrinkLine decide whether a
+// run's whole answer survives, and until this guard existed there was no way to
+// call them without also starting a runner — so the one part of this file that
+// silently destroyed output was the part nothing could reach.
+if (require.main === module) {
+  main().catch((e) => { console.error(`huginn-device: ${e.message}`); process.exit(1); });
+} else {
+  module.exports = {
+    VERSION, MAX_LINE_BYTES, MAX_BATCH_BYTES,
+    shrinkLine, batchLines, parseFlags, tokenOrWhy, cwdFor, effectiveScope, allows, argvFor,
+  };
+}

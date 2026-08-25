@@ -158,6 +158,11 @@ fun describeDevice(device: Device): String {
         device.running -> "running something"
         !device.online -> "not reachable"
         device.queued > 0 -> "${device.queued} queued"
+        // Said as a QUESTION, because that is the honest shape of it. Claiming
+        // "idle" here is what let the daemon hand work to a machine that was
+        // still finishing an earlier job, where it sat undelivered until it was
+        // declared "no word for 5 minutes".
+        device.awaitingPoll -> "free? not asked for work since huginn restarted"
         else -> "idle"
     }
     device.version?.takeIf { it.isNotBlank() }?.let { parts += "v$it" }
