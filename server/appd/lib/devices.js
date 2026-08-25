@@ -100,6 +100,17 @@ function validateRegistration(raw, now) {
       locked: b.locked === true,
       root: typeof b.root === 'string' ? b.root.slice(0, 300) : null,
       version: typeof b.version === 'string' ? b.version.slice(0, 40) : null,
+      // What the device says it SERVES — display only, never routing authority
+      // (routing keys on the daemon-minted llmSlug in the row id). Only a
+      // generate enrolment gets a catalog; entries are cleaned at ingest and
+      // invalid ones dropped rather than failing the registration — refusing
+      // would take a live device offline over a display string.
+      ...(scope === 'generate' && Array.isArray(b.models) ? {
+        models: b.models.slice(0, MAX_MODELS)
+          .map((m) => (m && typeof m === 'object') ? m : {})
+          .filter((m) => MODEL_SLUG_RE.test(String(m.slug || '')))
+          .map((m) => ({ slug: String(m.slug), display: cleanDisplay(m.display) || String(m.slug) })),
+      } : {}),
       registeredAt: now,
       lastSeen: now,
     },
@@ -222,6 +233,8 @@ function deviceView(id, device, now) {
     online: isOnline(device, now),
     lastSeen: device.lastSeen ?? null,
     registeredAt: device.registeredAt ?? null,
+    ...(device.llmSlug ? { llmSlug: device.llmSlug } : {}),
+    ...(Array.isArray(device.models) ? { models: device.models } : {}),
   };
 }
 
@@ -233,6 +246,74 @@ function deviceView(id, device, now) {
  * which chat, what to say, which conversation to resume — and nothing that
  * would let this daemon widen what the far end is willing to do.
  */
+// ------------------------------------------------------------- local models
+//
+// The composite id of a local-model picker row is `local-<llmSlug>-<modelSlug>`.
+// The llmSlug is MINTED BY THE DAEMON at first generate-scope registration and
+// echoed back — agreement by handshake, never parallel derivation, so the
+// daemon and the shim cannot drift on it. It never changes on rename: id
+// stability beats name freshness.
+
+/** Lowercase, non-alphanumeric squeezed to dashes, capped. */
+function slugify(name, cap = 16) {
+  return String(name || '').toLowerCase().replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '').slice(0, cap).replace(/-+$/g, '');
+}
+
+/**
+ * Unique against every taken slug INCLUDING prefix-with-dash ambiguity, so
+ * `local-<llmSlug>-` prefixes always parse unambiguously: if "box" exists,
+ * "box-2" would make `local-box-2-chat` unparseable, so collisions get a hash
+ * suffix instead of a counter.
+ */
+function mintLlmSlug(name, uuid, taken) {
+  const base = slugify(name) || String(uuid).replace(/-/g, '').slice(0, 8);
+  const clash = taken.some((t) => t === base || t.startsWith(`${base}-`) || base.startsWith(`${t}-`));
+  return clash ? `${base.slice(0, 11)}-${String(uuid).replace(/-/g, '').slice(0, 4)}` : base;
+}
+
+/** Control characters out, whitespace collapsed, bounded. Display text only. */
+function cleanDisplay(s, cap = 60) {
+  return String(s || '').replace(/[\x00-\x1f\x7f-\x9f]/g, ' ')
+    .replace(/\s+/g, ' ').trim().slice(0, cap);
+}
+
+const MODEL_SLUG_RE = /^[a-z0-9][a-z0-9-]{1,29}$/;
+const MAX_MODELS = 16;
+
+/**
+ * Whether this device can serve a local-model chat right now. The generate
+ * sibling of canRun, with reasons in the same actionable style.
+ */
+function canServe(device, now) {
+  if (!device) return { ok: false, reason: 'no enrolled machine serves this model — it may have been unenrolled' };
+  if (device.scope !== 'generate') return { ok: false, reason: `${device.name} is not enrolled to serve local models` };
+  if (!isOnline(device, now)) return { ok: false, reason: `${device.name} has not checked in — the machine serving this model looks offline` };
+  return { ok: true };
+}
+
+/**
+ * The local rows of GET /v1/models. Computed per request from the in-memory
+ * registry, no cache: there is no exec and no disk here, and `available` is
+ * time-dependent, so any cache would lie.
+ */
+function localModelRows(state, now) {
+  const rows = [];
+  for (const [id, d] of Object.entries((state && state.devices) || {})) {
+    if (d.scope !== 'generate' || !d.llmSlug || !Array.isArray(d.models)) continue;
+    for (const m of d.models) {
+      rows.push({
+        id: `local-${d.llmSlug}-${m.slug}`,
+        display: `${m.display} - ${d.name}`,
+        family: 'local',
+        available: isOnline(d, now),
+        host: id,
+      });
+    }
+  }
+  return rows;
+}
+
 function workItem({ id, chatId, prompt, mode, model, effort, resumeSessionId, roundId, now }) {
   return {
     id,
@@ -253,4 +334,5 @@ module.exports = {
   SCOPES, MODE_NEEDS, FRESH_MS, FORGET_MS,
   emptyState, validateRegistration, effectiveScope, scopeCovers,
   canRun, isOnline, noteSeen, pruneDevices, deviceView, workItem,
+  slugify, mintLlmSlug, cleanDisplay, canServe, localModelRows,
 };

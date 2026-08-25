@@ -4,9 +4,9 @@
 #     [ -f ~/.huginn/huginn.sh ] && source ~/.huginn/huginn.sh
 # Targets the `huginn` SSH alias by default; override per-device with:  export HUGINN_HOST=my-host
 # Self-update with:  huginn update   (pulls this file from the repo; gh -> scp fallback)
-# Version: 0.11.0
+# Version: 0.12.0
 
-HUGINN_VERSION='0.11.0'
+HUGINN_VERSION='0.12.0'
 HUGINN_REPO='silencelen/huginn'
 # Where `huginn update` may fetch a replacement for THIS FILE, which it then
 # sources into the live shell. Pinned, and deliberately NOT $HUGINN_HOST:
@@ -96,6 +96,83 @@ _huginn_device() {
         echo "huginn device: this machine is not set up as a device - run: huginn device on" >&2
         return 1; }
       node "$runner" "$sub" "$@" ;;
+  esac
+}
+
+# `huginn local` - THIS machine serves local AI models to huginn (the optional
+# local tier). Same grammar as `huginn device`: consent, fetch pinned, validate,
+# install, enrol - and the same trust roots for the fetch. The manager carries
+# its own pinned runtime/model manifest, so what it may install is decided by
+# the release you are running, never by whatever an endpoint serves today.
+_huginn_local_manager() { printf '%s' "$HOME/.huginn/huginn-local"; }
+
+_huginn_local_fetch() {
+  local f dest tmp got uh
+  for f in huginn-local huginn-llm-shim; do
+    dest="$HOME/.huginn/$f"; got=
+    [ "${1:-}" = force ] || [ ! -s "$dest" ] || continue
+    mkdir -p "$HOME/.huginn"; tmp="$dest.tmp"
+    if command -v gh >/dev/null 2>&1; then
+      gh api "repos/$HUGINN_REPO/contents/client/$f" \
+        -H "Accept: application/vnd.github.raw" >"$tmp" 2>/dev/null && [ -s "$tmp" ] && got=1
+    fi
+    if [ -z "$got" ]; then
+      # PINNED, like the device runner and `huginn update`: this downloads code
+      # a service will run in a loop, so the source is a trust root. Never
+      # $HUGINN_HOST.
+      uh="${HUGINN_UPDATE_HOST:-$HUGINN_UPDATE_HOST_DEFAULT}"
+      scp -o BatchMode=yes "$uh:/usr/local/share/huginn-cli/$f" "$tmp" >/dev/null 2>&1 && got=1
+    fi
+    [ -n "$got" ] || {
+      echo "huginn local: could not fetch $f (gh and the mirror both failed)" >&2
+      rm -f "$tmp"; return 1; }
+    if ! node --check "$tmp" 2>/dev/null; then
+      echo "huginn local: the downloaded $f failed its syntax check - keeping what is here" >&2
+      rm -f "$tmp"; return 1; fi
+    mv -f "$tmp" "$dest"; chmod 0755 "$dest"
+  done
+}
+
+_huginn_local() {
+  local H="${HUGINN_HOST:-huginn}" mgr sub dir srv
+  mgr="$(_huginn_local_manager)"
+  sub="${1:-status}"; [ $# -gt 0 ] && shift
+  command -v node >/dev/null 2>&1 || {
+    echo "huginn local: needs node - which any machine that can run claude already has" >&2
+    return 1; }
+  case "$sub" in
+    on)
+      _huginn_local_fetch "${HUGINN_LOCAL_REFRESH:+force}" || return 1
+      dir="${HUGINN_LOCAL_DIR:-$HOME/.config/huginn-local}"
+      mkdir -p "$dir/device"; chmod 700 "$dir" "$dir/device" 2>/dev/null
+      # Token and address over the ssh link this machine is already trusted on,
+      # exactly like device-on. An existing device enrolment's token is reused
+      # rather than fetched twice.
+      if [ ! -s "$dir/device/appd-token" ]; then
+        if [ -s "$HOME/.config/huginn/appd-token" ]; then
+          cp "$HOME/.config/huginn/appd-token" "$dir/device/appd-token"; chmod 600 "$dir/device/appd-token"
+        elif ssh -T "$H" 'cat /etc/huginn-appd/token' >"$dir/device/appd-token.tmp" 2>/dev/null \
+           && [ -n "$(tr -d '[:space:]' <"$dir/device/appd-token.tmp" 2>/dev/null)" ]; then
+          mv -f "$dir/device/appd-token.tmp" "$dir/device/appd-token"; chmod 600 "$dir/device/appd-token"
+        else
+          rm -f "$dir/device/appd-token.tmp"
+          echo "huginn local: could not read the appd token from $H" >&2; return 1
+        fi
+      fi
+      srv="$(ssh -T "$H" 'echo $SSH_CONNECTION' 2>/dev/null | awk '{print $3}')"
+      [ -n "$srv" ] || { echo "huginn local: could not work out how to reach $H's daemon" >&2; return 1; }
+      HUGINN_LOCAL_DIR="$dir" node "$mgr" on --url "http://$srv:8787" "$@"
+      ;;
+    update)
+      _huginn_local_fetch force || return 1
+      [ -s "$mgr" ] || { echo "huginn local: not set up - run: huginn local on" >&2; return 1; }
+      node "$mgr" update "$@"
+      ;;
+    *)
+      [ -s "$mgr" ] || {
+        echo "huginn local: this machine does not serve local models - run: huginn local on" >&2
+        return 1; }
+      node "$mgr" "$sub" "$@" ;;
   esac
 }
 
@@ -289,6 +366,9 @@ EOF
   huginn device [status]      what THIS machine offers huginn, and what huginn sees
   huginn device on            offer this machine  [--scope look|work|own] [--root DIR]
   huginn device off           stop offering it
+  huginn local [status]       what THIS machine serves as local AI, if anything
+  huginn local on             serve local models from this machine (optional, ~5 GB)
+  huginn local off            stop serving  [--purge-models]
   huginn device unit          print a systemd unit that keeps the runner up
   huginn kill <name>          hard end: stop the session now
   huginn -p "question"        one-shot headless query (reasoning + memory, read-only)
@@ -378,6 +458,7 @@ EOF
     # on. Different question, different place it is answered - `devices` renders
     # on the host, `device` never leaves this machine.
     device) _huginn_device "${@:2}" ;;
+    local) _huginn_local "${@:2}" ;;
     desktop)
       local want=''
       case "${2:-}" in
@@ -536,7 +617,7 @@ _huginn_complete() {
   local cur prev cmds
   cur="${COMP_WORDS[COMP_CWORD]}"
   prev="${COMP_WORDS[COMP_CWORD-1]}"
-  cmds="list ls status st rounds devices device solo rename mv kill end -p -y usage cost desktop update version help"
+  cmds="list ls status st rounds devices device local solo rename mv kill end -p -y usage cost desktop update version help"
   if [ "$COMP_CWORD" -eq 1 ]; then
     # first word: subcommands + live session names (bare name attaches to it)
     mapfile -t COMPREPLY < <(compgen -W "$cmds $(_huginn_sessions)" -- "$cur")
@@ -550,6 +631,8 @@ _huginn_complete() {
         mapfile -t COMPREPLY < <(compgen -W "windows linux both" -- "$cur") ;;
       device)
         mapfile -t COMPREPLY < <(compgen -W "status on off unit update serve" -- "$cur") ;;
+      local)
+        mapfile -t COMPREPLY < <(compgen -W "status on off unit update doctor" -- "$cur") ;;
       --scope)
         mapfile -t COMPREPLY < <(compgen -W "look work own" -- "$cur") ;;
       today|yesterday|week|month)   # optional report-type override after a date shortcut

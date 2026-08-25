@@ -1,0 +1,419 @@
+#!/usr/bin/env node
+'use strict';
+// huginn-llm-shim — the local-model engine behind a generate-scope device row.
+//
+// Version: 0.12.0
+//
+// The device runner spawns this in place of `claude` (conf.claude points here),
+// so its OUTSIDE face is the narrow slice of the claude CLI contract the
+// pipeline consumes: the stream flags as argv, the prompt on stdin, Claude Code
+// stream-json on stdout. Its INSIDE face is one authenticated OpenAI-style
+// chat-completions endpoint on loopback (llama-swap in managed mode, an
+// existing Ollama/LM Studio in adapter mode).
+//
+// WHAT THIS FILE MUST NEVER GROW: a tool surface. No shell, no filesystem
+// reach beyond its own session dir, no MCP. The generate scope's whole security
+// story is that this engine can only turn text into more text — the argv fence
+// (no tool flags), the policy fence (exclusive scope) and this structural fence
+// all say the same thing, and this one is the one that cannot fail open,
+// because there is nothing here to open. Any future tool surface goes through
+// shared/device-policy.json and the generated case matrix, never this file.
+//
+// FAILURE IS A RESULT FRAME, NOT AN EXIT CODE. Anything that goes wrong after
+// startup — endpoint down, unknown model, auth refused, watchdog fired — is an
+// honest `result` with is_error:true, and the process exits 0: the frame is the
+// truth and the daemon files it as the run's outcome. A nonzero exit is
+// reserved for contract-level failure where no frame could be emitted (bad
+// argv, stdout gone). One error path, always admitted, never two competing
+// reports.
+//
+// The reported version is VERSION plus a content hash of this very file — a
+// version string is not evidence of content, and the machine this runs on is
+// exactly the kind of place a stale copy goes unnoticed.
+
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
+const http = require('node:http');
+const https = require('node:https');
+const crypto = require('node:crypto');
+
+const VERSION = '0.12.0';
+
+// ------------------------------------------------------------------ limits
+
+// The runner shrinks oversized lines and batches under a budget, but the
+// lesson from that pass was to never emit an oversized line at the SOURCE.
+// A single stdout line stays comfortably under the runner's 128 KiB cap.
+const MAX_LINE_BYTES = 120 * 1024;
+// A long answer ships as several assistant frames of at most this much text.
+const ASSISTANT_CHUNK_BYTES = 100 * 1024;
+// result.result is a summary field (the daemon snippets it); the full text
+// always travels in the assistant frames.
+const RESULT_CAP_BYTES = 8 * 1024;
+// Sessions: one JSONL per session id, capped and pruned so an unattended
+// serving box never quietly fills its disk with chat history.
+const SESSION_CAP_BYTES = 512 * 1024;
+const SESSION_MAX_FILES = 200;
+const SESSION_MAX_AGE_MS = 14 * 24 * 60 * 60 * 1000;
+// No token for this long (model load included) ends the run with an honest
+// error rather than orphaning the device's single job slot.
+const WATCHDOG_MS = Number(process.env.HUGINN_SHIM_WATCHDOG_MS || '') || 120_000;
+
+const SESSION_ID_RE = /^[0-9a-fA-F-]{36}$/;
+
+// ------------------------------------------------------------------ config
+
+function localDir() {
+  if (process.env.HUGINN_LOCAL_DIR) return process.env.HUGINN_LOCAL_DIR;
+  return process.platform === 'win32'
+    ? path.join(process.env.ProgramData || 'C:\\ProgramData', 'huginn-local')
+    : path.join(os.homedir(), '.config', 'huginn-local');
+}
+
+function loadLocal() {
+  try {
+    return JSON.parse(fs.readFileSync(path.join(localDir(), 'local.json'), 'utf8'));
+  } catch {
+    return null;
+  }
+}
+
+function apiKey(conf) {
+  if (conf && conf.mode === 'adapter') return (conf.adapter && conf.adapter.key) || null;
+  try {
+    return fs.readFileSync(path.join(localDir(), 'api-key'), 'utf8').trim() || null;
+  } catch {
+    return null;
+  }
+}
+
+function endpointOf(conf) {
+  if (conf && conf.mode === 'adapter' && conf.adapter && conf.adapter.url) return conf.adapter.url;
+  return `http://127.0.0.1:${(conf && conf.port) || 8748}`;
+}
+
+/**
+ * A picker row's composite id (`local-<llmSlug>-<modelSlug>`) back to the
+ * llama-swap model key. EXACT llmSlug match required: an id minted for another
+ * host must never be quietly served by this one — that is the no-silent-
+ * substitution rule made mechanical. A bare slug (the shim's own vocabulary)
+ * passes through when it is in the catalog.
+ */
+function mapModel(raw, conf) {
+  const slugs = Object.keys((conf && conf.modelsBySlug) || {});
+  if (!raw) return { key: (conf && conf.defaultModel) || slugs[0] || null };
+  const s = String(raw).trim().toLowerCase();
+  const mine = `local-${(conf && conf.llmSlug) || ''}-`;
+  if (conf && conf.llmSlug && s.startsWith(mine)) {
+    const slug = s.slice(mine.length);
+    return slugs.includes(slug) ? { key: slug }
+      : { error: `this machine does not serve "${slug}" — it serves: ${slugs.join(', ') || '(nothing)'}` };
+  }
+  if (s.startsWith('local-')) {
+    return { error: `model "${s}" was minted for a different machine — this one is "${(conf && conf.llmSlug) || '?'}"` };
+  }
+  return slugs.includes(s) ? { key: s }
+    : { error: `unknown model "${s}" — this machine serves: ${slugs.join(', ') || '(nothing)'}` };
+}
+
+// ---------------------------------------------------------------- sessions
+
+function sessionsDir() { return path.join(localDir(), 'sessions'); }
+
+function loadSession(id) {
+  try {
+    return fs.readFileSync(path.join(sessionsDir(), `${id}.jsonl`), 'utf8')
+      .split('\n').filter(Boolean).map((l) => JSON.parse(l))
+      .filter((m) => m && typeof m.content === 'string' && ['system', 'user', 'assistant'].includes(m.role));
+  } catch {
+    return [];
+  }
+}
+
+function saveSession(id, history) {
+  const dir = sessionsDir();
+  fs.mkdirSync(dir, { recursive: true });
+  let lines = history.map((m) => JSON.stringify({ role: m.role, content: m.content, ts: m.ts || Date.now() }));
+  // Cap by dropping the OLDEST non-system turns: the system line anchors the
+  // conversation, the newest turns are the ones a resume actually needs.
+  let text = lines.join('\n') + '\n';
+  while (Buffer.byteLength(text) > SESSION_CAP_BYTES && lines.length > 1) {
+    const idx = lines.findIndex((l) => !l.includes('"role":"system"'));
+    if (idx < 0) break;
+    lines.splice(idx, 1);
+    text = lines.join('\n') + '\n';
+  }
+  fs.writeFileSync(path.join(dir, `${id}.jsonl`), text);
+}
+
+/** Old and surplus session files go, newest stay. Called once per spawn. */
+function pruneSessions(now = Date.now()) {
+  const dir = sessionsDir();
+  let entries;
+  try {
+    entries = fs.readdirSync(dir).filter((f) => f.endsWith('.jsonl'))
+      .map((f) => ({ f, m: fs.statSync(path.join(dir, f)).mtimeMs }));
+  } catch {
+    return;
+  }
+  const doomed = new Set(entries.filter((e) => now - e.m > SESSION_MAX_AGE_MS).map((e) => e.f));
+  const fresh = entries.filter((e) => !doomed.has(e.f)).sort((a, b) => b.m - a.m);
+  for (const e of fresh.slice(SESSION_MAX_FILES)) doomed.add(e.f);
+  for (const f of doomed) { try { fs.unlinkSync(path.join(dir, f)); } catch { /* gone is gone */ } }
+}
+
+// ------------------------------------------------------------------- argv
+
+/**
+ * Exactly the surface the runners' argvFor() produces for generate mode, plus
+ * the claude-contract flags they produce for every mode (accepted as no-ops so
+ * a future runner change cannot break the spawn). Anything unrecognised is a
+ * REFUSAL at exit 2: a flag this engine does not know is one it cannot honour,
+ * and silently ignoring it is how a fence looks intact while it is not.
+ */
+function parseArgv(argv) {
+  const out = { model: null, effort: null, resume: null, persona: null, contractCheck: false, version: false };
+  const noop = new Set(['-p', '--verbose', '--include-partial-messages']);
+  for (let i = 0; i < argv.length; i++) {
+    const a = argv[i];
+    if (noop.has(a)) continue;
+    if (a === '--output-format') { i += 1; continue; }
+    if (a === '--contract-check') { out.contractCheck = true; continue; }
+    if (a === '--version' || a === 'version') { out.version = true; continue; }
+    if (a === '--model') { out.model = argv[++i] ?? null; continue; }
+    if (a === '--effort') { out.effort = argv[++i] ?? null; continue; }
+    if (a === '--resume') { out.resume = argv[++i] ?? null; continue; }
+    if (a === '--append-system-prompt') { out.persona = argv[++i] ?? null; continue; }
+    if (a === '--allowedTools' || a === '--disallowedTools') { i += 1; continue; }
+    return { error: `huginn-llm-shim: unknown flag "${a}"` };
+  }
+  return out;
+}
+
+// ------------------------------------------------------------------ emit
+
+let emitted = 0;
+function emit(obj) {
+  let line = JSON.stringify(obj);
+  if (Buffer.byteLength(line) > MAX_LINE_BYTES) {
+    // Never an oversized line at the source. Truncated IN the text, admitted.
+    const over = Buffer.byteLength(line) - MAX_LINE_BYTES;
+    line = JSON.stringify(shrinkFrame(obj, over));
+  }
+  process.stdout.write(line + '\n');
+  emitted += 1;
+}
+
+function shrinkFrame(obj, over) {
+  const marker = (n) => `[… ${n} bytes were too large to send and were dropped]`;
+  const cut = (s, n) => s.slice(0, Math.max(0, s.length - n)) + marker(n);
+  const c = JSON.parse(JSON.stringify(obj));
+  const need = over + 128;
+  if (c.type === 'assistant' && c.message?.content?.[0]?.text) {
+    c.message.content[0].text = cut(c.message.content[0].text, need);
+  } else if (c.type === 'stream_event' && c.event?.delta?.text) {
+    c.event.delta.text = cut(c.event.delta.text, need);
+  } else if (c.type === 'result' && typeof c.result === 'string') {
+    c.result = cut(c.result, need);
+  }
+  return c;
+}
+
+/** A long answer as several assistant frames, lossless when concatenated. */
+function splitText(text, cap = ASSISTANT_CHUNK_BYTES) {
+  const parts = [];
+  let rest = text;
+  while (Buffer.byteLength(rest) > cap) {
+    // Cut on a character boundary at most `cap` bytes in.
+    let n = cap;
+    while (n > 0 && Buffer.byteLength(rest.slice(0, n)) > cap) n -= 1024;
+    parts.push(rest.slice(0, n));
+    rest = rest.slice(n);
+  }
+  parts.push(rest);
+  return parts;
+}
+
+function capBytes(s, cap) {
+  if (Buffer.byteLength(s) <= cap) return s;
+  let n = cap;
+  while (n > 0 && Buffer.byteLength(s.slice(0, n)) > cap - 40) n -= 512;
+  return s.slice(0, n) + ' […truncated]';
+}
+
+// ---------------------------------------------------------------- version
+
+function versionString() {
+  const hash = crypto.createHash('sha256').update(fs.readFileSync(__filename)).digest('hex').slice(0, 12);
+  return `${VERSION}+${hash}`;
+}
+
+// ----------------------------------------------------------------- request
+
+function postChat(endpoint, key, body, onDelta) {
+  return new Promise((resolve, reject) => {
+    const u = new URL('/v1/chat/completions', endpoint);
+    const mod = u.protocol === 'https:' ? https : http;
+    const payload = Buffer.from(JSON.stringify(body));
+    const req = mod.request(u, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        'content-length': payload.length,
+        ...(key ? { authorization: `Bearer ${key}` } : {}),
+      },
+    }, (res) => {
+      if (res.statusCode === 401 || res.statusCode === 403) {
+        res.resume();
+        return reject(new Error(`the local engine refused this machine's key (${res.statusCode}) — check ${path.join(localDir(), 'api-key')}`));
+      }
+      if (res.statusCode !== 200) {
+        let text = '';
+        res.on('data', (c) => { if (text.length < 500) text += c; });
+        res.on('end', () => reject(new Error(`the local engine answered ${res.statusCode}: ${text.slice(0, 300)}`)));
+        return;
+      }
+      let buf = '';
+      let full = '';
+      res.setEncoding('utf8');
+      res.on('data', (chunk) => {
+        buf += chunk;
+        let nl;
+        while ((nl = buf.indexOf('\n')) >= 0) {
+          const line = buf.slice(0, nl).trim();
+          buf = buf.slice(nl + 1);
+          if (!line.startsWith('data:')) continue;
+          const data = line.slice(5).trim();
+          if (data === '[DONE]') continue;
+          try {
+            const ev = JSON.parse(data);
+            const delta = ev.choices?.[0]?.delta?.content;
+            if (typeof delta === 'string' && delta.length) { full += delta; onDelta(delta); }
+          } catch { /* a partial or foreign line is not an answer */ }
+        }
+      });
+      res.on('end', () => resolve(full));
+      res.on('error', reject);
+    });
+    req.on('error', (e) => reject(new Error(`could not reach the local engine at ${endpoint}: ${e.message}`)));
+    req.end(payload);
+    resolve.abortReq = req;
+    postChat.lastReq = req;
+  });
+}
+
+// ------------------------------------------------------------------- main
+
+const CONTRACT_DELTAS = ['The shim ', 'speaks the ', 'contract.'];
+
+function contractCheck() {
+  const sid = crypto.randomUUID();
+  emit({ type: 'system', subtype: 'init', session_id: sid, model: 'contract-check', engine: 'huginn-llm-shim', version: versionString() });
+  for (const d of CONTRACT_DELTAS) {
+    emit({ type: 'stream_event', event: { type: 'content_block_delta', delta: { type: 'text_delta', text: d } } });
+  }
+  const text = CONTRACT_DELTAS.join('');
+  emit({ type: 'assistant', message: { content: [{ type: 'text', text }] } });
+  emit({ type: 'result', is_error: false, result: text, duration_ms: 1, total_cost_usd: 0, num_turns: 1, session_id: sid });
+}
+
+async function main() {
+  const args = parseArgv(process.argv.slice(2));
+  if (args.error) { process.stderr.write(args.error + '\n'); process.exit(2); }
+  if (args.version) { process.stdout.write(versionString() + '\n'); return; }
+  if (args.contractCheck) { contractCheck(); return; }
+
+  const started = Date.now();
+  const conf = loadLocal();
+  const sid = SESSION_ID_RE.test(String(args.resume || '')) ? args.resume : crypto.randomUUID();
+
+  const fail = (reason) => {
+    emit({ type: 'result', is_error: true, result: reason, duration_ms: Date.now() - started, total_cost_usd: 0, num_turns: 1, session_id: sid });
+  };
+
+  const mapped = mapModel(args.model, conf);
+
+  // The init frame goes out BEFORE any network I/O, so a dead backend still
+  // yields an attributable, resumable chat instead of five minutes of silence.
+  emit({
+    type: 'system', subtype: 'init', session_id: sid,
+    model: mapped.key || String(args.model || ''), engine: 'huginn-llm-shim', version: versionString(),
+  });
+
+  if (!conf) return fail(`this machine has no local-engine config (${path.join(localDir(), 'local.json')}) — run: huginn local on`);
+  if (mapped.error) return fail(mapped.error);
+  if (!mapped.key) return fail('this machine serves no models — run: huginn local status');
+
+  try { pruneSessions(); } catch { /* housekeeping never kills a run */ }
+
+  const prompt = await new Promise((r) => {
+    let s = '';
+    process.stdin.setEncoding('utf8');
+    process.stdin.on('data', (c) => { s += c; });
+    process.stdin.on('end', () => r(s));
+  });
+
+  const history = loadSession(sid);
+  const messages = [];
+  if (args.persona) messages.push({ role: 'system', content: args.persona });
+  for (const m of history) if (m.role !== 'system' || !args.persona) messages.push({ role: m.role, content: m.content });
+  messages.push({ role: 'user', content: prompt });
+
+  let watchdog = null;
+  let dead = false;
+  const arm = () => {
+    if (watchdog) clearTimeout(watchdog);
+    watchdog = setTimeout(() => {
+      dead = true;
+      try { postChat.lastReq?.destroy(new Error('watchdog')); } catch { /* already down */ }
+    }, WATCHDOG_MS);
+  };
+
+  arm();
+  let full;
+  try {
+    full = await postChat(endpointOf(conf), apiKey(conf), {
+      model: mapped.key, messages, stream: true,
+    }, (delta) => {
+      arm();
+      emit({ type: 'stream_event', event: { type: 'content_block_delta', delta: { type: 'text_delta', text: delta } } });
+    });
+  } catch (e) {
+    clearTimeout(watchdog);
+    if (dead) {
+      return fail(`local model ${mapped.key} produced no output for ${Math.round(WATCHDOG_MS / 1000)}s at ${endpointOf(conf)} — the run was stopped (the model may still be loading; retry once, then check: huginn local status)`);
+    }
+    return fail(String(e.message || e));
+  }
+  clearTimeout(watchdog);
+
+  for (const part of splitText(full)) {
+    emit({ type: 'assistant', message: { content: [{ type: 'text', text: part }] } });
+  }
+  try {
+    const keep = args.persona ? [{ role: 'system', content: args.persona }] : [];
+    saveSession(sid, [...keep, ...history.filter((m) => m.role !== 'system'),
+      { role: 'user', content: prompt }, { role: 'assistant', content: full }]);
+  } catch { /* a failed save loses resume, not the answer */ }
+  emit({
+    type: 'result', is_error: false, result: capBytes(full, RESULT_CAP_BYTES),
+    duration_ms: Date.now() - started, total_cost_usd: 0, num_turns: 1, session_id: sid,
+  });
+}
+
+if (require.main === module) {
+  main().catch((e) => {
+    // Last resort: if nothing was emitted the contract is broken and exit 2
+    // says so; if frames went out, the honest error frame is the report.
+    if (emitted === 0) { process.stderr.write(`huginn-llm-shim: ${e.message}\n`); process.exit(2); }
+    emit({ type: 'result', is_error: true, result: String(e.message || e), duration_ms: 0, total_cost_usd: 0, num_turns: 1 });
+  });
+} else {
+  module.exports = {
+    VERSION, MAX_LINE_BYTES, ASSISTANT_CHUNK_BYTES, RESULT_CAP_BYTES,
+    SESSION_CAP_BYTES, SESSION_MAX_FILES, SESSION_MAX_AGE_MS,
+    versionString, mapModel, parseArgv, splitText, capBytes, shrinkFrame,
+    loadSession, saveSession, pruneSessions, localDir,
+  };
+}

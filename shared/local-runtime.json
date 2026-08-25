@@ -1,0 +1,83 @@
+{
+  "_comment": [
+    "The PIN MANIFEST for the local tier: exactly which inference runtime, which",
+    "service wrapper and which model files `huginn local on` may install, with the",
+    "sha256 every download is verified against before it is unpacked or served.",
+    "",
+    "scripts/gen-local-manifest.js embeds this into client/huginn-local between",
+    "GENERATED markers (the gen-device-policy.js precedent), so the one fetched",
+    "file carries its own pins and there is no second fetch to substitute. A",
+    "runtime or model bump is therefore BY CONSTRUCTION a reviewed cli-v* release",
+    "— there is no other path, and that is the gated-bump doctrine: the named",
+    "failure mode is a routine upstream patch silently degrading a GPU box to CPU.",
+    "",
+    "Model sha256s come from the Hugging Face LFS metadata (lfs.oid IS the",
+    "sha256); runtime hashes were computed from the downloaded assets at pin time.",
+    "Every class carries exactly one chat model and one embed model. G16 hardware",
+    "is detected and reported, but installs the G8 plan — no 14B row ships until",
+    "a real G16 use exists.",
+    "",
+    "Licenses ride here so a bump cannot quietly pull in a restrictive one:",
+    "weights are pulled from the vendor at activation, never redistributed."
+  ],
+  "manifestVersion": 1,
+  "llamaCpp": {
+    "release": "b10628",
+    "urlBase": "https://github.com/ggml-org/llama.cpp/releases/download/b10628/",
+    "serverBinary": { "linux": "llama-b10628/llama-server", "win32": "llama-server.exe" },
+    "assets": {
+      "linux-x64":    { "name": "llama-b10628-bin-ubuntu-x64.tar.gz",       "sha256": "ad504cb670be83fbfb2039fff645bb10308b7e26370a284167fd99b2f2a3df72", "bytes": 16291880 },
+      "linux-arm64":  { "name": "llama-b10628-bin-ubuntu-arm64.tar.gz",     "sha256": "0482ddec0d0335979d85dceda3aa5035ac732a628c639c66da0b67137c178b6e", "bytes": 13041378 },
+      "win-x64-cpu":  { "name": "llama-b10628-bin-win-cpu-x64.zip",         "sha256": "220aac2ac04ca9d73b124fec005dca1d9ebd99dcdfc1b023b58c3a99865fce6d", "bytes": 18067727 },
+      "win-x64-cuda": { "name": "llama-b10628-bin-win-cuda-12.4-x64.zip",   "sha256": "3226cab6eaede7f4827502ca29aaf54839b20c9deab240443aec4b3741a61cbc", "bytes": 250464723 },
+      "win-cudart":   { "name": "cudart-llama-bin-win-cuda-12.4-x64.zip",   "sha256": "8c79a9b226de4b3cacfd1f83d24f962d0773be79f1e7b75c6af4ded7e32ae1d6", "bytes": 391443627 }
+    }
+  },
+  "llamaSwap": {
+    "version": "v251",
+    "urlBase": "https://github.com/mostlygeek/llama-swap/releases/download/v251/",
+    "assets": {
+      "linux-x64":   { "name": "llama-swap_251_linux_amd64.tar.gz", "sha256": "85bd7f231f5777ff6b8b787a794f825678b8d042cd4484044516a58ecdc7622b", "bytes": 13052453 },
+      "linux-arm64": { "name": "llama-swap_251_linux_arm64.tar.gz", "sha256": "777bfa16b2ef6a78ad36f1e0c28b5dd4adda1dc0cc9aea32b6fba8e1c5a41de9", "bytes": 12284196 },
+      "win-x64":     { "name": "llama-swap_251_windows_amd64.zip",  "sha256": "f91ebc3bbf3e6b2d96a5c0e8c6967755a336734b3b8b7447b1a36cde670aee5f", "bytes": 13373344 }
+    }
+  },
+  "winsw": {
+    "version": "v2.12.0",
+    "url": "https://github.com/winsw/winsw/releases/download/v2.12.0/WinSW-x64.exe",
+    "sha256": "05b82d46ad331cc16bdc00de5c6332c1ef818df8ceefcd49c726553209b3a0da",
+    "bytes": 18243033
+  },
+  "models": {
+    "G8": [
+      { "slug": "qwen3-8b", "display": "Qwen3 8B", "role": "chat", "ctx": 16384, "gpu": true,
+        "repo": "Qwen/Qwen3-8B-GGUF", "file": "Qwen3-8B-Q4_K_M.gguf",
+        "sha256": "d98cdcbd03e17ce47681435b5150e34c1417f50b5c0019dd560e4882c5745785",
+        "bytes": 5027783488, "license": "Apache-2.0" },
+      { "slug": "nomic-embed", "display": "Nomic Embed", "role": "embed", "ctx": 2048, "gpu": false,
+        "repo": "nomic-ai/nomic-embed-text-v1.5-GGUF", "file": "nomic-embed-text-v1.5.Q8_0.gguf",
+        "sha256": "3e24342164b3d94991ba9692fdc0dd08e3fd7362e0aacc396a9a5c54a544c3b7",
+        "bytes": 146146432, "license": "Apache-2.0" }
+    ],
+    "C": [
+      { "slug": "qwen3-4b", "display": "Qwen3 4B", "role": "chat", "ctx": 8192, "gpu": false,
+        "repo": "Qwen/Qwen3-4B-GGUF", "file": "Qwen3-4B-Q4_K_M.gguf",
+        "sha256": "7485fe6f11af29433bc51cab58009521f205840f5b4ae3a32fa7f92e8534fdf5",
+        "bytes": 2497280256, "license": "Apache-2.0" },
+      { "slug": "nomic-embed", "display": "Nomic Embed", "role": "embed", "ctx": 2048, "gpu": false,
+        "repo": "nomic-ai/nomic-embed-text-v1.5-GGUF", "file": "nomic-embed-text-v1.5.Q8_0.gguf",
+        "sha256": "3e24342164b3d94991ba9692fdc0dd08e3fd7362e0aacc396a9a5c54a544c3b7",
+        "bytes": 146146432, "license": "Apache-2.0" }
+    ],
+    "A": [
+      { "slug": "qwen3-1p7b", "display": "Qwen3 1.7B", "role": "chat", "ctx": 8192, "gpu": false,
+        "repo": "Qwen/Qwen3-1.7B-GGUF", "file": "Qwen3-1.7B-Q8_0.gguf",
+        "sha256": "061b54daade076b5d3362dac252678d17da8c68f07560be70818cace6590cb1a",
+        "bytes": 1834426016, "license": "Apache-2.0" },
+      { "slug": "nomic-embed", "display": "Nomic Embed", "role": "embed", "ctx": 2048, "gpu": false,
+        "repo": "nomic-ai/nomic-embed-text-v1.5-GGUF", "file": "nomic-embed-text-v1.5.Q8_0.gguf",
+        "sha256": "3e24342164b3d94991ba9692fdc0dd08e3fd7362e0aacc396a9a5c54a544c3b7",
+        "bytes": 146146432, "license": "Apache-2.0" }
+    ]
+  }
+}

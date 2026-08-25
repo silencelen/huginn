@@ -3,9 +3,9 @@
 #     if (Test-Path "$HOME\.huginn\huginn.ps1") { . "$HOME\.huginn\huginn.ps1" }
 # Targets the `huginn` SSH alias by default; override per-device with:  $env:HUGINN_HOST = 'my-host'
 # Self-update with:  huginn update   (pulls this file from the repo; gh -> scp fallback)
-# Version: 0.11.0
+# Version: 0.12.0
 
-$script:HUGINN_VERSION = '0.11.0'
+$script:HUGINN_VERSION = '0.12.0'
 $script:HUGINN_REPO    = 'silencelen/huginn'
 # Where `huginn update` may fetch a replacement for THIS FILE, which is then loaded
 # into the shell. Pinned, and deliberately NOT $HUGINN_HOST: that variable answers
@@ -343,6 +343,63 @@ function huginn {
     } else {
       Write-Host "huginn device: this machine is not set up as a device - run: huginn device on"
     }
+  } elseif ($args[0] -eq 'local') {
+    # THIS machine serves local AI models to huginn - the optional local tier.
+    # Same grammar as `huginn device`: consent, fetch pinned, validate, install,
+    # enrol - and the same trust roots for the fetch. The manager carries its
+    # own pinned runtime/model manifest; what it may install is decided by the
+    # release you run, never by whatever an endpoint serves today.
+    $sub = if ($args.Count -ge 2) { $args[1] } else { 'status' }
+    $rest = if ($args.Count -ge 3) { $args[2..($args.Count-1)] } else { @() }
+    $mgr = Join-Path $HOME '.huginn/huginn-local'
+    if (-not (Get-Command node -ErrorAction SilentlyContinue)) {
+      Write-Host "huginn local: needs node - which any machine that can run claude already has"
+    } elseif ($sub -eq 'on' -or $sub -eq 'update') {
+      New-Item -ItemType Directory -Force -Path (Split-Path $mgr) | Out-Null
+      foreach ($f in 'huginn-local', 'huginn-llm-shim') {
+        $dest = Join-Path $HOME ".huginn/$f"
+        if ($sub -eq 'update' -or -not (Test-Path $dest)) {
+          # PINNED, like the device runner: this downloads code a service will
+          # run in a loop, so the source is a trust root. Never $HUGINN_HOST.
+          $uh = if ($env:HUGINN_UPDATE_HOST) { $env:HUGINN_UPDATE_HOST } else { $script:HUGINN_UPDATE_HOST_DEFAULT }
+          $tmp = "$dest.tmp"; $got = $false
+          if (Get-Command gh -ErrorAction SilentlyContinue) {
+            gh api "repos/$script:HUGINN_REPO/contents/client/$f" -H "Accept: application/vnd.github.raw" > $tmp 2>$null
+            if ((Test-Path $tmp) -and (Get-Item $tmp).Length -gt 0) { $got = $true }
+          }
+          if (-not $got) {
+            scp -o BatchMode=yes "${uh}:/usr/local/share/huginn-cli/$f" $tmp 2>$null
+            if ((Test-Path $tmp) -and (Get-Item $tmp).Length -gt 0) { $got = $true }
+          }
+          if ($got) { node --check $tmp 2>$null; if ($LASTEXITCODE -ne 0) { $got = $false } }
+          if ($got) { Move-Item -Force $tmp $dest } else {
+            Remove-Item -Force -ErrorAction SilentlyContinue $tmp
+            Write-Host "huginn local: could not fetch $f (gh and the mirror both failed)"; return
+          }
+        }
+      }
+      if ($sub -eq 'update') { if (Test-Path $mgr) { node $mgr update @rest }; return }
+      $dir = if ($env:HUGINN_LOCAL_DIR) { $env:HUGINN_LOCAL_DIR } else { Join-Path $env:ProgramData 'huginn-local' }
+      New-Item -ItemType Directory -Force -Path (Join-Path $dir 'device') | Out-Null
+      $tokfile = Join-Path $dir 'device/appd-token'
+      if (-not (Test-Path $tokfile)) {
+        $old = Join-Path $HOME '.config/huginn/appd-token'
+        if (Test-Path $old) { Copy-Item $old $tokfile }
+        else {
+          $tok = (ssh -T $H 'cat /etc/huginn-appd/token') -join ''
+          if ($tok.Trim()) { Set-Content -NoNewline -Path $tokfile -Value $tok.Trim() }
+          else { Write-Host "huginn local: could not read the appd token from $H"; return }
+        }
+      }
+      $srv = ((ssh -T $H 'echo $SSH_CONNECTION') -split '\s+')[2]
+      if (-not $srv) { Write-Host "huginn local: could not work out how to reach $H's daemon"; return }
+      $env:HUGINN_LOCAL_DIR = $dir
+      node $mgr on --url "http://${srv}:8787" @rest
+    } elseif (Test-Path $mgr) {
+      node $mgr $sub @rest
+    } else {
+      Write-Host "huginn local: this machine does not serve local models - run: huginn local on"
+    }
   } elseif ($args[0] -eq 'desktop') {
     $arg = if ($args.Count -gt 1) { "$($args[1])".ToLower() } else { '' }
     $want = switch ($arg) {
@@ -514,7 +571,7 @@ function _Huginn-Sessions {
 }
 Register-ArgumentCompleter -CommandName huginn, rclaude, rcc -ScriptBlock {
   param($word, $ast, $pos)
-  $cmds = 'list', 'status', 'rounds', 'devices', 'device', 'solo', 'rename', 'kill', 'end', '-p', '-y', 'usage', 'cost', 'desktop', 'update', 'version', 'help'
+  $cmds = 'list', 'status', 'rounds', 'devices', 'device', 'local', 'solo', 'rename', 'kill', 'end', '-p', '-y', 'usage', 'cost', 'desktop', 'update', 'version', 'help'
   # tokens already typed after the command name, excluding the partial word being completed
   $typed = @($ast.CommandElements | Select-Object -Skip 1 | ForEach-Object { $_.ToString() })
   if ($word -and $typed.Count -ge 1) { $typed = @($typed | Select-Object -SkipLast 1) }
@@ -529,6 +586,8 @@ Register-ArgumentCompleter -CommandName huginn, rclaude, rcc -ScriptBlock {
     $candidates = 'daily', 'monthly', 'weekly', 'session', 'blocks', 'statusline'
   } elseif ($prev -eq 'desktop') {
     $candidates = 'windows', 'linux', 'both'
+  } elseif ($prev -eq 'local') {
+    $candidates = 'status', 'on', 'off', 'unit', 'update', 'doctor'
   } else {
     $candidates = @()
   }
