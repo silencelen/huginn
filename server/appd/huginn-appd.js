@@ -35,7 +35,7 @@ const { summarizeUsage } = require('./lib/usage');
 const { normalizePlan } = require('./lib/plan');
 const { AccountStore, fingerprint, sameAccount, normUuid } = require('./lib/accounts');
 const { formatModel, discoverModels, parseModelId } = require('./lib/models');
-const { pushPending, takePending, clearPending, queuedEvents } = require('./lib/chatqueue');
+const { pushPending, takePending, clearPending, drainPending, queuedEvents } = require('./lib/chatqueue');
 const { digest } = require('./lib/watch');
 const { decideAlerts, routeAlerts, telegramText, pruneSent, carryRunStarts } = require('./lib/alerts');
 const clientsLib = require('./lib/clients');
@@ -52,7 +52,7 @@ const pushLib = require('./lib/pushtokens');
 const { trySender } = require('./lib/fcm');
 const { createPending, stepSoftEnd } = require('./lib/softend');
 
-const VERSION = '2.71.0';
+const VERSION = '2.72.0';
 const PORT = Number(process.env.HUGINN_APPD_PORT || 8787);
 const DATA_DIR = process.env.HUGINN_APPD_DATA || '/var/lib/huginn-appd';
 const UPLOADS_DIR = path.join(DATA_DIR, 'uploads');
@@ -1354,7 +1354,16 @@ function startRun(meta, userText) {
       if (!line) continue;
       let ev;
       try { ev = JSON.parse(line); } catch { continue; }
-      handleClaudeEvent(meta, run_, ev);
+      // ⚠ GUARDED, as the device path at /work/:id/events already was. This is a
+      // stdout 'data' handler: a throw here is an unhandled exception and TAKES
+      // THE WHOLE DAEMON DOWN — every tmux session's reader, every other chat,
+      // every Round. handleClaudeEvent appends to the transcript, so a disk that
+      // is full, read-only, or holding a file where a directory should be turned
+      // one broken chat into a dead process. Found by trying to test the run-slot
+      // leak below it: the injected write failure killed the daemon before the
+      // slot could even be observed.
+      try { handleClaudeEvent(meta, run_, ev); }
+      catch (e) { log(`chat ${chatId} could not record an event: ${e.message}`); }
     }
   });
   let errBuf = '';
@@ -1362,10 +1371,18 @@ function startRun(meta, userText) {
 
   proc.on('close', (code) => {
     clearTimeout(killer);
-    settleRun(run_, {
-      exitCode: code,
-      failureText: `claude exited ${code}${errBuf ? `: ${errBuf.slice(-500)}` : ''}`,
-    });
+    // Same reasoning: a 'close' handler that throws is unhandled. settleRun now
+    // releases the run slot in a finally, so the worst case here is a chat whose
+    // ending was not written — not a daemon that stops existing.
+    try {
+      settleRun(run_, {
+        exitCode: code,
+        failureText: `claude exited ${code}${errBuf ? `: ${errBuf.slice(-500)}` : ''}`,
+      });
+    } catch (e) {
+      log(`chat ${chatId} could not settle cleanly: ${e.message}`);
+      try { run_.finish(); } catch { /* already finished */ }
+    }
   });
 
   log(`chat ${chatId} run started (mode=${meta.mode}, resume=${meta.claudeSessionId || 'new'})`);
@@ -1514,29 +1531,59 @@ async function readLoginState() {
  *   report or its silence remotely — and only the caller can say it in a way that
  *   means anything to a reader.
  */
+/**
+ * What the transcript says about messages that were queued and then dropped.
+ *
+ * The TEXT is quoted back, not just the count: it is the only remaining copy —
+ * the sender's client cleared its composer when the 202 came back — so a bare
+ * "1 message was dropped" would be an apology for losing something without
+ * saying what.
+ */
+function droppedNote(dropped, why) {
+  const n = dropped.length;
+  const head = n === 1
+    ? `A message you sent was not delivered, because ${why}.`
+    : `${n} messages you sent were not delivered, because ${why}.`;
+  const body = dropped
+    .map((p) => `  “${roundsLib.oneLine(p.text, 300)}”`)
+    .join('\n');
+  return `${head}\n\n${body}\n\nNothing was sent to Claude. Send it again if you still want it.`;
+}
+
 function settleRun(run_, { exitCode = null, failureText = null } = {}) {
   const chatId = run_.chatId;
   const ts = Math.floor(Date.now() / 1000);
 
-  if (!run_.sawResult) {
-    // Crashed / killed / cancelled with no result event — record what we know.
-    const errText = run_.cancelled ? 'cancelled' : (failureText || 'the run ended without a result');
-    if (run_.assistantText) appendMsg(chatId, { type: 'assistant', text: run_.assistantText, ts, partial: true });
-    appendMsg(chatId, { type: 'error', text: errText, ts });
-    run_.emit('error', { text: errText });
-    updateMeta(chatId, (m) => { m.updatedAt = ts; m.lastSnippet = errText.slice(0, 120); });
+  // ⚠ THE SLOT IS RELEASED WHATEVER HAPPENS. Everything above `run_.finish()`
+  // touches the disk, and `appendMsg` on a full or read-only disk throws — which
+  // used to abandon the run in `activeRuns` forever. That set IS the local run
+  // pool (MAX_CONCURRENT_RUNS = 3), so each leak permanently cost one slot, and
+  // after three every local chat and every `local` Round got 429 "too many
+  // concurrent runs" with nothing actually running, until somebody restarted the
+  // daemon. A disk that is full is a bad day; a daemon that never runs anything
+  // again until it is restarted is a worse one.
+  try {
+    if (!run_.sawResult) {
+      // Crashed / killed / cancelled with no result event — record what we know.
+      const errText = run_.cancelled ? 'cancelled' : (failureText || 'the run ended without a result');
+      if (run_.assistantText) appendMsg(chatId, { type: 'assistant', text: run_.assistantText, ts, partial: true });
+      appendMsg(chatId, { type: 'error', text: errText, ts });
+      run_.emit('error', { text: errText });
+      updateMeta(chatId, (m) => { m.updatedAt = ts; m.lastSnippet = errText.slice(0, 120); });
+    }
+    // Recorded before anything else observes the finish. A completed run has to
+    // leave a durable mark: the alert watcher runs on a timer and cannot be relied
+    // on to catch the instant `running` goes false — a five-second run slipped
+    // straight through a ten-second tick and was never reported.
+    updateMeta(chatId, (m) => {
+      m.finishedRuns = (m.finishedRuns || 0) + 1;
+      m.finishedAt = ts;
+      delete m.runStartedAt;                  // this run is accounted for
+    });
+    run_.emit('done', { exitCode });
+  } finally {
+    run_.finish();
   }
-  // Recorded before anything else observes the finish. A completed run has to
-  // leave a durable mark: the alert watcher runs on a timer and cannot be relied
-  // on to catch the instant `running` goes false — a five-second run slipped
-  // straight through a ten-second tick and was never reported.
-  updateMeta(chatId, (m) => {
-    m.finishedRuns = (m.finishedRuns || 0) + 1;
-    m.finishedAt = ts;
-    delete m.runStartedAt;                  // this run is accounted for
-  });
-  run_.emit('done', { exitCode });
-  run_.finish();
   log(`chat ${chatId} run finished (exit ${exitCode})`);
 
   const fresh = loadMeta(chatId);
@@ -1554,18 +1601,30 @@ function settleRun(run_, { exitCode = null, failureText = null } = {}) {
       const sealed = loadMeta(chatId) || fresh;
       // And then it is OVER. Draining a queue into a sealed run would reopen the
       // very thing that just ended, so anything waiting is dropped here instead.
-      const waiting = clearPending(sealed);
-      if (waiting) {
+      const waiting = drainPending(sealed);
+      if (waiting.length) {
         saveMeta(sealed);
-        log(`round run ${chatId} dropped ${waiting} queued message(s): the run is closed`);
+        // ⚠ SAID IN THE CHAT, not only in a log nobody reads. The sender got a
+        // 202 {queued:true, position:1}; the message then never appeared in the
+        // transcript, nothing said it had been dropped, and the retry hit a 409
+        // off the sealed run — so it was simply gone. The chat route already
+        // fixed exactly this for the cancel window and wrote down why it was
+        // unacceptable: "worse than being told to wait". Round runs then did the
+        // same thing.
+        appendMsg(chatId, { type: 'system', text: droppedNote(waiting, 'this round finished'), ts });
+        log(`round run ${chatId} dropped ${waiting.length} queued message(s): the run is closed`);
       }
       return;
     }
     if (run_.cancelled) {
       // Cancel means stop. Respawning from the queue would make the stop
       // button start the very thing it was pressed to end.
-      const dropped = clearPending(fresh);
-      if (dropped) { saveMeta(fresh); log(`chat ${chatId} dropped ${dropped} queued message(s) on cancel`); }
+      const dropped = drainPending(fresh);
+      if (dropped.length) {
+        saveMeta(fresh);
+        appendMsg(chatId, { type: 'system', text: droppedNote(dropped, 'the run was cancelled'), ts });
+        log(`chat ${chatId} dropped ${dropped.length} queued message(s) on cancel`);
+      }
     } else {
       const next = takePending(fresh);
       if (next) {
@@ -1576,6 +1635,23 @@ function settleRun(run_, { exitCode = null, failureText = null } = {}) {
     }
   }
 }
+
+/**
+ * Devices this daemon has heard ASK FOR WORK since it started.
+ *
+ * ⚠ IN-MEMORY ON PURPOSE, and the emptiness after a restart is the signal.
+ * `remoteRuns` is in-memory too, so `deploy.sh` — a routine operation here —
+ * wipes it. The daemon then correctly writes "interrupted: huginn-appd restarted
+ * while this was running" into the old chat, but the far machine is still
+ * running that claude and is SINGLE-JOB: it will not poll again until its
+ * orphaned child exits, which for a real run is minutes to hours.
+ *
+ * Meanwhile the daemon reported that device `online:true, running:false,
+ * queued:0`, accepted the next job with a 202, and the job sat undelivered until
+ * it was declared "no word for 5 minutes". Reachable is not the same as free,
+ * and after a restart the honest answer is that we do not know which.
+ */
+const polledSince = new Map();
 
 // ------------------------------------------------------------------ devices
 //
@@ -2204,14 +2280,38 @@ function finishRoundRun(meta, failure) {
     manual: !!meta.roundManual,
     durationSec: meta.roundStartedAt ? at - meta.roundStartedAt : null,
   };
+  // ⚠ WHAT FALLS OFF THE END IS DELETED, and this used to be a slow leak with a
+  // false promise on top of it. `finishRoundRun` says the conversation "stays
+  // readable forever — that is the whole point of keeping it", and after the 11th
+  // run the chat id was evicted from runs[] — while round chats are filtered out
+  // of /v1/chats by design, so there was no other path to it. It could not be
+  // opened, listed or deleted through any route. A daily Round left ~355 orphan
+  // transcript directories a year, invisible and impossible to count against.
+  //
+  // So the promise is narrowed to what is true — readable while it is in the
+  // history — and the transcript goes when the row does, rather than becoming
+  // something only `du` can find.
+  let evicted = [];
   updateRound(round.id, (r) => {
+    const prior = Array.isArray(r.runs) ? r.runs : [];
+    const kept = [run, ...prior].slice(0, MAX_RUN_HISTORY);
+    evicted = prior.slice(MAX_RUN_HISTORY - 1)
+      .map((x) => x && x.chatId)
+      .filter((id) => id && id !== meta.id && !kept.some((k) => k.chatId === id));
     r.lastRun = run;
-    r.runs = [run, ...(Array.isArray(r.runs) ? r.runs : [])].slice(0, MAX_RUN_HISTORY);
+    r.runs = kept;
     if (r.currentChatId === meta.id) r.currentChatId = null;
   });
+  for (const id of evicted) {
+    // Never a live one: a chat still running is not in this Round's history tail.
+    if (activeRuns.has(id)) { log(`round ${round.id}: not pruning ${id}, still running`); continue; }
+    try { fs.rmSync(chatDir(id), { recursive: true, force: true }); log(`round ${round.id} pruned run transcript ${id}`); }
+    catch (e) { log(`round ${round.id}: could not prune ${id}: ${e.message}`); }
+  }
   // On the chat too, so opening a past run shows its verdict without re-parsing.
   // `sealed` is the auto-end: a Round's run is one turn against a stated goal and
-  // then it is over. The conversation stays readable forever — that is the whole
+  // then it is over. The conversation stays readable for as long as the run is in
+  // the Round's history (the last MAX_RUN_HISTORY) — that is the whole
   // point of keeping it — but it stops being something anyone can continue, so a
   // scheduled job cannot quietly become an open chat nobody meant to start.
   updateMeta(meta.id, (m) => {
@@ -4468,6 +4568,11 @@ const server = http.createServer(async (req, res) => {
           ...devicesLib.deviceView(id, d, now),
           running: !!activeRunFor(id),
           queued: (deviceQueues.get(id) || []).length,
+          // "It has not asked for work since huginn restarted, so whether it is
+          // free is not something this daemon can currently say." A device that
+          // was mid-run through a restart looks exactly like an idle one until it
+          // finishes and polls again.
+          awaitingPoll: !polledSince.has(id),
         }))
         .sort((a, b) => Number(b.online) - Number(a.online) || a.name.localeCompare(b.name));
       return sendJson(res, 200, { devices: list });
@@ -4502,6 +4607,7 @@ const server = http.createServer(async (req, res) => {
           ...devicesLib.deviceView(devId, device, now),
           running: !!activeRunFor(devId),
           queued: (deviceQueues.get(devId) || []).length,
+          awaitingPoll: !polledSince.has(devId),
         });
       }
 
@@ -4531,6 +4637,10 @@ const server = http.createServer(async (req, res) => {
       // there is or the wait runs out — so a device learns about a job in the
       // moment it is created without polling in a loop.
       if (req.method === 'GET' && dsub === '/work') {
+        // Asking for work is the only evidence that a device is FREE. A heartbeat
+        // proves it is reachable, which is a different question and the one the
+        // daemon used to answer instead.
+        polledSince.set(devId, Date.now());
         const lockedParam = u.searchParams.get('locked');
         devicesLib.noteSeen(deviceState, devId, now, {
           locked: lockedParam === '1' ? true : (lockedParam === '0' ? false : undefined),
@@ -4577,7 +4687,12 @@ const server = http.createServer(async (req, res) => {
         if (!entry) return sendErr(res, 404, 'no such run');
         if (entry.deviceId !== devId) return sendErr(res, 403, 'that run belongs to another device');
 
-        const body = JSON.parse(await readBody(req) || '{}');
+        // A megabyte here, not the default 256KB. A device streams stream-json
+        // with --include-partial-messages, so one line legitimately carries a
+        // whole tool_result; the runner keeps itself well under this, but an
+        // OLDER runner does not know to, and rejecting its batch loses the whole
+        // answer rather than the oversized part of it.
+        const body = JSON.parse(await readBody(req, 1024 * 1024) || '{}');
         entry.lastHeard = Date.now();
         devicesLib.noteSeen(deviceState, devId, entry.lastHeard, body);
 

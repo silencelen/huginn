@@ -451,3 +451,23 @@ test("a Round's manual run lands on its device, not on this host", async () => {
   assert.equal(round.body.lastRun.headline, 'disk is fine');
   assert.equal(round.body.lastRun.malformed, false);
 });
+
+// ------------------------------------------------- reachable is not the same as free
+
+test('a device that has not asked for work is not reported as free', async () => {
+  // ⚠ remoteRuns is in-memory, so restarting appd wipes it — while the far
+  // machine is still running its claude and is SINGLE-JOB: it will not poll
+  // again until that child exits, which for a real run is minutes to hours. The
+  // daemon reported that device online:true, running:false, queued:0, accepted
+  // the next job with a 202, and the job sat undelivered until it was declared
+  // "no word for 5 minutes". A heartbeat proves REACHABLE; only asking for work
+  // proves FREE, and the daemon was answering the second question with the first.
+  const d = await enrol('pollbox');
+  const before = (await api('/v1/devices')).body.devices.find((x) => x.id === d.id);
+  assert.equal(before.awaitingPoll, true, 'a device that has never polled looks free');
+
+  // One long-poll with no work waiting is enough to prove it is asking.
+  await api(`/v1/devices/${d.id}/work?wait=1`);
+  const after = (await api('/v1/devices')).body.devices.find((x) => x.id === d.id);
+  assert.equal(after.awaitingPoll, false, 'asking for work did not count as asking');
+});
