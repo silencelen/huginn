@@ -9,6 +9,20 @@ appeared only as a side-note on the app releases it happened to ship with. Three
 undocumented, and the notes-cutting matcher could fuse two sections when an app and an appd
 version number collided. Entries below are reconstructed from the shipping commits.
 
+## 2.75.0 — 2026-08-25
+
+### Added
+- **The local-model family.** A generate-scope enrolment may advertise a model
+  catalog (display-only, cleaned at ingest); the daemon mints it a stable
+  `llmSlug` and echoes it — every local row id is `local-<llmSlug>-<modelSlug>`.
+  `GET /v1/models?local=1` unions those rows (`family:"local"`, `available`,
+  `host`), opt-in so old clients never see rows they would 400 on. Picking a
+  local row IS the host choice: the chat is forced ask-mode, pinned to its
+  machine for life, and refused at the button when the machine cannot serve.
+  The work item rides as mode `generate`; Rounds refuse the family at create,
+  patch AND fire; a local-family run can never record spend, whatever its
+  result frame claims.
+
 ## 2.74.0 — 2026-08-25
 
 ### Added

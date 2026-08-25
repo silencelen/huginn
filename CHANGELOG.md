@@ -10,6 +10,29 @@ Format loosely follows [Keep a Changelog](https://keepachangelog.com/); versions
 
 ## [Unreleased]
 
+## [0.12.0] - 2026-08-25
+
+### Added
+- **`huginn local` — serve local AI models to huginn from this machine.** The
+  optional local tier: `huginn local on` detects the hardware class, gates on
+  disk, downloads a PINNED llama-server + llama-swap (sha256-verified, loopback
+  only, api-key minted), pulls the pinned models, installs the services
+  (systemd on Linux, WinSW on Windows — alive with nobody logged in), and
+  enrols a second device row at scope `generate`. `off|status|unit|update|
+  doctor` complete the verb; `--adapter ollama|lmstudio` wraps an existing
+  loopback endpoint instead of installing anything. The pins are embedded in
+  the manager by `scripts/gen-local-manifest.js`, so a runtime or model bump
+  is by construction a reviewed release of this client.
+- **`huginn-llm-shim`** — the generate engine: the claude-CLI stream-json
+  contract on its outside, one authenticated OpenAI-style endpoint on its
+  inside. No tool surface by construction; failures are honest result frames;
+  a 120s no-token watchdog; sessions capped and pruned; reports
+  `version+contenthash`.
+- The device runner spawns `conf.llm` through node for generate work, sends a
+  display-only model catalog at enrolment, and **aborts a generate enrolment
+  the daemon does not echo back** — an old daemon would silently file it as a
+  read-only claude device.
+
 ## [0.11.0] - 2026-08-25
 
 ### Added
