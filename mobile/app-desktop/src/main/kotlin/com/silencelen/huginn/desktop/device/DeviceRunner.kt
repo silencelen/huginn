@@ -201,6 +201,18 @@ class DeviceRunner(
             return
         }
 
+        // This runner only ever spawns claude; serving local models is the
+        // headless service's job (it must survive logout), so generate work is
+        // refused here unconditionally rather than fed to the wrong engine.
+        DevicePolicy.engineRefusal(work.mode, hasEngine = false)?.let { why ->
+            _status.value = _status.value.copy(note = "Refused a job: $why", locked = locked)
+            runCatching {
+                client.postWorkEvents(deviceId, work.id, emptyList(), done = true, exitCode = null,
+                    error = why, locked = locked)
+            }
+            return
+        }
+
         val argv = DevicePolicy.argvFor(work, enrolled, locked, settings.deviceRootNow())
         val cwd = DevicePolicy.cwdFor(enrolled, locked, settings.deviceRootNow(),
             System.getProperty("user.home") ?: ".")

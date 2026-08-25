@@ -155,9 +155,11 @@ test('a device enrols and reports what it will do', async () => {
   assert.match(d.id, /^[0-9a-f-]{36}$/);
 });
 
-test('an unknown scope enrols as look, not as own', async () => {
+test('an unknown scope enrols at the floor, not as own', async () => {
+  // The floor is generate, the exclusive rung: a junk scope can run nothing a
+  // claude device runs. An ABSENT scope still enrols at look (see devices.test).
   const d = await enrol({ name: 'sketchy', scope: 'root' });
-  assert.equal(d.scope, 'look', 'the narrowest, never the widest');
+  assert.equal(d.scope, 'generate', 'the floor, never the widest');
 });
 
 test('a nameless device is refused', async () => {
@@ -470,4 +472,18 @@ test('a device that has not asked for work is not reported as free', async () =>
   await api(`/v1/devices/${d.id}/work?wait=1`);
   const after = (await api('/v1/devices')).body.devices.find((x) => x.id === d.id);
   assert.equal(after.awaitingPoll, false, 'asking for work did not count as asking');
+});
+
+test('a generate-scope device is not a place a chat runs', async () => {
+  // The exclusive rung, seen from the daemon's pre-check: a serving row can
+  // never be offered ask or act, and the refusal is said at the button.
+  const dev = await enrol({ name: 'LLMBOX', scope: 'generate' });
+  const refused = await chatOn(dev.id, 'ask');
+  assert.equal(refused.status, 409, JSON.stringify(refused.body));
+  assert.match(refused.body.error, /generate/);
+  // And the client wire never carries generate: an unknown chat mode coerces to
+  // ask. generate exists only in the WORK ITEM, minted by the daemon itself.
+  const made = await api('/v1/chats', { method: 'POST', body: JSON.stringify({ mode: 'generate' }) });
+  assert.equal(made.status, 201, JSON.stringify(made.body));
+  assert.equal(made.body.mode, 'ask', 'generate is a work-item mode, not a chat mode');
 });
