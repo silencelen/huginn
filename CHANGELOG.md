@@ -10,6 +10,54 @@ Format loosely follows [Keep a Changelog](https://keepachangelog.com/); versions
 
 ## [Unreleased]
 
+## [0.10.2] - 2026-08-25
+
+### Fixed — the headless runner, which had no gate at all
+
+Every one of these has the same shape: the runner reported success, or the wrong
+reason, on a machine with **nobody sitting at it**. That is the one place a
+misleading message costs the most, because there is no human to notice the advice
+is useless. `client/huginn-device` now has a section in `scripts/test-client.sh`.
+
+- **The generated systemd unit dropped `HUGINN_DEVICE_DIR`.** It relocates BOTH
+  `device.json` and `appd-token`, so `HUGINN_DEVICE_DIR=/etc/huginn huginn-device on`
+  followed by the very next line the tool prints installed a service reading
+  `~/.config/huginn`: no config, no token. `serve()` treats that as transient and
+  loops at 15 s forever, so the process never exits, `Restart=always` never fires,
+  and **systemd reports the unit perfectly healthy while it does nothing at all**.
+  The unit pinned `HOME` with a six-line comment about why a wrong one is fatal,
+  and then dropped the variable that moves the same two files.
+- **A missing work root was reported as "claude is not on this machine's PATH".**
+  `spawn()` raises ENOENT for a missing executable AND for a missing cwd, and the
+  handler assumed the first. So a deleted root made every job on the device fail
+  forever, with the one instruction the operator had already followed. The cwd is
+  checked before the spawn now, and the PATH message no longer prints the machine's
+  private config path into a chat that syncs to a phone.
+- **`huginn device off` said "Removed from huginn." and exited 0 when the DELETE
+  failed**, having already thrown away `conf.id` — the only handle that could ever
+  remove the row. So exactly when someone decommissions a machine (host asleep, VPN
+  down, wrong url) the device stayed enrolled, a restart enrolled a SECOND row for
+  the same box, and the stale one kept being offered work for thirty days. It now
+  keeps the id, says what went wrong, and exits non-zero so a script can tell.
+- **Every token-file problem read as "no appd token — put one in <path>"**, pointing
+  at a file that was, in most cases, sitting right there. EACCES, EISDIR, an empty
+  file and a file holding one captured newline are now named individually. The
+  newline case is the nasty one: `huginn.sh` guarded the fetched token with `[ -s ]`,
+  which a newline passes, so a botched `ssh huginn 'cat /etc/huginn-appd/token'`
+  installed cleanly and then the runner insisted no token existed. That guard now
+  requires non-whitespace content.
+- **`huginn-device on` silently ignored `--flag=value` and unknown flags.** The
+  parser matched only the space-separated form by exact string equality and the
+  if/else chain had no else, so `--scope=own --root=/srv/build` enrolled at the
+  default scope with no root and printed `Enrolled flagbox as "work"` — the word
+  root never appeared in the output. Both forms are parsed now and anything
+  unrecognised is refused with exit 2.
+- **The host and the machine disagreed about where work runs.** `root` is only
+  honoured at `work` scope (an `own` run starts in the account home), but it was
+  accepted, stored and advertised regardless, so `huginn devices` on the host named
+  a directory that ran nothing. Both ends changed: the runner says so at enrolment,
+  and the host's line says where work actually starts.
+
 ## [0.10.1] - 2026-08-24
 
 ### Fixed
