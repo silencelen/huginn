@@ -573,12 +573,21 @@ data class SavedAccount(
 @Serializable
 data class SavedAccounts(val accounts: List<SavedAccount> = emptyList())
 
-/** A model the installed CLI offers, discovered on the host. */
+/**
+ * A model the host offers: the installed CLI's Claude models, and — when the
+ * client asks with `?local=1` — the `family:"local"` rows served by enrolled
+ * machines. All additions are nullable-with-default, so an older daemon's rows
+ * parse to exactly the old behaviour.
+ */
 @Serializable
 data class ModelChoice(
     val id: String = "",
     val display: String = "",
     val family: String = "",
+    /** False when the serving machine has not checked in. */
+    val available: Boolean = true,
+    /** The device a local row runs on. Display only — the id already carries it. */
+    val host: String? = null,
 )
 
 @Serializable
@@ -932,6 +941,13 @@ data class Device(
     val registeredAt: Long? = null,
     val running: Boolean = false,
     val queued: Int = 0,
+    /** The daemon-minted slug inside a serving row's model ids. Display only. */
+    val llmSlug: String? = null,
+    /**
+     * What a serving machine says it serves, for DISPLAY ONLY. Routing authority
+     * is GET /v1/models; nothing may branch on this list.
+     */
+    val models: List<DeviceModel> = emptyList(),
     /**
      * True when this daemon has not heard the device ASK FOR WORK since it
      * started, so whether it is free is not something it can currently say.
@@ -943,6 +959,13 @@ data class Device(
      * child exits, minutes or hours later.
      */
     val awaitingPoll: Boolean = false
+)
+
+/** One entry of a serving machine's advertised catalog. Display only. */
+@Serializable
+data class DeviceModel(
+    val slug: String = "",
+    val display: String = "",
 )
 
 @Serializable
