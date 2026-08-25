@@ -32,3 +32,4 @@ if (-not (Select-String -Path $PROFILE -Pattern '\.huginn\\huginn\.ps1' -Quiet))
 }
 . "$HOME\.huginn\huginn.ps1"
 Write-Host "`nInstalled. Authorize the key above on the host, then:  huginn help  |  huginn status" -ForegroundColor Green
+Write-Host "This machine may also be able to serve local AI models to huginn (optional, ~5 GB):  huginn local on" -ForegroundColor DarkGray

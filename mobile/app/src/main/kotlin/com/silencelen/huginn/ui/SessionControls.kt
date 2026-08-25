@@ -40,16 +40,6 @@ import com.silencelen.huginn.data.ModelChoice
  * separate control channel — which is also why the current values are read back
  * from the session's own transcript and pane rather than tracked here.
  */
-/** Used only until the host's own list arrives, and if discovery ever fails. */
-private val FALLBACK_MODELS = listOf(
-    "fable" to "Fable",
-    "opus" to "Opus",
-    "sonnet" to "Sonnet",
-    "haiku" to "Haiku",
-)
-
-private val EFFORTS = listOf("low", "medium", "high", "xhigh", "max")
-
 @Composable
 fun SessionControls(
     model: String?,
@@ -76,15 +66,17 @@ fun SessionControls(
             if (compacting) CompactingChip()
             ContextMeter(contextPercent)
             PickerChip(
-                label = prettyModel(model),
-                options = modelOptions(models),
+                label = ModelLabels.model(model),
+                // SESSION site: Claude rows only — this chip types /model into a
+                // live pane, where a local row could never work.
+                options = ModelLabels.options(models, ModelLabels.PickerSite.SESSION),
                 onPick = { onCommand("/model $it") },
             )
             PickerChip(
                 // Reads as the current value, like the model and mode chips; the
                 // word "Effort" only appears when the session has not reported one.
-                label = prettyEffort(effort),
-                options = EFFORTS.map { it to it.replaceFirstChar { c -> c.uppercase() } },
+                label = ModelLabels.effort(effort),
+                options = ModelLabels.effortOptions(),
                 onPick = { onCommand("/effort $it") },
             )
             // Permission mode has no slash command that sets it directly; Shift+Tab
@@ -124,23 +116,35 @@ fun ChatOptionsBar(
             horizontalArrangement = Arrangement.spacedBy(6.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
+            val localNow = ModelLabels.isLocal(model, models)
             PickerChip(
-                label = if (model == null) "Default model" else prettyModel(model),
-                options = modelOptions(models),
+                label = if (model == null) "Default model" else ModelLabels.model(model, models),
+                options = ModelLabels.options(models, ModelLabels.PickerSite.CHAT),
                 enabled = enabled,
                 onPick = onModel,
             )
-            PickerChip(
-                label = if (effort == null) "Default effort" else prettyEffort(effort),
-                options = EFFORTS.map { it to it.replaceFirstChar { c -> c.uppercase() } },
-                enabled = enabled,
-                onPick = onEffort,
-            )
+            // A local model has no effort knob — five levels that do nothing
+            // would be a lying control, so the chip is absent, not disabled.
+            if (!localNow) {
+                PickerChip(
+                    label = if (effort == null) "Default effort" else ModelLabels.effort(effort),
+                    options = ModelLabels.effortOptions(),
+                    enabled = enabled,
+                    onPick = onEffort,
+                )
+            }
             AssistChip(
                 onClick = { },
                 enabled = false,
                 label = { Text(if (mode == "act") "Act" else "Ask") },
             )
+            if (localNow) {
+                Text(
+                    ModelLabels.LOCAL_ASK_ONLY,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
         }
     }
 }
@@ -179,23 +183,5 @@ private fun PickerChip(
     }
 }
 
-/** `xhigh` reads as `Xhigh`; an unknown or missing level falls back to the word. */
-fun prettyEffort(effort: String?): String =
-    effort?.takeIf { it.isNotBlank() }?.replaceFirstChar { it.uppercase() } ?: "Effort"
-
-fun modelOptions(models: List<ModelChoice>): List<Pair<String, String>> =
-    if (models.isEmpty()) FALLBACK_MODELS else models.map { it.id to it.display }
-
-/**
- * The label for the model control.
- *
- * Both sources already carry the version — the pane writes "Opus 5" and the
- * server formats ids into "Opus 4.8" — so this must NOT collapse them to a
- * family name. It used to, which is why the control said "Opus" when Claude Code
- * can be running Opus 5 or Opus 4.8 and the difference matters.
- */
-fun prettyModel(model: String?): String {
-    val m = model?.trim()
-    if (m.isNullOrEmpty()) return "Model"
-    return m
-}
+// The duplicate label tables and pretty* helpers that used to live here are
+// gone — ModelLabels in :core is the one copy, as its header always demanded.

@@ -419,7 +419,10 @@ class HuginnClient(
         decode(post("/v1/account/login/code", Tier.POLL, jsonBody("code" to code)))
 
     /** Models the installed CLI offers, so the picker cannot go stale. */
-    suspend fun models(): List<ModelChoice> = decode<ModelList>(call("/v1/models")).models
+    // ?local=1 is the OPT-IN for family:"local" rows: this client knows to keep
+    // them out of session pickers and to treat picking one as a machine choice,
+    // so it asks for them. An older daemon ignores the unknown parameter.
+    suspend fun models(): List<ModelChoice> = decode<ModelList>(call("/v1/models?local=1")).models
 
     // ------------------------------------------------- account + usage
 

@@ -55,28 +55,49 @@ fun ChatOptionsRow(
     onEffort: (String) -> Unit,
     onMode: (String) -> Unit,
 ) {
+    val localNow = ModelLabels.isLocal(model, models)
     Row(
         horizontalArrangement = Arrangement.spacedBy(6.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         PickerChip(
-            label = if (model.isNullOrBlank()) "Default model" else ModelLabels.model(model),
-            options = ModelLabels.options(models) + (CLEAR to "Host default"),
+            label = if (model.isNullOrBlank()) "Default model" else ModelLabels.model(model, models),
+            // A local chat is pinned to its machine for life: clearing back to a
+            // host default would mean a different engine, which the daemon
+            // refuses — so the clear entry is absent rather than doomed.
+            options = ModelLabels.options(models, ModelLabels.PickerSite.CHAT) +
+                (if (localNow) emptyList() else listOf(CLEAR to "Host default")),
             enabled = enabled,
             onPick = onModel,
         )
-        PickerChip(
-            label = if (effort.isNullOrBlank()) "Default effort" else ModelLabels.effort(effort),
-            options = ModelLabels.effortOptions() + (CLEAR to "Host default"),
-            enabled = enabled,
-            onPick = onEffort,
-        )
-        PickerChip(
-            label = if (mode == "act") "Act" else "Ask",
-            options = listOf("ask" to "Ask — reasoning and memory, no tools", "act" to "Act — files, commands, the web"),
-            enabled = enabled,
-            onPick = onMode,
-        )
+        // A local model has no effort knob — the chip is absent, not disabled.
+        if (!localNow) {
+            PickerChip(
+                label = if (effort.isNullOrBlank()) "Default effort" else ModelLabels.effort(effort),
+                options = ModelLabels.effortOptions() + (CLEAR to "Host default"),
+                enabled = enabled,
+                onPick = onEffort,
+            )
+        }
+        if (localNow) {
+            AssistChip(
+                onClick = { },
+                enabled = false,
+                label = { Text("Ask", style = MaterialTheme.typography.labelMedium) },
+            )
+            Text(
+                ModelLabels.LOCAL_ASK_ONLY,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        } else {
+            PickerChip(
+                label = if (mode == "act") "Act" else "Ask",
+                options = listOf("ask" to "Ask — reasoning and memory, no tools", "act" to "Act — files, commands, the web"),
+                enabled = enabled,
+                onPick = onMode,
+            )
+        }
     }
 }
 
