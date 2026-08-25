@@ -52,7 +52,7 @@ const pushLib = require('./lib/pushtokens');
 const { trySender } = require('./lib/fcm');
 const { createPending, stepSoftEnd } = require('./lib/softend');
 
-const VERSION = '2.65.0';
+const VERSION = '2.66.0';
 const PORT = Number(process.env.HUGINN_APPD_PORT || 8787);
 const DATA_DIR = process.env.HUGINN_APPD_DATA || '/var/lib/huginn-appd';
 const UPLOADS_DIR = path.join(DATA_DIR, 'uploads');
@@ -1418,6 +1418,11 @@ function handleClaudeEvent(meta, run_, ev) {
         turns: ev.num_turns ?? null,
         ts,
       };
+      // What the run said went wrong, KEPT. A usage-limit or credit failure
+      // arrives as is_error with the reason in `result` and no assistant text at
+      // all; without this the Round could only report "no output", which is false
+      // and unactionable when the truth was sitting in the event.
+      if (ev.is_error && typeof ev.result === 'string') rec.errorText = ev.result.slice(0, 500);
       appendMsg(chatId, rec);
       run_.emit('result', rec);
       const finalText = typeof ev.result === 'string' ? ev.result : run_.assistantText;
@@ -1534,11 +1539,17 @@ function settleRun(run_, { exitCode = null, failureText = null } = {}) {
     if (fresh.roundId) {
       try { finishRoundRun(fresh, run_.cancelled ? 'cancelled' : null); }
       catch (e) { log(`round run ${chatId} could not be recorded: ${e.message}`); }
+      // ⚠ RE-READ. finishRoundRun just wrote the seal, the verdict and endedAt;
+      // `fresh` is the snapshot from BEFORE that. Saving it back erased all of
+      // them, and a chat that reopens is a chat where the owner's next question
+      // gets filed as the Round's official report — verbatim the failure
+      // reconcileInterruptedRuns' comment says was already fixed.
+      const sealed = loadMeta(chatId) || fresh;
       // And then it is OVER. Draining a queue into a sealed run would reopen the
       // very thing that just ended, so anything waiting is dropped here instead.
-      const waiting = clearPending(fresh);
+      const waiting = clearPending(sealed);
       if (waiting) {
-        saveMeta(fresh);
+        saveMeta(sealed);
         log(`round run ${chatId} dropped ${waiting} queued message(s): the run is closed`);
       }
       return;
@@ -1621,7 +1632,11 @@ function queueWork(deviceId, item) {
   deviceWaiters.set(deviceId, waiters);
   if (w) {
     clearTimeout(w.timer);
-    w.respond(q.shift() || null);
+    const handing = q.shift() || null;
+    // Put it BACK if the waiter could not take it. Its socket may have closed in
+    // the window before its own close handler unparked it.
+    if (handing && w.respond(handing) === false) q.unshift(handing);
+    else if (!handing) w.respond(null);
     deviceQueues.set(deviceId, q);
   }
 }
@@ -1636,6 +1651,10 @@ function queueWork(deviceId, item) {
  * take the waiter out of the running.
  */
 function parkWaiter(deviceId, waitS, respond) {
+  // `respond` returns whether it actually delivered. A socket that closed between
+  // `answered = true` and the `close` handler running left a waiter that queueWork
+  // would hand an item to and drop on the floor — the job created, accepted, and
+  // never run, with the chat stuck `running` and the device showing nothing queued.
   const entry = { respond, timer: null };
   const drop = () => {
     clearTimeout(entry.timer);
@@ -1647,6 +1666,25 @@ function parkWaiter(deviceId, waitS, respond) {
   waiters.push(entry);
   deviceWaiters.set(deviceId, waiters);
   return drop;
+}
+
+/**
+ * Takes a work item out of a device's queue.
+ *
+ * ⚠ A QUEUE ENTRY MUST NOT OUTLIVE ITS RUN. It did, and the consequences were the
+ * worst in this feature: pressing Stop on an `act` job left the item sitting
+ * there, so the machine was handed it on its next poll and ran it for real with
+ * full grants — while the chat told the owner it had been cancelled. The same
+ * entry survived `loseRemoteRun`, so a laptop that woke hours later executed a
+ * dead job whose every result was then rejected 404.
+ */
+function withdrawWork(deviceId, workId) {
+  const q = deviceQueues.get(deviceId);
+  if (!q || !q.length) return false;
+  const keep = q.filter((it) => it.id !== workId);
+  if (keep.length === q.length) return false;
+  deviceQueues.set(deviceId, keep);
+  return true;
 }
 
 /** Runs this device currently owns. One at a time, so a machine is never flooded. */
@@ -1715,7 +1753,10 @@ function loseRemoteRun(workId, why) {
   const entry = remoteRuns.get(workId);
   if (!entry) return;
   remoteRuns.delete(workId);
-  const name = ((deviceState.devices || {})[entry.deviceId] || {}).name || entry.deviceId;
+  // Before the name lookup below, because the DELETE-device path has already
+  // removed the record by the time it gets here and the queue would be orphaned.
+  withdrawWork(entry.deviceId, workId);
+  const name = hostNameFor(entry.deviceId) || ((deviceState.devices || {})[entry.deviceId] || {}).name || entry.deviceId;
   log(`chat ${entry.chatId} lost its run on ${name}: ${why}`);
   settleRun(entry.run_, { exitCode: null, failureText: `${name}: ${why}` });
 }
@@ -1744,6 +1785,23 @@ setInterval(() => { try { devicesTick(); } catch (e) { log('devices: tick failed
 /** Stop a run: ask, then insist. Shared by the cancel route and a Round timeout. */
 function cancelRun(run_) {
   run_.cancelled = true;
+  // A REMOTE run has no `proc` to kill. Stopping it means taking the work back
+  // before the machine is handed it — otherwise Stop stops nothing, the device
+  // picks the item up on its next poll (up to 25s away, or hours for a sleeping
+  // laptop) and does the work anyway while the chat says it was cancelled.
+  if (run_.remote) {
+    const { deviceId, workId } = run_.remote;
+    if (withdrawWork(deviceId, workId)) {
+      // Never handed over, so nothing out there is running: settle immediately
+      // rather than leaving the chat "stopping" until the silence timer fires.
+      remoteRuns.delete(workId);
+      settleRun(run_, { exitCode: null, failureText: 'cancelled before it was picked up' });
+      return;
+    }
+    // Already with the device. It learns of the cancel in the ack to its next
+    // batch and posts its own terminal frame, so the ending still comes from it.
+    return;
+  }
   try { run_.proc.kill('SIGTERM'); } catch { }
   setTimeout(() => { try { run_.proc.kill('SIGKILL'); } catch { } }, 5000).unref();
 }
@@ -2026,17 +2084,49 @@ function finishRoundRun(meta, failure) {
   if (!round) return;                    // the Round was deleted mid-run; the chat stands alone
 
   const msgs = loadMsgs(meta.id);
-  let text = '';
+  // EVERY assistant message, joined — not merely the last one.
+  //
+  // parseReport is documented as "the LAST block wins" across the whole answer,
+  // but this narrowed to a single message first, and each text content block
+  // becomes its own message. So an ordinary agentic turn — write the report, run
+  // one more tool, say "Confirmed." — threw the report away and filed the word
+  // "Confirmed." as the week's finding, with a complete `action` report sitting
+  // one message earlier in the same transcript. Joining preserves last-wins.
+  const parts = [];
   let lastError = null;
+  let resultFailure = null;
   for (const m of msgs) {
-    if (m.type === 'assistant' && m.text) text = m.text;
+    if (m.type === 'assistant' && m.text) parts.push(m.text);
     if (m.type === 'error' && m.text) lastError = m.text;
+    // A FLAG, not a guess. lib/rounds' own header says the report contract exists
+    // because "success must be a FLAG, not a guess" — and this was guessing from
+    // prose while the flag sat unread two fields away.
+    if (m.type === 'result' && m.ok === false) {
+      resultFailure = m.errorText || 'the run reported an error';
+    }
   }
+  const text = parts.join('\n\n');
+  const parsed = text ? roundsLib.parseReport(text) : null;
 
   let report;
-  if (failure) report = roundsLib.errorReport(failure);
-  else if (!text && lastError) report = roundsLib.errorReport(lastError);
-  else report = roundsLib.parseReport(text) || roundsLib.fallbackReport(text);
+  if (parsed) {
+    // ⚠ A REPORT BEATS A FAILURE, and on a device that is the NORMAL case rather
+    // than a race: a timeout cancel cannot stop the far machine, which finishes
+    // cleanly and delivers a valid report — and this used to file "did not finish"
+    // over the top of "7 of 7 backups verified, all green".
+    report = parsed;
+  } else if (failure) {
+    report = roundsLib.errorReport(failure);
+  } else if (resultFailure) {
+    report = roundsLib.errorReport(resultFailure);
+  } else if (lastError) {
+    // Reached even when there IS text: one streamed token before a crash used to
+    // turn "claude exited 1" into a cheerful progress line, so the same crash
+    // reported as a failure or as "Checking the disks now" depending on timing.
+    report = roundsLib.errorReport(lastError);
+  } else {
+    report = roundsLib.fallbackReport(text);
+  }
 
   const at = Math.floor(Date.now() / 1000);
   const status = roundsLib.effectiveStatus(report);
@@ -2116,6 +2206,59 @@ async function deliverRoundReport(round, report, chatId) {
  * One pass over every Round. Cheap by construction: a few small JSON reads, and
  * no tmux, no network and no spawn unless something is actually due.
  */
+/**
+ * A scheduled fire that was REFUSED is still something that happened.
+ *
+ * ⚠ THIS IS THE QUIETEST FAILURE IN THE FEATURE and it used to be one log line.
+ * Eight ordinary triggers reach here — the device was unenrolled, is asleep, is
+ * locked, narrowed its scope, is already running something (two Rounds on one
+ * machine at 03:00: the second was dropped EVERY NIGHT), the local pool is full,
+ * or the slot was missed with catchUp off. In every one of them `runs` stayed 0,
+ * `lastRun` stayed null, and nothing was sent — even with notifyWhen "always",
+ * because a failure that never becomes a run can never be notified about.
+ *
+ * So the operator saw "Daily at 3:00 AM · in 51m" and a clean green week, for a
+ * job that had not run since the laptop went to sleep. Firing by hand was the
+ * only way to learn why, and that path has always answered with a reason.
+ *
+ * A skipped run is recorded as `attention` rather than `action`: nothing is
+ * wrong with the world, something is wrong with the arrangement.
+ */
+function recordSkippedRound(roundId, reason) {
+  const round = loadRound(roundId);
+  if (!round) return;
+  const at = Math.floor(Date.now() / 1000);
+  const report = {
+    status: 'attention',
+    headline: `did not run: ${String(reason).slice(0, 120)}`,
+    items: [],
+    goalMet: null,
+    malformed: false,
+  };
+  const run = {
+    at,
+    chatId: null,                 // there is no transcript; nothing ran
+    status: 'attention',
+    reportedStatus: null,
+    goalMet: null,
+    headline: report.headline,
+    items: [],
+    malformed: false,
+    skipped: true,
+    manual: false,
+    durationSec: 0,
+  };
+  updateRound(round.id, (r) => {
+    r.lastRun = run;
+    r.runs = [run, ...(Array.isArray(r.runs) ? r.runs : [])].slice(0, MAX_RUN_HISTORY);
+  });
+  log(`round ${round.id}: could not start (${reason}) — recorded as a skipped run`);
+  if (roundsLib.shouldNotify(round.notifyWhen, 'attention')) {
+    deliverRoundReport(round, report, null)
+      .catch((e) => log(`round ${round.id}: skip notice failed (${e.message})`));
+  }
+}
+
 async function roundsTick() {
   const now = Date.now();
   for (const round of listRounds()) {
@@ -2141,7 +2284,7 @@ async function roundsTick() {
     if (!d.run) continue;
 
     const started = fireRound(loadRound(round.id) || round);
-    if (started.error) log(`round ${round.id}: could not start (${started.error})`);
+    if (started.error) recordSkippedRound(round.id, started.error);
   }
 }
 setInterval(() => { roundsTick().catch((e) => log('rounds: tick failed', e.message)); }, 30_000).unref();
@@ -2185,6 +2328,19 @@ function startQueuedRun(meta, text) {
  * before completion is indistinguishable from one at the start). Saying plainly
  * that it was interrupted leaves the decision where it belongs.
  */
+/**
+ * A Round whose run was interrupted must still record that it happened.
+ *
+ * Without this the restart left `runs` at 0, `lastRun` null, `currentChatId`
+ * dangling at a dead chat, and — worst — the chat UNSEALED, so opening it and
+ * typing started a live run whose answer was then filed as the Round's report.
+ */
+function reconcileInterruptedRound(meta) {
+  if (!meta.roundId) return;
+  try { finishRoundRun(meta, 'huginn-appd restarted while this was running'); }
+  catch (e) { log(`round run ${meta.id} could not be recorded after restart: ${e.message}`); }
+}
+
 function reconcileInterruptedRuns() {
   let ids = [];
   // The directory rather than listChats(): this runs before the port is open, and
@@ -2206,6 +2362,7 @@ function reconcileInterruptedRuns() {
       m.lastSnippet = text.slice(0, 120);
       delete m.runStartedAt;
     });
+    reconcileInterruptedRound(loadMeta(id) || meta);
     log(`chat ${id}: run interrupted by restart (started ${meta.runStartedAt}) — recorded`);
   }
 }
@@ -4307,7 +4464,10 @@ const server = http.createServer(async (req, res) => {
         devicesLib.noteSeen(deviceState, devId, now, {
           locked: lockedParam === '1' ? true : (lockedParam === '0' ? false : undefined),
         });
-        const q = deviceQueues.get(devId) || [];
+        // Anything whose run has ended is dropped rather than handed over. The
+        // queue is a view of `remoteRuns`; an item that outlives its run is a job
+        // the owner already stopped, or one the daemon already gave up on.
+        let q = (deviceQueues.get(devId) || []).filter((it) => remoteRuns.has(it.id));
         if (q.length) {
           const item = q.shift();
           deviceQueues.set(devId, q);
@@ -4315,16 +4475,20 @@ const server = http.createServer(async (req, res) => {
           if (entry) entry.lastHeard = Date.now();
           return sendJson(res, 200, { work: item });
         }
+        deviceQueues.set(devId, q);
         const waitS = Number(u.searchParams.get('wait')) || WORK_WAIT_DEFAULT_S;
         let answered = false;
         const drop = parkWaiter(devId, waitS, (item) => {
-          if (answered) return;
+          // The return value is the contract: false means "I did not take it",
+          // and queueWork puts the item back rather than losing it.
+          if (answered || res.writableEnded) return false;
           answered = true;
           if (item) {
             const entry = remoteRuns.get(item.id);
             if (entry) entry.lastHeard = Date.now();
           }
           sendJson(res, 200, { work: item || null });
+          return true;
         });
         // Unparked, not just flagged: a flag alone would let queueWork hand this
         // dead response a job and drop it on the floor.
@@ -4391,11 +4555,30 @@ const server = http.createServer(async (req, res) => {
 
       if (req.method === 'PATCH' && rsub === '') {
         const body = JSON.parse(await readBody(req) || '{}');
-        const patched = applyRoundPatch(round, body);
+        // ⚠ RE-READ AFTER THE AWAIT. `round` above was loaded before the body
+        // arrived, and a phone sends the whole prompt on save, so the window is
+        // every PATCH. A run finishing inside it had its record erased — runs
+        // 1 -> 0, lastRun back to null — AFTER its push had gone out; a run
+        // STARTING inside it got currentChatId reset to null, which defeats the
+        // "previous run is still going" guard and puts two live claude processes
+        // on the same act work while the row reads not-running.
+        const current = loadRound(roundId);
+        if (!current) return sendErr(res, 404, 'no such round');
+        const patched = applyRoundPatch(current, body);
         if (patched.error) return sendErr(res, 400, patched.error);
         return sendJson(res, 200, roundView(saveRound(patched.round)));
       }
       if (req.method === 'DELETE' && rsub === '') {
+        // Stop the work before removing the schedule. Deleting a Round used to
+        // leave its run with no surface at all — absent from /v1/rounds and from
+        // /v1/chats, nothing in either client to press, holding a slot in the
+        // pool until the 2-hour hard cap. For an act Round, "delete the schedule"
+        // has to stop what it is doing right now.
+        const live = round.currentChatId && activeRuns.get(round.currentChatId);
+        if (live) {
+          log(`round ${roundId} deleted while running — cancelling chat ${round.currentChatId}`);
+          try { cancelRun(live); } catch (e) { log(`round ${roundId}: cancel failed (${e.message})`); }
+        }
         // The Round goes; its past runs are ordinary chats and are left alone, so
         // deleting a schedule never destroys the reports it already produced.
         try { fs.unlinkSync(roundPath(roundId)); } catch { /* already gone */ }
