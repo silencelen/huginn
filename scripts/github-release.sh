@@ -44,11 +44,38 @@ command -v gh >/dev/null || { echo "REFUSING: gh is not installed" >&2; exit 1; 
 echo "$VERSION" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+$' \
   || { echo "REFUSING: version '$VERSION' is not x.y.z" >&2; exit 1; }
 
+# TAG PREFIX = UPDATE CHANNEL. TITLE = LABEL. They are not the same thing and only
+# one of them is free to change.
+#
+# A client only knows the prefix it was BUILT with. Rename one and the old client
+# does not fail — it keeps checking, matches nothing, and reports "up to date"
+# forever, with no way to be told the new name. So a channel rename is sequenced:
+#
+#   1. ship a release, under the OLD tag, whose client accepts BOTH names
+#   2. wait until every device has actually taken it
+#   3. only then start publishing under the new tag
+#
+# Step 1 shipped in app 2.73.0 (GithubReleases.MOBILE_TAG_PREFIXES). APP_TAG below
+# is step 3, left on the old name deliberately.
+#
+# ⚠ FLIPPING APP_TAG IS NOT THE WHOLE JOB. devstore selects releases by
+# `.source.tagPrefix` in the app's app.json ON DEVSERV; that has to move in the
+# same breath or the store silently stops seeing new builds.
+APP_TAG="app-v"          # -> "mobile-v" once every device is past 2.73.0
+# The CLI channel renames with no ceremony: nothing consumes these tags. `huginn
+# update` pulls client/huginn.sh from the repo CONTENTS api, and `huginn desktop`
+# reads desktop-v — neither has ever looked at a bare v tag.
+CLI_TAG="cli-v"
+
 case "$COMPONENT" in
-  core)    TAG="v$VERSION";         TITLE="huginn-cli v$VERSION";      CHANGELOG=CHANGELOG.md ;;
-  app)     TAG="app-v$VERSION";     TITLE="Huginn (Android) $VERSION"; CHANGELOG=mobile/CHANGELOG.md ;;
-  desktop) TAG="desktop-v$VERSION"; TITLE="Huginn Desktop $VERSION";   CHANGELOG=mobile/app-desktop/CHANGELOG.md ;;
-  appd)    TAG="appd-v$VERSION";    TITLE="huginn-appd $VERSION";      CHANGELOG=server/appd/CHANGELOG.md ;;
+  core)    TAG="$CLI_TAG$VERSION";  TITLE="Huginn CLI $VERSION (Linux, macOS, Windows)"; CHANGELOG=CHANGELOG.md ;;
+  app)     TAG="$APP_TAG$VERSION";  TITLE="Huginn Mobile $VERSION (Android)";            CHANGELOG=mobile/CHANGELOG.md ;;
+  # ONE build, TWO platforms — an .exe and a .deb from the same jars. That is why
+  # this channel is not split into windows-v/linux-v: it would be two tags, two
+  # manifests and two updater channels describing one artifact set, and the files
+  # already say which is which.
+  desktop) TAG="desktop-v$VERSION"; TITLE="Huginn Desktop $VERSION (Windows, Linux)";    CHANGELOG=mobile/app-desktop/CHANGELOG.md ;;
+  appd)    TAG="appd-v$VERSION";    TITLE="huginn-appd $VERSION (server)";               CHANGELOG=server/appd/CHANGELOG.md ;;
   *) echo "REFUSING: unknown component '$COMPONENT'" >&2; exit 2 ;;
 esac
 

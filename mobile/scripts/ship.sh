@@ -66,7 +66,9 @@ UPLOADS=("$APK")
 VN="$(grep -oE '"versionName":"[^"]+"' "$MANIFEST" | head -1 | cut -d'"' -f4)"
 
 if [ "$VARIANT" = "release" ]; then
-  echo "[ship 2/3] publishing GitHub release app-v$VN"
+  # The tag is github-release.sh's to name (see APP_TAG there); it prints the real
+  # one. Naming it again here is how a log starts lying after a channel rename.
+  echo "[ship 2/3] publishing the $VN mobile release"
   TMPD="$(mktemp -d)"
   # The updater matches the APK asset by extension and verifies by sha256, so
   # the nice asset name and latest.json's internal apk name need not agree —
@@ -80,11 +82,11 @@ if [ "$VARIANT" = "release" ]; then
          "$TMPD/Huginn-$VN.apk#Huginn $VN (signed APK, arm64-v8a)" \
          "$REPO_DIR/mobile/$MANIFEST#Release manifest (sha256, for in-app + devstore update)"; then
     rm -rf "$TMPD"
-    echo "[ship] FAIL GitHub release app-v$VN failed — NOTHING is published. Fix and re-run." >&2
+    echo "[ship] FAIL: the $VN mobile release failed — NOTHING is published. Fix and re-run." >&2
     exit 1
   fi
   rm -rf "$TMPD"
-  echo "[ship] GitHub release app-v$VN published (APK + latest.json)"
+  echo "[ship] $VN mobile release published (APK + latest.json)"
 
   # A nudge, not a publish path: the timer would pick this up within 15 minutes
   # anyway. If devserv is unreachable the release still stands and the store

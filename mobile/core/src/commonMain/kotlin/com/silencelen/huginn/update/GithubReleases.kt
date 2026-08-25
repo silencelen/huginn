@@ -51,14 +51,45 @@ object GithubReleaseIndex {
      * a minor of ten). Null when nothing matches.
      */
     fun newest(releases: List<GhRelease>, tagPrefix: String): GhRelease? =
+        newest(releases, listOf(tagPrefix))
+
+    /**
+     * The same, across SEVERAL accepted prefixes.
+     *
+     * ⚠ A TAG PREFIX IS AN UPDATE CHANNEL, NOT A LABEL, and that is why this
+     * overload exists. An installed client only knows the prefix it was built
+     * with, so renaming one does not fail loudly — the old client keeps checking,
+     * keeps matching nothing, and keeps reporting "up to date" forever. There is
+     * no way to tell it about a new name, because looking for the old one is the
+     * only thing it knows how to do.
+     *
+     * So a rename is a two-step: teach clients BOTH names, ship that release under
+     * BOTH tags so the old ones can still find it, and only then stop publishing
+     * the old tag. The list is ordered newest-name-first for readability; matching
+     * is by whichever prefix a tag actually carries, and the winner is decided on
+     * SEMVER of the tail, so the same version published under two names ties
+     * rather than one shadowing the other.
+     */
+    fun newest(releases: List<GhRelease>, tagPrefixes: List<String>): GhRelease? =
         releases
-            .filter { !it.draft && !it.prerelease && it.tagName.startsWith(tagPrefix) }
-            .filter { Semver.parse(versionOf(it, tagPrefix)) != null }
-            .maxWithOrNull { a, b -> Semver.compare(versionOf(a, tagPrefix), versionOf(b, tagPrefix)) }
+            .filter { !it.draft && !it.prerelease }
+            .mapNotNull { r ->
+                val p = tagPrefixes.firstOrNull { r.tagName.startsWith(it) } ?: return@mapNotNull null
+                val v = versionOf(r, p)
+                if (Semver.parse(v) == null) null else r to v
+            }
+            .maxWithOrNull { a, b -> Semver.compare(a.second, b.second) }
+            ?.first
 
     /** The semver tail of a release tag: "desktop-v0.6.0" − "desktop-v" = "0.6.0". */
     fun versionOf(release: GhRelease, tagPrefix: String): String =
         release.tagName.removePrefix(tagPrefix)
+
+    /** The tail, using whichever of [tagPrefixes] the tag actually carries. */
+    fun versionOf(release: GhRelease, tagPrefixes: List<String>): String =
+        tagPrefixes.firstOrNull { release.tagName.startsWith(it) }
+            ?.let { release.tagName.removePrefix(it) }
+            ?: release.tagName
 }
 
 /**
@@ -127,6 +158,18 @@ class GithubReleases(
         const val REPO: String = "silencelen/huginn"
         const val USER_AGENT: String = "huginn-updater"
         const val DESKTOP_TAG_PREFIX: String = "desktop-v"
+
+        /**
+         * The phone's channel. `mobile-v` since 2026-08-25; `app-v` is the name it
+         * shipped under until then and is still ACCEPTED so a client built before
+         * the rename can find the release that teaches it the new one.
+         *
+         * Do not drop `app-v` until every device has rolled past 2.73.0 — see the
+         * note on [GithubReleaseIndex.newest].
+         */
+        const val MOBILE_TAG_PREFIX: String = "mobile-v"
         const val APP_TAG_PREFIX: String = "app-v"
+        val MOBILE_TAG_PREFIXES: List<String> = listOf(MOBILE_TAG_PREFIX, APP_TAG_PREFIX)
+        val DESKTOP_TAG_PREFIXES: List<String> = listOf(DESKTOP_TAG_PREFIX)
     }
 }

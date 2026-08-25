@@ -63,7 +63,7 @@ class PhoneUpdater(
     private val installedVersionCode: Long,
     private val installedVersionName: String = "",
     private val feed: ReleaseFeed = GithubReleases(),
-    private val tagPrefix: String = GithubReleases.APP_TAG_PREFIX,
+    private val tagPrefixes: List<String> = GithubReleases.MOBILE_TAG_PREFIXES,
     private val cacheDir: File,
     private val downloader: suspend (url: String, dest: File, onProgress: (Long, Long) -> Unit) -> Unit =
         ::downloadTo,
@@ -85,8 +85,8 @@ class PhoneUpdater(
         _state.value = AppUpdateState.Checking
         val releases = runCatching { feed.list() }
             .getOrElse { return fail("could not reach GitHub releases: ${it.message}") }
-        val release = GithubReleaseIndex.newest(releases, tagPrefix)
-            ?: return fail("no $tagPrefix release published yet")
+        val release = GithubReleaseIndex.newest(releases, tagPrefixes)
+            ?: return fail("no ${tagPrefixes.first()} release published yet")
 
         val manifestAsset = release.asset(MANIFEST_NAME)
             ?: return fail("release ${release.tagName} has no $MANIFEST_NAME — cannot verify it")
