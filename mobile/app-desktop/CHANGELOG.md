@@ -14,7 +14,27 @@ the Electron client's go to `/v1/desktop` and the two never mix — see
      refusal is deliberate — it is what stops a release going out with no notes.
      ─────────────────────────────────────────────────────────────────────────── -->
 
-## Unreleased
+## 0.8.8
+
+### Fixed
+- **A question no longer covers the terminal or the controls.** 0.8.7 stopped the prompt card
+  resizing the real terminal by floating it over the pane — which traded one problem for another:
+  on the Screen tab it sat on top of the output and the controls underneath it.
+  The card is back below the pane where it blocks nothing, and the viewport genuinely shrinks to
+  make room. What makes that safe is the distinction the last two releases kept missing: **a
+  prompt may take LAYOUT space, it may not change the REPORTED geometry.** The geometry report is
+  now held while a question is up, so tmux never hears about the shrink — the terminal keeps its
+  own shape and scrolls inside the shorter window instead of re-wrapping.
+
+### Changed
+- **Dropped "(Compose)" from the app name.** It is now just "Huginn Desktop" in the Start Menu,
+  the uninstall entry, the installer, and the diagnostics header. The qualifier only ever existed
+  to tell this client apart from the Electron one, which is gone.
+  The rename is DISPLAY ONLY: the install directory and the uninstall registry key both key off
+  `APP_ID` (`huginn-desktop-kt`), and the toast AUMID is untouched, so an upgrade cannot land
+  beside the old copy, orphan its uninstall entry, or lose notification identity. The one thing
+  that does move is the Start Menu folder, so the installer now deletes the old one by its literal
+  pre-rename name.
 
 ### Changed
 - **Dropped "(Compose)" from the app name.** It is now just "Huginn Desktop" in the Start Menu,
