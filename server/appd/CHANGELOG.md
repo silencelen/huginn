@@ -9,6 +9,26 @@ appeared only as a side-note on the app releases it happened to ship with. Three
 undocumented, and the notes-cutting matcher could fuse two sections when an app and an appd
 version number collided. Entries below are reconstructed from the shipping commits.
 
+## 2.74.0 — 2026-08-25
+
+### Added
+- **The `generate` policy rung** (the local-AI tier, ahead of the feature).
+  `generate` joins the scope lattice as an EXCLUSIVE rung: it matches only
+  itself, in both directions — so a claude device can never be offered
+  local-model work, and a serving device can never be offered ask or act. A
+  locked generate device keeps serving (a generate run mutates nothing, and
+  dropping it to look would sideways-grant ask). Junk scopes at registration
+  now floor to generate; an absent scope still enrols at look. `scopeCovers`
+  replaces raw lattice comparison everywhere.
+
+### Changed
+- A pre-check refusal blames the lock only when unlocking would actually help;
+  otherwise it names the scope, because the scope is what somebody would change.
+- Registration scopes are normalised (trim + lowercase), matching the runners.
+
+No generate work can be produced yet — chats and Rounds cannot reach the mode
+until the local tier ships. This release is the fence, ahead of the field.
+
 ## 2.73.0 — 2026-08-25
 
 ### Changed

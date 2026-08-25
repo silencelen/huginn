@@ -10,6 +10,26 @@ Format loosely follows [Keep a Changelog](https://keepachangelog.com/); versions
 
 ## [Unreleased]
 
+## [0.11.0] - 2026-08-25
+
+### Added
+- **The `generate` scope** — the exclusive rung for machines that serve local
+  models (the local-AI tier). A generate device runs ONLY generate work and
+  generate work runs ONLY on a generate device; rank ordering alone would have
+  let a claude device answer a local-model request. A granted generate argv is
+  the bare stream flags plus the request: no tool flags, no persona, no effort.
+  The headless runner refuses generate work unless a local engine is configured
+  (`conf.llm`), and never falls through to claude.
+
+### Changed
+- **Junk scopes floor to `generate`, not `look`** — a scope nobody can reason
+  about now runs nothing a claude device runs. An absent scope still enrols at
+  `look`. `huginn-device on` refuses unknown scopes loudly instead of flooring
+  them, and refuses `--scope generate` (that enrolment is created by `huginn
+  local on`, arriving with the local tier).
+- **A refusal blames the lock only when unlocking would help.** A locked
+  look-scope device asked to act now names the scope, not the lock.
+
 ## [0.10.3] - 2026-08-25
 
 ### Fixed — one oversized line could lose a remote run's entire answer

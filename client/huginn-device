@@ -31,18 +31,24 @@ const https = require('https');
 const readline = require('readline');
 const { spawn } = require('child_process');
 
-const VERSION = '0.10.3';
+const VERSION = '0.11.0';
 
 // ---8<--- GENERATED POLICY — scripts/gen-device-policy.js — DO NOT EDIT ---8<---
 const POLICY = {
   "scopes": [
+    "generate",
     "look",
     "work",
     "own"
   ],
+  "exclusiveScopes": [
+    "generate"
+  ],
+  "enrolDefault": "look",
   "modeNeeds": {
     "ask": "look",
-    "act": "work"
+    "act": "work",
+    "generate": "generate"
   },
   "lockDropsTo": "look",
   "streamFlags": [
@@ -86,7 +92,8 @@ const POLICY = {
   },
   "refusals": {
     "locked": "this machine is locked, so it is read-only until someone unlocks it",
-    "scope": "this machine is set to {scope}, which cannot run {mode}"
+    "scope": "this machine is set to {scope}, which cannot run {mode}",
+    "engine": "this machine has no local model engine, so it cannot run generate"
   }
 };
 // ---8<--- END GENERATED POLICY ---8<---
@@ -220,7 +227,22 @@ function parseScope(raw) {
   return POLICY.scopes.includes(s) ? s : POLICY.scopes[0];
 }
 
-const effectiveScope = (scope, locked) => (locked ? POLICY.lockDropsTo : parseScope(scope));
+/**
+ * An EXCLUSIVE scope (generate) matches only itself, both ways: a generate
+ * device runs only generate work, and generate work runs only on a generate
+ * device. Rank ordering alone would let `own` satisfy generate — and this
+ * machine would spawn claude to answer a local-model request, the silent
+ * engine substitution the policy bans in both directions.
+ */
+const exclusive = (s) => (POLICY.exclusiveScopes || []).includes(s);
+
+// Exclusive scopes ignore the lock drop: a generate run mutates nothing, so a
+// lock has nothing to withdraw — and dropping generate to look would
+// sideways-GRANT ask, a claude mode this row has no engine for.
+const effectiveScope = (scope, locked) => {
+  const s = parseScope(scope);
+  return exclusive(s) ? s : (locked ? POLICY.lockDropsTo : s);
+};
 
 /**
  * ⚠ AN UNKNOWN MODE IS REFUSED. This FAILED OPEN: `POLICY.modeNeeds` comes from
@@ -234,16 +256,46 @@ const effectiveScope = (scope, locked) => (locked ? POLICY.lockDropsTo : parseSc
 const needFor = (mode) =>
   (Object.prototype.hasOwnProperty.call(POLICY.modeNeeds, mode) && typeof POLICY.modeNeeds[mode] === 'string')
     ? POLICY.modeNeeds[mode] : null;
-const allows = (scope, mode) => { const n = needFor(mode); return n !== null && rank(parseScope(scope)) >= rank(n); };
+const allows = (scope, mode) => {
+  const n = needFor(mode);
+  if (n === null) return false;
+  const s = parseScope(scope);
+  if (exclusive(n) || exclusive(s)) return s === n;
+  return rank(s) >= rank(n);
+};
 
 function refusal(scope, locked, mode) {
   if (allows(effectiveScope(scope, locked), mode)) return null;
-  return locked
+  // The lock is blamed only when unlocking would actually help — the enrolled
+  // scope allows the mode and only the lock-drop is in the way. Everything else
+  // names the scope, because the scope is what somebody would have to change.
+  return (locked && allows(parseScope(scope), mode))
     ? POLICY.refusals.locked
     : POLICY.refusals.scope.replace('{scope}', parseScope(scope)).replace('{mode}', mode);
 }
 
+/**
+ * The engine fence — the one rule the policy table cannot hold, because the
+ * table cannot see which binary sits at conf.claude/conf.llm. Generate work
+ * needs a local model engine; this runner spawns one only when `huginn local
+ * on` has configured it. Without one the honest answer is a refusal, never a
+ * claude spawn with a tool-flag-free argv.
+ */
+const engineRefusal = (mode, hasEngine) =>
+  (mode === 'generate' && !hasEngine) ? POLICY.refusals.engine : null;
+
 function argvFor(work, scope, locked, persona) {
+  // A granted generate argv is the bare stream flags plus the request: no tool
+  // flags (the shim has no tool surface — absence is the fence), no --effort,
+  // and NO persona — huginn's context never rides to a serving box.
+  if (work.mode === 'generate' && allows(effectiveScope(scope, locked), 'generate')) {
+    const argv = POLICY.streamFlags.slice();
+    if (work.model) argv.push('--model', work.model);
+    if (SESSION_ID_RE.test(String(work.resumeSessionId || ''))) {
+      argv.push('--resume', work.resumeSessionId);
+    }
+    return argv;
+  }
   const act = work.mode === 'act' && allows(effectiveScope(scope, locked), 'act');
   const argv = POLICY.streamFlags.slice();
   if (work.model) argv.push('--model', work.model);
@@ -458,6 +510,19 @@ function runWork(id, work, conf) {
       return;
     }
 
+    // The engine fence, after the scope fence: policy said yes, but generate
+    // work still needs a configured local engine. Never fall through to claude —
+    // a hand-edited `scope: "generate"` on a claude box would otherwise pass
+    // the policy and spawn claude with a tool-flag-free argv.
+    const engineWhy = engineRefusal(work.mode, !!conf.llm);
+    if (engineWhy) {
+      log(`refused ${work.id}: ${engineWhy}`);
+      api('POST', `/v1/devices/${id}/work/${work.id}/events`,
+        { lines: [], done: true, error: engineWhy, locked: lock })
+        .catch(() => {}).then(resolve);
+      return;
+    }
+
     const argv = argvFor(work, scope, lock);
     const cwd = cwdFor(scope, lock, conf.root);
     log(`running ${work.id} (${work.mode}) in ${cwd}`);
@@ -472,11 +537,14 @@ function runWork(id, work, conf) {
       return;
     }
 
+    // Which engine: the claude CLI for ask/act, the llm shim for generate. The
+    // dispatch is by MODE, never by scope — the scope fence already ran.
+    const bin = work.mode === 'generate' ? conf.llm : (conf.claude || 'claude');
     let child;
     try {
-      child = spawn(conf.claude || 'claude', argv, { cwd, stdio: ['pipe', 'pipe', 'pipe'] });
+      child = spawn(bin, argv, { cwd, stdio: ['pipe', 'pipe', 'pipe'] });
     } catch (e) {
-      return finish(`could not start claude on ${conf.name}: ${e.message}`);
+      return finish(`could not start ${work.mode === 'generate' ? 'the local engine' : 'claude'} on ${conf.name}: ${e.message}`);
     }
 
     let pending = [];
@@ -697,7 +765,21 @@ async function main() {
       const parsed = parseFlags(process.argv.slice(3), ['scope', 'root', 'url', 'name', 'claude']);
       if (parsed.error) { console.error(`huginn-device on: ${parsed.error}`); process.exit(2); }
       const f = parsed.flags;
-      if (f.scope !== undefined) conf.scope = parseScope(f.scope);
+      // Validated, not floored: at enrol time a typo'd scope must be a refusal,
+      // not a silent enrolment at the floor — the floor is now generate, and a
+      // typo'd claude enrolment landing there would be a dead device row.
+      if (f.scope !== undefined) {
+        const s = String(f.scope).trim().toLowerCase();
+        if (!POLICY.scopes.includes(s)) {
+          console.error(`huginn-device on: unknown scope "${f.scope}" — one of: look, work, own`);
+          process.exit(2);
+        }
+        if (exclusive(s)) {
+          console.error(`huginn-device on: "${s}" enrolment is created by \`huginn local on\`, not by hand`);
+          process.exit(2);
+        }
+        conf.scope = s;
+      }
       if (f.root !== undefined) conf.root = f.root;
       if (f.url !== undefined) conf.url = f.url;
       if (f.name !== undefined) conf.name = f.name.slice(0, 40);
@@ -820,13 +902,21 @@ WantedBy=default.target`);
     case 'print-argv': {
       // For scripts/test-device-policy.sh: this runner, driven over the shared case
       // matrix, so it and the Kotlin one are held to the same table.
-      const [scope, lockedArg, mode] = process.argv.slice(3);
+      // Optional 4th arg: a JSON object {model, effort, resumeSessionId, persona}
+      // merged into the work item, so the persona/effort-exclusion rules for
+      // generate mode can be driven from the outside like everything else.
+      const [scope, lockedArg, mode, extraJson] = process.argv.slice(3);
       const lock = lockedArg === 'true' || lockedArg === '1';
-      const work = { id: 'w', chatId: 'c', prompt: 'p', mode };
+      const extra = extraJson ? JSON.parse(extraJson) : {};
+      const work = {
+        id: 'w', chatId: 'c', prompt: 'p', mode,
+        model: extra.model, effort: extra.effort, resumeSessionId: extra.resumeSessionId,
+      };
       process.stdout.write(JSON.stringify({
         effectiveScope: effectiveScope(scope, lock),
         refusal: refusal(scope, lock, mode),
-        argv: argvFor(work, scope, lock),
+        engineRefusal: engineRefusal(mode, extra.hasEngine === true),
+        argv: argvFor(work, scope, lock, extra.persona),
         cwd: cwdFor(scope, lock, '/root-dir') === '/root-dir' ? 'root' : 'home',
       }));
       break;
@@ -860,5 +950,6 @@ if (require.main === module) {
   module.exports = {
     VERSION, MAX_LINE_BYTES, MAX_BATCH_BYTES,
     shrinkLine, batchLines, parseFlags, tokenOrWhy, cwdFor, effectiveScope, allows, argvFor,
+    engineRefusal,
   };
 }
