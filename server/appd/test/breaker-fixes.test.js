@@ -359,3 +359,48 @@ test('an act round cannot be widened onto a look-only device', async () => {
   assert.strictEqual(widened.status, 400, 'an act round was pinned to a look-only machine');
   assert.match(JSON.stringify(widened.body), /look/);
 });
+
+// ──────────────────────────── (e) the run pool survives a settle that throws
+
+test('a run that cannot write its ending still gives back its slot', async () => {
+  // ⚠ settleRun does several disk writes BEFORE run_.finish(), and appendFileSync
+  // on a full or read-only disk throws. The outer handler then returned 500 and
+  // finish() never ran, so activeRuns kept that chatId FOREVER — and activeRuns
+  // IS the local run pool (MAX_CONCURRENT_RUNS = 3). Each leak permanently cost
+  // one slot; after three, every locally-hosted chat and every `local` Round got
+  // 429 "too many concurrent runs" with nothing actually running, until somebody
+  // restarted the daemon. A full disk is a bad day. A daemon that will not run
+  // anything again until it is restarted is a worse one.
+  //
+  // ⚠ Only the TRANSCRIPT FILE is broken, by replacing messages.jsonl with a
+  // directory — appendFileSync then fails with EISDIR even for root, which a
+  // chmod would not, since these tests run as root. Removing the whole chat
+  // directory instead took the daemon down outright, which is a real robustness
+  // gap of its own but makes a useless test: a dead daemon proves nothing about
+  // whether a slot was returned.
+  const r = await mkRound({ title: 'unwritable', prompt: 'SLOW' });
+  const fired = await api(`/v1/rounds/${r.id}/run`, { method: 'POST' });
+  assert.strictEqual(fired.status, 202);
+  const chatId = fired.body.chatId;
+
+  await wait(400);
+  const msgs = path.join(tmp, 'data', 'chats', chatId, 'messages.jsonl');
+  fs.rmSync(msgs, { force: true });
+  fs.mkdirSync(msgs, { recursive: true });
+
+  const until = Date.now() + 20000;
+  let running = true;
+  while (Date.now() < until) {
+    const b = (await api(`/v1/rounds/${r.id}`)).body;
+    running = !!b.running;
+    if (!running) break;
+    await wait(200);
+  }
+  assert.strictEqual(running, false,
+    'the run never gave back its slot — three of these and every local chat 429s forever');
+
+  // And the pool really is free: a fresh local Round can still be fired.
+  const r2 = await mkRound({ title: 'after the leak', prompt: 'anything' });
+  const again = await api(`/v1/rounds/${r2.id}/run`, { method: 'POST' });
+  assert.strictEqual(again.status, 202, `the pool is still burnt: ${JSON.stringify(again.body)}`);
+});

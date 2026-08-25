@@ -9,6 +9,55 @@ appeared only as a side-note on the app releases it happened to ship with. Three
 undocumented, and the notes-cutting matcher could fuse two sections when an app and an appd
 version number collided. Entries below are reconstructed from the shipping commits.
 
+## 2.72.0 — 2026-08-25
+
+### Fixed — a broken transcript no longer kills the daemon
+
+Found while writing a test for something smaller. `handleClaudeEvent` was called
+from a stdout `data` handler with **no try/catch** — the device path at
+`/work/:id/events` already had one; the local spawn did not. That function appends
+to the transcript, so a disk that is full, read-only, or holding a file where a
+directory should be turned one broken chat into an **unhandled exception and a dead
+process**: every tmux session's reader, every other chat, every Round. The `close`
+handler called `settleRun` unguarded for the same reason. Both are guarded now.
+
+### Fixed — a run that cannot write its ending still gives back its slot
+
+`settleRun` does several disk writes before `run_.finish()`, and a throw abandoned
+the entry in `activeRuns` forever. That set IS the local run pool
+(`MAX_CONCURRENT_RUNS = 3`), so each leak permanently cost a slot; after three,
+every locally-hosted chat and every `local` Round got 429 "too many concurrent
+runs" with nothing running, until somebody restarted the daemon. The finish is in a
+`finally` now.
+
+### Fixed — reachable is not the same as free
+
+`remoteRuns` is in-memory, so `deploy.sh` wipes it — while the far machine is still
+running its claude and is single-job: it will not ask for work again until that
+child exits, minutes or hours later. The daemon reported that device
+`online:true, running:false, queued:0`, accepted the next job with a 202, and the
+job sat undelivered until it was declared "no word for 5 minutes". A heartbeat
+proves reachable; only asking for work proves free. `awaitingPoll` now says which
+question can actually be answered, and `huginn devices` shows it.
+
+### Fixed — run transcripts no longer outlive the history that points at them
+
+`finishRoundRun` promised the conversation "stays readable forever", and after the
+11th run the chat id was evicted from `runs[]` — while round chats are filtered out
+of `/v1/chats` by design, so there was no other path to it. Not openable, not
+listable, not deletable: a daily Round left ~355 orphan transcript directories a
+year, invisible and impossible to count against. Evicted transcripts are pruned,
+and the promise is narrowed to what is true.
+
+### Changed
+- The device events route accepts a megabyte, so an older runner's oversized batch
+  is not rejected whole. The runner itself now stays well under it — see cli 0.10.3.
+- A queued message that IS dropped now says so in the transcript, quoting what was
+  dropped. ⚠ Probed rather than assumed: a send during a Round run is already
+  refused with an actionable 409, so this path is depth rather than a live fix.
+
+614 tests, floor raised to 610.
+
 ## 2.71.0 — 2026-08-25
 
 ### Added — a report can be marked as read
