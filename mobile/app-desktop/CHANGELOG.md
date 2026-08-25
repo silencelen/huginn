@@ -1,5 +1,11 @@
 # Huginn Desktop changelog
 
+## 0.8.15
+
+- **A Round's model and effort can now be changed after creation** — the
+  shared client API omitted both fields from round updates while the daemon
+  accepted them all along. An empty value clears back to the host default.
+
 ## 0.8.14
 
 - **Forget now asks first**, as the phone already did. It sat directly beside

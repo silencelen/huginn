@@ -11,6 +11,7 @@ import io.ktor.client.request.HttpRequestData
 import io.ktor.http.HttpHeaders
 import io.ktor.http.HttpStatusCode
 import io.ktor.http.content.OutgoingContent
+import io.ktor.http.content.TextContent
 import io.ktor.utils.io.ByteChannel
 import io.ktor.utils.io.readRemaining
 import kotlinx.coroutines.CoroutineScope
@@ -336,6 +337,35 @@ class HuginnClientTest {
         // callers rather than throwing here.
         val made = ok("""{"ok":true}""").createSession("plain")
         assertEquals("", made)
+    }
+
+    // -------------------------------------------------- round patch body
+
+    private fun lastBody(): String = (seen.last().body as TextContent).text
+
+    @Test
+    fun `updateRound carries model and effort only when the caller says something`() = runTest {
+        // The daemon PATCH accepted both fields all along; the client used to
+        // omit them from its signature entirely, so a Round born with a model
+        // could never be moved off it from any client.
+        val c = ok("""{"id":"r-1"}""")
+
+        c.updateRound("r-1", model = "opus", effort = "high")
+        val withBoth = lastBody()
+        assertTrue("\"model\":\"opus\"" in withBoth, withBoth)
+        assertTrue("\"effort\":\"high\"" in withBoth, withBoth)
+
+        c.updateRound("r-1", title = "renamed")
+        val without = lastBody()
+        assertFalse("\"model\"" in without, "an omitted model must not ride the patch: $without")
+        assertFalse("\"effort\"" in without, "an omitted effort must not ride the patch: $without")
+
+        // An empty string is the CLEAR and must reach the wire: the daemon
+        // treats blank as "back to the host default".
+        c.updateRound("r-1", model = "", effort = "")
+        val cleared = lastBody()
+        assertTrue("\"model\":\"\"" in cleared, cleared)
+        assertTrue("\"effort\":\"\"" in cleared, cleared)
     }
 
 }

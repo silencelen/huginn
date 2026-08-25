@@ -787,6 +787,13 @@ class HuginnClient(
         notifyWhen: String? = null,
         catchUp: Boolean? = null,
         host: String? = null,
+        // The daemon's PATCH accepted these all along; the client never offered
+        // them, so a Round's model and effort were unchangeable for its whole
+        // life. Null leaves each alone; an empty string clears back to the host
+        // default (the goal-clearing precedent: blank is the only way to say
+        // "no particular model any more").
+        model: String? = null,
+        effort: String? = null,
     ): Round = decode(
         call("/v1/rounds/$id", HttpMethod.Patch, body = buildJsonObject {
             enabled?.let { put("enabled", JsonPrimitive(it)) }
@@ -801,6 +808,8 @@ class HuginnClient(
             notifyWhen?.let { put("notifyWhen", JsonPrimitive(it)) }
             catchUp?.let { put("catchUp", JsonPrimitive(it)) }
             host?.let { put("host", JsonPrimitive(it)) }
+            model?.let { put("model", JsonPrimitive(it)) }
+            effort?.let { put("effort", JsonPrimitive(it)) }
         }),
     )
 

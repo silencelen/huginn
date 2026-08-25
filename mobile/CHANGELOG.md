@@ -1,5 +1,13 @@
 # Huginn changelog
 
+## 2.79.0 — 2026-08-25
+
+### Fixed
+- **A Round's model and effort can now be changed after creation.** The
+  client API omitted both fields from round updates, so a Round born with a
+  model could never be moved off it — the daemon accepted them all along. An
+  empty value clears back to the host default.
+
 ## 2.78.0 — 2026-08-25
 
 ### Changed
