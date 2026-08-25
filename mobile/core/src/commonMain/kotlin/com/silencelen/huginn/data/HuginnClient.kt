@@ -811,6 +811,16 @@ class HuginnClient(
     /** Fires the Round now. The report arrives the same way a scheduled one does. */
     suspend fun runRound(id: String): RoundRunStarted = decode(post("/v1/rounds/$id/run"))
 
+    /**
+     * "I have read this and dealt with it" — or, with false, "no I have not".
+     *
+     * Marks the RUN, never the Round, so firing again produces a report nobody
+     * has answered yet. The report itself is untouched: this records that
+     * somebody saw it, and never edits what it said.
+     */
+    suspend fun ackRound(id: String, acknowledged: Boolean = true): Round =
+        decode(post("/v1/rounds/$id/ack", body = mapOf("acknowledged" to acknowledged)))
+
     suspend fun chats(): List<Chat> = decode<ChatList>(call("/v1/chats")).chats
 
     /**

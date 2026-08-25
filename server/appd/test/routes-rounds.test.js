@@ -351,6 +351,54 @@ test("a run's chat is dated in the Round's own zone, not UTC", async () => {
   await waitForRun(west.id);
 });
 
+test('a report can be marked read, and a new run arrives unread', async () => {
+  // ⚠ THE GAP: a report saying `action` is true the moment it is written and
+  // stays true forever, because nothing could ever say otherwise. The row held a
+  // red mark about findings already read and worked through, and the only thing
+  // that would clear it was the next run — which for still-open findings said
+  // `action` again. A signal that cannot be answered stops being a signal.
+  const r = await mkRound({ title: 'ackable', prompt: 'Check. EMIT_STATUS:action' });
+  await api(`/v1/rounds/${r.id}/run`, { method: 'POST' });
+  const done = await waitForRun(r.id);
+  assert.equal(done.lastRun.status, 'action');
+  assert.ok(!done.lastRun.acknowledgedAt, 'a fresh report is not already read');
+
+  const acked = await api(`/v1/rounds/${r.id}/ack`, { method: 'POST', body: JSON.stringify({ acknowledged: true }) });
+  assert.equal(acked.status, 200);
+  assert.ok(acked.body.lastRun.acknowledgedAt > 0, 'not marked');
+  // The report itself is untouched: this records that somebody saw it.
+  assert.equal(acked.body.lastRun.status, 'action');
+  assert.equal(acked.body.lastRun.headline, 'stub report for action');
+  // And the history agrees, or one run has two answers about whether it was read.
+  assert.ok(acked.body.runs[0].acknowledgedAt > 0, 'the history copy disagrees');
+
+  const undone = await api(`/v1/rounds/${r.id}/ack`, { method: 'POST', body: JSON.stringify({ acknowledged: false }) });
+  assert.equal(undone.body.lastRun.acknowledgedAt, null);
+
+  // ⚠ THE INVARIANT THE WHOLE DESIGN RESTS ON. The mark lives on the RUN, so a
+  // Round cannot be marked done once and stay quiet through next week's
+  // findings. Held on the Round it would need code to remember to clear it, and
+  // that code would eventually not run.
+  await api(`/v1/rounds/${r.id}/ack`, { method: 'POST', body: JSON.stringify({ acknowledged: true }) });
+  await api(`/v1/rounds/${r.id}/run`, { method: 'POST' });
+  const until = Date.now() + 15000;
+  let after = null;
+  while (Date.now() < until) {
+    const b = (await api(`/v1/rounds/${r.id}`)).body;
+    if ((b.runs || []).length > 1) { after = b; break; }
+    await wait(150);
+  }
+  assert.ok(after, 'the second run never landed');
+  assert.ok(!after.lastRun.acknowledgedAt, 'a NEW report inherited the old one\'s acknowledgement');
+});
+
+test('a round with no report cannot be marked read', async () => {
+  const r = await mkRound({ title: 'never run' });
+  const a = await api(`/v1/rounds/${r.id}/ack`, { method: 'POST', body: JSON.stringify({ acknowledged: true }) });
+  assert.equal(a.status, 409);
+  assert.match(a.body.error, /no report/);
+});
+
 test('a capped report reaches the reader with the true count', async () => {
   // ⚠ THIS TEST EXISTS BECAUSE THE FIX SHIPPED DOING NOTHING. parseReport was
   // taught to record how many items a run really reported, and the run RECORD

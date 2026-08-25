@@ -851,6 +851,7 @@ fun HuginnApp(
                 nowMs = nowMs,
                 loading = loading,
                 connected = connected,
+                onAcknowledgeRound = { r, ack -> vm.acknowledgeRound(r.id, ack) },
                 onOpenRound = { r ->
                     // The report if there is one; otherwise the Round itself. A
                     // schedule that has not fired yet used to swallow the tap

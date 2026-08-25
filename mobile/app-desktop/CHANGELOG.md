@@ -1,5 +1,12 @@
 # Huginn Desktop changelog
 
+## 0.8.13
+
+- **"Mark done" on a round that has reported something** — the status mark goes
+  quiet and the line reads "read", with the report untouched and still readable.
+  Undo puts it back. Remembered against that run, so the next report arrives
+  unanswered.
+
 ## 0.8.12
 
 - A round that reports more findings than the daemon keeps now says both numbers
