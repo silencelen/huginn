@@ -9,6 +9,64 @@ appeared only as a side-note on the app releases it happened to ship with. Three
 undocumented, and the notes-cutting matcher could fuse two sections when an app and an appd
 version number collided. Entries below are reconstructed from the shipping commits.
 
+## 2.66.0 — 2026-08-25
+
+Four root causes from an adversarial review of Rounds and Devices — 139 edge cases probed by nine
+parallel agents, every finding refuted by an independent skeptic before it counted. The pure layer
+held: 18,000 DST-crossing fires across 25 zones, the 364-row scope/lock/mode grant matrix, and
+every status/notify combination came back correct. These are the bookkeeping AROUND it, and they
+all failed in the same direction — **the surfaces showed a clean week while the work had not
+happened, had happened twice, or had happened after the owner pressed stop.**
+
+### Fixed
+- **A scheduled fire that is refused is now a recorded run.** It used to be one log line. Eight
+  ordinary triggers reach that path — the device was unenrolled, asleep, locked, narrowed its
+  scope, was already running something (two Rounds on one machine at 03:00: **the second was
+  dropped every night**), the local pool was full, or the slot was missed with catchUp off. In
+  every one, `runs` stayed 0, `lastRun` stayed null and nothing was sent — *even with notifyWhen
+  "always"*, because a failure that never becomes a run can never be notified about. The row read
+  "Daily at 3:00 AM · in 51m" for a job that had not run since the laptop went to sleep. Recorded
+  as `attention`, not `action`: nothing is wrong with the world, something is wrong with the
+  arrangement.
+- **Cancelling a remote job now takes the work back.** `cancelRun` killed a process a remote run
+  does not have and left the item in the device's queue, so the machine was handed it on its next
+  poll — up to 25s away, or hours for a sleeping laptop — and ran the owner's `act` prompt for
+  real with full grants, while the chat said it had been cancelled. A run withdrawn before handover
+  now settles immediately instead of sitting at "stopping" until the silence timer fires.
+- **A work item can no longer outlive its run.** `loseRemoteRun` deleted the run and left the queue
+  entry at the front, so a laptop waking hours later executed a dead job whose every result was
+  rejected 404 — work done, billed, and thrown away. The `/work` handout now drops any item whose
+  run has ended, and `deviceQueues` is a view of `remoteRuns` rather than a life of its own.
+- **A poll that hung up no longer swallows the job.** The waiter was flagged answered before its
+  close handler unparked it; in that window `queueWork` handed the dead waiter an item and dropped
+  it. The job was created, accepted, and never ran. `respond` now reports whether it delivered, and
+  an undelivered item goes back on the queue.
+- **The Round's verdict is read from the facts, not inferred from prose.** Four failures, one
+  contract: only the LAST assistant message was parsed, so an ordinary agentic turn (report, one
+  more tool call, "Confirmed.") filed the word "Confirmed." as the week's finding; one streamed
+  token before a crash turned "claude exited 1" into a cheerful progress line; `is_error` — the
+  flag `lib/rounds` own header says this design exists for — was never read; and a delivered report
+  is now kept even when the run was cancelled, because on a device that is the NORMAL outcome and
+  it used to file "did not finish" over the top of "7 of 7 backups verified".
+- **The seal survives a message typed mid-run.** `settleRun` held a snapshot from before
+  `finishRoundRun` wrote it, so any queued message erased `sealed`, the verdict and `endedAt` — the
+  chat reopened and the owner's next question was filed as the Round's official report. Verbatim
+  the failure `reconcileInterruptedRuns` comment says was already fixed.
+- **`PATCH /v1/rounds/:id` re-reads after the body arrives.** It loaded the Round before the await,
+  and a phone sends the whole prompt on save, so the window was every edit. A run finishing inside
+  it had its record erased after its push had gone out; a run STARTING inside it had
+  `currentChatId` reset to null, defeating the "previous run is still going" guard and putting two
+  live `claude` processes on the same act work.
+- **A restart no longer loses the Round's run.** `reconcileInterruptedRuns` marked the chat
+  interrupted but had no `roundId` branch, so `runs` stayed 0, `currentChatId` dangled at a dead
+  chat, and the chat was left UNSEALED — feeding the same "your question becomes the report"
+  cascade.
+- **Deleting a Round stops the work it is doing right now.** The run lost every surface at once —
+  absent from `/v1/rounds` and from `/v1/chats`, nothing in either client to press — while holding
+  a pool slot until the 2-hour hard cap. For an `act` Round, "delete the schedule" has to stop it.
+
+Seven regression tests, six of which fail against the previous build.
+
 ## 2.65.0 — 2026-08-24
 
 ### Changed
