@@ -2,6 +2,7 @@ package com.silencelen.huginn
 
 import com.silencelen.huginn.data.DeviceWork
 import com.silencelen.huginn.device.DevicePolicy
+import com.silencelen.huginn.device.DevicePolicyTable
 import com.silencelen.huginn.device.DeviceScope
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -23,12 +24,16 @@ class DevicePolicyTest {
         DeviceWork(id = "w1", chatId = "c1", prompt = "look", mode = mode, model = model, resumeSessionId = resume)
 
     @Test
-    fun anUnrecognisedScopeIsTheNarrowestOne() {
-        assertEquals(DeviceScope.LOOK, DevicePolicy.parse("root"))
-        assertEquals(DeviceScope.LOOK, DevicePolicy.parse(null))
-        assertEquals(DeviceScope.LOOK, DevicePolicy.parse(""))
+    fun anUnrecognisedScopeIsTheFloor() {
+        // The floor is generate, the exclusive rung: a junk scope can run nothing
+        // a claude device runs, and no claude engine will ever serve generate. A
+        // typo is a dead row, not a privilege escalation in either direction.
+        assertEquals(DeviceScope.GENERATE, DevicePolicy.parse("root"))
+        assertEquals(DeviceScope.GENERATE, DevicePolicy.parse(null))
+        assertEquals(DeviceScope.GENERATE, DevicePolicy.parse(""))
         assertEquals(DeviceScope.OWN, DevicePolicy.parse("OWN"))
         assertEquals(DeviceScope.WORK, DevicePolicy.parse(" work "))
+        assertEquals(DeviceScope.GENERATE, DevicePolicy.parse("generate"))
     }
 
     @Test
@@ -162,5 +167,63 @@ class DevicePolicyTest {
         assertEquals("/home/me", DevicePolicy.cwdFor(DeviceScope.WORK, false, "  ", "/home/me"))
         // Locked drops to look, which has no root of its own.
         assertEquals("/home/me", DevicePolicy.cwdFor(DeviceScope.WORK, true, "/src", "/home/me"))
+    }
+
+    // ------------------------------------------------------- the generate rung
+
+    @Test
+    fun generateIsExclusiveInBothDirections() {
+        // Rank ordering alone would let `own` satisfy generate — and this machine
+        // would spawn claude to answer a local-model request, the silent engine
+        // substitution the policy bans both ways.
+        assertFalse(DevicePolicy.allows(DeviceScope.OWN, "generate"))
+        assertFalse(DevicePolicy.allows(DeviceScope.WORK, "generate"))
+        assertFalse(DevicePolicy.allows(DeviceScope.LOOK, "generate"))
+        assertFalse(DevicePolicy.allows(DeviceScope.GENERATE, "ask"))
+        assertFalse(DevicePolicy.allows(DeviceScope.GENERATE, "act"))
+        assertTrue(DevicePolicy.allows(DeviceScope.GENERATE, "generate"))
+    }
+
+    @Test
+    fun aLockedGenerateDeviceKeepsServingAndNeverBlamesTheLock() {
+        // The lock stops unwatched mutation; a generate run mutates nothing, and
+        // dropping to look would sideways-grant ask, a mode the row has no engine
+        // for. When ask IS refused, the reason names the scope — unlocking would
+        // not help, so the lock must not be blamed.
+        assertEquals(DeviceScope.GENERATE, DevicePolicy.effective(DeviceScope.GENERATE, locked = true))
+        assertNull(DevicePolicy.refusal(DeviceScope.GENERATE, locked = true, mode = "generate"))
+        val ask = DevicePolicy.refusal(DeviceScope.GENERATE, locked = true, mode = "ask")
+        assertNotNull(ask)
+        assertTrue(ask.contains("generate"), ask)
+        assertFalse(ask.contains("locked"), "unlocking would not help, so the lock is not blamed")
+    }
+
+    @Test
+    fun aGenerateArgvShedsEverythingButTheRequest() {
+        val argv = DevicePolicy.argvFor(
+            DeviceWork(
+                id = "w1", chatId = "c1", prompt = "p", mode = "generate",
+                model = "local-x-q", effort = "high",
+                resumeSessionId = "123e4567-e89b-12d3-a456-426614174000",
+            ),
+            DeviceScope.GENERATE, locked = false, root = "/src", persona = "P",
+        )
+        assertEquals(
+            DevicePolicyTable.STREAM_FLAGS +
+                listOf("--model", "local-x-q", "--resume", "123e4567-e89b-12d3-a456-426614174000"),
+            argv,
+        )
+        assertFalse(argv.contains("--effort"), "a local model has no effort knob")
+        assertFalse(argv.contains("--append-system-prompt"), "no context egress to a serving box")
+        assertFalse(argv.contains("--allowedTools"), "no tool surface, no tool flags")
+    }
+
+    @Test
+    fun theEngineFenceRefusesGenerateWithoutAnEngine() {
+        // This runner only ever spawns claude, so DeviceRunner passes
+        // hasEngine = false unconditionally; serving is the headless service's job.
+        assertEquals(DevicePolicyTable.REFUSAL_ENGINE, DevicePolicy.engineRefusal("generate", hasEngine = false))
+        assertNull(DevicePolicy.engineRefusal("generate", hasEngine = true))
+        assertNull(DevicePolicy.engineRefusal("ask", hasEngine = false))
     }
 }

@@ -13,15 +13,393 @@
     "Modes nobody defined (constructor, __proto__, \"\") are here deliberately:",
     "they are inherited properties of any plain object, so a table built from",
     "JSON answers them with a function, and one runner read that as \"allowed at",
-    "every scope\". Every row for them must be a refusal."
+    "every scope\". Every row for them must be a refusal.",
+    "Scopes nobody defined (root, constructor, \"\") floor to SCOPES[0] = generate",
+    "in all three programs, so their rows must match the scope-generate rows",
+    "exactly: nothing a claude device runs, and only an llm engine ever serves.",
+    "A GRANTED generate row is the bare streamFlags — no tool flags at all, and",
+    "--effort/--append-system-prompt are stripped for generate mode too (that",
+    "half is asserted per-runner, since the matrix argv omits ride-alongs).",
+    "A REFUSED generate row carries the look argv, per the two-fences rule."
   ],
   "cases": [
+    {
+      "scope": "generate",
+      "locked": false,
+      "mode": "ask",
+      "effectiveScope": "generate",
+      "actGranted": false,
+      "generateGranted": false,
+      "refusal": "this machine is set to generate, which cannot run ask",
+      "cwd": "home",
+      "argv": [
+        "-p",
+        "--output-format",
+        "stream-json",
+        "--verbose",
+        "--include-partial-messages",
+        "--allowedTools",
+        "Skill Read Glob Grep WebFetch WebSearch",
+        "--disallowedTools",
+        "Bash Edit Write NotebookEdit"
+      ]
+    },
+    {
+      "scope": "generate",
+      "locked": false,
+      "mode": "act",
+      "effectiveScope": "generate",
+      "actGranted": false,
+      "generateGranted": false,
+      "refusal": "this machine is set to generate, which cannot run act",
+      "cwd": "home",
+      "argv": [
+        "-p",
+        "--output-format",
+        "stream-json",
+        "--verbose",
+        "--include-partial-messages",
+        "--allowedTools",
+        "Skill Read Glob Grep WebFetch WebSearch",
+        "--disallowedTools",
+        "Bash Edit Write NotebookEdit"
+      ]
+    },
+    {
+      "scope": "generate",
+      "locked": false,
+      "mode": "generate",
+      "effectiveScope": "generate",
+      "actGranted": false,
+      "generateGranted": true,
+      "refusal": null,
+      "cwd": "home",
+      "argv": [
+        "-p",
+        "--output-format",
+        "stream-json",
+        "--verbose",
+        "--include-partial-messages"
+      ]
+    },
+    {
+      "scope": "generate",
+      "locked": false,
+      "mode": "constructor",
+      "effectiveScope": "generate",
+      "actGranted": false,
+      "generateGranted": false,
+      "refusal": "this machine is set to generate, which cannot run constructor",
+      "cwd": "home",
+      "argv": [
+        "-p",
+        "--output-format",
+        "stream-json",
+        "--verbose",
+        "--include-partial-messages",
+        "--allowedTools",
+        "Skill Read Glob Grep WebFetch WebSearch",
+        "--disallowedTools",
+        "Bash Edit Write NotebookEdit"
+      ]
+    },
+    {
+      "scope": "generate",
+      "locked": false,
+      "mode": "toString",
+      "effectiveScope": "generate",
+      "actGranted": false,
+      "generateGranted": false,
+      "refusal": "this machine is set to generate, which cannot run toString",
+      "cwd": "home",
+      "argv": [
+        "-p",
+        "--output-format",
+        "stream-json",
+        "--verbose",
+        "--include-partial-messages",
+        "--allowedTools",
+        "Skill Read Glob Grep WebFetch WebSearch",
+        "--disallowedTools",
+        "Bash Edit Write NotebookEdit"
+      ]
+    },
+    {
+      "scope": "generate",
+      "locked": false,
+      "mode": "__proto__",
+      "effectiveScope": "generate",
+      "actGranted": false,
+      "generateGranted": false,
+      "refusal": "this machine is set to generate, which cannot run __proto__",
+      "cwd": "home",
+      "argv": [
+        "-p",
+        "--output-format",
+        "stream-json",
+        "--verbose",
+        "--include-partial-messages",
+        "--allowedTools",
+        "Skill Read Glob Grep WebFetch WebSearch",
+        "--disallowedTools",
+        "Bash Edit Write NotebookEdit"
+      ]
+    },
+    {
+      "scope": "generate",
+      "locked": false,
+      "mode": "hasOwnProperty",
+      "effectiveScope": "generate",
+      "actGranted": false,
+      "generateGranted": false,
+      "refusal": "this machine is set to generate, which cannot run hasOwnProperty",
+      "cwd": "home",
+      "argv": [
+        "-p",
+        "--output-format",
+        "stream-json",
+        "--verbose",
+        "--include-partial-messages",
+        "--allowedTools",
+        "Skill Read Glob Grep WebFetch WebSearch",
+        "--disallowedTools",
+        "Bash Edit Write NotebookEdit"
+      ]
+    },
+    {
+      "scope": "generate",
+      "locked": false,
+      "mode": "valueOf",
+      "effectiveScope": "generate",
+      "actGranted": false,
+      "generateGranted": false,
+      "refusal": "this machine is set to generate, which cannot run valueOf",
+      "cwd": "home",
+      "argv": [
+        "-p",
+        "--output-format",
+        "stream-json",
+        "--verbose",
+        "--include-partial-messages",
+        "--allowedTools",
+        "Skill Read Glob Grep WebFetch WebSearch",
+        "--disallowedTools",
+        "Bash Edit Write NotebookEdit"
+      ]
+    },
+    {
+      "scope": "generate",
+      "locked": false,
+      "mode": "",
+      "effectiveScope": "generate",
+      "actGranted": false,
+      "generateGranted": false,
+      "refusal": "this machine is set to generate, which cannot run ",
+      "cwd": "home",
+      "argv": [
+        "-p",
+        "--output-format",
+        "stream-json",
+        "--verbose",
+        "--include-partial-messages",
+        "--allowedTools",
+        "Skill Read Glob Grep WebFetch WebSearch",
+        "--disallowedTools",
+        "Bash Edit Write NotebookEdit"
+      ]
+    },
+    {
+      "scope": "generate",
+      "locked": true,
+      "mode": "ask",
+      "effectiveScope": "generate",
+      "actGranted": false,
+      "generateGranted": false,
+      "refusal": "this machine is set to generate, which cannot run ask",
+      "cwd": "home",
+      "argv": [
+        "-p",
+        "--output-format",
+        "stream-json",
+        "--verbose",
+        "--include-partial-messages",
+        "--allowedTools",
+        "Skill Read Glob Grep WebFetch WebSearch",
+        "--disallowedTools",
+        "Bash Edit Write NotebookEdit"
+      ]
+    },
+    {
+      "scope": "generate",
+      "locked": true,
+      "mode": "act",
+      "effectiveScope": "generate",
+      "actGranted": false,
+      "generateGranted": false,
+      "refusal": "this machine is set to generate, which cannot run act",
+      "cwd": "home",
+      "argv": [
+        "-p",
+        "--output-format",
+        "stream-json",
+        "--verbose",
+        "--include-partial-messages",
+        "--allowedTools",
+        "Skill Read Glob Grep WebFetch WebSearch",
+        "--disallowedTools",
+        "Bash Edit Write NotebookEdit"
+      ]
+    },
+    {
+      "scope": "generate",
+      "locked": true,
+      "mode": "generate",
+      "effectiveScope": "generate",
+      "actGranted": false,
+      "generateGranted": true,
+      "refusal": null,
+      "cwd": "home",
+      "argv": [
+        "-p",
+        "--output-format",
+        "stream-json",
+        "--verbose",
+        "--include-partial-messages"
+      ]
+    },
+    {
+      "scope": "generate",
+      "locked": true,
+      "mode": "constructor",
+      "effectiveScope": "generate",
+      "actGranted": false,
+      "generateGranted": false,
+      "refusal": "this machine is set to generate, which cannot run constructor",
+      "cwd": "home",
+      "argv": [
+        "-p",
+        "--output-format",
+        "stream-json",
+        "--verbose",
+        "--include-partial-messages",
+        "--allowedTools",
+        "Skill Read Glob Grep WebFetch WebSearch",
+        "--disallowedTools",
+        "Bash Edit Write NotebookEdit"
+      ]
+    },
+    {
+      "scope": "generate",
+      "locked": true,
+      "mode": "toString",
+      "effectiveScope": "generate",
+      "actGranted": false,
+      "generateGranted": false,
+      "refusal": "this machine is set to generate, which cannot run toString",
+      "cwd": "home",
+      "argv": [
+        "-p",
+        "--output-format",
+        "stream-json",
+        "--verbose",
+        "--include-partial-messages",
+        "--allowedTools",
+        "Skill Read Glob Grep WebFetch WebSearch",
+        "--disallowedTools",
+        "Bash Edit Write NotebookEdit"
+      ]
+    },
+    {
+      "scope": "generate",
+      "locked": true,
+      "mode": "__proto__",
+      "effectiveScope": "generate",
+      "actGranted": false,
+      "generateGranted": false,
+      "refusal": "this machine is set to generate, which cannot run __proto__",
+      "cwd": "home",
+      "argv": [
+        "-p",
+        "--output-format",
+        "stream-json",
+        "--verbose",
+        "--include-partial-messages",
+        "--allowedTools",
+        "Skill Read Glob Grep WebFetch WebSearch",
+        "--disallowedTools",
+        "Bash Edit Write NotebookEdit"
+      ]
+    },
+    {
+      "scope": "generate",
+      "locked": true,
+      "mode": "hasOwnProperty",
+      "effectiveScope": "generate",
+      "actGranted": false,
+      "generateGranted": false,
+      "refusal": "this machine is set to generate, which cannot run hasOwnProperty",
+      "cwd": "home",
+      "argv": [
+        "-p",
+        "--output-format",
+        "stream-json",
+        "--verbose",
+        "--include-partial-messages",
+        "--allowedTools",
+        "Skill Read Glob Grep WebFetch WebSearch",
+        "--disallowedTools",
+        "Bash Edit Write NotebookEdit"
+      ]
+    },
+    {
+      "scope": "generate",
+      "locked": true,
+      "mode": "valueOf",
+      "effectiveScope": "generate",
+      "actGranted": false,
+      "generateGranted": false,
+      "refusal": "this machine is set to generate, which cannot run valueOf",
+      "cwd": "home",
+      "argv": [
+        "-p",
+        "--output-format",
+        "stream-json",
+        "--verbose",
+        "--include-partial-messages",
+        "--allowedTools",
+        "Skill Read Glob Grep WebFetch WebSearch",
+        "--disallowedTools",
+        "Bash Edit Write NotebookEdit"
+      ]
+    },
+    {
+      "scope": "generate",
+      "locked": true,
+      "mode": "",
+      "effectiveScope": "generate",
+      "actGranted": false,
+      "generateGranted": false,
+      "refusal": "this machine is set to generate, which cannot run ",
+      "cwd": "home",
+      "argv": [
+        "-p",
+        "--output-format",
+        "stream-json",
+        "--verbose",
+        "--include-partial-messages",
+        "--allowedTools",
+        "Skill Read Glob Grep WebFetch WebSearch",
+        "--disallowedTools",
+        "Bash Edit Write NotebookEdit"
+      ]
+    },
     {
       "scope": "look",
       "locked": false,
       "mode": "ask",
       "effectiveScope": "look",
       "actGranted": false,
+      "generateGranted": false,
       "refusal": null,
       "cwd": "home",
       "argv": [
@@ -42,7 +420,29 @@
       "mode": "act",
       "effectiveScope": "look",
       "actGranted": false,
+      "generateGranted": false,
       "refusal": "this machine is set to look, which cannot run act",
+      "cwd": "home",
+      "argv": [
+        "-p",
+        "--output-format",
+        "stream-json",
+        "--verbose",
+        "--include-partial-messages",
+        "--allowedTools",
+        "Skill Read Glob Grep WebFetch WebSearch",
+        "--disallowedTools",
+        "Bash Edit Write NotebookEdit"
+      ]
+    },
+    {
+      "scope": "look",
+      "locked": false,
+      "mode": "generate",
+      "effectiveScope": "look",
+      "actGranted": false,
+      "generateGranted": false,
+      "refusal": "this machine is set to look, which cannot run generate",
       "cwd": "home",
       "argv": [
         "-p",
@@ -62,6 +462,7 @@
       "mode": "constructor",
       "effectiveScope": "look",
       "actGranted": false,
+      "generateGranted": false,
       "refusal": "this machine is set to look, which cannot run constructor",
       "cwd": "home",
       "argv": [
@@ -82,6 +483,7 @@
       "mode": "toString",
       "effectiveScope": "look",
       "actGranted": false,
+      "generateGranted": false,
       "refusal": "this machine is set to look, which cannot run toString",
       "cwd": "home",
       "argv": [
@@ -102,6 +504,7 @@
       "mode": "__proto__",
       "effectiveScope": "look",
       "actGranted": false,
+      "generateGranted": false,
       "refusal": "this machine is set to look, which cannot run __proto__",
       "cwd": "home",
       "argv": [
@@ -122,6 +525,7 @@
       "mode": "hasOwnProperty",
       "effectiveScope": "look",
       "actGranted": false,
+      "generateGranted": false,
       "refusal": "this machine is set to look, which cannot run hasOwnProperty",
       "cwd": "home",
       "argv": [
@@ -142,6 +546,7 @@
       "mode": "valueOf",
       "effectiveScope": "look",
       "actGranted": false,
+      "generateGranted": false,
       "refusal": "this machine is set to look, which cannot run valueOf",
       "cwd": "home",
       "argv": [
@@ -162,6 +567,7 @@
       "mode": "",
       "effectiveScope": "look",
       "actGranted": false,
+      "generateGranted": false,
       "refusal": "this machine is set to look, which cannot run ",
       "cwd": "home",
       "argv": [
@@ -182,6 +588,7 @@
       "mode": "ask",
       "effectiveScope": "look",
       "actGranted": false,
+      "generateGranted": false,
       "refusal": null,
       "cwd": "home",
       "argv": [
@@ -202,7 +609,29 @@
       "mode": "act",
       "effectiveScope": "look",
       "actGranted": false,
-      "refusal": "this machine is locked, so it is read-only until someone unlocks it",
+      "generateGranted": false,
+      "refusal": "this machine is set to look, which cannot run act",
+      "cwd": "home",
+      "argv": [
+        "-p",
+        "--output-format",
+        "stream-json",
+        "--verbose",
+        "--include-partial-messages",
+        "--allowedTools",
+        "Skill Read Glob Grep WebFetch WebSearch",
+        "--disallowedTools",
+        "Bash Edit Write NotebookEdit"
+      ]
+    },
+    {
+      "scope": "look",
+      "locked": true,
+      "mode": "generate",
+      "effectiveScope": "look",
+      "actGranted": false,
+      "generateGranted": false,
+      "refusal": "this machine is set to look, which cannot run generate",
       "cwd": "home",
       "argv": [
         "-p",
@@ -222,7 +651,8 @@
       "mode": "constructor",
       "effectiveScope": "look",
       "actGranted": false,
-      "refusal": "this machine is locked, so it is read-only until someone unlocks it",
+      "generateGranted": false,
+      "refusal": "this machine is set to look, which cannot run constructor",
       "cwd": "home",
       "argv": [
         "-p",
@@ -242,7 +672,8 @@
       "mode": "toString",
       "effectiveScope": "look",
       "actGranted": false,
-      "refusal": "this machine is locked, so it is read-only until someone unlocks it",
+      "generateGranted": false,
+      "refusal": "this machine is set to look, which cannot run toString",
       "cwd": "home",
       "argv": [
         "-p",
@@ -262,7 +693,8 @@
       "mode": "__proto__",
       "effectiveScope": "look",
       "actGranted": false,
-      "refusal": "this machine is locked, so it is read-only until someone unlocks it",
+      "generateGranted": false,
+      "refusal": "this machine is set to look, which cannot run __proto__",
       "cwd": "home",
       "argv": [
         "-p",
@@ -282,7 +714,8 @@
       "mode": "hasOwnProperty",
       "effectiveScope": "look",
       "actGranted": false,
-      "refusal": "this machine is locked, so it is read-only until someone unlocks it",
+      "generateGranted": false,
+      "refusal": "this machine is set to look, which cannot run hasOwnProperty",
       "cwd": "home",
       "argv": [
         "-p",
@@ -302,7 +735,8 @@
       "mode": "valueOf",
       "effectiveScope": "look",
       "actGranted": false,
-      "refusal": "this machine is locked, so it is read-only until someone unlocks it",
+      "generateGranted": false,
+      "refusal": "this machine is set to look, which cannot run valueOf",
       "cwd": "home",
       "argv": [
         "-p",
@@ -322,7 +756,8 @@
       "mode": "",
       "effectiveScope": "look",
       "actGranted": false,
-      "refusal": "this machine is locked, so it is read-only until someone unlocks it",
+      "generateGranted": false,
+      "refusal": "this machine is set to look, which cannot run ",
       "cwd": "home",
       "argv": [
         "-p",
@@ -342,6 +777,7 @@
       "mode": "ask",
       "effectiveScope": "work",
       "actGranted": false,
+      "generateGranted": false,
       "refusal": null,
       "cwd": "root",
       "argv": [
@@ -362,6 +798,7 @@
       "mode": "act",
       "effectiveScope": "work",
       "actGranted": true,
+      "generateGranted": false,
       "refusal": null,
       "cwd": "root",
       "argv": [
@@ -377,9 +814,31 @@
     {
       "scope": "work",
       "locked": false,
+      "mode": "generate",
+      "effectiveScope": "work",
+      "actGranted": false,
+      "generateGranted": false,
+      "refusal": "this machine is set to work, which cannot run generate",
+      "cwd": "root",
+      "argv": [
+        "-p",
+        "--output-format",
+        "stream-json",
+        "--verbose",
+        "--include-partial-messages",
+        "--allowedTools",
+        "Skill Read Glob Grep WebFetch WebSearch",
+        "--disallowedTools",
+        "Bash Edit Write NotebookEdit"
+      ]
+    },
+    {
+      "scope": "work",
+      "locked": false,
       "mode": "constructor",
       "effectiveScope": "work",
       "actGranted": false,
+      "generateGranted": false,
       "refusal": "this machine is set to work, which cannot run constructor",
       "cwd": "root",
       "argv": [
@@ -400,6 +859,7 @@
       "mode": "toString",
       "effectiveScope": "work",
       "actGranted": false,
+      "generateGranted": false,
       "refusal": "this machine is set to work, which cannot run toString",
       "cwd": "root",
       "argv": [
@@ -420,6 +880,7 @@
       "mode": "__proto__",
       "effectiveScope": "work",
       "actGranted": false,
+      "generateGranted": false,
       "refusal": "this machine is set to work, which cannot run __proto__",
       "cwd": "root",
       "argv": [
@@ -440,6 +901,7 @@
       "mode": "hasOwnProperty",
       "effectiveScope": "work",
       "actGranted": false,
+      "generateGranted": false,
       "refusal": "this machine is set to work, which cannot run hasOwnProperty",
       "cwd": "root",
       "argv": [
@@ -460,6 +922,7 @@
       "mode": "valueOf",
       "effectiveScope": "work",
       "actGranted": false,
+      "generateGranted": false,
       "refusal": "this machine is set to work, which cannot run valueOf",
       "cwd": "root",
       "argv": [
@@ -480,6 +943,7 @@
       "mode": "",
       "effectiveScope": "work",
       "actGranted": false,
+      "generateGranted": false,
       "refusal": "this machine is set to work, which cannot run ",
       "cwd": "root",
       "argv": [
@@ -500,6 +964,7 @@
       "mode": "ask",
       "effectiveScope": "look",
       "actGranted": false,
+      "generateGranted": false,
       "refusal": null,
       "cwd": "home",
       "argv": [
@@ -520,7 +985,29 @@
       "mode": "act",
       "effectiveScope": "look",
       "actGranted": false,
+      "generateGranted": false,
       "refusal": "this machine is locked, so it is read-only until someone unlocks it",
+      "cwd": "home",
+      "argv": [
+        "-p",
+        "--output-format",
+        "stream-json",
+        "--verbose",
+        "--include-partial-messages",
+        "--allowedTools",
+        "Skill Read Glob Grep WebFetch WebSearch",
+        "--disallowedTools",
+        "Bash Edit Write NotebookEdit"
+      ]
+    },
+    {
+      "scope": "work",
+      "locked": true,
+      "mode": "generate",
+      "effectiveScope": "look",
+      "actGranted": false,
+      "generateGranted": false,
+      "refusal": "this machine is set to work, which cannot run generate",
       "cwd": "home",
       "argv": [
         "-p",
@@ -540,7 +1027,8 @@
       "mode": "constructor",
       "effectiveScope": "look",
       "actGranted": false,
-      "refusal": "this machine is locked, so it is read-only until someone unlocks it",
+      "generateGranted": false,
+      "refusal": "this machine is set to work, which cannot run constructor",
       "cwd": "home",
       "argv": [
         "-p",
@@ -560,7 +1048,8 @@
       "mode": "toString",
       "effectiveScope": "look",
       "actGranted": false,
-      "refusal": "this machine is locked, so it is read-only until someone unlocks it",
+      "generateGranted": false,
+      "refusal": "this machine is set to work, which cannot run toString",
       "cwd": "home",
       "argv": [
         "-p",
@@ -580,7 +1069,8 @@
       "mode": "__proto__",
       "effectiveScope": "look",
       "actGranted": false,
-      "refusal": "this machine is locked, so it is read-only until someone unlocks it",
+      "generateGranted": false,
+      "refusal": "this machine is set to work, which cannot run __proto__",
       "cwd": "home",
       "argv": [
         "-p",
@@ -600,7 +1090,8 @@
       "mode": "hasOwnProperty",
       "effectiveScope": "look",
       "actGranted": false,
-      "refusal": "this machine is locked, so it is read-only until someone unlocks it",
+      "generateGranted": false,
+      "refusal": "this machine is set to work, which cannot run hasOwnProperty",
       "cwd": "home",
       "argv": [
         "-p",
@@ -620,7 +1111,8 @@
       "mode": "valueOf",
       "effectiveScope": "look",
       "actGranted": false,
-      "refusal": "this machine is locked, so it is read-only until someone unlocks it",
+      "generateGranted": false,
+      "refusal": "this machine is set to work, which cannot run valueOf",
       "cwd": "home",
       "argv": [
         "-p",
@@ -640,7 +1132,8 @@
       "mode": "",
       "effectiveScope": "look",
       "actGranted": false,
-      "refusal": "this machine is locked, so it is read-only until someone unlocks it",
+      "generateGranted": false,
+      "refusal": "this machine is set to work, which cannot run ",
       "cwd": "home",
       "argv": [
         "-p",
@@ -660,6 +1153,7 @@
       "mode": "ask",
       "effectiveScope": "own",
       "actGranted": false,
+      "generateGranted": false,
       "refusal": null,
       "cwd": "home",
       "argv": [
@@ -680,6 +1174,7 @@
       "mode": "act",
       "effectiveScope": "own",
       "actGranted": true,
+      "generateGranted": false,
       "refusal": null,
       "cwd": "home",
       "argv": [
@@ -695,9 +1190,31 @@
     {
       "scope": "own",
       "locked": false,
+      "mode": "generate",
+      "effectiveScope": "own",
+      "actGranted": false,
+      "generateGranted": false,
+      "refusal": "this machine is set to own, which cannot run generate",
+      "cwd": "home",
+      "argv": [
+        "-p",
+        "--output-format",
+        "stream-json",
+        "--verbose",
+        "--include-partial-messages",
+        "--allowedTools",
+        "Skill Read Glob Grep WebFetch WebSearch",
+        "--disallowedTools",
+        "Bash Edit Write NotebookEdit"
+      ]
+    },
+    {
+      "scope": "own",
+      "locked": false,
       "mode": "constructor",
       "effectiveScope": "own",
       "actGranted": false,
+      "generateGranted": false,
       "refusal": "this machine is set to own, which cannot run constructor",
       "cwd": "home",
       "argv": [
@@ -718,6 +1235,7 @@
       "mode": "toString",
       "effectiveScope": "own",
       "actGranted": false,
+      "generateGranted": false,
       "refusal": "this machine is set to own, which cannot run toString",
       "cwd": "home",
       "argv": [
@@ -738,6 +1256,7 @@
       "mode": "__proto__",
       "effectiveScope": "own",
       "actGranted": false,
+      "generateGranted": false,
       "refusal": "this machine is set to own, which cannot run __proto__",
       "cwd": "home",
       "argv": [
@@ -758,6 +1277,7 @@
       "mode": "hasOwnProperty",
       "effectiveScope": "own",
       "actGranted": false,
+      "generateGranted": false,
       "refusal": "this machine is set to own, which cannot run hasOwnProperty",
       "cwd": "home",
       "argv": [
@@ -778,6 +1298,7 @@
       "mode": "valueOf",
       "effectiveScope": "own",
       "actGranted": false,
+      "generateGranted": false,
       "refusal": "this machine is set to own, which cannot run valueOf",
       "cwd": "home",
       "argv": [
@@ -798,6 +1319,7 @@
       "mode": "",
       "effectiveScope": "own",
       "actGranted": false,
+      "generateGranted": false,
       "refusal": "this machine is set to own, which cannot run ",
       "cwd": "home",
       "argv": [
@@ -818,6 +1340,7 @@
       "mode": "ask",
       "effectiveScope": "look",
       "actGranted": false,
+      "generateGranted": false,
       "refusal": null,
       "cwd": "home",
       "argv": [
@@ -838,7 +1361,29 @@
       "mode": "act",
       "effectiveScope": "look",
       "actGranted": false,
+      "generateGranted": false,
       "refusal": "this machine is locked, so it is read-only until someone unlocks it",
+      "cwd": "home",
+      "argv": [
+        "-p",
+        "--output-format",
+        "stream-json",
+        "--verbose",
+        "--include-partial-messages",
+        "--allowedTools",
+        "Skill Read Glob Grep WebFetch WebSearch",
+        "--disallowedTools",
+        "Bash Edit Write NotebookEdit"
+      ]
+    },
+    {
+      "scope": "own",
+      "locked": true,
+      "mode": "generate",
+      "effectiveScope": "look",
+      "actGranted": false,
+      "generateGranted": false,
+      "refusal": "this machine is set to own, which cannot run generate",
       "cwd": "home",
       "argv": [
         "-p",
@@ -858,7 +1403,8 @@
       "mode": "constructor",
       "effectiveScope": "look",
       "actGranted": false,
-      "refusal": "this machine is locked, so it is read-only until someone unlocks it",
+      "generateGranted": false,
+      "refusal": "this machine is set to own, which cannot run constructor",
       "cwd": "home",
       "argv": [
         "-p",
@@ -878,7 +1424,8 @@
       "mode": "toString",
       "effectiveScope": "look",
       "actGranted": false,
-      "refusal": "this machine is locked, so it is read-only until someone unlocks it",
+      "generateGranted": false,
+      "refusal": "this machine is set to own, which cannot run toString",
       "cwd": "home",
       "argv": [
         "-p",
@@ -898,7 +1445,8 @@
       "mode": "__proto__",
       "effectiveScope": "look",
       "actGranted": false,
-      "refusal": "this machine is locked, so it is read-only until someone unlocks it",
+      "generateGranted": false,
+      "refusal": "this machine is set to own, which cannot run __proto__",
       "cwd": "home",
       "argv": [
         "-p",
@@ -918,7 +1466,8 @@
       "mode": "hasOwnProperty",
       "effectiveScope": "look",
       "actGranted": false,
-      "refusal": "this machine is locked, so it is read-only until someone unlocks it",
+      "generateGranted": false,
+      "refusal": "this machine is set to own, which cannot run hasOwnProperty",
       "cwd": "home",
       "argv": [
         "-p",
@@ -938,7 +1487,8 @@
       "mode": "valueOf",
       "effectiveScope": "look",
       "actGranted": false,
-      "refusal": "this machine is locked, so it is read-only until someone unlocks it",
+      "generateGranted": false,
+      "refusal": "this machine is set to own, which cannot run valueOf",
       "cwd": "home",
       "argv": [
         "-p",
@@ -958,7 +1508,1488 @@
       "mode": "",
       "effectiveScope": "look",
       "actGranted": false,
-      "refusal": "this machine is locked, so it is read-only until someone unlocks it",
+      "generateGranted": false,
+      "refusal": "this machine is set to own, which cannot run ",
+      "cwd": "home",
+      "argv": [
+        "-p",
+        "--output-format",
+        "stream-json",
+        "--verbose",
+        "--include-partial-messages",
+        "--allowedTools",
+        "Skill Read Glob Grep WebFetch WebSearch",
+        "--disallowedTools",
+        "Bash Edit Write NotebookEdit"
+      ]
+    },
+    {
+      "scope": "root",
+      "locked": false,
+      "mode": "ask",
+      "effectiveScope": "generate",
+      "actGranted": false,
+      "generateGranted": false,
+      "refusal": "this machine is set to generate, which cannot run ask",
+      "cwd": "home",
+      "argv": [
+        "-p",
+        "--output-format",
+        "stream-json",
+        "--verbose",
+        "--include-partial-messages",
+        "--allowedTools",
+        "Skill Read Glob Grep WebFetch WebSearch",
+        "--disallowedTools",
+        "Bash Edit Write NotebookEdit"
+      ]
+    },
+    {
+      "scope": "root",
+      "locked": false,
+      "mode": "act",
+      "effectiveScope": "generate",
+      "actGranted": false,
+      "generateGranted": false,
+      "refusal": "this machine is set to generate, which cannot run act",
+      "cwd": "home",
+      "argv": [
+        "-p",
+        "--output-format",
+        "stream-json",
+        "--verbose",
+        "--include-partial-messages",
+        "--allowedTools",
+        "Skill Read Glob Grep WebFetch WebSearch",
+        "--disallowedTools",
+        "Bash Edit Write NotebookEdit"
+      ]
+    },
+    {
+      "scope": "root",
+      "locked": false,
+      "mode": "generate",
+      "effectiveScope": "generate",
+      "actGranted": false,
+      "generateGranted": true,
+      "refusal": null,
+      "cwd": "home",
+      "argv": [
+        "-p",
+        "--output-format",
+        "stream-json",
+        "--verbose",
+        "--include-partial-messages"
+      ]
+    },
+    {
+      "scope": "root",
+      "locked": false,
+      "mode": "constructor",
+      "effectiveScope": "generate",
+      "actGranted": false,
+      "generateGranted": false,
+      "refusal": "this machine is set to generate, which cannot run constructor",
+      "cwd": "home",
+      "argv": [
+        "-p",
+        "--output-format",
+        "stream-json",
+        "--verbose",
+        "--include-partial-messages",
+        "--allowedTools",
+        "Skill Read Glob Grep WebFetch WebSearch",
+        "--disallowedTools",
+        "Bash Edit Write NotebookEdit"
+      ]
+    },
+    {
+      "scope": "root",
+      "locked": false,
+      "mode": "toString",
+      "effectiveScope": "generate",
+      "actGranted": false,
+      "generateGranted": false,
+      "refusal": "this machine is set to generate, which cannot run toString",
+      "cwd": "home",
+      "argv": [
+        "-p",
+        "--output-format",
+        "stream-json",
+        "--verbose",
+        "--include-partial-messages",
+        "--allowedTools",
+        "Skill Read Glob Grep WebFetch WebSearch",
+        "--disallowedTools",
+        "Bash Edit Write NotebookEdit"
+      ]
+    },
+    {
+      "scope": "root",
+      "locked": false,
+      "mode": "__proto__",
+      "effectiveScope": "generate",
+      "actGranted": false,
+      "generateGranted": false,
+      "refusal": "this machine is set to generate, which cannot run __proto__",
+      "cwd": "home",
+      "argv": [
+        "-p",
+        "--output-format",
+        "stream-json",
+        "--verbose",
+        "--include-partial-messages",
+        "--allowedTools",
+        "Skill Read Glob Grep WebFetch WebSearch",
+        "--disallowedTools",
+        "Bash Edit Write NotebookEdit"
+      ]
+    },
+    {
+      "scope": "root",
+      "locked": false,
+      "mode": "hasOwnProperty",
+      "effectiveScope": "generate",
+      "actGranted": false,
+      "generateGranted": false,
+      "refusal": "this machine is set to generate, which cannot run hasOwnProperty",
+      "cwd": "home",
+      "argv": [
+        "-p",
+        "--output-format",
+        "stream-json",
+        "--verbose",
+        "--include-partial-messages",
+        "--allowedTools",
+        "Skill Read Glob Grep WebFetch WebSearch",
+        "--disallowedTools",
+        "Bash Edit Write NotebookEdit"
+      ]
+    },
+    {
+      "scope": "root",
+      "locked": false,
+      "mode": "valueOf",
+      "effectiveScope": "generate",
+      "actGranted": false,
+      "generateGranted": false,
+      "refusal": "this machine is set to generate, which cannot run valueOf",
+      "cwd": "home",
+      "argv": [
+        "-p",
+        "--output-format",
+        "stream-json",
+        "--verbose",
+        "--include-partial-messages",
+        "--allowedTools",
+        "Skill Read Glob Grep WebFetch WebSearch",
+        "--disallowedTools",
+        "Bash Edit Write NotebookEdit"
+      ]
+    },
+    {
+      "scope": "root",
+      "locked": false,
+      "mode": "",
+      "effectiveScope": "generate",
+      "actGranted": false,
+      "generateGranted": false,
+      "refusal": "this machine is set to generate, which cannot run ",
+      "cwd": "home",
+      "argv": [
+        "-p",
+        "--output-format",
+        "stream-json",
+        "--verbose",
+        "--include-partial-messages",
+        "--allowedTools",
+        "Skill Read Glob Grep WebFetch WebSearch",
+        "--disallowedTools",
+        "Bash Edit Write NotebookEdit"
+      ]
+    },
+    {
+      "scope": "root",
+      "locked": true,
+      "mode": "ask",
+      "effectiveScope": "generate",
+      "actGranted": false,
+      "generateGranted": false,
+      "refusal": "this machine is set to generate, which cannot run ask",
+      "cwd": "home",
+      "argv": [
+        "-p",
+        "--output-format",
+        "stream-json",
+        "--verbose",
+        "--include-partial-messages",
+        "--allowedTools",
+        "Skill Read Glob Grep WebFetch WebSearch",
+        "--disallowedTools",
+        "Bash Edit Write NotebookEdit"
+      ]
+    },
+    {
+      "scope": "root",
+      "locked": true,
+      "mode": "act",
+      "effectiveScope": "generate",
+      "actGranted": false,
+      "generateGranted": false,
+      "refusal": "this machine is set to generate, which cannot run act",
+      "cwd": "home",
+      "argv": [
+        "-p",
+        "--output-format",
+        "stream-json",
+        "--verbose",
+        "--include-partial-messages",
+        "--allowedTools",
+        "Skill Read Glob Grep WebFetch WebSearch",
+        "--disallowedTools",
+        "Bash Edit Write NotebookEdit"
+      ]
+    },
+    {
+      "scope": "root",
+      "locked": true,
+      "mode": "generate",
+      "effectiveScope": "generate",
+      "actGranted": false,
+      "generateGranted": true,
+      "refusal": null,
+      "cwd": "home",
+      "argv": [
+        "-p",
+        "--output-format",
+        "stream-json",
+        "--verbose",
+        "--include-partial-messages"
+      ]
+    },
+    {
+      "scope": "root",
+      "locked": true,
+      "mode": "constructor",
+      "effectiveScope": "generate",
+      "actGranted": false,
+      "generateGranted": false,
+      "refusal": "this machine is set to generate, which cannot run constructor",
+      "cwd": "home",
+      "argv": [
+        "-p",
+        "--output-format",
+        "stream-json",
+        "--verbose",
+        "--include-partial-messages",
+        "--allowedTools",
+        "Skill Read Glob Grep WebFetch WebSearch",
+        "--disallowedTools",
+        "Bash Edit Write NotebookEdit"
+      ]
+    },
+    {
+      "scope": "root",
+      "locked": true,
+      "mode": "toString",
+      "effectiveScope": "generate",
+      "actGranted": false,
+      "generateGranted": false,
+      "refusal": "this machine is set to generate, which cannot run toString",
+      "cwd": "home",
+      "argv": [
+        "-p",
+        "--output-format",
+        "stream-json",
+        "--verbose",
+        "--include-partial-messages",
+        "--allowedTools",
+        "Skill Read Glob Grep WebFetch WebSearch",
+        "--disallowedTools",
+        "Bash Edit Write NotebookEdit"
+      ]
+    },
+    {
+      "scope": "root",
+      "locked": true,
+      "mode": "__proto__",
+      "effectiveScope": "generate",
+      "actGranted": false,
+      "generateGranted": false,
+      "refusal": "this machine is set to generate, which cannot run __proto__",
+      "cwd": "home",
+      "argv": [
+        "-p",
+        "--output-format",
+        "stream-json",
+        "--verbose",
+        "--include-partial-messages",
+        "--allowedTools",
+        "Skill Read Glob Grep WebFetch WebSearch",
+        "--disallowedTools",
+        "Bash Edit Write NotebookEdit"
+      ]
+    },
+    {
+      "scope": "root",
+      "locked": true,
+      "mode": "hasOwnProperty",
+      "effectiveScope": "generate",
+      "actGranted": false,
+      "generateGranted": false,
+      "refusal": "this machine is set to generate, which cannot run hasOwnProperty",
+      "cwd": "home",
+      "argv": [
+        "-p",
+        "--output-format",
+        "stream-json",
+        "--verbose",
+        "--include-partial-messages",
+        "--allowedTools",
+        "Skill Read Glob Grep WebFetch WebSearch",
+        "--disallowedTools",
+        "Bash Edit Write NotebookEdit"
+      ]
+    },
+    {
+      "scope": "root",
+      "locked": true,
+      "mode": "valueOf",
+      "effectiveScope": "generate",
+      "actGranted": false,
+      "generateGranted": false,
+      "refusal": "this machine is set to generate, which cannot run valueOf",
+      "cwd": "home",
+      "argv": [
+        "-p",
+        "--output-format",
+        "stream-json",
+        "--verbose",
+        "--include-partial-messages",
+        "--allowedTools",
+        "Skill Read Glob Grep WebFetch WebSearch",
+        "--disallowedTools",
+        "Bash Edit Write NotebookEdit"
+      ]
+    },
+    {
+      "scope": "root",
+      "locked": true,
+      "mode": "",
+      "effectiveScope": "generate",
+      "actGranted": false,
+      "generateGranted": false,
+      "refusal": "this machine is set to generate, which cannot run ",
+      "cwd": "home",
+      "argv": [
+        "-p",
+        "--output-format",
+        "stream-json",
+        "--verbose",
+        "--include-partial-messages",
+        "--allowedTools",
+        "Skill Read Glob Grep WebFetch WebSearch",
+        "--disallowedTools",
+        "Bash Edit Write NotebookEdit"
+      ]
+    },
+    {
+      "scope": "constructor",
+      "locked": false,
+      "mode": "ask",
+      "effectiveScope": "generate",
+      "actGranted": false,
+      "generateGranted": false,
+      "refusal": "this machine is set to generate, which cannot run ask",
+      "cwd": "home",
+      "argv": [
+        "-p",
+        "--output-format",
+        "stream-json",
+        "--verbose",
+        "--include-partial-messages",
+        "--allowedTools",
+        "Skill Read Glob Grep WebFetch WebSearch",
+        "--disallowedTools",
+        "Bash Edit Write NotebookEdit"
+      ]
+    },
+    {
+      "scope": "constructor",
+      "locked": false,
+      "mode": "act",
+      "effectiveScope": "generate",
+      "actGranted": false,
+      "generateGranted": false,
+      "refusal": "this machine is set to generate, which cannot run act",
+      "cwd": "home",
+      "argv": [
+        "-p",
+        "--output-format",
+        "stream-json",
+        "--verbose",
+        "--include-partial-messages",
+        "--allowedTools",
+        "Skill Read Glob Grep WebFetch WebSearch",
+        "--disallowedTools",
+        "Bash Edit Write NotebookEdit"
+      ]
+    },
+    {
+      "scope": "constructor",
+      "locked": false,
+      "mode": "generate",
+      "effectiveScope": "generate",
+      "actGranted": false,
+      "generateGranted": true,
+      "refusal": null,
+      "cwd": "home",
+      "argv": [
+        "-p",
+        "--output-format",
+        "stream-json",
+        "--verbose",
+        "--include-partial-messages"
+      ]
+    },
+    {
+      "scope": "constructor",
+      "locked": false,
+      "mode": "constructor",
+      "effectiveScope": "generate",
+      "actGranted": false,
+      "generateGranted": false,
+      "refusal": "this machine is set to generate, which cannot run constructor",
+      "cwd": "home",
+      "argv": [
+        "-p",
+        "--output-format",
+        "stream-json",
+        "--verbose",
+        "--include-partial-messages",
+        "--allowedTools",
+        "Skill Read Glob Grep WebFetch WebSearch",
+        "--disallowedTools",
+        "Bash Edit Write NotebookEdit"
+      ]
+    },
+    {
+      "scope": "constructor",
+      "locked": false,
+      "mode": "toString",
+      "effectiveScope": "generate",
+      "actGranted": false,
+      "generateGranted": false,
+      "refusal": "this machine is set to generate, which cannot run toString",
+      "cwd": "home",
+      "argv": [
+        "-p",
+        "--output-format",
+        "stream-json",
+        "--verbose",
+        "--include-partial-messages",
+        "--allowedTools",
+        "Skill Read Glob Grep WebFetch WebSearch",
+        "--disallowedTools",
+        "Bash Edit Write NotebookEdit"
+      ]
+    },
+    {
+      "scope": "constructor",
+      "locked": false,
+      "mode": "__proto__",
+      "effectiveScope": "generate",
+      "actGranted": false,
+      "generateGranted": false,
+      "refusal": "this machine is set to generate, which cannot run __proto__",
+      "cwd": "home",
+      "argv": [
+        "-p",
+        "--output-format",
+        "stream-json",
+        "--verbose",
+        "--include-partial-messages",
+        "--allowedTools",
+        "Skill Read Glob Grep WebFetch WebSearch",
+        "--disallowedTools",
+        "Bash Edit Write NotebookEdit"
+      ]
+    },
+    {
+      "scope": "constructor",
+      "locked": false,
+      "mode": "hasOwnProperty",
+      "effectiveScope": "generate",
+      "actGranted": false,
+      "generateGranted": false,
+      "refusal": "this machine is set to generate, which cannot run hasOwnProperty",
+      "cwd": "home",
+      "argv": [
+        "-p",
+        "--output-format",
+        "stream-json",
+        "--verbose",
+        "--include-partial-messages",
+        "--allowedTools",
+        "Skill Read Glob Grep WebFetch WebSearch",
+        "--disallowedTools",
+        "Bash Edit Write NotebookEdit"
+      ]
+    },
+    {
+      "scope": "constructor",
+      "locked": false,
+      "mode": "valueOf",
+      "effectiveScope": "generate",
+      "actGranted": false,
+      "generateGranted": false,
+      "refusal": "this machine is set to generate, which cannot run valueOf",
+      "cwd": "home",
+      "argv": [
+        "-p",
+        "--output-format",
+        "stream-json",
+        "--verbose",
+        "--include-partial-messages",
+        "--allowedTools",
+        "Skill Read Glob Grep WebFetch WebSearch",
+        "--disallowedTools",
+        "Bash Edit Write NotebookEdit"
+      ]
+    },
+    {
+      "scope": "constructor",
+      "locked": false,
+      "mode": "",
+      "effectiveScope": "generate",
+      "actGranted": false,
+      "generateGranted": false,
+      "refusal": "this machine is set to generate, which cannot run ",
+      "cwd": "home",
+      "argv": [
+        "-p",
+        "--output-format",
+        "stream-json",
+        "--verbose",
+        "--include-partial-messages",
+        "--allowedTools",
+        "Skill Read Glob Grep WebFetch WebSearch",
+        "--disallowedTools",
+        "Bash Edit Write NotebookEdit"
+      ]
+    },
+    {
+      "scope": "constructor",
+      "locked": true,
+      "mode": "ask",
+      "effectiveScope": "generate",
+      "actGranted": false,
+      "generateGranted": false,
+      "refusal": "this machine is set to generate, which cannot run ask",
+      "cwd": "home",
+      "argv": [
+        "-p",
+        "--output-format",
+        "stream-json",
+        "--verbose",
+        "--include-partial-messages",
+        "--allowedTools",
+        "Skill Read Glob Grep WebFetch WebSearch",
+        "--disallowedTools",
+        "Bash Edit Write NotebookEdit"
+      ]
+    },
+    {
+      "scope": "constructor",
+      "locked": true,
+      "mode": "act",
+      "effectiveScope": "generate",
+      "actGranted": false,
+      "generateGranted": false,
+      "refusal": "this machine is set to generate, which cannot run act",
+      "cwd": "home",
+      "argv": [
+        "-p",
+        "--output-format",
+        "stream-json",
+        "--verbose",
+        "--include-partial-messages",
+        "--allowedTools",
+        "Skill Read Glob Grep WebFetch WebSearch",
+        "--disallowedTools",
+        "Bash Edit Write NotebookEdit"
+      ]
+    },
+    {
+      "scope": "constructor",
+      "locked": true,
+      "mode": "generate",
+      "effectiveScope": "generate",
+      "actGranted": false,
+      "generateGranted": true,
+      "refusal": null,
+      "cwd": "home",
+      "argv": [
+        "-p",
+        "--output-format",
+        "stream-json",
+        "--verbose",
+        "--include-partial-messages"
+      ]
+    },
+    {
+      "scope": "constructor",
+      "locked": true,
+      "mode": "constructor",
+      "effectiveScope": "generate",
+      "actGranted": false,
+      "generateGranted": false,
+      "refusal": "this machine is set to generate, which cannot run constructor",
+      "cwd": "home",
+      "argv": [
+        "-p",
+        "--output-format",
+        "stream-json",
+        "--verbose",
+        "--include-partial-messages",
+        "--allowedTools",
+        "Skill Read Glob Grep WebFetch WebSearch",
+        "--disallowedTools",
+        "Bash Edit Write NotebookEdit"
+      ]
+    },
+    {
+      "scope": "constructor",
+      "locked": true,
+      "mode": "toString",
+      "effectiveScope": "generate",
+      "actGranted": false,
+      "generateGranted": false,
+      "refusal": "this machine is set to generate, which cannot run toString",
+      "cwd": "home",
+      "argv": [
+        "-p",
+        "--output-format",
+        "stream-json",
+        "--verbose",
+        "--include-partial-messages",
+        "--allowedTools",
+        "Skill Read Glob Grep WebFetch WebSearch",
+        "--disallowedTools",
+        "Bash Edit Write NotebookEdit"
+      ]
+    },
+    {
+      "scope": "constructor",
+      "locked": true,
+      "mode": "__proto__",
+      "effectiveScope": "generate",
+      "actGranted": false,
+      "generateGranted": false,
+      "refusal": "this machine is set to generate, which cannot run __proto__",
+      "cwd": "home",
+      "argv": [
+        "-p",
+        "--output-format",
+        "stream-json",
+        "--verbose",
+        "--include-partial-messages",
+        "--allowedTools",
+        "Skill Read Glob Grep WebFetch WebSearch",
+        "--disallowedTools",
+        "Bash Edit Write NotebookEdit"
+      ]
+    },
+    {
+      "scope": "constructor",
+      "locked": true,
+      "mode": "hasOwnProperty",
+      "effectiveScope": "generate",
+      "actGranted": false,
+      "generateGranted": false,
+      "refusal": "this machine is set to generate, which cannot run hasOwnProperty",
+      "cwd": "home",
+      "argv": [
+        "-p",
+        "--output-format",
+        "stream-json",
+        "--verbose",
+        "--include-partial-messages",
+        "--allowedTools",
+        "Skill Read Glob Grep WebFetch WebSearch",
+        "--disallowedTools",
+        "Bash Edit Write NotebookEdit"
+      ]
+    },
+    {
+      "scope": "constructor",
+      "locked": true,
+      "mode": "valueOf",
+      "effectiveScope": "generate",
+      "actGranted": false,
+      "generateGranted": false,
+      "refusal": "this machine is set to generate, which cannot run valueOf",
+      "cwd": "home",
+      "argv": [
+        "-p",
+        "--output-format",
+        "stream-json",
+        "--verbose",
+        "--include-partial-messages",
+        "--allowedTools",
+        "Skill Read Glob Grep WebFetch WebSearch",
+        "--disallowedTools",
+        "Bash Edit Write NotebookEdit"
+      ]
+    },
+    {
+      "scope": "constructor",
+      "locked": true,
+      "mode": "",
+      "effectiveScope": "generate",
+      "actGranted": false,
+      "generateGranted": false,
+      "refusal": "this machine is set to generate, which cannot run ",
+      "cwd": "home",
+      "argv": [
+        "-p",
+        "--output-format",
+        "stream-json",
+        "--verbose",
+        "--include-partial-messages",
+        "--allowedTools",
+        "Skill Read Glob Grep WebFetch WebSearch",
+        "--disallowedTools",
+        "Bash Edit Write NotebookEdit"
+      ]
+    },
+    {
+      "scope": "__proto__",
+      "locked": false,
+      "mode": "ask",
+      "effectiveScope": "generate",
+      "actGranted": false,
+      "generateGranted": false,
+      "refusal": "this machine is set to generate, which cannot run ask",
+      "cwd": "home",
+      "argv": [
+        "-p",
+        "--output-format",
+        "stream-json",
+        "--verbose",
+        "--include-partial-messages",
+        "--allowedTools",
+        "Skill Read Glob Grep WebFetch WebSearch",
+        "--disallowedTools",
+        "Bash Edit Write NotebookEdit"
+      ]
+    },
+    {
+      "scope": "__proto__",
+      "locked": false,
+      "mode": "act",
+      "effectiveScope": "generate",
+      "actGranted": false,
+      "generateGranted": false,
+      "refusal": "this machine is set to generate, which cannot run act",
+      "cwd": "home",
+      "argv": [
+        "-p",
+        "--output-format",
+        "stream-json",
+        "--verbose",
+        "--include-partial-messages",
+        "--allowedTools",
+        "Skill Read Glob Grep WebFetch WebSearch",
+        "--disallowedTools",
+        "Bash Edit Write NotebookEdit"
+      ]
+    },
+    {
+      "scope": "__proto__",
+      "locked": false,
+      "mode": "generate",
+      "effectiveScope": "generate",
+      "actGranted": false,
+      "generateGranted": true,
+      "refusal": null,
+      "cwd": "home",
+      "argv": [
+        "-p",
+        "--output-format",
+        "stream-json",
+        "--verbose",
+        "--include-partial-messages"
+      ]
+    },
+    {
+      "scope": "__proto__",
+      "locked": false,
+      "mode": "constructor",
+      "effectiveScope": "generate",
+      "actGranted": false,
+      "generateGranted": false,
+      "refusal": "this machine is set to generate, which cannot run constructor",
+      "cwd": "home",
+      "argv": [
+        "-p",
+        "--output-format",
+        "stream-json",
+        "--verbose",
+        "--include-partial-messages",
+        "--allowedTools",
+        "Skill Read Glob Grep WebFetch WebSearch",
+        "--disallowedTools",
+        "Bash Edit Write NotebookEdit"
+      ]
+    },
+    {
+      "scope": "__proto__",
+      "locked": false,
+      "mode": "toString",
+      "effectiveScope": "generate",
+      "actGranted": false,
+      "generateGranted": false,
+      "refusal": "this machine is set to generate, which cannot run toString",
+      "cwd": "home",
+      "argv": [
+        "-p",
+        "--output-format",
+        "stream-json",
+        "--verbose",
+        "--include-partial-messages",
+        "--allowedTools",
+        "Skill Read Glob Grep WebFetch WebSearch",
+        "--disallowedTools",
+        "Bash Edit Write NotebookEdit"
+      ]
+    },
+    {
+      "scope": "__proto__",
+      "locked": false,
+      "mode": "__proto__",
+      "effectiveScope": "generate",
+      "actGranted": false,
+      "generateGranted": false,
+      "refusal": "this machine is set to generate, which cannot run __proto__",
+      "cwd": "home",
+      "argv": [
+        "-p",
+        "--output-format",
+        "stream-json",
+        "--verbose",
+        "--include-partial-messages",
+        "--allowedTools",
+        "Skill Read Glob Grep WebFetch WebSearch",
+        "--disallowedTools",
+        "Bash Edit Write NotebookEdit"
+      ]
+    },
+    {
+      "scope": "__proto__",
+      "locked": false,
+      "mode": "hasOwnProperty",
+      "effectiveScope": "generate",
+      "actGranted": false,
+      "generateGranted": false,
+      "refusal": "this machine is set to generate, which cannot run hasOwnProperty",
+      "cwd": "home",
+      "argv": [
+        "-p",
+        "--output-format",
+        "stream-json",
+        "--verbose",
+        "--include-partial-messages",
+        "--allowedTools",
+        "Skill Read Glob Grep WebFetch WebSearch",
+        "--disallowedTools",
+        "Bash Edit Write NotebookEdit"
+      ]
+    },
+    {
+      "scope": "__proto__",
+      "locked": false,
+      "mode": "valueOf",
+      "effectiveScope": "generate",
+      "actGranted": false,
+      "generateGranted": false,
+      "refusal": "this machine is set to generate, which cannot run valueOf",
+      "cwd": "home",
+      "argv": [
+        "-p",
+        "--output-format",
+        "stream-json",
+        "--verbose",
+        "--include-partial-messages",
+        "--allowedTools",
+        "Skill Read Glob Grep WebFetch WebSearch",
+        "--disallowedTools",
+        "Bash Edit Write NotebookEdit"
+      ]
+    },
+    {
+      "scope": "__proto__",
+      "locked": false,
+      "mode": "",
+      "effectiveScope": "generate",
+      "actGranted": false,
+      "generateGranted": false,
+      "refusal": "this machine is set to generate, which cannot run ",
+      "cwd": "home",
+      "argv": [
+        "-p",
+        "--output-format",
+        "stream-json",
+        "--verbose",
+        "--include-partial-messages",
+        "--allowedTools",
+        "Skill Read Glob Grep WebFetch WebSearch",
+        "--disallowedTools",
+        "Bash Edit Write NotebookEdit"
+      ]
+    },
+    {
+      "scope": "__proto__",
+      "locked": true,
+      "mode": "ask",
+      "effectiveScope": "generate",
+      "actGranted": false,
+      "generateGranted": false,
+      "refusal": "this machine is set to generate, which cannot run ask",
+      "cwd": "home",
+      "argv": [
+        "-p",
+        "--output-format",
+        "stream-json",
+        "--verbose",
+        "--include-partial-messages",
+        "--allowedTools",
+        "Skill Read Glob Grep WebFetch WebSearch",
+        "--disallowedTools",
+        "Bash Edit Write NotebookEdit"
+      ]
+    },
+    {
+      "scope": "__proto__",
+      "locked": true,
+      "mode": "act",
+      "effectiveScope": "generate",
+      "actGranted": false,
+      "generateGranted": false,
+      "refusal": "this machine is set to generate, which cannot run act",
+      "cwd": "home",
+      "argv": [
+        "-p",
+        "--output-format",
+        "stream-json",
+        "--verbose",
+        "--include-partial-messages",
+        "--allowedTools",
+        "Skill Read Glob Grep WebFetch WebSearch",
+        "--disallowedTools",
+        "Bash Edit Write NotebookEdit"
+      ]
+    },
+    {
+      "scope": "__proto__",
+      "locked": true,
+      "mode": "generate",
+      "effectiveScope": "generate",
+      "actGranted": false,
+      "generateGranted": true,
+      "refusal": null,
+      "cwd": "home",
+      "argv": [
+        "-p",
+        "--output-format",
+        "stream-json",
+        "--verbose",
+        "--include-partial-messages"
+      ]
+    },
+    {
+      "scope": "__proto__",
+      "locked": true,
+      "mode": "constructor",
+      "effectiveScope": "generate",
+      "actGranted": false,
+      "generateGranted": false,
+      "refusal": "this machine is set to generate, which cannot run constructor",
+      "cwd": "home",
+      "argv": [
+        "-p",
+        "--output-format",
+        "stream-json",
+        "--verbose",
+        "--include-partial-messages",
+        "--allowedTools",
+        "Skill Read Glob Grep WebFetch WebSearch",
+        "--disallowedTools",
+        "Bash Edit Write NotebookEdit"
+      ]
+    },
+    {
+      "scope": "__proto__",
+      "locked": true,
+      "mode": "toString",
+      "effectiveScope": "generate",
+      "actGranted": false,
+      "generateGranted": false,
+      "refusal": "this machine is set to generate, which cannot run toString",
+      "cwd": "home",
+      "argv": [
+        "-p",
+        "--output-format",
+        "stream-json",
+        "--verbose",
+        "--include-partial-messages",
+        "--allowedTools",
+        "Skill Read Glob Grep WebFetch WebSearch",
+        "--disallowedTools",
+        "Bash Edit Write NotebookEdit"
+      ]
+    },
+    {
+      "scope": "__proto__",
+      "locked": true,
+      "mode": "__proto__",
+      "effectiveScope": "generate",
+      "actGranted": false,
+      "generateGranted": false,
+      "refusal": "this machine is set to generate, which cannot run __proto__",
+      "cwd": "home",
+      "argv": [
+        "-p",
+        "--output-format",
+        "stream-json",
+        "--verbose",
+        "--include-partial-messages",
+        "--allowedTools",
+        "Skill Read Glob Grep WebFetch WebSearch",
+        "--disallowedTools",
+        "Bash Edit Write NotebookEdit"
+      ]
+    },
+    {
+      "scope": "__proto__",
+      "locked": true,
+      "mode": "hasOwnProperty",
+      "effectiveScope": "generate",
+      "actGranted": false,
+      "generateGranted": false,
+      "refusal": "this machine is set to generate, which cannot run hasOwnProperty",
+      "cwd": "home",
+      "argv": [
+        "-p",
+        "--output-format",
+        "stream-json",
+        "--verbose",
+        "--include-partial-messages",
+        "--allowedTools",
+        "Skill Read Glob Grep WebFetch WebSearch",
+        "--disallowedTools",
+        "Bash Edit Write NotebookEdit"
+      ]
+    },
+    {
+      "scope": "__proto__",
+      "locked": true,
+      "mode": "valueOf",
+      "effectiveScope": "generate",
+      "actGranted": false,
+      "generateGranted": false,
+      "refusal": "this machine is set to generate, which cannot run valueOf",
+      "cwd": "home",
+      "argv": [
+        "-p",
+        "--output-format",
+        "stream-json",
+        "--verbose",
+        "--include-partial-messages",
+        "--allowedTools",
+        "Skill Read Glob Grep WebFetch WebSearch",
+        "--disallowedTools",
+        "Bash Edit Write NotebookEdit"
+      ]
+    },
+    {
+      "scope": "__proto__",
+      "locked": true,
+      "mode": "",
+      "effectiveScope": "generate",
+      "actGranted": false,
+      "generateGranted": false,
+      "refusal": "this machine is set to generate, which cannot run ",
+      "cwd": "home",
+      "argv": [
+        "-p",
+        "--output-format",
+        "stream-json",
+        "--verbose",
+        "--include-partial-messages",
+        "--allowedTools",
+        "Skill Read Glob Grep WebFetch WebSearch",
+        "--disallowedTools",
+        "Bash Edit Write NotebookEdit"
+      ]
+    },
+    {
+      "scope": "",
+      "locked": false,
+      "mode": "ask",
+      "effectiveScope": "generate",
+      "actGranted": false,
+      "generateGranted": false,
+      "refusal": "this machine is set to generate, which cannot run ask",
+      "cwd": "home",
+      "argv": [
+        "-p",
+        "--output-format",
+        "stream-json",
+        "--verbose",
+        "--include-partial-messages",
+        "--allowedTools",
+        "Skill Read Glob Grep WebFetch WebSearch",
+        "--disallowedTools",
+        "Bash Edit Write NotebookEdit"
+      ]
+    },
+    {
+      "scope": "",
+      "locked": false,
+      "mode": "act",
+      "effectiveScope": "generate",
+      "actGranted": false,
+      "generateGranted": false,
+      "refusal": "this machine is set to generate, which cannot run act",
+      "cwd": "home",
+      "argv": [
+        "-p",
+        "--output-format",
+        "stream-json",
+        "--verbose",
+        "--include-partial-messages",
+        "--allowedTools",
+        "Skill Read Glob Grep WebFetch WebSearch",
+        "--disallowedTools",
+        "Bash Edit Write NotebookEdit"
+      ]
+    },
+    {
+      "scope": "",
+      "locked": false,
+      "mode": "generate",
+      "effectiveScope": "generate",
+      "actGranted": false,
+      "generateGranted": true,
+      "refusal": null,
+      "cwd": "home",
+      "argv": [
+        "-p",
+        "--output-format",
+        "stream-json",
+        "--verbose",
+        "--include-partial-messages"
+      ]
+    },
+    {
+      "scope": "",
+      "locked": false,
+      "mode": "constructor",
+      "effectiveScope": "generate",
+      "actGranted": false,
+      "generateGranted": false,
+      "refusal": "this machine is set to generate, which cannot run constructor",
+      "cwd": "home",
+      "argv": [
+        "-p",
+        "--output-format",
+        "stream-json",
+        "--verbose",
+        "--include-partial-messages",
+        "--allowedTools",
+        "Skill Read Glob Grep WebFetch WebSearch",
+        "--disallowedTools",
+        "Bash Edit Write NotebookEdit"
+      ]
+    },
+    {
+      "scope": "",
+      "locked": false,
+      "mode": "toString",
+      "effectiveScope": "generate",
+      "actGranted": false,
+      "generateGranted": false,
+      "refusal": "this machine is set to generate, which cannot run toString",
+      "cwd": "home",
+      "argv": [
+        "-p",
+        "--output-format",
+        "stream-json",
+        "--verbose",
+        "--include-partial-messages",
+        "--allowedTools",
+        "Skill Read Glob Grep WebFetch WebSearch",
+        "--disallowedTools",
+        "Bash Edit Write NotebookEdit"
+      ]
+    },
+    {
+      "scope": "",
+      "locked": false,
+      "mode": "__proto__",
+      "effectiveScope": "generate",
+      "actGranted": false,
+      "generateGranted": false,
+      "refusal": "this machine is set to generate, which cannot run __proto__",
+      "cwd": "home",
+      "argv": [
+        "-p",
+        "--output-format",
+        "stream-json",
+        "--verbose",
+        "--include-partial-messages",
+        "--allowedTools",
+        "Skill Read Glob Grep WebFetch WebSearch",
+        "--disallowedTools",
+        "Bash Edit Write NotebookEdit"
+      ]
+    },
+    {
+      "scope": "",
+      "locked": false,
+      "mode": "hasOwnProperty",
+      "effectiveScope": "generate",
+      "actGranted": false,
+      "generateGranted": false,
+      "refusal": "this machine is set to generate, which cannot run hasOwnProperty",
+      "cwd": "home",
+      "argv": [
+        "-p",
+        "--output-format",
+        "stream-json",
+        "--verbose",
+        "--include-partial-messages",
+        "--allowedTools",
+        "Skill Read Glob Grep WebFetch WebSearch",
+        "--disallowedTools",
+        "Bash Edit Write NotebookEdit"
+      ]
+    },
+    {
+      "scope": "",
+      "locked": false,
+      "mode": "valueOf",
+      "effectiveScope": "generate",
+      "actGranted": false,
+      "generateGranted": false,
+      "refusal": "this machine is set to generate, which cannot run valueOf",
+      "cwd": "home",
+      "argv": [
+        "-p",
+        "--output-format",
+        "stream-json",
+        "--verbose",
+        "--include-partial-messages",
+        "--allowedTools",
+        "Skill Read Glob Grep WebFetch WebSearch",
+        "--disallowedTools",
+        "Bash Edit Write NotebookEdit"
+      ]
+    },
+    {
+      "scope": "",
+      "locked": false,
+      "mode": "",
+      "effectiveScope": "generate",
+      "actGranted": false,
+      "generateGranted": false,
+      "refusal": "this machine is set to generate, which cannot run ",
+      "cwd": "home",
+      "argv": [
+        "-p",
+        "--output-format",
+        "stream-json",
+        "--verbose",
+        "--include-partial-messages",
+        "--allowedTools",
+        "Skill Read Glob Grep WebFetch WebSearch",
+        "--disallowedTools",
+        "Bash Edit Write NotebookEdit"
+      ]
+    },
+    {
+      "scope": "",
+      "locked": true,
+      "mode": "ask",
+      "effectiveScope": "generate",
+      "actGranted": false,
+      "generateGranted": false,
+      "refusal": "this machine is set to generate, which cannot run ask",
+      "cwd": "home",
+      "argv": [
+        "-p",
+        "--output-format",
+        "stream-json",
+        "--verbose",
+        "--include-partial-messages",
+        "--allowedTools",
+        "Skill Read Glob Grep WebFetch WebSearch",
+        "--disallowedTools",
+        "Bash Edit Write NotebookEdit"
+      ]
+    },
+    {
+      "scope": "",
+      "locked": true,
+      "mode": "act",
+      "effectiveScope": "generate",
+      "actGranted": false,
+      "generateGranted": false,
+      "refusal": "this machine is set to generate, which cannot run act",
+      "cwd": "home",
+      "argv": [
+        "-p",
+        "--output-format",
+        "stream-json",
+        "--verbose",
+        "--include-partial-messages",
+        "--allowedTools",
+        "Skill Read Glob Grep WebFetch WebSearch",
+        "--disallowedTools",
+        "Bash Edit Write NotebookEdit"
+      ]
+    },
+    {
+      "scope": "",
+      "locked": true,
+      "mode": "generate",
+      "effectiveScope": "generate",
+      "actGranted": false,
+      "generateGranted": true,
+      "refusal": null,
+      "cwd": "home",
+      "argv": [
+        "-p",
+        "--output-format",
+        "stream-json",
+        "--verbose",
+        "--include-partial-messages"
+      ]
+    },
+    {
+      "scope": "",
+      "locked": true,
+      "mode": "constructor",
+      "effectiveScope": "generate",
+      "actGranted": false,
+      "generateGranted": false,
+      "refusal": "this machine is set to generate, which cannot run constructor",
+      "cwd": "home",
+      "argv": [
+        "-p",
+        "--output-format",
+        "stream-json",
+        "--verbose",
+        "--include-partial-messages",
+        "--allowedTools",
+        "Skill Read Glob Grep WebFetch WebSearch",
+        "--disallowedTools",
+        "Bash Edit Write NotebookEdit"
+      ]
+    },
+    {
+      "scope": "",
+      "locked": true,
+      "mode": "toString",
+      "effectiveScope": "generate",
+      "actGranted": false,
+      "generateGranted": false,
+      "refusal": "this machine is set to generate, which cannot run toString",
+      "cwd": "home",
+      "argv": [
+        "-p",
+        "--output-format",
+        "stream-json",
+        "--verbose",
+        "--include-partial-messages",
+        "--allowedTools",
+        "Skill Read Glob Grep WebFetch WebSearch",
+        "--disallowedTools",
+        "Bash Edit Write NotebookEdit"
+      ]
+    },
+    {
+      "scope": "",
+      "locked": true,
+      "mode": "__proto__",
+      "effectiveScope": "generate",
+      "actGranted": false,
+      "generateGranted": false,
+      "refusal": "this machine is set to generate, which cannot run __proto__",
+      "cwd": "home",
+      "argv": [
+        "-p",
+        "--output-format",
+        "stream-json",
+        "--verbose",
+        "--include-partial-messages",
+        "--allowedTools",
+        "Skill Read Glob Grep WebFetch WebSearch",
+        "--disallowedTools",
+        "Bash Edit Write NotebookEdit"
+      ]
+    },
+    {
+      "scope": "",
+      "locked": true,
+      "mode": "hasOwnProperty",
+      "effectiveScope": "generate",
+      "actGranted": false,
+      "generateGranted": false,
+      "refusal": "this machine is set to generate, which cannot run hasOwnProperty",
+      "cwd": "home",
+      "argv": [
+        "-p",
+        "--output-format",
+        "stream-json",
+        "--verbose",
+        "--include-partial-messages",
+        "--allowedTools",
+        "Skill Read Glob Grep WebFetch WebSearch",
+        "--disallowedTools",
+        "Bash Edit Write NotebookEdit"
+      ]
+    },
+    {
+      "scope": "",
+      "locked": true,
+      "mode": "valueOf",
+      "effectiveScope": "generate",
+      "actGranted": false,
+      "generateGranted": false,
+      "refusal": "this machine is set to generate, which cannot run valueOf",
+      "cwd": "home",
+      "argv": [
+        "-p",
+        "--output-format",
+        "stream-json",
+        "--verbose",
+        "--include-partial-messages",
+        "--allowedTools",
+        "Skill Read Glob Grep WebFetch WebSearch",
+        "--disallowedTools",
+        "Bash Edit Write NotebookEdit"
+      ]
+    },
+    {
+      "scope": "",
+      "locked": true,
+      "mode": "",
+      "effectiveScope": "generate",
+      "actGranted": false,
+      "generateGranted": false,
+      "refusal": "this machine is set to generate, which cannot run ",
       "cwd": "home",
       "argv": [
         "-p",

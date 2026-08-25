@@ -635,3 +635,20 @@ test('run transcripts do not outlive the history that points at them', async () 
       `run ${id} is still in the history but its transcript was pruned`);
   }
 });
+
+test('a round cannot be pinned to a generate-scope device', async () => {
+  // A serving row is not a place a Round runs: placeRound goes through the
+  // exclusivity-aware comparison, so the refusal lands at save time with the
+  // permanent kind of wrong named.
+  const reg = await api('/v1/devices', {
+    method: 'POST',
+    body: JSON.stringify({ name: 'LLMBOX', platform: 'linux', scope: 'generate' }),
+  });
+  assert.equal(reg.status, 201, JSON.stringify(reg.body));
+  const r = await api('/v1/rounds', {
+    method: 'POST',
+    body: JSON.stringify({ title: 'gate', prompt: 'p', schedule: SUNDAY_7PM, host: reg.body.id }),
+  });
+  assert.equal(r.status, 400, JSON.stringify(r.body));
+  assert.match(r.body.error, /generate/);
+});

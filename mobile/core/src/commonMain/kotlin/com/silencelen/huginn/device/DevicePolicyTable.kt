@@ -12,8 +12,8 @@ package com.silencelen.huginn.device
  * happen is for one of them to quietly grant more than the other.
  */
 internal object DevicePolicyTable {
-    val SCOPES: List<String> = listOf("look", "work", "own")
-    val MODE_NEEDS: Map<String, String> = mapOf("ask" to "look", "act" to "work")
+    val SCOPES: List<String> = listOf("generate", "look", "work", "own")
+    val MODE_NEEDS: Map<String, String> = mapOf("ask" to "look", "act" to "work", "generate" to "generate")
     const val LOCK_DROPS_TO: String = "look"
 
     val STREAM_FLAGS: List<String> = listOf("-p", "--output-format", "stream-json", "--verbose", "--include-partial-messages")
@@ -25,4 +25,8 @@ internal object DevicePolicyTable {
 
     const val REFUSAL_LOCKED: String = "this machine is locked, so it is read-only until someone unlocks it"
     const val REFUSAL_SCOPE: String = "this machine is set to {scope}, which cannot run {mode}"
+    const val REFUSAL_ENGINE: String = "this machine has no local model engine, so it cannot run generate"
+
+    /** Scopes that match only themselves, both ways. See shared/device-policy.json. */
+    val EXCLUSIVE_SCOPES: List<String> = listOf("generate")
 }
