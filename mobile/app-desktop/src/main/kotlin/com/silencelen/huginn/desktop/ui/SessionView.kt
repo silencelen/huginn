@@ -585,7 +585,31 @@ private fun ScreenTab(controller: SessionController) {
     // enabling live and typing "ls" put "s" into the pane.
     LaunchedEffect(live) { if (live) focus.requestFocus() }
 
+    val paneClipboard = LocalClipboardManager.current
+    val paneCopy: (String) -> Unit = remember(paneClipboard) {
+        { t -> paneClipboard.setText(AnnotatedString(t)) }
+    }
+
     Column(Modifier.fillMaxSize()) {
+        // The pane is a canvas, so there is nothing to select with a mouse either
+        // — the same gap the phone had. Quiet, right-aligned, and only drawn when
+        // there is something to take.
+        val paneLinks = com.silencelen.huginn.ui.linksOn(screen)
+        if (com.silencelen.huginn.ui.hasCopyableText(screen)) {
+            Row(
+                Modifier.fillMaxWidth().padding(horizontal = 12.dp),
+                horizontalArrangement = Arrangement.End,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                when {
+                    paneLinks.size == 1 -> TextButton(onClick = { paneCopy(paneLinks[0]) }) { Text("Copy link") }
+                    paneLinks.size > 1 -> TextButton(onClick = { paneCopy(paneLinks.joinToString("\n")) }) {
+                        Text("Copy ${paneLinks.size} links")
+                    }
+                }
+                TextButton(onClick = { paneCopy(com.silencelen.huginn.ui.screenText(screen)) }) { Text("Copy screen") }
+            }
+        }
         // "Blocked" means a resize is NEEDED and refused, not merely that somebody
         // is attached — so this banner cannot come back after it has been dealt
         // with. Forcing is offered, never taken: the resize would shrink a terminal
