@@ -1,4 +1,4 @@
-; Windows installer for the Compose Multiplatform desktop client.
+; Windows installer for the Huginn desktop client.
 ;
 ; Built by LINUX makensis (no Windows machine involved), wrapping the app-image
 ; that Windows jpackage.exe produced under wine. scripts/release-desktop.sh
@@ -40,7 +40,17 @@ Unicode true
 !addplugindir /x86-unicode "${PLUGIN_DIR}"
 
 !define APP_ID    "huginn-desktop-kt"
-!define APP_NAME  "Huginn Desktop (Compose)"
+; Was "Huginn Desktop (Compose)" until 0.8.8. The qualifier existed only to tell
+; this client apart from the Electron one, which is gone — so it now said nothing
+; except to make the owner read four extra characters on every Start Menu entry.
+; APP_NAME is DISPLAY ONLY: InstallDir and UNINST_KEY both key off APP_ID, so the
+; rename cannot install alongside the old copy or orphan its uninstall entry. What
+; it DOES move is the Start Menu folder, which OLD_SM_NAME below cleans up.
+!define APP_NAME  "Huginn Desktop"
+; The pre-0.8.8 Start Menu folder. An upgrade writes shortcuts under the new name
+; and would otherwise leave the old folder sitting there forever with a working
+; shortcut in it — two entries for one app, one of which stops being updated.
+!define OLD_SM_NAME "Huginn Desktop (Compose)"
 !define APP_EXE   "huginn-desktop-kt.exe"
 !define PUBLISHER "silencelen"
 !define UNINST_KEY "Software\Microsoft\Windows\CurrentVersion\Uninstall\${APP_ID}"
@@ -197,6 +207,14 @@ Section "Install"
   ; This is not theory. The Electron client showed no notifications in field use
   ; until its identity was set; the hand-written installer that replaced
   ; electron-builder lost the step, and 0.3.1 shipped without it.
+  ; The old folder goes first, and by its LITERAL old name — an upgrade from a
+  ; pre-0.8.8 install has shortcuts under it that would otherwise linger, still
+  ; launching this app but never updated again.
+  WinShell::UninstShortcut "$SMPROGRAMS\${OLD_SM_NAME}\${OLD_SM_NAME}.lnk"
+  Delete "$SMPROGRAMS\${OLD_SM_NAME}\${OLD_SM_NAME}.lnk"
+  Delete "$SMPROGRAMS\${OLD_SM_NAME}\Uninstall ${OLD_SM_NAME}.lnk"
+  RMDir "$SMPROGRAMS\${OLD_SM_NAME}"
+
   CreateDirectory "$SMPROGRAMS\${APP_NAME}"
   CreateShortCut "$SMPROGRAMS\${APP_NAME}\${APP_NAME}.lnk" "$INSTDIR\${APP_EXE}"
   WinShell::SetLnkAUMI "$SMPROGRAMS\${APP_NAME}\${APP_NAME}.lnk" "${AUMID}"
@@ -222,6 +240,11 @@ Section "Uninstall"
   Delete "$SMPROGRAMS\${APP_NAME}\${APP_NAME}.lnk"
   Delete "$SMPROGRAMS\${APP_NAME}\Uninstall ${APP_NAME}.lnk"
   RMDir "$SMPROGRAMS\${APP_NAME}"
+  ; Belt and braces for a machine that upgraded across the rename and never had
+  ; the install-time cleanup run.
+  Delete "$SMPROGRAMS\${OLD_SM_NAME}\${OLD_SM_NAME}.lnk"
+  Delete "$SMPROGRAMS\${OLD_SM_NAME}\Uninstall ${OLD_SM_NAME}.lnk"
+  RMDir "$SMPROGRAMS\${OLD_SM_NAME}"
   Delete "$INSTDIR\Uninstall.exe"
   RMDir /r "$INSTDIR\app"
   RMDir /r "$INSTDIR\runtime"

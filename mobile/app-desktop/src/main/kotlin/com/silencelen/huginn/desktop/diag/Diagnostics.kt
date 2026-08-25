@@ -54,7 +54,7 @@ object Diagnostics {
 
     fun build(input: Input): String {
         val lines = buildList {
-            add("# Huginn Desktop (Compose) diagnostics")
+            add("# Huginn Desktop diagnostics")
             add("generated       ${input.generatedAt}")
             add("")
             add("## App")
