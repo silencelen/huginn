@@ -335,6 +335,14 @@ fun ChatView(
         Composer(
             // Same rule as the phone, read off the detail this view already holds.
             sealedRun = detail?.closed == true,
+            // The Round this chat is the run of, found by the run itself rather
+            // than by a field on the chat — the same lookup the Rounds list does
+            // to open it, so the two cannot disagree about which is which.
+            onContinueRound = store?.let { st ->
+                st.rounds.value.firstOrNull { it.lastRun?.chatId == chatId }
+                    ?.takeIf { com.silencelen.huginn.ui.worthContinuing(it) }
+                    ?.let { r -> { scope.launch { st.continueRound(r) } } }
+            },
             draft = draft,
             onDraft = setDraft,
             onSent = clearDraft,
@@ -372,6 +380,8 @@ fun ChatView(
 @Composable
 private fun Composer(
     sealedRun: Boolean = false,
+    /** The way out of a finished Round; null when there is nothing to carry on. */
+    onContinueRound: (() -> Unit)? = null,
     draft: String,
     onDraft: (String) -> Unit,
     onSent: () -> Unit,
@@ -385,7 +395,7 @@ private fun Composer(
     onSend: (String) -> Unit,
 ) {
     if (sealedRun) {
-        SealedNote(Modifier.fillMaxWidth())
+        SealedNote(Modifier.fillMaxWidth(), onContinue = onContinueRound)
         return
     }
     val attachment by attachments.current.collectAsState()

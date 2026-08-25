@@ -34,6 +34,20 @@ data class RoundDraft(
     val dates: Set<Int> = setOf(1),
     /** Text, not a number, because it is bound to a field somebody is mid-typing. */
     val everyMinutes: String = "60",
+    /**
+     * The zone this Round's clock is in, carried through the editor untouched.
+     *
+     * ⚠ THIS FIELD IS THE FIX FOR A REAL BUG. Without it the draft had no zone,
+     * so [toSchedule] substituted the EDITING DEVICE's zone — and opening a Round
+     * set for 07:30 Europe/London on a phone in Los Angeles and saving it without
+     * touching anything moved the job eight hours. Every surface would have gone
+     * on showing a correct-looking "7:30", because the daemon renders the cadence
+     * in the zone it was given.
+     *
+     * Null only for a Round being WRITTEN, where the device's zone is the right
+     * default and the only one available.
+     */
+    val tz: String? = null,
     val mode: String = "ask",
     /** always | attention | never */
     val notifyWhen: String = "attention",
@@ -95,11 +109,16 @@ fun isClockTime(v: String): Boolean {
  * @param tz this client's IANA zone, or null to let the daemon use the host's.
  *   Null is the normal case for the shared UI, which has no calendar to ask.
  */
-fun RoundDraft.toSchedule(tz: String? = null): RoundSchedule = when (kind) {
-    "interval" -> RoundSchedule(kind = "interval", everyMinutes = everyMinutes.trim().toIntOrNull())
-    "weekly" -> RoundSchedule(kind = "weekly", at = at.trim(), tz = tz, days = days.sorted())
-    "monthly" -> RoundSchedule(kind = "monthly", at = at.trim(), tz = tz, dates = dates.sorted())
-    else -> RoundSchedule(kind = "daily", at = at.trim(), tz = tz)
+fun RoundDraft.toSchedule(deviceTz: String? = null): RoundSchedule {
+    // The Round's OWN zone wins. `deviceTz` is a default for a Round being
+    // written, never an override for one being edited — see [RoundDraft.tz].
+    val zone = tz?.takeIf { it.isNotBlank() } ?: deviceTz
+    return when (kind) {
+        "interval" -> RoundSchedule(kind = "interval", everyMinutes = everyMinutes.trim().toIntOrNull())
+        "weekly" -> RoundSchedule(kind = "weekly", at = at.trim(), tz = zone, days = days.sorted())
+        "monthly" -> RoundSchedule(kind = "monthly", at = at.trim(), tz = zone, dates = dates.sorted())
+        else -> RoundSchedule(kind = "daily", at = at.trim(), tz = zone)
+    }
 }
 
 /** An existing Round, opened for editing. */
@@ -114,6 +133,7 @@ fun Round.toDraft(): RoundDraft = RoundDraft(
     days = schedule.days.toSet().ifEmpty { setOf(1) },
     dates = schedule.dates.toSet().ifEmpty { setOf(1) },
     everyMinutes = (schedule.everyMinutes ?: 60).toString(),
+    tz = schedule.tz,
     mode = mode,
     notifyWhen = notifyWhen,
     host = host,
@@ -126,7 +146,18 @@ fun Round.toDraft(): RoundDraft = RoundDraft(
  * it; once the Round exists, that is what every surface shows. This exists only
  * because a form with no feedback until Save is a form people get wrong twice.
  */
-fun RoundDraft.cadencePreview(): String {
+fun RoundDraft.cadencePreview(): String = cadenceWords() + zoneSuffix()
+
+/**
+ * The zone, said out loud whenever the Round has one.
+ *
+ * A time with no clock named beside it is the thing that let the zone bug hide:
+ * "7:30" reads as correct in any zone, so nobody could see it move.
+ */
+private fun RoundDraft.zoneSuffix(): String =
+    if (isInterval) "" else tz?.takeIf { it.isNotBlank() }?.let { " · $it" } ?: ""
+
+private fun RoundDraft.cadenceWords(): String {
     if (isInterval) {
         val n = everyMinutes.trim().toIntOrNull() ?: return "Every … minutes"
         return when {

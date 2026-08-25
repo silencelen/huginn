@@ -25,6 +25,8 @@ import com.silencelen.huginn.data.Round
 fun RoundEditScreen(
     existing: Round?,
     devices: List<Device>,
+    /** Seeds a NEW round's clock. An existing one keeps its own — see RoundDraft.tz. */
+    deviceTz: String?,
     onCreate: (RoundDraft, (String?) -> Unit) -> Unit,
     onSave: (String, RoundDraft, (String?) -> Unit) -> Unit,
     onDelete: (String, (String?) -> Unit) -> Unit,
@@ -33,7 +35,7 @@ fun RoundEditScreen(
     // Keyed on the Round's id, so opening a different one starts from ITS values
     // rather than the last one's — and so a poll landing mid-edit does not reset
     // the form under somebody's hands.
-    var draft by remember(existing?.id) { mutableStateOf(existing?.toDraft() ?: RoundDraft()) }
+    var draft by remember(existing?.id) { mutableStateOf(existing?.toDraft() ?: RoundDraft(tz = deviceTz)) }
     var saving by remember(existing?.id) { mutableStateOf(false) }
     var error by remember(existing?.id) { mutableStateOf<String?>(null) }
     var confirmDelete by remember { mutableStateOf(false) }
