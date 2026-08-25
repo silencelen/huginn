@@ -331,7 +331,7 @@ class AppStore(
      * zone; without this the daemon falls back to the HOST's, which is usually the
      * same and quietly is not when it isn't.
      */
-    private fun deviceZone(): String? =
+    fun deviceZone(): String? =
         runCatching { java.util.TimeZone.getDefault().id?.takeIf { it.isNotBlank() } }.getOrNull()
 
     /** @return null on success, otherwise the daemon's reason — not ours. */
@@ -362,6 +362,21 @@ class AppStore(
                 host = draft.host,
             )
         }.fold({ refreshRounds(); null }, { it.message ?: "Could not save it" })
+
+    /**
+     * Carries on from a finished Round, in a fresh chat on the same machine.
+     * The report lands as a draft, never a sent message — see the phone's twin.
+     */
+    suspend fun continueRound(round: Round): String? {
+        val c = runCatching {
+            client.createChat(mode = round.mode, model = round.model, effort = round.effort,
+                host = round.host.takeIf { it != "local" })
+        }.getOrNull() ?: return null
+        drafts.set(com.silencelen.huginn.data.DraftBook.chatKey(c.id), com.silencelen.huginn.ui.followUpDraft(round))
+        refreshChats()
+        openChat(c.id)
+        return c.id
+    }
 
     /** The schedule goes; the reports it already wrote are chats and stay. */
     suspend fun deleteRound(id: String): String? =

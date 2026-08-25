@@ -52,16 +52,33 @@ fun HostBadge(host: String?, hostName: String?, modifier: Modifier = Modifier) {
  * kind of small dishonesty that makes a feature feel broken.
  */
 @Composable
-fun SealedNote(modifier: Modifier = Modifier, isRound: Boolean = true) {
+fun SealedNote(
+    modifier: Modifier = Modifier,
+    isRound: Boolean = true,
+    /**
+     * Offered only when the run left something to do. A round that came back all
+     * clear needs no door, and an offer on every finished run is an offer that
+     * means nothing on the ones that matter.
+     */
+    onContinue: (() -> Unit)? = null,
+) {
     Surface(
         color = MaterialTheme.colorScheme.surfaceVariant,
         contentColor = MaterialTheme.colorScheme.onSurfaceVariant,
         modifier = modifier,
     ) {
-        Text(
-            sealedNote(isRound),
-            style = MaterialTheme.typography.bodySmall,
-            modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
-        )
+        androidx.compose.foundation.layout.Row(
+            Modifier.padding(start = 16.dp, end = 6.dp, top = 4.dp, bottom = 4.dp),
+            verticalAlignment = androidx.compose.ui.Alignment.CenterVertically,
+        ) {
+            Text(
+                sealedNote(isRound),
+                style = MaterialTheme.typography.bodySmall,
+                modifier = Modifier.weight(1f).padding(vertical = 8.dp),
+            )
+            if (onContinue != null) {
+                androidx.compose.material3.TextButton(onClick = onContinue) { Text("Carry on") }
+            }
+        }
     }
 }

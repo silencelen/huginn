@@ -60,6 +60,7 @@ fun RoundsPane(store: AppStore) {
         RoundEditorPane(
             existing = target,
             devices = devices,
+            deviceTz = store.deviceZone(),
             onCreate = { d -> store.createRound(d) },
             onSave = { id, d -> store.saveRound(id, d) },
             onDelete = { id -> store.deleteRound(id) },
@@ -130,13 +131,14 @@ fun RoundsPane(store: AppStore) {
 private fun RoundEditorPane(
     existing: Round?,
     devices: List<com.silencelen.huginn.data.Device>,
+    deviceTz: String?,
     onCreate: suspend (RoundDraft) -> String?,
     onSave: suspend (String, RoundDraft) -> String?,
     onDelete: suspend (String) -> String?,
     onDone: () -> Unit,
 ) {
     val scope = rememberCoroutineScope()
-    var draft by remember(existing?.id) { mutableStateOf(existing?.toDraft() ?: RoundDraft()) }
+    var draft by remember(existing?.id) { mutableStateOf(existing?.toDraft() ?: RoundDraft(tz = deviceTz)) }
     var saving by remember(existing?.id) { mutableStateOf(false) }
     var error by remember(existing?.id) { mutableStateOf<String?>(null) }
     var confirmDelete by remember { mutableStateOf(false) }

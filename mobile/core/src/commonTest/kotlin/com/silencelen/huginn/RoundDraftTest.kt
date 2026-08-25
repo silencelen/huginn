@@ -136,6 +136,32 @@ class RoundDraftTest {
     }
 
     @Test
+    fun aRoundKeepsItsOWNZoneThroughTheEditor() {
+        // The regression this field exists for: a draft with a zone must ignore
+        // whatever zone the editing device is in, or saving an untouched Round
+        // moves it. Covered end-to-end in RoundEditRoundTripTest against real
+        // daemon payloads; asserted here at the unit it turns on.
+        val d = ok.copy(kind = "daily", at = "07:30", tz = "Europe/London")
+        assertEquals("Europe/London", d.toSchedule("America/Los_Angeles").tz)
+        // And a NEW round, which has no zone of its own, takes the device's.
+        assertEquals("America/Los_Angeles", ok.copy(kind = "daily").toSchedule("America/Los_Angeles").tz)
+        // Blank is absent, not a zone.
+        assertEquals("America/Los_Angeles", ok.copy(kind = "daily", tz = "  ").toSchedule("America/Los_Angeles").tz)
+    }
+
+    @Test
+    fun thePreviewNamesTheClockWhenTheRoundHasOne() {
+        // A time with no clock beside it is what let the zone bug hide: "7:30"
+        // reads as correct in every zone on earth.
+        assertEquals(
+            "Every day at 7:30 AM · Europe/London",
+            ok.copy(kind = "daily", at = "07:30", tz = "Europe/London").cadencePreview(),
+        )
+        // An interval has no wall clock, so naming a zone would be noise.
+        assertEquals("Every 2 hours", ok.copy(kind = "interval", everyMinutes = "120", tz = "Europe/London").cadencePreview())
+    }
+
+    @Test
     fun thePreviewNeverPretendsAnEmptyFormIsASchedule() {
         assertEquals("Pick a day", ok.copy(kind = "weekly", days = emptySet()).cadencePreview())
         assertEquals("Pick a date", ok.copy(kind = "monthly", dates = emptySet()).cadencePreview())

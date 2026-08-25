@@ -65,6 +65,12 @@ import com.silencelen.huginn.data.TranscriptPage
  */
 @Composable
 fun ChatScreen(
+    /**
+     * The way out of a finished Round. Null when there is nothing to carry
+     * forward — an all-clear round needs no door, and an offer on every sealed
+     * run is an offer that means nothing on the ones that do.
+     */
+    onContinueRound: (() -> Unit)? = null,
     page: TranscriptPage?,
     /** Why the transcript could not be read, when it could not. */
     error: String?,
@@ -211,6 +217,7 @@ fun ChatScreen(
 
         Composer(
             sealedRun = sealedRun,
+            onContinueRound = onContinueRound,
             draft = draft,
             onDraft = onDraft,
             sending = sending,
@@ -277,6 +284,8 @@ private fun ThinkingLine() {
 @Composable
 private fun Composer(
     sealedRun: Boolean = false,
+    /** The way out of a finished Round; null when there is nothing to carry on. */
+    onContinueRound: (() -> Unit)? = null,
     draft: String,
     onDraft: (String) -> Unit,
     sending: Boolean,
@@ -300,7 +309,7 @@ private fun Composer(
         // navigationBarsPadding, like the Surface below it: the Scaffold sets
         // contentWindowInsets to zero precisely because every composer owns its own
         // inset, so a replacement that forgot it would sit under the system bar.
-        SealedNote(Modifier.fillMaxWidth().navigationBarsPadding())
+        SealedNote(Modifier.fillMaxWidth().navigationBarsPadding(), onContinue = onContinueRound)
         return
     }
     Surface(color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f)) {

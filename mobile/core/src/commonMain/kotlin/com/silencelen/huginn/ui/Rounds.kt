@@ -127,3 +127,48 @@ fun sealedNote(round: Boolean = true): String =
     if (round) "This round has finished. It is kept here for review."
     else "This conversation is closed."
 
+/**
+ * The opening message for a conversation that carries on from a Round's report.
+ *
+ * ⚠ THIS EXISTS BECAUSE THE FEATURE HAD A DEAD END. A Round whose report needs
+ * acting on shows "Needs you" in red — and tapping it landed the reader in a
+ * SEALED run that says only "kept here for review", with nothing to do. The
+ * signal was about the world; the destination was a closed conversation. So the
+ * status was right, the seal was right, and the door was missing.
+ *
+ * The text is a DRAFT, never a sent message: a Round can be an `act` round, and
+ * auto-sending would start unattended work off the back of a tap meant to read
+ * something. It lands in the composer for a person to edit or delete.
+ *
+ * Every item's `suggest` is carried, which is what that field was added for and
+ * what nothing until now consumed: acting on a finding should not begin from a
+ * blank page.
+ */
+fun followUpDraft(round: Round): String {
+    val run = round.lastRun ?: return ""
+    val b = StringBuilder()
+    b.append("Following up on the \"").append(round.title).append("\" round")
+    round.cadence.takeIf { it.isNotBlank() }?.let { b.append(" (").append(it).append(")") }
+    b.append(", which reported:\n\n")
+    run.headline.takeIf { it.isNotBlank() }?.let { b.append(it).append("\n\n") }
+    run.items.forEachIndexed { i, item ->
+        b.append(i + 1).append(". ").append(item.title.ifBlank { "(untitled)" }).append("\n")
+        item.detail.takeIf { it.isNotBlank() }?.let { b.append("   ").append(it).append("\n") }
+        item.suggest.takeIf { it.isNotBlank() }?.let { b.append("   suggested: ").append(it).append("\n") }
+    }
+    if (run.items.isNotEmpty()) b.append("\n")
+    return b.toString()
+}
+
+/**
+ * Whether a sealed run has anything worth carrying forward.
+ *
+ * A clean "all clear" round with no items needs no door — offering one on every
+ * finished run would make the offer meaningless on the ones that matter.
+ */
+fun worthContinuing(round: Round?): Boolean {
+    val run = round?.lastRun ?: return false
+    return run.items.isNotEmpty() || run.status == "action" || run.status == "attention" ||
+        run.goalMet == false || run.malformed
+}
+

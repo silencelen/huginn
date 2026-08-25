@@ -67,13 +67,14 @@ for r in rounds:
     mark = MARK.get(st, "-") if last else "-"
     state = "paused" if not r.get("enabled") else ("RUNNING" if r.get("running") else until(r.get("nextRunAt")))
 
-    print("  %-2s %s" % (mark, r.get("title", "?")))
+    print("  %-2s %s" % (mark, r.get("title") or "?"))
     where = r.get("hostName") or "this host"
+    # Same trap as huginn-devices: present-but-null defeats .get's default.
     print("       %s  .  %s  .  %s  .  on %s"
-          % (r.get("cadence", "?"), state, r.get("mode", "ask"), where))
+          % (r.get("cadence") or "?", state, r.get("mode") or "ask", where))
 
     if last:
-        bits = [WORD.get(st, st or "?"), ago(last.get("at"))]
+        bits = [WORD.get(st) or st or "unclear", ago(last.get("at"))]
         n = len(last.get("items") or [])
         if n:
             bits.append("%d item%s" % (n, "" if n == 1 else "s"))

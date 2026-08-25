@@ -1106,7 +1106,7 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
      * usually the same and quietly is not when it isn't. Sent from the platform
      * layer, which is the only place that knows.
      */
-    private fun deviceZone(): String? =
+    fun deviceZone(): String? =
         runCatching { java.util.TimeZone.getDefault().id?.takeIf { it.isNotBlank() } }.getOrNull()
 
     /**
@@ -1853,6 +1853,32 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
      * scoped, and its refusal names which — so it is surfaced as-is rather than
      * being rewritten into something vaguer here.
      */
+    /**
+     * Carries on from a finished Round, in a fresh chat.
+     *
+     * Same mode, same machine, same model as the Round, because acting on its
+     * report means doing the thing it was watching — on the box it was watching.
+     * The report lands as a DRAFT, never a sent message: a Round can be `act`, and
+     * sending on a tap meant to read something would start unattended work.
+     */
+    fun continueRound(round: com.silencelen.huginn.data.Round, onCreated: (String) -> Unit) {
+        viewModelScope.launch {
+            awaitReady()
+            runCatching {
+                client.createChat(
+                    mode = round.mode,
+                    model = round.model,
+                    effort = round.effort,
+                    host = round.host.takeIf { it != "local" },
+                )
+            }.onSuccess { c ->
+                setDraft(chatDraftKey(c.id), followUpDraft(round))
+                refreshChats()
+                onCreated(c.id)
+            }.onFailure { _toast.value = errText(it) }
+        }
+    }
+
     fun newChat(mode: String, host: String? = null, onCreated: (String) -> Unit) {
         viewModelScope.launch {
             runCatching { client.createChat(mode, host = host) }

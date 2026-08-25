@@ -44,8 +44,8 @@ for x in devs:
     # Enrolled scope AND what it will do right now, when they differ: "own,
     # read-only while locked" is a different situation from "enrolled read-only",
     # and showing only the second makes a locked machine look misconfigured.
-    scope = x.get("scope", "?")
-    eff = x.get("effectiveScope", scope)
+    scope = x.get("scope") or "?"
+    eff = x.get("effectiveScope") or scope
     scope_txt = scope if scope == eff else "%s -> %s while locked" % (scope, eff)
 
     if x.get("running"):
@@ -57,8 +57,10 @@ for x in devs:
     else:
         state = "idle"
 
-    print("  %-1s %s" % ("*" if x.get("online") else " ", x.get("name", "?")))
-    print("      %s  .  %s  .  %s" % (x.get("platform", "?"), scope_txt, state))
+    # `or "?"`, not `.get(k, "?")`: the default only covers a MISSING key, and a
+    # key that is present-but-null sails straight through it and prints "None".
+    print("  %-1s %s" % ("*" if x.get("online") else " ", x.get("name") or "?"))
+    print("      %s  .  %s  .  %s" % (x.get("platform") or "?", scope_txt, state))
     extra = []
     if x.get("version"):
         extra.append("v%s" % x["version"])
