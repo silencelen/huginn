@@ -9,6 +9,32 @@ appeared only as a side-note on the app releases it happened to ship with. Three
 undocumented, and the notes-cutting matcher could fuse two sections when an app and an appd
 version number collided. Entries below are reconstructed from the shipping commits.
 
+## 2.67.0 — 2026-08-25
+
+The two findings the review flagged as needing re-adjudication rather than trust. Both were real,
+and both were somewhat different from the summary — so both were reproduced first.
+
+### Fixed
+- **A mode nobody defined is now refused, not mapped to a scope.** `modeNeeds` is a plain object,
+  so `modeNeeds.constructor` is a *function* and `indexOf` of it is `-1`. The daemon refused these
+  by accident of that arithmetic; the headless runner's `rank(scope) >= -1` was true for **every**
+  scope, so the one function whose whole job is to say no returned "no refusal" on a look-only
+  machine. Nothing escalated — `argvFor` compares `mode === 'act'` literally, so the tools stayed
+  read-only — but a fence that fails open is not a fence. Kotlin was immune to the prototype trick
+  and wrong for a different reason: it mapped the unknown to `work`, which let anything
+  unrecognised run on any machine enrolled at work or own. All four implementations now refuse
+  outright, and **36 hostile rows are in the shared case matrix** so both runners are held to it.
+- **A session id that is really a flag can no longer reach an argv.** `meta.claudeSessionId` was
+  stored verbatim from `ev.session_id` — an event the DEVICE posts — and rode back to that machine
+  as the value of `--resume`. `--resume` takes its value optionally, so a string beginning with
+  `--` does not become the id, it becomes the **next flag**: `--resume
+  --dangerously-skip-permissions` is two flags, not one. An unvalidated string in flag position is
+  authority travelling inside a request, and a work item is defined as carrying a request and no
+  authority. Now validated as a uuid **at the source and at the fence** — the device builds its own
+  argv, so it does not get to assume the other end checked.
+
+560 appd tests. Two new regression tests, both of which fail against the previous build.
+
 ## 2.66.0 — 2026-08-25
 
 Four root causes from an adversarial review of Rounds and Devices — 139 edge cases probed by nine

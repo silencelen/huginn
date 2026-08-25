@@ -14,6 +14,27 @@ the Electron client's go to `/v1/desktop` and the two never mix — see
      refusal is deliberate — it is what stops a release going out with no notes.
      ─────────────────────────────────────────────────────────────────────────── -->
 
+## 0.8.10
+
+### Fixed
+- **A mode nobody defined is now refused, not mapped to a scope.** `modeNeeds` is a plain object,
+  so `modeNeeds.constructor` is a *function* and `indexOf` of it is `-1`. The daemon refused these
+  by accident of that arithmetic; the headless runner's `rank(scope) >= -1` was true for **every**
+  scope, so the one function whose whole job is to say no returned "no refusal" on a look-only
+  machine. Nothing escalated — `argvFor` compares `mode === 'act'` literally, so the tools stayed
+  read-only — but a fence that fails open is not a fence. Kotlin was immune to the prototype trick
+  and wrong for a different reason: it mapped the unknown to `work`, which let anything
+  unrecognised run on any machine enrolled at work or own. All four implementations now refuse
+  outright, and **36 hostile rows are in the shared case matrix** so both runners are held to it.
+- **A session id that is really a flag can no longer reach an argv.** `meta.claudeSessionId` was
+  stored verbatim from `ev.session_id` — an event the DEVICE posts — and rode back to that machine
+  as the value of `--resume`. `--resume` takes its value optionally, so a string beginning with
+  `--` does not become the id, it becomes the **next flag**: `--resume
+  --dangerously-skip-permissions` is two flags, not one. An unvalidated string in flag position is
+  authority travelling inside a request, and a work item is defined as carrying a request and no
+  authority. Now validated as a uuid **at the source and at the fence** — the device builds its own
+  argv, so it does not get to assume the other end checked.
+
 ## 0.8.9
 
 ### Fixed
