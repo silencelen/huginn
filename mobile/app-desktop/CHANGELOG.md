@@ -1,4 +1,4 @@
-# Huginn Desktop (Compose) changelog
+# Huginn Desktop changelog
 
 The Compose Multiplatform desktop client, versioned separately from the phone
 app and from the Electron desktop client. Its releases go to `/v1/desktop-kt`;
@@ -13,6 +13,20 @@ the Electron client's go to `/v1/desktop` and the two never mix — see
      (and fold these notes in with whatever else that release carries). That
      refusal is deliberate — it is what stops a release going out with no notes.
      ─────────────────────────────────────────────────────────────────────────── -->
+
+## Unreleased
+
+### Changed
+- **Dropped "(Compose)" from the app name.** It is now just "Huginn Desktop" in the Start Menu,
+  the uninstall entry, the installer, and the diagnostics header. The qualifier only ever existed
+  to tell this client apart from the Electron one, which is gone — so it had stopped saying
+  anything and just made the name longer.
+  The rename is DISPLAY ONLY: the install directory and the uninstall registry key both key off
+  `APP_ID` (`huginn-desktop-kt`), and the toast AUMID is untouched, so an upgrade cannot land
+  beside the old copy, orphan its uninstall entry, or lose notification identity. The one thing
+  that does move is the Start Menu folder, so the installer now deletes the old one by its literal
+  pre-rename name — otherwise a machine upgrading across this would keep a second, working, never-
+  again-updated shortcut forever.
 
 ## 0.8.7
 
