@@ -146,6 +146,8 @@ function platform() {
 // table. Both are asserted against shared/device-policy-cases.json, so a request
 // cannot come out differently depending on which kind of machine it landed on.
 
+const SESSION_ID_RE = /^[0-9a-fA-F-]{36}$/;
+
 const rank = (s) => POLICY.scopes.indexOf(s);
 
 function parseScope(raw) {
@@ -157,7 +159,19 @@ function parseScope(raw) {
 
 const effectiveScope = (scope, locked) => (locked ? POLICY.lockDropsTo : parseScope(scope));
 
-const allows = (scope, mode) => rank(parseScope(scope)) >= rank(POLICY.modeNeeds[mode] ?? 'work');
+/**
+ * ⚠ AN UNKNOWN MODE IS REFUSED. This FAILED OPEN: `POLICY.modeNeeds` comes from
+ * JSON so it carries Object.prototype, `modeNeeds.constructor` is a function,
+ * `rank()` of it is -1, and `rank(scope) >= -1` is true for every scope — so a
+ * look-only machine returned "no refusal" for a mode nobody had ever defined.
+ * The tools stayed read-only because argvFor compares mode === 'act' literally,
+ * so nothing escalated; but this is the function whose entire job is to say no,
+ * and it said yes. Mapping the unknown to 'work' would be no better.
+ */
+const needFor = (mode) =>
+  (Object.prototype.hasOwnProperty.call(POLICY.modeNeeds, mode) && typeof POLICY.modeNeeds[mode] === 'string')
+    ? POLICY.modeNeeds[mode] : null;
+const allows = (scope, mode) => { const n = needFor(mode); return n !== null && rank(parseScope(scope)) >= rank(n); };
 
 function refusal(scope, locked, mode) {
   if (allows(effectiveScope(scope, locked), mode)) return null;
@@ -171,7 +185,13 @@ function argvFor(work, scope, locked, persona) {
   const argv = POLICY.streamFlags.slice();
   if (work.model) argv.push('--model', work.model);
   if (work.effort) argv.push('--effort', work.effort);
-  if (work.resumeSessionId) argv.push('--resume', work.resumeSessionId);
+  // ⚠ Checked HERE too, not only where it was stored. This machine builds its own
+  // argv — that is the whole security model — so it does not get to assume the
+  // other end validated anything. `--resume` takes an optional value, so a string
+  // starting with `--` is not an id, it is a second flag.
+  if (SESSION_ID_RE.test(String(work.resumeSessionId || ''))) {
+    argv.push('--resume', work.resumeSessionId);
+  }
   if (persona) argv.push('--append-system-prompt', persona);
   const t = POLICY.tools[act ? 'act' : 'look'];
   argv.push('--allowedTools', t.allowed.join(' '));

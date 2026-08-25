@@ -6,6 +6,7 @@ import com.silencelen.huginn.device.DeviceScope
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
+import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
@@ -106,12 +107,51 @@ class DevicePolicyTest {
         assertFalse(bare.contains("--model"))
         assertFalse(bare.contains("--resume"))
 
+        // A REAL session id. This fixture used to be "sess-1", which now fails
+        // validation — the test was right to break, because the shape of a session
+        // id is the thing being enforced.
+        val sid = "4f1c2b8a-9d3e-4a71-8b52-6c0f7e1a2d94"
         val full = DevicePolicy.argvFor(
-            work(mode = "act", model = "opus", resume = "sess-1"),
+            work(mode = "act", model = "opus", resume = sid),
             DeviceScope.WORK, locked = false, root = null,
         )
         assertEquals("opus", full[full.indexOf("--model") + 1])
-        assertEquals("sess-1", full[full.indexOf("--resume") + 1])
+        assertEquals(sid, full[full.indexOf("--resume") + 1])
+    }
+
+    @Test
+    fun aResumeIdThatIsReallyAFlagNeverReachesTheArgv() {
+        // `--resume` takes its value OPTIONALLY, so a string beginning with "--"
+        // does not become the session id — it becomes the NEXT FLAG. The value
+        // originates in an event the far end posted, and this machine builds its
+        // own argv, so it validates rather than assuming somebody else did.
+        val clean = DevicePolicy.argvFor(work(mode = "act"), DeviceScope.OWN, locked = false, root = null)
+        for (hostile in listOf("--dangerously-skip-permissions", "--allowedTools Bash", "-p", "", "  ", "not-a-uuid")) {
+            val argv = DevicePolicy.argvFor(
+                work(mode = "act", resume = hostile),
+                DeviceScope.OWN, locked = false, root = null,
+            )
+            assertFalse(argv.contains("--resume"), "a bogus resume id got through: $hostile")
+            // Not "the value is absent" — `-p` is legitimately the first stream
+            // flag, so that assertion would fail on correct behaviour. The real
+            // property is that a rejected id adds NOTHING: the argv is identical
+            // to the one built with no resume id at all.
+            assertEquals(clean, argv, "a rejected resume id changed the argv: $hostile")
+        }
+    }
+
+    @Test
+    fun aModeNobodyDefinedIsRefusedRatherThanMappedToAScope() {
+        // A Kotlin Map has no prototype, so the JS failure cannot happen here —
+        // but mapping an unknown mode to "work" let anything unrecognised run on
+        // every machine enrolled at work or own.
+        for (mode in listOf("constructor", "toString", "hasOwnProperty", "", "sudo")) {
+            for (scope in DeviceScope.entries) {
+                assertFalse(DevicePolicy.allows(scope, mode), "$scope allowed mode '$mode'")
+                assertNotNull(DevicePolicy.refusal(scope, locked = false, mode = mode),
+                    "$scope did not refuse mode '$mode'")
+            }
+        }
     }
 
     @Test
