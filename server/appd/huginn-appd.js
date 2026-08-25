@@ -52,7 +52,7 @@ const pushLib = require('./lib/pushtokens');
 const { trySender } = require('./lib/fcm');
 const { createPending, stepSoftEnd } = require('./lib/softend');
 
-const VERSION = '2.69.0';
+const VERSION = '2.70.0';
 const PORT = Number(process.env.HUGINN_APPD_PORT || 8787);
 const DATA_DIR = process.env.HUGINN_APPD_DATA || '/var/lib/huginn-appd';
 const UPLOADS_DIR = path.join(DATA_DIR, 'uploads');
@@ -2096,10 +2096,16 @@ function fireRound(round, { manual = false } = {}) {
     // The chat carries the placement; startRunAnywhere reads it and nothing about
     // firing a Round needs to know that devices exist.
     host: round.host || 'local',
+    // A tag minted for THIS run and put only in the prompt. Nothing the run
+    // READS can know it, so a report block arriving inside fetched content
+    // cannot be mistaken for the run's own answer. It lives on the chat rather
+    // than in memory because the parse happens when the run FINISHES, which may
+    // be on the other side of a daemon restart.
+    reportTag: crypto.randomBytes(5).toString('hex'),
   };
   saveMeta(meta);
 
-  const started = startRunAnywhere(meta, roundsLib.promptFor(round));
+  const started = startRunAnywhere(meta, roundsLib.promptFor(round, meta.reportTag));
   if (started && started.error) {
     // startRun checks the pool before it writes anything, so nothing but the meta
     // exists yet and the chat can be withdrawn completely — better than leaving
@@ -2148,7 +2154,7 @@ function finishRoundRun(meta, failure) {
     }
   }
   const text = parts.join('\n\n');
-  const parsed = text ? roundsLib.parseReport(text) : null;
+  const parsed = text ? roundsLib.parseReport(text, meta.reportTag || null) : null;
 
   let report;
   if (parsed) {
@@ -2167,7 +2173,12 @@ function finishRoundRun(meta, failure) {
     // reported as a failure or as "Checking the disks now" depending on timing.
     report = roundsLib.errorReport(lastError);
   } else {
-    report = roundsLib.fallbackReport(text);
+    report = roundsLib.fallbackReport(
+      text,
+      roundsLib.untaggedReport(text, meta.reportTag)
+        ? 'a report block arrived without this run\'s tag'
+        : 'no huginn-report block',
+    );
   }
 
   const at = Math.floor(Date.now() / 1000);
