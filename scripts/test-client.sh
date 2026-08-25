@@ -20,7 +20,7 @@ ok()   { echo "  ok    $*"; }
 bad()  { echo "  FAIL  $*" >&2; FAIL=1; }
 skip() { echo "  SKIP  $*  <-- not a pass" >&2; }
 
-echo "[1/6] syntax"
+echo "[1/7] syntax"
 bash -n client/huginn.sh && ok "huginn.sh parses" || bad "huginn.sh does not parse"
 if command -v pwsh >/dev/null 2>&1; then
   if pwsh -NoProfile -Command '
@@ -32,7 +32,7 @@ else
   skip "huginn.ps1 parse (no pwsh)"
 fi
 
-echo "[2/6] the two version constants agree with each other and the changelog"
+echo "[2/7] the two version constants agree with each other and the changelog"
 SH_V=$(grep -m1 "^HUGINN_VERSION=" client/huginn.sh | sed "s/.*'\(.*\)'.*/\1/")
 PS_V=$(grep -m1 "HUGINN_VERSION = " client/huginn.ps1 | sed "s/.*'\(.*\)'.*/\1/")
 CL_V=$(grep -m1 -oE '^## \[[0-9]+\.[0-9]+\.[0-9]+\]' CHANGELOG.md | tr -d '#[] ')
@@ -53,7 +53,7 @@ done
 # `update` overwrites the file that is then loaded into the shell, so its download
 # host is a trust root. huginn.sh pinned it in 0.6.1; huginn.ps1 kept using
 # $HUGINN_HOST until 0.8.2 — nothing noticed for two minor versions.
-echo "[2b/6] both clients pin the update trust root"
+echo "[2b/7] both clients pin the update trust root"
 for f in client/huginn.sh client/huginn.ps1; do
   grep -q 'HUGINN_UPDATE_HOST' "$f" && ok "$f pins HUGINN_UPDATE_HOST" \
     || bad "$f fetches update code from an unpinned host"
@@ -61,7 +61,7 @@ done
 grep -q 'scp .*\${H}:' client/huginn.ps1 && bad "huginn.ps1 still scps from \$HUGINN_HOST" \
   || ok "huginn.ps1 does not scp from \$HUGINN_HOST"
 
-echo "[3/6] both clients expose the same verbs (parity by verb)"
+echo "[3/7] both clients expose the same verbs (parity by verb)"
 # huginn.sh writes cases as alternations (`list|ls)`, `status|st)`), so match the
 # verb as a case ALTERNATIVE, not as a bare `verb)`.
 for v in end kill solo rename list status rounds devices device desktop usage update version help; do
@@ -77,7 +77,7 @@ for v in end kill solo rename list status rounds devices device desktop usage up
   [ "$a" -gt 0 ] && [ "$b" -gt 0 ] && ok "verb $v" || bad "verb $v missing (sh=$a ps1=$b)"
 done
 
-echo "[4/6] what the PowerShell client actually SENDS"
+echo "[4/7] what the PowerShell client actually SENDS"
 if ! command -v pwsh >/dev/null 2>&1; then
   skip "ps1 behaviour (no pwsh)"
 else
@@ -133,7 +133,7 @@ STUB
     && ok "end rejects a non-conforming name" || bad "end accepted 'bad-name'"
 fi
 
-echo "[5/6] what the POSIX client actually SENDS"
+echo "[5/7] what the POSIX client actually SENDS"
 # huginn.sh is the client the 0.8.0 deny-list bug actually shipped to, and nothing
 # here exercised it — [4/6] drives only huginn.ps1. Same stub-ssh technique; huginn.sh
 # passes a plain argv string rather than a base64 payload, so the stub logs argv.
@@ -167,7 +167,7 @@ grep -q "soft-end" <<<"$SE" && ok "sh: end reaches the soft-end route" || bad "s
 SK=$(semit 'huginn kill testsess')
 grep -q "DELETE" <<<"$SK" && ok "sh: kill prefers the daemon DELETE" || bad "sh: kill did not use DELETE"
 
-echo "[6/6] desktop links come from GitHub, and reach it WITHOUT the host"
+echo "[6/7] desktop links come from GitHub, and reach it WITHOUT the host"
 # The whole point of the verb is that it works on a machine that cannot ssh here
 # (that is why it does not use /v1/desktop-kt, whose every route needs the token).
 # Both halves are asserted: the url is right, AND the stub ssh log stayed empty.
@@ -181,6 +181,19 @@ else
   grep -qE '^https://github\.com/silencelen/huginn/releases/download/desktop-v[0-9.]+/huginn-desktop-kt_.*\.deb$' <<<"$URL" \
     && ok "sh: desktop linux prints one bare release url ($URL)" \
     || bad "sh: desktop linux printed: $URL"
+  # ⚠ AND THAT IT IS THE NEWEST ONE. The check above asserts the SHAPE of the url
+  # and shipped green for months while the client handed out a build four
+  # versions stale: GitHub does not return releases newest-first, and the client
+  # took the first desktop-v* it saw. A well-formed url to a real file is exactly
+  # what that bug looks like. Compared against every desktop tag in the feed, so
+  # this needs no knowledge of what the tree happens to be building.
+  GOT_V=$(grep -oE 'desktop-v[0-9]+\.[0-9]+\.[0-9]+' <<<"$URL" | head -1 | sed 's/desktop-v//')
+  TOP_V=$(curl -sfL --max-time 15 "https://api.github.com/repos/silencelen/huginn/releases?per_page=60" \
+            | grep -o '"tag_name"[[:space:]]*:[[:space:]]*"desktop-v[^"]*"' \
+            | sed 's/.*"desktop-v\([^"]*\)".*/\1/' | sort -t. -k1,1n -k2,2n -k3,3n | tail -1)
+  [ -n "$GOT_V" ] && [ "$GOT_V" = "$TOP_V" ] \
+    && ok "sh: and it is the NEWEST desktop release ($GOT_V)" \
+    || bad "sh: desktop points at $GOT_V but the newest published is $TOP_V"
   [ -z "$SD" ] && ok "sh: desktop reached GitHub without touching the host" \
     || bad "sh: desktop sent something over ssh: $SD"
   if command -v pwsh >/dev/null 2>&1; then
@@ -196,6 +209,73 @@ else
   fi
 fi
 rm -rf "$T2"
+
+echo "[7/7] the headless runner (client/huginn-device)"
+# WHY THIS SECTION EXISTS: the runner had no gate at all, and every defect it
+# shipped had the same shape — it reported success, or the wrong reason, on a
+# machine with NOBODY SITTING AT IT. That is the one place a misleading message
+# costs the most, because there is no human to notice the advice is useless.
+node --check client/huginn-device && ok "huginn-device parses" || bad "huginn-device does not parse"
+
+DEV_V=$(grep -m1 "^const VERSION = " client/huginn-device | sed "s/.*'\(.*\)'.*/\1/")
+[ "$DEV_V" = "$SH_V" ] && ok "huginn-device says $DEV_V, same as the core" \
+  || bad "huginn-device says $DEV_V but the core says $SH_V — they ship as one release"
+
+# HUGINN_DEVICE_DIR relocates BOTH device.json and appd-token. The generated unit
+# pinned HOME with a six-line comment about why a wrong one is fatal, and then
+# dropped this — so the very next line the tool prints installed a service reading
+# ~/.config/huginn: no config, no token. serve() treats that as transient and
+# loops at 15s forever, so the process never exits, Restart=always never fires,
+# and systemd reports the unit perfectly healthy while it does nothing.
+for FLAVOUR in "--system" ""; do
+  U=$(HUGINN_DEVICE_DIR=/etc/huginn node client/huginn-device unit $FLAVOUR 2>/dev/null)
+  grep -q "^Environment=HUGINN_DEVICE_DIR=/etc/huginn$" <<<"$U" \
+    && ok "unit ${FLAVOUR:-（user）} carries HUGINN_DEVICE_DIR" \
+    || bad "unit ${FLAVOUR:-（user）} drops HUGINN_DEVICE_DIR — the service reads a different config"
+  grep -q "^Environment=HOME=" <<<"$U" \
+    && ok "unit ${FLAVOUR:-（user）} carries HOME" || bad "unit ${FLAVOUR:-（user）} drops HOME"
+done
+
+# `--scope=own --root=/srv/build` enrolled at the DEFAULT scope with no root and
+# printed `Enrolled flagbox as "work"`. The word root never appeared in the
+# output, so nothing said the build directory had been dropped.
+TD=$(mktemp -d)
+HUGINN_DEVICE_DIR="$TD" node client/huginn-device on --scpoe=own >/dev/null 2>&1
+[ $? -eq 2 ] && ok "an unknown flag is refused, not ignored" || bad "an unknown flag was swallowed"
+HUGINN_DEVICE_DIR="$TD" node client/huginn-device on --scope >/dev/null 2>&1
+[ $? -eq 2 ] && ok "a flag with no value is refused" || bad "a valueless flag was swallowed"
+
+# The token reason. EACCES, EISDIR, a dangling symlink, an absent file and a file
+# holding one captured newline all produced the same "put one in <path>" — advice
+# that is wrong in four of those five cases, repeated every 15 seconds forever.
+reason () { HUGINN_APPD_TOKEN= HUGINN_DEVICE_DIR="$TD" node client/huginn-device status 2>&1 \
+              | grep -m1 "^    token"; }
+rm -f "$TD/appd-token"
+grep -q "no token file at" <<<"$(reason)" && ok "an absent token says so" || bad "absent token: $(reason)"
+printf '\n' > "$TD/appd-token"
+grep -q "whitespace" <<<"$(reason)" \
+  && ok "a token file holding one newline says SO, not MISSING" \
+  || bad "newline-only token: $(reason)"
+: > "$TD/appd-token"
+grep -q "is empty" <<<"$(reason)" && ok "an empty token file says so" || bad "empty token: $(reason)"
+printf 'realtoken\n' > "$TD/appd-token"
+grep -qv "MISSING" <<<"$(reason)" && ok "a good token is not reported missing" || bad "good token: $(reason)"
+
+# `off` printed "Removed from huginn." and exited 0 when the DELETE failed, having
+# already thrown away conf.id — the only handle that could ever remove the row.
+# So exactly when a machine is decommissioned (host asleep, VPN down, wrong url)
+# the row was orphaned on the host and unremovable from the machine, and a restart
+# enrolled a second one.
+printf '{"id":"11111111-1111-1111-1111-111111111111","url":"http://127.0.0.1:1","scope":"work"}\n' > "$TD/device.json"
+OFF=$(HUGINN_DEVICE_DIR="$TD" node client/huginn-device off 2>&1); OFF_RC=$?
+[ "$OFF_RC" -ne 0 ] && ok "off fails loudly when huginn is unreachable" \
+  || bad "off exited 0 with the host unreachable"
+grep -q "Removed from huginn" <<<"$OFF" && bad "off claimed success while failing" \
+  || ok "off does not claim to have removed anything"
+grep -q '11111111-1111-1111-1111-111111111111' "$TD/device.json" \
+  && ok "off keeps the id, so it can be run again" \
+  || bad "off destroyed the only handle that can remove the row"
+rm -rf "$TD"
 
 echo
 [ "$FAIL" = 0 ] && echo "client gates: PASS" || { echo "client gates: FAIL" >&2; exit 1; }

@@ -31,7 +31,7 @@ const https = require('https');
 const readline = require('readline');
 const { spawn } = require('child_process');
 
-const VERSION = '0.10.1';
+const VERSION = '0.10.2';
 
 // ---8<--- GENERATED POLICY — scripts/gen-device-policy.js — DO NOT EDIT ---8<---
 const POLICY = {
@@ -121,15 +121,78 @@ function loadConf() {
   return c;
 }
 
+/**
+ * `--flag value` AND `--flag=value`, with anything unrecognised refused.
+ *
+ * Refusing rather than ignoring is the whole point: a typo in a flag that
+ * silently does nothing produces a machine enrolled at the wrong scope, in the
+ * wrong directory, reported as a success.
+ */
+function parseFlags(args, allowed) {
+  const flags = {};
+  for (let i = 0; i < args.length; i += 1) {
+    const a = args[i];
+    if (!a.startsWith('--')) return { error: `unexpected argument "${a}"` };
+    const eq = a.indexOf('=');
+    const name = (eq === -1 ? a.slice(2) : a.slice(2, eq));
+    if (!allowed.includes(name)) {
+      return { error: `unknown flag "--${name}" (try: ${allowed.map((x) => `--${x}`).join(' ')})` };
+    }
+    if (eq !== -1) { flags[name] = a.slice(eq + 1); continue; }
+    const v = args[i + 1];
+    if (v === undefined || v.startsWith('--')) return { error: `--${name} needs a value` };
+    flags[name] = v; i += 1;
+  }
+  return { flags };
+}
+
 function saveConf(c) {
   fs.mkdirSync(CONF_DIR, { recursive: true, mode: 0o700 });
   fs.writeFileSync(CONF_FILE, JSON.stringify(c, null, 2) + '\n', { mode: 0o600 });
 }
 
 function token() {
-  const t = (process.env.HUGINN_APPD_TOKEN || '').trim();
-  if (t) return t;
-  try { return fs.readFileSync(TOKEN_FILE, 'utf8').trim(); } catch { return ''; }
+  return tokenOrWhy().token;
+}
+
+/**
+ * The token, or WHY there isn't one.
+ *
+ * ⚠ This used to be `try { read } catch { return '' }`, so a file that was
+ * missing, unreadable, a directory, a dangling symlink, or present but empty all
+ * produced the same empty string and the same advice: "put one in <path>" —
+ * pointing at a file that was, in three of those five cases, sitting right there.
+ * Under `serve()` that repeats every 15 seconds forever with the wrong
+ * instruction, on a machine with nobody at it to notice the advice is useless.
+ *
+ * A one-byte newline is the nastiest of them: `client/huginn.sh` guards the
+ * fetched token with `[ -s ]`, which a newline passes, so a botched
+ * `ssh huginn 'cat /etc/huginn-appd/token'` installs cleanly and then the runner
+ * insists there is no token at all.
+ */
+function tokenOrWhy() {
+  const env = (process.env.HUGINN_APPD_TOKEN || '').trim();
+  if (env) return { token: env, why: null };
+  let raw;
+  try {
+    raw = fs.readFileSync(TOKEN_FILE, 'utf8');
+  } catch (e) {
+    if (e.code === 'ENOENT') return { token: '', why: `no token file at ${TOKEN_FILE}` };
+    if (e.code === 'EACCES') return { token: '', why: `cannot read ${TOKEN_FILE} (permissions)` };
+    if (e.code === 'EISDIR') return { token: '', why: `${TOKEN_FILE} is a directory, not a file` };
+    return { token: '', why: `cannot read ${TOKEN_FILE}: ${e.message}` };
+  }
+  const t = raw.trim();
+  if (!t) {
+    return {
+      token: '',
+      why: raw.length
+        ? `${TOKEN_FILE} holds only whitespace (${raw.length} byte${raw.length === 1 ? '' : 's'}) — `
+          + 'a capture that caught a newline and nothing else'
+        : `${TOKEN_FILE} is empty`,
+    };
+  }
+  return { token: t, why: null };
 }
 
 function platform() {
@@ -203,6 +266,10 @@ function argvFor(work, scope, locked, persona) {
 // a run starts in, not a kernel boundary — a granted Bash can leave any directory
 // and no flag Claude Code takes will stop it. The fences that are real are the
 // scope gate above and, on a machine with a screen, the lock rule.
+function isDir(p) {
+  try { return fs.statSync(p).isDirectory(); } catch { return false; }
+}
+
 function cwdFor(scope, locked, root) {
   const home = os.homedir() || process.cwd();
   const r = (root || '').trim();
@@ -231,7 +298,13 @@ function api(method, p, body, { timeoutMs = 20000 } = {}) {
   const mod = u.protocol === 'https:' ? https : http;
   const payload = body === undefined ? null : Buffer.from(JSON.stringify(body));
   const tok = token();
-  if (!tok) return Promise.reject(new Error(`no appd token — put one in ${TOKEN_FILE}`));
+  if (!tok) {
+    // The REASON, not one guess dressed as a fact. Under serve() this repeats
+    // every 15 seconds forever on a machine with nobody at it, so the difference
+    // between "there is no file" and "the file is there and holds a newline" is
+    // the difference between a fix and an afternoon.
+    return Promise.reject(new Error(`no appd token — ${tokenOrWhy().why || 'reason unknown'}`));
+  }
 
   return new Promise((resolve, reject) => {
     const req = mod.request(u, {
@@ -307,6 +380,16 @@ function runWork(id, work, conf) {
     const cwd = cwdFor(scope, lock, conf.root);
     log(`running ${work.id} (${work.mode}) in ${cwd}`);
 
+    // ⚠ CHECKED BEFORE THE SPAWN, because spawn() raises ENOENT for a missing
+    // EXECUTABLE and for a missing CWD, and the error handler below could only
+    // guess. It guessed "claude is not on this machine's PATH" — so a deleted
+    // work root made every job on the device fail forever with the one piece of
+    // advice the operator had already followed.
+    if (!isDir(cwd)) {
+      finish(`${conf.name} cannot start work: ${cwd} is not a directory`);
+      return;
+    }
+
     let child;
     try {
       child = spawn(conf.claude || 'claude', argv, { cwd, stdio: ['pipe', 'pipe', 'pipe'] });
@@ -343,10 +426,12 @@ function runWork(id, work, conf) {
 
     child.on('error', (e) => finish(
       e.code === 'ENOENT'
-        // By a wide margin the most likely first-run failure, and worth saying
-        // precisely: this text lands in the chat, and "claude is not on this
-        // machine's PATH" is actionable where "spawn failed" is not.
-        ? `claude is not on ${conf.name}'s PATH (set "claude" in ${CONF_FILE} to its full path)`
+        // The cwd was checked above, so ENOENT here really is the executable.
+        //
+        // ⚠ No config PATH in this string. It lands in a chat that syncs to a
+        // phone, and the private layout of a machine is not something to publish
+        // there to say a sentence that is just as actionable without it.
+        ? `claude was not found on ${conf.name} (set "claude" to its full path in this machine's huginn config)`
         : `could not start claude on ${conf.name}: ${e.message}`));
 
     child.on('close', (code) => finish(
@@ -444,7 +529,12 @@ async function status() {
   console.log(`    huginn      ${conf.url}`);
   console.log(`    claude      ${conf.claude}`);
   console.log(`    config      ${CONF_FILE}`);
-  console.log(`    token       ${token() ? TOKEN_FILE : 'MISSING — see `huginn device on`'}`);
+  // ⚠ THE REASON HERE TOO. `status` is precisely where somebody looks when the
+  // runner will not start, and printing MISSING for a file that is sitting right
+  // there — unreadable, or holding a captured newline — sends them to re-create
+  // something they already have.
+  const tk = tokenOrWhy();
+  console.log(`    token       ${tk.token ? TOKEN_FILE : `MISSING — ${tk.why}`}`);
   if (!conf.id) {
     console.log('');
     // Its OWN name, not `huginn device on`. The CLI wrapper is a convenience a
@@ -483,14 +573,33 @@ async function main() {
   switch (cmd) {
     case 'enrol': case 'enroll': case 'on': {
       // Flags, so `huginn device on --scope own --root /srv` is one command.
-      const args = process.argv.slice(3);
-      for (let i = 0; i < args.length; i += 1) {
-        const v = args[i + 1];
-        if (args[i] === '--scope' && v) { conf.scope = parseScope(v); i += 1; }
-        else if (args[i] === '--root' && v) { conf.root = v; i += 1; }
-        else if (args[i] === '--url' && v) { conf.url = v; i += 1; }
-        else if (args[i] === '--name' && v) { conf.name = v.slice(0, 40); i += 1; }
-        else if (args[i] === '--claude' && v) { conf.claude = v; i += 1; }
+      //
+      // ⚠ BOTH FORMS, AND NOTHING SILENTLY IGNORED. This matched only the
+      // space-separated form by exact string equality, and the if/else chain had
+      // no else — so `--scope=own --root=/srv/build` enrolled at the DEFAULT
+      // scope with no root and printed `Enrolled flagbox as "work"`. The word
+      // root never appeared in the output, so nothing told anyone their build
+      // directory had been dropped and every job would land in $HOME. The help,
+      // the shell wrapper and the completion all advertise these flags; the
+      // equals form is the one people type.
+      const parsed = parseFlags(process.argv.slice(3), ['scope', 'root', 'url', 'name', 'claude']);
+      if (parsed.error) { console.error(`huginn-device on: ${parsed.error}`); process.exit(2); }
+      const f = parsed.flags;
+      if (f.scope !== undefined) conf.scope = parseScope(f.scope);
+      if (f.root !== undefined) conf.root = f.root;
+      if (f.url !== undefined) conf.url = f.url;
+      if (f.name !== undefined) conf.name = f.name.slice(0, 40);
+      if (f.claude !== undefined) conf.claude = f.claude;
+      // ⚠ SAID OUT LOUD, because the two ends disagreed silently. `root` is the
+      // cwd a run STARTS in and the policy matrix only honours it for `work`; an
+      // `own` device starts in $HOME. It was accepted, stored and advertised to
+      // the host anyway, so `huginn devices` named a directory that ran nothing.
+      if (f.root !== undefined && parseScope(conf.scope) !== 'work') {
+        console.log('');
+        console.log(`  Note: --root is only used at "work" scope. This machine is enrolling as`);
+        console.log(`  "${parseScope(conf.scope)}", so work will start in the account's home directory`);
+        console.log(`  instead of ${f.root}. The root is kept in the config in case you narrow the`);
+        console.log('  scope later.');
       }
       saveConf(conf);
       const id = await enrol(loadConf());
@@ -513,7 +622,25 @@ async function main() {
     }
     case 'off': {
       if (!conf.id) { console.log('Not enrolled.'); break; }
-      await api('DELETE', `/v1/devices/${conf.id}`).catch((e) => console.error(e.message));
+      // ⚠ THE ID IS THE ONLY HANDLE THAT CAN REMOVE THIS ROW, so it is not thrown
+      // away until the host confirms the row is gone. The DELETE used to be
+      // `.catch(e => console.error(e.message))` — logged, then ignored — and the
+      // id was deleted and "Removed from huginn." printed at exit 0 regardless.
+      // So exactly when someone decommissions a machine (host asleep, VPN down,
+      // wrong url) the device stayed enrolled, the handle was destroyed, a
+      // restart enrolled a SECOND row for the same box, and the stale one went on
+      // being offered work for thirty days.
+      try {
+        await api('DELETE', `/v1/devices/${conf.id}`);
+      } catch (e) {
+        console.error(`Could NOT remove this machine from huginn: ${e.message}`);
+        console.error('');
+        console.error(`  Still enrolled as ${conf.id}. Nothing has been changed here, so this`);
+        console.error('  is safe to run again once huginn is reachable. Stop the runner');
+        console.error('  meanwhile, or it keeps answering for work:');
+        console.error('    systemctl disable --now huginn-device');
+        process.exit(1);
+      }
       delete conf.id;
       saveConf(conf);
       // Said plainly, because "removed" would be a lie: nothing here reaches onto
@@ -534,6 +661,14 @@ async function main() {
       // anyone changes User= — and this program finds BOTH its config and claude's
       // credentials under it, so a wrong HOME is a runner that enrols and then
       // cannot log in, which reads as a broken login rather than a wrong unit.
+      //
+      // ⚠ And HUGINN_DEVICE_DIR with it, pinned to the directory THIS invocation
+      // actually used. It relocates both device.json and appd-token, so
+      // `HUGINN_DEVICE_DIR=/etc/huginn huginn-device on` followed by the very
+      // next line this tool prints produced a service reading ~/.config/huginn:
+      // no config, no token. serve() treats that as transient and loops at 15s
+      // forever, so the process never exits, Restart=always never fires, and
+      // systemd reports the unit perfectly healthy while it does nothing at all.
       console.log(system
         ? `# /etc/systemd/system/huginn-device.service
 # A whole machine offering itself, not one person's session: no lingering to
@@ -546,6 +681,7 @@ After=network-online.target
 ExecStart=${process.execPath} ${self} serve
 User=${who.username}
 Environment=HOME=${who.homedir}
+Environment=HUGINN_DEVICE_DIR=${CONF_DIR}
 Restart=always
 RestartSec=10
 
@@ -561,6 +697,7 @@ After=network-online.target
 [Service]
 ExecStart=${process.execPath} ${self} serve
 Environment=HOME=${who.homedir}
+Environment=HUGINN_DEVICE_DIR=${CONF_DIR}
 Restart=always
 RestartSec=10
 
