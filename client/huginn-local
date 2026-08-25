@@ -2,7 +2,7 @@
 'use strict';
 // huginn-local — activation and lifecycle of the local-AI tier on THIS machine.
 //
-// Version: 0.12.1
+// Version: 0.12.2
 //
 // `huginn local on` follows the device-enrolment grammar exactly: consent →
 // fetch pinned → validate → install → enrol. This file is the manager the shell
@@ -36,7 +36,7 @@ const https = require('node:https');
 const crypto = require('node:crypto');
 const { spawnSync, spawn } = require('node:child_process');
 
-const VERSION = '0.12.1';
+const VERSION = '0.12.2';
 
 // ---8<--- BEGIN GENERATED MANIFEST — scripts/gen-local-manifest.js — DO NOT EDIT ---8<---
 const MANIFEST = {
@@ -424,6 +424,8 @@ function swapYamlFor(conf, models, manifest = MANIFEST) {
   ];
   for (const m of models) {
     const gpuArgs = m.gpu ? ' -ngl 99 --flash-attn on' : ' -ngl 0';
+    // Chat models answer, they do not think out loud: verified live on b10628.
+    const reason = m.role === 'chat' ? ' --reasoning off' : '';
     const env = (m.gpu && conf.gpuUuid) ? `\n    env:\n      - "CUDA_VISIBLE_DEVICES=${conf.gpuUuid}"` : '';
     const embed = m.role === 'embed' ? ' --embedding' : '';
     lines.push(
@@ -434,7 +436,7 @@ function swapYamlFor(conf, models, manifest = MANIFEST) {
       `      --host 127.0.0.1 --port \${PORT}`,
       `      --api-key-file ${P('api-key')}`,
       `      -m ${P('models', m.file)}`,
-      `      -c ${m.ctx}${gpuArgs}${embed}${env}`,
+      `      -c ${m.ctx}${gpuArgs}${reason}${embed}${env}`,
       `    ttl: ${m.role === 'embed' ? 300 : 900}`,
     );
   }

@@ -10,6 +10,14 @@ Format loosely follows [Keep a Changelog](https://keepachangelog.com/); versions
 
 ## [Unreleased]
 
+## [0.12.2] - 2026-08-25
+
+### Changed
+- Chat models are served with reasoning OFF (verified live on the pinned
+  build): a quick local chat answers, it does not think out loud. Existing
+  installs pick this up on their next update or activation.
+- The installers now mention the optional local tier in one closing line.
+
 ## [0.12.1] - 2026-08-25
 
 ### Fixed

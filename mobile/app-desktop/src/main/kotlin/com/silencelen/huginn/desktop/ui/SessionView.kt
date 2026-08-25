@@ -425,7 +425,9 @@ private fun SessionHeader(
         // which is exactly what the key bar sends.
         ControlAction(mode?.replaceFirstChar { it.uppercase() } ?: "Mode", onClick = onCycleMode)
         ControlPicker(ModelLabels.effort(effort), ModelLabels.effortOptions()) { onCommand("/effort $it") }
-        ControlPicker(ModelLabels.model(model), ModelLabels.options(models)) { onCommand("/model $it") }
+        // SESSION site: Claude rows only — this control types /model into a live
+        // pane, where a local row could never work.
+        ControlPicker(ModelLabels.model(model), ModelLabels.options(models, ModelLabels.PickerSite.SESSION)) { onCommand("/model $it") }
     }
 }
 

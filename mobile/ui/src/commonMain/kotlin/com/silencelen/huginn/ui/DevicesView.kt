@@ -123,20 +123,33 @@ private fun DeviceRow(device: Device, onStart: (String) -> Unit, onForget: () ->
                 horizontalArrangement = Arrangement.End,
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                // Enabled from what the machine will do RIGHT NOW, not from what it
-                // is enrolled at: a locked machine offering an Act button that always
-                // fails is worse than no button at all.
-                TextButton(
-                    onClick = { onStart("ask") },
-                    enabled = device.online && !device.running &&
-                        DevicePolicy.allows(DevicePolicy.parse(device.effectiveScope), "ask"),
-                ) { Text("Ask here") }
-                TextButton(
-                    onClick = { onStart("act") },
-                    enabled = device.online && !device.running &&
-                        DevicePolicy.allows(DevicePolicy.parse(device.effectiveScope), "act"),
-                ) { Text("Act here") }
+                // A serving row cannot start a claude run, so Ask/Act here are
+                // ABSENT for it (a button that always fails is worse than none);
+                // the line below answers "so how do I use it" instead. Forget
+                // stays: it is still the only takeaway.
+                if (device.scope != "generate") {
+                    // Enabled from what the machine will do RIGHT NOW, not from what it
+                    // is enrolled at: a locked machine offering an Act button that always
+                    // fails is worse than no button at all.
+                    TextButton(
+                        onClick = { onStart("ask") },
+                        enabled = device.online && !device.running &&
+                            DevicePolicy.allows(DevicePolicy.parse(device.effectiveScope), "ask"),
+                    ) { Text("Ask here") }
+                    TextButton(
+                        onClick = { onStart("act") },
+                        enabled = device.online && !device.running &&
+                            DevicePolicy.allows(DevicePolicy.parse(device.effectiveScope), "act"),
+                    ) { Text("Act here") }
+                }
                 TextButton(onClick = onForget) { Text("Forget") }
+            }
+            if (device.scope == "generate") {
+                Text(
+                    "Chat with it by picking its model in any chat's model menu.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
             }
         }
     }
@@ -150,6 +163,19 @@ private fun DeviceRow(device: Device, onStart: (String) -> Unit, onForget: () ->
  * second makes a locked machine look misconfigured by somebody.
  */
 fun describeDevice(device: Device): String {
+    // A serving row says what it IS: the lock never changes what it will do
+    // (generate is exclusive and ignores the lock drop), so no locked clause.
+    if (device.scope == "generate") {
+        val parts = mutableListOf(device.platform, "serves local models")
+        if (device.models.isNotEmpty()) parts += device.models.joinToString(", ") { it.display.ifBlank { it.slug } }
+        parts += when {
+            !device.online -> "not reachable"
+            device.running -> "generating"
+            else -> "serving"
+        }
+        device.version?.takeIf { it.isNotBlank() }?.let { parts += "v$it" }
+        return parts.joinToString(" · ")
+    }
     val parts = mutableListOf<String>()
     parts += device.platform
     parts += if (device.scope == device.effectiveScope) {
