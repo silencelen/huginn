@@ -9,6 +9,17 @@ appeared only as a side-note on the app releases it happened to ship with. Three
 undocumented, and the notes-cutting matcher could fuse two sections when an app and an appd
 version number collided. Entries below are reconstructed from the shipping commits.
 
+## 2.73.0 — 2026-08-25
+
+### Changed
+- **An unknown model or effort id is refused loudly.** `POST`/`PATCH` on
+  `/v1/chats` and `/v1/rounds` used to treat any unrecognised model id as
+  "use the host default" — a typo or a foreign id silently changed which model
+  answered, and nothing said so. Absent, null or empty still means the default;
+  an unknown non-empty id is now a 400 naming the id and pointing at
+  `/v1/models`. Effort gets the identical matrix. A refused PATCH no longer
+  half-applies the rest of the body.
+
 ## 2.72.0 — 2026-08-25
 
 ### Fixed — a broken transcript no longer kills the daemon
