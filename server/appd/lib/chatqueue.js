@@ -52,6 +52,22 @@ function clearPending(meta) {
 }
 
 /**
+ * The same, but hands back WHAT was dropped rather than only how many.
+ *
+ * ⚠ Because a count is not enough to be honest with the sender. A message
+ * accepted with 202 `{queued:true}` and then destroyed leaves nothing anywhere —
+ * not in the transcript, not in a reply — and the retry gets a 409 off a sealed
+ * run, so it is simply gone. The route that queues it already says why that is
+ * unacceptable ("worse than being told to wait"); the drop sites need the text
+ * to be able to say it.
+ */
+function drainPending(meta) {
+  const had = list(meta);
+  meta.pending = [];
+  return had;
+}
+
+/**
  * Pending messages as transcript events, so the conversation shows them where
  * they will land rather than swallowing them until delivery. They exist only
  * until they are delivered — at which point they appear in the real transcript
@@ -68,4 +84,4 @@ function queuedEvents(meta, baseSeq = 0) {
   }));
 }
 
-module.exports = { pushPending, takePending, clearPending, queuedEvents, MAX_PENDING, MAX_TEXT };
+module.exports = { pushPending, takePending, clearPending, drainPending, queuedEvents, MAX_PENDING, MAX_TEXT };

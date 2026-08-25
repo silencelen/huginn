@@ -62,6 +62,15 @@ for x in devs:
         state = "not reachable  (last seen %s)" % ago(x.get("lastSeen"))
     elif x.get("queued"):
         state = "%d queued" % x["queued"]
+    elif x.get("awaitingPoll"):
+        # ⚠ Reachable is not the same as FREE, and the daemon used to answer the
+        # second question with the first. remoteRuns is in-memory, so restarting
+        # appd wipes it -- while the far machine is still running its claude and
+        # is single-job: it will not ask for work again until that child exits,
+        # which for a real run is minutes to hours. The row said "idle", the next
+        # job was accepted with a 202, and it sat undelivered until it was
+        # declared "no word for 5 minutes".
+        state = "free? unknown - has not asked for work since huginn restarted"
     else:
         state = "idle"
 
