@@ -87,7 +87,18 @@ const assistant = (text) => ({ type: 'assistant', message: { content: [{ type: '
  */
 const FENCE = String.fromCharCode(96, 96, 96);
 const NL = String.fromCharCode(10);
-const REPORT = (json) => FENCE + 'huginn-report' + NL + json + NL + FENCE;
+const REPORT = (json, tag = null) =>
+  FENCE + 'huginn-report' + (tag ? ' ' + tag : '') + NL + json + NL + FENCE;
+
+/**
+ * The tag the daemon minted for this run, read out of the prompt it handed over.
+ *
+ * A device is the clearest case for why the tag exists: the machine holding the
+ * file system is the one reading logs and pages, so a report block planted in
+ * what it read arrives over the same wire as its answer. The tag rides in the
+ * work item's prompt, which is the only place it appears.
+ */
+const tagOf = (prompt) => (String(prompt || '').match(/THIS RUN'S TAG: ([A-Za-z0-9_-]{1,64})/) || [])[1] || null;
 
 before(async () => {
   tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'appd-dev-'));
@@ -419,7 +430,7 @@ test("a Round's manual run lands on its device, not on this host", async () => {
 
   // Report back as the device would, and the Round records it like any other.
   await postEvents(d.id, work.id, [
-    assistant(REPORT('{"status":"ok","headline":"disk is fine"}')),
+    assistant(REPORT('{"status":"ok","headline":"disk is fine"}', tagOf(work.prompt))),
     { type: 'result', is_error: false },
   ], { done: true, exitCode: 0 });
 

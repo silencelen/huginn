@@ -33,11 +33,16 @@ let inp=''; process.stdin.on('data',c=>inp+=c);
 process.stdin.on('end',()=>{
   const say=(t)=>console.log(JSON.stringify({type:'assistant',message:{content:[{type:'text',text:t}]}}));
   console.log(JSON.stringify({type:'system',subtype:'init',session_id:'stub-'+process.pid}));
-  const block=F+'huginn-report'+NL+JSON.stringify({status:'action',headline:'disk nearly full',
+  // The tag the daemon minted for this run, echoed exactly as a real run must:
+  // a block without it is treated as something the run READ, not something it
+  // wrote, which is what stops a report planted in a log from being believed.
+  const TAG=(inp.match(/THIS RUN.S TAG: ([A-Za-z0-9_-]{1,64})/)||[])[1]||'';
+  const FENCE=F+'huginn-report'+(TAG?' '+TAG:'');
+  const block=FENCE+NL+JSON.stringify({status:'action',headline:'disk nearly full',
     items:[{title:'root fs 99%',detail:'d',suggest:'s'}]})+NL+F;
   if (inp.includes('REPORT_THEN_CHATTER')) { say('Here is what I found.'+NL+NL+block); say('Confirmed.'); }
   else if (inp.includes('SLOW')) { say('working'); const t=Date.now(); while(Date.now()-t<4000){} say('done'); }
-  else say('all fine'+NL+NL+F+'huginn-report'+NL+JSON.stringify({status:'ok',headline:'clean',items:[]})+NL+F);
+  else say('all fine'+NL+NL+FENCE+NL+JSON.stringify({status:'ok',headline:'clean',items:[]})+NL+F);
   console.log(JSON.stringify({type:'result',is_error:false,duration_ms:5,num_turns:1}));
 });
 `;
@@ -167,7 +172,11 @@ test('a delivered report beats a cancel that could not stop the far machine', as
   // genuinely marked cancelled — the state in which the far machine goes on to
   // finish cleanly and deliver a real report.
   await api(`/v1/chats/${chatId}/cancel`, { method: 'POST' });
-  const block = '```huginn-report\n' + JSON.stringify({ status: 'ok', headline: '7 of 7 backups verified', items: [] }) + '\n```';
+  // Tagged from the work item the device was handed — the only place the tag
+  // appears, and the reason a block arriving from a device can be trusted as its
+  // answer rather than as something it read while working.
+  const tag = (String(w.prompt || '').match(/THIS RUN'S TAG: ([A-Za-z0-9_-]{1,64})/) || [])[1] || '';
+  const block = '```huginn-report ' + tag + '\n' + JSON.stringify({ status: 'ok', headline: '7 of 7 backups verified', items: [] }) + '\n```';
   await api(`/v1/devices/${d.id}/work/${w.id}/events`, { method: 'POST',
     body: JSON.stringify({ lines: [INIT('s'), ASSISTANT(block)] }) });
   await api(`/v1/devices/${d.id}/work/${w.id}/events`, { method: 'POST',
