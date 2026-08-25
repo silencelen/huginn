@@ -1,5 +1,17 @@
 # Huginn changelog
 
+## 2.72.0 — 2026-08-25
+
+### Fixed
+- **A question no longer covers the terminal or the controls.** 0.8.7 stopped the prompt card
+  resizing the real terminal by floating it over the pane — which traded one problem for another:
+  on the Screen tab it sat on top of the output and the controls underneath it.
+  The card is back below the pane where it blocks nothing, and the viewport genuinely shrinks to
+  make room. What makes that safe is the distinction the last two releases kept missing: **a
+  prompt may take LAYOUT space, it may not change the REPORTED geometry.** The geometry report is
+  now held while a question is up, so tmux never hears about the shrink — the terminal keeps its
+  own shape and scrolls inside the shorter window instead of re-wrapping.
+
 ## 2.71.0 — 2026-08-24
 
 ### Fixed

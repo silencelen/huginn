@@ -131,27 +131,21 @@ fun TerminalScreen(
                     }
                 }
         ) {
+            // ⚠⚠ A PROMPT MAY TAKE LAYOUT SPACE. IT MAY NOT CHANGE THE REPORTED
+            // GEOMETRY. Those are two different things and conflating them cost two
+            // releases. This box measures itself into TMUX ROWS and reports them —
+            // a real resize of the owner's terminal, seen by every attached client.
+            // As a plain sibling the prompt card resized it twice per question and
+            // the pane re-wrapped while the reader was reading the question. As an
+            // OVERLAY it stopped resizing anything and covered the terminal and the
+            // controls instead. So: the card sits below and the viewport genuinely
+            // shrinks, but the report is HELD while it is up. The pane keeps its
+            // tmux size and scrolls inside the smaller viewport, which is what the
+            // scroll state below is for.
             val cols = with(density) { (maxWidth.toPx() / painter.cellWidth).toInt() }.coerceIn(20, 300)
             val rows = with(density) { (maxHeight.toPx() / painter.cellHeight).toInt() }.coerceIn(10, 200)
-            LaunchedEffect(cols, rows) { onGeometry(cols, rows) }
-
-        // ⚠⚠ THE PROMPT CARD IS AN OVERLAY, NOT A SIBLING, AND MUST STAY ONE.
-        // The box it floats over takes weight(1f) and MEASURES ITSELF INTO TMUX
-        // ROWS. As a sibling this card cost ~16 rows the moment Claude asked a
-        // question and gave them back when it was answered — a real resize of the
-        // owner's terminal, twice per question, seen by every attached client. The
-        // pane re-wrapped under the reader exactly while they were trying to read
-        // the thing being asked. Overlaying costs nothing and keeps the promise
-        // that a question is always answerable from here.
-            //
-            // A detected choice prompt becomes buttons. This is the single biggest
-            // phone win over a terminal: answering "1/2/3" without hunting for
-            // digits on a soft keyboard while the TUI redraws under your thumb.
-            screen?.prompt?.let { prompt ->
-                Box(Modifier.align(Alignment.BottomCenter).padding(8.dp)) {
-                    PromptCard(prompt, onAnswerPrompt, onAnswerMulti)
-                }
-            }
+            val promptUp = screen?.prompt != null
+            LaunchedEffect(cols, rows, promptUp) { if (!promptUp) onGeometry(cols, rows) }
 
             if (screen == null) {
                 Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
@@ -211,6 +205,18 @@ fun TerminalScreen(
                     )
                 }
             }
+        }
+
+        // Below the pane, not over it: a card floating on top hid the terminal and
+        // the controls under it. It costs viewport height, and that is fine —
+        // the geometry report is held while it is up, so the terminal itself never
+        // changes shape.
+        //
+        // A detected choice prompt becomes buttons. This is the single biggest
+        // phone win over a terminal: answering "1/2/3" without hunting for digits
+        // on a soft keyboard while the TUI redraws under your thumb.
+        screen?.prompt?.let { prompt ->
+            PromptCard(prompt, onAnswerPrompt, onAnswerMulti)
         }
 
         KeyRow(onSendKeys, liveTyping, onToggleLive = { liveTyping = !liveTyping })
