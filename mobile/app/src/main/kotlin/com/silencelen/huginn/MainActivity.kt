@@ -861,7 +861,10 @@ fun HuginnApp(
                 },
                 onRunRound = { r -> vm.runRound(r.id) },
                 onSetRoundEnabled = { r, on -> vm.setRoundEnabled(r.id, on) },
-                onEditRound = { r -> dest = Dest.RoundEdit(r.id) },
+                // Refreshed here too, not only for a NEW round: without it a cold
+                // launch opened the editor with an empty device list, which hid
+                // where-it-runs for every Round that has a machine.
+                onEditRound = { r -> vm.refreshDevices(); dest = Dest.RoundEdit(r.id) },
                 onNewRound = { vm.refreshDevices(); dest = Dest.RoundEdit(null) },
                 onOpenSettings = { dest = Dest.Settings },
                 onStartPolling = { vm.startRoundsPolling() },

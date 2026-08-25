@@ -114,7 +114,12 @@ fun RoundDraft.toSchedule(deviceTz: String? = null): RoundSchedule {
     // written, never an override for one being edited — see [RoundDraft.tz].
     val zone = tz?.takeIf { it.isNotBlank() } ?: deviceTz
     return when (kind) {
-        "interval" -> RoundSchedule(kind = "interval", everyMinutes = everyMinutes.trim().toIntOrNull())
+        // The zone rides along even here. An interval does not USE it, but
+        // dropping it destroyed it: the editor seeds from schedule.tz, so a Round
+        // toggled to Interval and back came out in the editing device's zone.
+        "interval" -> RoundSchedule(
+            kind = "interval", tz = zone, everyMinutes = everyMinutes.trim().toIntOrNull(),
+        )
         "weekly" -> RoundSchedule(kind = "weekly", at = at.trim(), tz = zone, days = days.sorted())
         "monthly" -> RoundSchedule(kind = "monthly", at = at.trim(), tz = zone, dates = dates.sorted())
         else -> RoundSchedule(kind = "daily", at = at.trim(), tz = zone)

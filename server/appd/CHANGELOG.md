@@ -9,6 +9,39 @@ appeared only as a side-note on the app releases it happened to ship with. Three
 undocumented, and the notes-cutting matcher could fuse two sections when an app and an appd
 version number collided. Entries below are reconstructed from the shipping commits.
 
+## 2.68.0 — 2026-08-25
+
+### Fixed
+- **The two channels announcing a round no longer disagree.** Push led with "did not finish — "
+  while the Telegram fallback indexed the *reported* status, so an `ok` report with `goalMet:false`
+  — the one case this design calls out as most worth surfacing — arrived as a **green tick and a
+  clean sentence**, on the channel used precisely when the app is not there to show the warning
+  row. The display status and text are now one pure function, `reportDisplay`, so there is nowhere
+  for a second opinion to live.
+- **A round pinned to a machine that is gone can be edited again.** Both clients send `host` on
+  every save, so an unenrolled device made EVERY edit fail — including changing only the title —
+  with an error naming something the person did not touch, and their typing discarded. If it was
+  the only device the editor hid the where-it-runs chips, so there was no way to move the round
+  back. Permanently uneditable, while Pause/Resume kept working so the row looked alive. Keeping a
+  host that no longer exists is now allowed; MOVING onto one that never existed, and widening an
+  `act` round onto a look-only machine, are both still refused. The editor draws the section
+  whenever a round is pinned elsewhere, showing the missing machine as "a machine that is gone".
+- **A midnight daylight-saving gap no longer moves a round to the wrong day.** In America/Havana,
+  America/Santiago and Atlantic/Azores the spring-forward begins at 00:00, and a wall time that
+  does not exist resolved to 23:xx the PREVIOUS local day — a different date, weekday and
+  day-of-month. A `Daily at 12:00 AM` round ran twice on one day and never on the transition day;
+  `Sundays at 12:00 AM` fired on **Saturday** while the row still read Sundays; `Monthly on the
+  8th` fired on the 7th. Silent on every surface, because the cadence is rendered from the
+  schedule and the schedule was never wrong.
+- **Switching a round to Interval no longer destroys its timezone.** An interval does not use one,
+  but dropping it destroyed it — and the editor seeds itself from `schedule.tz`, so a
+  `9:00 AM Asia/Tokyo` round toggled to Interval and back landed on the editing device's zone,
+  eight hours out, with no way to recover the original.
+- A device that has been removed is named as "a removed device" rather than by raw uuid when its
+  run is lost — the resolver for exactly that case existed and was called four lines too late.
+
+580 appd tests. Thirteen new ones fail against the previous build.
+
 ## 2.67.0 — 2026-08-25
 
 The two findings the review flagged as needing re-adjudication rather than trust. Both were real,

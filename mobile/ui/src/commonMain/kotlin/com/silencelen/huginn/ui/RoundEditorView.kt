@@ -194,7 +194,13 @@ fun RoundEditor(
             )
         }
 
-        if (devices.isNotEmpty()) {
+        // ⚠ ALSO WHEN THERE ARE NO DEVICES, if this Round is pinned to one. Hiding
+        // the section on an empty list meant a Round whose machine had been
+        // unenrolled had no chip to move it back to Huginn — and since the daemon
+        // refused every edit for the same reason, it was permanently uneditable
+        // while Pause/Resume kept working, so the row looked perfectly alive.
+        val pinnedElsewhere = draft.host != "local"
+        if (devices.isNotEmpty() || pinnedElsewhere) {
             SectionLabel("WHERE IT RUNS")
             FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 FilterChip(
@@ -213,6 +219,24 @@ fun RoundEditor(
                         enabled = draft.mode != "act" || d.scope != "look",
                     )
                 }
+                // The machine it names is not in the list. Shown, selected, and
+                // said plainly — otherwise the form would silently look as though
+                // the Round runs here.
+                if (pinnedElsewhere && devices.none { it.id == draft.host }) {
+                    FilterChip(
+                        selected = true,
+                        onClick = { },
+                        label = { Text("a machine that is gone") },
+                    )
+                }
+            }
+            if (pinnedElsewhere && devices.none { it.id == draft.host }) {
+                Text(
+                    "This round is pinned to a machine huginn no longer knows, so it cannot run. " +
+                        "Pick Huginn to bring it back here.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.error,
+                )
             }
         }
 
