@@ -9,6 +9,37 @@ appeared only as a side-note on the app releases it happened to ship with. Three
 undocumented, and the notes-cutting matcher could fuse two sections when an app and an appd
 version number collided. Entries below are reconstructed from the shipping commits.
 
+## 2.70.1 — 2026-08-25
+
+### Fixed — the item count fix from 2.69.0 shipped doing nothing
+
+`parseReport` was taught to record how many items a run really reported, and the
+run RECORD dropped the field on its way to the reader. So both halves were right,
+both were unit-tested, and the wire between them was not: every reader fell back
+to the capped length and a round that found 500 things still showed "20 items"
+under a headline saying 500 — exactly the behaviour 2.69.0 claimed to fix.
+
+Caught by a live run, not by the suite. There is now an end-to-end test: a stub
+reports 30 findings, and the assertion is that `lastRun.itemsTotal` is 30 while
+`lastRun.items` is 20.
+
+Which is the same failure the whole breaker pass is about, turned on its author:
+being sure a thing was decided is not the same as being sure it was DONE.
+
+### Fixed — a leaked test daemon no longer reads as twelve code failures
+
+The port formula gives few slots, and a daemon leaked by an earlier run (a test
+process killed before `after()` could fire) sits on one, answers `/v1/ping`
+happily because ping needs no token, and rejects the new run's. That surfaced as
+twelve tests failing with `401 unauthorized`, which reads like a bug in the
+daemon and is not one. Every port-binding test file now asks an authenticated
+question before trusting the port, and names the port to go and look at.
+
+Two such daemons were in fact still running, left over from the adversarial
+breaker pass.
+
+606 tests.
+
 ## 2.70.0 — 2026-08-25
 
 ### Fixed — a report block a run READ is no longer accepted as its answer
