@@ -52,7 +52,7 @@ const pushLib = require('./lib/pushtokens');
 const { trySender } = require('./lib/fcm');
 const { createPending, stepSoftEnd } = require('./lib/softend');
 
-const VERSION = '2.70.0';
+const VERSION = '2.70.1';
 const PORT = Number(process.env.HUGINN_APPD_PORT || 8787);
 const DATA_DIR = process.env.HUGINN_APPD_DATA || '/var/lib/huginn-appd';
 const UPLOADS_DIR = path.join(DATA_DIR, 'uploads');
@@ -2193,6 +2193,13 @@ function finishRoundRun(meta, failure) {
     goalMet: report.goalMet,
     headline: report.headline,
     items: report.items,
+    // ⚠ CARRIED, and it was not. parseReport caps `items` at 20 and records how
+    // many the run actually reported — and this record dropped that number on
+    // the floor, so every reader fell back to the capped length and the fix
+    // shipped doing nothing. A round that found 500 things still showed "20
+    // items" under a headline saying 500. The parse being right is not the same
+    // as a reader seeing it; caught by a live run, not by a test.
+    itemsTotal: typeof report.itemsTotal === 'number' ? report.itemsTotal : report.items.length,
     malformed: report.malformed,
     manual: !!meta.roundManual,
     durationSec: meta.roundStartedAt ? at - meta.roundStartedAt : null,
@@ -2301,6 +2308,7 @@ function recordSkippedRound(roundId, reason) {
     goalMet: null,
     headline: report.headline,
     items: [],
+    itemsTotal: 0,
     malformed: false,
     skipped: true,
     manual: false,

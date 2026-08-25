@@ -124,6 +124,18 @@ before(async () => {
     try { if ((await api('/v1/ping')).status === 200) break; } catch { /* not up */ }
     await wait(100);
   }
+  // ⚠ IS THE DAEMON ON THIS PORT ACTUALLY OURS? The formula above gives few
+  // slots, and a daemon leaked by an earlier run — a test process killed before
+  // after() could fire — sits on one, answers /v1/ping happily because ping
+  // needs no token, and rejects OURS. That surfaced once as twelve tests failing
+  // with `401 unauthorized`, which reads like a code bug and is not one. So ask
+  // an AUTHENTICATED question before trusting the port, and say plainly what is
+  // wrong: `ss -ltnp | grep <port>` then kill it.
+  const own = await api('/v1/rounds');
+  if (own.status === 401) {
+    throw new Error(`port ${PORT} is held by another huginn-appd, probably one leaked by an earlier `
+      + `test run — it answers ping but not our token. Find it with: ss -ltnp | grep ${PORT}`);
+  }
 });
 
 after(() => {
