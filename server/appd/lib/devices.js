@@ -202,16 +202,20 @@ function scopeCovers(scope, needed) {
  * "cannot run" with no explanation is the kind of error that gets a feature
  * abandoned rather than fixed.
  */
-function canRun(device, mode, now) {
+function canRun(device, mode, now, state = null) {
   if (!device) return { ok: false, reason: 'no such device' };
-  if (!isOnline(device, now)) return { ok: false, reason: `${device.name} has not checked in` };
+  // The name a PERSON knows, when the registry is at hand: refusals about a
+  // serving row must say "DATATREEX", not the "-llm" credential the UI no
+  // longer shows anywhere.
+  const who = state ? machineDisplayName(state, device) : device.name;
+  if (!isOnline(device, now)) return { ok: false, reason: `${who} has not checked in` };
   // ⚠ Own-property, and refused outright when it is not one. `MODE_NEEDS` is a
   // plain object, so `MODE_NEEDS.constructor` is a function: this used to refuse
   // by accident (indexOf of a function is -1) rather than on purpose, and echoed
   // the caller's own string back in the reason.
   const needed = (Object.prototype.hasOwnProperty.call(MODE_NEEDS, mode) && typeof MODE_NEEDS[mode] === 'string')
     ? MODE_NEEDS[mode] : null;
-  if (needed === null) return { ok: false, reason: `${device.name} was asked for something it does not recognise` };
+  if (needed === null) return { ok: false, reason: `${who} was asked for something it does not recognise` };
   const enrolled = SCOPES.includes(device.scope) ? device.scope : SCOPES[0];
   const scope = effectiveScope(device);
   if (!scopeCovers(scope, needed)) {
@@ -222,8 +226,8 @@ function canRun(device, mode, now) {
     return {
       ok: false,
       reason: lockedBlame
-        ? `${device.name} is locked, so it is read-only until someone unlocks it`
-        : `${device.name} is enrolled as "${device.scope}", which cannot run ${mode}`,
+        ? `${who} is locked, so it is read-only until someone unlocks it`
+        : `${who} is enrolled as "${device.scope}", which cannot run ${mode}`,
     };
   }
   return { ok: true };
@@ -320,10 +324,11 @@ const MAX_MODELS = 16;
  * Whether this device can serve a local-model chat right now. The generate
  * sibling of canRun, with reasons in the same actionable style.
  */
-function canServe(device, now) {
+function canServe(device, now, state = null) {
   if (!device) return { ok: false, reason: 'no enrolled machine serves this model — it may have been unenrolled' };
-  if (device.scope !== 'generate') return { ok: false, reason: `${device.name} is not enrolled to serve local models` };
-  if (!isOnline(device, now)) return { ok: false, reason: `${device.name} has not checked in — the machine serving this model looks offline` };
+  const who = state ? machineDisplayName(state, device) : device.name;
+  if (device.scope !== 'generate') return { ok: false, reason: `${who} is not enrolled to serve local models` };
+  if (!isOnline(device, now)) return { ok: false, reason: `${who} has not checked in — the machine serving this model looks offline` };
   return { ok: true };
 }
 
@@ -338,6 +343,8 @@ function canServe(device, now) {
  * `-llm` names are credential labels, not what anyone calls the box.
  */
 function machineDisplayName(state, d) {
+  // A claude row already wears the name a person knows.
+  if (d.scope !== 'generate') return d.name;
   const machine = d.machine || deriveMachine(d);
   if (machine) {
     for (const s of Object.values((state && state.devices) || {})) {

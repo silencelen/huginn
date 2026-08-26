@@ -52,7 +52,7 @@ const pushLib = require('./lib/pushtokens');
 const { trySender } = require('./lib/fcm');
 const { createPending, stepSoftEnd } = require('./lib/softend');
 
-const VERSION = '2.77.0';
+const VERSION = '2.78.0';
 const PORT = Number(process.env.HUGINN_APPD_PORT || 8787);
 const DATA_DIR = process.env.HUGINN_APPD_DATA || '/var/lib/huginn-appd';
 const UPLOADS_DIR = path.join(DATA_DIR, 'uploads');
@@ -291,7 +291,7 @@ function resolveLocalModel(rawId) {
     if ((d.models || []).some((x) => x.slug === slug)) {
       return { deviceId: devId, device: d, slug, id: modelId };
     }
-    return { error: `${d.name} does not serve "${slug}" — it advertises: ${(d.models || []).map((x) => x.slug).join(', ') || '(nothing)'}` };
+    return { error: `${devicesLib.machineDisplayName(deviceState, d)} does not serve "${slug}" — it advertises: ${(d.models || []).map((x) => x.slug).join(', ') || '(nothing)'}` };
   }
   return { error: 'no enrolled machine serves this model — its machine may have been unenrolled' };
 }
@@ -1163,7 +1163,11 @@ function chatStates() {
  */
 function hostNameFor(host) {
   if (!host || host === 'local') return null;
-  return ((deviceState.devices || {})[host] || {}).name || 'a removed device';
+  // The MACHINE name a person knows: a local chat's host is the serving
+  // credential's row, whose "-llm" name the UI no longer shows anywhere —
+  // badges and refusals built from this must not resurrect it.
+  const d = (deviceState.devices || {})[host];
+  return d ? devicesLib.machineDisplayName(deviceState, d) : 'a removed device';
 }
 
 /**
@@ -1844,7 +1848,7 @@ function startRemoteRun(meta, userText) {
   // exclusive scope serves and the argv sheds tools/persona/effort for. The
   // chat-level wire never carries generate; this is where the daemon translates.
   const workMode = isLocalFamily(meta.model) ? 'generate' : meta.mode;
-  const verdict = devicesLib.canRun(device, workMode, now);
+  const verdict = devicesLib.canRun(device, workMode, now, deviceState);
   if (!verdict.ok) return { error: verdict.reason, code: 409 };
   if (activeRunFor(deviceId)) return { error: `${device.name} is already running something`, code: 409 };
   if ((deviceQueues.get(deviceId) || []).length >= MAX_WORK_QUEUE) {
@@ -4925,7 +4929,7 @@ const server = http.createServer(async (req, res) => {
           return sendErr(res, 400, `this model runs on ${r.device.name} — the model row already chooses the machine`);
         }
         if (body.mode === 'act') return sendErr(res, 400, 'local models run ask-only — switch to Ask');
-        const served = devicesLib.canServe(r.device, Date.now());
+        const served = devicesLib.canServe(r.device, Date.now(), deviceState);
         if (!served.ok) return sendErr(res, 409, served.reason);
         const evL = effortDecision(body.effort);
         if (evL.error) return sendErr(res, 400, evL.error);
@@ -4961,7 +4965,7 @@ const server = http.createServer(async (req, res) => {
       if (typeof body.host === 'string' && body.host && body.host !== 'local') {
         const dev = (deviceState.devices || {})[body.host];
         if (!dev) return sendErr(res, 404, 'no such device');
-        const verdict = devicesLib.canRun(dev, mode, Date.now());
+        const verdict = devicesLib.canRun(dev, mode, Date.now(), deviceState);
         if (!verdict.ok) return sendErr(res, 409, verdict.reason);
         host = body.host;
       }
@@ -5214,7 +5218,7 @@ const server = http.createServer(async (req, res) => {
             if (body.mode === 'act') return sendErr(res, 400, 'local models run ask-only — switch to Ask');
             const r = resolveLocalModel(body.model);
             if (r.error) return sendErr(res, 400, r.error);
-            const served = devicesLib.canServe(r.device, Date.now());
+            const served = devicesLib.canServe(r.device, Date.now(), deviceState);
             if (!served.ok) return sendErr(res, 409, served.reason);
             mv = { model: r.id, host: r.deviceId, forceAsk: true };
           } else if (isLocalFamily(meta.model)) {
