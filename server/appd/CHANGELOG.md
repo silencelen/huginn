@@ -9,6 +9,17 @@ appeared only as a side-note on the app releases it happened to ship with. Three
 undocumented, and the notes-cutting matcher could fuse two sections when an app and an appd
 version number collided. Entries below are reconstructed from the shipping commits.
 
+## 2.76.0 — 2026-08-25
+
+- One box, ONE device. Every row now carries a `machine` key — reported by
+  current runners, derived from the name for older rows (`<host>-llm` rejoins
+  its host) — so every renderer folds a machine's claude and serving
+  enrolments into one object with capability facets. The rows themselves stay
+  separate where authority is decided: the serving credential can never gain
+  claude reach, and nothing about routing changed.
+- Catalog rows are titled by the machine's own name ("Qwen3 8B - DATATREEX"),
+  not the serving credential's - the `-llm` names are internal labels.
+
 ## 2.75.0 — 2026-08-25
 
 ### Added
