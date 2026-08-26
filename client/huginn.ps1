@@ -3,9 +3,9 @@
 #     if (Test-Path "$HOME\.huginn\huginn.ps1") { . "$HOME\.huginn\huginn.ps1" }
 # Targets the `huginn` SSH alias by default; override per-device with:  $env:HUGINN_HOST = 'my-host'
 # Self-update with:  huginn update   (pulls this file from the repo; gh -> scp fallback)
-# Version: 0.12.4
+# Version: 0.12.5
 
-$script:HUGINN_VERSION = '0.12.4'
+$script:HUGINN_VERSION = '0.12.5'
 $script:HUGINN_REPO    = 'silencelen/huginn'
 # Where `huginn update` may fetch a replacement for THIS FILE, which is then loaded
 # into the shell. Pinned, and deliberately NOT $HUGINN_HOST: that variable answers
@@ -301,7 +301,7 @@ function huginn {
         # downloads code a service will then run in a loop, so the host it comes
         # from is a trust root, never $HUGINN_HOST.
         $uh = if ($env:HUGINN_UPDATE_HOST) { $env:HUGINN_UPDATE_HOST } else { $script:HUGINN_UPDATE_HOST_DEFAULT }
-        $tmp = "$runner.tmp"
+        $tmp = "$runner.tmp.js"
         $got = $false
         if (Get-Command gh -ErrorAction SilentlyContinue) {
           gh api "repos/$script:HUGINN_REPO/contents/client/huginn-device" -H "Accept: application/vnd.github.raw" > $tmp 2>$null
@@ -364,7 +364,7 @@ function huginn {
           # PINNED, like the device runner: this downloads code a service will
           # run in a loop, so the source is a trust root. Never $HUGINN_HOST.
           $uh = if ($env:HUGINN_UPDATE_HOST) { $env:HUGINN_UPDATE_HOST } else { $script:HUGINN_UPDATE_HOST_DEFAULT }
-          $tmp = "$dest.tmp"; $got = $false
+          $tmp = "$dest.tmp.js"; $got = $false
           if (Get-Command gh -ErrorAction SilentlyContinue) {
             gh api "repos/$script:HUGINN_REPO/contents/client/$f" -H "Accept: application/vnd.github.raw" > $tmp 2>$null
             if ((Test-Path $tmp) -and (Get-Item $tmp).Length -gt 0) { $got = $true }

@@ -4,9 +4,9 @@
 #     [ -f ~/.huginn/huginn.sh ] && source ~/.huginn/huginn.sh
 # Targets the `huginn` SSH alias by default; override per-device with:  export HUGINN_HOST=my-host
 # Self-update with:  huginn update   (pulls this file from the repo; gh -> scp fallback)
-# Version: 0.12.4
+# Version: 0.12.5
 
-HUGINN_VERSION='0.12.4'
+HUGINN_VERSION='0.12.5'
 HUGINN_REPO='silencelen/huginn'
 # Where `huginn update` may fetch a replacement for THIS FILE, which it then
 # sources into the live shell. Pinned, and deliberately NOT $HUGINN_HOST:
@@ -31,7 +31,7 @@ _huginn_device_fetch() {
   local dest tmp got= uh
   dest="$(_huginn_device_runner)"
   [ "${1:-}" = force ] || [ ! -s "$dest" ] || return 0
-  mkdir -p "$HOME/.huginn"; tmp="$dest.tmp"
+  mkdir -p "$HOME/.huginn"; tmp="$dest.tmp.js"
   if command -v gh >/dev/null 2>&1; then
     gh api "repos/$HUGINN_REPO/contents/client/huginn-device" \
       -H "Accept: application/vnd.github.raw" >"$tmp" 2>/dev/null && [ -s "$tmp" ] && got=1
@@ -114,7 +114,7 @@ _huginn_local_fetch() {
   for f in huginn-local huginn-llm-shim huginn-device; do
     dest="$HOME/.huginn/$f"; got=
     [ "${1:-}" = force ] || [ ! -s "$dest" ] || continue
-    mkdir -p "$HOME/.huginn"; tmp="$dest.tmp"
+    mkdir -p "$HOME/.huginn"; tmp="$dest.tmp.js"
     if command -v gh >/dev/null 2>&1; then
       gh api "repos/$HUGINN_REPO/contents/client/$f" \
         -H "Accept: application/vnd.github.raw" >"$tmp" 2>/dev/null && [ -s "$tmp" ] && got=1

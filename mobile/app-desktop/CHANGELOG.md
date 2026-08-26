@@ -1,5 +1,15 @@
 # Huginn Desktop changelog
 
+## 0.10.3
+
+- **Local-AI setup works on current Node.** The fetched manager is
+  syntax-checked before install; the check ran on a `.tmp`-named download,
+  and modern Node (22+, including the LTS the installer now offers) refuses
+  to even parse an unknown extension — so a machine with brand-new Node hit
+  "failed its syntax check: node:internal/modules/esm/get_format" before
+  anything ran. Downloads are checked under a `.js` name now; the installed
+  files are unchanged.
+
 ## 0.10.2
 
 - **The installers carry the Node.js dependency now**, instead of the app's

@@ -10,6 +10,17 @@ Format loosely follows [Keep a Changelog](https://keepachangelog.com/); versions
 
 ## [Unreleased]
 
+## [0.12.5] - 2026-08-25
+
+### Fixed
+- Fetched code (the device runner, the local manager and shim) is
+  syntax-checked before install, and the check ran on a `.tmp`-named
+  download — which modern Node (22+) refuses to even parse
+  (ERR_UNKNOWN_FILE_EXTENSION), so a machine with current Node could not
+  fetch any of them. Reproduced on node 22.23.1 the day the first Node-24
+  machine hit it. Downloads are checked under a `.js` name now; installed
+  names are unchanged.
+
 ## [0.12.4] - 2026-08-25
 
 ### Changed
