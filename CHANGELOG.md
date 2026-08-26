@@ -10,6 +10,24 @@ Format loosely follows [Keep a Changelog](https://keepachangelog.com/); versions
 
 ## [Unreleased]
 
+## [0.12.3] - 2026-08-25
+
+### Added
+- `huginn local plan` — everything `on` would decide (hardware class, models,
+  the disk gate, the device name) with nothing `on` would do. `--json` is the
+  machine shape: it is how the desktop app's new set-up flow shows a real
+  consent card before a human clicks anything.
+
+### Changed
+- On Windows, `huginn local on`/`off`/`update` now refuse UP FRONT from an
+  unelevated shell — the services are LocalSystem, and discovering that after
+  a multi-GB download was the worst place to. Verified downloads are kept
+  either way, so a refused run loses nothing and a re-run resumes.
+- The local-tier fetch now carries the device runner too: a machine that had
+  never enrolled as a claude device could reach enrolment with no runner to
+  install, and died there on a bare spawn error. The manager also names that
+  condition honestly instead of failing late.
+
 ## [0.12.2] - 2026-08-25
 
 ### Changed

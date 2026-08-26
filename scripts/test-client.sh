@@ -335,6 +335,30 @@ echo "$UNIT_RUN" | grep -q 'Environment=HUGINN_DEVICE_DIR=/tmp/hl-gate/device' \
 HUGINN_LOCAL_DIR=/tmp/hl-gate node client/huginn-local on --clsas=G8 >/dev/null 2>&1
 [ $? -eq 2 ] && ok "an unknown flag is refused, not ignored" || bad "an unknown flag was swallowed"
 
+# `plan` is the desktop's consent card: it must DECIDE everything and DO
+# nothing. Both halves are asserted — the answer's shape, and the empty dir.
+PLAN_DIR=$(mktemp -d)
+HUGINN_LOCAL_DIR="$PLAN_DIR" node client/huginn-local plan --json | python3 -c '
+import json, sys
+p = json.load(sys.stdin)
+assert ("refuse" in p) != ("downloads" in p), "exactly one of refuse/downloads"
+assert p["deviceName"].endswith("-llm"), p["deviceName"]
+assert p["services"] == ["huginn-local-llm", "huginn-local-runner"], p["services"]
+' && ok "plan --json answers with a decision (refuse XOR downloads)" \
+  || bad "plan --json is not a decision the desktop can render"
+[ -z "$(ls -A "$PLAN_DIR")" ] && ok "plan wrote nothing — read-only as promised" \
+  || bad "plan MUTATED its dir: $(ls -A "$PLAN_DIR" | head -3 | tr '\n' ' ')"
+rm -rf "$PLAN_DIR"
+
+# Verb parity for the new door, and the runner riding along in the fetch —
+# a machine that never enrolled as a claude device has no runner otherwise.
+grep -q '^    plan)' client/huginn.sh && grep -q "\$sub -eq 'plan'" client/huginn.ps1 \
+  && ok "both shells carry: local plan" || bad "local plan is missing from a shell client"
+grep -q 'for f in huginn-local huginn-llm-shim huginn-device; do' client/huginn.sh \
+  && grep -q "'huginn-local', 'huginn-llm-shim', 'huginn-device'" client/huginn.ps1 \
+  && ok "both shells fetch the device runner with the local tier" \
+  || bad "a shell client's local fetch list is missing huginn-device"
+
 # The shim's own suite carries the contract verifier — the dialect
 # handleClaudeEvent consumes, asserted frame by frame.
 SHIM_OUT=$(node --test scripts/test-llm-shim.js 2>&1)

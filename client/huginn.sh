@@ -4,9 +4,9 @@
 #     [ -f ~/.huginn/huginn.sh ] && source ~/.huginn/huginn.sh
 # Targets the `huginn` SSH alias by default; override per-device with:  export HUGINN_HOST=my-host
 # Self-update with:  huginn update   (pulls this file from the repo; gh -> scp fallback)
-# Version: 0.12.2
+# Version: 0.12.3
 
-HUGINN_VERSION='0.12.2'
+HUGINN_VERSION='0.12.3'
 HUGINN_REPO='silencelen/huginn'
 # Where `huginn update` may fetch a replacement for THIS FILE, which it then
 # sources into the live shell. Pinned, and deliberately NOT $HUGINN_HOST:
@@ -108,7 +108,10 @@ _huginn_local_manager() { printf '%s' "$HOME/.huginn/huginn-local"; }
 
 _huginn_local_fetch() {
   local f dest tmp got uh
-  for f in huginn-local huginn-llm-shim; do
+  # huginn-device rides along: managed mode installs a runner SERVICE, and a
+  # machine that never enrolled as a claude device has no runner otherwise
+  # (found wiring the desktop door — enrolment died on a bare spawn error).
+  for f in huginn-local huginn-llm-shim huginn-device; do
     dest="$HOME/.huginn/$f"; got=
     [ "${1:-}" = force ] || [ ! -s "$dest" ] || continue
     mkdir -p "$HOME/.huginn"; tmp="$dest.tmp"
@@ -167,6 +170,11 @@ _huginn_local() {
       _huginn_local_fetch force || return 1
       [ -s "$mgr" ] || { echo "huginn local: not set up - run: huginn local on" >&2; return 1; }
       node "$mgr" update "$@"
+      ;;
+    plan)
+      # Read-only: what `on` would install here, without installing anything.
+      _huginn_local_fetch || return 1
+      node "$mgr" plan "$@"
       ;;
     *)
       [ -s "$mgr" ] || {
@@ -368,6 +376,7 @@ EOF
   huginn device off           stop offering it
   huginn local [status]       what THIS machine serves as local AI, if anything
   huginn local on             serve local models from this machine (optional, ~5 GB)
+  huginn local plan           what 'on' would install here, without installing anything
   huginn local off            stop serving  [--purge-models]
   huginn device unit          print a systemd unit that keeps the runner up
   huginn kill <name>          hard end: stop the session now
@@ -632,7 +641,7 @@ _huginn_complete() {
       device)
         mapfile -t COMPREPLY < <(compgen -W "status on off unit update serve" -- "$cur") ;;
       local)
-        mapfile -t COMPREPLY < <(compgen -W "status on off unit update doctor" -- "$cur") ;;
+        mapfile -t COMPREPLY < <(compgen -W "status on plan off unit update doctor" -- "$cur") ;;
       --scope)
         mapfile -t COMPREPLY < <(compgen -W "look work own" -- "$cur") ;;
       today|yesterday|week|month)   # optional report-type override after a date shortcut

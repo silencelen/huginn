@@ -2,7 +2,7 @@
 'use strict';
 // huginn-local — activation and lifecycle of the local-AI tier on THIS machine.
 //
-// Version: 0.12.2
+// Version: 0.12.3
 //
 // `huginn local on` follows the device-enrolment grammar exactly: consent →
 // fetch pinned → validate → install → enrol. This file is the manager the shell
@@ -36,7 +36,7 @@ const https = require('node:https');
 const crypto = require('node:crypto');
 const { spawnSync, spawn } = require('node:child_process');
 
-const VERSION = '0.12.2';
+const VERSION = '0.12.3';
 
 // ---8<--- BEGIN GENERATED MANIFEST — scripts/gen-local-manifest.js — DO NOT EDIT ---8<---
 const MANIFEST = {
@@ -537,6 +537,25 @@ function sysctl(args, { user = false } = {}) {
   return spawnSync('systemctl', [...base, ...args], { encoding: 'utf8' });
 }
 
+/**
+ * A LocalSystem service cannot be installed, started or removed from an
+ * unelevated shell — and discovering that AFTER a multi-GB download is the
+ * worst place to. `net session` answers only for elevated tokens (SYSTEM
+ * included), costs nothing, and exists on every Windows this supports.
+ * Everywhere else the answer is simply yes.
+ */
+function isElevatedWin() {
+  if (process.platform !== 'win32') return true;
+  const r = spawnSync('net', ['session'], { encoding: 'utf8' });
+  return r.status === 0;
+}
+
+function refuseUnelevated(doing) {
+  if (isElevatedWin()) return;
+  console.error(`refused: ${doing} touches the LocalSystem services (WinSW), which needs an elevated shell — re-run from an Administrator terminal. Verified downloads are kept, so nothing already fetched is lost.`);
+  process.exit(1);
+}
+
 function installServiceLinux(which, { system }) {
   const name = which === 'llm' ? LLM_SERVICE : RUNNER_SERVICE;
   const file = system
@@ -659,18 +678,25 @@ function enrolDevice(conf, models) {
 
 // -------------------------------------------------------------------- on
 
+/** `--class` may narrow, never widen; G16 asked-for still serves the G8 plan. */
+function narrowClass(det, cls) {
+  const order = { A: 0, C: 1, G8: 2, G16: 3 };
+  if (!(cls in order)) return { error: `unknown class "${cls}" — one of: G8, G16, C, A`, exit: 2 };
+  if (!det.refuse && order[cls] > order[det.cls]) {
+    return { error: `--class may narrow, never widen: detected ${det.cls}, asked for ${cls}`, exit: 1 };
+  }
+  det.cls = cls; det.plan = cls === 'G16' ? 'G8' : cls;
+  return null;
+}
+
 async function cmdOn(flags) {
   if (!MANIFEST) { console.error('this file was not generated correctly — run: node scripts/gen-local-manifest.js'); process.exit(2); }
+  refuseUnelevated('turning on');
   const det = detectClass();
   if (det.refuse && !flags.adapter) { console.error(`refused: ${det.refuse}`); process.exit(1); }
   if (flags.class) {
-    const order = { A: 0, C: 1, G8: 2, G16: 3 };
-    if (!(flags.class in order)) { console.error(`unknown class "${flags.class}" — one of: G8, G16, C, A`); process.exit(2); }
-    if (!det.refuse && order[flags.class] > order[det.cls]) {
-      console.error(`--class may narrow, never widen: detected ${det.cls}, asked for ${flags.class}`);
-      process.exit(1);
-    }
-    det.cls = flags.class; det.plan = flags.class === 'G16' ? 'G8' : flags.class;
+    const err = narrowClass(det, flags.class);
+    if (err) { console.error(err.error); process.exit(err.exit); }
   }
   const hostname = os.hostname().toLowerCase().replace(/[^a-z0-9-]/g, '-').replace(/-+/g, '-').replace(/^-|-$/g, '').slice(0, 34) || 'machine';
   const conf = loadConf() || {};
@@ -796,6 +822,11 @@ function installShimCopy() {
   fs.copyFileSync(src, P('bin', 'huginn-llm-shim.js'));
   const runnerSrc = path.join(os.homedir(), '.huginn', 'huginn-device');
   if (fs.existsSync(runnerSrc)) fs.copyFileSync(runnerSrc, P('bin', 'huginn-device.js'));
+  else if (!fs.existsSync(P('bin', 'huginn-device.js'))) {
+    // Without the runner there is a model server but no way to serve it to
+    // huginn — refuse HERE, not at enrolment with a bare spawn error.
+    throw new Error(`the device runner is not at ${runnerSrc} — run through a door that fetches it (huginn local on, or the desktop's set-up flow)`);
+  }
 }
 
 function installRunnerService(flags) {
@@ -820,6 +851,7 @@ function manifestHash() {
 async function cmdOff(flags) {
   const conf = loadConf();
   if (!conf) { console.error('not set up — nothing to turn off'); process.exit(1); }
+  refuseUnelevated('turning off');
   let failed = 0;
   const step = (name, fn) => {
     try { fn(); console.log(`  ok      ${name}`); }
@@ -918,6 +950,7 @@ async function cmdUpdate(flags) {
   if (!MANIFEST) { console.error('this file was not generated correctly'); process.exit(2); }
   const conf = loadConf();
   if (!conf) { console.error('not set up — run: huginn local on'); process.exit(1); }
+  refuseUnelevated('updating');
   installShimCopy();
   console.log('  shim + runner copies refreshed from ~/.huginn');
   if (conf.mode === 'adapter') { console.log('adapter mode: nothing else to update.'); return; }
@@ -985,6 +1018,58 @@ async function cmdDoctor() {
   }
 }
 
+// ------------------------------------------------------------------- plan
+
+/**
+ * Everything `on` would decide, with nothing `on` would do: detection, the
+ * chosen plan, the disk gate and the device name, as one answer. This is the
+ * desktop app's consent card — the UI shows exactly what the terminal flow
+ * would have printed, and only after a human has read it does anything run
+ * `on --yes`. No file is written, no service touched, nothing downloaded.
+ */
+async function cmdPlan(flags) {
+  if (!MANIFEST) { console.error('this file was not generated correctly — run: node scripts/gen-local-manifest.js'); process.exit(2); }
+  const det = detectClass();
+  if (flags.class && !det.refuse) {
+    const err = narrowClass(det, flags.class);
+    if (err) { console.error(err.error); process.exit(err.exit); }
+  }
+  const hostname = os.hostname().toLowerCase().replace(/[^a-z0-9-]/g, '-').replace(/-+/g, '-').replace(/^-|-$/g, '').slice(0, 34) || 'machine';
+  const conf = loadConf() || {};
+  const out = {
+    version: VERSION,
+    dir: localDir(),
+    platform: process.platform,
+    elevated: isElevatedWin(),
+    setup: !!conf.mode,
+    deviceName: flags.name || conf.deviceName || `${hostname}-llm`,
+    services: [LLM_SERVICE, RUNNER_SERVICE],
+  };
+  if (det.refuse) { out.refuse = det.refuse; }
+  else {
+    out.cls = det.cls;
+    if (det.note) out.note = det.note;
+    if (det.gpu) out.gpu = { name: det.gpu.name, memMiB: det.gpu.memMiB };
+    const plan = planFor(det);
+    if (plan.error) { out.refuse = plan.error; }
+    else {
+      out.plan = plan.plan;
+      out.downloads = plan.downloads.map((d) => ({ kind: d.kind, name: d.name, bytes: d.bytes }));
+      out.needBytes = plan.downloads.reduce((s, d) => s + d.bytes, 0);
+      const gate = diskGate(out.needBytes, freeBytes());
+      out.gate = { ok: gate.ok, line: gate.line };
+    }
+  }
+  if (flags.json) { console.log(JSON.stringify(out)); return; }
+  if (out.refuse) { console.error(`refused: ${out.refuse}`); process.exit(1); }
+  console.log(`class ${out.cls}${out.cls !== out.plan ? ` (serving the ${out.plan} plan)` : ''}${out.gpu ? ` — GPU ${out.gpu.name}` : ''}`);
+  if (out.note) console.log(`  ${out.note}`);
+  console.log(`  ${out.gate.line}`);
+  for (const d of out.downloads) console.log(`  ${(d.bytes / (1024 * 1024)).toFixed(0).padStart(6)} MB  ${d.name}`);
+  console.log(`  device row "${out.deviceName}" at scope generate`);
+  if (!out.gate.ok) { console.error('refused: not enough disk'); process.exit(1); }
+}
+
 // ------------------------------------------------------------------- main
 
 function usage() {
@@ -992,6 +1077,7 @@ function usage() {
 
   huginn local on     [--class G8|G16|C|A] [--gpu-uuid U] [--name N] [--yes] [--system]
                       [--adapter ollama|lmstudio [--adapter-url URL] [--adapter-key K]]
+  huginn local plan   [--class G8|G16|C|A] [--name N] [--json]   what \`on\` would do, doing nothing
   huginn local off    [--purge-models] [--yes]
   huginn local status [--json]
   huginn local unit   [--system] [--which llm|runner]
@@ -1008,6 +1094,7 @@ async function main() {
   const flags = parsed.flags;
   switch (cmd) {
     case 'on': await cmdOn(flags); break;
+    case 'plan': await cmdPlan(flags); break;
     case 'off': await cmdOff(flags); break;
     case 'status': await cmdStatus(flags); break;
     case 'update': await cmdUpdate(flags); break;
@@ -1028,7 +1115,7 @@ if (require.main === module) {
 } else {
   module.exports = {
     VERSION, MANIFEST, parseFlags, detectClass, planFor, diskGate, swapYamlFor,
-    unitText, winswXml, mintKey, localDir, statusInfo, manifestHash,
+    unitText, winswXml, mintKey, localDir, statusInfo, manifestHash, narrowClass,
     LLM_SERVICE, RUNNER_SERVICE,
   };
 }
