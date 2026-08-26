@@ -225,6 +225,40 @@ Section "Install"
   WriteRegStr HKCU "Software\Classes\AppUserModelId\${AUMID}" "DisplayName" "${APP_NAME}"
 
   CreateShortCut "$SMPROGRAMS\${APP_NAME}\Uninstall ${APP_NAME}.lnk" "$INSTDIR\Uninstall.exe"
+
+  ; ------------------------------------------------------------- node runtime
+  ;
+  ; The optional features — serving local AI models, running work as a device —
+  ; are Node programs, and the NATIVE claude build no longer implies node is
+  ; present (field-proven: the first activation attempt found claude.exe and no
+  ; node anywhere). This installer is per-user and unsigned, so it never
+  ; elevates ITSELF: when node is missing it OFFERS the winget install, and
+  ; the one admin prompt that follows belongs to the signed Node.js package —
+  ; a prompt worth trusting, unlike ours would be. Declining costs nothing but
+  ; those two features, which say so themselves when asked. Silent installs
+  ; (the self-updater path) skip the offer: a surprise UAC mid-update is how
+  ; trust dies, so /SD answers No.
+  nsExec::ExecToStack 'cmd /c where node'
+  Pop $0
+  Pop $1
+  ${If} $0 != 0
+    ${IfNot} ${FileExists} "$PROGRAMFILES64\nodejs\node.exe"
+      MessageBox MB_YESNO|MB_ICONQUESTION \
+        "Huginn's optional features (serving local AI models, running work as a device) use Node.js, which was not found on this machine.$\r$\n$\r$\nInstall Node.js LTS now?$\r$\n(winget runs it; expect one administrator prompt from the Node.js installer itself.)" \
+        /SD IDNO IDNO node_done
+      nsExec::ExecToLog 'winget install --id OpenJS.NodeJS.LTS --accept-package-agreements --accept-source-agreements --disable-interactivity'
+      Pop $0
+      ${If} $0 != 0
+        ; Covers a declined UAC, an offline machine, and no winget at all
+        ; (nsExec pushes "error" when the exec itself fails) — one honest
+        ; fallback for every shape of no.
+        MessageBox MB_OK|MB_ICONEXCLAMATION \
+          "Node.js did not install (winget said: $0).$\r$\nInstall it any time from nodejs.org, or run:  winget install OpenJS.NodeJS.LTS" \
+          /SD IDOK
+      ${EndIf}
+      node_done:
+    ${EndIf}
+  ${EndIf}
 SectionEnd
 
 Section "Uninstall"
