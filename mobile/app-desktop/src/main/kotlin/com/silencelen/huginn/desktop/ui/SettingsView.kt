@@ -143,7 +143,7 @@ fun SettingsView(store: AppStore) {
         )
 
         DeviceSection(store)
-        LocalServeSection()
+        LocalServeSection(store)
 
         UpdateSection(store)
         DiagnosticsSection(store)
@@ -653,24 +653,30 @@ private val SCOPE_CHOICES = listOf(
  * serving state of its own: the services belong to systemd/WinSW, this section
  * only asks and relays. Serving is never remotely flippable — this section
  * exists only on the machine itself, which is the whole doctrine.
+ *
+ * Setting up happens HERE too, with the same consent the terminal takes: the
+ * read-only `plan` (class, models, disk gate) is shown as a card, and only a
+ * human's click on the sized button runs `on --yes`. Never a bare switch —
+ * the button says what it will download before it downloads it.
  */
 @Composable
-private fun LocalServeSection() {
+private fun LocalServeSection(store: AppStore) {
     val scope = rememberCoroutineScope()
     var status by remember { mutableStateOf<LocalServe.Status?>(null) }
     var error by remember { mutableStateOf<String?>(null) }
     var busy by remember { mutableStateOf(false) }
     var log by remember { mutableStateOf(listOf<String>()) }
-    val fetched = remember { LocalServe.managerFile().isFile }
+    var plan by remember { mutableStateOf<LocalServe.Plan?>(null) }
 
     fun refresh() {
         scope.launch {
+            if (!LocalServe.managerFile().isFile) { status = null; error = null; return@launch }
             LocalServe.status()
                 .onSuccess { status = it; error = null }
                 .onFailure { status = null; error = it.message }
         }
     }
-    LaunchedEffect(Unit) { if (fetched) refresh() }
+    LaunchedEffect(Unit) { refresh() }
 
     SectionHeader("Serve local AI from this PC")
     Muted(
@@ -680,42 +686,87 @@ private fun LocalServeSection() {
         maxLines = 4,
     )
 
-    if (!fetched) {
-        // No switch wired to nothing: setting up downloads ~5 GB of pinned
-        // engine and model files, and the consent for that lives in the
-        // terminal flow that fetches the manager in the first place.
+    val s = status
+    if (s?.setup != true) {
+        if (error != null) Muted("The manager did not answer: $error", Modifier.padding(top = 8.dp, start = 4.dp), maxLines = 2)
+        val p = plan
+        when {
+            p == null -> {
+                Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(top = 6.dp)) {
+                    TextButton(
+                        onClick = {
+                            busy = true; log = emptyList()
+                            scope.launch {
+                                LocalServe.plan { line -> log = (log + line).takeLast(8) }
+                                    .onSuccess { plan = it; log = emptyList() }
+                                    .onFailure { log = (log + (it.message ?: "could not read this machine")).takeLast(8) }
+                                busy = false
+                            }
+                        },
+                        enabled = !busy,
+                    ) { Text(if (busy) "Checking this machine…" else "Set up local AI…") }
+                }
+                Muted(
+                    "Checks what this machine can serve and shows the exact plan before anything downloads. " +
+                        "Also available from a terminal:  huginn local on",
+                    Modifier.padding(start = 4.dp),
+                    maxLines = 3,
+                )
+            }
+            p.refuse != null -> {
+                Muted("This machine can't serve: ${p.refuse}", Modifier.padding(top = 8.dp, start = 4.dp), maxLines = 4)
+                TextButton(onClick = { plan = null }, enabled = !busy) { Text("Back") }
+            }
+            else -> {
+                // The consent card — the same lines the terminal flow prints.
+                Muted("class ${p.cls ?: "?"}${p.note?.let { " — $it" } ?: ""} → device \"${p.deviceName}\"", Modifier.padding(top = 8.dp, start = 4.dp), maxLines = 3)
+                p.downloads.forEach { d ->
+                    Muted("${d.bytes / (1024 * 1024)} MB  ${d.name}", Modifier.padding(start = 12.dp), maxLines = 1)
+                }
+                p.gate?.let { Muted(it.line, Modifier.padding(start = 4.dp, top = 2.dp), maxLines = 2) }
+                Muted(
+                    "Installs two always-on services and offers this machine's models to huginn." +
+                        if (p.platform == "win32") " Windows will show one administrator (UAC) prompt." else "",
+                    Modifier.padding(start = 4.dp, top = 2.dp),
+                    maxLines = 3,
+                )
+                Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(top = 6.dp)) {
+                    TextButton(
+                        onClick = {
+                            busy = true; log = emptyList()
+                            scope.launch {
+                                LocalServe.enable(store.settings.baseUrlNow(), store.settings.tokenNow()) { line ->
+                                    log = (log + line).takeLast(8)
+                                }
+                                busy = false; plan = null; refresh()
+                            }
+                        },
+                        enabled = !busy && p.gate?.ok == true,
+                    ) { Text(if (busy) "Setting up…" else "Download and turn on (${p.needBytes / (1024 * 1024)} MB)") }
+                    TextButton(onClick = { plan = null }, enabled = !busy) { Text("Cancel") }
+                }
+            }
+        }
+    } else {
         Muted(
-            "Not set up. From this machine's terminal:  huginn local on   " +
-                "(optional, ~5 GB, chosen for this machine's hardware)",
+            when {
+                s.engine.reachable && s.engine.models.isNotEmpty() ->
+                    "Serving ${s.engine.models.joinToString(", ")} (class ${s.cls ?: "?"}) as \"${s.deviceName ?: "?"}\"."
+                else -> "Set up as \"${s.deviceName ?: "?"}\" but the engine is NOT answering — services: " +
+                    "llm ${s.services.llm ?: "?"}, runner ${s.services.runner ?: "?"}"
+            },
             Modifier.padding(top = 8.dp, start = 4.dp),
             maxLines = 3,
         )
-        return
-    }
-
-    val s = status
-    Muted(
-        when {
-            error != null -> "The manager did not answer: $error"
-            s == null -> "Asking…"
-            !s.setup -> "Installed but not set up — run: huginn local on"
-            s.engine.reachable && s.engine.models.isNotEmpty() ->
-                "Serving ${s.engine.models.joinToString(", ")} (class ${s.cls ?: "?"}) as \"${s.deviceName ?: "?"}\"."
-            else -> "Set up as \"${s.deviceName ?: "?"}\" but the engine is NOT answering — services: " +
-                "llm ${s.services.llm ?: "?"}, runner ${s.services.runner ?: "?"}"
-        },
-        Modifier.padding(top = 8.dp, start = 4.dp),
-        maxLines = 3,
-    )
-
-    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(top = 6.dp)) {
-        TextButton(onClick = { refresh() }, enabled = !busy) { Text("Refresh") }
-        if (s?.setup == true) {
+        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(top = 6.dp)) {
+            TextButton(onClick = { refresh() }, enabled = !busy) { Text("Refresh") }
             TextButton(
                 onClick = {
                     busy = true; log = emptyList()
                     scope.launch {
-                        LocalServe.run("off") { line -> log = (log + line).takeLast(8) }
+                        // Elevated on Windows: stopping a LocalSystem service is
+                        // as privileged as installing one.
+                        LocalServe.disable { line -> log = (log + line).takeLast(8) }
                         busy = false; refresh()
                     }
                 },

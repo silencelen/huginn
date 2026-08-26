@@ -1,5 +1,18 @@
 # Huginn Desktop changelog
 
+## 0.10.0
+
+- **Set up local AI from Settings.** "Serve local AI from this PC" can now do
+  the whole thing instead of pointing at a terminal: one click shows this
+  machine's real plan — hardware class, the exact models and sizes, the disk
+  check — as a card, and only a click on the sized button downloads and turns
+  it on. Same manager, same consent, same refusals as `huginn local on`; the
+  terminal door still works. On Windows the services install behind a single
+  administrator (UAC) prompt, and stopping is elevated the same way now —
+  which the old Stop button quietly was not.
+- Serving still cannot be flipped from another machine: this door exists only
+  on the machine itself.
+
 ## 0.9.0
 
 - **Local models in the chat model menu** (shared with the phone): rows named
