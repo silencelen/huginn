@@ -33,3 +33,8 @@ if (-not (Select-String -Path $PROFILE -Pattern '\.huginn\\huginn\.ps1' -Quiet))
 . "$HOME\.huginn\huginn.ps1"
 Write-Host "`nInstalled. Authorize the key above on the host, then:  huginn help  |  huginn status" -ForegroundColor Green
 Write-Host "This machine may also be able to serve local AI models to huginn (optional, ~5 GB):  huginn local on" -ForegroundColor DarkGray
+# The base client needs no node; only the optional features do. Named here
+# because the native claude build ships without node, so its absence is normal.
+if (-not (Get-Command node -ErrorAction SilentlyContinue)) {
+  Write-Host "Note: the optional device/local-AI features need Node.js LTS:  winget install OpenJS.NodeJS.LTS" -ForegroundColor DarkGray
+}
