@@ -93,9 +93,10 @@ fun SessionControls(
 }
 
 /**
- * The same controls for a chat. A chat has no permission mode to cycle (its tool
- * access is fixed by Ask/Act at creation), so that slot states the mode instead of
- * offering to change it.
+ * The same controls for a chat. Ask/Act is a picker here as on the desktop —
+ * the daemon accepts `mode` on PATCH, and claiming it was "fixed at creation"
+ * was the stale half of a fork the audit caught. A LOCAL chat's mode stays a
+ * statement: those really are Ask-only.
  */
 @Composable
 fun ChatOptionsBar(
@@ -104,8 +105,10 @@ fun ChatOptionsBar(
     effort: String?,
     models: List<ModelChoice>,
     enabled: Boolean,
+    started: Boolean,
     onModel: (String) -> Unit,
     onEffort: (String) -> Unit,
+    onMode: (String) -> Unit,
 ) {
     Surface(color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)) {
         Row(
@@ -119,7 +122,12 @@ fun ChatOptionsBar(
             val localNow = ModelLabels.isLocal(model, models)
             PickerChip(
                 label = if (model == null) "Default model" else ModelLabels.model(model, models),
-                options = ModelLabels.options(models, ModelLabels.PickerSite.CHAT),
+                // Context-aware, with a way BACK: the menu shrinks to what the
+                // daemon accepts on a started chat, and the clear row exists
+                // exactly when clearing is legal — the audit caught the phone
+                // with no way to return to the host default at all.
+                options = ModelLabels.options(models, ModelLabels.PickerSite.CHAT, current = model, started = started) +
+                    (if (localNow && started) emptyList() else listOf("" to "Host default")),
                 enabled = enabled,
                 onPick = onModel,
             )
@@ -128,16 +136,28 @@ fun ChatOptionsBar(
             if (!localNow) {
                 PickerChip(
                     label = if (effort == null) "Default effort" else ModelLabels.effort(effort),
-                    options = ModelLabels.effortOptions(),
+                    options = ModelLabels.effortOptions() + ("" to "Host default"),
                     enabled = enabled,
                     onPick = onEffort,
                 )
             }
-            AssistChip(
-                onClick = { },
-                enabled = false,
-                label = { Text(if (mode == "act") "Act" else "Ask") },
-            )
+            if (!localNow) {
+                PickerChip(
+                    label = if (mode == "act") "Act" else "Ask",
+                    options = listOf(
+                        "ask" to "Ask — reasoning and memory, no tools",
+                        "act" to "Act — files, commands, the web",
+                    ),
+                    enabled = enabled,
+                    onPick = onMode,
+                )
+            } else {
+                AssistChip(
+                    onClick = { },
+                    enabled = false,
+                    label = { Text("Ask") },
+                )
+            }
             if (localNow) {
                 Text(
                     ModelLabels.LOCAL_ASK_ONLY,

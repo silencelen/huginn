@@ -52,8 +52,10 @@ fun DevicesScreen(
     }
 
     // A phone is a pocketful of mis-taps and Forget sits beside two buttons you
-    // press often, so it asks. The desktop does not, and does not need to.
-    var forgetTarget by remember { mutableStateOf<Device?>(null) }
+    // press often, so it asks. The target is the MACHINE — every credential the
+    // box holds — because the audit caught per-row callbacks racing this
+    // single-slot dialog, which silently kept only the last row.
+    var forgetTarget by remember { mutableStateOf<MachineGroup?>(null) }
 
     Box(Modifier.fillMaxSize()) {
         if (devices.isEmpty() && !loading) {
@@ -93,21 +95,31 @@ fun DevicesScreen(
         }
     }
 
-    forgetTarget?.let { d ->
+    forgetTarget?.let { g ->
         AlertDialog(
             onDismissRequest = { forgetTarget = null },
-            title = { Text("Forget ${d.name}?") },
+            title = { Text("Forget ${g.head.name}?") },
             // Said precisely, because "remove" would be a lie: nothing here reaches
-            // onto that machine, and a runner still running there simply re-enrols.
+            // onto that machine, and its always-on services simply re-enrol.
             text = {
                 Text(
-                    "Huginn stops offering it work. Nothing changes on ${d.name} itself — " +
-                        "if its runner is still going it will enrol again. Stop it there to " +
-                        "make this stick.",
+                    if (g.serving.isEmpty()) {
+                        "Huginn stops offering it work. Nothing changes on ${g.head.name} itself — " +
+                            "if its runner is still going it will enrol again. Stop it there to " +
+                            "make this stick."
+                    } else {
+                        "Huginn stops offering it work and its local models. Nothing changes on " +
+                            "${g.head.name} itself — a runner or serving service still going there " +
+                            "simply re-enrols. Stop them there (“huginn device off”, " +
+                            "“huginn local off”) to make this stick."
+                    },
                 )
             },
             confirmButton = {
-                TextButton(onClick = { val t = d; forgetTarget = null; onForget(t) }) { Text("Forget") }
+                TextButton(onClick = {
+                    val t = g; forgetTarget = null
+                    t.rows.forEach(onForget)
+                }) { Text("Forget") }
             },
             dismissButton = { TextButton(onClick = { forgetTarget = null }) { Text("Cancel") } },
         )
