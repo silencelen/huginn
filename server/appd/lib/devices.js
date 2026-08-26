@@ -70,6 +70,35 @@ function emptyState() {
   return { devices: {} };
 }
 
+/**
+ * The MACHINE a row belongs to — one physical box, presented as one object.
+ *
+ * A box that both runs claude work and serves local models holds TWO
+ * enrolments on purpose: the serving credential is the exclusive `generate`
+ * rung and must never gain claude authority, so the rows stay separate where
+ * authority is decided. But they are one machine to the person, so every row
+ * carries this grouping key and every renderer folds rows that share it into
+ * one device with capability facets. Display and grouping ONLY — never
+ * routing, never authority.
+ */
+function normalizeMachine(s) {
+  const m = String(s || '').toLowerCase().replace(/[^a-z0-9-]+/g, '-')
+    .replace(/-+/g, '-').replace(/^-|-$/g, '').slice(0, 40);
+  return m || null;
+}
+
+/**
+ * For rows enrolled before machines were reported (or by an old runner):
+ * the serving row's default name is `<hostname>-llm` by construction, so
+ * stripping that suffix rejoins it to its machine. Heuristic by admission —
+ * a runner that REPORTS its machine always wins over this.
+ */
+function deriveMachine(device) {
+  const name = String((device && device.name) || '');
+  const base = device && device.scope === 'generate' ? name.replace(/-llm$/i, '') : name;
+  return normalizeMachine(base);
+}
+
 /** @returns {{ok: true, device: object} | {ok: false, error: string}} */
 function validateRegistration(raw, now) {
   const b = raw && typeof raw === 'object' ? raw : {};
@@ -111,6 +140,9 @@ function validateRegistration(raw, now) {
           .filter((m) => MODEL_SLUG_RE.test(String(m.slug || '')))
           .map((m) => ({ slug: String(m.slug), display: cleanDisplay(m.display) || String(m.slug) })),
       } : {}),
+      // The grouping key: reported by current runners, derived from the name
+      // for older ones so one box never renders as two devices either way.
+      machine: normalizeMachine(b.machine) || deriveMachine({ name, scope }),
       registeredAt: now,
       lastSeen: now,
     },
@@ -233,6 +265,9 @@ function deviceView(id, device, now) {
     online: isOnline(device, now),
     lastSeen: device.lastSeen ?? null,
     registeredAt: device.registeredAt ?? null,
+    // Derived at view time too, so a row persisted before machines existed
+    // groups correctly even before its runner re-registers.
+    machine: device.machine || deriveMachine(device),
     ...(device.llmSlug ? { llmSlug: device.llmSlug } : {}),
     ...(Array.isArray(device.models) ? { models: device.models } : {}),
   };
@@ -297,6 +332,21 @@ function canServe(device, now) {
  * registry, no cache: there is no exec and no disk here, and `available` is
  * time-dependent, so any cache would lie.
  */
+/**
+ * The name a person knows the machine by: its claude row's name when the
+ * machine has one ("DATATREEX"), the serving row's own name otherwise. The
+ * `-llm` names are credential labels, not what anyone calls the box.
+ */
+function machineDisplayName(state, d) {
+  const machine = d.machine || deriveMachine(d);
+  if (machine) {
+    for (const s of Object.values((state && state.devices) || {})) {
+      if (s !== d && s.scope !== 'generate' && (s.machine || deriveMachine(s)) === machine) return s.name;
+    }
+  }
+  return d.name;
+}
+
 function localModelRows(state, now) {
   const rows = [];
   for (const [id, d] of Object.entries((state && state.devices) || {})) {
@@ -304,7 +354,7 @@ function localModelRows(state, now) {
     for (const m of d.models) {
       rows.push({
         id: `local-${d.llmSlug}-${m.slug}`,
-        display: `${m.display} - ${d.name}`,
+        display: `${m.display} - ${machineDisplayName(state, d)}`,
         family: 'local',
         available: isOnline(d, now),
         host: id,
@@ -335,4 +385,5 @@ module.exports = {
   emptyState, validateRegistration, effectiveScope, scopeCovers,
   canRun, isOnline, noteSeen, pruneDevices, deviceView, workItem,
   slugify, mintLlmSlug, cleanDisplay, canServe, localModelRows,
+  normalizeMachine, deriveMachine, machineDisplayName,
 };
