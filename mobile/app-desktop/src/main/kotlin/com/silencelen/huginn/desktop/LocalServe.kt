@@ -90,10 +90,54 @@ object LocalServe {
         File(System.getProperty("user.home") ?: ".", ".config/huginn-local")
     }
 
-    fun nodeOk(): Boolean = try {
-        ProcessBuilder("node", "--version").redirectErrorStream(true).start()
-            .let { it.inputStream.readBytes(); it.waitFor() == 0 }
-    } catch (_: Exception) { false }
+    /**
+     * Find a node binary the way a person at a terminal would. A GUI app's
+     * PATH is whatever the desktop session had at login — an fnm/nvm shell
+     * hook, a fresh MSI, or a per-user install can all leave `node` visible
+     * in every terminal and invisible here (field-found on the first desktop
+     * activation attempt). Every candidate is PROVEN by running `--version`,
+     * never assumed from existence.
+     */
+    fun findNode(): String? {
+        val home = System.getProperty("user.home")
+        val candidates = buildList {
+            add("node")
+            if (isWindows()) {
+                System.getenv("NVM_SYMLINK")?.let { add(File(it, "node.exe").path) }
+                System.getenv("ProgramFiles")?.let { add(File(it, "nodejs\\node.exe").path) }
+                System.getenv("ProgramFiles(x86)")?.let { add(File(it, "nodejs\\node.exe").path) }
+                System.getenv("LOCALAPPDATA")?.let { add(File(it, "Programs\\nodejs\\node.exe").path) }
+            } else {
+                add("/usr/local/bin/node")
+                add("/usr/bin/node")
+                add("/opt/homebrew/bin/node")
+                home?.let { add("$it/.nvm/current/bin/node") }
+            }
+        }
+        for (c in candidates) {
+            try {
+                val p = ProcessBuilder(c, "--version").redirectErrorStream(true).start()
+                p.inputStream.readBytes()
+                if (p.waitFor() == 0) return c
+            } catch (_: Exception) { /* next candidate */ }
+        }
+        return null
+    }
+
+    @Volatile
+    private var cachedNode: String? = null
+
+    /** The proven node binary, cached once found; null means genuinely absent. */
+    fun nodeBin(): String? {
+        cachedNode?.let { return it }
+        val found = findNode()
+        if (found != null) cachedNode = found
+        return found
+    }
+
+    private const val NODE_MISSING =
+        "node was not found on this machine — install Node.js LTS " +
+            "(nodejs.org, or on Windows: winget install OpenJS.NodeJS.LTS), then try again"
 
     /**
      * Fetch the manager, the shim and the device runner when absent — the same
@@ -102,6 +146,9 @@ object LocalServe {
      * that fails `node --check` is refused, never installed.
      */
     suspend fun fetchManager(onLine: (String) -> Unit): Boolean = withContext(Dispatchers.IO) {
+        // NOT `?: run {}`: a bare `run` in this object is the member verb below.
+        val node = nodeBin()
+        if (node == null) { onLine(NODE_MISSING); return@withContext false }
         for (f in listOf("huginn-local", "huginn-llm-shim", "huginn-device")) {
             val dest = File(huginnDir(), f)
             if (dest.isFile && dest.length() > 0) continue
@@ -116,7 +163,7 @@ object LocalServe {
                 check(conn.responseCode == 200) { "answered ${conn.responseCode}" }
                 conn.inputStream.use { input -> tmp.outputStream().use { input.copyTo(it) } }
                 check(tmp.length() > 0) { "empty download" }
-                val chk = ProcessBuilder("node", "--check", tmp.absolutePath)
+                val chk = ProcessBuilder(node, "--check", tmp.absolutePath)
                     .redirectErrorStream(true).start()
                 val chkOut = chk.inputStream.bufferedReader().readText()
                 check(chk.waitFor() == 0) { "failed its syntax check: ${chkOut.take(120)}" }
@@ -136,7 +183,8 @@ object LocalServe {
         runCatching {
             val mgr = managerFile()
             check(mgr.isFile) { "not fetched" }
-            val p = ProcessBuilder("node", mgr.absolutePath, "status", "--json")
+            val node = checkNotNull(nodeBin()) { NODE_MISSING }
+            val p = ProcessBuilder(node, mgr.absolutePath, "status", "--json")
                 .redirectErrorStream(true).start()
             val out = p.inputStream.bufferedReader().readText()
             check(p.waitFor() == 0) { out.take(300).ifBlank { "status failed" } }
@@ -147,9 +195,12 @@ object LocalServe {
     /** Read-only: what turning on would install HERE. Fetches the manager if absent. */
     suspend fun plan(onLine: (String) -> Unit): Result<Plan> = withContext(Dispatchers.IO) {
         runCatching {
-            check(nodeOk()) { "node was not found — which any machine that can run claude already has" }
+            // Not "any machine that can run claude has node": the native claude
+            // build needs no node at all — field-proven by the first machine
+            // this ran on. Absence gets the install instruction, by name.
+            val node = checkNotNull(nodeBin()) { NODE_MISSING }
             check(fetchManager(onLine)) { "the manager could not be fetched" }
-            val p = ProcessBuilder("node", managerFile().absolutePath, "plan", "--json")
+            val p = ProcessBuilder(node, managerFile().absolutePath, "plan", "--json")
                 .redirectErrorStream(true).start()
             val out = p.inputStream.bufferedReader().readText()
             check(p.waitFor() == 0) { out.take(300).ifBlank { "plan failed" } }
@@ -202,8 +253,10 @@ object LocalServe {
     suspend fun run(vararg args: String, onLine: (String) -> Unit): Int = withContext(Dispatchers.IO) {
         val mgr = managerFile()
         if (!mgr.isFile) { onLine("the manager is not fetched — set up first"); return@withContext 2 }
+        val node = nodeBin()
+        if (node == null) { onLine(NODE_MISSING); return@withContext 2 }
         try {
-            val p = ProcessBuilder("node", mgr.absolutePath, *args)
+            val p = ProcessBuilder(node, mgr.absolutePath, *args)
                 .redirectErrorStream(true).start()
             p.inputStream.bufferedReader().forEachLine { onLine(it) }
             p.waitFor()
@@ -216,21 +269,25 @@ object LocalServe {
     /**
      * The .cmd the elevated side runs. A file, not an inline argument string,
      * for the same reason the device runner uses one: quoting survives review,
-     * and the redirect is how output crosses the elevation boundary.
+     * and the redirect is how output crosses the elevation boundary. The node
+     * path is the RESOLVED one, quoted — the elevated environment's PATH is
+     * yet another PATH, and `C:\Program Files\nodejs` carries a space.
      */
-    fun elevatedCmdText(mgr: File, args: List<String>, log: File): String =
-        "@echo off\r\nnode \"${mgr.path}\" ${args.joinToString(" ")} > \"${log.path}\" 2>&1\r\n"
+    fun elevatedCmdText(node: String, mgr: File, args: List<String>, log: File): String =
+        "@echo off\r\n\"$node\" \"${mgr.path}\" ${args.joinToString(" ")} > \"${log.path}\" 2>&1\r\n"
 
     private suspend fun runElevatedWindows(args: List<String>, onLine: (String) -> Unit): Int {
         val mgr = managerFile()
         if (!mgr.isFile) { onLine("the manager is not fetched — set up first"); return 2 }
+        val node = nodeBin()
+        if (node == null) { onLine(NODE_MISSING); return 2 }
         val dir = localDataDir()
         val log = File(dir, "activate.log")
         val cmd = File(dir, "activate.cmd")
         try {
             dir.mkdirs()
             log.writeText("")
-            cmd.writeText(elevatedCmdText(mgr, args, log))
+            cmd.writeText(elevatedCmdText(node, mgr, args, log))
         } catch (e: Exception) {
             onLine("could not stage the elevated step: ${e.message}")
             return 2
