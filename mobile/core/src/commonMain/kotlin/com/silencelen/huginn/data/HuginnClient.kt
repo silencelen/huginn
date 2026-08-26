@@ -658,6 +658,7 @@ class HuginnClient(
         root: String? = null,
         version: String? = null,
         locked: Boolean = false,
+        machine: String? = null,
     ): Device = decode(
         post("/v1/devices", body = buildJsonObject {
             put("name", JsonPrimitive(name))
@@ -667,6 +668,9 @@ class HuginnClient(
             if (id != null) put("id", JsonPrimitive(id))
             if (root != null) put("root", JsonPrimitive(root))
             if (version != null) put("version", JsonPrimitive(version))
+            // The box this row belongs to, so a renamed device still folds
+            // into one machine object with its serving sibling.
+            if (machine != null) put("machine", JsonPrimitive(machine))
         }),
     )
 

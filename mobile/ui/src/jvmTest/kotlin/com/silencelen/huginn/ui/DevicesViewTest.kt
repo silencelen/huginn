@@ -110,4 +110,62 @@ class DevicesViewTest {
         val line = describeDevice(servingDevice(models = emptyList()))
         assertTrue(line.contains("serves local models"), line)
     }
+
+    // -------------------------------------------------- one machine, one card
+    //
+    // A box wearing two credentials (claude work + local-AI serving) is ONE
+    // device to a person. Grouping is by the daemon's machine key; authority
+    // stays per-row, which these tests assert by checking the facets keep
+    // their own scopes.
+
+    private fun claudeRow(machine: String? = "datatreex") = Device(
+        id = "c1", name = "DATATREEX", platform = "windows",
+        scope = "own", effectiveScope = "own", online = true, machine = machine,
+    )
+
+    private fun servingRow(machine: String? = "datatreex", online: Boolean = true) = Device(
+        id = "s1", name = "datatreex-llm", platform = "windows",
+        scope = "generate", effectiveScope = "generate", online = online,
+        machine = machine, llmSlug = "datatreex-llm",
+        models = listOf(DeviceModel("qwen3-8b", "Qwen3 8B")),
+    )
+
+    @Test
+    fun rowsSharingAMachineFoldIntoOneGroupNamedForItsClaudeRow() {
+        val groups = groupByMachine(listOf(claudeRow(), servingRow()))
+        assertEquals(1, groups.size, "one box, one card")
+        val g = groups.single()
+        assertEquals("DATATREEX", g.head.name, "the name a person knows the box by")
+        assertEquals(listOf("own"), g.claude.map { it.scope })
+        assertEquals(listOf("generate"), g.serving.map { it.scope })
+    }
+
+    @Test
+    fun aMachineIsOnlineWhenAnyOfItsFacetsIs() {
+        // The real shape this catches: the desktop app is closed (claude facet
+        // dark) while the serving SERVICE still answers. The box is not offline.
+        val g = groupByMachine(listOf(claudeRow().copy(online = false), servingRow())).single()
+        assertTrue(g.online)
+    }
+
+    @Test
+    fun aServeOnlyMachineIsItsOwnGroupHeadedByTheServingRow() {
+        val g = groupByMachine(listOf(servingRow(machine = "lonely"))).single()
+        assertEquals("datatreex-llm", g.head.name)
+        assertTrue(g.claude.isEmpty())
+    }
+
+    @Test
+    fun rowsWithoutAMachineKeyNeverMergeWithEachOther() {
+        // Pre-2.76.0 daemons emit no machine: falling back to the row id must
+        // keep every row its own group rather than lumping strangers together.
+        val groups = groupByMachine(listOf(claudeRow(machine = null), servingRow(machine = null)))
+        assertEquals(2, groups.size)
+    }
+
+    @Test
+    fun theMergedServingLineDropsThePlatformTheClaudeFacetAlreadySaid() {
+        val line = describeDevice(servingDevice(), includePlatform = false)
+        assertEquals("serves local models · Qwen3 8B · serving · v0.12.1", line)
+    }
 }

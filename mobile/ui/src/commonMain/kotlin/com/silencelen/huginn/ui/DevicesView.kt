@@ -55,11 +55,11 @@ fun DevicesSection(
                 modifier = Modifier.padding(start = 14.dp, top = 6.dp),
             )
         }
-        devices.forEach { d ->
-            DeviceRow(
-                device = d,
-                onStart = { mode -> onStart(d, mode) },
-                onForget = { onForget(d) },
+        groupByMachine(devices).forEach { g ->
+            MachineCard(
+                group = g,
+                onStart = onStart,
+                onForget = onForget,
             )
         }
         // Said once, under the list, because the commonest question this screen
@@ -74,8 +74,31 @@ fun DevicesSection(
     }
 }
 
+/**
+ * One MACHINE, seen whole. A box that both runs claude work and serves local
+ * models holds two enrolments on purpose — authority is decided per-row, and
+ * the serving credential must never gain claude reach — but a person owns a
+ * box, not a credential. Rows sharing the daemon's machine key fold into one
+ * group; the `-llm` row becomes the "serves local AI" facet of its machine.
+ */
+data class MachineGroup(val rows: List<Device>) {
+    val claude: List<Device> = rows.filter { it.scope != "generate" }
+    val serving: List<Device> = rows.filter { it.scope == "generate" }
+    /** The name a person knows the box by — its claude row's, when it has one. */
+    val head: Device = claude.firstOrNull() ?: rows.first()
+    val online: Boolean = rows.any { it.online }
+}
+
+fun groupByMachine(devices: List<Device>): List<MachineGroup> {
+    val groups = LinkedHashMap<String, MutableList<Device>>()
+    for (d in devices) {
+        groups.getOrPut(d.machine?.takeIf { it.isNotBlank() } ?: d.id) { mutableListOf() }.add(d)
+    }
+    return groups.values.map { MachineGroup(it) }
+}
+
 @Composable
-private fun DeviceRow(device: Device, onStart: (String) -> Unit, onForget: () -> Unit) {
+private fun MachineCard(group: MachineGroup, onStart: (Device, String) -> Unit, onForget: (Device) -> Unit) {
     Surface(
         color = MaterialTheme.colorScheme.surfaceVariant,
         contentColor = MaterialTheme.colorScheme.onSurface,
@@ -84,69 +107,88 @@ private fun DeviceRow(device: Device, onStart: (String) -> Unit, onForget: () ->
         Column(Modifier.padding(start = 14.dp, end = 6.dp, top = 10.dp, bottom = 6.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Surface(
-                    color = if (device.online) MaterialTheme.colorScheme.primary
+                    color = if (group.online) MaterialTheme.colorScheme.primary
                     else MaterialTheme.colorScheme.outlineVariant,
                     shape = CircleShape,
-                    modifier = Modifier.size(if (device.online) 8.dp else 6.dp),
+                    modifier = Modifier.size(if (group.online) 8.dp else 6.dp),
                 ) {}
                 Column(Modifier.padding(start = 10.dp).weight(1f)) {
                     Text(
-                        device.name,
+                        group.head.name,
                         style = MaterialTheme.typography.bodyLarge,
                         fontWeight = FontWeight.SemiBold,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
                     )
-                    Text(
-                        describeDevice(device),
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        maxLines = 2,
-                        overflow = TextOverflow.Ellipsis,
-                    )
+                    // Each capability on its own line: what it will DO (claude),
+                    // then what it SERVES. Two facets of one machine, never two
+                    // machines.
+                    group.claude.forEach { d ->
+                        Text(
+                            describeDevice(d),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 2,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    }
+                    group.serving.forEach { d ->
+                        Text(
+                            describeDevice(d, includePlatform = group.claude.isEmpty()),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 2,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    }
                 }
             }
-            device.root?.takeIf { it.isNotBlank() }?.let { root ->
-                // Said plainly, because the word "work" invites exactly the wrong
-                // assumption: this is where a run STARTS, not a fence it stays behind.
-                Text(
-                    "work starts in $root — not a sandbox",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.padding(start = 18.dp, top = 2.dp),
-                )
+            group.claude.forEach { d ->
+                d.root?.takeIf { it.isNotBlank() }?.let { root ->
+                    // Said plainly, because the word "work" invites exactly the wrong
+                    // assumption: this is where a run STARTS, not a fence it stays behind.
+                    Text(
+                        "work starts in $root — not a sandbox",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.padding(start = 18.dp, top = 2.dp),
+                    )
+                }
             }
             Row(
                 Modifier.fillMaxWidth().padding(top = 2.dp),
                 horizontalArrangement = Arrangement.End,
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                // A serving row cannot start a claude run, so Ask/Act here are
-                // ABSENT for it (a button that always fails is worse than none);
-                // the line below answers "so how do I use it" instead. Forget
-                // stays: it is still the only takeaway.
-                if (device.scope != "generate") {
+                // Ask/Act belong to the claude capability — a serving facet can
+                // never start a claude run, so a machine without that capability
+                // shows no such buttons (one that always fails is worse than
+                // none); the line below answers "so how do I use it" instead.
+                group.claude.firstOrNull()?.let { d ->
                     // Enabled from what the machine will do RIGHT NOW, not from what it
                     // is enrolled at: a locked machine offering an Act button that always
                     // fails is worse than no button at all.
                     TextButton(
-                        onClick = { onStart("ask") },
-                        enabled = device.online && !device.running &&
-                            DevicePolicy.allows(DevicePolicy.parse(device.effectiveScope), "ask"),
+                        onClick = { onStart(d, "ask") },
+                        enabled = d.online && !d.running &&
+                            DevicePolicy.allows(DevicePolicy.parse(d.effectiveScope), "ask"),
                     ) { Text("Ask here") }
                     TextButton(
-                        onClick = { onStart("act") },
-                        enabled = device.online && !device.running &&
-                            DevicePolicy.allows(DevicePolicy.parse(device.effectiveScope), "act"),
+                        onClick = { onStart(d, "act") },
+                        enabled = d.online && !d.running &&
+                            DevicePolicy.allows(DevicePolicy.parse(d.effectiveScope), "act"),
                     ) { Text("Act here") }
                 }
-                TextButton(onClick = onForget) { Text("Forget") }
+                // One Forget for the machine: it takes away every credential the
+                // box holds, because forgetting half a machine is a state nobody
+                // asks for by pressing a button called Forget.
+                TextButton(onClick = { group.rows.forEach(onForget) }) { Text("Forget") }
             }
-            if (device.scope == "generate") {
+            if (group.serving.isNotEmpty()) {
                 Text(
-                    "Chat with it by picking its model in any chat's model menu.",
+                    "Chat with its local AI by picking its model in any chat's model menu.",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
@@ -162,11 +204,15 @@ private fun DeviceRow(device: Device, onStart: (String) -> Unit, onForget: () ->
  * locked" is a different situation from "enrolled read-only", and showing only the
  * second makes a locked machine look misconfigured by somebody.
  */
-fun describeDevice(device: Device): String {
+fun describeDevice(device: Device, includePlatform: Boolean = true): String {
     // A serving row says what it IS: the lock never changes what it will do
     // (generate is exclusive and ignores the lock drop), so no locked clause.
+    // Inside a merged machine card the claude facet already named the platform,
+    // so the serving line may drop it rather than say "windows" twice.
     if (device.scope == "generate") {
-        val parts = mutableListOf(device.platform, "serves local models")
+        val parts = mutableListOf<String>()
+        if (includePlatform) parts += device.platform
+        parts += "serves local models"
         if (device.models.isNotEmpty()) parts += device.models.joinToString(", ") { it.display.ifBlank { it.slug } }
         parts += when {
             !device.online -> "not reachable"

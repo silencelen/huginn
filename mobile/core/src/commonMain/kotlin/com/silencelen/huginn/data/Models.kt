@@ -939,6 +939,13 @@ data class Device(
     /** Epoch MILLIseconds, like Round.nextRunAt and unlike the record timestamps. */
     val lastSeen: Long? = null,
     val registeredAt: Long? = null,
+    /**
+     * The daemon's grouping key for the physical box: rows sharing it are one
+     * machine wearing two credentials (claude work + local-AI serving) and
+     * render as ONE device with capability facets. Grouping and display only —
+     * authority stays per-row.
+     */
+    val machine: String? = null,
     val running: Boolean = false,
     val queued: Int = 0,
     /** The daemon-minted slug inside a serving row's model ids. Display only. */

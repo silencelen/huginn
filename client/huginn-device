@@ -31,7 +31,7 @@ const https = require('https');
 const readline = require('readline');
 const { spawn } = require('child_process');
 
-const VERSION = '0.12.5';
+const VERSION = '0.12.6';
 
 // ---8<--- GENERATED POLICY — scripts/gen-device-policy.js — DO NOT EDIT ---8<---
 const POLICY = {
@@ -200,6 +200,18 @@ function tokenOrWhy() {
     };
   }
   return { token: t, why: null };
+}
+
+/**
+ * The box this row belongs to. The daemon groups rows sharing this key into
+ * ONE machine object (a serving `<host>-llm` sibling joins its host), so a
+ * renamed device still folds correctly. Normalised the way the daemon
+ * normalises; grouping and display only, never authority.
+ */
+function machineKey() {
+  const m = String(os.hostname() || '').toLowerCase().replace(/[^a-z0-9-]+/g, '-')
+    .replace(/-+/g, '-').replace(/^-|-$/g, '').slice(0, 40);
+  return m || undefined;
 }
 
 function platform() {
@@ -401,6 +413,7 @@ async function enrol(conf) {
     root: conf.root || null,
     version: VERSION,
     locked: locked(),
+    machine: machineKey(),
     // Display-only advertisement (what a serving row says it serves). The
     // daemon renders it untrusted; it is never routing authority.
     models: Array.isArray(conf.models) ? conf.models : undefined,

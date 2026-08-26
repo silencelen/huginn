@@ -10,6 +10,15 @@ Format loosely follows [Keep a Changelog](https://keepachangelog.com/); versions
 
 ## [Unreleased]
 
+## [0.12.6] - 2026-08-25
+
+### Changed
+- The device runner reports which MACHINE it is at enrolment. One box wearing
+  two credentials (claude work + local-AI serving) now presents as one device
+  with capability facets everywhere devices are listed; authority still lives
+  per-row and is unchanged. Daemons from 2.76.0 emit the key and derive it
+  for older runners, so every pairing keeps working.
+
 ## [0.12.5] - 2026-08-25
 
 ### Fixed
