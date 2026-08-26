@@ -1,5 +1,17 @@
 # Huginn Desktop changelog
 
+## 0.10.2
+
+- **The installers carry the Node.js dependency now**, instead of the app's
+  error message teaching it after the fact. The Windows installer detects a
+  machine without node and offers to install Node.js LTS through winget — the
+  one administrator prompt belongs to the signed Node.js package, never to
+  this unsigned per-user installer, and silent upgrade installs skip the
+  offer entirely. The Linux .deb declares `Recommends: nodejs`, so apt brings
+  it by default while `--no-install-recommends` can still decline. The base
+  app runs fine without node either way — only serving local AI models and
+  running device work need it, and declining the offer only postpones those.
+
 ## 0.10.1
 
 - **Local-AI setup finds node like a person would.** The first field run hit

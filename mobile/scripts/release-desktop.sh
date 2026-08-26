@@ -215,6 +215,32 @@ DEB_SRC="$BUILD/compose/binaries/main/deb/$DEB"
 [ -f "$DEB_SRC" ] || { echo "REFUSING: $DEB_SRC was not produced" >&2; exit 1; }
 echo "  $(basename "$DEB_SRC") $(stat -c %s "$DEB_SRC") bytes"
 
+# The optional features (serving local AI, running work as a device) are Node
+# programs, and the native claude build no longer implies node exists on the
+# machine. Compose's DSL exposes no dependency field, so it is added to the
+# built package directly — Recommends, not Depends: the app itself runs fine
+# without node, apt installs Recommends by default, and --no-install-recommends
+# still lets a minimal install decline. Verified after the repack, since a
+# packaging step that exits 0 having done nothing is the house failure shape.
+DEB_TMP="$BUILD/deb-recommends"
+rm -rf "$DEB_TMP"; mkdir -p "$DEB_TMP"
+dpkg-deb -R "$DEB_SRC" "$DEB_TMP/root" >> "$LOG" 2>&1
+if grep -q '^Recommends:' "$DEB_TMP/root/DEBIAN/control"; then
+  echo "REFUSING: the deb already carries Recommends — blind append would corrupt it" >&2; exit 1
+fi
+# jpackage's control ends with a blank line; a field appended after it reads
+# as a SECOND package paragraph and dpkg-deb refuses the whole file. One
+# paragraph in, one out.
+sed -i '/^$/d' "$DEB_TMP/root/DEBIAN/control"
+printf 'Recommends: nodejs (>= 16)\n' >> "$DEB_TMP/root/DEBIAN/control"
+dpkg-deb -b "$DEB_TMP/root" "$DEB_TMP/$DEB" >> "$LOG" 2>&1
+[ -f "$DEB_TMP/$DEB" ] || { echo "REFUSING: Recommends repack produced no deb" >&2; exit 1; }
+[ "$(dpkg-deb -f "$DEB_TMP/$DEB" Recommends)" = "nodejs (>= 16)" ] || {
+  echo "REFUSING: repacked deb does not answer for its Recommends field" >&2; exit 1; }
+mv -f "$DEB_TMP/$DEB" "$DEB_SRC"
+rm -rf "$DEB_TMP"
+echo "  Recommends: nodejs (>= 16) injected ($(stat -c %s "$DEB_SRC") bytes repacked)"
+
 # ----------------------------------------------------------- 3. windows build
 if [ "$LINUX_ONLY" = 0 ]; then
   echo "[3/7] windows installer (jpackage.exe under wine -> linux makensis)"

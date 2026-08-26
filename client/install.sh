@@ -37,3 +37,8 @@ source "$HOME/.huginn/huginn.sh"
 echo
 echo "Installed. Authorize the key above on the host, then:  huginn help  |  huginn status"
 echo "This machine may also be able to serve local AI models to huginn (optional, ~5 GB):  huginn local on"
+# The base client is bash+ssh and needs no node; only the optional features do.
+# Said HERE because the native claude build ships without node, so its absence
+# is normal now, not a sign something else is missing.
+command -v node >/dev/null 2>&1 || \
+  echo "Note: the optional device/local-AI features need Node.js LTS (nodejs.org) — the base client does not."
