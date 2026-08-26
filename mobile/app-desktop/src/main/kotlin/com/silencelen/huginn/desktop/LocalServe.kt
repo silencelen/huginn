@@ -140,6 +140,16 @@ object LocalServe {
             "(nodejs.org, or on Windows: winget install OpenJS.NodeJS.LTS), then try again"
 
     /**
+     * The name a download is syntax-checked under. MUST end in .js: modern
+     * node refuses to even PARSE an unknown extension (`node --check x.tmp`
+     * dies with ERR_UNKNOWN_FILE_EXTENSION out of esm/get_format — field-hit
+     * on the first Node-24 machine), while older node assumed CommonJS and
+     * passed, which is why this never bit before. The installed name stays
+     * extensionless, which every node RUNS as CommonJS.
+     */
+    fun fetchTmpName(f: String) = "$f.tmp.js"
+
+    /**
      * Fetch the manager, the shim and the device runner when absent — the same
      * three files, from the same trust root, as the CLI's `huginn local on`
      * (the pinned public repo over TLS), and with the same gate: a download
@@ -153,7 +163,7 @@ object LocalServe {
             val dest = File(huginnDir(), f)
             if (dest.isFile && dest.length() > 0) continue
             dest.parentFile?.mkdirs()
-            val tmp = File(huginnDir(), "$f.tmp")
+            val tmp = File(huginnDir(), fetchTmpName(f))
             onLine("fetching $f…")
             try {
                 val conn = URI("https://raw.githubusercontent.com/silencelen/huginn/main/client/$f")

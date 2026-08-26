@@ -350,6 +350,17 @@ assert p["services"] == ["huginn-local-llm", "huginn-local-runner"], p["services
   || bad "plan MUTATED its dir: $(ls -A "$PLAN_DIR" | head -3 | tr '\n' ' ')"
 rm -rf "$PLAN_DIR"
 
+# Modern node refuses to PARSE an unknown extension — `node --check x.tmp`
+# dies with ERR_UNKNOWN_FILE_EXTENSION (esm/get_format; reproduced on this
+# host's node 22.23.1, field-hit by the first Node-24 machine). Every fetch
+# that syntax-checks its download must therefore download under a .js name.
+[ "$(grep -c 'tmp="\$dest\.tmp\.js"' client/huginn.sh)" = 2 ] \
+  && ok "sh fetches syntax-check under a .js temp name" \
+  || bad "sh fetch temp name regressed — .tmp is unparseable on modern node"
+[ "$(grep -Fc '.tmp.js"' client/huginn.ps1)" -ge 2 ] \
+  && ok "ps1 fetches syntax-check under a .js temp name" \
+  || bad "ps1 fetch temp name regressed — .tmp is unparseable on modern node"
+
 # Verb parity for the new door, and the runner riding along in the fetch —
 # a machine that never enrolled as a claude device has no runner otherwise.
 grep -q '^    plan)' client/huginn.sh && grep -q "\$sub -eq 'plan'" client/huginn.ps1 \
