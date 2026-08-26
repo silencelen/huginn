@@ -188,17 +188,33 @@ test('an offline serving machine refuses at the button, with the machine named',
   assert.match(gone.body.error, /unenrolled|no enrolled machine/);
 });
 
-test('a local chat is pinned to its machine for life', async () => {
+/** Drive one real turn through the work lane, so the chat HAS history. */
+async function makeStarted(dev, chatId, text = 'hello') {
+  const sent = await api(`/v1/chats/${chatId}/messages`, { method: 'POST', body: JSON.stringify({ text }) });
+  assert.ok(sent.status < 300, JSON.stringify(sent.body));
+  const work = await api(`/v1/devices/${dev.id}/work?wait=2`);
+  assert.ok(work.body && work.body.work, JSON.stringify(work.body));
+  const init = { type: 'system', subtype: 'init', session_id: crypto.randomUUID() };
+  const result = { type: 'result', is_error: false, result: 'hi', duration_ms: 5, num_turns: 1 };
+  const posted = await api(`/v1/devices/${dev.id}/work/${work.body.work.id}/events`, {
+    method: 'POST', body: JSON.stringify({ lines: [JSON.stringify(init), JSON.stringify(result)], done: true, exitCode: 0 }),
+  });
+  assert.ok(posted.status < 300, JSON.stringify(posted.body));
+  await wait(300);
+}
+
+test('a STARTED local chat is pinned to its machine — the pin protects history', async () => {
   const dev = await enrolLlm({ name: 'pinbox' });
   const other = await enrolLlm({ name: 'otherbox' });
   const id = `local-${dev.llmSlug}-qwen3-8b`;
   const { body: chat } = await api('/v1/chats', { method: 'POST', body: JSON.stringify({ model: id }) });
+  await makeStarted(dev, chat.id);
 
   const toAct = await api(`/v1/chats/${chat.id}`, { method: 'PATCH', body: JSON.stringify({ mode: 'act' }) });
   assert.equal(toAct.status, 409, JSON.stringify(toAct.body));
 
   const toClaude = await api(`/v1/chats/${chat.id}`, { method: 'PATCH', body: JSON.stringify({ model: 'opus' }) });
-  assert.equal(toClaude.status, 409);
+  assert.equal(toClaude.status, 409, 'history lives on the machine; the chat may not leave it');
 
   const toOther = await api(`/v1/chats/${chat.id}`, { method: 'PATCH', body: JSON.stringify({ model: `local-${other.llmSlug}-qwen3-8b` }) });
   assert.equal(toOther.status, 409);
@@ -207,10 +223,37 @@ test('a local chat is pinned to its machine for life', async () => {
   const sameHost = await api(`/v1/chats/${chat.id}`, { method: 'PATCH', body: JSON.stringify({ model: `local-${dev.llmSlug}-nomic-embed` }) });
   assert.equal(sameHost.status, 200, JSON.stringify(sameHost.body));
   assert.equal(sameHost.body.model, `local-${dev.llmSlug}-nomic-embed`);
+});
 
-  const claudeChat = await api('/v1/chats', { method: 'POST', body: JSON.stringify({ mode: 'ask' }) });
-  const cross = await api(`/v1/chats/${claudeChat.body.id}`, { method: 'PATCH', body: JSON.stringify({ model: id }) });
-  assert.equal(cross.status, 409, 'a claude chat cannot be patched onto a machine');
+test('an UNSTARTED chat may re-decide its machine — the pin protects history, not emptiness', async () => {
+  // The field shape this covers: both clients create the chat FIRST and offer
+  // the model second, so "New chat, pick Qwen3" arrived as a PATCH — and was
+  // refused with an instruction to start the new chat the user was already in.
+  const dev = await enrolLlm({ name: 'freebox' });
+  const other = await enrolLlm({ name: 'movebox' });
+  const id = `local-${dev.llmSlug}-qwen3-8b`;
+
+  // claude -> local: allowed, host pinned, ask forced.
+  const { body: chat } = await api('/v1/chats', { method: 'POST', body: JSON.stringify({ mode: 'ask' }) });
+  const onto = await api(`/v1/chats/${chat.id}`, { method: 'PATCH', body: JSON.stringify({ model: id }) });
+  assert.equal(onto.status, 200, JSON.stringify(onto.body));
+  assert.equal(onto.body.model, id);
+  assert.equal(onto.body.host, dev.id, 'the row choice IS the machine choice');
+  assert.equal(onto.body.mode, 'ask', 'ask is forced exactly as at creation');
+
+  // local -> another machine: an empty chat may move.
+  const move = await api(`/v1/chats/${chat.id}`, { method: 'PATCH', body: JSON.stringify({ model: `local-${other.llmSlug}-qwen3-8b` }) });
+  assert.equal(move.status, 200, JSON.stringify(move.body));
+  assert.equal(move.body.host, other.id);
+
+  // local -> claude: back onto this host.
+  const leave = await api(`/v1/chats/${chat.id}`, { method: 'PATCH', body: JSON.stringify({ model: 'opus' }) });
+  assert.equal(leave.status, 200, JSON.stringify(leave.body));
+  assert.equal(leave.body.host, 'local', 'leaving the machine lands the chat back home');
+
+  // act can still never arrive WITH a local pick, even unstarted.
+  const withAct = await api(`/v1/chats/${chat.id}`, { method: 'PATCH', body: JSON.stringify({ model: id, mode: 'act' }) });
+  assert.equal(withAct.status, 400, JSON.stringify(withAct.body));
 });
 
 test('the work item rides as mode generate with the composite id', async () => {

@@ -52,7 +52,7 @@ const pushLib = require('./lib/pushtokens');
 const { trySender } = require('./lib/fcm');
 const { createPending, stepSoftEnd } = require('./lib/softend');
 
-const VERSION = '2.76.0';
+const VERSION = '2.77.0';
 const PORT = Number(process.env.HUGINN_APPD_PORT || 8787);
 const DATA_DIR = process.env.HUGINN_APPD_DATA || '/var/lib/huginn-appd';
 const UPLOADS_DIR = path.join(DATA_DIR, 'uploads');
@@ -5199,10 +5199,41 @@ const server = http.createServer(async (req, res) => {
         // Validated BEFORE the mutator runs: a 400 PATCH must not half-apply the
         // rest of the body, and the updateMeta callback cannot return an error.
         let mv = null;
-        // A local-family chat is pinned to its machine for life: the model row
-        // WAS the host choice, so the only legal model change is another model
-        // on the same machine, and act-mode can never arrive.
-        if (isLocalFamily(meta.model)) {
+        // An UNSTARTED chat may re-decide its model freely, INCLUDING across
+        // the local/claude boundary and between machines. The pin below
+        // protects HISTORY — a transcript that lives on the machine that ran
+        // it — and a chat with no turns, no claude session and nothing in
+        // flight has none. Without this, both clients' "New chat, then pick
+        // the model" flow was refused with an instruction to start the new
+        // chat the user was already looking at.
+        const unstarted = !meta.turns && !meta.claudeSessionId && !activeRuns.has(id);
+        if (unstarted && 'model' in body) {
+          if (isLocalFamily(body.model)) {
+            // Crossing ONTO a machine: same decision as at creation — same
+            // resolution, same at-the-button refusals, same forced ask.
+            if (body.mode === 'act') return sendErr(res, 400, 'local models run ask-only — switch to Ask');
+            const r = resolveLocalModel(body.model);
+            if (r.error) return sendErr(res, 400, r.error);
+            const served = devicesLib.canServe(r.device, Date.now());
+            if (!served.ok) return sendErr(res, 409, served.reason);
+            mv = { model: r.id, host: r.deviceId, forceAsk: true };
+          } else if (isLocalFamily(meta.model)) {
+            // Leaving a machine (including clearing back to the default):
+            // becomes a plain claude chat on this host.
+            mv = modelDecision(body.model);
+            if (mv.error) return sendErr(res, 400, mv.error);
+            mv = { model: mv.model, host: 'local' };
+          } else {
+            // claude -> claude: the host is untouched on purpose — an
+            // Ask-here chat pointed at a device keeps its device.
+            mv = modelDecision(body.model);
+            if (mv.error) return sendErr(res, 400, mv.error);
+          }
+        // A STARTED local-family chat is pinned to its machine: the model row
+        // WAS the host choice, the transcript lives there, so the only legal
+        // model change is another model on the same machine, and act-mode can
+        // never arrive.
+        } else if (isLocalFamily(meta.model)) {
           if (body.mode === 'act') {
             return sendErr(res, 409, `this chat runs on ${hostNameFor(meta.host) || 'a local model'}, which is ask-only`);
           }
@@ -5241,7 +5272,14 @@ const server = http.createServer(async (req, res) => {
           }
           // Model and effort apply to the NEXT turn; an in-flight run keeps what
           // it started with, since the flags are fixed at spawn.
-          if (mv) { fresh.model = mv.model; changed = true; }
+          if (mv) {
+            fresh.model = mv.model; changed = true;
+            // Set only by an unstarted-chat re-decision: crossing onto a
+            // machine carries its host and is always ask; crossing back
+            // carries 'local'. A plain model change touches neither.
+            if (mv.host !== undefined) fresh.host = mv.host;
+            if (mv.forceAsk) fresh.mode = 'ask';
+          }
           if (ev) { fresh.effort = ev.effort; changed = true; }
           if ('mode' in body) { fresh.mode = body.mode === 'act' ? 'act' : 'ask'; changed = true; }
         });
