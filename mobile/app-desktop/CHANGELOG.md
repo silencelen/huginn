@@ -1,5 +1,16 @@
 # Huginn Desktop changelog
 
+## 0.10.1
+
+- **Local-AI setup finds node like a person would.** The first field run hit
+  "node was not found" on a machine that runs claude fine — the native claude
+  build needs no node, and a GUI app's PATH is not a terminal's. The app now
+  probes the standard install locations (Program Files, the nvm symlink,
+  /usr/local/bin and friends) and proves each candidate with `--version`;
+  when node is genuinely absent, the message names the exact install step
+  instead of a stale assumption. The elevated step also uses the resolved,
+  quoted node path — `C:\Program Files` carries a space.
+
 ## 0.10.0
 
 - **Set up local AI from Settings.** "Serve local AI from this PC" can now do
