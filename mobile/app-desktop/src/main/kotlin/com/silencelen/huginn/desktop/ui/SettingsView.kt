@@ -659,24 +659,61 @@ private val SCOPE_CHOICES = listOf(
  * human's click on the sized button runs `on --yes`. Never a bare switch —
  * the button says what it will download before it downloads it.
  */
+/**
+ * The enable/stop flow's state, held OUTSIDE the composition on purpose: an
+ * install in flight must neither cancel nor vanish when the person clicks away
+ * from Settings. The audit caught exactly that — state in remember{} and work
+ * in the section's own scope meant leaving mid-download abandoned the log and
+ * CANCELLED the reader while the elevated child kept running unwatched. One
+ * flow at a time is all the manager allows anyway.
+ */
+private object LocalServeFlow {
+    val busy = kotlinx.coroutines.flow.MutableStateFlow(false)
+    val log = kotlinx.coroutines.flow.MutableStateFlow(listOf<String>())
+    private val scope = kotlinx.coroutines.CoroutineScope(
+        kotlinx.coroutines.SupervisorJob() + kotlinx.coroutines.Dispatchers.IO,
+    )
+
+    fun line(l: String) { log.value = (log.value + l).takeLast(8) }
+
+    fun run(block: suspend () -> Unit) {
+        if (busy.value) return
+        busy.value = true
+        log.value = emptyList()
+        scope.launch { try { block() } finally { busy.value = false } }
+    }
+}
+
 @Composable
 private fun LocalServeSection(store: AppStore) {
     val scope = rememberCoroutineScope()
     var status by remember { mutableStateOf<LocalServe.Status?>(null) }
     var error by remember { mutableStateOf<String?>(null) }
-    var busy by remember { mutableStateOf(false) }
-    var log by remember { mutableStateOf(listOf<String>()) }
+    val busy by LocalServeFlow.busy.collectAsState()
+    val log by LocalServeFlow.log.collectAsState()
     var plan by remember { mutableStateOf<LocalServe.Plan?>(null) }
 
     fun refresh() {
         scope.launch {
-            if (!LocalServe.managerFile().isFile) { status = null; error = null; return@launch }
+            if (!LocalServe.managerFile().isFile) {
+                // A MACHINE-wide install (ProgramData on Windows) can exist
+                // while this user's fetched manager does not — the door must
+                // not claim "not set up" over a box that is serving. Fetch
+                // quietly and ask properly; a fetch failure falls through to
+                // the honest set-up state.
+                if (java.io.File(LocalServe.localDataDir(), "local.json").isFile) {
+                    LocalServe.fetchManager { }
+                } else { status = null; error = null; return@launch }
+            }
             LocalServe.status()
                 .onSuccess { status = it; error = null }
                 .onFailure { status = null; error = it.message }
         }
     }
     LaunchedEffect(Unit) { refresh() }
+    // The flow finishing — begun from ANY visit to this screen — is the moment
+    // the truth changed; re-ask the manager rather than trusting the last log line.
+    LaunchedEffect(busy) { if (!busy) refresh() }
 
     SectionHeader("Serve local AI from this PC")
     Muted(
@@ -687,24 +724,54 @@ private fun LocalServeSection(store: AppStore) {
     )
 
     val s = status
-    if (s?.setup != true) {
+    val engineUp = s?.setup == true && s.engine.reachable && s.engine.models.isNotEmpty()
+    if (!engineUp) {
         if (error != null) Muted("The manager did not answer: $error", Modifier.padding(top = 8.dp, start = 4.dp), maxLines = 2)
+        // Installed-but-dark gets its diagnosis AND the door back on — the
+        // audit caught Stop dead-ending this section with nothing but Refresh.
+        // An alive endpoint serving an EMPTY list is its own named state, not
+        // "not answering".
+        if (s?.setup == true) {
+            Muted(
+                if (s.engine.reachable) {
+                    "Set up as \"${s.deviceName ?: "?"}\" and the engine answers — but it serves NO models, " +
+                        "which is not healthy. Turning serving back on reinstalls the pinned models."
+                } else {
+                    "Set up as \"${s.deviceName ?: "?"}\" but the engine is NOT answering — services: " +
+                        "llm ${s.services.llm ?: "?"}, runner ${s.services.runner ?: "?"}."
+                },
+                Modifier.padding(top = 8.dp, start = 4.dp),
+                maxLines = 4,
+            )
+        }
         val p = plan
         when {
             p == null -> {
                 Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(top = 6.dp)) {
                     TextButton(
                         onClick = {
-                            busy = true; log = emptyList()
-                            scope.launch {
-                                LocalServe.plan { line -> log = (log + line).takeLast(8) }
-                                    .onSuccess { plan = it; log = emptyList() }
-                                    .onFailure { log = (log + (it.message ?: "could not read this machine")).takeLast(8) }
-                                busy = false
+                            LocalServeFlow.run {
+                                LocalServe.plan { LocalServeFlow.line(it) }
+                                    .onSuccess { plan = it; LocalServeFlow.log.value = emptyList() }
+                                    .onFailure { LocalServeFlow.line(it.message ?: "could not read this machine") }
                             }
                         },
                         enabled = !busy,
-                    ) { Text(if (busy) "Checking this machine…" else "Set up local AI…") }
+                    ) {
+                        Text(
+                            when {
+                                busy -> "Working…"
+                                s?.setup == true -> "Turn serving back on…"
+                                else -> "Set up local AI…"
+                            },
+                        )
+                    }
+                    if (s?.setup == true) {
+                        TextButton(
+                            onClick = { LocalServeFlow.run { LocalServe.disable { LocalServeFlow.line(it) } } },
+                            enabled = !busy,
+                        ) { Text("Stop serving") }
+                    }
                 }
                 Muted(
                     "Checks what this machine can serve and shows the exact plan before anything downloads. " +
@@ -731,15 +798,12 @@ private fun LocalServeSection(store: AppStore) {
                     maxLines = 3,
                 )
                 Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(top = 6.dp)) {
+                    val url = store.settings.baseUrlNow()
+                    val token = store.settings.tokenNow()
                     TextButton(
                         onClick = {
-                            busy = true; log = emptyList()
-                            scope.launch {
-                                LocalServe.enable(store.settings.baseUrlNow(), store.settings.tokenNow()) { line ->
-                                    log = (log + line).takeLast(8)
-                                }
-                                busy = false; plan = null; refresh()
-                            }
+                            plan = null
+                            LocalServeFlow.run { LocalServe.enable(url, token) { LocalServeFlow.line(it) } }
                         },
                         enabled = !busy && p.gate?.ok == true,
                     ) { Text(if (busy) "Setting up…" else "Download and turn on (${p.needBytes / (1024 * 1024)} MB)") }
@@ -748,13 +812,17 @@ private fun LocalServeSection(store: AppStore) {
             }
         }
     } else {
+        // Non-null by engineUp's definition; bound once so it reads plainly.
+        val sv = checkNotNull(s)
+        val runnerState = sv.services.runner ?: "?"
+        val runnerUp = runnerState == "active" ||
+            runnerState.contains("Started", ignoreCase = true) ||
+            runnerState.contains("running", ignoreCase = true)
         Muted(
-            when {
-                s.engine.reachable && s.engine.models.isNotEmpty() ->
-                    "Serving ${s.engine.models.joinToString(", ")} (class ${s.cls ?: "?"}) as \"${s.deviceName ?: "?"}\"."
-                else -> "Set up as \"${s.deviceName ?: "?"}\" but the engine is NOT answering — services: " +
-                    "llm ${s.services.llm ?: "?"}, runner ${s.services.runner ?: "?"}"
-            },
+            "Serving ${sv.engine.models.joinToString(", ")} (class ${sv.cls ?: "?"}) as \"${sv.deviceName ?: "?"}\"." +
+                // The engine answering is HALF the path: without the runner,
+                // huginn queues work to a machine that never asks for it.
+                if (!runnerUp) " But the runner service is $runnerState — chats will queue until it runs." else "",
             Modifier.padding(top = 8.dp, start = 4.dp),
             maxLines = 3,
         )
@@ -762,13 +830,9 @@ private fun LocalServeSection(store: AppStore) {
             TextButton(onClick = { refresh() }, enabled = !busy) { Text("Refresh") }
             TextButton(
                 onClick = {
-                    busy = true; log = emptyList()
-                    scope.launch {
-                        // Elevated on Windows: stopping a LocalSystem service is
-                        // as privileged as installing one.
-                        LocalServe.disable { line -> log = (log + line).takeLast(8) }
-                        busy = false; refresh()
-                    }
+                    // Elevated on Windows: stopping a LocalSystem service is
+                    // as privileged as installing one.
+                    LocalServeFlow.run { LocalServe.disable { LocalServeFlow.line(it) } }
                 },
                 enabled = !busy,
             ) { Text("Stop serving") }

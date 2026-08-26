@@ -360,11 +360,21 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
     private val _models = MutableStateFlow<List<ModelChoice>>(emptyList())
     val models: StateFlow<List<ModelChoice>> = _models.asStateFlow()
 
+    private var modelsAt = 0L
+
     fun refreshModels() {
-        if (_models.value.isNotEmpty()) return
+        // Local rows carry a time-dependent `available` the daemon computes per
+        // request and deliberately never caches; one fetch per PROCESS froze
+        // every machine in whatever state the app launched into — the audit's
+        // highest phone finding. Refetched when stale instead; called on every
+        // chat open, so the menu tracks reality within a minute.
+        if (_models.value.isNotEmpty() && System.currentTimeMillis() - modelsAt < 60_000) return
         viewModelScope.launch {
             awaitReady()
-            runCatching { client.models() }.onSuccess { _models.value = it }
+            runCatching { client.models() }.onSuccess {
+                _models.value = it
+                modelsAt = System.currentTimeMillis()
+            }
         }
     }
 
@@ -1773,6 +1783,15 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
     val chatMode: StateFlow<String> = _chatMode.asStateFlow()
 
     /**
+     * Whether this chat HAS HISTORY — the daemon's pin condition, and what
+     * decides which model rows its menu may offer. Optimistically true once a
+     * send is in flight; staying true a moment too long only narrows a menu,
+     * where the opposite offers rows the daemon will 409.
+     */
+    private val _chatStarted = MutableStateFlow(false)
+    val chatStarted: StateFlow<Boolean> = _chatStarted.asStateFlow()
+
+    /**
      * Whether the open chat is a finished Round run.
      *
      * Read from the chat's own meta, NOT from the chats list: a Round's runs are
@@ -1818,10 +1837,13 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
         _streamingText.value = null
         _activeTool.value = null
         _chatError.value = null
+        // The model menu must reflect which machines serve RIGHT NOW.
+        refreshModels()
         viewModelScope.launch {
             val meta = runCatching { client.chat(id) }.getOrNull()
             _chatMode.value = meta?.mode ?: "ask"
             _chatModel.value = meta?.model
+            _chatStarted.value = (meta?.turns ?: 0) > 0 || meta?.claudeSessionId != null
             _chatEffort.value = meta?.effort
             _chatTitle.value = meta?.title
             _chatSealed.value = meta?.closed == true
@@ -1863,10 +1885,15 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
         loadChatTranscript(id)
     }
 
-    fun setChatOptions(id: String, model: String? = null, effort: String? = null) {
+    fun setChatOptions(id: String, model: String? = null, effort: String? = null, mode: String? = null) {
         viewModelScope.launch {
-            runCatching { client.updateChat(id, model = model, effort = effort) }
-                .onSuccess { _chatModel.value = it.model; _chatEffort.value = it.effort; refreshChats() }
+            runCatching { client.updateChat(id, model = model, effort = effort, mode = mode) }
+                .onSuccess {
+                    _chatMode.value = it.mode
+                    _chatModel.value = it.model
+                    _chatEffort.value = it.effort
+                    refreshChats()
+                }
                 .onFailure { _toast.value = errText(it) }
         }
     }
@@ -1945,19 +1972,23 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
             text = if (text.isBlank()) markerFor(att) else text + "\n\n" + markerFor(att)
         }
         if (text.isBlank()) return
-        clearDraft(chatDraftKey(id))
         if (_sending.value) {
             viewModelScope.launch {
+                // Cleared only when the queue ACCEPTS: a refused send must not
+                // cost the typed message — the audit caught a 409 destroying it
+                // with nothing left but a transient snackbar.
                 runCatching { client.queueMessage(id, text) }
-                    .onSuccess { loadChatTranscript(id); refreshChats() }
+                    .onSuccess { clearDraft(chatDraftKey(id)); loadChatTranscript(id); refreshChats() }
                     .onFailure { _toast.value = errText(it) }
             }
             return
         }
+        clearDraft(chatDraftKey(id))
         _sending.value = true
+        _chatStarted.value = true
         _streamingText.value = ""
         _activeTool.value = null
-        collect(id, client.sendMessage(id, text))
+        collect(id, client.sendMessage(id, text), sentText = text)
     }
 
     /** Interrupts a running session the way Esc does at the keyboard. */
@@ -1987,10 +2018,14 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
         _chatPage.value = null
     }
 
-    private fun collect(id: String, flow: kotlinx.coroutines.flow.Flow<ChatEvent>) {
+    private fun collect(id: String, flow: kotlinx.coroutines.flow.Flow<ChatEvent>, sentText: String? = null) {
         streamJob?.cancel()
         streamJob = viewModelScope.launch {
+            // A Failure as the VERY FIRST event is an HTTP refusal — the daemon
+            // said no before any run existed — and gets its own honest handling.
+            var sawStream = false
             flow.collect { ev ->
+                if (ev !is ChatEvent.Failure) sawStream = true
                 when (ev) {
                     is ChatEvent.Started -> Unit
                     is ChatEvent.Delta -> _streamingText.value = (_streamingText.value ?: "") + ev.text
@@ -2017,6 +2052,13 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
                         // doing on huginn. Left set, `streaming` stayed true and the
                         // view showed a spinner for a tool that had long finished.
                         _activeTool.value = null
+                        if (!sawStream) {
+                            // Refused at the door: no run exists, nothing will
+                            // land. The typed message goes back to the composer
+                            // it was cleared from a moment earlier.
+                            _sending.value = false
+                            sentText?.let { setDraft(chatDraftKey(id), it) }
+                        }
                     }
                     ChatEvent.Done -> {
                         _sending.value = false

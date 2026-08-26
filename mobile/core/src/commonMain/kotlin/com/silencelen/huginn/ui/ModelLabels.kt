@@ -54,14 +54,36 @@ object ModelLabels {
      * SESSION sites get Claude rows only — a session chip types `/model` into a
      * live pane, and a local row there could never work. CHAT sites also get
      * the AVAILABLE local rows (their display already names the machine, e.g.
-     * "Qwen3 8B - datatreex-llm"); an unreachable machine's rows are absent,
-     * the same way an offline device reads in its own list — a pickable row
-     * that always fails would be the fake control this object exists to forbid.
+     * "Qwen3 8B - DATATREEX"); an unreachable machine's rows are absent, the
+     * same way an offline device reads in its own list — a pickable row that
+     * always fails would be the fake control this object exists to forbid.
+     *
+     * The same rule is why a STARTED chat's menu shrinks: the daemon pins a
+     * chat with history to its family and machine (the transcript lives where
+     * it ran), so a started local chat offers only its own machine's rows and
+     * a started Claude chat offers no machines at all. An unstarted chat may
+     * re-decide freely — the daemon accepts that since 2.77.0 — so its menu
+     * stays whole. Callers that do not know the chat's state keep the old
+     * behaviour by omission, which is only correct for creation-time menus.
      */
-    fun options(models: List<ModelChoice>, site: PickerSite): List<Pair<String, String>> {
+    fun options(
+        models: List<ModelChoice>,
+        site: PickerSite,
+        current: String? = null,
+        started: Boolean = false,
+    ): List<Pair<String, String>> {
         if (models.isEmpty()) return FALLBACK_MODELS
         val claude = models.filter { it.family != "local" }.map { it.id to it.display }
         if (site == PickerSite.SESSION) return claude.ifEmpty { FALLBACK_MODELS }
+        if (started && isLocal(current, models)) {
+            val host = models.firstOrNull { it.id == current }?.host
+            val sameMachine = models.filter { it.family == "local" && it.available && it.host != null && it.host == host }
+                .map { it.id to it.display }
+            // The machine vanished from the catalog: the only honest menu is
+            // the current row itself — nothing else can be switched to.
+            return sameMachine.ifEmpty { listOf((current ?: "") to model(current, models)) }
+        }
+        if (started) return claude.ifEmpty { FALLBACK_MODELS }
         val local = models.filter { it.family == "local" && it.available }.map { it.id to it.display }
         return (claude.ifEmpty { FALLBACK_MODELS }) + local
     }
