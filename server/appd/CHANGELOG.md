@@ -9,6 +9,13 @@ appeared only as a side-note on the app releases it happened to ship with. Three
 undocumented, and the notes-cutting matcher could fuse two sections when an app and an appd
 version number collided. Entries below are reconstructed from the shipping commits.
 
+## 2.78.0 — 2026-08-25
+
+- Refusals and host badges name the MACHINE a person knows ("DATATREEX"),
+  never the "-llm" serving credential the UI no longer shows anywhere:
+  hostNameFor, canServe, canRun and the wrong-model refusal all resolve
+  through the machine key when a claude sibling names the box.
+
 ## 2.77.0 — 2026-08-25
 
 - An UNSTARTED chat (no turns, no claude session, nothing running) may
