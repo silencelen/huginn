@@ -299,6 +299,10 @@ fun main(args: Array<String>) {
             scope.launch {
                 runCatching { store.client.createChat(mode) }
                     .onSuccess { store.openChat(it.id); store.refreshChats() }
+                    // The shortcut and the palette must not fail SILENTLY while
+                    // the list pane's "+ Ask" reports the same refusal — a key
+                    // that does nothing teaches people the key is broken.
+                    .onFailure { store.noteError(it) }
             }
         }
 

@@ -1,5 +1,35 @@
 # Huginn Desktop changelog
 
+## 0.12.0
+
+The audit wave: a six-surface review of the local-AI features in real use,
+every finding adversarially verified against the code before it was fixed.
+
+- The Devices rail badge and the footer count machines, matching the merged
+  list — one box was still counted twice in both.
+- **Model menus tell the truth about a started chat**: a chat with history is
+  pinned to its family and machine, so its menu offers only what the daemon
+  will accept — and an unstarted chat may go anywhere, including back to the
+  host default, which the menu offers whenever clearing is legal.
+- **Forget forgets the machine** — both credentials at once (it silently kept
+  one) — and its dialog names the serving services that would re-enrol.
+- **A refused send costs nothing typed**: the message returns to the composer
+  instead of sitting on screen as a delivered bubble with the spinner stuck.
+- Ctrl N and the command palette report a failed chat-create instead of doing
+  silently nothing; multi-select delete survives one refusal, finishes the
+  rest and NAMES what was refused; the two delete confirms now agree about
+  what is actually deleted (huginn's record — the transcript on the host
+  stays).
+- Refusals from Ask here / Forget / Run now stay on screen instead of being
+  wiped by the next 5-second poll.
+- **"Serve local AI from this PC" has no dead ends**: stopping offers the way
+  back on; an install in flight survives leaving Settings; a machine-wide
+  Windows install is recognised from a fresh user profile; an engine serving
+  zero models is called exactly that; the healthy line warns when the runner
+  service is down; a rotated daemon token reaches the services.
+- The Round editor no longer shows a permanently dead chip named for a
+  serving credential.
+
 ## 0.11.0
 
 - **One machine, one card** (shared with the phone): a PC that both runs work

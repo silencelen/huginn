@@ -42,7 +42,10 @@ fun DevicesPane(store: AppStore) {
     // minute later, because a runner that is still running simply re-enrols. So
     // the button looked like it had done nothing, when what it had actually done
     // was kill whatever that device was running.
-    var forgetTarget by remember { mutableStateOf<com.silencelen.huginn.data.Device?>(null) }
+    // The target is the MACHINE — every credential the box holds. The audit
+    // caught per-row callbacks racing this single-slot dialog, keeping only
+    // the last row.
+    var forgetTarget by remember { mutableStateOf<com.silencelen.huginn.ui.MachineGroup?>(null) }
 
     if (devices.isEmpty()) {
         Column(
@@ -70,28 +73,35 @@ fun DevicesPane(store: AppStore) {
         DevicesSection(
             devices = devices,
             onStart = { d, mode -> scope.launch { store.startChatOn(d.id, mode) } },
-            onForget = { d -> forgetTarget = d },
+            onForget = { g -> forgetTarget = g },
             header = null,
         )
     }
 
-    forgetTarget?.let { d ->
+    forgetTarget?.let { g ->
         AlertDialog(
             onDismissRequest = { forgetTarget = null },
-            title = { Text("Forget ${d.name}?") },
+            title = { Text("Forget ${g.head.name}?") },
             // The same words as the phone, deliberately: two dialogs describing
             // one action differently is how people learn to distrust both.
             text = {
                 Text(
-                    "Huginn stops offering it work. Nothing changes on ${d.name} itself — " +
-                        "if its runner is still going it will enrol again. Stop it there to " +
-                        "make this stick.",
+                    if (g.serving.isEmpty()) {
+                        "Huginn stops offering it work. Nothing changes on ${g.head.name} itself — " +
+                            "if its runner is still going it will enrol again. Stop it there to " +
+                            "make this stick."
+                    } else {
+                        "Huginn stops offering it work and its local models. Nothing changes on " +
+                            "${g.head.name} itself — a runner or serving service still going there " +
+                            "simply re-enrols. Stop them there (“huginn device off”, " +
+                            "“huginn local off”) to make this stick."
+                    },
                 )
             },
             confirmButton = {
                 TextButton(onClick = {
-                    val t = d; forgetTarget = null
-                    scope.launch { store.forgetDevice(t.id) }
+                    val t = g; forgetTarget = null
+                    scope.launch { t.rows.forEach { store.forgetDevice(it.id) } }
                 }) { Text("Forget") }
             },
             dismissButton = { TextButton(onClick = { forgetTarget = null }) { Text("Cancel") } },

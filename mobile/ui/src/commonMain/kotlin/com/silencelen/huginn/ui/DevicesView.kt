@@ -39,7 +39,7 @@ import com.silencelen.huginn.device.DevicePolicy
 fun DevicesSection(
     devices: List<Device>,
     onStart: (Device, String) -> Unit,
-    onForget: (Device) -> Unit,
+    onForget: (MachineGroup) -> Unit,
     modifier: Modifier = Modifier,
     header: String? = "DEVICES",
 ) {
@@ -98,7 +98,7 @@ fun groupByMachine(devices: List<Device>): List<MachineGroup> {
 }
 
 @Composable
-private fun MachineCard(group: MachineGroup, onStart: (Device, String) -> Unit, onForget: (Device) -> Unit) {
+private fun MachineCard(group: MachineGroup, onStart: (Device, String) -> Unit, onForget: (MachineGroup) -> Unit) {
     Surface(
         color = MaterialTheme.colorScheme.surfaceVariant,
         contentColor = MaterialTheme.colorScheme.onSurface,
@@ -183,12 +183,17 @@ private fun MachineCard(group: MachineGroup, onStart: (Device, String) -> Unit, 
                 }
                 // One Forget for the machine: it takes away every credential the
                 // box holds, because forgetting half a machine is a state nobody
-                // asks for by pressing a button called Forget.
-                TextButton(onClick = { group.rows.forEach(onForget) }) { Text("Forget") }
+                // asks for by pressing a button called Forget. The GROUP goes to
+                // the dialog — the audit caught the per-row callbacks racing a
+                // single-slot confirm, which kept only the last row.
+                TextButton(onClick = { onForget(group) }) { Text("Forget") }
             }
             if (group.serving.isNotEmpty()) {
+                // "any chat" was a lie the daemon corrected with a 409: a chat
+                // with history is pinned to its family and machine. A NEW chat
+                // is the door that always opens.
                 Text(
-                    "Chat with its local AI by picking its model in any chat's model menu.",
+                    "Chat with its local AI: start a new chat and pick its model.",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
