@@ -3,9 +3,9 @@
 #     if (Test-Path "$HOME\.huginn\huginn.ps1") { . "$HOME\.huginn\huginn.ps1" }
 # Targets the `huginn` SSH alias by default; override per-device with:  $env:HUGINN_HOST = 'my-host'
 # Self-update with:  huginn update   (pulls this file from the repo; gh -> scp fallback)
-# Version: 0.12.3
+# Version: 0.12.4
 
-$script:HUGINN_VERSION = '0.12.3'
+$script:HUGINN_VERSION = '0.12.4'
 $script:HUGINN_REPO    = 'silencelen/huginn'
 # Where `huginn update` may fetch a replacement for THIS FILE, which is then loaded
 # into the shell. Pinned, and deliberately NOT $HUGINN_HOST: that variable answers
@@ -291,7 +291,7 @@ function huginn {
     $rest = if ($args.Count -ge 3) { $args[2..($args.Count-1)] } else { @() }
     $runner = Join-Path $HOME '.huginn/huginn-device'
     if (-not (Get-Command node -ErrorAction SilentlyContinue)) {
-      Write-Host "huginn device: needs node - which any machine that can run claude already has"
+      Write-Host "huginn device: needs node - install Node.js LTS: winget install OpenJS.NodeJS.LTS"
     } elseif ($sub -eq 'on' -or $sub -eq 'enrol' -or $sub -eq 'enroll' -or $sub -eq 'update') {
       $dir = Join-Path $HOME '.config/huginn'
       New-Item -ItemType Directory -Force -Path (Split-Path $runner) | Out-Null
@@ -353,7 +353,7 @@ function huginn {
     $rest = if ($args.Count -ge 3) { $args[2..($args.Count-1)] } else { @() }
     $mgr = Join-Path $HOME '.huginn/huginn-local'
     if (-not (Get-Command node -ErrorAction SilentlyContinue)) {
-      Write-Host "huginn local: needs node - which any machine that can run claude already has"
+      Write-Host "huginn local: needs node - install Node.js LTS: winget install OpenJS.NodeJS.LTS"
     } elseif ($sub -eq 'on' -or $sub -eq 'update' -or $sub -eq 'plan') {
       New-Item -ItemType Directory -Force -Path (Split-Path $mgr) | Out-Null
       # huginn-device rides along: managed mode installs a runner SERVICE, and

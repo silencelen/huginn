@@ -72,14 +72,17 @@ class LocalServeTest {
     }
 
     @Test
-    fun `the elevated cmd quotes both paths and redirects everything to the log`() {
+    fun `the elevated cmd quotes all three paths and redirects everything to the log`() {
         val text = LocalServe.elevatedCmdText(
+            "C:\\Program Files\\nodejs\\node.exe",
             File("C:\\Users\\o o\\.huginn\\huginn-local"),
             listOf("on", "--yes", "--url", "http://100.64.0.1:8787"),
             File("C:\\ProgramData\\huginn-local\\activate.log"),
         )
         assertTrue(text.startsWith("@echo off\r\n"), text)
-        // Paths may carry spaces; both must be quoted, and stderr must not be lost.
+        // All three paths may carry spaces (Program Files always does); each
+        // must be quoted, and stderr must not be lost.
+        assertTrue("\"C:\\Program Files\\nodejs\\node.exe\"" in text, text)
         assertTrue("\"C:\\Users\\o o\\.huginn\\huginn-local\"" in text, text)
         assertTrue("> \"C:\\ProgramData\\huginn-local\\activate.log\" 2>&1" in text, text)
         assertTrue(" on --yes --url http://100.64.0.1:8787 " in text, text)
