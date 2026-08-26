@@ -72,6 +72,15 @@ class LocalServeTest {
     }
 
     @Test
+    fun `downloads are syntax-checked under a js name`() {
+        // `node --check x.tmp` dies with ERR_UNKNOWN_FILE_EXTENSION on modern
+        // node (esm/get_format) — reproduced on node 22.23.1 the day the first
+        // Node-24 machine hit it in the field. The temp name is the fix.
+        assertTrue(LocalServe.fetchTmpName("huginn-local").endsWith(".js"))
+        assertTrue(LocalServe.fetchTmpName("huginn-local").startsWith("huginn-local."))
+    }
+
+    @Test
     fun `the elevated cmd quotes all three paths and redirects everything to the log`() {
         val text = LocalServe.elevatedCmdText(
             "C:\\Program Files\\nodejs\\node.exe",
