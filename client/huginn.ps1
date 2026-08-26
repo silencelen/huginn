@@ -3,9 +3,9 @@
 #     if (Test-Path "$HOME\.huginn\huginn.ps1") { . "$HOME\.huginn\huginn.ps1" }
 # Targets the `huginn` SSH alias by default; override per-device with:  $env:HUGINN_HOST = 'my-host'
 # Self-update with:  huginn update   (pulls this file from the repo; gh -> scp fallback)
-# Version: 0.12.2
+# Version: 0.12.3
 
-$script:HUGINN_VERSION = '0.12.2'
+$script:HUGINN_VERSION = '0.12.3'
 $script:HUGINN_REPO    = 'silencelen/huginn'
 # Where `huginn update` may fetch a replacement for THIS FILE, which is then loaded
 # into the shell. Pinned, and deliberately NOT $HUGINN_HOST: that variable answers
@@ -354,9 +354,11 @@ function huginn {
     $mgr = Join-Path $HOME '.huginn/huginn-local'
     if (-not (Get-Command node -ErrorAction SilentlyContinue)) {
       Write-Host "huginn local: needs node - which any machine that can run claude already has"
-    } elseif ($sub -eq 'on' -or $sub -eq 'update') {
+    } elseif ($sub -eq 'on' -or $sub -eq 'update' -or $sub -eq 'plan') {
       New-Item -ItemType Directory -Force -Path (Split-Path $mgr) | Out-Null
-      foreach ($f in 'huginn-local', 'huginn-llm-shim') {
+      # huginn-device rides along: managed mode installs a runner SERVICE, and
+      # a machine that never enrolled as a claude device has no runner otherwise.
+      foreach ($f in 'huginn-local', 'huginn-llm-shim', 'huginn-device') {
         $dest = Join-Path $HOME ".huginn/$f"
         if ($sub -eq 'update' -or -not (Test-Path $dest)) {
           # PINNED, like the device runner: this downloads code a service will
@@ -378,6 +380,7 @@ function huginn {
           }
         }
       }
+      if ($sub -eq 'plan') { node $mgr plan @rest; return }
       if ($sub -eq 'update') { if (Test-Path $mgr) { node $mgr update @rest }; return }
       $dir = if ($env:HUGINN_LOCAL_DIR) { $env:HUGINN_LOCAL_DIR } else { Join-Path $env:ProgramData 'huginn-local' }
       New-Item -ItemType Directory -Force -Path (Join-Path $dir 'device') | Out-Null
@@ -587,7 +590,7 @@ Register-ArgumentCompleter -CommandName huginn, rclaude, rcc -ScriptBlock {
   } elseif ($prev -eq 'desktop') {
     $candidates = 'windows', 'linux', 'both'
   } elseif ($prev -eq 'local') {
-    $candidates = 'status', 'on', 'off', 'unit', 'update', 'doctor'
+    $candidates = 'status', 'on', 'plan', 'off', 'unit', 'update', 'doctor'
   } else {
     $candidates = @()
   }
