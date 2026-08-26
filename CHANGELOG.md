@@ -10,6 +10,15 @@ Format loosely follows [Keep a Changelog](https://keepachangelog.com/); versions
 
 ## [Unreleased]
 
+## [0.12.4] - 2026-08-25
+
+### Changed
+- The "needs node" refusals in `huginn device` and `huginn local` no longer
+  claim that any machine running claude has node — the NATIVE claude build
+  ships without it, which the first local-tier field test promptly proved.
+  Both clients now name the install step instead (Node.js LTS; on Windows:
+  `winget install OpenJS.NodeJS.LTS`).
+
 ## [0.12.3] - 2026-08-25
 
 ### Added

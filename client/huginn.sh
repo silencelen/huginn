@@ -4,9 +4,9 @@
 #     [ -f ~/.huginn/huginn.sh ] && source ~/.huginn/huginn.sh
 # Targets the `huginn` SSH alias by default; override per-device with:  export HUGINN_HOST=my-host
 # Self-update with:  huginn update   (pulls this file from the repo; gh -> scp fallback)
-# Version: 0.12.3
+# Version: 0.12.4
 
-HUGINN_VERSION='0.12.3'
+HUGINN_VERSION='0.12.4'
 HUGINN_REPO='silencelen/huginn'
 # Where `huginn update` may fetch a replacement for THIS FILE, which it then
 # sources into the live shell. Pinned, and deliberately NOT $HUGINN_HOST:
@@ -59,8 +59,8 @@ _huginn_device() {
   runner="$(_huginn_device_runner)"
   sub="${1:-status}"; [ $# -gt 0 ] && shift
   command -v node >/dev/null 2>&1 || {
-    echo "huginn device: needs node - which any machine that can run claude already has," >&2
-    echo "               since claude is itself a node program" >&2
+    echo "huginn device: needs node - the NATIVE claude build ships without it; install" >&2
+    echo "               Node.js LTS: nodejs.org (Windows: winget install OpenJS.NodeJS.LTS)" >&2
     return 1; }
   case "$sub" in
     on|enrol|enroll)
@@ -141,7 +141,7 @@ _huginn_local() {
   mgr="$(_huginn_local_manager)"
   sub="${1:-status}"; [ $# -gt 0 ] && shift
   command -v node >/dev/null 2>&1 || {
-    echo "huginn local: needs node - which any machine that can run claude already has" >&2
+    echo "huginn local: needs node - install Node.js LTS: nodejs.org (Windows: winget install OpenJS.NodeJS.LTS)" >&2
     return 1; }
   case "$sub" in
     on)
