@@ -312,3 +312,21 @@ test('rounds refuse the local family at create, patch and fire', async () => {
   assert.equal(fired.status, 400, JSON.stringify(fired.body));
   assert.match(fired.body.error, /local model/);
 });
+
+test('refusals name the MACHINE, never the -llm credential', async () => {
+  // The UI shows machine names everywhere now; an error that says
+  // "namebox-llm" would name a thing the user has never seen.
+  await api('/v1/devices', { method: 'POST', body: JSON.stringify({ name: 'NAMEBOX', platform: 'windows', scope: 'own' }) });
+  const dev = await enrolLlm({ name: 'namebox-llm' });
+  const id = `local-${dev.llmSlug}-qwen3-8b`;
+  const { body: chat } = await api('/v1/chats', { method: 'POST', body: JSON.stringify({ model: id }) });
+  await makeStarted(dev, chat.id);
+  const toAct = await api(`/v1/chats/${chat.id}`, { method: 'PATCH', body: JSON.stringify({ mode: 'act' }) });
+  assert.equal(toAct.status, 409, JSON.stringify(toAct.body));
+  assert.match(toAct.body.error, /NAMEBOX/, 'the machine name a person knows');
+  assert.ok(!toAct.body.error.includes('namebox-llm'), toAct.body.error);
+  // The wrong-model refusal names the machine too.
+  const bad = await api('/v1/chats', { method: 'POST', body: JSON.stringify({ model: `local-${dev.llmSlug}-nope` }) });
+  assert.equal(bad.status, 400);
+  assert.match(bad.body.error, /NAMEBOX/, bad.body.error);
+})
