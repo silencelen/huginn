@@ -9,6 +9,17 @@ appeared only as a side-note on the app releases it happened to ship with. Three
 undocumented, and the notes-cutting matcher could fuse two sections when an app and an appd
 version number collided. Entries below are reconstructed from the shipping commits.
 
+## 2.77.0 — 2026-08-25
+
+- An UNSTARTED chat (no turns, no claude session, nothing running) may
+  re-decide its model freely — including onto a local machine, between
+  machines, and back to Claude. The pin protects HISTORY, which an empty
+  chat does not have; before this, both clients' "New chat, then pick the
+  model" flow was refused with an instruction to start the new chat the
+  user was already looking at. Crossing onto a machine runs the same
+  checks as creation (resolution, serving state, forced ask); a STARTED
+  chat keeps every existing pin.
+
 ## 2.76.0 — 2026-08-25
 
 - One box, ONE device. Every row now carries a `machine` key — reported by
