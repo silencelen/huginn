@@ -86,4 +86,43 @@ class ModelLabelsOptionsTest {
         assertEquals(true, row.available, "absent means available — nothing degrades")
         assertEquals(null, row.host)
     }
+
+    // ------------------------------------------------- the started-chat menus
+    //
+    // The daemon pins a chat WITH HISTORY to its family and machine, so a menu
+    // that keeps offering the other side is a menu of permanent 409s — the
+    // audit's exact finding. An unstarted chat may re-decide freely (daemon
+    // 2.77.0), so only `started` shrinks anything.
+
+    private val twoMachines = models + listOf(
+        ModelChoice(id = "local-prestige-qwen3-4b", display = "Qwen3 4B - PRESTIGE", family = "local", available = true, host = "d-2"),
+    )
+
+    @Test
+    fun aStartedLocalChatOffersOnlyItsOwnMachine() {
+        val ids = ModelLabels.options(twoMachines, PickerSite.CHAT, current = "local-gpubox-qwen3-8b", started = true)
+            .map { it.first }
+        assertEquals(listOf("local-gpubox-qwen3-8b"), ids, "no Claude rows, no other machines, no offline sibling")
+    }
+
+    @Test
+    fun aStartedClaudeChatOffersNoMachinesAtAll() {
+        val ids = ModelLabels.options(twoMachines, PickerSite.CHAT, current = "opus", started = true).map { it.first }
+        assertEquals(listOf("fable", "opus"), ids)
+    }
+
+    @Test
+    fun anUnstartedChatKeepsTheWholeMenu() {
+        val ids = ModelLabels.options(twoMachines, PickerSite.CHAT, current = "opus", started = false).map { it.first }
+        assertEquals(listOf("fable", "opus", "local-gpubox-qwen3-8b", "local-prestige-qwen3-4b"), ids)
+    }
+
+    @Test
+    fun aStartedLocalChatWhoseMachineVanishedOffersOnlyItself() {
+        // The machine was unenrolled: the catalog has no rows for it, and the
+        // only honest menu is the current model with nowhere to go.
+        val gone = listOf(ModelChoice(id = "opus", display = "Opus 5", family = "opus"))
+        val rows = ModelLabels.options(gone, PickerSite.CHAT, current = "local-gpubox-qwen3-8b", started = true)
+        assertEquals(listOf("local-gpubox-qwen3-8b"), rows.map { it.first })
+    }
 }

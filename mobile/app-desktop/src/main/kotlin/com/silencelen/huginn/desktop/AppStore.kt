@@ -307,21 +307,25 @@ class AppStore(
      * fault rather than being swallowed.
      */
     suspend fun startChatOn(deviceId: String, mode: String) {
+        // Faults.ACTION, not CHATS: the audit caught these refusals filed
+        // under the polled source, which the next successful 5s chats poll
+        // CLEARS - the reason vanished before anyone read it. A hand action's
+        // outcome belongs to the source no poll ever touches.
         runCatching { client.createChat(mode, host = deviceId) }
             .onSuccess { made -> openChat(made.id); openView(View.CHATS); refreshChats() }
-            .onFailure { note(Faults.CHATS, it) }
+            .onFailure { note(Faults.ACTION, it) }
     }
 
     suspend fun forgetDevice(id: String) {
         runCatching { client.deleteDevice(id) }
             .onSuccess { refreshDevices() }
-            .onFailure { note(Faults.CHATS, it) }
+            .onFailure { note(Faults.ACTION, it) }
     }
 
     suspend fun runRound(id: String) {
         runCatching { client.runRound(id) }
             .onSuccess { refreshRounds() }
-            .onFailure { note(Faults.CHATS, it) }
+            .onFailure { note(Faults.ACTION, it) }
     }
 
     /**
@@ -368,10 +372,14 @@ class AppStore(
      * The report lands as a draft, never a sent message — see the phone's twin.
      */
     suspend fun continueRound(round: Round): String? {
+        // The refusal is SHOWN, not swallowed: the audit caught "Carry on"
+        // doing nothing with no message when the daemon said no (machine gone,
+        // scope narrowed) — a button that silently does nothing is a broken
+        // button as far as the person pressing it can tell.
         val c = runCatching {
             client.createChat(mode = round.mode, model = round.model, effort = round.effort,
                 host = round.host.takeIf { it != "local" })
-        }.getOrNull() ?: return null
+        }.onFailure { note(Faults.ACTION, it) }.getOrNull() ?: return null
         drafts.set(com.silencelen.huginn.data.DraftBook.chatKey(c.id), com.silencelen.huginn.ui.followUpDraft(round))
         refreshChats()
         openChat(c.id)

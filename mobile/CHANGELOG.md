@@ -1,5 +1,28 @@
 # Huginn changelog
 
+## 2.82.0 — 2026-08-25
+
+The audit wave: a six-surface review of the local-AI features in real use,
+every finding adversarially verified against the code before it was fixed.
+
+### Fixed
+- The Settings "Devices" line counts machines that can RUN WORK, with serving
+  machines on their own line — and no longer counts one box twice.
+- **The model menu tracks reality**: the catalog refreshes when a chat opens
+  (it was fetched once per app launch, freezing every machine in whatever
+  state the app started with), shrinks to what the daemon will accept on a
+  STARTED chat, and gains "Host default" rows so a picked model or effort can
+  be cleared again.
+- **Ask/Act is a real control on claude chats**, as the desktop always had —
+  the chip claimed "fixed at creation" while the daemon accepted the change.
+  Local chats stay honestly Ask-only.
+- **A refused send costs nothing typed**: the message returns to the composer
+  (it was destroyed with only a snackbar left), and notification replies
+  report the daemon's actual reason instead of "huginn is unreachable".
+- The new-chat dialog no longer offers a serving machine as a place to run
+  claude work; Forget forgets the whole machine, not silently half of it, and
+  says which services would re-enrol.
+
 ## 2.81.0 — 2026-08-25
 
 ### Changed

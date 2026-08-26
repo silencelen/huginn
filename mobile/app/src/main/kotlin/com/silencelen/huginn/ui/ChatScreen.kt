@@ -82,7 +82,10 @@ fun ChatScreen(
     model: String?,
     effort: String?,
     models: List<ModelChoice>,
+    /** The daemon's pin condition — history exists — which shapes the model menu. */
+    started: Boolean,
     onSetOptions: (String?, String?) -> Unit,
+    onMode: (String) -> Unit,
     chatId: String,
     suggestions: List<String>,
     voiceReady: Boolean,
@@ -140,8 +143,10 @@ fun ChatScreen(
             effort = effort,
             models = models,
             enabled = !sending,
+            started = started,
             onModel = { onSetOptions(it, null) },
             onEffort = { onSetOptions(null, it) },
+            onMode = onMode,
         )
         if (error != null && !streaming) {
             // NOT the empty state. A chat that failed to load looks identical to a

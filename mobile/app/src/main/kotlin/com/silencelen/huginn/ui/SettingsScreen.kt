@@ -69,6 +69,7 @@ fun SettingsScreen(
     onRefreshDelivery: () -> Unit,
     onTestPush: () -> Unit,
     deviceCount: Int,
+    servingCount: Int = 0,
     onOpenDevices: () -> Unit,
     appLock: Boolean,
     appLockAvailable: Boolean,
@@ -283,6 +284,16 @@ fun SettingsScreen(
                     },
                     style = MaterialTheme.typography.bodyMedium,
                 )
+                // The serving capability said separately, because a serve-only
+                // machine cannot "run work" and this row must not claim it does.
+                if (servingCount > 0) {
+                    Text(
+                        if (servingCount == 1) "1 machine serves local AI models"
+                        else "$servingCount machines serve local AI models",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
                 Text(
                     "Your PC, a server, a build box. A machine offers ITSELF and decides what " +
                         "it will allow — this phone can see them, start work on one, and " +

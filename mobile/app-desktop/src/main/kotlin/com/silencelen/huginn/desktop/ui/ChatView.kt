@@ -118,7 +118,13 @@ fun ChatView(
     store: AppStore? = AppStore.current,
 ) {
     val scope = rememberCoroutineScope()
-    val controller = remember(chatId) { ChatController(client, chatId, scope) }
+    val controller = remember(chatId) {
+        ChatController(client, chatId, scope, onRefusedSend = { text ->
+            // A refused send costs nothing typed: the message returns to the
+            // composer it was cleared from a moment earlier.
+            store?.drafts?.set(DraftBook.chatKey(chatId), text)
+        })
+    }
     // Keyed on the chat: switching chats must not carry a half-uploaded screenshot
     // into somebody else's conversation, and the old controller's upload is
     // cancelled with it.
@@ -241,6 +247,9 @@ fun ChatView(
             // Model, effort and mode are fixed when a run spawns, so offering to
             // change them mid-turn would be offering something that cannot happen.
             optionsEnabled = !busy,
+            // Started = the daemon's pin condition: history exists (or is being
+            // written right now). It decides which model rows are even offered.
+            started = (detail?.turns ?: 0) > 0 || detail?.claudeSessionId != null || running,
             onModel = { controller.setOptions(model = it) },
             onEffort = { controller.setOptions(effort = it) },
             onMode = { controller.setOptions(mode = it) },

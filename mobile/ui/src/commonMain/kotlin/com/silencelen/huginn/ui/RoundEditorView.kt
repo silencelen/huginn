@@ -209,7 +209,12 @@ fun RoundEditor(
                     onClick = { onDraft(draft.copy(host = "local")) },
                     label = { Text("Huginn") },
                 )
-                devices.forEach { d ->
+                // Serving rows are ABSENT, not disabled: a Round can never run
+                // on the generate credential, the machine's claude enrolment is
+                // already its own chip, and a permanently dead chip named for a
+                // "-llm" credential nobody sees anywhere else is noise wearing
+                // a control's clothes.
+                devices.filter { it.scope != "generate" }.forEach { d ->
                     FilterChip(
                         selected = draft.host == d.id,
                         onClick = { onDraft(draft.copy(host = d.id)) },
@@ -217,8 +222,7 @@ fun RoundEditor(
                         // Its ENROLLED scope, not what it will do this second: a
                         // Round for next Sunday must not be un-pickable because the
                         // laptop happens to be locked on a Tuesday. The policy
-                        // answers, not a hand-rolled comparison — a generate-scope
-                        // serving row must never read as a place a Round runs.
+                        // answers, not a hand-rolled comparison.
                         enabled = DevicePolicy.allows(DevicePolicy.parse(d.scope), draft.mode),
                     )
                 }

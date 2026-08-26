@@ -51,6 +51,7 @@ fun ChatOptionsRow(
     effort: String?,
     models: List<ModelChoice>,
     enabled: Boolean,
+    started: Boolean,
     onModel: (String) -> Unit,
     onEffort: (String) -> Unit,
     onMode: (String) -> Unit,
@@ -62,11 +63,14 @@ fun ChatOptionsRow(
     ) {
         PickerChip(
             label = if (model.isNullOrBlank()) "Default model" else ModelLabels.model(model, models),
-            // A local chat is pinned to its machine for life: clearing back to a
-            // host default would mean a different engine, which the daemon
-            // refuses — so the clear entry is absent rather than doomed.
-            options = ModelLabels.options(models, ModelLabels.PickerSite.CHAT) +
-                (if (localNow) emptyList() else listOf(CLEAR to "Host default")),
+            // The menu is the daemon's truth: a STARTED chat is pinned to its
+            // family and machine, so ModelLabels shrinks the rows accordingly —
+            // an unstarted chat may still go anywhere (daemon 2.77.0). The
+            // clear entry follows the same rule: only a started local chat has
+            // no legal way back to the host default, so only there is it
+            // absent rather than doomed.
+            options = ModelLabels.options(models, ModelLabels.PickerSite.CHAT, current = model, started = started) +
+                (if (localNow && started) emptyList() else listOf(CLEAR to "Host default")),
             enabled = enabled,
             onPick = onModel,
         )

@@ -50,18 +50,19 @@ class ReplyReceiver : BroadcastReceiver() {
 
         CoroutineScope(Dispatchers.IO).launch {
             try {
-                val ok = withTimeoutOrNull(25_000) { send(app, chat, text) }
+                val outcome = withTimeoutOrNull(25_000) { send(app, chat, text) }
                 // Nothing more to say on success: the reply is already in the thread,
                 // and huginn's answer will arrive as the next message in it. Only
-                // failure needs words — and it repeats the text back, because it was
-                // typed into a box the system has torn down and would otherwise have
-                // to be written again from memory.
-                when (ok) {
-                    true -> Unit
-                    false -> update(app, notificationId, title, chat,
-                        theirs = "Not sent — huginn is unreachable. Your message: $text")
-                    null -> update(app, notificationId, title, chat,
+                // failure needs words — the DAEMON'S OWN words when it refused (the
+                // audit caught every refusal collapsed into "unreachable", a network
+                // failure that did not happen) — and it repeats the text back,
+                // because it was typed into a box the system has torn down.
+                when {
+                    outcome == null -> update(app, notificationId, title, chat,
                         theirs = "Not sent — huginn did not respond. Your message: $text")
+                    outcome.isEmpty() -> Unit
+                    else -> update(app, notificationId, title, chat,
+                        theirs = "Not sent — $outcome. Your message: $text")
                 }
             } catch (e: Exception) {
                 update(app, notificationId, title, chat,
@@ -72,17 +73,19 @@ class ReplyReceiver : BroadcastReceiver() {
         }
     }
 
-    private suspend fun send(app: Context, chat: String, text: String): Boolean {
+    /** Empty on success; the failure's own words otherwise (never a guess). */
+    private suspend fun send(app: Context, chat: String, text: String): String {
         val settings = SettingsStore(app)
         val bearer = settings.token.first()
-        if (bearer.isBlank()) return false
+        if (bearer.isBlank()) return "no token is set"
         val base = settings.baseUrl.first()
         val client = HuginnClient({ base }, { bearer })
         // Always the queueing endpoint, never the streaming one: a broadcast
         // receiver has seconds to live and nothing to show a stream to. The host
         // starts the run either way — queued if the chat is busy, immediately if
         // it is not — and the answer comes back as the next finish notification.
-        return runCatching { client.queueMessage(chat, text) }.isSuccess
+        return runCatching { client.queueMessage(chat, text) }
+            .fold({ "" }, { it.message ?: "huginn is unreachable" })
     }
 
     /**

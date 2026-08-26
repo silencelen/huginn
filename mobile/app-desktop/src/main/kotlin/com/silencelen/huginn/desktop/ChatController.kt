@@ -38,6 +38,13 @@ class ChatController(
     private val client: HuginnClient,
     private val chatId: String,
     private val scope: CoroutineScope,
+    /**
+     * Where a REFUSED send's text goes — back into the composer's draft, so a
+     * daemon 4xx (machine offline, mode refused) costs the user nothing typed.
+     * The audit found the refused message sitting on screen as a delivered
+     * bubble with busy() latched instead.
+     */
+    private val onRefusedSend: (String) -> Unit = {},
 ) {
 
     private val _detail = MutableStateFlow<ChatDetail?>(null)
@@ -104,6 +111,13 @@ class ChatController(
 
     /** Guards the reattach loop from becoming an unbounded retry against a dead route. */
     private var reattempts = 0
+
+    /**
+     * Whether the current flow has streamed anything at all. A Failure as the
+     * VERY FIRST event is the shape of an HTTP refusal (the daemon said no
+     * before any run started) — terminal, not reattachable.
+     */
+    private var sawStream = false
 
     /**
      * Everything that means "a turn is in flight". Suggestions, the queue tag and
@@ -302,6 +316,7 @@ class ChatController(
         streamJob = scope.launch {
             var flow = initial
             while (true) {
+                sawStream = false
                 flow.collect { ev -> apply(ev) }
                 // Completing without `done` means the socket went away mid-run.
                 // The run is almost certainly still going on the host, so reattach
@@ -326,6 +341,7 @@ class ChatController(
     }
 
     private suspend fun apply(ev: ChatEvent) {
+        if (ev !is ChatEvent.Failure) sawStream = true
         when (ev) {
             // The daemon persists the user's message BEFORE it starts the run, so
             // this is the first moment the transcript can carry it — and the
@@ -348,11 +364,21 @@ class ChatController(
             is ChatEvent.Result -> { _activity.value = null; loadTranscript() }
             is ChatEvent.Failure -> {
                 _notice.value = ev.text
-                // `running` is NOT cleared here: a failure frame may precede a
-                // reattach, and blanking it would stop the reattach happening.
-                // The tool, however, is no longer running for US, whatever it is
-                // doing on huginn — left set, the view shows a spinner forever.
                 _activity.value = null
+                if (!sawStream) {
+                    // Nothing streamed before this: the daemon REFUSED the send
+                    // (a 4xx at the door — machine offline, mode not allowed).
+                    // No run exists, so a reattach would only re-ask; the typed
+                    // message goes back to the composer instead of sitting on
+                    // screen as a delivered bubble with the spinner latched.
+                    _pendingSend.value?.let(onRefusedSend)
+                    _pendingSend.value = null
+                    _running.value = false
+                } else {
+                    // Mid-run failure: `running` is NOT cleared — a failure
+                    // frame may precede a reattach, and blanking it would stop
+                    // the reattach happening.
+                }
             }
             ChatEvent.Done -> {
                 _running.value = false

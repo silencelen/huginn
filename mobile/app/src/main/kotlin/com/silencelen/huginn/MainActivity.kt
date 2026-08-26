@@ -86,6 +86,7 @@ import com.silencelen.huginn.ui.EmptyState
 import com.silencelen.huginn.ui.LiveInput
 import com.silencelen.huginn.ui.ChatsScreen
 import com.silencelen.huginn.ui.DevicesScreen
+import com.silencelen.huginn.ui.groupByMachine
 import com.silencelen.huginn.ui.RoundEditScreen
 import com.silencelen.huginn.ui.linksOn
 import com.silencelen.huginn.ui.worthContinuing
@@ -516,6 +517,7 @@ fun HuginnApp(
     val loadingScrollback by vm.loadingScrollback.collectAsState()
     val chatModel by vm.chatModel.collectAsState()
     val chatEffort by vm.chatEffort.collectAsState()
+    val chatStarted by vm.chatStarted.collectAsState()
     val models by vm.models.collectAsState()
     val transcript by vm.transcript.collectAsState()
     val hasEarlier by vm.hasEarlier.collectAsState()
@@ -917,7 +919,9 @@ fun HuginnApp(
                 model = chatModel,
                 effort = chatEffort,
                 models = models,
+                started = chatStarted || sending,
                 onSetOptions = { m, e -> vm.setChatOptions(id, model = m, effort = e) },
+                onMode = { vm.setChatOptions(id, mode = it) },
                 chatId = id,
                 suggestions = suggestions,
                 voiceReady = voiceReady,
@@ -1097,7 +1101,11 @@ fun HuginnApp(
                 onRefreshDelivery = { vm.refreshDelivery() },
                 onTestPush = { vm.sendTestPush() },
                 onAlertsMode = { vm.setAlertsMode(it) },
-                deviceCount = devices.size,
+                // Machines, and only the ones the sentence is TRUE of: "can run
+                // work" is the claude capability, which a serve-only machine
+                // does not have. It gets its own line via servingCount instead.
+                deviceCount = groupByMachine(devices).count { g -> g.rows.any { r -> r.scope != "generate" } },
+                servingCount = groupByMachine(devices).count { g -> g.rows.any { r -> r.scope == "generate" } },
                 onOpenDevices = { vm.refreshDevices(); dest = Dest.Devices },
                 appLock = appLock,
                 appLockAvailable = remember { AppLock.canLock(context) },

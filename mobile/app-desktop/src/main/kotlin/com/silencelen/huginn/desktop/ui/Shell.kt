@@ -75,6 +75,7 @@ import com.silencelen.huginn.desktop.ui.common.Tip
 import com.silencelen.huginn.desktop.ui.common.WithHuginnMenus
 import com.silencelen.huginn.desktop.ui.common.connectionTip
 import com.silencelen.huginn.desktop.ui.common.railCountTip
+import com.silencelen.huginn.ui.groupByMachine
 import kotlinx.coroutines.launch
 import java.awt.Cursor
 import java.awt.Toolkit
@@ -183,6 +184,12 @@ fun Shell(store: AppStore) {
 
     val showsList = view == View.CHATS || view == View.SESSIONS
 
+    // The rail and the footer count MACHINES, not credentials: a box serving
+    // local AI beside its claude enrolment is one device to the person reading
+    // a badge, exactly as it is one card in the list. Rows still exist under
+    // the fold; nothing here may count them separately again.
+    val machines = groupByMachine(devices)
+
     WithHuginnMenus {
         Column(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
             Row(Modifier.fillMaxWidth().weight(1f)) {
@@ -195,9 +202,9 @@ fun Shell(store: AppStore) {
                     rounds = rounds.size,
                     roundsWanting = rounds.count { it.lastRun?.status == "action" },
                     roundsRunning = rounds.count { it.running },
-                    devices = devices.size,
-                    devicesOnline = devices.count { it.online },
-                    devicesBusy = devices.count { it.running },
+                    devices = machines.size,
+                    devicesOnline = machines.count { it.online },
+                    devicesBusy = machines.count { g -> g.rows.any { it.running } },
                     onSelect = { store.openView(it) },
                 )
                 VerticalDivider(color = MaterialTheme.colorScheme.outlineVariant)
@@ -380,12 +387,28 @@ fun Shell(store: AppStore) {
                         // save, so an orphan is paid for on every keystroke in
                         // every other target, forever.
                         is ConfirmTarget.DeleteChats -> act {
-                            target.ids.forEach { store.client.deleteChat(it) }
-                            target.ids.forEach { store.drafts.clear(DraftBook.chatKey(it)) }
-                            target.ids.forEach { store.sentHistory.clear(DraftBook.chatKey(it)) }
-                            if (store.chatId.value in target.ids) store.openChat(null)
+                            // Per chat, each with its own cleanup: one refusal (a
+                            // run in flight) must not abort the loop mid-way and
+                            // leave already-deleted chats' drafts orphaned — the
+                            // exact cost the comment above says this exists to
+                            // prevent. The refusals that do happen are collected
+                            // and NAMED, not reported as one anonymous 409.
+                            val refused = mutableListOf<String>()
+                            target.ids.forEach { id ->
+                                runCatching { store.client.deleteChat(id) }
+                                    .onSuccess {
+                                        store.drafts.clear(DraftBook.chatKey(id))
+                                        store.sentHistory.clear(DraftBook.chatKey(id))
+                                        if (store.chatId.value == id) store.openChat(null)
+                                    }
+                                    .onFailure { e ->
+                                        val name = chats.firstOrNull { c -> c.id == id }?.title ?: id.take(8)
+                                        refused += "$name (${e.message ?: "refused"})"
+                                    }
+                            }
                             chatSel = Selection()
                             store.refreshChats()
+                            check(refused.isEmpty()) { "not deleted: ${refused.joinToString("; ")}" }
                         }
                         is ConfirmTarget.KillSessions -> act {
                             target.names.forEach { store.client.killSession(it) }
@@ -734,7 +757,8 @@ private fun StatusLine(
                     View.CHATS -> "${chats.size} chats"
                     View.SESSIONS -> "${sessions.size} sessions"
                     View.ROUNDS -> "${rounds.size} rounds"
-                    View.DEVICES -> "${devices.size} devices"
+                    // Machines, not credential rows — same count as the rail badge.
+                    View.DEVICES -> "${groupByMachine(devices).size} devices"
                     View.STATUS -> "status"
                     View.SETTINGS -> "settings"
                 },
@@ -886,12 +910,16 @@ private fun DialogField(value: String, ok: Boolean, onChange: (String) -> Unit) 
 private fun ConfirmDialog(target: ConfirmTarget, onDismiss: () -> Unit, onConfirm: () -> Unit) {
     val (title, body, verb) = when (target) {
         is ConfirmTarget.DeleteChats ->
+            // The same sentence as ChatTopBar's dialog, deliberately: the audit
+            // caught the two confirms CONTRADICTING each other about data loss
+            // for one and the same DELETE. This is the true one — huginn's
+            // record goes, the Claude session transcript on the host stays.
             if (target.ids.size == 1) {
-                Triple("Delete this chat?", "Its transcript goes with it. This cannot be undone.", "Delete")
+                Triple("Delete this chat?", "Removes it from huginn. The underlying transcript file stays on the host.", "Delete")
             } else {
                 Triple(
                     "Delete ${target.ids.size} chats?",
-                    "Their transcripts go with them. This cannot be undone.",
+                    "Removes them from huginn. The underlying transcript files stay on the host.",
                     "Delete ${target.ids.size}",
                 )
             }

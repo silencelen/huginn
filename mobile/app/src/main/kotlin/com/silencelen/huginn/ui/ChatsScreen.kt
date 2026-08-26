@@ -149,7 +149,12 @@ fun ChatsScreen(
                             enabled = true,
                             onClick = { newHost = null },
                         )
-                        devices.forEach { d ->
+                        // Serving rows are NOT places a claude run can live —
+                        // their machines are reached by picking their model in
+                        // the chat instead. Absent, not disabled: a selectable
+                        // host the daemon always refuses is a trap, and its
+                        // "-llm" credential name is shown nowhere else.
+                        devices.filter { it.scope != "generate" }.forEach { d ->
                             HostChoice(
                                 label = d.name,
                                 // The reason it cannot be picked, not just that it

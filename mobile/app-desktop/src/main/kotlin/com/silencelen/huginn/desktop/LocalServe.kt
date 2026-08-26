@@ -231,7 +231,11 @@ object LocalServe {
             val dev = File(localDataDir(), "device")
             dev.mkdirs()
             val tok = File(dev, "appd-token")
-            if (!tok.isFile || tok.readText().isBlank()) {
+            // Refreshed whenever it DIFFERS, not only when absent: the audit
+            // caught a rotated daemon token never reaching a stale seed, which
+            // left the services 401ing while the app itself worked fine.
+            val existing = runCatching { tok.readText().trim() }.getOrNull()
+            if (existing != token.trim()) {
                 tok.writeText(token)
                 try {
                     java.nio.file.Files.setPosixFilePermissions(
