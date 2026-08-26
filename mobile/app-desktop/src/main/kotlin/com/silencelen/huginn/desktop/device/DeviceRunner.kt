@@ -177,6 +177,7 @@ class DeviceRunner(
             root = settings.deviceRootNow().takeIf { it.isNotBlank() },
             version = appVersion,
             locked = locked,
+            machine = machineKey(hostName),
         )
         if (dev.id != existing) settings.setDeviceId(dev.id)
         return dev.id
@@ -327,5 +328,15 @@ class DeviceRunner(
                 ?: runCatching { java.net.InetAddress.getLocalHost().hostName }.getOrNull()
             return (env ?: "this machine").take(40)
         }
+
+        /**
+         * The daemon groups rows by this into one machine object (the claude
+         * enrolment and a serving sibling fold into one device). Normalised
+         * the way the daemon normalises, so a reported key and a derived one
+         * for the same box can never disagree.
+         */
+        fun machineKey(host: String): String? =
+            host.lowercase().replace(Regex("[^a-z0-9-]+"), "-")
+                .replace(Regex("-+"), "-").trim('-').take(40).ifEmpty { null }
     }
 }

@@ -2,7 +2,7 @@
 'use strict';
 // huginn-llm-shim — the local-model engine behind a generate-scope device row.
 //
-// Version: 0.12.5
+// Version: 0.12.6
 //
 // The device runner spawns this in place of `claude` (conf.claude points here),
 // so its OUTSIDE face is the narrow slice of the claude CLI contract the
@@ -38,7 +38,7 @@ const http = require('node:http');
 const https = require('node:https');
 const crypto = require('node:crypto');
 
-const VERSION = '0.12.5';
+const VERSION = '0.12.6';
 
 // ------------------------------------------------------------------ limits
 

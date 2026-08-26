@@ -1,5 +1,16 @@
 # Huginn changelog
 
+## 2.81.0 — 2026-08-25
+
+### Changed
+- **One machine, one card.** A PC that both runs work and serves local AI
+  used to appear twice in Devices ("DATATREEX" and "datatreex-llm"). It is
+  now one card, named the way you know the box, with each capability on its
+  own line — what it will do as a device, and what it serves as local AI.
+  Ask/Act belong to the work capability; Forget takes away everything the
+  box holds. Chat model menus title local rows by the machine's own name
+  too ("Qwen3 8B — DATATREEX").
+
 ## 2.80.0 — 2026-08-25
 
 ### Added

@@ -1,5 +1,14 @@
 # Huginn Desktop changelog
 
+## 0.11.0
+
+- **One machine, one card** (shared with the phone): a PC that both runs work
+  and serves local AI is one entry in Devices now, with each capability on
+  its own line, instead of appearing as itself and again as "<name>-llm".
+  Chat model menus title local rows by the machine's own name.
+- This machine's own enrolment now names its machine key, so a renamed
+  device still folds into one object with its serving half.
+
 ## 0.10.3
 
 - **Local-AI setup works on current Node.** The fetched manager is
