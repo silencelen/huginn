@@ -94,6 +94,8 @@ import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.launch
 import com.silencelen.huginn.data.ModelChoice
 import com.silencelen.huginn.ui.CompactingChip
+import com.silencelen.huginn.ui.OverviewDensity
+import com.silencelen.huginn.ui.SessionOverviewView
 import com.silencelen.huginn.ui.ContextMeter
 import com.silencelen.huginn.ui.DegradedAskCard
 import com.silencelen.huginn.ui.HistoryWalk
@@ -131,7 +133,7 @@ import com.silencelen.huginn.ui.theme.LocalMonoStyle
 @Composable
 fun SessionView(store: AppStore, name: String) {
     val controller = remember(name) {
-        SessionController(store.client, name, store.presence, store.paneLease, store.scope)
+        SessionController(store.client, name, store.presence, store.paneLease, store.metaSaver, store.scope)
     }
     val draftKey = DraftBook.sessionKey(name)
     DisposableEffect(name) {
@@ -274,6 +276,7 @@ fun SessionView(store: AppStore, name: String) {
             when (tab) {
                 SessionTab.CONVERSATION -> ConversationTab(controller)
                 SessionTab.SCREEN -> ScreenTab(controller)
+                SessionTab.OVERVIEW -> OverviewTab(controller, store)
             }
         }
 
@@ -462,6 +465,53 @@ private fun SessionHeader(
     }
 }
 
+/**
+ * The resting place: what this session has spent, where the pace lands, the
+ * person's own notes, and the map of what it did.
+ *
+ * Thin by construction — the controller polls (only while this tab is selected),
+ * [AppStore] owns the autosave, and the whole surface is the shared composable
+ * the phone draws too.
+ */
+@Composable
+private fun OverviewTab(controller: SessionController, store: AppStore) {
+    val overview by controller.overview.collectAsState()
+    val graph by controller.graph.collectAsState()
+    val note by controller.overviewNote.collectAsState()
+    val plan by store.plan.collectAsState()
+    val goals by store.metaSaver.goals.collectAsState()
+    val notes by store.metaSaver.notes.collectAsState()
+    val saveState by store.metaSaver.state.collectAsState()
+    val saveNote by store.metaSaver.note.collectAsState()
+    var density by remember { mutableStateOf(OverviewDensity.COMPACT) }
+    // The countdowns are live, so the clock has to move on its own; the map's own
+    // numbers are refreshed by the poll.
+    var nowMs by remember { mutableStateOf(System.currentTimeMillis()) }
+    LaunchedEffect(Unit) {
+        while (true) {
+            nowMs = System.currentTimeMillis()
+            kotlinx.coroutines.delay(30_000)
+        }
+    }
+    LaunchedEffect(Unit) { store.refreshStatus() }
+    SessionOverviewView(
+        overview = overview,
+        graph = graph,
+        plan = plan,
+        nowMs = nowMs,
+        goals = goals,
+        notes = notes,
+        saveState = saveState,
+        density = density,
+        onGoals = { store.metaSaver.setGoals(it) },
+        onNotes = { store.metaSaver.setNotes(it) },
+        onDensity = { density = it },
+        unavailable = if (overview == null && graph == null) note else null,
+        note = saveNote,
+        onDismissNote = { store.metaSaver.clearNote() },
+    )
+}
+
 @Composable
 private fun TabStrip(
     current: SessionTab,
@@ -483,6 +533,7 @@ private fun TabStrip(
     ) {
         TabItem("Conversation", current == SessionTab.CONVERSATION) { onSelect(SessionTab.CONVERSATION) }
         TabItem("Screen", current == SessionTab.SCREEN) { onSelect(SessionTab.SCREEN) }
+        TabItem("Overview", current == SessionTab.OVERVIEW) { onSelect(SessionTab.OVERVIEW) }
         Box(Modifier.weight(1f))
         // Out of the focus order: the Screen tab holds keyboard focus so live keys
         // reach the pane, and a button that took focus on click would silently stop

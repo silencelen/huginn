@@ -97,6 +97,8 @@ import com.silencelen.huginn.ui.ScratchpadEditorView
 import com.silencelen.huginn.ui.ScratchpadListView
 import com.silencelen.huginn.ui.HuginnViewModel
 import com.silencelen.huginn.ui.LocalAttachmentImages
+import com.silencelen.huginn.ui.OverviewDensity
+import com.silencelen.huginn.ui.SessionOverviewView
 import com.silencelen.huginn.ui.SessionScreen
 import com.silencelen.huginn.ui.SessionSubtitle
 import com.silencelen.huginn.ui.SessionsScreen
@@ -517,6 +519,16 @@ fun HuginnApp(
     val openPad by vm.padSaver.pad.collectAsState()
     val padSaveState by vm.padSaver.state.collectAsState()
     val padNote by vm.padSaver.note.collectAsState()
+    val overview by vm.overview.collectAsState()
+    val sessionGraph by vm.sessionGraph.collectAsState()
+    val overviewNote by vm.overviewNote.collectAsState()
+    val metaGoals by vm.metaSaver.goals.collectAsState()
+    val metaNotes by vm.metaSaver.notes.collectAsState()
+    val metaSaveState by vm.metaSaver.state.collectAsState()
+    val metaNote by vm.metaSaver.note.collectAsState()
+    // The map's row height, remembered across a rotation but not across installs:
+    // it is a reading preference for the screen you are on, not a setting.
+    var overviewDensity by rememberSaveable { mutableStateOf(OverviewDensity.COMPACT) }
     // Where a page is being sent, when the picker is open. The page's own text,
     // captured when the button was pressed rather than read at the far end: it is
     // what the person was looking at when they decided to send it.
@@ -1116,6 +1128,34 @@ fun HuginnApp(
                 pads = if (padsAvailable == true) pads else emptyList(),
                 padRefId = padRefs[com.silencelen.huginn.ui.ScratchpadRules.sessionRefKey(name)],
                 onPadRef = { vm.setPadRef(com.silencelen.huginn.ui.ScratchpadRules.sessionRefKey(name), it) },
+                overviewPane = {
+                    // Started and stopped by the TAB's own existence: the map is a
+                    // whole-transcript walk on the host, so it must not be polled
+                    // from behind the conversation. Lifecycle-gated like every
+                    // other poll here — a DisposableEffect alone keeps running
+                    // while the phone is in a pocket.
+                    LifecycleStartEffect(name) {
+                        vm.refreshPlan()
+                        vm.startOverviewPolling(name)
+                        onStopOrDispose { vm.stopOverviewPolling() }
+                    }
+                    SessionOverviewView(
+                        overview = overview,
+                        graph = sessionGraph,
+                        plan = plan,
+                        nowMs = nowMs,
+                        goals = metaGoals,
+                        notes = metaNotes,
+                        saveState = metaSaveState,
+                        density = overviewDensity,
+                        onGoals = { vm.metaSaver.setGoals(it) },
+                        onNotes = { vm.metaSaver.setNotes(it) },
+                        onDensity = { overviewDensity = it },
+                        unavailable = if (overview == null && sessionGraph == null) overviewNote else null,
+                        note = metaNote,
+                        onDismissNote = { vm.metaSaver.clearNote() },
+                    )
+                },
             )
         }
         val statusPane: @Composable () -> Unit = {

@@ -5,6 +5,10 @@ import com.silencelen.huginn.data.HuginnClient
 import com.silencelen.huginn.data.PaneLease
 import com.silencelen.huginn.data.PanePrompt
 import com.silencelen.huginn.data.Screen
+import com.silencelen.huginn.data.SessionGraph
+import com.silencelen.huginn.data.SessionMeta
+import com.silencelen.huginn.data.SessionMetaSaver
+import com.silencelen.huginn.data.SessionOverview
 import com.silencelen.huginn.data.TranscriptPage
 import com.silencelen.huginn.ui.LiveInput
 import com.silencelen.huginn.ui.LocalEcho
@@ -29,8 +33,8 @@ import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 
-/** Which face of one session is on screen. Both stay alive; only one is selected. */
-enum class SessionTab { CONVERSATION, SCREEN }
+/** Which face of one session is on screen. All stay alive; only one is selected. */
+enum class SessionTab { CONVERSATION, SCREEN, OVERVIEW }
 
 /**
  * One open session: its Claude transcript, its live pane, and the tmux size lease
@@ -53,6 +57,13 @@ class SessionController(
     val name: String,
     private val presence: Presence,
     private val lease: PaneLeaseHolder,
+    /**
+     * The goals-and-notes autosave. Owned by [AppStore], not by this controller,
+     * for the reason the whole class exists: the flush that matters happens as
+     * this controller is being closed, and a saver on this scope would be
+     * cancelled at exactly that moment.
+     */
+    private val meta: SessionMetaSaver,
     appScope: CoroutineScope,
 ) {
 
@@ -99,6 +110,20 @@ class SessionController(
      */
     private val _neverRan = MutableStateFlow(false)
     val neverRan: StateFlow<Boolean> = _neverRan.asStateFlow()
+
+    private val _overview = MutableStateFlow<SessionOverview?>(null)
+    val overview: StateFlow<SessionOverview?> = _overview.asStateFlow()
+
+    private val _graph = MutableStateFlow<SessionGraph?>(null)
+    val graph: StateFlow<SessionGraph?> = _graph.asStateFlow()
+
+    /**
+     * Why the overview has nothing to show, in the daemon's own words. A plain
+     * shell and a session whose first prompt has not landed both reach that route
+     * legitimately and get a 409 with a reason; neither is a failure.
+     */
+    private val _overviewNote = MutableStateFlow<String?>(null)
+    val overviewNote: StateFlow<String?> = _overviewNote.asStateFlow()
 
     private val _screen = MutableStateFlow<Screen?>(null)
     val screen: StateFlow<Screen?> = _screen.asStateFlow()
@@ -203,8 +228,52 @@ class SessionController(
     fun start() {
         scope.launch { transcriptLoop() }
         scope.launch { screenSupervisor() }
+        scope.launch { overviewSupervisor() }
         scope.launch { keyDrainer() }
     }
+
+    /**
+     * The map, polled ONLY while its tab is the one being looked at.
+     *
+     * Same shape as [screenSupervisor] and for a sharper reason: reading this
+     * costs the daemon a walk of the whole transcript, which reaches thirty
+     * megabytes on a long run. Behind another tab it would be a poll nobody can
+     * see paid for by everybody.
+     *
+     * The FIRST pass fetches the header on its own — cheap on the wire, and the
+     * first thing somebody arriving reads — then the loop takes over with the
+     * cursor, which answers "unchanged" in two numbers while nothing is moving.
+     */
+    private suspend fun overviewSupervisor() {
+        combine(presence.visible, _tab) { visible, tab -> visible && tab == SessionTab.OVERVIEW }
+            .collectLatest { watching ->
+                if (!watching) {
+                    // Leaving the tab is when the sentence still in the air has to land.
+                    meta.flush()
+                    return@collectLatest
+                }
+                // Only on the first visit. Re-opening on every tab flip would
+                // reset the editors to the last meta the POLL returned, which
+                // after a save from this client is the text before it was typed.
+                if (meta.session.value != name) meta.open(name, SessionMeta())
+                runCatching { client.sessionOverview(name) }
+                    .onSuccess { _overview.value = it; _overviewNote.value = null; meta.refresh(name, it.meta) }
+                    .onFailure { _overviewNote.value = overviewNoteFor(it) }
+                while (scope.isActive) {
+                    runCatching { client.sessionGraph(name, _graph.value?.cursor) }
+                        .onSuccess { g ->
+                            if (!g.unchanged) { _graph.value = g; meta.refresh(name, g.meta) }
+                            _overviewNote.value = null
+                        }
+                        .onFailure { _overviewNote.value = overviewNoteFor(it) }
+                    delay(OVERVIEW_POLL_MS)
+                }
+            }
+    }
+
+    /** A daemon that predates the route says nothing; everything else says why. */
+    private fun overviewNoteFor(t: Throwable): String? =
+        (t as? HuginnClient.HuginnException)?.takeIf { it.code != 404 }?.message
 
     /**
      * Teardown. RELEASES THE LEASE, and does it on the app scope rather than the
@@ -581,5 +650,8 @@ class SessionController(
 
         /** Scrollback depth; the daemon clamps to 2000. */
         const val HISTORY_LINES: Int = 2_000
+
+        /** How often the map asks whether anything happened. Its cursor makes that cheap. */
+        const val OVERVIEW_POLL_MS: Long = 5_000
     }
 }

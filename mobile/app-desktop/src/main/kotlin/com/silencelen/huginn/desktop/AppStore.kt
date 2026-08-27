@@ -6,6 +6,7 @@ import com.silencelen.huginn.data.Device
 import com.silencelen.huginn.data.Round
 import com.silencelen.huginn.data.Scratchpad
 import com.silencelen.huginn.data.ScratchpadSaver
+import com.silencelen.huginn.data.SessionMetaSaver
 import com.silencelen.huginn.ui.RoundDraft
 import com.silencelen.huginn.ui.toSchedule
 import com.silencelen.huginn.desktop.device.DeviceRunner
@@ -250,6 +251,15 @@ class AppStore(
      */
     val padSaver = ScratchpadSaver(scope, { id, rev, content ->
         client.saveScratchpad(id, rev, content = content)
+    })
+
+    /**
+     * The goals and notes beside a session, and their autosave. APP level for the
+     * same reason as [padSaver]: the flush happens as the Overview tab is torn
+     * down, which is the exact moment a scope owned by that tab is cancelled.
+     */
+    val metaSaver = SessionMetaSaver(scope, { name, goals, notes ->
+        client.saveSessionMeta(name, goals, notes)
     })
 
     /**

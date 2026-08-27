@@ -36,9 +36,24 @@ function agentsDirFor(transcriptPath, sessionId) {
   return path.join(path.dirname(transcriptPath), sessionId, 'subagents');
 }
 
+/**
+ * Where workflow runs put their agents. BOTH, because the CLI has used both.
+ *
+ * `<sessionId>/subagents/workflows/` is where the runs on this host land today;
+ * `<sessionId>/workflows/` is the sibling the CLI also writes into — on this
+ * host it currently holds the run MANIFESTS and a scripts dir rather than
+ * transcripts, but it is the same namespace, and scanning only one of the two
+ * is a blind spot that reports "no agents" for a fan-out that ran. Both are
+ * scanned and the results merged by run name.
+ */
+function workflowDirs(dir) {
+  return [path.join(dir, 'workflows'), path.join(path.dirname(dir), 'workflows')];
+}
+
 /** Every agent transcript, with the workflow run it belongs to (null = direct). */
 function listAgentFiles(dir, fsImpl = fs) {
   const out = [];
+  const seen = new Set();
   let entries = [];
   try { entries = fsImpl.readdirSync(dir, { withFileTypes: true }); } catch { return out; }
   for (const e of entries) {
@@ -46,15 +61,22 @@ function listAgentFiles(dir, fsImpl = fs) {
       out.push({ file: path.join(dir, e.name), workflow: null });
     }
   }
-  let wfs = [];
-  try { wfs = fsImpl.readdirSync(path.join(dir, 'workflows'), { withFileTypes: true }); } catch { return out; }
-  for (const w of wfs) {
-    if (!w.isDirectory()) continue;
-    let files = [];
-    try { files = fsImpl.readdirSync(path.join(dir, 'workflows', w.name), { withFileTypes: true }); } catch { continue; }
-    for (const f of files) {
-      if (f.isFile() && /^agent-.*\.jsonl$/.test(f.name)) {
-        out.push({ file: path.join(dir, 'workflows', w.name, f.name), workflow: w.name });
+  for (const wfRoot of workflowDirs(dir)) {
+    let wfs = [];
+    try { wfs = fsImpl.readdirSync(wfRoot, { withFileTypes: true }); } catch { continue; }
+    for (const w of wfs) {
+      if (!w.isDirectory()) continue;
+      let files = [];
+      try { files = fsImpl.readdirSync(path.join(wfRoot, w.name), { withFileTypes: true }); } catch { continue; }
+      for (const f of files) {
+        if (!f.isFile() || !/^agent-.*\.jsonl$/.test(f.name)) continue;
+        // Keyed on run + agent, not on the path: the same run reached through
+        // two roots is one run, and listing it twice would double every token
+        // total computed from these files.
+        const key = `${w.name}/${f.name}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        out.push({ file: path.join(wfRoot, w.name, f.name), workflow: w.name });
       }
     }
   }
@@ -110,6 +132,28 @@ function journalSummaries(journalFile, fsImpl = fs) {
   return out;
 }
 
+/**
+ * Which agents in a workflow run have SETTLED, whatever they concluded.
+ *
+ * Separate from journalSummaries because a result is not always a summary: real
+ * journals on this host carry `result:{findings:[…]}` with no summary field at
+ * all, so "did it finish" and "what did it say" are two different questions and
+ * only the first one always has an answer.
+ */
+function journalSettled(journalFile, fsImpl = fs) {
+  const out = new Set();
+  let text = '';
+  try { text = fsImpl.readFileSync(journalFile, 'utf8'); } catch { return out; }
+  for (const line of text.split('\n')) {
+    if (!line.trim()) continue;
+    try {
+      const d = JSON.parse(line);
+      if (d.type === 'result' && d.agentId) out.add(d.agentId);
+    } catch { /* half-written line */ }
+  }
+  return out;
+}
+
 /** What the agent is doing right now, from its transcript tail. */
 function agentLastLine(file) {
   try {
@@ -154,11 +198,13 @@ function listAgents(dir, nowSec, fsImpl = fs, max = 24) {
   out.sort((a, b) => b.updatedAt - a.updatedAt);
   const kept = out.slice(0, max);
   // Journal summaries, one read per workflow run represented in the kept rows.
+  // The journal sits beside the agent's OWN file rather than under an assumed
+  // root — a run may have come from either workflow location (see workflowDirs).
   const summaries = new Map();
   for (const a of kept) {
     if (!a.workflow || summaries.has(a.workflow)) continue;
     summaries.set(a.workflow,
-      journalSummaries(path.join(dir, 'workflows', a.workflow, 'journal.jsonl'), fsImpl));
+      journalSummaries(path.join(path.dirname(a.file), 'journal.jsonl'), fsImpl));
   }
   // The transcript reads are the expensive part; only the kept rows pay them.
   for (const a of kept) {
@@ -172,6 +218,7 @@ function listAgents(dir, nowSec, fsImpl = fs, max = 24) {
 }
 
 module.exports = {
-  agentsDirFor, listAgentFiles, agentTask, agentLastLine, journalSummaries, listAgents,
+  agentsDirFor, workflowDirs, listAgentFiles, agentTask, agentLastLine,
+  journalSummaries, journalSettled, listAgents,
   ACTIVE_S, RECENT_S,
 };

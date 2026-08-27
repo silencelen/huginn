@@ -1111,3 +1111,179 @@ data class EventsAck(
     val done: Boolean = false,
     val cancel: Boolean = false,
 )
+
+// --------------------------------------------------------- session overview
+
+/**
+ * A session's ledger, read off its whole transcript by the daemon.
+ *
+ * Deliberately its own fetch rather than fields on [Session]: the list is polled
+ * by everything, and this costs a walk of a file that reaches thirty megabytes.
+ */
+@Serializable
+data class GraphTokens(
+    val input: Long = 0,
+    val output: Long = 0,
+    val cacheRead: Long = 0,
+    val cacheCreation: Long = 0,
+) {
+    /** What the session WROTE: new context plus generation, not re-reads. */
+    val written: Long get() = input + output + cacheCreation
+    val all: Long get() = written + cacheRead
+}
+
+@Serializable
+data class ToolCount(val name: String = "", val count: Int = 0)
+
+@Serializable
+data class GraphTotals(
+    val wallMs: Long = 0,
+    val startedAt: Long? = null,
+    val lastActivityTs: Long? = null,
+    val turns: Int = 0,
+    val userMessages: Int = 0,
+    val toolCalls: Int = 0,
+    val errors: Int = 0,
+    val tokens: GraphTokens = GraphTokens(),
+    val agentCount: Int = 0,
+    val agentTokens: GraphTokens = GraphTokens(),
+    val activeAgents: Int = 0,
+    val compactions: Int = 0,
+    val droppedTokens: Long = 0,
+    val filesTouched: Int = 0,
+    val models: List<String> = emptyList(),
+    val efforts: List<String> = emptyList(),
+)
+
+/**
+ * Burn rate over the two windows worth having.
+ *
+ * [tokensPerMin10] and [tokensPerMin60] count WRITTEN tokens; the `all` pair adds
+ * cache reads, which are an order of magnitude larger and would drown the number
+ * a person is actually watching.
+ */
+@Serializable
+data class GraphRate(
+    val tokensPerMin10: Long = 0,
+    val tokensPerMin60: Long = 0,
+    val allTokensPerMin10: Long = 0,
+    val allTokensPerMin60: Long = 0,
+    val lastActivityTs: Long? = null,
+    val activeRecently: Boolean = false,
+)
+
+/**
+ * One block on the map.
+ *
+ * [kind] is `user`, `action`, `response` or `compact`. Unknown kinds are drawn as
+ * plain blocks rather than dropped — a newer daemon inventing a fifth is not a
+ * reason for the map to develop a hole.
+ */
+@Serializable
+data class GraphNode(
+    val id: String = "",
+    val kind: String = "action",
+    val ts: Long? = null,
+    val endTs: Long? = null,
+    val durMs: Long = 0,
+    val label: String = "",
+    val detail: String? = null,
+    val tokens: GraphTokens = GraphTokens(),
+    val toolCalls: Int = 0,
+    val tools: List<ToolCount> = emptyList(),
+    val files: Int = 0,
+    val errors: Int = 0,
+    /** Agent ids that branched from this block. */
+    val agents: List<String> = emptyList(),
+    val models: List<String> = emptyList(),
+    val pre: Long? = null,
+    val post: Long? = null,
+    val dropped: Long? = null,
+)
+
+/**
+ * A branch: an agent, where it left the spine and where it came back.
+ *
+ * [status] is `done`, `running`, `failed`, `stalled` or `orphan`. The last two are
+ * not failures — a workflow member whose run journal never recorded a result, and
+ * an agent whose join did not survive a compaction — but they are not "done"
+ * either, and saying so is the difference between a map and a guess.
+ */
+@Serializable
+data class GraphAgent(
+    val id: String = "",
+    val agentType: String? = null,
+    val description: String? = null,
+    val summary: String? = null,
+    val spawnNodeId: String? = null,
+    val spawnTs: Long? = null,
+    val mergeNodeId: String? = null,
+    val mergeTs: Long? = null,
+    val status: String = "done",
+    val tokens: GraphTokens = GraphTokens(),
+    val toolCalls: Int = 0,
+    val durMs: Long = 0,
+    val updatedAt: Long = 0,
+    val workflowId: String? = null,
+    val depth: Int = 1,
+)
+
+@Serializable
+data class GraphWorkflow(
+    val id: String = "",
+    val nodeId: String? = null,
+    val ts: Long? = null,
+    val members: Int = 0,
+)
+
+/**
+ * Where the client got to. TWO numbers, because a fan-out grows in two places: a
+ * parent writes nothing while six agents run, so a parent-size cursor reports
+ * "unchanged" for exactly the stretch worth watching.
+ */
+@Serializable
+data class GraphCursor(val size: Long = 0, val agentBytes: Long = 0)
+
+/** The goals and notes a person keeps against a run. */
+@Serializable
+data class SessionMeta(
+    val goals: String = "",
+    val notes: String = "",
+    val updatedAt: Long = 0,
+)
+
+@Serializable
+data class SessionOverview(
+    val name: String = "",
+    val claudeSessionId: String? = null,
+    val sessionId: String? = null,
+    val generatedAt: Long = 0,
+    val totals: GraphTotals = GraphTotals(),
+    val rate: GraphRate = GraphRate(),
+    val cursor: GraphCursor = GraphCursor(),
+    val meta: SessionMeta = SessionMeta(),
+)
+
+@Serializable
+data class SessionMetaSaved(
+    val ok: Boolean = false,
+    val claudeSessionId: String? = null,
+    val meta: SessionMeta = SessionMeta(),
+)
+
+@Serializable
+data class SessionGraph(
+    val v: Int = 1,
+    val name: String = "",
+    val sessionId: String? = null,
+    val generatedAt: Long = 0,
+    /** True when the cursor matched: everything else is absent and the held copy stands. */
+    val unchanged: Boolean = false,
+    val totals: GraphTotals = GraphTotals(),
+    val rate: GraphRate = GraphRate(),
+    val nodes: List<GraphNode> = emptyList(),
+    val agents: List<GraphAgent> = emptyList(),
+    val workflows: List<GraphWorkflow> = emptyList(),
+    val cursor: GraphCursor = GraphCursor(),
+    val meta: SessionMeta = SessionMeta(),
+)

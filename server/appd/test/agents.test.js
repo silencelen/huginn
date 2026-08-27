@@ -77,3 +77,50 @@ test('a missing journal is an empty map', () => {
   const { journalSummaries } = require('../lib/agents');
   assert.equal(journalSummaries('/nope/journal.jsonl').size, 0);
 });
+
+test('workflow runs are found in BOTH places the CLI writes them', () => {
+  // The scan used to look only under subagents/workflows. The CLI also writes a
+  // `workflows` directory beside subagents — that is where the run manifests
+  // live on this host — and a run whose transcripts landed there reported as no
+  // agents at all, which reads on the phone as a fan-out that never started.
+  const dir = fs2.mkdtempSync(path2.join(os2.tmpdir(), 'agents-both-'));
+  const subagents = path2.join(dir, 'subagents');
+  fs2.mkdirSync(path2.join(subagents, 'workflows', 'wf_inner'), { recursive: true });
+  fs2.writeFileSync(path2.join(subagents, 'workflows', 'wf_inner', 'agent-i1.jsonl'), '{}\n');
+  fs2.mkdirSync(path2.join(dir, 'workflows', 'wf_sibling'), { recursive: true });
+  fs2.writeFileSync(path2.join(dir, 'workflows', 'wf_sibling', 'agent-s1.jsonl'), '{}\n');
+
+  const files = listAgentFiles(subagents);
+  assert.equal(files.length, 2);
+  assert.deepEqual(files.map((f) => f.workflow).sort(), ['wf_inner', 'wf_sibling']);
+});
+
+test('the same run reached through both roots is counted once', () => {
+  // Double-listing a run would double every token total computed off these
+  // files, which is worse than the blind spot it fixes.
+  const dir = fs2.mkdtempSync(path2.join(os2.tmpdir(), 'agents-dup-'));
+  const subagents = path2.join(dir, 'subagents');
+  for (const root of [path2.join(subagents, 'workflows'), path2.join(dir, 'workflows')]) {
+    fs2.mkdirSync(path2.join(root, 'wf_same'), { recursive: true });
+    fs2.writeFileSync(path2.join(root, 'wf_same', 'agent-d1.jsonl'), '{}\n');
+  }
+  assert.equal(listAgentFiles(subagents).length, 1);
+});
+
+test('a settled agent is one with a result line, summary or not', () => {
+  // Real journals carry `result:{findings:[…]}` with no summary at all, so
+  // "did it finish" cannot be answered by looking for a summary.
+  const { journalSettled } = require('../lib/agents');
+  const dir = fs2.mkdtempSync(path2.join(os2.tmpdir(), 'settled-'));
+  const f = path2.join(dir, 'journal.jsonl');
+  fs2.writeFileSync(f, [
+    JSON.stringify({ type: 'started', agentId: 'a1' }),
+    JSON.stringify({ type: 'result', agentId: 'a1', result: { findings: [{ title: 'x' }] } }),
+    JSON.stringify({ type: 'started', agentId: 'a2' }),
+    '',
+  ].join('\n'));
+  const s = journalSettled(f);
+  assert.equal(s.has('a1'), true);
+  assert.equal(s.has('a2'), false, 'started is not finished');
+  assert.equal(journalSettled('/nope/journal.jsonl').size, 0);
+});
