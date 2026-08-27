@@ -35,6 +35,8 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.compose.LifecycleStartEffect
+import kotlinx.coroutines.delay
 
 /**
  * Keeps a conversation pinned to its newest content, and reports when there is
@@ -265,6 +267,37 @@ fun SectionLabel(text: String, modifier: Modifier = Modifier) {
         color = MaterialTheme.colorScheme.onSurfaceVariant,
         modifier = modifier.padding(start = 16.dp, end = 16.dp, top = 18.dp, bottom = 6.dp),
     )
+}
+
+/**
+ * A clock that ticks while the screen is on the front, and stops when it is not.
+ *
+ * ⚠ EVERY "in 4h" AND "3 minutes ago" ON THIS PHONE IS DRAWN FROM A `nowMs`, and
+ * a `nowMs` sampled once per composition freezes the moment the screen settles.
+ * The Rounds rows, the pages list and the session map all read one — and the
+ * shell's was read straight from the clock with nothing to move it, so a phone
+ * left open showed countdowns that never counted and "just now" an hour later.
+ *
+ * Thirty seconds because the finest unit any of them shows is a minute. Tied to
+ * the LIFECYCLE rather than to composition: a backgrounded screen counting down
+ * to itself is a wakeup every half minute for a number nobody is reading.
+ */
+@Composable
+fun screenClock(periodMs: Long = 30_000L): Long {
+    var started by remember { mutableStateOf(false) }
+    LifecycleStartEffect(Unit) {
+        started = true
+        onStopOrDispose { started = false }
+    }
+    var nowMs by remember { mutableStateOf(System.currentTimeMillis()) }
+    LaunchedEffect(started, periodMs) {
+        if (!started) return@LaunchedEffect
+        while (true) {
+            nowMs = System.currentTimeMillis()
+            delay(periodMs)
+        }
+    }
+    return nowMs
 }
 
 @Composable

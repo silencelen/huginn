@@ -93,6 +93,7 @@ import com.silencelen.huginn.ui.linksOn
 import com.silencelen.huginn.ui.worthContinuing
 import com.silencelen.huginn.ui.screenText
 import com.silencelen.huginn.ui.RoundsScreen
+import com.silencelen.huginn.ui.screenClock
 import com.silencelen.huginn.ui.ScratchpadEditorView
 import com.silencelen.huginn.ui.ScratchpadListView
 import com.silencelen.huginn.ui.HuginnViewModel
@@ -433,6 +434,11 @@ internal sealed interface Dest {
     data object Settings : Dest
 }
 
+// The two surfaces that read the pages poll. Named because on a wide screen they
+// are BOTH on screen, and the poll belongs to whichever of them is still there.
+private const val PAD_WATCH_LIST = "list"
+private const val PAD_WATCH_EDITOR = "editor"
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun HuginnApp(
@@ -535,10 +541,14 @@ fun HuginnApp(
     var pendingPadText by remember { mutableStateOf<String?>(null) }
     val devices by vm.devices.collectAsState()
     val chatSealed by vm.chatSealed.collectAsState()
-    // Recomputed on every recomposition, which the chat/round refresh already
-    // drives. A Round row says "in 4h", not "in 3h 59m", so a clock that ticks
-    // only when the data does is precise enough and costs nothing.
-    val nowMs = System.currentTimeMillis()
+    // ⚠ TICKED, not sampled. This one clock feeds every "in 4h" and "3 minutes
+    // ago" the shell draws — Round rows, the pages list, the session map — and it
+    // was read straight from the system clock on each recomposition, with nothing
+    // to cause one. On a screen that has settled (the overview, a list nobody is
+    // scrolling) that means the countdowns simply stop: "in 4h" stays "in 4h" for
+    // the rest of the evening. Thirty seconds and lifecycle-gated, exactly as the
+    // desktop's Status pane does it — see [screenClock].
+    val nowMs = screenClock()
     val sessions by vm.sessions.collectAsState()
     val status by vm.status.collectAsState()
     val statusError by vm.statusError.collectAsState()
@@ -1194,8 +1204,8 @@ fun HuginnApp(
         // from a screen that is not showing it.
         val scratchpadsPane: @Composable () -> Unit = {
             LifecycleStartEffect(Unit) {
-                vm.startScratchpadsPolling()
-                onStopOrDispose { vm.stopScratchpadsPolling() }
+                vm.startScratchpadsPolling(PAD_WATCH_LIST)
+                onStopOrDispose { vm.stopScratchpadsPolling(PAD_WATCH_LIST) }
             }
             ScratchpadListView(
                 pads = pads,
@@ -1214,9 +1224,13 @@ fun HuginnApp(
             // exactly when the flush has to run and exactly when a composition
             // scope would already be gone.
             DisposableEffect(id) { onDispose { vm.padSaver.flush() } }
+            // NAMED, because on a wide screen the list is on the same screen and
+            // watching the same poll: an unnamed stop from this pane took the
+            // list's poll down with it, and the list then sat frozen with nothing
+            // on screen looking wrong. See HuginnViewModel.padWatchers.
             LifecycleStartEffect(Unit) {
-                vm.startScratchpadsPolling()
-                onStopOrDispose { vm.stopScratchpadsPolling() }
+                vm.startScratchpadsPolling(PAD_WATCH_EDITOR)
+                onStopOrDispose { vm.stopScratchpadsPolling(PAD_WATCH_EDITOR) }
             }
             ScratchpadEditorView(
                 pad = openPad?.takeIf { it.id == id },
@@ -1567,8 +1581,8 @@ fun HuginnApp(
                             is Dest.Scratchpads, is Dest.Scratchpad -> Row(Modifier.fillMaxSize()) {
                                 Box(Modifier.width(292.dp).fillMaxSize()) {
                                     LifecycleStartEffect(Unit) {
-                                        vm.startScratchpadsPolling()
-                                        onStopOrDispose { vm.stopScratchpadsPolling() }
+                                        vm.startScratchpadsPolling(PAD_WATCH_LIST)
+                                        onStopOrDispose { vm.stopScratchpadsPolling(PAD_WATCH_LIST) }
                                     }
                                     ScratchpadListView(
                                         pads = pads,

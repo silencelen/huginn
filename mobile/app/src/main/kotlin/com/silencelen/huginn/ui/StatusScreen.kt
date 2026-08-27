@@ -13,20 +13,14 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
-import androidx.lifecycle.compose.LifecycleStartEffect
 import com.silencelen.huginn.appVersion
 import com.silencelen.huginn.data.Plan
 import com.silencelen.huginn.data.Status
 import com.silencelen.huginn.data.Usage
-import kotlinx.coroutines.delay
 
 /** The same health summary `huginn status` prints, minus what a phone cannot use. */
 @Composable
@@ -149,22 +143,7 @@ private fun diskColor(usedPercent: String?): androidx.compose.ui.graphics.Color?
  * itself is a wakeup every half minute for a number nobody is reading.
  */
 @Composable
-private fun planClock(): Long {
-    var started by remember { mutableStateOf(false) }
-    LifecycleStartEffect(Unit) {
-        started = true
-        onStopOrDispose { started = false }
-    }
-    var nowMs by remember { mutableStateOf(System.currentTimeMillis()) }
-    LaunchedEffect(started) {
-        if (!started) return@LaunchedEffect
-        while (true) {
-            nowMs = System.currentTimeMillis()
-            delay(30_000)
-        }
-    }
-    return nowMs
-}
+private fun planClock(): Long = screenClock()
 
 /** The screen's own gutter; the shared sections draw edge to edge without it. */
 private val sectionPadding = Modifier.padding(horizontal = 16.dp)

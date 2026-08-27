@@ -1,6 +1,12 @@
 package com.silencelen.huginn.desktop.device
 
 import com.silencelen.huginn.data.HuginnClient
+import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.async
+import kotlinx.coroutines.test.advanceTimeBy
+import kotlinx.coroutines.test.advanceUntilIdle
+import kotlinx.coroutines.test.currentTime
+import kotlinx.coroutines.test.runTest
 import java.io.IOException
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -16,6 +22,7 @@ import kotlin.test.assertTrue
  * the id and hope — leaves a row enrolled at the daemon that nothing on this
  * machine can ever retire.
  */
+@OptIn(ExperimentalCoroutinesApi::class)
 class UnenrolTest {
 
     // -------------------------------------------------------------- the step
@@ -120,6 +127,47 @@ class UnenrolTest {
             assertTrue(ms >= last, "attempt $n waited ${ms}ms after ${last}ms")
             last = ms
         }
+    }
+
+    // ----------------------------------------------- the wait around the backoff
+
+    @Test
+    fun `a long backoff still answers the toggle coming back on`() = runTest {
+        // ⚠ THE FIVE MINUTES OF NOTHING. The backoff runs INSIDE the loop that
+        // also watches the toggle, so a flat `delay(300_000)` meant turning the
+        // device back on did nothing at all for up to five minutes — Settings
+        // still reading "Off", no way to tell whether the click had registered,
+        // and nothing to do but wait it out or restart the app.
+        var enabled = false
+        val woke = async {
+            DeviceRunner.waitOrWake(Unenrol.backoffMs(20), sliceMs = 1_000) { enabled }
+        }
+        advanceTimeBy(30_000)
+        enabled = true
+        advanceTimeBy(1_500)
+        assertTrue(woke.await(), "the wait was still asleep with the toggle already back on")
+        assertTrue(
+            currentTime < 60_000,
+            "it woke after ${currentTime}ms; a slice is a second, so anything near the full backoff is the bug",
+        )
+    }
+
+    @Test
+    fun `a wait nobody interrupts still waits the whole time`() = runTest {
+        // The other half: slicing must not turn a five-minute backoff into a busy
+        // loop that retries the DELETE every second.
+        val woke = async { DeviceRunner.waitOrWake(20_000, sliceMs = 1_000) { false } }
+        advanceUntilIdle()
+        assertFalse(woke.await())
+        assertEquals(20_000L, currentTime)
+    }
+
+    @Test
+    fun `a toggle that came back during the last request is not slept on at all`() = runTest {
+        val woke = async { DeviceRunner.waitOrWake(300_000, sliceMs = 1_000) { true } }
+        advanceUntilIdle()
+        assertTrue(woke.await())
+        assertEquals(0L, currentTime, "it went to sleep on an answer it already had")
     }
 
     // --------------------------------------------------------------- the line

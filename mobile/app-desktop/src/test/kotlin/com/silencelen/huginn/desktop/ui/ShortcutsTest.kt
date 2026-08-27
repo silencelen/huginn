@@ -5,6 +5,7 @@ import com.silencelen.huginn.data.Scratchpad
 import com.silencelen.huginn.data.Session
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertNotEquals
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
@@ -27,7 +28,7 @@ class ShortcutsTest {
     }
 
     @Test
-    fun `the two page bindings are distinct, and neither fires while typing`() {
+    fun `the two page bindings are distinct`() {
         // The panel toggle sits on Shift beside the view it opens a sidebar for.
         // Getting them the same way round is the difference between "show me my
         // notes" and "take a third of this window away mid-sentence".
@@ -35,21 +36,66 @@ class ShortcutsTest {
             match(true, false, false, "P"),
             match(true, true, false, "P"),
         )
-        assertNull(match(true, false, false, "P", typing = true).takeIf { false })
         // A bare P is a letter somebody is typing, never a shortcut.
         assertNull(match(false, false, false, "P"))
         assertNull(match(false, false, true, "P"))
     }
 
     @Test
-    fun `typing suppresses everything except list navigation`() {
-        // A shortcut that eats a keystroke mid-sentence is worse than one that
-        // is missing, so the composer wins every contest but this one.
-        assertNull(match(true, false, false, "K", typing = true).takeIf { false })
-        assertNull(match(false, false, false, "ESCAPE", typing = true))
+    fun `typing suppresses the bare keys, and Ctrl chords still work`() {
+        // ⚠ THIS TEST USED TO BE A TAUTOLOGY. Two of its assertions read
+        // `assertNull(match(...).takeIf { false })` — `takeIf { false }` is null
+        // whatever match returns, so both passed against any behaviour at all,
+        // including the Ctrl+digit leak below. Written out properly, the rule is
+        // that a BARE key belongs to the field and a Ctrl chord does not.
+        assertNull(match(false, false, false, "ESCAPE", typing = true), "Esc leaves the field before the view")
         assertNull(match(false, false, false, "F1", typing = true))
+        assertEquals(
+            Shortcut.PALETTE,
+            match(true, false, false, "K", typing = true),
+            "Ctrl+K is not a character; suppressing it would make the palette unreachable from a composer",
+        )
+        assertEquals(Shortcut.VIEW_SCRATCHPADS, match(true, false, false, "P", typing = true))
+        assertEquals(Shortcut.TOGGLE_PAD_PANEL, match(true, true, false, "P", typing = true))
         assertEquals(Shortcut.LIST_NEXT, match(false, false, alt = true, key = "DOWN", typing = true))
         assertEquals(Shortcut.LIST_PREV, match(false, false, alt = true, key = "UP", typing = true))
+    }
+
+    @Test
+    fun `Ctrl and a digit is the one chord that must not fire mid-sentence`() {
+        // ⚠ LIVE-VERIFIED. On X11/AWT a Ctrl+letter chord produces a control code
+        // no field will insert, but Ctrl+digit produces the printable DIGIT — so
+        // Ctrl+1 switched to Chats and typed "1" into whatever had focus, and in
+        // the page editor the autosave committed it a moment later. The character
+        // half is swallowed by the window (see isChordDebris); this half is the
+        // view switch declining to happen mid-sentence at all.
+        assertNull(match(true, false, false, "1", typing = true))
+        assertNull(match(true, false, false, "2", typing = true))
+        assertNull(match(true, false, false, "3", typing = true))
+        // …and it is still there the moment the cursor is not in a field.
+        assertEquals(Shortcut.VIEW_CHATS, match(true, false, false, "1"))
+        assertEquals(Shortcut.VIEW_SESSIONS, match(true, false, false, "2"))
+        assertEquals(Shortcut.VIEW_STATUS, match(true, false, false, "3"))
+    }
+
+    @Test
+    fun `a Ctrl chord's stray character is recognised as debris`() {
+        // Ctrl+1 on X11 delivers the digit as its own event, after the key press.
+        assertTrue(isChordDebris(ctrl = true, alt = false, codePoint = '1'.code))
+        assertTrue(isChordDebris(ctrl = true, alt = false, codePoint = ','.code))
+        // Ctrl+C arrives as 3 on the platforms that send anything at all, and no
+        // field inserts a control code — nothing to swallow.
+        assertFalse(isChordDebris(ctrl = true, alt = false, codePoint = 3))
+        assertFalse(isChordDebris(ctrl = true, alt = false, codePoint = 0x7F))
+        // ⚠ AltGr IS Ctrl+Alt on Windows and Linux, and the characters it makes
+        // are the ones people on those layouts type with. Swallowing them would
+        // make this window refuse half of a Polish or German keyboard.
+        assertFalse(isChordDebris(ctrl = true, alt = true, codePoint = 'ę'.code))
+        // AWT's CHAR_UNDEFINED. Not text, and not ours to eat — the same 0xFFFF
+        // trap the terminal keys documents.
+        assertFalse(isChordDebris(ctrl = true, alt = false, codePoint = 0xFFFF))
+        // Ordinary typing is never debris.
+        assertFalse(isChordDebris(ctrl = false, alt = false, codePoint = '1'.code))
     }
 
     @Test
