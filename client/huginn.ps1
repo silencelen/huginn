@@ -3,9 +3,9 @@
 #     if (Test-Path "$HOME\.huginn\huginn.ps1") { . "$HOME\.huginn\huginn.ps1" }
 # Targets the `huginn` SSH alias by default; override per-device with:  $env:HUGINN_HOST = 'my-host'
 # Self-update with:  huginn update   (pulls this file from the repo; gh -> scp fallback)
-# Version: 0.12.6
+# Version: 0.12.7
 
-$script:HUGINN_VERSION = '0.12.6'
+$script:HUGINN_VERSION = '0.12.7'
 $script:HUGINN_REPO    = 'silencelen/huginn'
 # Where `huginn update` may fetch a replacement for THIS FILE, which is then loaded
 # into the shell. Pinned, and deliberately NOT $HUGINN_HOST: that variable answers
@@ -343,6 +343,13 @@ function huginn {
     } else {
       Write-Host "huginn device: this machine is not set up as a device - run: huginn device on"
     }
+  } elseif ($args[0] -eq 'llm') {
+    # One question to the LOCAL TIER - a serving machine's model answers, never
+    # Claude. Host-rendered; args are single-quoted for the remote shell.
+    $q = if ($args.Count -gt 1) {
+      ($args[1..($args.Count-1)] | ForEach-Object { "'" + ($_ -replace "'", "'\''") + "'" }) -join ' '
+    } else { '' }
+    ssh -T $H "huginn-llm $q"
   } elseif ($args[0] -eq 'local') {
     # THIS machine serves local AI models to huginn - the optional local tier.
     # Same grammar as `huginn device`: consent, fetch pinned, validate, install,
@@ -574,7 +581,7 @@ function _Huginn-Sessions {
 }
 Register-ArgumentCompleter -CommandName huginn, rclaude, rcc -ScriptBlock {
   param($word, $ast, $pos)
-  $cmds = 'list', 'status', 'rounds', 'devices', 'device', 'local', 'solo', 'rename', 'kill', 'end', '-p', '-y', 'usage', 'cost', 'desktop', 'update', 'version', 'help'
+  $cmds = 'list', 'status', 'rounds', 'devices', 'device', 'local', 'llm', 'solo', 'rename', 'kill', 'end', '-p', '-y', 'usage', 'cost', 'desktop', 'update', 'version', 'help'
   # tokens already typed after the command name, excluding the partial word being completed
   $typed = @($ast.CommandElements | Select-Object -Skip 1 | ForEach-Object { $_.ToString() })
   if ($word -and $typed.Count -ge 1) { $typed = @($typed | Select-Object -SkipLast 1) }

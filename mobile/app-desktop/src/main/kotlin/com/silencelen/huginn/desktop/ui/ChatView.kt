@@ -57,6 +57,8 @@ import androidx.compose.ui.unit.dp
 import com.silencelen.huginn.data.DraftBook
 import com.silencelen.huginn.data.HuginnClient
 import com.silencelen.huginn.data.TranscriptEvent
+import com.silencelen.huginn.ui.Escalation
+import com.silencelen.huginn.ui.ModelLabels
 import com.silencelen.huginn.ui.SealedNote
 import com.silencelen.huginn.desktop.AppStore
 import com.silencelen.huginn.desktop.ChatController
@@ -250,6 +252,16 @@ fun ChatView(
             // Started = the daemon's pin condition: history exists (or is being
             // written right now). It decides which model rows are even offered.
             started = (detail?.turns ?: 0) > 0 || detail?.claudeSessionId != null || running,
+            onEscalate = if (ModelLabels.isLocal(detail?.model, models)) ({
+                // The handoff is built HERE, where the transcript is loaded,
+                // and lands as a DRAFT in a new Claude chat — user-driven,
+                // never auto-sent. The local chat is untouched.
+                val turns = (page?.events ?: emptyList())
+                    .filter { (it.kind == "user" || it.kind == "assistant") && !it.sidechain }
+                    .mapNotNull { e -> e.text?.let { t -> (if (e.kind == "user") "User" else "Assistant") to t } }
+                val draft = Escalation.draft(ModelLabels.model(detail?.model, models), turns)
+                scope.launch { store?.escalateWithDraft(draft) }
+            }) else null,
             onModel = { controller.setOptions(model = it) },
             onEffort = { controller.setOptions(effort = it) },
             onMode = { controller.setOptions(mode = it) },

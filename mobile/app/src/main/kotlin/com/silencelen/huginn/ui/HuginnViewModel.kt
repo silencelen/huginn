@@ -1952,6 +1952,27 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
      * choice, and the daemon forces ask. The refusal (machine just went
      * offline) surfaces as-is — it names the machine since appd 2.78.0.
      */
+    /**
+     * The user-driven half of the conduits: the local conversation lands as a
+     * DRAFT in a NEW Claude chat, for the person to read, edit and send. The
+     * local chat is untouched — its transcript lives on its machine.
+     */
+    fun escalateLocalChat(onOpened: (String) -> Unit) {
+        val label = ModelLabels.model(_chatModel.value, _models.value)
+        val turns = (_chatPage.value?.events ?: emptyList())
+            .filter { (it.kind == "user" || it.kind == "assistant") && !it.sidechain }
+            .mapNotNull { e -> e.text?.let { t -> (if (e.kind == "user") "User" else "Assistant") to t } }
+        viewModelScope.launch {
+            runCatching { client.createChat("ask") }
+                .onSuccess {
+                    setDraft(chatDraftKey(it.id), com.silencelen.huginn.ui.Escalation.draft(label, turns))
+                    refreshChats()
+                    onOpened(it.id)
+                }
+                .onFailure { _toast.value = errText(it) }
+        }
+    }
+
     fun newLocalChat(modelId: String, onCreated: (String) -> Unit) {
         viewModelScope.launch {
             runCatching { client.createChat("ask", model = modelId) }

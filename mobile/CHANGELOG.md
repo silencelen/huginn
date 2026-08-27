@@ -1,5 +1,15 @@
 # Huginn changelog
 
+## 2.84.0 — 2026-08-26
+
+The conduits: the local tier and Claude, connected in exactly one direction
+each.
+
+### Added
+- **Escalate to Claude** on a local chat: the conversation lands as a DRAFT
+  in a new Claude chat, for you to read, edit and send. Nothing is auto-sent,
+  and the local chat is untouched. A local model never calls Claude itself.
+
 ## 2.83.0 — 2026-08-26
 
 The journey wave: how the local tier is discovered, entered and lived with.

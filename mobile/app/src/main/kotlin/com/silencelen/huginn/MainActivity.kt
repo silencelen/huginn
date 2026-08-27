@@ -928,6 +928,9 @@ fun HuginnApp(
                 waking = chatWaking,
                 onSetOptions = { m, e -> vm.setChatOptions(id, model = m, effort = e) },
                 onMode = { vm.setChatOptions(id, mode = it) },
+                onEscalate = if (com.silencelen.huginn.ui.ModelLabels.isLocal(chatModel, models)) ({
+                    vm.escalateLocalChat { newId -> vm.openChat(newId); dest = Dest.Chat(newId) }
+                }) else null,
                 chatId = id,
                 suggestions = suggestions,
                 voiceReady = voiceReady,

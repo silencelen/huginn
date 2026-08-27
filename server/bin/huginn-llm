@@ -1,0 +1,90 @@
+#!/usr/bin/env bash
+# huginn-llm — one question to a serving machine's local model, answer on stdout.
+#
+# The P6 delegation lane: the door through which huginn-side agents (and the
+# owner, over ssh) hand a task to the local tier instead of spending Claude.
+# Host-side for the same reasons as huginn-rounds/huginn-devices beside it: the
+# bearer token never leaves this machine, and there is ONE implementation of
+# "ask the local tier" rather than one per caller.
+#
+# It rides the ordinary chat lane — create, send, poll, read, DELETE — so the
+# whole serving path is exercised, exactly like the daily smoke. The chat is
+# removed on success AND on failure: a delegation tool must not litter the
+# owner's chat list (--keep exists for debugging a bad answer).
+#
+#   huginn-llm [--model <row-id>] [--timeout <s>] [--keep] "prompt"
+#   echo "text" | huginn-llm -            (prompt from stdin, e.g. summarise)
+#
+# Refusals are the daemon's own words (they name the MACHINE since 2.78.0);
+# an offline tier is exit 1 with the reason, never a hang.
+set -u
+
+API=http://127.0.0.1:8787
+TOKEN_FILE=/etc/huginn-appd/token
+[ -s "$TOKEN_FILE" ] || { echo "huginn-llm: no appd token at $TOKEN_FILE" >&2; exit 1; }
+auth=(-H "Authorization: Bearer $(cat "$TOKEN_FILE")" -H "content-type: application/json")
+
+MODEL= TIMEOUT=120 KEEP= PROMPT=
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --model)   MODEL="${2:?--model needs a value}"; shift 2 ;;
+    --timeout) TIMEOUT="${2:?--timeout needs a value}"; shift 2 ;;
+    --keep)    KEEP=1; shift ;;
+    -h|--help)
+      sed -n '2,20p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    --*) echo "huginn-llm: unknown flag $1" >&2; exit 2 ;;
+    *) PROMPT="${PROMPT:+$PROMPT }$1"; shift ;;
+  esac
+done
+if [ "$PROMPT" = "-" ]; then PROMPT=$(cat); fi
+[ -n "$PROMPT" ] || { echo "huginn-llm: no prompt (arg or '-' for stdin)" >&2; exit 2; }
+
+py() { python3 -c "$1" 2>/dev/null; }
+
+# Default model: the first AVAILABLE local row — the same door a person's
+# "+ Local" button opens. --model pins a specific machine's row.
+if [ -z "$MODEL" ]; then
+  MODEL=$(curl -s -m 15 "$API/v1/models?local=1" "${auth[@]}" | py "
+import json,sys
+for m in json.load(sys.stdin).get('models',[]):
+    if m.get('family')=='local' and m.get('available'):
+        print(m['id']); break")
+  [ -n "$MODEL" ] || { echo "huginn-llm: no machine is serving local models right now" >&2; exit 1; }
+fi
+
+TITLE=$(printf '%s' "llm: $PROMPT" | tr '\n' ' ' | head -c 60)
+CHAT=$(curl -s -m 15 -X POST "$API/v1/chats" "${auth[@]}" \
+  -d "$(python3 -c "import json,sys; print(json.dumps({'model': sys.argv[1], 'title': sys.argv[2]}))" "$MODEL" "$TITLE")")
+CID=$(printf '%s' "$CHAT" | py "import json,sys; print(json.load(sys.stdin).get('id',''))")
+if [ -z "$CID" ]; then
+  echo "huginn-llm: refused — $(printf '%s' "$CHAT" | py "import json,sys; print(json.load(sys.stdin).get('error','?'))")" >&2
+  exit 1
+fi
+
+cleanup() { [ -n "$KEEP" ] || curl -s -m 10 -X DELETE "$API/v1/chats/$CID" "${auth[@]}" >/dev/null; }
+trap cleanup EXIT
+
+SENT=$(curl -s -m 15 -X POST "$API/v1/chats/$CID/messages" "${auth[@]}" \
+  -d "$(python3 -c "import json,sys; print(json.dumps({'text': sys.stdin.read()}))" <<<"$PROMPT")")
+printf '%s' "$SENT" | grep -q '"ok":true' || {
+  echo "huginn-llm: send refused — $(printf '%s' "$SENT" | py "import json,sys; print(json.load(sys.stdin).get('error','?'))")" >&2
+  exit 1; }
+
+DEADLINE=$(( $(date +%s) + TIMEOUT ))
+while [ "$(date +%s)" -lt "$DEADLINE" ]; do
+  sleep 2
+  R=$(curl -s -m 15 "$API/v1/chats/$CID" "${auth[@]}")
+  RUN=$(printf '%s' "$R" | py "import json,sys; print(json.load(sys.stdin).get('running'))")
+  if [ "$RUN" = "False" ]; then
+    ANSWER=$(printf '%s' "$R" | py "
+import json,sys
+c = json.load(sys.stdin)
+a = [m for m in c.get('messages',[]) if m.get('type')=='assistant']
+print((a[-1].get('text') or '') if a else '')")
+    if [ -n "$ANSWER" ]; then printf '%s\n' "$ANSWER"; exit 0; fi
+    echo "huginn-llm: the run finished with no answer (see the chat with --keep)" >&2
+    exit 1
+  fi
+done
+echo "huginn-llm: no answer within ${TIMEOUT}s — the machine may be loading the model; retry or raise --timeout" >&2
+exit 1

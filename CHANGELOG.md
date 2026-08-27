@@ -10,6 +10,17 @@ Format loosely follows [Keep a Changelog](https://keepachangelog.com/); versions
 
 ## [Unreleased]
 
+## [0.12.7] - 2026-08-26
+
+### Added
+- `huginn llm "prompt"` — one question to the LOCAL TIER, answered by a
+  serving machine's model, never Claude. Renders on the host (`huginn-llm`),
+  where the token lives; `huginn llm -` reads the prompt from stdin so a
+  file can be piped in for summarising. The chat it rides in is deleted
+  either way; `--keep` (host-side) preserves it for debugging. This is the
+  delegation half of the Kvasir conduits: huginn-side agents use the same
+  tool.
+
 ## [0.12.6] - 2026-08-25
 
 ### Changed
