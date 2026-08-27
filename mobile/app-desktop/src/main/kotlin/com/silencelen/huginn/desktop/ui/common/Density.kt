@@ -64,6 +64,18 @@ object Frame {
     /** The status line at the foot of the window. */
     val statusHeight = 26.dp
 
+    /**
+     * How wide a PARAGRAPH is allowed to get.
+     *
+     * The only number here that is about reading rather than about the window. A
+     * pane is as wide as the window, and an empty state's sentence set across all
+     * of it is one long line the eye has to track back across — the pane looks
+     * emptier for having text in it. [NothingOpen] had a cap from the start; the
+     * full-width panes (Rounds, Devices) did not, which is the whole difference
+     * between those two screenshots.
+     */
+    val prose = 420.dp
+
     /** A state dot, in the row's own text flow. Never a bar. */
     val dot = 7.dp
 

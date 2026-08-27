@@ -17,6 +17,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.outlined.EditNote
@@ -441,9 +442,17 @@ fun ScratchpadChip(
     var open by remember { mutableStateOf(false) }
     val chosen = pads.firstOrNull { it.id == selectedId }
     Box(modifier) {
+        // SET OUTWEIGHS ITS OWN INVITATION. Empty, this is an offer and should sit
+        // under everything else on the composer. Filled, it is a promise that a
+        // whole page rides out with the next message — and drawn in the same
+        // muted ink as the placeholder it replaced, it read as quieter than the
+        // composer's own greyed-out hint. A tonal fill and full-strength ink, both
+        // of which the surface already owns: no accent, no badge.
         Surface(
-            color = Color.Transparent,
-            contentColor = MaterialTheme.colorScheme.onSurfaceVariant,
+            color = if (chosen != null) MaterialTheme.colorScheme.surfaceVariant else Color.Transparent,
+            contentColor = if (chosen != null) MaterialTheme.colorScheme.onSurface
+            else MaterialTheme.colorScheme.onSurfaceVariant,
+            shape = RoundedCornerShape(8.dp),
         ) {
             Row(
                 Modifier.clickable { open = true }.padding(horizontal = 8.dp, vertical = 4.dp),
@@ -458,6 +467,7 @@ fun ScratchpadChip(
                 Text(
                     chosen?.name ?: "Attach a page",
                     style = MaterialTheme.typography.labelMedium,
+                    fontWeight = if (chosen != null) FontWeight.SemiBold else FontWeight.Normal,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                     // A long page name must not push Send off a narrow composer.

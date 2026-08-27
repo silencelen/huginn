@@ -10,7 +10,6 @@ import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -47,7 +46,11 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.foundation.focusable
+import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.KeyEventType
@@ -63,8 +66,10 @@ import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.input.TextFieldValue
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.runtime.rememberCoroutineScope
 import com.silencelen.huginn.data.DraftBook
@@ -316,7 +321,7 @@ fun SessionView(store: AppStore, name: String) {
         val suggestions by cue.suggestions.collectAsState()
         LaunchedEffect(page?.nextOffset, working) { cue.onTurnBoundary(page?.nextOffset, working) }
         if (onConversation && screen?.prompt == null && Suggest.visible(suggestions, working, draft)) {
-            SuggestionChips(suggestions, onPick = setDraft)
+            SuggestionChips(suggestions, onPick = setDraft, modifier = rememberEdgeFade())
         }
 
         // THE PROMPT LIVES OUTSIDE THE TABS, which is the point: a question is the
@@ -410,6 +415,14 @@ fun SessionView(store: AppStore, name: String) {
  * separate control that sets it is the same verb twice, and a second bar of chips
  * under the header would also cost height, which on the Screen tab is measured
  * into rows and pushed to a real tmux window.
+ *
+ * IT SURVIVES THE SQUEEZE, which is the whole reason it is measured. Opening the
+ * pages panel takes 360dp out of this column with no warning, and the row this
+ * replaces answered that by WRAPPING: the model picker folded onto a second line
+ * and the session name ran into the context meter, because a `Text` with no bound
+ * is measured before its siblings and simply takes its whole intrinsic width.
+ * Nothing here is allowed to wrap. The title ellipses, and under real pressure the
+ * facts that are also written down somewhere else give way — in that order.
  */
 @Composable
 private fun SessionHeader(
@@ -429,41 +442,135 @@ private fun SessionHeader(
     onCommand: (String) -> Unit,
     onCycleMode: () -> Unit,
 ) {
-    Row(
-        Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 10.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        when (state) {
-            "running" -> StateDot(MaterialTheme.colorScheme.primary)
-            "attention" -> StateDot(MaterialTheme.colorScheme.error)
-        }
-        Text(title, style = MaterialTheme.typography.titleSmall)
-        Muted(name, Modifier.padding(start = 10.dp))
-        Spacer(Modifier.weight(1f))
-        if (compacting) CompactingChip(Modifier.padding(end = 10.dp))
-        // "Context window used" — the readout Claude auto-compacts against; sits
-        // with the other status marks, only when the host reported a percentage.
-        if (contextPercent != null) {
-            Tip("Context window used") {
-                ContextMeter(contextPercent, Modifier.padding(end = 10.dp))
+    BoxWithConstraints(Modifier.fillMaxWidth()) {
+        val tight = maxWidth < HEADER_TIGHT
+        val cramped = maxWidth < HEADER_CRAMPED
+        Row(
+            Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 10.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            // The identity half takes what the controls do not: one weighted Row
+            // rather than a trailing Spacer, so the controls stay flush right even
+            // when the title is short. (A weighted title with `fill = false` leaves
+            // its unused share as slack, and the slack lands at the right edge.)
+            // The end inset is the gap that a Spacer used to provide for free: at
+            // full width there is slack here anyway, but once the title is long
+            // enough to be ellipsised it ends flush against the context meter.
+            Row(
+                Modifier.weight(1f).padding(end = 10.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                when (state) {
+                    "running" -> StateDot(MaterialTheme.colorScheme.primary)
+                    "attention" -> StateDot(MaterialTheme.colorScheme.error)
+                }
+                Text(
+                    title,
+                    style = MaterialTheme.typography.titleSmall,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f, fill = false).widthIn(min = TITLE_MIN),
+                )
+                // The tmux name, and only when the title is something else — the
+                // same rule the list row uses, because two identical strings side
+                // by side is the header spending width to say one thing twice.
+                if (!tight && name != title) {
+                    Muted(name, Modifier.padding(start = 10.dp).widthIn(max = NAME_MAX))
+                }
             }
+            if (compacting) CompactingChip(Modifier.padding(end = 10.dp))
+            // "Context window used" — the readout Claude auto-compacts against; sits
+            // with the other status marks, only when the host reported a percentage.
+            if (contextPercent != null) {
+                Tip("Context window used") {
+                    ContextMeter(contextPercent, Modifier.padding(end = 10.dp))
+                }
+            }
+            // Geometry only matters while WE are holding the window to our shape —
+            // saying so is the honest way to show that this window is doing something
+            // to somebody else's terminal.
+            if (!tight && leased && cols != null && rows != null) {
+                Muted("fitted ${cols}×${rows}", Modifier.padding(end = 10.dp))
+            }
+            if (!cramped) branch?.let { Muted(it, Modifier.padding(end = 4.dp)) }
+            // Permission mode has no slash command that sets it; Shift+Tab cycles it,
+            // which is exactly what the key bar sends.
+            ControlAction(mode?.replaceFirstChar { it.uppercase() } ?: "Mode", onClick = onCycleMode)
+            // Effort is the first CONTROL to go, and the last thing to go at all:
+            // it is the one of the three that is usually left where the host put it.
+            // Its value is still on the Overview, and /effort still works by hand.
+            if (!cramped) {
+                ControlPicker(ModelLabels.effort(effort), ModelLabels.effortOptions()) { onCommand("/effort $it") }
+            }
+            // SESSION site: Claude rows only — this control types /model into a live
+            // pane, where a local row could never work.
+            ControlPicker(ModelLabels.model(model), ModelLabels.options(models, ModelLabels.PickerSite.SESSION)) { onCommand("/model $it") }
         }
-        // Geometry only matters while WE are holding the window to our shape —
-        // saying so is the honest way to show that this window is doing something
-        // to somebody else's terminal.
-        if (leased && cols != null && rows != null) {
-            Muted("fitted ${cols}×${rows}", Modifier.padding(end = 10.dp))
-        }
-        branch?.let { Muted(it, Modifier.padding(end = 4.dp)) }
-        // Permission mode has no slash command that sets it; Shift+Tab cycles it,
-        // which is exactly what the key bar sends.
-        ControlAction(mode?.replaceFirstChar { it.uppercase() } ?: "Mode", onClick = onCycleMode)
-        ControlPicker(ModelLabels.effort(effort), ModelLabels.effortOptions()) { onCommand("/effort $it") }
-        // SESSION site: Claude rows only — this control types /model into a live
-        // pane, where a local row could never work.
-        ControlPicker(ModelLabels.model(model), ModelLabels.options(models, ModelLabels.PickerSite.SESSION)) { onCommand("/model $it") }
     }
 }
+
+/**
+ * The wash over the trailing edge of a strip that scrolls sideways.
+ *
+ * The suggestion chips have always scrolled; what they did not do is END
+ * anywhere. With the pages panel open the row is cut by the column's edge
+ * mid-word, and a sliced glyph reads as a rendering fault rather than as "there
+ * is more to the right" — this strip is optional chrome, so it must never be the
+ * thing on the screen that looks broken. A short gradient into the background
+ * says what the hard clip was trying to, costs no height, and takes nothing out
+ * of the scroll: it is drawn over the content, not laid out beside it.
+ */
+@Composable
+fun rememberEdgeFade(width: Dp = 30.dp): Modifier {
+    val bg = MaterialTheme.colorScheme.background
+    return remember(bg, width) {
+        Modifier.drawWithContent {
+            drawContent()
+            val w = width.toPx()
+            drawRect(
+                // WEIGHTED TOWARDS THE EDGE rather than linear. A linear wash over
+                // 30dp dims a chip that legitimately ENDS near the edge as much as
+                // it dissolves one that is being cut, and the first of those is the
+                // common case. This leaves the first half almost untouched and does
+                // its work in the last few pixels, where the sliced glyph is.
+                brush = Brush.horizontalGradient(
+                    colorStops = arrayOf(
+                        0f to Color.Transparent,
+                        0.55f to bg.copy(alpha = 0.18f),
+                        1f to bg,
+                    ),
+                    startX = size.width - w,
+                    endX = size.width,
+                ),
+                topLeft = Offset(size.width - w, 0f),
+                size = Size(w, size.height),
+            )
+        }
+    }
+}
+
+/**
+ * The widths the header gives things up at.
+ *
+ * [HEADER_TIGHT] is where the pages panel lands a maximised window: the tmux name
+ * and the fitted geometry go, both of which are written down elsewhere (the list
+ * row, and the pane itself). [HEADER_CRAMPED] is a genuinely narrow column, where
+ * the git branch and the effort mark follow. What is left at every width is the
+ * title, the state dot, the context meter, the mode and the model — the five
+ * things this header is FOR.
+ */
+private val HEADER_TIGHT = 900.dp
+private val HEADER_CRAMPED = 620.dp
+
+/**
+ * A floor for the title box, so it is never squeezed to a bare ellipsis while
+ * there is room for a word of it. Coerced into whatever space the row actually
+ * has, which is what stops a floor from becoming an overflow.
+ */
+private val TITLE_MIN = 80.dp
+
+/** A tmux name is at most 50 characters, and none of them earn a third of the row. */
+private val NAME_MAX = 150.dp
 
 /**
  * The resting place: what this session has spent, where the pace lands, the

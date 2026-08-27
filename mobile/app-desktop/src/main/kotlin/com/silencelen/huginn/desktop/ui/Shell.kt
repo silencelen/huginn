@@ -529,15 +529,27 @@ private fun NavRail(
             label = "Chats",
             count = chats,
             active = current == View.CHATS,
-            tip = railCountTip("chats", chats, chatsRunning, "running"),
+            tip = railCountTip(nounFor(chats, "chat"), chats, chatsRunning, "running"),
             mark = if (chatsRunning > 0) MaterialTheme.colorScheme.primary else null,
         ) { onSelect(View.CHATS) }
+        // ⚠ OBSERVED ONCE, 2026-08-27, AND NOT REPRODUCED: this row read 7 with
+        // two sessions live — 7 being also the number of rail items when the
+        // pages one is present. Looked into and NOT found to be positional state:
+        // every count here is a PARAMETER (`sessions.size`, computed in Shell),
+        // no RailItem remembers one, and Compose keys these by CALL SITE rather
+        // than by ordinal — so the conditional `pads?.let` slot below cannot
+        // shift a count between items the way an unkeyed `items()` loop would.
+        // The likeliest reading is that it was simply right: this counts every
+        // tmux session the daemon lists, not the ones actively working, so seven
+        // sessions with two of them live is an ordinary Tuesday. If it recurs,
+        // capture `sessions.map { it.name }` beside the badge before assuming a
+        // rendering fault.
         RailItem(
             icon = Icons.Outlined.Terminal,
             label = "Sessions",
             count = sessions,
             active = current == View.SESSIONS,
-            tip = railCountTip("sessions", sessions, sessionsWaiting, "waiting on you"),
+            tip = railCountTip(nounFor(sessions, "session"), sessions, sessionsWaiting, "waiting on you"),
             mark = if (sessionsWaiting > 0) MaterialTheme.colorScheme.error else null,
         ) { onSelect(View.SESSIONS) }
         RailItem(
@@ -545,7 +557,7 @@ private fun NavRail(
             label = "Rounds",
             count = rounds,
             active = current == View.ROUNDS,
-            tip = railCountTip("rounds", rounds, roundsWanting, "needing you"),
+            tip = railCountTip(nounFor(rounds, "round"), rounds, roundsWanting, "needing you"),
             // The same two-colour vocabulary the rows above use, for the same
             // reason: a third meaning for a dot would need a legend.
             mark = when {
@@ -559,7 +571,7 @@ private fun NavRail(
             label = "Devices",
             count = devices,
             active = current == View.DEVICES,
-            tip = railCountTip("devices", devices, devicesOnline, "reachable"),
+            tip = railCountTip(nounFor(devices, "device"), devices, devicesOnline, "reachable"),
             // Busy is the only state worth a mark here. "Offline" is the normal
             // condition of a laptop and marking it would leave the rail permanently
             // lit for something nobody needs to do anything about.
@@ -568,10 +580,14 @@ private fun NavRail(
         pads?.let { list ->
             RailItem(
                 icon = Icons.Outlined.EditNote,
-                label = "Scratchpads",
+                // PAGES, which is what the palette, the panel, the list header and
+                // the phone all call them. The rail was the last surface still
+                // saying "Scratchpads" — the internal name — so the one word that
+                // has to match across four surfaces matched on three.
+                label = "Pages",
                 count = list.size,
                 active = current == View.SCRATCHPADS,
-                tip = "Scratchpads · your own pages, and what you attach to a message",
+                tip = "Pages · notes you keep, and the one you hand to a message",
                 // No mark. A page is only ever changed by the person reading this
                 // rail, so there is nothing here that could need them — and a dot
                 // that never means anything is a dot nobody reads.
@@ -828,12 +844,12 @@ private fun StatusLine(
             }
             Text(
                 when (view) {
-                    View.CHATS -> "${chats.size} chats"
-                    View.SESSIONS -> "${sessions.size} sessions"
-                    View.ROUNDS -> "${rounds.size} rounds"
+                    View.CHATS -> countWords(chats.size, "chat")
+                    View.SESSIONS -> countWords(sessions.size, "session")
+                    View.ROUNDS -> countWords(rounds.size, "round")
                     // Machines, not credential rows — same count as the rail badge.
-                    View.DEVICES -> "${groupByMachine(devices).size} devices"
-                    View.SCRATCHPADS -> "${pads.size} pages"
+                    View.DEVICES -> countWords(groupByMachine(devices).size, "device")
+                    View.SCRATCHPADS -> countWords(pads.size, "page")
                     View.STATUS -> "status"
                     View.SETTINGS -> "settings"
                 },
@@ -860,6 +876,22 @@ private fun StatusLine(
         }
     }
 }
+
+// ------------------------------------------------------------------ counting
+
+/**
+ * The noun for a count, and the count with it.
+ *
+ * The status line printed "1 rounds", "1 chats", "1 devices" — every pane, every
+ * time the frame held exactly one of something, which on this fleet is most days.
+ * It is the smallest possible tell that a sentence was assembled rather than
+ * written, and the rail's own tooltip shares the fix so the two never disagree
+ * about the same number. Every noun in the frame is regular; the day one is not,
+ * this takes a second parameter rather than a special case at a call site.
+ */
+private fun nounFor(n: Int, singular: String) = if (n == 1) singular else "${singular}s"
+
+private fun countWords(n: Int, singular: String) = "$n ${nounFor(n, singular)}"
 
 // ----------------------------------------------------------------- dialogs
 
