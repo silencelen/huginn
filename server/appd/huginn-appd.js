@@ -165,6 +165,27 @@ const DISALLOWED = {
 
 function log(...args) { console.log(new Date().toISOString(), ...args); }
 
+// The scratchpad frames, same argument as the attachment markers below: a chat
+// list entry titled with the first line of an attached page is about the page,
+// not about what was asked. The literals are lib/scratchpads.js's own — see the
+// ⚠ there — and :core's ScratchpadRules carries the third copy, byte for byte.
+//
+// The optional ` #xxxxxx` is the tag a page mints for itself when its own
+// CONTENT holds a line beginning "[End scratchpad". `\2` backreferences the tag
+// the OPEN carried, so a tagged frame is closed only by its own marker and the
+// pasted one inside it is just more content. (A backreference to a group that
+// did not participate matches the empty string, which is exactly the untagged
+// case: `[End scratchpad]` and nothing else.)
+//
+// Non-greedy on the close, which is the opposite of what rounds.js chose and
+// right for the opposite reason: this is display only, so matching the FIRST
+// closing line can at worst leave a tail of the page visible, while matching the
+// last could swallow words the person actually typed.
+// The SESSION frame is deliberately left alone: it names a path and never
+// carries content, so nothing in it can close it early and it never gets a tag.
+const CHAT_FRAME_RE = /\[Scratchpad "([^"\n]{1,60})"( #[0-9a-f]{6})?\]\n[\s\S]*?\n\[End scratchpad\2\]\n*/g;
+const SESSION_FRAME_RE = /\[Scratchpad "([^"\n]{1,60})" at [^\]\n]*\]\n*/g;
+
 /**
  * User text as a title or snippet should read. The attachment marker is
  * plumbing for Claude — a chat list entry titled
@@ -172,21 +193,21 @@ function log(...args) { console.log(new Date().toISOString(), ...args); }
  * daemon stored a file, not what the conversation is about.
  */
 function humanizeUserText(t) {
-  const s = String(t || '')
+  let s = String(t || '')
     .replace(/\[Attached image at [^\]]+\]/g, '\u{1F4F7} photo')
-    .replace(/\[Attached file at [^\]]+\]/g, '\u{1F4CE} file')
-    // The scratchpad frames, same argument: a chat list entry titled with the
-    // first line of an attached page is about the page, not about what was
-    // asked. The literals are lib/scratchpads.js's own — see the ⚠ there — and
-    // :core's ScratchpadRules carries the third copy.
-    //
-    // Non-greedy on the close, which is the opposite of what rounds.js chose and
-    // right for the opposite reason: this is display only, so matching the FIRST
-    // "[End scratchpad]" line can at worst leave a tail of the page visible,
-    // while matching the last could swallow words the person actually typed.
-    .replace(/\[Scratchpad "([^"\n]{1,60})"\]\n[\s\S]*?\n\[End scratchpad\]\n*/g, '\u{1F4DD} $1\n')
-    .replace(/\[Scratchpad "([^"\n]{1,60})" at [^\]\n]*\]\n*/g, '\u{1F4DD} $1\n')
-    .trim();
+    .replace(/\[Attached file at [^\]]+\]/g, '\u{1F4CE} file');
+  // ⚠ BOTH MARKERS PRESENT BEFORE THE SCAN IS ATTEMPTED AT ALL. CHAT_FRAME_RE
+  // holds a `[\s\S]*?` between two literals, so on text with many opening
+  // markers and no closing one the engine restarts a walk to end-of-string at
+  // every one of them — quadratic in the length of a message a person can paste.
+  // This runs on the title of every chat in the list. The guard costs two
+  // indexOf scans and changes nothing about what matches: neither pattern can
+  // fire without the literal it is testing for.
+  if (s.includes('[Scratchpad "')) {
+    if (s.includes('[End scratchpad')) s = s.replace(CHAT_FRAME_RE, '\u{1F4DD} $1\n');
+    s = s.replace(SESSION_FRAME_RE, '\u{1F4DD} $1\n');
+  }
+  s = s.trim();
   return s || '\u{1F4F7} photo';
 }
 
@@ -2860,6 +2881,21 @@ const SCRATCHPADS_DIR = path.join(DATA_DIR, 'scratchpads');
 const SCRATCHPAD_RENDER_DIR = path.join(SCRATCHPADS_DIR, 'render');
 fs.mkdirSync(SCRATCHPAD_RENDER_DIR, { recursive: true });
 
+/**
+ * How much body a page write may send — larger than the global 256 KiB default.
+ *
+ * ⚠ THE CAPS HAD TO AGREE AND DID NOT. A pad is capped at 100,000 CHARACTERS and
+ * a body at 256 KiB of BYTES, so for any script whose characters cost three
+ * bytes — Japanese, Chinese, Devanagari, most emoji — the character cap was
+ * unreachable: a legal 90,000-character page is 270,000 bytes and died in
+ * readBody, surfacing as the outer catch-all "request body too large" with no
+ * mention of pages at all. This is enough room for the largest legal page in the
+ * worst encoding (and for a client that \u-escapes every non-ASCII character),
+ * so a page that IS over the limit is refused by contentProblem, in the route's
+ * own words, naming the number the person is being held to.
+ */
+const SCRATCHPAD_BODY_MAX = 1024 * 1024;
+
 function padPath(id) { return path.join(SCRATCHPADS_DIR, `${id}.json`); }
 
 function loadPad(id) {
@@ -2930,29 +2966,107 @@ function ensureMain() {
 /**
  * The pad a message names, or the fallback — and why not, when there is no pad.
  *
- * `null` id means Main, which is the contract: a client that offers no picker at
- * all still gets the behaviour the owner asked for ("Main when unspecified").
+ * THREE ANSWERS, and the callers must tell them apart: `{pad}` is the page,
+ * `{error}` is a 404 (an id that names nothing), and `{badRequest}` is a 400
+ * (a field that is present and is not an id at all).
+ *
+ * ⚠ ABSENT AND BLANK ARE NOT THE SAME THING. Absent — the field is not in the
+ * body, or is null — means no reference, and is decided by the CALLER before it
+ * gets here; that is what keeps Main out of conversations nobody attached it to.
+ * A field that is PRESENT and blank ("", "   ", 0, false, {}) is a client that
+ * meant to send an id and sent nothing, and this used to coerce every one of
+ * them to Main: a page silently attached to a message because a picker's state
+ * was empty. Said out loud instead, which is also the only way the client that
+ * did it ever finds out.
+ *
+ * The literal "main" stays a legal id — a client with no picker at all still
+ * gets the behaviour the owner asked for ("Main when it is named").
  */
 function padForReference(rawId) {
-  const id = typeof rawId === 'string' ? rawId.trim() : '';
-  if (!id || id === 'main') return { pad: ensureMain() };
+  if (typeof rawId !== 'string' || !rawId.trim()) {
+    return { badRequest: 'scratchpadId must be a page id or "main" — leave it out entirely for no page' };
+  }
+  const id = rawId.trim();
+  if (id === 'main') return { pad: ensureMain() };
   const pad = loadPad(id);
   if (!pad) return { error: 'no such scratchpad' };
   return { pad };
 }
 
+/** Render files this old are gone, and no more than this many are kept. */
+const RENDER_KEEP_MS = 7 * 24 * 60 * 60 * 1000;
+const RENDER_KEEP_MAX = 50;
+
+/**
+ * Drops render files nothing should still be reading.
+ *
+ * Two rules because they answer different questions: the age rule is about a
+ * pane that may still be told to read a path (a message can sit unsent in a
+ * composer for a while, but not for a week), and the count rule is what keeps a
+ * directory of world-readable copies from growing for the life of the daemon.
+ * A pruned path is an honest ENOENT; the thing being avoided is a path that
+ * resolves to the WRONG text, which is what a shared filename guaranteed.
+ */
+function pruneRenderFiles(now = Date.now()) {
+  let names;
+  try { names = fs.readdirSync(SCRATCHPAD_RENDER_DIR); } catch { return; }
+  const kept = [];
+  for (const n of names) {
+    if (!n.endsWith('.md')) continue;                       // .md.tmp mid-write
+    const stamped = /-(\d{10,})\.md$/.exec(n);
+    let at;
+    if (stamped) at = Number(stamped[1]);
+    else {
+      // The pre-per-send shape (`<padId>.md`). Nothing new points at one, but
+      // it is still a readable copy of somebody's page, so it ages out too.
+      try { at = fs.statSync(path.join(SCRATCHPAD_RENDER_DIR, n)).mtimeMs; } catch { continue; }
+    }
+    if (now - at > RENDER_KEEP_MS) {
+      try { fs.unlinkSync(path.join(SCRATCHPAD_RENDER_DIR, n)); } catch { /* raced */ }
+      continue;
+    }
+    kept.push({ n, at });
+  }
+  if (kept.length <= RENDER_KEEP_MAX) return;
+  kept.sort((a, b) => b.at - a.at);
+  for (const { n } of kept.slice(RENDER_KEEP_MAX)) {
+    try { fs.unlinkSync(path.join(SCRATCHPAD_RENDER_DIR, n)); } catch { /* raced */ }
+  }
+}
+
 /**
  * Writes the pad where a session's Claude can Read it, and says where that is.
  *
- * Rewritten on every send rather than kept in step with the store: the file is a
- * snapshot of what was attached, and a stale one is worse than a missing one
- * because the run would answer confidently about the wrong text.
+ * ⚠ ONE FILE PER SEND, named with the moment it was written — because the
+ * comment that used to sit here claimed snapshot semantics that a shared
+ * `<padId>.md` could not possibly provide. That file was rewritten on every
+ * attach and shared across every session, so an hour-old message still sitting
+ * in a pane's scrollback named a path that now held the page's CURRENT text.
+ * The run would follow it and answer confidently about words the sender never
+ * attached — the exact failure the old comment said it was avoiding, caused by
+ * the mechanism it described.
+ *
+ * Now the marker names a file that is genuinely the text as it read when SEND
+ * was pressed, which is the same contract the chat path gets by carrying the
+ * content itself. Old ones are pruned rather than kept forever; see
+ * [pruneRenderFiles] for what "old" is and why a missing file beats a wrong one.
  */
 function renderPad(pad) {
-  const file = path.join(SCRATCHPAD_RENDER_DIR, `${pad.id}.md`);
+  const file = path.join(SCRATCHPAD_RENDER_DIR, `${pad.id}-${Date.now()}.md`);
   fs.writeFileSync(`${file}.tmp`, String(pad.content || ''), { mode: 0o644 });
   fs.renameSync(`${file}.tmp`, file);
+  pruneRenderFiles();
   return file;
+}
+
+/** Every rendered copy of one pad, for the delete that must leave none behind. */
+function unlinkRenderFiles(padId) {
+  let names;
+  try { names = fs.readdirSync(SCRATCHPAD_RENDER_DIR); } catch { return; }
+  for (const n of names) {
+    if (n !== `${padId}.md` && !n.startsWith(`${padId}-`)) continue;
+    try { fs.unlinkSync(path.join(SCRATCHPAD_RENDER_DIR, n)); } catch { /* already gone */ }
+  }
 }
 
 // ------------------------------------------------------- account + usage
@@ -3279,7 +3393,18 @@ function savePushState(st) {
  */
 function retireDeadInstall(freshPush, installId, token) {
   if (!pushLib.drop(freshPush, installId, token)) return false;
-  if (clientsLib.dropClient(clientState, installId)) clientDirty = true;
+  if (clientsLib.dropClient(clientState, installId)) {
+    clientDirty = true;
+    // ⚠ WRITTEN NOW, NOT ON THE 60-SECOND TIMER. The caller persists push.json
+    // as soon as this returns, so the two halves of one retirement were landing
+    // up to a minute apart — and a restart in that minute (a deploy, a crash,
+    // an OOM kill) brought back a clients.json still naming a phone whose token
+    // had already gone. That row can never be retired again: the only thing that
+    // drops it is a dead-token verdict, and there is no longer a token to get
+    // one for. It sits in the clients panel saying "still listening" about an
+    // uninstalled app until its seven-day prune, and `appOnline` reads it.
+    flushClients();
+  }
   return true;
 }
 
@@ -4643,11 +4768,25 @@ const server = http.createServer(async (req, res) => {
       // exactly the stretch the map is worth watching.
       const g = sessionGraph(st.transcript, st.sessionId);
       if (!g) return sendErr(res, 409, 'recorded transcript file is gone');
+      // ⚠ has() BEFORE Number(), because `Number(null)` is 0 and an EMPTY
+      // transcript's cursor is also 0 — so a cursor-less first fetch of a
+      // session that has not written a byte yet was answered `unchanged`, and
+      // the client had nothing to be unchanged FROM. It sat on an empty screen
+      // for as long as the session stayed quiet. The agentBytes check below
+      // already modelled this; the size check did not.
+      const hasSize = u.searchParams.has('size');
       const size = Number(u.searchParams.get('size'));
       const agentBytes = Number(u.searchParams.get('agentBytes'));
-      if (Number.isFinite(size) && size === g.cursor.size
+      if (hasSize && Number.isFinite(size) && size === g.cursor.size
         && (!u.searchParams.has('agentBytes') || agentBytes === g.cursor.agentBytes)) {
-        return sendJson(res, 200, { unchanged: true, cursor: g.cursor });
+        // ⚠ THE META RIDES BOTH SHAPES. Goals and notes are edited on a phone
+        // while the desktop watches an IDLE session, and an idle session is
+        // precisely the one whose cursor never moves — so a short-circuit that
+        // carried only the cursor meant an edit made on one device reached the
+        // other only when the run happened to write something. The contract the
+        // clients are built against is: `meta` is present on the unchanged reply
+        // and on the full one, and is applied from either.
+        return sendJson(res, 200, { unchanged: true, cursor: g.cursor, meta: sessionMetaView(st.sessionId) });
       }
       return sendJson(res, 200, { name, ...g, meta: sessionMetaView(st.sessionId) });
     }
@@ -4736,24 +4875,38 @@ const server = http.createServer(async (req, res) => {
       if (!(await sessionExists(name))) return sendErr(res, 404, 'no such session');
       const body = JSON.parse(await readBody(req) || '{}');
       let typedKeys = typeof body.text === 'string' ? body.text : '';
+      if (typedKeys.length > 8000) return sendErr(res, 400, 'text too long');
+      /**
+       * A scratchpad reference, as a PATH rather than as the page itself.
+       *
+       * A pane takes 8,000 characters at a time and a page holds up to
+       * 100,000, so pasting one in would refuse most of the pages worth
+       * attaching. The session's Claude has Read and the file is on this host,
+       * so it gets the better half of the trade: a pointer it can re-read,
+       * and a message that still fits.
+       *
+       * ⚠ OUTSIDE THE `text` GUARD, WHICH IS WHERE IT USED TO BE. A page with no
+       * message is a legitimate thing to send — "read this" — and the reference
+       * used to be silently dropped in that case while the route answered ok.
+       * Attaching a page and being told it worked, with nothing arriving in the
+       * pane, is the worst of the three possible behaviours.
+       */
+      if ('scratchpadId' in body && body.scratchpadId !== null) {
+        const ref = padForReference(body.scratchpadId);
+        if (ref.badRequest) return sendErr(res, 400, ref.badRequest);
+        if (ref.error) return sendErr(res, 404, ref.error);
+        // ONE render per send — renderPad writes a file each time it is called.
+        const rendered = renderPad(ref.pad);
+        const frame = scratchpadsLib.sessionFrame(ref.pad.name, rendered);
+        typedKeys = typedKeys
+          ? scratchpadsLib.composeForSession(ref.pad, rendered, typedKeys)
+          : frame;
+        // The SESSION wording, not the chat one: only this one line travels, so
+        // the number the sender is given is the room left for what they typed.
+        const overflow = scratchpadsLib.sessionFitProblem(typedKeys, frame, 8000);
+        if (overflow) return sendErr(res, 413, overflow);
+      }
       if (typedKeys.length > 0) {
-        if (typedKeys.length > 8000) return sendErr(res, 400, 'text too long');
-        /**
-         * A scratchpad reference, as a PATH rather than as the page itself.
-         *
-         * A pane takes 8,000 characters at a time and a page holds up to
-         * 100,000, so pasting one in would refuse most of the pages worth
-         * attaching. The session's Claude has Read and the file is on this host,
-         * so it gets the better half of the trade: a pointer it can re-read,
-         * and a message that still fits.
-         */
-        if ('scratchpadId' in body && body.scratchpadId !== null) {
-          const ref = padForReference(body.scratchpadId);
-          if (ref.error) return sendErr(res, 404, ref.error);
-          typedKeys = scratchpadsLib.composeForSession(ref.pad, renderPad(ref.pad), typedKeys);
-          const overflow = scratchpadsLib.fitProblem(typedKeys, 8000);
-          if (overflow) return sendErr(res, 413, overflow);
-        }
         const r = await run('tmux', ['send-keys', '-t', `=${name}:`, '-l', '--', typedKeys]);
         if (r.err) return sendErr(res, 500, `tmux: ${r.stderr.trim()}`);
         // A beat before any Enter that follows. Text and Enter in one burst
@@ -5401,8 +5554,16 @@ const server = http.createServer(async (req, res) => {
       });
     }
     if (req.method === 'POST' && p === '/v1/scratchpads') {
-      const body = JSON.parse(await readBody(req) || '{}');
+      const body = JSON.parse(await readBody(req, SCRATCHPAD_BODY_MAX) || '{}');
+      // ⚠ ensureMain BEFORE THE UNIQUENESS CHECK, the same one line the GET does
+      // and for a sharper reason. Main is minted lazily by the first LIST, so on
+      // an install where a client created a page before ever listing one, "Main"
+      // was not taken — the create was allowed, and the ensureMain that ran on
+      // the next list minted a SECOND page with that name. Two rows reading
+      // "Main", one of them the fallback every unspecified reference resolves to
+      // and no way to tell which from the picker.
       const pads = listPads();
+      if (!pads.some(scratchpadsLib.isMain)) pads.push(ensureMain());
       if (pads.length >= scratchpadsLib.MAX_PADS) {
         return sendErr(res, 400, `that is the ${scratchpadsLib.MAX_PADS}-page limit — delete one first`);
       }
@@ -5439,7 +5600,7 @@ const server = http.createServer(async (req, res) => {
        * that it lost.
        */
       if (req.method === 'PATCH') {
-        const body = JSON.parse(await readBody(req) || '{}');
+        const body = JSON.parse(await readBody(req, SCRATCHPAD_BODY_MAX) || '{}');
         const current = loadPad(padId);
         if (!current) return sendErr(res, 404, 'no such scratchpad');
         const rev = Number(body.rev);
@@ -5471,9 +5632,10 @@ const server = http.createServer(async (req, res) => {
       if (req.method === 'DELETE') {
         if (scratchpadsLib.isMain(pad)) return sendErr(res, 400, 'the Main page cannot be deleted');
         try { fs.unlinkSync(padPath(padId)); } catch { /* already gone */ }
-        // The rendered copy goes too. Leaving it would hand a session's Claude a
-        // readable path to a page the owner has just deleted.
-        try { fs.unlinkSync(path.join(SCRATCHPAD_RENDER_DIR, `${padId}.md`)); } catch { /* never rendered */ }
+        // Every rendered copy goes too, not one — there is a file per SEND now.
+        // Leaving any of them would hand a session's Claude a readable path to a
+        // page the owner has just deleted.
+        unlinkRenderFiles(padId);
         return sendJson(res, 200, { ok: true });
       }
       return sendErr(res, 405, 'method not allowed');
@@ -5607,6 +5769,7 @@ const server = http.createServer(async (req, res) => {
         let text = typed;
         if ('scratchpadId' in body && body.scratchpadId !== null) {
           const ref = padForReference(body.scratchpadId);
+          if (ref.badRequest) return sendErr(res, 400, ref.badRequest);
           if (ref.error) return sendErr(res, 404, ref.error);
           text = scratchpadsLib.composeForChat(ref.pad, typed);
           const overflow = scratchpadsLib.fitProblem(text, 100_000);

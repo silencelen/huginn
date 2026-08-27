@@ -285,6 +285,14 @@ function turnNodes(turn, baseIndex) {
 
 function closeTurn(s) {
   if (!s.turn) return;
+  // ⚠ THE ONLY PLACE PER-TURN ERRORS BECOME A TOTAL, and it is why the roll-up
+  // sits above the `made.length` check rather than inside it. Failures are
+  // counted on the OPEN turn as tool_results arrive and the turn object is then
+  // dropped, so `totals.errors` — which the overview card and the map header
+  // both render — read zero for a session with a hundred failed tool calls. A
+  // number that is always zero is worse than no number: it says the run went
+  // fine.
+  s.totals.errors += s.turn.errors;
   const made = turnNodes(s.turn, s.nodes.length);
   if (made.length) {
     for (const n of made) s.nodes.push(n);
@@ -372,7 +380,12 @@ function consume(s, d) {
       if (Array.isArray(c)) {
         for (const b of c) {
           if (!b || b.type !== 'tool_result' || !b.tool_use_id) continue;
-          if (b.is_error === true && s.turn) s.turn.errors++;
+          // Inside a turn it rides the turn and reaches the totals at close.
+          // OUTSIDE one it is counted straight into the totals: a result landing
+          // after a compact boundary (or a `turn_duration` marker) closed the
+          // turn it belonged to still describes a tool that failed, and the
+          // alternative to counting it here is not counting it at all.
+          if (b.is_error === true) { if (s.turn) s.turn.errors++; else s.totals.errors++; }
           if (!s.spawns.has(b.tool_use_id)) continue;
           s.merges.set(b.tool_use_id, { ts, isError: b.is_error === true });
           // The Workflow tool_result is the ONE place the parent names the run
@@ -490,7 +503,6 @@ function consume(s, d) {
  */
 function agentStats(cache, file, size) {
   const hit = cache.get(file);
-  if (hit && hit.parsedBytes === size) return hit;
   const st = hit && hit.parsedBytes <= size ? hit : {
     parsedBytes: 0, seen: new Set(), tokens: zeroTokens(), toolCalls: 0,
     firstTs: null, lastTs: null, meta: null, task: null,
@@ -500,8 +512,22 @@ function agentStats(cache, file, size) {
   // kept. Retried while empty rather than cached as empty: an agent directory is
   // created a moment before it is populated, and a null taken in that moment
   // would be the label for the rest of the run.
+  //
+  // ⚠ THE RETRY MUST SIT ABOVE THE EQUAL-SIZE EARLY RETURN, which is where it
+  // did NOT sit. `.meta.json` is a SIBLING of the transcript and lands on its
+  // own schedule, so the ordinary case is a first poll that reads an agent with
+  // bytes already written and no meta yet — and every poll after that returned
+  // on size alone without ever looking again. The retry the comment promises
+  // could only ever run on a poll that also found new bytes, which for a
+  // finished agent is never: it kept the null forever, and the branch was drawn
+  // with no name and no parent for the rest of the session.
   if (!st.meta || !Object.keys(st.meta).length) st.meta = readAgentMeta(file);
   if (!st.task) st.task = agentTask(file);
+  // Only NOW is an unchanged file free. Cheap by construction: what runs above
+  // is one small sibling read (and one HEAD read) for agents still missing them,
+  // and nothing at all for the ones that have both — which is all of them, a
+  // moment after they start.
+  if (hit && hit.parsedBytes === size) return hit;
   st.parsedBytes = walkLines(file, st.parsedBytes, size, (d) => {
     const ts = tsOf(d);
     if (ts) { if (!st.firstTs) st.firstTs = ts; st.lastTs = ts; }
@@ -669,6 +695,11 @@ function buildWire(state, dir, agentCache, nowSec, size) {
     byNode.get(a.spawnNodeId).push(a.id);
   }
   for (const n of nodes) n.agents = byNode.get(n.id) || [];
+  // The turn still in flight is PREVIEWED, not closed, so its failures have not
+  // reached state.totals yet — added here for exactly the reason `turns` is, and
+  // so the header and the nodes under it never disagree while a turn is running.
+  let previewErrors = 0;
+  for (const n of preview) previewErrors += n.errors || 0;
   return {
     v: 1,
     sessionId: state.sessionId,
@@ -680,7 +711,7 @@ function buildWire(state, dir, agentCache, nowSec, size) {
       turns: state.totals.turns + (preview.length ? 1 : 0),
       userMessages: state.totals.userMessages,
       toolCalls: state.totals.toolCalls,
-      errors: state.totals.errors,
+      errors: state.totals.errors + previewErrors,
       tokens: { ...state.totals.tokens },
       agentCount: agents.length,
       agentTokens,
