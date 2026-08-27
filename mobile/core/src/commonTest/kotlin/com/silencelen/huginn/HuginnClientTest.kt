@@ -368,4 +368,43 @@ class HuginnClientTest {
         assertTrue("\"effort\":\"\"" in cleared, cleared)
     }
 
+    // ------------------------------------------------------ round polish
+
+    @Test
+    fun `polishRound sends the whole draft and decodes the proposal`() = runTest {
+        val r = ok("""{"polished":"Read the alerts and say what changed.","note":"Trimmed to 500 characters."}""")
+            .polishRound(field = "prompt", title = "Telegram", prompt = "look at alerts", goal = "g", mode = "act")
+
+        assertEquals("http://appd.test/v1/rounds/polish", seen.single().url.toString())
+        assertEquals("POST", seen.single().method.value)
+        // The whole draft, not just the field being rewritten: a goal only means
+        // something beside its prompt, and both only mean something beside the mode
+        // that decides whether the run may change anything.
+        val body = lastBody()
+        assertTrue("\"field\":\"prompt\"" in body, body)
+        assertTrue("\"title\":\"Telegram\"" in body, body)
+        assertTrue("\"goal\":\"g\"" in body, body)
+        assertTrue("\"mode\":\"act\"" in body, body)
+        assertEquals("Read the alerts and say what changed.", r.polished)
+        assertEquals("Trimmed to 500 characters.", r.note)
+        assertNull(r.error)
+    }
+
+    @Test
+    fun `polish rides the poll tier because a real model call takes seconds`() = runTest {
+        ok("""{"polished":"x"}""").polishRound(field = "goal", goal = "g")
+        assertEquals(HuginnClient.POLL_READ_TIMEOUT_MS, timeouts?.socketTimeoutMillis)
+        assertEquals(HuginnClient.POLL_CALL_TIMEOUT_MS, timeouts?.requestTimeoutMillis)
+    }
+
+    @Test
+    fun `a model that was unavailable decodes as an error, not as an exception`() = runTest {
+        // The daemon degrades to 200 {error} on purpose — the person is mid-sentence
+        // in a text field — so the client must NOT treat this as a broken host.
+        val r = ok("""{"error":"polish is unavailable right now"}""")
+            .polishRound(field = "goal", goal = "g")
+        assertNull(r.polished, "there is nothing to offer them")
+        assertEquals("polish is unavailable right now", r.error)
+    }
+
 }

@@ -16,6 +16,7 @@ import com.silencelen.huginn.data.ChatDetail
 import com.silencelen.huginn.data.ChatEvent
 import com.silencelen.huginn.data.HuginnClient
 import com.silencelen.huginn.data.ModelChoice
+import com.silencelen.huginn.data.PolishResult
 import com.silencelen.huginn.ui.ModelLabels
 import com.silencelen.huginn.data.Screen
 import com.silencelen.huginn.data.Session
@@ -1132,6 +1133,33 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
                 )
             }.onSuccess { refreshRounds(); onResult(null) }
                 .onFailure { onResult(errText(it)) }
+        }
+    }
+
+    /**
+     * Asks the host to rewrite one field of a Round being drafted.
+     *
+     * Nothing is saved and nothing is refreshed: this is a PROPOSAL for the editor
+     * to show, and the Round on the host — if it even exists yet — is untouched
+     * until somebody presses Save.
+     *
+     * A thrown failure becomes a [PolishResult] with an error rather than a toast:
+     * the editor already has a quiet line for it, and a toast for "the model was
+     * busy" is a notification about nothing.
+     */
+    fun polishRound(draft: RoundDraft, field: String, onResult: (PolishResult) -> Unit) {
+        viewModelScope.launch {
+            awaitReady()
+            runCatching {
+                client.polishRound(
+                    field = field,
+                    title = draft.title.trim(),
+                    prompt = draft.prompt.trim(),
+                    goal = draft.goal.trim(),
+                    mode = draft.mode,
+                )
+            }.onSuccess { onResult(it) }
+                .onFailure { onResult(PolishResult(error = errText(it))) }
         }
     }
 
