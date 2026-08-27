@@ -4,6 +4,7 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
@@ -19,8 +20,10 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import com.silencelen.huginn.desktop.AppStore
+import com.silencelen.huginn.desktop.ui.common.Frame
 import com.silencelen.huginn.ui.DevicesSection
 import kotlinx.coroutines.launch
 
@@ -61,7 +64,12 @@ fun DevicesPane(store: AppStore) {
                     "offers itself with \"huginn device on\".",
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.padding(top = 8.dp),
+                textAlign = TextAlign.Center,
+                // CAPPED, like the detail pane's own empty state. Four sentences
+                // run across the full width of a 1400px window are one line of
+                // type under a centred heading, which reads as a caption rather
+                // than as the paragraph it is.
+                modifier = Modifier.widthIn(max = Frame.prose).padding(top = 8.dp),
             )
         }
         return

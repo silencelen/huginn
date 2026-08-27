@@ -51,6 +51,13 @@ fun ControlPicker(
             "$label ▾",
             style = MaterialTheme.typography.labelSmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
+            // NEVER WRAPS. These sit at the end of a header row that can lose
+            // 360dp to the pages panel between one frame and the next, and a
+            // two-word model name folding onto a second line does not just look
+            // wrong — it makes the whole header taller, which on the Screen tab is
+            // measured into rows and pushed to a real tmux window.
+            maxLines = 1,
+            softWrap = false,
             modifier = Modifier
                 .clip(RoundedCornerShape(6.dp))
                 .clickable { open = true }
@@ -75,6 +82,9 @@ fun ControlAction(label: String, modifier: Modifier = Modifier, onClick: () -> U
         label,
         style = MaterialTheme.typography.labelSmall,
         color = MaterialTheme.colorScheme.onSurfaceVariant,
+        // Single line, for the same reason as [ControlPicker] above.
+        maxLines = 1,
+        softWrap = false,
         modifier = modifier
             .clip(RoundedCornerShape(6.dp))
             .clickable(onClick = onClick)
