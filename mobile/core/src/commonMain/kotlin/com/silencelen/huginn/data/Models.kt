@@ -535,6 +535,15 @@ data class PlanLimit(
     val isActive: Boolean = false,
 )
 
+/**
+ * Extra usage — the credits that keep working past a plan limit.
+ *
+ * `usedCredits` and `monthlyLimit` are MINOR units at [decimalPlaces], not whole
+ * currency: 10055 with two places is $100.55. The daemon only sends this block
+ * for an account that has had credits switched on at some point, so its presence
+ * is the "is there anything to show" answer; [isEnabled] is the different,
+ * narrower question of whether they are on right now.
+ */
 @Serializable
 data class ExtraUsage(
     val utilization: Double? = null,
@@ -542,12 +551,41 @@ data class ExtraUsage(
     val monthlyLimit: Double? = null,
     val currency: String = "USD",
     val spendLimitReached: Boolean = false,
+    val isEnabled: Boolean = false,
+    val creditsEverEnabled: Boolean? = null,
+    val decimalPlaces: Int? = null,
+    /** Why they are off — e.g. `org_level_disabled_until`. */
+    val disabledReason: String? = null,
+    val userDisabled: Boolean? = null,
+)
+
+/**
+ * What extra usage has actually cost, in minor units.
+ *
+ * Kept as an integer and an exponent the whole way rather than divided into a
+ * Double, because a cent has no exact binary fraction and this is the one figure
+ * on the screen that IS a bill rather than an estimate.
+ */
+@Serializable
+data class Spend(
+    val usedMinor: Long? = null,
+    val limitMinor: Long? = null,
+    val exponent: Int = 2,
+    val currency: String = "USD",
+    val percent: Double? = null,
+    /** Claude's own word — the limit rows colour by the same vocabulary. */
+    val severity: String? = null,
+    val enabled: Boolean = false,
+    val disabledReason: String? = null,
+    val canPurchaseCredits: Boolean = false,
+    val canToggle: Boolean = false,
 )
 
 @Serializable
 data class Plan(
     val limits: List<PlanLimit> = emptyList(),
     val extraUsage: ExtraUsage? = null,
+    val spend: Spend? = null,
     val fetchedAt: Long? = null,
     val error: String? = null,
 )

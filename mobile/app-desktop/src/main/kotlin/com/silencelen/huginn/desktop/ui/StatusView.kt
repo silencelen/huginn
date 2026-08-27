@@ -1,27 +1,29 @@
 package com.silencelen.huginn.desktop.ui
 
-import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.ui.Alignment
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
 import androidx.compose.ui.unit.dp
 import com.silencelen.huginn.data.Plan
 import com.silencelen.huginn.data.Status
 import com.silencelen.huginn.data.Usage
+import com.silencelen.huginn.ui.PlanSection
+import com.silencelen.huginn.ui.UsageSection
+import kotlinx.coroutines.delay
 
 /**
  * Host, plan headroom and token usage. Three endpoints on one screen, which makes
@@ -30,6 +32,18 @@ import com.silencelen.huginn.data.Usage
  */
 @Composable
 fun StatusView(status: Status?, plan: Plan?, usage: Usage?, route: String, watchConnected: Boolean) {
+    // The plan rows count down to their resets, and this pane can sit open on a
+    // second monitor for a working day. Thirty seconds: the countdown's finest
+    // unit is a minute, so anything faster recomposes to redraw identical text.
+    // Composition-gated, which on a desktop is the whole of the lifecycle there
+    // is — the view exists only while Status is the selected pane.
+    var nowMs by remember { mutableStateOf(System.currentTimeMillis()) }
+    LaunchedEffect(Unit) {
+        while (true) {
+            nowMs = System.currentTimeMillis()
+            delay(30_000)
+        }
+    }
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(24.dp)) {
         Text("Status", style = MaterialTheme.typography.titleMedium)
 
@@ -51,36 +65,14 @@ fun StatusView(status: Status?, plan: Plan?, usage: Usage?, route: String, watch
         Field("route", route)
         Field("watch stream", if (watchConnected) "attached" else "detached")
 
+        // Both sections are :ui's, drawn from :core's decisions — the same pixels
+        // the phone gets, including the extra-usage card this pane never had and
+        // the countdown that replaced a hand-sliced timestamp printing UTC.
         Section("Plan")
-        val limits = plan?.limits.orEmpty()
-        if (plan?.error != null) Muted(plan.error!!)
-        else if (limits.isEmpty()) Muted("no plan data")
-        else limits.forEach { limit ->
-            Column(Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
-                Row(
-                    Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Text(limit.label, style = MaterialTheme.typography.bodyMedium)
-                    Muted("${fmt(limit.percent, 0)}%" + (limit.resetsAt?.let { " · resets ${shortTime(it)}" } ?: ""))
-                }
-                Meter(limit.percent / 100.0, limit.severity)
-            }
-        }
+        PlanSection(plan, nowMs)
 
         Section("Usage")
-        val today = usage?.data?.today
-        val week = usage?.data?.week
-        if (usage?.error != null) Muted(usage.error!!)
-        else {
-            Field("today", "${thousands(today?.totalTokens ?: 0)} tokens")
-            Field("7 days", "${thousands(week?.totalTokens ?: 0)} tokens")
-            // The $ figure is ccusage's list-rate estimate; on a Max plan it
-            // overstates the real cost by a wide margin, so it is labelled rather
-            // than shown as a number someone might quote.
-            if (usage?.costIsEstimate == true) Muted("cost figures are list-rate estimates, not what the plan charges")
-        }
+        UsageSection(usage)
     }
 }
 
@@ -102,45 +94,11 @@ private fun Field(label: String, value: String) {
     }
 }
 
-/** A filled track, no accent bar: the fill IS the mark. */
-@Composable
-private fun Meter(fraction: Double, severity: String) {
-    val scheme = MaterialTheme.colorScheme
-    val color = when (severity) {
-        "critical", "high" -> scheme.error
-        else -> scheme.primary
-    }
-    Box(
-        Modifier.fillMaxWidth().padding(top = 6.dp).height(4.dp)
-            .clip(RoundedCornerShape(2.dp))
-            .background(scheme.surfaceVariant),
-    ) {
-        Box(
-            Modifier.fillMaxWidth(fraction.coerceIn(0.0, 1.0).toFloat())
-                .fillMaxSize()
-                .clip(RoundedCornerShape(2.dp))
-                .background(color),
-        )
-    }
-}
-
 private fun fmt(v: Double, decimals: Int): String {
     if (decimals == 0) return v.toLong().toString()
     val scale = generateSequence(1L) { it * 10 }.take(decimals + 1).last()
     return ((v * scale).toLong() / scale.toDouble()).toString()
 }
-
-private fun thousands(n: Long): String =
-    n.toString().reversed().chunked(3).joinToString(",").reversed()
-
-/**
- * The daemon passes Claude's reset timestamps through verbatim, microseconds and
- * all. Nobody reads `2026-08-03T08:00:00.746373+00:00`; the minute is the
- * information.
- */
-private fun shortTime(iso: String): String =
-    Regex("^(\\d{4}-\\d{2}-\\d{2})T(\\d{2}:\\d{2})").find(iso)
-        ?.let { "${it.groupValues[1]} ${it.groupValues[2]}" } ?: iso
 
 private fun humanUptime(sec: Long): String = when {
     sec <= 0 -> "?"
