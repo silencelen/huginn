@@ -361,6 +361,12 @@ rm -rf "$PLAN_DIR"
   && ok "ps1 fetches syntax-check under a .js temp name" \
   || bad "ps1 fetch temp name regressed — .tmp is unparseable on modern node"
 
+# The delegation lane: parse + parity here; the LIVE path is the daily
+# smoke's job. A tool promised in two shells must exist in both.
+bash -n server/bin/huginn-llm && ok "huginn-llm parses" || bad "huginn-llm does not parse"
+grep -q '^    llm) ssh -T' client/huginn.sh && grep -q "eq 'llm'" client/huginn.ps1 \
+  && ok "both shells carry: llm" || bad "the llm verb is missing from a shell client"
+
 # Verb parity for the new door, and the runner riding along in the fetch —
 # a machine that never enrolled as a claude device has no runner otherwise.
 grep -q '^    plan)' client/huginn.sh && grep -q "\$sub -eq 'plan'" client/huginn.ps1 \
@@ -407,6 +413,7 @@ check_deployed client/huginn.ps1         /usr/local/share/huginn-cli/huginn.ps1
 check_deployed client/huginn-local       /usr/local/share/huginn-cli/huginn-local
 check_deployed client/huginn-llm-shim    /usr/local/share/huginn-cli/huginn-llm-shim
 check_deployed server/bin/huginn-rounds  /usr/local/bin/huginn-rounds
+check_deployed server/bin/huginn-llm     /usr/local/bin/huginn-llm
 check_deployed server/bin/huginn-devices /usr/local/bin/huginn-devices
 [ "$DRIFT" -eq 0 ] || echo "       (install the ones above, or devices keep receiving the old file)" >&2
 

@@ -516,6 +516,10 @@ fun main(args: Array<String>) {
                                     is PaletteItem.Verb -> when (item.shortcut) {
                                         Shortcut.NEW_ASK -> newChat("ask")
                                         Shortcut.NEW_ACT -> newChat("act")
+                                        Shortcut.NEW_LOCAL -> scope.launch {
+                                            runCatching { store.startLocalChat() }
+                                                .onFailure { store.noteError(it) }
+                                        }
                                         Shortcut.VIEW_STATUS -> store.openView(View.STATUS)
                                         Shortcut.VIEW_SETTINGS -> store.openView(View.SETTINGS)
                                         else -> Unit

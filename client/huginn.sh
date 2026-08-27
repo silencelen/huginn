@@ -4,9 +4,9 @@
 #     [ -f ~/.huginn/huginn.sh ] && source ~/.huginn/huginn.sh
 # Targets the `huginn` SSH alias by default; override per-device with:  export HUGINN_HOST=my-host
 # Self-update with:  huginn update   (pulls this file from the repo; gh -> scp fallback)
-# Version: 0.12.6
+# Version: 0.12.7
 
-HUGINN_VERSION='0.12.6'
+HUGINN_VERSION='0.12.7'
 HUGINN_REPO='silencelen/huginn'
 # Where `huginn update` may fetch a replacement for THIS FILE, which it then
 # sources into the live shell. Pinned, and deliberately NOT $HUGINN_HOST:
@@ -374,6 +374,7 @@ EOF
   huginn device [status]      what THIS machine offers huginn, and what huginn sees
   huginn device on            offer this machine  [--scope look|work|own] [--root DIR]
   huginn device off           stop offering it
+  huginn llm "prompt"         one question to the local tier (a serving machine answers, not Claude)
   huginn local [status]       what THIS machine serves as local AI, if anything
   huginn local on             serve local models from this machine (optional, ~5 GB)
   huginn local plan           what 'on' would install here, without installing anything
@@ -463,6 +464,11 @@ EOF
     # single version constant; this has far more fields to drift over.
     rounds|round) ssh -T "$H" huginn-rounds ;;
     devices) ssh -T "$H" huginn-devices ;;
+    # One question to the LOCAL TIER - answered by a serving machine's model,
+    # never Claude. Renders on the host like devices/rounds above: one
+    # implementation, and the token never leaves huginn. `huginn llm -` reads
+    # the prompt from stdin, so a file can be piped in for summarising.
+    llm) ssh -T "$H" "huginn-llm $(printf '%q ' "${@:2}")" ;;
     # Plural is the host's list of machines; SINGULAR is the one you are typing
     # on. Different question, different place it is answered - `devices` renders
     # on the host, `device` never leaves this machine.
@@ -626,7 +632,7 @@ _huginn_complete() {
   local cur prev cmds
   cur="${COMP_WORDS[COMP_CWORD]}"
   prev="${COMP_WORDS[COMP_CWORD-1]}"
-  cmds="list ls status st rounds devices device local solo rename mv kill end -p -y usage cost desktop update version help"
+  cmds="list ls status st rounds devices device local llm solo rename mv kill end -p -y usage cost desktop update version help"
   if [ "$COMP_CWORD" -eq 1 ]; then
     # first word: subcommands + live session names (bare name attaches to it)
     mapfile -t COMPREPLY < <(compgen -W "$cmds $(_huginn_sessions)" -- "$cur")

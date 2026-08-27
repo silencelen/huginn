@@ -321,6 +321,21 @@ class AppStore(
         refreshChats()
     }
 
+    /**
+     * A NEW Claude chat carrying an escalation handoff in its DRAFT — the
+     * user-driven half of the conduits. Nothing is sent: the person reads,
+     * edits and sends. The local chat is untouched.
+     */
+    suspend fun escalateWithDraft(draft: String) {
+        runCatching {
+            val made = client.createChat("ask")
+            drafts.set(com.silencelen.huginn.data.DraftBook.chatKey(made.id), draft)
+            openChat(made.id)
+            openView(View.CHATS)
+            refreshChats()
+        }.onFailure { note(Faults.ACTION, it) }
+    }
+
     suspend fun startChatOn(deviceId: String, mode: String) {
         // Faults.ACTION, not CHATS: the audit caught these refusals filed
         // under the polled source, which the next successful 5s chats poll

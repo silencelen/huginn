@@ -51,6 +51,8 @@ fun ChatTopBar(
     models: List<ModelChoice>,
     optionsEnabled: Boolean,
     started: Boolean,
+    /** Present only on a LOCAL chat: hand this conversation to Claude, as a draft. */
+    onEscalate: (() -> Unit)? = null,
     onModel: (String) -> Unit,
     onEffort: (String) -> Unit,
     onMode: (String) -> Unit,
@@ -98,6 +100,14 @@ fun ChatTopBar(
                 )
             }
             DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
+                // Only a LOCAL chat can escalate — the conversation goes to a
+                // NEW Claude chat as a DRAFT the person sends themselves.
+                if (onEscalate != null) {
+                    DropdownMenuItem(
+                        text = { Text("Escalate to Claude", style = MaterialTheme.typography.bodySmall) },
+                        onClick = { menuOpen = false; onEscalate() },
+                    )
+                }
                 DropdownMenuItem(
                     text = { Text("Rename", style = MaterialTheme.typography.bodySmall) },
                     onClick = { menuOpen = false; renaming = true },

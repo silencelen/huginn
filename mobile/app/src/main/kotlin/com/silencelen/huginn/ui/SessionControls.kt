@@ -109,6 +109,8 @@ fun ChatOptionsBar(
     onModel: (String) -> Unit,
     onEffort: (String) -> Unit,
     onMode: (String) -> Unit,
+    /** Present only on a LOCAL chat: hand this conversation to Claude, as a draft. */
+    onEscalate: (() -> Unit)? = null,
 ) {
     Surface(color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)) {
         Row(
@@ -156,6 +158,15 @@ fun ChatOptionsBar(
                     onClick = { },
                     enabled = false,
                     label = { Text("Ask") },
+                )
+            }
+            if (localNow && onEscalate != null) {
+                // The user-driven half of the conduits: the conversation moves
+                // to a NEW Claude chat as a DRAFT the person sends themselves.
+                AssistChip(
+                    onClick = onEscalate,
+                    enabled = enabled,
+                    label = { Text("Escalate to Claude") },
                 )
             }
             if (localNow) {
