@@ -4,6 +4,8 @@ import com.silencelen.huginn.data.AppdRoutes
 import com.silencelen.huginn.data.Chat
 import com.silencelen.huginn.data.Device
 import com.silencelen.huginn.data.Round
+import com.silencelen.huginn.data.Scratchpad
+import com.silencelen.huginn.data.ScratchpadSaver
 import com.silencelen.huginn.ui.RoundDraft
 import com.silencelen.huginn.ui.toSchedule
 import com.silencelen.huginn.desktop.device.DeviceRunner
@@ -33,8 +35,8 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 
-/** Which of the four destinations the window is showing. */
-enum class View { CHATS, SESSIONS, ROUNDS, DEVICES, STATUS, SETTINGS }
+/** Which of the destinations the window is showing. */
+enum class View { CHATS, SESSIONS, ROUNDS, DEVICES, SCRATCHPADS, STATUS, SETTINGS }
 
 /**
  * App-level state: navigation, the two lists, the status snapshot, and the watch
@@ -223,6 +225,129 @@ class AppStore(
         // remove it. See Unenrol.
         val wanted = settings.deviceEnabledNow() || settings.deviceUnenrolPendingNow()
         if (wanted) deviceRunner.start() else deviceRunner.stop()
+    }
+
+    // ------------------------------------------------------------ scratchpads
+
+    private val _pads = MutableStateFlow<List<Scratchpad>>(emptyList())
+    val pads: StateFlow<List<Scratchpad>> = _pads.asStateFlow()
+
+    /**
+     * Whether this daemon HAS scratchpads. Null until the first probe answers.
+     *
+     * FEATURE DETECTION, not version parsing: a 404 is the route itself saying it
+     * is not there, while a version string is a claim about what a build contains.
+     * False hides the rail item, the panel toggle, the composer chip and the
+     * palette verbs — a door that leads to an error is worse than no door.
+     */
+    private val _padsAvailable = MutableStateFlow<Boolean?>(null)
+    val padsAvailable: StateFlow<Boolean?> = _padsAvailable.asStateFlow()
+
+    /**
+     * The open page and its autosave. APP level, like [drafts] and the pane lease:
+     * the flush that matters happens as the panel closes, which is the exact
+     * moment a scope owned by that panel would be cancelled.
+     */
+    val padSaver = ScratchpadSaver(scope, { id, rev, content ->
+        client.saveScratchpad(id, rev, content = content)
+    })
+
+    /**
+     * Whether the side panel is open beside the conversation.
+     *
+     * ONE flag for both the chat and the session view, because it is one panel as
+     * far as the person is concerned: opening it in a chat and then walking to a
+     * session should not close it, and a second flag would make that a coin flip.
+     */
+    private val _padPanel = MutableStateFlow(false)
+    val padPanel: StateFlow<Boolean> = _padPanel.asStateFlow()
+
+    fun togglePadPanel() = setPadPanel(!_padPanel.value)
+
+    fun setPadPanel(open: Boolean) {
+        _padPanel.value = open
+        if (!open) padSaver.flush() else scope.launch { openDefaultPad() }
+    }
+
+    /** Which page each composer will attach, by [com.silencelen.huginn.ui.ScratchpadRules] key. */
+    private val _padRefs = MutableStateFlow<Map<String, String>>(emptyMap())
+    val padRefs: StateFlow<Map<String, String>> = _padRefs.asStateFlow()
+
+    fun setPadRef(key: String, id: String?) {
+        _padRefs.value = _padRefs.value.toMutableMap().apply {
+            if (id == null) remove(key) else put(key, id)
+        }
+    }
+
+    /** The reference a send should carry, dropped if it names a page since deleted. */
+    fun padRefFor(key: String): String? =
+        _padRefs.value[key]?.takeIf { id -> _pads.value.any { it.id == id } }
+
+    /**
+     * Silent on failure, and only a 404 is recorded — the same shape as
+     * refreshRounds. A status bar that permanently reports a missing feature as a
+     * fault is how a reader learns to stop reading it.
+     */
+    suspend fun refreshPads() {
+        runCatching { client.scratchpads() }
+            .onSuccess { _pads.value = it; _padsAvailable.value = true }
+            .onFailure {
+                if (it is HuginnClient.HuginnException && it.code == 404) _padsAvailable.value = false
+            }
+    }
+
+    /**
+     * Opens a page's TEXT. The list is polled; content is fetched here and never
+     * polled — a poll that replaced the text under a cursor would be an editor
+     * that types back at you.
+     */
+    suspend fun openPad(id: String) {
+        runCatching { client.scratchpad(id) }
+            .onSuccess { padSaver.open(it) }
+            .onFailure { note(Faults.ACTION, it) }
+    }
+
+    /** Main, or whatever is already open. What the panel shows when it is opened. */
+    private suspend fun openDefaultPad() {
+        if (padSaver.pad.value != null) return
+        if (_pads.value.isEmpty()) refreshPads()
+        val wanted = _pads.value.firstOrNull { it.main } ?: _pads.value.firstOrNull() ?: return
+        openPad(wanted.id)
+    }
+
+    suspend fun createPad(name: String) {
+        runCatching { client.createScratchpad(name) }
+            .onSuccess { made -> refreshPads(); padSaver.open(made) }
+            .onFailure { note(Faults.ACTION, it) }
+    }
+
+    suspend fun renamePad(id: String, name: String) {
+        val rev = padSaver.pad.value?.takeIf { it.id == id }?.rev
+            ?: _pads.value.firstOrNull { it.id == id }?.rev ?: return
+        runCatching { client.saveScratchpad(id, rev, name = name) }
+            .onSuccess { saved -> padSaver.open(saved.pad); refreshPads() }
+            .onFailure { note(Faults.ACTION, it) }
+    }
+
+    suspend fun deletePad(id: String) {
+        runCatching { client.deleteScratchpad(id) }
+            .onSuccess {
+                // forget(), not close(): a pending write for a page that has just
+                // been deleted would recreate it out of a timer.
+                if (padSaver.pad.value?.id == id) padSaver.forget()
+                _padRefs.value = _padRefs.value.filterValues { it != id }
+                refreshPads()
+            }
+            .onFailure { note(Faults.ACTION, it) }
+    }
+
+    /**
+     * Stages a page into a target's composer: APPENDED, never sent, and never
+     * clobbering — a half-typed draft outranks anything arriving into it.
+     */
+    fun stagePadInDraft(key: String, text: String) {
+        val current = drafts[key]
+        drafts.set(key, if (current.isBlank()) text else current + "\n" + text)
     }
 
     private val _sessions = MutableStateFlow<List<Session>>(emptyList())
@@ -709,6 +834,10 @@ class AppStore(
                 refreshSessions()
                 refreshRounds()
                 refreshDevices()
+                // The pages LIST only. Their text is fetched when one is opened,
+                // for the same reason the transcript is not in this loop: a poll
+                // that overwrote what somebody is typing is not a refresh.
+                refreshPads()
                 // Cheap, because start() returns immediately when the runner is
                 // already going. This way it survives a settings file edited
                 // underneath the app as well as a toggle in the UI.

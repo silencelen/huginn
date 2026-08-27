@@ -48,7 +48,7 @@ object AttachmentText {
      */
     fun displayText(text: String): String {
         if ('[' !in text) return text
-        val cleaned = text
+        val cleaned = ScratchpadRules.collapse(text)
             .replace(MARKER_RE, "📷 Photo attached")
             .replace(FILE_RE) { m -> "📎 " + (m.groupValues[2].ifBlank { "File attached" }) }
             .trim()

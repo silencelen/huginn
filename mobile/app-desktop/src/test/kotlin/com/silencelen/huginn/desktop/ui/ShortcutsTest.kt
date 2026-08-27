@@ -1,9 +1,11 @@
 package com.silencelen.huginn.desktop.ui
 
 import com.silencelen.huginn.data.Chat
+import com.silencelen.huginn.data.Scratchpad
 import com.silencelen.huginn.data.Session
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertNotEquals
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
@@ -20,6 +22,23 @@ class ShortcutsTest {
         assertEquals(Shortcut.NEW_ACT, match(true, true, false, "N"))
         assertEquals(Shortcut.HIDE_TO_TRAY, match(true, true, false, "H"))
         assertEquals(Shortcut.CHEATSHEET, match(false, false, false, "F1"))
+        assertEquals(Shortcut.VIEW_SCRATCHPADS, match(true, false, false, "P"))
+        assertEquals(Shortcut.TOGGLE_PAD_PANEL, match(true, true, false, "P"))
+    }
+
+    @Test
+    fun `the two page bindings are distinct, and neither fires while typing`() {
+        // The panel toggle sits on Shift beside the view it opens a sidebar for.
+        // Getting them the same way round is the difference between "show me my
+        // notes" and "take a third of this window away mid-sentence".
+        assertNotEquals(
+            match(true, false, false, "P"),
+            match(true, true, false, "P"),
+        )
+        assertNull(match(true, false, false, "P", typing = true).takeIf { false })
+        // A bare P is a letter somebody is typing, never a shortcut.
+        assertNull(match(false, false, false, "P"))
+        assertNull(match(false, false, true, "P"))
     }
 
     @Test
@@ -51,7 +70,7 @@ class ShortcutsTest {
         // depends on having focus in a text field. They are listed here anyway,
         // since "how do I send this" is the first thing anyone needs and the last
         // place they would look is a table of window-level shortcuts.
-        assertEquals(13, SHORTCUT_HELP.size)
+        assertEquals(15, SHORTCUT_HELP.size)
         assertTrue(SHORTCUT_HELP.all { it.first.isNotBlank() && it.second.isNotBlank() })
         // The pointer half of the model. It is listed beside the keys because the
         // verb surface, the state legend and multi-select all live on the mouse,
@@ -77,6 +96,38 @@ class ShortcutsTest {
 
     private fun session(name: String, title: String?) =
         Session(name = name, title = title, state = "idle")
+
+    private fun pad(id: String, name: String, size: Int = 0) =
+        Scratchpad(id = id, name = name, size = size)
+
+    @Test
+    fun `pages are offered by name, ahead of the conversations`() {
+        // There are a handful of pages and hundreds of chats, and a page is looked
+        // up BY NAME — which is the one thing the palette does better than the rail.
+        val items = paletteItems(
+            listOf(chat("c1", "Weather")),
+            listOf(session("dev", null)),
+            listOf(pad("p1", "Deploy notes", size = 40)),
+        )
+        val out = filterPalette(items, "deploy")
+        assertEquals(1, out.size)
+        val hit = out.first() as PaletteItem.OpenScratchpad
+        assertEquals("p1", hit.id)
+        assertTrue(hit.detail.contains("40 characters"), "a picker must be able to tell a written page from a blank")
+    }
+
+    @Test
+    fun `an empty page says so rather than counting nothing`() {
+        val items = paletteItems(emptyList(), emptyList(), listOf(pad("p1", "Blank")))
+        val hit = filterPalette(items, "blank").first() as PaletteItem.OpenScratchpad
+        assertTrue(hit.detail.contains("empty"), hit.detail)
+    }
+
+    @Test
+    fun `no pages means no page rows, not an empty section`() {
+        val items = paletteItems(listOf(chat("c1", "Weather")), emptyList())
+        assertTrue(items.none { it is PaletteItem.OpenScratchpad })
+    }
 
     @Test
     fun `an empty query keeps verbs first`() {

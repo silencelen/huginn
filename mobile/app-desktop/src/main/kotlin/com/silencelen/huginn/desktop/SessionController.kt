@@ -516,12 +516,23 @@ class SessionController(
         ops.trySend(LiveInput.Op.Key(keys))
     }
 
-    /** A composed line: text and Enter in ONE request, so nothing can interleave. */
-    fun sendLine(text: String, thenEnter: Boolean = true) {
+    /**
+     * A composed line: text and Enter in ONE request, so nothing can interleave.
+     *
+     * A [scratchpadId] reaches the pane as a PATH the daemon writes beside its
+     * store — a page holds more than a pane accepts in one paste, and a run with
+     * the file can re-read it as it changes.
+     */
+    fun sendLine(text: String, thenEnter: Boolean = true, scratchpadId: String? = null) {
         _echo.value = LocalEcho.otherKey(_echo.value)
         scope.launch {
             runCatching {
-                client.sendKeys(name, text = text, keys = if (thenEnter) listOf("Enter") else emptyList())
+                client.sendKeys(
+                    name,
+                    text = text,
+                    keys = if (thenEnter) listOf("Enter") else emptyList(),
+                    scratchpadId = scratchpadId,
+                )
             }.onFailure { _screenError.value = it.message ?: "could not send" }
         }
     }

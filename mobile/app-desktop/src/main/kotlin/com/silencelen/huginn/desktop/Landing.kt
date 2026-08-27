@@ -44,6 +44,10 @@ object Landing {
         // first thing. Kept here so `parse` and `encode` stay mutual inverses.
         View.ROUNDS -> "rounds"
         View.DEVICES -> "devices"
+        // Same reasoning as Rounds: encodable so the two halves stay mutual
+        // inverses, not persistable because a window that opens on somebody's
+        // notes answers a question nobody asked first thing.
+        View.SCRATCHPADS -> "pages"
         // Never written — the caller filters on [persistable] — but an encoder that
         // silently produced "chats" for Settings would be a landing bug nobody
         // could read off the file.
@@ -62,6 +66,7 @@ object Landing {
         "sessions" -> View.SESSIONS
         "rounds" -> View.ROUNDS
         "devices" -> View.DEVICES
+        "pages" -> View.SCRATCHPADS
         else -> DEFAULT
     }
 }

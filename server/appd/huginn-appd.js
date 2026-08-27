@@ -40,6 +40,7 @@ const { digest } = require('./lib/watch');
 const { decideAlerts, routeAlerts, telegramText, pruneSent, carryRunStarts } = require('./lib/alerts');
 const clientsLib = require('./lib/clients');
 const roundsLib = require('./lib/rounds');
+const scratchpadsLib = require('./lib/scratchpads');
 const devicesLib = require('./lib/devices');
 const { taskDirFor, parsePs, scanTasks, extractBgIds } = require('./lib/tasks');
 const { agentsDirFor, listAgents } = require('./lib/agents');
@@ -173,6 +174,17 @@ function humanizeUserText(t) {
   const s = String(t || '')
     .replace(/\[Attached image at [^\]]+\]/g, '\u{1F4F7} photo')
     .replace(/\[Attached file at [^\]]+\]/g, '\u{1F4CE} file')
+    // The scratchpad frames, same argument: a chat list entry titled with the
+    // first line of an attached page is about the page, not about what was
+    // asked. The literals are lib/scratchpads.js's own — see the ⚠ there — and
+    // :core's ScratchpadRules carries the third copy.
+    //
+    // Non-greedy on the close, which is the opposite of what rounds.js chose and
+    // right for the opposite reason: this is display only, so matching the FIRST
+    // "[End scratchpad]" line can at worst leave a tail of the page visible,
+    // while matching the last could swallow words the person actually typed.
+    .replace(/\[Scratchpad "([^"\n]{1,60})"\]\n[\s\S]*?\n\[End scratchpad\]\n*/g, '\u{1F4DD} $1\n')
+    .replace(/\[Scratchpad "([^"\n]{1,60})" at [^\]\n]*\]\n*/g, '\u{1F4DD} $1\n')
     .trim();
   return s || '\u{1F4F7} photo';
 }
@@ -2770,6 +2782,126 @@ async function planForCredentials(creds) {
   } catch { return null; } finally { clearTimeout(timer); }
 }
 
+// -------------------------------------------------------------- scratchpads
+//
+// The user's own pages, held here so a phone and a desktop are editing the SAME
+// text rather than two copies of it. Nothing on this host writes to them: they
+// are written by a person and read by a run only when a person attaches one.
+//
+// Shaped like rounds — one JSON file per pad, a read-modify-write funnel, and a
+// lib holding the rules — with one thing rounds does not have: a REVISION. Two
+// clients autosaving the same page is the normal case here, not the exceptional
+// one, so a save carries the rev it was based on and a stale one is refused with
+// the current copy rather than silently overwriting whatever the other device
+// had just typed.
+
+const SCRATCHPADS_DIR = path.join(DATA_DIR, 'scratchpads');
+/**
+ * Where a pad is materialised for a tmux session to READ.
+ *
+ * Separate from the store on purpose, and not 0600: the pad's own file is this
+ * daemon's record, while this is a copy handed to a Claude running as whoever
+ * owns that session. World-readable is the point — an unreadable path in the
+ * message would be a reference the run cannot follow.
+ */
+const SCRATCHPAD_RENDER_DIR = path.join(SCRATCHPADS_DIR, 'render');
+fs.mkdirSync(SCRATCHPAD_RENDER_DIR, { recursive: true });
+
+function padPath(id) { return path.join(SCRATCHPADS_DIR, `${id}.json`); }
+
+function loadPad(id) {
+  if (!UUID_RE.test(String(id || ''))) return null;
+  try { return JSON.parse(fs.readFileSync(padPath(id), 'utf8')); } catch { return null; }
+}
+
+/** tmp+rename, like every other store here: a reader never sees half a page. */
+function savePad(pad) {
+  const file = padPath(pad.id);
+  fs.writeFileSync(`${file}.tmp`, JSON.stringify(pad, null, 2), { mode: 0o600 });
+  fs.renameSync(`${file}.tmp`, file);
+  return pad;
+}
+
+function listPads() {
+  let files = [];
+  try { files = fs.readdirSync(SCRATCHPADS_DIR); } catch { return []; }
+  const out = [];
+  for (const f of files) {
+    if (!f.endsWith('.json')) continue;
+    const p = loadPad(f.slice(0, -5));
+    if (p) out.push(p);
+  }
+  return scratchpadsLib.sortPads(out);
+}
+
+/**
+ * Reload, change, save — the same funnel as updateRound and updateMeta, and the
+ * same reason. A PATCH is read after an await on the request body, and the pad
+ * loaded before that await is a snapshot: writing it back would discard whatever
+ * the OTHER device saved in the gap, which on a page two clients are both
+ * autosaving is not a rare race but the ordinary one.
+ */
+function updatePad(id, mutate) {
+  const p = loadPad(id);
+  if (!p) return null;
+  mutate(p);
+  p.updatedAt = Math.floor(Date.now() / 1000);
+  // The rev is bumped HERE rather than by each caller, so there is no way to
+  // write a page without moving the number every save is checked against.
+  p.rev = (Number(p.rev) || 0) + 1;
+  return savePad(p);
+}
+
+/**
+ * The pad a reference falls back to, created on first sight.
+ *
+ * Lazily rather than at startup because an install that never opens a scratchpad
+ * should not grow a file for one — and because "the list is empty" is a state the
+ * clients would otherwise have to distinguish from "the feature is off".
+ */
+function ensureMain() {
+  const existing = listPads().find((p) => scratchpadsLib.isMain(p));
+  if (existing) return existing;
+  const now = Math.floor(Date.now() / 1000);
+  return savePad({
+    id: crypto.randomUUID(),
+    name: scratchpadsLib.MAIN_NAME,
+    content: '',
+    main: true,
+    createdAt: now,
+    updatedAt: now,
+    rev: 1,
+  });
+}
+
+/**
+ * The pad a message names, or the fallback — and why not, when there is no pad.
+ *
+ * `null` id means Main, which is the contract: a client that offers no picker at
+ * all still gets the behaviour the owner asked for ("Main when unspecified").
+ */
+function padForReference(rawId) {
+  const id = typeof rawId === 'string' ? rawId.trim() : '';
+  if (!id || id === 'main') return { pad: ensureMain() };
+  const pad = loadPad(id);
+  if (!pad) return { error: 'no such scratchpad' };
+  return { pad };
+}
+
+/**
+ * Writes the pad where a session's Claude can Read it, and says where that is.
+ *
+ * Rewritten on every send rather than kept in step with the store: the file is a
+ * snapshot of what was attached, and a stale one is worse than a missing one
+ * because the run would answer confidently about the wrong text.
+ */
+function renderPad(pad) {
+  const file = path.join(SCRATCHPAD_RENDER_DIR, `${pad.id}.md`);
+  fs.writeFileSync(`${file}.tmp`, String(pad.content || ''), { mode: 0o644 });
+  fs.renameSync(`${file}.tmp`, file);
+  return file;
+}
+
 // ------------------------------------------------------- account + usage
 
 /** `claude auth status` already emits JSON; pass it through, minus nothing secret. */
@@ -4474,9 +4606,26 @@ const server = http.createServer(async (req, res) => {
       const name = m[1];
       if (!(await sessionExists(name))) return sendErr(res, 404, 'no such session');
       const body = JSON.parse(await readBody(req) || '{}');
-      if (typeof body.text === 'string' && body.text.length > 0) {
-        if (body.text.length > 8000) return sendErr(res, 400, 'text too long');
-        const r = await run('tmux', ['send-keys', '-t', `=${name}:`, '-l', '--', body.text]);
+      let typedKeys = typeof body.text === 'string' ? body.text : '';
+      if (typedKeys.length > 0) {
+        if (typedKeys.length > 8000) return sendErr(res, 400, 'text too long');
+        /**
+         * A scratchpad reference, as a PATH rather than as the page itself.
+         *
+         * A pane takes 8,000 characters at a time and a page holds up to
+         * 100,000, so pasting one in would refuse most of the pages worth
+         * attaching. The session's Claude has Read and the file is on this host,
+         * so it gets the better half of the trade: a pointer it can re-read,
+         * and a message that still fits.
+         */
+        if ('scratchpadId' in body && body.scratchpadId !== null) {
+          const ref = padForReference(body.scratchpadId);
+          if (ref.error) return sendErr(res, 404, ref.error);
+          typedKeys = scratchpadsLib.composeForSession(ref.pad, renderPad(ref.pad), typedKeys);
+          const overflow = scratchpadsLib.fitProblem(typedKeys, 8000);
+          if (overflow) return sendErr(res, 413, overflow);
+        }
+        const r = await run('tmux', ['send-keys', '-t', `=${name}:`, '-l', '--', typedKeys]);
         if (r.err) return sendErr(res, 500, `tmux: ${r.stderr.trim()}`);
         // A beat before any Enter that follows. Text and Enter in one burst
         // occasionally read to the TUI as a single paste, which INSERTS the
@@ -5106,6 +5255,101 @@ const server = http.createServer(async (req, res) => {
       return sendErr(res, 404, 'no such round route');
     }
 
+    // ---- scratchpads: the user's own pages, and nothing this host writes to
+    if (req.method === 'GET' && p === '/v1/scratchpads') {
+      // Main is minted HERE and not at startup, so listing is also what creates
+      // the page every reference falls back to. This route is also the probe both
+      // clients use to decide whether this daemon has the feature at all — a 404
+      // from an older one hides every scratchpad control rather than showing a
+      // door that leads to an error (the refreshRounds precedent).
+      //
+      // One directory scan, not two: this is polled every five seconds by an open
+      // desktop.
+      const pads = listPads();
+      if (!pads.some(scratchpadsLib.isMain)) pads.push(ensureMain());
+      return sendJson(res, 200, {
+        pads: scratchpadsLib.sortPads(pads).map(scratchpadsLib.padRow),
+      });
+    }
+    if (req.method === 'POST' && p === '/v1/scratchpads') {
+      const body = JSON.parse(await readBody(req) || '{}');
+      const pads = listPads();
+      if (pads.length >= scratchpadsLib.MAX_PADS) {
+        return sendErr(res, 400, `that is the ${scratchpadsLib.MAX_PADS}-page limit — delete one first`);
+      }
+      const bad = scratchpadsLib.nameProblem(body.name, pads.map((p2) => p2.name));
+      if (bad) return sendErr(res, 400, bad);
+      const content = typeof body.content === 'string' ? body.content : '';
+      const badContent = scratchpadsLib.contentProblem(content);
+      if (badContent) return sendErr(res, 400, badContent);
+      const now = Math.floor(Date.now() / 1000);
+      return sendJson(res, 201, savePad({
+        id: crypto.randomUUID(),
+        name: scratchpadsLib.cleanName(body.name),
+        content,
+        main: false,
+        createdAt: now,
+        updatedAt: now,
+        rev: 1,
+      }));
+    }
+    if ((m = p.match(/^\/v1\/scratchpads\/([0-9a-f-]{36})$/))) {
+      const padId = m[1];
+      const pad = loadPad(padId);
+      if (!pad) return sendErr(res, 404, 'no such scratchpad');
+
+      if (req.method === 'GET') return sendJson(res, 200, pad);
+
+      /**
+       * The autosave. `rev` is what the editor last read, not a hint.
+       *
+       * ⚠ RE-READ AFTER THE AWAIT, and then compare — the same hazard the Round
+       * PATCH documents, made routine here because two clients editing one page
+       * IS the feature. A stale save is answered 409 with the CURRENT pad in the
+       * body so the editor can adopt it and say so, rather than being told only
+       * that it lost.
+       */
+      if (req.method === 'PATCH') {
+        const body = JSON.parse(await readBody(req) || '{}');
+        const current = loadPad(padId);
+        if (!current) return sendErr(res, 404, 'no such scratchpad');
+        const rev = Number(body.rev);
+        if (!Number.isInteger(rev)) return sendErr(res, 400, 'rev is required — it is what makes a save safe');
+        if (rev !== (Number(current.rev) || 0)) return sendJson(res, 409, current);
+
+        let name = null;
+        if (typeof body.name === 'string') {
+          // Main's name is load-bearing: it is what a reference with no pad named
+          // falls back to, and what every client calls that fallback.
+          if (scratchpadsLib.isMain(current)) return sendErr(res, 400, 'the Main page cannot be renamed');
+          const taken = listPads().filter((p2) => p2.id !== padId).map((p2) => p2.name);
+          const bad = scratchpadsLib.nameProblem(body.name, taken);
+          if (bad) return sendErr(res, 400, bad);
+          name = scratchpadsLib.cleanName(body.name);
+        }
+        if (typeof body.content === 'string') {
+          const bad = scratchpadsLib.contentProblem(body.content);
+          if (bad) return sendErr(res, 400, bad);
+        }
+        const saved = updatePad(padId, (p2) => {
+          if (name !== null) p2.name = name;
+          if (typeof body.content === 'string') p2.content = body.content;
+        });
+        if (!saved) return sendErr(res, 404, 'no such scratchpad');
+        return sendJson(res, 200, saved);
+      }
+
+      if (req.method === 'DELETE') {
+        if (scratchpadsLib.isMain(pad)) return sendErr(res, 400, 'the Main page cannot be deleted');
+        try { fs.unlinkSync(padPath(padId)); } catch { /* already gone */ }
+        // The rendered copy goes too. Leaving it would hand a session's Claude a
+        // readable path to a page the owner has just deleted.
+        try { fs.unlinkSync(path.join(SCRATCHPAD_RENDER_DIR, `${padId}.md`)); } catch { /* never rendered */ }
+        return sendJson(res, 200, { ok: true });
+      }
+      return sendErr(res, 405, 'method not allowed');
+    }
+
     if (req.method === 'GET' && p === '/v1/chats') return sendJson(res, 200, { chats: listChats() });
 
     if (req.method === 'POST' && p === '/v1/chats') {
@@ -5214,9 +5458,31 @@ const server = http.createServer(async (req, res) => {
           return sendErr(res, 409, 'this run has finished and is kept for review — start a new chat to continue');
         }
         const body = JSON.parse(await readBody(req) || '{}');
-        const text = typeof body.text === 'string' ? body.text.trim() : '';
-        if (!text) return sendErr(res, 400, 'text required');
-        if (text.length > 100_000) return sendErr(res, 400, 'text too long');
+        const typed = typeof body.text === 'string' ? body.text.trim() : '';
+        if (!typed) return sendErr(res, 400, 'text required');
+        if (typed.length > 100_000) return sendErr(res, 400, 'text too long');
+        /**
+         * The scratchpad the sender attached, composed HERE and now.
+         *
+         * ⚠ AT RECEIPT, NOT AT DELIVERY, and that matters most for the queued
+         * path below. A reference resolved when the queue drains would quote
+         * whatever the page said minutes later — after the sender had gone on
+         * editing it — so the message the transcript shows and the message the
+         * run received would be different text. Composing here makes the queue
+         * entry a snapshot of what the person actually sent.
+         *
+         * Absent field = no reference at all. Attaching Main to every message
+         * that never asked for one would put a page into conversations the owner
+         * never meant it to reach.
+         */
+        let text = typed;
+        if ('scratchpadId' in body && body.scratchpadId !== null) {
+          const ref = padForReference(body.scratchpadId);
+          if (ref.error) return sendErr(res, 404, ref.error);
+          text = scratchpadsLib.composeForChat(ref.pad, typed);
+          const overflow = scratchpadsLib.fitProblem(text, 100_000);
+          if (overflow) return sendErr(res, 413, overflow);
+        }
         // Busy: hold it and deliver when this run ends, rather than refusing.
         // A headless run cannot be fed mid-flight, and a dead end here would be
         // the one place the app behaves worse than typing into the session.
