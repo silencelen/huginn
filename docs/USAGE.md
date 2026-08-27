@@ -16,6 +16,7 @@
 | `huginn usage [args]` / `cost` | Claude Code token/cost report ([ccusage]) — e.g. `usage monthly`, `session`, `blocks --live` |
 | `huginn usage <when>` | shortcut date range: `today` \| `yesterday` \| `week` \| `month` — e.g. `usage today`, `usage week session` |
 | `huginn update` | self-update the client from the repo (`gh` → `scp` fallback) |
+| `huginn uninstall` | remove huginn from **this** machine — see [Uninstalling](#uninstalling) |
 | `huginn version` | print the client version + target host |
 | `huginn help` / `?` / `/help` | this reference |
 | `rclaude` / `rcc` | aliases for `huginn` |
@@ -67,6 +68,47 @@ The attach renames your terminal tab/window to **`huginn:<session>`** — so `hu
 | `HUGINN_NO_RECONNECT` | set to `1` to disable auto-reconnect |
 | `HUGINN_NO_TITLE` | set to `1` to disable terminal-tab naming |
 | `HUGINN_WORKDIR` *(host)* | working directory new sessions open in (default `$HOME`) |
+
+## Uninstalling
+
+`huginn uninstall` puts the machine back the way the installer found it. It asks you to
+type `uninstall` first (`--yes` skips that), and it does the two halves in this order:
+
+1. **The server, first.** Every enrolment this machine holds — itself as a device, and
+   `<host>-llm` if it also serves local models — is retired from the daemon *while the
+   token that can do it still exists*. Wipe first and those rows are unremovable from
+   here forever: they sit in `huginn devices` reading "not reachable" and go on being
+   offered work by a machine that is gone.
+2. **The disk, second.** `~/.huginn` (the client, the device runner, the local-AI
+   manager), `~/.config/huginn` (the enrolment and its copy of the appd token),
+   `~/.config/huginn-local` (models, sessions, runtime — often several GB), and the
+   `source ~/.huginn/huginn.sh` line the installer put in your profile.
+
+If the host is unreachable the uninstall **still finishes** — an uninstaller does not get
+a second run — and it names the row it stranded so you can retire it from the host later.
+That is the one place the "never destroy the only handle" rule is deliberately inverted;
+`huginn device off` on its own still refuses, because that one *can* be run again.
+
+**What it leaves, on purpose:** your SSH key and the `Host huginn` stanza. The installer
+only *creates* a key when there is not one already, and afterwards nothing can tell the
+key it generated from the one you have used for years — `~/.ssh/id_ed25519` is the default
+name for both. `huginn uninstall --all` removes the stanza, and removes the key pair only
+when it is huginn's by filename (`id_ed25519_huginn`) or by the comment in its `.pub`.
+Anything ambiguous is kept, and the summary says which and why.
+
+The summary at the end lists exactly what went and what stayed. The `huginn` function is
+still loaded in the shell you ran it from until you open a new one.
+
+### The desktop app
+
+The desktop client has its own uninstaller and does the same two halves. On Windows,
+Programs and Features → *Huginn Desktop* unenrols both rows, stops and deregisters the
+`huginn-local-*` WinSW services, and then removes `%USERPROFILE%\.config\huginn-desktop-kt`
+(the settings file holds the bearer token in plaintext, and so does the `.corrupt` copy
+beside it), the update cache, `%ProgramData%\huginn-local`, the `huginn:` URL scheme, and
+the two CLI files it keeps current in `~/.huginn` — named one by one, so a base client you
+installed separately survives. On Linux, `apt purge huginn-desktop-kt` does the same for
+every real user's home; plain `apt remove` leaves configuration alone, the Debian way.
 
 ## Headless one-shots
 
