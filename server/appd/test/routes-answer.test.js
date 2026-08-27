@@ -78,7 +78,7 @@ before(async () => {
   // the readiness loop instead of saying what went wrong.
   daemon.on('error', (e) => { throw e; });
 
-  for (let i = 0; i < 100; i++) {
+  for (let i = 0; i < 300; i++) { // 30s cap: parallel gradle load on this host has pushed daemon start past 10s
     try {
       const r = await api('/v1/ping');
       if (r.status === 200) break;

@@ -150,7 +150,7 @@ before(async () => {
     stdio: 'ignore',
   });
   daemon.on('error', (e) => { throw e; });
-  for (let i = 0; i < 100; i++) {
+  for (let i = 0; i < 300; i++) { // 30s cap: parallel gradle load on this host has pushed daemon start past 10s
     try { if ((await api('/v1/ping')).status === 200) break; } catch { /* not up */ }
     await wait(100);
   }
