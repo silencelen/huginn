@@ -519,6 +519,44 @@ test('previews skip footer workflow rows and selector help', () => {
   assert.deepEqual(got, ['real content line']);
 });
 
+test('previews drop a terminal ANSWERING a query, which is not the session speaking', () => {
+  // \u26A0 CAPTURED LIVE on 2026-08-26 from /v1/sessions?preview=1, verbatim: a
+  // session whose headline on both clients was
+  //
+  //     \u276F 4;21;22;23;24;28;32;42;52c
+  //
+  // \u2014 the tail of a Primary Device Attributes reply, sitting in the composer
+  // because nothing was reading the tty when it arrived. It is the terminal
+  // talking to itself, and the previous line of real work had already scrolled
+  // out of the two-line budget it displaced.
+  const got = previewLines([
+    'Confirmed, the gate is green.',
+    '\u276F 4;21;22;23;24;28;32;42;52c',
+  ], 2);
+  assert.deepEqual(got, ['Confirmed, the gate is green.']);
+
+  // The other shapes the same accident produces: the reply with its bracket or
+  // its private marker still attached, a DA2 (`>`), and a DSR cursor report.
+  for (const line of ['[?64;1;2;6;9;15;22c', '?62;1;4c', '\u276F >0;95;0c', '24;80R', '\u276F [24;1R']) {
+    assert.deepEqual(previewLines(['real work happened here', line], 2), ['real work happened here'], line);
+  }
+});
+
+test('the reply filter is narrow enough that real content survives it', () => {
+  // It must only ever drop a line that is NOTHING but a reply. These are the
+  // near-misses: prose that ends in one, a version, a bare number, a time.
+  const keep = [
+    'wrote 24;80R to the log',
+    'exit 1',
+    '2;3;4',                       // no terminating letter
+    '1;2;3d',                      // not a reply letter
+    'v1;2c and then some words',
+    '\u276F 12;34;56cat',
+  ];
+  // Kept VERBATIM: previewLines returns the line, it does not rewrite it.
+  for (const line of keep) assert.deepEqual(previewLines([line], 1), [line.trim()], line);
+});
+
 
 // ------------------------------------------------ multi-select AskUserQuestion
 //
