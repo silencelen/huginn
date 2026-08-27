@@ -20,11 +20,17 @@ class DevicesViewTest {
         running: Boolean = false,
         queued: Int = 0,
         version: String? = null,
+        lastSeen: Long? = null,
     ) = Device(
         id = "d1", name = "PRESTIGE", platform = "windows",
         scope = scope, effectiveScope = effective, online = online,
-        running = running, queued = queued, version = version,
+        running = running, queued = queued, version = version, lastSeen = lastSeen,
     )
+
+    /** A fixed clock; `lastSeen` is epoch MILLIseconds, like the daemon sends it. */
+    private val now = 1_800_000_000_000L
+    private val hour = 3_600_000L
+    private val day = 24 * hour
 
     @Test
     fun aLockedMachineSaysBothWhatItIsAndWhatItIsDoingNow() {
@@ -109,6 +115,73 @@ class DevicesViewTest {
     fun aServingRowWithNoCatalogStillReads() {
         val line = describeDevice(servingDevice(models = emptyList()))
         assertTrue(line.contains("serves local models"), line)
+    }
+
+    // ------------------------------------------------------ how long it has been
+    //
+    // "not reachable" reads identically whether a machine went quiet four minutes
+    // ago or four weeks ago, and those are completely different situations: one is
+    // a laptop lid, the other is an enrolment nobody ever gave back. Every stale
+    // row this workstream exists to remove hid in that gap.
+
+    @Test
+    fun anUnreachableMachineSaysHowLongItHasBeenThatWay() {
+        val line = describeDevice(device(online = false, lastSeen = now - 3 * day), nowMs = now)
+        assertTrue(line.contains("not reachable"), line)
+        assertTrue(line.contains("last seen 3 days ago"), line)
+    }
+
+    @Test
+    fun aReachableMachineDoesNotDateItself() {
+        // The reader is looking at a machine that is here NOW; when it last
+        // checked in is noise, and it would change every few seconds.
+        val line = describeDevice(device(online = true, lastSeen = now - 3 * day), nowMs = now)
+        assertFalse(line.contains("last seen"), line)
+    }
+
+    // Nullable at BOTH ends: a daemon older than the field sends no lastSeen, and
+    // a caller with no clock passes no nowMs. Neither may produce a bare
+    // "last seen" with nothing after it.
+    @Test
+    fun anOlderDaemonThatSendsNoLastSeenSaysNothingAboutIt() {
+        val line = describeDevice(device(online = false, lastSeen = null), nowMs = now)
+        assertTrue(line.contains("not reachable"), line)
+        assertFalse(line.contains("last seen"), line)
+    }
+
+    @Test
+    fun aCallerWithNoClockSaysNothingAboutIt() {
+        val line = describeDevice(device(online = false, lastSeen = now - 3 * day))
+        assertTrue(line.contains("not reachable"), line)
+        assertFalse(line.contains("last seen"), line)
+    }
+
+    @Test
+    fun aZeroStampIsNotTheEpoch() {
+        // A row persisted before lastSeen was recorded reads 0, and "last seen 55
+        // years ago" is worse than saying nothing.
+        assertFalse(describeDevice(device(online = false, lastSeen = 0L), nowMs = now).contains("last seen"))
+    }
+
+    @Test
+    fun theVersionStaysLastEvenWithTheAgeInTheLine() {
+        // The version is the tail of this line everywhere else in the app; an age
+        // clause appended after it would move it and break the shape.
+        val line = describeDevice(
+            device(online = false, lastSeen = now - 5 * hour, version = "0.14.0"),
+            nowMs = now,
+        )
+        assertTrue(line.endsWith("v0.14.0"), line)
+        assertEquals(
+            "windows · own · not reachable · last seen 5h ago · v0.14.0",
+            line,
+        )
+    }
+
+    @Test
+    fun aServingRowDatesItselfTheSameWay() {
+        val line = describeDevice(servingDevice(online = false).copy(lastSeen = now - 2 * hour), nowMs = now)
+        assertTrue(line.contains("not reachable · last seen 2h ago"), line)
     }
 
     // -------------------------------------------------- one machine, one card

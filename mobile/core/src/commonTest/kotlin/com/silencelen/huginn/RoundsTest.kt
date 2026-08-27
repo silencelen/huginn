@@ -5,6 +5,7 @@ import com.silencelen.huginn.data.RoundItem
 import com.silencelen.huginn.data.RoundRun
 import com.silencelen.huginn.ui.RoundStatus
 import com.silencelen.huginn.ui.agoWords
+import com.silencelen.huginn.ui.agoWordsMs
 import com.silencelen.huginn.ui.canAcknowledge
 import com.silencelen.huginn.ui.itemCountWords
 import com.silencelen.huginn.ui.isAcknowledged
@@ -66,6 +67,33 @@ class RoundsTest {
         assertEquals("yesterday", agoWords(now / 1000 - 30 * 3600, now))
         assertEquals("3 days ago", agoWords(now / 1000 - 3 * 24 * 3600, now))
         assertEquals("", agoWords(null, now))
+    }
+
+    /**
+     * ⚠ THE DAEMON'S WIRE IS NOT CONSISTENT ABOUT ITS UNITS. A Round's
+     * `lastRun.at` is epoch SECONDS; a Device's `lastSeen` is epoch
+     * MILLIseconds. Both are real, so the mistake worth engineering against is
+     * picking the wrong one silently — hence two names that each say their unit,
+     * over one function with a flag nobody reads at the call site.
+     */
+    @Test
+    fun agoWordsMsTakeMillisecondsAndAgreeWithTheSecondsForm() {
+        assertEquals("1h ago", agoWordsMs(now - 3600_000, now))
+        assertEquals("just now", agoWordsMs(now - 5_000, now))
+        assertEquals("yesterday", agoWordsMs(now - 30 * hour, now))
+        assertEquals("3 days ago", agoWordsMs(now - 3 * 24 * hour, now))
+        // One formatting table, two doors: the same instant must read the same
+        // whichever unit it arrived in.
+        assertEquals(agoWords(now / 1000 - 3 * 24 * 3600, now), agoWordsMs(now - 3 * 24 * hour, now))
+    }
+
+    @Test
+    fun anAbsentOrZeroStampSaysNothingRatherThanFiftyFiveYears() {
+        // A row persisted before the field existed reads 0, and a daemon older
+        // than the field sends nothing at all.
+        assertEquals("", agoWordsMs(null, now))
+        assertEquals("", agoWordsMs(0L, now))
+        assertEquals("", agoWordsMs(-1L, now))
     }
 
     @Test

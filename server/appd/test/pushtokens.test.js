@@ -188,3 +188,99 @@ test('a dead-token drop cannot delete the replacement registered while sending',
   assert.equal(push.drop(st, 'install-1', 'new-token'), true);
   assert.deepStrictEqual(push.list(st), []);
 });
+
+// ------------------------------------------------------ the uninstall sweep
+//
+// A validate-only pass over every stored token. It COLLECTS and applies nothing:
+// the sweep holds the network for one round trip per phone, and the register
+// route writes the same file meanwhile, so the caller re-reads before acting.
+
+/** A probe that answers from a table, and records what it was asked. */
+function stubProbe(byToken) {
+  const asked = [];
+  const impl = async (token) => {
+    asked.push(token);
+    const r = byToken[token];
+    if (r instanceof Error) throw r;
+    return r ?? { ok: true, dead: false, status: 200, error: null };
+  };
+  impl.asked = asked;
+  return impl;
+}
+
+const GONE = { ok: false, dead: true, status: 404, error: 'Requested entity was not found.' };
+
+test('the sweep asks about every stored token', async () => {
+  const st = push.emptyState();
+  push.register(st, 'a', 'tok-a', T0);
+  push.register(st, 'b', 'tok-b', T0);
+  const probe = stubProbe({});
+  const r = await push.reconcile(st, probe);
+  assert.equal(r.checked, 2);
+  assert.deepEqual(probe.asked.sort(), ['tok-a', 'tok-b']);
+  assert.deepEqual(r.dead, []);
+});
+
+test('the sweep names the install AND the token it was about', async () => {
+  // The token comes back so the caller's drop can be guarded on the install
+  // still holding it — rotation is exactly when a dead verdict arrives.
+  const st = push.emptyState();
+  push.register(st, 'uninstalled', 'tok-dead', T0);
+  const r = await push.reconcile(st, stubProbe({ 'tok-dead': GONE }));
+  assert.equal(r.dead.length, 1);
+  assert.equal(r.dead[0].installId, 'uninstalled');
+  assert.equal(r.dead[0].token, 'tok-dead');
+});
+
+// The property the whole design rests on: a sweep that wrote as it went would
+// erase a token registered during its own network round trips.
+test('the sweep changes nothing itself', async () => {
+  const st = push.emptyState();
+  push.register(st, 'uninstalled', 'tok-dead', T0);
+  await push.reconcile(st, stubProbe({ 'tok-dead': GONE }));
+  assert.equal(push.count(st), 1, 'the caller applies outcomes against a fresh read');
+});
+
+// ⚠ The failure mode that would empty the registry in one pass. This runs
+// unattended and drops rows; an outage read as "dead" would unregister every
+// phone at once, with no way back but reinstalling the app on each.
+test('an outage mid-sweep is counted, never treated as a dead token', async () => {
+  const st = push.emptyState();
+  push.register(st, 'a', 'tok-a', T0);
+  push.register(st, 'b', 'tok-b', T0);
+  const r = await push.reconcile(st, stubProbe({
+    'tok-a': { ok: false, dead: false, status: 503, error: 'try again' },
+    'tok-b': { ok: false, dead: false, status: 500, error: 'internal' },
+  }));
+  assert.deepEqual(r.dead, []);
+  assert.equal(r.failed, 2);
+});
+
+test('a probe that throws is a broken sender, not a dead phone', async () => {
+  const st = push.emptyState();
+  push.register(st, 'a', 'tok-a', T0);
+  const r = await push.reconcile(st, stubProbe({ 'tok-a': new Error('socket hang up') }));
+  assert.deepEqual(r.dead, []);
+  assert.equal(r.failed, 1, 'counted, so a run of these is visible without being acted on');
+});
+
+test('one dead phone in a healthy fleet is the only one reported', async () => {
+  const st = push.emptyState();
+  push.register(st, 'live', 'tok-live', T0);
+  push.register(st, 'gone', 'tok-gone', T0);
+  push.register(st, 'flaky', 'tok-flaky', T0);
+  const r = await push.reconcile(st, stubProbe({
+    'tok-gone': GONE,
+    'tok-flaky': { ok: false, dead: false, status: 503, error: 'try again' },
+  }));
+  assert.deepEqual(r.dead.map((d) => d.installId), ['gone']);
+  assert.equal(r.failed, 1);
+  assert.equal(r.checked, 3);
+});
+
+test('an empty registry sweeps without asking FCM anything', async () => {
+  const probe = stubProbe({});
+  const r = await push.reconcile(push.emptyState(), probe);
+  assert.equal(r.checked, 0);
+  assert.equal(probe.asked.length, 0, 'no round trip, no token, no cost');
+});

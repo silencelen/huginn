@@ -2,7 +2,7 @@
 const test = require('node:test');
 const assert = require('node:assert');
 const {
-  emptyState, noteSeen, appOnline, listClients, pruneClients,
+  emptyState, noteSeen, appOnline, listClients, pruneClients, dropClient,
   FRESH_STREAM_MS, FRESH_BEAT_MS,
 } = require('../lib/clients');
 
@@ -104,4 +104,42 @@ test('overlong ids and user agents are truncated, not rejected', () => {
   const st = noteSeen(emptyState(), 'x'.repeat(200), { ua: 'y'.repeat(500) }, T0);
   const [c] = listClients(st, T0);
   assert.ok(c.ua.length <= 80);
+});
+
+// ---------------------------------------------------- a phone that is GONE
+//
+// The prune above answers "quiet for a week". This answers "we have proof": FCM
+// reporting the install's token unregistered, which is what an uninstall looks
+// like from here. The install id is the join between push.json and this file.
+
+test('an uninstalled phone is dropped at once rather than waiting out its week', () => {
+  const st = noteSeen(emptyState(), 'install-1', { kind: 'stream' }, T0);
+  assert.equal(dropClient(st, 'install-1'), true);
+  assert.deepEqual(Object.keys(st.clients), []);
+});
+
+// The caller persists on a true. Reporting one for a row that was never there
+// would rewrite clients.json on every dead-token verdict for a phone this
+// daemon never saw check in.
+test('dropping a client that was never here reports nothing to persist', () => {
+  const st = noteSeen(emptyState(), 'install-1', {}, T0);
+  assert.equal(dropClient(st, 'install-2'), false);
+  assert.equal(dropClient(st, ''), false);
+  assert.equal(dropClient(st, undefined), false);
+  assert.deepEqual(Object.keys(st.clients), ['install-1'], 'and nothing was removed');
+});
+
+test('dropping one phone leaves the others listening', () => {
+  let st = noteSeen(emptyState(), 'gone', { kind: 'stream' }, T0);
+  st = noteSeen(st, 'here', { kind: 'stream' }, T0);
+  dropClient(st, 'gone');
+  assert.deepEqual(Object.keys(st.clients), ['here']);
+  assert.equal(appOnline(st, T0 + 1000), true, 'the surviving phone is still a route');
+});
+
+// Reachable when a dead-token verdict arrives before this daemon has any client
+// state at all — a fresh start that pushes before anything checks in.
+test('dropping from an empty state is a no-op rather than a throw', () => {
+  assert.equal(dropClient(emptyState(), 'install-1'), false);
+  assert.equal(dropClient({}, 'install-1'), false);
 });

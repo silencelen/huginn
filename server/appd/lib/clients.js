@@ -107,7 +107,25 @@ function pruneClients(state, now, forgetMs = FORGET_MS) {
   return state;
 }
 
+/**
+ * Forgets one client outright, ahead of its seven days.
+ *
+ * The prune above answers "has this gone quiet for a week"; this answers
+ * "we have PROOF it is gone" — FCM reporting the install's token unregistered,
+ * which is what an uninstall looks like from here. Waiting out FORGET_MS in that
+ * case leaves a phone listed for a week after it stopped existing, and the whole
+ * point of this file is that the list is evidence rather than assumption.
+ *
+ * @returns true when a row was actually removed, so a caller knows to persist.
+ */
+function dropClient(state, id) {
+  const clients = (state && state.clients) || {};
+  if (!id || !Object.prototype.hasOwnProperty.call(clients, id)) return false;
+  delete clients[id];
+  return true;
+}
+
 module.exports = {
-  emptyState, noteSeen, appOnline, listClients, pruneClients, freshnessFor,
+  emptyState, noteSeen, appOnline, listClients, pruneClients, dropClient, freshnessFor,
   FRESH_MS, FRESH_STREAM_MS, FRESH_BEAT_MS, FORGET_MS,
 };

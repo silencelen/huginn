@@ -1,11 +1,14 @@
 package com.silencelen.huginn.desktop
 
+import com.silencelen.huginn.data.HuginnSettings
 import java.io.File
 import java.nio.file.Files
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 import kotlin.test.AfterTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertNotEquals
 import kotlin.test.assertTrue
 
@@ -155,6 +158,93 @@ class DesktopSettingsTest {
         settings.setLanding(View.CHATS, chatId = "c1", sessionName = null)
         settings.setLanding(View.CHATS, chatId = null, sessionName = null)
         assertEquals(null, DesktopSettings(file).lastChatIdNow())
+    }
+
+    // ------------------------------------------------ giving the enrolment back
+    //
+    // ⚠ The device id is the ONLY handle that can retire this machine's row at
+    // the daemon. Turning the toggle off used to flip a boolean and nothing else,
+    // so the row sat "not reachable" in everybody's device list for its full
+    // thirty days. The fix is not to delete the id on the click — that loses the
+    // handle exactly when the daemon is unreachable, which is exactly when a
+    // machine is being decommissioned. The debt is RECORDED and paid off later.
+
+    @Test
+    fun `turning the offer off records what is still owed`() {
+        val settings = DesktopSettings(freshFile())
+        settings.setDeviceId("dev-1")
+        settings.setDeviceEnabled(true)
+        settings.setDeviceEnabled(false)
+
+        assertTrue(settings.deviceUnenrolPendingNow(), "the row still has to be retired")
+        assertEquals("dev-1", settings.deviceIdNow(), "and the only handle that can do it is kept")
+    }
+
+    @Test
+    fun `a machine that never enrolled owes nothing when it is switched off`() {
+        val settings = DesktopSettings(freshFile())
+        settings.setDeviceEnabled(true)
+        settings.setDeviceEnabled(false)
+        // A pending flag here would keep the runner alive forever to retry a
+        // DELETE against an id that does not exist.
+        assertFalse(settings.deviceUnenrolPendingNow())
+    }
+
+    @Test
+    fun `turning it back on withdraws the debt`() {
+        // The runner is about to re-enrol under this same id, so deleting the row
+        // would retire the enrolment being used right now.
+        val settings = DesktopSettings(freshFile())
+        settings.setDeviceId("dev-1")
+        settings.setDeviceEnabled(false)
+        assertTrue(settings.deviceUnenrolPendingNow())
+
+        settings.setDeviceEnabled(true)
+        assertFalse(settings.deviceUnenrolPendingNow())
+        assertEquals("dev-1", settings.deviceIdNow())
+    }
+
+    @Test
+    fun `the debt survives being closed before the daemon could be reached`() {
+        // The case the flag exists for: a laptop retired and shut down on a train.
+        val file = freshFile()
+        DesktopSettings(file).apply {
+            setDeviceId("dev-1")
+            setDeviceEnabled(false)
+        }
+
+        val next = DesktopSettings(file)
+        assertTrue(next.deviceUnenrolPendingNow(), "still owed after a relaunch")
+        assertEquals("dev-1", next.deviceIdNow())
+        assertFalse(next.deviceEnabledNow())
+    }
+
+    @Test
+    fun `removal takes the token, the handle and the half-written messages`() {
+        val settings = DesktopSettings(freshFile())
+        runBlocking {
+            settings.setToken("secret-token-value")
+            settings.setDrafts(mapOf("chat-1" to "half a sentence"))
+        }
+        settings.setDeviceId("dev-1")
+        settings.setDeviceEnabled(true)
+
+        settings.clearForRemoval()
+
+        assertEquals("", settings.tokenNow(), "the credential goes")
+        assertEquals("", settings.deviceIdNow(), "the rows are already retired by now")
+        assertFalse(settings.deviceEnabledNow())
+        assertFalse(settings.deviceUnenrolPendingNow(), "nothing is owed once the rows are gone")
+        assertEquals(emptyMap(), runBlocking { settings.drafts.first() })
+    }
+
+    @Test
+    fun `removal keeps the address, which is not a credential`() {
+        // The connect screen would only ask for the same one back.
+        val settings = DesktopSettings(freshFile())
+        runBlocking { settings.setBaseUrl(HuginnSettings.DEFAULT_BASE_URL) }
+        settings.clearForRemoval()
+        assertEquals(HuginnSettings.DEFAULT_BASE_URL, settings.baseUrlNow())
     }
 
     @Test

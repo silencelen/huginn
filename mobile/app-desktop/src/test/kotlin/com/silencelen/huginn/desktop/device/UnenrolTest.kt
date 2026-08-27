@@ -1,0 +1,154 @@
+package com.silencelen.huginn.desktop.device
+
+import com.silencelen.huginn.data.HuginnClient
+import java.io.IOException
+import kotlin.test.Test
+import kotlin.test.assertEquals
+import kotlin.test.assertFalse
+import kotlin.test.assertNotNull
+import kotlin.test.assertNull
+import kotlin.test.assertTrue
+
+/**
+ * Giving an enrolment back without losing the handle that can.
+ *
+ * Every case here is one where the naive version — flip the boolean, or delete
+ * the id and hope — leaves a row enrolled at the daemon that nothing on this
+ * machine can ever retire.
+ */
+class UnenrolTest {
+
+    // -------------------------------------------------------------- the step
+
+    @Test
+    fun `a toggle-off with nothing owed simply idles`() {
+        assertEquals(Unenrol.Step.IDLE, Unenrol.step(pending = false, deviceId = "dev-1"), "nothing owed")
+        assertEquals(Unenrol.Step.IDLE, Unenrol.step(pending = false, deviceId = ""), "nothing owed, nothing held")
+    }
+
+    @Test
+    fun `a pending unenrol with a handle asks the daemon`() {
+        assertEquals(Unenrol.Step.RETIRE, Unenrol.step(pending = true, deviceId = "dev-1"))
+    }
+
+    // Otherwise the disabled loop spins forever on a DELETE it cannot address.
+    @Test
+    fun `a pending unenrol with no handle settles instead of spinning`() {
+        assertEquals(Unenrol.Step.SETTLE, Unenrol.step(pending = true, deviceId = ""))
+        assertEquals(Unenrol.Step.SETTLE, Unenrol.step(pending = true, deviceId = "   "))
+    }
+
+    @Test
+    fun `a machine that never enrolled owes nothing when it is switched off`() {
+        assertFalse(Unenrol.owesUnenrol(""), "no row was ever created")
+        assertFalse(Unenrol.owesUnenrol("  "))
+        assertTrue(Unenrol.owesUnenrol("dev-1"))
+    }
+
+    // ------------------------------------------------------------ the verdict
+
+    @Test
+    fun `a clean delete has landed`() {
+        assertTrue(Unenrol.landed(null))
+    }
+
+    /**
+     * ⚠ 404 IS SUCCESS. "No such device" means the row this id names is already
+     * gone — retired from the phone, pruned after thirty days, or landed by an
+     * earlier attempt whose reply was lost. Reading it as a failure would keep
+     * the id and the pending flag forever against something that cannot be
+     * deleted twice, and the toggle would never come back to rest.
+     */
+    @Test
+    fun `a row that is already gone counts as landed`() {
+        assertTrue(Unenrol.landed(HuginnClient.HuginnException(404, "no such device")))
+    }
+
+    /**
+     * ⚠ THE ONE DECISION WHERE BEING WRONG COSTS AN ENROLMENT NOBODY CAN RETIRE.
+     * The CLI made this mistake and had to be fixed: it logged the failed DELETE
+     * and cleared the config anyway, so exactly when someone decommissioned a
+     * machine — host asleep, VPN down, wrong url — the row stayed enrolled and
+     * the only handle that could remove it was destroyed in the same breath.
+     */
+    @Test
+    fun `every other failure keeps the handle`() {
+        assertFalse(Unenrol.landed(IOException("connection refused")), "offline is not gone")
+        assertFalse(Unenrol.landed(HuginnClient.HuginnException(401, "unauthorised")), "a bad token is not gone")
+        assertFalse(Unenrol.landed(HuginnClient.HuginnException(403, "forbidden")))
+        assertFalse(Unenrol.landed(HuginnClient.HuginnException(500, "boom")))
+        assertFalse(Unenrol.landed(HuginnClient.HuginnException(502, "bad gateway")))
+    }
+
+    @Test
+    fun `a failure that never reached HTTP has no status to read`() {
+        assertNull(Unenrol.statusOf(IOException("connection refused")))
+        assertEquals(404, Unenrol.statusOf(HuginnClient.HuginnException(404, "no such device")))
+    }
+
+    // ------------------------------------------------------------ the backoff
+
+    @Test
+    fun `the first retry is soon, because the commonest failure is a restart`() {
+        assertEquals(5_000L, Unenrol.backoffMs(0))
+        assertEquals(10_000L, Unenrol.backoffMs(1))
+        assertEquals(20_000L, Unenrol.backoffMs(2))
+    }
+
+    /**
+     * A laptop closed since Tuesday must not have spent Tuesday retrying every
+     * five seconds — and must not have backed off into next week either.
+     */
+    @Test
+    fun `the backoff holds at five minutes rather than growing forever`() {
+        assertEquals(5 * 60_000L, Unenrol.backoffMs(20))
+        assertEquals(5 * 60_000L, Unenrol.backoffMs(1_000))
+        assertEquals(5 * 60_000L, Unenrol.backoffMs(Int.MAX_VALUE), "no overflow, no negative wait")
+    }
+
+    @Test
+    fun `the backoff never asks a loop to wait a negative time`() {
+        assertEquals(5_000L, Unenrol.backoffMs(-1))
+        assertEquals(5_000L, Unenrol.backoffMs(Int.MIN_VALUE))
+    }
+
+    @Test
+    fun `the backoff only ever grows`() {
+        var last = 0L
+        for (n in 0..12) {
+            val ms = Unenrol.backoffMs(n)
+            assertTrue(ms >= last, "attempt $n waited ${ms}ms after ${last}ms")
+            last = ms
+        }
+    }
+
+    // --------------------------------------------------------------- the line
+
+    @Test
+    fun `a settled toggle says nothing extra`() {
+        assertNull(Unenrol.note(Unenrol.Step.IDLE, null), "Off is the whole story")
+        assertNull(Unenrol.note(Unenrol.Step.SETTLE, "whatever"))
+    }
+
+    @Test
+    fun `a pending unenrol says so quietly and promises to retry`() {
+        val line = assertNotNull(Unenrol.note(Unenrol.Step.RETIRE, null))
+        assertTrue(line.contains("unenrol pending"), line)
+        assertTrue(line.contains("will retry"), line)
+        // Not an error, not a warning: nothing on this machine is broken, and the
+        // toggle really is off. Only a row elsewhere has not been told yet.
+        assertTrue(line.startsWith("Off"), line)
+    }
+
+    @Test
+    fun `the reason rides along when there is one`() {
+        val line = assertNotNull(Unenrol.note(Unenrol.Step.RETIRE, "connection refused"))
+        assertTrue(line.contains("connection refused"), line)
+        assertTrue(line.contains("will retry"), line)
+    }
+
+    @Test
+    fun `a blank reason is left out rather than shown as empty brackets`() {
+        assertEquals(Unenrol.note(Unenrol.Step.RETIRE, null), Unenrol.note(Unenrol.Step.RETIRE, "   "))
+    }
+}

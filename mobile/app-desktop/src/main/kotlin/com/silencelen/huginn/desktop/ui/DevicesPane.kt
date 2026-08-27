@@ -80,6 +80,10 @@ fun DevicesPane(store: AppStore) {
             thisMachine = com.silencelen.huginn.desktop.device.DeviceRunner.machineKey(
                 com.silencelen.huginn.desktop.device.DeviceRunner.defaultName(),
             ),
+            // Sampled per composition rather than ticked — the same reasoning as
+            // the phone's Devices screen: the list repolls while it is open and
+            // "last seen" is measured in hours and days.
+            nowMs = System.currentTimeMillis(),
         )
     }
 

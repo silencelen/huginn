@@ -494,3 +494,52 @@ test('a generate-scope device is not a place a chat runs', async () => {
   assert.equal(made.status, 201, JSON.stringify(made.body));
   assert.equal(made.body.mode, 'ask', 'generate is a work-item mode, not a chat mode');
 });
+
+// ------------------------------------------------- the registry on disk
+//
+// ⚠ saveDevices was the ONE state writer here that was a bare writeFileSync,
+// while push.json and clients.json have used tmp+rename since they were written.
+// The loader silently starts from EMPTY when it cannot parse the file, so a crash
+// or a full disk partway through a write discards every enrolment without a word:
+// each machine then re-registers under a fresh id and comes back as a new row
+// with no history, while the old rows are simply gone.
+test('the device registry is written atomically and kept private', async () => {
+  const dev = await enrol({ name: 'ATOMIC' });
+  const file = path.join(tmp, 'data', 'devices.json');
+
+  // Present, parseable, and holding what was just enrolled.
+  const parsed = JSON.parse(fs.readFileSync(file, 'utf8'));
+  assert.ok(parsed.devices[dev.id], 'the enrolment reached disk');
+
+  // 0600, like push.json and clients.json: this file names every machine that
+  // has offered itself to this daemon.
+  assert.equal(fs.statSync(file).mode & 0o777, 0o600);
+
+  // rename(2) is what makes the swap atomic, so the temp file must not survive
+  // it — one left behind means the write path is not the one being asserted.
+  assert.equal(fs.existsSync(`${file}.tmp`), false, 'the temp file was renamed, not left');
+});
+
+test('a deletion is persisted the same way, not just from memory', async () => {
+  const dev = await enrol({ name: 'ATOMICGONE' });
+  const file = path.join(tmp, 'data', 'devices.json');
+  assert.ok(JSON.parse(fs.readFileSync(file, 'utf8')).devices[dev.id]);
+
+  const gone = await api(`/v1/devices/${dev.id}`, { method: 'DELETE' });
+  assert.equal(gone.status, 200, JSON.stringify(gone.body));
+
+  const after = JSON.parse(fs.readFileSync(file, 'utf8'));
+  assert.equal(after.devices[dev.id], undefined, 'a restart must not resurrect it');
+  assert.equal(fs.existsSync(`${file}.tmp`), false);
+});
+
+// A row can only be retired with the id that made it — the doctrine both the CLI
+// and the desktop toggle-off now hold to (keep the handle until the DELETE
+// lands). A second DELETE has to be distinguishable from a first, or "already
+// gone" and "never landed" look the same to a retrying client.
+test('deleting a device twice says so rather than pretending', async () => {
+  const dev = await enrol({ name: 'TWICE' });
+  assert.equal((await api(`/v1/devices/${dev.id}`, { method: 'DELETE' })).status, 200);
+  const again = await api(`/v1/devices/${dev.id}`, { method: 'DELETE' });
+  assert.equal(again.status, 404, 'a retry can read this as "the row is gone"');
+});

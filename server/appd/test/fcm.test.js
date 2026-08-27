@@ -199,6 +199,95 @@ test('a present key yields a sender that knows its project', () => {
   assert.equal(sender.projectId, 'test-project');
 });
 
+// ------------------------------------------------ asking without delivering
+//
+// How an uninstall is discovered on a host that rarely alerts. The phone cannot
+// report that it is gone and its check-ins just stop, so FCM is the only party
+// that knows — and a probe is the only way to ask it without waking every phone.
+
+// ⚠ THE LOAD-BEARING ASSERTION IN THIS FILE. `validate_only` is a sibling of
+// `message`, not a field inside it. Nested, it is an unknown field on Message
+// and FCM DELIVERS: every daily sweep would fire a real high-priority push at
+// every registered phone, which on the one transport built to wake sleeping
+// devices is a silent 3am notification storm.
+test('a probe sets validate_only beside the message, never inside it', async () => {
+  const sender = new FcmSender(writeKey());
+  const f = stubFetch([TOKEN_OK, { status: 200, body: '{"name":"projects/x/messages/fake"}' }]);
+  const r = await sender.validate('device-tok', f);
+  assert.equal(r.ok, true);
+
+  const body = JSON.parse(f.calls[1].opts.body);
+  assert.equal(body.validate_only, true, 'top level, beside message');
+  assert.equal(body.message.validate_only, undefined, 'inside the message it would DELIVER');
+  assert.equal(body.message.token, 'device-tok');
+  assert.match(f.calls[1].url, /projects\/test-project\/messages:send$/);
+});
+
+// FCM answers INVALID_ARGUMENT for a malformed PAYLOAD as readily as for a bad
+// token, which is why INVALID_ARGUMENT is not a dead-token code. A probe that
+// sent junk could therefore not tell the two apart at all.
+test('a probe carries a valid payload so the verdict is about the token', async () => {
+  const sender = new FcmSender(writeKey());
+  const f = stubFetch([TOKEN_OK, { status: 200, body: '{}' }]);
+  await sender.validate('t', f);
+  const msg = JSON.parse(f.calls[1].opts.body).message;
+  assert.equal(msg.notification, undefined, 'data-only, like every other send here');
+  for (const [k, v] of Object.entries(msg.data)) {
+    assert.equal(typeof v, 'string', `${k} must be a string`);
+  }
+});
+
+test('a probe reports an unregistered install as dead, exactly as a send does', async () => {
+  const sender = new FcmSender(writeKey());
+  const f = stubFetch([TOKEN_OK, {
+    status: 404,
+    body: JSON.stringify({
+      error: {
+        code: 404, status: 'NOT_FOUND', message: 'Requested entity was not found.',
+        details: [{ '@type': 'type.googleapis.com/google.firebase.fcm.v1.FcmError', errorCode: 'UNREGISTERED' }],
+      },
+    }),
+  }]);
+  const r = await sender.validate('stale', f);
+  assert.equal(r.dead, true);
+  assert.equal(r.ok, false);
+  assert.equal(r.status, 404);
+});
+
+// The sweep runs unattended and drops rows. If an outage read as "dead" it would
+// unregister every phone in one pass, with no route back but a reinstall.
+test('a probe during an outage is not a verdict about any token', async () => {
+  const sender = new FcmSender(writeKey());
+  const f = stubFetch([TOKEN_OK, {
+    status: 503,
+    body: JSON.stringify({ error: { code: 503, status: 'UNAVAILABLE', message: 'try again' } }),
+  }]);
+  const r = await sender.validate('good-token', f);
+  assert.equal(r.dead, false, 'discarding this token would unregister a working phone');
+  assert.equal(r.ok, false);
+});
+
+// One verdict function, so a probe and a send cannot come to differ about what
+// "dead" means — the whole retry policy rests on that one distinction.
+test('a probe and a send give the same verdict for the same reply', async () => {
+  const reply = {
+    status: 400,
+    body: JSON.stringify({
+      error: {
+        code: 400, status: 'INVALID_ARGUMENT', message: 'bad payload',
+        details: [{ '@type': 'type.googleapis.com/google.firebase.fcm.v1.FcmError', errorCode: 'INVALID_ARGUMENT' }],
+      },
+    }),
+  };
+  const sent = await new FcmSender(writeKey()).send('t', { title: 'T', text: 'B' }, stubFetch([TOKEN_OK, reply]));
+  const probed = await new FcmSender(writeKey()).validate('t', stubFetch([TOKEN_OK, reply]));
+  assert.deepEqual(
+    { ok: probed.ok, dead: probed.dead, status: probed.status },
+    { ok: sent.ok, dead: sent.dead, status: sent.status },
+  );
+  assert.equal(probed.dead, false, 'INVALID_ARGUMENT is a payload verdict, not a token one');
+});
+
 // Audit findings, 2026-07-28.
 
 test('INVALID_ARGUMENT does NOT mark a token dead', async () => {
