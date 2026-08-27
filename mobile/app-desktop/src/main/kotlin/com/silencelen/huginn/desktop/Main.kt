@@ -57,12 +57,18 @@ import java.io.File
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.ui.input.key.isAltPressed
+import androidx.compose.ui.input.key.utf16CodePoint
 import com.silencelen.huginn.desktop.ui.Cheatsheet
 import com.silencelen.huginn.desktop.ui.CommandPalette
 import com.silencelen.huginn.desktop.ui.PaletteItem
 import com.silencelen.huginn.desktop.ui.Shortcut
+import com.silencelen.huginn.desktop.ui.common.Frame
+import com.silencelen.huginn.desktop.ui.isChordDebris
 import com.silencelen.huginn.desktop.ui.keyName
 import com.silencelen.huginn.desktop.ui.match
+import com.silencelen.huginn.desktop.ui.padPanelFits
+import com.silencelen.huginn.desktop.ui.padPanelHasHome
+import com.silencelen.huginn.desktop.ui.padPanelShowing
 
 /**
  * The Compose Multiplatform desktop client for huginn-appd.
@@ -295,6 +301,34 @@ fun main(args: Array<String>) {
             }
         }
 
+        /**
+         * The pane the page panel would come out of. The rail and the list are
+         * already spoken for, so the window's own width is the wrong number —
+         * this is the same box the two conversation views measure with their own
+         * `BoxWithConstraints`, arrived at from the outside.
+         */
+        fun detailWidthDp(): Float =
+            windowState.size.width.value - Frame.railWidth.value - settings.listWidth.value
+
+        /** Is the page panel actually on screen — the only thing Esc may close. */
+        fun padPanelOnScreen(): Boolean = padPanelShowing(
+            open = store.padPanel.value,
+            view = store.view.value,
+            chatOpen = store.chatId.value != null,
+            sessionOpen = store.sessionName.value != null,
+            padsAvailable = store.padsAvailable.value,
+            detailWidthDp = detailWidthDp(),
+        )
+
+        /** Is there anywhere to put it — which is what the toggle needs to know. */
+        fun padPanelReachable(): Boolean =
+            padPanelHasHome(
+                view = store.view.value,
+                chatOpen = store.chatId.value != null,
+                sessionOpen = store.sessionName.value != null,
+                padsAvailable = store.padsAvailable.value,
+            ) && padPanelFits(detailWidthDp())
+
         fun quit() {
             // Before the process starts unwinding, while the client is certainly
             // still usable. Doing it twice is free: the holder clears what it holds
@@ -368,6 +402,15 @@ fun main(args: Array<String>) {
             // covers shortcuts; the running window shows what the process hands
             // AWT, which without this is Java's coffee cup.
             icon = RavenMark.windowIcon(),
+            // PREVIEW, before the focused field — which is the only place this can
+            // be caught. A Ctrl chord's printable character arrives as its own
+            // later event (KEY_TYPED on X11/AWT), so consuming the key press below
+            // does nothing about it: Ctrl+1 switched views AND typed "1" into the
+            // page editor, where the autosave then committed it. See [isChordDebris].
+            onPreviewKeyEvent = { e ->
+                e.type != KeyEventType.KeyDown && e.type != KeyEventType.KeyUp &&
+                    isChordDebris(e.isCtrlPressed, e.isAltPressed, e.utf16CodePoint)
+            },
             onKeyEvent = { e ->
                 if (e.type != KeyEventType.KeyDown) return@Window false
                 // The table lives in ui/Shortcuts.kt so it can be tested; this
@@ -375,6 +418,13 @@ fun main(args: Array<String>) {
                 // everything but its own dismissal — a palette that navigates
                 // the shell underneath it is a palette you cannot type in.
                 val overlay = paletteOpen.value || cheatsOpen.value
+                // `typing` is left at its default: this shell has no focus signal
+                // to give it — Compose puts the whole window in ONE AWT component,
+                // so nothing out here can see which composable has the caret, and
+                // the only honest way to learn it is for the fields themselves to
+                // say so. The one chord that made that dangerous — Ctrl+digit
+                // leaking its character into a text field — is stopped at the
+                // source in the preview handler above rather than inferred here.
                 val shortcut = keyName(e.key)?.let {
                     match(e.isCtrlPressed, e.isShiftPressed, e.isAltPressed, it)
                 }
@@ -403,14 +453,19 @@ fun main(args: Array<String>) {
                     shortcut == Shortcut.VIEW_STATUS -> { store.openView(View.STATUS); true }
                     shortcut == Shortcut.VIEW_SETTINGS -> { store.openView(View.SETTINGS); true }
                     shortcut == Shortcut.VIEW_SCRATCHPADS -> { store.openView(View.SCRATCHPADS); true }
-                    shortcut == Shortcut.TOGGLE_PAD_PANEL -> { store.togglePadPanel(); true }
+                    // Only where it can actually appear: toggling a panel into a
+                    // window with no room for it, or into Settings, is a key that
+                    // does nothing and teaches the reader the key is broken.
+                    shortcut == Shortcut.TOGGLE_PAD_PANEL -> { if (padPanelReachable()) store.togglePadPanel(); true }
                     shortcut == Shortcut.NEW_ASK -> { newChat("ask"); true }
                     shortcut == Shortcut.NEW_ACT -> { newChat("act"); true }
-                    // Esc closes the PANEL first. It is the newest thing on
-                    // screen and the one the reader most likely meant; leaving the
-                    // conversation instead would be Esc doing two things at once.
+                    // Esc closes the PANEL first — but only when the panel is
+                    // really there. It used to consult the FLAG alone, which is
+                    // true in places the panel is never drawn (Settings, a narrow
+                    // window, a daemon with no pages), so Escape silently did
+                    // nothing instead of leaving the conversation.
                     shortcut == Shortcut.BACK -> {
-                        if (store.padPanel.value) store.setPadPanel(false) else store.back()
+                        if (padPanelOnScreen()) store.setPadPanel(false) else store.back()
                         true
                     }
                     shortcut == Shortcut.LIST_PREV -> { store.stepList(-1); true }
@@ -529,7 +584,11 @@ fun main(args: Array<String>) {
                                         Shortcut.VIEW_STATUS -> store.openView(View.STATUS)
                                         Shortcut.VIEW_SETTINGS -> store.openView(View.SETTINGS)
                                         Shortcut.VIEW_SCRATCHPADS -> store.openView(View.SCRATCHPADS)
-                                        Shortcut.TOGGLE_PAD_PANEL -> store.togglePadPanel()
+                                        // Same gate as the chord: the verb is
+                                        // offered from everywhere, and it can
+                                        // only do anything in a conversation.
+                                        Shortcut.TOGGLE_PAD_PANEL ->
+                                            if (padPanelReachable()) store.togglePadPanel() else store.openView(View.SCRATCHPADS)
                                         else -> Unit
                                     }
                                 }

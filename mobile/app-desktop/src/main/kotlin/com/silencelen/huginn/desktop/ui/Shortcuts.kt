@@ -96,6 +96,16 @@ fun match(
             else -> null
         }
     }
+    // ⚠ CTRL+DIGIT IS NOT SAFE MID-SENTENCE, and it is the one Ctrl chord that is
+    // not. On X11/AWT a Ctrl+letter chord produces a CONTROL code that no text
+    // field will insert, but Ctrl+digit produces the printable digit — so the view
+    // switch and a stray "1" in whatever field had focus happened together, and
+    // the page editor's autosave then committed the corruption without anybody
+    // pressing anything. The character half is swallowed by the window (see
+    // [isChordDebris]); this half is the shortcut declining to fire mid-sentence
+    // at all, because switching views out from under a half-typed message is not
+    // what Ctrl+1 was reached for while typing.
+    if (typing && key.length == 1 && key[0] in '0'..'9') return null
     return when (key) {
         "K" -> Shortcut.PALETTE
         "N" -> Shortcut.NEW_ASK
@@ -113,6 +123,36 @@ fun match(
         "BACKSLASH" -> Shortcut.SPLIT_RESET
         else -> null
     }
+}
+
+/**
+ * Whether a character the platform has just produced is the DEBRIS of a Ctrl
+ * chord rather than something a person typed.
+ *
+ * ⚠ THE DIGIT THAT ENDED UP IN THE PAGE. A chord arrives as two events: the key
+ * press, which [match] answers, and — on X11/AWT — a separate KEY_TYPED carrying
+ * a character. For Ctrl+letter that character is a control code (Ctrl+C is 3) and
+ * every text field ignores it, which is why nobody had seen this. For Ctrl+digit,
+ * Ctrl+comma and friends it is the PRINTABLE character, and consuming the key
+ * press does nothing to stop it: the second event goes straight to the focused
+ * field. Ctrl+1 therefore switched to Chats AND typed "1" into whatever was
+ * focused, and in the page editor the autosave committed it a moment later.
+ *
+ * Held while a Ctrl chord is down, no printable character belongs to anybody —
+ * which is true of every platform's behaviour and is why this is safe to swallow
+ * wholesale rather than key by key.
+ *
+ * @param alt excluded deliberately: Ctrl+Alt IS AltGr on Windows and Linux, and
+ *   the characters it makes are the ones people on those layouts type with.
+ * @param codePoint the character the event carried. AWT reports 0xFFFF
+ *   (CHAR_UNDEFINED) for a key with no character, which is not text and is left
+ *   alone — the same trap [TermKeys] documents.
+ */
+fun isChordDebris(ctrl: Boolean, alt: Boolean, codePoint: Int): Boolean {
+    if (!ctrl || alt) return false
+    if (codePoint < 0x20 || codePoint == 0x7F) return false
+    if (codePoint == 0xFFFF) return false
+    return true
 }
 
 /**
