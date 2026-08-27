@@ -335,12 +335,6 @@ class HuginnClient(
     /** Whether the HOST can push at all, and which devices it would reach. */
     suspend fun push(): PushStatus = decode(call("/v1/push"))
 
-    suspend fun testPush(): PushTestResult = decode(post("/v1/push/test", Tier.POLL))
-
-    suspend fun testAlert() {
-        post("/v1/alerts/test", Tier.POLL)
-    }
-
     /**
      * Parks until something an alert depends on changes, or [waitMs] elapses.
      * Uses the long-poll tier: the server holds this open deliberately.

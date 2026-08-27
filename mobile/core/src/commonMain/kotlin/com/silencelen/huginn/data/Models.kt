@@ -757,15 +757,6 @@ data class PushStatus(
     val pushed: Int = 0,
 )
 
-@Serializable
-data class PushTestResult(
-    val ok: Boolean = false,
-    val sent: Int = 0,
-    val dead: Int = 0,
-    val failed: Int = 0,
-    val error: String? = null,
-)
-
 /** What arrives on the watching connection. */
 sealed interface WatchEvent {
     data class State(val watch: Watch) : WatchEvent

@@ -1,5 +1,7 @@
 package com.silencelen.huginn.ui
 
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -13,6 +15,8 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.ExpandLess
+import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.Visibility
 import androidx.compose.material.icons.filled.VisibilityOff
 import androidx.compose.material3.Button
@@ -61,13 +65,11 @@ fun SettingsScreen(
     alerts: com.silencelen.huginn.data.Alerts?,
     onAlertsEnabled: (Boolean) -> Unit,
     onAlertsMode: (String) -> Unit,
-    onTestAlert: () -> Unit,
     health: HuginnViewModel.DeliveryHealth,
     clients: com.silencelen.huginn.data.ClientsInfo?,
     push: com.silencelen.huginn.data.PushStatus?,
     onRequestDozeExemption: () -> Unit,
     onRefreshDelivery: () -> Unit,
-    onTestPush: () -> Unit,
     deviceCount: Int,
     servingCount: Int = 0,
     onOpenDevices: () -> Unit,
@@ -80,7 +82,6 @@ fun SettingsScreen(
     notificationsAllowed: Boolean,
     onRequestNotifications: () -> Unit,
     onOpenSystemNotificationSettings: () -> Unit,
-    onTestNotification: () -> Unit,
     account: Account?,
     savedAccounts: List<SavedAccount>,
     switching: Boolean,
@@ -89,7 +90,6 @@ fun SettingsScreen(
     onSignIn: () -> Unit,
     onSignOut: () -> Unit,
     onSave: (String, String) -> Unit,
-    onTest: () -> Unit,
     routePinned: Boolean,
     resolvingRoute: Boolean,
     onSelectRoute: (String) -> Unit,
@@ -107,6 +107,7 @@ fun SettingsScreen(
     var url by remember(baseUrl) { mutableStateOf(baseUrl) }
     var tok by remember(token) { mutableStateOf(token) }
     var reveal by remember { mutableStateOf(false) }
+    var deliveryOpen by remember { mutableStateOf(false) }
 
     Column(
         Modifier.fillMaxSize().verticalScroll(rememberScrollState()).navigationBarsPadding().padding(16.dp),
@@ -192,11 +193,8 @@ fun SettingsScreen(
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
 
-        Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-            Button(onClick = { onSave(url, tok) }, enabled = url.isNotBlank() && tok.isNotBlank()) {
-                Text("Save and connect")
-            }
-            OutlinedButton(onClick = onTest) { Text("Test") }
+        Button(onClick = { onSave(url, tok) }, enabled = url.isNotBlank() && tok.isNotBlank()) {
+            Text("Save and connect")
         }
 
         when (connected) {
@@ -268,7 +266,6 @@ fun SettingsScreen(
                         onCheckedChange = { onAlertsMode(if (it) "fallback" else "always") },
                     )
                 }
-                OutlinedButton(onClick = onTestAlert) { Text("Send a test") }
             }
         }
 
@@ -525,70 +522,94 @@ fun SettingsScreen(
                     color = if (ps.configured && registered) MaterialTheme.colorScheme.primary
                         else MaterialTheme.colorScheme.onSurfaceVariant,
                 )
-                if (ps.pushed > 0) {
-                    Text(
-                        "${ps.pushed} delivered so far",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
-                // What the background alarm has decided to do, and why. Worth a line
-                // of its own: the cadence swings by a factor of six and used to make
-                // that choice silently, so the one bug it has had could only be found
-                // by reading a night of server logs after the fact.
-                Text(
-                    when {
-                        health.pushesReceived == 0L ->
-                            "No push has arrived here yet, so the backup check runs every " +
-                                "10 minutes until one proves it can."
-                        health.pushesMissing > 0L ->
-                            "${health.pushesMissing} push(es) huginn sent never arrived, so the " +
-                                "backup check has tightened to every 10 minutes."
-                        else ->
-                            "${health.pushesReceived} of ${health.pushesSent} pushes arrived — " +
-                                "nothing dropped, so the backup check only runs hourly."
-                    },
-                    style = MaterialTheme.typography.labelSmall,
-                    color = if (health.relaxed) MaterialTheme.colorScheme.onSurfaceVariant
-                        else MaterialTheme.colorScheme.error,
-                )
-                if (ps.configured && registered) {
-                    OutlinedButton(onClick = onTestPush) { Text("Send a test push") }
-                }
             }
 
-            // Two witnesses. The app's own record can only be written while the app
-            // is alive, so it cannot testify about the hours that matter; huginn's
-            // was taken by a machine that never slept.
-            Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+            // The counts behind that sentence, folded away. They answer "why did
+            // nothing arrive last night", which is a question asked rarely and
+            // never by accident — and the sentences above already say whether
+            // there is anything to ask about.
+            Row(
+                Modifier.fillMaxWidth().clickable { deliveryOpen = !deliveryOpen },
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
                 Text(
-                    "This app last reached huginn ${ago(health.lastContactAt)}",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    "Delivery details",
+                    style = MaterialTheme.typography.bodyMedium,
+                    modifier = Modifier.weight(1f),
                 )
-                Text(
-                    "Background check last ran ${ago(health.lastAlarmAt)}",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                Icon(
+                    if (deliveryOpen) Icons.Filled.ExpandLess else Icons.Filled.ExpandMore,
+                    contentDescription = if (deliveryOpen) "Collapse" else "Expand",
+                    modifier = Modifier.size(18.dp),
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
-                clients?.clients?.firstOrNull()?.let { c ->
-                    Text(
-                        "huginn last heard from this phone ${agoSeconds(c.ageSeconds)}" +
-                            (c.kind?.let { k -> " (${describeKind(k)})" } ?: "") +
-                            "  ·  ${c.checkIns} check-ins",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
-                if (health.lastError.isNotBlank()) {
-                    Text(
-                        "Last failure ${ago(health.lastErrorAt)}: ${health.lastError}",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
+            }
+            AnimatedVisibility(deliveryOpen) {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    push?.let { ps ->
+                        if (ps.pushed > 0) {
+                            Text(
+                                "${ps.pushed} delivered so far",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                        // What the background alarm has decided to do, and why. Worth a line
+                        // of its own: the cadence swings by a factor of six and used to make
+                        // that choice silently, so the one bug it has had could only be found
+                        // by reading a night of server logs after the fact.
+                        Text(
+                            when {
+                                health.pushesReceived == 0L ->
+                                    "No push has arrived here yet, so the backup check runs every " +
+                                        "10 minutes until one proves it can."
+                                health.pushesMissing > 0L ->
+                                    "${health.pushesMissing} push(es) huginn sent never arrived, so the " +
+                                        "backup check has tightened to every 10 minutes."
+                                else ->
+                                    "${health.pushesReceived} of ${health.pushesSent} pushes arrived — " +
+                                        "nothing dropped, so the backup check only runs hourly."
+                            },
+                            style = MaterialTheme.typography.labelSmall,
+                            color = if (health.relaxed) MaterialTheme.colorScheme.onSurfaceVariant
+                                else MaterialTheme.colorScheme.error,
+                        )
+                    }
+
+                    // Two witnesses. The app's own record can only be written while the app
+                    // is alive, so it cannot testify about the hours that matter; huginn's
+                    // was taken by a machine that never slept.
+                    Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                        Text(
+                            "This app last reached huginn ${ago(health.lastContactAt)}",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                        Text(
+                            "Background check last ran ${ago(health.lastAlarmAt)}",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                        clients?.clients?.firstOrNull()?.let { c ->
+                            Text(
+                                "huginn last heard from this phone ${agoSeconds(c.ageSeconds)}" +
+                                    (c.kind?.let { k -> " (${describeKind(k)})" } ?: "") +
+                                    "  ·  ${c.checkIns} check-ins",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                        if (health.lastError.isNotBlank()) {
+                            Text(
+                                "Last failure ${ago(health.lastErrorAt)}: ${health.lastError}",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                    }
+                    OutlinedButton(onClick = onRefreshDelivery) { Text("Refresh") }
                 }
             }
-            OutlinedButton(onClick = onRefreshDelivery) { Text("Refresh") }
         }
 
         // Whether the system will actually deliver them is a separate question
@@ -606,18 +627,11 @@ fun SettingsScreen(
                     OutlinedButton(onClick = onOpenSystemNotificationSettings) { Text("System settings") }
                 }
             } else {
-                Row(
-                    horizontalArrangement = Arrangement.spacedBy(10.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Text(
-                        "Allowed by Android.",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.weight(1f),
-                    )
-                    OutlinedButton(onClick = onTestNotification) { Text("Send a test") }
-                }
+                Text(
+                    "Allowed by Android.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
             }
         }
 
