@@ -1876,7 +1876,17 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
                     keys = if (thenEnter) listOf("Enter") else emptyList(),
                     scratchpadId = padId,
                 )
-            }.onFailure { _toast.value = errText(it) }
+            }.onFailure {
+                _toast.value = errText(it)
+                // A refused send hands everything back: the composer was emptied
+                // on press, so without this the text and the attached page existed
+                // nowhere but a toast. Appended, never clobbered — newer typing
+                // outranks the restore, same as the chat path.
+                val key = sessionDraftKey(name)
+                val cur = _drafts.value[key].orEmpty()
+                setDraft(key, if (cur.isBlank()) text else cur + "\n" + text)
+                if (padId != null && padRefFor(padKey) == null) setPadRef(padKey, padId)
+            }
         }
     }
 
