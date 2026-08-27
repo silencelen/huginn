@@ -48,6 +48,13 @@ fun DevicesSection(
      * enrols — marks nothing.
      */
     thisMachine: String? = null,
+    /**
+     * The shell's clock, so an unreachable machine can say how long it has been
+     * that way. Passed in rather than read here for the same reason [PlanSection]
+     * takes one: this module is multiplatform and owns no clock, and a shell that
+     * has none (or does not want the line) simply leaves it null.
+     */
+    nowMs: Long? = null,
 ) {
     if (devices.isEmpty()) return
     Column(modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -67,6 +74,7 @@ fun DevicesSection(
                 isThis = g.isThisMachine(thisMachine),
                 onStart = onStart,
                 onForget = onForget,
+                nowMs = nowMs,
             )
         }
         // Said once, under the list, because the commonest question this screen
@@ -109,7 +117,13 @@ fun groupByMachine(devices: List<Device>): List<MachineGroup> {
 }
 
 @Composable
-private fun MachineCard(group: MachineGroup, isThis: Boolean, onStart: (Device, String) -> Unit, onForget: (MachineGroup) -> Unit) {
+private fun MachineCard(
+    group: MachineGroup,
+    isThis: Boolean,
+    onStart: (Device, String) -> Unit,
+    onForget: (MachineGroup) -> Unit,
+    nowMs: Long? = null,
+) {
     Surface(
         color = MaterialTheme.colorScheme.surfaceVariant,
         contentColor = MaterialTheme.colorScheme.onSurface,
@@ -149,7 +163,7 @@ private fun MachineCard(group: MachineGroup, isThis: Boolean, onStart: (Device, 
                     // machines.
                     group.claude.forEach { d ->
                         Text(
-                            describeDevice(d),
+                            describeDevice(d, nowMs = nowMs),
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                             maxLines = 2,
@@ -158,7 +172,7 @@ private fun MachineCard(group: MachineGroup, isThis: Boolean, onStart: (Device, 
                     }
                     group.serving.forEach { d ->
                         Text(
-                            describeDevice(d, includePlatform = group.claude.isEmpty()),
+                            describeDevice(d, includePlatform = group.claude.isEmpty(), nowMs = nowMs),
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                             maxLines = 2,
@@ -233,7 +247,7 @@ private fun MachineCard(group: MachineGroup, isThis: Boolean, onStart: (Device, 
  * locked" is a different situation from "enrolled read-only", and showing only the
  * second makes a locked machine look misconfigured by somebody.
  */
-fun describeDevice(device: Device, includePlatform: Boolean = true): String {
+fun describeDevice(device: Device, includePlatform: Boolean = true, nowMs: Long? = null): String {
     // A serving row says what it IS: the lock never changes what it will do
     // (generate is exclusive and ignores the lock drop), so no locked clause.
     // Inside a merged machine card the claude facet already named the platform,
@@ -248,6 +262,7 @@ fun describeDevice(device: Device, includePlatform: Boolean = true): String {
             device.running -> "generating"
             else -> "serving"
         }
+        if (!device.online) lastSeenClause(device, nowMs)?.let { parts += it }
         device.version?.takeIf { it.isNotBlank() }?.let { parts += "v$it" }
         return parts.joinToString(" · ")
     }
@@ -269,6 +284,25 @@ fun describeDevice(device: Device, includePlatform: Boolean = true): String {
         device.awaitingPoll -> "free? not asked for work since huginn restarted"
         else -> "idle"
     }
+    if (!device.online) lastSeenClause(device, nowMs)?.let { parts += it }
     device.version?.takeIf { it.isNotBlank() }?.let { parts += "v$it" }
     return parts.joinToString(" · ")
+}
+
+/**
+ * "last seen 3 days ago", or nothing at all.
+ *
+ * Only beside "not reachable", because that is the one state where the reader's
+ * next question is always the same one: is this machine asleep, or did it leave
+ * in June? Without it every absent row reads identically whether it went quiet
+ * four minutes ago or four weeks ago, which is exactly the gap a stale enrolment
+ * hides in.
+ *
+ * Nullable at BOTH ends on purpose. A daemon older than the field sends no
+ * `lastSeen`, and a caller with no clock passes no `nowMs`; either way the line
+ * says less rather than guessing. Never a bare "last seen" with nothing after it.
+ */
+private fun lastSeenClause(device: Device, nowMs: Long?): String? {
+    if (nowMs == null || nowMs <= 0L) return null
+    return agoWordsMs(device.lastSeen, nowMs).takeIf { it.isNotBlank() }?.let { "last seen $it" }
 }

@@ -160,6 +160,100 @@ fun SettingsView(store: AppStore) {
         CliSync.summary.collectAsState().value?.let {
             Muted(it, Modifier.padding(top = 2.dp))
         }
+
+        RemoveAccessSection(store)
+    }
+}
+
+// ------------------------------------------------------- taking it back out
+
+/**
+ * The way out. One quiet row under "This install", because the honest place for
+ * "undo the whole thing" is beside what it undoes rather than hidden.
+ *
+ * QUIET ON PURPOSE — no red, no warning triangle, no capitals. Nothing here is
+ * destructive to anything that matters: the chats, sessions and Rounds live on
+ * huginn and are untouched. What goes is this computer's ACCESS — the rows the
+ * daemon holds for it, the token this app connects with, and the drafts typed
+ * here. Dressing that up as danger would teach the reader to fear a button that
+ * is the polite alternative to uninstalling.
+ *
+ * The dialog says exactly what will happen, in the order it happens, because the
+ * ordering is the guarantee: the daemon first, this machine second, and on any
+ * failure nothing here changes at all.
+ */
+@Composable
+private fun RemoveAccessSection(store: AppStore) {
+    var confirming by remember { mutableStateOf(false) }
+    var busy by remember { mutableStateOf(false) }
+    var outcome by remember { mutableStateOf<String?>(null) }
+
+    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(top = 14.dp)) {
+        TextButton(onClick = { confirming = true }, enabled = !busy) {
+            Text("Remove this computer's access")
+        }
+    }
+    Muted(
+        "Unenrols this machine from huginn and forgets the token here. Your chats " +
+            "and sessions stay on huginn.",
+        Modifier.padding(start = 4.dp),
+        maxLines = 2,
+    )
+    outcome?.let {
+        Text(
+            it,
+            style = MaterialTheme.typography.labelMedium,
+            color = MaterialTheme.colorScheme.primary,
+            modifier = Modifier.padding(top = 8.dp, start = 4.dp),
+        )
+    }
+
+    if (confirming) {
+        AlertDialog(
+            onDismissRequest = { confirming = false },
+            title = { Text("Remove this computer's access?") },
+            text = {
+                Text(
+                    "huginn is asked first to drop every enrolment this machine holds — " +
+                        "the one that runs work here, and the local-AI one if this box " +
+                        "serves models. Then this app forgets its token, its enrolment and " +
+                        "any half-written messages, and asks for a server and token again.\n\n" +
+                        "Nothing on huginn is deleted: chats, sessions and Rounds are all " +
+                        "still there. If huginn cannot be reached, nothing changes here " +
+                        "either — try again when it is.",
+                )
+            },
+            confirmButton = {
+                TextButton(
+                    enabled = !busy,
+                    onClick = {
+                        confirming = false
+                        busy = true
+                        outcome = null
+                        // The APP's scope, not the composition's: navigating away
+                        // from Settings must not cancel a flow that is halfway
+                        // through retiring rows at the daemon.
+                        store.scope.launch {
+                            store.removeThisComputer()
+                                .onSuccess {
+                                    outcome = when (it) {
+                                        0 -> "removed — this computer held no enrolment; " +
+                                            "the token here is cleared"
+                                        1 -> "removed — 1 enrolment dropped and the token here is cleared"
+                                        else -> "removed — $it enrolments dropped and the token here is cleared"
+                                    }
+                                }
+                                .onFailure {
+                                    outcome = "could not reach huginn (${it.message}) — " +
+                                        "nothing changed here; try again when it answers"
+                                }
+                            busy = false
+                        }
+                    },
+                ) { Text("Remove") }
+            },
+            dismissButton = { TextButton(onClick = { confirming = false }) { Text("Cancel") } },
+        )
     }
 }
 

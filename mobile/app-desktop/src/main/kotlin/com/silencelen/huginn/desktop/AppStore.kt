@@ -215,7 +215,14 @@ class AppStore(
      * listed but will not run anything is worse than one that is absent.
      */
     fun syncDeviceRunner() {
-        if (settings.deviceEnabledNow()) deviceRunner.start() else deviceRunner.stop()
+        // ⚠ A pending unenrol keeps the runner ALIVE while the toggle is off. It
+        // is not serving anything in that state — the supervise loop's disabled
+        // branch is the only thing running — but that branch is what retries the
+        // DELETE that retires this machine's row, and stopping the runner would
+        // leave the row enrolled for its full thirty days with nothing left to
+        // remove it. See Unenrol.
+        val wanted = settings.deviceEnabledNow() || settings.deviceUnenrolPendingNow()
+        if (wanted) deviceRunner.start() else deviceRunner.stop()
     }
 
     private val _sessions = MutableStateFlow<List<Session>>(emptyList())
@@ -351,6 +358,57 @@ class AppStore(
         runCatching { client.deleteDevice(id) }
             .onSuccess { refreshDevices() }
             .onFailure { note(Faults.ACTION, it) }
+    }
+
+    /**
+     * Takes this computer back out of huginn entirely: every row the daemon holds
+     * for this machine, then the token, the enrolment handle and the drafts here.
+     *
+     * SERVER FIRST, and that ordering is the whole design. The token is what
+     * authorises the DELETE, so a local wipe that ran first would leave rows
+     * nobody could retire — the exact failure the CLI's `off` verb was fixed for.
+     * On any failure NOTHING local changes, so the action is safe to press again
+     * once the daemon is reachable.
+     *
+     * The MACHINE, not the row: a box that also serves local models holds two
+     * enrolments on purpose, and "remove this computer's access" that left the
+     * serving credential behind would be a lie about what it did. Same grouping
+     * as the human-facing Forget button — filter by the daemon's machine key.
+     *
+     * Idempotent by construction: a machine with no rows left (a previous attempt
+     * that deleted them and then lost the window) is success, not an error, so
+     * pressing it again finishes the job.
+     */
+    suspend fun removeThisComputer(): Result<Int> {
+        val key = DeviceRunner.machineKey(DeviceRunner.defaultName())
+        // Listing is part of the server half: if this cannot be asked, nothing is
+        // known about what is out there and nothing local may be touched.
+        val all = runCatching { client.devices() }
+            .onFailure { note(Faults.ACTION, it) }
+            .getOrElse { return Result.failure(it) }
+
+        // The machine key finds the whole box; the stored enrolment id is the
+        // belt to its braces. They are not the same net: a row enrolled before
+        // machine keys existed, or one whose key this build cannot compute (an
+        // unresolvable hostname), would be missed by grouping alone — and missing
+        // it is the one outcome that matters, because the token about to be
+        // cleared is the only thing that could ever have retired it.
+        val myId = settings.deviceIdNow().takeIf { it.isNotBlank() }
+        val mine = all.filter { (key != null && it.machine == key) || (myId != null && it.id == myId) }
+        for (d in mine) {
+            val r = runCatching { client.deleteDevice(d.id) }
+            if (r.isFailure) {
+                val e = r.exceptionOrNull()!!
+                note(Faults.ACTION, e)
+                refreshDevices()
+                return Result.failure(e)
+            }
+        }
+
+        settings.clearForRemoval()
+        syncDeviceRunner()
+        _devices.value = emptyList()
+        return Result.success(mine.size)
     }
 
     suspend fun runRound(id: String) {
@@ -527,6 +585,11 @@ class AppStore(
         scope.launch { presenceTicker() }
         scope.launch { restoreLanding() }
         scope.launch { rememberLanding() }
+        // Not left to the poll loop alone: that loop is gated on the window being
+        // VISIBLE, and an app relaunched straight into the tray would then neither
+        // offer this machine nor pay off a pending unenrol until somebody happened
+        // to open the window. Idempotent, so the poll's own call still costs nothing.
+        syncDeviceRunner()
         updater.start(scope)
         // Records stream connects/drops, update outcomes and uncaught errors into
         // the ring buffer the Settings screen copies. Derived entirely from state
