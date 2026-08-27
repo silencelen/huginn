@@ -26,6 +26,14 @@ object AppLog : RingLog(defaultLogFile()) {
     @Volatile private var lastWatchErrorAt: Long = 0
 
     /**
+     * The chosen notifier's own name — "libnotify", "windows-toast", "awt-tray".
+     * Which path a notification took is the first thing worth knowing when one did
+     * not arrive. Set once, from where the notifier is chosen; null means this
+     * machine has no desktop route at all.
+     */
+    @Volatile var notifierName: String? = null
+
+    /**
      * Starts the observers. ONE call, from [AppStore.start].
      *
      * Everything it records is derived from state the store already publishes, so
@@ -135,7 +143,7 @@ object AppLog : RingLog(defaultLogFile()) {
                 present = store.presence.present.value,
                 visible = store.presence.visible.value,
                 claiming = store.settings.notifyEnabledNow() && store.presence.present.value,
-                notifier = if (NotifierSeam.available) (NotifierSeam.name ?: "wired") else null,
+                notifier = notifierName,
                 updateStatus = describe(update),
                 updateVersion = updateVersion(update),
                 updateError = (update as? UpdateState.Error)?.message,
