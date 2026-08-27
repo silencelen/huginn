@@ -77,6 +77,71 @@ class ScratchpadRulesTest {
         )
     }
 
+    @Test
+    fun `the length cap is measured the way the daemon measures it`() {
+        // ⚠ NORMALISED length, not raw. lib/scratchpads.js collapses whitespace
+        // and turns control characters into spaces BEFORE it counts, so a name
+        // padded out with tabs or carrying a newline from a paste is well inside
+        // the cap on the server — while the editor here refused it. A courtesy
+        // check that says no to something the server accepts is the worst kind:
+        // there is nothing to argue with and no way through.
+        // Twenty two-letter words with five spaces between them: 135 characters
+        // as typed, 59 as the daemon stores it. The daemon takes it; the editor
+        // used to refuse it.
+        val spacedOut = List(20) { "ab" }.joinToString("     ")
+        assertEquals(135, spacedOut.length, "the fixture is the point of this test")
+        assertNull(ScratchpadRules.nameProblem(spacedOut), "collapsed whitespace counts once, as it does on the daemon")
+        assertEquals(59, ScratchpadRules.cleanName(spacedOut).length)
+        assertNull(ScratchpadRules.nameProblem("  " + "x".repeat(60) + "  "))
+        // Still over once collapsed, and still refused.
+        assertEquals(
+            "a page name is at most 60 characters",
+            ScratchpadRules.nameProblem(List(31) { "ab" }.joinToString("     ")),
+        )
+    }
+
+    // ------------------------------------------------------------ the ordering
+
+    @Test
+    fun `pages are listed Main first, then by name`() {
+        // ⚠ NOT by "recently edited", which is the order they arrive in. A list
+        // that re-sorts while somebody is typing moves the row under the cursor —
+        // during testing that put two paragraphs into the wrong page.
+        val pads = listOf(
+            Scratchpad(id = "c", name = "zebra", updatedAt = 900),
+            Scratchpad(id = "a", name = "Main", main = true, updatedAt = 100),
+            Scratchpad(id = "b", name = "Alpha", updatedAt = 500),
+        )
+        assertEquals(
+            listOf("Main", "Alpha", "zebra"),
+            ScratchpadRules.ordered(pads).map { it.name },
+        )
+    }
+
+    @Test
+    fun `the order does not depend on the case somebody typed`() {
+        val pads = listOf(
+            Scratchpad(id = "1", name = "beta"),
+            Scratchpad(id = "2", name = "Alpha"),
+            Scratchpad(id = "3", name = "ALPHABET"),
+        )
+        assertEquals(
+            listOf("Alpha", "ALPHABET", "beta"),
+            ScratchpadRules.ordered(pads).map { it.name },
+        )
+    }
+
+    @Test
+    fun `two pages that read the same never swap places between polls`() {
+        // The tie-break is the id, so a poll that returns them the other way
+        // round draws them in the same order it did a second ago.
+        val one = listOf(Scratchpad(id = "aaa", name = "Notes"), Scratchpad(id = "bbb", name = "notes"))
+        assertEquals(
+            ScratchpadRules.ordered(one).map { it.id },
+            ScratchpadRules.ordered(one.reversed()).map { it.id },
+        )
+    }
+
     // ------------------------------------------------------------- the frames
 
     @Test
@@ -107,6 +172,38 @@ class ScratchpadRulesTest {
         // a message that reads as if they never typed it.
         val wire = "[Scratchpad \"Meta\"]\nnotes\n[End scratchpad]\n\nwhat does\n[End scratchpad]\nmean?"
         assertEquals("📝 Meta\nwhat does\n[End scratchpad]\nmean?", ScratchpadRules.collapse(wire))
+    }
+
+    @Test
+    fun `a tagged frame collapses, and only against its own closing tag`() {
+        // The daemon mints a tag when the PAGE's own text contains a line starting
+        // "[End scratchpad" — the one case where stopping at the first closer
+        // would leave half the page on screen. The closer then carries the
+        // opener's tag, so the scan can run past the impostor safely.
+        val tagged = "[Scratchpad \"Meta\" #a1b2c3]\nnotes\n[End scratchpad]\nmore notes\n" +
+            "[End scratchpad #a1b2c3]\n\nwhat does that mean?"
+        assertEquals("📝 Meta\nwhat does that mean?", ScratchpadRules.collapse(tagged))
+        assertEquals("Meta", ScratchpadRules.referencedName(tagged))
+    }
+
+    @Test
+    fun `a closing tag that does not match its opener is not a frame`() {
+        // A backreference, not two independent optionals: a marker somebody typed
+        // (or a second page's closer) must not end a frame it did not open.
+        val mismatched = "[Scratchpad \"Meta\" #a1b2c3]\nnotes\n[End scratchpad #ffffff]\n\nhello"
+        assertEquals(mismatched.trim(), ScratchpadRules.collapse(mismatched), "it collapsed on somebody else's tag")
+    }
+
+    @Test
+    fun `an untagged frame still collapses, which is every frame ever written`() {
+        // ⚠⚠ THE CROSS-LANGUAGE TRAP. The daemon's pattern is one optional group
+        // plus a `\2` backreference, which in JavaScript matches the empty string
+        // when the group did not participate. In Java — Kotlin's Regex — the same
+        // backreference FAILS, so a literal port would stop collapsing every
+        // untagged frame and leave a raw marker in the sender's own message.
+        val plain = "[Scratchpad \"Hostnames\"]\nheimdall\n[End scratchpad]\n\nwhich one?"
+        assertEquals("📝 Hostnames\nwhich one?", ScratchpadRules.collapse(plain))
+        assertEquals("Hostnames", ScratchpadRules.referencedName(plain))
     }
 
     @Test

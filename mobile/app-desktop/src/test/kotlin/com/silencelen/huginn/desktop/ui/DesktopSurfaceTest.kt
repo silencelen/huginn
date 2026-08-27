@@ -3,6 +3,7 @@ package com.silencelen.huginn.desktop.ui
 import com.silencelen.huginn.data.Chat
 import com.silencelen.huginn.data.Session
 import com.silencelen.huginn.desktop.Splitter
+import com.silencelen.huginn.desktop.View
 import com.silencelen.huginn.desktop.WindowLayout
 import com.silencelen.huginn.desktop.ui.common.ChatVerbs
 import com.silencelen.huginn.desktop.ui.common.HuginnMenuItem
@@ -339,6 +340,75 @@ class DesktopSurfaceTest {
     fun `maximized survives the round trip`() {
         val out = WindowLayout.restore(WindowLayout(10, 10, 1280, 840, maximized = true), 1920, 1080)
         assertTrue(out.maximized)
+    }
+
+    // ------------------------------------------------------- the page panel
+    //
+    // ⚠ ESC USED TO CONSULT THE FLAG ALONE. `store.padPanel` says the reader
+    // would LIKE the panel; it can be true in Settings, true against a daemon
+    // with no pages, and true in a window too narrow to hold one. In all three
+    // Escape silently "closed" a panel that was not there instead of leaving the
+    // conversation — a key that does nothing visible, so the reader presses it
+    // again and nothing happens twice.
+
+    @Test
+    fun `the panel is only on screen where all three conditions hold`() {
+        assertTrue(
+            padPanelShowing(
+                open = true, view = View.CHATS, chatOpen = true, sessionOpen = false,
+                padsAvailable = true, detailWidthDp = 1200f,
+            ),
+        )
+        assertFalse(
+            padPanelShowing(
+                open = false, view = View.CHATS, chatOpen = true, sessionOpen = false,
+                padsAvailable = true, detailWidthDp = 1200f,
+            ),
+            "nobody asked for it",
+        )
+        assertFalse(
+            padPanelShowing(
+                open = true, view = View.SETTINGS, chatOpen = true, sessionOpen = true,
+                padsAvailable = true, detailWidthDp = 1200f,
+            ),
+            "there is no conversation in Settings for it to sit beside",
+        )
+        assertFalse(
+            padPanelShowing(
+                open = true, view = View.CHATS, chatOpen = true, sessionOpen = false,
+                padsAvailable = false, detailWidthDp = 1200f,
+            ),
+            "a daemon with no pages has nothing to draw",
+        )
+        assertFalse(
+            padPanelShowing(
+                open = true, view = View.CHATS, chatOpen = true, sessionOpen = false,
+                padsAvailable = null, detailWidthDp = 1200f,
+            ),
+            "null is the probe not having answered, which is not a yes",
+        )
+        assertFalse(
+            padPanelShowing(
+                open = true, view = View.CHATS, chatOpen = true, sessionOpen = false,
+                padsAvailable = true, detailWidthDp = 700f,
+            ),
+            "360dp out of this pane would leave no conversation worth reading",
+        )
+    }
+
+    @Test
+    fun `a conversation view with nothing open is not a home for it`() {
+        // The detail pane is an empty state, not a chat: a panel beside nothing is
+        // two columns of nothing.
+        assertFalse(padPanelHasHome(View.CHATS, chatOpen = false, sessionOpen = true, padsAvailable = true))
+        assertFalse(padPanelHasHome(View.SESSIONS, chatOpen = true, sessionOpen = false, padsAvailable = true))
+        assertTrue(padPanelHasHome(View.SESSIONS, chatOpen = false, sessionOpen = true, padsAvailable = true))
+    }
+
+    @Test
+    fun `the width rule is the render site's own number`() {
+        assertTrue(padPanelFits(PANEL_MIN_WINDOW_DP.toFloat()))
+        assertFalse(padPanelFits(PANEL_MIN_WINDOW_DP - 1f))
     }
 
     // ------------------------------------------------------------- fixtures
