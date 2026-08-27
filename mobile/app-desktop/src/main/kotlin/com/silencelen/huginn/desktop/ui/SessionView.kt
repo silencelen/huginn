@@ -398,6 +398,9 @@ fun SessionView(store: AppStore, name: String) {
             padRefId = padRefs[padRefKey],
             onPadRef = { store.setPadRef(padRefKey, it) },
             onSent2 = { store.setPadRef(padRefKey, null) },
+            onPadRefRestore = { id ->
+                if (store.padRefs.value[padRefKey] == null) store.setPadRef(padRefKey, id)
+            },
         )
     }
     if (showPanel) ScratchpadSidePanel(store, PadTarget.Session(name))
@@ -1060,6 +1063,8 @@ private fun Composer(
     onPadRef: (String?) -> Unit = {},
     /** The reference rides ONE message, like a staged photo. */
     onSent2: () -> Unit = {},
+    /** A refused send hands the reference back — unless a newer one was set. */
+    onPadRefRestore: (String) -> Unit = {},
 ) {
     val attachments = rememberAttachmentController(client, scope, controller.name)
     val attachment by attachments.current.collectAsState()
@@ -1097,8 +1102,10 @@ private fun Composer(
                     // was returning would otherwise reach a sendLine that never
                     // runs and still count as sent.
                     ensureActive()
-                    if (full.isNotEmpty()) controller.sendLine(full, scratchpadId = padId)
-                    posted = true
+                    // Awaited, not fired-and-forgotten: the box was emptied on
+                    // press, so a refusal with no answer left the text (and the
+                    // attached page) existing nowhere.
+                    posted = if (full.isNotEmpty()) controller.sendLineNow(full, scratchpadId = padId) else true
                 } finally {
                     // take() parks for the whole upload on a scope that dies with
                     // this view, so leaving the session mid-upload cancels the
@@ -1110,7 +1117,10 @@ private fun Composer(
                     // principle: leaving also closes the controller, so a send
                     // that tried to carry on regardless would be launching on a
                     // scope that is already cancelled.
-                    if (!posted) onRestore(body)
+                    if (!posted) {
+                        onRestore(body)
+                        if (padId != null) onPadRefRestore(padId)
+                    }
                 }
             }
         }

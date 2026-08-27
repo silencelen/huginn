@@ -1,5 +1,45 @@
 # Huginn Desktop changelog
 
+## 0.15.0
+
+The devnotes wave: everything on the owner's list — pages you keep, a place to
+rest in a long run, honest budgets, and clean exits.
+
+- **Pages**: a rail view for all of them, and a side panel that slides in
+  beside any chat or session — glance at the conversation while you write.
+  `Ctrl+P` opens the pages, `Ctrl+Shift+P` the panel; the palette knows every
+  page by name. Attach one to a message from the composer chip; "Send to this
+  chat" is one click in the panel, anywhere else one picker.
+- **Overview** on every session's tab strip: exact token stats, pace and
+  plan-window projections, goals and notes that autosave to the host, and the
+  session drawn as a map — action blocks with their intent, agent lanes that
+  branch out and merge back, compactions as seams. Tap anything for its
+  numbers; one control trades room for detail.
+- **Polish** under a Round's prompt and goal — the AI drafts against how a
+  round actually runs, you read and decide. Never applied by itself.
+- **Status grows up**: the full shared plan/usage section including the
+  extra-usage card this client never had — and "resets in" is finally in your
+  timezone. It was slicing the offset off the UTC string and presenting the
+  wall-clock as local.
+- **Turning "Give Huginn access to this PC" off now unenrols** — server first,
+  retried until the daemon hears it, so the Devices list stops collecting
+  "not reachable" rows that were really just gone. "Remove this computer's
+  access" unenrols the whole machine and wipes the local token in one step.
+- **Uninstall means gone**: the Windows uninstaller unenrols best-effort and
+  then removes every local file — settings (both config roots), caches (both
+  cache roots), the local tier with its second token copy, the url-scheme key —
+  and the .deb purge does the same for every home. Nothing keeps a plaintext
+  token you can no longer see.
+- **Ctrl+1/2/3 no longer type into your text.** The chord's printable debris
+  arrived as its own event past the shortcut layer and autosave was committing
+  it into pages; it is now filtered at the window, while Ctrl+letter chords
+  keep working mid-typing.
+- The node detail sheet scrolls instead of ending at the window's edge; the
+  session header survives the panel opening; suggestion chips fade at the pane
+  edge instead of being sliced mid-word; "1 round" and "1 agent" read singular;
+  Rounds carries the same header band as its neighbours; empty-state prose
+  holds a reading measure.
+
 ## 0.14.0
 
 The conduits: the local tier and Claude, connected in exactly one direction

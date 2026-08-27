@@ -599,17 +599,24 @@ class SessionController(
      * the file can re-read it as it changes.
      */
     fun sendLine(text: String, thenEnter: Boolean = true, scratchpadId: String? = null) {
+        scope.launch { sendLineNow(text, thenEnter, scratchpadId) }
+    }
+
+    /**
+     * The same send, but the caller learns whether it LANDED. The composer path
+     * needs the answer: its field was emptied on press, and a network refusal
+     * with no answer left the text (and the attached page) existing nowhere.
+     */
+    suspend fun sendLineNow(text: String, thenEnter: Boolean = true, scratchpadId: String? = null): Boolean {
         _echo.value = LocalEcho.otherKey(_echo.value)
-        scope.launch {
-            runCatching {
-                client.sendKeys(
-                    name,
-                    text = text,
-                    keys = if (thenEnter) listOf("Enter") else emptyList(),
-                    scratchpadId = scratchpadId,
-                )
-            }.onFailure { _screenError.value = it.message ?: "could not send" }
-        }
+        return runCatching {
+            client.sendKeys(
+                name,
+                text = text,
+                keys = if (thenEnter) listOf("Enter") else emptyList(),
+                scratchpadId = scratchpadId,
+            )
+        }.onFailure { _screenError.value = it.message ?: "could not send" }.isSuccess
     }
 
     /**

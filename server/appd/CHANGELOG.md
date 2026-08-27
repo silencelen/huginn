@@ -9,6 +9,44 @@ appeared only as a side-note on the app releases it happened to ship with. Three
 undocumented, and the notes-cutting matcher could fuse two sections when an app and an appd
 version number collided. Entries below are reconstructed from the shipping commits.
 
+## 2.79.0 — 2026-08-27
+
+The devnotes wave, server side: pages, the session map, honest budgets, and
+rows that leave when their machine does.
+
+- **Scratchpads**: `/v1/scratchpads` CRUD — Main minted on first list and
+  protected, rev-guarded saves that answer a 409 with the current page, and
+  the reference lane: `scratchpadId` on a chat message quotes the page into
+  the text server-side (composed at queue-receipt, so the transcript shows
+  what was actually sent), on session keys it rides as a marker to a per-send
+  snapshot file. A page whose own content contains the closing marker gets a
+  tag on both ends, report-tag style. Never in the watch digest.
+- **Session overview**: `lib/sessiongraph` walks a session's whole transcript
+  incrementally — turns become blocks, subagents join the spine through their
+  `.meta.json` tool-use id (both workflow directories now scanned; one was
+  invisible), token totals are summed once per API call after measuring that
+  per-record summing overcounts cache reads 2.7×. Three routes: `/overview`,
+  `/graph` with a two-number cursor (`unchanged` still carries the meta, so
+  goals typed on one device reach the other on an idle session), `/meta` into
+  a per-`claudeSessionId` store the tmux name can never corrupt.
+- **`/v1/rounds/polish`**: the caged one-shot, aimed at a Round's own runtime
+  frame — sonnet, no tools, no persona, one turn, input-hashed single-flight;
+  failures degrade and are never cached.
+- **Plan**: the `spend` block is parsed (minor units + exponent, percent,
+  severity, disabled reason) and extra usage shows for any account that EVER
+  enabled credits — the old `is_enabled` gate hid a paused month's real spend.
+- **Devices**: `devices.json` writes are atomic+0600 like the other stores; an
+  FCM UNREGISTERED verdict retires the client row with the token; a daily
+  validate-only push sweep discovers uninstalled phones on a quiet host; and
+  device views carry `lastSeen` so "not reachable" can say since when.
+- **A seal landing inside a request's own body window is refused** instead of
+  the stale pre-read waving the message through to reopen the chat — the one
+  interleave settleRun's single-turn shape cannot cover.
+- Session previews filter terminal DA/DSR replies (a `❯ 4;21;…c` echo was
+  presented as the session's last line).
+- Removed: `POST /v1/push/test` and `POST /v1/alerts/test` — nothing real
+  called them.
+
 ## 2.78.0 — 2026-08-25
 
 - Refusals and host badges name the MACHINE a person knows ("DATATREEX"),
