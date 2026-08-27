@@ -10,6 +10,31 @@ Format loosely follows [Keep a Changelog](https://keepachangelog.com/); versions
 
 ## [Unreleased]
 
+## [0.13.0] - 2026-08-27
+
+### Added
+- `huginn uninstall [--all] [--yes]` on both shells, behaviourally identical:
+  local tier off, device off, `~/.huginn` and the installer's profile line
+  removed, with a summary of what went and what deliberately stayed. The SSH
+  stanza and key survive by default; `--all` takes them only when the key is
+  provably huginn's own.
+
+### Changed
+- `huginn-device off` removes the bearer token with the id — server first,
+  disk second, and it still refuses to lose the only handle when the DELETE
+  fails; `--force` clears a machine the server cannot hear and names the row
+  it strands. `huginn local off` stops leaving credentials behind; `--purge`
+  removes the whole tier, models and services included.
+
+### Fixed
+- An unset `%ProgramData%` no longer throws anywhere a path is built.
+- A value on a value-less flag (`--purge-models=false`) is refused instead of
+  read as truthy — which would have deleted the models it named to keep.
+- The device directory is reported "left (not empty)" when `rmdir` declines
+  it, instead of claimed as removed.
+- Both clients are pure ASCII again (em-dashes had crept into comments — a
+  live PowerShell 5.1 code-page hazard on `scp`-fetched files).
+
 ## [0.12.7] - 2026-08-26
 
 ### Added

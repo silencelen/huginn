@@ -236,8 +236,9 @@ private fun StatsHeader(
             Stat("tools", totals.toolCalls.toString())
             if (totals.filesTouched > 0) Stat("files", totals.filesTouched.toString())
             if (totals.agentCount > 0) {
-                Stat("agents", if (totals.activeAgents > 0) "${totals.agentCount} · ${totals.activeAgents} live"
-                else totals.agentCount.toString())
+                Stat(if (totals.agentCount == 1) "agent" else "agents",
+                    if (totals.activeAgents > 0) "${totals.agentCount} · ${totals.activeAgents} live"
+                    else totals.agentCount.toString())
             }
             if (totals.compactions > 0) {
                 Stat("compacted", "${totals.compactions}× · ${PlanFormat.compactTokens(totals.droppedTokens)} dropped")

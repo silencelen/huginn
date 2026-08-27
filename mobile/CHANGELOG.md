@@ -1,5 +1,45 @@
 # Huginn changelog
 
+## 2.85.0 — 2026-08-27
+
+The devnotes wave: everything on the owner's list — pages you keep, a place to
+rest in a long run, honest budgets, and clean exits.
+
+### Added
+- **Pages** (scratchpads): notes that live on the host — Main plus your own.
+  Open them from the top bar on Chats, Sessions and inside any conversation;
+  attach ONE page to a message from the composer chip (the daemon quotes it
+  server-side, and nothing attaches unless you ask); "Send to…" stages a page's
+  text into any chat or session draft — appended to what's already typed, never
+  auto-sent. Autosave holds your text through conflicts, page switches and
+  failures; a page edited on two devices says so instead of losing one side.
+- **Overview**, a third tab on a session — a place to rest in a long
+  unattended run. Exact token stats with the cache split, the pace and what it
+  adds by each plan-window reset (tokens and percentages only — no invented
+  dollars), goals and notes that autosave to the host and follow the session,
+  and the map: the whole run drawn as blocks — you, the work, the answers —
+  with agent branches that leave the spine and come back where they merged.
+- **Polish** under a Round's prompt and goal: one caged model call drafts a
+  tighter version against how a round actually runs — the single unattended
+  turn, the mode's tools, the "done when" sentence the goal completes. You
+  read it, then Use or Discard. Nothing is ever applied by itself.
+- **Extra usage on Status**: the budget, the amount used and the state
+  ("paused until the monthly reset", "limit reached") — shown for any account
+  that ever enabled credits. A paused month used to hide real spend entirely.
+
+### Changed
+- The Status plan and usage sections are one shared implementation with the
+  desktop, and the reset countdowns tick while you watch.
+- Settings decluttered: the three "send a test" buttons are gone, the
+  background-delivery counters fold away until asked for, and the connection
+  test lives inside "Save and connect", which already ran it.
+
+### Fixed
+- A refused send hands back BOTH the text and the attached page — chat and
+  session alike. The composer being emptied on press is a promise, not a risk.
+- The auth token is excluded from device-to-device transfer; cloud backup was
+  already off, and now a phone migration cannot carry the credential either.
+
 ## 2.84.0 — 2026-08-26
 
 The conduits: the local tier and Claude, connected in exactly one direction
