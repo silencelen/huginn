@@ -418,14 +418,21 @@ private fun RowRule() {
 }
 
 /**
+ * The band at the top of a pane: what it is, how much of it there is, what can be
+ * done with it. Shared rather than copied — Rounds drew a bare right-aligned
+ * button with no title at all while its three neighbours all carried this, and a
+ * second implementation of a title band is how two panes start looking like two
+ * apps.
+ *
  * @param count what the pane holds, shown as a muted numeral beside the title —
  *   the cheapest true fact about a list, and the one a scrollbar only implies.
  * @param selected how many rows a bulk verb would address, shown ONLY while
  *   multi-select is live. It is the one piece of state that is otherwise invisible
- *   if the selected rows have scrolled out of view.
+ *   if the selected rows have scrolled out of view. Zero where a pane has no
+ *   multi-select.
  */
 @Composable
-private fun ListHeader(title: String, count: Int, selected: Int, actions: @Composable () -> Unit) {
+internal fun ListHeader(title: String, count: Int, selected: Int, actions: @Composable () -> Unit) {
     Row(
         Modifier.fillMaxWidth().padding(start = Space.wide, end = Space.tight, top = Space.tight, bottom = Space.tight),
         verticalAlignment = Alignment.CenterVertically,

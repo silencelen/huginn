@@ -2,10 +2,10 @@ package com.silencelen.huginn.desktop.ui
 
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
@@ -23,10 +23,13 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import com.silencelen.huginn.data.PolishResult
 import com.silencelen.huginn.data.Round
 import com.silencelen.huginn.desktop.AppStore
+import com.silencelen.huginn.desktop.ui.common.DeskType
+import com.silencelen.huginn.desktop.ui.common.Frame
 import com.silencelen.huginn.ui.RoundDraft
 import com.silencelen.huginn.ui.RoundEditor
 import com.silencelen.huginn.ui.RoundsSection
@@ -94,41 +97,52 @@ fun RoundsPane(store: AppStore) {
                     "a weekly alert review, a nightly check.",
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.padding(top = 8.dp, bottom = 12.dp),
+                textAlign = TextAlign.Center,
+                // CAPPED, like the detail pane's own empty state. Centred under a
+                // centred heading, a sentence set across 1400px of window is one
+                // line of type the eye has to track back across; the measure is
+                // what makes it read as a paragraph.
+                modifier = Modifier.widthIn(max = Frame.prose).padding(top = 8.dp, bottom = 12.dp),
             )
             Button(onClick = { writingNew = true }) { Text("New round") }
         }
         return
     }
 
-    Column(
-        Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(vertical = 12.dp),
-    ) {
-        Row(
-            Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 4.dp),
-            horizontalArrangement = Arrangement.End,
-        ) {
-            Button(onClick = { writingNew = true }) { Text("New round") }
+    Column(Modifier.fillMaxSize()) {
+        // The same band Sessions, Pages and Status carry. This pane used to open
+        // as a lone right-aligned button floating in black — no title, no count,
+        // nothing saying which destination you had arrived at.
+        ListHeader("Rounds", rounds.size, selected = 0) {
+            TextButton(onClick = { writingNew = true }) { Text("+ New round", style = DeskType.rail) }
         }
-        RoundsSection(
-            rounds = rounds,
-            nowMs = nowMs,
-            // The rail already says "Rounds"; repeating it here would be the same
-            // word in adjacent columns, which is the thing the rail lost its labels over.
-            header = null,
-            onOpenRound = { r ->
-                // The report if there is one; otherwise the Round itself, so a
-                // schedule that has not fired yet does not swallow the click.
-                val chat = r.lastRun?.chatId
-                if (chat != null) store.openChat(chat) else editing = r
-            },
-            onRunNow = { r -> scope.launch { store.runRound(r.id) } },
-            onSetEnabled = { r, on -> scope.launch { store.setRoundEnabled(r.id, on) } },
-            onAcknowledge = { r, ack -> scope.launch { store.acknowledgeRound(r.id, ack) } },
-            // Same reason as the phone: the editor needs a device list to draw
-            // where-it-runs, and a stale empty one hides it for every Round.
-            onEdit = { r -> scope.launch { store.refreshDevices() }; editing = r },
-        )
+        // Weight rather than fillMaxSize: inside a Column a child that fills the
+        // height takes the WHOLE column's, band included, and lays its last row
+        // out past the bottom edge.
+        Column(
+            Modifier.weight(1f).fillMaxWidth().verticalScroll(rememberScrollState())
+                .padding(vertical = 12.dp),
+        ) {
+            RoundsSection(
+                rounds = rounds,
+                nowMs = nowMs,
+                // The band above already says "Rounds"; the shared section would
+                // say it a second time, in the same column, a few dp lower.
+                header = null,
+                onOpenRound = { r ->
+                    // The report if there is one; otherwise the Round itself, so a
+                    // schedule that has not fired yet does not swallow the click.
+                    val chat = r.lastRun?.chatId
+                    if (chat != null) store.openChat(chat) else editing = r
+                },
+                onRunNow = { r -> scope.launch { store.runRound(r.id) } },
+                onSetEnabled = { r, on -> scope.launch { store.setRoundEnabled(r.id, on) } },
+                onAcknowledge = { r, ack -> scope.launch { store.acknowledgeRound(r.id, ack) } },
+                // Same reason as the phone: the editor needs a device list to draw
+                // where-it-runs, and a stale empty one hides it for every Round.
+                onEdit = { r -> scope.launch { store.refreshDevices() }; editing = r },
+            )
+        }
     }
 }
 
