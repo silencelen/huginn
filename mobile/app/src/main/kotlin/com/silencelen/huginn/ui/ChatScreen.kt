@@ -84,6 +84,8 @@ fun ChatScreen(
     models: List<ModelChoice>,
     /** The daemon's pin condition — history exists — which shapes the model menu. */
     started: Boolean,
+    /** A local chat between send and first token: the model is loading, say so. */
+    waking: Boolean = false,
     onSetOptions: (String?, String?) -> Unit,
     onMode: (String) -> Unit,
     chatId: String,
@@ -185,7 +187,7 @@ fun ChatScreen(
             ) {
                 items(rows.size, key = { rowKeys[it] }) { i -> TranscriptRowItem(rows[i], onCopy) }
                 if (streaming) {
-                    item { StreamingItem(streamingText, activeTool, onCopy) }
+                    item { StreamingItem(streamingText, activeTool, waking, onCopy) }
                 }
             }
         }
@@ -251,7 +253,7 @@ fun ChatScreen(
  * replaces it.
  */
 @Composable
-private fun StreamingItem(text: String?, activeTool: String?, onCopy: (String) -> Unit) {
+private fun StreamingItem(text: String?, activeTool: String?, waking: Boolean, onCopy: (String) -> Unit) {
     Column {
         if (!text.isNullOrEmpty()) {
             MarkdownText(text, onCopy)
@@ -261,6 +263,14 @@ private fun StreamingItem(text: String?, activeTool: String?, onCopy: (String) -
             TranscriptEventItem(
                 TranscriptEvent(kind = "tool", name = activeTool, input = "running"),
                 onCopy,
+            )
+        } else if (text.isNullOrEmpty() && waking) {
+            // A cold local model takes up to ~30s to load; a generic thinking
+            // shimmer over that silence reads as a hang. Name what is happening.
+            Text(
+                "waking the local model…",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         } else if (text.isNullOrEmpty()) {
             ThinkingLine()

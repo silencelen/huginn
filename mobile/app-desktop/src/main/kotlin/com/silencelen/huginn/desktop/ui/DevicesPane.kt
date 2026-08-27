@@ -75,6 +75,11 @@ fun DevicesPane(store: AppStore) {
             onStart = { d, mode -> scope.launch { store.startChatOn(d.id, mode) } },
             onForget = { g -> forgetTarget = g },
             header = null,
+            // The machine this window is running on, keyed the way the daemon
+            // keys machines — its card says "(this device)".
+            thisMachine = com.silencelen.huginn.desktop.device.DeviceRunner.machineKey(
+                com.silencelen.huginn.desktop.device.DeviceRunner.defaultName(),
+            ),
         )
     }
 

@@ -41,6 +41,7 @@ import com.silencelen.huginn.data.Autoswitch
 import com.silencelen.huginn.data.SavedAccount
 import com.silencelen.huginn.desktop.AppStore
 import com.silencelen.huginn.desktop.DesktopSettings
+import com.silencelen.huginn.desktop.CliSync
 import com.silencelen.huginn.desktop.LocalServe
 import com.silencelen.huginn.desktop.diag.AppLog
 import com.silencelen.huginn.desktop.diag.NotifierSeam
@@ -155,6 +156,11 @@ fun SettingsView(store: AppStore) {
             if (DesktopSettings.isPackaged()) "packaged build" else "unpackaged — dev token bootstrap allowed",
             Modifier.padding(top = 2.dp),
         )
+        // What the launch-time CLI sync did, when it did anything: the CLI on
+        // this machine rides along with the app instead of aging in place.
+        CliSync.summary.collectAsState().value?.let {
+            Muted(it, Modifier.padding(top = 2.dp))
+        }
     }
 }
 

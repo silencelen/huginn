@@ -1,5 +1,17 @@
 # Huginn changelog
 
+## 2.83.0 — 2026-08-26
+
+The journey wave: how the local tier is discovered, entered and lived with.
+
+### Added
+- **Local AI in the new-chat dialog**: serving machines' models are listed
+  below the hosts — one tap makes the chat (Ask is forced by design, so there
+  is no second question to answer).
+- **"waking the local model…"** between send and first token on a local chat.
+  A cold model takes up to ~30s to load, and the thinking shimmer over that
+  silence read as a hang.
+
 ## 2.82.0 — 2026-08-25
 
 The audit wave: a six-surface review of the local-AI features in real use,

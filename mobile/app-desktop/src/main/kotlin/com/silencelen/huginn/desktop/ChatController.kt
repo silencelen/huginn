@@ -4,6 +4,7 @@ import com.silencelen.huginn.data.ChatDetail
 import com.silencelen.huginn.data.ChatEvent
 import com.silencelen.huginn.data.HuginnClient
 import com.silencelen.huginn.data.ModelChoice
+import com.silencelen.huginn.ui.ModelLabels
 import com.silencelen.huginn.data.TranscriptPage
 import com.silencelen.huginn.ui.SuggestionCue
 import kotlinx.coroutines.CoroutineScope
@@ -243,6 +244,12 @@ class ChatController(
             _notice.value = null
             _pendingSend.value = body
             _running.value = true
+            // The silence between send and first token on a LOCAL chat is the
+            // model LOADING — up to ~30s cold — and a bare spinner reads as
+            // broken. Say what is actually happening; the first delta clears it.
+            if (ModelLabels.isLocal(_detail.value?.model, _models.value)) {
+                _activity.value = WAKING
+            }
             reattempts = 0
             consume(client.sendMessage(chatId, body))
         }
@@ -393,6 +400,9 @@ class ChatController(
     }
 
     private companion object {
+        /** The pre-first-token cue on local chats; cleared by the first delta. */
+        const val WAKING = "waking the local model"
+
         const val MAX_REATTACH = 5
 
         /** Linear, not exponential: five tries reach 15s, which is the right shape for a socket that may simply have blinked. */
