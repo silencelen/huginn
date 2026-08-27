@@ -24,6 +24,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
+import com.silencelen.huginn.data.PolishResult
 import com.silencelen.huginn.data.Round
 import com.silencelen.huginn.desktop.AppStore
 import com.silencelen.huginn.ui.RoundDraft
@@ -64,6 +65,7 @@ fun RoundsPane(store: AppStore) {
             onCreate = { d -> store.createRound(d) },
             onSave = { id, d -> store.saveRound(id, d) },
             onDelete = { id -> store.deleteRound(id) },
+            onPolish = { d, f -> store.polishRound(d, f) },
             onDone = { editing = null; writingNew = false },
         )
         return
@@ -138,6 +140,7 @@ private fun RoundEditorPane(
     onCreate: suspend (RoundDraft) -> String?,
     onSave: suspend (String, RoundDraft) -> String?,
     onDelete: suspend (String) -> String?,
+    onPolish: suspend (RoundDraft, String) -> PolishResult,
     onDone: () -> Unit,
 ) {
     val scope = rememberCoroutineScope()
@@ -166,6 +169,10 @@ private fun RoundEditorPane(
         },
         onCancel = onDone,
         onDelete = existing?.let { { confirmDelete = true } },
+        // The shared editor is callback-shaped so it can be used from a plain
+        // composable; the store's side is suspend. The launch is the whole
+        // adaptation, exactly as onSave does it above.
+        onPolish = { d, f, done -> scope.launch { done(onPolish(d, f)) } },
     )
 
     if (confirmDelete && existing != null) {

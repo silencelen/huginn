@@ -941,6 +941,26 @@ data class RoundList(val rounds: List<Round> = emptyList())
 @Serializable
 data class RoundRunStarted(val ok: Boolean = false, val chatId: String? = null)
 
+/**
+ * An AI-written improvement to ONE field of a Round somebody is drafting.
+ *
+ * AI DRAFTS, HUMAN ACCEPTS. This is a proposal and never an edit: the editor shows
+ * [polished] beside the field and waits for a person to take it or throw it away.
+ * Nothing here is persisted — a polish that was discarded should leave no trace,
+ * which is why [RoundDraft] has no field for it.
+ *
+ * [error] arrives with HTTP 200, deliberately. A model being unavailable is not a
+ * broken daemon, and the person is mid-sentence in a text field: it deserves one
+ * quiet line, not the failure path a 5xx would take.
+ */
+@Serializable
+data class PolishResult(
+    val polished: String? = null,
+    /** Something true about the answer worth saying, e.g. that it had to be trimmed. */
+    val note: String? = null,
+    val error: String? = null,
+)
+
 // ------------------------------------------------------------------ devices
 
 /**
