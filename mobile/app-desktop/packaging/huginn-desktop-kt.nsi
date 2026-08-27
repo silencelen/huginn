@@ -202,9 +202,11 @@ Section "Install"
   ; Wipe the previous payload first. An in-place overwrite leaves orphaned jars
   ; from the old release on the classpath, and two versions of the same library
   ; in APPDIR is a failure that only shows up as a NoSuchMethodError at runtime.
-  ; The user's settings live under %USERPROFILE%\.config\huginn-desktop-kt (NOT
-  ; %APPDATA% — DesktopSettings.defaultFile() has no Windows branch, so it takes
-  ; the XDG shape on every platform), so this loses nothing.
+  ; The user's settings live under %XDG_CONFIG_HOME%, or %USERPROFILE%\.config
+  ; when that is unset — \huginn-desktop-kt either way, and NOT %APPDATA%:
+  ; DesktopSettings.defaultFile() has no Windows branch, so it takes the XDG
+  ; shape on every platform. Neither root is under $INSTDIR, so this loses
+  ; nothing.
   RMDir /r "$INSTDIR\app"
   RMDir /r "$INSTDIR\runtime"
   File /r "${SRC_DIR}/*"
@@ -326,14 +328,24 @@ Section "Uninstall"
   ;
   ; The two roots, read the way the programs that WROTE them read them.
   ; $PROFILE and not $APPDATA: DesktopSettings.defaultFile() has no Windows
-  ; branch at all, so the settings take the XDG shape on every platform.
+  ; branch at all, so the settings take the XDG shape on every platform — which
+  ; means %XDG_CONFIG_HOME% FIRST and $PROFILE\.config only as its fallback,
+  ; exactly the order defaultFile() reads them in. Reading only the fallback is
+  ; not a smaller bug than reading the wrong variable: on a machine that sets it
+  ; (a dotfiles setup, a roaming or portable profile) the deletion below would
+  ; find an empty path and leave the plaintext token where the app put it.
   ; %ProgramData% from the environment, the way huginn-local's localDir() does —
   ; and with the literal fallback it uses, because everything below joins onto
   ; this string and an empty one would aim them at the root of the system drive.
   ReadEnvStr $R0 "ProgramData"
   StrCmp $R0 "" 0 +2
     StrCpy $R0 "C:\ProgramData"
-  StrCpy $R1 "$PROFILE\.config\huginn-desktop-kt"
+  ReadEnvStr $R3 "XDG_CONFIG_HOME"
+  ${If} $R3 == ""
+    StrCpy $R1 "$PROFILE\.config\huginn-desktop-kt"
+  ${Else}
+    StrCpy $R1 "$R3\huginn-desktop-kt"
+  ${EndIf}
   StrCpy $R2 "$R0\huginn-local"
   InitPluginsDir
   FileOpen $9 "$PLUGINSDIR\unenrol.ps1" w
@@ -415,6 +427,14 @@ Section "Uninstall"
   ; separately-installed base client, and that install is not ours to undo. A
   ; wildcard here would take huginn.ps1 and huginn.ps1.bak with it and leave the
   ; person's shell profile sourcing a file that no longer exists.
+  ;
+  ; The names come from CliSync.candidates() — every satellite the app WRITES
+  ; here, minus the base client it shares with install.sh — plus the siblings
+  ; CliSync leaves around one: the .bak of the copy it replaced and the two temp
+  ; names a validated download is staged under. A satellite added there and not
+  ; added here is a file the app keeps current and the uninstaller walks past —
+  ; which is exactly what happened to huginn-llm-shim: CliSync took it on in
+  ; 0.13.0 and this list was written in 0.14.0 without it.
   Delete "$PROFILE\.huginn\huginn-device"
   Delete "$PROFILE\.huginn\huginn-device.bak"
   Delete "$PROFILE\.huginn\huginn-device.tmp.js"
@@ -423,6 +443,10 @@ Section "Uninstall"
   Delete "$PROFILE\.huginn\huginn-local.bak"
   Delete "$PROFILE\.huginn\huginn-local.tmp.js"
   Delete "$PROFILE\.huginn\huginn-local.appsync.tmp.js"
+  Delete "$PROFILE\.huginn\huginn-llm-shim"
+  Delete "$PROFILE\.huginn\huginn-llm-shim.bak"
+  Delete "$PROFILE\.huginn\huginn-llm-shim.tmp.js"
+  Delete "$PROFILE\.huginn\huginn-llm-shim.appsync.tmp.js"
   RMDir "$PROFILE\.huginn"
 
   ; SAID, rather than assumed. %ProgramData%\huginn-local is written by a

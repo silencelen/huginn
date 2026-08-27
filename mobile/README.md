@@ -192,7 +192,7 @@ root SSH key: if a device carrying it is lost, rotate the file, restart the unit
 | GET | `/v1/sessions/<name>/screen` | `?cols=&rows=` leases a resize, `?history=` adds scrollback, `?hash=&wait=` long-polls, `?force=1` resizes past an attached client |
 | DELETE | `/v1/sessions/<name>/size` | release the resize lease now |
 | GET | `/v1/sessions/<name>/transcript` | structured events; `?offset=` tails |
-| POST | `/v1/sessions/<name>/keys` | `{text?, keys?}`; keys validated against an allowlist |
+| POST | `/v1/sessions/<name>/keys` | `{text?, keys?, scratchpadId?}`; keys validated against an allowlist. A scratchpad is sent as a PATH the pane's Claude can read, not as its text — `null` means Main |
 | POST | `/v1/sessions/<name>/answer` | `{option}` or `{options:[…]}` for multi-select, plus `fingerprint?`; answers a numbered prompt. Refuses with 409 if the pane no longer shows that question |
 | GET | `/v1/watch` | change signal; `?stream=1` is SSE with a 25s keepalive, otherwise a long poll |
 | GET | `/v1/clients` | which phones have checked in, and how recently |
@@ -205,7 +205,7 @@ root SSH key: if a device carrying it is lost, rotate the file, restart the unit
 | GET | `/v1/chats/<id>/transcript` | the same structured events as a session |
 | PATCH | `/v1/chats/<id>` | `{title}` |
 | DELETE | `/v1/chats/<id>` | refuses while a run is active |
-| POST | `/v1/chats/<id>/messages?stream=1` | posts and streams the run as SSE |
+| POST | `/v1/chats/<id>/messages?stream=1` | posts and streams the run as SSE; optional `scratchpadId` (`null` = Main) prepends the page, composed at receipt so a queued message is a snapshot |
 | GET | `/v1/chats/<id>/stream?since=<seq>` | reattach to an in-flight run |
 | POST | `/v1/chats/<id>/cancel` | SIGTERM then SIGKILL |
 | POST | `/v1/uploads` | raw bytes, any type, ≤128MB (streamed to disk); server names the file, returns its path; pruned after 7 days |
@@ -217,6 +217,12 @@ root SSH key: if a device carrying it is lost, rotate the file, restart the unit
 | GET | `/v1/chats/<id>/suggestions` | the same, for a chat |
 | GET | `/v1/sessions/<name>/agents` | the individual agents behind a fan-out |
 | GET | `/v1/autoswitch` · POST | automatic account rotation state / `{enabled}` |
+| POST | `/v1/rounds/polish` | `{field, title?, prompt?, goal?, mode?}`; one better draft of that field, as a proposal a person accepts — never applied, and 200 with `{error}` when the model cannot answer |
+| GET | `/v1/scratchpads` · POST | the pages the owner keeps; the GET mints Main on first sight, POST takes `{name, content?}`. A 404 here is how a client knows this daemon has no scratchpads |
+| GET | `/v1/scratchpads/<id>` · PATCH · DELETE | PATCH is the autosave, `{rev, name?, content?}` — a stale `rev` comes back 409 with the current page to adopt. Main cannot be renamed or deleted |
+| GET | `/v1/sessions/<name>/overview` | what this run has spent and what it did; 409 until the Claude hook has recorded a transcript. Deliberately not in the session list or the watch digest |
+| GET | `/v1/sessions/<name>/graph` | the map of the same run; `?size=&agentBytes=` is a two-part cursor and answers `{unchanged:true}` while neither has moved |
+| POST | `/v1/sessions/<name>/meta` | `{goals?, notes?}`; kept against the Claude session id and not the window name, so 409 before a first prompt has landed |
 
 SSE events: `started`, `delta`, `assistant`, `tool_start`, `tool`, `result`,
 `error`, `done`. Each run keeps a bounded replay buffer so a phone that locks
