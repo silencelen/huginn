@@ -474,6 +474,41 @@ class HuginnClient(
     }
 
     /**
+     * A session's ledger without its map: cheap enough to open a screen with.
+     *
+     * 409 when the Claude hook has not fired yet (a plain shell, or a session
+     * whose first prompt is still being typed) — the caller shows the empty
+     * state rather than an error, because neither is a fault.
+     */
+    suspend fun sessionOverview(name: String): SessionOverview =
+        decode(call("/v1/sessions/$name/overview"))
+
+    /**
+     * The map, or nothing when the cursor still matches.
+     *
+     * Both halves of the cursor are sent. Passing only the parent size would
+     * report a fan-out as unchanged for as long as it runs, because the parent
+     * transcript does not grow while its agents do.
+     */
+    suspend fun sessionGraph(name: String, cursor: GraphCursor? = null): SessionGraph {
+        val q = cursor?.let { "?size=${it.size}&agentBytes=${it.agentBytes}" } ?: ""
+        return decode(call("/v1/sessions/$name/graph$q"))
+    }
+
+    /**
+     * The goals and notes a person keeps against a run.
+     *
+     * Fields are sent INDIVIDUALLY — two editors on one screen autosave on their
+     * own debounces, and a save carrying both would write whatever the other
+     * field held when this one was last read.
+     */
+    suspend fun saveSessionMeta(name: String, goals: String? = null, notes: String? = null): SessionMeta =
+        decode<SessionMetaSaved>(post("/v1/sessions/$name/meta", body = buildJsonObject {
+            goals?.let { put("goals", JsonPrimitive(it)) }
+            notes?.let { put("notes", JsonPrimitive(it)) }
+        })).meta
+
+    /**
      * Soft end: the host types its wrap-up phrase into the pane so Claude can
      * finish and commit; with auto-end on (the host default) the session then
      * ends itself once it settles. Returns what was actually sent — the phrase
