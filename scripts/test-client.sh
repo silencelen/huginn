@@ -64,7 +64,7 @@ grep -q 'scp .*\${H}:' client/huginn.ps1 && bad "huginn.ps1 still scps from \$HU
 echo "[3/8] both clients expose the same verbs (parity by verb)"
 # huginn.sh writes cases as alternations (`list|ls)`, `status|st)`), so match the
 # verb as a case ALTERNATIVE, not as a bare `verb)`.
-for v in end kill solo rename list status rounds devices device local desktop usage update version help; do
+for v in end kill solo rename list status rounds devices device local desktop usage update uninstall version help; do
   # Match the DISPATCH, not a mention: huginn.ps1 lists every verb in its
   # completion array too, so grepping "'$v'" passes even with the branch deleted
   # (verified by removing the `end` branch: still 2 matches, still green).
@@ -267,6 +267,7 @@ grep -qv "MISSING" <<<"$(reason)" && ok "a good token is not reported missing" |
 # the row was orphaned on the host and unremovable from the machine, and a restart
 # enrolled a second one.
 printf '{"id":"11111111-1111-1111-1111-111111111111","url":"http://127.0.0.1:1","scope":"work"}\n' > "$TD/device.json"
+printf 'sometoken\n' > "$TD/appd-token"
 OFF=$(HUGINN_DEVICE_DIR="$TD" node client/huginn-device off 2>&1); OFF_RC=$?
 [ "$OFF_RC" -ne 0 ] && ok "off fails loudly when huginn is unreachable" \
   || bad "off exited 0 with the host unreachable"
@@ -275,7 +276,72 @@ grep -q "Removed from huginn" <<<"$OFF" && bad "off claimed success while failin
 grep -q '11111111-1111-1111-1111-111111111111' "$TD/device.json" \
   && ok "off keeps the id, so it can be run again" \
   || bad "off destroyed the only handle that can remove the row"
+# ...AND the token with it. A failed off that swept the credential away would
+# leave a machine that cannot retry the very thing it was told to retry.
+[ -s "$TD/appd-token" ] && ok "a refused off keeps the token too" \
+  || bad "a refused off destroyed the token, so it can never be retried"
+
+# --force is the ONE exit from that refusal, for the machine that is going away
+# regardless (an uninstall, a wipe). It must clear BOTH files, exit 0, and NAME
+# the row it is stranding - a silent force would be the original bug with a flag
+# on it.
+FOFF=$(HUGINN_DEVICE_DIR="$TD" node client/huginn-device off --force 2>&1); FOFF_RC=$?
+[ "$FOFF_RC" -eq 0 ] && ok "off --force exits 0: the local half is what it promised" \
+  || bad "off --force exited $FOFF_RC"
+grep -q '11111111-1111-1111-1111-111111111111' <<<"$FOFF" \
+  && ok "off --force names the row it stranded" \
+  || bad "off --force cleared the machine without naming the row left on the host"
+grep -q "Removed from huginn" <<<"$FOFF" && bad "off --force claimed the row was removed" \
+  || ok "off --force does not claim the row went with it"
+[ ! -e "$TD/device.json" ] && [ ! -e "$TD/appd-token" ] \
+  && ok "off --force leaves neither the config nor the token" \
+  || bad "off --force left $(ls "$TD" 2>/dev/null | tr '\n' ' ')behind"
 rm -rf "$TD"
+
+# ⚠ AND `--force=false` IS A REFUSAL, NOT A SETTING. A value-less flag written
+# with an `=` used to fall through to the string branch, and a non-empty string
+# is truthy - so the one spelling somebody reaches for to turn a destructive
+# flag OFF was the spelling that turned it on.
+TD3=$(mktemp -d)
+printf '{"id":"44444444-4444-4444-4444-444444444444","url":"http://127.0.0.1:1"}\n' > "$TD3/device.json"
+printf 'sometoken\n' > "$TD3/appd-token"
+HUGINN_DEVICE_DIR="$TD3" node client/huginn-device off --force=false >/dev/null 2>&1
+[ $? -eq 2 ] && ok "off --force=false is refused, not read as a boolean" \
+  || bad "off --force=false was accepted"
+[ -s "$TD3/appd-token" ] && ok "and it changed nothing on the way out" \
+  || bad "a refused flag still destroyed the token"
+rm -rf "$TD3"
+
+# ⚠ AND THE SUCCESS PATH TAKES THE TOKEN WITH IT. `off` used to delete the id
+# out of device.json and leave BOTH files sitting there, so a machine somebody
+# had just decommissioned kept a working bearer token for the daemon - the same
+# one /etc/huginn-appd/token holds, root-equivalent on the host - in a file
+# nobody would ever look at again. Needs a listener, so it SKIPS LOUDLY rather
+# than reporting green on a box where the port is taken.
+TD2=$(mktemp -d)
+node -e '
+const http = require("http");
+const s = http.createServer((q, r) => { r.writeHead(200, {"Content-Type":"application/json"}); r.end("{}"); });
+s.on("error", () => process.exit(1));
+s.listen(8791, "127.0.0.1", () => { console.log("up"); });
+setTimeout(() => process.exit(0), 20000);
+' > "$TD2/srv.log" 2>&1 &
+SRV_PID=$!
+for _ in 1 2 3 4 5 6 7 8 9 10; do grep -q up "$TD2/srv.log" 2>/dev/null && break; sleep 0.3; done
+if ! grep -q up "$TD2/srv.log" 2>/dev/null; then
+  skip "off success path (could not listen on 127.0.0.1:8791)"
+else
+  printf '{"id":"22222222-2222-2222-2222-222222222222","url":"http://127.0.0.1:8791","scope":"work"}\n' > "$TD2/device.json"
+  printf 'sometoken\n' > "$TD2/appd-token"
+  SOFF=$(HUGINN_DEVICE_DIR="$TD2" node client/huginn-device off 2>&1)
+  grep -q "Removed from huginn" <<<"$SOFF" \
+    && ok "off says so when the row really went" || bad "off on a live daemon said: $SOFF"
+  [ ! -e "$TD2/device.json" ] && [ ! -e "$TD2/appd-token" ] \
+    && ok "a successful off takes the config AND the token" \
+    || bad "off left a live bearer token on a decommissioned machine"
+fi
+kill "$SRV_PID" 2>/dev/null; wait "$SRV_PID" 2>/dev/null
+rm -rf "$TD2"
 
 # ⚠ THE SIZE RULES, which decide whether a run's whole answer survives. A device
 # streams stream-json with --include-partial-messages, so ONE line can carry a
@@ -335,6 +401,41 @@ echo "$UNIT_RUN" | grep -q 'Environment=HUGINN_DEVICE_DIR=/tmp/hl-gate/device' \
 HUGINN_LOCAL_DIR=/tmp/hl-gate node client/huginn-local on --clsas=G8 >/dev/null 2>&1
 [ $? -eq 2 ] && ok "an unknown flag is refused, not ignored" || bad "an unknown flag was swallowed"
 
+# `--purge` is the uninstall-hygiene door: the whole tier, not just the models.
+# Asserted as a KNOWN flag - exit 1 "not set up", never exit 2 "unknown flag".
+# A purge silently rejected as a typo looks exactly like a purge that ran and
+# found nothing, which is the --scpoe lesson pointed at a delete.
+PURGE_DIR=$(mktemp -d); rmdir "$PURGE_DIR"
+HUGINN_LOCAL_DIR="$PURGE_DIR" node client/huginn-local off --purge --yes >/dev/null 2>&1
+[ $? -eq 1 ] && ok "--purge is a known flag, refused only for want of an install" \
+  || bad "--purge was rejected as an unknown flag"
+
+# ⚠ AND IT REFUSES A DIRECTORY IT DOES NOT OWN. HUGINN_LOCAL_DIR is an argument
+# somebody supplies and --purge is a recursive delete of whatever it names, so
+# pointed at a home by a typo it would take the home.
+GUARD=$(mktemp -d); mkdir -p "$GUARD/home/bin"
+cp client/huginn-device "$GUARD/home/bin/huginn-device.js"
+printf '{"mode":"managed","systemUnits":false}\n' > "$GUARD/home/local.json"
+printf 'keepme\n' > "$GUARD/home/precious"
+# Captured, never piped: this file runs under `set -o pipefail`, and the command
+# under test EXITS NONZERO on purpose (a refused step is a failed step), so
+# `node ... | grep -q` reports the node exit and the gate fails on a pass.
+GOUT=$(HOME="$GUARD/home" HUGINN_LOCAL_DIR="$GUARD/home" \
+  node client/huginn-local off --purge --yes 2>&1)
+grep -q "does not own" <<<"$GOUT" \
+  && ok "--purge refuses a HUGINN_LOCAL_DIR that is a home directory" \
+  || bad "--purge did not refuse a home directory: $GOUT"
+[ -f "$GUARD/home/precious" ] && ok "and the home survived it" \
+  || bad "--purge deleted a home directory"
+rm -rf "$GUARD"
+
+# The same lesson on this side: a value-less flag written with an `=` fell
+# through to the string branch, and every `if (flags.x)` here reads a non-empty
+# string as yes - so `--purge-models=false` deleted the models.
+HUGINN_LOCAL_DIR=/tmp/hl-gate node client/huginn-local off --purge-models=false >/dev/null 2>&1
+[ $? -eq 2 ] && ok "--purge-models=false is refused, not read as a boolean" \
+  || bad "--purge-models=false was accepted as a value"
+
 # `plan` is the desktop's consent card: it must DECIDE everything and DO
 # nothing. Both halves are asserted — the answer's shape, and the empty dir.
 PLAN_DIR=$(mktemp -d)
@@ -387,6 +488,63 @@ else
   bad "shim suite: pass=${SHIM_PASS:-?} fail=${SHIM_FAIL:-?}"
   echo "$SHIM_OUT" | grep -A4 'not ok' | head -20 >&2
 fi
+
+echo "[uninstall/8] the server first, and only huginn's own files"
+# WHY: `huginn uninstall` is the one verb that deletes a person's files, and the
+# two ways it can be wrong are both silent. It can leave the tokens (the whole
+# point of it), or it can take something that was never huginn's - a general SSH
+# key, somebody else's line in .bashrc, another Host stanza. Driven against an
+# UNREACHABLE host on purpose: an uninstaller does not get a second run, so that
+# is the path that has to finish and still tell the truth.
+UD=$(mktemp -d)
+mkdir -p "$UD/.huginn" "$UD/.config/huginn" "$UD/.ssh"
+cp client/huginn.sh "$UD/.huginn/huginn.sh"
+cp client/huginn-device "$UD/.huginn/huginn-device"
+printf '{"id":"33333333-3333-3333-3333-333333333333","url":"http://127.0.0.1:1","scope":"work","name":"gate"}\n' \
+  > "$UD/.config/huginn/device.json"
+printf 'sometoken\n' > "$UD/.config/huginn/appd-token"
+printf '# mine\nexport EDITOR=vim\n[ -f ~/.huginn/huginn.sh ] && source ~/.huginn/huginn.sh\nalias ll="ls -l"\n' > "$UD/.bashrc"
+printf 'Host other\n  HostName 10.0.0.9\n\nHost huginn\n  HostName 10.0.0.1\n  IdentityFile %s/.ssh/id_ed25519\n\nHost last\n  HostName 10.0.0.8\n' "$UD" > "$UD/.ssh/config"
+printf 'PRIVATE\n' > "$UD/.ssh/id_ed25519"
+printf 'ssh-ed25519 AAAA me@laptop\n' > "$UD/.ssh/id_ed25519.pub"
+UOUT=$(HOME="$UD" bash -c 'source "$HOME/.huginn/huginn.sh"; huginn uninstall --all --yes' 2>&1)
+
+grep -q '33333333-3333-3333-3333-333333333333' <<<"$UOUT" \
+  && ok "uninstall names the row it could not retire" \
+  || bad "uninstall was silent about a stranded device row"
+[ ! -e "$UD/.huginn" ] && [ ! -e "$UD/.config/huginn/appd-token" ] \
+  && ok "uninstall leaves neither the client nor the token" \
+  || bad "uninstall left huginn files behind"
+if grep -q 'EDITOR=vim' "$UD/.bashrc" && grep -q 'ls -l' "$UD/.bashrc" \
+   && ! grep -q 'huginn.sh' "$UD/.bashrc"; then
+  ok "uninstall takes its profile line and nothing else"
+else
+  bad ".bashrc after uninstall: $(tr '\n' '|' < "$UD/.bashrc")"
+fi
+# ⚠ THE KEY. install.sh REUSES ~/.ssh/id_ed25519 when it is already there, so
+# after the fact nothing can tell its key from the one somebody has used for
+# five years - and deleting the wrong one locks them out of every host they have.
+[ -f "$UD/.ssh/id_ed25519" ] \
+  && ok "--all keeps a key that is not provably huginn's" \
+  || bad "--all deleted a general-purpose SSH key"
+if grep -q 'Host other' "$UD/.ssh/config" && grep -q 'Host last' "$UD/.ssh/config" \
+   && ! grep -q 'Host huginn' "$UD/.ssh/config"; then
+  ok "--all removes the huginn stanza and leaves the others"
+else
+  bad "ssh config after --all: $(tr '\n' '|' < "$UD/.ssh/config")"
+fi
+# The same key, renamed to something that says whose it is, IS removed - the
+# other half of the rule, or the flag would just never do anything.
+UD2=$(mktemp -d); mkdir -p "$UD2/.huginn" "$UD2/.ssh"
+cp client/huginn.sh "$UD2/.huginn/huginn.sh"
+printf 'Host huginn\n  HostName 10.0.0.1\n  IdentityFile %s/.ssh/id_ed25519_huginn\n' "$UD2" > "$UD2/.ssh/config"
+printf 'PRIVATE\n' > "$UD2/.ssh/id_ed25519_huginn"
+printf 'ssh-ed25519 AAAA me@laptop\n' > "$UD2/.ssh/id_ed25519_huginn.pub"
+HOME="$UD2" bash -c 'source "$HOME/.huginn/huginn.sh"; huginn uninstall --all --yes' >/dev/null 2>&1
+[ ! -e "$UD2/.ssh/id_ed25519_huginn" ] && [ ! -e "$UD2/.ssh/id_ed25519_huginn.pub" ] \
+  && ok "--all removes a key whose NAME says it is huginn's" \
+  || bad "--all kept a key that is provably huginn's"
+rm -rf "$UD" "$UD2"
 
 echo "[8/8] what is actually DEPLOYED on this host, vs what is in the tree"
 # ⚠ WHY THIS EXISTS. On 2026-08-25 the live headless device (brokkr) was found
