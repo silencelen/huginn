@@ -1070,6 +1070,7 @@ fun HuginnApp(
                 onCreate = { d, cb -> vm.createRound(d, cb) },
                 onSave = { rid, d, cb -> vm.saveRound(rid, d, cb) },
                 onDelete = { rid, cb -> vm.deleteRound(rid, cb) },
+                onPolish = { d, f, cb -> vm.polishRound(d, f, cb) },
                 onDone = { dest = Dest.Rounds },
             )
         }

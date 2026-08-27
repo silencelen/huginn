@@ -818,6 +818,38 @@ class HuginnClient(
         call("/v1/rounds/$id", HttpMethod.Delete)
     }
 
+    /**
+     * A better draft of one Round field, written by a model and returned as a
+     * PROPOSAL — this never saves anything, and there is no id because the Round
+     * may not exist yet.
+     *
+     * The whole draft is sent, not just the field being rewritten: the goal only
+     * makes sense next to the prompt, and both only make sense next to the mode,
+     * which decides whether the run may change anything at all.
+     *
+     * Tier.POLL, like suggestions: the host runs a real model call for this and it
+     * can take several seconds, which the 30s default would sometimes clip into a
+     * timeout that looks like a broken button.
+     *
+     * @param field "prompt" or "goal". The daemon refuses anything else with a 400 —
+     *   the one case here that IS an exception rather than a [PolishResult.error].
+     */
+    suspend fun polishRound(
+        field: String,
+        title: String = "",
+        prompt: String = "",
+        goal: String = "",
+        mode: String = "ask",
+    ): PolishResult = decode(
+        post("/v1/rounds/polish", Tier.POLL, buildJsonObject {
+            put("field", JsonPrimitive(field))
+            put("title", JsonPrimitive(title))
+            put("prompt", JsonPrimitive(prompt))
+            put("goal", JsonPrimitive(goal))
+            put("mode", JsonPrimitive(mode))
+        }),
+    )
+
     /** Fires the Round now. The report arrives the same way a scheduled one does. */
     suspend fun runRound(id: String): RoundRunStarted = decode(post("/v1/rounds/$id/run"))
 

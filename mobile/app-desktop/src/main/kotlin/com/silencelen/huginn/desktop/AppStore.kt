@@ -14,6 +14,7 @@ import com.silencelen.huginn.ui.AttachmentImageLoader
 import com.silencelen.huginn.ui.SkiaImageBytesDecoder
 import com.silencelen.huginn.data.HuginnClient
 import com.silencelen.huginn.data.Plan
+import com.silencelen.huginn.data.PolishResult
 import com.silencelen.huginn.data.RouteResolver
 import com.silencelen.huginn.data.Session
 import com.silencelen.huginn.data.Status
@@ -415,6 +416,25 @@ class AppStore(
         openChat(c.id)
         return c.id
     }
+
+    /**
+     * Asks the host to rewrite one field of a Round being drafted.
+     *
+     * Nothing is saved and no list is refreshed: this is a PROPOSAL the editor
+     * shows, and the Round — if it exists at all yet — is untouched until Save.
+     * A thrown failure becomes an error IN the result rather than a fault banner;
+     * the editor has a quiet line for it, and "the model was busy" is not a fault.
+     */
+    suspend fun polishRound(draft: RoundDraft, field: String): PolishResult =
+        runCatching {
+            client.polishRound(
+                field = field,
+                title = draft.title.trim(),
+                prompt = draft.prompt.trim(),
+                goal = draft.goal.trim(),
+                mode = draft.mode,
+            )
+        }.getOrElse { PolishResult(error = it.message ?: "Polish is unavailable right now") }
 
     /** The schedule goes; the reports it already wrote are chats and stay. */
     suspend fun deleteRound(id: String): String? =

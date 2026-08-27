@@ -44,6 +44,7 @@ const devicesLib = require('./lib/devices');
 const { taskDirFor, parsePs, scanTasks, extractBgIds } = require('./lib/tasks');
 const { agentsDirFor, listAgents } = require('./lib/agents');
 const { suggestionContext, buildPrompt, parseSuggestions } = require('./lib/suggest');
+const { FIELDS: POLISH_FIELDS, buildPolishPrompt, parsePolish } = require('./lib/polish');
 const {
   decideSwitch, worstLimit, agedLimits, explain: explainSwitch,
   THRESHOLD: AUTOSWITCH_THRESHOLD,
@@ -3157,6 +3158,75 @@ async function suggestionsFor(id, transcriptPath) {
   return { suggestions: entry.suggestions, forSize: size };
 }
 
+/** sha of the draft -> {at, promise, result}. Small: a draft stops mattering the moment it is saved. */
+const polishCache = new Map();
+const POLISH_CACHE_MAX = 20;
+
+/**
+ * One AI-polished draft of a Round field, single-flight on the exact draft.
+ *
+ * Keyed on a hash of everything the prompt is built from, so the second tap of
+ * Polish on unchanged text — a double tap, a rotation, both clients open — waits on
+ * the first call instead of buying a second one. Change a character and it is a
+ * different key and a real call, which is the behaviour somebody editing wants.
+ *
+ * FAILURES ARE NOT CACHED. A cached error would make Polish permanently broken for
+ * that exact draft with no way to retry but to type something and undo it, and a
+ * failure here is nearly always transient (a timeout, a busy limit). Successes stay
+ * because they cost a model call; failures cost nothing to repeat.
+ *
+ * @returns {{polished, note?}|{error}} — never throws, and never a 5xx: the field
+ *   the person is typing in must not be hostage to a model being unavailable.
+ */
+async function polishFor(field, draft, cap) {
+  const key = crypto.createHash('sha256')
+    .update(JSON.stringify([field, draft.title, draft.prompt, draft.goal, draft.mode]))
+    .digest('hex');
+  const hit = polishCache.get(key);
+  if (hit) return hit.promise ? await hit.promise : hit.result;
+
+  const entry = { at: Date.now(), promise: null, result: null };
+  entry.promise = (async () => {
+    const r = await run('claude', [
+      '-p',
+      // Caged exactly as the suggestion call is: no CLAUDE.md (global or
+      // project), no tools, one turn, scratch cwd. This must never inherit
+      // huginn's persona — it is rewriting text for an unattended job, and a
+      // persona would write as one.
+      '--setting-sources', '',
+      // sonnet, not suggest's haiku: this answer is pasted into a job that then
+      // runs unattended for months, so the quality of the sentence is the whole
+      // feature. And 90s rather than the suggestion path's 45: the prompt field
+      // carries up to 20k characters of draft.
+      '--model', 'sonnet',
+      '--max-turns', '1',
+      '--tools', '',
+      '--', buildPolishPrompt(field, draft, cap),
+    ], { timeout: 90_000, cwd: DATA_DIR });
+    if (r.err) {
+      log(`polish: ${field} failed: ${(r.stderr || r.err.message || '').slice(0, 120)}`);
+      return { error: 'polish is unavailable right now' };
+    }
+    const parsed = parsePolish(field, r.stdout, cap);
+    log(`polish: ${field} -> ${parsed.error ? `refused (${parsed.error})` : `${parsed.polished.length} chars`}`);
+    return parsed;
+  })();
+
+  polishCache.set(key, entry);
+  const result = await entry.promise;
+  if (result.error) {
+    // Dropped whole rather than settled, so callers still holding entry.promise
+    // get this answer and the NEXT tap is a real retry rather than a replay.
+    polishCache.delete(key);
+  } else {
+    entry.result = result;
+    entry.promise = null;
+    // Insertion-ordered, so the oldest key is the first one out.
+    while (polishCache.size > POLISH_CACHE_MAX) polishCache.delete(polishCache.keys().next().value);
+  }
+  return result;
+}
+
 
 /**
  * Makes a saved login the active one, everywhere it has to happen at once:
@@ -4811,6 +4881,45 @@ const server = http.createServer(async (req, res) => {
       const built = buildRound(body);
       if (built.error) return sendErr(res, 400, built.error);
       return sendJson(res, 201, roundView(saveRound(built.round)));
+    }
+    /**
+     * A better draft of one field, from the model — never applied by it.
+     *
+     * ⚠ PLACED BEFORE THE `/v1/rounds/<id>` BRANCH ON PURPOSE. That branch matches
+     * a 36-character uuid, so "polish" could not be captured by it either way, and
+     * this exact-path branch is above it so the reading order matches the matching
+     * order: a reader who sees the id branch first would have to hold the regex in
+     * their head to know this one is still reachable.
+     *
+     * It operates on the DRAFT in somebody's editor, not on a stored Round, so
+     * there is no id, nothing is written, and the PATCH re-read hazard two branches
+     * below simply does not exist here. The answer goes back as a proposal and a
+     * person accepts or discards it — AI drafts, human accepts.
+     */
+    if (req.method === 'POST' && p === '/v1/rounds/polish') {
+      const body = JSON.parse(await readBody(req) || '{}');
+      const field = typeof body.field === 'string' ? body.field.trim() : '';
+      if (!POLISH_FIELDS.includes(field)) {
+        return sendErr(res, 400, `field must be one of ${POLISH_FIELDS.join(', ')}`);
+      }
+      const draft = {
+        title: roundsLib.oneLine(body.title, 80),
+        prompt: typeof body.prompt === 'string' ? body.prompt.trim().slice(0, MAX_ROUND_PROMPT) : '',
+        goal: typeof body.goal === 'string' ? body.goal.trim().slice(0, MAX_ROUND_GOAL) : '',
+        mode: body.mode === 'act' ? 'act' : 'ask',
+      };
+      // Nothing to work from. Refused loudly rather than answered with an invented
+      // Round: polish improves what somebody wrote, and a model handed only a
+      // schedule would write the job itself and present it as their words.
+      if (!draft.prompt && !draft.goal) {
+        return sendErr(res, 400, 'write something first — polish improves a draft, it does not invent one');
+      }
+      const cap = field === 'prompt' ? MAX_ROUND_PROMPT : MAX_ROUND_GOAL;
+      // 200 with {error} even when the model failed, exactly like the suggestions
+      // path: the person is mid-sentence in a text field, and a 5xx there would be
+      // handled by whatever the client does with a broken daemon rather than by the
+      // one quiet line this deserves.
+      return sendJson(res, 200, await polishFor(field, draft, cap));
     }
     if ((m = p.match(/^\/v1\/rounds\/([0-9a-f-]{36})(\/.*)?$/))) {
       const roundId = m[1]; const rsub = m[2] || '';

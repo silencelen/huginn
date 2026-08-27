@@ -21,14 +21,18 @@ const crypto = require('node:crypto');
 // the files CONCURRENTLY, so these ranges must not overlap. The width is what
 // makes a range, not the base:
 //
-//   routes-answer      8788 + pid%900   ->  8788-9687
-//   routes-lifecycle   9700 + pid%100   ->  9700-9799
-//   routes-rounds      9800 + pid%60    ->  9800-9859
-//   routes-devices     9870 + pid%50    ->  9870-9919
-//   session-identity   9930 + pid%40    ->  9930-9969
-//   breaker-fixes      9971 + pid%25    ->  9971-9995
-//   routes-modelgate  10000 + pid%50    -> 10000-10049
-//   routes-localmodels 10050 + pid%50   -> 10050-10099  (this file)
+//   routes-answer       8788 + pid%900   ->  8788-9687
+//   routes-lifecycle    9700 + pid%100   ->  9700-9799
+//   routes-rounds       9800 + pid%60    ->  9800-9859
+//   routes-devices      9870 + pid%50    ->  9870-9919
+//   session-identity    9930 + pid%40    ->  9930-9969
+//   breaker-fixes       9971 + pid%25    ->  9971-9995
+//   routes-modelgate   10000 + pid%50    -> 10000-10049
+//   routes-localmodels 10050 + pid%50   -> 10050-10099   (this file)
+//   routes-polish      10100 + pid%50    -> 10100-10149
+//
+// Also spoken for, outside this directory: scripts/test-llm-shim.js holds
+// 18790-18799.
 //
 // Adding a file? Take the next free block and extend this table, in every file.
 const PORT = 10050 + (process.pid % 50);
