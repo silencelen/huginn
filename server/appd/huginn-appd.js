@@ -5775,6 +5775,19 @@ const server = http.createServer(async (req, res) => {
           const overflow = scratchpadsLib.fitProblem(text, 100_000);
           if (overflow) return sendErr(res, 413, overflow);
         }
+        // ⚠ RE-CHECKED ON A FRESH READ. `meta` predates the readBody await, and a
+        // Round can seal inside that window — settleRun runs whole in one turn, so
+        // the only gap it can slip through is this request's own body arriving.
+        // The stale check above then waves the message past the seal and
+        // startRunAnywhere reopens a chat that just closed itself, re-running
+        // finishRoundRun on whatever the new run says. Same stale-snapshot class
+        // the queue path below documents; same cure: never trust a pre-await read
+        // for a decision made after it.
+        const live = loadMeta(id);
+        if (!live) return sendErr(res, 404, 'no such chat');
+        if (live.sealed) {
+          return sendErr(res, 409, 'this run has finished and is kept for review — start a new chat to continue');
+        }
         // Busy: hold it and deliver when this run ends, rather than refusing.
         // A headless run cannot be fed mid-flight, and a dead end here would be
         // the one place the app behaves worse than typing into the session.
@@ -5807,7 +5820,9 @@ const server = http.createServer(async (req, res) => {
         }
         // Anywhere, not here: a chat pinned to a device must reach that device
         // whether the message came from a phone, a queue drain or a Round.
-        const started = startRunAnywhere(meta, text);
+        // `live`, not `meta`: the run must start from the state the seal check
+        // just read, not the pre-await snapshot.
+        const started = startRunAnywhere(live, text);
         if (started.error) return sendErr(res, started.code, started.error);
         // Auto-title from the first message, through updateMeta.
         //
@@ -5817,9 +5832,9 @@ const server = http.createServer(async (req, res) => {
         // updateMeta — so saving this whole object put the pre-run meta back,
         // silently erasing the in-flight marker startRun had just recorded. The
         // interrupted-run test failed on a missing marker and this is why.
-        if (!meta.title) {
+        if (!live.title) {
           const title = humanizeUserText(text).slice(0, 60);
-          meta.title = title;
+          live.title = title;
           updateMeta(id, (m) => { if (!m.title) m.title = title; });
         }
         if (u.searchParams.get('stream') === '1') {
