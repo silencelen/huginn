@@ -168,4 +168,12 @@ class DevicesViewTest {
         val line = describeDevice(servingDevice(), includePlatform = false)
         assertEquals("serves local models · Qwen3 8B · serving · v0.12.1", line)
     }
+
+    @Test
+    fun theReadersOwnMachineKnowsItselfByKeyAndAPhoneMarksNothing() {
+        val g = groupByMachine(listOf(claudeRow(), servingRow())).single()
+        assertTrue(g.isThisMachine("datatreex"), "the box the reader sits at")
+        assertFalse(g.isThisMachine("prestige"), "someone else's box is not this device")
+        assertFalse(g.isThisMachine(null), "a phone (never enrolled) marks nothing")
+    }
 }

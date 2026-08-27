@@ -42,6 +42,12 @@ fun DevicesSection(
     onForget: (MachineGroup) -> Unit,
     modifier: Modifier = Modifier,
     header: String? = "DEVICES",
+    /**
+     * The reader's own machine key (the daemon's normalised-hostname grouping
+     * key), so their machine's card can say so. Null — a phone, which never
+     * enrols — marks nothing.
+     */
+    thisMachine: String? = null,
 ) {
     if (devices.isEmpty()) return
     Column(modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -58,6 +64,7 @@ fun DevicesSection(
         groupByMachine(devices).forEach { g ->
             MachineCard(
                 group = g,
+                isThis = g.isThisMachine(thisMachine),
                 onStart = onStart,
                 onForget = onForget,
             )
@@ -87,6 +94,10 @@ data class MachineGroup(val rows: List<Device>) {
     /** The name a person knows the box by — its claude row's, when it has one. */
     val head: Device = claude.firstOrNull() ?: rows.first()
     val online: Boolean = rows.any { it.online }
+
+    /** Whether this card IS the machine the reader is sitting at. */
+    fun isThisMachine(machineKey: String?): Boolean =
+        machineKey != null && rows.any { it.machine == machineKey }
 }
 
 fun groupByMachine(devices: List<Device>): List<MachineGroup> {
@@ -98,7 +109,7 @@ fun groupByMachine(devices: List<Device>): List<MachineGroup> {
 }
 
 @Composable
-private fun MachineCard(group: MachineGroup, onStart: (Device, String) -> Unit, onForget: (MachineGroup) -> Unit) {
+private fun MachineCard(group: MachineGroup, isThis: Boolean, onStart: (Device, String) -> Unit, onForget: (MachineGroup) -> Unit) {
     Surface(
         color = MaterialTheme.colorScheme.surfaceVariant,
         contentColor = MaterialTheme.colorScheme.onSurface,
@@ -113,13 +124,26 @@ private fun MachineCard(group: MachineGroup, onStart: (Device, String) -> Unit, 
                     modifier = Modifier.size(if (group.online) 8.dp else 6.dp),
                 ) {}
                 Column(Modifier.padding(start = 10.dp).weight(1f)) {
-                    Text(
-                        group.head.name,
-                        style = MaterialTheme.typography.bodyLarge,
-                        fontWeight = FontWeight.SemiBold,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                    )
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(
+                            group.head.name,
+                            style = MaterialTheme.typography.bodyLarge,
+                            fontWeight = FontWeight.SemiBold,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.weight(1f, fill = false),
+                        )
+                        if (isThis) {
+                            // Muted and in the words a person would use — the
+                            // machine they are sitting at, said once, no badge.
+                            Text(
+                                " (this device)",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                maxLines = 1,
+                            )
+                        }
+                    }
                     // Each capability on its own line: what it will DO (claude),
                     // then what it SERVES. Two facets of one machine, never two
                     // machines.

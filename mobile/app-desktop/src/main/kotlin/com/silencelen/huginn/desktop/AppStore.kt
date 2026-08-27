@@ -306,6 +306,21 @@ class AppStore(
      * that refusal is the useful moment to hear it — so the error surfaces as a
      * fault rather than being swallowed.
      */
+    /**
+     * A chat on whichever machine is serving, in one act. The first available
+     * local row is the door — an unstarted chat can still be re-pointed at
+     * another machine from its model menu (daemon 2.77.0). Throws so callers
+     * report through their own channel, like every other create here.
+     */
+    suspend fun startLocalChat() {
+        val local = client.models().firstOrNull { it.family == "local" && it.available }
+            ?: throw IllegalStateException("no machine is serving local models right now")
+        val made = client.createChat("ask", model = local.id)
+        openChat(made.id)
+        openView(View.CHATS)
+        refreshChats()
+    }
+
     suspend fun startChatOn(deviceId: String, mode: String) {
         // Faults.ACTION, not CHATS: the audit caught these refusals filed
         // under the polled source, which the next successful 5s chats poll
