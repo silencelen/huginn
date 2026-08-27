@@ -43,12 +43,14 @@ import com.silencelen.huginn.data.SessionOverview
 import com.silencelen.huginn.data.LoginState
 import com.silencelen.huginn.data.RouteResolver
 import com.silencelen.huginn.data.UriByteStream
+import com.silencelen.huginn.data.Watchers
 import com.silencelen.huginn.notify.SessionWatchWorker
 import com.silencelen.huginn.ui.LiveInput
 import com.silencelen.huginn.notify.AppLock
 import com.silencelen.huginn.notify.Heartbeat
 import com.silencelen.huginn.notify.HuginnMessagingService
 import com.silencelen.huginn.notify.WatchService
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -957,7 +959,7 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
             // that runs once per connection, which is exactly the cadence feature
             // detection wants. A 404 here turns every scratchpad control off.
             runCatching { client.scratchpads() }
-                .onSuccess { _scratchpads.value = it; _scratchpadsAvailable.value = true }
+                .onSuccess { landPads(it) }
                 .onFailure { if (it is HuginnClient.HuginnException && it.code == 404) _scratchpadsAvailable.value = false }
             _loading.value = false
         }
@@ -1091,15 +1093,21 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
             awaitReady()
             // The header first: it is the cheapest thing on this wire and the
             // first thing somebody arriving actually reads.
+            // The generation is captured BEFORE each fetch: what comes back was
+            // read server-side at that moment, and a save of ours can land in
+            // between — after which the poll is a photograph of the text as it
+            // read before it was typed. See SessionMetaSaver's invariant 1.
+            var at = metaSaver.generation()
             runCatching { client.sessionOverview(name) }
-                .onSuccess { _overview.value = it; _overviewNote.value = null; metaSaver.refresh(name, it.meta) }
+                .onSuccess { _overview.value = it; _overviewNote.value = null; metaSaver.refresh(name, it.meta, at) }
                 .onFailure { _overviewNote.value = noteFor(it) }
             while (isActive) {
+                at = metaSaver.generation()
                 runCatching { client.sessionGraph(name, _sessionGraph.value?.cursor) }
                     .onSuccess { g ->
                         if (!g.unchanged) {
                             _sessionGraph.value = g
-                            metaSaver.refresh(name, g.meta)
+                            metaSaver.refresh(name, g.meta, at)
                         }
                         _overviewNote.value = null
                     }
@@ -1147,8 +1155,8 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
      * same reason: the flush that matters happens as the editor is torn down, and
      * a scope owned by that editor is cancelled at the exact moment it has work.
      */
-    val padSaver = ScratchpadSaver(viewModelScope, { id, rev, content ->
-        client.saveScratchpad(id, rev, content = content)
+    val padSaver = ScratchpadSaver(viewModelScope, { id, rev, name, content ->
+        client.saveScratchpad(id, rev, name = name, content = content)
     })
 
     /**
@@ -1175,31 +1183,59 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch {
             awaitReady()
             runCatching { client.scratchpads() }
-                .onSuccess { _scratchpads.value = it; _scratchpadsAvailable.value = true }
+                .onSuccess { landPads(it) }
                 .onFailure { if (it is HuginnClient.HuginnException && it.code == 404) _scratchpadsAvailable.value = false }
         }
+    }
+
+    /**
+     * Ordered HERE, once, for every surface that lists pages — the list, the
+     * switcher, the composer chip. See ScratchpadRules.ordered for why it is not
+     * the order the daemon happens to send.
+     */
+    private fun landPads(pads: List<Scratchpad>) {
+        _scratchpads.value = ScratchpadRules.ordered(pads)
+        _scratchpadsAvailable.value = true
     }
 
     private var padsPollJob: Job? = null
 
     /**
+     * Which surfaces are watching the pages list.
+     *
+     * ⚠ A SET, not a boolean, because two of them share the poll on a wide
+     * screen: the list and the editor sit side by side, and closing the editor
+     * used to stop the poll the LIST was still reading from — after which it sat
+     * frozen with nothing on screen looking wrong. See [Watchers].
+     */
+    private val padWatchers = Watchers()
+
+    /**
      * Live only while a scratchpad surface is on screen. Ten seconds, like Rounds:
      * a page changes at human speed, and the row's own line is rounded to minutes.
+     *
+     * @param surface which one is asking — "list" or "editor". Balanced by
+     *   [stopScratchpadsPolling] with the same name.
      */
-    fun startScratchpadsPolling() {
+    fun startScratchpadsPolling(surface: String = "list") {
+        // The job is checked as well as the count: a loop that ended on its own
+        // (a throw out of awaitReady) would otherwise stay dead for as long as
+        // anybody was still nominally watching it.
+        if (!padWatchers.enter(surface) && padsPollJob?.isActive == true) return
         padsPollJob?.cancel()
         padsPollJob = viewModelScope.launch {
             awaitReady()
             while (isActive) {
                 runCatching { client.scratchpads() }
-                    .onSuccess { _scratchpads.value = it; _scratchpadsAvailable.value = true }
+                    .onSuccess { landPads(it) }
                     .onFailure { if (it is HuginnClient.HuginnException && it.code == 404) _scratchpadsAvailable.value = false }
                 delay(10_000)
             }
         }
     }
 
-    fun stopScratchpadsPolling() {
+    fun stopScratchpadsPolling(surface: String = "list") {
+        if (!padWatchers.leave(surface)) return
         padsPollJob?.cancel()
         padsPollJob = null
     }
@@ -1212,8 +1248,12 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
     fun openScratchpad(id: String) {
         viewModelScope.launch {
             awaitReady()
+            // Captured BEFORE the fetch: what comes back is the page as the daemon
+            // read it, and a write of ours can land in between. See the saver's
+            // invariant 1 — capturing after would prove nothing.
+            val at = padSaver.generation()
             runCatching { client.scratchpad(id) }
-                .onSuccess { padSaver.open(it) }
+                .onSuccess { padSaver.open(it, at) }
                 .onFailure { _toast.value = errText(it) }
         }
     }
@@ -1225,7 +1265,7 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
             awaitReady()
             runCatching { client.createScratchpad(name) }
                 .onSuccess { made ->
-                    _scratchpads.value = _scratchpads.value + made
+                    landPads(_scratchpads.value + made)
                     refreshScratchpads()
                     padSaver.open(made)
                     onCreated(made.id)
@@ -1234,14 +1274,21 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
+    /**
+     * THROUGH THE SAVER, not straight at the wire. A rename and an autosave PATCH
+     * the same row with the same rev, so a rename fired while a save was in the
+     * air made one of them lose: the save losing put the server's older text back
+     * over live typing, the rename losing simply did not happen. The saver's chain
+     * makes them a queue.
+     */
     fun renameScratchpad(id: String, name: String) {
         viewModelScope.launch {
             awaitReady()
             val rev = padSaver.pad.value?.takeIf { it.id == id }?.rev
                 ?: _scratchpads.value.firstOrNull { it.id == id }?.rev ?: return@launch
-            runCatching { client.saveScratchpad(id, rev, name = name) }
-                .onSuccess { saved -> padSaver.open(saved.pad); refreshScratchpads() }
-                .onFailure { _toast.value = errText(it) }
+            padSaver.rename(id, name, rev)
+                .onSuccess { refreshScratchpads() }
+                .onFailure { if (it !is CancellationException) _toast.value = errText(it) }
         }
     }
 
@@ -2302,7 +2349,15 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
         _chatWaking.value = ModelLabels.isLocal(_chatModel.value, _models.value)
         _streamingText.value = ""
         _activeTool.value = null
-        collect(id, client.sendMessage(id, text, scratchpadId = padId), sentText = text)
+        // The page reference travels with the text on the way back too: a refused
+        // send that restores the words but forgets the page is a message that
+        // silently loses its attachment, and the second attempt sends without it.
+        collect(
+            id,
+            client.sendMessage(id, text, scratchpadId = padId),
+            sentText = text,
+            sentPadId = padId,
+        )
     }
 
     /** Interrupts a running session the way Esc does at the keyboard. */
@@ -2332,7 +2387,12 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
         _chatPage.value = null
     }
 
-    private fun collect(id: String, flow: kotlinx.coroutines.flow.Flow<ChatEvent>, sentText: String? = null) {
+    private fun collect(
+        id: String,
+        flow: kotlinx.coroutines.flow.Flow<ChatEvent>,
+        sentText: String? = null,
+        sentPadId: String? = null,
+    ) {
         streamJob?.cancel()
         streamJob = viewModelScope.launch {
             // A Failure as the VERY FIRST event is an HTTP refusal — the daemon
@@ -2373,9 +2433,13 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
                         if (!sawStream) {
                             // Refused at the door: no run exists, nothing will
                             // land. The typed message goes back to the composer
-                            // it was cleared from a moment earlier.
+                            // it was cleared from a moment earlier — and so does
+                            // the page it was carrying, which is part of the
+                            // message as far as the person who attached it is
+                            // concerned.
                             _sending.value = false
                             sentText?.let { setDraft(chatDraftKey(id), it) }
+                            sentPadId?.let { setPadRef(ScratchpadRules.chatRefKey(id), it) }
                         }
                     }
                     ChatEvent.Done -> {

@@ -256,13 +256,19 @@ class SessionController(
                 // reset the editors to the last meta the POLL returned, which
                 // after a save from this client is the text before it was typed.
                 if (meta.session.value != name) meta.open(name, SessionMeta())
+                // The generation is captured BEFORE each fetch: what comes back
+                // was read server-side at that moment, and a save of ours can land
+                // in between — after which the poll is a photograph of the text as
+                // it read before it was typed. See SessionMetaSaver's invariant 1.
+                var at = meta.generation()
                 runCatching { client.sessionOverview(name) }
-                    .onSuccess { _overview.value = it; _overviewNote.value = null; meta.refresh(name, it.meta) }
+                    .onSuccess { _overview.value = it; _overviewNote.value = null; meta.refresh(name, it.meta, at) }
                     .onFailure { _overviewNote.value = overviewNoteFor(it) }
                 while (scope.isActive) {
+                    at = meta.generation()
                     runCatching { client.sessionGraph(name, _graph.value?.cursor) }
                         .onSuccess { g ->
-                            if (!g.unchanged) { _graph.value = g; meta.refresh(name, g.meta) }
+                            if (!g.unchanged) { _graph.value = g; meta.refresh(name, g.meta, at) }
                             _overviewNote.value = null
                         }
                         .onFailure { _overviewNote.value = overviewNoteFor(it) }

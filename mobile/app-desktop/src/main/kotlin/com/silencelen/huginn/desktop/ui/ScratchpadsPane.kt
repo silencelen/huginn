@@ -107,6 +107,54 @@ const val PANEL_MIN_WINDOW_DP: Int = 900
 
 val PANEL_WIDTH = 360.dp
 
+// ------------------------------------------------------- is it on screen at all
+//
+// ⚠ THREE CONDITIONS DECIDE WHETHER THE PANEL IS DRAWN, and for a while only ONE
+// of them decided whether Esc closed it. `store.padPanel` is a flag that says
+// "the reader would like the panel"; it can be true in Settings, true against a
+// daemon that has no pages, and true in a window too narrow to hold it. Esc read
+// that flag alone, so in all three cases Escape silently closed a panel that was
+// not there instead of leaving the conversation — the key doing nothing visible
+// is the worst kind of broken, because the reader presses it again.
+//
+// So the rule lives here, next to the number it depends on, and the keyboard and
+// the render sites ask the same question rather than each keeping their own half.
+
+/**
+ * Whether this window has anywhere to PUT the panel: the daemon has pages, and
+ * the reader is in a conversation (a chat or a session), which is the only place
+ * the panel is drawn beside anything.
+ */
+fun padPanelHasHome(
+    view: View,
+    chatOpen: Boolean,
+    sessionOpen: Boolean,
+    padsAvailable: Boolean?,
+): Boolean = padsAvailable == true && when (view) {
+    View.CHATS -> chatOpen
+    View.SESSIONS -> sessionOpen
+    else -> false
+}
+
+/**
+ * …and whether the pane it would come out of is wide enough to still be a
+ * conversation afterwards.
+ *
+ * @param detailWidthDp the width of the pane the panel takes its 360dp from — NOT
+ *   the window: the rail and the list pane are already spoken for.
+ */
+fun padPanelFits(detailWidthDp: Float): Boolean = detailWidthDp >= PANEL_MIN_WINDOW_DP
+
+/** All three: what the render sites draw, and the only thing Esc may close. */
+fun padPanelShowing(
+    open: Boolean,
+    view: View,
+    chatOpen: Boolean,
+    sessionOpen: Boolean,
+    padsAvailable: Boolean?,
+    detailWidthDp: Float,
+): Boolean = open && padPanelHasHome(view, chatOpen, sessionOpen, padsAvailable) && padPanelFits(detailWidthDp)
+
 @Composable
 private fun PadEditor(store: AppStore, target: PadTarget?, modifier: Modifier) {
     val pads by store.pads.collectAsState()

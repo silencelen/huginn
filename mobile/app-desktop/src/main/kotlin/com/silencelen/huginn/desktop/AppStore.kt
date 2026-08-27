@@ -8,6 +8,7 @@ import com.silencelen.huginn.data.Scratchpad
 import com.silencelen.huginn.data.ScratchpadSaver
 import com.silencelen.huginn.data.SessionMetaSaver
 import com.silencelen.huginn.ui.RoundDraft
+import com.silencelen.huginn.ui.ScratchpadRules
 import com.silencelen.huginn.ui.toSchedule
 import com.silencelen.huginn.desktop.device.DeviceRunner
 import com.silencelen.huginn.desktop.update.BuildInfo
@@ -25,6 +26,7 @@ import com.silencelen.huginn.data.Usage
 import com.silencelen.huginn.data.Watch
 import com.silencelen.huginn.data.WatchEvent
 import com.silencelen.huginn.desktop.update.DesktopUpdater
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -249,8 +251,8 @@ class AppStore(
      * the flush that matters happens as the panel closes, which is the exact
      * moment a scope owned by that panel would be cancelled.
      */
-    val padSaver = ScratchpadSaver(scope, { id, rev, content ->
-        client.saveScratchpad(id, rev, content = content)
+    val padSaver = ScratchpadSaver(scope, { id, rev, name, content ->
+        client.saveScratchpad(id, rev, name = name, content = content)
     })
 
     /**
@@ -300,9 +302,19 @@ class AppStore(
      */
     suspend fun refreshPads() {
         runCatching { client.scratchpads() }
-            .onSuccess { _pads.value = it; _padsAvailable.value = true }
+            // Ordered HERE, once, for every surface that lists pages — the rail
+            // view, the switcher, the composer chip and the palette all read this
+            // one flow. See ScratchpadRules.ordered for why it is not the order
+            // the daemon happens to send.
+            .onSuccess { _pads.value = ScratchpadRules.ordered(it); _padsAvailable.value = true }
             .onFailure {
-                if (it is HuginnClient.HuginnException && it.code == 404) _padsAvailable.value = false
+                if (it is HuginnClient.HuginnException && it.code == 404) {
+                    _padsAvailable.value = false
+                    // A panel that can never be drawn must not stay "open" in the
+                    // flag: Esc consults it, and a flag nothing can render is the
+                    // definition of an ambush.
+                    _padPanel.value = false
+                }
             }
     }
 
@@ -312,8 +324,12 @@ class AppStore(
      * that types back at you.
      */
     suspend fun openPad(id: String) {
+        // Captured BEFORE the fetch. What comes back is the page as the daemon
+        // read it, and a write of ours can land in between — see the saver's
+        // invariant 1. Capturing after would prove nothing.
+        val at = padSaver.generation()
         runCatching { client.scratchpad(id) }
-            .onSuccess { padSaver.open(it) }
+            .onSuccess { padSaver.open(it, at) }
             .onFailure { note(Faults.ACTION, it) }
     }
 
@@ -331,12 +347,19 @@ class AppStore(
             .onFailure { note(Faults.ACTION, it) }
     }
 
+    /**
+     * THROUGH THE SAVER, not straight at the wire. A rename and an autosave PATCH
+     * the same row with the same rev, so a rename fired while a save was in the
+     * air made one of them lose: the save losing put the server's older text back
+     * over live typing, the rename losing simply did not happen. The saver's chain
+     * makes them a queue.
+     */
     suspend fun renamePad(id: String, name: String) {
         val rev = padSaver.pad.value?.takeIf { it.id == id }?.rev
             ?: _pads.value.firstOrNull { it.id == id }?.rev ?: return
-        runCatching { client.saveScratchpad(id, rev, name = name) }
-            .onSuccess { saved -> padSaver.open(saved.pad); refreshPads() }
-            .onFailure { note(Faults.ACTION, it) }
+        padSaver.rename(id, name, rev)
+            .onSuccess { refreshPads() }
+            .onFailure { if (it !is CancellationException) note(Faults.ACTION, it) }
     }
 
     suspend fun deletePad(id: String) {

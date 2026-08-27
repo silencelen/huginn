@@ -100,7 +100,7 @@ class DeviceRunner(
                 // and this loop is what pays it — see retireIfOwed and [Unenrol].
                 if (retireIfOwed()) continue
                 _status.value = DeviceStatus(note = "Off")
-                delay(2_000)
+                waitOrWake(IDLE_POLL_MS) { settings.deviceEnabledNow() }
                 continue
             }
             try {
@@ -222,7 +222,12 @@ class DeviceRunner(
             deviceId = id,
             note = Unenrol.note(step, failure?.let { short(it) }) ?: "Off",
         )
-        delay(Unenrol.backoffMs(unenrolAttempts))
+        // ⚠ NOT a plain delay. This backoff reaches five minutes, and it runs
+        // inside the loop that also watches the toggle — so a flat wait meant
+        // turning the device back ON did nothing at all for up to 300 seconds,
+        // with Settings still reading "Off" and no way to tell whether the click
+        // had registered. Sliced, so the answer to "I changed my mind" is a second.
+        waitOrWake(Unenrol.backoffMs(unenrolAttempts)) { settings.deviceEnabledNow() }
         unenrolAttempts += 1
         return true
     }
@@ -377,6 +382,44 @@ class DeviceRunner(
         (e.message ?: e::class.simpleName ?: "unknown").take(120)
 
     companion object {
+        /** How long the disabled loop rests between passes. */
+        const val IDLE_POLL_MS: Long = 2_000
+
+        /**
+         * How often a wait looks up to see whether it is still worth waiting.
+         * A second: fast enough that a toggle feels like a toggle, slow enough
+         * that five minutes of backoff is 300 checks of one boolean.
+         */
+        const val WAKE_SLICE_MS: Long = 1_000
+
+        /**
+         * Waits [totalMs] — but in slices, and gives up the moment [wake] is true.
+         *
+         * The whole point is that a long wait must not swallow a decision made
+         * during it. A `delay(300_000)` is unreachable from the outside except by
+         * cancelling the coroutine that holds it, and cancelling this one would
+         * take the unenrol debt down with it.
+         *
+         * @return true when it woke early, false when it waited the whole time.
+         */
+        internal suspend fun waitOrWake(
+            totalMs: Long,
+            sliceMs: Long = WAKE_SLICE_MS,
+            wake: () -> Boolean,
+        ): Boolean {
+            var left = totalMs
+            while (left > 0) {
+                // Asked BEFORE the first sleep: a toggle that flipped while the
+                // last request was in flight is already true, and sleeping on it
+                // once would be a second nobody needs to wait.
+                if (wake()) return true
+                val step = if (left < sliceMs) left else sliceMs
+                delay(step)
+                left -= step
+            }
+            return wake()
+        }
+
         /**
          * The name that appears in the device list. The computer's own name, because
          * that is what the owner calls it — a uuid in a list of machines is a list
