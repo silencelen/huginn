@@ -221,8 +221,16 @@ function parseFlags(argv, known) {
     const eq = a.indexOf('=');
     const name = (eq >= 0 ? a.slice(2, eq) : a.slice(2));
     if (!known.includes(name)) return { error: `unknown flag "--${name}"` };
+    // The value-less flags, and NO `=` form for them. `--purge-models=false`
+    // has one honest reading and it is "keep the models", but the eq branch
+    // below stores a STRING, and every `if (flags.x)` here reads a non-empty
+    // string as yes — so the one spelling somebody reaches for to turn a
+    // destructive flag off is the spelling that turns it on.
+    if (['yes', 'system', 'json', 'purge-models', 'purge'].includes(name)) {
+      if (eq >= 0) return { error: `--${name} takes no value (write it as --${name})` };
+      flags[name] = true; continue;
+    }
     if (eq >= 0) { flags[name] = a.slice(eq + 1); continue; }
-    if (['yes', 'system', 'json', 'purge-models'].includes(name)) { flags[name] = true; continue; }
     const v = argv[++i];
     if (v === undefined) return { error: `--${name} needs a value` };
     flags[name] = v;
@@ -848,9 +856,41 @@ function manifestHash() {
 
 // ------------------------------------------------------------------- off
 
+/**
+ * The whole local tier, gone. GUARDED rather than trusted: HUGINN_LOCAL_DIR is
+ * an argument somebody supplies, and a recursive delete of whatever it happens
+ * to hold is the one mistake this file must never make. The two answers that
+ * mean it was set to the wrong thing are a filesystem root and a home
+ * directory, and neither is something the local tier ever owns.
+ */
+function purgeDir() {
+  const dir = path.resolve(localDir());
+  if (dir === path.parse(dir).root || dir === path.resolve(os.homedir())) {
+    throw new Error(`refusing to delete ${dir} — HUGINN_LOCAL_DIR names a directory the local tier does not own`);
+  }
+  fs.rmSync(dir, { recursive: true, force: true });
+}
+
+/** The typed confirmation. A y/n is too cheap for a delete this size. */
+function typedDelete(what) {
+  return new Promise((res) => {
+    process.stdout.write(`Type "delete" to remove ${what}: `);
+    process.stdin.setEncoding('utf8');
+    process.stdin.once('data', (d) => { process.stdin.pause(); res(String(d).trim() === 'delete'); });
+  });
+}
+
 async function cmdOff(flags) {
-  const conf = loadConf();
-  if (!conf) { console.error('not set up — nothing to turn off'); process.exit(1); }
+  const stored = loadConf();
+  const purging = flags.purge === true || flags['purge-models'] === true;
+  // ⚠ `off` now takes local.json with it — the credentials are the point of the
+  // verb — so the SECOND off, the one somebody runs after reading "off, not
+  // gone: 12 model file(s) remain", arrives with no config to load. Refusing
+  // there would strand the exact files that message just pointed at.
+  if (!stored && !(purging && fs.existsSync(localDir()))) {
+    console.error('not set up — nothing to turn off'); process.exit(1);
+  }
+  const conf = stored || {};
   refuseUnelevated('turning off');
   let failed = 0;
   const step = (name, fn) => {
@@ -885,20 +925,50 @@ async function cmdOff(flags) {
     console.error('\nStill enrolled at the daemon — services are down; run `huginn local off` again when huginn is reachable.');
     process.exit(1);
   }
-  if (flags['purge-models']) {
-    if (!flags.yes) {
-      const sure = await new Promise((res) => {
-        process.stdout.write(`Type "delete" to remove ${P('models')} and ${P('sessions')}: `);
-        process.stdin.setEncoding('utf8');
-        process.stdin.once('data', (d) => { process.stdin.pause(); res(String(d).trim() === 'delete'); });
+
+  // ⚠ THE CREDENTIALS GO WITH THE ROW, and this is the half `off` used to skip.
+  // The delegation above has just taken <localDir>/device/{device.json,appd-token}
+  // with it (huginn-device's own forget()), and these are the rest: local.json
+  // names the row, the models and the port, and api-key is the bearer the
+  // loopback server checks. A machine that had been turned off kept all of them
+  // on disk, so "off" meant a stopped service and a full set of live secrets.
+  // Not conditional on --purge: a token is not a model, and nobody turns a
+  // service off in order to keep its key.
+  step('remove local.json + api-key', () => {
+    for (const f of ['local.json', 'local.json.tmp', 'api-key']) fs.rmSync(P(f), { force: true });
+    // Belt and braces — the delegation normally already did these.
+    fs.rmSync(P('device', 'appd-token'), { force: true });
+    fs.rmSync(P('device', 'device.json'), { force: true });
+  });
+
+  if (flags.purge === true) {
+    // The whole tier: models, sessions, bin, runtime, and the directory itself.
+    // The services are already stopped and deregistered above; on Linux their
+    // UNIT FILES outlive `disable`, and a unit file pointing at a deleted
+    // binary is a service that fails on every boot forever.
+    if (!flags.yes && !(await typedDelete(localDir()))) {
+      console.log('kept the local tier.'); process.exit(failed ? 1 : 0);
+    }
+    if (process.platform !== 'win32') {
+      step('remove the systemd unit files', () => {
+        for (const name of [LLM_SERVICE, RUNNER_SERVICE]) {
+          fs.rmSync(conf.systemUnits
+            ? `/etc/systemd/system/${name}.service`
+            : path.join(os.homedir(), '.config', 'systemd', 'user', `${name}.service`), { force: true });
+        }
+        sysctl(['daemon-reload'], { user: !conf.systemUnits });
       });
-      if (!sure) { console.log('kept the models.'); process.exit(failed ? 1 : 0); }
+    }
+    step(`remove ${localDir()}`, () => purgeDir());
+  } else if (flags['purge-models']) {
+    if (!flags.yes && !(await typedDelete(`${P('models')} and ${P('sessions')}`))) {
+      console.log('kept the models.'); process.exit(failed ? 1 : 0);
     }
     step('purge models + sessions', () => { fs.rmSync(P('models'), { recursive: true, force: true }); fs.rmSync(P('sessions'), { recursive: true, force: true }); });
   } else {
     let kept = 0;
     try { kept = fs.readdirSync(P('models')).length; } catch { /* none */ }
-    if (kept) console.log(`off, not gone: ${kept} model file(s) remain at ${P('models')} — remove with: huginn local off --purge-models`);
+    if (kept) console.log(`off, not gone: ${kept} model file(s) remain at ${P('models')} — remove with: huginn local off --purge-models  (or --purge for everything)`);
   }
   if (failed) { console.error(`\n${failed} step(s) failed — NOT fully off.`); process.exit(1); }
   console.log('\nOff.');
@@ -1078,7 +1148,9 @@ function usage() {
   huginn local on     [--class G8|G16|C|A] [--gpu-uuid U] [--name N] [--yes] [--system]
                       [--adapter ollama|lmstudio [--adapter-url URL] [--adapter-key K]]
   huginn local plan   [--class G8|G16|C|A] [--name N] [--json]   what \`on\` would do, doing nothing
-  huginn local off    [--purge-models] [--yes]
+  huginn local off    [--purge-models] [--purge] [--yes]
+                      off keeps the models; --purge-models takes those too;
+                      --purge removes the whole tier, ${localDir()} included
   huginn local status [--json]
   huginn local unit   [--system] [--which llm|runner]
   huginn local update [--yes]
@@ -1088,7 +1160,7 @@ function usage() {
 async function main() {
   const cmd = process.argv[2];
   const rest = process.argv.slice(3);
-  const known = ['class', 'gpu-uuid', 'name', 'url', 'yes', 'system', 'json', 'adapter', 'adapter-url', 'adapter-key', 'purge-models', 'which'];
+  const known = ['class', 'gpu-uuid', 'name', 'url', 'yes', 'system', 'json', 'adapter', 'adapter-url', 'adapter-key', 'purge-models', 'purge', 'which'];
   const parsed = parseFlags(rest, known);
   if (parsed.error) { console.error(`huginn-local ${cmd || ''}: ${parsed.error}`); process.exit(2); }
   const flags = parsed.flags;
