@@ -608,6 +608,47 @@ test('a message sent during a Round run is refused, not swallowed', async () => 
     'the note does not quote the message, which is the only copy left');
 });
 
+test('a chat sealed while the message body is in flight is refused, not restarted', async () => {
+  // ⚠ THE ONE GAP settleRun cannot cover. settleRun runs whole in a single turn
+  // — finish, seal, drain, note — so nothing interleaves with it EXCEPT a
+  // request already parked inside its own readBody await. The route's seal check
+  // read `meta` from before that await; a seal landing inside the window then
+  // sailed past the stale check and startRunAnywhere reopened the chat that had
+  // just closed itself. This drives the window deterministically: half the body,
+  // seal, the rest of the body.
+  const made = await api('/v1/chats', { method: 'POST', body: JSON.stringify({ mode: 'ask' }) });
+  assert.equal(made.status, 201, JSON.stringify(made.body));
+  const id = made.body.id;
+  const metaPath = path.join(tmp, 'data', 'chats', id, 'meta.json');
+
+  const payload = JSON.stringify({ text: 'arrived after the end' });
+  let sendRest;
+  const gate = new Promise((r) => { sendRest = r; });
+  const stream = new ReadableStream({
+    async start(c) {
+      c.enqueue(new TextEncoder().encode(payload.slice(0, 6)));
+      await gate;
+      c.enqueue(new TextEncoder().encode(payload.slice(6)));
+      c.close();
+    },
+  });
+  const resP = fetch(`${BASE}/v1/chats/${id}/messages`, {
+    method: 'POST',
+    duplex: 'half',
+    body: stream,
+    headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+  });
+  await wait(250); // the daemon is inside readBody on the half-sent body
+  const m = JSON.parse(fs.readFileSync(metaPath, 'utf8'));
+  m.sealed = true; // exactly what settleRun writes when a Round's run closes
+  fs.writeFileSync(metaPath, JSON.stringify(m));
+  sendRest();
+  const res = await resP;
+  assert.equal(res.status, 409, `a message that outlived the seal must be refused, got ${res.status}`);
+  const after = await api(`/v1/chats/${id}`);
+  assert.equal(after.body.running, false, 'the sealed chat must not have started a run');
+});
+
 test('run transcripts do not outlive the history that points at them', async () => {
   // ⚠ finishRoundRun promised the conversation "stays readable forever", and
   // after the 11th run the chat id was evicted from runs[] — while round chats
