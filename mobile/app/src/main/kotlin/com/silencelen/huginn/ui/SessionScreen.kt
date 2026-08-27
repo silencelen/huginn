@@ -55,13 +55,15 @@ import kotlinx.coroutines.launch
 import com.silencelen.huginn.data.TranscriptPage
 
 /**
- * One tmux session, two ways of looking at it.
+ * One tmux session, three ways of looking at it.
  *
  * **Conversation** is the default and is read from the session's Claude Code
  * transcript: real structured events (thinking, tool calls with their results,
  * subagent output, workflow runs) rather than anything scraped off the screen.
  * **Screen** is the live pane, for the things only the pane can do: answering a
- * prompt, watching a spinner, typing.
+ * prompt, watching a spinner, typing. **Overview** is the other end of the same
+ * material — the whole run rather than the last few minutes of it: what it has
+ * spent, where the pace lands, and a map of what it did while nobody watched.
  */
 @Composable
 fun SessionScreen(
@@ -106,11 +108,19 @@ fun SessionScreen(
     pads: List<com.silencelen.huginn.data.Scratchpad> = emptyList(),
     padRefId: String? = null,
     onPadRef: (String?) -> Unit = {},
+    /**
+     * The Overview tab's content. A slot rather than a dozen more parameters:
+     * this screen is a frame, and everything that surface needs — the graph, the
+     * plan, the autosaving editors — is already assembled where the view model
+     * lives.
+     */
+    overviewPane: @Composable () -> Unit = {},
 ) {
     Column(Modifier.fillMaxSize()) {
         TabRow(selectedTabIndex = tab) {
             Tab(selected = tab == 0, onClick = { onTab(0) }, text = { Text("Conversation") })
             Tab(selected = tab == 1, onClick = { onTab(1) }, text = { Text("Screen") })
+            Tab(selected = tab == 2, onClick = { onTab(2) }, text = { Text("Overview") })
         }
         SessionControls(
             // The pane reports the CURRENT model and mode; the transcript only
@@ -128,7 +138,9 @@ fun SessionScreen(
             compacting = screen?.compacting ?: false,
         )
         Box(Modifier.weight(1f)) {
-            if (tab == 0) {
+            if (tab == 2) {
+                overviewPane()
+            } else if (tab == 0) {
                 SessionConversation(
                     name = name,
                     page = transcript,
