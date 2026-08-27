@@ -102,6 +102,10 @@ fun SessionScreen(
     onAttach: (android.net.Uri) -> Unit = {},
     onAttachFile: (android.net.Uri) -> Unit = {},
     onClearAttachment: () -> Unit = {},
+    /** Empty against a daemon with no scratchpads, which hides the control. */
+    pads: List<com.silencelen.huginn.data.Scratchpad> = emptyList(),
+    padRefId: String? = null,
+    onPadRef: (String?) -> Unit = {},
 ) {
     Column(Modifier.fillMaxSize()) {
         TabRow(selectedTabIndex = tab) {
@@ -154,6 +158,9 @@ fun SessionScreen(
                 onAttach = onAttach,
                 onAttachFile = onAttachFile,
                 onClearAttachment = onClearAttachment,
+                pads = pads,
+                padRefId = padRefId,
+                onPadRef = onPadRef,
             )
             } else {
                 TerminalScreen(
@@ -211,6 +218,9 @@ private fun SessionConversation(
     onAttach: (android.net.Uri) -> Unit = {},
     onAttachFile: (android.net.Uri) -> Unit = {},
     onClearAttachment: () -> Unit = {},
+    pads: List<com.silencelen.huginn.data.Scratchpad> = emptyList(),
+    padRefId: String? = null,
+    onPadRef: (String?) -> Unit = {},
 ) {
     val scope = rememberCoroutineScope()
     val listState = rememberLazyListState()
@@ -371,6 +381,17 @@ private fun SessionConversation(
 
         Surface(color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f)) {
           Column {
+            // The page a session's Claude will be pointed at. It reaches the pane
+            // as a PATH — a page holds more than a pane accepts in one paste — so
+            // the run reads it rather than being handed it.
+            if (pads.isNotEmpty()) {
+                ScratchpadChip(
+                    pads = pads,
+                    selectedId = padRefId,
+                    onSelect = onPadRef,
+                    modifier = Modifier.padding(start = 8.dp, top = 4.dp),
+                )
+            }
             AttachmentBar(attachment, onClearAttachment)
             Row(
                 Modifier

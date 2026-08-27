@@ -402,9 +402,17 @@ fun main(args: Array<String>) {
                     shortcut == Shortcut.VIEW_SESSIONS -> { store.openView(View.SESSIONS); true }
                     shortcut == Shortcut.VIEW_STATUS -> { store.openView(View.STATUS); true }
                     shortcut == Shortcut.VIEW_SETTINGS -> { store.openView(View.SETTINGS); true }
+                    shortcut == Shortcut.VIEW_SCRATCHPADS -> { store.openView(View.SCRATCHPADS); true }
+                    shortcut == Shortcut.TOGGLE_PAD_PANEL -> { store.togglePadPanel(); true }
                     shortcut == Shortcut.NEW_ASK -> { newChat("ask"); true }
                     shortcut == Shortcut.NEW_ACT -> { newChat("act"); true }
-                    shortcut == Shortcut.BACK -> { store.back(); true }
+                    // Esc closes the PANEL first. It is the newest thing on
+                    // screen and the one the reader most likely meant; leaving the
+                    // conversation instead would be Esc doing two things at once.
+                    shortcut == Shortcut.BACK -> {
+                        if (store.padPanel.value) store.setPadPanel(false) else store.back()
+                        true
+                    }
                     shortcut == Shortcut.LIST_PREV -> { store.stepList(-1); true }
                     shortcut == Shortcut.LIST_NEXT -> { store.stepList(1); true }
                     // The seam, from the keyboard. Clamping lives in the settings
@@ -496,12 +504,21 @@ fun main(args: Array<String>) {
                         CommandPalette(
                             chats = store.chats.collectAsState().value,
                             sessions = store.sessions.collectAsState().value,
+                            pads = if (store.padsAvailable.collectAsState().value == true) {
+                                store.pads.collectAsState().value
+                            } else {
+                                emptyList()
+                            },
                             onDismiss = { paletteOpen.value = false },
                             onPick = { item ->
                                 paletteOpen.value = false
                                 when (item) {
                                     is PaletteItem.OpenChat -> store.openChat(item.id)
                                     is PaletteItem.OpenSession -> store.openSession(item.name)
+                                    is PaletteItem.OpenScratchpad -> {
+                                        store.openView(View.SCRATCHPADS)
+                                        scope.launch { store.openPad(item.id) }
+                                    }
                                     is PaletteItem.Verb -> when (item.shortcut) {
                                         Shortcut.NEW_ASK -> newChat("ask")
                                         Shortcut.NEW_ACT -> newChat("act")
@@ -511,6 +528,8 @@ fun main(args: Array<String>) {
                                         }
                                         Shortcut.VIEW_STATUS -> store.openView(View.STATUS)
                                         Shortcut.VIEW_SETTINGS -> store.openView(View.SETTINGS)
+                                        Shortcut.VIEW_SCRATCHPADS -> store.openView(View.SCRATCHPADS)
+                                        Shortcut.TOGGLE_PAD_PANEL -> store.togglePadPanel()
                                         else -> Unit
                                     }
                                 }

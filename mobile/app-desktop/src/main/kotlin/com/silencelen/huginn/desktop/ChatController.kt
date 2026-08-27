@@ -229,13 +229,16 @@ class ChatController(
      * where it was typed, rather than as a banner about a message that is not
      * shown.
      */
-    fun send(text: String) {
+    fun send(text: String, scratchpadId: String? = null) {
         val body = text.trim()
         if (body.isEmpty()) return
         cue.clear()
         scope.launch {
             if (_running.value) {
-                runCatching { client.queueMessage(chatId, body) }
+                // The daemon composes the reference AT RECEIPT and stores the
+                // composed text, so a queued message quotes the page as it read
+                // when Send was pressed rather than when the queue drains.
+                runCatching { client.queueMessage(chatId, body, scratchpadId = scratchpadId) }
                     .onSuccess { loadTranscript() }
                     .onFailure { _notice.value = it.message ?: "could not queue that message" }
                 return@launch
@@ -251,7 +254,7 @@ class ChatController(
                 _activity.value = WAKING
             }
             reattempts = 0
-            consume(client.sendMessage(chatId, body))
+            consume(client.sendMessage(chatId, body, scratchpadId = scratchpadId))
         }
     }
 

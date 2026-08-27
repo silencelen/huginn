@@ -104,6 +104,10 @@ fun ChatScreen(
     onAttach: (android.net.Uri) -> Unit = {},
     onAttachFile: (android.net.Uri) -> Unit = {},
     onClearAttachment: () -> Unit = {},
+    /** Empty against a daemon with no scratchpads, which hides the control. */
+    pads: List<com.silencelen.huginn.data.Scratchpad> = emptyList(),
+    padRefId: String? = null,
+    onPadRef: (String?) -> Unit = {},
 ) {
     val scope = rememberCoroutineScope()
     val listState = rememberLazyListState()
@@ -227,6 +231,9 @@ fun ChatScreen(
         Composer(
             sealedRun = sealedRun,
             onContinueRound = onContinueRound,
+            pads = pads,
+            padRefId = padRefId,
+            onPadRef = onPadRef,
             draft = draft,
             onDraft = onDraft,
             sending = sending,
@@ -303,6 +310,9 @@ private fun Composer(
     sealedRun: Boolean = false,
     /** The way out of a finished Round; null when there is nothing to carry on. */
     onContinueRound: (() -> Unit)? = null,
+    pads: List<com.silencelen.huginn.data.Scratchpad> = emptyList(),
+    padRefId: String? = null,
+    onPadRef: (String?) -> Unit = {},
     draft: String,
     onDraft: (String) -> Unit,
     sending: Boolean,
@@ -331,6 +341,17 @@ private fun Composer(
     }
     Surface(color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f)) {
       Column {
+        // Above the box rather than inside the row: the reference is a fact about
+        // the message being written, and the row below is already four controls
+        // deep on a phone.
+        if (pads.isNotEmpty()) {
+            ScratchpadChip(
+                pads = pads,
+                selectedId = padRefId,
+                onSelect = onPadRef,
+                modifier = Modifier.padding(start = 8.dp, top = 4.dp),
+            )
+        }
         AttachmentBar(attachment, onClearAttachment)
         Row(
             Modifier
