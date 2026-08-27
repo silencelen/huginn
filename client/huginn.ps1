@@ -588,7 +588,9 @@ function huginn {
       }
       if ($sub -eq 'plan') { node $mgr plan @rest; return }
       if ($sub -eq 'update') { if (Test-Path $mgr) { node $mgr update @rest }; return }
-      $dir = if ($env:HUGINN_LOCAL_DIR) { $env:HUGINN_LOCAL_DIR } else { Join-Path $env:ProgramData 'huginn-local' }
+      $dir = if ($env:HUGINN_LOCAL_DIR) { $env:HUGINN_LOCAL_DIR }
+             elseif ($env:ProgramData)  { Join-Path $env:ProgramData 'huginn-local' }
+             else                       { 'C:\ProgramData\huginn-local' }
       New-Item -ItemType Directory -Force -Path (Join-Path $dir 'device') | Out-Null
       $tokfile = Join-Path $dir 'device/appd-token'
       if (-not (Test-Path $tokfile)) {
