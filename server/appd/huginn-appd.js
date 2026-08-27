@@ -44,6 +44,7 @@ const scratchpadsLib = require('./lib/scratchpads');
 const devicesLib = require('./lib/devices');
 const { taskDirFor, parsePs, scanTasks, extractBgIds } = require('./lib/tasks');
 const { agentsDirFor, listAgents } = require('./lib/agents');
+const { sessionGraph, sessionOverview } = require('./lib/sessiongraph');
 const { suggestionContext, buildPrompt, parseSuggestions } = require('./lib/suggest');
 const { FIELDS: POLISH_FIELDS, buildPolishPrompt, parsePolish } = require('./lib/polish');
 const {
@@ -459,6 +460,58 @@ function knownBackgroundIds(st) {
   const ids = extractBgIds(t.events);
   bgIdCache.set(st.sessionId, { size, ids });
   return ids;
+}
+
+// -------------------------------------------------------- per-session notes
+//
+// The goals and notes a PERSON writes against a session — the overview surface
+// is somewhere to rest during a long run, and a rest stop with nowhere to write
+// down what you are waiting for is a dashboard.
+//
+// ⚠ KEYED ON THE CLAUDE SESSION ID, NEVER THE TMUX NAME. tmux names are reused
+// and the hook's state files outlive the sessions that wrote them (see
+// ofThisIncarnation) — 24 state files for 5 live sessions on this host, the
+// oldest a month dead. A notes file keyed on the name would hand the next
+// session called `dev` the previous one's goals, and then overwrite them.
+
+const SESSION_META_DIR = path.join(DATA_DIR, 'session-meta');
+
+const MAX_GOALS = 2_000;
+const MAX_NOTES = 20_000;
+
+function sessionMetaPath(id) { return path.join(SESSION_META_DIR, `${id}.json`); }
+
+function loadSessionMeta(id) {
+  if (!id || !/^[0-9a-zA-Z_-]{1,64}$/.test(id)) return null;
+  try { return JSON.parse(fs.readFileSync(sessionMetaPath(id), 'utf8')); } catch { return null; }
+}
+
+/** tmp+rename at 0600, like every other store here. */
+function saveSessionMeta(meta) {
+  fs.mkdirSync(SESSION_META_DIR, { recursive: true });
+  const file = sessionMetaPath(meta.sessionId);
+  fs.writeFileSync(`${file}.tmp`, JSON.stringify(meta, null, 2), { mode: 0o600 });
+  fs.renameSync(`${file}.tmp`, file);
+  return meta;
+}
+
+/**
+ * Reload, change, save — the funnel updateMeta and updatePad use, for the same
+ * reason. Two clients autosaving the same page is the ordinary case here, and a
+ * meta captured before an awaited request body is a snapshot: writing it back
+ * would drop whatever the other device saved in the gap.
+ */
+function updateSessionMeta(id, mutate) {
+  const m = loadSessionMeta(id) || { sessionId: id, goals: '', notes: '', updatedAt: 0 };
+  mutate(m);
+  m.sessionId = id;
+  m.updatedAt = Math.floor(Date.now() / 1000);
+  return saveSessionMeta(m);
+}
+
+function sessionMetaView(id) {
+  const m = loadSessionMeta(id);
+  return { goals: (m && m.goals) || '', notes: (m && m.notes) || '', updatedAt: (m && m.updatedAt) || 0 };
 }
 
 /** Background shells + agents for one session, or the empty shape. */
@@ -4551,6 +4604,82 @@ const server = http.createServer(async (req, res) => {
         return sendJson(res, 200, { suggestions: [], reason: 'running' });
       }
       return sendJson(res, 200, await suggestionsFor(st.sessionId, st.transcript));
+    }
+
+    // --- the overview: what this session has spent, and the map of what it did
+    //
+    // DELIBERATELY NOT ON /v1/sessions?preview=1 AND NOT IN THE WATCH DIGEST.
+    // The list is polled by every client and by the notification poller; a
+    // whole-file walk per session per poll would make the cheapest route on
+    // this daemon the most expensive one. And nothing here is news worth waking
+    // a parked phone for — it is a page somebody opens on purpose.
+    if ((m = p.match(/^\/v1\/sessions\/([A-Za-z0-9_][A-Za-z0-9_.-]{0,49})\/overview$/)) && req.method === 'GET') {
+      const name = m[1];
+      if (!(await sessionExists(name))) return sendErr(res, 404, 'no such session');
+      const st = readSessionState(name);
+      if (!st || !st.sessionId || !st.transcript) {
+        return sendErr(res, 409, 'no transcript recorded for this session yet — the Claude hook fires on the first prompt');
+      }
+      const o = sessionOverview(st.transcript, st.sessionId);
+      if (!o) return sendErr(res, 409, 'recorded transcript file is gone');
+      return sendJson(res, 200, {
+        name,
+        claudeSessionId: st.sessionId,
+        ...o,
+        meta: sessionMetaView(st.sessionId),
+      });
+    }
+
+    if ((m = p.match(/^\/v1\/sessions\/([A-Za-z0-9_][A-Za-z0-9_.-]{0,49})\/graph$/)) && req.method === 'GET') {
+      const name = m[1];
+      if (!(await sessionExists(name))) return sendErr(res, 404, 'no such session');
+      const st = readSessionState(name);
+      if (!st || !st.sessionId || !st.transcript) {
+        return sendErr(res, 409, 'no transcript recorded for this session yet — the Claude hook fires on the first prompt');
+      }
+      // The cursor is TWO numbers because a fan-out grows in two places. A
+      // parent writes nothing at all while six agents run, so a parent-size
+      // cursor reports "unchanged" for as long as the fan-out lasts — which is
+      // exactly the stretch the map is worth watching.
+      const g = sessionGraph(st.transcript, st.sessionId);
+      if (!g) return sendErr(res, 409, 'recorded transcript file is gone');
+      const size = Number(u.searchParams.get('size'));
+      const agentBytes = Number(u.searchParams.get('agentBytes'));
+      if (Number.isFinite(size) && size === g.cursor.size
+        && (!u.searchParams.has('agentBytes') || agentBytes === g.cursor.agentBytes)) {
+        return sendJson(res, 200, { unchanged: true, cursor: g.cursor });
+      }
+      return sendJson(res, 200, { name, ...g, meta: sessionMetaView(st.sessionId) });
+    }
+
+    if ((m = p.match(/^\/v1\/sessions\/([A-Za-z0-9_][A-Za-z0-9_.-]{0,49})\/meta$/)) && req.method === 'POST') {
+      const name = m[1];
+      if (!(await sessionExists(name))) return sendErr(res, 404, 'no such session');
+      const st = readSessionState(name);
+      // A plain shell, or a session whose first prompt has not landed yet. Said
+      // in words rather than by writing the file under the tmux name, which is
+      // the one thing this store must never do.
+      if (!st || !st.sessionId) {
+        return sendErr(res, 409, 'this session has no Claude session id yet — notes are kept against the run, not the window name');
+      }
+      const body = JSON.parse(await readBody(req) || '{}');
+      if (body.goals !== undefined && typeof body.goals !== 'string') return sendErr(res, 400, 'goals must be text');
+      if (body.notes !== undefined && typeof body.notes !== 'string') return sendErr(res, 400, 'notes must be text');
+      if (typeof body.goals === 'string' && body.goals.length > MAX_GOALS) {
+        return sendErr(res, 400, `goals are at most ${MAX_GOALS.toLocaleString('en-US')} characters`);
+      }
+      if (typeof body.notes === 'string' && body.notes.length > MAX_NOTES) {
+        return sendErr(res, 400, `notes are at most ${MAX_NOTES.toLocaleString('en-US')} characters`);
+      }
+      const saved = updateSessionMeta(st.sessionId, (meta) => {
+        if (typeof body.goals === 'string') meta.goals = body.goals;
+        if (typeof body.notes === 'string') meta.notes = body.notes;
+      });
+      return sendJson(res, 200, {
+        ok: true,
+        claudeSessionId: st.sessionId,
+        meta: { goals: saved.goals || '', notes: saved.notes || '', updatedAt: saved.updatedAt },
+      });
     }
 
     // --- the individual agents behind "0/4 agents done"

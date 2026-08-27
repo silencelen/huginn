@@ -36,6 +36,10 @@ import com.silencelen.huginn.data.PushStatus
 import com.silencelen.huginn.data.Round
 import com.silencelen.huginn.data.Scratchpad
 import com.silencelen.huginn.data.ScratchpadSaver
+import com.silencelen.huginn.data.SessionGraph
+import com.silencelen.huginn.data.SessionMeta
+import com.silencelen.huginn.data.SessionMetaSaver
+import com.silencelen.huginn.data.SessionOverview
 import com.silencelen.huginn.data.LoginState
 import com.silencelen.huginn.data.RouteResolver
 import com.silencelen.huginn.data.UriByteStream
@@ -1033,6 +1037,93 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
         roundsPollJob?.cancel()
         roundsPollJob = null
     }
+
+    // -------------------------------------------------- the session overview
+
+    private val _overview = MutableStateFlow<SessionOverview?>(null)
+    val overview: StateFlow<SessionOverview?> = _overview.asStateFlow()
+
+    private val _sessionGraph = MutableStateFlow<SessionGraph?>(null)
+    val sessionGraph: StateFlow<SessionGraph?> = _sessionGraph.asStateFlow()
+
+    /**
+     * Why there is nothing to show, in the daemon's own words. A plain shell and a
+     * session whose first prompt has not landed both reach this route legitimately
+     * and get a 409 with a reason — neither is a fault, and neither belongs in the
+     * error path beside "no route to host".
+     */
+    private val _overviewNote = MutableStateFlow<String?>(null)
+    val overviewNote: StateFlow<String?> = _overviewNote.asStateFlow()
+
+    /**
+     * The goals and notes beside a run, and their autosave. APP-SCOPED for the
+     * same reason [padSaver] is: the flush that matters happens as the tab is torn
+     * down, and a scope owned by that tab is cancelled at exactly that moment.
+     */
+    val metaSaver = SessionMetaSaver(viewModelScope, { name, goals, notes ->
+        client.saveSessionMeta(name, goals, notes)
+    })
+
+    private var overviewJob: Job? = null
+
+    /**
+     * Live only while the Overview tab is on screen, and only for the session it
+     * is showing.
+     *
+     * The map is a whole-transcript walk on the host — thirty megabytes in the
+     * worst case — so it is polled ONLY here and never from the sessions list. The
+     * cursor is what makes the poll cheap: an unchanged session answers with two
+     * numbers and nothing else.
+     */
+    fun startOverviewPolling(name: String) {
+        overviewJob?.cancel()
+        _overview.value = null
+        _sessionGraph.value = null
+        _overviewNote.value = null
+        // Opened before the fetch so typing works the instant the tab is up; the
+        // server's copy arrives underneath it through refresh(), which never
+        // overwrites a field somebody is already in. Only on the first visit,
+        // though: re-opening on every return to the tab would reset the editors
+        // to the last meta the POLL returned, which after a save from this client
+        // is the text as it read before it was typed.
+        if (metaSaver.session.value != name) metaSaver.open(name, SessionMeta())
+        overviewJob = viewModelScope.launch {
+            awaitReady()
+            // The header first: it is the cheapest thing on this wire and the
+            // first thing somebody arriving actually reads.
+            runCatching { client.sessionOverview(name) }
+                .onSuccess { _overview.value = it; _overviewNote.value = null; metaSaver.refresh(name, it.meta) }
+                .onFailure { _overviewNote.value = noteFor(it) }
+            while (isActive) {
+                runCatching { client.sessionGraph(name, _sessionGraph.value?.cursor) }
+                    .onSuccess { g ->
+                        if (!g.unchanged) {
+                            _sessionGraph.value = g
+                            metaSaver.refresh(name, g.meta)
+                        }
+                        _overviewNote.value = null
+                    }
+                    .onFailure { _overviewNote.value = noteFor(it) }
+                delay(5_000)
+            }
+        }
+    }
+
+    fun stopOverviewPolling() {
+        overviewJob?.cancel()
+        overviewJob = null
+        // The tab is gone; the sentence that was still in the air is not.
+        metaSaver.flush()
+    }
+
+    private fun noteFor(t: Throwable): String? =
+        (t as? HuginnClient.HuginnException)?.let { e ->
+            when (e.code) {
+                // The daemon predates this feature. Nothing to say about it.
+                404 -> null
+                else -> e.message
+            }
+        }
 
     // ------------------------------------------------------- scratchpads
 
