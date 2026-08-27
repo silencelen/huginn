@@ -20,6 +20,22 @@ class BackFromTest {
     }
 
     @Test
+    fun `a page goes up to the list of pages`() {
+        assertEquals(Dest.Scratchpads, backFrom(Dest.Scratchpad("pad-1"), tab = 0))
+    }
+
+    @Test
+    fun `the pages list returns to the section it was opened from`() {
+        // Pages are reachable from four places, so "up" cannot name the one it was
+        // opened from without a destination that carries it. The section is the
+        // honest answer, and it is the trade Settings already made.
+        assertEquals(Dest.Chats, backFrom(Dest.Scratchpads, tab = 0))
+        assertEquals(Dest.Sessions, backFrom(Dest.Scratchpads, tab = 1))
+        assertEquals(Dest.Rounds, backFrom(Dest.Scratchpads, tab = 3))
+        assertEquals(Dest.Status, backFrom(Dest.Scratchpads, tab = 2))
+    }
+
+    @Test
     fun `settings returns to the tab it was opened from`() {
         assertEquals(Dest.Chats, backFrom(Dest.Settings, tab = 0))
         assertEquals(Dest.Sessions, backFrom(Dest.Settings, tab = 1))

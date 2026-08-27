@@ -28,6 +28,7 @@ import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Chat
 import androidx.compose.material.icons.outlined.Computer
+import androidx.compose.material.icons.outlined.EditNote
 import androidx.compose.material.icons.outlined.Schedule
 import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material.icons.outlined.Speed
@@ -61,6 +62,7 @@ import com.silencelen.huginn.data.Chat
 import com.silencelen.huginn.data.DraftBook
 import com.silencelen.huginn.data.Device
 import com.silencelen.huginn.data.Round
+import com.silencelen.huginn.data.Scratchpad
 import com.silencelen.huginn.data.Session
 import com.silencelen.huginn.desktop.AppStore
 import com.silencelen.huginn.desktop.View
@@ -113,6 +115,10 @@ fun Shell(store: AppStore) {
     val sessions by store.sessions.collectAsState()
     val rounds by store.rounds.collectAsState()
     val devices by store.devices.collectAsState()
+    val pads by store.pads.collectAsState()
+    // Null until the probe answers; false hides the rail item outright, because a
+    // destination that 404s is worse than one that is not offered.
+    val padsAvailable by store.padsAvailable.collectAsState()
     val loaded by store.listsLoaded.collectAsState()
     // Its OWN flag. The sessions list used to be told "loaded" by the chats fetch
     // returning, so a start where chats answered and sessions did not drew "No
@@ -183,7 +189,9 @@ fun Shell(store: AppStore) {
         kill = { names -> confirming = ConfirmTarget.KillSessions(names) },
     )
 
-    val showsList = view == View.CHATS || view == View.SESSIONS
+    // Pages get the list-plus-detail shape too: the list IS the navigation, and an
+    // editor with no way to reach the other pages is a page, not a notebook.
+    val showsList = view == View.CHATS || view == View.SESSIONS || view == View.SCRATCHPADS
 
     // The rail and the footer count MACHINES, not credentials: a box serving
     // local AI beside its claude enrolment is one device to the person reading
@@ -206,6 +214,7 @@ fun Shell(store: AppStore) {
                     devices = machines.size,
                     devicesOnline = machines.count { it.online },
                     devicesBusy = machines.count { g -> g.rows.any { it.running } },
+                    pads = if (padsAvailable == true) pads else null,
                     onSelect = { store.openView(it) },
                 )
                 VerticalDivider(color = MaterialTheme.colorScheme.outlineVariant)
@@ -273,6 +282,7 @@ fun Shell(store: AppStore) {
                                     )
                                 }
                             }
+                            View.SCRATCHPADS -> ScratchpadsList(store)
                             View.SESSIONS -> SessionsList(
                                 sessions = sessions,
                                 loaded = sessionsLoaded,
@@ -331,6 +341,8 @@ fun Shell(store: AppStore) {
                             }
                         }
 
+                        View.SCRATCHPADS -> ScratchpadsDetail(store)
+
                         // Full width, like Status: a Round row already carries its
                         // report, so there is no detail half to split off.
                         View.ROUNDS -> RoundsPane(store)
@@ -354,6 +366,7 @@ fun Shell(store: AppStore) {
                 sessions = sessions,
                 rounds = rounds,
                 devices = devices,
+                pads = pads,
                 selected = if (view == View.SESSIONS) sessionSel.size else chatSel.size,
                 error = error,
                 onDismissError = { store.clearError() },
@@ -492,6 +505,8 @@ private fun NavRail(
     devices: Int,
     devicesOnline: Int,
     devicesBusy: Int,
+    /** Null when this daemon has no scratchpads, which removes the item entirely. */
+    pads: List<Scratchpad>?,
     onSelect: (View) -> Unit,
 ) {
     Column(
@@ -550,6 +565,19 @@ private fun NavRail(
             // lit for something nobody needs to do anything about.
             mark = if (devicesBusy > 0) MaterialTheme.colorScheme.primary else null,
         ) { onSelect(View.DEVICES) }
+        pads?.let { list ->
+            RailItem(
+                icon = Icons.Outlined.EditNote,
+                label = "Scratchpads",
+                count = list.size,
+                active = current == View.SCRATCHPADS,
+                tip = "Scratchpads · your own pages, and what you attach to a message",
+                // No mark. A page is only ever changed by the person reading this
+                // rail, so there is nothing here that could need them — and a dot
+                // that never means anything is a dot nobody reads.
+                mark = null,
+            ) { onSelect(View.SCRATCHPADS) }
+        }
         RailItem(
             icon = Icons.Outlined.Speed,
             label = "Status",
@@ -708,6 +736,7 @@ private fun StatusLine(
     sessions: List<Session>,
     rounds: List<Round>,
     devices: List<Device>,
+    pads: List<Scratchpad>,
     selected: Int,
     error: String?,
     onDismissError: () -> Unit,
@@ -804,6 +833,7 @@ private fun StatusLine(
                     View.ROUNDS -> "${rounds.size} rounds"
                     // Machines, not credential rows — same count as the rail badge.
                     View.DEVICES -> "${groupByMachine(devices).size} devices"
+                    View.SCRATCHPADS -> "${pads.size} pages"
                     View.STATUS -> "status"
                     View.SETTINGS -> "settings"
                 },

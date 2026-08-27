@@ -34,6 +34,8 @@ import com.silencelen.huginn.data.ClientsInfo
 import com.silencelen.huginn.data.Device
 import com.silencelen.huginn.data.PushStatus
 import com.silencelen.huginn.data.Round
+import com.silencelen.huginn.data.Scratchpad
+import com.silencelen.huginn.data.ScratchpadSaver
 import com.silencelen.huginn.data.LoginState
 import com.silencelen.huginn.data.RouteResolver
 import com.silencelen.huginn.data.UriByteStream
@@ -947,6 +949,12 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
             // rather than raising an error about a feature the user never asked for.
             runCatching { client.rounds() }.onSuccess { _rounds.value = it }
             runCatching { client.devices() }.onSuccess { _devices.value = it }
+            // The scratchpad probe rides the app-wide refresh: it is the one place
+            // that runs once per connection, which is exactly the cadence feature
+            // detection wants. A 404 here turns every scratchpad control off.
+            runCatching { client.scratchpads() }
+                .onSuccess { _scratchpads.value = it; _scratchpadsAvailable.value = true }
+                .onFailure { if (it is HuginnClient.HuginnException && it.code == 404) _scratchpadsAvailable.value = false }
             _loading.value = false
         }
     }
@@ -1024,6 +1032,160 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
     fun stopRoundsPolling() {
         roundsPollJob?.cancel()
         roundsPollJob = null
+    }
+
+    // ------------------------------------------------------- scratchpads
+
+    private val _scratchpads = MutableStateFlow<List<Scratchpad>>(emptyList())
+    val scratchpads: StateFlow<List<Scratchpad>> = _scratchpads.asStateFlow()
+
+    /**
+     * Whether this daemon HAS scratchpads. Null until the first probe answers.
+     *
+     * A 404 hides every scratchpad control — the top-bar icon, the composer chip,
+     * the destinations. FEATURE DETECTION rather than version parsing, and the
+     * distinction is the point: a version string is a claim about what a build
+     * contains, while a 404 is the route itself answering. Same silent-404 shape
+     * as refreshRounds, which is the house precedent.
+     */
+    private val _scratchpadsAvailable = MutableStateFlow<Boolean?>(null)
+    val scratchpadsAvailable: StateFlow<Boolean?> = _scratchpadsAvailable.asStateFlow()
+
+    /**
+     * The open page and its autosave. APP-SCOPED, like the draft book and for the
+     * same reason: the flush that matters happens as the editor is torn down, and
+     * a scope owned by that editor is cancelled at the exact moment it has work.
+     */
+    val padSaver = ScratchpadSaver(viewModelScope, { id, rev, content ->
+        client.saveScratchpad(id, rev, content = content)
+    })
+
+    /**
+     * Which page each composer will attach, by [ScratchpadRules] key.
+     *
+     * In memory only. A reference is a decision about the message being written
+     * right now, and one restored from disk days later would silently put a page
+     * into the next thing typed.
+     */
+    private val _padRefs = MutableStateFlow<Map<String, String>>(emptyMap())
+    val padRefs: StateFlow<Map<String, String>> = _padRefs.asStateFlow()
+
+    fun setPadRef(key: String, id: String?) {
+        _padRefs.value = _padRefs.value.toMutableMap().apply {
+            if (id == null) remove(key) else put(key, id)
+        }
+    }
+
+    /** The reference a send should carry, dropped if it names a page since deleted. */
+    private fun padRefFor(key: String): String? =
+        _padRefs.value[key]?.takeIf { id -> _scratchpads.value.any { it.id == id } }
+
+    fun refreshScratchpads() {
+        viewModelScope.launch {
+            awaitReady()
+            runCatching { client.scratchpads() }
+                .onSuccess { _scratchpads.value = it; _scratchpadsAvailable.value = true }
+                .onFailure { if (it is HuginnClient.HuginnException && it.code == 404) _scratchpadsAvailable.value = false }
+        }
+    }
+
+    private var padsPollJob: Job? = null
+
+    /**
+     * Live only while a scratchpad surface is on screen. Ten seconds, like Rounds:
+     * a page changes at human speed, and the row's own line is rounded to minutes.
+     */
+    fun startScratchpadsPolling() {
+        padsPollJob?.cancel()
+        padsPollJob = viewModelScope.launch {
+            awaitReady()
+            while (isActive) {
+                runCatching { client.scratchpads() }
+                    .onSuccess { _scratchpads.value = it; _scratchpadsAvailable.value = true }
+                    .onFailure { if (it is HuginnClient.HuginnException && it.code == 404) _scratchpadsAvailable.value = false }
+                delay(10_000)
+            }
+        }
+    }
+
+    fun stopScratchpadsPolling() {
+        padsPollJob?.cancel()
+        padsPollJob = null
+    }
+
+    /**
+     * Fetches a page's TEXT and opens it. The list is polled; content is not —
+     * a poll that replaced the text under a cursor would be an editor that types
+     * back at you.
+     */
+    fun openScratchpad(id: String) {
+        viewModelScope.launch {
+            awaitReady()
+            runCatching { client.scratchpad(id) }
+                .onSuccess { padSaver.open(it) }
+                .onFailure { _toast.value = errText(it) }
+        }
+    }
+
+    fun closeScratchpad() = padSaver.close()
+
+    fun createScratchpad(name: String, onCreated: (String) -> Unit = {}) {
+        viewModelScope.launch {
+            awaitReady()
+            runCatching { client.createScratchpad(name) }
+                .onSuccess { made ->
+                    _scratchpads.value = _scratchpads.value + made
+                    refreshScratchpads()
+                    padSaver.open(made)
+                    onCreated(made.id)
+                }
+                .onFailure { _toast.value = errText(it) }
+        }
+    }
+
+    fun renameScratchpad(id: String, name: String) {
+        viewModelScope.launch {
+            awaitReady()
+            val rev = padSaver.pad.value?.takeIf { it.id == id }?.rev
+                ?: _scratchpads.value.firstOrNull { it.id == id }?.rev ?: return@launch
+            runCatching { client.saveScratchpad(id, rev, name = name) }
+                .onSuccess { saved -> padSaver.open(saved.pad); refreshScratchpads() }
+                .onFailure { _toast.value = errText(it) }
+        }
+    }
+
+    fun deleteScratchpad(id: String) {
+        viewModelScope.launch {
+            awaitReady()
+            runCatching { client.deleteScratchpad(id) }
+                .onSuccess {
+                    // forget(), not close(): a pending write for a page that has
+                    // just been deleted would recreate it out of a timer.
+                    if (padSaver.pad.value?.id == id) padSaver.forget()
+                    _padRefs.value = _padRefs.value.filterValues { it != id }
+                    refreshScratchpads()
+                }
+                .onFailure { _toast.value = errText(it) }
+        }
+    }
+
+    /**
+     * Stages a page's text into a target's composer: APPENDED, never sent.
+     *
+     * The share contract, and the same rule as [stageShareInChat] — a half-typed
+     * draft outranks anything arriving into it, and nothing is sent on the
+     * person's behalf.
+     */
+    fun stagePadInChat(id: String, text: String) {
+        val key = chatDraftKey(id)
+        val cur = _drafts.value[key].orEmpty()
+        setDraft(key, if (cur.isBlank()) text else cur + "\n" + text)
+    }
+
+    fun stagePadInSession(name: String, text: String) {
+        val key = sessionDraftKey(name)
+        val cur = _drafts.value[key].orEmpty()
+        setDraft(key, if (cur.isBlank()) text else cur + "\n" + text)
     }
 
     /** Read once when the new-chat dialog opens, so a machine enrolled since the
@@ -1562,10 +1724,20 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
             text = if (text.isBlank()) markerFor(att) else text + "\n\n" + markerFor(att)
         }
         if (text.isBlank()) return
+        // The attached page, taken here so it rides ONE message. The daemon
+        // composes the reference itself — the pane gets a path, not the page.
+        val padKey = ScratchpadRules.sessionRefKey(name)
+        val padId = padRefFor(padKey)
         clearDraft(sessionDraftKey(name))
+        setPadRef(padKey, null)
         viewModelScope.launch {
             runCatching {
-                client.sendKeys(name, text = text, keys = if (thenEnter) listOf("Enter") else emptyList())
+                client.sendKeys(
+                    name,
+                    text = text,
+                    keys = if (thenEnter) listOf("Enter") else emptyList(),
+                    scratchpadId = padId,
+                )
             }.onFailure { _toast.value = errText(it) }
         }
     }
@@ -2012,24 +2184,34 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
             text = if (text.isBlank()) markerFor(att) else text + "\n\n" + markerFor(att)
         }
         if (text.isBlank()) return
+        // The attached page. Named, never pasted: the daemon composes the frame so
+        // a queued message is a snapshot of what the page said when Send was
+        // pressed rather than what it says when the queue drains.
+        val padKey = ScratchpadRules.chatRefKey(id)
+        val padId = padRefFor(padKey)
         if (_sending.value) {
             viewModelScope.launch {
                 // Cleared only when the queue ACCEPTS: a refused send must not
                 // cost the typed message — the audit caught a 409 destroying it
-                // with nothing left but a transient snackbar.
-                runCatching { client.queueMessage(id, text) }
-                    .onSuccess { clearDraft(chatDraftKey(id)); loadChatTranscript(id); refreshChats() }
+                // with nothing left but a transient snackbar. The reference goes
+                // with it, for the same reason.
+                runCatching { client.queueMessage(id, text, scratchpadId = padId) }
+                    .onSuccess {
+                        clearDraft(chatDraftKey(id)); setPadRef(padKey, null)
+                        loadChatTranscript(id); refreshChats()
+                    }
                     .onFailure { _toast.value = errText(it) }
             }
             return
         }
         clearDraft(chatDraftKey(id))
+        setPadRef(padKey, null)
         _sending.value = true
         _chatStarted.value = true
         _chatWaking.value = ModelLabels.isLocal(_chatModel.value, _models.value)
         _streamingText.value = ""
         _activeTool.value = null
-        collect(id, client.sendMessage(id, text), sentText = text)
+        collect(id, client.sendMessage(id, text, scratchpadId = padId), sentText = text)
     }
 
     /** Interrupts a running session the way Esc does at the keyboard. */

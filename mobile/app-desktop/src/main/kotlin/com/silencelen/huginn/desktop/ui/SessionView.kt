@@ -11,6 +11,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -104,6 +105,8 @@ import com.silencelen.huginn.ui.ModelLabels
 import com.silencelen.huginn.ui.NewestPill
 import com.silencelen.huginn.ui.onScrollInput
 import com.silencelen.huginn.ui.PromptCard
+import com.silencelen.huginn.ui.ScratchpadChip
+import com.silencelen.huginn.ui.ScratchpadRules
 import com.silencelen.huginn.ui.SkiaCellPainter
 import com.silencelen.huginn.ui.Suggest
 import com.silencelen.huginn.ui.SuggestionChips
@@ -192,7 +195,20 @@ fun SessionView(store: AppStore, name: String) {
     val history = historyMap[draftKey].orEmpty()
     val viewScope = rememberCoroutineScope()
 
-    Column(Modifier.fillMaxSize()) {
+    val pads by store.pads.collectAsState()
+    val padsAvailable by store.padsAvailable.collectAsState()
+    val padPanel by store.padPanel.collectAsState()
+    val padRefs by store.padRefs.collectAsState()
+    val padRefKey = ScratchpadRules.sessionRefKey(name)
+
+    BoxWithConstraints(Modifier.fillMaxSize()) {
+    // A panel that leaves no pane worth reading beside it is not a panel. The
+    // Screen tab measures the column it sits in into real tmux rows and columns,
+    // which is the other half of the reason this has a floor at all.
+    val panelFits = maxWidth >= PANEL_MIN_WINDOW_DP.dp
+    val showPanel = padPanel && panelFits && padsAvailable == true
+    Row(Modifier.fillMaxSize()) {
+    Column(Modifier.weight(1f).fillMaxHeight()) {
         SessionHeader(
             title = page?.title ?: row?.title ?: name,
             name = name,
@@ -235,6 +251,14 @@ fun SessionView(store: AppStore, name: String) {
                         }
                 }
                 TextButton(onClick = { paneCopy(com.silencelen.huginn.ui.screenText(screen)) }) { Text("Copy screen") }
+            }
+            // The panel toggle lives HERE for the same reason the copy buttons do:
+            // this row is above the weighted box the Screen tab measures into tmux
+            // rows, and anything drawn inside that box resizes somebody's terminal.
+            if (padsAvailable == true && panelFits) {
+                TextButton(onClick = { store.togglePadPanel() }) {
+                    Text(if (padPanel) "Hide pages" else "Pages")
+                }
             }
         }
         HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
@@ -362,7 +386,14 @@ fun SessionView(store: AppStore, name: String) {
             onRecord = { store.sentHistory.record(draftKey, it) },
             working = working,
             scope = viewScope,
+            pads = if (padsAvailable == true) pads else emptyList(),
+            padRefId = padRefs[padRefKey],
+            onPadRef = { store.setPadRef(padRefKey, it) },
+            onSent2 = { store.setPadRef(padRefKey, null) },
         )
+    }
+    if (showPanel) ScratchpadSidePanel(store, PadTarget.Session(name))
+    }
     }
 }
 
@@ -866,6 +897,11 @@ private fun Composer(
     onRecord: (String) -> Unit,
     working: Boolean,
     scope: CoroutineScope,
+    pads: List<com.silencelen.huginn.data.Scratchpad> = emptyList(),
+    padRefId: String? = null,
+    onPadRef: (String?) -> Unit = {},
+    /** The reference rides ONE message, like a staged photo. */
+    onSent2: () -> Unit = {},
 ) {
     val attachments = rememberAttachmentController(client, scope, controller.name)
     val attachment by attachments.current.collectAsState()
@@ -889,7 +925,11 @@ private fun Composer(
             val body = draft
             if (body.isNotBlank()) onRecord(body)
             recall.value = null
+            // Captured before the composer is emptied: the reference belongs to
+            // the message being sent, not to whatever is typed next.
+            val padId = padRefId
             onSent()
+            onSent2()
             var posted = false
             scope.launch {
                 try {
@@ -899,7 +939,7 @@ private fun Composer(
                     // was returning would otherwise reach a sendLine that never
                     // runs and still count as sent.
                     ensureActive()
-                    if (full.isNotEmpty()) controller.sendLine(full)
+                    if (full.isNotEmpty()) controller.sendLine(full, scratchpadId = padId)
                     posted = true
                 } finally {
                     // take() parks for the whole upload on a scope that dies with
@@ -937,6 +977,11 @@ private fun Composer(
             )
             .padding(12.dp),
     ) {
+        if (pads.isNotEmpty()) {
+            Row(Modifier.fillMaxWidth().padding(bottom = 4.dp)) {
+                ScratchpadChip(pads = pads, selectedId = padRefId, onSelect = onPadRef)
+            }
+        }
         pending?.let {
             Row(Modifier.fillMaxWidth().padding(bottom = 6.dp)) {
                 AttachChip(it) { attachments.clear() }

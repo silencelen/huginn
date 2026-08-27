@@ -59,12 +59,13 @@ import com.silencelen.huginn.desktop.ui.common.Space
 fun CommandPalette(
     chats: List<Chat>,
     sessions: List<Session>,
+    pads: List<com.silencelen.huginn.data.Scratchpad> = emptyList(),
     onPick: (PaletteItem) -> Unit,
     onDismiss: () -> Unit,
 ) {
     var query by remember { mutableStateOf("") }
     var selected by remember { mutableStateOf(0) }
-    val all = remember(chats, sessions) { paletteItems(chats, sessions) }
+    val all = remember(chats, sessions, pads) { paletteItems(chats, sessions, pads) }
     val shown = remember(all, query) { filterPalette(all, query) }
     val focus = remember { FocusRequester() }
     val listState = rememberLazyListState()

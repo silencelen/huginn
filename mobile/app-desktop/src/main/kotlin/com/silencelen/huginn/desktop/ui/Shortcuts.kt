@@ -1,6 +1,7 @@
 package com.silencelen.huginn.desktop.ui
 
 import com.silencelen.huginn.data.Chat
+import com.silencelen.huginn.data.Scratchpad
 import com.silencelen.huginn.data.Session
 
 /**
@@ -18,6 +19,19 @@ enum class Shortcut {
     VIEW_SESSIONS,
     VIEW_STATUS,
     VIEW_SETTINGS,
+
+    /**
+     * The pages, full width. P for pages: the digits are taken and a fourth one
+     * would suggest a rail position this does not have.
+     */
+    VIEW_SCRATCHPADS,
+
+    /**
+     * The page beside the conversation. Ctrl+Shift+P, next to the view it toggles
+     * a panel of — the same pairing every editor uses for "the sidebar of the
+     * thing Ctrl+P opens".
+     */
+    TOGGLE_PAD_PANEL,
     NEW_ASK,
     NEW_ACT,
     /** Palette-only — no key: a chat on whichever machine serves local AI. */
@@ -78,6 +92,7 @@ fun match(
         return when (key) {
             "H" -> Shortcut.HIDE_TO_TRAY
             "N" -> Shortcut.NEW_ACT
+            "P" -> Shortcut.TOGGLE_PAD_PANEL
             else -> null
         }
     }
@@ -87,6 +102,7 @@ fun match(
         "1" -> Shortcut.VIEW_CHATS
         "2" -> Shortcut.VIEW_SESSIONS
         "3" -> Shortcut.VIEW_STATUS
+        "P" -> Shortcut.VIEW_SCRATCHPADS
         "COMMA" -> Shortcut.VIEW_SETTINGS
         "SLASH" -> Shortcut.CHEATSHEET
         // Deliberately NOT suppressed while typing, like the list arrows above:
@@ -108,6 +124,7 @@ fun keyName(key: androidx.compose.ui.input.key.Key): String? = when (key) {
     androidx.compose.ui.input.key.Key.K -> "K"
     androidx.compose.ui.input.key.Key.N -> "N"
     androidx.compose.ui.input.key.Key.H -> "H"
+    androidx.compose.ui.input.key.Key.P -> "P"
     androidx.compose.ui.input.key.Key.One -> "1"
     androidx.compose.ui.input.key.Key.Two -> "2"
     androidx.compose.ui.input.key.Key.Three -> "3"
@@ -132,6 +149,8 @@ val SHORTCUT_HELP: List<Pair<String, String>> = listOf(
     "Ctrl ," to "Settings",
     "Ctrl N" to "New Ask chat",
     "Ctrl Shift N" to "New Act chat",
+    "Ctrl P" to "Pages",
+    "Ctrl Shift P" to "Show the open page beside this conversation",
     "Alt ↑ / ↓" to "Previous / next in the list (works while typing)",
     "Ctrl [ / ]" to "Narrower / wider list pane",
     "Ctrl \\" to "Reset the list pane (or double-click the seam)",
@@ -158,6 +177,7 @@ sealed interface PaletteItem {
 
     data class OpenChat(val id: String, override val label: String, override val detail: String) : PaletteItem
     data class OpenSession(val name: String, override val label: String, override val detail: String) : PaletteItem
+    data class OpenScratchpad(val id: String, override val label: String, override val detail: String) : PaletteItem
     data class Verb(val shortcut: Shortcut, override val label: String, override val detail: String) : PaletteItem
 }
 
@@ -165,12 +185,29 @@ private val VERBS = listOf(
     PaletteItem.Verb(Shortcut.NEW_ASK, "New Ask chat", "reasoning, memory and reads"),
     PaletteItem.Verb(Shortcut.NEW_ACT, "New Act chat", "can run commands and change files"),
     PaletteItem.Verb(Shortcut.NEW_LOCAL, "New local chat", "a serving machine's model answers — never Claude"),
+    PaletteItem.Verb(Shortcut.VIEW_SCRATCHPADS, "Pages", "your own pages, and what a message can carry"),
+    PaletteItem.Verb(Shortcut.TOGGLE_PAD_PANEL, "Page beside this conversation", "show or hide the side panel"),
     PaletteItem.Verb(Shortcut.VIEW_STATUS, "Status", "host, plan and usage"),
     PaletteItem.Verb(Shortcut.VIEW_SETTINGS, "Settings", "server, accounts, diagnostics"),
 )
 
-fun paletteItems(chats: List<Chat>, sessions: List<Session>): List<PaletteItem> =
+fun paletteItems(
+    chats: List<Chat>,
+    sessions: List<Session>,
+    pads: List<Scratchpad> = emptyList(),
+): List<PaletteItem> =
     VERBS +
+        // Pages before the conversations: there are a handful of them and hundreds
+        // of chats, and a page is looked up BY NAME, which is the one thing the
+        // palette is better at than the rail.
+        pads.map {
+            PaletteItem.OpenScratchpad(
+                it.id,
+                it.label(),
+                listOfNotNull("page", if (it.size <= 0) "empty" else "${it.size} characters")
+                    .joinToString(" · "),
+            )
+        } +
         sessions.map {
             PaletteItem.OpenSession(
                 it.name,
@@ -228,3 +265,6 @@ fun stepIndex(current: Int, size: Int, delta: Int): Int {
     if (current < 0) return if (delta > 0) 0 else size - 1
     return ((current + delta) % size + size) % size
 }
+
+/** A page with no name is not possible, but a decoded one with a blank is. */
+private fun Scratchpad.label(): String = name.ifBlank { "Untitled page" }

@@ -9,6 +9,7 @@ import io.ktor.client.plugins.HttpTimeoutCapability
 import io.ktor.client.plugins.HttpTimeoutConfig
 import io.ktor.client.request.HttpRequestData
 import io.ktor.http.HttpHeaders
+import io.ktor.http.headersOf
 import io.ktor.http.HttpStatusCode
 import io.ktor.http.content.OutgoingContent
 import io.ktor.http.content.TextContent
@@ -407,4 +408,77 @@ class HuginnClientTest {
         assertEquals("polish is unavailable right now", r.error)
     }
 
+    // ------------------------------------------------------- scratchpads
+
+    @Test
+    fun `a message with no page attached does not mention one`() = runTest {
+        // ABSENT is not the same as naming Main: the daemon falls back to Main only
+        // for a reference it was actually asked for, so a field sent on every
+        // message would put a page into conversations nobody attached it to.
+        ok("""{"ok":true}""").queueMessage("c1", "just a question")
+        assertFalse("scratchpadId" in lastBody(), lastBody())
+    }
+
+    @Test
+    fun `an attached page travels as an id, never as its text`() = runTest {
+        ok("""{"ok":true}""").queueMessage("c1", "what about this", scratchpadId = "pad-9")
+        val body = lastBody()
+        assertTrue("\"scratchpadId\":\"pad-9\"" in body, body)
+        // The daemon composes the frame. A client that pasted the page in would
+        // make the queued copy a snapshot of the wrong moment, and would have to
+        // keep its own copy of a marker two other files already own.
+        assertFalse("Scratchpad" in body, body)
+    }
+
+    @Test
+    fun `a session send carries the reference too`() = runTest {
+        ok("""{"ok":true}""").sendKeys("jtyper", text = "follow this", scratchpadId = "pad-9")
+        assertEquals("http://appd.test/v1/sessions/jtyper/keys", seen.single().url.toString())
+        assertTrue("\"scratchpadId\":\"pad-9\"" in lastBody(), lastBody())
+    }
+
+    @Test
+    fun `a save carries the rev it was based on`() = runTest {
+        val r = ok("""{"id":"pad-9","name":"Main","content":"two","rev":8}""")
+            .saveScratchpad("pad-9", rev = 7, content = "two")
+        assertEquals("PATCH", seen.single().method.value)
+        assertTrue("\"rev\":7" in lastBody(), lastBody())
+        assertFalse(r.conflict)
+        assertEquals(8, r.pad.rev, "the new rev is what makes the NEXT save safe")
+    }
+
+    @Test
+    fun `a 409 is an answer carrying the winner's copy, not an exception`() = runTest {
+        // Two devices autosaving one page is the ordinary case here. Throwing would
+        // send it down the failure path and leave the editor with nothing to adopt.
+        val r = client {
+            respond(
+                """{"id":"pad-9","name":"Main","content":"from the desktop","rev":12}""",
+                HttpStatusCode.Conflict,
+                headersOf(HttpHeaders.ContentType, "application/json"),
+            )
+        }.saveScratchpad("pad-9", rev = 7, content = "from the phone")
+        assertTrue(r.conflict)
+        assertEquals("from the desktop", r.pad.content)
+        assertEquals(12, r.pad.rev)
+    }
+
+    @Test
+    fun `a refusal about the NAME still throws`() = runTest {
+        // A 400 is a real refusal and belongs on the failure path; only the
+        // conflict is an answer.
+        assertFailsWith<HuginnClient.HuginnException> {
+            client { respondError(HttpStatusCode.BadRequest, """{"error":"there is already a page with that name"}""") }
+                .saveScratchpad("pad-9", rev = 1, name = "Notes")
+        }
+    }
+
+    @Test
+    fun `the pages probe is a plain GET, so a 404 can mean 'no such feature'`() = runTest {
+        val pads = ok("""{"pads":[{"id":"p1","name":"Main","main":true,"rev":3,"size":11}]}""").scratchpads()
+        assertEquals("http://appd.test/v1/scratchpads", seen.single().url.toString())
+        assertEquals("GET", seen.single().method.value)
+        assertEquals(1, pads.size)
+        assertTrue(pads.single().main)
+    }
 }

@@ -9,6 +9,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material.icons.outlined.EditNote
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
@@ -53,6 +54,12 @@ fun ChatTopBar(
     started: Boolean,
     /** Present only on a LOCAL chat: hand this conversation to Claude, as a draft. */
     onEscalate: (() -> Unit)? = null,
+    /**
+     * The scratchpad panel's toggle. Null when this daemon has no pages, or when
+     * the window is too narrow to give one 360dp and still leave a conversation.
+     */
+    padPanelOpen: Boolean = false,
+    onTogglePadPanel: (() -> Unit)? = null,
     onModel: (String) -> Unit,
     onEffort: (String) -> Unit,
     onMode: (String) -> Unit,
@@ -90,6 +97,20 @@ fun ChatTopBar(
             onEffort = onEffort,
             onMode = onMode,
         )
+        // Between the options and the overflow, because it is a control for the
+        // WINDOW rather than for the chat: what is on screen beside this
+        // conversation, not what the next turn runs with.
+        onTogglePadPanel?.let { toggle ->
+            IconButton(onClick = toggle, modifier = Modifier.size(34.dp)) {
+                Icon(
+                    Icons.Outlined.EditNote,
+                    contentDescription = if (padPanelOpen) "Hide pages" else "Show pages",
+                    modifier = Modifier.size(18.dp),
+                    tint = if (padPanelOpen) MaterialTheme.colorScheme.onSurface
+                    else MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
         Box {
             IconButton(onClick = { menuOpen = true }, modifier = Modifier.size(34.dp)) {
                 Icon(

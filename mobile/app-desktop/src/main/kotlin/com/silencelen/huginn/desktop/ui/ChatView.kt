@@ -8,10 +8,12 @@ import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
@@ -58,6 +60,8 @@ import com.silencelen.huginn.data.DraftBook
 import com.silencelen.huginn.data.HuginnClient
 import com.silencelen.huginn.data.TranscriptEvent
 import com.silencelen.huginn.ui.Escalation
+import com.silencelen.huginn.ui.ScratchpadChip
+import com.silencelen.huginn.ui.ScratchpadRules
 import com.silencelen.huginn.ui.ModelLabels
 import com.silencelen.huginn.ui.SealedNote
 import com.silencelen.huginn.desktop.AppStore
@@ -237,7 +241,24 @@ fun ChatView(
     // here. A view that fetches on its own recomposition asks again every time
     // the window regains focus, for an answer the daemon has already cached.
 
-    Column(Modifier.fillMaxSize()) {
+    // The scratchpad state, with an inert stand-in for the store-less call — the
+    // `remember` is UNCONDITIONAL because a remember behind an `if` changes the
+    // slot table's shape, and this view already has one nullable dependency too
+    // many.
+    val noPads = remember { NoScratchpads() }
+    val pads by (store?.pads ?: noPads.pads).collectAsState()
+    val padsAvailable by (store?.padsAvailable ?: noPads.available).collectAsState()
+    val padPanel by (store?.padPanel ?: noPads.panel).collectAsState()
+    val padRefs by (store?.padRefs ?: noPads.refs).collectAsState()
+    val padRefKey = ScratchpadRules.chatRefKey(chatId)
+
+    BoxWithConstraints(Modifier.fillMaxSize()) {
+    // A 360dp panel is only worth taking out of a window that still has a
+    // conversation left afterwards; below this it would be two columns of nothing.
+    val panelFits = maxWidth >= PANEL_MIN_WINDOW_DP.dp
+    val showPanel = padPanel && panelFits && padsAvailable == true
+    Row(Modifier.fillMaxSize()) {
+    Column(Modifier.weight(1f).fillMaxHeight()) {
         ChatTopBar(
             title = detail?.title ?: "Untitled",
             running = running,
@@ -267,6 +288,11 @@ fun ChatView(
             onMode = { controller.setOptions(mode = it) },
             onRename = { controller.rename(it) },
             onDelete = { controller.delete() },
+            padPanelOpen = padPanel,
+            // Absent, not disabled, when the window cannot hold the panel: a
+            // control that does nothing reads as a broken control.
+            onTogglePadPanel = store?.takeIf { padsAvailable == true && panelFits }
+                ?.let { s -> { s.togglePadPanel() } },
         )
         HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
 
@@ -374,8 +400,20 @@ fun ChatView(
             scope = scope,
             running = running,
             onStop = { controller.cancel() },
-            onSend = { text -> controller.send(text) },
+            pads = if (padsAvailable == true) pads else emptyList(),
+            padRefId = padRefs[padRefKey],
+            onPadRef = { store?.setPadRef(padRefKey, it) },
+            onSend = { text, padId ->
+                controller.send(text, scratchpadId = padId)
+                // The reference rides ONE message, like a staged photo.
+                store?.setPadRef(padRefKey, null)
+            },
         )
+    }
+    // `store` is what publishes padsAvailable, so a true there already proves it
+    // is present — but the panel needs the object, not the flag.
+    store?.takeIf { showPanel }?.let { ScratchpadSidePanel(it, PadTarget.Chat(chatId)) }
+    }
     }
 }
 
@@ -413,7 +451,11 @@ private fun Composer(
     scope: kotlinx.coroutines.CoroutineScope,
     running: Boolean,
     onStop: () -> Unit,
-    onSend: (String) -> Unit,
+    pads: List<com.silencelen.huginn.data.Scratchpad> = emptyList(),
+    padRefId: String? = null,
+    onPadRef: (String?) -> Unit = {},
+    /** The message, and the page riding with it — the daemon composes the frame. */
+    onSend: (String, String?) -> Unit,
 ) {
     if (sealedRun) {
         SealedNote(Modifier.fillMaxWidth(), onContinue = onContinueRound)
@@ -450,7 +492,7 @@ private fun Composer(
                     // was returning would otherwise let this through to a launch
                     // that never runs, and count as sent.
                     ensureActive()
-                    if (full.isNotEmpty()) onSend(full)
+                    if (full.isNotEmpty()) onSend(full, padRefId)
                     posted = true
                 } finally {
                     // take() parks for the whole upload — up to 20s — on a scope
@@ -482,6 +524,11 @@ private fun Composer(
             )
             .padding(12.dp),
     ) {
+        if (pads.isNotEmpty()) {
+            Row(Modifier.fillMaxWidth().padding(bottom = 4.dp)) {
+                ScratchpadChip(pads = pads, selectedId = padRefId, onSelect = onPadRef)
+            }
+        }
         pending?.let {
             Row(Modifier.fillMaxWidth().padding(bottom = 6.dp)) {
                 AttachChip(it) { attachments.clear() }
@@ -685,4 +732,20 @@ private fun LoadFailed(message: String, onRetry: () -> Unit) {
 private fun rememberCopy(): (String) -> Unit {
     val clipboard = LocalClipboardManager.current
     return remember(clipboard) { { text: String -> clipboard.setText(AnnotatedString(text)) } }
+}
+
+/**
+ * The scratchpad state a ChatView built WITHOUT a store sees: none of it, and
+ * never changing.
+ *
+ * Nothing in the app constructs that view — `Shell` passes the store — but the
+ * parameter is defaulted, and a composable that silently stops rendering its
+ * composer because one dependency is null is not a good failure. Held as one
+ * object so the flows are remembered together and unconditionally.
+ */
+private class NoScratchpads {
+    val pads = MutableStateFlow(emptyList<com.silencelen.huginn.data.Scratchpad>())
+    val available = MutableStateFlow<Boolean?>(false)
+    val panel = MutableStateFlow(false)
+    val refs = MutableStateFlow(emptyMap<String, String>())
 }

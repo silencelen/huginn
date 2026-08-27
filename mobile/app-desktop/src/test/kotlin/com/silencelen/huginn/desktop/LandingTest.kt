@@ -55,6 +55,17 @@ class LandingTest {
     }
 
     @Test
+    fun `pages encode and parse, and are still not a place to reopen into`() {
+        // Landing.kt's own rule: encode and parse must BOTH learn a new view even
+        // when it is not persistable, or they stop being mutual inverses and the
+        // file becomes unreadable as a record of where anyone was.
+        assertEquals(View.SCRATCHPADS, Landing.parse(Landing.encode(View.SCRATCHPADS)))
+        // A window that opens on somebody's notes answers a question nobody asked
+        // first thing — the same argument Rounds is excluded on.
+        assertFalse(Landing.persistable(View.SCRATCHPADS))
+    }
+
+    @Test
     fun `every view encodes to something distinguishable`() {
         // An encoder that silently produced "chats" for Settings would be a
         // landing bug that could not be read off the settings file.

@@ -23,6 +23,8 @@ class DestSaverTest {
             Dest.Settings,
             Dest.Chat("fc322e02-cf53-4b09-a28d-6fc291cd66fa"),
             Dest.SessionView("andrev"),
+            Dest.Scratchpads,
+            Dest.Scratchpad("6f1c0f5e-0000-4000-8000-000000000001"),
         )
         for (d in cases) {
             assertEquals("lost $d across a rebuild", d, keyToDest(destToKey(d)))
@@ -37,6 +39,11 @@ class DestSaverTest {
         assertEquals("abc-123", d.id)
         val s = keyToDest(destToKey(Dest.SessionView("huginnapp"))) as Dest.SessionView
         assertEquals("huginnapp", s.name)
+        // A page restored as "a page" rather than THE page would open the wrong
+        // one, and the editor autosaves — so the wrong page would then be typed
+        // into with no sign anything was amiss.
+        val p = keyToDest(destToKey(Dest.Scratchpad("pad-9"))) as Dest.Scratchpad
+        assertEquals("pad-9", p.id)
     }
 
     @Test
