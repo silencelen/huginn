@@ -65,6 +65,24 @@ const STATUS_RE = /^\s*\[[^\]]+\]\s+\S/;                // '[andrev] Opus 5 · m
 // glyphs ◯◐◑◒◓◉⧉ are deliberately excluded (captured live 2026-08-10, fixture
 // plan-approval-with-task).
 const SPINNER_RE = /^\s*[✢✦✧✳✴✶✷✸✹✺✻✼✽◴◵◶◷·∙∗*+]\s/;
+// A terminal ANSWERING a query, typed into the composer because nothing was
+// reading the tty when the answer arrived. Captured live on 2026-08-26 from
+// /v1/sessions?preview=1, where a session's headline was:
+//
+//     ❯ 4;21;22;23;24;28;32;42;52c
+//
+// — the tail of a Primary Device Attributes reply (CSI ? … c), whose escape
+// prefix the TUI had already consumed, leaving the digits as ordinary typed
+// text. DSR replies (CSI row;col R) land the same way.
+//
+// DELIBERATELY NARROW: anchored at both ends, so it can only ever drop a line
+// that is NOTHING but the reply — never a line of content that happens to end
+// in one. Written without a nested quantifier for the same reason `authorized`
+// avoids one; the group needs a literal ';' to start, so a long run of digits
+// cannot make this backtrack.
+const DA_REPLY_RE = /^\[?[?>]?[0-9]+(?:;[0-9]+)*[cR]$/;
+/** Long enough for the widest real reply seen; short enough to be a "tail". */
+const DA_REPLY_MAX = 96;
 
 /**
  * The most recent lines that say something about what the session is doing,
@@ -81,6 +99,10 @@ function previewLines(lines, max = 3) {
     if (PROMPT_MARK_RE.test(t) && t.replace(PROMPT_MARK_RE, '').trim() === '') continue;
     if (MODE_HINT_RE.test(t)) continue;
     if (STATUS_RE.test(t)) continue;
+    // The terminal talking to itself. Tested on the line WITH the prompt mark
+    // stripped, because that is how it shows up: sitting in the composer.
+    const bare = t.replace(PROMPT_MARK_RE, '').trim();
+    if (bare.length <= DA_REPLY_MAX && DA_REPLY_RE.test(bare)) continue;
     // Footer furniture: workflow/board rows persist there long after the run
     // ends, so a dead workflow was headlining the session's preview forever;
     // selector help lines are instructions, not content.

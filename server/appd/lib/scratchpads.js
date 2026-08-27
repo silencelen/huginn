@@ -7,10 +7,14 @@
 // of config that keeps getting pasted — held on the host so both clients see the
 // same page, and attached to a message only when the person says so.
 //
-// Everything here is pure: the naming rules, the caps, and the two frames a pad
-// is composed into. The daemon owns the files and the routes; this owns what is
-// legal and what the text looks like when it arrives, so the client and the
-// server cannot disagree about either.
+// Everything here is pure but one thing: the naming rules, the caps, and the two
+// frames a pad is composed into. The daemon owns the files and the routes; this
+// owns what is legal and what the text looks like when it arrives, so the client
+// and the server cannot disagree about either. (The exception is the frame tag —
+// see [chatFrame] — which is random by necessity and injectable so a test can
+// still assert a literal.)
+
+const crypto = require('node:crypto');
 
 /** The pad every install has, and the one a reference falls back to. */
 const MAIN_NAME = 'Main';
@@ -85,6 +89,28 @@ function isMain(pad) {
 // title. A wording change here that is not made there leaves a raw frame sitting
 // in somebody's message list. (The DEPRECATED Electron client is exempt: it is
 // not built any more and never learns the marker.)
+//
+// The tagged variant is part of that contract. Both collapsers match, exactly:
+//
+//     open   \[Scratchpad "([^"\n]{1,60})"( #[0-9a-f]{6})?\]
+//     close  \[End scratchpad( #[0-9a-f]{6})?\]
+//
+// with the SAME tag required on both ends — which is what makes a tagged frame
+// survive a pasted `[End scratchpad]` sitting in the middle of the page.
+
+/**
+ * A line of the pad's own CONTENT that would close the frame around it.
+ *
+ * Line-anchored because that is exactly what the collapsers match: a mention of
+ * the marker mid-sentence is harmless, a line that STARTS with it is the end of
+ * the frame as far as every reader is concerned.
+ */
+const CONTENT_CLOSES_FRAME = /^\[End scratchpad/m;
+
+/** Six lowercase hex, the report-tag precedent at lib/rounds.js's own size/3. */
+function mintTag() {
+  return crypto.randomBytes(3).toString('hex');
+}
 
 /**
  * A pad, quoted INTO a chat message.
@@ -92,13 +118,31 @@ function isMain(pad) {
  * The content travels rather than a path because a chat runs headless with no
  * guarantee of a Read tool — an `ask` chat has none at all — so a reference that
  * named a file would be a reference the run could not follow.
+ *
+ * ⚠ A PAGE CAN CONTAIN ITS OWN CLOSING MARKER, and pages of pasted conversation
+ * routinely do. An untagged frame around content holding a line that begins
+ * `[End scratchpad` ends THERE: the run reads half a page, and both collapsers
+ * turn the rest of it into raw text sitting in the sender's own message. The
+ * answer is the one rounds.js already uses for a report block found in fetched
+ * content — a tag minted here and carried on BOTH markers, so the close that
+ * matters is the one that matches the open.
+ *
+ * Minted only when the content forces it, so the ordinary frame stays the exact
+ * literal three other files quote. `tag` is injectable so a test can assert one.
  */
-function chatFrame(name, content) {
-  return `[Scratchpad "${name}"]\n${content}\n[End scratchpad]`;
+function chatFrame(name, content, tag = null) {
+  const body = String(content ?? '');
+  if (!CONTENT_CLOSES_FRAME.test(body)) return `[Scratchpad "${name}"]\n${body}\n[End scratchpad]`;
+  // A pasted frame in the content may already carry a tag; re-minted rather than
+  // trusted to be unique, because a collision would close this frame early in
+  // exactly the case the tag exists to prevent.
+  let t = tag || mintTag();
+  for (let i = 0; !tag && i < 8 && body.includes(t); i++) t = mintTag();
+  return `[Scratchpad "${name}" #${t}]\n${body}\n[End scratchpad #${t}]`;
 }
 
-function composeForChat(pad, text) {
-  return `${chatFrame(pad.name, String(pad.content || ''))}\n\n${text}`;
+function composeForChat(pad, text, tag = null) {
+  return `${chatFrame(pad.name, String(pad.content || ''), tag)}\n\n${text}`;
 }
 
 /**
@@ -131,6 +175,26 @@ function fitProblem(composed, cap) {
     + `over the ${cap.toLocaleString('en-US')} limit — shorten one of them`;
 }
 
+/**
+ * The same, for the SESSION path — which needs its own wording, not this one's.
+ *
+ * ⚠ A DIFFERENT THING TRAVELS ON THAT PATH. The page itself is not in the
+ * message; only [sessionFrame]'s one line naming a file is. So "that page and
+ * this message come to N characters — shorten one of them" named the wrong
+ * culprit and offered a fix that cannot work: shortening a 90,000-character page
+ * changes the composed length by nothing at all. The only thing the sender can
+ * shorten is what they typed, so the number they are given is how much room is
+ * left for it once the reference has taken its share.
+ */
+function sessionFitProblem(composed, frame, cap) {
+  if (composed.length <= cap) return null;
+  const room = Math.max(0, cap - frame.length - 1);        // the newline that joins them
+  return `the one-line reference to that page takes ${frame.length.toLocaleString('en-US')} of the `
+    + `${cap.toLocaleString('en-US')} characters a session accepts, leaving room for `
+    + `${room.toLocaleString('en-US')} — this message is `
+    + `${Math.max(0, composed.length - frame.length - 1).toLocaleString('en-US')}`;
+}
+
 // --------------------------------------------------------------------- views
 
 /** A list row: everything but the content, which is what makes the list cheap. */
@@ -149,11 +213,30 @@ function padRow(pad) {
   };
 }
 
-/** Newest edit first, except that Main is always the first row. */
+/**
+ * Main first, then by NAME, case-insensitively.
+ *
+ * ⚠ IT USED TO BE NEWEST-EDIT-FIRST, and that is a list that reorders itself
+ * under the person using it: typing into a page moves it to the top, so the row
+ * the cursor was in is now somewhere else and the next click lands on a
+ * different page. Observed twice in one sitting — text typed into the wrong pad
+ * both times. A picker is a place, and a place has to stay put; recency belongs
+ * in the row (`updatedAt` is on it), not in the ordering.
+ *
+ * Plain code-unit comparison on the lowercased name rather than localeCompare:
+ * both clients sort the same list with the same rule, and a locale-aware collator
+ * would give one of them a different answer for the same two rows. The id
+ * breaks a tie so the order is total — two pages CAN read the same, because
+ * uniqueness is enforced at create time and a page renamed on one device races a
+ * page created on another.
+ */
 function sortPads(pads) {
   return [...pads].sort((a, b) => {
     if (isMain(a) !== isMain(b)) return isMain(a) ? -1 : 1;
-    return (b.updatedAt || 0) - (a.updatedAt || 0);
+    const an = String(a.name || '').toLowerCase();
+    const bn = String(b.name || '').toLowerCase();
+    if (an !== bn) return an < bn ? -1 : 1;
+    return String(a.id || '') < String(b.id || '') ? -1 : 1;
   });
 }
 
@@ -161,5 +244,5 @@ module.exports = {
   MAIN_NAME, MAX_NAME, MAX_CONTENT, MAX_PADS,
   cleanName, nameProblem, contentProblem, isMain,
   chatFrame, composeForChat, sessionFrame, composeForSession,
-  fitProblem, padRow, sortPads,
+  fitProblem, sessionFitProblem, padRow, sortPads,
 };
