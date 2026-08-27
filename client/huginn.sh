@@ -285,8 +285,16 @@ _huginn_uninstall() {
     # Named files only, and after the attempt above: a dir that was never
     # enrolled can still hold the token `huginn device on` fetched into it.
     rm -f "$ddir/device.json" "$ddir/appd-token"
-    rmdir "$ddir" 2>/dev/null
-    removed+=("$ddir")
+    # rmdir REFUSING a non-empty directory is the safeguard, not a failure - a
+    # leftover .tmp, a .bak, or a file somebody put there themselves all stop
+    # it, and none of them are ours to delete. But it was reported as removed
+    # either way, so the one summary that tells a person what is still on their
+    # disk named a directory that is still on their disk.
+    if rmdir "$ddir" 2>/dev/null; then
+      removed+=("$ddir")
+    else
+      left+=("$ddir - left (not empty): its device.json and appd-token are gone, but something else is in there")
+    fi
     echo
   fi
 
