@@ -24,10 +24,11 @@ import androidx.compose.ui.window.WindowPlacement
 import androidx.compose.ui.window.WindowPosition
 import androidx.compose.ui.window.rememberWindowState
 import com.silencelen.huginn.data.HuginnClient
-import com.silencelen.huginn.desktop.diag.NotifierSeam
+import com.silencelen.huginn.desktop.diag.AppLog
 import com.silencelen.huginn.desktop.notify.Activation
 import com.silencelen.huginn.desktop.notify.Activations
 import com.silencelen.huginn.desktop.notify.NavTarget
+import com.silencelen.huginn.desktop.notify.NoNotifier
 import com.silencelen.huginn.desktop.notify.NotifyRequest
 import com.silencelen.huginn.desktop.notify.NotifyRouter
 import com.silencelen.huginn.desktop.notify.Notifiers
@@ -102,22 +103,10 @@ fun main(args: Array<String>) {
     println("[huginn] ${Notifiers.describe(notifier)}")
     println("[huginn] ${SchemeRegistrar.register()}")
 
-    // Settings' "send test notification" fires through the REAL delivery path, not
-    // a second one built to look like it — a test button wired to its own code path
-    // is a green light that proves nothing. NotifierSeam holds the slot.
-    NotifierSeam.name = notifier.name
-    NotifierSeam.sendTest = {
-        notifier.post(
-            NotifyRequest(
-                key = "diag-test",
-                title = "Huginn",
-                body = "Test notification from Settings",
-                urgent = false,
-                target = NavTarget(TargetKind.CHATS, ""),
-            )
-        )
-        notifier.healthy
-    }
+    // Named in the diagnostics report, because which path a notification took is
+    // the first thing worth knowing when one did not arrive. Null for NoNotifier,
+    // which is not a path but the absence of one, and the report says so.
+    AppLog.notifierName = notifier.name.takeIf { notifier !== NoNotifier }
 
     // Window control, held OUTSIDE the composition because the tray, an
     // activation and a second launch all have to reach it — and two of those can

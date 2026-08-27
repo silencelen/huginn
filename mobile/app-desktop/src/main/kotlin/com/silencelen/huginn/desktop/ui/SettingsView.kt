@@ -44,7 +44,6 @@ import com.silencelen.huginn.desktop.DesktopSettings
 import com.silencelen.huginn.desktop.CliSync
 import com.silencelen.huginn.desktop.LocalServe
 import com.silencelen.huginn.desktop.diag.AppLog
-import com.silencelen.huginn.desktop.diag.NotifierSeam
 import com.silencelen.huginn.desktop.update.UpdateState
 import kotlinx.coroutines.launch
 import java.awt.Desktop
@@ -153,7 +152,7 @@ fun SettingsView(store: AppStore) {
         Muted(settings.path)
         Muted("client id ${settings.clientIdNow()}", Modifier.padding(top = 2.dp))
         Muted(
-            if (DesktopSettings.isPackaged()) "packaged build" else "unpackaged — dev token bootstrap allowed",
+            if (DesktopSettings.isPackaged()) "packaged build" else "running from source",
             Modifier.padding(top = 2.dp),
         )
         // What the launch-time CLI sync did, when it did anything: the CLI on
@@ -499,46 +498,21 @@ private fun DiagnosticsSection(store: AppStore) {
     var note by remember { mutableStateOf<String?>(null) }
 
     SectionHeader("Diagnostics")
-    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        Button(onClick = {
-            scope.launch {
-                // Refreshed FIRST: the status snapshot is only fetched while the
-                // Status view is open, so a report copied from here otherwise said
-                // "appd version unknown" — which is the one line that says whether
-                // the client and the daemon are even the same generation.
-                runCatching { store.refreshStatus() }
-                val text = AppLog.diagnostics(store)
-                // Compose's clipboard, not AWT's. The Electron release that denied every
-                // permission also denied clipboard writes and broke every copy in the app
-                // silently for a whole release; the carry-over list names it.
-                clipboard.setText(AnnotatedString(text))
-                note = "copied ${text.lineSequence().count()} lines — paste it into a chat"
-            }
-        }) { Text("Copy diagnostics") }
-
-        // THE SEAM. A test button wired to anything other than the real notifier is
-        // a green light attached to nothing, so while `notify/` is being built this
-        // stays visibly disabled rather than reaching for the phone push or the
-        // Telegram alert endpoint — both of which exist on the client and neither of
-        // which tests THIS window. See NotifierSeam for the one line that arms it.
-        Button(
-            enabled = NotifierSeam.available,
-            onClick = {
-                note = when (NotifierSeam.fire()) {
-                    true -> "test notification sent"
-                    false -> "the desktop notifier refused — no notification daemon?"
-                    null -> "no desktop notifier is installed"
-                }
-            },
-        ) { Text("Send test notification") }
-    }
-    if (!NotifierSeam.available) {
-        Muted(
-            "test notification unavailable: this build has no desktop notifier yet, so Telegram and the phone remain the only routes",
-            Modifier.padding(top = 6.dp),
-            maxLines = 2,
-        )
-    }
+    Button(onClick = {
+        scope.launch {
+            // Refreshed FIRST: the status snapshot is only fetched while the
+            // Status view is open, so a report copied from here otherwise said
+            // "appd version unknown" — which is the one line that says whether
+            // the client and the daemon are even the same generation.
+            runCatching { store.refreshStatus() }
+            val text = AppLog.diagnostics(store)
+            // Compose's clipboard, not AWT's. The Electron release that denied every
+            // permission also denied clipboard writes and broke every copy in the app
+            // silently for a whole release; the carry-over list names it.
+            clipboard.setText(AnnotatedString(text))
+            note = "copied ${text.lineSequence().count()} lines — paste it into a chat"
+        }
+    }) { Text("Copy diagnostics") }
     note?.let {
         Text(
             it,
