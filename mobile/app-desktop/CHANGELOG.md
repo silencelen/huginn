@@ -1,5 +1,28 @@
 # Huginn Desktop changelog
 
+## 0.13.0
+
+The journey wave: how the local tier is discovered, entered and lived with.
+
+- **The app keeps this machine's CLI current.** Updating the desktop used to
+  leave yesterday's `huginn` in the terminal beside it. On launch the app now
+  quietly brings along whatever huginn files the machine already has — the
+  client script and any fetched satellites — with the same validation the
+  CLI's own updater uses (parse check, `.bak` kept, atomic swap) and the same
+  pinned repo. Presence is the consent: nothing is installed onto a machine
+  that never had it, and the elevated service copies on a serving box stay
+  with `huginn local update`. Settings' "This install" says what happened.
+- **"+ Local"** beside "+ Ask / + Act": one click, a chat on whichever machine
+  is serving. Present only while one is — a door onto a refusal is a fake
+  control.
+- **A first-launch offer card** in the chats list: this PC may be able to
+  serve local AI. "Set up" opens the door, either button dismisses it
+  forever, and it never appears once anything already serves.
+- **"waking the local model…"** between send and first token on a local chat —
+  a cold model takes up to ~30s to load, and a bare spinner read as a hang.
+- **"(this device)"** on the Devices page marks the machine you are sitting
+  at, in words, without a badge.
+
 ## 0.12.0
 
 The audit wave: a six-surface review of the local-AI features in real use,

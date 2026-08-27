@@ -50,6 +50,8 @@ class DesktopSettings(private val file: File = defaultFile()) : HuginnSettings {
          */
         val token: String = "",
         val routePinned: Boolean = false,
+        /** The first-launch local-AI offer card: shown once, dismissed forever. */
+        val localOfferSeen: Boolean = false,
         val clientId: String = "",
         val fontScale: Float = HuginnSettings.DEFAULT_FONT_SCALE,
         val notifyEnabled: Boolean = true,
@@ -203,6 +205,15 @@ class DesktopSettings(private val file: File = defaultFile()) : HuginnSettings {
         val next = value.trim()
         _token.value = next
         mutate { it.copy(token = next) }
+    }
+
+    private val _localOfferSeen = kotlinx.coroutines.flow.MutableStateFlow(stored.localOfferSeen)
+    val localOfferSeen: Flow<Boolean> = _localOfferSeen.asStateFlow()
+    fun localOfferSeenNow(): Boolean = _localOfferSeen.value
+
+    suspend fun setLocalOfferSeen() {
+        _localOfferSeen.value = true
+        mutate { it.copy(localOfferSeen = true) }
     }
 
     override suspend fun selectRoute(url: String, pinned: Boolean) {

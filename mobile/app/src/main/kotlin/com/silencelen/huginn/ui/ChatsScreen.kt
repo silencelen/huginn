@@ -47,6 +47,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.silencelen.huginn.data.Chat
 import com.silencelen.huginn.data.Device
+import com.silencelen.huginn.data.ModelChoice
 
 /**
  * Home surface: every headless conversation with huginn, newest first. "Ask" runs
@@ -65,6 +66,10 @@ fun ChatsScreen(
     onOpen: (String) -> Unit,
     /** (mode, host) — host is null for this machine. */
     onNew: (String, String?) -> Unit,
+    /** The catalog, for the dialog's LOCAL AI rows. Empty hides the section. */
+    models: List<ModelChoice> = emptyList(),
+    /** One tap on a local model row makes the chat — no mode to choose, ask is forced. */
+    onNewLocal: (String) -> Unit = {},
     /** The dialog is opening: a good moment to find out what machines exist. */
     onOpenNewChat: () -> Unit = {},
     onDelete: (String) -> Unit,
@@ -150,10 +155,10 @@ fun ChatsScreen(
                             onClick = { newHost = null },
                         )
                         // Serving rows are NOT places a claude run can live —
-                        // their machines are reached by picking their model in
-                        // the chat instead. Absent, not disabled: a selectable
-                        // host the daemon always refuses is a trap, and its
-                        // "-llm" credential name is shown nowhere else.
+                        // their machines are reached through LOCAL AI below.
+                        // Absent, not disabled: a selectable host the daemon
+                        // always refuses is a trap, and its "-llm" credential
+                        // name is shown nowhere else.
                         devices.filter { it.scope != "generate" }.forEach { d ->
                             HostChoice(
                                 label = d.name,
@@ -169,6 +174,27 @@ fun ChatsScreen(
                                 enabled = d.online,
                                 onClick = { newHost = d.id },
                             )
+                        }
+                        // One tap makes the chat: a local row IS the machine
+                        // choice and ask is forced, so there is no second
+                        // question to ask. Only what is serving RIGHT NOW.
+                        val localRows = models.filter { it.family == "local" && it.available }
+                        if (localRows.isNotEmpty()) {
+                            Text(
+                                "LOCAL AI",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.padding(top = 10.dp),
+                            )
+                            localRows.forEach { m ->
+                                HostChoice(
+                                    label = m.display,
+                                    detail = "local model · Ask-only · answers on its machine",
+                                    selected = false,
+                                    enabled = true,
+                                    onClick = { showNew = false; onNewLocal(m.id) },
+                                )
+                            }
                         }
                     }
                 }
