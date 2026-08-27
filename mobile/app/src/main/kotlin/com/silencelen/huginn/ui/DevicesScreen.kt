@@ -89,6 +89,11 @@ fun DevicesScreen(
                         onStart = onStart,
                         onForget = { forgetTarget = it },
                         header = null,
+                        // Sampled per composition rather than ticked: this list
+                        // repolls while the screen is open, and "last seen" is
+                        // measured in hours and days — a second clock running
+                        // beside that one would buy nothing a reader could see.
+                        nowMs = System.currentTimeMillis(),
                     )
                 }
             }

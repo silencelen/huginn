@@ -144,6 +144,53 @@ function sentTo(state, installId) {
   return (t && t.pushes) || 0;
 }
 
+/**
+ * One pass of the uninstall sweep: ask about every stored token, report back.
+ *
+ * WHY THIS EXISTS. A phone that has been uninstalled cannot tell this daemon so,
+ * and its check-ins simply stop — which looks identical to a phone in a drawer,
+ * a phone abroad, and a phone whose owner turned notifications off. On a host
+ * that alerts rarely, the token of a phone deleted in March is first discovered
+ * to be dead by the first alert in June, because a real send is the only thing
+ * that has ever asked. A validate-only probe asks without delivering anything,
+ * so the discovery no longer waits on there being bad news to deliver.
+ *
+ * COLLECTS, DOES NOT APPLY. Same reasoning as deliverPush: this awaits one
+ * network round trip per token, and POST /v1/push/register writes the same file
+ * meanwhile — a phone registering a rotated token inside that window would be
+ * erased by a snapshot taken before the sweep started. The caller re-reads the
+ * state and applies these outcomes against THAT.
+ *
+ * A `dead` verdict carries the token it was about, so the caller's drop can be
+ * guarded on the install still holding it. Rotation is precisely when a dead
+ * verdict arrives — FCM answers UNREGISTERED for the token being retired at the
+ * moment the phone registers its replacement.
+ *
+ * @param validate  async (token) => {ok, dead, status, error}; the FCM sender's
+ *                  probe, or a stub. Never called for an empty state.
+ * @returns {Promise<{checked: number, dead: Array, failed: number}>}
+ */
+async function reconcile(state, validate) {
+  const devices = list(state);
+  const out = { checked: 0, dead: [], failed: 0 };
+  for (const d of devices) {
+    out.checked += 1;
+    let r;
+    try {
+      r = await validate(d.token);
+    } catch (e) {
+      // A thrown probe is a broken SENDER, never a dead token. Counting it as
+      // dead would unregister the whole fleet the first time the network hiccups
+      // mid-sweep, and nothing could push again until each phone re-registered.
+      r = { ok: false, dead: false, status: 0, error: e.message };
+    }
+    if (r && r.dead) out.dead.push({ installId: d.installId, token: d.token, error: r.error || null });
+    else if (!r || !r.ok) out.failed += 1;
+  }
+  return out;
+}
+
 module.exports = {
-  emptyState, register, list, count, drop, noteFailure, noteSuccess, totals, sentTo, MAX_TOKENS,
+  emptyState, register, list, count, drop, noteFailure, noteSuccess, totals, sentTo,
+  reconcile, MAX_TOKENS,
 };
