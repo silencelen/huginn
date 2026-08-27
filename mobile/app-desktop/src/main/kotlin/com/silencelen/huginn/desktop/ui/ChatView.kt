@@ -375,7 +375,9 @@ fun ChatView(
         // to a live prompt and to a running turn — Suggest.visible is that rule,
         // shared with the phone.
         if (Suggest.visible(suggestions, busy, draft)) {
-            SuggestionChips(suggestions, onPick = setDraft)
+            // The strip ends in a wash rather than a hard cut: same reason as the
+            // session pane's, and the pages panel narrows this column too.
+            SuggestionChips(suggestions, onPick = setDraft, modifier = rememberEdgeFade())
         }
 
         HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)

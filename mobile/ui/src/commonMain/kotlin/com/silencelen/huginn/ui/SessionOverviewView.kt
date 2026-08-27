@@ -19,7 +19,9 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
@@ -183,10 +185,20 @@ fun SessionOverviewView(
 
     open?.let { node ->
         ModalBottomSheet(onDismissRequest = { open = null }) {
+            // A block with twenty agents under it is ORDINARY here, and a sheet has
+            // no more room than the window it opens in: uncapped and unscrolled,
+            // the list simply ran past the bottom edge and the last agents could
+            // not be reached at all. The cap is what gives the scroller something
+            // to scroll INSIDE — a sheet that is only as tall as it needs to be
+            // still is, because this is a maximum rather than a height.
             NodeDetail(
                 node = node,
                 agents = node.agents.mapNotNull { agentsById[it] },
-                modifier = Modifier.padding(horizontal = 18.dp).padding(bottom = 28.dp),
+                modifier = Modifier
+                    .heightIn(max = SHEET_MAX)
+                    .verticalScroll(rememberScrollState())
+                    .padding(horizontal = 18.dp)
+                    .padding(bottom = 28.dp),
             )
         }
     }
@@ -420,6 +432,33 @@ private fun MapHeader(
 private val LANE_W = 14.dp
 private val INDENT_W = 3.dp
 
+/**
+ * The map's own margin from the right edge of the pane.
+ *
+ * The gutter used to end exactly ON it: the outermost lane sits half a lane width
+ * in, so its stroke landed within a pixel of the column edge and a workflow
+ * bracket — the widest thing the gutter ever draws — read as part of the window
+ * frame rather than as part of the map.
+ */
+private val MAP_END = 8.dp
+
+/**
+ * Between a block's right edge and the lifeline that leaves it.
+ *
+ * Without it the connector starts flush against the row's token count, and a
+ * hairline touching the end of "83.1k" is a strikethrough, not a branch.
+ */
+private val LANE_GAP = 5.dp
+
+/**
+ * How far the connector's control point is pushed off the chord.
+ *
+ * Small on purpose. This is the whole difference between a branch and a line
+ * through the numbers, and a quadratic deviates half its control offset at the
+ * midpoint — so the drawn bow is half of this.
+ */
+private val LANE_BOW = 6.dp
+
 @Composable
 private fun MapRow(
     row: GraphLayout.Row,
@@ -453,7 +492,8 @@ private fun MapRow(
     Box(Modifier.fillMaxWidth().height(height).clickable(onClick = onClick)) {
         Canvas(Modifier.fillMaxSize()) {
             val gutterPx = gutter.toPx()
-            val right = size.width - 14.dp.toPx() - gutterPx
+            val endPx = MAP_END.toPx()
+            val right = size.width - 14.dp.toPx() - gutterPx - endPx
             val top = 3.dp.toPx()
             val bottom = size.height - 3.dp.toPx()
             val left = 14.dp.toPx()
@@ -492,13 +532,26 @@ private fun MapRow(
                     LaneTone.OWN -> hues.getOrElse(lane.hue % hues.size) { scheme.primary }
                 }
                 val alpha = if (laneTone == LaneTone.LIVE) 0.95f else 0.7f
-                val x = size.width - gutterPx + lane.lane * LANE_W.toPx() +
+                val x = size.width - endPx - gutterPx + lane.lane * LANE_W.toPx() +
                     LANE_W.toPx() / 2f + lane.indent * INDENT_W.toPx()
-                drawLane(lane.phase, x, right, mid, color.copy(alpha = alpha), 1.6.dp.toPx())
+                // The connector starts CLEAR of the block, not on its edge: the
+                // row's token count is drawn hard against that edge, so a line
+                // beginning there strikes through it.
+                drawLane(
+                    lane.phase,
+                    x,
+                    right + LANE_GAP.toPx(),
+                    mid,
+                    color.copy(alpha = alpha),
+                    1.6.dp.toPx(),
+                )
             }
         }
         Row(
-            Modifier.fillMaxSize().padding(start = 24.dp, end = 10.dp + gutter),
+            // The end inset lands the text INSIDE the block rather than 4dp past
+            // its rounded corner, which is where the token count used to sit — and
+            // is why the lifeline leaving that block appeared to cross it.
+            Modifier.fillMaxSize().padding(start = 24.dp, end = 18.dp + MAP_END + gutter),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Column(Modifier.weight(1f)) {
@@ -552,29 +605,52 @@ private fun DrawScope.drawLane(
 ) {
     val top = 0f
     val bottom = size.height
+    // Which way the lifeline is HEADING, which is what the connector should lean
+    // towards: down the gutter after a spawn, up out of it into a merge.
+    val bow = LANE_BOW.toPx()
     when (phase) {
         GraphLayout.Phase.PASS -> drawLine(color, Offset(x, top), Offset(x, bottom), strokeWidth = width)
         GraphLayout.Phase.START -> {
-            drawPath(curve(blockRight, mid, x), color, style = Stroke(width = width))
+            drawPath(curve(blockRight, mid, x, bow), color, style = Stroke(width = width))
             drawLine(color, Offset(x, mid), Offset(x, bottom), strokeWidth = width)
         }
         GraphLayout.Phase.END -> {
             drawLine(color, Offset(x, top), Offset(x, mid), strokeWidth = width)
-            drawPath(curve(blockRight, mid, x), color, style = Stroke(width = width))
+            drawPath(curve(blockRight, mid, x, -bow), color, style = Stroke(width = width))
         }
         GraphLayout.Phase.POINT -> {
-            drawPath(curve(blockRight, mid, x), color, style = Stroke(width = width))
+            drawPath(curve(blockRight, mid, x, bow), color, style = Stroke(width = width))
             drawCircle(color, radius = width * 1.6f, center = Offset(x, mid))
         }
     }
 }
 
-private fun curve(fromX: Float, y: Float, toX: Float): Path = Path().apply {
+/**
+ * The connector between a block's edge and a lifeline's column.
+ *
+ * [bow] is the control point's offset OFF THE CHORD, and it is the whole of this
+ * function's reason to exist: with the control point on the chord — which is what
+ * this shipped with — `quadraticTo` draws a perfectly straight horizontal line,
+ * so every branch on the map was a hairline through the row rather than the curve
+ * the code above says it is. Signed, because a spawn and a merge lean opposite
+ * ways.
+ */
+private fun curve(fromX: Float, y: Float, toX: Float, bow: Float): Path = Path().apply {
     moveTo(fromX, y)
-    quadraticTo((fromX + toX) / 2f, y, toX, y)
+    quadraticTo((fromX + toX) / 2f, y + bow, toX, y)
 }
 
 // ------------------------------------------------------------------ detail
+
+/**
+ * How tall the node sheet is allowed to get.
+ *
+ * A ceiling rather than a height: a block with one tool call still draws a short
+ * sheet. It is deliberately shorter than any window this runs in, so the sheet
+ * always ENDS somewhere the reader can see — a sheet clipped by the window edge
+ * gives no sign that there is more of it.
+ */
+private val SHEET_MAX = 420.dp
 
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
