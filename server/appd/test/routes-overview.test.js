@@ -36,6 +36,7 @@ const crypto = require('node:crypto');
 //   routes-polish       10100 + pid%50   -> 10100-10149
 //   routes-scratchpads  10150 + pid%50   -> 10150-10199
 //   routes-overview     10200 + pid%50   -> 10200-10249   (this file)
+//   push-retire         10250 + pid%50   -> 10250-10299
 //
 // Also spoken for, outside this directory: scripts/test-llm-shim.js holds
 // 18790-18799.
@@ -46,6 +47,10 @@ const BASE = `http://127.0.0.1:${PORT}`;
 
 const SESS = `ovtest_${process.pid}`;
 const BARE = `ovbare_${process.pid}`;
+// A session whose transcript is recorded but still EMPTY — the state a hook
+// creates the instant before the first record lands, and the one where a cursor
+// of zero and no cursor at all had become the same thing.
+const EMPTY = `ovempty_${process.pid}`;
 const CLAUDE_ID = `ov-${process.pid}-0000`;
 
 let tmp, token, daemon, transcript;
@@ -111,9 +116,10 @@ before(async () => {
     '',
   ].join('\n'));
 
-  // Two real tmux sessions: one the hook has reported a Claude id for, one it
-  // has not — the second is how a plain shell reaches these routes.
-  for (const name of [SESS, BARE]) {
+  // Three real tmux sessions: one the hook has reported a Claude id for, one it
+  // has not (which is how a plain shell reaches these routes), and one whose
+  // transcript is recorded and still zero bytes long.
+  for (const name of [SESS, BARE, EMPTY]) {
     sh('tmux', ['new-session', '-d', '-s', name, '-c', tmp, '-x', '80', '-y', '24', 'cat >/dev/null']);
   }
   fs.writeFileSync(path.join(tmp, 'state', SESS), JSON.stringify({
@@ -150,7 +156,7 @@ before(async () => {
 
 after(() => {
   if (daemon) daemon.kill('SIGTERM');
-  for (const name of [SESS, BARE]) {
+  for (const name of [SESS, BARE, EMPTY]) {
     try { sh('tmux', ['kill-session', '-t', `=${name}`]); } catch { /* gone */ }
   }
   if (tmp) fs.rmSync(tmp, { recursive: true, force: true });
@@ -215,6 +221,50 @@ test('a matching cursor answers unchanged instead of the whole map', async () =>
   assert.equal(again.body.unchanged, true);
   assert.equal(again.body.nodes, undefined);
   assert.deepEqual(again.body.cursor, { size, agentBytes });
+});
+
+test('the unchanged reply still carries the notes, or an idle session never learns them', async () => {
+  // ⚠ THE CASE THIS EXISTS FOR: goals typed on the phone against a session
+  // nobody is running. An idle session is exactly the one whose cursor never
+  // moves, so every poll from the watching desktop takes the short-circuit —
+  // and a short-circuit carrying only the cursor meant the edit arrived when the
+  // run next wrote a byte, which for an idle session is never. Both clients
+  // apply `meta` from either shape; that is the contract, and it is only true if
+  // the field is on both.
+  await api(`/v1/sessions/${SESS}/meta`, {
+    method: 'POST', body: JSON.stringify({ goals: 'typed on the phone', notes: 'while nothing ran' }),
+  });
+  const first = await api(`/v1/sessions/${SESS}/graph`);
+  const { size, agentBytes } = first.body.cursor;
+  const again = await api(`/v1/sessions/${SESS}/graph?size=${size}&agentBytes=${agentBytes}`);
+  assert.equal(again.body.unchanged, true, 'nothing moved, which is the whole point');
+  assert.equal(again.body.meta.goals, 'typed on the phone');
+  assert.equal(again.body.meta.notes, 'while nothing ran');
+  assert.ok(again.body.meta.updatedAt > 0);
+});
+
+test('a fetch with NO cursor is never "unchanged" — there is nothing to be unchanged from', async () => {
+  // ⚠ `Number(null)` is 0 and an untouched transcript's cursor is also 0, so a
+  // first fetch of a session that has not written a byte yet was answered
+  // `unchanged: true` with no map in it. The client had nothing to hold, and
+  // sat on an empty screen for as long as the session stayed quiet. The
+  // agentBytes half already tested for PRESENCE; the size half only tested the
+  // value it coerced to.
+  const empty = path.join(tmp, 'projects', `${CLAUDE_ID}-empty.jsonl`);
+  fs.writeFileSync(empty, '');
+  fs.writeFileSync(path.join(tmp, 'state', EMPTY), JSON.stringify({
+    state: 'idle', sessionId: `${CLAUDE_ID}-empty`, transcript: empty, cwd: tmp,
+    ts: Math.floor(Date.now() / 1000),
+  }));
+  const { status, body } = await api(`/v1/sessions/${EMPTY}/graph`);
+  assert.equal(status, 200, JSON.stringify(body));
+  assert.equal(body.unchanged, undefined, 'a first fetch always gets the map');
+  assert.deepEqual(body.nodes, [], 'even when the map is empty, which is the answer');
+  assert.equal(body.cursor.size, 0);
+
+  // And the short-circuit still works when the cursor is actually SENT as zero.
+  const again = await api(`/v1/sessions/${EMPTY}/graph?size=0&agentBytes=0`);
+  assert.equal(again.body.unchanged, true, 'an explicit 0 is a cursor; an absent one is not');
 });
 
 test('a stale cursor gets the map, and the map has grown', async () => {

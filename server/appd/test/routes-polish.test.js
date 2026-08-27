@@ -37,6 +37,7 @@ const crypto = require('node:crypto');
 //   routes-polish      10100 + pid%50    -> 10100-10149   (this file)
 //   routes-scratchpads 10150 + pid%50    -> 10150-10199
 //   routes-overview    10200 + pid%50    -> 10200-10249
+//   push-retire         10250 + pid%50   -> 10250-10299
 //
 // Also spoken for, outside this directory: scripts/test-llm-shim.js holds
 // 18790-18799.

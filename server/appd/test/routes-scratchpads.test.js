@@ -13,7 +13,7 @@
 
 const { test, before, after } = require('node:test');
 const assert = require('node:assert');
-const { spawn } = require('node:child_process');
+const { spawn, execFileSync } = require('node:child_process');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
@@ -36,6 +36,7 @@ const crypto = require('node:crypto');
 //   routes-polish       10100 + pid%50   -> 10100-10149
 //   routes-scratchpads  10150 + pid%50   -> 10150-10199   (this file)
 //   routes-overview     10200 + pid%50   -> 10200-10249
+//   push-retire         10250 + pid%50   -> 10250-10299
 //
 // Also spoken for, outside this directory: scripts/test-llm-shim.js holds
 // 18790-18799.
@@ -44,7 +45,21 @@ const crypto = require('node:crypto');
 const PORT = 10150 + (process.pid % 50);
 const BASE = `http://127.0.0.1:${PORT}`;
 
+// One real tmux session, for the half of this feature that does NOT travel as
+// text: a page attached to a live pane goes as a path, and the path is written
+// per send. Killed in after().
+const SESS = `padsess_${process.pid}`;
+
 let tmp, token, daemon;
+
+function sh(cmd, args) {
+  return execFileSync(cmd, args, { encoding: 'utf8' }).trim();
+}
+
+/** What the pane has actually been sent, which for `-l` keys is its own text. */
+function paneText() {
+  return sh('tmux', ['capture-pane', '-p', '-t', `=${SESS}:`]);
+}
 
 /**
  * Answers a chat turn, and keeps the prompt it was handed.
@@ -108,6 +123,27 @@ function chatMeta(id) {
   return JSON.parse(fs.readFileSync(path.join(tmp, 'data', 'chats', id, 'meta.json'), 'utf8'));
 }
 
+/**
+ * Waits until no chat is running and none has anything queued.
+ *
+ * ⚠ THE WATCH DIGEST HASHES `running`, `pending` AND `finishedRuns` PER CHAT
+ * (lib/watch.js says exactly which facts belong in it and why). Tests above this
+ * one leave runs in flight — one of them deliberately holds a run open for four
+ * seconds — so a "the hash did not move" assertion taken while any of them is
+ * still finishing is measuring the wrong thing and fails on a busy host. Nothing
+ * here starts a run on its own, so once the file is quiet it stays quiet.
+ */
+async function waitForQuiet(timeoutMs = 30_000) {
+  const until = Date.now() + timeoutMs;
+  while (Date.now() < until) {
+    const { body } = await api('/v1/chats');
+    const busy = (body.chats || []).filter((c) => c.running || c.pending > 0);
+    if (!busy.length) return;
+    await wait(150);
+  }
+  throw new Error('chats never went quiet');
+}
+
 async function mkPad(name, content = '') {
   const { status, body } = await api('/v1/scratchpads', {
     method: 'POST', body: JSON.stringify({ name, content }),
@@ -130,6 +166,10 @@ before(async () => {
   fs.writeFileSync(path.join(tmp, 'token'), token, { mode: 0o600 });
   fs.mkdirSync(path.join(tmp, 'data'));
   fs.mkdirSync(path.join(tmp, 'state'));
+
+  // `cat` rather than a shell: the pane echoes exactly what is sent to it and
+  // never interprets any of it.
+  sh('tmux', ['new-session', '-d', '-s', SESS, '-c', tmp, '-x', '200', '-y', '50', 'cat >/dev/null']);
 
   daemon = spawn(process.execPath, [path.join(__dirname, '..', 'huginn-appd.js')], {
     env: {
@@ -162,6 +202,7 @@ before(async () => {
 
 after(() => {
   if (daemon) daemon.kill('SIGTERM');
+  try { sh('tmux', ['kill-session', '-t', `=${SESS}`]); } catch { /* gone */ }
   if (tmp) fs.rmSync(tmp, { recursive: true, force: true });
 });
 
@@ -235,6 +276,42 @@ test('content over the cap is refused at create and at save', async () => {
   assert.equal(400, saved.status);
 });
 
+// ⚠ THE TWO CAPS ARE IN DIFFERENT UNITS and had stopped agreeing. A page is
+// capped at 100,000 CHARACTERS and the global request body at 256 KiB of BYTES,
+// so for any script whose characters cost three bytes the character cap was
+// unreachable: a perfectly legal page died in readBody and came back as the
+// outer catch-all "request body too large", which says nothing about pages.
+
+test('a legal page in a three-byte script is not refused for being three-byte', async () => {
+  // 90,000 characters — well inside the page cap — and 270,000 bytes, well
+  // outside the old body budget. This is an ordinary page of Japanese.
+  const content = '例'.repeat(90_000);
+  assert.ok(Buffer.byteLength(content, 'utf8') > 256 * 1024, 'the fixture is only a fixture if it is over');
+  const made = await api('/v1/scratchpads', {
+    method: 'POST', body: JSON.stringify({ name: 'Multibyte', content }),
+  });
+  assert.equal(201, made.status, JSON.stringify(made.body));
+  assert.equal(90_000, made.body.content.length);
+
+  const saved = await api(`/v1/scratchpads/${made.body.id}`, {
+    method: 'PATCH', body: JSON.stringify({ content: `${content}例`.slice(1), rev: made.body.rev }),
+  });
+  assert.equal(200, saved.status, JSON.stringify(saved.body).slice(0, 200));
+});
+
+test('an over-cap page is refused in the ROUTE\'s words, not the transport\'s', async () => {
+  // 100,001 characters and 300,003 bytes: over the page cap, under the page
+  // routes' own body budget — so the answer names the number the person is being
+  // held to instead of "request body too large".
+  const content = '例'.repeat(100_001);
+  const made = await api('/v1/scratchpads', {
+    method: 'POST', body: JSON.stringify({ name: 'Multibyte too big', content }),
+  });
+  assert.equal(400, made.status, JSON.stringify(made.body));
+  assert.match(made.body.error, /a page holds at most 100,000 characters/);
+  assert.doesNotMatch(made.body.error, /body/);
+});
+
 test('a page is deletable and then gone', async () => {
   const pad = await mkPad('Temporary');
   assert.equal(200, (await api(`/v1/scratchpads/${pad.id}`, { method: 'DELETE' })).status);
@@ -258,6 +335,30 @@ test('Main cannot be renamed either — every client calls the fallback by that 
   });
   assert.equal(400, status);
   assert.match(body.error, /cannot be renamed/);
+});
+
+test('a SECOND Main cannot be created before the first list has minted one', async () => {
+  // ⚠ THE ORDER OF FIRST CONTACT DECIDED THIS. Main is minted lazily by the
+  // LIST route, so on an install where a client created a page before it ever
+  // listed one, "Main" was not taken — the create was allowed, and the next list
+  // minted a second page with the same name. Two rows reading "Main" in the
+  // picker, one of them the fallback every unspecified reference resolves to,
+  // and nothing on screen to tell them apart.
+  //
+  // Reproduced by taking Main's file off disk, which is the same state as an
+  // install where nothing has listed yet.
+  const main = await mainPad();
+  fs.unlinkSync(path.join(tmp, 'data', 'scratchpads', `${main.id}.json`));
+
+  const dupe = await api('/v1/scratchpads', { method: 'POST', body: JSON.stringify({ name: 'main' }) });
+  assert.equal(400, dupe.status, JSON.stringify(dupe.body));
+  assert.match(dupe.body.error, /already a page/);
+
+  const { body } = await api('/v1/scratchpads');
+  const mains = body.pads.filter((p2) => p2.main);
+  assert.equal(1, mains.length, 'exactly one page is the fallback');
+  assert.equal(1, body.pads.filter((p2) => p2.name.toLowerCase() === 'main').length,
+    'and exactly one row reads Main');
 });
 
 test('Main is still WRITABLE — it is a page, not a placeholder', async () => {
@@ -339,6 +440,49 @@ test('no scratchpadId means no page — Main is never attached behind your back'
   assert.ok(!prompt.includes('[Scratchpad'), 'a page reached a conversation nobody attached it to');
 });
 
+test('a scratchpadId that is PRESENT and blank is said out loud, not read as Main', async () => {
+  // ⚠ ABSENT AND BLANK ARE DIFFERENT ANSWERS. Absent means no page — that rule
+  // is what keeps Main out of conversations nobody attached it to. Present and
+  // blank is a client that meant to send an id and sent nothing, and every one
+  // of these used to coerce to Main: a page silently attached to a message
+  // because a picker's state was empty. The only way the client that did it ever
+  // finds out is being told.
+  const chat = (await api('/v1/chats', { method: 'POST', body: JSON.stringify({ mode: 'ask' }) })).body;
+  for (const bad of ['', '   ', 0, false, {}, []]) {
+    const { status, body } = await api(`/v1/chats/${chat.id}/messages`, {
+      method: 'POST', body: JSON.stringify({ text: 'REF_BLANK', scratchpadId: bad }),
+    });
+    assert.equal(400, status, `${JSON.stringify(bad)} was accepted`);
+    assert.match(body.error, /scratchpadId must be a page id or "main"/);
+  }
+  assert.equal(0, prompts().filter((x) => x.includes('REF_BLANK')).length, 'and nothing was sent');
+});
+
+test('a null scratchpadId is still "no page", which is the one blank that means something', async () => {
+  const chat = (await api('/v1/chats', { method: 'POST', body: JSON.stringify({ mode: 'ask' }) })).body;
+  const { status } = await api(`/v1/chats/${chat.id}/messages`, {
+    method: 'POST', body: JSON.stringify({ text: 'REF_NULL just a question', scratchpadId: null }),
+  });
+  assert.equal(202, status);
+  const prompt = await waitForPrompt('REF_NULL');
+  assert.ok(!prompt.includes('[Scratchpad'), 'null is how a client says "clear the attachment"');
+});
+
+test('the literal "main" still resolves to Main, for a client with no picker', async () => {
+  const main = await mainPad();
+  await api(`/v1/scratchpads/${main.id}`, {
+    method: 'PATCH',
+    body: JSON.stringify({ content: 'MAIN_BY_NAME', rev: (await api(`/v1/scratchpads/${main.id}`)).body.rev }),
+  });
+  const chat = (await api('/v1/chats', { method: 'POST', body: JSON.stringify({ mode: 'ask' }) })).body;
+  const sent = await api(`/v1/chats/${chat.id}/messages`, {
+    method: 'POST', body: JSON.stringify({ text: 'REF_MAIN read it', scratchpadId: 'main' }),
+  });
+  assert.equal(202, sent.status, JSON.stringify(sent.body));
+  const prompt = await waitForPrompt('REF_MAIN');
+  assert.ok(prompt.includes('[Scratchpad "Main"]\nMAIN_BY_NAME\n[End scratchpad]'), prompt.slice(0, 200));
+});
+
 test('naming a page that is not there is a 404, not a silent send', async () => {
   const chat = (await api('/v1/chats', { method: 'POST', body: JSON.stringify({ mode: 'ask' }) })).body;
   const { status } = await api(`/v1/chats/${chat.id}/messages`, {
@@ -401,11 +545,242 @@ test('editing pages never wakes a watching phone', async () => {
   // turns on and nothing else. A page is written by the person holding the
   // phone; buzzing them about their own typing is the purest form of the noise
   // that digest exists to avoid.
-  const before = (await api('/v1/watch')).body.hash;
-  const pad = await mkPad('Noisy', 'first');
-  await api(`/v1/scratchpads/${pad.id}`, {
-    method: 'PATCH', body: JSON.stringify({ content: 'second', rev: pad.rev }),
+  //
+  // ⚠ MEASURED IN A WINDOW THE TEST CAN PROVE HELD STILL. The digest's two
+  // inputs are this host's WHOLE tmux session list — the daemon shares the
+  // machine's tmux server, and every other route test in this directory creates
+  // and kills sessions while this one runs — and every chat, which the tests
+  // above leave finishing. A bare before/after comparison was measuring those,
+  // not pages: it went red on a busy host for reasons that had nothing to do
+  // with the thing being asserted. So the bracket is retried until its
+  // uncontrolled inputs come back identical, and only then is the hash judged.
+  // A page that DID enter the digest still fails every attempt, which is the
+  // regression this exists to catch.
+  // ⚠ SAMPLED AFTER EVERY STEP, not only at the end. A create followed by a
+  // delete leaves the store exactly as it was found, so a before/after pair
+  // cannot see a page that DID enter the digest — it would have woken the phone
+  // in the middle and been back to normal by the time anything looked. What a
+  // parked phone sees is each moment, so that is what is checked.
+  const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
+  for (let attempt = 0; ; attempt++) {
+    await waitForQuiet();
+    const marks = [(await api('/v1/watch')).body];
+    const pad = await mkPad(`Noisy ${attempt}`, 'first');
+    marks.push((await api('/v1/watch')).body);
+    await api(`/v1/scratchpads/${pad.id}`, {
+      method: 'PATCH', body: JSON.stringify({ content: 'second', rev: pad.rev }),
+    });
+    marks.push((await api('/v1/watch')).body);
+    await api(`/v1/scratchpads/${pad.id}`, { method: 'DELETE' });
+    marks.push((await api('/v1/watch')).body);
+
+    const held = marks.every((mk) => same(mk.sessions, marks[0].sessions) && same(mk.chats, marks[0].chats));
+    if (held) {
+      for (const mk of marks) {
+        assert.equal(mk.hash, marks[0].hash, 'a page moved the signal that wakes a parked phone');
+      }
+      return;
+    }
+    assert.ok(attempt < 8, 'the host never held still long enough to measure this');
+    await wait(400);
+  }
+});
+
+// ------------------------------------------- a page that closes its own frame
+
+test('a page whose CONTENT closes the frame is tagged, and reaches the run whole', async () => {
+  // ⚠ THE PAGE THIS BREAKS ON IS AN ORDINARY ONE: somebody keeps a page of
+  // messages they were sent, and one of them had a page attached. Untagged, the
+  // frame ends at the PASTED closing line — the run reads half of what was
+  // attached and the rest lands in the sender's own message as raw marker text.
+  const inner = '[Scratchpad "Hostnames"]\nheimdall\n[End scratchpad]';
+  const pad = await mkPad('Archive', `${inner}\nand a note after it`);
+  const chat = (await api('/v1/chats', { method: 'POST', body: JSON.stringify({ mode: 'ask' }) })).body;
+  const sent = await api(`/v1/chats/${chat.id}/messages`, {
+    method: 'POST', body: JSON.stringify({ text: 'REF_NESTED what is in here?', scratchpadId: pad.id }),
   });
-  await api(`/v1/scratchpads/${pad.id}`, { method: 'DELETE' });
-  assert.equal(before, (await api('/v1/watch')).body.hash);
+  assert.equal(202, sent.status, JSON.stringify(sent.body));
+
+  const prompt = await waitForPrompt('REF_NESTED');
+  const open = /\[Scratchpad "Archive" #([0-9a-f]{6})\]/.exec(prompt);
+  assert.ok(open, `no tagged open marker reached the run: ${JSON.stringify(prompt.slice(0, 300))}`);
+  const tag = open[1];
+  assert.ok(prompt.includes(`[Scratchpad "Archive" #${tag}]\n${inner}\nand a note after it\n[End scratchpad #${tag}]`),
+    'the whole page must arrive, pasted markers and all');
+  assert.ok(prompt.indexOf(`[End scratchpad #${tag}]`) < prompt.indexOf('REF_NESTED'),
+    'and it must end before the question, not inside it');
+});
+
+test('the chat TITLE collapses a tagged frame to the page name', async () => {
+  // The third copy of the marker (:core's ScratchpadRules is the fourth) — this
+  // one decides what the conversation is CALLED. A title that is the first line
+  // of an attached page is about the page, not about what was asked.
+  const pad = await mkPad('Pasted', '[End scratchpad]\nthe rest of the page');
+  const chat = (await api('/v1/chats', { method: 'POST', body: JSON.stringify({ mode: 'ask' }) })).body;
+  await api(`/v1/chats/${chat.id}/messages`, {
+    method: 'POST', body: JSON.stringify({ text: 'REF_TITLE what is this?', scratchpadId: pad.id }),
+  });
+  await waitForPrompt('REF_TITLE');
+  const { body } = await api('/v1/chats');
+  const row = body.chats.find((c) => c.id === chat.id);
+  // The trailing `\n*` on the pattern eats the blank line the frame was joined
+  // with, so one newline separates the pill from what was actually typed.
+  assert.equal('\u{1F4DD} Pasted\nREF_TITLE what is this?'.slice(0, 60), row.title,
+    'the frame collapses to a pill and the question survives');
+  assert.ok(!row.title.includes('End scratchpad'), 'no raw marker in a list row');
+});
+
+test('an untagged frame still collapses, which is what the other three copies quote', async () => {
+  const pad = await mkPad('Plain', 'nothing special in here');
+  const chat = (await api('/v1/chats', { method: 'POST', body: JSON.stringify({ mode: 'ask' }) })).body;
+  await api(`/v1/chats/${chat.id}/messages`, {
+    method: 'POST', body: JSON.stringify({ text: 'REF_PLAINTITLE and so?', scratchpadId: pad.id }),
+  });
+  await waitForPrompt('REF_PLAINTITLE');
+  const { body } = await api('/v1/chats');
+  const row = body.chats.find((c) => c.id === chat.id);
+  assert.match(row.title, /^\u{1F4DD} Plain/u);
+});
+
+test('a message full of opening markers and no close is answered promptly', async () => {
+  // ⚠ THE COLLAPSE PATTERN HOLDS A `[\s\S]*?` BETWEEN TWO LITERALS, so on text
+  // with many opening markers and no closing one the engine restarts a walk to
+  // end-of-string at every one of them. It runs on the title and the snippet of
+  // every chat in the list. The guard is two indexOf scans and changes nothing
+  // about what matches — see the assertion below, which is the half that can
+  // actually regress.
+  const line = `[Scratchpad "${'x'.repeat(60)}"]`;
+  const text = `PATHOLOGICAL ${Array.from({ length: 1_200 }, () => line).join('\n')}`;
+  assert.ok(text.length < 100_000, 'inside the chat cap, or this is testing the cap');
+  const chat = (await api('/v1/chats', { method: 'POST', body: JSON.stringify({ mode: 'ask' }) })).body;
+  const started = Date.now();
+  const { status } = await api(`/v1/chats/${chat.id}/messages`, { method: 'POST', body: JSON.stringify({ text }) });
+  assert.equal(202, status);
+  assert.ok(Date.now() - started < 10_000, 'a title is not worth ten seconds');
+  const { body } = await api('/v1/chats');
+  const row = body.chats.find((c) => c.id === chat.id);
+  assert.match(row.title, /^PATHOLOGICAL/, 'an unclosed marker is not a frame, and is left alone');
+});
+
+// ------------------------------------------------------- the session path
+
+test('a page attached to a SESSION travels as a path, and the file is what was sent', async () => {
+  const pad = await mkPad('Runbook', 'step one\nstep two');
+  const sent = await api(`/v1/sessions/${SESS}/keys`, {
+    method: 'POST', body: JSON.stringify({ text: 'follow this', scratchpadId: pad.id }),
+  });
+  assert.equal(200, sent.status, JSON.stringify(sent.body));
+  const pane = paneText();
+  const at = /\[Scratchpad "Runbook" at (\S+\.md) /.exec(pane);
+  assert.ok(at, `no reference reached the pane: ${JSON.stringify(pane.slice(0, 300))}`);
+  assert.equal('step one\nstep two', fs.readFileSync(at[1], 'utf8'));
+  assert.ok(pane.includes('follow this'), 'and the message went with it');
+});
+
+test('each send gets its OWN file, so an older message never resolves to newer text', async () => {
+  // ⚠ THE COMMENT USED TO CLAIM SNAPSHOT SEMANTICS THAT A SHARED FILENAME
+  // CANNOT PROVIDE. render/<padId>.md was rewritten on every attach and shared
+  // across every session, so a message still sitting in a pane's scrollback
+  // named a path that now held the page's CURRENT text — and the run would
+  // follow it and answer confidently about words the sender never attached.
+  const pad = await mkPad('Moving page', 'VERSION ONE');
+  await api(`/v1/sessions/${SESS}/keys`, {
+    method: 'POST', body: JSON.stringify({ text: 'FIRST_SEND', scratchpadId: pad.id }),
+  });
+  const first = /\[Scratchpad "Moving page" at (\S+\.md) /.exec(paneText());
+  assert.ok(first, 'the first send named a file');
+
+  const fresh = (await api(`/v1/scratchpads/${pad.id}`)).body;
+  await api(`/v1/scratchpads/${pad.id}`, {
+    method: 'PATCH', body: JSON.stringify({ content: 'VERSION TWO', rev: fresh.rev }),
+  });
+  await api(`/v1/sessions/${SESS}/keys`, {
+    method: 'POST', body: JSON.stringify({ text: 'SECOND_SEND', scratchpadId: pad.id }),
+  });
+  const paths = [...paneText().matchAll(/\[Scratchpad "Moving page" at (\S+\.md) /g)].map((x) => x[1]);
+  assert.equal(2, paths.length, 'two sends, two markers');
+  assert.notEqual(paths[0], paths[1], 'and two files — a shared name is the whole bug');
+  assert.equal('VERSION ONE', fs.readFileSync(paths[0], 'utf8'), 'the older path still reads as it was sent');
+  assert.equal('VERSION TWO', fs.readFileSync(paths[1], 'utf8'));
+});
+
+test('deleting a page takes every rendered copy with it', async () => {
+  const pad = await mkPad('Ephemeral', 'secret-ish');
+  await api(`/v1/sessions/${SESS}/keys`, { method: 'POST', body: JSON.stringify({ text: 'a', scratchpadId: pad.id }) });
+  await api(`/v1/sessions/${SESS}/keys`, { method: 'POST', body: JSON.stringify({ text: 'b', scratchpadId: pad.id }) });
+  const dir = path.join(tmp, 'data', 'scratchpads', 'render');
+  assert.equal(2, fs.readdirSync(dir).filter((f) => f.startsWith(`${pad.id}-`)).length);
+
+  assert.equal(200, (await api(`/v1/scratchpads/${pad.id}`, { method: 'DELETE' })).status);
+  assert.equal(0, fs.readdirSync(dir).filter((f) => f.startsWith(`${pad.id}-`)).length,
+    'a readable path to a page the owner just deleted is the one thing that must not survive');
+});
+
+test('render files older than the keep window are pruned on the next write', async () => {
+  const pad = await mkPad('Prunable', 'x');
+  const dir = path.join(tmp, 'data', 'scratchpads', 'render');
+  const ancient = path.join(dir, `${pad.id}-1000000000000.md`);   // 2001
+  fs.writeFileSync(ancient, 'from another era');
+  assert.ok(fs.existsSync(ancient));
+  await api(`/v1/sessions/${SESS}/keys`, { method: 'POST', body: JSON.stringify({ text: 'c', scratchpadId: pad.id }) });
+  assert.equal(false, fs.existsSync(ancient), 'the directory does not grow for the life of the daemon');
+});
+
+test('a page with NO message sends the reference alone — attaching IS the message', async () => {
+  // ⚠ THE REFERENCE USED TO BE DROPPED HERE while the route answered ok. Being
+  // told the page was attached, with nothing arriving in the pane, is worse than
+  // either sending it or refusing.
+  const pad = await mkPad('Alone', 'read me');
+  const sent = await api(`/v1/sessions/${SESS}/keys`, {
+    method: 'POST', body: JSON.stringify({ scratchpadId: pad.id }),
+  });
+  assert.equal(200, sent.status, JSON.stringify(sent.body));
+  const at = /\[Scratchpad "Alone" at (\S+\.md) — read it before acting on this message\.\]/.exec(paneText());
+  assert.ok(at, `the frame did not travel on its own: ${JSON.stringify(paneText().slice(-300))}`);
+  assert.equal('read me', fs.readFileSync(at[1], 'utf8'));
+});
+
+test('the session refusal blames the message, because the page is not in it', async () => {
+  // The chat wording ("that page and this message … shorten one of them") points
+  // at a fix that cannot work on this path: only the one-line reference travels,
+  // so shortening a 90,000-character page changes the composed length by nothing.
+  const pad = await mkPad('Pointed at', 'y'.repeat(50_000));
+  const { status, body } = await api(`/v1/sessions/${SESS}/keys`, {
+    method: 'POST', body: JSON.stringify({ text: 'z'.repeat(8_000), scratchpadId: pad.id }),
+  });
+  assert.equal(413, status, JSON.stringify(body));
+  assert.doesNotMatch(body.error, /that page and this message/);
+  assert.match(body.error, /one-line reference to that page takes \d+ of the 8,000 characters/);
+  assert.match(body.error, /this message is 8,000/);
+});
+
+test('a blank scratchpadId is refused on the session path too', async () => {
+  const { status, body } = await api(`/v1/sessions/${SESS}/keys`, {
+    method: 'POST', body: JSON.stringify({ text: 'hello', scratchpadId: '   ' }),
+  });
+  assert.equal(400, status);
+  assert.match(body.error, /scratchpadId must be a page id or "main"/);
+});
+
+// ----------------------------------------------------------- the list order
+
+test('the list is Main, then name order — it does not reshuffle while you type', async () => {
+  // ⚠ A PICKER IS A PLACE. Ordering by most-recently-edited moves the row you
+  // are typing in to the top, so the next click opens a different page; a tester
+  // typed into the wrong pad twice in one sitting. Recency is already on the row
+  // as `updatedAt` and does not also get to be the order.
+  for (const n of ['zeta pad', 'Alpha pad', 'MIDDLE pad']) await mkPad(n);
+  const names = () => api('/v1/scratchpads').then((r) => r.body.pads
+    .map((p2) => p2.name).filter((n) => n === 'Main' || n.endsWith(' pad')));
+
+  const before = await names();
+  assert.deepEqual(before, ['Main', 'Alpha pad', 'MIDDLE pad', 'zeta pad']);
+
+  // Edit the LAST one. Nothing may move.
+  const zeta = (await api('/v1/scratchpads')).body.pads.find((p2) => p2.name === 'zeta pad');
+  const full = (await api(`/v1/scratchpads/${zeta.id}`)).body;
+  await api(`/v1/scratchpads/${zeta.id}`, {
+    method: 'PATCH', body: JSON.stringify({ content: 'just typed something', rev: full.rev }),
+  });
+  assert.deepEqual(await names(), before, 'the row a person is editing stays where it is');
 });

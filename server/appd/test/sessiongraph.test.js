@@ -509,7 +509,136 @@ test('a growing agent file is running, and its tokens keep up', () => {
   assert.equal(second.totals.agentTokens.output, 11, 'the append is added, not re-summed from zero');
 });
 
+test('an agent whose meta lands a moment LATE is read again, not remembered as nameless', () => {
+  // ⚠ THE ORDINARY CASE, not a rare one. `.meta.json` is a SIBLING of the
+  // transcript and is written on its own schedule, so the first poll routinely
+  // finds bytes and no meta. The retry the walker's comment promises used to sit
+  // BELOW the equal-size early return, which meant it could only run on a poll
+  // that also found new bytes — and for an agent that has stopped writing, that
+  // is never. The branch kept the null: no description, no type, and no join to
+  // the tool_use that spawned it, for the rest of the session.
+  resetCache();
+  const dir = tmpdir();
+  const sid = 'slate';
+  const file = write(dir, `${sid}.jsonl`, [
+    userSays('go', 0),
+    assistant('r1', 1, [{ type: 'tool_use', id: 'ag1', name: 'Agent', input: { description: 'Check the switches' } }], {}),
+  ]);
+  const subs = path.join(dir, sid, 'subagents');
+  fs.mkdirSync(subs, { recursive: true });
+  const agentFile = path.join(subs, 'agent-l1.jsonl');
+  fs.writeFileSync(agentFile, JSON.stringify(assistant('al1', 2, [], { o: 5 })) + '\n');
+
+  const first = sessionGraph(file, sid);
+  assert.equal(first.agents.length, 1);
+  assert.equal(first.agents[0].spawnNodeId, null, 'nothing to join it to yet');
+  assert.equal(first.agents[0].agentType, null);
+  assert.equal(first.agents[0].description, null, 'and nothing to call it');
+
+  // The directory is populated a beat later, and the agent file NEVER grows
+  // again — which is exactly what a finished agent looks like.
+  fs.writeFileSync(path.join(subs, 'agent-l1.meta.json'),
+    JSON.stringify({ agentType: 'Explore', toolUseId: 'ag1', spawnDepth: 1 }));
+
+  const second = sessionGraph(file, sid);
+  assert.equal(second.agents[0].agentType, 'Explore', 'the sibling was read again');
+  assert.equal(second.agents[0].spawnNodeId, 'n1', 'and the join it carries finally lands');
+  assert.equal(second.agents[0].description, 'Check the switches',
+    'which is also the only route to the parent\'s own words for it');
+  assert.equal(second.agents[0].depth, 1);
+});
+
 // ------------------------------------------------------------ totals + rate
+
+// ------------------------------------------------------------------- errors
+//
+// `totals.errors` is rendered on the overview card and on the map header. It was
+// EMITTED and never incremented: the count lived on the open turn, and closing
+// the turn threw the turn away. A header that always reads zero does not say "we
+// do not know" — it says the run went fine.
+
+test('failed tool calls reach the totals, and the totals match the blocks', () => {
+  resetCache();
+  const dir = tmpdir();
+  const file = write(dir, 'serr1.jsonl', [
+    userSays('run the gate', 0),
+    assistant('r1', 1, [{ type: 'tool_use', id: 't1', name: 'Bash', input: {} }], { o: 5 }),
+    toolResult('t1', 2, 'exit 1', true),
+    assistant('r2', 3, [{ type: 'tool_use', id: 't2', name: 'Bash', input: {} }], { o: 5 }),
+    toolResult('t2', 4, 'exit 2', true),
+    assistant('r3', 5, [{ type: 'tool_use', id: 't3', name: 'Bash', input: {} }], { o: 5 }),
+    toolResult('t3', 6, 'ok'),
+    userSays('and again', 7),
+    assistant('r4', 8, [{ type: 'tool_use', id: 't4', name: 'Bash', input: {} }], { o: 5 }),
+    toolResult('t4', 9, 'exit 3', true),
+    userSays('enough', 10),
+  ]);
+  const g = sessionGraph(file, 'serr1');
+  const nodeSum = g.nodes.reduce((n, x) => n + (x.errors || 0), 0);
+  assert.equal(nodeSum, 3, 'two in the first turn, one in the second');
+  assert.equal(g.totals.errors, nodeSum, 'the header is the sum of what is drawn under it');
+});
+
+test('a turn still RUNNING has its failures in the header already', () => {
+  // The last turn is previewed rather than closed, so its errors have not been
+  // rolled up yet. Counted here for the same reason `turns` is: a header and the
+  // blocks beneath it that disagree while a run is live is the one moment
+  // somebody is actually watching.
+  resetCache();
+  const dir = tmpdir();
+  const file = write(dir, 'serr2.jsonl', [
+    userSays('go', 0),
+    assistant('r1', 1, [{ type: 'tool_use', id: 't1', name: 'Bash', input: {} }], { o: 5 }),
+    toolResult('t1', 2, 'exit 1', true),
+  ]);
+  const g = sessionGraph(file, 'serr2');
+  assert.equal(g.nodes.reduce((n, x) => n + (x.errors || 0), 0), 1);
+  assert.equal(g.totals.errors, 1, 'not zero until the turn happens to end');
+});
+
+test('a failure landing after its turn was closed is still a failure', () => {
+  // A compact boundary closes the turn where it falls. The tool_result for work
+  // issued before it arrives with no open turn to charge — and the alternative
+  // to counting it straight into the totals is not counting it at all.
+  resetCache();
+  const dir = tmpdir();
+  const file = write(dir, 'serr3.jsonl', [
+    userSays('go', 0),
+    assistant('r1', 1, [{ type: 'tool_use', id: 't1', name: 'Bash', input: {} }], { o: 5 }),
+    {
+      type: 'system',
+      subtype: 'compact_boundary',
+      uuid: 'cb',
+      timestamp: T(2),
+      compactMetadata: { trigger: 'auto', preTokens: 100, postTokens: 10 },
+    },
+    toolResult('t1', 3, 'exit 1', true),
+  ]);
+  const g = sessionGraph(file, 'serr3');
+  assert.equal(g.totals.errors, 1);
+  assert.equal(g.nodes.reduce((n, x) => n + (x.errors || 0), 0), 0,
+    'it belongs to no block on the map, which is why the totals must carry it');
+});
+
+test('a clean session says zero rather than a number the roll-up invented', () => {
+  // Closed turns AND an open one, because the count is assembled from both and
+  // a roll-up that charged per turn rather than per failure would read three.
+  resetCache();
+  const dir = tmpdir();
+  const file = write(dir, 'serr4.jsonl', [
+    userSays('one', 0),
+    assistant('r1', 1, [{ type: 'tool_use', id: 't1', name: 'Bash', input: {} }], { o: 5 }),
+    toolResult('t1', 2, 'ok'),
+    userSays('two', 3),
+    assistant('r2', 4, [{ type: 'tool_use', id: 't2', name: 'Bash', input: {} }], { o: 5 }),
+    toolResult('t2', 5, 'ok'),
+    userSays('three', 6),
+    assistant('r3', 7, [{ type: 'text', text: 'done' }], { o: 5 }),
+  ]);
+  const g = sessionGraph(file, 'serr4');
+  assert.equal(g.totals.turns, 3, 'two closed and one in flight');
+  assert.equal(g.totals.errors, 0);
+});
 
 test('the header counts what a person would count', () => {
   resetCache();
