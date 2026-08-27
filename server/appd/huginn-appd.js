@@ -1731,9 +1731,27 @@ let deviceState = (() => {
   return devicesLib.emptyState();
 })();
 
+/**
+ * Persists the registry, atomically — write a temp file, then rename over.
+ *
+ * ⚠ THIS WAS A BARE writeFileSync, and it was the only state writer here that
+ * was: push.json and clients.json have used tmp+rename since they were written.
+ * The difference matters because of what the LOADER above does with a file it
+ * cannot parse — it starts from empty and says nothing. A crash, a power cut or
+ * a full disk partway through this write leaves truncated JSON, and the next
+ * start therefore discards EVERY enrolment silently. Every device then looks
+ * un-enrolled and re-registers under a fresh id, so the machines come back as
+ * new rows with no history while the old rows are simply gone.
+ *
+ * rename(2) is atomic within a filesystem, so a reader sees either the whole
+ * previous file or the whole new one and never a half of either. 0o600 because
+ * the same file names every machine that has offered itself to this daemon.
+ */
 function saveDevices() {
-  try { fs.writeFileSync(DEVICES_FILE, JSON.stringify(deviceState, null, 2)); }
-  catch (e) { log(`devices: could not persist (${e.message})`); }
+  try {
+    fs.writeFileSync(`${DEVICES_FILE}.tmp`, JSON.stringify(deviceState, null, 2), { mode: 0o600 });
+    fs.renameSync(`${DEVICES_FILE}.tmp`, DEVICES_FILE);
+  } catch (e) { log(`devices: could not persist (${e.message})`); }
 }
 
 /** Work handed out but not yet finished, and the runs behind it. */
@@ -3056,6 +3074,31 @@ function savePushState(st) {
 }
 
 /**
+ * Everything one dead registration costs, in the two places that learn of one:
+ * a real send in [deliverPush], and the daily validate-only sweep.
+ *
+ * THE INSTALL ID IS THE JOIN. The app sends the same per-installation id when it
+ * registers a push token (push.json) and when it checks in (clients.json), so a
+ * dead token is evidence about BOTH rows and dropping only the first left a ghost
+ * phone listed in the clients panel until its seven-day prune. Worse than merely
+ * untidy: `clientsLib.appOnline` reads that list to decide whether the app is a
+ * delivery route — a stale row cannot make a phone look fresh forever (its lastAt
+ * still ages out) but the panel says "still listening" about a phone that has been
+ * uninstalled.
+ *
+ * ⚠ devices.json is NOT part of this join and must not be touched here. A device
+ * is another MACHINE that runs claude work; phones never enrol as devices, and an
+ * install id is not a device id. The two registries share no key.
+ *
+ * @returns true when the token was actually dropped (see pushLib.drop's token guard).
+ */
+function retireDeadInstall(freshPush, installId, token) {
+  if (!pushLib.drop(freshPush, installId, token)) return false;
+  if (clientsLib.dropClient(clientState, installId)) clientDirty = true;
+  return true;
+}
+
+/**
  * Pushes one alert to every registered device.
  *
  * A token FCM reports as dead is forgotten; any other failure is counted and left
@@ -3105,12 +3148,71 @@ async function deliverPush(alert) {
       if (o.kind === 'ok') pushLib.noteSuccess(fresh, o.installId, o.at);
       // Only while the install still holds the token that failed: a drop keyed on
       // the install alone would delete a registration made while we were sending.
-      else if (o.kind === 'dead') pushLib.drop(fresh, o.installId, o.token);
+      // The client row goes with it — see retireDeadInstall for why the install id
+      // is the join, and why devices.json is deliberately not part of it.
+      else if (o.kind === 'dead') retireDeadInstall(fresh, o.installId, o.token);
       else pushLib.noteFailure(fresh, o.installId);
     }
     savePushState(fresh);
   }
   return { sent, dead, failed };
+}
+
+// ------------------------------------------------- the daily uninstall sweep
+//
+// The one thing a quiet host cannot learn any other way. A phone that has been
+// uninstalled stops checking in, which is what a phone in a drawer also does, so
+// the registry keeps a dead token until something happens worth pushing about —
+// and on a household daemon that can be months. A validate-only probe asks FCM
+// the question directly, without delivering anything to anybody.
+//
+// Once a DAY, not once an hour: the answer changes when somebody uninstalls an
+// app, which is not an hourly event, and each pass costs one FCM round trip per
+// registered phone. The first pass waits ten minutes rather than running at
+// startup, so a daemon crash-looping never sweeps at all — and so a deploy does
+// not spend its first second on a question whose answer keeps for a day.
+
+const PUSH_RECONCILE_MS = 24 * 60 * 60 * 1000;
+const PUSH_RECONCILE_FIRST_MS = 10 * 60 * 1000;
+
+/**
+ * Validates every stored token and retires the ones FCM says are gone.
+ *
+ * Same cleanup as a dead verdict from a real send — [retireDeadInstall] — and
+ * deliberately the same function, so an uninstall discovered by the sweep and one
+ * discovered by an alert cannot leave the daemon in two different states.
+ *
+ * One quiet line per REMOVAL and nothing at all otherwise. A sweep that logged
+ * its own heartbeat would write 365 lines a year saying nothing happened, and the
+ * lines that matter would be the ones nobody could find.
+ */
+async function pushReconcileTick() {
+  if (!fcm) return { checked: 0, dead: 0 };
+  const st = loadPushState();
+  if (!pushLib.count(st)) return { checked: 0, dead: 0 };
+
+  const r = await pushLib.reconcile(st, (token) => fcm.validate(token));
+  if (!r.dead.length) return { checked: r.checked, dead: 0 };
+
+  // Applied against a FRESH read: the sweep held the network for one round trip
+  // per phone, and POST /v1/push/register writes this same file.
+  const fresh = loadPushState();
+  let dropped = 0;
+  for (const d of r.dead) {
+    if (!retireDeadInstall(fresh, d.installId, d.token)) continue;
+    dropped += 1;
+    log(`push: install ${d.installId} gone (uninstalled?) — token + client row dropped`);
+  }
+  if (dropped) savePushState(fresh);
+  return { checked: r.checked, dead: dropped };
+}
+
+if (fcm) {
+  setTimeout(() => {
+    pushReconcileTick().catch((e) => log('push: reconcile failed', e.message));
+    setInterval(() => { pushReconcileTick().catch((e) => log('push: reconcile failed', e.message)); },
+      PUSH_RECONCILE_MS).unref();
+  }, PUSH_RECONCILE_FIRST_MS).unref();
 }
 
 const suggestCache = new Map();   // sessionId -> {size, suggestions, promise}

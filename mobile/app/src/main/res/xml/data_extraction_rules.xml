@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    WHAT MAY LEAVE THIS PHONE. Nothing.
+
+    android:allowBackup="false" is still set and is still the primary answer, but
+    it is not the whole answer on Android 12+: Google's own note says that on
+    devices from some manufacturers `allowBackup="false"` disables cloud backup
+    (Drive) while leaving DEVICE-TO-DEVICE transfer enabled for the app. D2D is
+    the phone-to-phone migration wizard people run when they replace a handset,
+    and this app's DataStore blob is the only copy of the daemon's bearer token —
+    a root-equivalent credential for huginn — plus the FCM registration token.
+
+    So both transports are named explicitly. `<device-transfer>` is the one that
+    matters; `<cloud-backup>` is belt and braces, since a section that is present
+    is a section nobody can accidentally re-enable by flipping allowBackup.
+
+    domain="file" is getFilesDir(); Preferences DataStore writes to
+    filesDir/datastore/<name>.preferences_pb, so path="datastore" excludes the
+    whole directory and everything under it recursively. Google's own docs give
+    an FCM registration token as the example of a file that MUST NOT be restored
+    onto a new device — a restored token belongs to a phone that no longer has
+    the app, which is exactly the ghost registration this daemon now sweeps up.
+
+    ⚠ TWO TRAPS, both silent:
+      * An unrecognised `domain`, or a `path` containing ".." or "//", is SKIPPED
+        by the parser with no build error and no runtime error. A typo here fails
+        OPEN — it does not protect anything, and nothing says so.
+      * If a section is missing here, Android falls back to the file named by
+        android:fullBackupContent for that operation. This manifest declares no
+        such attribute, so there is nothing to fall back to — but adding one later
+        without repeating these excludes in it would quietly reopen the D2D path.
+
+    This file governs API 31+. On 29 and 30 (minSdk is 29) the old rules apply and
+    allowBackup="false" governs on its own, which is why it stays set.
+-->
+<data-extraction-rules>
+    <cloud-backup>
+        <exclude domain="file" path="datastore" />
+    </cloud-backup>
+    <device-transfer>
+        <exclude domain="file" path="datastore" />
+    </device-transfer>
+</data-extraction-rules>

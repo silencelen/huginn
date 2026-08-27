@@ -88,9 +88,23 @@ fun untilWords(nextRunAt: Long?, nowMs: Long): String {
  * stamps its records with — its schedule is in milliseconds and its timestamps
  * are not, and mixing the two silently produces "in 55 years".
  */
-fun agoWords(atSec: Long?, nowMs: Long): String {
-    if (atSec == null || atSec <= 0L) return ""
-    val d = nowMs - atSec * 1000L
+fun agoWords(atSec: Long?, nowMs: Long): String =
+    agoWordsMs(atSec?.takeIf { it > 0L }?.times(1000L), nowMs)
+
+/**
+ * The same words, from a MILLISECOND stamp.
+ *
+ * A second entry point rather than a second implementation, and a second entry
+ * point rather than one function with a unit flag: the daemon's wire is not
+ * consistent about this — a Round's `lastRun.at` is in seconds while a Device's
+ * `lastSeen` is in milliseconds — so both units are real and the mistake worth
+ * engineering against is picking the wrong one silently. Two names that each say
+ * their unit make that a compile-time question instead of a "3 minutes ago"
+ * rendering as "55 years ago" question.
+ */
+fun agoWordsMs(atMs: Long?, nowMs: Long): String {
+    if (atMs == null || atMs <= 0L) return ""
+    val d = nowMs - atMs
     return when {
         d < MIN -> "just now"
         d < HOUR -> "${d / MIN}m ago"

@@ -64,6 +64,9 @@ class DeviceRunner(
     @Volatile
     private var current: Process? = null
 
+    /** How many times the pending unenrol has been refused, for the backoff. */
+    private var unenrolAttempts = 0
+
     /**
      * IDEMPOTENT, and that is the whole point.
      *
@@ -93,6 +96,9 @@ class DeviceRunner(
     private suspend fun supervise() {
         while (scope.isActive) {
             if (!settings.deviceEnabledNow()) {
+                // Off is not always idle. A toggle-off owes the daemon a DELETE,
+                // and this loop is what pays it — see retireIfOwed and [Unenrol].
+                if (retireIfOwed()) continue
                 _status.value = DeviceStatus(note = "Off")
                 delay(2_000)
                 continue
@@ -165,6 +171,60 @@ class DeviceRunner(
         } finally {
             beat.cancel()
         }
+    }
+
+    /**
+     * Pays off a pending unenrol, one attempt per pass.
+     *
+     * ⚠ THE RETRY IS THE POINT. The toggle going off is a local fact; the row it
+     * created lives at the daemon and only a DELETE removes it. Doing that once,
+     * at the moment of the click, loses to the commonest case there is — the
+     * laptop being closed, the VPN being down, the daemon restarting — and the
+     * row then sits "not reachable" for thirty days. So this runs while the
+     * toggle is OFF (which is why [AppStore.syncDeviceRunner] keeps the runner
+     * alive while a debt is outstanding) and keeps the id until the daemon says
+     * the row is gone.
+     *
+     * @return true when this pass handled the debt and the caller should loop
+     *   again immediately rather than fall through to the idle wait.
+     */
+    private suspend fun retireIfOwed(): Boolean {
+        val step = Unenrol.step(settings.deviceUnenrolPendingNow(), settings.deviceIdNow())
+        if (step == Unenrol.Step.IDLE) return false
+        if (step == Unenrol.Step.SETTLE) {
+            settings.clearDeviceUnenrolPending()
+            return true
+        }
+
+        val id = settings.deviceIdNow()
+        val failure: Exception? = try {
+            client.deleteDevice(id)
+            null
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            e
+        }
+
+        if (Unenrol.landed(failure)) {
+            // Only now: the row is gone, so the handle has nothing left to hold.
+            // A later toggle-on enrols fresh, and the daemon folds the new row
+            // into the same machine by its machine key, so nothing reads as a
+            // second computer.
+            settings.setDeviceId("")
+            settings.clearDeviceUnenrolPending()
+            unenrolAttempts = 0
+            _status.value = DeviceStatus(note = "Off")
+            return true
+        }
+
+        _status.value = DeviceStatus(
+            deviceId = id,
+            note = Unenrol.note(step, failure?.let { short(it) }) ?: "Off",
+        )
+        delay(Unenrol.backoffMs(unenrolAttempts))
+        unenrolAttempts += 1
+        return true
     }
 
     private suspend fun enrol(scopeWire: String, locked: Boolean): String {

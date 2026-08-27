@@ -3,6 +3,7 @@ package com.silencelen.huginn.desktop
 import com.silencelen.huginn.data.AppdRoutes
 import com.silencelen.huginn.data.HuginnSettings
 import com.silencelen.huginn.data.SettingsCodec
+import com.silencelen.huginn.desktop.device.Unenrol
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -89,6 +90,13 @@ class DesktopSettings(private val file: File = defaultFile()) : HuginnSettings {
          */
         val deviceEnabled: Boolean = false,
         val deviceId: String = "",
+        /**
+         * The toggle went off and the daemon has NOT yet confirmed the row is
+         * gone. Persisted rather than held in memory because the case it exists
+         * for is exactly the one where the app is closed before the daemon can be
+         * reached — a laptop switched off after being retired. See [Unenrol].
+         */
+        val deviceUnenrolPending: Boolean = false,
         val deviceScope: String = "look",
         /** Where a `work`-scoped run starts. Not a sandbox — see DevicePolicy. */
         val deviceRoot: String = "",
@@ -162,6 +170,7 @@ class DesktopSettings(private val file: File = defaultFile()) : HuginnSettings {
     private val _lastWatchErrorAt = MutableStateFlow(stored.lastWatchErrorAt)
     private val _closeToTray = MutableStateFlow(stored.closeToTray)
     private val _deviceEnabled = MutableStateFlow(stored.deviceEnabled)
+    private val _deviceUnenrolPending = MutableStateFlow(stored.deviceUnenrolPending)
     private val _deviceScope = MutableStateFlow(stored.deviceScope)
     private val _deviceRoot = MutableStateFlow(stored.deviceRoot)
     private val _deviceClaudePath = MutableStateFlow(stored.deviceClaudePath)
@@ -308,19 +317,43 @@ class DesktopSettings(private val file: File = defaultFile()) : HuginnSettings {
     // about being point-in-time.
 
     val deviceEnabled: StateFlow<Boolean> = _deviceEnabled.asStateFlow()
+    val deviceUnenrolPending: StateFlow<Boolean> = _deviceUnenrolPending.asStateFlow()
     val deviceScope: StateFlow<String> = _deviceScope.asStateFlow()
     val deviceRoot: StateFlow<String> = _deviceRoot.asStateFlow()
     val deviceClaudePath: StateFlow<String> = _deviceClaudePath.asStateFlow()
 
     fun deviceEnabledNow(): Boolean = _deviceEnabled.value
+    fun deviceUnenrolPendingNow(): Boolean = _deviceUnenrolPending.value
     fun deviceScopeNow(): String = _deviceScope.value
     fun deviceRootNow(): String = _deviceRoot.value
     fun deviceClaudePathNow(): String = _deviceClaudePath.value
-    fun deviceIdNow(): String = stored.deviceId
+    fun deviceIdNow(): String = synchronized(lock) { stored.deviceId }
 
+    /**
+     * Turns the offer on or off. Off ALSO records what is still owed to the
+     * daemon — the row it enrolled has to be deleted, and only the stored id can
+     * do it, so the switch and the debt are written together rather than left to
+     * two callers to keep in step. See [Unenrol] for the ordering.
+     */
     fun setDeviceEnabled(value: Boolean) {
         _deviceEnabled.value = value
-        mutate { it.copy(deviceEnabled = value) }
+        if (value) {
+            // Turning it back ON withdraws the debt: the runner is about to
+            // re-enrol with this same id, so deleting the row would retire the
+            // enrolment that is being used right now.
+            _deviceUnenrolPending.value = false
+            mutate { it.copy(deviceEnabled = true, deviceUnenrolPending = false) }
+        } else {
+            val owed = Unenrol.owesUnenrol(deviceIdNow())
+            _deviceUnenrolPending.value = owed
+            mutate { it.copy(deviceEnabled = false, deviceUnenrolPending = owed) }
+        }
+    }
+
+    /** The debt is settled: the daemon confirmed the row is gone (or never had one). */
+    fun clearDeviceUnenrolPending() {
+        _deviceUnenrolPending.value = false
+        mutate { it.copy(deviceUnenrolPending = false) }
     }
 
     fun setDeviceScope(value: String) {
@@ -341,9 +374,45 @@ class DesktopSettings(private val file: File = defaultFile()) : HuginnSettings {
     /**
      * The enrolment id the daemon gave this machine. Persisted so a restart
      * re-enrols as the SAME device instead of leaving a ghost in the list.
+     *
+     * ⚠ Clearing it (`""`) THROWS AWAY THE ONLY HANDLE that can retire this
+     * machine's row, so it is done in exactly one place — after the daemon has
+     * confirmed the DELETE. See [Unenrol].
      */
     fun setDeviceId(value: String) {
         mutate { it.copy(deviceId = value) }
+    }
+
+    /**
+     * Back to the connect screen: the token this app authenticates with, the
+     * enrolment handle, and the half-written messages go.
+     *
+     * SERVER-FIRST is the caller's job, not this one's — by the time this runs
+     * the rows are already retired at the daemon, because a token dropped first
+     * cannot retire anything afterwards. That ordering is the whole reason this
+     * is one call rather than three: nothing here should be reachable from a
+     * path that failed halfway.
+     *
+     * The base URL stays. It is an address rather than a credential, and the
+     * connect screen would only ask for the same one back. (A from-source run on
+     * the daemon's own host re-reads the dev token at next launch — see
+     * [bootstrapDevToken] — which is a development convenience and does not
+     * apply to a packaged build.)
+     */
+    fun clearForRemoval() {
+        _token.value = ""
+        _drafts.value = emptyMap()
+        _deviceEnabled.value = false
+        _deviceUnenrolPending.value = false
+        mutate {
+            it.copy(
+                token = "",
+                drafts = "",
+                deviceId = "",
+                deviceEnabled = false,
+                deviceUnenrolPending = false,
+            )
+        }
     }
 
     fun setCloseToTray(value: Boolean) {
