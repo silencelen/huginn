@@ -12,6 +12,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import com.silencelen.huginn.data.Device
+import com.silencelen.huginn.data.PolishResult
 import com.silencelen.huginn.data.Round
 
 /**
@@ -31,6 +32,8 @@ fun RoundEditScreen(
     onSave: (String, RoundDraft, (String?) -> Unit) -> Unit,
     onDelete: (String, (String?) -> Unit) -> Unit,
     onDone: () -> Unit,
+    /** Rewrites one field and hands the answer back. Nothing is saved — see [RoundEditor]. */
+    onPolish: ((RoundDraft, String, (PolishResult) -> Unit) -> Unit)? = null,
 ) {
     // Keyed on the Round's id, so opening a different one starts from ITS values
     // rather than the last one's — and so a poll landing mid-edit does not reset
@@ -65,6 +68,7 @@ fun RoundEditScreen(
             },
             onCancel = onDone,
             onDelete = existing?.let { { confirmDelete = true } },
+            onPolish = onPolish,
         )
     }
 
