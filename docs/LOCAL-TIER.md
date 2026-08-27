@@ -131,7 +131,12 @@ The fetched **manager** (`client/huginn-local`, Node) owns:
   list read from the body) instead of installing the stack. Detect, never auto-activate.
   Never bundle LM Studio (ToS) or GPU drivers (EULA) — detect and instruct.
 - **`off`**: stop runner first, then llm; deregister with the device-off honesty;
-  models kept by default, deleted only behind an explicit typed confirmation.
+  then **the credentials go with the row** — `local.json`, `api-key` and
+  `device/appd-token` are removed, because a tier that is off has no business keeping a
+  live bearer token on disk. Models are kept by default, deleted only behind an explicit
+  typed confirmation: `--purge-models` for the models and sessions, `--purge` for the
+  whole tier including the runtime, the systemd unit files and `localDir` itself (guarded:
+  it refuses to delete a `HUGINN_LOCAL_DIR` that resolves to a home or a filesystem root).
   **`update`**: manager+shim from the house channels; runtime/model bumps only via a
   manifest change riding a `cli-v*` release. **`status --json`** feeds the desktop.
 

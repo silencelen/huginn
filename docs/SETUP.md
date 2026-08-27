@@ -86,3 +86,17 @@ installer included. Details, requirements, and what the apps do:
 huginn status      # uptime, auth (should show your subscription), sessions, disk
 huginn             # drops you into the 'main' session; run: claude
 ```
+
+## Uninstall (per device)
+
+```bash
+huginn uninstall          # unenrols this machine, then removes the client + its tokens
+huginn uninstall --all    # and the 'Host huginn' SSH stanza, and huginn's own key if it made one
+```
+
+It unenrols **before** it deletes — the row can only be retired with the token that is
+about to go — and prints what it removed and what it deliberately left. Details, including
+why your SSH key survives by default: [`USAGE.md`](USAGE.md#uninstalling).
+
+The desktop app is removed the usual way for its platform (Programs and Features, or
+`apt purge huginn-desktop-kt`), and its uninstaller does the same unenrol-then-delete.

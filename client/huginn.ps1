@@ -82,9 +82,9 @@ function _Huginn-DesktopRelease {
   $body = _Huginn-Get "https://api.github.com/repos/$script:HUGINN_REPO/releases?per_page=60"
   if (-not $body) { return $null }
   try { $releases = $body | ConvertFrom-Json } catch { return $null }
-  # ⚠ Highest SEMVER, not first in the feed. GitHub does not return releases
-  # newest-first — verified 2026-08-25 with desktop-v0.8.9 ahead of
-  # desktop-v0.8.13 in the same page — so this handed out an installer four
+  # NOTE: Highest SEMVER, not first in the feed. GitHub does not return releases
+  # newest-first - verified 2026-08-25 with desktop-v0.8.9 ahead of
+  # desktop-v0.8.13 in the same page - so this handed out an installer four
   # versions stale while looking perfectly healthy, because the url was
   # well-formed and did exist. The Kotlin updater already picked by semver.
   $tag = ($releases | Where-Object { $_.tag_name -like 'desktop-v*' } |
@@ -161,6 +161,202 @@ function _Huginn-Attach {
   }
 }
 
+# --- uninstall -------------------------------------------------------------
+# `huginn uninstall` - put this machine back the way install.ps1 found it.
+#
+# THE ORDER IS THE POINT, and it is huginn-device's: THE SERVER FIRST, THE DISK
+# SECOND. Every enrolment this machine holds can only be retired with a token
+# that is about to be deleted, so each unenrol is attempted while its own
+# credentials still exist. Wipe first and those rows are unremovable from here
+# forever - they sit in `huginn devices` reading "not reachable" and go on being
+# offered work by a machine that no longer exists.
+#
+# AND AN UNINSTALLER DOES NOT GET A SECOND RUN, so a failed unenrol does not
+# stop it: the local files go anyway (`off --force`), and the row that was
+# stranded is named - by the runner, and again in the summary. That is the one
+# place the refuse-to-destroy-the-handle rule is deliberately inverted, because
+# "run it again tomorrow" is advice to somebody who will not be here tomorrow.
+#
+# WHAT IT LEAVES ON PURPOSE: the SSH key and the `Host huginn` stanza.
+# install.ps1 only CREATES a key when there is not one already, and afterwards
+# nothing can tell "the key install.ps1 generated" from "the key you have used
+# for five years" - id_ed25519 is the default name for both, and the wrong guess
+# locks somebody out of every host they have. So they stay, with a note. `--all`
+# takes them, and only then, when the key is huginn-specific by FILENAME or by
+# the comment in its .pub. Never by guess.
+#
+# Kept behaviourally identical to huginn.sh's _huginn_uninstall, verb for verb
+# and message for message: the two clients have already drifted over a single
+# version constant, and this one deletes things.
+function _Huginn-Uninstall {
+  param([string[]]$Rest = @())
+  $all = $false; $yes = $false
+  foreach ($a in $Rest) {
+    if     ($a -eq '--all') { $all = $true }
+    elseif ($a -eq '--yes') { $yes = $true }
+    else { Write-Host "usage: huginn uninstall [--all] [--yes]" -ForegroundColor Red; return }
+  }
+  $hdir = Join-Path $HOME '.huginn'
+  # Both managers derive these from the same variables, so there is nothing to
+  # pass down - and nothing is written into $env: here, which would outlive the
+  # command and quietly repoint the next `huginn local`.
+  $ddir = if ($env:HUGINN_DEVICE_DIR) { $env:HUGINN_DEVICE_DIR } else { Join-Path $HOME '.config\huginn' }
+  # The literal fallback is huginn-local's own (localDir()), copied rather than
+  # improved on: with %ProgramData% unset, Join-Path is handed a null and THROWS,
+  # which took out the whole local-tier step in testing. The two must agree about
+  # where the tier lives or this deletes the wrong nothing.
+  $ldir = if ($env:HUGINN_LOCAL_DIR) { $env:HUGINN_LOCAL_DIR }
+          elseif ($env:ProgramData)  { Join-Path $env:ProgramData 'huginn-local' }
+          else                       { 'C:\ProgramData\huginn-local' }
+  $cfg  = Join-Path $HOME '.ssh\config'
+  # The EXACT line install.ps1 appends, single-quoted so $HOME stays literal the
+  # way the installer wrote it. Matched whole-line, so a profile somebody
+  # hand-wrote differently is reported rather than rewritten.
+  $line = 'if (Test-Path "$HOME\.huginn\huginn.ps1") { . "$HOME\.huginn\huginn.ps1" }'
+  $havenode = [bool](Get-Command node -ErrorAction SilentlyContinue)
+  $removed = @(); $left = @()
+
+  Write-Host "huginn uninstall removes, from THIS machine:"
+  Write-Host "  $hdir"
+  Write-Host "      the client, the device runner, the local-AI manager"
+  Write-Host "  $ddir"
+  Write-Host "      this machine's device enrolment and its copy of the appd token"
+  Write-Host "  $ldir"
+  Write-Host "      the local-AI tier: models, sessions, runtime (can be several GB)"
+  Write-Host "  the huginn line in $PROFILE"
+  Write-Host ""
+  Write-Host "It unenrols this machine from huginn FIRST, while the tokens still exist."
+  if ($all) { Write-Host "--all: the 'Host huginn' SSH stanza goes too, and its key IF it is huginn's own." }
+  Write-Host ""
+  if (-not $yes) {
+    $answer = Read-Host 'Type "uninstall" to continue'
+    if ($answer -ne 'uninstall') { Write-Host "Nothing was removed."; return }
+    Write-Host ""
+  }
+
+  # 1. The local tier first: it owns a device row of its own (<host>-llm), two
+  #    services and the heaviest files, and its manager lives in $hdir - which
+  #    step 3 is about to delete, so this cannot be reordered after it.
+  if (Test-Path $ldir) {
+    Write-Host "==> local AI tier"
+    $mgr = Join-Path $hdir 'huginn-local'
+    if ($havenode -and (Test-Path $mgr)) {
+      node $mgr off --purge --yes
+      # Deliberately NOT forced. A failed unenrol here keeps the id that can
+      # still retire the row, and what is left behind is models - which the
+      # summary names, with the command that finishes the job.
+      if ($LASTEXITCODE -eq 0) { $removed += $ldir }
+      else { $left += "$ldir - 'huginn local off --purge' did not finish; run it again when huginn is reachable" }
+    } else {
+      $left += "$ldir - no manager or no node here, so nothing could unenrol or remove it"
+    }
+    Write-Host ""
+  }
+
+  # 2. This machine as a device.
+  if (Test-Path $ddir) {
+    Write-Host "==> device enrolment"
+    $runner = Join-Path $hdir 'huginn-device'
+    if ($havenode -and (Test-Path $runner)) {
+      node $runner off
+      if ($LASTEXITCODE -ne 0) {
+        node $runner off --force
+        $left += "a device row on huginn (named above) is still enrolled - retire it from the host"
+      }
+    } else {
+      $left += "this machine may still be enrolled - no runner or no node here to unenrol it"
+    }
+    # Named files only, and after the attempt above: a dir that was never
+    # enrolled can still hold the token `huginn device on` fetched into it.
+    foreach ($f in 'device.json', 'appd-token') {
+      Remove-Item -Force -ErrorAction SilentlyContinue (Join-Path $ddir $f)
+    }
+    if ((Test-Path $ddir) -and -not (Get-ChildItem -Force $ddir -ErrorAction SilentlyContinue)) {
+      Remove-Item -Force -ErrorAction SilentlyContinue $ddir
+    }
+    $removed += $ddir
+    Write-Host ""
+  }
+
+  # 3. The client itself. The whole directory: install.ps1 created it and
+  #    everything in it is huginn's - unlike the desktop app's uninstaller,
+  #    which shares this directory and therefore names its files one by one.
+  if (Test-Path $hdir) {
+    Remove-Item -Recurse -Force -ErrorAction SilentlyContinue $hdir
+    $removed += $hdir
+  }
+
+  # 4. The profile line.
+  if ($PROFILE -and (Test-Path $PROFILE)) {
+    $plines = @(Get-Content $PROFILE)
+    if ($plines -contains $line) {
+      # UTF8 out, not Set-Content's 5.1 default (the system ANSI code page):
+      # $PROFILE is not one of the two files the pure-ASCII rule covers - nothing
+      # ever fetches it over scp - and re-encoding somebody's profile is how a
+      # non-English string already in it turns to mojibake.
+      Set-Content -Path $PROFILE -Value ($plines | Where-Object { $_ -ne $line }) -Encoding UTF8
+      $removed += "the huginn line in $PROFILE"
+    } elseif ($plines -match '\.huginn\\huginn\.ps1') {
+      $left += "a hand-edited '.huginn\huginn.ps1' line in $PROFILE - it is not the one the installer wrote, so it was left"
+    }
+  }
+
+  # 5. SSH. Left by default; see the note on this function.
+  $key = ''; $slines = @()
+  if (Test-Path $cfg) {
+    $slines = @(Get-Content $cfg)
+    $inH = $false
+    foreach ($l in $slines) {
+      $t = $l.Trim()
+      # -match is case-insensitive in PowerShell, which is also how ssh reads
+      # these keywords.
+      if ($t -match '^host\s+(.+)$') { $inH = ($matches[1].Trim() -eq 'huginn'); continue }
+      if ($inH -and ($t -match '^identityfile\s+(.+)$')) { $key = $matches[1].Trim(); break }
+    }
+  }
+  $ours = $false
+  if ($key) {
+    if ((Split-Path -Leaf $key) -like '*huginn*') { $ours = $true }
+    elseif ((Test-Path "$key.pub") -and ((Get-Content "$key.pub" -Raw) -match 'huginn')) { $ours = $true }
+  }
+  if ($all -and (Test-Path $cfg)) {
+    # Only a stanza that is EXACTLY `Host huginn`. `Host huginn build01` serves
+    # another alias too, and taking it out would break a host this never
+    # installed.
+    $keep = @(); $drop = $false
+    foreach ($l in $slines) {
+      $t = $l.Trim()
+      if ($t -match '^host\s+(.+)$') { $drop = ($matches[1].Trim() -eq 'huginn') }
+      if (-not $drop) { $keep += $l }
+    }
+    # ascii, and this one IS the encoding that matters: a BOM on the first line
+    # of ~/.ssh/config is a keyword OpenSSH does not recognise.
+    Set-Content -Path $cfg -Value $keep -Encoding ascii
+    $removed += "the 'Host huginn' stanza in $cfg"
+    if ($ours -and (Test-Path $key)) {
+      Remove-Item -Force -ErrorAction SilentlyContinue $key, "$key.pub"
+      $removed += "$key and $key.pub (huginn's own key)"
+    } elseif ($key) {
+      $left += "$key - NOT removed: nothing marks it as huginn's (no 'huginn' in the filename or the .pub comment), and it is very likely your general SSH key"
+    }
+  } elseif ($key) {
+    $left += "$key and the 'Host huginn' stanza in $cfg - kept (use 'huginn uninstall --all' to remove them)"
+  }
+
+  Write-Host "Removed:"
+  if ($removed.Count -eq 0) { Write-Host "  (nothing - was huginn installed here?)" }
+  foreach ($r in $removed) { Write-Host "  $r" }
+  if ($left.Count -gt 0) {
+    Write-Host ""
+    Write-Host "Left behind, on purpose or because it could not be done:"
+    foreach ($r in $left) { Write-Host "  $r" }
+  }
+  Write-Host ""
+  # The function is still defined in THIS session - the file it came from is
+  # gone, but PowerShell does not forget what it has already dot-sourced.
+  Write-Host "The 'huginn' command is still loaded in this session. Open a new PowerShell, or: Remove-Item Function:huginn" -ForegroundColor Yellow
+}
+
 function huginn {
   $H = if ($env:HUGINN_HOST) { $env:HUGINN_HOST } else { 'huginn' }
   if ($args.Count -eq 0) {
@@ -196,6 +392,9 @@ function huginn {
   huginn desktop              download links for the latest Huginn Desktop build
   huginn desktop win|linux    just that platform's url, bare, for scripting
   huginn update               self-update this client from the repo ($script:HUGINN_REPO)
+  huginn uninstall            unenrol this machine, then remove the client, the
+                              tokens, the local-AI tier and the profile line
+                              [--all also takes the SSH stanza + huginn's own key]
   huginn version              show client version
   huginn help | ? | /help     this help
 
@@ -410,6 +609,9 @@ function huginn {
     } else {
       Write-Host "huginn local: this machine does not serve local models - run: huginn local on"
     }
+  } elseif ($args[0] -eq 'uninstall') {
+    $rest = if ($args.Count -ge 2) { $args[1..($args.Count-1)] } else { @() }
+    _Huginn-Uninstall -Rest $rest
   } elseif ($args[0] -eq 'desktop') {
     $arg = if ($args.Count -gt 1) { "$($args[1])".ToLower() } else { '' }
     $want = switch ($arg) {
@@ -581,7 +783,7 @@ function _Huginn-Sessions {
 }
 Register-ArgumentCompleter -CommandName huginn, rclaude, rcc -ScriptBlock {
   param($word, $ast, $pos)
-  $cmds = 'list', 'status', 'rounds', 'devices', 'device', 'local', 'llm', 'solo', 'rename', 'kill', 'end', '-p', '-y', 'usage', 'cost', 'desktop', 'update', 'version', 'help'
+  $cmds = 'list', 'status', 'rounds', 'devices', 'device', 'local', 'llm', 'solo', 'rename', 'kill', 'end', '-p', '-y', 'usage', 'cost', 'desktop', 'update', 'uninstall', 'version', 'help'
   # tokens already typed after the command name, excluding the partial word being completed
   $typed = @($ast.CommandElements | Select-Object -Skip 1 | ForEach-Object { $_.ToString() })
   if ($word -and $typed.Count -ge 1) { $typed = @($typed | Select-Object -SkipLast 1) }
@@ -598,6 +800,8 @@ Register-ArgumentCompleter -CommandName huginn, rclaude, rcc -ScriptBlock {
     $candidates = 'windows', 'linux', 'both'
   } elseif ($prev -eq 'local') {
     $candidates = 'status', 'on', 'plan', 'off', 'unit', 'update', 'doctor'
+  } elseif ($prev -eq 'uninstall') {
+    $candidates = '--all', '--yes'
   } else {
     $candidates = @()
   }

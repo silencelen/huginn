@@ -134,8 +134,13 @@ function loadConf() {
  * Refusing rather than ignoring is the whole point: a typo in a flag that
  * silently does nothing produces a machine enrolled at the wrong scope, in the
  * wrong directory, reported as a success.
+ *
+ * `bools` names the flags that carry no value — `off --force` is an
+ * instruction, not a setting, and demanding `--force yes` would make the next
+ * argument disappear into it. Named rather than guessed: a value-taking flag
+ * that silently accepted a bare form is the same class of bug in reverse.
  */
-function parseFlags(args, allowed) {
+function parseFlags(args, allowed, bools = []) {
   const flags = {};
   for (let i = 0; i < args.length; i += 1) {
     const a = args[i];
@@ -144,6 +149,13 @@ function parseFlags(args, allowed) {
     const name = (eq === -1 ? a.slice(2) : a.slice(2, eq));
     if (!allowed.includes(name)) {
       return { error: `unknown flag "--${name}" (try: ${allowed.map((x) => `--${x}`).join(' ')})` };
+    }
+    if (bools.includes(name)) {
+      // And NO `=` form for them. `--force=false` has one honest reading and it
+      // is "do not force", but a string is truthy — so the one spelling somebody
+      // reaches for to turn a destructive flag OFF would have turned it on.
+      if (eq !== -1) return { error: `--${name} takes no value (write it as --${name})` };
+      flags[name] = true; continue;
     }
     if (eq !== -1) { flags[name] = a.slice(eq + 1); continue; }
     const v = args[i + 1];
@@ -156,6 +168,31 @@ function parseFlags(args, allowed) {
 function saveConf(c) {
   fs.mkdirSync(CONF_DIR, { recursive: true, mode: 0o700 });
   fs.writeFileSync(CONF_FILE, JSON.stringify(c, null, 2) + '\n', { mode: 0o600 });
+}
+
+/**
+ * Both files this runner owns, gone. Returns the ones that were actually there,
+ * so the caller reports what it did rather than what it attempted.
+ *
+ * ⚠ THE TOKEN GOES WITH THE CONFIG. `off` used to delete the id out of
+ * device.json and leave BOTH files sitting on disk, so a machine somebody had
+ * just decommissioned kept a working bearer token for the daemon — the same
+ * token /etc/huginn-appd/token holds, root-equivalent on the host — in a file
+ * nobody would ever look at again. The id is the handle for one row; the token
+ * is the handle for everything, and it is the one an uninstall is really about.
+ */
+function forget() {
+  const gone = [];
+  for (const f of [CONF_FILE, TOKEN_FILE]) {
+    try {
+      if (fs.existsSync(f)) { fs.rmSync(f, { force: true }); gone.push(f); }
+    } catch { /* a file that would not go is reported by its absence from this list */ }
+  }
+  // rmdir, never rm -r: HUGINN_DEVICE_DIR is somebody's argument, and the local
+  // tier points it at <localDir>/device. It goes only when it is empty, which is
+  // the only state in which it is certainly ours.
+  try { fs.rmdirSync(CONF_DIR); } catch { /* not empty, or already gone */ }
+  return gone;
 }
 
 function token() {
@@ -848,7 +885,19 @@ async function main() {
       break;
     }
     case 'off': {
-      if (!conf.id) { console.log('Not enrolled.'); break; }
+      const parsed = parseFlags(process.argv.slice(3), ['force'], ['force']);
+      if (parsed.error) { console.error(`huginn-device off: ${parsed.error}`); process.exit(2); }
+      const force = parsed.flags.force === true;
+
+      if (!conf.id) {
+        console.log('Not enrolled.');
+        // A machine with no id can still be holding the token it enrolled with,
+        // and the token is the part that matters. Only under --force, though:
+        // plain `off` on an un-enrolled machine has always been a no-op, and
+        // things out there run it that way to make sure.
+        if (force) for (const f of forget()) console.log(`  removed ${f}`);
+        break;
+      }
       // ⚠ THE ID IS THE ONLY HANDLE THAT CAN REMOVE THIS ROW, so it is not thrown
       // away until the host confirms the row is gone. The DELETE used to be
       // `.catch(e => console.error(e.message))` — logged, then ignored — and the
@@ -857,22 +906,49 @@ async function main() {
       // wrong url) the device stayed enrolled, the handle was destroyed, a
       // restart enrolled a SECOND row for the same box, and the stale one went on
       // being offered work for thirty days.
+      //
+      // --force is the ONE case where losing the handle is the right answer: the
+      // machine itself is going away (a wipe, an uninstall), so "run it again
+      // tomorrow" is advice to somebody who will not be here. It never guesses
+      // at that — it has to be asked for — and it exits 0 because the local half
+      // it was asked to do did happen; the half that did NOT is on stderr, with
+      // the row named, because that row is now the host's problem to retire.
+      let dropped = true;
       try {
         await api('DELETE', `/v1/devices/${conf.id}`);
       } catch (e) {
+        if (!force) {
+          console.error(`Could NOT remove this machine from huginn: ${e.message}`);
+          console.error('');
+          console.error(`  Still enrolled as ${conf.id}. Nothing has been changed here, so this`);
+          console.error('  is safe to run again once huginn is reachable. Stop the runner');
+          console.error('  meanwhile, or it keeps answering for work:');
+          console.error('    systemctl disable --now huginn-device');
+          console.error('');
+          console.error('  If this machine is going away regardless and you accept a stale row:');
+          console.error('    huginn-device off --force');
+          process.exit(1);
+        }
+        dropped = false;
         console.error(`Could NOT remove this machine from huginn: ${e.message}`);
         console.error('');
-        console.error(`  Still enrolled as ${conf.id}. Nothing has been changed here, so this`);
-        console.error('  is safe to run again once huginn is reachable. Stop the runner');
-        console.error('  meanwhile, or it keeps answering for work:');
-        console.error('    systemctl disable --now huginn-device');
-        process.exit(1);
+        console.error(`  --force: clearing this machine anyway. The row ${conf.id} ("${conf.name}")`);
+        console.error('  is STILL enrolled and nothing here can remove it any more — the token');
+        console.error('  that could is being deleted with everything else. Retire it from the');
+        console.error('  host, where the token lives:');
+        console.error(`    curl -X DELETE -H "Authorization: Bearer $(cat /etc/huginn-appd/token)" \\`);
+        console.error(`      http://127.0.0.1:8787/v1/devices/${conf.id}`);
+        console.error('');
       }
-      delete conf.id;
-      saveConf(conf);
-      // Said plainly, because "removed" would be a lie: nothing here reaches onto
-      // the machine, and a runner still running would simply re-enrol.
-      console.log('Removed from huginn. Stop the runner too, or it enrols again:');
+      const gone = forget();
+      // Said plainly, and never "removed" over a failure: nothing here reaches
+      // onto the machine, and a runner still running would simply re-enrol.
+      console.log(dropped
+        ? 'Removed from huginn.'
+        : 'Cleared this machine. It is STILL enrolled at the daemon (see above).');
+      for (const f of gone) console.log(`  removed ${f}`);
+      console.log('');
+      console.log('Stop the runner too, or it enrols again:');
       console.log('  systemctl disable --now huginn-device          (system unit)');
       console.log('  systemctl --user disable --now huginn-device   (user unit)');
       break;
@@ -960,7 +1036,10 @@ WantedBy=default.target`);
 
   huginn-device on [--scope look|work|own] [--root DIR] [--url URL]
                               enrol this machine and save the settings
-  huginn-device off           stop offering it (and stop the service)
+  huginn-device off           stop offering it: remove the row, then the settings
+                              and the token here (and stop the service)
+  huginn-device off --force   clear this machine even if huginn is unreachable —
+                              names the row that will be left stranded
   huginn-device serve         the runner itself; this is what systemd starts
   huginn-device status        what this machine offers, and what huginn sees
   huginn-device unit          print a systemd USER unit (one person's session)

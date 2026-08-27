@@ -19,7 +19,7 @@ HUGINN_UPDATE_HOST_DEFAULT='huginn'
 # `huginn devices` (plural) lists the machines the host knows about. `huginn
 # device` (singular) is about the one you are typing on: offering it to Huginn as
 # a place to run work, the way the desktop app's "Give Huginn access to this PC"
-# toggle does — for machines that have no desktop app and nobody sitting at them.
+# toggle does - for machines that have no desktop app and nobody sitting at them.
 #
 # The runner itself is a separate small Node program (client/huginn-device; that
 # file says why Node and not more shell). It is fetched on demand rather than
@@ -110,7 +110,7 @@ _huginn_local_fetch() {
   local f dest tmp got uh
   # huginn-device rides along: managed mode installs a runner SERVICE, and a
   # machine that never enrolled as a claude device has no runner otherwise
-  # (found wiring the desktop door — enrolment died on a bare spawn error).
+  # (found wiring the desktop door - enrolment died on a bare spawn error).
   for f in huginn-local huginn-llm-shim huginn-device; do
     dest="$HOME/.huginn/$f"; got=
     [ "${1:-}" = force ] || [ ! -s "$dest" ] || continue
@@ -184,6 +184,179 @@ _huginn_local() {
   esac
 }
 
+# --- uninstall -------------------------------------------------------------
+# `huginn uninstall` - put this machine back the way install.sh found it.
+#
+# THE ORDER IS THE POINT, and it is huginn-device's: THE SERVER FIRST, THE DISK
+# SECOND. Every enrolment this machine holds can only be retired with a token
+# that is about to be deleted, so each unenrol is attempted while its own
+# credentials still exist. Wipe first and those rows are unremovable from here
+# forever - they sit in `huginn devices` reading "not reachable" and go on being
+# offered work by a machine that no longer exists.
+#
+# AND AN UNINSTALLER DOES NOT GET A SECOND RUN, so a failed unenrol does not
+# stop it: the local files go anyway (`off --force`), and the row that was
+# stranded is named - by the runner, and again in the summary. That is the one
+# place the refuse-to-destroy-the-handle rule is deliberately inverted, because
+# "run it again tomorrow" is advice to somebody who will not be here tomorrow.
+#
+# WHAT IT LEAVES ON PURPOSE: the SSH key and the `Host huginn` stanza.
+# install.sh only CREATES a key when there is not one already, and afterwards
+# nothing can tell "the key install.sh generated" from "the key you have used
+# for five years" - ~/.ssh/id_ed25519 is the default name for both, and the
+# wrong guess locks somebody out of every host they have. So they stay, with a
+# note. `--all` takes them, and only then, when the key is huginn-specific by
+# FILENAME or by the comment in its .pub. Never by guess.
+_huginn_uninstall() {
+  local all= yes= a
+  for a in "$@"; do
+    case "$a" in
+      --all) all=1 ;;
+      --yes) yes=1 ;;
+      *) echo "usage: huginn uninstall [--all] [--yes]" >&2; return 1 ;;
+    esac
+  done
+  # Everything below is built out of $HOME. An empty one turns every path here
+  # into an absolute path at the filesystem root, so it is a refusal and not a
+  # default.
+  [ -n "$HOME" ] || { echo "huginn uninstall: HOME is not set - refusing to guess where anything lives" >&2; return 1; }
+
+  local hdir="$HOME/.huginn"
+  local ddir="${HUGINN_DEVICE_DIR:-$HOME/.config/huginn}"
+  local ldir="${HUGINN_LOCAL_DIR:-$HOME/.config/huginn-local}"
+  local rc="$HOME/.bashrc"
+  local cfg="$HOME/.ssh/config"
+  # The EXACT line install.sh appends. Matched whole-line and fixed-string, so a
+  # profile somebody hand-wrote differently is reported rather than rewritten.
+  local rcline='[ -f ~/.huginn/huginn.sh ] && source ~/.huginn/huginn.sh'
+  local havenode=; command -v node >/dev/null 2>&1 && havenode=1
+  local -a removed=() left=()
+
+  echo "huginn uninstall removes, from THIS machine:"
+  echo "  $hdir"
+  echo "      the client, the device runner, the local-AI manager"
+  echo "  $ddir"
+  echo "      this machine's device enrolment and its copy of the appd token"
+  echo "  $ldir"
+  echo "      the local-AI tier: models, sessions, runtime (can be several GB)"
+  echo "  the 'source ~/.huginn/huginn.sh' line in $rc"
+  echo
+  echo "It unenrols this machine from huginn FIRST, while the tokens still exist."
+  [ -n "$all" ] && echo "--all: the 'Host huginn' SSH stanza goes too, and its key IF it is huginn's own."
+  echo
+  if [ -z "$yes" ]; then
+    local answer=
+    read -rp 'Type "uninstall" to continue: ' answer
+    [ "$answer" = uninstall ] || { echo "Nothing was removed."; return 1; }
+    echo
+  fi
+
+  # 1. The local tier first: it owns a device row of its own (<host>-llm), two
+  #    services and the heaviest files, and its manager lives in $hdir - which
+  #    step 3 is about to delete, so this cannot be reordered after it.
+  if [ -d "$ldir" ]; then
+    echo "==> local AI tier"
+    if [ -n "$havenode" ] && [ -s "$hdir/huginn-local" ]; then
+      if HUGINN_LOCAL_DIR="$ldir" node "$hdir/huginn-local" off --purge --yes; then
+        removed+=("$ldir")
+      else
+        # Deliberately NOT forced. A failed unenrol here keeps the id that can
+        # still retire the row, and what is left behind is models - which the
+        # summary names, with the command that finishes the job.
+        left+=("$ldir - 'huginn local off --purge' did not finish; run it again when huginn is reachable")
+      fi
+    else
+      left+=("$ldir - no manager or no node here, so nothing could unenrol or remove it")
+    fi
+    echo
+  fi
+
+  # 2. This machine as a device.
+  if [ -d "$ddir" ]; then
+    echo "==> device enrolment"
+    if [ -n "$havenode" ] && [ -s "$hdir/huginn-device" ]; then
+      if ! HUGINN_DEVICE_DIR="$ddir" node "$hdir/huginn-device" off; then
+        HUGINN_DEVICE_DIR="$ddir" node "$hdir/huginn-device" off --force
+        left+=("a device row on huginn (named above) is still enrolled - retire it from the host")
+      fi
+    else
+      left+=("this machine may still be enrolled - no runner or no node here to unenrol it")
+    fi
+    # Named files only, and after the attempt above: a dir that was never
+    # enrolled can still hold the token `huginn device on` fetched into it.
+    rm -f "$ddir/device.json" "$ddir/appd-token"
+    rmdir "$ddir" 2>/dev/null
+    removed+=("$ddir")
+    echo
+  fi
+
+  # 3. The client itself. The whole directory: install.sh created it and
+  #    everything in it is huginn's - unlike the desktop app's uninstaller,
+  #    which shares this directory and therefore names its files one by one.
+  if [ -d "$hdir" ]; then
+    rm -rf "$hdir"
+    removed+=("$hdir")
+  fi
+
+  # 4. The profile line.
+  if [ -f "$rc" ] && grep -qxF "$rcline" "$rc"; then
+    local grc
+    grep -vxF "$rcline" "$rc" > "$rc.huginn-uninstall"; grc=$?
+    # 0 = lines kept, 1 = the file was only that line. Anything else is a read
+    # error, and truncating somebody's .bashrc over one is not a trade worth
+    # making.
+    if [ "$grc" -le 1 ]; then
+      mv -f "$rc.huginn-uninstall" "$rc"
+      removed+=("the source line in $rc")
+    else
+      rm -f "$rc.huginn-uninstall"
+      left+=("the source line in $rc - could not rewrite it (read error)")
+    fi
+  elif [ -f "$rc" ] && grep -q '\.huginn/huginn\.sh' "$rc"; then
+    left+=("a hand-edited '.huginn/huginn.sh' line in $rc - it is not the one the installer wrote, so it was left")
+  fi
+
+  # 5. SSH. Left by default; see the note on this function.
+  local key='' ours=
+  if [ -f "$cfg" ]; then
+    key="$(awk 'tolower($1)=="host"{h=(NF==2 && $2=="huginn")} h && tolower($1)=="identityfile"{print $2; exit}' "$cfg")"
+  fi
+  if [ -n "$key" ]; then
+    case "${key##*/}" in *huginn*) ours=1 ;; esac
+    [ -z "$ours" ] && [ -f "$key.pub" ] && grep -qi huginn "$key.pub" && ours=1
+  fi
+  if [ -n "$all" ] && [ -f "$cfg" ]; then
+    # Only a stanza that is EXACTLY `Host huginn`. `Host huginn build01` serves
+    # another alias too, and taking it out would break a host this never
+    # installed.
+    awk 'tolower($1)=="host"{drop=(NF==2 && $2=="huginn")} !drop' "$cfg" > "$cfg.huginn-uninstall" \
+      && mv -f "$cfg.huginn-uninstall" "$cfg" && chmod 600 "$cfg" \
+      && removed+=("the 'Host huginn' stanza in $cfg")
+    rm -f "$cfg.huginn-uninstall"
+    if [ -n "$ours" ] && [ -f "$key" ]; then
+      rm -f "$key" "$key.pub"
+      removed+=("$key and $key.pub (huginn's own key)")
+    elif [ -n "$key" ]; then
+      left+=("$key - NOT removed: nothing marks it as huginn's (no 'huginn' in the filename or the .pub comment), and it is very likely your general SSH key")
+    fi
+  elif [ -n "$key" ]; then
+    left+=("$key and the 'Host huginn' stanza in $cfg - kept (use 'huginn uninstall --all' to remove them)")
+  fi
+
+  echo "Removed:"
+  if [ "${#removed[@]}" -eq 0 ]; then echo "  (nothing - was huginn installed here?)"; fi
+  for a in "${removed[@]}"; do echo "  $a"; done
+  if [ "${#left[@]}" -gt 0 ]; then
+    echo
+    echo "Left behind, on purpose or because it could not be done:"
+    for a in "${left[@]}"; do echo "  $a"; done
+  fi
+  echo
+  # The function is still defined in THIS shell - the file it came from is gone,
+  # but bash does not forget what it has already sourced.
+  echo "The 'huginn' command is still loaded in this shell. Open a new one, or: unset -f huginn rclaude rcc"
+}
+
 # A session name is letters, digits, and underscore only - no '-', '*', spaces or
 # other shell-special characters. This keeps a typo'd flag (e.g. 'huginn --hlp')
 # from falling through to the attach path and spawning a junk tmux session, and
@@ -202,7 +375,7 @@ _huginn_canon_name() { printf '%s' "${1,,}"; }
 
 # Reach huginn-appd, which listens on the HOST's loopback. The bearer token is
 # root-only on the host, so the call runs THERE (over the ssh alias) and only the
-# result comes back — the token never touches a client device. $1=method $2=path.
+# result comes back - the token never touches a client device. $1=method $2=path.
 # Prints the raw JSON body; non-zero exit on any HTTP error or an unreachable
 # daemon, which the callers use to fall back.
 _huginn_appd() {
@@ -212,12 +385,12 @@ _huginn_appd() {
 
 # --- desktop download links ---
 # The Compose desktop client ships as a PUBLIC GitHub release (tag desktop-v<ver>),
-# and that is also where the installed app's own self-updater fetches from — so the
+# and that is also where the installed app's own self-updater fetches from - so the
 # link printed here is the real distribution source, not a mirror that can drift.
 # Deliberately NOT the daemon's /v1/desktop-kt: it serves the same bytes, but every
 # route on it needs the host's bearer token and a browser has no way to send one.
 # That also makes `desktop` the one verb that works from a device which cannot reach
-# the host at all — it is a GitHub fetch, not an ssh.
+# the host at all - it is a GitHub fetch, not an ssh.
 
 # GET a URL as text. curl -> wget -> the host (which always has both), so a stock
 # Windows/Termux shell without curl still resolves the link instead of erroring.
@@ -234,12 +407,12 @@ _huginn_get() {
 # Newest desktop-v* release, printed as: <tag>\n<manifest json>.
 # Filtered by TAG rather than read from /releases/latest, because four components
 # publish into this one feed (v*, app-v*, appd-v*, desktop-v*) and "latest" is
-# simply whichever shipped last — usually not the desktop.
+# simply whichever shipped last - usually not the desktop.
 # Unauthenticated API, so 60 requests/hour per IP; this is one call per invocation.
 #
-# ⚠ THE WINNER IS DECIDED ON SEMVER, NOT ON FEED POSITION. This took the FIRST
+# NOTE: THE WINNER IS DECIDED ON SEMVER, NOT ON FEED POSITION. This took the FIRST
 # desktop-v* tag in the response, on the assumption that GitHub returns releases
-# newest-first. It does not — verified 2026-08-25, with desktop-v0.8.9 (created
+# newest-first. It does not - verified 2026-08-25, with desktop-v0.8.9 (created
 # 04:10) ahead of desktop-v0.8.13 (created 09:39) in the same page. So
 # `huginn desktop linux` handed out an installer FOUR versions stale and looked
 # entirely healthy doing it, because the url was well-formed and did exist.
@@ -256,7 +429,7 @@ _huginn_desktop_release() {
   [ -n "$ver" ] || return 1
   tag="desktop-v$ver"
   # manifest.json is a release ASSET (the same one the updater verifies sha256
-  # against), so the filenames come from the release itself — nothing here has to
+  # against), so the filenames come from the release itself - nothing here has to
   # guess how electron-builder or jpackage named an artifact.
   json="$(_huginn_get "https://github.com/$HUGINN_REPO/releases/download/$tag/manifest.json" | tr -d '\n')"
   [ -n "$json" ] || return 1
@@ -272,7 +445,7 @@ _huginn_json_num() { printf '%s' "$1" | sed -n "s/.*\"$2\"[[:space:]]*:[[:space:
 
 # Which artifact THIS machine could actually run. Empty is a normal answer: on a
 # phone (Termux) or a Mac there is no desktop build, and the useful behaviour there
-# is to print both links so they can be sent to a laptop — not to fail.
+# is to print both links so they can be sent to a laptop - not to fail.
 _huginn_desktop_platform() {
   case "$(uname -o 2>/dev/null)" in Android*) return ;; esac
   case "$(uname -s 2>/dev/null)" in
@@ -315,7 +488,7 @@ _huginn_attach() {
     # Distinguish "the link died" from "the remote command fails instantly". We do
     # NOT classify by exit code: real drops on Termux/Windows OpenSSH do not
     # reliably return 255, which is why v2026-06-16b widened this to any non-zero.
-    # Duration is the honest signal — a session that lived 40 minutes dropped; one
+    # Duration is the honest signal - a session that lived 40 minutes dropped; one
     # that died in 0.3s twenty times in a row is a server-side error we are hiding.
     if [ "$elapsed" -lt 5 ]; then
       quick=$(( quick + 1 ))
@@ -378,7 +551,7 @@ EOF
   huginn local [status]       what THIS machine serves as local AI, if anything
   huginn local on             serve local models from this machine (optional, ~5 GB)
   huginn local plan           what 'on' would install here, without installing anything
-  huginn local off            stop serving  [--purge-models]
+  huginn local off            stop serving  [--purge-models] [--purge]
   huginn device unit          print a systemd unit that keeps the runner up
   huginn kill <name>          hard end: stop the session now
   huginn -p "question"        one-shot headless query (reasoning + memory, read-only)
@@ -393,6 +566,9 @@ EOF
                               without gh, from the PINNED $HUGINN_UPDATE_HOST mirror
                               (never $HUGINN_HOST - that would make whichever box you
                               point at a source of code this shell then runs)
+  huginn uninstall            unenrol this machine, then remove the client, the
+                              tokens, the local-AI tier and the profile line
+                              [--all also takes the SSH stanza + huginn's own key]
   huginn version              show client version
   huginn help | ? | /help     this help
 
@@ -416,7 +592,7 @@ EOF
       tmp="$dest.tmp"
       echo "huginn: updating client -> $dest"
       if command -v gh >/dev/null 2>&1; then
-        # Leave it at $tmp — the syntax check + backup below is the only install path.
+        # Leave it at $tmp - the syntax check + backup below is the only install path.
         if gh api "repos/$HUGINN_REPO/contents/client/huginn.sh" -H "Accept: application/vnd.github.raw" >"$tmp" 2>/dev/null && [ -s "$tmp" ]; then
           got=1; echo "  pulled from GitHub ($HUGINN_REPO) via gh"
         else
@@ -427,7 +603,7 @@ EOF
         command -v gh >/dev/null 2>&1 || echo "  (gh not installed - using the scp fallback)"
         # The mirror host is PINNED, not $H. This path downloads a shell script
         # and the block below sources it, so the host it comes from is a trust
-        # root, not a convenience — and $HUGINN_HOST is routinely repointed at a
+        # root, not a convenience - and $HUGINN_HOST is routinely repointed at a
         # test box or mistyped. Say which host is being trusted, every time.
         local uh="${HUGINN_UPDATE_HOST:-$HUGINN_UPDATE_HOST_DEFAULT}"
         [ "$uh" = "$HUGINN_UPDATE_HOST_DEFAULT" ] \
@@ -474,6 +650,7 @@ EOF
     # on the host, `device` never leaves this machine.
     device) _huginn_device "${@:2}" ;;
     local) _huginn_local "${@:2}" ;;
+    uninstall) _huginn_uninstall "${@:2}" ;;
     desktop)
       local want=''
       case "${2:-}" in
@@ -563,7 +740,7 @@ EOF
       # Prefer the daemon's DELETE: it also removes the orphaned /run state file
       # and releases the pane lease, which a bare tmux kill-session leaves behind
       # (Claude's SessionEnd hook never fires on a kill). Fall back to tmux if the
-      # daemon is unreachable — kill must work even when appd is down.
+      # daemon is unreachable - kill must work even when appd is down.
       # '=' anchor on the fallback: without it 'huginn kill andvari' kills 'andvariautofill'.
       if _huginn_appd DELETE "/v1/sessions/$kn" >/dev/null 2>&1; then
         echo "killed: $kn"
@@ -574,8 +751,8 @@ EOF
       [ -n "$2" ] || { echo "usage: huginn end <name>" >&2; return 1; }
       _huginn_valid_name "$2" || { echo "huginn: invalid session name '$2' (use letters, digits, underscore; no - or *)" >&2; return 1; }
       local en; en="$(_huginn_canon_name "$2")"
-      # Soft end: ask Claude to wrap up (finish, commit, prepare to end) and — when
-      # auto-end is on for the host — end the session once it settles. This is a
+      # Soft end: ask Claude to wrap up (finish, commit, prepare to end) and - when
+      # auto-end is on for the host - end the session once it settles. This is a
       # DAEMON feature (it types into the pane and watches state), so there is no
       # tmux fallback; the phrase is whatever the host is configured to send.
       local r; r="$(_huginn_appd POST "/v1/sessions/$en/soft-end")" || {
@@ -589,12 +766,12 @@ EOF
       local q="$*"; q=${q//\'/\'\\\'\'}            # POSIX single-quote escape
       # Kept in step with huginn-appd's ask/act tool sets (server/appd TOOLS/
       # DISALLOWED): -p is read-only reasoning + web + memory, -y may also mutate.
-      # The DISALLOWED deny-list is the real fence — --allowedTools only
+      # The DISALLOWED deny-list is the real fence - --allowedTools only
       # auto-approves, so without it a -p query could still be granted Bash.
       # The flag is assembled HERE and interpolated into the remote command, so the
       # quoting is bash SYNTAX on the host. Building it into a remote variable and
       # expanding it unquoted (the 0.8.0 pre-release form) word-split it into
-      # `'Bash` `Edit` `Write` `NotebookEdit'` — literal quotes, no valid tool name,
+      # `'Bash` `Edit` `Write` `NotebookEdit'` - literal quotes, no valid tool name,
       # so nothing was actually denied.
       local tools dflag
       if [ "$mode" = "-y" ]; then
@@ -632,7 +809,7 @@ _huginn_complete() {
   local cur prev cmds
   cur="${COMP_WORDS[COMP_CWORD]}"
   prev="${COMP_WORDS[COMP_CWORD-1]}"
-  cmds="list ls status st rounds devices device local llm solo rename mv kill end -p -y usage cost desktop update version help"
+  cmds="list ls status st rounds devices device local llm solo rename mv kill end -p -y usage cost desktop update uninstall version help"
   if [ "$COMP_CWORD" -eq 1 ]; then
     # first word: subcommands + live session names (bare name attaches to it)
     mapfile -t COMPREPLY < <(compgen -W "$cmds $(_huginn_sessions)" -- "$cur")
@@ -648,6 +825,8 @@ _huginn_complete() {
         mapfile -t COMPREPLY < <(compgen -W "status on off unit update serve" -- "$cur") ;;
       local)
         mapfile -t COMPREPLY < <(compgen -W "status on plan off unit update doctor" -- "$cur") ;;
+      uninstall)
+        mapfile -t COMPREPLY < <(compgen -W "--all --yes" -- "$cur") ;;
       --scope)
         mapfile -t COMPREPLY < <(compgen -W "look work own" -- "$cur") ;;
       today|yesterday|week|month)   # optional report-type override after a date shortcut
