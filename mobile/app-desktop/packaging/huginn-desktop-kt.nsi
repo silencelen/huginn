@@ -408,8 +408,14 @@ Section "Uninstall"
   ; else.
   RMDir /r "$R1"
   ; Downloaded installers from the self-updater. Not secret, just hundreds of MB
-  ; of an app that is no longer here.
+  ; of an app that is no longer here. DesktopUpdater.defaultCacheDir() honours
+  ; %XDG_CACHE_HOME% first, and past runs may have used either root, so both
+  ; app-named directories go.
   RMDir /r "$PROFILE\.cache\huginn-desktop-kt"
+  ReadEnvStr $R3 "XDG_CACHE_HOME"
+  ${If} $R3 != ""
+    RMDir /r "$R3\huginn-desktop-kt"
+  ${EndIf}
   ; The local tier: models, sessions, the runtime, and a SECOND copy of the
   ; token under device\appd-token. Multi-GB, and invisible in Programs and
   ; Features because nothing here installed it as a package.
