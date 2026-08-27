@@ -31,6 +31,7 @@ import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Schedule
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Terminal
+import androidx.compose.material.icons.outlined.EditNote
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -92,13 +93,15 @@ import com.silencelen.huginn.ui.linksOn
 import com.silencelen.huginn.ui.worthContinuing
 import com.silencelen.huginn.ui.screenText
 import com.silencelen.huginn.ui.RoundsScreen
+import com.silencelen.huginn.ui.ScratchpadEditorView
+import com.silencelen.huginn.ui.ScratchpadListView
 import com.silencelen.huginn.ui.HuginnViewModel
 import com.silencelen.huginn.ui.LocalAttachmentImages
 import com.silencelen.huginn.ui.SessionScreen
 import com.silencelen.huginn.ui.SessionSubtitle
 import com.silencelen.huginn.ui.SessionsScreen
 import com.silencelen.huginn.ui.SettingsScreen
-import com.silencelen.huginn.ui.ShareTargetSheet
+import com.silencelen.huginn.ui.SendTargetSheet
 import com.silencelen.huginn.ui.SignInDialog
 import com.silencelen.huginn.ui.StatusScreen
 import com.silencelen.huginn.ui.theme.HuginnTheme
@@ -274,6 +277,16 @@ internal fun backFrom(dest: Dest, tab: Int): Dest? = when (dest) {
     // through Settings, so Settings is the only honest answer.
     is Dest.Devices -> Dest.Settings
     is Dest.RoundEdit -> Dest.Rounds
+    is Dest.Scratchpad -> Dest.Scratchpads
+    // Pages are reachable from four different places, so "up" cannot mean the
+    // place they were opened from without a destination that carries it. The
+    // section is the honest answer, and it is the trade Settings already made.
+    is Dest.Scratchpads -> when (tab) {
+        0 -> Dest.Chats
+        1 -> Dest.Sessions
+        3 -> Dest.Rounds
+        else -> Dest.Status
+    }
     is Dest.Settings -> when (tab) {
         0 -> Dest.Chats
         1 -> Dest.Sessions
@@ -371,6 +384,8 @@ internal fun destToKey(d: Dest): String = when (d) {
     is Dest.Rounds -> "rounds"
     is Dest.RoundEdit -> "roundedit:${d.id ?: ""}"
     is Dest.Devices -> "devices"
+    is Dest.Scratchpads -> "pages"
+    is Dest.Scratchpad -> "page:${d.id}"
     is Dest.Sessions -> "sessions"
     is Dest.SessionView -> "session:${d.name}"
     is Dest.Status -> "status"
@@ -384,6 +399,8 @@ internal fun keyToDest(v: String): Dest = when {
     v == "rounds" -> Dest.Rounds
     v.startsWith("roundedit:") -> Dest.RoundEdit(v.removePrefix("roundedit:").ifEmpty { null })
     v == "devices" -> Dest.Devices
+    v == "pages" -> Dest.Scratchpads
+    v.startsWith("page:") -> Dest.Scratchpad(v.removePrefix("page:"))
     v == "sessions" -> Dest.Sessions
     v.startsWith("session:") -> Dest.SessionView(v.removePrefix("session:"))
     v == "status" -> Dest.Status
@@ -404,6 +421,10 @@ internal sealed interface Dest {
     data class RoundEdit(val id: String?) : Dest
     /** A child of Settings, not a bar item — see DevicesScreen for why. */
     data object Devices : Dest
+    /** The user's own pages. Reachable from every list and every conversation. */
+    data object Scratchpads : Dest
+    /** One page, full screen. A child of Scratchpads. */
+    data class Scratchpad(val id: String) : Dest
     data object Sessions : Dest
     data class SessionView(val name: String) : Dest
     data object Status : Dest
@@ -487,6 +508,19 @@ fun HuginnApp(
 
     val chats by vm.chats.collectAsState()
     val rounds by vm.rounds.collectAsState()
+    val pads by vm.scratchpads.collectAsState()
+    // Null until the probe answers. Every scratchpad control is hidden on false —
+    // an older daemon has no such route, and a door that leads to an error is
+    // worse than no door.
+    val padsAvailable by vm.scratchpadsAvailable.collectAsState()
+    val padRefs by vm.padRefs.collectAsState()
+    val openPad by vm.padSaver.pad.collectAsState()
+    val padSaveState by vm.padSaver.state.collectAsState()
+    val padNote by vm.padSaver.note.collectAsState()
+    // Where a page is being sent, when the picker is open. The page's own text,
+    // captured when the button was pressed rather than read at the far end: it is
+    // what the person was looking at when they decided to send it.
+    var pendingPadText by remember { mutableStateOf<String?>(null) }
     val devices by vm.devices.collectAsState()
     val chatSealed by vm.chatSealed.collectAsState()
     // Recomputed on every recomposition, which the chat/round refresh already
@@ -556,10 +590,10 @@ fun HuginnApp(
     val attachmentOwner by vm.attachmentOwner.collectAsState()
 
     pendingShare?.let { share ->
-        ShareTargetSheet(
+        SendTargetSheet(
             sessions = sessions,
             chats = chats,
-            sharingImage = share.shareImage != null,
+            title = if (share.shareImage != null) "Share photo to" else "Share to",
             onDismiss = { pendingShare = null },
             onNewChat = {
                 pendingShare = null
@@ -579,6 +613,34 @@ fun HuginnApp(
                 sessionTab = 0
                 dest = Dest.SessionView(name)
                 vm.stageShareInSession(name, share.shareText, share.shareImage)
+            },
+        )
+    }
+
+    pendingPadText?.let { text ->
+        SendTargetSheet(
+            sessions = sessions,
+            chats = chats,
+            title = "Send this page to",
+            onDismiss = { pendingPadText = null },
+            onNewChat = {
+                pendingPadText = null
+                tab = 0
+                vm.newChatForShare(text, null) { id -> dest = Dest.Chat(id) }
+            },
+            onChat = { id ->
+                pendingPadText = null
+                tab = 0
+                vm.openChat(id)
+                dest = Dest.Chat(id)
+                vm.stagePadInChat(id, text)
+            },
+            onSession = { name ->
+                pendingPadText = null
+                tab = 1
+                sessionTab = 0
+                dest = Dest.SessionView(name)
+                vm.stagePadInSession(name, text)
             },
         )
     }
@@ -682,7 +744,8 @@ fun HuginnApp(
     }
 
     val isChild = dest is Dest.Chat || dest is Dest.SessionView || dest is Dest.Settings ||
-        dest is Dest.Devices || dest is Dest.RoundEdit
+        dest is Dest.Devices || dest is Dest.RoundEdit ||
+        dest is Dest.Scratchpads || dest is Dest.Scratchpad
     // The system gesture, going where the arrow goes. Without this the commonest
     // gesture on the phone closed the app from every child screen.
     androidx.activity.compose.BackHandler(enabled = isChild) {
@@ -694,6 +757,8 @@ fun HuginnApp(
         is Dest.Rounds -> "Rounds"
         is Dest.RoundEdit -> if (d.id == null) "New round" else "Edit round"
         is Dest.Devices -> "Devices"
+        is Dest.Scratchpads -> "Pages"
+        is Dest.Scratchpad -> pads.firstOrNull { it.id == d.id }?.name ?: "Page"
         is Dest.Sessions -> "Sessions"
         is Dest.SessionView -> transcript?.title ?: d.name
         is Dest.Status -> "Status"
@@ -824,6 +889,10 @@ fun HuginnApp(
             // own so its number only has to be distinct. Devices shares it because
             // it IS Settings as far as the rail's highlight is concerned.
             is Dest.Settings, is Dest.Devices -> 4
+            // FIVE, which matches no bar item and no rail item — deliberately.
+            // Pages are opened from wherever you already are, so highlighting a
+            // section would claim you had navigated somewhere you had not.
+            is Dest.Scratchpads, is Dest.Scratchpad -> 5
         }
 
         // Each surface once, as a lambda, so the narrow and wide layouts are
@@ -944,6 +1013,9 @@ fun HuginnApp(
                 onAttach = { vm.attachImage(it, HuginnViewModel.chatDraftKey(id)) },
                 onAttachFile = { vm.attachFile(it, HuginnViewModel.chatDraftKey(id)) },
                 onClearAttachment = { vm.clearAttachment(HuginnViewModel.chatDraftKey(id)) },
+                pads = if (padsAvailable == true) pads else emptyList(),
+                padRefId = padRefs[com.silencelen.huginn.ui.ScratchpadRules.chatRefKey(id)],
+                onPadRef = { vm.setPadRef(com.silencelen.huginn.ui.ScratchpadRules.chatRefKey(id), it) },
             )
         }
         val sessionsPane: @Composable (Boolean) -> Unit = { twoPane ->
@@ -1041,6 +1113,9 @@ fun HuginnApp(
                 hasEarlier = hasEarlier,
                 loadingHistory = loadingHistory,
                 onLoadEarlier = { vm.loadEarlierTranscript(name) },
+                pads = if (padsAvailable == true) pads else emptyList(),
+                padRefId = padRefs[com.silencelen.huginn.ui.ScratchpadRules.sessionRefKey(name)],
+                onPadRef = { vm.setPadRef(com.silencelen.huginn.ui.ScratchpadRules.sessionRefKey(name), it) },
             )
         }
         val statusPane: @Composable () -> Unit = {
@@ -1072,6 +1147,51 @@ fun HuginnApp(
                 onDelete = { rid, cb -> vm.deleteRound(rid, cb) },
                 onPolish = { d, f, cb -> vm.polishRound(d, f, cb) },
                 onDone = { dest = Dest.Rounds },
+            )
+        }
+        // The pages themselves. Polled only while one of these two is on screen —
+        // a page changes when a person types into it, and nobody is typing into it
+        // from a screen that is not showing it.
+        val scratchpadsPane: @Composable () -> Unit = {
+            LifecycleStartEffect(Unit) {
+                vm.startScratchpadsPolling()
+                onStopOrDispose { vm.stopScratchpadsPolling() }
+            }
+            ScratchpadListView(
+                pads = pads,
+                selectedId = null,
+                nowMs = nowMs,
+                onOpen = { p -> vm.openScratchpad(p.id); dest = Dest.Scratchpad(p.id) },
+                onCreate = { name -> vm.createScratchpad(name) { id -> dest = Dest.Scratchpad(id) } },
+                onDelete = { p -> vm.deleteScratchpad(p.id) },
+            )
+        }
+        val scratchpadPane: @Composable (String) -> Unit = { id ->
+            // Fetched on open, not polled: a poll that replaced the text under a
+            // cursor would be an editor that types back at you.
+            LaunchedEffect(id) { if (openPad?.id != id) vm.openScratchpad(id) }
+            // The scope that writes is the view model's, so leaving the screen is
+            // exactly when the flush has to run and exactly when a composition
+            // scope would already be gone.
+            DisposableEffect(id) { onDispose { vm.padSaver.flush() } }
+            LifecycleStartEffect(Unit) {
+                vm.startScratchpadsPolling()
+                onStopOrDispose { vm.stopScratchpadsPolling() }
+            }
+            ScratchpadEditorView(
+                pad = openPad?.takeIf { it.id == id },
+                pads = pads,
+                state = padSaveState,
+                note = padNote,
+                onEdit = { vm.padSaver.set(it) },
+                onSwitch = { p -> vm.openScratchpad(p.id); dest = Dest.Scratchpad(p.id) },
+                onDismissNote = { vm.padSaver.clearNote() },
+                // Absent on an empty page rather than present and inert: there
+                // is nothing to send, and a button that does nothing when pressed
+                // reads as broken.
+                onSendElsewhere = openPad?.content?.takeIf { it.isNotBlank() }
+                    ?.let { text -> { pendingPadText = text } },
+                onRename = { name -> vm.renameScratchpad(id, name) },
             )
         }
         val devicesPane: @Composable () -> Unit = {
@@ -1189,6 +1309,18 @@ fun HuginnApp(
                         if (dest !is Dest.Settings && dest !is Dest.Chat && dest !is Dest.SessionView) {
                             IconButton(onClick = { dest = Dest.Settings }) {
                                 Icon(Icons.Filled.Settings, contentDescription = "Settings")
+                            }
+                        }
+                        // The way into the pages, offered from the four places a
+                        // person is when they want one: either list, and either
+                        // kind of conversation. Hidden entirely against a daemon
+                        // that has no scratchpads — see scratchpadsAvailable.
+                        if (padsAvailable == true &&
+                            (dest is Dest.Chats || dest is Dest.Sessions ||
+                                dest is Dest.Chat || dest is Dest.SessionView)
+                        ) {
+                            IconButton(onClick = { vm.refreshScratchpads(); dest = Dest.Scratchpads }) {
+                                Icon(Icons.Outlined.EditNote, contentDescription = "Pages")
                             }
                         }
                         // The slot the settings gear vacated: controls for the thing
@@ -1342,6 +1474,8 @@ fun HuginnApp(
                             is Dest.Rounds -> roundsPane()
                             is Dest.RoundEdit -> roundEditPane(d.id)
                             is Dest.Devices -> devicesPane()
+                            is Dest.Scratchpads -> scratchpadsPane()
+                            is Dest.Scratchpad -> scratchpadPane(d.id)
                             is Dest.Status -> statusPane()
                             is Dest.Settings -> settingsPane()
                         }
@@ -1387,6 +1521,32 @@ fun HuginnApp(
                             }
                             is Dest.Devices -> Box(Modifier.fillMaxSize(), contentAlignment = androidx.compose.ui.Alignment.TopCenter) {
                                 Box(Modifier.widthIn(max = 840.dp)) { devicesPane() }
+                            }
+                            // List and editor side by side, the same shape the
+                            // chats and sessions take when the fold opens.
+                            is Dest.Scratchpads, is Dest.Scratchpad -> Row(Modifier.fillMaxSize()) {
+                                Box(Modifier.width(292.dp).fillMaxSize()) {
+                                    LifecycleStartEffect(Unit) {
+                                        vm.startScratchpadsPolling()
+                                        onStopOrDispose { vm.stopScratchpadsPolling() }
+                                    }
+                                    ScratchpadListView(
+                                        pads = pads,
+                                        selectedId = (dest as? Dest.Scratchpad)?.id,
+                                        nowMs = nowMs,
+                                        onOpen = { p -> vm.openScratchpad(p.id); dest = Dest.Scratchpad(p.id) },
+                                        onCreate = { name -> vm.createScratchpad(name) { id -> dest = Dest.Scratchpad(id) } },
+                                        onDelete = { p -> vm.deleteScratchpad(p.id) },
+                                    )
+                                }
+                                VerticalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+                                Box(Modifier.weight(1f).fillMaxSize()) {
+                                    val open = dest as? Dest.Scratchpad
+                                    if (open != null) scratchpadPane(open.id)
+                                    else Box(Modifier.fillMaxSize(), contentAlignment = androidx.compose.ui.Alignment.Center) {
+                                        EmptyState("No page open", "Pick one on the left, or start a new one.")
+                                    }
+                                }
                             }
                         }
                     }

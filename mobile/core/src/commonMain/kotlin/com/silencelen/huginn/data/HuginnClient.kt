@@ -617,11 +617,23 @@ class HuginnClient(
             (offset?.let { "&offset=$it" } ?: "") + (until?.let { "&until=$it" } ?: ""),
     ))
 
-    /** Literal text, then named keys (tmux send-keys names, server-validated). */
-    suspend fun sendKeys(name: String, text: String? = null, keys: List<String> = emptyList()) {
+    /**
+     * Literal text, then named keys (tmux send-keys names, server-validated).
+     *
+     * A [scratchpadId] reaches the pane as a PATH rather than as the page: the
+     * daemon materialises it beside the store and names the file, because a pane
+     * takes 8,000 characters and a page holds 100,000.
+     */
+    suspend fun sendKeys(
+        name: String,
+        text: String? = null,
+        keys: List<String> = emptyList(),
+        scratchpadId: String? = null,
+    ) {
         val payload = buildJsonObject {
             if (text != null) put("text", JsonPrimitive(text))
             if (keys.isNotEmpty()) put("keys", JsonArray(keys.map { JsonPrimitive(it) }))
+            scratchpadId?.let { put("scratchpadId", JsonPrimitive(it)) }
         }
         post("/v1/sessions/$name/keys", body = payload)
     }
@@ -863,6 +875,60 @@ class HuginnClient(
     suspend fun ackRound(id: String, acknowledged: Boolean = true): Round =
         decode(post("/v1/rounds/$id/ack", body = mapOf("acknowledged" to acknowledged)))
 
+    // ---- scratchpads: the user's own pages, quoted into a message on request
+
+    /**
+     * Every page, without any of their text.
+     *
+     * ALSO THE FEATURE PROBE. A daemon older than scratchpads has no such route
+     * and answers 404, and both clients hide every scratchpad control on that
+     * rather than parsing a version — same shape as the silent-404 refreshRounds
+     * precedent, and for the same reason: a version string is a claim about what
+     * a build contains, while a 404 is the route itself answering.
+     */
+    suspend fun scratchpads(): List<Scratchpad> = decode<ScratchpadList>(call("/v1/scratchpads")).pads
+
+    /** One page, with its content and the rev a save must carry back. */
+    suspend fun scratchpad(id: String): Scratchpad = decode(call("/v1/scratchpads/$id"))
+
+    suspend fun createScratchpad(name: String, content: String = ""): Scratchpad = decode(
+        post("/v1/scratchpads", body = buildJsonObject {
+            put("name", JsonPrimitive(name))
+            if (content.isNotEmpty()) put("content", JsonPrimitive(content))
+        }),
+    )
+
+    /**
+     * The autosave, and the one call here that treats a non-2xx as an answer.
+     *
+     * A 409 means the other device saved first. It is not a failure — it arrives
+     * carrying the current text and its rev, which is everything the editor needs
+     * to adopt it — so it comes back as [ScratchpadSave.conflict] rather than as a
+     * throw. Every other status still throws, because a 400 about a name IS a
+     * refusal and belongs on the failure path.
+     */
+    suspend fun saveScratchpad(
+        id: String,
+        rev: Int,
+        name: String? = null,
+        content: String? = null,
+    ): ScratchpadSave {
+        val body = buildJsonObject {
+            put("rev", JsonPrimitive(rev))
+            name?.let { put("name", JsonPrimitive(it)) }
+            content?.let { put("content", JsonPrimitive(it)) }
+        }
+        val resp = http.request { build("/v1/scratchpads/$id", HttpMethod.Patch, Tier.NORMAL, body) }
+        val text = resp.bodyAsText()
+        if (resp.status.value == 409) return ScratchpadSave(decode(text), conflict = true)
+        if (!resp.status.isSuccess()) throw errorFrom(resp.status.value, text)
+        return ScratchpadSave(decode(text), conflict = false)
+    }
+
+    suspend fun deleteScratchpad(id: String) {
+        call("/v1/scratchpads/$id", HttpMethod.Delete)
+    }
+
     suspend fun chats(): List<Chat> = decode<ChatList>(call("/v1/chats")).chats
 
     /**
@@ -911,16 +977,33 @@ class HuginnClient(
      * is deliberate: locking the phone must not kill Claude mid-task. Reattach
      * with [streamChat].
      */
-    fun sendMessage(id: String, text: String): Flow<ChatEvent> =
-        sse("/v1/chats/$id/messages?stream=1", HttpMethod.Post, jsonBody("text" to text))
+    fun sendMessage(id: String, text: String, scratchpadId: String? = null): Flow<ChatEvent> =
+        sse("/v1/chats/$id/messages?stream=1", HttpMethod.Post, messageBody(text, scratchpadId))
 
     /**
      * Posts a message to a chat that is already running. The server queues it and
      * delivers it when the current run ends; there is no stream to follow because
      * the reply belongs to a future run.
+     *
+     * A [scratchpadId] here is composed by the daemon AT RECEIPT and stored
+     * already-composed, so the queued message quotes the page as it read when Send
+     * was pressed rather than as it reads whenever the queue happens to drain.
      */
-    suspend fun queueMessage(id: String, text: String) {
-        post("/v1/chats/$id/messages", body = jsonBody("text" to text))
+    suspend fun queueMessage(id: String, text: String, scratchpadId: String? = null) {
+        post("/v1/chats/$id/messages", body = messageBody(text, scratchpadId))
+    }
+
+    /**
+     * ABSENT means no page at all, which is not the same as naming Main.
+     *
+     * The daemon falls back to Main only for a reference it was actually asked
+     * for; omitting the field is how a message says it carries none. Sending
+     * `null` explicitly would read the same way to `explicitNulls = false`, so the
+     * field is simply not built.
+     */
+    private fun messageBody(text: String, scratchpadId: String?): JsonObject = buildJsonObject {
+        put("text", JsonPrimitive(text))
+        scratchpadId?.let { put("scratchpadId", JsonPrimitive(it)) }
     }
 
     /** Reattaches to an in-flight run, replaying events after [since] (0 = all). */

@@ -961,6 +961,50 @@ data class PolishResult(
     val error: String? = null,
 )
 
+// -------------------------------------------------------------- scratchpads
+
+/**
+ * One of the user's own pages on the host.
+ *
+ * [content] is absent from a list row and present on a fetched pad, which is what
+ * makes the list cheap enough to poll — so it defaults to empty rather than being
+ * nullable, and [size] is how a picker tells a written page from a blank one
+ * without asking for the text.
+ */
+@Serializable
+data class Scratchpad(
+    val id: String,
+    val name: String = "",
+    val content: String = "",
+    /**
+     * The revision this copy was read at. Every save carries it back, and a save
+     * based on a stale one is refused with the server's copy — which is the whole
+     * reason two devices can autosave the same page without one silently erasing
+     * the other's paragraph.
+     */
+    val rev: Int = 0,
+    /** The undeletable, unrenameable page a reference falls back to. */
+    val main: Boolean = false,
+    val createdAt: Long = 0,
+    val updatedAt: Long = 0,
+    /** Characters, from a list row. Zero on a fetched pad is [content] being empty. */
+    val size: Int = 0,
+)
+
+@Serializable
+data class ScratchpadList(val pads: List<Scratchpad> = emptyList())
+
+/**
+ * The answer to a save: what the server now holds, and whether it took ours.
+ *
+ * A conflict is NOT an exception. It is the expected outcome of the other device
+ * having saved first, it arrives with everything needed to recover (the current
+ * text and its rev), and the editor's response to it is a quiet line rather than
+ * an error — so surfacing it as a throw would make the ordinary case travel the
+ * failure path.
+ */
+data class ScratchpadSave(val pad: Scratchpad, val conflict: Boolean)
+
 // ------------------------------------------------------------------ devices
 
 /**
