@@ -203,10 +203,6 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
     private val _alerts = MutableStateFlow<Alerts?>(null)
     val alerts: StateFlow<Alerts?> = _alerts.asStateFlow()
 
-    fun refreshAlerts() {
-        viewModelScope.launch { runCatching { client.alerts() }.onSuccess { _alerts.value = it } }
-    }
-
     /**
      * What the host has seen of this phone — the evidence that background delivery
      * is working, gathered by a machine that was awake while the phone was not.
@@ -238,24 +234,6 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
             runCatching { client.clients() }.onSuccess { _clients.value = it }
             runCatching { client.push() }.onSuccess { _push.value = it }
             _health.value = readHealth()
-        }
-    }
-
-    /**
-     * Sends a real push to this device.
-     *
-     * Deliberately the same path a genuine alert takes, right through Google, so a
-     * success here means the whole chain works rather than that one link does.
-     */
-    fun sendTestPush() {
-        viewModelScope.launch {
-            runCatching { client.testPush() }
-                .onSuccess {
-                    _toast.value = if (it.ok) "Pushed to ${it.sent} device${if (it.sent == 1) "" else "s"}"
-                        else (it.error ?: "No device accepted the push")
-                    refreshDelivery()
-                }
-                .onFailure { _toast.value = errText(it) }
         }
     }
 
@@ -326,14 +304,6 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
                         "huginn will message you when a session needs you"
                     else "huginn will stop messaging you"
                 }
-                .onFailure { _toast.value = errText(it) }
-        }
-    }
-
-    fun sendTestAlert() {
-        viewModelScope.launch {
-            runCatching { client.testAlert() }
-                .onSuccess { _toast.value = "Test sent from huginn"; refreshAlerts() }
                 .onFailure { _toast.value = errText(it) }
         }
     }
@@ -750,7 +720,7 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
         SessionWatchWorker.schedule(app)
     }
 
-    fun testConnection() {
+    private fun testConnection() {
         viewModelScope.launch {
             runCatching { client.ping() }
                 .onSuccess {

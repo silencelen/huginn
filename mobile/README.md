@@ -197,10 +197,8 @@ root SSH key: if a device carrying it is lost, rotate the file, restart the unit
 | GET | `/v1/watch` | change signal; `?stream=1` is SSE with a 25s keepalive, otherwise a long poll |
 | GET | `/v1/clients` | which phones have checked in, and how recently |
 | GET | `/v1/alerts` · POST | host-sent alerts: `{enabled, mode: fallback\|always}` |
-| POST | `/v1/alerts/test` | sends one Telegram alert now |
 | GET | `/v1/push` | whether FCM is configured, and the registered devices (never their tokens) |
 | POST | `/v1/push/register` | `{installId, token, model?}` |
-| POST | `/v1/push/test` | pushes a real message to every registered device |
 | GET | `/v1/chats` | chat list, newest first |
 | POST | `/v1/chats` | `{mode: ask\|act}` |
 | GET | `/v1/chats/<id>` | metadata + digest transcript + in-flight partial text |

@@ -1108,7 +1108,6 @@ fun HuginnApp(
                 push = push,
                 onRequestDozeExemption = { vm.requestDozeExemption() },
                 onRefreshDelivery = { vm.refreshDelivery() },
-                onTestPush = { vm.sendTestPush() },
                 onAlertsMode = { vm.setAlertsMode(it) },
                 // Machines, and only the ones the sentence is TRUE of: "can run
                 // work" is the claude capability, which a serve-only machine
@@ -1133,14 +1132,6 @@ fun HuginnApp(
                         )
                     }
                 },
-                onTestNotification = {
-                    SessionWatchWorker.post(
-                        context,
-                        "Notifications are working",
-                        "This is what a session needing you will look like.",
-                        null,
-                    )
-                },
                 account = account,
                 savedAccounts = savedAccounts,
                 switching = switching,
@@ -1149,12 +1140,10 @@ fun HuginnApp(
                 onSignIn = { vm.beginAddAccount() },
                 alerts = hostAlerts,
                 onAlertsEnabled = { vm.setAlertsEnabled(it) },
-                onTestAlert = { vm.sendTestAlert() },
                 watchEnabled = watchEnabled,
                 onWatchEnabled = { vm.setWatchEnabled(it) },
                 onSignOut = { vm.logout() },
                 onSave = { u, t -> vm.saveSettings(u, t) },
-                onTest = { vm.testConnection() },
                 routePinned = routePinned,
                 resolvingRoute = resolvingRoute,
                 onSelectRoute = { vm.selectRoute(it) },

@@ -3075,7 +3075,7 @@ async function deliverPush(alert) {
   // a phone registering a rotated token inside that window was erased when the
   // snapshot loaded before the sends got saved over it, leaving the host pushing to
   // a token the phone had already replaced. Two concurrent deliverPush calls
-  // (alert tick, autoswitch tick, /v1/push/test) clobbered each other the same way.
+  // (an alert tick and an autoswitch tick) clobbered each other the same way.
   const outcomes = [];
   for (const d of devices) {
     let r;
@@ -3661,21 +3661,6 @@ const server = http.createServer(async (req, res) => {
       });
     }
 
-    if (req.method === 'POST' && p === '/v1/push/test') {
-      if (!fcm) return sendErr(res, 503, 'FCM is not configured on this host');
-      const r = await deliverPush({
-        title: 'Huginn push test',
-        text: 'This is what an alert delivered straight to the app looks like.',
-        kind: 'test',
-        subject: 'test',
-      });
-      return sendJson(res, r.sent > 0 ? 200 : 502, {
-        ok: r.sent > 0, ...r,
-        error: r.sent > 0 ? undefined
-          : (r.dead ? 'the registered token was rejected as dead' : 'no device accepted the push'),
-      });
-    }
-
     // --- automatic account switching
     if (req.method === 'GET' && p === '/v1/autoswitch') {
       const st = loadAutoswitch();
@@ -3740,11 +3725,6 @@ const server = http.createServer(async (req, res) => {
       if (st.enabled) startAlertWatcher();
       log(`alerts: ${st.enabled ? 'enabled' : 'disabled'} mode=${st.mode || 'fallback'}`);
       return sendJson(res, 200, { enabled: !!st.enabled, mode: st.mode || 'fallback' });
-    }
-
-    if (req.method === 'POST' && p === '/v1/alerts/test') {
-      const ok = await deliverTelegram('🔔 Huginn test alert\nThis is what a session needing you will look like.');
-      return sendJson(res, ok ? 200 : 500, ok ? { ok: true } : { error: 'could not deliver' });
     }
 
     // --- the change signal a watching phone parks on
