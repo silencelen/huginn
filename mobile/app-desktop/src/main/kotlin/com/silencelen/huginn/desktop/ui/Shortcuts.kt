@@ -20,6 +20,8 @@ enum class Shortcut {
     VIEW_SETTINGS,
     NEW_ASK,
     NEW_ACT,
+    /** Palette-only — no key: a chat on whichever machine serves local AI. */
+    NEW_LOCAL,
     LIST_PREV,
     LIST_NEXT,
     BACK,
@@ -162,6 +164,7 @@ sealed interface PaletteItem {
 private val VERBS = listOf(
     PaletteItem.Verb(Shortcut.NEW_ASK, "New Ask chat", "reasoning, memory and reads"),
     PaletteItem.Verb(Shortcut.NEW_ACT, "New Act chat", "can run commands and change files"),
+    PaletteItem.Verb(Shortcut.NEW_LOCAL, "New local chat", "a serving machine's model answers — never Claude"),
     PaletteItem.Verb(Shortcut.VIEW_STATUS, "Status", "host, plan and usage"),
     PaletteItem.Verb(Shortcut.VIEW_SETTINGS, "Settings", "server, accounts, diagnostics"),
 )

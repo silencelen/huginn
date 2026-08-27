@@ -88,6 +88,7 @@ fun ChatScreen(
     waking: Boolean = false,
     onSetOptions: (String?, String?) -> Unit,
     onMode: (String) -> Unit,
+    onEscalate: (() -> Unit)? = null,
     chatId: String,
     suggestions: List<String>,
     voiceReady: Boolean,
@@ -149,6 +150,7 @@ fun ChatScreen(
             onModel = { onSetOptions(it, null) },
             onEffort = { onSetOptions(null, it) },
             onMode = onMode,
+            onEscalate = onEscalate,
         )
         if (error != null && !streaming) {
             // NOT the empty state. A chat that failed to load looks identical to a
