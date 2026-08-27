@@ -465,6 +465,9 @@ fun main(args: Array<String>) {
             }
 
             LaunchedEffect(Unit) { store.start() }
+            // Quietly brings this machine's CLI install along with the app —
+            // presence of the files is the consent; validation before swap.
+            LaunchedEffect(Unit) { CliSync.startOnce() }
 
             // An activation that started the process, replayed once there is a
             // window and a store to act on.

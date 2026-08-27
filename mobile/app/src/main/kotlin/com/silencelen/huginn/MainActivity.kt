@@ -518,6 +518,7 @@ fun HuginnApp(
     val chatModel by vm.chatModel.collectAsState()
     val chatEffort by vm.chatEffort.collectAsState()
     val chatStarted by vm.chatStarted.collectAsState()
+    val chatWaking by vm.chatWaking.collectAsState()
     val models by vm.models.collectAsState()
     val transcript by vm.transcript.collectAsState()
     val hasEarlier by vm.hasEarlier.collectAsState()
@@ -839,6 +840,10 @@ fun HuginnApp(
                 onNew = { mode, host ->
                     vm.newChat(mode, host) { id -> vm.openChat(id); dest = Dest.Chat(id) }
                 },
+                models = models,
+                onNewLocal = { modelId ->
+                    vm.newLocalChat(modelId) { id -> vm.openChat(id); dest = Dest.Chat(id) }
+                },
                 onDelete = { vm.deleteChat(it) },
                 onOpenSettings = { dest = Dest.Settings },
                 newChatRequest = newChatAsk,
@@ -920,6 +925,7 @@ fun HuginnApp(
                 effort = chatEffort,
                 models = models,
                 started = chatStarted || sending,
+                waking = chatWaking,
                 onSetOptions = { m, e -> vm.setChatOptions(id, model = m, effort = e) },
                 onMode = { vm.setChatOptions(id, mode = it) },
                 chatId = id,

@@ -36,6 +36,7 @@ import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.VerticalDivider
@@ -212,22 +213,66 @@ fun Shell(store: AppStore) {
                 if (showsList) {
                     Box(Modifier.width(listWidth.dp).fillMaxHeight()) {
                         when (view) {
-                            View.CHATS -> ChatsList(
-                                chats = chats,
-                                loaded = loaded,
-                                activeId = chatId,
-                                selection = chatSel,
-                                onSelect = { chatSel = it },
-                                onOpen = { store.openChat(it) },
-                                onNew = { mode ->
-                                    act {
-                                        val made = store.client.createChat(mode)
-                                        store.openChat(made.id)
-                                        store.refreshChats()
+                            View.CHATS -> Column(Modifier.fillMaxSize()) {
+                                // First-launch offer, once and dismissible: the
+                                // machine may be able to SERVE, and the only
+                                // door was a Settings section nobody is told
+                                // about. Gone forever on either button, and
+                                // never shown once anything already serves.
+                                val offerSeen by store.settings.localOfferSeen.collectAsState(initial = true)
+                                if (!offerSeen && devices.none { it.scope == "generate" }) {
+                                    Surface(
+                                        color = MaterialTheme.colorScheme.surfaceVariant,
+                                        modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 6.dp),
+                                    ) {
+                                        Column(Modifier.padding(12.dp)) {
+                                            Text("Serve local AI from this PC", style = MaterialTheme.typography.labelLarge)
+                                            Text(
+                                                "This machine may be able to run small AI models and offer them " +
+                                                    "in huginn's chat menus — private, on your own hardware. " +
+                                                    "Setting up shows the exact plan before anything downloads.",
+                                                style = MaterialTheme.typography.bodySmall,
+                                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                            )
+                                            Row(
+                                                horizontalArrangement = Arrangement.End,
+                                                modifier = Modifier.fillMaxWidth(),
+                                            ) {
+                                                TextButton(onClick = {
+                                                    act { store.settings.setLocalOfferSeen() }
+                                                    store.openView(View.SETTINGS)
+                                                }) { Text("Set up") }
+                                                TextButton(onClick = {
+                                                    act { store.settings.setLocalOfferSeen() }
+                                                }) { Text("Not now") }
+                                            }
+                                        }
                                     }
-                                },
-                                verbs = chatVerbs,
-                            )
+                                }
+                                Box(Modifier.weight(1f)) {
+                                    ChatsList(
+                                        chats = chats,
+                                        loaded = loaded,
+                                        activeId = chatId,
+                                        selection = chatSel,
+                                        onSelect = { chatSel = it },
+                                        onOpen = { store.openChat(it) },
+                                        onNew = { mode ->
+                                            act {
+                                                val made = store.client.createChat(mode)
+                                                store.openChat(made.id)
+                                                store.refreshChats()
+                                            }
+                                        },
+                                        onNewLocal = if (devices.any { it.scope == "generate" && it.online }) {
+                                            { act { store.startLocalChat() } }
+                                        } else {
+                                            null
+                                        },
+                                        verbs = chatVerbs,
+                                    )
+                                }
+                            }
                             View.SESSIONS -> SessionsList(
                                 sessions = sessions,
                                 loaded = sessionsLoaded,

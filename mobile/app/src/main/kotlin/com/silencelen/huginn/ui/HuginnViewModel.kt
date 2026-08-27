@@ -16,6 +16,7 @@ import com.silencelen.huginn.data.ChatDetail
 import com.silencelen.huginn.data.ChatEvent
 import com.silencelen.huginn.data.HuginnClient
 import com.silencelen.huginn.data.ModelChoice
+import com.silencelen.huginn.ui.ModelLabels
 import com.silencelen.huginn.data.Screen
 import com.silencelen.huginn.data.Session
 import com.silencelen.huginn.data.SettingsStore
@@ -1792,6 +1793,13 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
     val chatStarted: StateFlow<Boolean> = _chatStarted.asStateFlow()
 
     /**
+     * A LOCAL chat's pre-first-token cue: the silence is the model LOADING —
+     * up to ~30s cold — not a hang. Set at send, cleared by the first token.
+     */
+    private val _chatWaking = MutableStateFlow(false)
+    val chatWaking: StateFlow<Boolean> = _chatWaking.asStateFlow()
+
+    /**
      * Whether the open chat is a finished Round run.
      *
      * Read from the chat's own meta, NOT from the chats list: a Round's runs are
@@ -1939,6 +1947,19 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
+    /**
+     * A chat on a serving machine, in one tap: the model row IS the machine
+     * choice, and the daemon forces ask. The refusal (machine just went
+     * offline) surfaces as-is — it names the machine since appd 2.78.0.
+     */
+    fun newLocalChat(modelId: String, onCreated: (String) -> Unit) {
+        viewModelScope.launch {
+            runCatching { client.createChat("ask", model = modelId) }
+                .onSuccess { refreshChats(); onCreated(it.id) }
+                .onFailure { _toast.value = errText(it) }
+        }
+    }
+
     fun deleteChat(id: String) {
         viewModelScope.launch {
             runCatching { client.deleteChat(id) }
@@ -1986,6 +2007,7 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
         clearDraft(chatDraftKey(id))
         _sending.value = true
         _chatStarted.value = true
+        _chatWaking.value = ModelLabels.isLocal(_chatModel.value, _models.value)
         _streamingText.value = ""
         _activeTool.value = null
         collect(id, client.sendMessage(id, text), sentText = text)
@@ -2028,7 +2050,10 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
                 if (ev !is ChatEvent.Failure) sawStream = true
                 when (ev) {
                     is ChatEvent.Started -> Unit
-                    is ChatEvent.Delta -> _streamingText.value = (_streamingText.value ?: "") + ev.text
+                    is ChatEvent.Delta -> {
+                        _chatWaking.value = false
+                        _streamingText.value = (_streamingText.value ?: "") + ev.text
+                    }
                     is ChatEvent.Assistant -> {
                         // The block is complete and now in the transcript, which is
                         // the richer source: reload rather than keeping a second copy.
@@ -2046,6 +2071,7 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
                         loadChatTranscript(id)
                     }
                     is ChatEvent.Failure -> {
+                        _chatWaking.value = false
                         _toast.value = ev.text
                         _streamingText.value = null
                         // The tool is not running for US any more, whatever it is
@@ -2061,6 +2087,7 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
                         }
                     }
                     ChatEvent.Done -> {
+                        _chatWaking.value = false
                         _sending.value = false
                         _streamingText.value = null
                         _activeTool.value = null

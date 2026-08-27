@@ -101,12 +101,17 @@ fun ChatsList(
     onSelect: (Selection) -> Unit,
     onOpen: (String) -> Unit,
     onNew: (String) -> Unit,
+    /** Present only while a machine is serving — a door onto a 409 is a fake control. */
+    onNewLocal: (() -> Unit)? = null,
     verbs: ChatVerbs,
 ) {
     Column(Modifier.fillMaxSize()) {
         ListHeader("Chats", chats.size, selection.size) {
             TextButton(onClick = { onNew("ask") }) { Text("+ Ask", style = DeskType.rail) }
             TextButton(onClick = { onNew("act") }) { Text("+ Act", style = DeskType.rail) }
+            if (onNewLocal != null) {
+                TextButton(onClick = onNewLocal) { Text("+ Local", style = DeskType.rail) }
+            }
         }
         // Loading and empty are DIFFERENT SENTENCES. `loaded` is false only until
         // the first fetch settles, and a cold start that says "No chats yet" is a
