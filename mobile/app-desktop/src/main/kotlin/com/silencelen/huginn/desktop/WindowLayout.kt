@@ -116,7 +116,19 @@ object Splitter {
     const val REOPEN_PULL: Float = 12f
 
     /**
-     * Accumulated outward travel, one drag delta at a time.
+     * ONE DRAG on a shut seam, as it happens.
+     *
+     * @param travel outward distance banked so far, in dp.
+     * @param spent this gesture has already fired its reopen. Everything after
+     *   that is momentum — see [pull].
+     */
+    data class Pull(val travel: Float = 0f, val spent: Boolean = false)
+
+    /** What a gesture starts from, installed on every `onDragStarted`. */
+    val NO_PULL: Pull = Pull()
+
+    /**
+     * One drag delta, folded into the gesture.
      *
      * A threshold applied to a SINGLE delta is a threshold on pointer SPEED
      * rather than on distance — a slow, deliberate pull would never reach it and
@@ -124,11 +136,33 @@ object Splitter {
      * and the sum is dropped the moment the pointer goes back the other way,
      * because a leftward drag on a seam with nothing to its left is not half of a
      * rightward one and must not be banked toward the next.
+     *
+     * ⚠ AND THE GESTURE ENDS AT THE THRESHOLD, WHICH IS THE HALF THAT SHIPPED
+     * MISSING. A pull is a person moving the pointer, not stopping dead on the
+     * 12th pixel: the reopen fired and the remaining travel of the SAME gesture
+     * fell through to the resize the seam does when it is open, so a 30px pull
+     * reopened the pane and then left the remembered width at 332. That is
+     * momentum arriving as intent, and it silently rewrites a number the reader
+     * chose by dragging. Once [Pull.spent] is set, nothing else in the gesture
+     * counts; resizing resumes on the next one, when [NO_PULL] goes back in.
      */
-    fun pull(sum: Float, delta: Float): Float = if (delta <= 0f) 0f else sum + delta
+    fun pull(state: Pull, delta: Float): Pull = when {
+        state.spent -> state
+        delta <= 0f -> NO_PULL
+        else -> {
+            val travel = state.travel + delta
+            if (travel >= REOPEN_PULL) Pull(spent = true) else Pull(travel)
+        }
+    }
 
-    /** Whether that much travel is a request for the panel back. */
-    fun reopens(pull: Float): Boolean = pull >= REOPEN_PULL
+    /**
+     * Whether this step is THE one that reopens — the edge, not the condition.
+     *
+     * A render site asking "is it spent" would fire the toggle once per frame for
+     * the rest of the gesture, which is a pane that flickers shut and open under
+     * a pull that has not even finished.
+     */
+    fun fired(before: Pull, after: Pull): Boolean = !before.spent && after.spent
 
     /**
      * Which views have a list to hide, and therefore a seam and a notch at all.

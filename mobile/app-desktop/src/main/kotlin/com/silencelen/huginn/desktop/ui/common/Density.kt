@@ -1,5 +1,6 @@
 package com.silencelen.huginn.desktop.ui.common
 
+import androidx.compose.material3.DividerDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.text.TextStyle
@@ -81,6 +82,24 @@ object Frame {
 
     /** Barely rounded. A pill would be a button; this is a notch. */
     val notchCorner = 3.dp
+
+    /**
+     * How far LEFT the notch moves once the pane is shut.
+     *
+     * ⚠ THE NOTCH IS CENTRED ON A LINE, AND WHICH LINE CHANGES. Expanded, that is
+     * the seam's own rule, which runs down the middle of the 8dp strip the notch
+     * is centred in — so the two agree for free. Collapsed, the seam draws
+     * nothing and the only rule left is the RAIL's divider, which sits just
+     * outside the strip: the notch stayed where it was and the line came out
+     * through its left edge, so it read as hanging off the divider rather than
+     * riding it.
+     *
+     * Written as the two halves it is made of rather than as a number, because
+     * that is what it has to keep agreeing with: half the seam gets the notch to
+     * the strip's leading edge, and half the divider's own thickness gets it onto
+     * the middle of the line. Change either and this follows.
+     */
+    val notchCollapsedShift = splitterHit / 2 + DividerDefaults.Thickness / 2
 
     /** The chevron inside it. Sized to the tab, not to the rail's 20dp icons. */
     val notchChevron = 14.dp
