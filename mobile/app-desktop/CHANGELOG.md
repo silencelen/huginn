@@ -1,5 +1,12 @@
 # Huginn Desktop changelog
 
+## 0.18.0
+
+- **The installer wears the house's face.** The wizard's side panel is now the
+  raven in bone on Huginn's own dark ground instead of the stock blue Windows
+  art. The bitmap is generated from the brand master by `assets/brand/generate.sh`,
+  so it stays in step if the mark ever changes.
+
 ## 0.17.0
 
 The list pane gets a way out, questions stop covering the terminal, and the
