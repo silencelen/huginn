@@ -77,6 +77,7 @@ import com.silencelen.huginn.data.HuginnClient
 import com.silencelen.huginn.desktop.AppStore
 import com.silencelen.huginn.desktop.SessionController
 import com.silencelen.huginn.desktop.SessionTab
+import com.silencelen.huginn.desktop.face
 import com.silencelen.huginn.desktop.attach.AttachButton
 import com.silencelen.huginn.desktop.attach.AttachChip
 import com.silencelen.huginn.desktop.attach.AttachFilePicker
@@ -112,6 +113,7 @@ import com.silencelen.huginn.ui.ModelLabels
 import com.silencelen.huginn.ui.NewestPill
 import com.silencelen.huginn.ui.onScrollInput
 import com.silencelen.huginn.ui.PromptCard
+import com.silencelen.huginn.ui.PromptGate
 import com.silencelen.huginn.ui.ScratchpadRefBadge
 import com.silencelen.huginn.ui.ScratchpadRules
 import com.silencelen.huginn.ui.SkiaCellPainter
@@ -324,46 +326,50 @@ fun SessionView(store: AppStore, name: String) {
             SuggestionChips(suggestions, onPick = setDraft, modifier = rememberEdgeFade())
         }
 
-        // THE PROMPT LIVES OUTSIDE THE TABS, which is the point: a question is the
-        // one moment a reader must act, and making them find the Screen tab to
-        // click "1" while reading that very question in the transcript is a tab
-        // switch charged for nothing. The phone puts it in both tabs deliberately;
-        // one card below both is the same promise with one copy of the code.
+        // THE PROMPT LIVES OUTSIDE THE TABS — and on every face but one.
+        //
+        // OUTSIDE THE TABS, because a question is the one moment a reader must
+        // act, and making them find the Screen tab to click "1" while reading that
+        // very question in the transcript is a tab switch charged for nothing. One
+        // card below the tab body is that promise with one copy of the code.
+        //
+        // NOT ON THE SCREEN FACE, which is not in tension with the above: there the
+        // tab switch has already happened, and the terminal below IS the dialog —
+        // drawn by Claude Code itself, with every part of a multi-part question
+        // steppable in a way a row of buttons cannot drive. The steering card
+        // ("Answer on the Screen tab") is what made the old behaviour indefensible:
+        // it sends the reader to the pane, and the card then FOLLOWED them there
+        // and covered the very terminal it had just sent them to use. Which faces
+        // draw it is [PromptGate]'s to say, shared with the phone so the two
+        // clients cannot drift.
+        //
+        // BELOW THE TAB BODY, NOT OVER IT, on the faces that do draw it. Overlaying
+        // stopped the resize but hid what was underneath — one problem traded for
+        // another. It costs real height, and that is now free of consequence: the
+        // two faces that draw it are the transcript and the overview, and neither
+        // measures itself into tmux rows. Only the Screen face did, which was the
+        // other half of why it was the wrong place for a card.
         //
         // The card itself is the SHARED one (:ui PromptCards.kt) — one
-        // implementation for both shells; only the answer plumbing stays here.
-        // When the pane scrape cannot read the dialog but the hook knows a
-        // question is waiting, the degraded card renders instead of nothing;
-        // its answers verify against the live pane and steer to the Screen tab
-        // when that verification cannot see a run (reason=undetected).
-        // BELOW THE PANE, NOT OVER IT. Overlaying stopped the resize but hid the
-        // terminal and the controls underneath — one problem traded for another.
-        // It sits here and genuinely costs viewport height; what makes that safe is
-        // that ScreenTab HOLDS its geometry report while a question is up, so the
-        // terminal keeps its own shape and simply scrolls inside a shorter window.
-        //
-        // It still lives outside the TAB SWITCH, which was always the point: a
-        // question is the one moment a reader must act, and making them find the
-        // Screen tab to click "1" while reading that question in the transcript is
-        // a tab switch charged for nothing.
-        //
-        // The card itself is the SHARED one (:ui PromptCards.kt) — one
-        // implementation for both shells; only the answer plumbing stays here.
-        // When the pane scrape cannot read the dialog but the hook knows a question
-        // is waiting, the degraded card renders instead of nothing.
+        // implementation for both shells; only the answer plumbing stays here. When
+        // the pane scrape cannot read the dialog but the hook knows a question is
+        // waiting, the degraded card renders instead of nothing; its answers verify
+        // against the live pane and steer to the Screen tab when that verification
+        // cannot see a run (reason=undetected).
         val prompt = screen?.prompt
-        if (prompt != null) {
-            Box(Modifier.padding(horizontal = 12.dp, vertical = 6.dp)) {
-                PromptCard(
-                    prompt = prompt,
-                    answering = answering,
-                    note = answerNote,
-                    onAnswer = controller::answer,
-                    onAnswerMulti = controller::answerMulti,
-                )
-            }
-        } else {
-            screen?.ask?.let { ask ->
+        val ask = screen?.ask
+        if (PromptGate.visible(hasQuestion = prompt != null || ask != null, face = tab.face)) {
+            if (prompt != null) {
+                Box(Modifier.padding(horizontal = 12.dp, vertical = 6.dp)) {
+                    PromptCard(
+                        prompt = prompt,
+                        answering = answering,
+                        note = answerNote,
+                        onAnswer = controller::answer,
+                        onAnswerMulti = controller::answerMulti,
+                    )
+                }
+            } else if (ask != null) {
                 Box(Modifier.padding(horizontal = 12.dp, vertical = 6.dp)) {
                     DegradedAskCard(
                         ask = ask,
@@ -371,7 +377,9 @@ fun SessionView(store: AppStore, name: String) {
                         note = answerNote,
                         onAnswer = controller::answerDegraded,
                         // A multi-part question can't be tapped from here — jump to
-                        // the Screen tab, where its parts are stepped through.
+                        // the Screen tab, where its parts are stepped through. This
+                        // card stops being drawn the moment that lands, which is the
+                        // point: it exists to hand the reader over, not to follow.
                         onOpenScreen = { controller.openTab(SessionTab.SCREEN) },
                     )
                 }
@@ -892,10 +900,16 @@ private fun ScreenTab(controller: SessionController) {
             // GEOMETRY. Two different things, and conflating them cost two
             // releases: as a plain sibling the prompt card resized the owner's real
             // terminal twice per question, and as an overlay it stopped resizing
-            // anything but covered the terminal and the controls instead. So the
-            // card sits below and the viewport genuinely shrinks — and this report
-            // is HELD while it is up, so tmux never hears about it and the pane
-            // scrolls inside the shorter window instead of re-wrapping.
+            // anything but covered the terminal and the controls instead.
+            //
+            // It is now drawn in neither form on this face — [PromptGate] withholds
+            // it here entirely, so nothing question-shaped takes height any more
+            // and the viewport no longer shrinks when a question arrives. THE HOLD
+            // BELOW STAYS ANYWAY, on the reason that outlived the card: this is the
+            // face a reader is sent to in order to ANSWER, and reporting a new
+            // geometry re-wraps the live dialog under them mid-answer. It is only
+            // ever a pause — a window resized while a question is up is reported
+            // the moment the question is gone.
             val cols = with(density) { (maxWidth.toPx() / painter.cellWidth).toInt() }
             val rows = with(density) { (maxHeight.toPx() / painter.cellHeight).toInt() }
             val promptUp = screen?.prompt != null || screen?.ask != null

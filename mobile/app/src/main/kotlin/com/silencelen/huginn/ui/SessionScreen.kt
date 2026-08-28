@@ -116,6 +116,10 @@ fun SessionScreen(
      */
     overviewPane: @Composable () -> Unit = {},
 ) {
+    // The tab index in the form the shared rules reason about, so "which face is
+    // showing" is answered the same way here as it is on the desktop rather than
+    // by a `tab == 1` written out per render site.
+    val face = SessionFace.ofTabIndex(tab)
     Column(Modifier.fillMaxSize()) {
         TabRow(selectedTabIndex = tab) {
             Tab(selected = tab == 0, onClick = { onTab(0) }, text = { Text("Conversation") })
@@ -145,7 +149,12 @@ fun SessionScreen(
                     name = name,
                     page = transcript,
                     error = transcriptError,
-                    prompt = screen?.prompt,
+                    // Through the gate rather than straight from the pane: this
+                    // face draws the card, the Screen face does not, and the rule
+                    // that decides is the one the desktop reads too.
+                    prompt = screen?.prompt?.takeIf {
+                        PromptGate.visible(hasQuestion = true, face = face)
+                    },
                     spinner = screen?.spinner,
                     statusLines = screen?.statusLines ?: emptyList(),
                     transientLine = screen?.transientLine,
@@ -191,8 +200,6 @@ fun SessionScreen(
                     onLive = onLive,
                     micGranted = micGranted,
                     onRequestMic = onRequestMic,
-                    onAnswerPrompt = onAnswerPrompt,
-                    onAnswerMulti = onAnswerMulti,
                     onForceResize = onForceResize,
                 )
             }
