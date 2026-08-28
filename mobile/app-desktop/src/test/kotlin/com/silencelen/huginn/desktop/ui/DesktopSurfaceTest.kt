@@ -16,6 +16,8 @@ import com.silencelen.huginn.desktop.ui.common.clickSelection
 import com.silencelen.huginn.desktop.ui.common.connectionTip
 import com.silencelen.huginn.desktop.ui.common.humanDuration
 import com.silencelen.huginn.desktop.ui.common.labelsOf
+import com.silencelen.huginn.desktop.ui.common.noChatOpenCopy
+import com.silencelen.huginn.desktop.ui.common.noSessionOpenCopy
 import com.silencelen.huginn.desktop.ui.common.opensOnClick
 import com.silencelen.huginn.desktop.ui.common.railCountTip
 import com.silencelen.huginn.desktop.ui.common.sessionMenu
@@ -422,6 +424,54 @@ class DesktopSurfaceTest {
             Splitter.detailWidth(1280f, 52f, Splitter.MAX, collapsed = true) >
                 Splitter.detailWidth(1280f, 52f, Splitter.MIN, collapsed = false),
         )
+    }
+
+    // ------------------------------------------- what an empty pane may say
+    //
+    // ⚠ THE STALE SENTENCE IS INVISIBLE. With the list shut, both empty states
+    // went on giving directions to it — "pick one on the left", "every tmux
+    // session on the host is on the left", "walk the list", "right-click to
+    // rename". Nothing crashes and nothing draws wrong; a screenshot looks
+    // entirely correct unless you already know the pane is not there. The reader
+    // looks left, finds a nav rail, and concludes the client is broken rather
+    // than that they closed something.
+
+    @Test
+    fun `an empty pane never points at a list that is not there`() {
+        listOf(noChatOpenCopy(true), noSessionOpenCopy(true)).forEach { copy ->
+            val said = (copy.sentence + " " + copy.routes.joinToString(" ") { "${it.first} ${it.second}" })
+                .lowercase()
+            assertFalse(said.contains("on the left"), said)
+            assertFalse(said.contains("walk the list"), said)
+            // The row menu hangs off a LIST ROW; with the list shut there is
+            // nothing on screen to open it on.
+            assertFalse(said.contains("right-click"), said)
+            // And it has to say how to get the pane back, or the copy has simply
+            // gone quiet about the one thing the reader needs.
+            assertTrue(said.contains("ctrl b"), said)
+            assertTrue(said.contains("notch"), said)
+        }
+    }
+
+    @Test
+    fun `the way back it names is a chord the app really has`() {
+        // A route row is a promise about a key. Naming one the table does not
+        // carry is the same class of dead end as a binding with no keyName.
+        val named = (noChatOpenCopy(true).routes + noSessionOpenCopy(true).routes).map { it.first }.toSet()
+        val claimed = SHORTCUT_HELP.map { it.first }.toSet()
+        named.filter { it.startsWith("Ctrl") }.forEach {
+            assertTrue(it in claimed, "$it is offered by an empty pane but is not in the cheat sheet")
+        }
+    }
+
+    @Test
+    fun `with the list on screen the copy is the copy it always was`() {
+        // The collapsed variant is an EXCEPTION, not a rewrite. Directions to the
+        // pane are the right directions while the pane is there.
+        assertTrue(noChatOpenCopy(false).sentence.contains("on the left"))
+        assertTrue(noSessionOpenCopy(false).sentence.contains("on the left"))
+        assertEquals(3, noChatOpenCopy(false).routes.size)
+        assertEquals(3, noSessionOpenCopy(false).routes.size)
     }
 
     // ------------------------------------------------------- the page panel

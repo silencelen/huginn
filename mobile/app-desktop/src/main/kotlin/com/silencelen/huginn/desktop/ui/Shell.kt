@@ -26,6 +26,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.requiredSize
+import androidx.compose.foundation.layout.requiredWidth
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
@@ -81,6 +82,8 @@ import com.silencelen.huginn.desktop.ui.common.DeskType
 import com.silencelen.huginn.desktop.ui.common.Frame
 import com.silencelen.huginn.desktop.ui.common.NothingOpen
 import com.silencelen.huginn.desktop.ui.common.Selection
+import com.silencelen.huginn.desktop.ui.common.noChatOpenCopy
+import com.silencelen.huginn.desktop.ui.common.noSessionOpenCopy
 import com.silencelen.huginn.desktop.ui.common.SessionVerbs
 import com.silencelen.huginn.desktop.ui.common.Space
 import com.silencelen.huginn.desktop.ui.common.Tints
@@ -248,19 +251,31 @@ fun Shell(store: AppStore) {
                     // TWO BOXES, and the inner one is the reason it slides rather
                     // than squashes. The outer is what the Row measures, so it is
                     // what narrows to nothing; the inner holds the list at its real
-                    // width throughout and the clip eats the difference. One box
-                    // would re-wrap every row on the way out — two hundred titles
-                    // re-laid-out per frame to say "gone", and the last thing the
-                    // reader sees of the pane is it turning into ellipses.
+                    // width throughout and the clip eats the difference.
                     //
-                    // It closes toward the RAIL (default TopStart), which keeps the
-                    // names — the left-hand column of every list here — visible
-                    // longest, and leaves the meta on the right to go first.
+                    // ⚠⚠ `requiredWidth`, NEVER `width`, AND IT SHIPPED WRONG ONCE.
+                    // `Modifier.width` is a PREFERENCE: it is coerced into whatever
+                    // constraints arrive, so an inner box asking for 320dp inside an
+                    // outer that has animated down to 90 measures 90 — and the whole
+                    // list re-lays-out on every frame of the slide. The list header's
+                    // "+ Ask" stacked vertically and every title re-truncated, sixty
+                    // times a second, to say "gone". `requiredWidth` ignores the
+                    // incoming constraints, which is exactly what a thing being
+                    // clipped rather than resized needs. It is the same trap the
+                    // notch below documents and solves with `requiredSize`, one
+                    // screen up and one release earlier.
+                    //
+                    // TopStart is load-bearing now rather than a default worth
+                    // leaving implicit: with an oversized child, the alignment is
+                    // what decides which end gets eaten. Pinned to the start, the
+                    // pane closes toward the RAIL and the names — the left-hand
+                    // column of every list here — are the last thing to go.
                     Box(
                         Modifier.width((listWidth * openFraction).dp).fillMaxHeight()
                             .clipToBounds(),
+                        contentAlignment = Alignment.TopStart,
                     ) {
-                        Box(Modifier.width(listWidth.dp).fillMaxHeight()) {
+                        Box(Modifier.requiredWidth(listWidth.dp).fillMaxHeight()) {
                             when (view) {
                                 View.CHATS -> Column(Modifier.fillMaxSize()) {
                                     // First-launch offer, once and dismissible: the
@@ -360,15 +375,10 @@ fun Shell(store: AppStore) {
                             if (open != null) {
                                 ChatView(store.client, open)
                             } else {
-                                NothingOpen(
-                                    "No chat open",
-                                    "Pick one on the left, or start a new one. Ask reads and reasons; Act can change things on the host.",
-                                    listOf(
-                                        "Ctrl N" to "new Ask chat",
-                                        "Ctrl Shift N" to "new Act chat",
-                                        "Ctrl K" to "find one by name",
-                                    ),
-                                )
+                                // The copy knows whether the list it points at is
+                                // on screen — see [noChatOpenCopy].
+                                val copy = noChatOpenCopy(listCollapsed)
+                                NothingOpen("No chat open", copy.sentence, copy.routes)
                             }
                         }
 
@@ -380,15 +390,8 @@ fun Shell(store: AppStore) {
                             if (open != null) {
                                 SessionView(store, open)
                             } else {
-                                NothingOpen(
-                                    "No session open",
-                                    "Every tmux session on the host is on the left. Opening one shows its conversation and its live screen.",
-                                    listOf(
-                                        "Ctrl K" to "find one by name",
-                                        "Alt ↑ / ↓" to "walk the list",
-                                        "Right-click" to "rename, interrupt, end",
-                                    ),
-                                )
+                                val copy = noSessionOpenCopy(listCollapsed)
+                                NothingOpen("No session open", copy.sentence, copy.routes)
                             }
                         }
 
@@ -804,15 +807,26 @@ private fun Seam(
                 ),
             contentAlignment = Alignment.Center,
         ) {
-            // The line thickens on hover rather than lighting up: the seam should
-            // say "grabbable", not "selected".
-            Box(
-                Modifier.width(if (hovered) 2.dp else 1.dp).fillMaxHeight()
-                    .background(
-                        if (hovered) MaterialTheme.colorScheme.outline
-                        else MaterialTheme.colorScheme.outlineVariant
-                    )
-            )
+            // ONE RULE, NOT TWO. With the pane shut the seam sits against the
+            // rail's own VerticalDivider — two hairlines 5px apart, which reads as
+            // a double rule somebody forgot to clean up rather than as a seam. So
+            // the seam draws nothing while collapsed: the rail's divider is the
+            // line, the notch sits on it, and the 8dp strip goes on being the drag
+            // and double-click target while drawing no ink at all. The notch is
+            // what marks where it is, which is the whole reason a hidden target is
+            // findable.
+            //
+            // Expanded, unchanged: the line thickens on hover rather than lighting
+            // up, because the seam should say "grabbable", not "selected".
+            if (!collapsed) {
+                Box(
+                    Modifier.width(if (hovered) 2.dp else 1.dp).fillMaxHeight()
+                        .background(
+                            if (hovered) MaterialTheme.colorScheme.outline
+                            else MaterialTheme.colorScheme.outlineVariant
+                        )
+                )
+            }
         }
         SeamNotch(collapsed = collapsed, onToggle = onToggle)
     }
