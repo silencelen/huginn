@@ -116,12 +116,12 @@ class ShortcutsTest {
         // depends on having focus in a text field. They are listed here anyway,
         // since "how do I send this" is the first thing anyone needs and the last
         // place they would look is a table of window-level shortcuts.
-        assertEquals(15, SHORTCUT_HELP.size)
+        assertEquals(16, SHORTCUT_HELP.size)
         assertTrue(SHORTCUT_HELP.all { it.first.isNotBlank() && it.second.isNotBlank() })
         // The pointer half of the model. It is listed beside the keys because the
         // verb surface, the state legend and multi-select all live on the mouse,
         // and none of them is discoverable if nothing says so.
-        assertEquals(5, POINTER_HELP.size)
+        assertEquals(6, POINTER_HELP.size)
         assertTrue(POINTER_HELP.all { it.first.isNotBlank() && it.second.isNotBlank() })
     }
 
@@ -133,6 +133,64 @@ class ShortcutsTest {
         // Resizing the pane you are reading is the one layout change worth having
         // without leaving the composer — the same argument as Alt+arrow.
         assertEquals(Shortcut.SPLIT_WIDER, match(true, false, false, "RBRACKET", typing = true))
+    }
+
+    // -------------------------------------------------------- the list pane
+
+    @Test
+    fun `Ctrl B hides the list, and keeps working mid-sentence`() {
+        assertEquals(Shortcut.TOGGLE_LIST, match(true, false, false, "B"))
+        // Same argument as the brackets: this is the seam, and hiding the list to
+        // read a wide transcript is a layout change you want without leaving the
+        // composer. It is also safe there in a way Ctrl+digit is not — see below.
+        assertEquals(Shortcut.TOGGLE_LIST, match(true, false, false, "B", typing = true))
+        // A bare B is a letter somebody is typing, and Ctrl+Shift+B is nothing.
+        assertNull(match(false, false, false, "B"))
+        assertNull(match(true, true, false, "B"))
+        assertNull(match(false, false, true, "B"))
+    }
+
+    @Test
+    fun `the chord is actually reachable from a real key`() {
+        // ⚠ A BINDING IN `match` WITH NO `keyName` ENTRY IS DEAD CODE that reads
+        // like a working shortcut: the table would answer TOGGLE_LIST for "B" and
+        // nothing would ever hand it a "B" to answer about. The one test that can
+        // tell the difference is the round trip.
+        assertEquals("B", keyName(androidx.compose.ui.input.key.Key.B))
+        assertEquals(
+            Shortcut.TOGGLE_LIST,
+            keyName(androidx.compose.ui.input.key.Key.B)?.let { match(true, false, false, it) },
+        )
+    }
+
+    @Test
+    fun `Ctrl B leaves no character behind, which is why the letters never needed the digit fix`() {
+        // ⚠ VERIFIED AGAINST THE TOOLKIT, not assumed. Compose Foundation 1.7.3's
+        // desktop `isTypedEvent` requires the AWT KEY_TYPED char to be PRINTABLE —
+        // it rejects `Character.isISOControl`, 0xFFFF and the SPECIALS block — so
+        // the 0x02 that Ctrl+B delivers on X11 never becomes a CommitTextCommand at
+        // all. That is the whole reason Ctrl+K and Ctrl+N have shipped for weeks
+        // without leaking into the composer while Ctrl+1 typed "1" into the page
+        // editor and the autosave committed it.
+        //
+        // So this asserts the NEGATIVE deliberately: swallowing control codes here
+        // would be swallowing something no field was ever going to insert.
+        assertFalse(isChordDebris(ctrl = true, alt = false, codePoint = 2), "Ctrl+B is STX")
+        assertFalse(isChordDebris(ctrl = true, alt = false, codePoint = 11), "Ctrl+K is VT")
+        // The printable ones are still ours to eat.
+        assertTrue(isChordDebris(ctrl = true, alt = false, codePoint = '1'.code))
+    }
+
+    @Test
+    fun `the palette offers the list toggle by name`() {
+        // The chord is discoverable from the cheat sheet and the notch is
+        // discoverable by looking at the seam; the palette is how somebody who
+        // knows the WORD finds it without knowing either.
+        val items = paletteItems(emptyList(), emptyList())
+        val verb = items.filterIsInstance<PaletteItem.Verb>()
+            .singleOrNull { it.shortcut == Shortcut.TOGGLE_LIST }
+        assertTrue(verb != null, "the palette must offer it")
+        assertTrue(filterPalette(items, "list").contains(verb), "and find it by the obvious word")
     }
 
     // ------------------------------------------------------------- palette

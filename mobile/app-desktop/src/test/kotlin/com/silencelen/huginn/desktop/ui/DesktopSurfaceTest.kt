@@ -342,6 +342,88 @@ class DesktopSurfaceTest {
         assertTrue(out.maximized)
     }
 
+    // ------------------------------------------------------ the shut seam
+    //
+    // A collapsed seam keeps its 8dp and its notch, so the way back is exactly
+    // where the way out was. What changes is what a DRAG means there: with no pane
+    // to resize, an outward pull is the second way to reopen — and it has to be
+    // told apart from the twitch that lands on a 1px line while reaching past it.
+
+    @Test
+    fun `a pull is measured in distance, not in pointer speed`() {
+        // ⚠ THE OBVIOUS IMPLEMENTATION IS WRONG. Thresholding a single drag delta
+        // thresholds SPEED: a slow deliberate pull delivers 2px per frame and would
+        // never reopen anything, while a flick delivers 40 in one and always would.
+        // Small deltas have to add up.
+        var pull = 0f
+        repeat(5) { pull = Splitter.pull(pull, 3f) }
+        assertEquals(15f, pull)
+        assertTrue(Splitter.reopens(pull), "five slow frames are still a deliberate pull")
+
+        // …and one decisive frame is enough on its own.
+        assertTrue(Splitter.reopens(Splitter.pull(0f, 40f)))
+    }
+
+    @Test
+    fun `a twitch on the line is not a request for the pane back`() {
+        assertFalse(Splitter.reopens(Splitter.pull(0f, 1f)))
+        assertFalse(
+            Splitter.reopens(Splitter.pull(0f, Splitter.REOPEN_PULL - 1f)),
+            "the pull has to leave the seam it started on",
+        )
+        assertTrue(Splitter.reopens(Splitter.pull(0f, Splitter.REOPEN_PULL)))
+    }
+
+    @Test
+    fun `going back the other way spends the pull rather than banking it`() {
+        // A leftward drag on a seam with nothing to its left is not half of a
+        // rightward one. Banking it would mean a wobble adds up to a reopen.
+        var pull = 0f
+        pull = Splitter.pull(pull, 9f)
+        pull = Splitter.pull(pull, -9f)
+        assertEquals(0f, pull)
+        assertFalse(Splitter.reopens(pull))
+        // And the sum starts again from there rather than from where it was.
+        pull = Splitter.pull(pull, 5f)
+        assertFalse(Splitter.reopens(pull))
+    }
+
+    @Test
+    fun `the seam exists exactly where a list does`() {
+        // ONE definition, asked by the frame that draws the notch and by the window
+        // that binds Ctrl+B. Two copies would drift, and the one that drifts is
+        // always the one that decides whether a key press does anything.
+        assertTrue(Splitter.showsList(View.CHATS))
+        assertTrue(Splitter.showsList(View.SESSIONS))
+        assertTrue(Splitter.showsList(View.SCRATCHPADS), "pages are a list and a detail too")
+        assertFalse(Splitter.showsList(View.ROUNDS))
+        assertFalse(Splitter.showsList(View.DEVICES))
+        assertFalse(Splitter.showsList(View.STATUS))
+        assertFalse(Splitter.showsList(View.SETTINGS))
+    }
+
+    @Test
+    fun `a shut list gives its width to the detail pane`() {
+        // ⚠ WHAT THIS PREVENTS is invisible: the page panel needs 900dp of DETAIL
+        // pane, and subtracting a collapsed list's stored width anyway is how a
+        // 1280dp window with the list hidden gets told it has 908dp when it has
+        // 1228 — or, one size down, refuses to draw a panel with the room for it
+        // plainly on screen.
+        assertEquals(
+            908f,
+            Splitter.detailWidth(windowWidth = 1280f, railWidth = 52f, listWidth = 320f, collapsed = false),
+        )
+        assertEquals(
+            1228f,
+            Splitter.detailWidth(windowWidth = 1280f, railWidth = 52f, listWidth = 320f, collapsed = true),
+        )
+        // The rail is always there; only the list can go.
+        assertTrue(
+            Splitter.detailWidth(1280f, 52f, Splitter.MAX, collapsed = true) >
+                Splitter.detailWidth(1280f, 52f, Splitter.MIN, collapsed = false),
+        )
+    }
+
     // ------------------------------------------------------- the page panel
     //
     // ⚠ ESC USED TO CONSULT THE FLAG ALONE. `store.padPanel` says the reader
