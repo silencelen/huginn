@@ -134,8 +134,9 @@ talking to `huginn-appd` — a zero-dependency Node daemon on the host — over 
 
 Start at [`mobile/README.md`](mobile/README.md) for what they do and how to build them,
 and read [`docs/SECURITY.md`](docs/SECURITY.md) **before** deploying the daemon — it is a
-second root-equivalent credential and the docs treat it that way. The older Electron
-desktop client ([`desktop/`](desktop/)) is deprecated in favor of the Compose one.
+second root-equivalent credential and the docs treat it that way. There was an older
+Electron desktop client; it was retired and deleted on 2026-08-27 — the Compose one at
+`mobile/app-desktop` is the desktop client.
 
 ## 🤔 Isn't this just `ssh` + `tmux`?
 
@@ -150,7 +151,6 @@ Yes — and that's the point. Huginn is `ssh` + `tmux` + `claude` with the sharp
 | [`server/appd/`](server/appd/) | the phone daemon: sessions, chats, push, prompts-as-buttons over the tailnet |
 | [`client/`](client/) | `huginn.ps1` + `huginn.sh` + installers + an optional Termux detach button |
 | [`mobile/`](mobile/) | the Kotlin clients and the code they share: `:core` (logic + HTTP), `:ui` (Compose), `:app` (Android — [changelog](mobile/CHANGELOG.md)), `:app-desktop` (Windows/Linux — [changelog](mobile/app-desktop/CHANGELOG.md)) |
-| [`desktop/`](desktop/) | the Electron desktop client — **[deprecated](desktop/DEPRECATED.md)**, superseded by `mobile/app-desktop` |
 | [`docs/`](docs/) | [Setup](docs/SETUP.md) · [Usage](docs/USAGE.md) · [Architecture](docs/ARCHITECTURE.md) · [Adding a feature](docs/ADDING-A-FEATURE.md) · [Desktop migration](docs/DESKTOP-MIGRATION.md) · [FAQ](docs/FAQ.md) · [Security](docs/SECURITY.md) |
 
 ## 🧠 Memory (the other raven)

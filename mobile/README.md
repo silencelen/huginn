@@ -212,7 +212,7 @@ root SSH key: if a device carrying it is lost, rotate the file, restart the unit
 | GET | `/v1/models` | the pickable model list, discovered from the installed Claude Code binary |
 | POST | `/v1/account/login/code` | pastes the OAuth code into the login pane and waits for credentials to change |
 | GET | `/v1/account/login/state` | how the interactive sign-in is going |
-| GET | `/v1/desktop/manifest` · `/v1/desktop-kt/manifest` | the desktop clients' self-update feeds (Electron / Compose — [never the same channel](#the-desktop-client)) |
+| GET | `/v1/desktop-kt/manifest` | the desktop client's appd-side update feed — the transition path for installed 0.5.x clients; newer ones fetch from the [GitHub release](#the-desktop-client) |
 | GET | `/v1/sessions/<name>/suggestions` | suggested next messages at a turn boundary (cached by transcript size) |
 | GET | `/v1/chats/<id>/suggestions` | the same, for a chat |
 | GET | `/v1/sessions/<name>/agents` | the individual agents behind a fan-out |
@@ -297,13 +297,13 @@ re-fetched automatically), and Linux `makensis` wraps the result. The script
 proves the chain by installing the .exe under wine and launching what it
 installed.
 
-**`/v1/desktop-kt` is NOT `/v1/desktop`.** The latter is the Electron client's
-channel and the owner is running that client; publishing Compose artifacts there
-would offer a running application an update into a different program. The
-separation runs all the way down — separate serving directory, separate manifest,
-separate Windows install path and uninstall key — and the release script asserts
-the Electron channel is still intact on every run. See
-`docs/DESKTOP-MIGRATION.md` for what cutover involves.
+**`/v1/desktop-kt` is the only desktop channel.** There was a second one,
+`/v1/desktop`, belonging to the Electron client; that client was deleted on
+2026-08-27 by owner directive and the daemon stopped routing the path in appd
+2.81.0, so a GET there is now an ordinary 404. The channel keeps its `-kt` name
+rather than moving into the vacancy, because installed 0.5.x clients still poll
+this exact path. See `docs/DESKTOP-MIGRATION.md` for how the migration ran and
+how it ended.
 
 ## Modules
 
@@ -312,8 +312,8 @@ the Electron channel is still intact on every run. See
   markdown/syntax renderers, and the pure UI rules (local echo, transcript
   grouping, live-input diffing, voice loop, watch cycle). No Android imports —
   which is what lets `:app-desktop` consume the same code the phone runs, instead
-  of the hand-ported TypeScript the deprecated Electron client keeps in
-  `desktop/src/shared/core/`.
+  of the hand-ported TypeScript the retired Electron client carried its own copy
+  of.
 - **`:ui`** — Compose Multiplatform (`androidTarget` + `jvm`), the shared LOOK:
   the theme (one palette, one syntax set), the markdown/code renderer, the
   transcript rows (user bubble, thinking, tool, ask, subagent group, orphan
