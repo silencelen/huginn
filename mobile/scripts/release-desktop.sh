@@ -9,21 +9,10 @@
 # DATA_DIR/desktop-kt by local moves and verified back through the wire with the
 # real Bearer token.
 #
-# ---------------------------------------------------------------------------
-# THE OTHER CHANNEL. /v1/desktop belongs to the ELECTRON client, which the owner
-# is running (0.4.0) and which self-updates from it. This script must never write
-# there: an Electron client that "updates" into a Compose build has been replaced
-# by a different application, silently, from its own update prompt. The two
-# directories, the two manifests, the two installers' registry keys and install
-# paths are all disjoint (see lib/desktop.js and packaging/huginn-desktop-kt.nsi).
-#
-# CUTOVER, when parity arrives, is deliberately NOT a directory rename — a rename
-# is exactly the accident this separation exists to prevent. It is: ship one final
-# Electron release whose only change is a notice; then have the Compose installer
-# take over the Electron install path and uninstall key in the same release that
-# starts publishing to /v1/desktop; then retire /v1/desktop-kt. Nothing about that
-# sequence should be improvised on the day.
-# ---------------------------------------------------------------------------
+# /v1/desktop was the ELECTRON client's channel. That client was deleted on
+# 2026-08-27 by owner directive — strictly Compose — and the daemon stopped
+# routing the path in appd 2.81.0. This script is the only desktop release path
+# there is now.
 #
 # Usage: scripts/release-desktop.sh [--linux-only] [--skip-tests] [--skip-wine-install]
 set -euo pipefail
@@ -614,14 +603,6 @@ for f in "$DIST/$DEB" "$DIST/$EXE"; do
   [ "$LEN" = "$WANT" ] || { echo "FAIL: $b served $LEN bytes, built $WANT" >&2; exit 1; }
   echo "  $b OK ($LEN bytes)"
 done
-
-# The ELECTRON channel is untouched, and this asserts it rather than assuming it.
-# It is the one failure in this script that would reach the owner's running
-# desktop app, so it is checked on every release.
-ELECTRON=$(curl -sf -H "Authorization: Bearer $TOKEN" "$BASE_URL/v1/desktop/manifest" \
-  | node -p "try{JSON.parse(require('fs').readFileSync(0,'utf8')).version||''}catch{''}" || true)
-[ -n "$ELECTRON" ] || { echo "FAIL: /v1/desktop stopped serving a manifest" >&2; exit 1; }
-echo "  /v1/desktop still serves the Electron client: $ELECTRON (untouched)"
 
 # ---------------------------------------- GitHub Release (the update source now)
 # Publish to GitHub FIRST, because the client probe below fetches from GitHub. Tag
