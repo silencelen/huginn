@@ -83,8 +83,6 @@ fun TerminalScreen(
     onLive: (LiveInput.Op) -> Unit,
     micGranted: Boolean,
     onRequestMic: () -> Unit,
-    onAnswerPrompt: (Int) -> Unit,
-    onAnswerMulti: (List<Int>) -> Unit,
     onForceResize: () -> Unit,
 ) {
     val density = LocalDensity.current
@@ -138,10 +136,15 @@ fun TerminalScreen(
             // As a plain sibling the prompt card resized it twice per question and
             // the pane re-wrapped while the reader was reading the question. As an
             // OVERLAY it stopped resizing anything and covered the terminal and the
-            // controls instead. So: the card sits below and the viewport genuinely
-            // shrinks, but the report is HELD while it is up. The pane keeps its
-            // tmux size and scrolls inside the smaller viewport, which is what the
-            // scroll state below is for.
+            // controls instead.
+            //
+            // This tab now draws NEITHER: the card belongs to the conversation, so
+            // nothing question-shaped takes height here and the viewport no longer
+            // shrinks when one arrives. THE HOLD BELOW STAYS ANYWAY, on the reason
+            // that outlived the card — this is the tab a reader answers on, and
+            // reporting a new geometry re-wraps the live dialog under them while
+            // they are reading it. It is only ever a pause: a pinch-zoom during a
+            // question lands the moment the question is gone.
             val cols = with(density) { (maxWidth.toPx() / painter.cellWidth).toInt() }.coerceIn(20, 300)
             val rows = with(density) { (maxHeight.toPx() / painter.cellHeight).toInt() }.coerceIn(10, 200)
             val promptUp = screen?.prompt != null
@@ -207,18 +210,19 @@ fun TerminalScreen(
             }
         }
 
-        // Below the pane, not over it: a card floating on top hid the terminal and
-        // the controls under it. It costs viewport height, and that is fine —
-        // the geometry report is held while it is up, so the terminal itself never
-        // changes shape.
+        // NO QUESTION CARD HERE. A detected prompt becomes buttons on the
+        // CONVERSATION tab, where turning "press 1/2/3" into taps is the real win
+        // over a terminal — but this screen IS the terminal, and the dialog is
+        // already on it, drawn by Claude Code and steppable part by part in a way
+        // a row of buttons cannot drive.
         //
-        // A detected choice prompt becomes buttons. This is the single biggest
-        // phone win over a terminal: answering "1/2/3" without hunting for digits
-        // on a soft keyboard while the TUI redraws under your thumb.
-        screen?.prompt?.let { prompt ->
-            PromptCard(prompt, onAnswerPrompt, onAnswerMulti)
-        }
-
+        // Which is why people come to this tab in the first place: it is the one
+        // place a question the buttons cannot answer CAN be answered, and the app
+        // says so in as many words in Settings. The card then followed them here
+        // and covered the pane they had come to use — a second copy of the
+        // question, sitting on top of the real one. [PromptGate] is where that
+        // rule lives, and SessionScreen is where it is applied; this composable
+        // simply has no card to gate.
         KeyRow(onSendKeys, liveTyping, onToggleLive = { liveTyping = !liveTyping })
 
         LiveKeyboardField(

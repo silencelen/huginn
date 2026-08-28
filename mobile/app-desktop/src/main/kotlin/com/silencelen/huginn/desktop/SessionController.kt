@@ -12,6 +12,8 @@ import com.silencelen.huginn.data.SessionOverview
 import com.silencelen.huginn.data.TranscriptPage
 import com.silencelen.huginn.ui.LiveInput
 import com.silencelen.huginn.ui.LocalEcho
+import com.silencelen.huginn.ui.PromptGate
+import com.silencelen.huginn.ui.SessionFace
 import com.silencelen.huginn.ui.isTranscriptRestart
 import com.silencelen.huginn.ui.mergeTranscriptPage
 import com.silencelen.huginn.ui.prependTranscriptPage
@@ -35,6 +37,19 @@ import kotlinx.coroutines.launch
 
 /** Which face of one session is on screen. All stay alive; only one is selected. */
 enum class SessionTab { CONVERSATION, SCREEN, OVERVIEW }
+
+/**
+ * The same thing in the form `:core` reasons about, so a rule that has to hold on
+ * BOTH clients is written once against [SessionFace] rather than once here and
+ * once against the phone's tab index. This mapping is the whole of what is
+ * desktop-specific about it.
+ */
+val SessionTab.face: SessionFace
+    get() = when (this) {
+        SessionTab.CONVERSATION -> SessionFace.CONVERSATION
+        SessionTab.SCREEN -> SessionFace.SCREEN
+        SessionTab.OVERVIEW -> SessionFace.OVERVIEW
+    }
 
 /**
  * One open session: its Claude transcript, its live pane, and the tmux size lease
@@ -300,6 +315,15 @@ class SessionController(
      * poll reads.
      */
     fun openTab(t: SessionTab) {
+        // THE NOTE BELONGS TO THE CARD, so it goes where the card goes. It is the
+        // card's own red line ("the question moved on", the daemon's refusal), and
+        // on a face that draws no card it has no surface at all — it would simply
+        // sit in the state until the reader came BACK to the conversation, where a
+        // complaint about an answer attempt from before they were steered away is
+        // stale and, if they then answered in the terminal, wrong. The steering
+        // card's whole point is to move you to the pane; nothing of it should be
+        // waiting when you return.
+        if (!PromptGate.visible(hasQuestion = true, face = t.face)) _answerNote.value = null
         _tab.value = t
     }
 
@@ -552,10 +576,16 @@ class SessionController(
             runCatching { call(fingerprint) }
                 .onSuccess { r ->
                     if (!r.ok) {
-                        _answerNote.value = r.error ?: "The question moved on."
                         // The dialog is on screen but unreadable to the scrape:
-                        // the Screen tab is the one place it CAN be answered.
-                        if (r.reason == "undetected") _tab.value = SessionTab.SCREEN
+                        // the Screen tab is the one place it CAN be answered, so
+                        // the refusal STEERS there instead of explaining itself.
+                        // The note is not also set for this case, because the
+                        // Screen face draws no card to put it in — it would only
+                        // surface later, back on the conversation, as a complaint
+                        // about an attempt the reader has since answered by hand.
+                        // Through openTab so both routes to the pane behave alike.
+                        if (r.reason == "undetected") openTab(SessionTab.SCREEN)
+                        else _answerNote.value = r.error ?: "The question moved on."
                     }
                 }
                 // A 409 arrives here, carrying the daemon's own sentence. It is an
