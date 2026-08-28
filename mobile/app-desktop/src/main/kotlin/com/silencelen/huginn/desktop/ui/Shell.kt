@@ -29,6 +29,7 @@ import androidx.compose.foundation.layout.requiredSize
 import androidx.compose.foundation.layout.requiredWidth
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.wrapContentWidth
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
@@ -262,20 +263,40 @@ fun Shell(store: AppStore) {
                     // times a second, to say "gone". `requiredWidth` ignores the
                     // incoming constraints, which is exactly what a thing being
                     // clipped rather than resized needs. It is the same trap the
-                    // notch below documents and solves with `requiredSize`, one
-                    // screen up and one release earlier.
+                    // notch below documents and solves with `requiredSize`.
                     //
-                    // TopStart is load-bearing now rather than a default worth
-                    // leaving implicit: with an oversized child, the alignment is
-                    // what decides which end gets eaten. Pinned to the start, the
-                    // pane closes toward the RAIL and the names — the left-hand
-                    // column of every list here — are the last thing to go.
+                    // ⚠⚠ AND THE FIX FOR THAT ONE BROUGHT ITS OWN, WHICH ALIGNMENT
+                    // CANNOT REACH. A `requiredWidth` child VIOLATES its parent's
+                    // max width, and Compose does not simply let the overflow hang
+                    // off the end: `Placeable` coerces the reported width back into
+                    // the constraints and then places the real content at
+                    // `apparentToRealOffset` — `(coerced - measured) / 2` — so an
+                    // oversized child is silently CENTRED. The measured shift was
+                    // exactly `(320 - W) / 2` at every width. `contentAlignment`
+                    // does not help and reading it as the pin is the mistake: it
+                    // only chooses between positions the constraints can satisfy,
+                    // and this child's size is not one of them. So the pane ate its
+                    // names FIRST — "…ons 2", "…ress Huginn development notes" —
+                    // which is the opposite of the intent.
+                    //
+                    // `wrapContentWidth(Start, unbounded = true)` is the mechanism
+                    // that actually pins it: measure the child with NO width bound
+                    // (so nothing is violated and nothing re-wraps), report the
+                    // parent's width (so nothing is centred), and place the child's
+                    // start edge at zero. The overflow then hangs off the end where
+                    // the outer box's clip eats it, and the pane closes toward the
+                    // RAIL with the names — the left-hand column of every list here
+                    // — the last thing to go.
                     Box(
                         Modifier.width((listWidth * openFraction).dp).fillMaxHeight()
                             .clipToBounds(),
-                        contentAlignment = Alignment.TopStart,
                     ) {
-                        Box(Modifier.requiredWidth(listWidth.dp).fillMaxHeight()) {
+                        Box(
+                            Modifier
+                                .wrapContentWidth(align = Alignment.Start, unbounded = true)
+                                .requiredWidth(listWidth.dp)
+                                .fillMaxHeight(),
+                        ) {
                             when (view) {
                                 View.CHATS -> Column(Modifier.fillMaxSize()) {
                                     // First-launch offer, once and dismissible: the
@@ -776,10 +797,11 @@ private fun Seam(
 ) {
     val interaction = remember { MutableInteractionSource() }
     val hovered by interaction.collectIsHoveredAsState()
-    // Outward travel banked so far, and keyed on the state it belongs to: a half
-    // finished pull left over from before the pane came back must not be waiting
-    // to spend itself on the next one.
-    var pull by remember(collapsed) { mutableStateOf(0f) }
+    // The gesture in progress, reset by `onDragStarted` rather than keyed on
+    // `collapsed`: the pull that reopens FLIPS `collapsed` halfway through
+    // itself, so a key on that state would clear the very "already fired" mark
+    // that has to outlive it.
+    var pull by remember { mutableStateOf(Splitter.NO_PULL) }
     Box(Modifier.width(Frame.splitterHit).fillMaxHeight()) {
         Box(
             Modifier.fillMaxSize()
@@ -794,16 +816,24 @@ private fun Seam(
                 .draggable(
                     orientation = Orientation.Horizontal,
                     state = rememberDraggableState { delta ->
-                        if (!collapsed) {
-                            onDrag(delta)
-                        } else {
-                            pull = Splitter.pull(pull, delta)
-                            if (Splitter.reopens(pull)) {
-                                pull = 0f
-                                onToggle()
+                        when {
+                            // Whatever is left of the pull that reopened the pane.
+                            // The `collapsed` read has already flipped by now, so
+                            // without this the tail of the gesture lands on the
+                            // resize branch and nudges the width the reopen just
+                            // restored — momentum arriving as intent.
+                            pull.spent -> Unit
+                            !collapsed -> onDrag(delta)
+                            else -> {
+                                val next = Splitter.pull(pull, delta)
+                                if (Splitter.fired(pull, next)) onToggle()
+                                pull = next
                             }
                         }
                     },
+                    // A gesture is the unit here, so the accumulator belongs to
+                    // one: the next drag starts clean and resizes normally.
+                    onDragStarted = { pull = Splitter.NO_PULL },
                 ),
             contentAlignment = Alignment.Center,
         ) {
@@ -850,6 +880,14 @@ private fun Seam(
  *
  * The chevron points at what the click DOES, not at where the pane is: ‹ while the
  * list is open ("this shuts it"), › while it is shut ("this brings it back").
+ *
+ * ⚠ AND IT FOLLOWS THE LINE IT STRADDLES, WHICH MOVES. Centred in the 8dp strip
+ * the notch lands on the seam's own rule for free — but only while the seam draws
+ * one. Shut, the seam is blank and the rail's divider just outside the strip is
+ * the only rule left, so the notch has to step out to meet it or the line comes
+ * out through its left edge and the tab reads as hanging off the divider rather
+ * than riding it. [Frame.notchCollapsedShift] is that step; the offset is a
+ * layout one, so the click target goes with it.
  */
 @Composable
 private fun BoxScope.SeamNotch(collapsed: Boolean, onToggle: () -> Unit) {
@@ -861,6 +899,7 @@ private fun BoxScope.SeamNotch(collapsed: Boolean, onToggle: () -> Unit) {
     Tip(
         what,
         Modifier.align(Alignment.TopCenter)
+            .offset(x = if (collapsed) -Frame.notchCollapsedShift else 0.dp)
             .padding(top = Frame.notchInset)
             .requiredSize(width = Frame.notchWidth, height = Frame.notchHeight),
     ) {
