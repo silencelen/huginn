@@ -49,6 +49,18 @@ function assistant(id, at, blocks, usage = {}, extra = {}) {
         output_tokens: usage.o ?? 10,
         cache_read_input_tokens: usage.cr ?? 0,
         cache_creation_input_tokens: usage.cc ?? 0,
+        // The nested TTL breakdown of the flat cache_creation total, written
+        // only when a test asks for it — the records that carry no split are
+        // the case the pricing fallback exists for, and they have to stay
+        // reachable from here.
+        ...(usage.split
+          ? {
+            cache_creation: {
+              ephemeral_5m_input_tokens: usage.split[0],
+              ephemeral_1h_input_tokens: usage.split[1],
+            },
+          }
+          : {}),
         ...(usage.iters ? { iterations: usage.iters } : {}),
       },
     },
@@ -703,6 +715,162 @@ test('the overview is the header without the map', () => {
   assert.equal(o.agents, undefined);
   assert.equal(o.totals.tokens.output, 111);
   assert.ok(o.cursor.size > 0);
+});
+
+// ----------------------------------------------------------- the cost estimate
+//
+// What the session WOULD have billed at API list rates. The account is on a
+// subscription so none of it was charged — the client says so — but the tokens
+// are real and the arithmetic has to be too.
+//
+// The numbers below are exact on purpose: a rate or a bucket that drifts should
+// fail here rather than move a total by a few percent and keep rendering. The
+// load-bearing cases are the ones where a wrong answer still looks like a right
+// one — the same requestId counted twice, a cache write charged at the TTL
+// nobody recorded, and an agent's spend priced at its parent's model.
+
+test('every record is priced against the model IT names', () => {
+  resetCache();
+  const dir = tmpdir();
+  const file = write(dir, 'sce1.jsonl', [
+    userSays('go', 0),
+    assistant('r1', 1, [{ type: 'text', text: 'a' }], { i: 0, o: 1_000_000 }, { model: 'claude-opus-5' }),
+    assistant('r2', 2, [{ type: 'text', text: 'b' }], { i: 0, o: 1_000_000 }, { model: 'claude-haiku-4-5' }),
+  ]);
+  const g = sessionGraph(file, 'sce1');
+  assert.equal(g.totals.estCost.usd, 30, '$25 of opus output plus $5 of haiku output');
+  assert.deepEqual(g.totals.estCost.byModel, [
+    { model: 'claude-opus-5', usd: 25 },
+    { model: 'claude-haiku-4-5', usd: 5 },
+  ]);
+  assert.equal(g.totals.estCost.unpricedTokens, 0);
+});
+
+test('the 5m/1h cache-creation split is read, and each half billed at its own rate', () => {
+  // The nested `cache_creation` object is on every real record measured on this
+  // host, and the two TTLs are not the same price: 1.25x input against 2x. A
+  // walker that only read the flat total would have to pick one, and either
+  // pick is wrong for half the tokens.
+  resetCache();
+  const dir = tmpdir();
+  const file = write(dir, 'sce2.jsonl', [
+    userSays('go', 0),
+    assistant('r1', 1, [{ type: 'text', text: 'a' }],
+      { i: 0, o: 0, cc: 2_000_000, split: [1_000_000, 1_000_000] }, { model: 'claude-opus-5' }),
+  ]);
+  const g = sessionGraph(file, 'sce2');
+  assert.equal(g.totals.tokens.cacheCreation, 2_000_000, 'the FLAT total is still what was written');
+  assert.equal(g.totals.estCost.usd, 16.25, '$6.25 at the 5m rate plus $10 at the 1h rate');
+});
+
+test('a cache write with no split is carried as unsplit and billed at the CHEAPER rate', () => {
+  // Nothing said which TTL this was, so the estimate takes the low candidate
+  // rather than inventing spend it has no record of.
+  resetCache();
+  const dir = tmpdir();
+  const file = write(dir, 'sce3.jsonl', [
+    userSays('go', 0),
+    assistant('r1', 1, [{ type: 'text', text: 'a' }], { i: 0, o: 0, cc: 1_000_000 }, { model: 'claude-opus-5' }),
+  ]);
+  const g = sessionGraph(file, 'sce3');
+  assert.equal(g.totals.tokens.cacheCreation, 1_000_000, 'not lost on the way to the price');
+  assert.equal(g.totals.estCost.usd, 6.25, 'the 5-minute rate');
+  assert.notEqual(g.totals.estCost.usd, 10, 'not the 1-hour rate');
+});
+
+test('the estimate dedupes by requestId exactly as the token totals do', () => {
+  // ⚠ THE SAME FINDING THE TOTALS REST ON, and it has to hold on this path
+  // separately: the per-model accumulation is a second pass over the same
+  // records, and a dollar figure that triples is as renderable as a right one.
+  resetCache();
+  const dir = tmpdir();
+  const usage = { i: 0, o: 1_000_000 };
+  const file = write(dir, 'sce4.jsonl', [
+    userSays('go', 0),
+    assistant('r1', 1, [{ type: 'thinking', thinking: 'hm' }], usage, { model: 'claude-opus-5' }),
+    assistant('r1', 1, [{ type: 'text', text: 'a' }], usage, { model: 'claude-opus-5' }),
+    assistant('r1', 1, [{ type: 'tool_use', id: 't1', name: 'Bash', input: {} }], usage, { model: 'claude-opus-5' }),
+  ]);
+  const g = sessionGraph(file, 'sce4');
+  assert.equal(g.totals.tokens.output, 1_000_000, 'three records, one API call');
+  assert.equal(g.totals.estCost.usd, 25, 'and one call\'s worth of dollars, not three');
+});
+
+test('an agent is priced at its OWN model, and its share of the bill is reported', () => {
+  // A haiku Explore under an opus parent is the ordinary shape of a fan-out.
+  // Pricing the agent at the parent's rate would overstate it fivefold — and
+  // the client wants to say "of which this much was in agents", so the share
+  // has to come off the same accumulation as the total.
+  resetCache();
+  const dir = tmpdir();
+  const sid = 'sce5';
+  const file = write(dir, `${sid}.jsonl`, [
+    userSays('fan out', 0),
+    assistant('r1', 1, [{ type: 'tool_use', id: 'ag1', name: 'Agent', input: { description: 'look' } }],
+      { i: 0, o: 1_000_000 }, { model: 'claude-opus-5' }),
+  ]);
+  const subs = path.join(dir, sid, 'subagents');
+  fs.mkdirSync(subs, { recursive: true });
+  fs.writeFileSync(path.join(subs, 'agent-a1.meta.json'), JSON.stringify({ toolUseId: 'ag1', agentType: 'Explore' }));
+  fs.writeFileSync(path.join(subs, 'agent-a1.jsonl'),
+    JSON.stringify(assistant('a-r1', 2, [{ type: 'text', text: 'found it' }],
+      { i: 0, o: 1_000_000 }, { model: 'claude-haiku-4-5' })) + '\n');
+
+  const g = sessionGraph(file, sid);
+  assert.equal(g.totals.estCost.usd, 30, 'the estimate covers the parent and everything it spawned');
+  assert.equal(g.totals.agentEstCostUsd, 5, 'and says how much of that was the agent');
+  assert.deepEqual(g.totals.estCost.byModel.map((r) => r.model), ['claude-opus-5', 'claude-haiku-4-5']);
+});
+
+test('a model the table has never seen is reported unpriced, not guessed at', () => {
+  // The local tier writes transcripts too, and its ids are not on any Anthropic
+  // price list. Rounding them to the nearest family would produce a total that
+  // is confidently wrong; counting them separately keeps the estimate
+  // answerable.
+  resetCache();
+  const dir = tmpdir();
+  const file = write(dir, 'sce6.jsonl', [
+    userSays('go', 0),
+    assistant('r1', 1, [{ type: 'text', text: 'a' }], { i: 0, o: 1_000_000 }, { model: 'claude-opus-5' }),
+    assistant('r2', 2, [{ type: 'text', text: 'b' }], { i: 0, o: 1_000_000 }, { model: 'qwen3-coder-30b' }),
+  ]);
+  const g = sessionGraph(file, 'sce6');
+  assert.equal(g.totals.estCost.usd, 25, 'only what could honestly be priced');
+  assert.equal(g.totals.estCost.unpricedTokens, 1_000_000, 'and the rest is SAID, not dropped');
+  assert.deepEqual(g.totals.estCost.byModel.map((r) => r.model), ['claude-opus-5']);
+});
+
+test('a session that has spent nothing says null rather than a dollar figure', () => {
+  resetCache();
+  const dir = tmpdir();
+  const file = write(dir, 'sce7.jsonl', [
+    userSays('go', 0),
+    {
+      type: 'assistant',
+      uuid: 'a1',
+      requestId: 'r1',
+      timestamp: T(1),
+      message: { role: 'assistant', model: 'claude-opus-5', content: [{ type: 'text', text: 'hi' }] },
+    },
+  ]);
+  const g = sessionGraph(file, 'sce7');
+  assert.equal(g.totals.tokens.output, 0, 'no record carried usage');
+  assert.equal(g.totals.estCost, null, 'so there is nothing to price, and $0.00 would be a claim');
+  assert.equal(g.totals.agentEstCostUsd, null);
+});
+
+test('the overview carries the estimate too, or the cheap route is the one without the number', () => {
+  // The overview strips the map and keeps the header — and the cost estimate is
+  // header, not map. It rides `totals`, so it survives the strip by
+  // construction; this pins that it actually does.
+  resetCache();
+  const dir = tmpdir();
+  const o = sessionOverview(simpleSession(dir, 'sce8'), 'sce8');
+  assert.equal(o.nodes, undefined, 'still the cheap route');
+  assert.equal(o.totals.estCost.usd, 0.00842,
+    '4 input + 111 output + 900 unsplit cache writes, all opus');
+  assert.deepEqual(o.totals.estCost.byModel, [{ model: 'claude-opus-5', usd: 0.00842 }]);
+  assert.equal(o.totals.agentEstCostUsd, 0, 'no agents ran, which is a number and not an absence');
 });
 
 test('the cursor moves when an AGENT grows even though the parent did not', () => {
