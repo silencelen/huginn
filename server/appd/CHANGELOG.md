@@ -9,6 +9,30 @@ appeared only as a side-note on the app releases it happened to ship with. Three
 undocumented, and the notes-cutting matcher could fuse two sections when an app and an appd
 version number collided. Entries below are reconstructed from the shipping commits.
 
+## 2.80.0 — 2026-08-27
+
+The session overview learns what the run would have cost.
+
+- **`totals.estCost`**: the session's tokens priced at Anthropic's published
+  API list rates, broken down **per model** — a session that ran opus for the
+  work and haiku for a subagent has no single blended rate, so one figure over
+  both would be a number about nothing. Cache writes bill by TTL, read from the
+  nested `usage.cache_creation` split (1.25× input at five minutes, 2× at an
+  hour); a write whose TTL nothing recorded takes the cheaper of the two rather
+  than inventing spend it has no record of. A model the table has never seen —
+  the local tier, the CLI's own `<synthetic>` records — is never rounded to a
+  neighbouring family: its tokens come back as `estCost.unpricedTokens`, said
+  out loud instead of quietly dropped. `totals.agentEstCostUsd` is the share of
+  the total that came from agent files, so a fan-out can say how much of the
+  bill it was. Both are null when no record carried usage at all, and both ride
+  `totals` — so the cheap `/overview` route carries them, not just `/graph`.
+- ⚠ **It is an estimate, and none of it was charged.** This account is on a
+  subscription; the figure answers "what would this session have billed on the
+  API", and the clients caption it as exactly that. Rates live in a static
+  table in `lib/pricing.js`, cached 2026-08-27 — nothing asks the network what
+  anything costs, so a transcript prices the same way on a box with no route
+  out, and that date is the only thing that says when the table was true.
+
 ## 2.79.0 — 2026-08-27
 
 The devnotes wave, server side: pages, the session map, honest budgets, and

@@ -33,10 +33,18 @@
 //     computed from record timestamps, which cannot disagree with themselves.
 //   • `<synthetic>` appears as a model id on records the CLI generates itself.
 //     It is not a model anybody chose, so it is kept out of `models`.
+//   • `usage.cache_creation` is a NESTED breakdown of the flat
+//     `cache_creation_input_tokens` by TTL — {ephemeral_5m_input_tokens,
+//     ephemeral_1h_input_tokens} — and the two halves summed to the flat total
+//     on every record measured. It is read for pricing (the two TTLs bill at
+//     1.25x and 2x input), but the FLAT number stays the source of truth: what
+//     the halves do not account for is carried as `unsplit` rather than assigned
+//     to a TTL nobody reported.
 
 const fs = require('node:fs');
 const path = require('node:path');
 const { listAgentFiles, journalSummaries, journalSettled, agentTask, ACTIVE_S } = require('./agents');
+const { priceTokens } = require('./pricing');
 
 /** Bytes read per pass. Bounded so a 32MB transcript never lands in RAM whole. */
 const CHUNK = 4 * 1024 * 1024;
@@ -75,6 +83,84 @@ function addTokens(into, from) {
   into.input += from.input; into.output += from.output;
   into.cacheRead += from.cacheRead; into.cacheCreation += from.cacheCreation;
   return into;
+}
+
+// ------------------------------------------------------------ per-model spend
+//
+// A parallel accumulation to `tokens`, kept per MODEL because that is the only
+// unit a price applies to: the same session can run opus for the work and haiku
+// for a subagent, and one blended figure over both is not a number about
+// anything. Deliberately NOT folded into zeroTokens(): that shape is on the wire
+// under every node and every agent, and widening it would change the client's
+// contract for a field only the pricing pass reads.
+
+function zeroModelTokens() {
+  return {
+    input: 0,
+    output: 0,
+    cacheRead: 0,
+    cacheCreation5m: 0,
+    cacheCreation1h: 0,
+    cacheCreationUnsplit: 0,
+  };
+}
+
+/**
+ * One counted call's cache-creation tokens, split by TTL.
+ *
+ * The flat `cache_creation_input_tokens` is the total that has always been
+ * there; the nested `cache_creation` object is the breakdown. So the flat number
+ * decides how much was written and the split only decides how it is priced —
+ * anything the two named halves do not cover comes back as `unsplit`, which
+ * lib/pricing.js charges at the cheaper of the two rates rather than picking a
+ * TTL the record never claimed.
+ */
+function creationSplit(d, cacheCreation) {
+  const cc = d && d.message && d.message.usage && d.message.usage.cache_creation;
+  const c5m = (cc && cc.ephemeral_5m_input_tokens) || 0;
+  const c1h = (cc && cc.ephemeral_1h_input_tokens) || 0;
+  const named = c5m + c1h;
+  return { c5m, c1h, unsplit: named >= cacheCreation ? 0 : cacheCreation - named };
+}
+
+/**
+ * Adds one counted call to the per-model accumulation.
+ *
+ * A record with no model at all is filed under 'unknown' rather than dropped —
+ * it lands in the estimate's `unpricedTokens`, which is the honest place for
+ * spend nobody can attribute.
+ */
+function addModelUsage(byModel, model, tok, split) {
+  const key = model || 'unknown';
+  let m = byModel.get(key);
+  if (!m) { m = zeroModelTokens(); byModel.set(key, m); }
+  m.input += tok.input;
+  m.output += tok.output;
+  m.cacheRead += tok.cacheRead;
+  m.cacheCreation5m += split.c5m;
+  m.cacheCreation1h += split.c1h;
+  m.cacheCreationUnsplit += split.unsplit;
+  return m;
+}
+
+/**
+ * Merges per-model accumulations into the plain object lib/pricing.js prices.
+ *
+ * ⚠ ALWAYS INTO A FRESH OBJECT. The session's own accumulation is cached across
+ * polls; folding the agents' totals into it in place would add them again on
+ * every five-second poll, and the estimate would climb on a session that had
+ * stopped running — the same trap the spine nodes' `agents` array is assigned
+ * rather than appended for.
+ */
+function mergeByModel(...maps) {
+  const out = {};
+  for (const map of maps) {
+    for (const [model, t] of map) {
+      const into = out[model] || (out[model] = zeroModelTokens());
+      for (const k of Object.keys(into)) into[k] += t[k] || 0;
+    }
+  }
+  return out;
 }
 
 /**
@@ -182,6 +268,9 @@ function newState(sessionId) {
     files: new Set(),
     models: new Set(),
     efforts: new Set(),
+    // model id -> zeroModelTokens(), for the cost estimate. Same dedup as
+    // `totals.tokens` — it is filled from the same `usageOnce` result.
+    tokensByModel: new Map(),
     // tool_use id -> the spine node that issued it, for the agent join.
     spawns: new Map(),
     // tool_use id -> {ts, isError}, for the agent merge point.
@@ -441,6 +530,9 @@ function consume(s, d) {
   if (tok) {
     addTokens(s.totals.tokens, tok);
     addTokens(turn.tokensTail, tok);
+    // Off the SAME deduped result, so the priced tokens and the displayed
+    // tokens can never be two different numbers about one API call.
+    addModelUsage(s.tokensByModel, model, tok, creationSplit(d, tok.cacheCreation));
     pushSample(s, ts, tok);
   }
 
@@ -504,7 +596,7 @@ function consume(s, d) {
 function agentStats(cache, file, size) {
   const hit = cache.get(file);
   const st = hit && hit.parsedBytes <= size ? hit : {
-    parsedBytes: 0, seen: new Set(), tokens: zeroTokens(), toolCalls: 0,
+    parsedBytes: 0, seen: new Set(), tokens: zeroTokens(), byModel: new Map(), toolCalls: 0,
     firstTs: null, lastTs: null, meta: null, task: null,
   };
   // The meta file and the task line live outside the append window — one is a
@@ -533,7 +625,13 @@ function agentStats(cache, file, size) {
     if (ts) { if (!st.firstTs) st.firstTs = ts; st.lastTs = ts; }
     if (d.type !== 'assistant') return;
     const tok = usageOnce(d, st.seen);
-    if (tok) addTokens(st.tokens, tok);
+    if (tok) {
+      addTokens(st.tokens, tok);
+      // An agent picks its own model — a haiku Explore under an opus parent is
+      // the ordinary shape of a fan-out — so its spend is priced against the
+      // model ITS records name, never the parent's.
+      addModelUsage(st.byModel, d.message && d.message.model, tok, creationSplit(d, tok.cacheCreation));
+    }
     const c = d.message && d.message.content;
     if (Array.isArray(c)) for (const b of c) if (b && b.type === 'tool_use') st.toolCalls++;
   });
@@ -564,6 +662,7 @@ function collectAgents(dir, state, nodes, agentCache, nowSec) {
   const files = listAgentFiles(dir);
   const agents = [];
   const runs = new Map();
+  const agentModelMaps = [];
   let agentBytes = 0;
   const summaries = new Map();
   const settled = new Map();
@@ -573,6 +672,7 @@ function collectAgents(dir, state, nodes, agentCache, nowSec) {
     agentBytes += st.size;
     const id = path.basename(f.file).replace(/^agent-|\.jsonl$/g, '');
     const stats = agentStats(agentCache, f.file, st.size);
+    agentModelMaps.push(stats.byModel);
     const meta = stats.meta || {};
     const mtime = Math.floor(st.mtimeMs / 1000);
     const spawn = meta.toolUseId ? state.spawns.get(meta.toolUseId) : null;
@@ -625,7 +725,7 @@ function collectAgents(dir, state, nodes, agentCache, nowSec) {
     });
   }
   agents.sort((a, b) => (a.spawnTs || 0) - (b.spawnTs || 0) || a.id.localeCompare(b.id));
-  return { agents, workflows: [...runs.values()], agentBytes };
+  return { agents, workflows: [...runs.values()], agentBytes, agentModelMaps };
 }
 
 /**
@@ -678,11 +778,22 @@ function rateOf(state, nowSec) {
 function buildWire(state, dir, agentCache, nowSec, size) {
   const preview = turnNodes(state.turn, state.nodes.length);
   const nodes = preview.length ? state.nodes.concat(preview) : state.nodes;
-  const { agents, workflows, agentBytes } = dir
+  const { agents, workflows, agentBytes, agentModelMaps } = dir
     ? collectAgents(dir, state, nodes, agentCache, nowSec)
-    : { agents: [], workflows: [], agentBytes: 0 };
+    : { agents: [], workflows: [], agentBytes: 0, agentModelMaps: [] };
   const agentTokens = zeroTokens();
   for (const a of agents) addTokens(agentTokens, a.tokens);
+  // The estimate covers the WHOLE session — the parent's own calls and every
+  // agent it spawned — because that is what a person means by "what did this
+  // cost". `agentEstCostUsd` is the share of it that came from agent files, so a
+  // fan-out can say how much of the bill it was.
+  //
+  // Null only when nothing carried usage at all. A session that ran entirely on
+  // models this table has never seen still gets an object, with usd 0 and the
+  // tokens counted in `unpricedTokens` — null there would drop the one fact
+  // worth knowing, which is that there is spend nobody could price.
+  const byModel = mergeByModel(state.tokensByModel, ...agentModelMaps);
+  const estCost = Object.keys(byModel).length ? priceTokens(byModel) : null;
   // The branches are read off the AGENTS, not built during the walk: which node
   // an agent hangs from is known only once its meta file has been matched to a
   // tool_use, which happens here. Assigned fresh rather than appended to — the
@@ -715,6 +826,8 @@ function buildWire(state, dir, agentCache, nowSec, size) {
       tokens: { ...state.totals.tokens },
       agentCount: agents.length,
       agentTokens,
+      estCost,
+      agentEstCostUsd: estCost ? priceTokens(mergeByModel(...agentModelMaps)).usd : null,
       activeAgents: agents.filter((a) => a.status === 'running').length,
       compactions: state.totals.compactions,
       droppedTokens: state.totals.droppedTokens,
