@@ -16,14 +16,11 @@ updates:
       - dependency-name: 'org.jetbrains.compose*'
         update-types: ['version-update:semver-major', 'version-update:semver-minor']
 
-  # The DEPRECATED Electron client: no routine version churn (limit 0 stops
-  # version-update PRs; Dependabot SECURITY updates still open PRs here, which
-  # matches desktop/DEPRECATED.md — security and data-loss fixes only).
-  - package-ecosystem: npm
-    directory: /desktop
-    schedule:
-      interval: weekly
-    open-pull-requests-limit: 0
+  # There is no npm ecosystem here any more. The Electron client at /desktop was
+  # the only one, and it was deleted on 2026-08-27 — its stanza held the routine
+  # churn to zero while still letting security PRs through, and both are moot now
+  # that the tree and its package-lock.json are gone. The daemon has no npm
+  # dependencies at all, by design.
 
   # Keep the workflows' pinned actions current.
   - package-ecosystem: github-actions

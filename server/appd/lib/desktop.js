@@ -1,32 +1,33 @@
 'use strict';
-// The desktop update channels' pure parts: filename validation, content types,
-// manifest reading, and the one path resolution both channels share. The desktop
-// release scripts stock DATA_DIR/<channel> by local file moves (never over
+// The desktop update channel's pure parts: filename validation, content types,
+// manifest reading, and the path resolution the route serves from. The desktop
+// release script stocks DATA_DIR/desktop-kt by local file moves (never over
 // HTTP); the daemon only ever reads from it, so this file has no write path at
 // all.
 //
-// TWO CHANNELS, and the separation is load-bearing rather than tidy:
+// ONE CHANNEL:
 //
-//   DATA_DIR/desktop     -> /v1/desktop      the Electron client (0.4.0, in use)
 //   DATA_DIR/desktop-kt  -> /v1/desktop-kt   the Compose Multiplatform client
 //
-// They are different applications that happen to be called the same thing. The
-// owner's installed Electron client polls /v1/desktop and will install whatever
-// it finds there; publishing a Compose build into that directory would hand a
-// running program an "update" that replaces it with something else. Until the
-// Compose client reaches parity and the two are deliberately merged, nothing
-// writes across the line — see CUTOVER in scripts/release-desktop.sh.
+// There were two. DATA_DIR/desktop -> /v1/desktop served the Electron client,
+// and the separation between them was load-bearing rather than tidy: they were
+// different applications sharing a name, and a Compose build published into the
+// Electron directory would have handed a running program an "update" that
+// replaced it with something else. The Electron client was deleted from the
+// repo on 2026-08-27 by owner directive — strictly Compose — and its channel
+// went with it. A DATA_DIR/desktop left on a deployed host is stale bytes
+// nothing reads.
 //
-// Everything below takes the directory as an argument for exactly that reason:
-// there is no module-level "the desktop dir", so no code path can drift into
-// serving one channel from the other's files.
+// Everything below still takes the directory as an argument: there is no
+// module-level "the desktop dir", which is also what lets the uploads route
+// borrow resolveArtifact without inheriting a channel.
 
 const fs = require('fs');
 const path = require('path');
 
 // Valid by construction — no separator can appear, so no traversal exists.
-// electron-builder artifact names are short ASCII (Huginn-Setup-0.1.0.exe,
-// huginn-desktop-0.1.0.AppImage, latest.yml).
+// Artifact names are short ASCII (Huginn-Desktop-Setup-0.1.0.exe,
+// huginn-desktop-kt_0.1.0-1_amd64.deb, manifest.json).
 const NAME_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{1,80}$/;
 
 const CONTENT_TYPES = {
@@ -49,8 +50,9 @@ function contentTypeFor(name) {
 }
 
 /** The house-readable manifest (version, per-platform files) — null when the
- *  channel has never been stocked. electron-updater never reads this; the
- *  About dialog and release-script version gate do. */
+ *  channel has never been stocked. Read by the release script's version gate,
+ *  the About dialog, and the 0.5.x-transition clients that still poll here
+ *  rather than at the GitHub release. */
 function readManifest(dir) {
   try {
     return JSON.parse(fs.readFileSync(path.join(dir, 'manifest.json'), 'utf8'));
@@ -66,9 +68,9 @@ function readManifest(dir) {
  * Returns `{ ok: true, file, contentType, size }`, or
  * `{ ok: false, status, error }` with the status the caller should send.
  *
- * Shared by BOTH channels on purpose. The alternative — a copy per channel —
- * means the next hardening lands in one of them, and the one it misses is
- * whichever the author was not looking at.
+ * Shared with the uploads route on purpose. The alternative — a copy per
+ * directory served — means the next hardening lands in one of them, and the one
+ * it misses is whichever the author was not looking at.
  */
 function resolveArtifact(dir, name) {
   // Safe by construction: no separator passes validName, so the joined path

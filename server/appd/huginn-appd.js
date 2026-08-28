@@ -55,7 +55,7 @@ const pushLib = require('./lib/pushtokens');
 const { trySender } = require('./lib/fcm');
 const { createPending, stepSoftEnd } = require('./lib/softend');
 
-const VERSION = '2.80.0';
+const VERSION = '2.81.0';
 const PORT = Number(process.env.HUGINN_APPD_PORT || 8787);
 const DATA_DIR = process.env.HUGINN_APPD_DATA || '/var/lib/huginn-appd';
 const UPLOADS_DIR = path.join(DATA_DIR, 'uploads');
@@ -68,15 +68,17 @@ const UPLOAD_MAX_BYTES = 128 * 1024 * 1024;
 // values, or nothing at all, and exact-match punished the user for their file
 // manager's vocabulary.
 const { uploadExtFor, isReadable, contentTypeForUpload, isImageUpload } = require('./lib/uploads');
-// The desktop update channels — feed ymls + installers served from disk,
-// stocked by the desktop release scripts via local moves.
+// The desktop update channel — manifest + installers served from disk, stocked
+// by mobile/scripts/release-desktop.sh via local moves.
 //
-// TWO of them, and they must never converge while the Electron client is in
-// service: it polls /v1/desktop and installs what it finds, so a Compose build
-// landing there would replace a running application with a different one. See
-// the header of lib/desktop.js.
+// ONE of them. There were two, and keeping them apart was load-bearing: the
+// Electron client polled /v1/desktop and installed whatever it found, so a
+// Compose build landing there would have replaced a running application with a
+// different one. The Electron client was deleted on 2026-08-27 by owner
+// directive — strictly Compose — and /v1/desktop went with it. Nothing routes
+// to DATA_DIR/desktop any more; a directory of that name left on a deployed
+// host is stale bytes no route can reach.
 const desktopLib = require('./lib/desktop');
-const DESKTOP_DIR = path.join(DATA_DIR, 'desktop');
 const DESKTOP_KT_DIR = path.join(DATA_DIR, 'desktop-kt');
 
 // How long a NON-IMAGE upload is kept. Images are exempt entirely (see below):
@@ -5037,8 +5039,8 @@ const server = http.createServer(async (req, res) => {
       //
       // The empty-string case is called out separately in the tests because it
       // is a JavaScript truthiness trap: `if (!body.fingerprint)` reads as a
-      // presence check and silently also accepts ''. The Electron client got
-      // this right in notify/activation.ts and rejects both; the host did not.
+      // presence check and silently also accepts ''. The Electron client (since
+      // deleted) rejected both in its own notification path; the host did not.
       if (typeof body.fingerprint !== 'string' || body.fingerprint === '') {
         return sendErr(res, 400, 'fingerprint required');
       }
@@ -5107,15 +5109,16 @@ const server = http.createServer(async (req, res) => {
     }
 
     // --- chats
-    // --- desktop update channel: electron-updater's feed (latest*.yml) and the
-    // installers themselves. Auth like every route — the updater sends the
-    // Bearer header on the feed AND artifact GETs. This is the daemon's first
-    // streaming-OUT path (uploads is the streaming-in precedent): an installer
-    // is ~90 MB and must never transit the heap.
+    // --- desktop update channel: the manifest and the installers themselves.
+    // Auth like every route — the updater sends the Bearer header on the
+    // manifest AND artifact GETs. This is the daemon's first streaming-OUT path
+    // (uploads is the streaming-in precedent): an installer is ~90 MB and must
+    // never transit the heap.
     //
-    // One helper, both channels. The directory is the ONLY difference between
-    // them here; keeping that a parameter rather than a second copy of the route
-    // is what stops a future fix landing in one channel and not the other.
+    // One helper, and the uploads route below borrows it. The directory is the
+    // ONLY difference between the callers here; keeping that a parameter rather
+    // than a second copy of the route is what stops a future fix landing in one
+    // and not the other.
     const serveArtifact = (dir, name, extraHeaders = null) => {
       const found = desktopLib.resolveArtifact(dir, name);
       if (!found.ok) return sendErr(res, found.status, found.error);
@@ -5136,19 +5139,13 @@ const server = http.createServer(async (req, res) => {
       stream.pipe(res);
       stream.on('error', () => { try { res.destroy(); } catch { } });
     };
-    if (req.method === 'GET' && p === '/v1/desktop/manifest') {
-      const man = desktopLib.readManifest(DESKTOP_DIR);
-      if (!man) return sendErr(res, 404, 'no desktop releases yet');
-      return sendJson(res, 200, man);
-    }
-    if (req.method === 'GET' && (m = p.match(/^\/v1\/desktop\/([^/]+)$/))) {
-      return serveArtifact(DESKTOP_DIR, decodeURIComponent(m[1]));
-    }
-    // --- the Compose Multiplatform client's channel. Same contract, same auth,
-    // its OWN directory: /v1/desktop-kt, stocked by mobile/scripts/release-desktop.sh.
-    // The updater that reads it pins these paths at compile time (UpdateFeed.kt),
-    // because the builds are unsigned and whoever controls the feed controls what
-    // executes.
+    // --- the Compose Multiplatform client's channel, and the only one: /v1/desktop-kt,
+    // stocked by mobile/scripts/release-desktop.sh. The updater that reads it pins
+    // these paths at compile time (UpdateFeed.kt), because the builds are unsigned
+    // and whoever controls the feed controls what executes. Kept under its own name
+    // rather than promoted to /v1/desktop now that the Electron channel is gone: the
+    // 0.5.x clients still installed poll THIS path, and the retired one is better
+    // left as a 404 than quietly re-pointed at a different application's feed.
     if (req.method === 'GET' && p === '/v1/desktop-kt/manifest') {
       const man = desktopLib.readManifest(DESKTOP_KT_DIR);
       if (!man) return sendErr(res, 404, 'no desktop-kt releases yet');

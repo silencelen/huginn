@@ -11,8 +11,8 @@ ground rules differ by half:
   Android app and the Compose desktop client. "Tiny" doesn't apply there — *layered*
   does: read [`docs/ADDING-A-FEATURE.md`](docs/ADDING-A-FEATURE.md) before touching
   `mobile/`, and write in the lowest module that can hold the change (`:core` → `:ui` →
-  the shells). The Electron client in `desktop/` is
-  [deprecated](desktop/DEPRECATED.md) — security and data-loss fixes only.
+  the shells). There is one desktop client and it is the Compose one; the Electron
+  client that used to live in `desktop/` was retired and deleted on 2026-08-27.
 
 ## Ground rules (everywhere)
 

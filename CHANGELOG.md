@@ -3,8 +3,8 @@
 All notable changes to the **terminal client + server core** (`client/`, `server/`)
 are documented here. The other components version independently and keep their own
 changelogs: the Android app ([`mobile/CHANGELOG.md`](mobile/CHANGELOG.md)), the
-Compose desktop client ([`mobile/app-desktop/CHANGELOG.md`](mobile/app-desktop/CHANGELOG.md)),
-and the deprecated Electron client ([`desktop/CHANGELOG.md`](desktop/CHANGELOG.md)).
+desktop client ([`mobile/app-desktop/CHANGELOG.md`](mobile/app-desktop/CHANGELOG.md)),
+and the daemon ([`server/appd/CHANGELOG.md`](server/appd/CHANGELOG.md)).
 Format loosely follows [Keep a Changelog](https://keepachangelog.com/); versions use
 [SemVer](https://semver.org/).
 

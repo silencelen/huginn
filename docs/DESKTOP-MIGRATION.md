@@ -178,6 +178,30 @@ House rules that outrank taste: no left accent bars on rows or cards; subtle
 in-vernacular state marks rather than loud badges; controls that do the same
 verb unify into one control.
 
+## Status: RETIRED (2026-08-27) — everything below this section is history
+
+Owner directive, verbatim: *"delete the electron version. we are strictly on
+huginn desktop compose version."* Executed the same day:
+
+- **The tree is gone.** `desktop/` — source, tests, `package-lock.json`, its
+  release script, `DEPRECATED.md`, its changelog — was deleted from the repo.
+- **The channel is gone.** appd 2.81.0 stopped routing `/v1/desktop`; a GET
+  there now falls through to the ordinary 404 rather than being handled at all,
+  and `DATA_DIR/desktop` is neither read nor created. `/v1/desktop-kt` keeps its
+  name and its contents: installed 0.5.x Compose clients still poll that exact
+  path, so step 3 of the cutover below does not happen either.
+- **The graceful handover was superseded, not performed.** The cutover described
+  below — one final Electron release carrying a notice, then a Compose installer
+  taking over the Electron install path and Windows uninstall key so the OS saw
+  an upgrade rather than a second application — was the plan for retiring the
+  *installed* app. The directive overtook it. No notice release was cut and no
+  installer takes over that uninstall key, so any installed Electron copy simply
+  goes stale where it sits: it polls a channel that 404s, never updates again,
+  and has to be **uninstalled by hand** from Windows' own list.
+
+The sections that follow are the migration as it was planned and carried out.
+They are kept for the reasoning, not as instructions.
+
 ## Status: the Electron client is DEPRECATED (2026-07-31)
 
 All five build phases are done and the Compose client is in real use on the

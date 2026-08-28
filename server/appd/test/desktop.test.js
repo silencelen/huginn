@@ -2,6 +2,9 @@
 // The desktop update channel's gate: names are safe by construction (the
 // route builds paths only from names this regex passed), and the manifest
 // reader never throws at a request.
+//
+// The route-level half — that /v1/desktop-kt is served and the retired
+// /v1/desktop is not — lives in routes-desktop.test.js, against a real daemon.
 
 const { test } = require('node:test');
 const assert = require('node:assert');
@@ -43,8 +46,8 @@ test('content types map by extension, octet-stream otherwise', () => {
   assert.equal(contentTypeFor('weird.xyz'), 'application/octet-stream');
 });
 
-test('the Compose client\'s artifact names pass too', () => {
-  // /v1/desktop-kt serves jpackage/NSIS output, not electron-builder's.
+test('the Compose client\'s artifact names pass', () => {
+  // /v1/desktop-kt serves jpackage/NSIS output and Compose's own packageDeb.
   assert.ok(validName('Huginn-Desktop-Setup-0.1.0.exe'));
   assert.ok(validName('huginn-desktop-kt_0.1.0-1_amd64.deb'));
 });
@@ -84,27 +87,29 @@ test('resolveArtifact answers with what the route must send', () => {
   }
 });
 
-test('the two channels are separate directories, not a shared one', () => {
-  // The point of the whole split: the owner is RUNNING the Electron client
-  // against /v1/desktop, and it installs whatever that channel offers. A
-  // Compose artifact resolvable from the Electron directory would be an
-  // "update" into a different application.
+test('the channel cannot serve a sibling directory it was not given', () => {
+  // This used to assert the two channels apart. There is one channel now, but
+  // the property it was really about outlives the split and matters MORE after
+  // it: a host that ran the Electron client still has DATA_DIR/desktop sitting
+  // there full of installers for a program that no longer exists. The surviving
+  // channel is handed desktop-kt and can reach nothing else — not by name, and
+  // not by walking out of the directory it was given.
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'desktop-test-'));
   try {
-    const electron = path.join(root, 'desktop');
+    const retired = path.join(root, 'desktop');
     const compose = path.join(root, 'desktop-kt');
-    fs.mkdirSync(electron); fs.mkdirSync(compose);
-    fs.writeFileSync(path.join(electron, 'manifest.json'), JSON.stringify({ version: '0.4.0' }));
-    fs.writeFileSync(path.join(electron, 'Huginn-Setup-0.4.0.exe'), 'electron');
-    fs.writeFileSync(path.join(compose, 'manifest.json'), JSON.stringify({ version: '0.1.0' }));
-    fs.writeFileSync(path.join(compose, 'Huginn-Desktop-Setup-0.1.0.exe'), 'compose');
+    fs.mkdirSync(retired); fs.mkdirSync(compose);
+    fs.writeFileSync(path.join(retired, 'manifest.json'), JSON.stringify({ version: '0.4.0' }));
+    fs.writeFileSync(path.join(retired, 'Huginn-Setup-0.4.0.exe'), 'stale');
+    fs.writeFileSync(path.join(compose, 'manifest.json'), JSON.stringify({ version: '0.16.0' }));
+    fs.writeFileSync(path.join(compose, 'Huginn-Desktop-Setup-0.16.0.exe'), 'compose');
 
-    assert.equal(readManifest(electron).version, '0.4.0');
-    assert.equal(readManifest(compose).version, '0.1.0');
-    // Neither channel can reach the other's files, by name or by traversal.
-    assert.equal(resolveArtifact(electron, 'Huginn-Desktop-Setup-0.1.0.exe').ok, false);
+    assert.equal(readManifest(compose).version, '0.16.0');
+    assert.equal(resolveArtifact(compose, 'Huginn-Desktop-Setup-0.16.0.exe').ok, true);
+    // The leftovers next door are unreachable, by name and by traversal.
     assert.equal(resolveArtifact(compose, 'Huginn-Setup-0.4.0.exe').ok, false);
     assert.equal(resolveArtifact(compose, '../desktop/Huginn-Setup-0.4.0.exe').status, 400);
+    assert.equal(resolveArtifact(compose, '../desktop/manifest.json').status, 400);
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }
