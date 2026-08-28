@@ -351,43 +351,76 @@ class DesktopSurfaceTest {
     // to resize, an outward pull is the second way to reopen — and it has to be
     // told apart from the twitch that lands on a 1px line while reaching past it.
 
+    /** Runs one whole gesture through the fold and reports how often it fired. */
+    private fun gesture(vararg deltas: Float): Pair<Splitter.Pull, Int> {
+        var pull = Splitter.NO_PULL
+        var fires = 0
+        deltas.forEach { d ->
+            val next = Splitter.pull(pull, d)
+            if (Splitter.fired(pull, next)) fires++
+            pull = next
+        }
+        return pull to fires
+    }
+
     @Test
     fun `a pull is measured in distance, not in pointer speed`() {
         // ⚠ THE OBVIOUS IMPLEMENTATION IS WRONG. Thresholding a single drag delta
         // thresholds SPEED: a slow deliberate pull delivers 2px per frame and would
         // never reopen anything, while a flick delivers 40 in one and always would.
         // Small deltas have to add up.
-        var pull = 0f
-        repeat(5) { pull = Splitter.pull(pull, 3f) }
-        assertEquals(15f, pull)
-        assertTrue(Splitter.reopens(pull), "five slow frames are still a deliberate pull")
+        val (slow, slowFires) = gesture(3f, 3f, 3f, 3f, 3f)
+        assertTrue(slow.spent, "five slow frames are still a deliberate pull")
+        assertEquals(1, slowFires)
 
         // …and one decisive frame is enough on its own.
-        assertTrue(Splitter.reopens(Splitter.pull(0f, 40f)))
+        assertTrue(gesture(40f).first.spent)
     }
 
     @Test
     fun `a twitch on the line is not a request for the pane back`() {
-        assertFalse(Splitter.reopens(Splitter.pull(0f, 1f)))
+        assertFalse(gesture(1f).first.spent)
         assertFalse(
-            Splitter.reopens(Splitter.pull(0f, Splitter.REOPEN_PULL - 1f)),
+            gesture(Splitter.REOPEN_PULL - 1f).first.spent,
             "the pull has to leave the seam it started on",
         )
-        assertTrue(Splitter.reopens(Splitter.pull(0f, Splitter.REOPEN_PULL)))
+        assertTrue(gesture(Splitter.REOPEN_PULL).first.spent)
     }
 
     @Test
     fun `going back the other way spends the pull rather than banking it`() {
         // A leftward drag on a seam with nothing to its left is not half of a
         // rightward one. Banking it would mean a wobble adds up to a reopen.
-        var pull = 0f
-        pull = Splitter.pull(pull, 9f)
-        pull = Splitter.pull(pull, -9f)
-        assertEquals(0f, pull)
-        assertFalse(Splitter.reopens(pull))
-        // And the sum starts again from there rather than from where it was.
-        pull = Splitter.pull(pull, 5f)
-        assertFalse(Splitter.reopens(pull))
+        val (wobble, fires) = gesture(9f, -9f, 5f)
+        assertEquals(Splitter.NO_PULL.spent, wobble.spent)
+        assertEquals(5f, wobble.travel, "the sum starts again rather than resuming")
+        assertEquals(0, fires)
+    }
+
+    @Test
+    fun `the pull that reopens does not go on to resize`() {
+        // ⚠ THE HALF THAT SHIPPED MISSING. A pull is a person moving a pointer, not
+        // somebody stopping dead on the 12th pixel: the reopen fired and the rest of
+        // the SAME gesture fell through to the resize branch, so a 30px pull brought
+        // the pane back AND left the remembered width at 332. Momentum arriving as
+        // intent, silently rewriting a number the reader had chosen by dragging.
+        val (after, fires) = gesture(6f, 6f, 6f, 6f, 6f)
+        assertTrue(after.spent)
+        assertEquals(1, fires, "a gesture reopens once, not once per frame past the threshold")
+        assertEquals(0f, after.travel, "and banks nothing for the drag after it")
+    }
+
+    @Test
+    fun `a spent gesture stays spent, whichever way it goes`() {
+        val spent = Splitter.pull(Splitter.NO_PULL, 40f)
+        assertTrue(spent.spent)
+        assertEquals(spent, Splitter.pull(spent, 20f), "more of the same pull changes nothing")
+        assertEquals(spent, Splitter.pull(spent, -20f), "and neither does coming back")
+        assertFalse(Splitter.fired(spent, Splitter.pull(spent, 20f)), "and it never fires twice")
+        // The next GESTURE is what resumes normal service, which is why the render
+        // site reinstalls this on every onDragStarted rather than keying it on state.
+        assertFalse(Splitter.NO_PULL.spent)
+        assertEquals(0f, Splitter.NO_PULL.travel)
     }
 
     @Test
