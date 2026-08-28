@@ -1135,6 +1135,28 @@ data class GraphTokens(
 @Serializable
 data class ToolCount(val name: String = "", val count: Int = 0)
 
+/** One model's share of the estimate. The daemon sorts these by spend, biggest first. */
+@Serializable
+data class ModelCost(val model: String = "", val usd: Double = 0.0)
+
+/**
+ * What this session's tokens WOULD have billed at Anthropic's published API list
+ * rates. Nothing here was charged — the account is on a subscription — which is
+ * why every renderer of it carries the caption from `OverviewFormat.costStat`.
+ *
+ * Broken down per model because a run that used opus for the work and haiku for a
+ * subagent has no single blended rate. [unpricedTokens] are the tokens the
+ * daemon's rate table could not price at all — a model it has never seen is
+ * counted separately rather than rounded to a neighbouring family, so a total
+ * that is missing spend says so instead of looking complete.
+ */
+@Serializable
+data class EstCost(
+    val usd: Double = 0.0,
+    val byModel: List<ModelCost> = emptyList(),
+    val unpricedTokens: Long = 0,
+)
+
 @Serializable
 data class GraphTotals(
     val wallMs: Long = 0,
@@ -1147,6 +1169,10 @@ data class GraphTotals(
     val tokens: GraphTokens = GraphTokens(),
     val agentCount: Int = 0,
     val agentTokens: GraphTokens = GraphTokens(),
+    /** Null only when no record in the transcript carried usage at all. */
+    val estCost: EstCost? = null,
+    /** The share of [estCost] that came from agent files; 0 when a run fanned out to nothing. */
+    val agentEstCostUsd: Double? = null,
     val activeAgents: Int = 0,
     val compactions: Int = 0,
     val droppedTokens: Long = 0,

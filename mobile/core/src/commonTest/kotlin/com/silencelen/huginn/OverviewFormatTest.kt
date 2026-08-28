@@ -1,17 +1,23 @@
 package com.silencelen.huginn
 
+import com.silencelen.huginn.data.EstCost
 import com.silencelen.huginn.data.GraphRate
+import com.silencelen.huginn.data.ModelCost
 import com.silencelen.huginn.data.Plan
 import com.silencelen.huginn.data.PlanLimit
+import com.silencelen.huginn.data.SessionOverview
 import com.silencelen.huginn.ui.OverviewFormat
+import kotlinx.serialization.json.Json
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 /**
- * The projection card's arithmetic and its two house rules: no dollar figures on
- * a per-session screen, and every estimate says out loud that it is one.
+ * The overview header's arithmetic and its house rule: every estimate says out
+ * loud that it is one — the pace line in words, and the cost figure both with its
+ * `~` and with the caption that says whose money it is not.
  *
  * NOTE kotlin.test's argument order is (expected, actual, message).
  */
@@ -121,5 +127,135 @@ class OverviewFormatTest {
     fun `the cache share is stated, because it is most of the total and none of the work`() {
         assertEquals("99%", OverviewFormat.cacheShare(616_881_280, 623_402_413))
         assertEquals("0%", OverviewFormat.cacheShare(0, 0), "a session that has not started is not 100% cache")
+    }
+
+    // ------------------------------------------------------------------ money
+
+    @Test
+    fun `money groups its thousands the way the plan card's does`() {
+        // The same helper, so the two places this app prints money cannot drift:
+        // a four-figure estimate unreadable as "$1234.5" beside a plan card
+        // reading "$1,234.50" is one app answering in two formats.
+        assertEquals("$457.00", OverviewFormat.usd(457.0))
+        assertEquals("$1,234.50", OverviewFormat.usd(1234.5))
+        assertEquals("$1,000,000.00", OverviewFormat.usd(1_000_000.0))
+        assertEquals(
+            com.silencelen.huginn.ui.PlanFormat.minorAmount(123_450, 2, "USD"),
+            OverviewFormat.usd(1234.5),
+            "the same money through both formatters, byte for byte",
+        )
+    }
+
+    @Test
+    fun `a real total rounds to the cents a person would read`() {
+        // The daemon's own figure for the 33.8MB session, carried at six decimal
+        // places because the arithmetic has them; the screen has two.
+        assertEquals("$457.00", OverviewFormat.usd(456.999628))
+        assertEquals("$112.02", OverviewFormat.usd(112.022884))
+        assertEquals("$0.02", OverviewFormat.usd(0.02365), "the 5.6KB haiku session")
+    }
+
+    @Test
+    fun `a figure too small to show is not shown as nothing`() {
+        // A subagent that answered in four tokens really did cost something, and
+        // "$0.00" over it is the formatter claiming a fact it never had.
+        assertEquals("<$0.01", OverviewFormat.usd(0.004))
+        assertEquals("<$0.01", OverviewFormat.usd(0.000336), "the daemon's own smallest priced walk")
+        assertEquals("$0.01", OverviewFormat.usd(0.01), "a cent is a cent, not less than one")
+    }
+
+    @Test
+    fun `exactly nothing is nothing, and must not read as too small to show`() {
+        // This is what a session priced entirely on models the table has never
+        // seen gets: usd 0, with every token of it in unpricedTokens. "<$0.01"
+        // there would claim spend the estimate explicitly could not price.
+        assertEquals("$0.00", OverviewFormat.usd(0.0))
+    }
+
+    @Test
+    fun `the stat says the figure, the agents' share, and what the figure is`() {
+        // The real 33.8MB session: 66 turns, 24 agents, one model.
+        val stat = OverviewFormat.costStat(
+            EstCost(
+                usd = 456.999628,
+                byModel = listOf(ModelCost("claude-opus-5", 456.999628)),
+                unpricedTokens = 0,
+            ),
+            agentEstCostUsd = 112.022884,
+        )
+        assertNotNull(stat)
+        assertEquals("~$457.00", stat.value)
+        assertEquals(" · ~$112.02 of it in agents", stat.agentsShare)
+        assertEquals("~$457.00 · ~$112.02 of it in agents", stat.statValue)
+        assertNull(stat.unpriced, "every token of that session was on the price table")
+        assertEquals(
+            "what this session's tokens would bill at API list rates — " +
+                "covered by the subscription, not a bill",
+            stat.captionLine,
+        )
+        assertTrue(stat.value.startsWith("~"), "an estimate never renders as an exact amount: ${stat.value}")
+    }
+
+    @Test
+    fun `a run that fanned out to nothing claims no share`() {
+        // The daemon sends 0.0 rather than null for a session with no agents, so
+        // the gate has to be on the VALUE — " · $0.00 of it in agents" is a clause
+        // about nothing, and a null-only check would print it.
+        val est = EstCost(usd = 548.637882, byModel = listOf(ModelCost("claude-opus-5", 548.637882)))
+        assertNull(OverviewFormat.costStat(est, 0.0)?.agentsShare)
+        assertNull(OverviewFormat.costStat(est, null)?.agentsShare, "an older daemon omits the field entirely")
+        assertEquals("~$548.64", OverviewFormat.costStat(est, 0.0)?.statValue, "and the chip is just the figure")
+    }
+
+    @Test
+    fun `tokens nobody could price are named rather than dropped`() {
+        // A session that ran partly on the local tier. The dollar figure is true
+        // for what it covers and silent about the rest, so the rest is said.
+        val stat = OverviewFormat.costStat(
+            EstCost(usd = 12.5, byModel = listOf(ModelCost("claude-opus-5", 12.5)), unpricedTokens = 1_200_000),
+            agentEstCostUsd = 0.0,
+        )
+        assertNotNull(stat)
+        assertEquals(" · 1.2M tokens unpriced", stat.unpriced)
+        assertEquals("~$12.50", stat.statValue, "the note is a caption's clause, not part of the chip")
+        assertTrue(stat.captionLine.endsWith(" · 1.2M tokens unpriced"), stat.captionLine)
+    }
+
+    @Test
+    fun `no estimate at all means no stat, rather than a zero`() {
+        // Null is what a transcript with no usage records gets. "$0.00 api cost"
+        // over one is a claim; showing nothing is not.
+        assertNull(OverviewFormat.costStat(null))
+        assertNull(OverviewFormat.costStat(null, 112.02), "not even a stray agent figure resurrects it")
+    }
+
+    @Test
+    fun `the daemon's own overview body decodes straight into the stat`() {
+        // Not hand-written: this is what `sessionOverview` returned on 2026-08-27
+        // for the 33.8MB transcript on this host, pasted verbatim. It is the only
+        // test that fails when the two halves stop agreeing on a field NAME, and
+        // that failure is silent — a renamed key decodes to the default and the
+        // header quietly loses the stat.
+        val wire = """
+            {"v":1,"sessionId":"f1f9f1a1-43bf-4f9e-b566-ee68ed016244","generatedAt":1787880668,"totals":{"wallMs":246734000,"startedAt":1787557007,"lastActivityTs":1787803741,"turns":66,"userMessages":54,"toolCalls":1123,"errors":23,"tokens":{"input":2226,"output":1125192,"cacheRead":530134922,"cacheCreation":5310414},"agentCount":24,"agentTokens":{"input":2326,"output":144849,"cacheRead":165051358,"cacheCreation":4138296},"estCost":{"usd":456.999628,"byModel":[{"model":"claude-opus-5","usd":456.999628}],"unpricedTokens":0},"agentEstCostUsd":112.022884,"activeAgents":0,"compactions":2,"droppedTokens":2702263,"filesTouched":12,"models":["claude-opus-5"],"efforts":["xhigh"]},"rate":{"tokensPerMin10":2138,"tokensPerMin60":3689,"allTokensPerMin10":236830,"allTokensPerMin60":493422,"lastActivityTs":1787803741,"activeRecently":false},"cursor":{"size":33823721,"agentBytes":15839354}}
+        """.trimIndent()
+        // The same decoder HuginnClient uses. `v` rides the wire unmodelled and
+        // must not throw, and `name`/`meta` are absent here — the route adds them
+        // — which is the case the nullable-with-default house rule exists for.
+        val overview = Json { ignoreUnknownKeys = true; explicitNulls = false }
+            .decodeFromString<SessionOverview>(wire)
+
+        val est = overview.totals.estCost
+        assertNotNull(est, "the estimate has to survive the decode to be worth pricing")
+        assertEquals(456.999628, est.usd)
+        assertEquals(1, est.byModel.size)
+        assertEquals("claude-opus-5", est.byModel[0].model)
+        assertEquals(456.999628, est.byModel[0].usd)
+        assertEquals(0L, est.unpricedTokens)
+        assertEquals(112.022884, overview.totals.agentEstCostUsd)
+
+        val stat = OverviewFormat.costStat(est, overview.totals.agentEstCostUsd)
+        assertNotNull(stat)
+        assertEquals("~$457.00 · ~$112.02 of it in agents", stat.statValue)
     }
 }

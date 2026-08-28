@@ -1,26 +1,45 @@
 package com.silencelen.huginn.ui
 
+import com.silencelen.huginn.data.EstCost
 import com.silencelen.huginn.data.GraphRate
 import com.silencelen.huginn.data.Plan
 import com.silencelen.huginn.data.PlanLimit
 import kotlin.math.roundToLong
 
 /**
- * The words on the overview: how long, how fast, and where that pace lands.
+ * The words on the overview: how long, how fast, what that would have billed, and
+ * where the pace lands.
  *
  * Shared for the same reason [PlanFormat] is: the desktop and the phone are
- * describing one session and must not describe it differently. And projections
- * are the part of this screen most easily made dishonest, so the two rules that
- * keep them honest live here rather than in either renderer:
+ * describing one session and must not describe it differently. And this screen is
+ * the one most easily made dishonest, so the two rules that keep it honest live
+ * here rather than in either renderer:
  *
- *  * **No money.** ccusage prices at list rates and a Max plan pays nothing like
- *    them, so a dollar figure on a per-session screen is a number somebody would
- *    act on that is not true. Tokens and percentages only.
+ *  * **Money never appears without saying what it is.** The figure is the
+ *    daemon's per-model pricing of tokens that were already spent at list rates,
+ *    and this account is on a subscription — so it is what the session WOULD have
+ *    billed on the API, not a charge. It travels with [COST_CAPTION] attached,
+ *    and a renderer that shows the number without the caption is the bug this
+ *    rule exists to prevent. (An earlier version of this file banned money on a
+ *    per-session screen outright, which was right while the client was inventing
+ *    the number from a blended rate and wrong once the daemon priced it per
+ *    model and named what it could not price.)
  *  * **The estimate says it is one.** A projection is a straight line drawn
  *    through a burn rate measured over ten minutes; the sentence carries "at this
- *    pace" so it cannot be read as a forecast.
+ *    pace" so it cannot be read as a forecast. The cost figure carries its own
+ *    `~` for the same reason.
  */
 object OverviewFormat {
+
+    /**
+     * The one sentence that makes a dollar figure allowable on this screen.
+     *
+     * Not a hedge about accuracy — the arithmetic is exact for the rates it used.
+     * It is about WHOSE money it is: nobody was billed this, and a number on a
+     * screen with no such line is one somebody would act on.
+     */
+    const val COST_CAPTION: String =
+        "what this session's tokens would bill at API list rates — covered by the subscription, not a bill"
 
     /** "3d 4h" / "2h 15m" / "45m" / "40s". Two units at most; nobody reads three. */
     fun durationWords(ms: Long): String {
@@ -91,4 +110,80 @@ object OverviewFormat {
      * re-read of context already paid for is a number that starts arguments.
      */
     fun cacheShare(cacheRead: Long, all: Long): String = PlanFormat.sharePercent(cacheRead, all)
+
+    // ------------------------------------------------------------------ money
+
+    /**
+     * A dollar amount: `457.0` → `"$457.00"`, `1234.5` → `"$1,234.50"`.
+     *
+     * Routed through [PlanFormat.minorAmount] rather than formatted again here, so
+     * the two places this app prints money group their thousands identically and
+     * a fix to one is a fix to both. Cents, because this is a bill-shaped figure
+     * and a bill-shaped figure with no cents reads as rounded.
+     *
+     * Two amounts get their own words:
+     *
+     *  * **Under a cent but not nothing** is `"<$0.01"`. A subagent that answered
+     *    in four tokens really did cost something, and `"$0.00"` over it is the
+     *    formatter claiming a fact the arithmetic never had.
+     *  * **Exactly nothing** is `"$0.00"` — which is what a session priced
+     *    entirely on models the daemon has never seen gets, and it must not read
+     *    as "too small to show". The tokens it could not price are said out loud
+     *    beside it instead.
+     */
+    fun usd(amount: Double): String {
+        // A NaN cannot ride the daemon's JSON (kotlinx rejects the literal), so
+        // this is a guard rather than a case: it exists because roundToLong THROWS
+        // on one, and a crashed overview would be a worse answer than a zero.
+        if (!amount.isFinite()) return "$0.00"
+        if (amount > 0.0 && amount < 0.01) return "<$0.01"
+        return PlanFormat.minorAmount((amount * 100).roundToLong(), 2, "USD")
+    }
+
+    /**
+     * Everything the cost stat SAYS, decided here so neither renderer decides it.
+     *
+     * The pieces are separate because they land in two places — the chip and the
+     * quiet line under the header — but [statValue] and [captionLine] are what a
+     * renderer actually draws, so no client is left composing a money string.
+     */
+    data class CostStat(
+        /** The figure, hedge included: `"~$457.00"`. */
+        val value: String,
+        /** `" · ~$112.02 of it in agents"`, or null when a fan-out cost nothing. */
+        val agentsShare: String?,
+        /** `" · 1.2M tokens unpriced"`, or null when the table priced everything. */
+        val unpriced: String?,
+        /** Always [COST_CAPTION]; a field so a renderer cannot draw the stat without it. */
+        val caption: String,
+    ) {
+        /** The chip: `"~$457.00 · ~$112.02 of it in agents"`. */
+        val statValue: String get() = value + agentsShare.orEmpty()
+
+        /** The quiet line: the caption, plus what could not be priced. */
+        val captionLine: String get() = caption + unpriced.orEmpty()
+    }
+
+    /**
+     * The stat, or null when there is no estimate — which is what a session whose
+     * transcript carried no usage at all gets. A stat reading "$0.00" over a
+     * session nobody could price is a claim; absence is not.
+     *
+     * The agents' share is stated only when there IS one: the daemon sends 0.0 for
+     * a run that never fanned out, and " · $0.00 of it in agents" is a clause
+     * about nothing.
+     */
+    fun costStat(estCost: EstCost?, agentEstCostUsd: Double? = null): CostStat? {
+        val est = estCost ?: return null
+        return CostStat(
+            value = "~" + usd(est.usd),
+            agentsShare = agentEstCostUsd
+                ?.takeIf { it.isFinite() && it > 0.0 }
+                ?.let { " · ~${usd(it)} of it in agents" },
+            unpriced = est.unpricedTokens
+                .takeIf { it > 0L }
+                ?.let { " · ${PlanFormat.compactTokens(it)} unpriced" },
+            caption = COST_CAPTION,
+        )
+    }
 }

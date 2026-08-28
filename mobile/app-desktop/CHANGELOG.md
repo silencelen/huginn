@@ -15,6 +15,16 @@ Attaching a page is a thing you ask for, not a thing on the screen.
   switch pages. A whole page riding out with a message has to be visible.
 - Against a daemon with no pages the button goes straight to the file dialog as
   before. A menu of one row is worse than no menu.
+- **A session's Overview now says what the run would have cost**: an "api cost"
+  stat priced at Anthropic's published API list rates per model — one blended
+  rate over a session that ran two models would be a number about nothing —
+  with cache writes billed at the TTL the record carries and the agents' share
+  named in the same chip ("~$457.00 · ~$112.02 of it in agents"). The quiet
+  line beneath, beside the cache split, says what the figure is: what those
+  tokens would bill on the API, covered by the subscription rather than
+  charged. Tokens on a model the rate table has never seen are named as
+  unpriced instead of folded into a total that would look complete, and a
+  session nothing could price gets no stat at all.
 
 ## 0.15.0
 
