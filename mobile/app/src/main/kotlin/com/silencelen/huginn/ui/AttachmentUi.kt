@@ -16,7 +16,6 @@ import androidx.compose.material.icons.outlined.Description
 import androidx.compose.material.icons.outlined.Image
 import androidx.compose.material.icons.outlined.PhotoCamera
 import androidx.compose.material3.DropdownMenu
-import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -79,16 +78,32 @@ fun AttachmentBar(attachment: HuginnViewModel.Attachment?, onClear: () -> Unit) 
 }
 
 /**
- * The attach menu: camera, photo library, or any file. All three are the
- * system's own UIs and none needs a runtime permission — TakePicture hands the
- * camera app a FileProvider URI to write into, the photo picker is
- * permissionless by design, and OpenDocument grants exactly the one document
- * picked.
+ * The attach menu: camera, photo library, any file — and, when the daemon has
+ * pages, one of those. The first three are the system's own UIs and none needs a
+ * runtime permission: TakePicture hands the camera app a FileProvider URI to
+ * write into, the photo picker is permissionless by design, and OpenDocument
+ * grants exactly the one document picked.
+ *
+ * "Notes page" opens a SECOND menu on the same anchor rather than nesting one,
+ * which is the same move the desktop's clip button makes — and it is why the row
+ * list is built by the shared [AttachChooser] instead of being written out here:
+ * the rule about whether that row exists at all belongs to the feature probe, not
+ * to either shell.
+ *
+ * @param pads already gated by the caller's probe. Empty means an older daemon,
+ *   and the menu is then exactly the three it has always been.
  */
 @Composable
-fun AttachButton(onPickImage: (Uri) -> Unit, onPickFile: (Uri) -> Unit) {
+fun AttachButton(
+    onPickImage: (Uri) -> Unit,
+    onPickFile: (Uri) -> Unit,
+    pads: List<com.silencelen.huginn.data.Scratchpad> = emptyList(),
+    padRefId: String? = null,
+    onPadRef: (String?) -> Unit = {},
+) {
     val context = LocalContext.current
     var menuOpen by remember { mutableStateOf(false) }
+    var pagePicker by remember { mutableStateOf(false) }
     // Held across the camera round trip: TakePicture only returns a boolean, so
     // the URI it wrote into has to survive the app being backgrounded meanwhile.
     var captureUri by rememberSaveable { mutableStateOf<Uri?>(null) }
@@ -105,8 +120,49 @@ fun AttachButton(onPickImage: (Uri) -> Unit, onPickFile: (Uri) -> Unit) {
         ActivityResultContracts.OpenDocument()
     ) { uri -> if (uri != null) onPickFile(uri) }
 
+    val rows = AttachChooser.rows(
+        own = listOf(
+            AttachRow("take-photo", "Take photo", Icons.Outlined.PhotoCamera) {
+                val dir = File(context.cacheDir, "captures").apply { mkdirs() }
+                // Yesterday's captures have been uploaded or abandoned; either
+                // way the full-res original has no further use here. Pruned on
+                // the next use rather than a schedule — a dir that only grows
+                // when the camera is used only needs sweeping then.
+                dir.listFiles()?.forEach {
+                    if (it.lastModified() < System.currentTimeMillis() - 86_400_000L) it.delete()
+                }
+                val uri = FileProvider.getUriForFile(
+                    context,
+                    "com.silencelen.huginn.fileprovider",
+                    File(dir, "cap-${System.currentTimeMillis()}.jpg"),
+                )
+                captureUri = uri
+                runCatching { takePicture.launch(uri) }
+            },
+            AttachRow("photo-library", "Photo library", Icons.Outlined.Image) {
+                pickImage.launch(
+                    PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
+                )
+            },
+            AttachRow("local-file", "Local file", Icons.Outlined.Description) {
+                // The server allowlists what Read can genuinely open (images,
+                // pdf, text); anything else fails fast with its words.
+                pickFile.launch(arrayOf("*/*"))
+            },
+        ),
+        padsAvailable = pads.isNotEmpty(),
+        onNotesPage = { pagePicker = true },
+    )
+    // Cannot fire here — the phone always offers its own three — but it is the
+    // same call the desktop leans on, and special-casing it would be a second
+    // rule about the same menu.
+    val sole = AttachChooser.direct(rows)
+
     Box {
-        IconButton(onClick = { menuOpen = true }, modifier = Modifier.size(46.dp)) {
+        IconButton(
+            onClick = { if (sole != null) sole.onPick() else menuOpen = true },
+            modifier = Modifier.size(46.dp),
+        ) {
             Icon(
                 Icons.Outlined.AttachFile,
                 contentDescription = "Attach",
@@ -114,48 +170,10 @@ fun AttachButton(onPickImage: (Uri) -> Unit, onPickFile: (Uri) -> Unit) {
             )
         }
         DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
-            DropdownMenuItem(
-                text = { Text("Take photo") },
-                leadingIcon = { Icon(Icons.Outlined.PhotoCamera, null) },
-                onClick = {
-                    menuOpen = false
-                    val dir = File(context.cacheDir, "captures").apply { mkdirs() }
-                    // Yesterday's captures have been uploaded or abandoned; either
-                    // way the full-res original has no further use here. Pruned on
-                    // the next use rather than a schedule — a dir that only grows
-                    // when the camera is used only needs sweeping then.
-                    dir.listFiles()?.forEach {
-                        if (it.lastModified() < System.currentTimeMillis() - 86_400_000L) it.delete()
-                    }
-                    val uri = FileProvider.getUriForFile(
-                        context,
-                        "com.silencelen.huginn.fileprovider",
-                        File(dir, "cap-${System.currentTimeMillis()}.jpg"),
-                    )
-                    captureUri = uri
-                    runCatching { takePicture.launch(uri) }
-                },
-            )
-            DropdownMenuItem(
-                text = { Text("Photo library") },
-                leadingIcon = { Icon(Icons.Outlined.Image, null) },
-                onClick = {
-                    menuOpen = false
-                    pickImage.launch(
-                        PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
-                    )
-                },
-            )
-            DropdownMenuItem(
-                text = { Text("File") },
-                leadingIcon = { Icon(Icons.Outlined.Description, null) },
-                onClick = {
-                    menuOpen = false
-                    // The server allowlists what Read can genuinely open (images,
-                    // pdf, text); anything else fails fast with its words.
-                    pickFile.launch(arrayOf("*/*"))
-                },
-            )
+            AttachChooserItems(rows) { menuOpen = false; it.onPick() }
+        }
+        DropdownMenu(expanded = pagePicker, onDismissRequest = { pagePicker = false }) {
+            ScratchpadPickerItems(pads, padRefId) { pagePicker = false; onPadRef(it) }
         }
     }
 }

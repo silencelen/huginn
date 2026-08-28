@@ -396,10 +396,12 @@ private fun SessionConversation(
             // The page a session's Claude will be pointed at. It reaches the pane
             // as a PATH — a page holds more than a pane accepts in one paste — so
             // the run reads it rather than being handed it.
-            if (pads.isNotEmpty()) {
-                ScratchpadChip(
+            // ONLY when one is set — the invitation to attach moved into the
+            // attach button's chooser, which is where "attach" already lives.
+            pads.firstOrNull { it.id == padRefId }?.let { chosen ->
+                ScratchpadRefBadge(
+                    pad = chosen,
                     pads = pads,
-                    selectedId = padRefId,
                     onSelect = onPadRef,
                     modifier = Modifier.padding(start = 8.dp, top = 4.dp),
                 )
@@ -422,7 +424,13 @@ private fun SessionConversation(
                     shape = RoundedCornerShape(20.dp),
                 )
                 Spacer(Modifier.width(6.dp))
-                AttachButton(onPickImage = onAttach, onPickFile = onAttachFile)
+                AttachButton(
+                    onPickImage = onAttach,
+                    onPickFile = onAttachFile,
+                    pads = pads,
+                    padRefId = padRefId,
+                    onPadRef = onPadRef,
+                )
                 DictationMicButton(
                     micGranted = micGranted,
                     onRequestMic = onRequestMic,

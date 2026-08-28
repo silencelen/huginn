@@ -3,10 +3,12 @@ package com.silencelen.huginn.desktop.attach
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.draganddrop.dragAndDropTarget
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -16,11 +18,14 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AttachFile
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Image
+import androidx.compose.material.icons.outlined.AttachFile
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.Modifier
@@ -32,6 +37,11 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.AwtWindow
 import com.silencelen.huginn.data.HuginnClient
+import com.silencelen.huginn.data.Scratchpad
+import com.silencelen.huginn.ui.AttachChooser
+import com.silencelen.huginn.ui.AttachChooserItems
+import com.silencelen.huginn.ui.AttachRow
+import com.silencelen.huginn.ui.ScratchpadPickerItems
 import kotlinx.coroutines.CoroutineScope
 import java.awt.FileDialog
 import java.awt.Frame
@@ -114,11 +124,58 @@ fun AttachChip(attachment: ComposerAttachment, onRemove: () -> Unit) {
     }
 }
 
-/** The clip button. A TextButton so it sits on the composer's baseline with Send. */
+/**
+ * The clip button, and the choice behind it. A TextButton so it sits on the
+ * composer's baseline with Send.
+ *
+ * Two menus on ONE anchor, opened in sequence: the chooser ("Local file" /
+ * "Notes page"), and then — if the page row is taken — the pages themselves. A
+ * submenu proper would need a second anchor a few pixels off this one; hopping
+ * the same popup between two lists keeps the whole interaction under the button
+ * that was pressed.
+ *
+ * With pages unavailable there is only one row, and the button goes STRAIGHT to
+ * the file dialog exactly as it did before this menu existed — [AttachChooser.direct].
+ *
+ * @param pads already gated by the caller's feature probe: empty means the daemon
+ *   has no pages route, which is the only form this control sees that fact in.
+ */
 @Composable
-fun AttachButton(enabled: Boolean = true, onClick: () -> Unit) {
-    TextButton(onClick = onClick, enabled = enabled) {
-        Icon(Icons.Filled.AttachFile, contentDescription = "Attach a file")
+fun AttachButton(
+    enabled: Boolean = true,
+    pads: List<Scratchpad> = emptyList(),
+    padRefId: String? = null,
+    onPadRef: (String?) -> Unit = {},
+    onPickFile: () -> Unit,
+) {
+    var chooser by remember { mutableStateOf(false) }
+    var pagePicker by remember { mutableStateOf(false) }
+
+    val rows = AttachChooser.rows(
+        own = listOf(
+            AttachRow("local-file", "Local file", Icons.Outlined.AttachFile, onPickFile)
+        ),
+        padsAvailable = pads.isNotEmpty(),
+        onNotesPage = { pagePicker = true },
+    )
+    val sole = AttachChooser.direct(rows)
+
+    Box {
+        TextButton(
+            onClick = { if (sole != null) sole.onPick() else chooser = true },
+            enabled = enabled,
+        ) {
+            Icon(
+                Icons.Filled.AttachFile,
+                contentDescription = if (sole != null) "Attach a file" else "Attach",
+            )
+        }
+        DropdownMenu(expanded = chooser, onDismissRequest = { chooser = false }) {
+            AttachChooserItems(rows) { chooser = false; it.onPick() }
+        }
+        DropdownMenu(expanded = pagePicker, onDismissRequest = { pagePicker = false }) {
+            ScratchpadPickerItems(pads, padRefId) { pagePicker = false; onPadRef(it) }
+        }
     }
 }
 

@@ -1,5 +1,21 @@
 # Huginn Desktop changelog
 
+## 0.16.0
+
+Attaching a page is a thing you ask for, not a thing on the screen.
+
+- **The clip button now asks what kind**: "Local file" or "Notes page". The
+  first is the file dialog it always opened; the second is the page list the
+  composer chip used to hold. Both chat and session composers.
+- **The standing "Attach a page" chip is gone.** It sat above every message box
+  permanently offering something used occasionally, and the button beside it
+  already meant attach.
+- **A page you HAVE attached still says so** — the same compact mark by the
+  composer with its name and the ✕ to send without it, still clickable to
+  switch pages. A whole page riding out with a message has to be visible.
+- Against a daemon with no pages the button goes straight to the file dialog as
+  before. A menu of one row is worse than no menu.
+
 ## 0.15.0
 
 The devnotes wave: everything on the owner's list — pages you keep, a place to
