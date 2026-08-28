@@ -340,6 +340,16 @@ fun main(args: Array<String>) {
             exitApplication()
         }
 
+        // The one way a screen can ask to be quit, and the only reason one does:
+        // Settings' "Install and restart" has handed the machine to an installer
+        // that has to replace files this process holds open. Collected here
+        // because `quit` above is the only exit that releases the lease and
+        // flushes the landing position — a view calling exitProcess would skip
+        // both. The flow is a latch, so arriving late still sees it.
+        LaunchedEffect(Unit) {
+            store.quitRequested.collect { if (it) quit() }
+        }
+
         // VISIBILITY, from the window's real state rather than assumed. BOTH
         // minimized and hidden-to-tray count as invisible: a window that keeps
         // polling while nobody can see it renews the tmux size lease, pinning

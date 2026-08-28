@@ -45,6 +45,7 @@ import com.silencelen.huginn.desktop.CliSync
 import com.silencelen.huginn.desktop.LocalServe
 import com.silencelen.huginn.desktop.diag.AppLog
 import com.silencelen.huginn.desktop.update.UpdateState
+import com.silencelen.huginn.desktop.update.installThenQuit
 import kotlinx.coroutines.launch
 import java.awt.Desktop
 import java.net.URI
@@ -564,7 +565,16 @@ private fun UpdateSection(store: AppStore) {
             onClick = { scope.launch { store.updater.check() } },
         ) { Text("Check now") }
         (state as? UpdateState.Ready)?.let { ready ->
-            Button(enabled = ready.installable, onClick = { store.updater.install() }) { Text("Install and restart") }
+            // And restart, which until now it only claimed: the installer cannot
+            // replace files this process holds open, and it closes this client
+            // itself if we do not — killing the process TREE it is standing in,
+            // since it is a child of this JVM. So we leave, it installs, and its
+            // finish page brings the app back. [installThenQuit] holds the rule
+            // that this only happens when the launch really took.
+            Button(
+                enabled = ready.installable,
+                onClick = { installThenQuit(install = store.updater::install, quit = store::requestQuit) },
+            ) { Text("Install and restart") }
         }
     }
     (state as? UpdateState.Ready)?.takeIf { !it.installable }?.let {

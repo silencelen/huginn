@@ -87,6 +87,24 @@ class AppStore(
     val updater = DesktopUpdater()
 
     /**
+     * "Quit, when you can" — asked for from a view, which cannot do it itself.
+     *
+     * Only the application scope ends this process properly: Main's `quit`
+     * releases the tmux size lease, flushes the landing position and closes the
+     * notifier and the single-instance socket, and none of those are reachable
+     * from a screen. The self-updater's "Install and restart" needs exactly
+     * that, because the installer it has just started cannot replace files this
+     * process holds open.
+     *
+     * A latch and not an event: it is one-way and terminal, so a collector that
+     * arrives a frame late must still see it rather than miss the only emission.
+     */
+    private val _quitRequested = MutableStateFlow(false)
+    val quitRequested: StateFlow<Boolean> = _quitRequested.asStateFlow()
+
+    fun requestQuit() { _quitRequested.value = true }
+
+    /**
      * The tmux size lease, held at APP level because its release paths do not
      * share a lifetime: leaving a session view is a composition event, minimizing
      * is a window event, and being killed is neither. A per-view owner could only
