@@ -207,7 +207,8 @@ They are kept for the reasoning, not as instructions.
 All five build phases are done and the Compose client is in real use on the
 owner's machine. **New feature work goes to `mobile/app-desktop`**; the Electron
 client at `desktop/` takes security and data-loss fixes only — see
-[`../desktop/DEPRECATED.md`](../desktop/DEPRECATED.md). For how to add something
+`desktop/DEPRECATED.md` (deleted with the tree on 2026-08-27; the close-out
+above is what remains of it). For how to add something
 to both clients at once, see [`ADDING-A-FEATURE.md`](ADDING-A-FEATURE.md).
 
 **Not yet done, deliberately:** the owner's installed Electron client is still
