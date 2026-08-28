@@ -1,5 +1,18 @@
 # Huginn changelog
 
+## 2.87.0 — 2026-08-27
+
+The question card stops following you to the Screen tab.
+
+### Fixed
+- **A question's buttons no longer draw over the Screen tab.** That tab is
+  where you go to answer what the buttons cannot handle — a multi-part
+  question's card says so itself — and the card then drew itself on top of
+  the very pane it had just sent you to. The conversation keeps its card
+  exactly as before; the rule (a question shows its card on every face
+  except the live terminal) now lives in one shared place for both the
+  phone and the desktop, so the two clients cannot drift apart on it.
+
 ## 2.86.0 — 2026-08-27
 
 Attaching a page is a thing you ask for, not a thing on the screen.
