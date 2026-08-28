@@ -420,38 +420,36 @@ private fun RenamePadDialog(
 // -------------------------------------------------------------- the composer
 
 /**
- * The composer's reference control: which page, if any, rides along with the next
- * message.
+ * WHICH page is attached — and nothing at all when none is.
  *
- * ONE control with one verb, not a button plus a chip. Empty it invites, filled
- * it names the page and offers the ✕ — because "attach a page" and "which page is
- * attached" are the same question asked at two moments, and two controls for that
- * is a row of chrome above every composer for the sake of a feature used
- * occasionally.
+ * This used to be one control doing two jobs: empty it read "Attach a page", set
+ * it named the page. The invitation is gone, because a standing offer above every
+ * composer is a row of chrome for a feature used occasionally, and the attach
+ * button already means "attach"; that is where the choice lives now (see
+ * [AttachChooser]). What is left is the half that cannot go: a whole page riding
+ * out with the next message has to be VISIBLE, or the message carries something
+ * its sender cannot see.
+ *
+ * Still tappable, and for the same reason it still exists — the page it names is
+ * the page being sent, so changing it is a fact about this message, not a new
+ * attachment. ✕ sends without one.
  *
  * Quiet on purpose: this sits above a text field somebody is writing in, and the
- * message is the thing on that screen worth looking at.
+ * message is the thing on that screen worth looking at. A tonal fill and
+ * full-strength ink, both of which the surface already owns: no accent, no badge.
  */
 @Composable
-fun ScratchpadChip(
+fun ScratchpadRefBadge(
+    pad: Scratchpad,
     pads: List<Scratchpad>,
-    selectedId: String?,
     onSelect: (String?) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     var open by remember { mutableStateOf(false) }
-    val chosen = pads.firstOrNull { it.id == selectedId }
     Box(modifier) {
-        // SET OUTWEIGHS ITS OWN INVITATION. Empty, this is an offer and should sit
-        // under everything else on the composer. Filled, it is a promise that a
-        // whole page rides out with the next message — and drawn in the same
-        // muted ink as the placeholder it replaced, it read as quieter than the
-        // composer's own greyed-out hint. A tonal fill and full-strength ink, both
-        // of which the surface already owns: no accent, no badge.
         Surface(
-            color = if (chosen != null) MaterialTheme.colorScheme.surfaceVariant else Color.Transparent,
-            contentColor = if (chosen != null) MaterialTheme.colorScheme.onSurface
-            else MaterialTheme.colorScheme.onSurfaceVariant,
+            color = MaterialTheme.colorScheme.surfaceVariant,
+            contentColor = MaterialTheme.colorScheme.onSurface,
             shape = RoundedCornerShape(8.dp),
         ) {
             Row(
@@ -465,55 +463,73 @@ fun ScratchpadChip(
                 )
                 Spacer(Modifier.width(6.dp))
                 Text(
-                    chosen?.name ?: "Attach a page",
+                    pad.name,
                     style = MaterialTheme.typography.labelMedium,
-                    fontWeight = if (chosen != null) FontWeight.SemiBold else FontWeight.Normal,
+                    fontWeight = FontWeight.SemiBold,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                     // A long page name must not push Send off a narrow composer.
                     modifier = Modifier.widthIn(max = 132.dp),
                 )
-                if (chosen != null) {
-                    IconButton(
-                        onClick = { onSelect(null) },
-                        modifier = Modifier.size(22.dp),
-                    ) {
-                        Icon(
-                            Icons.Filled.Close,
-                            contentDescription = "Send without a page",
-                            modifier = Modifier.size(14.dp),
-                        )
-                    }
+                IconButton(
+                    onClick = { onSelect(null) },
+                    modifier = Modifier.size(22.dp),
+                ) {
+                    Icon(
+                        Icons.Filled.Close,
+                        contentDescription = "Send without a page",
+                        modifier = Modifier.size(14.dp),
+                    )
                 }
             }
         }
         DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
-            if (pads.isEmpty()) {
-                DropdownMenuItem(
-                    text = { Text("No pages yet", style = MaterialTheme.typography.bodyMedium) },
-                    enabled = false,
-                    onClick = {},
-                )
-            }
-            pads.forEach { p ->
-                DropdownMenuItem(
-                    text = {
-                        Text(
-                            p.name,
-                            style = MaterialTheme.typography.bodyMedium,
-                            fontWeight = if (p.id == selectedId) FontWeight.SemiBold else FontWeight.Normal,
-                        )
-                    },
-                    onClick = { open = false; onSelect(p.id) },
-                )
-            }
-            if (chosen != null) {
-                HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
-                DropdownMenuItem(
-                    text = { Text("No page", style = MaterialTheme.typography.bodyMedium) },
-                    onClick = { open = false; onSelect(null) },
-                )
-            }
+            ScratchpadPickerItems(pads, pad.id) { open = false; onSelect(it) }
         }
+    }
+}
+
+/**
+ * The page picker's rows: every page, and — once one is attached — the way back
+ * to none.
+ *
+ * Rows rather than a menu, so the two places that ask "which page" can put them
+ * in their own framing: the badge hangs them off itself, and each composer's
+ * attach chooser hangs them off the clip button under "Notes page". Same list,
+ * same order, same bold-for-current, wherever it is asked from.
+ *
+ * [onPick] is handed null for "No page"; the caller closes its own menu.
+ */
+@Composable
+fun ScratchpadPickerItems(
+    pads: List<Scratchpad>,
+    selectedId: String?,
+    onPick: (String?) -> Unit,
+) {
+    if (pads.isEmpty()) {
+        DropdownMenuItem(
+            text = { Text("No pages yet", style = MaterialTheme.typography.bodyMedium) },
+            enabled = false,
+            onClick = {},
+        )
+    }
+    pads.forEach { p ->
+        DropdownMenuItem(
+            text = {
+                Text(
+                    p.name,
+                    style = MaterialTheme.typography.bodyMedium,
+                    fontWeight = if (p.id == selectedId) FontWeight.SemiBold else FontWeight.Normal,
+                )
+            },
+            onClick = { onPick(p.id) },
+        )
+    }
+    if (pads.any { it.id == selectedId }) {
+        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+        DropdownMenuItem(
+            text = { Text("No page", style = MaterialTheme.typography.bodyMedium) },
+            onClick = { onPick(null) },
+        )
     }
 }

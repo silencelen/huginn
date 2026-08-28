@@ -60,7 +60,7 @@ import com.silencelen.huginn.data.DraftBook
 import com.silencelen.huginn.data.HuginnClient
 import com.silencelen.huginn.data.TranscriptEvent
 import com.silencelen.huginn.ui.Escalation
-import com.silencelen.huginn.ui.ScratchpadChip
+import com.silencelen.huginn.ui.ScratchpadRefBadge
 import com.silencelen.huginn.ui.ScratchpadRules
 import com.silencelen.huginn.ui.ModelLabels
 import com.silencelen.huginn.ui.SealedNote
@@ -526,9 +526,12 @@ private fun Composer(
             )
             .padding(12.dp),
     ) {
-        if (pads.isNotEmpty()) {
+        // ONLY when one is set. The empty-state invitation moved into the attach
+        // button's chooser; what stays is the mark that a whole page is riding
+        // out with this message.
+        pads.firstOrNull { it.id == padRefId }?.let { chosen ->
             Row(Modifier.fillMaxWidth().padding(bottom = 4.dp)) {
-                ScratchpadChip(pads = pads, selectedId = padRefId, onSelect = onPadRef)
+                ScratchpadRefBadge(pad = chosen, pads = pads, onSelect = onPadRef)
             }
         }
         pending?.let {
@@ -574,7 +577,12 @@ private fun Composer(
     if (field.text != draft) {
         field = TextFieldValue(draft, TextRange(draft.length))
     }
-            AttachButton { picking = true }
+            AttachButton(
+                pads = pads,
+                padRefId = padRefId,
+                onPadRef = onPadRef,
+                onPickFile = { picking = true },
+            )
             OutlinedTextField(
                 value = field,
                 onValueChange = { field = it; onDraft(it.text); exitRecallIfDiverged(recall, it.text) },
