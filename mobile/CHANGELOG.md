@@ -18,6 +18,19 @@ Attaching a page is a thing you ask for, not a thing on the screen.
   silently, so that half stays exactly where it was.
 - Against an older daemon with no pages, the menu is the three it has always
   been — nothing offers a route that can only fail.
+- **The Overview now says what the session would have cost.** An "api cost"
+  stat, priced at Anthropic's published API list rates **per model** — a run
+  that used opus for the work and haiku for a subagent has no single blended
+  rate — with cache writes billed at the TTL the record actually carries, and
+  the fan-out's share named beside it: "~$457.00 · ~$112.02 of it in agents".
+  Under it, in the same quiet line as the cache split, is what the figure IS:
+  what this session's tokens would bill at API list rates, covered by the
+  subscription and not a bill. That caption is the reason the number is
+  allowed on the screen at all — the version that shipped this tab withheld
+  dollars entirely, because the client would have had to invent them, and the
+  daemon prices them now. Tokens on a model it has never seen are counted and
+  said out loud rather than rounded into a total that would look complete, and
+  a session nothing could price shows no figure rather than a zero.
 
 ## 2.85.0 — 2026-08-27
 
