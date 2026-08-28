@@ -1,5 +1,24 @@
 # Huginn changelog
 
+## 2.86.0 — 2026-08-27
+
+Attaching a page is a thing you ask for, not a thing on the screen.
+
+### Changed
+- **The attach button asks what kind.** Tap the clip and choose — Take photo,
+  Photo library, Local file, or **Notes page**, which opens the same page list
+  the chip used to. Everything the button already did is still one tap and a
+  choice away; the page is simply in the same place as the rest of it.
+- **The standing "Attach a page" chip is gone** from every composer, chats and
+  sessions alike. It was a row of chrome above every message box, permanently
+  offering something used occasionally.
+- **A page you HAVE attached still says so**, in the same compact mark by the
+  composer — its name, and the ✕ to send without it. Tapping it still switches
+  pages. A whole page riding out with a message is not something to send
+  silently, so that half stays exactly where it was.
+- Against an older daemon with no pages, the menu is the three it has always
+  been — nothing offers a route that can only fail.
+
 ## 2.85.0 — 2026-08-27
 
 The devnotes wave: everything on the owner's list — pages you keep, a place to

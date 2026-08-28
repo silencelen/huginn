@@ -343,11 +343,12 @@ private fun Composer(
       Column {
         // Above the box rather than inside the row: the reference is a fact about
         // the message being written, and the row below is already four controls
-        // deep on a phone.
-        if (pads.isNotEmpty()) {
-            ScratchpadChip(
+        // deep on a phone. ONLY when one is set — the invitation to attach moved
+        // into the attach button's chooser, which is where "attach" already lives.
+        pads.firstOrNull { it.id == padRefId }?.let { chosen ->
+            ScratchpadRefBadge(
+                pad = chosen,
                 pads = pads,
-                selectedId = padRefId,
                 onSelect = onPadRef,
                 modifier = Modifier.padding(start = 8.dp, top = 4.dp),
             )
@@ -376,7 +377,13 @@ private fun Composer(
                 shape = RoundedCornerShape(20.dp),
             )
             Spacer(Modifier.width(6.dp))
-            AttachButton(onPickImage = onAttach, onPickFile = onAttachFile)
+            AttachButton(
+                onPickImage = onAttach,
+                onPickFile = onAttachFile,
+                pads = pads,
+                padRefId = padRefId,
+                onPadRef = onPadRef,
+            )
             DictationMicButton(
                 micGranted = micGranted,
                 onRequestMic = onRequestMic,

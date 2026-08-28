@@ -112,7 +112,7 @@ import com.silencelen.huginn.ui.ModelLabels
 import com.silencelen.huginn.ui.NewestPill
 import com.silencelen.huginn.ui.onScrollInput
 import com.silencelen.huginn.ui.PromptCard
-import com.silencelen.huginn.ui.ScratchpadChip
+import com.silencelen.huginn.ui.ScratchpadRefBadge
 import com.silencelen.huginn.ui.ScratchpadRules
 import com.silencelen.huginn.ui.SkiaCellPainter
 import com.silencelen.huginn.ui.Suggest
@@ -1145,9 +1145,12 @@ private fun Composer(
             )
             .padding(12.dp),
     ) {
-        if (pads.isNotEmpty()) {
+        // ONLY when one is set. The empty-state invitation moved into the attach
+        // button's chooser; what stays is the mark that a whole page is riding
+        // out with this message.
+        pads.firstOrNull { it.id == padRefId }?.let { chosen ->
             Row(Modifier.fillMaxWidth().padding(bottom = 4.dp)) {
-                ScratchpadChip(pads = pads, selectedId = padRefId, onSelect = onPadRef)
+                ScratchpadRefBadge(pad = chosen, pads = pads, onSelect = onPadRef)
             }
         }
         pending?.let {
@@ -1171,7 +1174,12 @@ private fun Composer(
             verticalAlignment = Alignment.Bottom,
             horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            AttachButton { picking = true }
+            AttachButton(
+                pads = pads,
+                padRefId = padRefId,
+                onPadRef = onPadRef,
+                onPickFile = { picking = true },
+            )
     // Same TextFieldValue as the chat composer, for the same reason: Shift+Enter
     // has to insert the newline itself, and appending to the String is silently
     // discarded by the field's own editing buffer. See ChatView for the detail.
