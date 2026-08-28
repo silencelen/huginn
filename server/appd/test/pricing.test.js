@@ -16,7 +16,7 @@
 const { test } = require('node:test');
 const assert = require('node:assert');
 
-const { matchFamily, priceTokens, RATES } = require('../lib/pricing');
+const { matchFamily, priceTokens, bucketKey, RATES, ERA_RATES } = require('../lib/pricing');
 
 /** One model's counted tokens, with everything the accumulator would have set. */
 function tokens(t = {}) {
@@ -119,6 +119,110 @@ test('a cache write with no TTL split prices at the CHEAPER 5-minute rate', () =
     'claude-opus-5': tokens({ cacheCreation5m: MILLION, cacheCreation1h: MILLION }),
   }).usd;
   assert.equal(split, 16.25, '6.25 at the 5m rate plus 10 at the 1h rate');
+});
+
+// ------------------------------------------------------------- the rate eras
+//
+// A price is a fact about a MOMENT, and the table above only knows about today.
+// Sonnet 5 launched on an introductory rate — $2/$10 per MTok against the $3/$15
+// sticker — and every token spent inside that window was spent at it, whether it
+// is priced today or in a year. So a record carries its timestamp to the pricer
+// and gets the card that was in force when it was written.
+//
+// The window is stated in UTC and closes at 2026-09-01T00:00:00Z, which is the
+// first sticker-priced second: "through 2026-08-31" is a date, and a date ends
+// where the next one begins.
+
+/** Epoch SECONDS, the unit a transcript's timestamps reach the pricer in. */
+const at = (iso) => Date.parse(iso) / 1000;
+const IN_WINDOW = at('2026-08-30T12:00:00Z');
+const BOUNDARY = at('2026-09-01T00:00:00Z');
+
+/** One model's tokens, priced as of a moment. */
+function priceAt(model, ts, t) {
+  return priceTokens({ [bucketKey(model, ts)]: tokens(t) });
+}
+
+test('a Sonnet 5 record inside the intro window prices at the rate that was in force', () => {
+  // The whole point: not a four-day patch that expires with the window, but the
+  // permanent answer for tokens that were spent while it was open. A session
+  // from August priced next March still bills at what August cost.
+  assert.equal(priceAt('claude-sonnet-5', IN_WINDOW, { input: MILLION }).usd, 2);
+  assert.equal(priceAt('claude-sonnet-5', IN_WINDOW, { output: MILLION }).usd, 10);
+  assert.notEqual(priceAt('claude-sonnet-5', IN_WINDOW, { output: MILLION }).usd, 15,
+    'the sticker rate would overstate that model by a third');
+  // And the cache rates ride the era's input rate, not the sticker one — on a
+  // cache-heavy session that is most of the difference.
+  assert.equal(priceAt('claude-sonnet-5', IN_WINDOW, { cacheRead: MILLION }).usd, 0.2);
+  assert.equal(priceAt('claude-sonnet-5', IN_WINDOW, { cacheCreationUnsplit: MILLION }).usd, 2.5);
+});
+
+test('the boundary second is the FIRST one at sticker, not the last one at intro', () => {
+  // An off-by-one here is a whole day priced wrong and nothing on screen looks
+  // different, so both sides of the instant are pinned rather than "a date in
+  // September".
+  const out = { output: MILLION };
+  assert.equal(priceAt('claude-sonnet-5', BOUNDARY - 1, out).usd, 10, 'the last intro second');
+  assert.equal(priceAt('claude-sonnet-5', BOUNDARY, out).usd, 15, 'the first sticker second');
+  assert.equal(priceAt('claude-sonnet-5', BOUNDARY + 86_400, out).usd, 15, 'and every one after it');
+});
+
+test('the era is Sonnet 5\'s alone — its family sibling was never on it', () => {
+  // ⚠ THE FAILURE THIS EXISTS FOR. `matchFamily` matches a family on a LOOSE
+  // substring ('sonnet'), which is safe because families are disjoint out there.
+  // An era sits INSIDE a family, so it cannot borrow that looseness: sonnet-4-6
+  // has been $3/$15 its whole life, and an era that leaked onto it would
+  // understate every 4-6 session by a third with a perfectly plausible number.
+  const out = { output: MILLION };
+  assert.equal(priceAt('claude-sonnet-4-6', IN_WINDOW, out).usd, 15, 'inside the window');
+  assert.equal(priceAt('claude-sonnet-4-6', BOUNDARY, out).usd, 15, 'and outside it');
+
+  // The dated variants of Sonnet 5 itself DO belong to it — those are the ids
+  // that actually reach a transcript.
+  assert.equal(priceAt('claude-sonnet-5-20260815', IN_WINDOW, out).usd, 10);
+  assert.equal(priceAt('anthropic.claude-sonnet-5', IN_WINDOW, out).usd, 10, 'and the Bedrock form');
+
+  // Nothing else in the table moved.
+  assert.equal(priceAt('claude-opus-5', IN_WINDOW, out).usd, 25);
+  assert.equal(priceAt('claude-haiku-4-5', IN_WINDOW, out).usd, 5);
+});
+
+test('a record with no timestamp takes the CHEAPER of the two cards it might have been', () => {
+  // The same rule the unsplit cache write follows, for the same reason: an
+  // estimate put in front of a person should under-state what it cannot
+  // evidence rather than invent spend it has no record of. An undated Sonnet 5
+  // record was written either side of the boundary and nothing says which, so it
+  // takes the intro card.
+  const out = { output: MILLION };
+  assert.equal(priceAt('claude-sonnet-5', null, out).usd, 10, 'the intro rate');
+  assert.equal(priceAt('claude-sonnet-5', undefined, out).usd, 10, 'however the absence arrives');
+  assert.notEqual(priceAt('claude-sonnet-5', null, out).usd, 15);
+  assert.equal(bucketKey('claude-sonnet-5', null), bucketKey('claude-sonnet-5', IN_WINDOW),
+    'and it lands in the same bucket as a record that says it was in the window');
+});
+
+test('a model priced on both sides of a boundary is ONE row, summed at the right rates', () => {
+  // The wire shape does not change: `byModel` is one row per model NAME, and a
+  // session that ran across the boundary shows a single claude-sonnet-5 row
+  // whose dollars are the era-correct sum. Two rows for one model would be a
+  // client rendering the same model twice and a total nobody can check.
+  const res = priceTokens({
+    [bucketKey('claude-sonnet-5', IN_WINDOW)]: tokens({ output: MILLION }),  // $10
+    [bucketKey('claude-sonnet-5', BOUNDARY)]: tokens({ output: MILLION }),   // $15
+  });
+  assert.deepEqual(res.byModel, [{ model: 'claude-sonnet-5', usd: 25 }]);
+  assert.equal(res.usd, 25);
+  assert.equal(res.unpricedTokens, 0);
+});
+
+test('an era card derives its cache rates the same way a family card does', () => {
+  // The invariant the family table is built on, held on the second table too: a
+  // corrected base rate can never leave a stale cache rate sitting beside it.
+  for (const [era, r] of Object.entries(ERA_RATES)) {
+    assert.equal(r.cacheRead, r.input * 0.1, `${era} cache read`);
+    assert.equal(r.cacheWrite5m, r.input * 1.25, `${era} 5m write`);
+    assert.equal(r.cacheWrite1h, r.input * 2, `${era} 1h write`);
+  }
 });
 
 // ------------------------------------------------------------------ the edges

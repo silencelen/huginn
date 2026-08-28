@@ -859,6 +859,70 @@ test('a session that has spent nothing says null rather than a dollar figure', (
   assert.equal(g.totals.agentEstCostUsd, null);
 });
 
+// A price is a fact about a moment: Sonnet 5's introductory rate ($2/$10 per
+// MTok against the $3/$15 sticker) closed at 2026-09-01T00:00:00Z, and tokens
+// spent while it was open were spent at it. The walker's job here is only to
+// carry each record's OWN timestamp to the pricer — on both paths.
+const IN_WINDOW = '2026-08-30T12:00:00Z';
+const AT_STICKER = '2026-09-02T12:00:00Z';
+
+test('a session spanning a rate boundary prices each record at the rate in force', () => {
+  // Both records name the same model, so the wire still shows ONE row — a
+  // client that renders a breakdown must not suddenly see claude-sonnet-5
+  // twice. What changes is the dollars inside it.
+  resetCache();
+  const dir = tmpdir();
+  const file = write(dir, 'sce9.jsonl', [
+    userSays('go', 0),
+    assistant('r1', 1, [{ type: 'text', text: 'a' }], { i: 0, o: 1_000_000 },
+      { model: 'claude-sonnet-5', timestamp: IN_WINDOW }),
+    assistant('r2', 2, [{ type: 'text', text: 'b' }], { i: 0, o: 1_000_000 },
+      { model: 'claude-sonnet-5', timestamp: AT_STICKER }),
+  ]);
+  const g = sessionGraph(file, 'sce9');
+  assert.equal(g.totals.estCost.usd, 25, '$10 at the intro output rate plus $15 at the sticker one');
+  assert.notEqual(g.totals.estCost.usd, 30, 'not both at sticker, which is the whole gap');
+  assert.deepEqual(g.totals.estCost.byModel, [{ model: 'claude-sonnet-5', usd: 25 }],
+    'one row per model NAME, whatever eras it was spread across');
+});
+
+test('an AGENT\'s records carry their own timestamps to the pricer too', () => {
+  // ⚠ THE ONE NOTHING ON SCREEN WOULD LOOK WRONG FOR. The agent path is a second
+  // accumulation with its own call into the pricer, so a timestamp threaded
+  // through the spine and forgotten here leaves every agent's Sonnet 5 spend at
+  // the undated fallback — and the fallback is the CHEAPER card, so it would be
+  // silently correct for the intro-window record and silently wrong for the one
+  // after it. That is why this agent writes on BOTH sides of the boundary:
+  // pricing the pair at one rate is wrong in one direction before the fix and
+  // the other direction if the timestamp is ever dropped again.
+  resetCache();
+  const dir = tmpdir();
+  const sid = 'sce10';
+  const file = write(dir, `${sid}.jsonl`, [
+    userSays('fan out', 0),
+    assistant('r1', 1, [{ type: 'tool_use', id: 'ag1', name: 'Agent', input: { description: 'look' } }],
+      { i: 0, o: 2_000_000 }, { model: 'claude-opus-5' }),
+  ]);
+  const subs = path.join(dir, sid, 'subagents');
+  fs.mkdirSync(subs, { recursive: true });
+  fs.writeFileSync(path.join(subs, 'agent-a1.meta.json'),
+    JSON.stringify({ toolUseId: 'ag1', agentType: 'Explore' }));
+  fs.writeFileSync(path.join(subs, 'agent-a1.jsonl'), [
+    assistant('a-r1', 2, [{ type: 'text', text: 'in the window' }], { i: 0, o: 1_000_000 },
+      { model: 'claude-sonnet-5', timestamp: IN_WINDOW }),
+    assistant('a-r2', 3, [{ type: 'text', text: 'after it' }], { i: 0, o: 1_000_000 },
+      { model: 'claude-sonnet-5', timestamp: AT_STICKER }),
+  ].map((r) => JSON.stringify(r)).join('\n') + '\n');
+
+  const g = sessionGraph(file, sid);
+  assert.equal(g.totals.agentEstCostUsd, 25, '$10 inside the window, $15 after it');
+  assert.notEqual(g.totals.agentEstCostUsd, 30, 'not both at sticker');
+  assert.notEqual(g.totals.agentEstCostUsd, 20, 'and not both at the undated fallback');
+  assert.equal(g.totals.estCost.usd, 75, '$50 of opus output on the spine, plus the agent');
+  assert.deepEqual(g.totals.estCost.byModel.find((r) => r.model === 'claude-sonnet-5'),
+    { model: 'claude-sonnet-5', usd: 25 }, 'still one row for the agent\'s model');
+});
+
 test('the overview carries the estimate too, or the cheap route is the one without the number', () => {
   // The overview strips the map and keeps the header — and the cost estimate is
   // header, not map. It rides `totals`, so it survives the strip by

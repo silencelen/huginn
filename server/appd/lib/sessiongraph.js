@@ -44,7 +44,7 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const { listAgentFiles, journalSummaries, journalSettled, agentTask, ACTIVE_S } = require('./agents');
-const { priceTokens } = require('./pricing');
+const { priceTokens, bucketKey } = require('./pricing');
 
 /** Bytes read per pass. Bounded so a 32MB transcript never lands in RAM whole. */
 const CHUNK = 4 * 1024 * 1024;
@@ -129,9 +129,16 @@ function creationSplit(d, cacheCreation) {
  * A record with no model at all is filed under 'unknown' rather than dropped —
  * it lands in the estimate's `unpricedTokens`, which is the honest place for
  * spend nobody can attribute.
+ *
+ * ⚠ THE RECORD'S OWN TIMESTAMP IS PART OF THE BUCKET. A list price is a fact
+ * about a moment, and lib/pricing.js owns every judgment about which one was in
+ * force — this passes `ts` and asks for a key back. Dropping it here does not
+ * break anything visibly: the pricer falls back to the cheaper of the candidate
+ * rates, so the estimate stays renderable and quietly understates any model that
+ * has ever changed price.
  */
-function addModelUsage(byModel, model, tok, split) {
-  const key = model || 'unknown';
+function addModelUsage(byModel, model, ts, tok, split) {
+  const key = bucketKey(model || 'unknown', ts);
   let m = byModel.get(key);
   if (!m) { m = zeroModelTokens(); byModel.set(key, m); }
   m.input += tok.input;
@@ -532,7 +539,7 @@ function consume(s, d) {
     addTokens(turn.tokensTail, tok);
     // Off the SAME deduped result, so the priced tokens and the displayed
     // tokens can never be two different numbers about one API call.
-    addModelUsage(s.tokensByModel, model, tok, creationSplit(d, tok.cacheCreation));
+    addModelUsage(s.tokensByModel, model, ts, tok, creationSplit(d, tok.cacheCreation));
     pushSample(s, ts, tok);
   }
 
@@ -629,8 +636,10 @@ function agentStats(cache, file, size) {
       addTokens(st.tokens, tok);
       // An agent picks its own model — a haiku Explore under an opus parent is
       // the ordinary shape of a fan-out — so its spend is priced against the
-      // model ITS records name, never the parent's.
-      addModelUsage(st.byModel, d.message && d.message.model, tok, creationSplit(d, tok.cacheCreation));
+      // model ITS records name, never the parent's. And against the rate in
+      // force at ITS timestamps: an agent outlives the turn that spawned it, so
+      // the spine's clock is not a stand-in for this file's.
+      addModelUsage(st.byModel, d.message && d.message.model, ts, tok, creationSplit(d, tok.cacheCreation));
     }
     const c = d.message && d.message.content;
     if (Array.isArray(c)) for (const b of c) if (b && b.type === 'tool_use') st.toolCalls++;
