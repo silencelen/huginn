@@ -160,6 +160,55 @@ class DesktopSettingsTest {
         assertEquals(null, DesktopSettings(file).lastChatIdNow())
     }
 
+    // --------------------------------------------------------- the list pane
+
+    @Test
+    fun `a shut list pane is still shut after a relaunch`() {
+        // The notch is a preference, not a mode: someone who closes the list to
+        // read a wide transcript has said something about this desk, and saying it
+        // again at every launch is how a control stops being used.
+        val file = freshFile()
+        DesktopSettings(file).setListCollapsed(true)
+
+        val next = DesktopSettings(file)
+        assertTrue(next.listCollapsedNow(), "the collapse must survive a restart")
+        assertTrue(file.readText().contains("listCollapsed"), "and be in the file, or it did not")
+    }
+
+    @Test
+    fun `an install that predates the notch opens with its list showing`() {
+        // The owner's own settings file has no such key. A client that decided
+        // "absent means shut" would launch with no visible navigation at all.
+        val file = freshFile()
+        file.parentFile.mkdirs()
+        file.writeText("""{"token":"t","listWidth":420.0}""")
+        assertFalse(DesktopSettings(file).listCollapsedNow())
+    }
+
+    @Test
+    fun `collapsing does not move the width, so the way back is where it was`() {
+        // Two facts, deliberately kept apart. If the collapse reset the width, the
+        // pane would come back at a default nobody chose rather than at the size it
+        // was dragged to — and the reader would have to drag it again every time.
+        val file = freshFile()
+        val settings = DesktopSettings(file)
+        settings.setListWidth(430f)
+        settings.setListCollapsed(true)
+        settings.setListCollapsed(false)
+        assertEquals(430f, settings.listWidth.value)
+        assertEquals(430f, DesktopSettings(file).listWidth.value, "and across a relaunch too")
+    }
+
+    @Test
+    fun `the toggle goes both ways from either starting point`() {
+        val settings = DesktopSettings(freshFile())
+        assertFalse(settings.listCollapsedNow(), "a fresh install shows its list")
+        settings.toggleListCollapsed()
+        assertTrue(settings.listCollapsedNow())
+        settings.toggleListCollapsed()
+        assertFalse(settings.listCollapsedNow())
+    }
+
     // ------------------------------------------------ giving the enrolment back
     //
     // ⚠ The device id is the ONLY handle that can retire this machine's row at
