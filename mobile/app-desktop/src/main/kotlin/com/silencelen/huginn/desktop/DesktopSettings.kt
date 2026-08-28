@@ -128,6 +128,20 @@ class DesktopSettings(private val file: File = defaultFile()) : HuginnSettings {
         val listWidth: Float = Splitter.DEFAULT,
 
         /**
+         * THE LIST PANE, SHUT. One flag for the whole frame rather than one per
+         * view: "I want the width" is a statement about this window and this
+         * desk, not about chats-as-opposed-to-sessions, and a per-view version
+         * would mean walking the rail to find which of them is still holding a
+         * column you thought you had closed.
+         *
+         * Kept SEPARATE from [listWidth] on purpose — collapsing must not move
+         * the width, or the way back would arrive at a default nobody chose
+         * instead of at the pane they had dragged. Default false: a client whose
+         * list is missing on first launch is a client with no visible navigation.
+         */
+        val listCollapsed: Boolean = false,
+
+        /**
          * WHERE THE WINDOW WAS LOOKING. Desktop-only, same argument as the window
          * geometry above: this client hides to the tray rather than quitting, so a
          * relaunch usually follows an update or a crash — the two occasions where
@@ -178,6 +192,7 @@ class DesktopSettings(private val file: File = defaultFile()) : HuginnSettings {
         WindowLayout(stored.windowX, stored.windowY, stored.windowW, stored.windowH, stored.windowMaximized)
     )
     private val _listWidth = MutableStateFlow(Splitter.clamp(stored.listWidth))
+    private val _listCollapsed = MutableStateFlow(stored.listCollapsed)
 
     init {
         if (stored.clientId.isEmpty()) mutate { it.copy(clientId = "desktop-kt-${UUID.randomUUID()}") }
@@ -464,6 +479,29 @@ class DesktopSettings(private val file: File = defaultFile()) : HuginnSettings {
     fun widenList() = nudgeListWidth(Splitter.STEP)
     fun narrowList() = nudgeListWidth(-Splitter.STEP)
     fun resetListWidth() = setListWidth(Splitter.DEFAULT)
+
+    /**
+     * Whether the list pane is shut. Persisted, because a pane you have to close
+     * again on every launch is a pane you stop closing — the same argument the
+     * width has made since the seam existed.
+     *
+     * NOT suspend, like the window geometry and for the same reason: it is
+     * written from a click on the notch and from the window's key handler,
+     * neither of which has a coroutine scope worth acquiring to set a boolean
+     * that is already in memory. It is also not per-frame, so it does not need
+     * the debounce the drag does.
+     */
+    val listCollapsed: StateFlow<Boolean> = _listCollapsed.asStateFlow()
+
+    fun listCollapsedNow(): Boolean = _listCollapsed.value
+
+    fun setListCollapsed(value: Boolean) {
+        if (value == _listCollapsed.value) return
+        _listCollapsed.value = value
+        mutate { it.copy(listCollapsed = value) }
+    }
+
+    fun toggleListCollapsed() = setListCollapsed(!_listCollapsed.value)
 
     // ---------------------------------------------------------- landing
     //

@@ -61,6 +61,30 @@ object Frame {
     /** The seam: a 1px line inside an 8px hit area, which is a mouse target. */
     val splitterHit = 8.dp
 
+    // THE NOTCH — the one element in the frame that straddles rather than sits
+    // beside. It is a drawer pull on the top of the seam: wider than the seam it
+    // is attached to, so it overhangs by 3dp on each side and reads as a tab on a
+    // line rather than as a button that happens to be near one. Off the spacing
+    // grid deliberately, like every other number in this object: these are the
+    // geometry of a control, not gaps between things.
+
+    /** The pull itself: wide enough for a chevron, narrow enough to stay quiet. */
+    val notchWidth = 14.dp
+    val notchHeight = 28.dp
+
+    /**
+     * How far down the seam it sits. Not flush with the top: the frame has no
+     * title bar of its own, so a tab pinned to y=0 reads as part of the window
+     * chrome above it rather than as part of the seam it belongs to.
+     */
+    val notchInset = 12.dp
+
+    /** Barely rounded. A pill would be a button; this is a notch. */
+    val notchCorner = 3.dp
+
+    /** The chevron inside it. Sized to the tab, not to the rail's 20dp icons. */
+    val notchChevron = 14.dp
+
     /** The status line at the foot of the window. */
     val statusHeight = 26.dp
 

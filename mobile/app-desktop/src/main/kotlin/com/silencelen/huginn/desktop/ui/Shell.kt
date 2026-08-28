@@ -1,7 +1,10 @@
 package com.silencelen.huginn.desktop.ui
 
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.gestures.Orientation
@@ -12,6 +15,7 @@ import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsHoveredAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -21,12 +25,16 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.requiredSize
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Chat
+import androidx.compose.material.icons.outlined.ChevronLeft
+import androidx.compose.material.icons.outlined.ChevronRight
 import androidx.compose.material.icons.outlined.Computer
 import androidx.compose.material.icons.outlined.EditNote
 import androidx.compose.material.icons.outlined.Schedule
@@ -52,6 +60,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.vector.ImageVector
@@ -65,6 +74,7 @@ import com.silencelen.huginn.data.Round
 import com.silencelen.huginn.data.Scratchpad
 import com.silencelen.huginn.data.Session
 import com.silencelen.huginn.desktop.AppStore
+import com.silencelen.huginn.desktop.Splitter
 import com.silencelen.huginn.desktop.View
 import com.silencelen.huginn.desktop.ui.common.ChatVerbs
 import com.silencelen.huginn.desktop.ui.common.DeskType
@@ -103,7 +113,9 @@ import java.awt.datatransfer.StringSelection
  *      condition became one, which is the house rule.
  *   2. **A seam that is remembered.** Width persists, double-click resets it, and
  *      Ctrl+[ / Ctrl+] move it from the keyboard. A pane you have to re-drag on
- *      every launch is a pane you stop dragging.
+ *      every launch is a pane you stop dragging — and the same argument is why the
+ *      notch's collapse persists too. The notch is the one control that straddles:
+ *      a drawer pull on the seam, pointing at what it would do.
  *   3. **Right-click, everywhere.** [WithHuginnMenus] installs the app's own menu
  *      look once, here, so a menu over a list row and a menu over selected
  *      transcript text are the same object rather than two lookalikes.
@@ -133,6 +145,7 @@ fun Shell(store: AppStore) {
     val plan by store.plan.collectAsState()
     val usage by store.usage.collectAsState()
     val listWidth by store.settings.listWidth.collectAsState()
+    val listCollapsed by store.settings.listCollapsed.collectAsState()
     val notifyEnabled by store.settings.notifyEnabled.collectAsState(true)
     val scope = rememberCoroutineScope()
 
@@ -190,8 +203,20 @@ fun Shell(store: AppStore) {
     )
 
     // Pages get the list-plus-detail shape too: the list IS the navigation, and an
-    // editor with no way to reach the other pages is a page, not a notebook.
-    val showsList = view == View.CHATS || view == View.SESSIONS || view == View.SCRATCHPADS
+    // editor with no way to reach the other pages is a page, not a notebook. The
+    // answer comes from [Splitter] rather than from an expression here, because
+    // the window's key handler has to ask the same question — see its KDoc.
+    val showsList = Splitter.showsList(view)
+
+    // THE FRACTION, not the width. Animating `listWidth` itself would put a 150ms
+    // lag on every frame of a DRAG — the seam would trail the pointer like wet
+    // paint. This is 1 while the pane is open and 0 while it is shut, so a drag
+    // moves the pane instantly and only the collapse is animated.
+    val openFraction by animateFloatAsState(
+        targetValue = if (listCollapsed) 0f else 1f,
+        animationSpec = tween(durationMillis = 150),
+        label = "list pane",
+    )
 
     // The rail and the footer count MACHINES, not credentials: a box serving
     // local AI beside its claude enrolment is one device to the person reading
@@ -220,85 +245,111 @@ fun Shell(store: AppStore) {
                 VerticalDivider(color = MaterialTheme.colorScheme.outlineVariant)
 
                 if (showsList) {
-                    Box(Modifier.width(listWidth.dp).fillMaxHeight()) {
-                        when (view) {
-                            View.CHATS -> Column(Modifier.fillMaxSize()) {
-                                // First-launch offer, once and dismissible: the
-                                // machine may be able to SERVE, and the only
-                                // door was a Settings section nobody is told
-                                // about. Gone forever on either button, and
-                                // never shown once anything already serves.
-                                val offerSeen by store.settings.localOfferSeen.collectAsState(initial = true)
-                                if (!offerSeen && devices.none { it.scope == "generate" }) {
-                                    Surface(
-                                        color = MaterialTheme.colorScheme.surfaceVariant,
-                                        modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 6.dp),
-                                    ) {
-                                        Column(Modifier.padding(12.dp)) {
-                                            Text("Serve local AI from this PC", style = MaterialTheme.typography.labelLarge)
-                                            Text(
-                                                "This machine may be able to run small AI models and offer them " +
-                                                    "in huginn's chat menus — private, on your own hardware. " +
-                                                    "Setting up shows the exact plan before anything downloads.",
-                                                style = MaterialTheme.typography.bodySmall,
-                                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                            )
-                                            Row(
-                                                horizontalArrangement = Arrangement.End,
-                                                modifier = Modifier.fillMaxWidth(),
-                                            ) {
-                                                TextButton(onClick = {
-                                                    act { store.settings.setLocalOfferSeen() }
-                                                    store.openView(View.SETTINGS)
-                                                }) { Text("Set up") }
-                                                TextButton(onClick = {
-                                                    act { store.settings.setLocalOfferSeen() }
-                                                }) { Text("Not now") }
+                    // TWO BOXES, and the inner one is the reason it slides rather
+                    // than squashes. The outer is what the Row measures, so it is
+                    // what narrows to nothing; the inner holds the list at its real
+                    // width throughout and the clip eats the difference. One box
+                    // would re-wrap every row on the way out — two hundred titles
+                    // re-laid-out per frame to say "gone", and the last thing the
+                    // reader sees of the pane is it turning into ellipses.
+                    //
+                    // It closes toward the RAIL (default TopStart), which keeps the
+                    // names — the left-hand column of every list here — visible
+                    // longest, and leaves the meta on the right to go first.
+                    Box(
+                        Modifier.width((listWidth * openFraction).dp).fillMaxHeight()
+                            .clipToBounds(),
+                    ) {
+                        Box(Modifier.width(listWidth.dp).fillMaxHeight()) {
+                            when (view) {
+                                View.CHATS -> Column(Modifier.fillMaxSize()) {
+                                    // First-launch offer, once and dismissible: the
+                                    // machine may be able to SERVE, and the only
+                                    // door was a Settings section nobody is told
+                                    // about. Gone forever on either button, and
+                                    // never shown once anything already serves.
+                                    val offerSeen by store.settings.localOfferSeen.collectAsState(initial = true)
+                                    if (!offerSeen && devices.none { it.scope == "generate" }) {
+                                        Surface(
+                                            color = MaterialTheme.colorScheme.surfaceVariant,
+                                            modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 6.dp),
+                                        ) {
+                                            Column(Modifier.padding(12.dp)) {
+                                                Text("Serve local AI from this PC", style = MaterialTheme.typography.labelLarge)
+                                                Text(
+                                                    "This machine may be able to run small AI models and offer them " +
+                                                        "in huginn's chat menus — private, on your own hardware. " +
+                                                        "Setting up shows the exact plan before anything downloads.",
+                                                    style = MaterialTheme.typography.bodySmall,
+                                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                                )
+                                                Row(
+                                                    horizontalArrangement = Arrangement.End,
+                                                    modifier = Modifier.fillMaxWidth(),
+                                                ) {
+                                                    TextButton(onClick = {
+                                                        act { store.settings.setLocalOfferSeen() }
+                                                        store.openView(View.SETTINGS)
+                                                    }) { Text("Set up") }
+                                                    TextButton(onClick = {
+                                                        act { store.settings.setLocalOfferSeen() }
+                                                    }) { Text("Not now") }
+                                                }
                                             }
                                         }
                                     }
+                                    Box(Modifier.weight(1f)) {
+                                        ChatsList(
+                                            chats = chats,
+                                            loaded = loaded,
+                                            activeId = chatId,
+                                            selection = chatSel,
+                                            onSelect = { chatSel = it },
+                                            onOpen = { store.openChat(it) },
+                                            onNew = { mode ->
+                                                act {
+                                                    val made = store.client.createChat(mode)
+                                                    store.openChat(made.id)
+                                                    store.refreshChats()
+                                                }
+                                            },
+                                            onNewLocal = if (devices.any { it.scope == "generate" && it.online }) {
+                                                { act { store.startLocalChat() } }
+                                            } else {
+                                                null
+                                            },
+                                            verbs = chatVerbs,
+                                        )
+                                    }
                                 }
-                                Box(Modifier.weight(1f)) {
-                                    ChatsList(
-                                        chats = chats,
-                                        loaded = loaded,
-                                        activeId = chatId,
-                                        selection = chatSel,
-                                        onSelect = { chatSel = it },
-                                        onOpen = { store.openChat(it) },
-                                        onNew = { mode ->
-                                            act {
-                                                val made = store.client.createChat(mode)
-                                                store.openChat(made.id)
-                                                store.refreshChats()
-                                            }
-                                        },
-                                        onNewLocal = if (devices.any { it.scope == "generate" && it.online }) {
-                                            { act { store.startLocalChat() } }
-                                        } else {
-                                            null
-                                        },
-                                        verbs = chatVerbs,
-                                    )
-                                }
+                                View.SCRATCHPADS -> ScratchpadsList(store)
+                                View.SESSIONS -> SessionsList(
+                                    sessions = sessions,
+                                    loaded = sessionsLoaded,
+                                    activeName = sessionName,
+                                    selection = sessionSel,
+                                    onSelect = { sessionSel = it },
+                                    onOpen = { store.openSession(it) },
+                                    onNew = { namingSession = true },
+                                    verbs = sessionVerbs,
+                                )
+                                else -> Unit
                             }
-                            View.SCRATCHPADS -> ScratchpadsList(store)
-                            View.SESSIONS -> SessionsList(
-                                sessions = sessions,
-                                loaded = sessionsLoaded,
-                                activeName = sessionName,
-                                selection = sessionSel,
-                                onSelect = { sessionSel = it },
-                                onOpen = { store.openSession(it) },
-                                onNew = { namingSession = true },
-                                verbs = sessionVerbs,
-                            )
-                            else -> Unit
                         }
                     }
-                    Splitter(
+                    Seam(
+                        collapsed = listCollapsed,
                         onDrag = { store.settings.nudgeListWidth(it) },
-                        onReset = { store.settings.resetListWidth() },
+                        // A reset on a SHUT seam has to include being on screen at
+                        // all: "put it back the way it was meant to be" cannot
+                        // sanely mean resizing something nobody can see. Expanding
+                        // and resetting together is the only reading of a
+                        // double-click here that leaves anything to look at.
+                        onReset = {
+                            store.settings.setListCollapsed(false)
+                            store.settings.resetListWidth()
+                        },
+                        onToggle = { store.settings.toggleListCollapsed() },
                     )
                 }
 
@@ -684,50 +735,140 @@ private fun RailItem(
     }
 }
 
-// ---------------------------------------------------------------- splitter
+// -------------------------------------------------------------------- seam
 
 /**
- * The draggable seam: a 1px line inside an 8px hit area, which is what a pointer
- * needs and a thumb never had to care about. (It was 5dp, sized to look right
- * rather than to be grabbed.)
+ * The draggable seam and the notch on top of it: a 1px line inside an 8px hit
+ * area, which is what a pointer needs and a thumb never had to care about. (It was
+ * 5dp, sized to look right rather than to be grabbed.)
  *
- * Double-click resets it. That is the standard desktop escape hatch for a pane
- * someone has dragged into uselessness, and without it the only way back to a sane
- * width is to guess it by eye. `combinedClickable` and `draggable` coexist here
- * deliberately — the drag consumes movement, the click consumes taps, and the
- * single-click branch does nothing on purpose so a stray click on the seam is
- * inert rather than surprising.
+ * Named `Seam` rather than `Splitter` because [com.silencelen.huginn.desktop.Splitter]
+ * — the object holding the bounds, the reopen threshold and the width arithmetic —
+ * is now called from inside it, and a composable sharing a name with the object it
+ * consults is a line that reads two ways.
+ *
+ * WHAT EACH GESTURE MEANS depends on one thing only: whether the pane is there.
+ *
+ *   * **Open** — drag resizes, double-click resets the width, single-click does
+ *     nothing on purpose so a stray click is inert rather than surprising.
+ *     `combinedClickable` and `draggable` coexist deliberately: the drag consumes
+ *     movement, the click consumes taps.
+ *   * **Shut** — there is no width to change, so a drag OUTWARD past
+ *     [Splitter.REOPEN_PULL] brings the pane back instead, and a double-click does
+ *     the same. The way back is exactly where the way out was, which is the whole
+ *     argument for keeping the seam at full size with nothing beside it.
+ *
+ * The notch is a separate hit target sitting on top, and the box that holds them
+ * both carries NO pointer modifiers of its own. That is load-bearing: the notch is
+ * wider than the seam and overhangs it, and a parent that handled pointers itself
+ * would be asked about a point outside its own bounds and answer for its children.
  */
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun Splitter(onDrag: (Float) -> Unit, onReset: () -> Unit) {
+private fun Seam(
+    collapsed: Boolean,
+    onDrag: (Float) -> Unit,
+    onReset: () -> Unit,
+    onToggle: () -> Unit,
+) {
     val interaction = remember { MutableInteractionSource() }
     val hovered by interaction.collectIsHoveredAsState()
-    Box(
-        Modifier.width(Frame.splitterHit).fillMaxHeight()
-            .hoverable(interaction)
-            .pointerHoverIcon(PointerIcon(Cursor(Cursor.E_RESIZE_CURSOR)))
-            .combinedClickable(
-                interactionSource = interaction,
-                indication = null,
-                onDoubleClick = onReset,
-                onClick = {},
-            )
-            .draggable(
-                orientation = Orientation.Horizontal,
-                state = rememberDraggableState { onDrag(it) },
-            ),
-        contentAlignment = Alignment.Center,
-    ) {
-        // The line thickens on hover rather than lighting up: the seam should say
-        // "grabbable", not "selected".
+    // Outward travel banked so far, and keyed on the state it belongs to: a half
+    // finished pull left over from before the pane came back must not be waiting
+    // to spend itself on the next one.
+    var pull by remember(collapsed) { mutableStateOf(0f) }
+    Box(Modifier.width(Frame.splitterHit).fillMaxHeight()) {
         Box(
-            Modifier.width(if (hovered) 2.dp else 1.dp).fillMaxHeight()
-                .background(
-                    if (hovered) MaterialTheme.colorScheme.outline
-                    else MaterialTheme.colorScheme.outlineVariant
+            Modifier.fillMaxSize()
+                .hoverable(interaction)
+                .pointerHoverIcon(PointerIcon(Cursor(Cursor.E_RESIZE_CURSOR)))
+                .combinedClickable(
+                    interactionSource = interaction,
+                    indication = null,
+                    onDoubleClick = onReset,
+                    onClick = {},
                 )
-        )
+                .draggable(
+                    orientation = Orientation.Horizontal,
+                    state = rememberDraggableState { delta ->
+                        if (!collapsed) {
+                            onDrag(delta)
+                        } else {
+                            pull = Splitter.pull(pull, delta)
+                            if (Splitter.reopens(pull)) {
+                                pull = 0f
+                                onToggle()
+                            }
+                        }
+                    },
+                ),
+            contentAlignment = Alignment.Center,
+        ) {
+            // The line thickens on hover rather than lighting up: the seam should
+            // say "grabbable", not "selected".
+            Box(
+                Modifier.width(if (hovered) 2.dp else 1.dp).fillMaxHeight()
+                    .background(
+                        if (hovered) MaterialTheme.colorScheme.outline
+                        else MaterialTheme.colorScheme.outlineVariant
+                    )
+            )
+        }
+        SeamNotch(collapsed = collapsed, onToggle = onToggle)
+    }
+}
+
+/**
+ * The notch: a drawer pull on the top of the seam, and the only element in the
+ * frame that straddles rather than sits beside.
+ *
+ * `requiredSize` rather than `size` because it has to be WIDER than the 8dp column
+ * it lives in — 3dp of overhang each side is what makes it read as a tab attached
+ * to a line rather than a button parked next to one. A plain `size` would be
+ * clamped to the parent's 8dp and the whole shape would collapse into the seam.
+ *
+ * QUIET AT REST, PRESSABLE ON HOVER, NEVER SELECTED. Same doctrine as the seam's
+ * own hover-thicken and the same two colours: [outlineVariant] and muted ink until
+ * the pointer arrives, [outline] and full ink once it has. No tint, no accent fill,
+ * no shadow — a lit-up pull would claim to be the state of the pane rather than a
+ * way to change it, and an accent fill is the house's most legible tell of a
+ * generated interface.
+ *
+ * The chevron points at what the click DOES, not at where the pane is: ‹ while the
+ * list is open ("this shuts it"), › while it is shut ("this brings it back").
+ */
+@Composable
+private fun BoxScope.SeamNotch(collapsed: Boolean, onToggle: () -> Unit) {
+    val interaction = remember { MutableInteractionSource() }
+    val hovered by interaction.collectIsHoveredAsState()
+    val scheme = MaterialTheme.colorScheme
+    val shape = RoundedCornerShape(Frame.notchCorner)
+    val what = if (collapsed) "Show list" else "Hide list"
+    Tip(
+        what,
+        Modifier.align(Alignment.TopCenter)
+            .padding(top = Frame.notchInset)
+            .requiredSize(width = Frame.notchWidth, height = Frame.notchHeight),
+    ) {
+        Box(
+            Modifier.fillMaxSize()
+                .clip(shape)
+                // surfaceVariant is the rail's own ground: the notch is a piece of
+                // frame, raised just enough to be a thing rather than a gap.
+                .background(scheme.surfaceVariant)
+                .border(1.dp, if (hovered) scheme.outline else scheme.outlineVariant, shape)
+                .hoverable(interaction)
+                .pointerHoverIcon(PointerIcon(Cursor(Cursor.HAND_CURSOR)))
+                .clickable(interactionSource = interaction, indication = null, onClick = onToggle),
+            contentAlignment = Alignment.Center,
+        ) {
+            Icon(
+                if (collapsed) Icons.Outlined.ChevronRight else Icons.Outlined.ChevronLeft,
+                contentDescription = what,
+                modifier = Modifier.size(Frame.notchChevron),
+                tint = if (hovered) scheme.onSurface else scheme.onSurfaceVariant,
+            )
+        }
     }
 }
 

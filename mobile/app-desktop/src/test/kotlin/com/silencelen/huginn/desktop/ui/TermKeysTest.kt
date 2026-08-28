@@ -188,6 +188,22 @@ class TermKeysTest {
     }
 
     @Test
+    fun `tmux keeps its own prefix while Live is on`() {
+        // ⚠ THE APP NOW BINDS Ctrl+B (hide the list pane), and `C-b` is tmux's
+        // prefix in most setups — the one chord a person at a live pane reaches for
+        // first. The pane wins, and it wins by ARRANGEMENT rather than by a rule
+        // anybody wrote: the Screen tab's `onPreviewKeyEvent` runs before the
+        // window's `onKeyEvent`, so a key this function claims never reaches the
+        // shortcut table at all. The same is already true of Ctrl+K and Ctrl+N.
+        //
+        // What that makes fragile is exactly this line. Drop B from the letter
+        // table and Ctrl+B silently starts collapsing the list pane instead of
+        // opening a tmux command prompt, with nothing on screen looking wrong.
+        assertEquals("C-b", named(down(Key.B, 'b'.code, ctrl = true)))
+        assertEquals("C-b", named(down(Key.B, 0x02, ctrl = true)), "and however the platform spells it")
+    }
+
+    @Test
     fun `Ctrl with something unmapped sends nothing rather than guessing`() {
         assertNull(TermKeys.of(down(Key.F5, ctrl = true)))
         assertNull(TermKeys.of(down(Key.One, '1'.code, ctrl = true)))
