@@ -87,8 +87,7 @@ function isMain(pad) {
 // back into a pill so the sender reads their own message rather than the page
 // they attached, and humanizeUserText in the daemon does the same for a chat
 // title. A wording change here that is not made there leaves a raw frame sitting
-// in somebody's message list. (The DEPRECATED Electron client is exempt: it is
-// not built any more and never learns the marker.)
+// in somebody's message list.
 //
 // The tagged variant is part of that contract. Both collapsers match, exactly:
 //

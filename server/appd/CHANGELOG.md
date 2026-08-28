@@ -9,6 +9,32 @@ appeared only as a side-note on the app releases it happened to ship with. Three
 undocumented, and the notes-cutting matcher could fuse two sections when an app and an appd
 version number collided. Entries below are reconstructed from the shipping commits.
 
+## 2.81.0 — 2026-08-27
+
+The Electron desktop client is deleted, and its update channel with it.
+
+- **`/v1/desktop` is gone** — not emptied, not deprecated: unrouted. A GET to it
+  falls through to the ordinary 404, like any path that was never a route at
+  all. `DATA_DIR/desktop` is no longer read, joined or created, so a directory
+  of that name left on a deployed host is stale bytes nothing can reach.
+- **`/v1/desktop-kt` is untouched**, and deliberately stays under its own name
+  rather than being promoted into the vacancy: the 0.5.x clients still
+  installed poll THAT path, and a retired route is better left a 404 than
+  quietly re-pointed at a different application's feed.
+- **Why the split existed, and why removing it is safe.** Two channels, two
+  directories, two manifests, a release-script assertion that the Electron feed
+  was still intact after every Compose release, and a test that neither channel
+  could reach the other's files — all of it protected one thing: a running
+  program being handed an "update" that replaced it with a different
+  application. That program no longer exists in the repo, by owner directive on
+  2026-08-27 — strictly Compose. A guard with nothing behind it stops being a
+  guard and becomes a rule that fails a release for the wrong reason.
+- Installed Electron copies are not migrated, and now never will be: the
+  graceful handover that was planned — a final notice release, then a Compose
+  installer taking over the Windows install path and uninstall key — was
+  superseded by the directive. Those copies simply go stale where they sit, and
+  should be uninstalled by hand.
+
 ## 2.80.0 — 2026-08-27
 
 The session overview learns what the run would have cost.

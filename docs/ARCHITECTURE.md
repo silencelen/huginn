@@ -29,7 +29,7 @@ Both clients end up at the same place: one Claude Code process in one tmux sessi
 - **`tmux.conf` (server)** — the multi-device ergonomics: `window-size smallest` (mirror fits the smaller screen), `Alt-d` detach, `Alt-o` detach-others, big scrollback, status-bar hints.
 - **`huginn-status` (server)** — a one-glance health summary.
 - **`huginn-appd` (server, optional)** — the daemon the apps talk to: sessions, headless chats, push notifications, prompts-as-buttons. Zero npm dependencies, Node ≥ 20, runs as **root**, listens on port 8787 (Tailscale address by default, `HUGINN_APPD_BIND` to change it) and requires `Authorization: Bearer <token>` on every route — the token in `/etc/huginn-appd/token`. It is the highest-privilege thing here and the one piece with a real threat model to read: [`SECURITY.md`](SECURITY.md).
-- **The Kotlin clients (`mobile/`, optional)** — `:core` (logic + HTTP) and `:ui` (Compose) shared by `:app` (Android) and `:app-desktop` (Windows/Linux). They hold no session state either; they render what the daemon reports and send keystrokes back. The older Electron client in `desktop/` is deprecated.
+- **The Kotlin clients (`mobile/`, optional)** — `:core` (logic + HTTP) and `:ui` (Compose) shared by `:app` (Android) and `:app-desktop` (Windows/Linux). They hold no session state either; they render what the daemon reports and send keystrokes back. An older Electron desktop client used to live in `desktop/`; it was retired and deleted on 2026-08-27 (see [`DESKTOP-MIGRATION.md`](DESKTOP-MIGRATION.md)).
 
 ## Why it's shaped this way
 
