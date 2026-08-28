@@ -71,6 +71,76 @@ fun EmptyBlock(headline: String, sentence: String, modifier: Modifier = Modifier
     }
 }
 
+// ------------------------------------------------- what an empty pane may say
+//
+// ⚠ THE COPY DEPENDS ON A PANE THAT IS NOT THIS ONE. Every sentence below used
+// to point at the list — "pick one on the left", "every tmux session on the host
+// is on the left", "walk the list", "right-click to rename" — and since the notch
+// arrived the list can be shut. Directions to a pane that is not there are worse
+// than no directions at all: the reader looks left, finds a nav rail, and
+// concludes the client is broken rather than that they closed something.
+//
+// So the choice is a function the render sites consult rather than a literal at
+// each call. That is also the only way to assert it, and asserting it is the
+// point: nothing crashes, nothing draws wrong, and a screenshot of the stale
+// version looks entirely correct unless you already know the pane is shut.
+
+/** The two halves of an empty detail pane that can go stale. */
+data class EmptyPaneCopy(val sentence: String, val routes: List<Pair<String, String>>)
+
+/** Chats, with none open. */
+fun noChatOpenCopy(listCollapsed: Boolean): EmptyPaneCopy = if (listCollapsed) {
+    EmptyPaneCopy(
+        "The list is hidden — the notch on the seam brings it back. " +
+            "Or start a new one from here: Ask reads and reasons; Act can change things on the host.",
+        listOf(
+            "Ctrl B" to "show the list",
+            "Ctrl N" to "new Ask chat",
+            "Ctrl Shift N" to "new Act chat",
+            "Ctrl K" to "find one by name",
+        ),
+    )
+} else {
+    EmptyPaneCopy(
+        "Pick one on the left, or start a new one. Ask reads and reasons; Act can change things on the host.",
+        listOf(
+            "Ctrl N" to "new Ask chat",
+            "Ctrl Shift N" to "new Act chat",
+            "Ctrl K" to "find one by name",
+        ),
+    )
+}
+
+/**
+ * Sessions, with none open.
+ *
+ * The collapsed half drops right-click rather than rewording it: the menu hangs
+ * off a LIST ROW, so with the list shut there is nothing on screen to open it on.
+ * Alt+arrow survives because it really does still work — it walks the sessions
+ * whether or not they are drawn — so it is renamed to say what it does rather
+ * than where it does it.
+ */
+fun noSessionOpenCopy(listCollapsed: Boolean): EmptyPaneCopy = if (listCollapsed) {
+    EmptyPaneCopy(
+        "The list is hidden. Every tmux session on the host is still in it, " +
+            "and the notch on the seam brings it back.",
+        listOf(
+            "Ctrl B" to "show the list",
+            "Ctrl K" to "find one by name",
+            "Alt ↑ / ↓" to "previous / next session",
+        ),
+    )
+} else {
+    EmptyPaneCopy(
+        "Every tmux session on the host is on the left. Opening one shows its conversation and its live screen.",
+        listOf(
+            "Ctrl K" to "find one by name",
+            "Alt ↑ / ↓" to "walk the list",
+            "Right-click" to "rename, interrupt, end",
+        ),
+    )
+}
+
 /**
  * The detail pane with nothing open. Centred, because unlike the list pane there
  * is no content above it for the text to belong to.
