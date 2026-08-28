@@ -175,6 +175,23 @@ test('the overview is the header, with no map in it', async () => {
   assert.deepEqual(body.meta, { goals: '', notes: '', updatedAt: 0 });
 });
 
+test('the overview says what the session would have billed at API list rates', async () => {
+  // One opus call: 1 input, 10 output, 100 cache read, 5 cache written with no
+  // TTL recorded. At list rates that is $0.000005 + $0.00025 + $0.00005 +
+  // $0.00003125 — the last at the 5-minute rate, because nothing said which TTL
+  // it was and the estimate takes the cheaper candidate.
+  //
+  // The account is on a subscription and none of this was charged; the number
+  // answers "what would this have cost on the API", and the client captions it
+  // as an estimate. That caption is the reason it is allowed on a screen.
+  const { status, body } = await api(`/v1/sessions/${SESS}/overview`);
+  assert.equal(status, 200, JSON.stringify(body));
+  assert.equal(body.totals.estCost.usd, 0.000336);
+  assert.deepEqual(body.totals.estCost.byModel, [{ model: 'claude-opus-5', usd: 0.000336 }]);
+  assert.equal(body.totals.estCost.unpricedTokens, 0, 'every token here is on the price table');
+  assert.equal(body.totals.agentEstCostUsd, 0, 'no agents ran — a number, not an absence');
+});
+
 test('the sessions LIST is not made to carry any of it', async () => {
   // The list is polled by every client and by the notification poller. A
   // whole-file walk per session per poll would make the cheapest route here the
@@ -211,6 +228,20 @@ test('the graph carries the spine, the cursor and the notes', async () => {
   assert.ok(body.cursor.size > 0);
   assert.equal(body.cursor.agentBytes, 0);
   assert.ok(body.meta, 'the map and the notes arrive together, so one poll serves the screen');
+});
+
+test('the graph and the overview never quote two different estimates', async () => {
+  // Both shapes are built from one walk of one file, so they cannot honestly
+  // disagree — but they are assembled at two call sites, and a field added to
+  // one of them is exactly the kind of thing that ships half-done. A person
+  // reading $0.34 on the map and $0.31 on the header has no way to tell which
+  // is the lie.
+  const graph = await api(`/v1/sessions/${SESS}/graph`);
+  const overview = await api(`/v1/sessions/${SESS}/overview`);
+  assert.equal(graph.status, 200, JSON.stringify(graph.body));
+  assert.ok(graph.body.totals.estCost, 'the map carries the estimate too');
+  assert.deepEqual(graph.body.totals.estCost, overview.body.totals.estCost);
+  assert.equal(graph.body.totals.agentEstCostUsd, overview.body.totals.agentEstCostUsd);
 });
 
 test('a matching cursor answers unchanged instead of the whole map', async () => {
