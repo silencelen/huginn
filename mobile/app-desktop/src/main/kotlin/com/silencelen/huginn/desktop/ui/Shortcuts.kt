@@ -52,6 +52,17 @@ enum class Shortcut {
     SPLIT_NARROWER,
     SPLIT_WIDER,
     SPLIT_RESET,
+
+    /**
+     * The list pane, gone and back. Ctrl+B because that is where every editor with
+     * a sidebar puts it and it was free here — the same muscle-memory argument as
+     * the brackets above, which is worth more than a mnemonic.
+     *
+     * ⚠ IT IS ALSO TMUX'S PREFIX, which matters in exactly one place: the Screen
+     * tab's live keyboard. That is not a conflict this table resolves and must not
+     * try to — see the note under [match].
+     */
+    TOGGLE_LIST,
 }
 
 /**
@@ -63,6 +74,16 @@ enum class Shortcut {
  *   than a missing shortcut — but list navigation deliberately survives, because
  *   moving between chats without leaving the composer is the whole point of
  *   putting it on Alt rather than the bare arrows.
+ *
+ * ⚠ THIS TABLE IS NOT CONSULTED AT ALL WHILE THE SCREEN TAB'S LIVE KEYBOARD HAS
+ * FOCUS, and nothing here should try to be. That pane installs its own
+ * `onPreviewKeyEvent`, which on a desktop runs BEFORE the window's `onKeyEvent`,
+ * and [TermKeys] turns every Ctrl+letter into a control name for tmux — so
+ * Ctrl+K, Ctrl+N and now Ctrl+B all reach the pane rather than the app while Live
+ * is on. That is the established rule (`HistoryRecall`'s `suppressed` says the
+ * same thing about the bare arrows) and it is the right one for Ctrl+B in
+ * particular: `C-b` is tmux's own prefix, and an app that ate it would make the
+ * live pane unable to do the one thing a tmux user reaches for first.
  */
 fun match(
     ctrl: Boolean,
@@ -121,6 +142,11 @@ fun match(
         "LBRACKET" -> Shortcut.SPLIT_NARROWER
         "RBRACKET" -> Shortcut.SPLIT_WIDER
         "BACKSLASH" -> Shortcut.SPLIT_RESET
+        // Not suppressed while typing either, and for the same reason the brackets
+        // are not: this is the seam. Hiding the list to read a wide transcript is a
+        // layout change you want without leaving the composer, and a Ctrl+letter
+        // chord cannot leave a character behind (see [isChordDebris]).
+        "B" -> Shortcut.TOGGLE_LIST
         else -> null
     }
 }
@@ -161,6 +187,7 @@ fun isChordDebris(ctrl: Boolean, alt: Boolean, codePoint: Int): Boolean {
  * why an unbound key never becomes a swallowed keystroke.
  */
 fun keyName(key: androidx.compose.ui.input.key.Key): String? = when (key) {
+    androidx.compose.ui.input.key.Key.B -> "B"
     androidx.compose.ui.input.key.Key.K -> "K"
     androidx.compose.ui.input.key.Key.N -> "N"
     androidx.compose.ui.input.key.Key.H -> "H"
@@ -192,6 +219,7 @@ val SHORTCUT_HELP: List<Pair<String, String>> = listOf(
     "Ctrl P" to "Pages",
     "Ctrl Shift P" to "Show the open page beside this conversation",
     "Alt ↑ / ↓" to "Previous / next in the list (works while typing)",
+    "Ctrl B" to "Hide or show the list pane (or click the notch on the seam)",
     "Ctrl [ / ]" to "Narrower / wider list pane",
     "Ctrl \\" to "Reset the list pane (or double-click the seam)",
     "Esc" to "Back to the list",
@@ -205,6 +233,7 @@ val POINTER_HELP: List<Pair<String, String>> = listOf(
     "Ctrl click" to "Add a row to the selection",
     "Shift click" to "Select everything between",
     "Hover a dot" to "What the state is, and how long it has been that way",
+    "Click the notch" to "Hide the list pane, and bring it back",
     "Double-click seam" to "Reset the list pane width",
 )
 
@@ -227,6 +256,7 @@ private val VERBS = listOf(
     PaletteItem.Verb(Shortcut.NEW_LOCAL, "New local chat", "a serving machine's model answers — never Claude"),
     PaletteItem.Verb(Shortcut.VIEW_SCRATCHPADS, "Pages", "your own pages, and what a message can carry"),
     PaletteItem.Verb(Shortcut.TOGGLE_PAD_PANEL, "Page beside this conversation", "show or hide the side panel"),
+    PaletteItem.Verb(Shortcut.TOGGLE_LIST, "Toggle list panel", "hide the list beside this pane, or bring it back"),
     PaletteItem.Verb(Shortcut.VIEW_STATUS, "Status", "host, plan and usage"),
     PaletteItem.Verb(Shortcut.VIEW_SETTINGS, "Settings", "server, accounts, diagnostics"),
 )

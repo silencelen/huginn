@@ -306,9 +306,17 @@ fun main(args: Array<String>) {
          * already spoken for, so the window's own width is the wrong number —
          * this is the same box the two conversation views measure with their own
          * `BoxWithConstraints`, arrived at from the outside.
+         *
+         * The arithmetic itself is [Splitter.detailWidth], because a COLLAPSED list
+         * takes none of it and subtracting its stored width anyway is how a window
+         * with room to spare gets told it is 320dp too narrow for the page panel.
          */
-        fun detailWidthDp(): Float =
-            windowState.size.width.value - Frame.railWidth.value - settings.listWidth.value
+        fun detailWidthDp(): Float = Splitter.detailWidth(
+            windowWidth = windowState.size.width.value,
+            railWidth = Frame.railWidth.value,
+            listWidth = settings.listWidth.value,
+            collapsed = settings.listCollapsedNow(),
+        )
 
         /** Is the page panel actually on screen — the only thing Esc may close. */
         fun padPanelOnScreen(): Boolean = padPanelShowing(
@@ -486,6 +494,15 @@ fun main(args: Array<String>) {
                     shortcut == Shortcut.SPLIT_NARROWER -> { settings.narrowList(); true }
                     shortcut == Shortcut.SPLIT_WIDER -> { settings.widenList(); true }
                     shortcut == Shortcut.SPLIT_RESET -> { settings.resetListWidth(); true }
+                    // Only where there is a list to hide. The same gate as the page
+                    // panel and for the same reason: this writes a persisted flag,
+                    // and flipping it from Status — where no seam is drawn — would
+                    // be a key press with nothing on screen to show for it, then a
+                    // pane that turns out to be missing three views later.
+                    shortcut == Shortcut.TOGGLE_LIST -> {
+                        if (Splitter.showsList(store.view.value)) settings.toggleListCollapsed()
+                        true
+                    }
                     else -> false
                 }
             },
@@ -599,6 +616,10 @@ fun main(args: Array<String>) {
                                         // only do anything in a conversation.
                                         Shortcut.TOGGLE_PAD_PANEL ->
                                             if (padPanelReachable()) store.togglePadPanel() else store.openView(View.SCRATCHPADS)
+                                        // Same gate as the chord: a seam that is
+                                        // not drawn has nothing to toggle.
+                                        Shortcut.TOGGLE_LIST ->
+                                            if (Splitter.showsList(store.view.value)) settings.toggleListCollapsed()
                                         else -> Unit
                                     }
                                 }

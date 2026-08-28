@@ -81,6 +81,10 @@ data class WindowLayout(
  * The bounds are a readability decision rather than a safety one: under ~220dp a
  * chat title is three words and an ellipsis, and over ~560dp the list is wider
  * than the transcript it is next to, which inverts what the window is for.
+ *
+ * The seam can also be shut entirely, which is a different fact from its width:
+ * collapsing does NOT move the number below, so bringing the panel back returns
+ * it to whatever it was dragged to rather than to a default nobody chose.
  */
 object Splitter {
     const val DEFAULT: Float = 320f
@@ -92,4 +96,63 @@ object Splitter {
 
     fun clamp(value: Float): Float =
         if (value.isNaN()) DEFAULT else value.coerceIn(MIN, MAX)
+
+    // ------------------------------------------------------- with it shut
+    //
+    // A collapsed seam is still a seam: it keeps its 8dp of hit area, it keeps
+    // the notch, and it still answers a drag. What it cannot do is resize a pane
+    // that is not on screen — so the same gesture means something else there,
+    // and the something else is "bring it back".
+
+    /**
+     * How far outward a pointer has to pull a COLLAPSED seam before the list
+     * comes back, in dp of travel.
+     *
+     * Wider than the seam itself (8dp) on purpose: the pull has to LEAVE the
+     * seam to count, which is what separates a deliberate drag from the twitch
+     * that lands on a 1px line while reaching for the pane behind it. Narrower
+     * than [STEP], because this is not an adjustment — it is a yes.
+     */
+    const val REOPEN_PULL: Float = 12f
+
+    /**
+     * Accumulated outward travel, one drag delta at a time.
+     *
+     * A threshold applied to a SINGLE delta is a threshold on pointer SPEED
+     * rather than on distance — a slow, deliberate pull would never reach it and
+     * a flick always would, which is exactly backwards. So the deltas are summed;
+     * and the sum is dropped the moment the pointer goes back the other way,
+     * because a leftward drag on a seam with nothing to its left is not half of a
+     * rightward one and must not be banked toward the next.
+     */
+    fun pull(sum: Float, delta: Float): Float = if (delta <= 0f) 0f else sum + delta
+
+    /** Whether that much travel is a request for the panel back. */
+    fun reopens(pull: Float): Boolean = pull >= REOPEN_PULL
+
+    /**
+     * Which views have a list to hide, and therefore a seam and a notch at all.
+     *
+     * ONE definition, asked by the frame that draws it and by the keyboard that
+     * toggles it. The page panel already paid for the alternative: three
+     * conditions decided whether it was on screen and only one of them decided
+     * whether Esc closed it, so Escape "closed" a panel that was not there. A
+     * chord that flips a flag with nothing on screen to show for it is the same
+     * bug wearing the same disguise — the reader presses it again.
+     */
+    fun showsList(view: View): Boolean =
+        view == View.CHATS || view == View.SESSIONS || view == View.SCRATCHPADS
+
+    /**
+     * The pane the page panel would come out of: the window, less the rail, less
+     * whatever the list is really taking.
+     *
+     * @param collapsed a shut list takes NOTHING, and the width it would have
+     *   taken belongs to the detail pane. Reading the stored width regardless is
+     *   how a window wide enough for the page panel gets told it is 320dp too
+     *   narrow for one — the panel silently refusing to appear, with the space
+     *   for it visibly right there.
+     */
+    fun detailWidth(windowWidth: Float, railWidth: Float, listWidth: Float, collapsed: Boolean): Float =
+        windowWidth - railWidth - if (collapsed) 0f else listWidth
 }
