@@ -96,6 +96,40 @@ VIAddVersionKey "LegalCopyright" "${PUBLISHER}"
 !define MUI_ABORTWARNING
 !insertmacro MUI_PAGE_DIRECTORY
 !insertmacro MUI_PAGE_INSTFILES
+
+; ------------------------------------------------- the last page starts the app
+;
+; A checkbox on the finish page, CHECKED, and pressing Finish starts the client.
+; MUI puts the Exec in that page's LEAVE handler, so "launch it when you close
+; the installer" is literally what happens rather than a paraphrase of it.
+;
+; It earns its place on the UPDATE path more than on a first install. An update
+; arrives through EnsureNotRunning below, which closes the running client —
+; force-ends it, in practice, because this app hides to the tray rather than
+; exiting — so until now an update TOOK THE APP AWAY and handed back a Start
+; Menu shortcut. Nothing else in the chain puts it back: DesktopUpdater runs the
+; downloaded installer with its UI, deliberately without /S, and stops there,
+; while the button that started the whole thing is labelled "Install and
+; restart". This is the half of that sentence the installer owes.
+;
+; A PLAIN Exec IS RIGHT HERE BECAUSE THIS INSTALLER NEVER ELEVATES. It declares
+; RequestExecutionLevel user and installs under $LOCALAPPDATA (see InstallDir
+; above), so the token it holds is the person's own — the same one that has to
+; own the settings file, the loopback record SingleInstance writes beside it and
+; the tray icon. Exec hands the new process exactly that token, and that is the
+; only reason no de-elevation dance (ShellExecAsUser and its relatives) is
+; needed here: an app started from an ADMIN token creates files the unelevated
+; app may then be unable to replace, and if the elevation borrowed another
+; account's credentials it does all of that in the wrong profile entirely. If
+; this installer ever moves to Program Files and starts asking for admin, this
+; line has to change with it.
+;
+; Silent installs show no pages at all, so /S — which the self-updater never
+; uses, but release-desktop.sh's wine smoke test does — launches nothing.
+!define MUI_FINISHPAGE_RUN "$INSTDIR\${APP_EXE}"
+!define MUI_FINISHPAGE_RUN_TEXT "Launch ${APP_NAME}"
+!insertmacro MUI_PAGE_FINISH
+
 !insertmacro MUI_UNPAGE_CONFIRM
 !insertmacro MUI_UNPAGE_INSTFILES
 !insertmacro MUI_LANGUAGE "English"
