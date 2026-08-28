@@ -75,8 +75,9 @@ import com.silencelen.huginn.ui.work.SettledDot
  * where it is tested; nothing here decides anything.
  *
  * House rules observed: no left accent bars anywhere, a breathing dot rather than
- * a badge for live work, tokens and percentages but never money, and every
- * estimate says out loud that it is one.
+ * a badge for live work, and every estimate says out loud that it is one — the
+ * pace line hedges in words, and the API-list-rate cost never appears without the
+ * caption that says whose money it is not.
  */
 
 enum class OverviewDensity { COMPACT, COMFORTABLE }
@@ -213,6 +214,9 @@ private fun StatsHeader(
     rate: com.silencelen.huginn.data.GraphRate?,
     nowMs: Long,
 ) {
+    // Null when nothing in the transcript carried usage — then there is no chip
+    // and no caption, rather than a $0.00 nobody could stand behind.
+    val cost = OverviewFormat.costStat(totals.estCost, totals.agentEstCostUsd)
     Column(Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 12.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             if (rate?.activeRecently == true) PulseDot(MaterialTheme.colorScheme.primary) else SettledDot()
@@ -244,6 +248,10 @@ private fun StatsHeader(
                 Stat("compacted", "${totals.compactions}× · ${PlanFormat.compactTokens(totals.droppedTokens)} dropped")
             }
             if (totals.errors > 0) Stat("tool errors", totals.errors.toString())
+            // Last because it is the widest chip by far — the agents' share rides
+            // in the value the way "3 · 1 live" does — so it wraps to its own row
+            // instead of shunting the short ones into a ragged one.
+            cost?.let { Stat("api cost", it.statValue) }
         }
         Spacer(Modifier.height(6.dp))
         // The cache share is stated because it is most of the total and almost
@@ -261,6 +269,18 @@ private fun StatsHeader(
             style = MaterialTheme.typography.labelSmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
+        // The caption belongs beside the share line and in the same voice: quiet,
+        // no icon, no colour. It is the reason the figure is allowed on a screen
+        // at all, and a warning tint would make a subscription-covered estimate
+        // look like a charge to answer for.
+        cost?.let {
+            Text(
+                it.captionLine,
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(top = 2.dp),
+            )
+        }
         if (totals.models.isNotEmpty()) {
             Text(
                 (totals.models.map { shortModel(it) } + totals.efforts).joinToString(" · "),
