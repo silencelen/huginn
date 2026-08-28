@@ -9,6 +9,45 @@ appeared only as a side-note on the app releases it happened to ship with. Three
 undocumented, and the notes-cutting matcher could fuse two sections when an app and an appd
 version number collided. Entries below are reconstructed from the shipping commits.
 
+## 2.82.0 — 2026-08-28
+
+Tokens bill at the rate that was in force when they were spent.
+
+- **The session estimate learned that a price is a fact about a moment.** Claude
+  Sonnet 5 launched on an introductory rate — $2/$10 per MTok against the $3/$15
+  sticker — and the table priced every sonnet-5 token at sticker, overstating any
+  session that touched that model by a third. `lib/pricing.js` now carries a
+  `RATE_ERAS` table beside the family cards, and each record reaches the pricer
+  with its own timestamp. On two real transcripts on this host the model's line
+  moves $0.3463 → $0.2309 and $0.5045 → $0.3363.
+- **This is permanent, not a four-day patch.** The window closes on 2026-08-31,
+  but a session from August priced next March still bills what August cost — the
+  era is a property of the tokens, not of today's date, and nothing here expires
+  when the window does. It is the rule the unsplit cache write already followed:
+  price what the record says happened.
+- **The era is Sonnet 5's alone.** A family is matched on a loose substring
+  because families are disjoint out there; an era lives *inside* one, next to
+  siblings that were never on it. `claude-sonnet-4-6` has been $3/$15 its whole
+  life, so the era's marker is anchored — the id must end at the model or at one
+  of the date suffixes that really reach a transcript. A leak there would have
+  understated every 4-6 session by a third with a perfectly renderable number.
+- **A record with no timestamp takes the cheaper of the two cards it might have
+  been**, read off the cards rather than assumed. An undated record was written
+  on one side of the boundary or the other and nothing says which; an estimate
+  put in front of a person should under-state what it cannot evidence rather
+  than invent spend it has no record of.
+- **The wire shape is unchanged.** `totals.estCost.byModel` is still one row per
+  model *name*: a session spanning the boundary shows a single `claude-sonnet-5`
+  row whose dollars are the era-correct sum. The eras are an accounting detail of
+  the pricer, and no client decodes them. `usd`, `agentEstCostUsd` and
+  `unpricedTokens` keep their contracts, and rounding still happens once per
+  rendered row.
+- **Both accumulation paths carry the timestamp** — the spine and the per-agent
+  one, which calls the pricer separately. That second one is the failure nothing
+  on screen would have looked wrong for: with the timestamp dropped, an agent's
+  sonnet-5 spend silently lands on the undated fallback, which is *correct* for a
+  record inside the window and wrong for one after it.
+
 ## 2.81.0 — 2026-08-27
 
 The Electron desktop client is deleted, and its update channel with it.
