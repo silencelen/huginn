@@ -1,5 +1,35 @@
 # Huginn Desktop changelog
 
+## 0.17.0
+
+The list pane gets a way out, questions stop covering the terminal, and the
+installer hands the app back when it is done.
+
+- **A notch on the seam collapses the list.** A small tab at the top of the
+  split between the list and the conversation shuts the pane — it slides
+  toward the rail and the notch stays where it was, chevron flipped, so the
+  way back is where the way out was. With the pane shut, an outward drag past
+  a short deliberate pull reopens it at its previous width, and a double-click
+  reopens it at the default. The state is remembered across restarts. Also on
+  Ctrl+B and in the command palette — both of which stand aside for tmux's
+  own C-b while the Screen tab's live keyboard is on.
+- **The question card no longer follows you to the Screen tab.** A multi-part
+  question's only affordance is "Answer on the Screen tab", and the card used
+  to cover the terminal it had just sent you to; it now stops drawing the
+  moment that lands, and takes its error note with it. Conversation and
+  Overview are unchanged.
+- **The Windows installer no longer ends by taking the app away.** Installing
+  or updating finishes on a page with one checked box — Launch Huginn
+  Desktop — and closing the installer starts the client; unchecking it closes
+  quietly. Silent installs still show nothing and launch nothing, and because
+  the installer never elevates, the app comes back with your own account
+  rather than an administrator's.
+- **"Install and restart" now does both.** The client closes itself as soon
+  as the installer is genuinely running, so the installer can replace files
+  it was holding open instead of having to end the process that launched it —
+  and the finish page's checked box brings the app back. If the installer
+  fails to start, nothing closes and the reason stays on screen.
+
 ## 0.16.0
 
 Attaching a page is a thing you ask for, not a thing on the screen.
