@@ -561,6 +561,17 @@ function batchLines(lines) {
 /** True when the daemon will never accept this again, however many times we try. */
 const permanent = (e) => / → (40[034]|413) /.test(String(e && e.message));
 
+// How long a just-spawned engine may produce NO output before it is treated as
+// wedged at startup. Generous — a working engine emits its init frame near-instantly,
+// so this only ever catches a child that never came alive. NOT an ongoing-silence
+// bound (see the watchdog in runWork): a quiet long tool is allowed.
+const STARTUP_SILENCE_MS = 180000;
+
+// The one in-flight run, exposed so the /beat loop can carry a Stop onto its child
+// while it sits in a quiet tool. The runner does one job at a time, so a single slot
+// is enough; runWork sets it after spawn and clears it in finish().
+let activeRun = null;
+
 function runWork(id, work, conf) {
   return new Promise((resolve) => {
     const scope = parseScope(conf.scope);
@@ -621,6 +632,31 @@ function runWork(id, work, conf) {
     let cancelled = false;
     let done = false;
 
+    // Startup-liveness watchdog. An engine child that wedges at startup (a hung
+    // auto-update, broken credentials) emits NOTHING and would otherwise hold this
+    // device's single job slot until the daemon gives up — looking healthy the
+    // whole time. Kill a child that has produced NO output at all within the window.
+    // This deliberately does NOT watchdog ONGOING silence: a working run may sit for
+    // minutes inside one quiet tool (a long build), and killing that is the exact
+    // failure the daemon-side /beat liveness fix exists to prevent. First output ⇒
+    // the engine is alive, and from then on silence is allowed.
+    let sawOutput = false;
+    const startupTimer = setTimeout(() => {
+      if (sawOutput || done) return;
+      log(`${work.id}: no output in ${Math.round(STARTUP_SILENCE_MS / 1000)}s — stopping a wedged engine`);
+      cancelled = true;
+      try { child.kill(); } catch { /* already gone */ }
+      finish(`${work.mode === 'generate' ? 'the local engine' : 'claude'} produced no output for ${Math.round(STARTUP_SILENCE_MS / 1000)}s on ${conf.name} and was stopped — it looked wedged on startup (check auth, or a hung update)`);
+    }, STARTUP_SILENCE_MS);
+
+    // So a Stop that arrives on the /beat channel — the one signal that still flows
+    // while a run sits in a long quiet tool — can reach this child. The flush loop
+    // honours `cancel` on event acks, but those only happen when there IS output;
+    // the beat covers the quiet.
+    activeRun = {
+      cancel: () => { if (!cancelled && !done) { cancelled = true; try { child.kill(); } catch { /* gone */ } } },
+    };
+
     let flushing = false;
     const flush = setInterval(async () => {
       if (!pending.length || done || flushing) return;
@@ -652,7 +688,7 @@ function runWork(id, work, conf) {
     }, 500);
 
     readline.createInterface({ input: child.stdout })
-      .on('line', (line) => { if (line.trim()) pending.push(line); });
+      .on('line', (line) => { sawOutput = true; if (line.trim()) pending.push(line); });
 
     // Claude's stderr is not stream-json and the daemon cannot read it, but it is
     // where a startup failure explains itself — so it is kept for the ending
@@ -684,6 +720,8 @@ function runWork(id, work, conf) {
     async function finish(error, exitCode = null) {
       if (done) return;
       done = true;
+      clearTimeout(startupTimer);
+      activeRun = null;
       clearInterval(flush);
       const tail = pending; pending = [];
       // ⚠ THE TAIL FIRST, THEN THE ENDING ALONE. These used to go in one POST,
@@ -730,7 +768,7 @@ async function serve() {
       beat = setInterval(() => {
         api('POST', `/v1/devices/${id}/beat`, {
           locked: locked(), scope: parseScope(loadConf().scope), version: VERSION,
-        }).catch(() => {});
+        }).then((r) => { if (r && r.cancel) activeRun?.cancel(); }).catch(() => {});
       }, 60000);
 
       let failures = 0;
