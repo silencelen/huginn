@@ -274,7 +274,10 @@ function _Huginn-Uninstall {
     if ((Test-Path $ddir) -and -not (Get-ChildItem -Force $ddir -ErrorAction SilentlyContinue)) {
       Remove-Item -Force -ErrorAction SilentlyContinue $ddir
     }
-    $removed += $ddir
+    # Only report what actually went: the dir may still hold files this uninstall
+    # does not own, or the Remove-Item may have failed silently, and claiming a
+    # removal that did not happen sends the user looking in the wrong place.
+    if (-not (Test-Path $ddir)) { $removed += $ddir }
     Write-Host ""
   }
 
@@ -544,11 +547,24 @@ function huginn {
     }
   } elseif ($args[0] -eq 'llm') {
     # One question to the LOCAL TIER - a serving machine's model answers, never
-    # Claude. Host-rendered; args are single-quoted for the remote shell.
-    $q = if ($args.Count -gt 1) {
-      ($args[1..($args.Count-1)] | ForEach-Object { "'" + ($_ -replace "'", "'\''") + "'" }) -join ' '
-    } else { '' }
-    ssh -T $H "huginn-llm $q"
+    # Claude. Leading --flags pass as argv; the PROMPT rides base64 -> stdin
+    # ("huginn-llm -"), the same hardening the exec path uses, so double quotes,
+    # newlines, $ and backticks in the prompt survive both PowerShell and the
+    # remote shell. Single-quote marshalling mangled double-quoted prompts on
+    # Windows PowerShell 5.1.
+    $rest = if ($args.Count -gt 1) { @($args[1..($args.Count - 1)]) } else { @() }
+    $flags = @(); $i = 0
+    while ($i -lt $rest.Count -and ([string]$rest[$i]).StartsWith('--')) {
+      $flags += $rest[$i]
+      if (($rest[$i] -eq '--model' -or $rest[$i] -eq '--timeout') -and ($i + 1) -lt $rest.Count) {
+        $i++; $flags += $rest[$i]
+      }
+      $i++
+    }
+    $prompt = if ($i -lt $rest.Count) { ($rest[$i..($rest.Count - 1)]) -join ' ' } else { '' }
+    $flagStr = ($flags | ForEach-Object { "'" + ($_ -replace "'", "'\''") + "'" }) -join ' '
+    $b64 = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($prompt))
+    ssh -T $H "echo $b64 | base64 -d | huginn-llm $flagStr -"
   } elseif ($args[0] -eq 'local') {
     # THIS machine serves local AI models to huginn - the optional local tier.
     # Same grammar as `huginn device`: consent, fetch pinned, validate, install,
