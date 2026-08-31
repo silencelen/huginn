@@ -499,10 +499,14 @@ class AccountStore {
     // And move the identity with the tokens, or the CLI keeps naming the old
     // account. No stored block means removing the stale one and letting the CLI
     // re-derive: wrong is worse than absent.
-    this.writeOauthAccount(rec.oauthAccount ?? null);
+    const wroteIdentity = this.writeOauthAccount(rec.oauthAccount ?? null);
     return {
       ok: true, email: rec.email ?? null, slug,
-      identityRestored: !!rec.oauthAccount,
+      // Only claim the identity followed the tokens if the write actually landed.
+      // writeOauthAccount returns false on a read/write failure; reporting
+      // identityRestored:true then tells the caller the CLI will name the new
+      // account when it will in fact keep naming the old one.
+      identityRestored: !!rec.oauthAccount && wroteIdentity,
     };
   }
 }

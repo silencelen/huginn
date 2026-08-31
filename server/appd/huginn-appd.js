@@ -1177,8 +1177,19 @@ function saveMeta(meta) {
   // writes pass through, so it is where those two can be dropped for good.
   const { running, ...rest } = meta;
   if (typeof rest.pending === 'number') delete rest.pending;
-  fs.mkdirSync(chatDir(meta.id), { recursive: true });
-  fs.writeFileSync(metaPath(meta.id), JSON.stringify(rest, null, 2));
+  // meta.json is the hottest writer in the store — rewritten on every message,
+  // queue push, run event and settle. A bare writeFileSync leaves a truncated file
+  // if the daemon is killed (OOM / power cut / ENOSPC) mid-write, and loadMeta then
+  // returns null forever: the chat vanishes from every view, its queue and sealed
+  // flag are lost, and messages.jsonl is orphaned, with nothing logged. tmp+rename
+  // is atomic within a filesystem, so a reader sees the whole old file or the whole
+  // new one, never a half. 0o700 on the dir and 0o600 on the file keep a chat
+  // transcript off other users even if the data-dir mode is ever loosened.
+  const dir = chatDir(meta.id);
+  fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+  const p = metaPath(meta.id);
+  fs.writeFileSync(`${p}.tmp`, JSON.stringify(rest, null, 2), { mode: 0o600 });
+  fs.renameSync(`${p}.tmp`, p);
 }
 /**
  * Mutates the meta ON DISK: reload, change, save.
@@ -2087,7 +2098,13 @@ function loadRound(id) {
   try { return JSON.parse(fs.readFileSync(roundPath(id), 'utf8')); } catch { return null; }
 }
 function saveRound(r) {
-  fs.writeFileSync(roundPath(r.id), JSON.stringify(r, null, 2));
+  // A Round is rewritten on every fire (currentChatId, nextRunAt, run history), so
+  // a torn bare write is a recurring exposure: loadRound swallows the parse error
+  // to null, listRounds skips the file, and the scheduled Round silently ceases to
+  // exist — the owner's report just stops arriving, with no alert and no log line.
+  // Atomic tmp+rename at 0o600, the same shape saveDevices/savePad use.
+  fs.writeFileSync(`${roundPath(r.id)}.tmp`, JSON.stringify(r, null, 2), { mode: 0o600 });
+  fs.renameSync(`${roundPath(r.id)}.tmp`, roundPath(r.id));
   return r;
 }
 function listRounds() {
@@ -2615,6 +2632,7 @@ function recordSkippedRound(roundId, reason) {
 async function roundsTick() {
   const now = Date.now();
   for (const round of listRounds()) {
+   try {
     // A wedged run holds a pool slot the owner's own chats need.
     if (round.currentChatId) {
       const active = activeRuns.get(round.currentChatId);
@@ -2632,12 +2650,23 @@ async function roundsTick() {
     // firing on every tick forever.
     if (d.nextRunAt !== round.nextRunAt) updateRound(round.id, (r) => { r.nextRunAt = d.nextRunAt; });
     if (d.reason === 'missed') {
-      log(`round ${round.id}: missed its slot by ${Math.round(d.lateBy / 60_000)}m, skipped (catchUp off)`);
+      // Record it as a skipped run, not just a log line. A missed slot that never
+      // becomes a run can never be notified — the row stays "last run OK", the week
+      // stays green, and a scan that silently did not happen looks like it did.
+      // recordSkippedRound is what makes it visible and honours notifyWhen; the
+      // re-arm above already prevents it repeating.
+      recordSkippedRound(round.id, `missed its slot by ${Math.round(d.lateBy / 60_000)}m (catchUp off)`);
     }
     if (!d.run) continue;
 
     const started = fireRound(loadRound(round.id) || round);
     if (started.error) recordSkippedRound(round.id, started.error);
+   } catch (e) {
+    // One corrupt/hand-edited round file must not stall every round after it. The
+    // per-round guard logs and moves on; without it a single throwing round wedges
+    // the whole 30s tick and nothing else ever fires.
+    log(`round ${round && round.id}: tick step failed (${e.message})`);
+   }
   }
 }
 setInterval(() => { roundsTick().catch((e) => log('rounds: tick failed', e.message)); }, 30_000).unref();
@@ -3691,6 +3720,17 @@ function saveAutoswitch(st) {
     fs.renameSync(`${AUTOSWITCH_STATE}.tmp`, AUTOSWITCH_STATE);
   } catch (e) { log('autoswitch: could not persist', e.message); }
 }
+// A tick spans awaited network calls (plan fetches, a performSwitch), during which
+// the owner may POST /v1/autoswitch to change `enabled` or `threshold`. Writing the
+// tick's start-of-pass snapshot back wholesale would silently revert that change.
+// Re-read the freshest state, mutate only the field(s) the tick owns, then save —
+// the shape alertTick already uses for exactly this reason.
+function updateAutoswitch(mut) {
+  const fresh = loadAutoswitch();
+  mut(fresh);
+  saveAutoswitch(fresh);
+  return fresh;
+}
 
 let autoswitchBusy = false;
 // The last tick's reasoning, so "it never fires" can be told apart from "it has
@@ -3722,7 +3762,7 @@ async function autoswitchTick() {
 
     const threshold = typeof st.threshold === 'number' ? st.threshold : undefined;
     const w = worstLimit(activeLimits);
-    if (!w || w.percent < (threshold ?? 95)) {
+    if (!w || w.percent < (threshold ?? AUTOSWITCH_THRESHOLD)) {
       autoswitchWhy = explainSwitch({ active, candidates: [], now: Date.now(), lastSwitchAt: st.lastSwitchAt || 0, threshold });
       return;
     }
@@ -3766,11 +3806,10 @@ async function autoswitchTick() {
       // Only at the threshold, and once a day: below it there is nothing to warn
       // about, and above it the reading changes every few minutes.
       const worst = worstLimit(active.limits);
-      if (worst && worst.percent >= threshold) {
+      if (worst && worst.percent >= (threshold ?? AUTOSWITCH_THRESHOLD)) {
         const lastWarn = st.lastIdleWarnAt || 0;
         if (Date.now() - lastWarn > 24 * 60 * 60 * 1000) {
-          st.lastIdleWarnAt = Date.now();
-          saveAutoswitch(st);
+          updateAutoswitch((s) => { s.lastIdleWarnAt = Date.now(); });
           const text = `${active.email || active.slug} is at ${worst.percent}% (${worst.label}) and ` +
             `auto-switch could not move: ${autoswitchWhy}. Sign in to another account, or ` +
             `open one of the saved ones once so its headroom can be read.`;
@@ -3786,10 +3825,11 @@ async function autoswitchTick() {
     const r = await performSwitch(d.to);
     if (!r.ok) { log(`autoswitch: activate failed: ${r.error}`); return; }
 
-    st.lastSwitchAt = Date.now();
-    st.switches = (st.switches || 0) + 1;
-    st.last = { at: Math.floor(Date.now() / 1000), ...d };
-    saveAutoswitch(st);
+    updateAutoswitch((s) => {
+      s.lastSwitchAt = Date.now();
+      s.switches = (s.switches || 0) + 1;
+      s.last = { at: Math.floor(Date.now() / 1000), ...d };
+    });
 
     // A silent identity change would be spooky: the phone and Telegram both
     // hear about it, whatever the alert toggle says. Statement, not question.
@@ -5307,9 +5347,25 @@ const server = http.createServer(async (req, res) => {
         const body = JSON.parse(await readBody(req) || '{}');
         devicesLib.noteSeen(deviceState, devId, now, body);
         saveDevices();
+        // A beat is liveness for the device's in-flight run, not only for the row.
+        // A runner beats every 60s from a timer that is independent of its work
+        // loop, so a long QUIET tool call — a build that streams nothing for
+        // minutes — is not silence: the machine is plainly still there. Without
+        // this refresh the run is declared lost at REMOTE_SILENCE_MS and the build
+        // is killed mid-work on a false connectivity failure. `cancel` rides the
+        // beat too, so a Stop reaches a run that is inside a quiet tool and not
+        // currently posting event batches (the ack channel it would otherwise
+        // wait on). Runners that do not yet read `cancel` here simply ignore it.
+        let cancel = false;
+        for (const entry of remoteRuns.values()) {
+          if (entry.deviceId !== devId) continue;
+          entry.lastHeard = now;
+          if (entry.run_.cancelled) cancel = true;
+        }
         return sendJson(res, 200, {
           ok: true,
           effectiveScope: devicesLib.effectiveScope(deviceState.devices[devId]),
+          cancel,
         });
       }
 
