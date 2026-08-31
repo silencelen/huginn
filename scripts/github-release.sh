@@ -93,11 +93,24 @@ done
 # is itself the leak once committed. Absent => the gate is a no-op, so a fresh
 # clone still releases; present => it fails CLOSED, including if `strings` is gone.
 DENY_SRC="${HUGINN_RELEASE_DENY_FILE:-/etc/huginn-appd/release-deny.txt}"
-if [ -s "$DENY_SRC" ] && [ "${#ARTIFACTS[@]}" -gt 0 ]; then
+if [ "${#ARTIFACTS[@]}" -gt 0 ]; then
   DENY="$(mktemp)"
   # Blank lines and comments stripped: a single empty pattern would match every
   # artifact and turn a security gate into an unconditional refusal.
-  grep -vE '^[[:space:]]*(#|$)' "$DENY_SRC" > "$DENY" || true
+  [ -s "$DENY_SRC" ] && grep -vE '^[[:space:]]*(#|$)' "$DENY_SRC" >> "$DENY" || true
+  # The hand-maintained denylist has drifted before: it once listed the (non-secret)
+  # Firebase API key but NOT the surname-bearing project_id the scrub actually
+  # existed to withhold. Derive the identity strings straight from the developer's
+  # own google-services config so the scan can never omit the ids it guards. The
+  # file is gitignored and never in the tree, so nothing secret is committed — the
+  # values are read at release time from an untracked file, and on a fresh clone
+  # (no config, no denylist) DENY stays empty and the gate is a no-op as before.
+  GS="${HUGINN_GOOGLE_SERVICES_FILE:-mobile/app/google-services.json}"
+  if [ -s "$GS" ]; then
+    grep -oE '"(project_id|project_number|mobilesdk_app_id|current_key)"[[:space:]]*:[[:space:]]*"[^"]+"' "$GS" \
+      | sed -E 's/.*:[[:space:]]*"([^"]+)"/\1/' >> "$DENY" || true
+  fi
+  [ -s "$DENY" ] && sort -u "$DENY" -o "$DENY" || true
   if [ -s "$DENY" ]; then
     command -v strings >/dev/null || {
       echo "REFUSING: $DENY_SRC exists but 'strings' is not installed -- cannot" >&2
