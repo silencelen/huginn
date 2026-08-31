@@ -338,6 +338,24 @@ test('uploads GET requires auth', async () => {
   res.body?.cancel?.();
 });
 
+test('a present but WRONG bearer is rejected (auth compares the token, not just the scheme)', async () => {
+  // The test above sends NO header — it exercises the missing/malformed-scheme
+  // branch. This one sends a well-formed Bearer carrying the wrong secret, pinning
+  // the token-COMPARISON branch, which is the gate that actually protects the host.
+  const wrong = await fetch(`${BASE}/v1/uploads/whatever.jpg`, {
+    headers: { authorization: `Bearer ${'0'.repeat(64)}` },
+  });
+  assert.equal(wrong.status, 401, 'a valid-scheme wrong token must not authorize');
+  wrong.body?.cancel?.();
+  // Control: the SAME route with the correct token does not 401 (it 404s the
+  // missing file), proving the 401 above is about the token, not the route.
+  const right = await fetch(`${BASE}/v1/uploads/whatever.jpg`, {
+    headers: { authorization: `Bearer ${token}` },
+  });
+  assert.notEqual(right.status, 401, 'the correct token authorizes this route');
+  right.body?.cancel?.();
+});
+
 // --- ask-sidecar fusion at the route layer ---------------------------------
 
 function writeAskSidecar(name, questions) {

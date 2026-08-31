@@ -176,6 +176,21 @@ test('a server-side outage is NOT treated as a dead token', async () => {
   assert.equal(r.status, 503);
 });
 
+test('a 404 that is NOT a dead-token code does not unregister the fleet', async () => {
+  // A project-level fault (wrong project id, endpoint gone) can 404 without the
+  // token being gone. Deciding "dead" from the bare status would drop every token
+  // in that tick; the verdict must come from the error CODE, not the HTTP 404.
+  const sender = new FcmSender(writeKey());
+  const f = stubFetch([TOKEN_OK, {
+    status: 404,
+    body: JSON.stringify({ error: { code: 404, status: 'FAILED_PRECONDITION', message: 'project not found' } }),
+  }]);
+  const r = await sender.send('good-token', { title: 'T', text: 'B' }, f);
+  assert.equal(r.ok, false);
+  assert.equal(r.dead, false, 'a non-UNREGISTERED 404 must not retire a live token');
+  assert.equal(r.status, 404);
+});
+
 test('an unparseable error body still yields a usable verdict', async () => {
   const sender = new FcmSender(writeKey());
   const f = stubFetch([TOKEN_OK, { status: 500, body: '<html>gateway</html>' }]);

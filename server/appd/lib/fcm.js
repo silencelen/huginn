@@ -160,7 +160,14 @@ class FcmSender {
 
     return {
       ok: false,
-      dead: DEAD_TOKEN_CODES.has(code) || res.status === 404,
+      // "Dead" is decided by the error CODE, never the bare HTTP status. The v1
+      // send URL embeds the project id, so a 404 can mean "this project/endpoint
+      // is wrong", not "this token is gone" — and treating every 404 as dead would
+      // unregister the WHOLE fleet in one tick on a project-level fault. A real
+      // unregistered token still reports dead: FCM answers UNREGISTERED in the
+      // details and NOT_FOUND in error.status, and both are in DEAD_TOKEN_CODES
+      // (see the `code` extraction above, which falls back to error.status).
+      dead: DEAD_TOKEN_CODES.has(code),
       status: res.status,
       error: message,
     };
