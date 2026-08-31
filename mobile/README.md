@@ -218,6 +218,14 @@ root SSH key: if a device carrying it is lost, rotate the file, restart the unit
 | GET | `/v1/sessions/<name>/agents` | the individual agents behind a fan-out |
 | GET | `/v1/autoswitch` · POST | automatic account rotation state / `{enabled}` |
 | POST | `/v1/rounds/polish` | `{field, title?, prompt?, goal?, mode?}`; one better draft of that field, as a proposal a person accepts — never applied, and 200 with `{error}` when the model cannot answer |
+| GET | `/v1/rounds` · POST | scheduled recurring runs (list); POST creates one from `{title, prompt, goal?, schedule, …}` |
+| GET | `/v1/rounds/<id>` · PATCH · DELETE | one round: view / edit its schedule+goal / delete it and its run history |
+| GET | `/v1/devices` | enrolled devices — machines that run dispatched `act`/`generate` work — with each one's scope and liveness |
+| POST | `/v1/devices` | enrol/register a device |
+| DELETE | `/v1/devices/<id>` | unenrol; stops offering work (does not reach onto the machine) |
+| POST | `/v1/devices/<id>/beat` | runner heartbeat + advertised scope; the response carries `cancel` for the device's in-flight run |
+| GET | `/v1/devices/<id>/work` | the runner's long poll for the next work item |
+| POST | `/v1/devices/<id>/events` | the runner streams a run's output back in batches; `{done, exitCode?, error?}` settles it |
 | GET | `/v1/scratchpads` · POST | the pages the owner keeps; the GET mints Main on first sight, POST takes `{name, content?}`. A 404 here is how a client knows this daemon has no scratchpads |
 | GET | `/v1/scratchpads/<id>` · PATCH · DELETE | PATCH is the autosave, `{rev, name?, content?}` — a stale `rev` comes back 409 with the current page to adopt. Main cannot be renamed or deleted |
 | GET | `/v1/sessions/<name>/overview` | what this run has spent and what it did; 409 until the Claude hook has recorded a transcript. Deliberately not in the session list or the watch digest |
