@@ -21,6 +21,35 @@ Huginn puts a capable AI coding agent on an always-on host and lets you drive it
 - **Richer credentials live behind it.** `/var/lib/huginn-appd/accounts/` holds a full OAuth blob per saved Claude login, and `/etc/huginn-appd/fcm-service-account.json` is a Google service-account key for push. Both are root-only on disk, and both are worth more to an attacker than the token that guards them.
 - **Uploads are not filtered by type**, up to 128 MB each, into `/var/lib/huginn-appd/uploads/`. Deliberate — an attachment is whatever the phone had, and an `act` chat may need to `unzip` or `sqlite3` it — but an authenticated client can put arbitrary bytes on the host's disk.
 
+## What's exposed — distributed execution (devices & the local tier)
+
+If you enrol *devices* (the daemon dispatching `act`/`generate` work to other
+machines — your PC, a laptop, a local-LLM box), the daemon's reach is no longer
+one host. Understand this before enrolling anything:
+
+- **A device runner authenticates with the same master token.** Every serving box
+  holds a copy of the daemon's bearer token — a root-equivalent credential, by the
+  same logic as [above](#whats-exposed--huginn-appd-the-app-daemon). Enrolling a
+  machine puts that token on it; losing that machine is losing the token.
+- **The daemon's reach now includes every enrolled machine.** A token holder can
+  queue work that runs on a remote device within that device's *scope*. So the
+  blast radius of a compromised token is the daemon host **plus** every box that
+  runs a runner for it.
+- **Scope is enforced on the device, not by the registry.** A device advertises a
+  scope (`generate` for local-LLM only, `work`, or `own`); the registry treats it
+  as advisory and can even re-scope a row from a heartbeat. The fence that keeps a
+  `generate` box from being handed `claude`-tier work is the runner on that box
+  honouring its own scope — a device you do not control is a device whose scope you
+  are trusting it to keep.
+- **The local tier is the same story.** A `llama-server` box enrolled for the local
+  model tier holds the master token like any other device. "The local tier cannot
+  reach Claude" holds in the *work-dispatch* plane; it is not an isolation boundary
+  at the credential level.
+
+Practical consequence: only enrol machines you trust as much as the daemon host,
+restrict each runner's network the way you restrict the daemon's, and rotate the
+token when *any* enrolled device is lost — not only the phone.
+
 ## Hardening checklist
 
 - ✅ **Key-only SSH.** Disable password auth (`PasswordAuthentication no`). One keypair per device — easy to revoke.

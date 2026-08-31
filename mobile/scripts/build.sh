@@ -35,7 +35,11 @@ echo "[build 1/3] unit tests"
 # and the transcript rows for BOTH clients, so a break there breaks the phone.
 # Only its jvm target runs — the suite needs a real DrawScope, and on the Android
 # target ImageBitmap is a stubbed android.graphics.Bitmap in a unit test.
-flock "$LOCK" ./gradlew :core:jvmTest :core:testDebugUnitTest :app:testDebugUnitTest :ui:jvmTest
+# --rerun-tasks --no-build-cache so the gate cannot pass on FROM-CACHE / UP-TO-DATE
+# task outputs: an unchanged tree leaves the test tasks up-to-date, gradle skips
+# them, and the COUNT below is then read from the PREVIOUS run's XML — a green gate
+# over tests that never executed. Forcing a real run is the whole point of a gate.
+flock "$LOCK" ./gradlew --rerun-tasks --no-build-cache :core:jvmTest :core:testDebugUnitTest :app:testDebugUnitTest :ui:jvmTest
 
 # The COUNT is asserted, not just the exit code — same reason as the server suite
 # below, and the same failure the line above describes: a suite that stops being

@@ -148,7 +148,10 @@ if [ "$SKIP_TESTS" = 0 ]; then
   # desktop client is made of, and a release that only ran :app-desktop:test
   # would be 26 tests over an untested application — the exact failure
   # scripts/build.sh was hardened against twice.
-  $GRADLE :core:jvmTest :core:testDebugUnitTest :app:testDebugUnitTest :ui:jvmTest \
+  # --rerun-tasks --no-build-cache: a release gate must not pass on cached/UP-TO-DATE
+  # task outputs (see scripts/build.sh) — the count below would otherwise be read
+  # from a prior run's XML while these tests never actually ran for this release.
+  $GRADLE --rerun-tasks --no-build-cache :core:jvmTest :core:testDebugUnitTest :app:testDebugUnitTest :ui:jvmTest \
           :app-desktop:test >> "$LOG" 2>&1 || {
     tail -40 "$LOG"; echo "REFUSING: kotlin tests failed (full log: $LOG)" >&2; exit 1; }
 

@@ -1,6 +1,6 @@
 # The local tier — serving local AI models to huginn
 
-Status: **spec, decisions locked 2026-08-25 · implementation in progress.**
+Status: **shipped and activatable — decisions locked 2026-08-25, implementation complete 2026-08-25/26.** This document is now both the spec and the description of what runs; where a detail below still reads as future tense, the behaviour it describes is live.
 Read `docs/ADDING-A-FEATURE.md` first, as always. This document is the implementation
 reference for the local tier across its four cuts (P1–P4 below). The conduits
 (delegation lane, escalate door) are a later phase and appear here only as named seams.
