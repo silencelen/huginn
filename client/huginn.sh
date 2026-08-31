@@ -562,7 +562,7 @@ EOF
   huginn local off            stop serving  [--purge-models] [--purge]
   huginn device unit          print a systemd unit that keeps the runner up
   huginn kill <name>          hard end: stop the session now
-  huginn -p "question"        one-shot headless query (reasoning + memory, read-only)
+  huginn -p "question"        one-shot headless query (reasoning + memory; does not auto-approve tools)
   huginn -y "task"            one-shot that may use tools (bash/files/web + memory)
   huginn usage [args]         Claude Code token/cost report (ccusage; default: daily)
                                 e.g. huginn usage monthly | session | blocks | blocks --live

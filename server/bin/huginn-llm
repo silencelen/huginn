@@ -61,7 +61,22 @@ if [ -z "$CID" ]; then
   exit 1
 fi
 
-cleanup() { [ -n "$KEEP" ] || curl -s -m 10 -X DELETE "$API/v1/chats/$CID" "${auth[@]}" >/dev/null; }
+SETTLED=""
+cleanup() {
+  # A run still active past our timeout is the real leak: the daemon refuses to
+  # DELETE a chat while its run is active (409), so without cancelling first the
+  # chat is orphaned AND the generate run keeps burning on the serving box. Only
+  # needed when we never observed the run settle (a timeout or a mid-run error).
+  [ -z "$SETTLED" ] && curl -s -m 10 -X POST "$API/v1/chats/$CID/cancel" "${auth[@]}" >/dev/null 2>&1
+  [ -n "$KEEP" ] && return
+  # Cancel is SIGTERM-then-SIGKILL and takes a moment to settle; retry the DELETE
+  # while it still 409s so the chat is not left behind.
+  for _ in 1 2 3 4 5; do
+    code=$(curl -s -m 10 -o /dev/null -w '%{http_code}' -X DELETE "$API/v1/chats/$CID" "${auth[@]}")
+    [ "$code" = 409 ] || break
+    sleep 1
+  done
+}
 trap cleanup EXIT
 
 SENT=$(curl -s -m 15 -X POST "$API/v1/chats/$CID/messages" "${auth[@]}" \
@@ -76,6 +91,7 @@ while [ "$(date +%s)" -lt "$DEADLINE" ]; do
   R=$(curl -s -m 15 "$API/v1/chats/$CID" "${auth[@]}")
   RUN=$(printf '%s' "$R" | py "import json,sys; print(json.load(sys.stdin).get('running'))")
   if [ "$RUN" = "False" ]; then
+    SETTLED=1   # the run finished on its own; DELETE will not 409, no cancel needed
     ANSWER=$(printf '%s' "$R" | py "
 import json,sys
 c = json.load(sys.stdin)

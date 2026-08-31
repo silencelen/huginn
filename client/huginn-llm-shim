@@ -272,6 +272,15 @@ function postChat(endpoint, key, body, onDelta) {
         let text = '';
         res.on('data', (c) => { if (text.length < 500) text += c; });
         res.on('end', () => reject(new Error(`the local engine answered ${res.statusCode}: ${text.slice(0, 300)}`)));
+        // Without these, a socket that dies before 'end' (llama-swap is Restart=always
+        // and can be recycled mid-error) leaves the promise unsettled forever — 'end'
+        // never fires, and destroying the request after its response arrived cannot
+        // reject it. The run then stalls the device's one job slot for the whole
+        // watchdog window and exits having emitted only the init frame, hiding the real
+        // cause. Reject on a premature close/error so it is reported. (After a normal
+        // 'end' the promise is already settled and these are no-ops.)
+        res.on('close', () => reject(new Error(`the local engine answered ${res.statusCode} then dropped the connection: ${text.slice(0, 300)}`)));
+        res.on('error', (e) => reject(new Error(`the local engine answered ${res.statusCode} then errored: ${e.message}`)));
         return;
       }
       let buf = '';
@@ -370,11 +379,19 @@ async function main() {
     }, WATCHDOG_MS);
   };
 
+  // The model name on the wire is the SLUG in managed mode (the llama-swap YAML is
+  // keyed by slug) but the backend's REAL name in adapter mode: an Ollama/LM Studio
+  // knows "qwen2.5:7b", never the slug-normalised "qwen2-5-7b", so sending the slug
+  // 404s on every adapter call. The real name is kept in modelsBySlug[slug].file.
+  const backendModel = conf.mode === 'adapter'
+    ? ((conf.modelsBySlug[mapped.key] || {}).file || mapped.key)
+    : mapped.key;
+
   arm();
   let full;
   try {
     full = await postChat(endpointOf(conf), apiKey(conf), {
-      model: mapped.key, messages, stream: true,
+      model: backendModel, messages, stream: true,
     }, (delta) => {
       arm();
       emit({ type: 'stream_event', event: { type: 'content_block_delta', delta: { type: 'text_delta', text: delta } } });

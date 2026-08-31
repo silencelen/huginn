@@ -627,6 +627,23 @@ function getJson(url, key) {
   });
 }
 
+// Just the status code of a POST — used by the keyless-completions guardrail, which
+// only cares whether the door refuses (401/403) or answers. Returns 0 on any
+// transport error so a flaky probe never blocks an install on its own.
+function postStatus(url, key, body) {
+  return new Promise((resolve) => {
+    const mod = url.startsWith('https:') ? https : http;
+    const data = Buffer.from(JSON.stringify(body));
+    const req = mod.request(url, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'content-length': data.length, ...(key ? { authorization: `Bearer ${key}` } : {}) },
+    }, (res) => { res.resume(); res.on('end', () => resolve(res.statusCode)); });
+    req.on('error', () => resolve(0));
+    req.setTimeout(8000, () => { req.destroy(); resolve(0); });
+    req.end(data);
+  });
+}
+
 /**
  * Health means reading the model-list BODY and requiring it nonempty — never a
  * TCP connect (the empty-daemon trap: a healthy-looking endpoint serving
@@ -808,13 +825,31 @@ async function cmdOn(flags) {
   console.log(`  serving ${h.models.join(', ')}`);
   const keyless = await getJson(`http://127.0.0.1:${conf.port}/v1/models`, null);
   if (keyless.status === 200) console.log('  note: the front door answers without the key on the model LIST; completions are key-gated by llama-server itself');
+  // Enforce the documented guardrail (LOCAL-TIER.md): a keyless COMPLETIONS request
+  // must be refused, or the loopback bind is the only fence. The model LIST being
+  // open is expected; a keyless COMPLETION being answered is not — it means anything
+  // that can reach loopback can spend this machine's model, so refuse to enrol.
+  const probeModel = (plan.models[0] && plan.models[0].slug) || conf.defaultModel;
+  const keylessComp = await postStatus(`http://127.0.0.1:${conf.port}/v1/chat/completions`, null,
+    { model: probeModel, messages: [{ role: 'user', content: 'x' }], max_tokens: 1 });
+  if (keylessComp === 0) {
+    console.log('  note: could not run the keyless-completions guardrail probe — verify by hand that a keyless completion is refused');
+  } else if (keylessComp !== 401 && keylessComp !== 403) {
+    throw new Error(`SECURITY: a KEYLESS completions request was answered ${keylessComp} (expected 401/403) — completions are NOT key-gated, so refusing to enrol. Set the engine's API key before turning this on.`);
+  } else {
+    console.log('  ok: keyless completions are refused — the API key is enforced');
+  }
   // 7: enrol FIRST, then start the runner service. The service's own poll loop
   // also enrols, and starting it before the id exists races two registrations
   // into two device rows — found live on the first real install: the second
   // enrolment saw the first one's slug as taken and hash-suffixed itself.
   const e = enrolDevice(conf, plan.models);
-  installRunnerService(flags);
+  // Persist the enrolment identity BEFORE starting the runner service: if the
+  // service install throws, the box has already registered a device row, and
+  // losing its slug here would strand it in a misleading half-enrolled state.
   conf.llmSlug = e.llmSlug;
+  saveConf(conf);
+  installRunnerService(flags);
   conf.installed = {
     llamaTag: MANIFEST.llamaCpp.release, swapVersion: MANIFEST.llamaSwap.version,
     models: plan.models.map((m) => m.slug), manifestHash: manifestHash(),
