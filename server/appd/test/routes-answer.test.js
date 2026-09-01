@@ -28,6 +28,7 @@ const crypto = require('node:crypto');
 const PORT = 8788 + (process.pid % 900);          // avoid the live daemon's 8787
 const SESSION = `audit-fp-${process.pid}`;
 const BASE = `http://127.0.0.1:${PORT}`;
+require('./retry-fetch');
 
 let tmp, token, daemon;
 
