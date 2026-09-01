@@ -50,11 +50,22 @@ const PORT = 9930 + (process.pid % 40);
 const BASE = `http://127.0.0.1:${PORT}`;
 require('./retry-fetch');
 const PFX = `ident-${process.pid}`;
+// Every tmux session this file makes lives on a PRIVATE `-L` server, shared with
+// the daemon under test via HUGINN_APPD_TMUX_SOCKET, never the default socket the
+// live `cc` sessions use. So a session leaked by a SIGKILL before after() can
+// fire lands on a socket nobody reads — not in the operator's desktop as
+// `ident-<pid>-*` noise. `-L`, not TMUX_TMPDIR: an inherited $TMUX from the pane
+// that launched `node --test` overrides TMUX_TMPDIR but never -L.
+const TMUX_SOCK = `huginn-test-${process.pid}`;
 
 let tmp, stateDir, token, daemon, transcript;
 const madeSessions = new Set();
 
-function sh(cmd, args) { return execFileSync(cmd, args, { encoding: 'utf8' }); }
+// tmux calls are pinned to the private socket; everything else runs as given.
+function sh(cmd, args) {
+  if (cmd === 'tmux') args = ['-L', TMUX_SOCK, ...args];
+  return execFileSync(cmd, args, { encoding: 'utf8' });
+}
 
 function mkSession(suffix) {
   const name = `${PFX}-${suffix}`;
@@ -117,6 +128,7 @@ before(async () => {
       HUGINN_APPD_DATA: path.join(tmp, 'data'),
       HUGINN_APPD_TOKEN_FILE: path.join(tmp, 'token'),
       HUGINN_APPD_STATE_DIR: stateDir,
+      HUGINN_APPD_TMUX_SOCKET: TMUX_SOCK,
     },
     stdio: 'ignore',
   });
@@ -143,6 +155,9 @@ after(() => {
   for (const name of madeSessions) {
     try { sh('tmux', ['kill-session', '-t', `=${name}`]); } catch { /* gone */ }
   }
+  // Reap the whole private server (safe: -L targets only OUR socket, never the
+  // default one), so nothing survives even if a session name was missed.
+  try { sh('tmux', ['kill-server']); } catch { /* no server */ }
   if (daemon) daemon.kill('SIGTERM');
   if (tmp) fs.rmSync(tmp, { recursive: true, force: true });
 });

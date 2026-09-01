@@ -55,7 +55,7 @@ const pushLib = require('./lib/pushtokens');
 const { trySender } = require('./lib/fcm');
 const { createPending, stepSoftEnd } = require('./lib/softend');
 
-const VERSION = '2.83.0';
+const VERSION = '2.84.0';
 const PORT = Number(process.env.HUGINN_APPD_PORT || 8787);
 const DATA_DIR = process.env.HUGINN_APPD_DATA || '/var/lib/huginn-appd';
 const UPLOADS_DIR = path.join(DATA_DIR, 'uploads');
@@ -110,6 +110,16 @@ const TOKEN_FILE = process.env.HUGINN_APPD_TOKEN_FILE || '/etc/huginn-appd/token
 // at a scratch dir so they never write state files into the live daemon's
 // watched directory on the same host.
 const STATE_DIR = process.env.HUGINN_APPD_STATE_DIR || '/run/huginn-claude-state';
+// A test knob only, empty in production. When set, EVERY tmux invocation this
+// daemon makes is pinned to a private `-L <name>` server instead of the default
+// socket that the interactive `cc` sessions (and the live daemon) share. The
+// route tests set it to a per-pid value so the throwaway sessions they create —
+// and any they LEAK when a test child is SIGKILLed before its after() hook can
+// fire — live on a socket nobody reads, and never surface in the desktop's
+// session list as `life-<pid>-*` / `ov*_<pid>` noise. Empty means the default
+// socket, i.e. exactly the production behaviour. `-L` (not TMUX_TMPDIR) because
+// an inherited $TMUX from the launching pane overrides TMUX_TMPDIR but not -L.
+const TMUX_SOCKET = process.env.HUGINN_APPD_TMUX_SOCKET || '';
 const PERSONA_FILE = '/usr/local/share/huginn-cli/persona.md';
 const WORKDIR = process.env.HUGINN_APPD_WORKDIR || process.env.HOME || '/root';
 // Optional companion memory node ("Muninn") — feeds the /v1/status mempalace
@@ -274,6 +284,10 @@ function readBodyRaw(req, limit = 256 * 1024) {
 }
 
 function run(cmd, args, opts = {}) {
+  // Socket isolation for tests (see TMUX_SOCKET): pin every tmux call to a
+  // private `-L` server. `-L` is a server flag, so it goes before the tmux
+  // subcommand. Empty TMUX_SOCKET (production) leaves argv untouched.
+  if (TMUX_SOCKET && cmd === 'tmux') args = ['-L', TMUX_SOCKET, ...args];
   return new Promise((resolve) => {
     execFile(cmd, args, { timeout: 10_000, maxBuffer: 4 * 1024 * 1024, ...opts },
       (err, stdout, stderr) => resolve({ err, stdout: stdout ?? '', stderr: stderr ?? '' }));
@@ -703,6 +717,11 @@ async function ensureTmuxServerScope() {
   // failure to OBSERVE, and starting a second server on a bad read is worse than
   // doing nothing.
   if (!probe.err || !/no server running/i.test(probe.stderr || '')) return;
+
+  // An isolated test socket wants a plain private server, NOT the shared
+  // huginn-tmux.scope: that unit name is global, so wrapping a per-pid test
+  // server in it would collide with (or be blocked by) the live daemon's scope.
+  if (TMUX_SOCKET) { await run('tmux', ['start-server']); return; }
 
   const r = await run('systemd-run',
     ['--scope', '--quiet', '--collect', `--unit=${TMUX_SCOPE}`, 'tmux', 'start-server']);
