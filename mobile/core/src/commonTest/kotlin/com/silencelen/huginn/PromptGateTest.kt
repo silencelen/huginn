@@ -1,7 +1,11 @@
 package com.silencelen.huginn
 
+import com.silencelen.huginn.data.PanePrompt
+import com.silencelen.huginn.data.PromptHeader
+import com.silencelen.huginn.data.PromptOption
 import com.silencelen.huginn.ui.PromptGate
 import com.silencelen.huginn.ui.SessionFace
+import com.silencelen.huginn.ui.asMultiPartSteer
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -58,6 +62,49 @@ class PromptGateTest {
             assertEquals(SessionFace.CONVERSATION, SessionFace.ofTabIndex(i), "index $i")
             assertTrue(PromptGate.visible(hasQuestion = true, face = SessionFace.ofTabIndex(i)), "index $i")
         }
+    }
+
+    @Test
+    fun `a pane-only multi-question prompt is steered, not tap-answered`() {
+        // The over-answer trap: no fused sidecar, but the pane scrape read a
+        // two-tab dialog. A single digit here answers question 1 AND confirms
+        // question 2's default, so the client must NOT offer answer buttons.
+        val paneOnlyTwoQ = PanePrompt(
+            question = "Pick a database",
+            options = listOf(PromptOption(number = 1, label = "Postgres")),
+            source = null,
+            headers = listOf(PromptHeader("Database"), PromptHeader("Cache")),
+        )
+        assertTrue(PromptGate.paneOnlyMultiQuestion(paneOnlyTwoQ))
+
+        // A single-question dialog carries at most one header — safe to tap.
+        assertFalse(
+            PromptGate.paneOnlyMultiQuestion(
+                paneOnlyTwoQ.copy(headers = listOf(PromptHeader("Database"))),
+            ),
+        )
+        // A FUSED prompt was split correctly by the daemon — its buttons are safe
+        // even with sibling questions present.
+        assertFalse(
+            PromptGate.paneOnlyMultiQuestion(paneOnlyTwoQ.copy(source = "hook")),
+        )
+        // No tab strip at all (an ordinary permission/plan dialog) — tap away.
+        assertFalse(PromptGate.paneOnlyMultiQuestion(PanePrompt(question = "Proceed?")))
+    }
+
+    @Test
+    fun `the steer card is read-only and points at the Screen tab`() {
+        val prompt = PanePrompt(
+            question = "Pick a database",
+            options = listOf(PromptOption(number = 1, label = "Postgres")),
+            fingerprint = "fp-1",
+            headers = listOf(PromptHeader("Database"), PromptHeader("Cache")),
+        )
+        val steer = prompt.asMultiPartSteer()
+        assertTrue(steer.multiPart, "a multi-part ask renders read-only + a Screen-tab steer")
+        assertEquals("Pick a database", steer.question)
+        assertEquals("fp-1", steer.fingerprint)
+        assertEquals(2, steer.questionCount)
     }
 
     @Test
