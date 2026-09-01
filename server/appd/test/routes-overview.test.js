@@ -54,6 +54,11 @@ const BARE = `ovbare_${process.pid}`;
 // of zero and no cursor at all had become the same thing.
 const EMPTY = `ovempty_${process.pid}`;
 const CLAUDE_ID = `ov-${process.pid}-0000`;
+// Private tmux socket shared with the daemon under test (HUGINN_APPD_TMUX_SOCKET),
+// so a session leaked by a SIGKILL never appears in the operator's desktop as
+// `ov*_<pid>` noise. `-L`, not TMUX_TMPDIR: an inherited $TMUX overrides the
+// latter but never the former.
+const TMUX_SOCK = `huginn-test-${process.pid}`;
 
 let tmp, token, daemon, transcript;
 
@@ -69,6 +74,7 @@ async function api(pathname, init = {}) {
 const wait = (ms) => new Promise((r) => setTimeout(r, ms));
 
 function sh(cmd, args) {
+  if (cmd === 'tmux') args = ['-L', TMUX_SOCK, ...args];
   return execFileSync(cmd, args, { encoding: 'utf8' }).trim();
 }
 
@@ -137,6 +143,7 @@ before(async () => {
       HUGINN_APPD_TOKEN_FILE: path.join(tmp, 'token'),
       HUGINN_APPD_STATE_DIR: path.join(tmp, 'state'),
       HUGINN_APPD_WORKDIR: tmp,
+      HUGINN_APPD_TMUX_SOCKET: TMUX_SOCK,
     },
     stdio: 'ignore',
   });
@@ -161,6 +168,8 @@ after(() => {
   for (const name of [SESS, BARE, EMPTY]) {
     try { sh('tmux', ['kill-session', '-t', `=${name}`]); } catch { /* gone */ }
   }
+  // Reap the private server outright (-L targets only OUR socket, never default).
+  try { sh('tmux', ['kill-server']); } catch { /* no server */ }
   if (tmp) fs.rmSync(tmp, { recursive: true, force: true });
 });
 

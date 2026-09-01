@@ -34,6 +34,10 @@ const crypto = require('node:crypto');
 const PORT = 9971 + (process.pid % 25);
 const BASE = `http://127.0.0.1:${PORT}`;
 require('./retry-fetch');
+// Pin this test daemon's tmux to a private `-L` socket even though this file
+// never creates a session itself — so no code path can ever leak one onto the
+// default socket the live `cc` sessions share. See HUGINN_APPD_TMUX_SOCKET.
+const TMUX_SOCK = `huginn-test-${process.pid}`;
 const LA = 'America/Los_Angeles';
 
 // Answers to order, so a test can ask for a report followed by more chatter —
@@ -81,7 +85,8 @@ before(async () => {
     env: { ...process.env, PATH: `${bin}:${process.env.PATH}`,
       HUGINN_APPD_PORT: String(PORT), HUGINN_APPD_BIND: '127.0.0.1',
       HUGINN_APPD_DATA: path.join(tmp, 'data'), HUGINN_APPD_TOKEN_FILE: path.join(tmp, 'token'),
-      HUGINN_APPD_STATE_DIR: path.join(tmp, 'state'), HUGINN_APPD_WORKDIR: tmp },
+      HUGINN_APPD_STATE_DIR: path.join(tmp, 'state'), HUGINN_APPD_WORKDIR: tmp,
+      HUGINN_APPD_TMUX_SOCKET: TMUX_SOCK },
     stdio: 'ignore',
   });
   daemon.on('error', (e) => { throw e; });

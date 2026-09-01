@@ -45,11 +45,20 @@ const PORT = 9700 + (process.pid % 100);
 const BASE = `http://127.0.0.1:${PORT}`;
 require('./retry-fetch');
 const PFX = `life-${process.pid}`;
+// Private tmux socket shared with the daemon under test (HUGINN_APPD_TMUX_SOCKET),
+// so a session leaked by a SIGKILL never appears in the operator's desktop as
+// `life-<pid>-*` noise — the exact leak reported 2026-09-01. `-L`, not
+// TMUX_TMPDIR: an inherited $TMUX from the launching pane overrides the latter
+// but never the former.
+const TMUX_SOCK = `huginn-test-${process.pid}`;
 
 let tmp, stateDir, token, daemon;
 const madeSessions = new Set();
 
-function sh(cmd, args) { return execFileSync(cmd, args, { encoding: 'utf8' }); }
+function sh(cmd, args) {
+  if (cmd === 'tmux') args = ['-L', TMUX_SOCK, ...args];
+  return execFileSync(cmd, args, { encoding: 'utf8' });
+}
 function capture(name) {
   try { return sh('tmux', ['capture-pane', '-p', '-t', `=${name}:`]); } catch { return ''; }
 }
@@ -93,6 +102,7 @@ before(async () => {
       HUGINN_APPD_DATA: path.join(tmp, 'data'),
       HUGINN_APPD_TOKEN_FILE: path.join(tmp, 'token'),
       HUGINN_APPD_STATE_DIR: stateDir,
+      HUGINN_APPD_TMUX_SOCKET: TMUX_SOCK,
     },
     stdio: 'ignore',
   });
@@ -119,6 +129,8 @@ after(() => {
   for (const name of madeSessions) {
     try { sh('tmux', ['kill-session', '-t', `=${name}`]); } catch { /* gone */ }
   }
+  // Reap the private server outright (-L targets only OUR socket, never default).
+  try { sh('tmux', ['kill-server']); } catch { /* no server */ }
   if (daemon) daemon.kill('SIGTERM');
   if (tmp) fs.rmSync(tmp, { recursive: true, force: true });
 });
