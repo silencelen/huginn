@@ -1,5 +1,19 @@
 # Huginn Desktop changelog
 
+## 0.19.0
+
+Fixes from the 2026-08-30 program-wide audit.
+
+- **The Telegram fallback is no longer suppressed while the desktop cannot actually
+  deliver.** The notify-route claim is now tied to real delivery capability, not just to
+  notifications being enabled.
+- **The device runner no longer drops a failed events batch** (it is retried, mirroring
+  the headless runner) and it honors a Stop that arrives while a run sits in a long quiet
+  tool.
+- Shares the client fixes: voice mode speaks the current turn, pinch-zoom reads the live
+  font scale, plan approvals render, an unreadable multi-question dialog steers instead
+  of over-answering, and "load earlier" history is no longer undone by the next poll.
+
 ## 0.18.0
 
 - **The installer wears the house's face.** The wizard's side panel is now the

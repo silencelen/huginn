@@ -1,5 +1,22 @@
 # Huginn changelog
 
+## 2.88.0 — 2026-08-31
+
+Fixes from the 2026-08-30 program-wide audit.
+
+- **Voice mode speaks the current turn's answer**, not the previous one — usable again
+  in a conversation with history.
+- **Pinch-zoom uses the live font scale** instead of the size captured when the view was
+  first composed.
+- **The shared prompt card now renders on the phone**: fused/multi-part prompts and the
+  choice-reconciliation fix reach Android, an unreadable dialog surfaces as a read-only
+  steer card, and a multi-question dialog can no longer over-answer the next question
+  with one tap.
+- **Plan approvals are visible** on the phone (an ExitPlanMode approval card).
+- **"Load earlier" history is no longer undone** by the next tail poll.
+- The overview map no longer crashes on a duplicate node id, and a lock-screen reply
+  keeps its authentication gate when the notification is rebuilt.
+
 ## 2.87.0 — 2026-08-27
 
 The question card stops following you to the Screen tab.
