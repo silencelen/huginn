@@ -16,9 +16,11 @@ Fixes from the 2026-08-30 program-wide audit.
 
 ### Fixed
 - The Windows installer creates a real passphrase-**less** SSH key on PowerShell 7,
-  which had been receiving a literal `""` two-character passphrase and silently breaking
-  passwordless SSH. (Verify once per edition: after generating, `ssh-keygen -y -P '' -f
-  $Key` must succeed.)
+  which had been receiving a literal `""` two-character passphrase (PowerShell 7.6 drops
+  an empty `''` argument and forwards `'""'` verbatim), silently breaking passwordless
+  SSH. It now answers ssh-keygen's prompts with empty lines over stdin instead of passing
+  `-N`. (Verify: `ssh-keygen -y -f <key>` prints the public key with no passphrase prompt
+  when the key is unprotected.)
 - `huginn llm` prompts survive quotes, newlines and `$`/backticks on Windows
   PowerShell 5.1 — the prompt now rides base64 to the remote `huginn-llm -`.
 - `huginn-llm` cancels a still-running turn before deleting its chat on timeout, so a

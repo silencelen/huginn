@@ -10,15 +10,16 @@ if (-not $HuginnHost) { $HuginnHost = Read-Host "Huginn host (IP or DNS name rea
 $here = Split-Path -Parent $MyInvocation.MyCommand.Path
 New-Item -ItemType Directory -Force "$HOME\.ssh" | Out-Null
 
-# 1. SSH key. An empty passphrase is marshalled DIFFERENTLY across PowerShell
-# editions: Windows PowerShell 5.1 collapses '""' into an empty argument, but
-# PowerShell 7+ (PSNativeCommandArgumentPassing) forwards '""' LITERALLY as a
-# two-character passphrase — which silently produced a passphrase-protected key
-# and broke passwordless SSH on every PS7 install. Pick the form each edition
-# needs. (Verify once on a real box, both editions: after generating,
-# `ssh-keygen -y -P '' -f $Key` must succeed, proving the key has no passphrase.)
-$noPass = if ($PSVersionTable.PSVersion.Major -ge 6) { '' } else { '""' }
-if (-not (Test-Path $Key)) { ssh-keygen -t ed25519 -f $Key -N $noPass | Out-Null }
+# 1. SSH key, with NO passphrase. An empty passphrase cannot be passed as a native
+# argument on PowerShell 7.6: `-N ''` is dropped entirely (ssh-keygen: "option
+# requires an argument -- N") and `-N '""'` is forwarded as a LITERAL two-character
+# passphrase — both verified on a real box, and the second is what silently broke
+# passwordless SSH. So do not pass -N at all: answer ssh-keygen's two interactive
+# passphrase prompts with empty lines over stdin. Pure PowerShell, edition- and
+# argument-mode-independent, and -f keeps a spaced path intact.
+# (Verify a generated key has no passphrase with: ssh-keygen -y -f $Key — it prints
+# the public key with no prompt when the key is unprotected.)
+if (-not (Test-Path $Key)) { "`n`n" | ssh-keygen -q -t ed25519 -f $Key }
 Write-Host "`n>>> Authorize THIS key on the Huginn host (append to its ~/.ssh/authorized_keys):" -ForegroundColor Yellow
 Write-Host "    $(Get-Content "$Key.pub")`n"
 
