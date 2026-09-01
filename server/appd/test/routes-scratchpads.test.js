@@ -51,10 +51,15 @@ require('./retry-fetch');
 // text: a page attached to a live pane goes as a path, and the path is written
 // per send. Killed in after().
 const SESS = `padsess_${process.pid}`;
+// Private tmux socket shared with the daemon under test (HUGINN_APPD_TMUX_SOCKET),
+// so a session leaked by a SIGKILL never surfaces in the operator's desktop.
+// `-L`, not TMUX_TMPDIR: an inherited $TMUX overrides the latter but never -L.
+const TMUX_SOCK = `huginn-test-${process.pid}`;
 
 let tmp, token, daemon;
 
 function sh(cmd, args) {
+  if (cmd === 'tmux') args = ['-L', TMUX_SOCK, ...args];
   return execFileSync(cmd, args, { encoding: 'utf8' }).trim();
 }
 
@@ -183,6 +188,7 @@ before(async () => {
       HUGINN_APPD_TOKEN_FILE: path.join(tmp, 'token'),
       HUGINN_APPD_STATE_DIR: path.join(tmp, 'state'),
       HUGINN_APPD_WORKDIR: tmp,
+      HUGINN_APPD_TMUX_SOCKET: TMUX_SOCK,
     },
     stdio: 'ignore',
   });
@@ -205,6 +211,8 @@ before(async () => {
 after(() => {
   if (daemon) daemon.kill('SIGTERM');
   try { sh('tmux', ['kill-session', '-t', `=${SESS}`]); } catch { /* gone */ }
+  // Reap the private server outright (-L targets only OUR socket, never default).
+  try { sh('tmux', ['kill-server']); } catch { /* no server */ }
   if (tmp) fs.rmSync(tmp, { recursive: true, force: true });
 });
 

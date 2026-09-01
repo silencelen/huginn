@@ -9,6 +9,20 @@ appeared only as a side-note on the app releases it happened to ship with. Three
 undocumented, and the notes-cutting matcher could fuse two sections when an app and an appd
 version number collided. Entries below are reconstructed from the shipping commits.
 
+## 2.84.0 — 2026-09-01
+
+- **Test sessions no longer surface in the desktop as phantom sessions.** The
+  route/lifecycle test suites create throwaway tmux sessions (`life-<pid>-*`,
+  `ident-<pid>-*`, `ov*_<pid>`, …) on the same default tmux socket the live
+  daemon and the interactive `cc` sessions share. When a test child was SIGKILLed
+  (a spend-limit kill, a wedged run) before its `after()` cleanup could fire, those
+  sessions leaked and appeared in the client's session list as backend noise. The
+  daemon now accepts `HUGINN_APPD_TMUX_SOCKET`: when set, every tmux call is pinned
+  to a private `-L <name>` server, and the tests point it at a per-pid socket
+  nobody reads. Production leaves it unset — behaviour on the default socket is
+  unchanged. `-L`, not `TMUX_TMPDIR`, because an inherited `$TMUX` from the pane
+  that launched the suite overrides the latter but never the former.
+
 ## 2.83.0 — 2026-08-31
 
 Fixes from the 2026-08-30 program-wide audit.
