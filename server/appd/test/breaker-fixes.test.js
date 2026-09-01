@@ -33,6 +33,7 @@ const crypto = require('node:crypto');
 
 const PORT = 9971 + (process.pid % 25);
 const BASE = `http://127.0.0.1:${PORT}`;
+require('./retry-fetch');
 const LA = 'America/Los_Angeles';
 
 // Answers to order, so a test can ask for a report followed by more chatter —
