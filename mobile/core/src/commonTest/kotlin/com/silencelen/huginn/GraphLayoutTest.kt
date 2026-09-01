@@ -58,6 +58,25 @@ class GraphLayoutTest {
     }
 
     @Test
+    fun `row indices are unique even when node ids repeat`() {
+        // The layout dedupes ids with putIfAbsent (it does NOT assume ids are
+        // unique), so a graph replayed across a compaction boundary can carry two
+        // nodes with the same non-empty id. The Overview LazyColumn keys on
+        // row.index for exactly this reason: keying on node.id would throw
+        // "Key was already used" and abort the whole list. This pins that the row
+        // index stays a unique key regardless of what the daemon does with ids.
+        val dupes = listOf(
+            GraphNode(id = "same", kind = "action", ts = 1_000),
+            GraphNode(id = "same", kind = "action", ts = 1_060),
+            GraphNode(id = "", kind = "action", ts = 1_120),
+            GraphNode(id = "same", kind = "action", ts = 1_180),
+        )
+        val r = GraphLayout.layout(dupes, emptyList())
+        val keys = r.rows.map { it.index }
+        assertEquals(keys.size, keys.distinct().size, "every row index must be unique")
+    }
+
+    @Test
     fun `one branch leaves, passes and rejoins`() {
         val r = GraphLayout.layout(nodes(4), listOf(agent("a", "n0", "n2", spawnTs = 1)))
         assertEquals(1, r.laneCount)

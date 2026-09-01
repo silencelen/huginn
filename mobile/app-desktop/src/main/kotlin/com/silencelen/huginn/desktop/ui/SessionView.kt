@@ -112,8 +112,10 @@ import com.silencelen.huginn.ui.FollowNewest
 import com.silencelen.huginn.ui.ModelLabels
 import com.silencelen.huginn.ui.NewestPill
 import com.silencelen.huginn.ui.onScrollInput
+import com.silencelen.huginn.ui.PlanApprovalCard
 import com.silencelen.huginn.ui.PromptCard
 import com.silencelen.huginn.ui.PromptGate
+import com.silencelen.huginn.ui.asMultiPartSteer
 import com.silencelen.huginn.ui.ScratchpadRefBadge
 import com.silencelen.huginn.ui.ScratchpadRules
 import com.silencelen.huginn.ui.SkiaCellPainter
@@ -356,9 +358,18 @@ fun SessionView(store: AppStore, name: String) {
         // waiting, the degraded card renders instead of nothing; its answers verify
         // against the live pane and steer to the Screen tab when that verification
         // cannot see a run (reason=undetected).
-        val prompt = screen?.prompt
-        val ask = screen?.ask
-        if (PromptGate.visible(hasQuestion = prompt != null || ask != null, face = tab.face)) {
+        // A pane-only MULTI-question prompt (no fused sidecar) is re-presented as
+        // the read-only steer card — a single digit there over-answers the next
+        // question. A genuine degraded ask and a pending plan approval draw here too.
+        val rawPrompt = screen?.prompt
+        val prompt = rawPrompt?.takeUnless { PromptGate.paneOnlyMultiQuestion(it) }
+        val ask = screen?.ask ?: rawPrompt?.takeIf { PromptGate.paneOnlyMultiQuestion(it) }?.asMultiPartSteer()
+        val planPending = screen?.planPending
+        if (PromptGate.visible(
+                hasQuestion = prompt != null || ask != null || planPending != null,
+                face = tab.face,
+            )
+        ) {
             if (prompt != null) {
                 Box(Modifier.padding(horizontal = 12.dp, vertical = 6.dp)) {
                     PromptCard(
@@ -380,6 +391,19 @@ fun SessionView(store: AppStore, name: String) {
                         // the Screen tab, where its parts are stepped through. This
                         // card stops being drawn the moment that lands, which is the
                         // point: it exists to hand the reader over, not to follow.
+                        onOpenScreen = { controller.openTab(SessionTab.SCREEN) },
+                    )
+                }
+            }
+            // The plan the owner is approving — shipped on every poll, previously
+            // rendered by nobody. When a readable prompt carries the approve/reject
+            // buttons this is context; when the pane was unreadable it is the only
+            // surface and steers to the Screen tab, where the dialog can be answered.
+            planPending?.let {
+                Box(Modifier.padding(horizontal = 12.dp, vertical = 6.dp)) {
+                    PlanApprovalCard(
+                        plan = it,
+                        hasButtons = prompt != null,
                         onOpenScreen = { controller.openTab(SessionTab.SCREEN) },
                     )
                 }

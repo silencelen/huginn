@@ -97,6 +97,64 @@ class VoiceLoopTest {
         // A late TTS completion after an interrupt must not restart listening twice.
         assertTrue(VoiceLoop.reduce(State.Listening(), Event.SpokenAll).effects.isEmpty())
     }
+
+    @Test
+    fun `speaks this turn's answer, never the prior one, in a chat with history`() {
+        // The reported bug: open a chat that already has replies, say the first
+        // thing — and voice mode reads the PREVIOUS answer aloud, one behind. The
+        // window is state=Thinking, sending not yet flipped, no streaming text, and
+        // the ambient "latest answer" still holding the prior reply.
+        val prior = "The build passed."
+        // Recorded when the turn is SENT (the fix). The bug recorded nothing, so
+        // the baseline was null and the gate below fired on the prior reply.
+        val baseline = VoiceLoop.baselineForTurn(prior)
+
+        // In that window the prior reply must NOT be spoken.
+        assertEquals(
+            null,
+            VoiceLoop.answerToSpeak(
+                State.Thinking, current = prior, alreadySpoken = baseline,
+                sending = false, streaming = null,
+            ),
+            "the prior turn's answer must not be spoken before the new one arrives",
+        )
+
+        // This turn's real answer arrives → speak THAT, exactly once.
+        val fresh = "And now the tests pass too."
+        assertEquals(
+            fresh,
+            VoiceLoop.answerToSpeak(
+                State.Thinking, current = fresh, alreadySpoken = baseline,
+                sending = false, streaming = null,
+            ),
+        )
+        assertEquals(
+            null,
+            VoiceLoop.answerToSpeak(
+                State.Thinking, current = fresh, alreadySpoken = fresh,
+                sending = false, streaming = null,
+            ),
+            "once spoken, the same answer is not read a second time",
+        )
+    }
+
+    @Test
+    fun `nothing is spoken while the turn is still in flight`() {
+        // Sending, or still streaming, or not yet in Thinking: the answer is not
+        // final, so the loop stays quiet.
+        assertEquals(
+            null,
+            VoiceLoop.answerToSpeak(State.Thinking, "partial", null, sending = true, streaming = null),
+        )
+        assertEquals(
+            null,
+            VoiceLoop.answerToSpeak(State.Thinking, "partial", null, sending = false, streaming = "still going"),
+        )
+        assertEquals(
+            null,
+            VoiceLoop.answerToSpeak(State.Listening(), "done", null, sending = false, streaming = null),
+        )
+    }
 }
 
 /** Markdown is for eyes; this is what the ears get. */

@@ -140,8 +140,15 @@ class DeviceRunner(
                 delay(60_000)
                 runCatching {
                     val l = LockProbe.locked()
-                    client.deviceBeat(id, locked = l, scope = scopeWire, version = appVersion)
+                    val r = client.deviceBeat(id, locked = l, scope = scopeWire, version = appVersion)
                     _status.value = _status.value.copy(locked = l)
+                    // A Stop reaches a run sitting in a long QUIET tool HERE: the
+                    // beat is the one channel still flowing when there are no event
+                    // batches to carry the cancel on their ack. Kill the in-flight
+                    // child; its finally posts the terminal frame, so the ending is
+                    // still something this device SAYS, not something the daemon
+                    // infers from a dropped connection.
+                    if (r.cancel) current?.destroy()
                 }
             }
         }
@@ -331,10 +338,36 @@ class DeviceRunner(
                     if (pending.isEmpty()) emptyList() else pending.toList().also { pending.clear() }
                 }
                 if (batch.isEmpty()) continue
-                val ack = runCatching { client.postWorkEvents(deviceId, work.id, batch) }.getOrNull()
-                if (ack?.cancel == true && !cancelled) {
-                    cancelled = true
-                    proc.destroy()
+                try {
+                    val ack = client.postWorkEvents(deviceId, work.id, batch)
+                    if (ack.cancel && !cancelled) {
+                        cancelled = true
+                        proc.destroy()
+                    }
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    if (isPermanentPostFailure(e)) {
+                        // The daemon will NEVER accept this run again — a restart lost
+                        // it (404), a rotated token (401/403), an over-cap batch (413).
+                        // Retrying would hammer the same status twice a second for the
+                        // life of the child, so stop; there is nothing left to deliver
+                        // these lines to.
+                        cancelled = true
+                        proc.destroy()
+                    } else {
+                        // A transient blip (wifi drop, daemon restarting) must NOT
+                        // silently eat the answer: the old code cleared `pending`
+                        // before the post and dropped the batch on any failure. Put it
+                        // back at the FRONT so the next flush re-sends it, in order,
+                        // ahead of newer lines — mirroring the headless huginn-device.
+                        synchronized(pending) {
+                            val rest = pending.toList()
+                            pending.clear()
+                            pending.addAll(batch)
+                            pending.addAll(rest)
+                        }
+                    }
                 }
             }
         }
@@ -382,6 +415,15 @@ class DeviceRunner(
         (e.message ?: e::class.simpleName ?: "unknown").take(120)
 
     companion object {
+        /**
+         * HTTP statuses on which a work-events POST is NOT worth retrying: the run
+         * is gone (404), the token no longer authorises it (401/403), or the batch
+         * is over the daemon's cap (400/413). Anything else — a timeout, a 5xx, a
+         * dropped socket — is a transient blip whose batch is restored to the front.
+         */
+        internal fun isPermanentPostFailure(e: Throwable): Boolean =
+            e is HuginnClient.HuginnException && e.code in setOf(400, 401, 403, 404, 413)
+
         /** How long the disabled loop rests between passes. */
         const val IDLE_POLL_MS: Long = 2_000
 

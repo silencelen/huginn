@@ -59,21 +59,36 @@ class AppStore(
 ) {
 
     /**
+     * Whether this desktop can ACTUALLY deliver a notification right now — set from
+     * [main] once the notifier has been chosen (it does not exist at construction).
+     * Default true so the claim is never accidentally suppressed before it is wired;
+     * Main narrows it to `notifier.canDeliver()`.
+     *
+     * This is the third half of the claim that used to be missing: the presence and
+     * the setting were consulted, but never whether a real [Notifier] backs them. A
+     * machine that resolved to `NoNotifier` (no tray, no libnotify) still claimed the
+     * route while every "needs you" fell on the floor and the Telegram fallback stayed
+     * held back.
+     */
+    var canDeliver: () -> Boolean = { true }
+
+    /**
      * ONE client for the whole app. The notify claim rides on a request header,
      * so it is read per-request from [Presence] rather than fixed at construction
      * — that is the only way an answer given now can reflect a desk that emptied
      * five minutes ago.
      *
-     * `notifyEnabled && present`, and both halves matter: notifications turned off
-     * means this client is not a route no matter who is sitting here, and a claim
-     * made while nobody is looking suppresses the Telegram fallback that would
-     * have reached the owner.
+     * `notifyEnabled && present && canDeliver`, and all three halves matter:
+     * notifications turned off means this client is not a route no matter who is
+     * sitting here, a claim made while nobody is looking suppresses the Telegram
+     * fallback that would have reached the owner, and a claim made when nothing can
+     * render suppresses it just as silently.
      */
     val client = HuginnClient(
         baseUrlProvider = { settings.baseUrlNow() },
         tokenProvider = { settings.tokenNow() },
         clientIdProvider = { settings.clientIdNow() },
-        canNotifyProvider = { settings.notifyEnabledNow() && presence.present.value },
+        canNotifyProvider = { settings.notifyEnabledNow() && presence.present.value && canDeliver() },
     )
 
     /**

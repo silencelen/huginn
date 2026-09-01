@@ -107,6 +107,46 @@ object VoiceLoop {
             else -> Step(state)
         }
     }
+
+    /**
+     * The baseline to record the moment a turn is SENT: the chat's answer as it
+     * stands right then, which belongs to a PRIOR turn.
+     *
+     * A chat opened on top of history already carries its last reply in the
+     * ambient "latest answer" the instant a new turn begins — and the turn
+     * boundary ([answerToSpeak]) fires in the window after the loop enters
+     * Thinking but before the send has flipped `sending` true. Without a baseline
+     * that window read the prior reply as this turn's answer and spoke it aloud,
+     * one behind, every first turn in any chat with history. Recording the prior
+     * answer here is what makes the loop WAIT for a genuinely new one.
+     */
+    fun baselineForTurn(current: String?): String? = current
+
+    /**
+     * The answer to speak at the turn boundary, or null to keep waiting.
+     *
+     * [current] is the chat's latest answer text — ambient, so it already holds
+     * the PRIOR turn's reply the moment a new turn is sent. [alreadySpoken] is the
+     * answer the loop has accounted for: the prior reply captured by
+     * [baselineForTurn] when the turn was sent, then each answer once it has been
+     * read out. The loop speaks only a non-blank [current] that differs from it —
+     * so the prior reply is never read before the user has spoken, and no reply is
+     * read twice.
+     */
+    fun answerToSpeak(
+        state: State,
+        current: String?,
+        alreadySpoken: String?,
+        sending: Boolean,
+        streaming: String?,
+    ): String? =
+        if (state == State.Thinking && !sending && streaming == null &&
+            !current.isNullOrBlank() && current != alreadySpoken
+        ) {
+            current
+        } else {
+            null
+        }
 }
 
 /**
