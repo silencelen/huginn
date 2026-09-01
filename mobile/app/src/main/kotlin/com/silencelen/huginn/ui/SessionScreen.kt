@@ -93,6 +93,8 @@ fun SessionScreen(
     onRequestMic: () -> Unit,
     onAnswerPrompt: (Int) -> Unit,
     onAnswerMulti: (List<Int>) -> Unit,
+    /** Answers the DEGRADED ask card (screen.ask) — carries that card's fingerprint. */
+    onAnswerDegraded: (Int) -> Unit = {},
     onForceResize: () -> Unit,
     onInterrupt: () -> Unit,
     onCopy: (String) -> Unit,
@@ -145,6 +147,20 @@ fun SessionScreen(
             if (tab == 2) {
                 overviewPane()
             } else if (tab == 0) {
+                // The question surface, resolved once and gated like the desktop's.
+                // A pane-only MULTI-question prompt is re-presented as the read-only
+                // steer card (a single digit would over-answer the next question);
+                // a genuine degraded ask and a pending plan approval both draw here
+                // too. Everything below is drawn only on a face the card belongs on.
+                val rawPrompt = screen?.prompt
+                val readablePrompt = rawPrompt?.takeUnless { PromptGate.paneOnlyMultiQuestion(it) }
+                val degradedAsk = screen?.ask
+                    ?: rawPrompt?.takeIf { PromptGate.paneOnlyMultiQuestion(it) }?.asMultiPartSteer()
+                val planPending = screen?.planPending
+                val cardVisible = PromptGate.visible(
+                    hasQuestion = readablePrompt != null || degradedAsk != null || planPending != null,
+                    face = face,
+                )
                 SessionConversation(
                     name = name,
                     page = transcript,
@@ -152,9 +168,11 @@ fun SessionScreen(
                     // Through the gate rather than straight from the pane: this
                     // face draws the card, the Screen face does not, and the rule
                     // that decides is the one the desktop reads too.
-                    prompt = screen?.prompt?.takeIf {
-                        PromptGate.visible(hasQuestion = true, face = face)
-                    },
+                    prompt = readablePrompt?.takeIf { cardVisible },
+                    ask = degradedAsk?.takeIf { cardVisible },
+                    planPending = planPending?.takeIf { cardVisible },
+                    onAnswerDegraded = onAnswerDegraded,
+                    onOpenScreen = { onTab(1) },
                     spinner = screen?.spinner,
                     statusLines = screen?.statusLines ?: emptyList(),
                     transientLine = screen?.transientLine,
@@ -213,6 +231,8 @@ private fun SessionConversation(
     page: TranscriptPage?,
     error: String?,
     prompt: com.silencelen.huginn.data.PanePrompt?,
+    ask: com.silencelen.huginn.data.DegradedAsk? = null,
+    planPending: com.silencelen.huginn.data.PlanPending? = null,
     spinner: String?,
     statusLines: List<String>,
     transientLine: String?,
@@ -227,6 +247,8 @@ private fun SessionConversation(
     onRequestMic: () -> Unit,
     onAnswerPrompt: (Int) -> Unit,
     onAnswerMulti: (List<Int>) -> Unit,
+    onAnswerDegraded: (Int) -> Unit = {},
+    onOpenScreen: () -> Unit = {},
     onInterrupt: () -> Unit,
     working: Boolean,
     onCopy: (String) -> Unit,
@@ -370,7 +392,9 @@ private fun SessionConversation(
         // Suggested next messages, at the turn boundary only. A live prompt's
         // buttons outrank them, typing dismisses them, and tapping one FILLS the
         // composer rather than sending — a suggestion is a draft, not a decision.
-        if (suggestions.isNotEmpty() && prompt == null && !working && draft.isBlank()) {
+        if (suggestions.isNotEmpty() && prompt == null && ask == null && planPending == null &&
+            !working && draft.isBlank()
+        ) {
             Row(
                 Modifier
                     .fillMaxWidth()
@@ -394,8 +418,33 @@ private fun SessionConversation(
             }
         }
 
+        // The SHARED cards (:ui PromptCards.kt), the same ones the desktop draws —
+        // so the fused prompt's descriptions, the "N of M" sibling counter and the
+        // PromptChoices reconciliation all reach the phone, and a degraded/unreadable
+        // ask or a pending plan is no longer invisible here.
         prompt?.let {
-            PromptCard(it, onAnswerPrompt, onAnswerMulti)
+            PromptCard(
+                prompt = it,
+                onAnswer = onAnswerPrompt,
+                onAnswerMulti = onAnswerMulti,
+            )
+        }
+        ask?.let {
+            DegradedAskCard(
+                ask = it,
+                onAnswer = onAnswerDegraded,
+                onOpenScreen = onOpenScreen,
+            )
+        }
+        planPending?.let {
+            PlanApprovalCard(
+                plan = it,
+                // The approve/reject buttons ride the readable prompt when there is
+                // one; without it the plan card is the only surface, so it steers to
+                // the Screen tab where the numbered dialog can be answered.
+                hasButtons = prompt != null,
+                onOpenScreen = onOpenScreen,
+            )
         }
 
         Surface(color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f)) {

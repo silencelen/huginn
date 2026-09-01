@@ -174,6 +174,34 @@ class TranscriptMergeTest {
     }
 
     @Test
+    fun aTailPollDoesNotUndoLoadEarlier() {
+        // "Load earlier" prepends older events, legitimately growing the window
+        // past the cap. The tail poll that fires ≤2.5s later usually has NOTHING
+        // new — and used to `takeLast(cap)` the extended window straight back down,
+        // discarding exactly the history the reader just loaded. A tail merge must
+        // never shrink a reader-extended window.
+        val extended = TranscriptPage(
+            events = (0..4).map { ev(it, "e$it") },   // 5 events, past the cap of 3
+            claudeSessionId = "s",
+        )
+        val emptyTail = TranscriptPage(events = emptyList(), claudeSessionId = "s", nextOffset = 900)
+        val merged = mergeTranscriptPage(extended, emptyTail, cap = 3)
+        assertEquals(
+            listOf("e0", "e1", "e2", "e3", "e4"), merged.events.map { it.text },
+            "the loaded-earlier prefix must survive an empty tail poll",
+        )
+
+        // A tail WITH new events still appends them; the extended head is not thrown
+        // away wholesale (it slides forward by the incoming growth, never collapses
+        // to the bare cap).
+        val withNew = TranscriptPage(events = listOf(ev(0, "new")), claudeSessionId = "s")
+        val merged2 = mergeTranscriptPage(extended, withNew, cap = 3)
+        assertTrue(merged2.events.size >= extended.events.size,
+            "a tail with new events must not shrink the window below its loaded size")
+        assertEquals("new", merged2.events.last().text)
+    }
+
+    @Test
     fun restartIsReportedSoCallersCanDropTheirOffset() {
         // The offset is a byte position in the OLD transcript file; carrying it
         // into the new one reads from a position that means nothing there.

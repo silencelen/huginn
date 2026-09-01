@@ -45,6 +45,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -110,6 +111,13 @@ fun TerminalScreen(
         AndroidCellPainter(with(density) { fontScale.sp.toPx() })
     }
 
+    // The pinch gesture is keyed on Unit (it must not restart mid-gesture), so its
+    // lambda captures the composition it was created in. Read the LIVE scale and
+    // callback through these instead, or each zoom multiplies the fontScale frozen
+    // at first composition and the terminal snaps back to the composed size.
+    val liveFontScale = rememberUpdatedState(fontScale)
+    val liveOnFontScale = rememberUpdatedState(onFontScale)
+
     Column(Modifier.fillMaxSize()) {
         if (screen?.resizeBlocked == true) {
             AttachedBanner(screen.attachedClients, onForceResize)
@@ -125,7 +133,9 @@ fun TerminalScreen(
                 // reported upstream the pane re-wraps instead of clipping.
                 .pointerInput(Unit) {
                     detectTransformGestures { _, _, zoom, _ ->
-                        if (zoom != 1f) onFontScale((fontScale * zoom).coerceIn(5.5f, 22f))
+                        if (zoom != 1f) {
+                            liveOnFontScale.value((liveFontScale.value * zoom).coerceIn(5.5f, 22f))
+                        }
                     }
                 }
         ) {
@@ -383,92 +393,12 @@ private fun AttachedBanner(clients: Int, onForce: () -> Unit) {
     }
 }
 
-@Composable
-fun PromptCard(
-    prompt: com.silencelen.huginn.data.PanePrompt,
-    onAnswer: (Int) -> Unit,
-    onAnswerMulti: (List<Int>) -> Unit,
-) {
-    // Local checkbox state, seeded from what the dialog already shows — the
-    // question may have been half-answered in tmux, and starting from blank
-    // would silently discard those choices. The host receives the full desired
-    // set and diffs, so both sides agree about what "these ones" means.
-    val chosen = remember(prompt.question, prompt.options.size) {
-        androidx.compose.runtime.mutableStateListOf<Int>().apply {
-            prompt.options.filter { it.checked == true }.forEach { add(it.number) }
-        }
-    }
-    Surface(
-        color = MaterialTheme.colorScheme.surfaceContainerHigh,
-        modifier = Modifier.fillMaxWidth(),
-    ) {
-        Column(Modifier.padding(horizontal = 12.dp, vertical = 10.dp)) {
-            Text(
-                prompt.question.ifBlank { "Claude is asking" },
-                style = MaterialTheme.typography.titleSmall,
-                fontWeight = FontWeight.SemiBold,
-            )
-            Spacer(Modifier.size(8.dp))
-            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                prompt.options.forEach { o ->
-                    if (prompt.multiSelect && o.checked != null) {
-                        // A checkbox row: toggling is local; nothing reaches the
-                        // pane until Answer, so half-formed sets are never typed.
-                        val on = chosen.contains(o.number)
-                        Surface(
-                            onClick = { if (on) chosen.remove(o.number) else chosen.add(o.number) },
-                            shape = RoundedCornerShape(10.dp),
-                            color = if (on) MaterialTheme.colorScheme.secondaryContainer
-                            else MaterialTheme.colorScheme.surface,
-                            modifier = Modifier.fillMaxWidth(),
-                        ) {
-                            Row(
-                                Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
-                                verticalAlignment = Alignment.CenterVertically,
-                            ) {
-                                androidx.compose.material3.Checkbox(
-                                    checked = on,
-                                    onCheckedChange = { if (on) chosen.remove(o.number) else chosen.add(o.number) },
-                                    modifier = Modifier.size(20.dp),
-                                )
-                                Spacer(Modifier.width(10.dp))
-                                Text(o.label, style = MaterialTheme.typography.bodyMedium)
-                            }
-                        }
-                    } else {
-                        Button(
-                            onClick = { onAnswer(o.number) },
-                            modifier = Modifier.fillMaxWidth(),
-                            shape = RoundedCornerShape(10.dp),
-                            colors = if (o.selected && !prompt.multiSelect) ButtonDefaults.buttonColors()
-                            else ButtonDefaults.outlinedButtonColors(
-                                contentColor = MaterialTheme.colorScheme.onSurface,
-                            ),
-                        ) {
-                            Text(
-                                "${o.number}.  ${o.label}",
-                                style = MaterialTheme.typography.bodyMedium,
-                                modifier = Modifier.fillMaxWidth(),
-                            )
-                        }
-                    }
-                }
-                if (prompt.multiSelect) {
-                    Button(
-                        onClick = { onAnswerMulti(chosen.toList().sorted()) },
-                        modifier = Modifier.fillMaxWidth(),
-                        shape = RoundedCornerShape(10.dp),
-                    ) {
-                        Text(
-                            if (chosen.isEmpty()) "Answer with none selected"
-                            else "Answer with ${chosen.size} selected",
-                        )
-                    }
-                }
-            }
-        }
-    }
-}
+// The question card is the SHARED one (:ui PromptCards.kt) — one implementation
+// for both shells, carrying the fused prompt's descriptions, the "N of M" sibling
+// counter, the PromptChoices reconciliation and the degraded-ask surface. The
+// phone-private copy that used to live here silently won overload resolution at
+// the SessionScreen call site and dropped every one of those; it was deleted so
+// the divergence would be a compile error rather than a silent wrong pick.
 
 /** The keys a phone keyboard cannot send, plus the live-typing toggle. */
 @Composable
