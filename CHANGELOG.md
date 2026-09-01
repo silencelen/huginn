@@ -10,6 +10,33 @@ Format loosely follows [Keep a Changelog](https://keepachangelog.com/); versions
 
 ## [Unreleased]
 
+## [0.14.0] - 2026-08-31
+
+Fixes from the 2026-08-30 program-wide audit.
+
+### Fixed
+- The Windows installer creates a real passphrase-**less** SSH key on PowerShell 7,
+  which had been receiving a literal `""` two-character passphrase and silently breaking
+  passwordless SSH. (Verify once per edition: after generating, `ssh-keygen -y -P '' -f
+  $Key` must succeed.)
+- `huginn llm` prompts survive quotes, newlines and `$`/backticks on Windows
+  PowerShell 5.1 — the prompt now rides base64 to the remote `huginn-llm -`.
+- `huginn-llm` cancels a still-running turn before deleting its chat on timeout, so a
+  slow answer no longer leaks the chat and leaves the generate run burning.
+- The device runner stops an engine that wedges at startup (no output at all) without
+  killing a run that is legitimately quiet inside a long tool, and honors a Stop
+  delivered on the heartbeat.
+- The local-model shim addresses an adapter backend by its real model name (an Ollama or
+  LM Studio model had 404'd on every call), and no longer hangs for two minutes when a
+  backend drops the connection mid-error.
+- `huginn local on` enforces the documented keyless guardrail (a keyless completion must
+  be refused) and persists the enrolment identity before starting the runner service.
+- `huginn uninstall` reports the device directory removed only when it is actually gone.
+
+### Changed
+- `huginn -p` help no longer calls the one-shot "read-only" (it obeys your Claude
+  permissions; see USAGE.md).
+
 ## [0.13.0] - 2026-08-27
 
 ### Added

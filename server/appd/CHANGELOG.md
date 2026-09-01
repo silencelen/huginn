@@ -9,6 +9,29 @@ appeared only as a side-note on the app releases it happened to ship with. Three
 undocumented, and the notes-cutting matcher could fuse two sections when an app and an appd
 version number collided. Entries below are reconstructed from the shipping commits.
 
+## 2.83.0 — 2026-08-31
+
+Fixes from the 2026-08-30 program-wide audit.
+
+- **Remote runs are no longer killed during a long, quiet tool call.** A device
+  `/beat` now refreshes its in-flight run's liveness (runners beat every 60s, well
+  inside the 5-minute silence window), so a build that streams nothing for minutes is
+  not mistaken for a dead device — and the beat carries a `cancel` flag so a Stop
+  reaches a run sitting in a quiet tool.
+- **The "Auto-switch is stuck" push fires again.** It had been dead at the default
+  threshold: the gate read an undefined value, so `percent >= undefined` was always
+  false and the once-a-day warning never fired. It now uses the effective threshold.
+- **A crash mid-write no longer silently destroys a chat or a scheduled Round.** Chat
+  `meta.json` and round files are written atomically (tmp+rename, `0o600`), and the chat
+  directory is `0o700` so a transcript stays off other users even if the data dir is
+  loosened.
+- **A missed Round slot is recorded as a skipped run** (and can notify) instead of only
+  logging, and one corrupt round file no longer stalls every later round in the tick.
+- **A project-level FCM 404 no longer unregisters the whole fleet** — a dead token is
+  decided by the error code, never the bare HTTP status.
+- Auto-switch no longer reverts a settings change made while its tick was running, and
+  account activation reports `identityRestored` honestly.
+
 ## 2.82.0 — 2026-08-28
 
 Tokens bill at the rate that was in force when they were spent.

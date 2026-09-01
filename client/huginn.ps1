@@ -5,7 +5,7 @@
 # Self-update with:  huginn update   (pulls this file from the repo; gh -> scp fallback)
 # Version: 0.13.0
 
-$script:HUGINN_VERSION = '0.13.0'
+$script:HUGINN_VERSION = '0.14.0'
 $script:HUGINN_REPO    = 'silencelen/huginn'
 # Where `huginn update` may fetch a replacement for THIS FILE, which is then loaded
 # into the shell. Pinned, and deliberately NOT $HUGINN_HOST: that variable answers
