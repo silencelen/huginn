@@ -75,3 +75,12 @@ object NoNotifier : Notifier {
     override fun post(request: NotifyRequest) = Unit
     override fun withdraw(key: String) = Unit
 }
+
+/**
+ * Whether this notifier can ACTUALLY put a notification on screen — the honest
+ * input to the `X-Huginn-Notify` claim. A [NoNotifier] (no tray, no libnotify)
+ * and a backend that has proven itself unhealthy both return false, so the daemon
+ * is not told this desktop is a route while nothing reaches the screen (which
+ * would hold back the household Telegram fallback).
+ */
+fun Notifier.canDeliver(): Boolean = this !== NoNotifier && healthy

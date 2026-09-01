@@ -167,7 +167,11 @@ fun SessionOverviewView(
         }
         if (layout.rows.isNotEmpty()) {
             item { MapHeader(layout, density, onDensity) }
-            items(layout.rows, key = { it.node.id.ifEmpty { "row${it.index}" } }) { row ->
+            // Keyed on the row INDEX, which GraphLayout assigns as the unique node
+            // position — not on node.id, which the layout itself treats as possibly
+            // duplicate (it dedupes with putIfAbsent). A repeated non-empty id would
+            // otherwise throw "Key was already used" and abort the whole Overview list.
+            items(layout.rows, key = { it.index }) { row ->
                 MapRow(row, layout.laneCount, density, agentsById) { open = row.node }
             }
             if (layout.unplaced.isNotEmpty()) {

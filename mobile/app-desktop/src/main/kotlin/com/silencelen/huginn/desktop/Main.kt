@@ -29,6 +29,7 @@ import com.silencelen.huginn.desktop.notify.Activation
 import com.silencelen.huginn.desktop.notify.Activations
 import com.silencelen.huginn.desktop.notify.NavTarget
 import com.silencelen.huginn.desktop.notify.NoNotifier
+import com.silencelen.huginn.desktop.notify.canDeliver
 import com.silencelen.huginn.desktop.notify.NotifyRequest
 import com.silencelen.huginn.desktop.notify.NotifyRouter
 import com.silencelen.huginn.desktop.notify.Notifiers
@@ -113,6 +114,12 @@ fun main(args: Array<String>) {
     // the first thing worth knowing when one did not arrive. Null for NoNotifier,
     // which is not a path but the absence of one, and the report says so.
     AppLog.notifierName = notifier.name.takeIf { notifier !== NoNotifier }
+
+    // The claim's missing third input: this desktop only tells the daemon it is a
+    // notification route when the chosen notifier can actually render one. Read
+    // live (a FallbackNotifier's health can change), so a backend going dark
+    // releases the claim and the Telegram fallback resumes.
+    store.canDeliver = { notifier.canDeliver() }
 
     // Window control, held OUTSIDE the composition because the tray, an
     // activation and a second launch all have to reach it — and two of those can

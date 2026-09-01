@@ -155,7 +155,16 @@ class ReplyReceiver : BroadcastReceiver() {
                         context, chat.hashCode(), replyIntent,
                         android.app.PendingIntent.FLAG_UPDATE_CURRENT or
                             android.app.PendingIntent.FLAG_MUTABLE,
-                    )).addRemoteInput(remote).build()
+                    )).addRemoteInput(remote)
+                    // Re-applied on EVERY rebuild, matching SessionWatchWorker.post().
+                    // Free text is arbitrary instruction to Claude on the host, so the
+                    // reply box must demand an unlock before it sends — and a rebuilt
+                    // notification (echoing "mine", or a failed-send "Not sent…") takes
+                    // the platform default of false unless this is set again, which
+                    // left a lock-screen free-text reply reachable after one prior
+                    // authenticated reply.
+                    .setAuthenticationRequired(true)
+                    .build()
             )
         NotificationManagerCompat.from(context).notify(id, builder.build())
     }

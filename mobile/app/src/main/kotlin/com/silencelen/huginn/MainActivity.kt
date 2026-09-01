@@ -1124,6 +1124,7 @@ fun HuginnApp(
                 onRequestMic = { voicePermission.launch(Manifest.permission.RECORD_AUDIO) },
                 onAnswerPrompt = { vm.answerPrompt(name, it, screen?.prompt?.fingerprint) },
                 onAnswerMulti = { opts -> vm.answerPromptMulti(name, opts, screen?.prompt?.fingerprint) },
+                onAnswerDegraded = { vm.answerPrompt(name, it, screen?.ask?.fingerprint) },
                 onForceResize = { vm.forceFit() },
                 onInterrupt = { vm.interruptSession(name) },
                 working = sessionWorking,

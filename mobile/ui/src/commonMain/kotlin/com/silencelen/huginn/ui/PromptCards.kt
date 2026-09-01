@@ -8,8 +8,11 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.MaterialTheme
@@ -24,8 +27,10 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.text.font.FontFamily
 import com.silencelen.huginn.data.DegradedAsk
 import com.silencelen.huginn.data.PanePrompt
+import com.silencelen.huginn.data.PlanPending
 import com.silencelen.huginn.data.PromptOption
 
 /**
@@ -182,6 +187,62 @@ fun DegradedAskCard(
             }
         }
         NoteLine(note)
+    }
+}
+
+/**
+ * An `ExitPlanMode` approval is waiting, and this shows the PLAN.
+ *
+ * The daemon ships `screen.planPending` (the plan text, up to 8000 chars) on every
+ * poll, but no client rendered it — so in the common case the owner approved from
+ * the pane-detected 1/2/3 buttons without ever seeing the plan as a card, and in
+ * the pane-unreadable case they saw nothing at all (the "plan approvals were
+ * invisible for weeks" symptom this field exists to defend against).
+ *
+ * There is no fingerprinted answer channel for a plan the way there is for a
+ * question, so this card does not itself tap-answer. When a readable prompt is
+ * present ([hasButtons]) its approve/reject buttons render just below and this card
+ * is pure context. When the pane could not be read there are no buttons anywhere,
+ * so the card steers to the Screen tab, where the numbered dialog can be answered.
+ */
+@Composable
+fun PlanApprovalCard(
+    plan: PlanPending,
+    hasButtons: Boolean,
+    onOpenScreen: (() -> Unit)? = null,
+) {
+    CardShell {
+        Text(
+            "Plan ready — approve to continue",
+            style = MaterialTheme.typography.bodyMedium,
+        )
+        plan.plan?.takeIf { it.isNotBlank() }?.let { body ->
+            Spacer(Modifier.height(6.dp))
+            Text(
+                body,
+                style = MaterialTheme.typography.labelSmall,
+                fontFamily = FontFamily.Monospace,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(max = 220.dp)
+                    .verticalScroll(rememberScrollState()),
+            )
+        }
+        if (!hasButtons) {
+            Spacer(Modifier.height(8.dp))
+            Text(
+                "The approval dialog is on the Screen tab — approve or keep planning there.",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            onOpenScreen?.let {
+                Button(
+                    onClick = it,
+                    modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
+                ) { Text("Open the Screen tab") }
+            }
+        }
     }
 }
 

@@ -69,6 +69,10 @@ fun VoiceSheet(
     var micNote by remember { mutableStateOf<String?>(null) }
 
     val currentOnSend = rememberUpdatedState(onSend)
+    // Read fresh inside effects that may run from a callback registered an earlier
+    // composition ago (the recognizer's onFinal, the send). The turn's baseline is
+    // captured off this the moment the message is sent.
+    val currentLastAnswer = rememberUpdatedState(lastAnswer)
 
     // ---- engines, created once per sheet, torn down with it ----
     val engines = remember { SpeechEngines(context) }
@@ -89,7 +93,15 @@ fun VoiceSheet(
                 },
             )
             VoiceLoop.Effect.StopListening -> engines.stopListening()
-            is VoiceLoop.Effect.SendMessage -> currentOnSend.value(e.text)
+            is VoiceLoop.Effect.SendMessage -> {
+                // Record the answer that already exists BEFORE this turn produces
+                // one — it belongs to the prior turn. Without this the boundary
+                // effect below fired on the prior reply the instant we entered
+                // Thinking (before `sending` flipped true) and spoke it aloud, one
+                // behind, on the first turn of any chat with history.
+                spokenFor = VoiceLoop.baselineForTurn(currentLastAnswer.value)
+                currentOnSend.value(e.text)
+            }
             is VoiceLoop.Effect.Speak -> engines.speak(Speakable.render(e.text)) {
                 apply(VoiceLoop.reduce(state, VoiceLoop.Event.SpokenAll))
             }
@@ -108,14 +120,20 @@ fun VoiceSheet(
         }
     }
 
-    // The turn boundary: thinking, nothing in flight any more, and an answer
-    // text that is not the one already spoken.
+    // The turn boundary: thinking, nothing in flight any more, and an answer that
+    // is genuinely THIS turn's — the decision (and the one-behind guard) is the
+    // pure VoiceLoop.answerToSpeak, seeded by the baseline captured at send.
     LaunchedEffect(sending, streamingText, lastAnswer, state) {
-        if (state == VoiceLoop.State.Thinking && !sending && streamingText == null &&
-            !lastAnswer.isNullOrBlank() && lastAnswer != spokenFor
-        ) {
-            spokenFor = lastAnswer
-            apply(VoiceLoop.reduce(state, VoiceLoop.Event.AnswerReady(lastAnswer)))
+        val toSpeak = VoiceLoop.answerToSpeak(
+            state = state,
+            current = lastAnswer,
+            alreadySpoken = spokenFor,
+            sending = sending,
+            streaming = streamingText,
+        )
+        if (toSpeak != null) {
+            spokenFor = toSpeak
+            apply(VoiceLoop.reduce(state, VoiceLoop.Event.AnswerReady(toSpeak)))
         }
     }
 

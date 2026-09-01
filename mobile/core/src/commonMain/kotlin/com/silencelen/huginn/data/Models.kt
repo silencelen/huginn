@@ -122,6 +122,22 @@ data class PanePrompt(
     val questionCount: Int? = null,
     /** "hook" when the host fused the exact tool input; absent for pane-only. */
     val source: String? = null,
+    /**
+     * The dialog's tab-strip headers, one per sibling question, present on a
+     * pane-only scrape of a multi-question AskUserQuestion. Two or more of these on
+     * a pane-only prompt (no fused sidecar) means a single digit would OVER-answer:
+     * the digit selects+advances and the Enter confirms the next question's default
+     * too. Such a prompt is steered to the Screen tab rather than tap-answered —
+     * see [com.silencelen.huginn.ui.PromptGate.paneOnlyMultiQuestion].
+     */
+    val headers: List<PromptHeader> = emptyList(),
+)
+
+/** One tab of a multi-question dialog's header strip. */
+@Serializable
+data class PromptHeader(
+    val label: String = "",
+    val checked: Boolean = false,
 )
 
 /**
@@ -1096,7 +1112,17 @@ data class DeviceWork(
 data class WorkEnvelope(val work: DeviceWork? = null)
 
 @Serializable
-data class BeatResult(val ok: Boolean = false, val effectiveScope: String = "look")
+data class BeatResult(
+    val ok: Boolean = false,
+    val effectiveScope: String = "look",
+    /**
+     * The daemon telling the device to stop the run in flight. It rides the beat
+     * as well as the events ack because a long QUIET tool posts no event batches —
+     * so the ack channel a Stop would otherwise arrive on is silent for minutes,
+     * and the 60s beat is the only thing still reaching the runner.
+     */
+    val cancel: Boolean = false,
+)
 
 /**
  * The daemon's answer to a batch of results.

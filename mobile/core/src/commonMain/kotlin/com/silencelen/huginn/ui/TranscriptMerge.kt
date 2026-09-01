@@ -89,8 +89,16 @@ fun mergeTranscriptPage(
     // A different Claude session under the same tmux name is a different
     // conversation, not more of this one. Appending would weld them together.
     if (isTranscriptRestart(current, page)) return page.copy(events = emptyList(), truncated = false)
+    // A "Load earlier" prepend legitimately grows the window past [cap] (that path
+    // must NEVER trim — see prependTranscriptPage). A tail poll fires within 2.5s,
+    // usually carrying ZERO new events, and would then `takeLast(cap)` the extended
+    // window back down — silently discarding the older events the reader just asked
+    // to load, and (worse) opening a gap between the VM's earliest-loaded byte and
+    // the new first event. So a tail merge NEVER shrinks a reader-extended window:
+    // the effective cap is at least the size already on screen.
+    val effectiveCap = maxOf(cap, current.events.size)
     return page.copy(
-        events = mergeTranscript(clearDelivered(current.events, page.deliveredQueued), page.events, cap),
+        events = mergeTranscript(clearDelivered(current.events, page.deliveredQueued), page.events, effectiveCap),
         title = page.title ?: current.title,
         model = page.model ?: current.model,
         modelDisplay = page.modelDisplay ?: current.modelDisplay,
