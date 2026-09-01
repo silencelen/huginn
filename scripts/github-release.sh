@@ -84,32 +84,29 @@ for a in "${ARTIFACTS[@]}"; do
 done
 
 # ---------------------------------------------------------------- identity gate
-# A built artifact can carry deployment identity the TREE no longer does: the
-# Google Services plugin compiles google-services.json into the APK's string
-# resources, so an APK names its Firebase project even though the repo stopped
-# doing so. Uploading one to a public release would quietly undo that.
+# A built artifact can carry a deployment SECRET the tree does not — an appd
+# bearer token, a private key — and uploading one to a public release would leak
+# it. The denylist of strings-not-to-publish lives OUTSIDE the tree on purpose:
+# the list is itself the leak once committed. Absent => the gate is a no-op, so a
+# fresh clone still releases; present => it fails CLOSED, including if `strings`
+# is gone.
 #
-# The denylist lives OUTSIDE the tree on purpose -- a list of strings-not-to-publish
-# is itself the leak once committed. Absent => the gate is a no-op, so a fresh
-# clone still releases; present => it fails CLOSED, including if `strings` is gone.
+# It deliberately does NOT derive from google-services.json. The Google Services
+# plugin compiles the Firebase FCM client config (project_id, sender id, app id,
+# Android API key) into EVERY APK — it must, for push to work — and that config
+# is non-secret by Google's own design (the Android API key is restricted by
+# package name + SHA-1, not kept private) and is already present in every release
+# APK ever published. Deriving deny strings from it made a working, publicly
+# distributed FCM app permanently unshippable while protecting nothing that was
+# not already public. Genuine secrets belong in the hand-maintained denylist
+# below; the huginn-branded project_id carries no owner identity. (owner call,
+# 2026-09-01 — see huginn-release-identity-gate-2026-09-01.)
 DENY_SRC="${HUGINN_RELEASE_DENY_FILE:-/etc/huginn-appd/release-deny.txt}"
 if [ "${#ARTIFACTS[@]}" -gt 0 ]; then
   DENY="$(mktemp)"
   # Blank lines and comments stripped: a single empty pattern would match every
   # artifact and turn a security gate into an unconditional refusal.
   [ -s "$DENY_SRC" ] && grep -vE '^[[:space:]]*(#|$)' "$DENY_SRC" >> "$DENY" || true
-  # The hand-maintained denylist has drifted before: it once listed the (non-secret)
-  # Firebase API key but NOT the surname-bearing project_id the scrub actually
-  # existed to withhold. Derive the identity strings straight from the developer's
-  # own google-services config so the scan can never omit the ids it guards. The
-  # file is gitignored and never in the tree, so nothing secret is committed — the
-  # values are read at release time from an untracked file, and on a fresh clone
-  # (no config, no denylist) DENY stays empty and the gate is a no-op as before.
-  GS="${HUGINN_GOOGLE_SERVICES_FILE:-mobile/app/google-services.json}"
-  if [ -s "$GS" ]; then
-    grep -oE '"(project_id|project_number|mobilesdk_app_id|current_key)"[[:space:]]*:[[:space:]]*"[^"]+"' "$GS" \
-      | sed -E 's/.*:[[:space:]]*"([^"]+)"/\1/' >> "$DENY" || true
-  fi
   [ -s "$DENY" ] && sort -u "$DENY" -o "$DENY" || true
   if [ -s "$DENY" ]; then
     command -v strings >/dev/null || {
@@ -125,7 +122,7 @@ if [ "${#ARTIFACTS[@]}" -gt 0 ]; then
       hits="$(strings -a "$f" 2>/dev/null | grep -cFf "$DENY" || true)"
       if [ "${hits:-0}" -gt 0 ]; then
         echo "REFUSING: '$f' matches $hits line(s) in $DENY_SRC" >&2
-        echo "          Deployment identity must not ship in a public release asset." >&2
+        echo "          A denylisted secret must not ship in a public release asset." >&2
         rm -f "$DENY"; exit 1
       fi
     done
