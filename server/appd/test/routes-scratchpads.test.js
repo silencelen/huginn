@@ -45,6 +45,7 @@ const crypto = require('node:crypto');
 // Adding a file? Take the next free block and extend this table, in every file.
 const PORT = 10150 + (process.pid % 50);
 const BASE = `http://127.0.0.1:${PORT}`;
+require('./retry-fetch');
 
 // One real tmux session, for the half of this feature that does NOT travel as
 // text: a page attached to a live pane goes as a path, and the path is written

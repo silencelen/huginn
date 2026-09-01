@@ -48,6 +48,7 @@ const crypto = require('node:crypto');
 // Adding a file? Take the next free block and extend this table, in every file.
 const PORT = 9930 + (process.pid % 40);
 const BASE = `http://127.0.0.1:${PORT}`;
+require('./retry-fetch');
 const PFX = `ident-${process.pid}`;
 
 let tmp, stateDir, token, daemon, transcript;
