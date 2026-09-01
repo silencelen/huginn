@@ -44,6 +44,7 @@ const crypto = require('node:crypto');
 // Adding a file? Take the next free block and extend this table, in every file.
 const PORT = 10300 + (process.pid % 50);
 const BASE = `http://127.0.0.1:${PORT}`;
+require('./retry-fetch');
 
 // What a real release stages, small enough to assert byte-for-byte.
 const KT_VERSION = '0.16.0';
