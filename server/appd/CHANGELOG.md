@@ -9,6 +9,28 @@ appeared only as a side-note on the app releases it happened to ship with. Three
 undocumented, and the notes-cutting matcher could fuse two sections when an app and an appd
 version number collided. Entries below are reconstructed from the shipping commits.
 
+## 2.85.0 — 2026-09-01
+
+- **Sessions survive a reboot / power cut.** Until now, when huginn lost power or
+  the box rebooted, the tmux server died with it and every live Claude Code session
+  was gone — the conversations were still on disk (Claude Code can `--resume` any of
+  them) but nothing knew which tmux session held which id. The daemon now keeps a
+  durable registry of live sessions in `DATA_DIR/active-sessions.json`: a session is
+  recorded when it is created, its Claude session id is filled in by a reconcile
+  timer once the title hook writes it (and sessions started outside the daemon, e.g.
+  interactive `cc`, are picked up the same way), and it is dropped when the session
+  is killed or an auto wind-down settles. On startup, if the tmux server is GONE
+  (the tell of a real reboot, since the server otherwise lives in its own systemd
+  scope and outlives an ordinary `systemctl restart huginn-appd`), each recorded
+  session is recreated running `claude --resume <id>`, so the conversations come
+  back where they left off. An appd-only restart changes nothing — the sessions
+  never died, and the restore is a deliberate no-op when the server is still there,
+  so nothing is ever double-created. A session with no resumable transcript on disk
+  comes back as a fresh `claude` in the same directory rather than being lost. The
+  id is validated as uuid-shaped before it reaches the shell tmux runs, so a
+  malformed id degrades to a fresh session instead of injecting. New pure module
+  `lib/session-registry.js` with its own suite.
+
 ## 2.84.0 — 2026-09-01
 
 - **Test sessions no longer surface in the desktop as phantom sessions.** The

@@ -35,6 +35,7 @@ const { summarizeUsage } = require('./lib/usage');
 const { normalizePlan } = require('./lib/plan');
 const { AccountStore, fingerprint, sameAccount, normUuid } = require('./lib/accounts');
 const { formatModel, discoverModels, parseModelId } = require('./lib/models');
+const sessreg = require('./lib/session-registry');
 const { pushPending, takePending, clearPending, drainPending, queuedEvents } = require('./lib/chatqueue');
 const { digest } = require('./lib/watch');
 const { decideAlerts, routeAlerts, telegramText, pruneSent, carryRunStarts } = require('./lib/alerts');
@@ -55,7 +56,7 @@ const pushLib = require('./lib/pushtokens');
 const { trySender } = require('./lib/fcm');
 const { createPending, stepSoftEnd } = require('./lib/softend');
 
-const VERSION = '2.84.0';
+const VERSION = '2.85.0';
 const PORT = Number(process.env.HUGINN_APPD_PORT || 8787);
 const DATA_DIR = process.env.HUGINN_APPD_DATA || '/var/lib/huginn-appd';
 const UPLOADS_DIR = path.join(DATA_DIR, 'uploads');
@@ -551,6 +552,61 @@ function sessionMetaView(id) {
   return { goals: (m && m.goals) || '', notes: (m && m.notes) || '', updatedAt: (m && m.updatedAt) || 0 };
 }
 
+// ---- durable session registry (survives a reboot) -------------------------
+//
+// The one store here that is deliberately keyed by tmux NAME rather than by Claude
+// session id: after a power cut the id is exactly what we have lost and are trying
+// to recover, and the name is the only handle that persists across the reboot. It
+// lives in DATA_DIR (not /run) for the same reason. See lib/session-registry.js for
+// the why; this is just the fs around it. Registered on create, dropped on kill,
+// and reconciled against live tmux on a timer so an id learned late (or a session
+// started outside the daemon) still lands before the next reboot needs it.
+
+const SESSION_REGISTRY_FILE = path.join(DATA_DIR, 'active-sessions.json');
+
+function loadRegistry() {
+  try {
+    const o = JSON.parse(fs.readFileSync(SESSION_REGISTRY_FILE, 'utf8'));
+    return o && o.sessions && typeof o.sessions === 'object' ? o.sessions : {};
+  } catch { return {}; }
+}
+
+/** tmp+rename at 0600, like every other store here. Best effort: a registry that
+ * fails to save costs a restore after the NEXT reboot, never a live session now. */
+function saveRegistry(sessions) {
+  try {
+    fs.mkdirSync(DATA_DIR, { recursive: true });
+    fs.writeFileSync(`${SESSION_REGISTRY_FILE}.tmp`,
+      JSON.stringify({ version: 1, sessions }, null, 2), { mode: 0o600 });
+    fs.renameSync(`${SESSION_REGISTRY_FILE}.tmp`, SESSION_REGISTRY_FILE);
+  } catch (e) { log(`session registry: save failed: ${e.message}`); }
+}
+
+function registryAdd(name, fields) {
+  if (!name || sessreg.isReserved(name)) return;
+  const s = loadRegistry();
+  const now = Math.floor(Date.now() / 1000);
+  if (!s[name]) s[name] = { name, createdAt: now, claudeSessionId: null, cwd: null };
+  Object.assign(s[name], fields || {}, { updatedAt: now });
+  saveRegistry(s);
+}
+
+function registryRemove(name) {
+  const s = loadRegistry();
+  if (s[name]) { delete s[name]; saveRegistry(s); }
+}
+
+/** Follow a session rename so the entry is not orphaned under the old name (which
+ * would then be pruned as "ended") while the live session keeps running unrecorded. */
+function registryRename(from, to) {
+  if (from === to) return;
+  const s = loadRegistry();
+  if (!s[from]) return;
+  if (!sessreg.isReserved(to)) s[to] = { ...s[from], name: to };
+  delete s[from];
+  saveRegistry(s);
+}
+
 /** Background shells + agents for one session, or the empty shape. */
 async function backgroundWork(name, panePid) {
   const st = readSessionState(name);
@@ -880,9 +936,97 @@ async function hardEndSession(name) {
   const { err, stderr } = await run('tmux', ['kill-session', '-t', `=${name}`]);
   if (err) return { err, stderr };
   clearSessionState(name);
+  // Off the restore list: a session ended on purpose (a DELETE, or an auto
+  // wind-down settling here) must not be resurrected by the next reboot. This is
+  // the single true-death boundary — a soft-end that only TYPES the wrap-up phrase
+  // leaves the session alive and still registered, which is correct, because it is
+  // still running and would still be worth bringing back if the power went now.
+  registryRemove(name);
   await releaseSize(name).catch(() => { });
   softEnds.delete(name);
   return { err: null };
+}
+
+// ---- session registry reconcile + reboot restore ---------------------------
+
+/**
+ * Keep the durable registry in step with what tmux actually has: fold in live
+ * sessions (learning a claudeSessionId the moment the title hook writes one, and
+ * picking up sessions started outside the daemon) and drop the ones that ended
+ * without a kill. Runs on a timer so the NEXT reboot restores the CURRENT set —
+ * a resumed session mints a fresh id, and this is what records it.
+ *
+ * Skipped whole on any tmux read failure. "no server running" and a timed-out
+ * fork look alike enough that treating either as "nothing is live" would prune the
+ * registry to empty and leave a reboot with nothing to restore — the same
+ * failure-to-observe trap listSessions documents.
+ */
+async function reconcileSessionRegistry() {
+  const { err, stdout } = await run('tmux',
+    ['list-sessions', '-F', '#{session_name}\t#{session_created}']);
+  if (err) return;
+  const now = Math.floor(Date.now() / 1000);
+  const live = [];
+  const liveNames = new Set();
+  for (const line of stdout.trim().split('\n')) {
+    if (!line) continue;
+    const [name, created] = line.split('\t');
+    if (!name) continue;
+    liveNames.add(name);
+    rememberBorn(name, created);
+    const st = readSessionState(name) || {};
+    live.push({
+      name,
+      createdAt: Number(created) || now,
+      claudeSessionId: st.sessionId || null,
+      cwd: st.cwd || null,
+    });
+  }
+  const merged = sessreg.mergeLive(loadRegistry(), live, now);
+  const { next, removed } = sessreg.pruneDead(merged, liveNames);
+  saveRegistry(next);
+  if (removed.length) log(`session registry: dropped ${removed.length} ended session(s): ${removed.join(', ')}`);
+}
+
+/**
+ * Bring back the sessions that were alive before a reboot.
+ *
+ * The tmux server lives in its own systemd scope, so it SURVIVES an ordinary
+ * `systemctl restart huginn-appd` — in that case the sessions never died and this
+ * must do nothing, or it would double-create every one of them. The distinguisher
+ * is the server itself: present means an appd-only restart (skip); absent means the
+ * box lost power or rebooted and the registry is the only record left (restore).
+ *
+ * Each session is recreated exactly as the create route would, but running
+ * `claude --resume <id>` so the conversation comes back rather than a blank prompt.
+ * Best effort per session: one that cannot be recreated is logged and skipped, not
+ * fatal to the rest.
+ */
+async function restoreSessionsAfterReboot() {
+  const probe = await run('tmux', ['ls']);
+  const serverGone = probe.err && /no server running|no such file or directory/i.test(probe.stderr || '');
+  if (!serverGone) return;  // appd-only restart (or a read we cannot trust) — leave live sessions be
+
+  const plan = sessreg.restorePlan(loadRegistry(), new Set());
+  if (!plan.length) return;
+  log(`session restore: tmux server is gone (reboot?); ${plan.length} recorded session(s) to bring back`);
+  await ensureTmuxServerScope();
+
+  let restored = 0, fresh = 0;
+  for (const entry of plan) {
+    const cwd = entry.cwd || WORKDIR;
+    const hasTranscript = !!(entry.claudeSessionId && findTranscriptFile(entry.claudeSessionId));
+    const { canResume, command } = sessreg.resumeCommand(entry, hasTranscript);
+    const r = await run('tmux', ['new-session', '-d', '-s', entry.name, '-c', cwd, command]);
+    if (r.err) {
+      log(`session restore: ${entry.name} could not be recreated: ${(r.stderr || r.err.message || '').trim().slice(0, 120)}`);
+      continue;
+    }
+    restored++;
+    if (canResume) log(`session restore: ${entry.name} resumed (${entry.claudeSessionId})`);
+    else { fresh++; log(`session restore: ${entry.name} restarted fresh (nothing resumable on disk)`); }
+  }
+  log(`session restore: ${restored}/${plan.length} back${fresh ? `, ${fresh} without a transcript` : ''}`);
 }
 
 /** One pass over the pending soft ends; kills the ones that have settled. */
@@ -4668,7 +4812,13 @@ const server = http.createServer(async (req, res) => {
       // route below: a '.' is rewritten to '_' with a zero exit, and a client
       // told the wrong name gets a 404 on everything it does next.
       const q = await run('tmux', ['display-message', '-p', '-t', `=${name}:`, '#S']);
-      return sendJson(res, 201, { ok: true, name: (q.stdout || '').trim() || name });
+      const created = (q.stdout || '').trim() || name;
+      // On the restore list from birth. The claudeSessionId is not known yet — the
+      // title hook writes it once Claude boots — so the reconcile timer fills it in;
+      // until then a reboot would bring this session back as a fresh `claude`, which
+      // is still the create route's own default and better than losing the name.
+      registryAdd(created, { cwd: WORKDIR });
+      return sendJson(res, 201, { ok: true, name: created });
     }
 
     if ((m = p.match(/^\/v1\/sessions\/([A-Za-z0-9_][A-Za-z0-9_.-]{0,49})$/)) && req.method === 'DELETE') {
@@ -4928,6 +5078,9 @@ const server = http.createServer(async (req, res) => {
       }
       if (leases.has(from)) { leases.set(actual, leases.get(from)); leases.delete(from); }
       if (softEnds.has(from)) { softEnds.set(actual, softEnds.get(from)); softEnds.delete(from); }
+      // The restore registry is keyed by name too; move it or the live session goes
+      // unrecorded under the new name and the old name gets pruned as "ended".
+      registryRename(from, actual);
       return sendJson(res, 200, { ok: true, name: actual });
     }
 
@@ -6169,6 +6322,16 @@ resolveBind().then(async (bind) => {
   // manual` by a killed daemon would otherwise keep a laptop's window shrunken
   // with nothing left to release it.
   await sweepStrandedSizes('startup');
+  // Bring back the tmux sessions a reboot/power-cut killed. A no-op when the tmux
+  // server survived (an ordinary appd restart), so it is safe to run every start.
+  // Before listen, like the sweep above, so the session list is whole by the time a
+  // client can ask for it.
+  await restoreSessionsAfterReboot().catch((e) => log(`session restore failed: ${e.message}`));
+  // Keep the durable registry in step with live tmux: learn ids the hook writes
+  // late, pick up sessions started outside the daemon, drop the ones that ended. The
+  // early tick catches a just-restored session's fresh id; the interval carries it.
+  setTimeout(() => { reconcileSessionRegistry().catch(() => { }); }, 15_000).unref();
+  setInterval(() => { reconcileSessionRegistry().catch(() => { }); }, 60_000).unref();
   // A restart kills any run that was in flight, and delivery of a chat's queue is
   // triggered by that run closing — so without this, messages queued before a
   // restart would sit on disk unanswered forever.
