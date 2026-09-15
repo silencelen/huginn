@@ -43,6 +43,27 @@ class BackFromTest {
     }
 
     @Test
+    fun `a settings drawer goes up to the list of drawers`() {
+        // The redesign's whole shape: nine drawers, one open at a time, and back
+        // returns to the nine rather than out of Settings entirely.
+        assertEquals(Dest.Settings, backFrom(Dest.SettingsSection("usage"), tab = 0))
+        assertEquals(Dest.Settings, backFrom(Dest.SettingsSection("about"), tab = 2))
+        // And it does NOT depend on the tab — that is the Settings home's trade,
+        // not this screen's.
+        assertEquals(Dest.Settings, backFrom(Dest.SettingsSection("host"), tab = 3))
+    }
+
+    @Test
+    fun `devices goes up to the drawer that named it`() {
+        // Devices is a destination in its own right now rather than "a child of
+        // Settings", but it is still opened from one row, so up is that drawer —
+        // returning to the Settings home would land a step above where the
+        // reader came from.
+        assertEquals(Dest.SettingsSection("devices"), backFrom(Dest.Devices, tab = 0))
+        assertEquals(Dest.SettingsSection("devices"), backFrom(Dest.Devices, tab = 2))
+    }
+
+    @Test
     fun `a root screen has no up, so back still leaves the app`() {
         // Deliberate: leaving from a root IS what back means on Android, and a
         // handler that swallowed it would trap the user in the app.
