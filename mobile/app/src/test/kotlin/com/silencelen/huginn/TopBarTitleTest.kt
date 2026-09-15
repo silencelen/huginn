@@ -21,11 +21,12 @@ import org.junit.Test
  * WHY A SOURCE GREP AND NOT A COMPOSE TEST. There is no compose-ui-test in this
  * module, and the failure mode is a measured width — a test that asserted "the
  * title composable was called" passes against exactly the broken bar. The source
- * text IS the rule: [com.silencelen.huginn.ui.HeadroomPill] called from this
- * file's `TopAppBar` is always wrong now, whatever it is passed.
+ * text IS the rule: a `HeadroomPill(` call from this file's `TopAppBar` is always
+ * wrong now, whatever it is passed.
  *
- * The composable itself STAYS in `:ui`; the desktop drops its own use separately
- * and it is deleted when no caller remains. This gate is about one call site.
+ * The composable itself was deleted from `:ui` once neither shell drew it (owner
+ * decision 29, app 3.1.1 / desktop 1.1.1); this gate is about one call site and
+ * stays so a re-creation under the same name is caught where it would land.
  *
  * NOTE this module is on org.junit, whose argument order is (message, expected,
  * actual) — the REVERSE of the kotlin.test order `:core` and `:ui` use.
