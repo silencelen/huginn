@@ -191,7 +191,7 @@ before(async () => {
 
 after(() => {
   if (daemon) daemon.kill('SIGTERM');
-  if (tmp) fs.rmSync(tmp, { recursive: true, force: true });
+  if (tmp) fs.rmSync(tmp, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 });
 });
 
 test('the shim is in place, or nothing below is testing what it says it is', async () => {
