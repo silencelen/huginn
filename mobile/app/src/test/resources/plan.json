@@ -1,0 +1,62 @@
+{
+ "limits": [
+  {
+   "kind": "session",
+   "group": "session",
+   "label": "Current session",
+   "percent": 31.0,
+   "severity": "normal",
+   "resetsAt": "2026-09-15T10:30:00+00:00",
+   "isActive": true
+  },
+  {
+   "kind": "weekly_all",
+   "group": "weekly",
+   "label": "Current week (all models)",
+   "percent": 64.0,
+   "severity": "warning",
+   "resetsAt": "2026-09-18T07:00:00+00:00",
+   "isActive": true
+  },
+  {
+   "kind": "weekly_scoped",
+   "group": "weekly",
+   "label": "Current week (Fable)",
+   "percent": 92.0,
+   "severity": "critical",
+   "resetsAt": "2026-09-18T07:00:00+00:00",
+   "isActive": true
+  }
+ ],
+ "extraUsage": {
+  "utilization": 0.0,
+  "usedCredits": 0,
+  "monthlyLimit": 10000,
+  "currency": "USD",
+  "spendLimitReached": false,
+  "isEnabled": false,
+  "creditsEverEnabled": true,
+  "decimalPlaces": 2,
+  "disabledReason": "org_level_disabled_until",
+  "userDisabled": false
+ },
+ "spend": {
+  "usedMinor": 0,
+  "limitMinor": 10000,
+  "exponent": 2,
+  "currency": "USD",
+  "percent": 0.0,
+  "severity": "normal",
+  "enabled": false,
+  "disabledReason": "org_level_disabled_until",
+  "canPurchaseCredits": true,
+  "canToggle": true
+ },
+ "fetchedAt": 1789460000,
+ "account": {
+  "email": "<email scrubbed, 24 chars>",
+  "accountUuid": "<accountUuid scrubbed, 36 chars>",
+  "slug": "owner-max",
+  "subscriptionType": "max_20x"
+ }
+}

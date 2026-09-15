@@ -1,0 +1,46 @@
+{
+ "events": [
+  {
+   "seq": 41,
+   "kind": "user",
+   "ts": 1789459600,
+   "sidechain": false,
+   "text": "<text scrubbed, 51 chars>"
+  },
+  {
+   "seq": 42,
+   "kind": "assistant",
+   "ts": 1789459640,
+   "sidechain": false,
+   "text": "<text scrubbed, 130 chars>"
+  },
+  {
+   "seq": 43,
+   "kind": "tool",
+   "ts": 1789459700,
+   "sidechain": false,
+   "name": "Bash",
+   "input": "<input scrubbed, 97 chars>",
+   "result": "<result scrubbed, 220 chars>",
+   "ok": true
+  },
+  {
+   "seq": 44,
+   "kind": "assistant",
+   "ts": 1789459910,
+   "sidechain": false,
+   "apiError": 429,
+   "text": "You've hit your session limit · resets 10:10pm (America/Los_Angeles)"
+  }
+ ],
+ "deliveredQueued": [],
+ "nextOffset": 512000,
+ "windowStart": 487424,
+ "truncated": false,
+ "title": "<title scrubbed, 41 chars>",
+ "model": "claude-fable-5-1",
+ "modelDisplay": "Fable 5.1",
+ "state": "idle",
+ "claudeSessionId": "<claudeSessionId scrubbed, 36 chars>",
+ "running": false
+}

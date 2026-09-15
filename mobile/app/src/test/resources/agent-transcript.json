@@ -1,0 +1,52 @@
+{
+ "events": [
+  {
+   "seq": 1,
+   "kind": "user",
+   "ts": 1789459101,
+   "sidechain": false,
+   "text": "<text scrubbed, 312 chars>"
+  },
+  {
+   "seq": 2,
+   "kind": "assistant",
+   "ts": 1789459140,
+   "sidechain": false,
+   "text": "<text scrubbed, 88 chars>"
+  },
+  {
+   "seq": 3,
+   "kind": "tool",
+   "ts": 1789459166,
+   "sidechain": false,
+   "name": "Grep",
+   "input": "<input scrubbed, 64 chars>",
+   "result": "<result scrubbed, 380 chars>",
+   "ok": true
+  },
+  {
+   "seq": 4,
+   "kind": "thinking",
+   "ts": 1789459201,
+   "sidechain": false,
+   "text": "<text scrubbed, 140 chars>"
+  },
+  {
+   "seq": 5,
+   "kind": "assistant",
+   "ts": 1789459980,
+   "sidechain": false,
+   "text": "<text scrubbed, 204 chars>"
+  }
+ ],
+ "deliveredQueued": [],
+ "nextOffset": 184320,
+ "windowStart": 0,
+ "truncated": false,
+ "model": "claude-opus-5",
+ "modelDisplay": "Opus 5",
+ "claudeSessionId": "<claudeSessionId scrubbed, 36 chars>",
+ "running": true,
+ "agentId": "agent-3f9c1a",
+ "workflowId": "wf_01H9ZKQT"
+}
