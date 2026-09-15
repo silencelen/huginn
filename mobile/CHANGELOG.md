@@ -1,5 +1,13 @@
 # Huginn changelog
 
+## 3.1.0 — 2026-09-15
+
+- **Settings is a place you can find things in.** Nine categories, a search field at the top that
+  finds a setting by what it does, and one screen per category instead of one long scroll.
+  Everything that was there is still there, once — account switching was rendered three times, and
+  quick actions can now be edited here too. Updates & diagnostics gained Copy diagnostics: the
+  delivery facts, route and versions as text you can paste (never the token).
+
 ## 3.0.2 — 2026-09-15
 
 - **How much of your session is left, under the Status icon.** A 2px line under the Status tab
