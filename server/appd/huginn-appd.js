@@ -3064,8 +3064,16 @@ function finishRoundRun(meta, failure) {
     // A FLAG, not a guess. lib/rounds' own header says the report contract exists
     // because "success must be a FLAG, not a guess" — and this was guessing from
     // prose while the flag sat unread two fields away.
-    if (m.type === 'result' && m.ok === false) {
-      resultFailure = m.errorText || 'the run reported an error';
+    if (m.type === 'result') {
+      if (m.ok === false) resultFailure = m.errorText || 'the run reported an error';
+      // ⚠ AND A LATER SUCCESS CLEARS IT. The transcript can hold more than one
+      // run since auto-resume landed: a turn that died on a usage limit is
+      // re-run on the same conversation, so the failed result of the first
+      // attempt is still sitting in `messages.jsonl` when the second one
+      // succeeds. Without this the Round filed "run failed: You've hit your
+      // session limit" over the top of a run that had just completed normally —
+      // and that verdict is what the report notification says.
+      else { resultFailure = null; lastError = null; }
     }
   }
   const text = parts.join('\n\n');
@@ -5403,9 +5411,17 @@ async function noteStall(rec, s, settings, activeWindows, now) {
   if (!records.length) return records;
   const found = resumeLib.stallOf(records, activeWindows, { now });
   if (!found) {
-    // Cleared: the conversation moved on. The row stops saying `stalled` and the
-    // attempt counter goes with it, because the next stall is a new one.
-    if (rec.stall && rec.stall.at) rec.stall = blankStall();
+    // ⚠ NOT NECESSARILY CLEARED. A native continuation, a person answering, and
+    // appd's own phrase all land AFTER the 429 and all make it "not the last
+    // record" — and only the resume pass can tell them apart. Clearing here
+    // would delete the evidence in the same tick it arrived, so `how:'native'`
+    // would never be recorded and the resumed notification would never name the
+    // sessions that came back on their own.
+    //
+    // So: cleared once the stall is resolved, or once the 429 has scrolled out
+    // of the tail entirely (nothing left to classify). Kept otherwise.
+    const stillInTail = resumeLib.recordsAfterStall(records).length > 0;
+    if (rec.stall && rec.stall.at && (rec.stall.resumedAt || !stillInTail)) rec.stall = blankStall();
     return records;
   }
   if (rec.stall && rec.stall.at === found.at) {
@@ -5481,7 +5497,7 @@ async function resumeSession(rec, s, settings, ctx) {
   const w = stall.window;
   const percent = w && activeWindows && activeWindows[w] ? activeWindows[w].percent : null;
   const verdict = resumeLib.eligible({
-    settings, meta, stall, records, resetSeen: resetWindows.has(w), percent, now,
+    settings, meta, stall, records, resetSeen: resetSeenFor(resetWindows, stall), percent, now,
   });
   if (!verdict.ok) { stall.why = verdict.why; return null; }
 
@@ -5552,27 +5568,33 @@ async function applyResumes(ctx) {
 async function resumeStalledChats(settings, ctx) {
   const { now, activeWindows, resetWindows } = ctx;
   const out = [];
+  let pending = false;
   let ids = [];
-  try { ids = fs.readdirSync(CHATS_DIR); } catch { return out; }
+  try { ids = fs.readdirSync(CHATS_DIR); } catch { chatStallsPending = false; return out; }
   for (const id of ids) {
     const meta = loadMeta(id);
     if (!meta || !meta.stall || !meta.stall.at || meta.stall.resumedAt) continue;
+    pending = true;
     if (activeRuns.has(id)) continue;
     const w = meta.stall.window;
     const percent = w && activeWindows && activeWindows[w] ? activeWindows[w].percent : null;
     // No per-chat toggle in 3.0 (design §4): chats and Rounds obey the global.
     const verdict = resumeLib.eligible({
       settings, meta: null, stall: meta.stall, records: null,
-      resetSeen: resetWindows.has(w), percent, now,
+      resetSeen: resetSeenFor(resetWindows, meta.stall), percent, now,
     });
     if (!verdict.ok) {
       if (meta.stall.why !== verdict.why) updateMeta(id, (m) => { if (m.stall) m.stall.why = verdict.why; });
       continue;
     }
     const r = rerunStalledRun(id);
-    if (r.ok) out.push(`${r.title} (re-run)`);
+    if (r.ok) { out.push(`${r.title} (re-run)`); pending = false; }
     else log(`headroom: could not re-run ${id}: ${r.error}`);
   }
+  // Recomputed each pass rather than latched: this flag is the ONLY thing that
+  // keeps the 10-second poll alive for a stalled chat on an otherwise green
+  // host, and a latched one would poll for the life of the daemon.
+  chatStallsPending = pending;
   return out;
 }
 
@@ -5655,6 +5677,7 @@ function noteRunStall(chatId, failureText) {
   updateMeta(chatId, (m) => {
     m.stall = { ...blankStall(), ...parsed, attempts, userText };
   });
+  chatStallsPending = true;
   log(`chat ${chatId} stalled on the ${parsed.window} limit; a re-run is pending the reset`);
   return true;
 }
@@ -5762,6 +5785,16 @@ async function consentWatch(state, settings, sessions, now) {
 let resumeTimer = null;
 let resumeBusy = false;
 /**
+ * Is a headless run waiting for a reset?
+ *
+ * In memory, and recomputed on every pass that reads the chats. A stalled CHAT
+ * does not make the host red — its window may be perfectly green by the time
+ * anyone looks — so without this the poll below would switch itself off and the
+ * re-run would wait for the five-minute idle tick. Reading every chat meta on a
+ * ten-second timer to find that out is the thing the flag exists to avoid.
+ */
+let chatStallsPending = false;
+/**
  * Ten seconds, but ONLY while something is stalled or the account is out of
  * room. The headroom tick's own cadence is a minute at its fastest and five
  * minutes at its idlest, and a host waiting for a reset is idle by definition —
@@ -5776,7 +5809,7 @@ async function resumeTick() {
   const state = hstate();
   const mode = state.mode || 'ok';
   const anyStalled = Object.values(state.sessions || {}).some((r) => r && r.stall && r.stall.at && !r.stall.resumedAt);
-  if (!anyStalled && mode !== 'red' && mode !== 'exhausted') return;
+  if (!anyStalled && !chatStallsPending && mode !== 'red' && mode !== 'exhausted') return;
   resumeBusy = true;
   try {
     const settings = loadHeadroomSettings();
@@ -5816,12 +5849,27 @@ if (resumeTimer.unref) resumeTimer.unref();
  */
 const RESET_MEMORY_MS = 60 * 60 * 1000;
 function recentResetWindows(state, now) {
-  const out = new Set();
+  const out = new Map();
   for (const r of state.resets || []) {
     if (!r || !r.window) continue;
-    if (now - (Number(r.at) || 0) <= RESET_MEMORY_MS) out.add(r.window);
+    const at = Number(r.at) || 0;
+    if (now - at > RESET_MEMORY_MS) continue;
+    if (at > (out.get(r.window) || 0)) out.set(r.window, at);
   }
   return out;
+}
+
+/**
+ * Has THIS stall's window reset since the stall?
+ *
+ * ⚠ SINCE THE STALL, not merely "recently". The reset log is a rolling hour and
+ * a host can stall twice in one: reading the earlier window's reset as this
+ * stall's confirmation would resume a session straight back into a full window,
+ * where it stalls again and spends one of only three attempts.
+ */
+function resetSeenFor(resets, stall) {
+  if (!stall || !stall.window) return false;
+  return (resets.get(stall.window) || 0) >= (Number(stall.at) || 0);
 }
 
 // ---- what the rest of the daemon asks headroom -----------------------------

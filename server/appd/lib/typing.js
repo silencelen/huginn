@@ -88,7 +88,17 @@ function chunks(text, target) {
  * randomised string is how a gate silently stops gating.
  */
 function isBoundaryRecord(rec) {
-  return !!rec && rec.type === 'system' && rec.subtype === 'turn_duration';
+  if (!rec) return false;
+  if (rec.type === 'system' && rec.subtype === 'turn_duration') return true;
+  // A turn that ended on an API ERROR is also over, and a usage-limit stall is
+  // the case that matters: the CLI writes the 429 as an ordinary assistant
+  // record and then stops — no `turn_duration` ever follows it (verified on the
+  // real capture in test/fixtures/transcripts/limit-429.jsonl, whose last record
+  // IS the stall). Without this the auto-resume phrase would queue behind a
+  // boundary that can never arrive and be dropped ten minutes later as a
+  // timeout: the one session appd most needs to speak to would be the one
+  // session it cannot.
+  return rec.type === 'assistant' && rec.isApiErrorMessage === true;
 }
 
 /** The record kind a caller can log or assert on: `user`, `system/turn_duration`, … */
