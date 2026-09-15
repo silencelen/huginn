@@ -11,7 +11,7 @@ const assert = require('node:assert');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const { AccountStore, fingerprint, sameAccount, normUuid, storedUuid } = require('../lib/accounts');
+const { AccountStore, fingerprint, sameAccount, normUuid, storedUuid, describe } = require('../lib/accounts');
 
 const UUID_A = '79c777a4-d96e-4de2-b95e-bd1f1e758236';
 const UUID_B = 'e12d3fa9-fb80-4e4a-b286-36890d487fd4';
@@ -569,4 +569,84 @@ test('a superseded token pair is archived by save, not deleted', () => {
   assert.strictEqual(store.list().length, 1);
   assert.strictEqual(store.readProfile(UUID_A).credentials.claudeAiOauth.refreshToken, 'r-new');
   assert.strictEqual(fs.existsSync(path.join(store.dir, `${stray}.json`)), false);
+});
+
+// ---- freshness and the refresh lock ----------------------------------------
+//
+// Added with the background refresher (wave 1). The store gained one word that
+// the app, the accounts list and the activate route all gate on, and one lock
+// it now has to respect — and the failure mode both of them guard against is
+// the same one: the owner signed out of their own CLI because two writers
+// rotated one login's token pair.
+
+test('freshness names what can still be switched to, in the daemon`s own vocabulary', () => {
+  const { store } = newStore();
+  const HOUR = 3600_000;
+  const now = Date.now();
+  const at = (slug) => store.list().find((a) => a.slug === slug);
+
+  const fresh = store.save('fresh@example.com', creds('r-fresh', { expiresAt: now + 6 * HOUR }));
+  const soon = store.save('soon@example.com', creds('r-soon', { expiresAt: now + 10 * 60_000 }));
+  const past = store.save('past@example.com', creds('r-past', { expiresAt: now - HOUR }));
+  const gone = store.save('gone@example.com',
+    creds('r-gone', { expiresAt: now - HOUR, refreshTokenExpiresAt: now - HOUR }));
+
+  assert.strictEqual(at(fresh).freshness, 'fresh');
+  assert.strictEqual(at(soon).freshness, 'expiring');
+  // `expired` is the NORMAL state of a saved inactive login between refreshes —
+  // it is a job for the refresher, not a broken account.
+  assert.strictEqual(at(past).freshness, 'expired');
+  // `unrefreshable` is the one that means "sign in again"; nothing this daemon
+  // can do brings a login back once its refresh token has expired.
+  assert.strictEqual(at(gone).freshness, 'unrefreshable');
+  assert.strictEqual(at(gone).refreshTokenExpiresAt, now - HOUR);
+
+  store.recordRefresh(past, { deadAt: now, lastStatus: 'known_dead_refresh_token' });
+  assert.strictEqual(at(past).freshness, 'unrefreshable', 'a dead refresh token is unrefreshable too');
+  assert.strictEqual(at(past).refresh.lastStatus, 'known_dead_refresh_token');
+});
+
+test('activate refuses while another process holds the OAuth lock, and writes nothing', () => {
+  const { store, credPath, root } = newStore();
+  fs.writeFileSync(credPath, JSON.stringify(creds('r-work')));
+  store.save('personal@example.com', creds('r-home'));
+  const before = fs.readFileSync(credPath);
+
+  // A refresh is in flight — ours or the CLI's. Installing a profile now would
+  // leave the credentials file a rotation behind whatever the refresher writes,
+  // and the CLI's answer to the invalid_grant that follows is to blank its own
+  // credentials.
+  fs.mkdirSync(path.join(root, '.oauth_refresh.lock'), { recursive: true });
+
+  const r = store.activate(fingerprint(creds('r-home')), 'work@example.com');
+  assert.strictEqual(r.ok, false);
+  assert.strictEqual(r.status, 'lock_busy');
+  assert.deepStrictEqual(fs.readFileSync(credPath), before, 'the live credentials file is untouched');
+
+  fs.rmSync(path.join(root, '.oauth_refresh.lock'), { recursive: true, force: true });
+  assert.strictEqual(store.activate(fingerprint(creds('r-home')), 'work@example.com').ok, true,
+    'and it works again the moment the lock is free');
+  assert.strictEqual(JSON.parse(fs.readFileSync(credPath, 'utf8')).claudeAiOauth.refreshToken, 'r-home');
+});
+
+test('describe is unchanged for a record saved before any of this existed', () => {
+  // An old record has no `refresh` block and no refreshTokenExpiresAt. The three
+  // fields that were always there must read exactly as they did, and the new
+  // ones must be null rather than absent — a client decoding `expiresAt: null`
+  // as "expired" is how a working account disappears from a switcher.
+  const legacy = {
+    claudeAiOauth: {
+      accessToken: 'at-old', refreshToken: 'r-old',
+      expiresAt: 1785187450640, scopes: ['user:profile', 'user:inference'],
+      subscriptionType: 'max',
+    },
+  };
+  const d = describe(legacy, { now: 1785187450640 - 5000 });
+  assert.strictEqual(d.subscriptionType, 'max');
+  assert.strictEqual(d.expiresAt, 1785187450640);
+  assert.strictEqual(d.scopes, 2, 'still a COUNT, not the array — the app renders it as a number');
+  assert.strictEqual(d.refreshTokenExpiresAt, null);
+  assert.strictEqual(d.refresh, null);
+  assert.strictEqual(d.freshness, 'expiring', 'derived from expiresAt alone, as it must be');
+  assert.strictEqual('freshness' in d, true);
 });

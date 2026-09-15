@@ -37,6 +37,8 @@ const crypto = require('node:crypto');
 //   push-retire         10250 + pid%50   -> 10250-10299
 //   routes-desktop      10300 + pid%50   -> 10300-10349
 //   routes-agent-transcript  10400 + pid%50 -> 10400-10449
+//   routes-refresh      10460 + pid%40   -> 10460-10499   (wave 1: upper half of the
+//                                                    10450-10499 routes-resume block)
 //
 // Also spoken for, outside this directory: scripts/test-llm-shim.js holds
 // 18790-18799.
