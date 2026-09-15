@@ -54,6 +54,7 @@ const h = require('../lib/headroom');
 // the bottom ten, refresh the upper forty. Widening either back re-collides.
 //   routes-typing      10500 + pid%50    -> 10500-10549
 //   routes-quick-actions 10600 + pid%50  -> 10600-10649
+//   routes-session-state 10750 + pid%50  -> 10750-10799
 //
 // This file also binds TWO stub servers on ephemeral ports (port 0), so they
 // cannot collide with anything.
