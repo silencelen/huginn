@@ -1,6 +1,6 @@
 {
  "host": "huginn",
- "appdVersion": "2.0.0",
+ "appdVersion": "3.0.0",
  "uptimeSec": 31502,
  "load": [
   8.29,
@@ -17,5 +17,17 @@
   "usedPercent": "65%"
  },
  "sessions": 4,
- "chatsRunning": 0
+ "chatsRunning": 0,
+ "softEndPhrase": "Wrap up: commit what is done and say what is left.",
+ "softEndAuto": true,
+ "headroom": {
+  "worstPercent": 92.0,
+  "worstLabel": "Current week (Fable)",
+  "nextResetAt": "2026-09-18T07:00:00+00:00",
+  "mode": "red",
+  "sentinels": [
+   "STOP-FABLE"
+  ],
+  "paused": 2
+ }
 }
