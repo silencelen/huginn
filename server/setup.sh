@@ -60,6 +60,12 @@ install_script "$HERE/bin/cc"                  /usr/local/bin/cc
 install_script "$HERE/bin/huginn-status"       /usr/local/bin/huginn-status
 install_script "$HERE/bin/huginn-rounds"       /usr/local/bin/huginn-rounds
 install_script "$HERE/bin/huginn-devices"      /usr/local/bin/huginn-devices
+# `huginn headroom` in both clients is only an ssh to THIS file, so a host that
+# skips it answers the verb with "command not found" from a shell the operator
+# never asked for. It is installed as a COPY like its siblings (huginn-sync does
+# not carry /usr/local/bin), which is the known drift [8/8] in test-client.sh
+# exists to catch.
+install_script "$HERE/bin/huginn-headroom"     /usr/local/bin/huginn-headroom
 install_script "$HERE/bin/huginn-claude-title" /usr/local/bin/huginn-claude-title
 
 # tmux config — installed for root by default; for a non-root login user, copy

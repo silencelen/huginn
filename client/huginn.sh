@@ -4,9 +4,9 @@
 #     [ -f ~/.huginn/huginn.sh ] && source ~/.huginn/huginn.sh
 # Targets the `huginn` SSH alias by default; override per-device with:  export HUGINN_HOST=my-host
 # Self-update with:  huginn update   (pulls this file from the repo; gh -> scp fallback)
-# Version: 0.14.0
+# Version: 1.0.0
 
-HUGINN_VERSION='0.14.0'
+HUGINN_VERSION='1.0.0'
 HUGINN_REPO='silencelen/huginn'
 # Where `huginn update` may fetch a replacement for THIS FILE, which it then
 # sources into the live shell. Pinned, and deliberately NOT $HUGINN_HOST:
@@ -551,6 +551,7 @@ EOF
   huginn end <name>           soft end: ask Claude to wrap up + commit, then
                               (if auto-end is on) end it once it goes idle
   huginn rounds               what this host does on a schedule, and what it found
+  huginn headroom             usage left per account, what huginn moved or is holding, and why
   huginn devices              machines that can run a chat in their own context
   huginn device [status]      what THIS machine offers huginn, and what huginn sees
   huginn device on            offer this machine  [--scope look|work|own] [--root DIR]
@@ -647,6 +648,20 @@ EOF
     # rather than one per client. These two files have already drifted over a
     # single version constant; this has far more fields to drift over.
     rounds|round) ssh -T "$H" huginn-rounds ;;
+    # Same host-side rule as rounds/devices, and for a third reason on top of
+    # theirs: headroom is read from the daemon with the bearer token, so
+    # rendering it anywhere but here would mean handing a laptop that token.
+    # -T, not -tt: the attach paths force a PTY because tmux needs one, but a
+    # renderer piped into `less` or captured into a variable must not have its
+    # newlines turned into CRLF by a tty on the far end.
+    # Flags go through printf %q like the llm branch: what follows the host name
+    # is parsed by a shell on the far side, so an argument is remote shell input.
+    # Guarded on $# because `printf '%q ' ` with NO arguments still runs the
+    # format once and emits '' - a bare `huginn headroom` would send one empty
+    # argument, which the renderer rightly refuses as an unknown flag.
+    headroom)
+      if [ "$#" -gt 1 ]; then ssh -T "$H" "huginn-headroom $(printf '%q ' "${@:2}")"
+      else ssh -T "$H" huginn-headroom; fi ;;
     devices) ssh -T "$H" huginn-devices ;;
     # One question to the LOCAL TIER - answered by a serving machine's model,
     # never Claude. Renders on the host like devices/rounds above: one
@@ -817,7 +832,7 @@ _huginn_complete() {
   local cur prev cmds
   cur="${COMP_WORDS[COMP_CWORD]}"
   prev="${COMP_WORDS[COMP_CWORD-1]}"
-  cmds="list ls status st rounds devices device local llm solo rename mv kill end -p -y usage cost desktop update uninstall version help"
+  cmds="list ls status st rounds headroom devices device local llm solo rename mv kill end -p -y usage cost desktop update uninstall version help"
   if [ "$COMP_CWORD" -eq 1 ]; then
     # first word: subcommands + live session names (bare name attaches to it)
     mapfile -t COMPREPLY < <(compgen -W "$cmds $(_huginn_sessions)" -- "$cur")
