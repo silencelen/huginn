@@ -93,6 +93,18 @@ async function api(pathname, init = {}) {
   return { status: res.status, body };
 }
 const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+/** Poll the pane until it shows `re`, rather than sleeping a fixed time for the paint. */
+async function paneShows(name, re, ms = 15_000) {
+  const deadline = Date.now() + ms;
+  for (;;) {
+    const text = capture(name);
+    if (re.test(text)) return text;
+    if (Date.now() > deadline) {
+      throw new Error(`${name} never showed ${re} within ${ms}ms. Pane held: ${JSON.stringify(text).slice(0, 400)}`);
+    }
+    await wait(100);
+  }
+}
 
 before(async () => {
   tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'appd-life-'));
@@ -133,14 +145,35 @@ before(async () => {
   }
 });
 
-after(() => {
+/**
+ * SIGTERM, then SIGKILL if it will not go, and wait until the process is REAPED.
+ *
+ * ⚠ SIGTERM IS A REQUEST, AND THE SCRATCH TREE IS NOT OURS UNTIL IT IS ANSWERED.
+ * The daemon still has writes in flight, and on a loaded host those land after
+ * this hook has started walking the directory — rimraf deletes a file, the
+ * daemon writes another, and the rmdir fails ENOTEMPTY. `node --test` reports
+ * that as the whole FILE failing with every test inside it green, which reads
+ * like a mystery and is a race in the teardown. Reproduced 2026-09-15.
+ */
+function reap(child, ms = 10_000) {
+  if (child.exitCode !== null || child.signalCode) return Promise.resolve();
+  return new Promise((resolve) => {
+    const hard = setTimeout(() => { try { child.kill('SIGKILL'); } catch { /* gone */ } }, 3_000);
+    const giveUp = setTimeout(resolve, ms);
+    const done = () => { clearTimeout(hard); clearTimeout(giveUp); resolve(); };
+    child.once('exit', done);
+    try { child.kill('SIGTERM'); } catch { done(); }
+  });
+}
+
+after(async () => {
   for (const name of madeSessions) {
     try { sh('tmux', ['kill-session', '-t', `=${name}`]); } catch { /* gone */ }
   }
   // Reap the private server outright (-L targets only OUR socket, never default).
   try { sh('tmux', ['kill-server']); } catch { /* no server */ }
-  if (daemon) daemon.kill('SIGTERM');
-  if (tmp) fs.rmSync(tmp, { recursive: true, force: true });
+  if (daemon) await reap(daemon);
+  if (tmp) fs.rmSync(tmp, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 });
 });
 
 test('/keys delivers literal text into the pane', async () => {
@@ -149,8 +182,9 @@ test('/keys delivers literal text into the pane', async () => {
     method: 'POST', body: JSON.stringify({ text: 'HELLO-FROM-KEYS' }),
   });
   assert.equal(status, 200);
-  await wait(300);
-  assert.match(capture(name), /HELLO-FROM-KEYS/);
+  // Polled, not slept: tmux delivering the keys and the shell echoing them are
+  // two scheduler decisions, and both queue behind a loaded host.
+  assert.match(await paneShows(name, /HELLO-FROM-KEYS/), /HELLO-FROM-KEYS/);
 });
 
 test('DELETE kills the session AND removes its state file', async () => {
@@ -411,11 +445,38 @@ function mkSessionWithPane(suffix, paneText) {
   return name;
 }
 
+/**
+ * `/screen`, once the daemon has DECIDED something about the pane.
+ *
+ * ⚠ The wait is for the PRECONDITION, never for the verdict. Every fixture here
+ * forks a shell that printf's its pane and a sidecar file that has to be read
+ * back; on a host running parallel gradle builds that paint lands well after the
+ * fixed 400-500 ms these tests used to sleep, and a `/screen` taken before it
+ * reads an EMPTY pane — no run, no fusion, no card — which failed as "it is
+ * offered as a read-only ask card" and looked like a daemon bug.
+ *
+ * So this returns as soon as there is an answer of ANY kind, tappable prompt or
+ * ask card, and the assertions at the call site still say which one it had to
+ * be. A daemon that offers the wrong one fails on the assertion that names it,
+ * exactly as before; only "the pane had not painted yet" is waited out.
+ */
+async function screenDecided(name, ms = 20_000) {
+  const deadline = Date.now() + ms;
+  for (;;) {
+    const r = await api(`/v1/sessions/${name}/screen`);
+    if (r.status === 200 && r.body && (r.body.prompt || r.body.ask)) return r;
+    if (Date.now() > deadline) {
+      throw new Error(`/screen detected neither a prompt nor an ask card on ${name} within ${ms}ms. `
+        + `Last body: ${JSON.stringify(r.body).slice(0, 400)} — pane held: ${JSON.stringify(capture(name)).slice(0, 400)}`);
+    }
+    await wait(100);
+  }
+}
+
 test('screen fuses the hook sidecar: hook labels + descriptions, TUI extras flagged', async () => {
   const name = mkSessionWithPane('fuse', COLOR_PANE);
   writeAskSidecar(name, COLOR_Q);
-  await wait(500);
-  const { status, body } = await api(`/v1/sessions/${name}/screen`);
+  const { status, body } = await screenDecided(name);
   assert.equal(status, 200);
   assert.ok(body.prompt, 'a prompt should be detected');
   assert.equal(body.prompt.source, 'hook', 'the sidecar should have been fused in');
@@ -445,8 +506,7 @@ test('a multi-part AskUserQuestion is NOT tappable — served as a Screen-tab ca
     { question: 'Pick a size?', header: 'Size', multiSelect: false,
       options: [{ label: 'Small' }, { label: 'Large' }] },
   ]);
-  await wait(400);
-  const { body } = await api(`/v1/sessions/${name}/screen`);
+  const { body } = await screenDecided(name);
   assert.equal(body.prompt, null, 'a multi-part question must not be a tappable prompt');
   assert.ok(body.ask, 'it is offered as a read-only ask card');
   assert.equal(body.ask.multiPart, true);
@@ -465,8 +525,7 @@ test('a sidecar with no readable pane run and attention state yields a degraded 
   sh('tmux', ['send-keys', '-t', `=${name}:`, 'printf "thinking about it...\\n"', 'Enter']);
   writeState(name, 'attention');
   writeAskSidecar(name, COLOR_Q);
-  await wait(400);
-  const { body } = await api(`/v1/sessions/${name}/screen`);
+  const { body } = await screenDecided(name);
   assert.equal(body.prompt, null, 'no live run to answer directly');
   assert.ok(body.ask, 'the degraded card should be present');
   assert.equal(body.ask.answerable, false);
