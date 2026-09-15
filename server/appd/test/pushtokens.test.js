@@ -284,3 +284,148 @@ test('an empty registry sweeps without asking FCM anything', async () => {
   assert.equal(r.checked, 0);
   assert.equal(probe.asked.length, 0, 'no round trip, no token, no cost');
 });
+
+// ------------------------------------------------ the counter and its epoch
+//
+// WHAT WENT WRONG. The phone compares the host's tally for this install against
+// what it actually received, and on 2026-09-15 it read "1274 of 916 pushes
+// arrived — nothing dropped": more received than ever sent. Both numbers were
+// honest and neither was comparable, because they count from different
+// starting points. The host's per-install tally lived on the TOKEN row, and
+// `register` rebuilt that row from scratch whenever Firebase reissued the token
+// — so the host silently restarted at 0 on 2026-08-15 while the phone's own
+// count kept climbing from July. The live file said it plainly: 917 for the one
+// install, 1321 delivered host-wide.
+//
+// Two properties fix it, and they are separate. The count must not restart when
+// the phone is still the same install (below), and when it DOES have to restart
+// — a dropped registration, a store recreated from nothing — the phone has to be
+// told, which is what the epoch is for. A number that quietly rebases is worse
+// than no number: it disables the deficit check permanently, and the check is
+// the only thing that tells a quiet night from a broken delivery path.
+
+test('a rotated token does not restart the delivery count', () => {
+  const st = push.emptyState();
+  push.register(st, 'install-1', 'tok-a', T0);
+  push.noteSuccess(st, 'install-1', T0 + 1000);
+  push.noteSuccess(st, 'install-1', T0 + 2000);
+  push.register(st, 'install-1', 'tok-b', T0 + 3000);
+  assert.equal(push.sentTo(st, 'install-1'), 2,
+    'the phone is the same install; its own tally did not restart, so this must not either');
+  assert.equal(push.list(st)[0].lastPushAt, Math.floor((T0 + 2000) / 1000),
+    'and the last delivery is still when it happened');
+});
+
+test('the count never goes backwards within an epoch', () => {
+  // Every write path, in the order a real phone hits them: register, deliver,
+  // re-register unchanged, rotate, deliver again.
+  const st = push.emptyState();
+  let high = 0;
+  const seen = () => {
+    const n = push.sentTo(st, 'install-1');
+    assert.ok(n >= high, `count fell from ${high} to ${n}`);
+    high = n;
+  };
+  push.register(st, 'install-1', 'tok-a', T0); seen();
+  push.noteSuccess(st, 'install-1', T0 + 1000); seen();
+  push.register(st, 'install-1', 'tok-a', T0 + 2000); seen();
+  push.register(st, 'install-1', 'tok-b', T0 + 3000); seen();
+  push.noteSuccess(st, 'install-1', T0 + 4000); seen();
+  assert.equal(high, 2);
+});
+
+test('an install gets an epoch when its counter is created', () => {
+  const st = push.emptyState();
+  push.register(st, 'install-1', 'tok-a', T0);
+  const e = push.epochOf(st, 'install-1');
+  assert.equal(typeof e, 'string');
+  assert.ok(e.length >= 8, 'long enough that two stores cannot collide');
+  assert.equal(push.list(st)[0].pushEpoch, e, 'and the panel sees the same one');
+});
+
+test('the epoch survives a restart, because it is in the file the daemon reloads', () => {
+  // A restart is exactly this: the same JSON, read back by a new process.
+  const st = push.emptyState();
+  push.register(st, 'install-1', 'tok-a', T0);
+  push.noteSuccess(st, 'install-1', T0 + 1000);
+  const before = push.epochOf(st, 'install-1');
+  const reloaded = JSON.parse(JSON.stringify(st));
+  assert.equal(push.epochOf(reloaded, 'install-1'), before);
+  assert.equal(push.sentTo(reloaded, 'install-1'), 1);
+  // And the app re-registering on start must not disturb either.
+  push.register(reloaded, 'install-1', 'tok-a', T0 + 5000);
+  assert.equal(push.epochOf(reloaded, 'install-1'), before);
+  assert.equal(push.sentTo(reloaded, 'install-1'), 1);
+});
+
+test('a rotation keeps the epoch: the counter did not restart, so nothing rebaselines', () => {
+  const st = push.emptyState();
+  push.register(st, 'install-1', 'tok-a', T0);
+  const before = push.epochOf(st, 'install-1');
+  push.register(st, 'install-1', 'tok-b', T0 + 1000);
+  assert.equal(push.epochOf(st, 'install-1'), before);
+});
+
+test('a store recreated from nothing mints a new epoch, never the old one', () => {
+  // The unreadable-file case. push.json is read on every touch and any failure
+  // — missing, truncated, EACCES — yields an empty state, which the next write
+  // then makes permanent. Restarting the count at 0 under the SAME epoch would
+  // leave the phone comparing its 1274 against a host that had forgotten
+  // everything, and reading the deficit as "nothing dropped" forever.
+  const first = push.emptyState();
+  push.register(first, 'install-1', 'tok-a', T0);
+  push.noteSuccess(first, 'install-1', T0 + 1000);
+
+  const recreated = push.emptyState();
+  push.register(recreated, 'install-1', 'tok-a', T0 + 2000);
+  assert.equal(push.sentTo(recreated, 'install-1'), 0, 'the count genuinely did restart');
+  assert.notEqual(push.epochOf(recreated, 'install-1'), push.epochOf(first, 'install-1'),
+    'so the phone must be told to rebaseline');
+});
+
+test('a dropped install that comes back is a new epoch', () => {
+  // A dead-token retirement really does forget the tally, so the phone must not
+  // go on comparing against the count that replaces it.
+  const st = push.emptyState();
+  push.register(st, 'install-1', 'tok-a', T0);
+  push.noteSuccess(st, 'install-1', T0 + 1000);
+  const before = push.epochOf(st, 'install-1');
+  push.drop(st, 'install-1');
+  push.register(st, 'install-1', 'tok-b', T0 + 2000);
+  assert.equal(push.sentTo(st, 'install-1'), 0);
+  assert.notEqual(push.epochOf(st, 'install-1'), before);
+});
+
+test('two installs never share an epoch', () => {
+  const st = push.emptyState();
+  push.register(st, 'phone', 'tok-a', T0);
+  push.register(st, 'tablet', 'tok-b', T0);
+  assert.notEqual(push.epochOf(st, 'phone'), push.epochOf(st, 'tablet'));
+});
+
+test('an epoch is asked for safely about an install that is not there', () => {
+  assert.equal(push.epochOf(push.emptyState(), 'ghost'), null);
+  assert.equal(push.epochOf(null, 'ghost'), null);
+});
+
+test('a row written before epochs gets one without losing its count', () => {
+  // The live file on the day this was written: a real tally, no epoch. Minting
+  // one keeps the number — it is not wrong, it is merely unvouched-for — and
+  // tells the phone to rebaseline against it, which is the honest answer to a
+  // count whose starting point the host can no longer account for.
+  const st = { tokens: { legacy: { token: 'tok-a', firstAt: T0, seenAt: T0, model: 'SM-F966U',
+    failures: 0, pushes: 917, lastPushAt: T0 } }, pushed: 1321 };
+  const r = push.register(st, 'legacy', 'tok-a', T0 + 1000);
+  assert.equal(push.sentTo(st, 'legacy'), 917, 'the tally is kept');
+  assert.equal(typeof push.epochOf(st, 'legacy'), 'string');
+  assert.equal(r.changed, true, 'and the daemon is told to write the file, or it is minted forever');
+});
+
+test('a delivery to a row written before epochs mints one too', () => {
+  // The app re-registers on start, but a push can land first on a host that has
+  // been up for weeks. Either write path is enough.
+  const st = { tokens: { legacy: { token: 'tok-a', firstAt: T0, seenAt: T0, failures: 0, pushes: 4 } } };
+  push.noteSuccess(st, 'legacy', T0 + 1000);
+  assert.equal(push.sentTo(st, 'legacy'), 5);
+  assert.equal(typeof push.epochOf(st, 'legacy'), 'string');
+});
