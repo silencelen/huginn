@@ -71,10 +71,14 @@ test('chunks of nothing is nothing, and an impossible target yields nothing to s
 
 // ----------------------------------------------------------- turn boundaries
 
-test('isBoundaryRecord accepts only system/turn_duration', () => {
+test('isBoundaryRecord accepts system/turn_duration and a turn that died on an api error', () => {
   assert.equal(t.isBoundaryRecord({ type: 'system', subtype: 'turn_duration', durationMs: 5 }), true);
   assert.equal(t.isBoundaryRecord({ type: 'system', subtype: 'stop_hook_summary' }), false);
   assert.equal(t.isBoundaryRecord({ type: 'assistant' }), false);
+  // ⚠ A USAGE-LIMIT STALL IS A BOUNDARY. The CLI writes the 429 as an ordinary
+  // assistant record and then stops; no turn_duration ever follows, so a queued
+  // auto-resume phrase would wait for a boundary that cannot arrive.
+  assert.equal(t.isBoundaryRecord({ type: 'assistant', isApiErrorMessage: true, apiErrorStatus: 429 }), true);
   assert.equal(t.isBoundaryRecord(null), false);
 });
 

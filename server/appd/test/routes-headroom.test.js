@@ -46,7 +46,11 @@ const crypto = require('node:crypto');
 //   routes-desktop     10300 + pid%50    -> 10300-10349
 //   routes-headroom    10350 + pid%50    -> 10350-10399   (this file)
 //   routes-agent-transcript 10400 + pid%50 -> 10400-10449
+//   routes-resume      10450 + pid%10    -> 10450-10459
 //   routes-refresh     10460 + pid%40    -> 10460-10499
+//
+// ⚠ 10450-10499 was ONE block in the wave-1 contract; it is SPLIT — resume keeps
+// the bottom ten, refresh the upper forty. Widening either back re-collides.
 //   routes-typing      10500 + pid%50    -> 10500-10549
 //
 // This file also binds TWO stub servers on ephemeral ports (port 0), so they
