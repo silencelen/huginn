@@ -77,7 +77,7 @@ const resumeLib = require('./lib/resume');
 // disagree about them; the file and the route live here.
 const quickLib = require('./lib/quickactions');
 
-const VERSION = '3.0.4';
+const VERSION = '3.0.5';
 const PORT = Number(process.env.HUGINN_APPD_PORT || 8787);
 const DATA_DIR = process.env.HUGINN_APPD_DATA || '/var/lib/huginn-appd';
 const UPLOADS_DIR = path.join(DATA_DIR, 'uploads');
@@ -4403,9 +4403,31 @@ const FCM_KEY = process.env.HUGINN_FCM_KEY || '/etc/huginn-appd/fcm-service-acco
 const PUSH_STATE = path.join(DATA_DIR, 'push.json');
 const fcm = trySender(FCM_KEY, log);
 
+/**
+ * The registry, re-read on every touch.
+ *
+ * ⚠ ANY failure here empties the store, and the next write makes that permanent.
+ * That is survivable — a phone re-registers on its next start — but it also
+ * silently resets every install's delivery tally, and the phone compares that
+ * tally against its own. A restart at 0 that nobody announces reads to the phone
+ * as "the host has sent fewer than I received", i.e. nothing is ever dropped,
+ * which disables the deficit check for good. The announcement is the epoch: an
+ * install rebuilt into an empty store mints a new one (see pushtokens.mintEpoch),
+ * so the phone rebaselines instead of believing the difference.
+ *
+ * A missing file is an ordinary first run and says nothing. Anything else is a
+ * file that may well still exist and still hold counters, so it gets a line —
+ * without one, the only evidence is a number quietly starting again from zero.
+ */
 function loadPushState() {
-  try { return JSON.parse(fs.readFileSync(PUSH_STATE, 'utf8')); }
-  catch { return pushLib.emptyState(); }
+  let raw;
+  try { raw = fs.readFileSync(PUSH_STATE, 'utf8'); }
+  catch (e) {
+    if (e.code !== 'ENOENT') log('push: state unreadable, counters restart under a new epoch', e.code || e.message);
+    return pushLib.emptyState();
+  }
+  try { return JSON.parse(raw); }
+  catch (e) { log('push: state corrupt, counters restart under a new epoch', e.message); return pushLib.emptyState(); }
 }
 function savePushState(st) {
   try {
@@ -7052,6 +7074,9 @@ const server = http.createServer(async (req, res) => {
           // would see every session disappear and act on it.
           if (sess !== null && d.hash !== last) {
             last = d.hash;
+            // One read for both, so a frame can never pair a tally with an epoch
+            // from a different read of the file.
+            const pushSt = streamInstall ? loadPushState() : null;
             res.write(`event: state\ndata: ${JSON.stringify({
               ...d, changed: true, serverTime: Math.floor(Date.now() / 1000),
               // Same field the long poll returns. Without it the app decodes the
@@ -7059,7 +7084,11 @@ const server = http.createServer(async (req, res) => {
               // disables push-deficit detection: the phone can no longer tell a
               // quiet night from a broken delivery path, so it never tightens
               // its fallback cadence no matter how many pushes go missing.
-              pushesSent: streamInstall ? pushLib.sentTo(loadPushState(), streamInstall) : null,
+              pushesSent: streamInstall ? pushLib.sentTo(pushSt, streamInstall) : null,
+              // Which run of counting that number belongs to. The phone rebaselines
+              // its own tally when this changes, because a count that restarts
+              // without saying so reads as a permanent "nothing is ever dropped".
+              pushEpoch: streamInstall ? pushLib.epochOf(pushSt, streamInstall) : null,
             })}\n\n`);
             nextKeepalive = Date.now() + KEEPALIVE_MS;
           } else if (Date.now() >= nextKeepalive) {
@@ -7096,6 +7125,7 @@ const server = http.createServer(async (req, res) => {
       }
       if (req.destroyed) return;
       const installId = String(req.headers['x-huginn-client'] || '').trim().slice(0, 64);
+      const pushSt = installId ? loadPushState() : null;
       return sendJson(res, 200, {
         ...d,
         changed: !known || d.hash !== known,
@@ -7104,7 +7134,15 @@ const server = http.createServer(async (req, res) => {
         // it against what it actually received, which is the only way it can tell a
         // quiet night from a broken delivery path — and that distinction is worth a
         // hundred and twenty device wake-ups a day.
-        pushesSent: installId ? pushLib.sentTo(loadPushState(), installId) : 0,
+        pushesSent: installId ? pushLib.sentTo(pushSt, installId) : 0,
+        // ⚠ AND THE RUN IT IS COUNTED IN. Two counters kept by two processes
+        // drift apart the moment one of them restarts — a token rotation, a
+        // retired registration, an unreadable push.json — and the phone, whose
+        // own count only ever climbs, then reads the difference as proof that
+        // nothing is ever dropped. It rebaselines when this string changes.
+        // Null on an install this host has no row for, which means "unknown" and
+        // must not be acted on. See lib/pushtokens.mintEpoch.
+        pushEpoch: installId ? pushLib.epochOf(pushSt, installId) : null,
       });
     }
 

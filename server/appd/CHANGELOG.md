@@ -9,6 +9,21 @@ appeared only as a side-note on the app releases it happened to ship with. Three
 undocumented, and the notes-cutting matcher could fuse two sections when an app and an appd
 version number collided. Entries below are reconstructed from the shipping commits.
 
+## 3.0.5 — 2026-09-15
+
+- **The push counter survives a restart and carries an epoch.** The phone decides how often to
+  wake itself by comparing the host's tally of pushes sent to this install against what actually
+  arrived — and on 2026-09-15 that page read "1274 of 916 pushes arrived — nothing dropped". Both
+  numbers were honest; neither was comparable. The tally lived on the token row, and a Firebase
+  token reissue rebuilt that row from zero, so the host restarted counting in August while the
+  phone kept counting from July. A retired registration and an unreadable `push.json` lose it the
+  same way. The count now carries across a rotation, and every count carries a `pushEpoch` — a
+  per-install string minted when the counter is created and reissued whenever it genuinely has to
+  restart, returned on `GET /v1/push` beside each device and on `/v1/watch` (long poll and stream)
+  beside `pushesSent`. A client compares only within an epoch and rebaselines when it changes,
+  which is the difference between a deficit check that works and one that answers "nothing is
+  ever dropped" forever. Additive: a client that does not read the field is unaffected.
+
 ## 3.0.4 — 2026-09-15
 
 - **The daemon's own lines stop waiting on a boundary that will never come.** With a person's
