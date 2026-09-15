@@ -737,3 +737,94 @@ test('windowStart is zero once the whole file is in view', () => {
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });
+
+// ------------------------------------------------------ running out of road
+//
+// A usage limit is not an error record and not a status: it is an ORDINARY
+// assistant record with three extra fields. Against the real one, captured off
+// a session that hit the cap (test/fixtures/transcripts/, see its README) —
+// because the shape is exactly the kind a synthetic fixture gets subtly wrong.
+
+const { isLimitStall, parseLimitError, lastNonAttachmentRecord } = require('../lib/limits');
+
+const LIMIT_FIXTURE = path.join(__dirname, 'fixtures', 'transcripts', 'limit-429.jsonl');
+const limitRecords = () => fs.readFileSync(LIMIT_FIXTURE, 'utf8')
+  .split('\n').filter((l) => l.trim()).map((l) => JSON.parse(l));
+
+test('a 429 assistant record renders as an event that says so', () => {
+  const t = readTranscript(LIMIT_FIXTURE);
+  const last = t.events[t.events.length - 1];
+  assert.equal(last.kind, 'assistant',
+    'the kind must not change — every client on 2.88.0 renders the text off it');
+  assert.equal(last.apiError, 429);
+  assert.match(last.text, /hit your session limit/);
+  // And nothing else in the window is marked: the five records before it are an
+  // ordinary turn, which is the whole difficulty of spotting a stall.
+  assert.equal(t.events.filter((e) => e.apiError != null).length, 1);
+  assert.equal(t.events.find((e) => e.kind === 'tool').apiError, undefined);
+});
+
+test('the real 429 record is a limit stall, with its text', () => {
+  const r = limitRecords();
+  const v = isLimitStall(r[r.length - 1]);
+  assert.equal(v.stalled, true);
+  assert.equal(v.status, 429);
+  assert.match(v.text, /resets 3:10am/);
+});
+
+test('an outage is not a stall, and neither is an ordinary answer', () => {
+  const r = limitRecords();
+  const real = r[r.length - 1];
+  // A 500 is an outage to ride out, not a window to wait for. Waiting for a
+  // reset that is not coming is the failure this distinction prevents.
+  const five = { ...real, apiErrorStatus: 500 };
+  assert.equal(isLimitStall(five).stalled, false);
+  assert.equal(isLimitStall(five).status, 500, 'still reported, so a caller can tell them apart');
+  // The flag alone, with no status, must not read as "no error".
+  const noStatus = { ...real, apiErrorStatus: undefined };
+  assert.equal(isLimitStall(noStatus).stalled, false);
+  // The last real ASSISTANT answer before the cap — same type, no flags.
+  assert.equal(isLimitStall({ type: 'assistant', message: { content: [{ type: 'text', text: 'done' }] } }).stalled, false);
+  assert.equal(isLimitStall(null).stalled, false);
+});
+
+test('the last record ignores attachments and queued messages', () => {
+  const r = limitRecords();
+  // The CLI appends its own bookkeeping after a turn, and a stalled agent's
+  // file routinely ENDS on one. A `records[length-1]` check would see an
+  // attachment and conclude the session is merely idle.
+  const withNoise = [...r,
+    { type: 'attachment', attachment: { type: 'deferred_tools_delta', addedNames: ['WebFetch'] } },
+    // Typed while Claude was mid-turn: written BEFORE the 429, never delivered.
+    // Counting it as "a human replied" would cancel a resume that should happen.
+    { type: 'queue-operation', operation: 'enqueue', content: 'and then check the logs' },
+  ];
+  assert.equal(lastNonAttachmentRecord(withNoise).apiErrorStatus, 429);
+  assert.equal(isLimitStall(lastNonAttachmentRecord(withNoise)).stalled, true);
+  // A real human message after the 429 DOES win — that is a cancelled stall.
+  const answered = [...withNoise, { type: 'user', message: { content: 'never mind' } }];
+  assert.equal(isLimitStall(lastNonAttachmentRecord(answered)).stalled, false);
+  assert.equal(lastNonAttachmentRecord([]), null);
+});
+
+test('the apology text says which window ran out', () => {
+  const r = limitRecords();
+  const session = parseLimitError(isLimitStall(r[r.length - 1]).text);
+  assert.deepEqual(session, { window: 'session', resetsClock: '3:10am', tz: 'America/Los_Angeles' });
+
+  // The other observed shape. No clock in it at all — the reset time for a
+  // weekly window comes from the usage endpoint, never from this text.
+  assert.deepEqual(
+    parseLimitError("You're out of usage credits. Run /usage-credits to keep using Fable 5.1 or /model to switch models."),
+    { window: 'weekly_fable', resetsClock: null, tz: null });
+
+  // Same sentence with no model named: which pool is empty is genuinely
+  // unknown, and a guess would send the arbiter to wait on the wrong reset.
+  assert.equal(parseLimitError("You're out of usage credits.").window, null);
+  // A monthly SPEND limit is not a window — nothing resets, so nothing waits.
+  assert.equal(parseLimitError("You've hit your monthly spend limit · raise it at claude.ai/settings/usage").window, null);
+  // Garbage in, nulls out — never a throw and never a default window.
+  for (const bad of ['', '   ', 'Disk is at 62%.', null, undefined, 42, {}]) {
+    assert.deepEqual(parseLimitError(bad), { window: null, resetsClock: null, tz: null });
+  }
+});
