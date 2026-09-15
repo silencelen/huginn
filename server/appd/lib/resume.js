@@ -389,8 +389,59 @@ function resumePlan({ kind = 'session', armed = false, stall = null, resumedNati
   };
 }
 
+/**
+ * How long a reset event stays usable as proof.
+ *
+ * `detectResets` fires ONCE, on the tick that sees the drop; the resume that
+ * follows may need two or three passes (the queue waits for a turn boundary), so
+ * the event is remembered rather than consumed by whoever reads it first.
+ */
+const RESET_MEMORY_MS = 60 * 60 * 1000;
+
+/**
+ * Which windows have reset recently enough to count — FOR THIS ACCOUNT.
+ *
+ * ⚠ THE ACTIVE ACCOUNT'S RESETS ONLY. `detectResets` runs over every saved
+ * login, and for an inactive one the "fresh" reading is aged-forward history: a
+ * fabricated `percent: 0` for any window whose reset time has passed. So a
+ * second account's stale weekly_fable snapshot rolling over used to emit a
+ * weekly_fable reset that satisfied a session stalled on the ACTIVE account's
+ * Fable week, which is still full — the phrase is typed, the session re-stalls,
+ * and one of only three attempts is gone. Three of those and it is abandoned for
+ * the night.
+ *
+ * A reset carrying no slug at all is kept: it predates the field, and dropping
+ * it would silently stop resumes on an upgrade.
+ *
+ * @returns Map<window, ms of the most recent reset>
+ */
+function recentResetWindows(resets, { now = Date.now(), activeSlug = null, memoryMs = RESET_MEMORY_MS } = {}) {
+  const out = new Map();
+  for (const r of resets || []) {
+    if (!r || !r.window) continue;
+    if (activeSlug && r.slug && r.slug !== activeSlug) continue;
+    const at = Number(r.at) || 0;
+    if (now - at > memoryMs) continue;
+    if (at > (out.get(r.window) || 0)) out.set(r.window, at);
+  }
+  return out;
+}
+
+/**
+ * Has THIS stall's window reset SINCE the stall?
+ *
+ * ⚠ Since the stall, not merely "recently". The reset log is a rolling hour and
+ * a host can stall twice in one: reading the earlier window's reset as this
+ * stall's confirmation resumes a session straight back into a full window.
+ */
+function resetSeenFor(map, stall) {
+  if (!stall || !stall.window || !map) return false;
+  return (map.get(stall.window) || 0) >= (Number(stall.at) || 0);
+}
+
 module.exports = {
-  NATIVE_GRACE_MS, CONSENT_GRACE_MS, MAX_ATTEMPTS, NATIVE_HORIZON_MS,
+  NATIVE_GRACE_MS, CONSENT_GRACE_MS, MAX_ATTEMPTS, NATIVE_HORIZON_MS, RESET_MEMORY_MS,
+  recentResetWindows, resetSeenFor,
   NATIVE_CONTINUATION, CANCEL_PATTERNS,
   stallOf, recordsAfterStall, nativeArmed, nativeResumed, nativeCancelled, eligible, resumePlan,
   nextOccurrence, isHumanRecord, textOfRecord, tsOf,
