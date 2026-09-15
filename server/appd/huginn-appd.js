@@ -77,7 +77,7 @@ const resumeLib = require('./lib/resume');
 // disagree about them; the file and the route live here.
 const quickLib = require('./lib/quickactions');
 
-const VERSION = '3.0.1';
+const VERSION = '3.0.3';
 const PORT = Number(process.env.HUGINN_APPD_PORT || 8787);
 const DATA_DIR = process.env.HUGINN_APPD_DATA || '/var/lib/huginn-appd';
 const UPLOADS_DIR = path.join(DATA_DIR, 'uploads');
@@ -1247,7 +1247,17 @@ async function pumpQueue(name) {
         entry.settle({ delivered: false, dropped: reason });
         continue;
       }
-      const d = typing.releaseDecision(gate);
+      // HOTFIX 3.0.3: a PERSON's message never waits for a turn boundary. 3.0.0
+      // held it in this queue until the turn ended — invisible to the sender,
+      // and on a session inside a long agent turn "the message just disappears".
+      // 2.x typed it at once and Claude Code's OWN queue showed it in the pane
+      // and took it up after the turn; that is what the owner wants back. Only
+      // the modal gate still holds a human send (text into a dialog is
+      // swallowed with no trace). Automated lines keep both gates.
+      // A pane SCRIPT (the ladder's picker walk, even when a person asked for it
+      // via Undo) keeps the turn gate: a picker opened mid-turn is a modal.
+      const humanText = !entry.automated && typeof entry.run !== 'function';
+      const d = typing.releaseDecision(humanText ? { ...gate, idle: true } : gate);
       if (!d.release) {
         q.blockedBy = d.blockedBy;
         armQueueTimer(name);

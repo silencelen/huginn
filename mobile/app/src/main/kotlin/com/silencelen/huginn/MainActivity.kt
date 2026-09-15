@@ -557,6 +557,14 @@ fun HuginnApp(
     // finishes, so it is polled wherever the reader is — and only while they are
     // actually there, which is what the lifecycle effect below is for.
     val headroomPill by vm.headroomPill.collectAsState()
+    // What the daemon is still holding, per session. A message typed into a busy
+    // session is queued and delivered at the next turn boundary; without this the
+    // composer emptied and nothing anywhere said where the message went.
+    val typing by vm.typing.collectAsState()
+    // The 5-hour session window, under the Status icon. A DIFFERENT NUMBER from the
+    // pill above it — the pill is the worst window anywhere, this is the one that
+    // decides whether the next hour of work finishes — and null draws nothing.
+    val sessionUsage by vm.sessionUsage.collectAsState()
     val streamAgents by vm.streamAgents.collectAsState()
     val streamsExpanded by vm.streamsExpanded.collectAsState()
     val selectedStream by vm.selectedStream.collectAsState()
@@ -1055,6 +1063,19 @@ fun HuginnApp(
                 pads = if (padsAvailable == true) pads else emptyList(),
                 padRefId = padRefs[com.silencelen.huginn.ui.ScratchpadRules.chatRefKey(id)],
                 onPadRef = { vm.setPadRef(com.silencelen.huginn.ui.ScratchpadRules.chatRefKey(id), it) },
+                quickActions = status?.quickActions,
+                onSelectionAction = { action, text ->
+                    vm.runSelectionAction(
+                        action = action,
+                        selection = text,
+                        draftKey = HuginnViewModel.chatDraftKey(id),
+                        actions = status?.quickActions,
+                        // A new chat inherits THIS chat's mode: "ask in a new chat"
+                        // about something an Act run produced is still act-shaped.
+                        mode = chatMode,
+                        onOpened = { newId -> vm.openChat(newId); dest = Dest.Chat(newId) },
+                    )
+                },
             )
         }
         val sessionsPane: @Composable (Boolean) -> Unit = { twoPane ->
@@ -1086,8 +1107,13 @@ fun HuginnApp(
                 // the one agents call that grows without bound and must not run
                 // from a pocket.
                 vm.startStreamAgentsPolling(name)
+                // The send queue. Lifecycle-gated like the rest, and it only
+                // actually asks the daemon while something is waiting — see
+                // startTypingPolling.
+                vm.startTypingPolling(name)
                 onStopOrDispose {
                     vm.stopScreenPolling(); vm.clearSuggestions(); vm.refreshSessions()
+                    vm.stopTypingPolling()
                     // Every stream handle goes with the session: an offset into
                     // one agent's file means nothing in the next session's.
                     vm.stopStreamPolling()
@@ -1174,9 +1200,17 @@ fun HuginnApp(
                 suggestions = suggestions,
                 micGranted = voiceReady,
                 onRequestMic = { voicePermission.launch(Manifest.permission.RECORD_AUDIO) },
-                onAnswerPrompt = { vm.answerPrompt(name, it, screen?.prompt?.fingerprint) },
-                onAnswerMulti = { opts -> vm.answerPromptMulti(name, opts, screen?.prompt?.fingerprint) },
-                onAnswerDegraded = { vm.answerPrompt(name, it, screen?.ask?.fingerprint) },
+                quickActions = status?.quickActions,
+                onSelectionAction = { action, text ->
+                    vm.runSelectionAction(
+                        action = action,
+                        selection = text,
+                        draftKey = HuginnViewModel.sessionDraftKey(name),
+                        actions = status?.quickActions,
+                        onOpened = { newId -> vm.openChat(newId); dest = Dest.Chat(newId) },
+                    )
+                },
+                queueNote = com.silencelen.huginn.ui.SendQueue.note(typing[name]),
                 onForceResize = { vm.forceFit() },
                 onInterrupt = { vm.interruptSession(name) },
                 working = sessionWorking,
@@ -1548,7 +1582,7 @@ fun HuginnApp(
                         NavigationBarItem(
                             selected = section == 2,
                             onClick = { onTab(2) },
-                            icon = { Icon(Icons.Filled.MonitorHeart, contentDescription = null) },
+                            icon = { StatusIcon(sessionUsage) },
                             label = { Text("Status") },
                         )
                     }
@@ -1588,7 +1622,7 @@ fun HuginnApp(
                         NavigationRailItem(
                             selected = section == 2,
                             onClick = { onTab(2) },
-                            icon = { Icon(Icons.Filled.MonitorHeart, contentDescription = null) },
+                            icon = { StatusIcon(sessionUsage) },
                             label = { Text("Status") },
                         )
                         Spacer(Modifier.weight(1f))
@@ -1690,6 +1724,25 @@ fun HuginnApp(
                     }
                 }
             }
+        }
+    }
+}
+
+/**
+ * The Status destination's icon, with the session-usage fill under it.
+ *
+ * A COMPOSABLE AND NOT TWO COPIES: the bottom bar and the rail draw the same
+ * destination, and the one that got the line while the other did not is exactly
+ * the drift a shared composable is for. Draws the bare icon when there is no
+ * reading — an older daemon costs 2dp of nothing.
+ */
+@Composable
+private fun StatusIcon(fill: com.silencelen.huginn.ui.UsageFill?) {
+    Column(horizontalAlignment = androidx.compose.ui.Alignment.CenterHorizontally) {
+        Icon(Icons.Filled.MonitorHeart, contentDescription = null)
+        fill?.let {
+            Spacer(Modifier.height(2.dp))
+            com.silencelen.huginn.ui.UsageFillLine(it, Modifier.width(24.dp))
         }
     }
 }

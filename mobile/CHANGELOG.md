@@ -1,5 +1,26 @@
 # Huginn changelog
 
+## 3.0.2 — 2026-09-15
+
+- **How much of your session is left, under the Status icon.** A 2px line under the Status tab
+  shows the current 5-hour window for the account you are signed in to, tinted the same way the
+  headroom pill is. It is a different number from the pill — the pill reports the fullest limit
+  anywhere, usually the Fable week — and it draws nothing at all when the host has no reading yet.
+- **A question is now one line, not a card.** When Claude asks something, a session's Conversation
+  and Overview show "Claude is asking a question · Answer on Screen →" and the Screen tab carries a
+  dot; tap either to go and answer it there, where every kind of question works. The cards took a
+  third of the screen for five options and could only answer some of them. The lock-screen
+  notification buttons are unchanged.
+- **Long-press a message** for Explain · Execute · Quote · Ask in new chat · Copy. Each one puts
+  text in the composer for you to edit; none of them sends. "Ask in new chat" makes the chat and
+  stages it there. The wording is the host's (Settings → Quick actions), so this phone and the
+  desktop now say the same thing. You can still drag to select a phrase the usual way.
+- **A message sent into a busy session no longer looks lost.** With appd 3.0.3 it goes straight
+  to the pane, where Claude Code's own queue shows it and takes it up after the turn; the one thing
+  that still holds it is a dialog on screen, and then the composer says so — "Queued · waiting for
+  the dialog" with the count — until it lands. The sessions list marks a session that has one
+  waiting, and a delivery problem is shown in the host's own words.
+
 ## 3.0.1 — 2026-09-15
 
 - **The stream picker shows live agents; finished ones fold away.** It listed every subagent a

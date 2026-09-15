@@ -2,11 +2,10 @@ package com.silencelen.huginn.desktop.ui
 
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.widthIn
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.MaterialTheme
@@ -24,6 +23,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import com.silencelen.huginn.desktop.AppStore
 import com.silencelen.huginn.desktop.ui.common.Frame
+import com.silencelen.huginn.desktop.ui.common.ReadingPane
 import com.silencelen.huginn.ui.DevicesSection
 import kotlinx.coroutines.launch
 
@@ -75,9 +75,11 @@ fun DevicesPane(store: AppStore) {
         return
     }
 
-    Column(
-        Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(vertical = 12.dp),
-    ) {
+    // A reading pane: capped, centred, scrollbarred. The cards used to fillMaxWidth
+    // with no cap — ~600px of content beside ~600px of nothing at 1440, verbs
+    // pinned to the far edge — and with no horizontal inset at all they ran past
+    // the right edge of a 600px window.
+    ReadingPane(padding = PaddingValues(horizontal = 12.dp, vertical = 12.dp)) {
         DevicesSection(
             devices = devices,
             onStart = { d, mode -> scope.launch { store.startChatOn(d.id, mode) } },
