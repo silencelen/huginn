@@ -1,0 +1,13 @@
+# SYNTHESISED from CLI 2.1.258 strings — replace with a real capture at the
+# first live Fable exhaustion. Copy from spike native-rl §7 (the jte dialog:
+# consent / switch_default / cancelled, heading "Fable limit reached ·
+# continuing on <M> uses usage credits"). Geometry 80x24, no ANSI.
+
+────────────────────────────────────────────────────────────────────────────────
+ Fable limit reached · continuing on Fable 5.1 uses usage credits
+
+ ❯ 1. Continue on Fable 5.1 (uses usage credits)
+   2. Switch to Opus 5 for this session
+   3. Cancel
+
+ Enter to confirm · Esc to cancel
