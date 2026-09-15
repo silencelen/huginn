@@ -339,13 +339,20 @@ function detectPrompt(lines) {
 // throws the turn away, and because it writes nothing to the shared
 // `~/.claude/settings.json` that every concurrent session on this host reads.
 //
-// ⚠ THE HEADING IS THE GATE, exactly as it is for the model picker. "Fable" and
-// "usage credits" must appear on ONE line: a session discussing its own usage
-// limits will say both words in an answer, and a numbered list underneath such
-// an answer is not a dialog. Same-line is the copy's own shape ("Fable limit
-// reached · continuing on <M> uses usage credits").
+// ⚠ THE HEADING IS THE GATE, exactly as it is for the model picker, and it is
+// NARROW on purpose. A session discussing its own usage limits will say "Fable"
+// and "usage credits" in the same sentence — that is ordinary prose, and a
+// numbered list under it is not a dialog. So the gate is the copy's own shape,
+// both measured spellings (native-rl §7):
+//
+//     Fable limit reached · continuing on <M> uses usage credits, …
+//     <Model> now uses usage credits · …
+//
+// on ONE line. Verified against the prose case in pane.test.js, which mentions
+// both words and must NOT be recommended.
 const CONSENT_HEAD_RE = /\bfable\b/i;
 const CONSENT_CREDITS_RE = /\busage credits\b/i;
+const CONSENT_COPY_RE = /\blimit reached\b|\bnow uses usage credits\b/i;
 // The row that changes the model for this session only. Never the one that
 // mentions credits — "Continue on Fable 5.1 (uses usage credits)" also contains
 // the word "session" in some renderings, and recommending THAT row would be
@@ -360,7 +367,8 @@ const CONSENT_SESSION_ROW_RE = /\bfor this session\b/i;
  */
 function consentRecommended(plain, opts) {
   if (!Array.isArray(opts) || opts.length < 2) return null;
-  const isConsent = plain.some((l) => CONSENT_HEAD_RE.test(l) && CONSENT_CREDITS_RE.test(l));
+  const isConsent = plain.some((l) => CONSENT_HEAD_RE.test(l)
+    && CONSENT_CREDITS_RE.test(l) && CONSENT_COPY_RE.test(l));
   if (!isConsent) return null;
   const row = opts.find((o) => CONSENT_SESSION_ROW_RE.test(o.label) && !CONSENT_CREDITS_RE.test(o.label));
   return row ? row.number : null;

@@ -860,3 +860,85 @@ test('a numbered list Claude WROTE is not a picker', () => {
   assert.strictEqual(parseModelPicker(['Select model', '  1. Fable']), null,
     'one row is not a menu');
 });
+
+// ---- the Fable consent dialog ----------------------------------------------
+//
+// ⚠ THE FIXTURE IS SYNTHESISED, and it says so in its own first lines. Its copy
+// and its three rows come from the binary's strings (spike native-rl §7:
+// `consent` / `switch_default` / `cancelled`, heading "Fable limit reached ·
+// continuing on <M> uses usage credits") because the dialog appears only at a
+// real Fable exhaustion and this host has not had one to capture. Replace it
+// with a real capture at the first one; these assertions should survive it,
+// which is most of why they are written against structure rather than wording.
+//
+// It matters because an UNANSWERED consent dialog LOSES the turn — measured,
+// `{reason:"model_error"}`, "nothing was sent". So this is the one prompt where
+// failing to detect it costs work rather than merely costing a button.
+
+const CONSENT_FIXTURE = path.join(__dirname, 'fixtures', 'prompts', 'fable-consent-80.txt');
+const consentLines = () => fs.readFileSync(CONSENT_FIXTURE, 'utf8').split('\n');
+
+test('the Fable consent dialog is a prompt, with the session-only row recommended', () => {
+  const p = detectPrompt(consentLines());
+  assert.ok(p, 'an unanswered consent dialog must reach the clients as a card');
+  assert.deepEqual(p.options.map((o) => o.number), [1, 2, 3]);
+  assert.match(p.options[0].label, /uses usage credits/);
+  assert.match(p.options[1].label, /for this session/);
+  assert.equal(p.options[2].label, 'Cancel');
+  assert.equal(p.multiSelect, false);
+  // The recommendation is the row that neither spends money nor throws the turn
+  // away — and it is a NUMBER, because it is fed to the same /answer path a
+  // person's tap uses.
+  assert.equal(p.recommended, 2);
+  assert.match(p.question, /Fable limit reached/);
+});
+
+test('recommended is absent from every ordinary dialog', () => {
+  // A permission dialog, the shape the app draws a hundred times a day. Marking
+  // a row recommended here would put a hint on a question appd has no opinion
+  // about — and the two-minute auto-answer keys off exactly that field.
+  const permission = detectPrompt([
+    'Do you want to create hello.txt?',
+    '❯ 1. Yes',
+    '  2. Yes, and don\'t ask again',
+    '  3. No, and tell Claude what to do differently (esc)',
+  ]);
+  assert.ok(permission);
+  assert.equal('recommended' in permission, false);
+  // And the gate is the dialog's own COPY, not merely its vocabulary: a session
+  // discussing its limits says "Fable" and "usage credits" in one ordinary
+  // sentence, and a numbered list under that is an answer, not a dialog.
+  const talkingAboutIt = detectPrompt([
+    'Fable ran out, so the rest of this would be on usage credits. Options:',
+    '❯ 1. Switch to Opus for this session',
+    '  2. Keep going on Fable',
+  ]);
+  assert.ok(talkingAboutIt, 'it still parses as a prompt — the caret and the run are real');
+  assert.equal(talkingAboutIt.recommended, undefined,
+    'but it carries neither "limit reached" nor "now uses usage credits", so it is not the dialog');
+});
+
+test('the consent dialog answers through the ordinary fingerprint path', () => {
+  const p = detectPrompt(consentLines());
+  const fp = promptFingerprint(p);
+  assert.ok(fp, 'a fingerprint is what /answer validates the digit against');
+  // The recommendation is NOT part of the question's identity: appd changing its
+  // mind about which row to press must not invalidate a card already on a phone.
+  const { recommended, ...withoutIt } = p;
+  assert.equal(promptFingerprint(withoutIt), fp);
+  // Moving the caret onto the recommended row is not a different question either.
+  const moved = { ...p, options: p.options.map((o) => ({ ...o, selected: o.number === 2 })) };
+  assert.equal(promptFingerprint(moved), fp);
+});
+
+test('a narrower pane renders the same dialog, and it still parses', () => {
+  // The only thing 80 columns buys this fixture is the width of its box rule, so
+  // a 79-column pane must produce exactly the same verdict. Detection that
+  // depended on the rule width would fail on the owner's real terminal, which is
+  // whatever size the window happens to be.
+  const narrow = consentLines().map((l) => l.slice(0, 79));
+  const p = detectPrompt(narrow);
+  assert.ok(p, 'the dialog survives a one-column trim');
+  assert.equal(p.recommended, 2);
+  assert.deepEqual(p.options.map((o) => o.number), [1, 2, 3]);
+});
