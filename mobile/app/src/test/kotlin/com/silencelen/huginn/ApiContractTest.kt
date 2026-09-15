@@ -12,10 +12,14 @@ import com.silencelen.huginn.data.SendKeysResult
 import com.silencelen.huginn.data.SessionList
 import com.silencelen.huginn.data.Status
 import com.silencelen.huginn.data.TranscriptPage
+import com.silencelen.huginn.data.Watch
 import com.silencelen.huginn.ui.HeadroomRules
 import com.silencelen.huginn.ui.PlanFormat
 import com.silencelen.huginn.ui.StreamPicker
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.jsonArray
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
@@ -168,16 +172,21 @@ class ApiContractTest {
 
     // ------------------------------------------------- headroom (3.0.0)
     //
-    // ⚠ AUTHORED FROM THE WAVE 1 CONTRACT on 2026-09-15, not captured: appd
-    // 3.0.0 does not exist yet. Every fixture below is hand-written from the
-    // example JSON in `design/w1-headroom.md` and MUST be re-captured from the
-    // live daemon once 3.0.0 deploys. Until then these prove the client can
-    // decode what the contract promises — not that the daemon sends it.
+    // ⚠ ALIGNED TO THE DAEMON AT c356870 + the Wave 1 fix round on 2026-09-15,
+    // not captured: appd 3.0.0 is not deployed yet. They were re-derived FROM
+    // THE DAEMON SOURCE rather than from `design/w1-headroom.md`, which is what
+    // the first pass was written from and why fourteen fields drifted — every
+    // `at` on `/v1/headroom` is milliseconds, `agents[].id` is the BARE hex,
+    // `depth` and `status` can be null, `settings` is always present, and the
+    // refresh vocabulary is `refreshed`/`active_skipped`/… and never `ok`.
+    // RE-CAPTURE LIVE AFTER DEPLOY; until then these prove the client can decode
+    // what the daemon's code emits, not that a running daemon emits it.
 
     @Test
     fun `a plan names the account its bars belong to`() {
         val p = json.decodeFromString<Plan>(fixture("plan.json"))
         assertTrue("limits must decode", p.limits.isNotEmpty())
+        assertTrue("fetchedAt is `planCache.at = Date.now()`: millis", p.fetchedAt!! > 1_000_000_000_000L)
         assertNotNull("the whole point: whose usage this is", p.account)
         assertTrue("an email is what a person recognises", !p.account!!.email.isNullOrBlank())
         assertEquals("max_20x", p.account!!.subscriptionType)
@@ -200,7 +209,7 @@ class ApiContractTest {
         assertEquals("red", h.mode)
         assertEquals("weekly_fable", h.worst?.window)
         assertEquals(92.0, h.worst!!.percent, 0.001)
-        assertTrue("a laddered session must decode", h.sessions.any { it.ladder?.to == "opus" })
+        val laddered = h.sessions.first { it.ladder?.to == "opus" }
         assertTrue("a stalled session must decode", h.sessions.any { it.stalled })
         assertNotNull("STOP-FABLE is armed", h.sentinels["STOP-FABLE"])
         assertEquals("one spawn held by the gate", 1, h.held.size)
@@ -210,6 +219,48 @@ class ApiContractTest {
         assertEquals(92, h.settings!!.ladderPct)
         assertEquals(85, h.settings!!.headsUpPct)
         assertEquals(listOf("fable", "opus", "sonnet"), h.settings!!.ladder)
+        assertEquals("claude-fable-5-1", h.settings!!.defaultModel)
+        assertTrue("{pct}" in h.settings!!.headsUpText)
+
+        // ⚠ EVERY CLOCK ON THIS ROUTE IS MILLISECONDS. The fixture used to carry
+        // seconds beside the daemon's millis with no field-name tell, so the
+        // contract test agreed with itself and with nothing else.
+        assertTrue("serverTime is millis", h.serverTime > 1_000_000_000_000L)
+        assertTrue("ladder.at is millis", laddered.ladder!!.at > 1_000_000_000_000L)
+        assertTrue("headsUpAt is millis", laddered.headsUpAt!! > 1_000_000_000_000L)
+        assertTrue("held since is millis", h.held.single().since > 1_000_000_000_000L)
+
+        // The stall record: the clock Claude printed and the daemon's refusal.
+        val stalled = h.sessions.first { it.stalled }
+        val stall = stalled.stall
+        assertNotNull("a stalled session carries its whole record", stall)
+        assertEquals("weekly_fable", stall!!.window)
+        assertTrue("stall.resetsAt is millis", stall.resetsAt!! > 1_000_000_000_000L)
+        assertEquals("auto-resume is off for this session", stall.why)
+        assertTrue("the limit sentence carries its own clock", stall.text!!.contains("resets 10:10pm"))
+        assertEquals(
+            "stopped: the daemon's own reason, not our guess at one",
+            "auto-resume is off for this session",
+            HeadroomRules.sessionMark(
+                com.silencelen.huginn.data.SessionHeadroom(
+                    family = stalled.family, autoResume = stalled.autoResume, stalled = true,
+                ),
+                null, 1_789_460_000_000L, stall = stall,
+            ),
+        )
+        // Always present, both halves null when nothing was seen.
+        assertNotNull("nativeSwitch is always on the row", laddered.nativeSwitch)
+
+        // The arbiter's last action, by the names the daemon actually writes.
+        val last = h.arbiter!!["lastAction"]!!.jsonObject
+        assertEquals("ladder_down", last["type"]!!.jsonPrimitive.content)
+        assertEquals("w1kcore", last["name"]!!.jsonPrimitive.content)
+        assertEquals("opus", last["to"]!!.jsonPrimitive.content)
+
+        val reset = h.resets.single()
+        assertEquals("session", reset.window)
+        assertTrue("the DUE instant stays ISO", reset.resetsAt!!.startsWith("2026-"))
+        assertTrue("and the observation clock is millis", reset.at!! > 1_000_000_000_000L)
     }
 
     @Test
@@ -218,8 +269,36 @@ class ApiContractTest {
         assertEquals("ok", h.mode)
         assertTrue(h.sessions.isEmpty())
         assertTrue(h.held.isEmpty())
-        assertNull("settings are only sent when asked for", h.settings)
+        assertTrue(h.resets.isEmpty())
+        // ⚠ `settings` is ALWAYS emitted — `headroomPayload` has no branch that
+        // omits it. The fixture used to leave it out and this line used to say so.
+        assertNotNull("settings ride every answer", h.settings)
+        assertEquals("claude-fable-5-1", h.settings!!.defaultModel)
         assertNull("an unarmed sentinel is null, not absent", h.sentinels["STOP"])
+    }
+
+    /**
+     * ⚠ THE DECODE THAT KILLED THE WHOLE RESPONSE, and the reason there is now a
+     * watch fixture at all: `normalizeHeadroomState` seeds `lastResumeAt: null`,
+     * so on every host that had never resumed anything — every fresh install —
+     * the explicit null failed the `/v1/watch` decode outright, taking the watch
+     * loop, every notification decision and the headroom toasts with it.
+     */
+    @Test
+    fun `the watch digest decodes both a null lastResumeAt and a zero`() {
+        val never = json.decodeFromString<Watch>(fixture("watch-never-resumed.json"))
+        assertNull("nothing has ever resumed; that is not the epoch", never.headroom!!.lastResumeAt)
+        assertEquals("ok", never.headroom!!.mode)
+
+        val live = json.decodeFromString<Watch>(fixture("watch.json"))
+        assertEquals(java.lang.Long.valueOf(0L), live.headroom!!.lastResumeAt)
+        assertEquals(listOf("promptprobe"), live.headroom!!.stalled)
+        assertEquals("opus", live.headroom!!.laddered["andrev"])
+        // ⚠ ISO here, unlike `/v1/headroom`'s millisecond `stall.resetsAt`: the
+        // digest converts it so the notification never has to guess a unit.
+        assertTrue(live.headroom!!.stalls["promptprobe"]!!.startsWith("2026-"))
+        assertEquals(listOf("STOP-FABLE"), live.headroom!!.sentinels)
+        assertEquals(java.lang.Long.valueOf(214L), live.pushesSent)
     }
 
     @Test
@@ -257,23 +336,51 @@ class ApiContractTest {
         )
         assertTrue("a queued send must decode", list.sessions.any { it.pendingSends > 0 })
         assertTrue(
-            "a session with no Claude session gets no cell at all",
+            "a session with no Claude session gets a NULL cell",
             list.sessions.any { it.headroom == null },
         )
+        // ⚠ ON THE RAW JSON, because a model default cannot tell an absent key
+        // from a null one and the drift is exactly about presence: `pendingSends`
+        // is always a number and `headroom` is always a key (null when the
+        // session has no Claude session id yet).
+        val rows = json.parseToJsonElement(fixture("sessions.json"))
+            .jsonObject["sessions"]!!.jsonArray.map { it.jsonObject }
+        rows.forEach {
+            assertTrue("every row carries pendingSends", "pendingSends" in it)
+            assertTrue("every row carries a headroom key", "headroom" in it)
+        }
     }
 
     @Test
     fun `agents with all=1 carry the run id the picker groups on`() {
         val info = json.decodeFromString<AgentsInfo>(fixture("agents-all.json"))
-        assertEquals(3, info.agents.size)
+        assertEquals(5, info.agents.size)
         assertEquals(2, info.agents.count { it.workflowId != null })
-        assertTrue("a status word must decode", info.agents.all { !it.status.isNullOrBlank() })
-        assertTrue("agentType must decode", info.agents.all { !it.agentType.isNullOrBlank() })
+
+        // ⚠ THE BARE HEX. `/agents` strips the `agent-` prefix and the transcript
+        // route takes it either way; a fixture carrying the prefixed form let the
+        // contract test agree with a client that 400'd on every chip.
+        assertTrue(
+            "the list emits bare ids: ${info.agents.map { it.id }}",
+            info.agents.none { it.id.startsWith("agent-") },
+        )
+
+        // The two nulls a contract test has to carry, because they are the two
+        // that used to fail the decode of the WHOLE list.
+        val orphan = info.agents.first { it.status == "orphan" }
+        assertNull("an agent with no .meta.json has no depth", orphan.depth)
+        assertNull("and no type", orphan.agentType)
+        assertTrue("a cold agent has no status word at all", info.agents.any { it.status == null })
+        assertTrue("a failed agent is a real row", info.agents.any { it.status == "failed" })
 
         val items = StreamPicker.items(info.agents, 1_789_460_000L)
         assertEquals("main", items.first().key)
         assertEquals("one run header for the two members", 1, items.count { it.header })
         assertEquals("keys must be unique", items.size, items.map { it.key }.toSet().size)
+        assertTrue(
+            "the picker addresses an agent by the id it was given",
+            items.any { it.agentId == "af7ca864cee1939de" },
+        )
     }
 
     @Test
@@ -282,6 +389,11 @@ class ApiContractTest {
         assertTrue("expected events", p.events.isNotEmpty())
         assertTrue("nextOffset drives the agent cursor", p.nextOffset > 0)
         assertEquals("Opus 5", p.modelDisplay)
+        // The route echoes the id it VALIDATED, which is the prefixed form even
+        // when the bare one was asked for — so a page can be attributed to the
+        // chip it came from without the caller re-deriving anything.
+        assertEquals("agent-3f9c1a", p.agentId)
+        assertEquals("wf_01H9ZKQT", p.workflowId)
         val known = setOf("user", "assistant", "thinking", "tool", "tool_result", "system")
         p.events.forEach { assertTrue("unhandled event kind '${it.kind}'", it.kind in known) }
     }
@@ -304,9 +416,31 @@ class ApiContractTest {
             assertTrue("unknown freshness word '${it.freshness}'", it.freshness in words)
         }
         val expired = saved.accounts.first { it.freshness == "expired" }
-        assertEquals("invalid_grant", expired.refresh?.lastStatus)
+        // ⚠ THE DAEMON'S WORDS. `ok` and `invalid_grant` are emitted by nothing —
+        // `lib/oauth-refresh.js` writes `refreshed`, `not_needed`,
+        // `active_skipped`, `refresh_token_expired`, `known_dead_refresh_token`,
+        // `lock_busy`, `refresh_failed` and the rest.
+        val refreshVocab = setOf(
+            "refreshed", "not_needed", "active_skipped", "no_refresh_token", "not_refreshable",
+            "refresh_token_expired", "known_dead_refresh_token", "account_on_hold",
+            "lock_busy", "lock_timeout", "lock_error", "lock_compromised",
+            "refresh_failed", "no_such_profile",
+        )
+        saved.accounts.forEach {
+            assertTrue(
+                "unknown refresh word '${it.refresh?.lastStatus}'",
+                it.refresh?.lastStatus in refreshVocab,
+            )
+        }
+        assertEquals("refresh_token_expired", expired.refresh?.lastStatus)
+        assertNotNull("set once by an invalid_grant and carried forward", expired.refresh?.deadAt)
         assertNotNull("expiry drives the Refresh button", expired.expiresAt)
         assertNotNull("past this, only a re-login helps", expired.refreshTokenExpiresAt)
+        // Every refresh clock is millis, in the same object as the millisecond
+        // `expiresAt` it is computed from (nextAt = expiresAt − skew).
+        saved.accounts.mapNotNull { it.refresh?.lastAt }.forEach {
+            assertTrue("refresh.lastAt is millis", it > 1_000_000_000_000L)
+        }
     }
 
     @Test
