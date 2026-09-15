@@ -116,6 +116,11 @@ test('a window that was red, whose clock has passed and now reads low, has reset
   assert.equal(r.length, 1);
   assert.equal(r[0].window, 'weekly_fable');
   assert.equal(r[0].slug, 'a');
+  // ⚠ `seenAt` IS MILLISECONDS, like every other epoch this module emits. It was
+  // seconds, sitting in the same `resets[]` row as `at` (ms) on /v1/headroom —
+  // two epochs a thousand apart in one object, with no field-name tell.
+  assert.equal(r[0].seenAt, NOW);
+  assert.ok(r[0].seenAt > 1e11);
 });
 
 test('RESET BY CALENDAR, STILL RED ON THE WIRE is not a reset', () => {

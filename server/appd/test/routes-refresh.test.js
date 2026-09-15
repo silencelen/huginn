@@ -259,7 +259,9 @@ test('an inactive expired profile is refreshed in place, under the same slug', a
 
   const { status, body } = await api(`/v1/accounts/${UUID_IDLE}/refresh`, { method: 'POST' });
   assert.equal(status, 200);
-  assert.deepEqual(body, { ok: true, status: 'refreshed' });
+  assert.equal(body.ok, true);
+  assert.equal(body.status, 'refreshed');
+  assert.equal(body.slug, UUID_IDLE, 'the row this answer belongs to');
 
   const tokenPosts = posts.slice(before).filter((p) => p.url.includes('/oauth/token'));
   assert.equal(tokenPosts.length, 1, 'exactly one POST to the token endpoint');
@@ -360,7 +362,10 @@ test('invalid_grant marks the login dead and keeps every byte of the record', as
   try {
     const { status, body } = await api(`/v1/accounts/${UUID_IDLE}/refresh`, { method: 'POST' });
     assert.equal(status, 200);
-    assert.deepEqual(body, { ok: false, status: 'known_dead_refresh_token' });
+    assert.equal(body.ok, false);
+    assert.equal(body.status, 'known_dead_refresh_token');
+    assert.equal(body.slug, UUID_IDLE);
+    assert.ok(body.refresh && body.refresh.deadAt, 'the describe() block travels with the verdict');
   } finally { stubMode = 'ok'; }
 
   const after = profile(UUID_IDLE);
@@ -389,7 +394,9 @@ test('a rate-limited refresh backs off instead of retrying, and rotates nothing'
   stubMode = 'rate_limited';
   try {
     const { body } = await api(`/v1/accounts/${UUID_IDLE}/refresh`, { method: 'POST' });
-    assert.deepEqual(body, { ok: false, status: 'refresh_failed' });
+    assert.equal(body.ok, false);
+    assert.equal(body.status, 'refresh_failed');
+    assert.equal(body.slug, UUID_IDLE);
   } finally { stubMode = 'ok'; }
 
   assert.equal(posts.filter((p) => p.url.includes('/oauth/token')).length, before + 1,
@@ -398,6 +405,24 @@ test('a rate-limited refresh backs off instead of retrying, and rotates nothing'
   assert.equal(JSON.stringify(after.credentials), storedBefore);
   assert.equal(after.refresh.deadAt ?? null, null, 'a 429 is not a dead login');
   assert.ok(after.refresh.nextAt - Date.now() > 7 * HOUR, 'and it waits a token lifetime');
+});
+
+test('POST /refresh answers the shape the client declares: ok, slug, status, refresh', async () => {
+  // It used to answer `{ok, status}` only, so `AccountRefreshed.slug` and
+  // `.refresh` were always their defaults and a settings screen had to re-fetch
+  // /v1/accounts to learn when the next attempt was due — for the row it was
+  // already looking at.
+  const { status, body } = await api(`/v1/accounts/${UUID_LIVE}/refresh`, { method: 'POST' });
+  assert.equal(status, 200);
+  assert.equal(body.slug, UUID_LIVE, 'the row this answer belongs to');
+  // ⚠ THE REAL VOCABULARY, not the kdoc's invented one. These are the words the
+  // daemon actually emits; `ok` is about the profile being usable afterwards,
+  // not about a POST having happened.
+  assert.ok(['refreshed', 'not_needed', 'active_skipped'].includes(body.status), body.status);
+  assert.equal(body.ok, true);
+  assert.ok(body.refresh && typeof body.refresh === 'object', 'the describe() block travels too');
+  assert.equal(body.refresh.lastStatus, body.status);
+  assert.ok(Number.isFinite(body.refresh.lastAt));
 });
 
 test('refreshing an unknown slug is a 404, not a silent ok', async () => {

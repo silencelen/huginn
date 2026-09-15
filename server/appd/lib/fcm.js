@@ -17,6 +17,20 @@
 
 const { ServiceAccount } = require('./gtoken');
 
+/**
+ * A push's structured payload, as the one string FCM will carry.
+ *
+ * Returns '' for anything that is not a plain object or cannot be serialised: a
+ * malformed payload must cost the notification its buttons, never its delivery.
+ */
+function payloadJson(payload) {
+  if (!payload || typeof payload !== 'object' || Array.isArray(payload)) return '';
+  try {
+    const json = JSON.stringify(payload);
+    return json && json !== '{}' ? json : '';
+  } catch { return ''; }
+}
+
 const SCOPE = 'https://www.googleapis.com/auth/firebase.messaging';
 
 /**
@@ -52,7 +66,7 @@ class FcmSender {
    * @returns {Promise<{ok: boolean, dead: boolean, status: number, error: string|null}>}
    *   `dead` distinguishes "forget this token" from "try again later".
    */
-  async send(token, { title, text, kind, subject, options, fingerprint }, fetchImpl = fetch) {
+  async send(token, { title, text, kind, subject, options, payload, fingerprint }, fetchImpl = fetch) {
     return this.#post(fetchImpl, {
       message: {
         token,
@@ -67,6 +81,15 @@ class FcmSender {
           // and be answered without opening the app. JSON in a string because an
           // FCM data payload is string-to-string and nothing else.
           options: options && options.length ? JSON.stringify(options) : '',
+          // ⚠ CARRIED, NOT DROPPED. An option is a WORD; acting on it needs the
+          // subject of the action — which session, which model, what to put it
+          // back to. Without this the headroom notifications could offer an
+          // "Undo" button that the app had no way to aim: the four headroom_*
+          // pushes reached the phone as plain text with no deep link and no
+          // buttons. JSON in a string because an FCM data payload is
+          // string-to-string and nothing else; an unserialisable value is
+          // dropped rather than failing the send.
+          payload: payloadJson(payload),
           fingerprint: String(fingerprint ?? ''),
         },
         android: {
@@ -192,4 +215,4 @@ function trySender(keyPath, log = () => { }) {
   }
 }
 
-module.exports = { FcmSender, trySender, DEAD_TOKEN_CODES, FCM_TIMEOUT_MS, SCOPE };
+module.exports = { FcmSender, trySender, payloadJson, DEAD_TOKEN_CODES, FCM_TIMEOUT_MS, SCOPE };

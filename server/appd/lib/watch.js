@@ -79,8 +79,13 @@ function digest(sessions, chats, headroom) {
     // — the notification already on the phone is now wrong.
     stalls: mapOf(hr.stalls),
     laddered: mapOf(hr.laddered),
-    lastResumeAt: Number.isFinite(Number(hr.lastResumeAt)) && hr.lastResumeAt !== null
-      ? Number(hr.lastResumeAt) : null,
+    // ⚠ A NUMBER, NEVER null. `WatchHeadroom.lastResumeAt` is a non-nullable
+    // `Long` and nothing in the client tree sets `coerceInputValues`, so one
+    // explicit null here fails the whole /v1/watch decode — which is the watch
+    // loop, every notification decision and the headroom toasts, on a daemon
+    // that has simply never resumed anything yet. 0 is "never", and it reads as
+    // never on both sides.
+    lastResumeAt: Number(hr.lastResumeAt) || 0,
     lastLadderAt: Number(hr.lastLadderAt) || 0,
     sentinels: Array.isArray(hr.sentinels) ? [...hr.sentinels].map(String).sort() : [],
   };

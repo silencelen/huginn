@@ -4903,7 +4903,12 @@ function normalizeHeadroomState(o) {
     sentinels: src.sentinels && typeof src.sentinels === 'object' ? src.sentinels : { STOP: null, 'STOP-FABLE': null },
     arbiter: {
       lastSwitchAt: 0, lastLadderAt: 0, lastAction: null, why: 'not run yet',
-      switches: 0, lastIdleWarnAt: 0, lastResumeAt: null,
+      // ⚠ 0, NEVER null. The Kotlin client declares `lastResumeAt: Long = 0`
+      // and the Json config has no `coerceInputValues`, so an explicit null
+      // fails the WHOLE /v1/watch decode — the desktop watch loop, every
+      // notification decision and the headroom toasts are dead on a fresh
+      // daemon until something resumes once.
+      switches: 0, lastIdleWarnAt: 0, lastResumeAt: 0,
       ...(src.arbiter && typeof src.arbiter === 'object' ? src.arbiter : {}),
     },
   };
@@ -5481,7 +5486,14 @@ async function applyHeadroomAction(action, ctx) {
       const text = `${action.name} was at ${action.pct}% of the Fable week — it is on ${to} for this `
         + `session only. The host's default model is untouched.`;
       const push = await deliverPush({
-        kind: 'headroom_downgraded', title: `Moved ${action.name} to ${to}`, text, subject: action.name,
+        kind: 'headroom_downgraded',
+        title: `Moved ${action.name} to ${to}`,
+        text,
+        subject: action.name,
+        // The buttons, and what they need to act on. An "Undo" with no session
+        // name is a button the app cannot aim.
+        options: ['Undo', 'OK'],
+        payload: { session: action.name, to, from },
       });
       if (!push.sent) await deliverTelegram(`\u{1F4C9} Moved ${action.name} to ${to}\n${text}`);
       return;
@@ -5495,7 +5507,12 @@ async function applyHeadroomAction(action, ctx) {
       const text = `${action.name} was moved to ${action.from} by Claude Code when Fable ran out. `
         + 'The Fable week has reset — move it back?';
       const push = await deliverPush({
-        kind: 'headroom_ladder_up', title: 'Back to Fable?', text, subject: action.name,
+        kind: 'headroom_ladder_up',
+        title: 'Back to Fable?',
+        text,
+        subject: action.name,
+        options: ['Back to Fable', 'Stay'],
+        payload: { session: action.name, to: action.to },
       });
       if (!push.sent) await deliverTelegram(`\u{1F199} Back to Fable?\n${text}`);
       log(`headroom: offered ${action.name} a move back to fable`);
@@ -5695,7 +5712,15 @@ async function noteStall(rec, s, settings, activeWindows, now) {
   rec.stall.notifiedAt = now;
   const text = `${s.name} hit the ${windowWords(found.window)} limit · resets ${clockOf(found.resetsAt)}`;
   const push = await deliverPush({
-    kind: 'headroom_limit', title: 'Usage limit reached', text, subject: s.name,
+    kind: 'headroom_limit',
+    title: 'Usage limit reached',
+    text,
+    subject: s.name,
+    payload: {
+      session: s.name,
+      window: found.window || '',
+      resetsAt: found.resetsAt ? new Date(found.resetsAt).toISOString() : '',
+    },
   });
   if (!push.sent) await deliverTelegram(`\u{1F6D1} Usage limit reached\n${text}`);
   return records;
@@ -5763,7 +5788,11 @@ async function resumeSession(rec, s, settings, ctx) {
         const text = `${s.name} hit a usage limit that named no reset time, and none appeared. `
           + 'It is waiting for you — auto-resume has stopped trying.';
         const push = await deliverPush({
-          kind: 'headroom_limit', title: 'Auto-resume gave up', text, subject: s.name,
+          kind: 'headroom_limit',
+          title: 'Auto-resume gave up',
+          text,
+          subject: s.name,
+          payload: { session: s.name, window: stall.window || '' },
         });
         if (!push.sent) await deliverTelegram(`\u{1F6D1} Auto-resume gave up\n${text}`);
       }
@@ -5878,10 +5907,19 @@ async function applyResumes(ctx) {
   }
   for (const line of await resumeStalledChats(settings, ctx)) resumed.push(line);
   if (!resumed.length) return;
-  state.arbiter.lastResumeAt = Math.floor(now / 1000);
+  // MILLISECONDS, like every other epoch in this payload (lib/headroom's banner).
+  state.arbiter.lastResumeAt = now;
   const text = `Usage limit reset · resumed: ${resumed.join(', ')}`;
+  // The lines read "jtyper (typed)"; the SUBJECT is the bare name, so a
+  // notification about one session can be opened at that session. Several at
+  // once is one event and keeps the host-wide subject.
+  const first = String(resumed[0] || '').split(' ')[0];
   const push = await deliverPush({
-    kind: 'headroom_resumed', title: 'Usage limit reset', text, subject: 'headroom',
+    kind: 'headroom_resumed',
+    title: 'Usage limit reset',
+    text,
+    subject: resumed.length === 1 && first ? first : 'headroom',
+    payload: { sessions: resumed.map((l) => String(l).split(' ')[0]).join(',') },
   });
   if (!push.sent) await deliverTelegram(`\u{1F504} Usage limit reset\n${text}`);
   log(`headroom: ${text}`);
@@ -6167,7 +6205,12 @@ async function consentWatch(state, settings, sessions, now) {
     const text = `${s.name} was asked to keep going on Fable using usage credits and nobody answered — `
       + `huginn switched it for this session instead.`;
     const push = await deliverPush({
-      kind: 'headroom_downgraded', title: `Moved ${s.name} off Fable`, text, subject: s.name,
+      kind: 'headroom_downgraded',
+      title: `Moved ${s.name} off Fable`,
+      text,
+      subject: s.name,
+      options: ['Undo', 'OK'],
+      payload: { session: s.name, to: to || '', from: 'fable' },
     });
     if (!push.sent) await deliverTelegram(`\u{1F4C9} Moved ${s.name} off Fable\n${text}`);
   }
@@ -6317,7 +6360,7 @@ function headroomFacts() {
     stalled,
     stalls,
     laddered,
-    lastResumeAt: st.arbiter.lastResumeAt ?? null,
+    lastResumeAt: Number(st.arbiter.lastResumeAt) || 0,
     lastLadderAt: st.arbiter.lastLadderAt || 0,
     sentinels: armed,
   };
@@ -6387,7 +6430,11 @@ function headroomPayload() {
     resets: (st.resets || []).slice(-20),
     arbiter: st.arbiter,
     settings,
-    serverTime: Math.floor(now / 1000),
+    // ⚠ MILLISECONDS. It used to be the one seconds field in a payload whose
+    // `ladder.at`, `headsUpAt`, `accounts[].readAt` and `arbiter.last*At` are
+    // all ms — and a client treats this as the host clock, so getting it wrong
+    // makes every relative time in the payload wrong by a factor of a thousand.
+    serverTime: now,
   };
 }
 
@@ -6401,8 +6448,13 @@ function headroomPayload() {
 function autoswitchAliasView() {
   const st = hstate();
   const settings = loadHeadroomSettings();
+  // ⚠ SPREAD FIRST, THEN OVERRIDE `at`. Written the other way round the spread
+  // WON, so this alias silently changed an existing 2.x field from seconds to
+  // milliseconds — the one pre-existing field this compatibility shim touched.
+  // `AutoswitchEvent.at` has been seconds since 2.x and is what the shipped
+  // clients parse.
   const last = st.arbiter.lastAction && st.arbiter.lastAction.type === 'switch_account'
-    ? { at: Math.floor((st.arbiter.lastAction.at || 0) / 1000), ...st.arbiter.lastAction }
+    ? { ...st.arbiter.lastAction, at: Math.floor((st.arbiter.lastAction.at || 0) / 1000) }
     : null;
   return {
     enabled: !!settings.accountSwitch.enabled,
@@ -7056,7 +7108,17 @@ const server = http.createServer(async (req, res) => {
       // having happened: `not_needed` means the token is already good, and
       // `active_skipped` means the CLI is keeping it fresh itself.
       const ok = ['refreshed', 'not_needed', 'active_skipped'].includes(status);
-      return sendJson(res, 200, { ok, status });
+      // `slug` and the `refresh` block travel too: the client's model declares
+      // both, and without them a settings screen has to re-fetch /v1/accounts to
+      // find out when the next attempt is due — for the row it is already
+      // looking at. `describe()` is the same shape /v1/accounts renders.
+      const after = accounts.readProfile(slug);
+      return sendJson(res, 200, {
+        ok,
+        slug,
+        status,
+        refresh: after ? (oauthRefresh.refreshOf(after) || null) : null,
+      });
     }
 
     if ((m = p.match(/^\/v1\/accounts\/([a-z0-9-]{1,60})\/activate$/)) && req.method === 'POST') {
@@ -7476,27 +7538,42 @@ const server = http.createServer(async (req, res) => {
       if (!rec || !rec.ladder || !rec.ladder.to) return sendErr(res, 409, 'huginn has not moved this session');
       const back = rec.ladder.from;
       rec.humanSetModelAt = Date.now();
+      // The settle is what clears the record when the job only QUEUED. The
+      // picker must not open inside a running turn, so an undo pressed mid-turn
+      // waits for the boundary — and without this the session stayed marked as
+      // laddered after the move had actually happened.
+      const landed = () => {
+        const st2 = hstate();
+        const r2 = st2.sessions[st.sessionId];
+        if (!r2) return;
+        r2.ladder = null;
+        r2.family = back;
+        st2.arbiter.lastLadderAt = Date.now();
+        st2.arbiter.lastAction = { type: 'ladder_up', at: Date.now(), name, to: back, by: 'undo' };
+        log(`headroom: ${name} put back on ${back} by hand`);
+        saveHeadroomState(st2);
+      };
       const out = await enqueueJob(name, () => applyLadder(name, back), {
-        automated: false, origin: 'headroom', kind: 'model',
+        automated: false,
+        origin: 'headroom',
+        kind: 'model',
+        onSettle: (v) => { if (v && v.result && v.result.ok) landed(); },
       });
       const result = out.result || {};
-      if (result.ok) {
-        rec.ladder = null;
-        rec.family = back;
-        state.arbiter.lastLadderAt = Date.now();
-        state.arbiter.lastAction = { type: 'ladder_up', at: Date.now(), name, to: back, by: 'undo' };
-        log(`headroom: ${name} put back on ${back} by hand`);
-      }
       saveHeadroomState(state);
-      return sendJson(res, 200, {
-        ok: true,
-        to: back,
-        // `queued` when the session is mid-turn: the picker must never open
-        // inside a running turn, so the job waits for the boundary like any
-        // other automated send.
-        queued: !result.ok && !out.dropped,
-        delivery: result.delivery || (out.dropped ? `dropped: ${out.dropped}` : 'queued'),
-      });
+      // ⚠ `ok` IS "THE REQUEST WAS ACCEPTED", NOT "THE MODEL MOVED". A client
+      // that reported success on any 2xx announced "put back on its own model"
+      // for an undo that was still sitting in the queue — under the same toast
+      // key as the downgrade it claimed to have reversed. `applied` is the field
+      // that answers the question the reader is actually asking.
+      const applied = !!result.ok;
+      const queued = out.result == null && !out.dropped;
+      const body = { ok: true, applied, queued, to: back };
+      if (!queued) {
+        body.delivery = result.delivery
+          || (out.dropped ? `dropped: ${out.dropped}` : 'delivery_unconfirmed');
+      }
+      return sendJson(res, 200, body);
     }
 
     if ((m = p.match(/^\/v1\/sessions\/([A-Za-z0-9_][A-Za-z0-9_.-]{0,49})\/meta$/)) && req.method === 'POST') {
@@ -7583,11 +7660,18 @@ const server = http.createServer(async (req, res) => {
       // Decoded before matching, so a percent-encoded traversal is judged as
       // what it means rather than as the literal it arrived as. A malformed
       // escape is simply not a valid id.
-      let agentId = null;
-      try { agentId = decodeURIComponent(m[2]); } catch { agentId = null; }
-      if (!agentId || !/^agent-[0-9a-f]{6,32}$/.test(agentId)) {
-        return sendErr(res, 400, 'invalid agent id');
-      }
+      let raw = null;
+      try { raw = decodeURIComponent(m[2]); } catch { raw = null; }
+      // ⚠ BOTH SPELLINGS. `GET /agents` emits the BARE hex (the basename with
+      // `agent-` and `.jsonl` stripped) and the client hands that straight back
+      // here — so a route that took only the prefixed form 400'd every stream
+      // chip. A 400 is not the 404 the client's compat path watches for, so it
+      // did not even degrade: the strip showed the raw daemon error. Normalised
+      // to the prefixed form, which is what the file on disk is called and what
+      // this route has always echoed.
+      const idm = raw ? /^(?:agent-)?([0-9a-f]{6,32})$/.exec(raw) : null;
+      if (!idm) return sendErr(res, 400, 'invalid agent id');
+      const agentId = `agent-${idm[1]}`;
       if (!(await sessionExists(name))) return sendErr(res, 404, 'no such session');
       const st = readSessionState(name);
       if (!st || !st.transcript || !st.sessionId) {
@@ -7717,22 +7801,22 @@ const server = http.createServer(async (req, res) => {
         if (overflow) return sendErr(res, 413, overflow);
       }
       /**
-       * A dialog is up and this is a RAW KEY send.
+       * ⚠ RAW KEYS ARE NEVER REFUSED FOR A MODAL, and there is no gate here.
        *
-       * Keys are never queued — an Escape or a BTab is an interrupt and means
-       * nothing if it arrives at the next turn boundary — so there is nowhere to
-       * hold it, and a key pressed into a selector picks one of its rows. The
-       * jsonl cannot see a modal at all, which is why this reads the pane.
+       * A key send is a PERSON driving the pane — the Screen tab sends every
+       * keypress this way, plus its dedicated Escape and BTab buttons. Refusing
+       * them at a dialog took the terminal keyboard and the Interrupt button
+       * away at exactly the moment they are needed, since Escape, the arrows,
+       * BTab and the digits are the keys that ANSWER a dialog; and it told the
+       * reader to go to the Screen tab they were already on. It broke the
+       * shipped 2.88.0 client identically.
+       *
+       * The turn-boundary QUEUE below still applies to `text`, and only to
+       * `text`: a message absorbed into a running turn silently rewrites what
+       * that turn was told to do, and a message delivered into a modal is
+       * swallowed with no trace. Neither is true of a keystroke a person just
+       * pressed.
        */
-      if (rawKeys.length) {
-        const cap = await run('tmux', ['capture-pane', '-p', '-t', `=${name}:`]);
-        if (!cap.err) {
-          const { why } = typing.paneReadyForInput(cap.stdout.replace(/\n$/, '').split('\n'));
-          if (typing.paneBlocks(why)) {
-            return sendErr(res, 409, 'that session has a dialog open — answer it on the Screen tab');
-          }
-        }
-      }
       let queued = 0;
       let position = 0;
       let delivered = false;

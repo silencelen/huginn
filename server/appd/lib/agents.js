@@ -301,7 +301,15 @@ function listAgents(dir, nowSec, fsImpl = fs, max = 24, opts = {}) {
     // `workflow` stays because clients on 2.88.0 read that one.
     a.workflowId = a.workflow;
     a.agentType = (meta && typeof meta.agentType === 'string') ? meta.agentType : null;
-    a.depth = (meta && typeof meta.spawnDepth === 'number') ? meta.spawnDepth : null;
+    // ⚠ A NUMBER, NEVER null — unlike `status`, which the client declares
+    // nullable. `AgentRun.depth` is a non-nullable `Int` and nothing in the
+    // client tree sets `coerceInputValues`, so ONE orphan agent (a file with no
+    // `.meta.json`, which is the deliberate `orphan` case) failed the whole
+    // decode: the stream picker AND the pre-existing work sheet, which has
+    // called /agents since 2.x, both went blank. 0 is the right answer anyway —
+    // an agent whose depth is unknown was spawned by the session itself as far
+    // as anything downstream can tell.
+    a.depth = (meta && typeof meta.spawnDepth === 'number') ? meta.spawnDepth : 0;
     a.status = agentStatus({ fresh: a.active, meta, workflow: a.workflow, journal: j, id: a.id });
     delete a.file;
   }

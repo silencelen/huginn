@@ -73,7 +73,7 @@ const FABLE = JSON.stringify({ type: 'assistant', message: { model: 'claude-fabl
 const HUMAN = JSON.stringify({ type: 'user', message: { content: 'actually, wait' } });
 
 let tmp, stateDir, claudeDir, dataDir, headroomDir, token, daemon;
-let usageServer, acctServer, usageFile, shimLog, tmuxFail;
+let usageServer, acctServer, usageFile, shimLog, tmuxFail, pushLog, seededSwitchAt;
 const madeSessions = new Set();
 
 function sh(cmd, args) {
@@ -134,6 +134,21 @@ async function api(pathname, init = {}) {
   return { status: res.status, body };
 }
 const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+/** Every push the daemon sent, as the FCM data message the phone would see. */
+function pushes(kind = null) {
+  let raw = '';
+  try { raw = fs.readFileSync(pushLog, 'utf8'); } catch { return []; }
+  const out = [];
+  for (const line of raw.split('\n')) {
+    if (!line.trim()) continue;
+    let body;
+    try { body = JSON.parse(line); } catch { continue; }
+    const data = body && body.message && body.message.data;
+    if (!data || (kind && data.kind !== kind)) continue;
+    out.push(data);
+  }
+  return out;
+}
 /** Every tmux argv the DAEMON ran, for the "and typed nothing further" checks. */
 function tmuxCalls(sessionName) {
   const raw = fs.existsSync(shimLog) ? fs.readFileSync(shimLog, 'utf8') : '';
@@ -201,6 +216,41 @@ before(async () => {
   fs.writeFileSync(path.join(claudeDir, 'settings.json'),
     `${JSON.stringify({ model: 'claude-fable-5-1', effortLevel: 'xhigh' }, null, 2)}\n`);
 
+  // A SEEDED arbiter action, written before the daemon starts.
+  //
+  // `/v1/autoswitch` is a compatibility alias rebuilt from `arbiter.lastAction`,
+  // and `AutoswitchEvent.at` has been epoch SECONDS since 2.x. There is no way
+  // to make the arbiter switch accounts from this file (it has one login), and
+  // the unit that matters is not worth leaving untested — so the state it reads
+  // is written by hand.
+  seededSwitchAt = Date.now() - 90_000;
+  fs.writeFileSync(path.join(dataDir, 'headroom.json'), JSON.stringify({
+    v: 1,
+    mode: 'ok',
+    accounts: {},
+    resets: [],
+    sessions: {},
+    sentinels: { STOP: null, 'STOP-FABLE': null },
+    arbiter: {
+      lastSwitchAt: seededSwitchAt,
+      lastLadderAt: 0,
+      lastResumeAt: 0,
+      switches: 1,
+      lastIdleWarnAt: 0,
+      why: 'seeded',
+      lastAction: {
+        type: 'switch_account',
+        at: seededSwitchAt,
+        from: 'slug-a',
+        to: 'slug-b',
+        fromEmail: 'a@example.test',
+        toEmail: 'b@example.test',
+        fromPercent: 97,
+        toPercent: 4,
+      },
+    },
+  }, null, 2));
+
   usageFile = path.join(tmp, 'usage.json');
   setUsage({});
 
@@ -255,9 +305,47 @@ before(async () => {
     + 'fi\n'
     + `exec ${realTmux} "$@"\n`, { mode: 0o755 });
 
+  // ---- FCM, recorded rather than sent.
+  //
+  // The only way to see what a notification actually carries: the Telegram
+  // fallback is a line of text, so `kind`, `subject`, `options` and `payload` —
+  // everything that makes a notification actionable — exist ONLY on the push. A
+  // `--require`d fetch shim answers Google's two hosts and writes each send's
+  // body to a file. Nothing here reaches Google; the key is a throwaway.
+  pushLog = path.join(tmp, 'push-sends.jsonl');
+  fs.writeFileSync(pushLog, '');
+  const fetchShim = path.join(tmp, 'fetch-shim.js');
+  fs.writeFileSync(fetchShim, `'use strict';
+const fs = require('node:fs');
+const real = globalThis.fetch;
+globalThis.fetch = async (input, init) => {
+  const url = String(input && input.url ? input.url : input);
+  const json = (status, obj) => new Response(JSON.stringify(obj), {
+    status, headers: { 'content-type': 'application/json' },
+  });
+  if (url.includes('oauth2.googleapis.com')) return json(200, { access_token: 'stub', expires_in: 3600 });
+  if (url.includes('fcm.googleapis.com')) {
+    try { fs.appendFileSync(${JSON.stringify(pushLog)}, ((init && init.body) || '{}') + '\\n'); } catch {}
+    return json(200, { name: 'projects/x/messages/1' });
+  }
+  return real(input, init);
+};
+`);
+  const { privateKey } = crypto.generateKeyPairSync('rsa', { modulusLength: 2048 });
+  const fcmKey = path.join(tmp, 'fcm-service-account.json');
+  fs.writeFileSync(fcmKey, JSON.stringify({
+    type: 'service_account',
+    project_id: 'huginn-test',
+    client_email: 'test@huginn-test.iam.gserviceaccount.com',
+    private_key: privateKey.export({ type: 'pkcs8', format: 'pem' }).toString(),
+    token_uri: 'https://oauth2.googleapis.com/token',
+  }), { mode: 0o600 });
+
   daemon = spawn(process.execPath, [path.join(__dirname, '..', 'huginn-appd.js')], {
     env: {
       ...process.env,
+      NODE_OPTIONS: `${process.env.NODE_OPTIONS || ''} --require ${fetchShim}`.trim(),
+      HUGINN_FCM_KEY: fcmKey,
       PATH: `${shimDir}:${process.env.PATH}`,
       HG_TMUX_LOG: shimLog,
       HG_TMUX_FAIL: tmuxFail,
@@ -325,6 +413,30 @@ test('/v1/headroom answers the whole picture, with the account read from the stu
     assert.ok(key in body, `/v1/headroom must carry ${key}`);
   }
   assert.equal(body.settings.ladderPct, 92);
+});
+
+test('/v1/autoswitch keeps `last.at` in SECONDS, and loses none of the row', async () => {
+  // ⚠ SPREAD ORDER. This view was built as `{ at: <seconds>, ...lastAction }`, so
+  // the spread's own millisecond `at` WON — silently changing an existing 2.x
+  // field by a factor of a thousand. It is the one pre-existing field this
+  // compatibility alias touches, and neither shipped client would have said so.
+  const { body } = await api('/v1/autoswitch');
+  assert.ok(body.last, 'a switch_account lastAction is what this view renders');
+  assert.equal(body.last.at, Math.floor(seededSwitchAt / 1000),
+    `last.at must be epoch SECONDS, got ${body.last.at}`);
+  assert.ok(body.last.at < 1e11, 'and it must not be milliseconds');
+  // …and overriding `at` must not drop the rest of the row.
+  assert.equal(body.last.type, 'switch_account');
+  assert.equal(body.last.toEmail, 'b@example.test');
+  assert.equal(body.last.fromPercent, 97);
+  assert.equal(body.switches, 1);
+
+  // The same instant on /v1/headroom is MILLISECONDS, which is the split this
+  // alias exists to hide — and `serverTime` is ms now too.
+  const hr = (await api('/v1/headroom')).body;
+  assert.equal(hr.arbiter.lastAction.at, seededSwitchAt, 'headroom epochs are milliseconds');
+  assert.ok(hr.serverTime > 1e11, 'including serverTime, which used to be the odd one out');
+  assert.equal(typeof hr.arbiter.lastResumeAt, 'number', 'and lastResumeAt is a NUMBER, never null');
 });
 
 test('/v1/status carries the one-line summary the pill draws', async () => {
@@ -645,6 +757,45 @@ test('a /model that cannot be SUBMITTED leaves nothing in the composer', async (
     'and the composer must be cleared — /model is sitting in it');
 });
 
+test('the downgrade notification carries the buttons AND what they act on', async () => {
+  // ⚠ The Telegram fallback is a line of text. `kind`, `subject`, `options` and
+  // `payload` exist only on the PUSH — and without a payload an "Undo" button is
+  // a word the app cannot aim at anything. All four headroom_* pushes went out
+  // as plain text with no options and no payload.
+  const reg = await api('/v1/push/register', {
+    method: 'POST', body: JSON.stringify({ installId: 'hr-test-install', token: 'tok-hr-test', model: 'Pixel 9' }),
+  });
+  assert.equal(reg.status, 200, JSON.stringify(reg.body));
+
+  const name = mkPicker('pushd', [
+    { label: 'Fable', desc: 'Fable 5.1', current: true },
+    { label: 'Opus (1M context)', desc: 'Opus 5' },
+  ]);
+  const transcript = writeTranscript(name, [FABLE, TURN]);
+  writeState(name, { sessionId: `sid-${name}`, transcript });
+  setUsage({ session: 5, weekly_all: 10, weekly_fable: 96 });
+  await tick({ cooldownMs: 0 });
+  await until((b) => b.sessions.some((x) => x.name === name && x.ladder && x.ladder.delivery === 'confirmed'),
+    25_000, 'a confirmed ladder move');
+
+  const deadline = Date.now() + 10_000;
+  let sent = [];
+  for (;;) {
+    sent = pushes('headroom_downgraded').filter((d) => d.subject === name);
+    if (sent.length) break;
+    if (Date.now() > deadline) break;
+    await wait(200);
+  }
+  assert.ok(sent.length, `no headroom_downgraded push named ${name}: ${JSON.stringify(pushes())}`);
+  const d = sent[sent.length - 1];
+  assert.equal(d.subject, name, 'the tmux session name, so the app can open the thing it is about');
+  assert.deepEqual(JSON.parse(d.options), ['Undo', 'OK']);
+  const payload = JSON.parse(d.payload);
+  assert.equal(payload.session, name);
+  assert.equal(payload.to, 'opus');
+  assert.equal(payload.from, 'fable');
+});
+
 test('undo puts a laddered session back, and stops the arbiter arguing with it', async () => {
   const name = mkPicker('undo', [
     { label: 'Fable', desc: 'Fable 5.1', current: true },
@@ -660,6 +811,12 @@ test('undo puts a laddered session back, and stops the arbiter arguing with it',
   const r = await api(`/v1/sessions/${name}/headroom/undo`, { method: 'POST' });
   assert.equal(r.status, 200, JSON.stringify(r.body));
   assert.equal(r.body.to, 'fable');
+  // ⚠ `ok` IS "ACCEPTED", NOT "MOVED". A client reporting success on any 2xx
+  // announced "put back on its own model" for an undo still sitting in the
+  // queue — under the same toast key as the downgrade it claimed to reverse.
+  assert.equal(r.body.applied, true, 'this one ran: the session was at a turn boundary');
+  assert.equal(r.body.queued, false);
+  assert.equal(r.body.delivery, 'confirmed');
   const back = await until((b) => {
     const s = b.sessions.find((x) => x.name === name);
     return s && !s.ladder;
@@ -673,6 +830,37 @@ test('undo puts a laddered session back, and stops the arbiter arguing with it',
   await wait(1500);
   const after = (await api('/v1/headroom')).body.sessions.find((s) => s.name === name);
   assert.equal(after.ladder, null, 'a human model choice holds the ladder off');
+});
+
+test('an undo that only QUEUES says so, and clears the record when it lands', async () => {
+  const name = mkPicker('undoq', [
+    { label: 'Fable', desc: 'Fable 5.1', current: true },
+    { label: 'Opus (1M context)', desc: 'Opus 5' },
+  ]);
+  const transcript = writeTranscript(name, [FABLE, TURN]);
+  writeState(name, { sessionId: `sid-${name}`, transcript });
+  setUsage({ session: 5, weekly_all: 10, weekly_fable: 97 });
+  await tick({ cooldownMs: 0 });
+  await until((b) => b.sessions.some((x) => x.name === name && x.ladder && x.ladder.delivery === 'confirmed'),
+    25_000, 'the downgrade to undo');
+
+  // Mid-turn: the picker must not open inside a running turn, so the undo waits.
+  fs.appendFileSync(transcript, `${HUMAN}\n`);
+  const r = await api(`/v1/sessions/${name}/headroom/undo`, { method: 'POST' });
+  assert.equal(r.status, 200, JSON.stringify(r.body));
+  assert.equal(r.body.applied, false, 'nothing has moved yet');
+  assert.equal(r.body.queued, true);
+  assert.equal(r.body.to, 'fable');
+  assert.equal(r.body.delivery, undefined, 'there is no delivery to report on a job that has not run');
+
+  // The turn ends; the job runs; the record clears from the job's own settle.
+  fs.appendFileSync(transcript, `${TURN}\n`);
+  const back = await until((b) => {
+    const x = b.sessions.find((y) => y.name === name);
+    return x && !x.ladder;
+  }, 30_000, 'the queued undo to land');
+  assert.equal(back.sessions.find((x) => x.name === name).family, 'fable');
+  assert.match(capture(name), /Set model to Fable for this session only/);
 });
 
 test('undo refuses a session huginn has not moved', async () => {
