@@ -67,6 +67,10 @@ dependencies {
     // exits 0. The release script asserts the count for the same reason.
     testImplementation(kotlin("test"))
     testImplementation(libs.coroutines.test)
+    // A mock HTTP engine, so the session controller's cursor and merge rules can
+    // be driven against a real HuginnClient rather than a hand-written double
+    // that would agree with whatever this module believed the routes were.
+    testImplementation(libs.ktor.client.mock)
 }
 
 // Headless verification (`xvfb-run ./gradlew :app-desktop:run`) needs BOTH of

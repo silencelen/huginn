@@ -20,6 +20,10 @@ data class WatchBaseline(
     val sessions: Map<String, String?> = emptyMap(),
     val runs: Map<String, Long> = emptyMap(),
     val running: Set<String> = emptySet(),
+    /** Sessions that were sitting on a usage limit last time. */
+    val stalled: Set<String> = emptySet(),
+    /** Sessions the ladder had moved, name → the family they were on. */
+    val laddered: Map<String, String> = emptyMap(),
 )
 
 /** One thing to do about a digest. */
@@ -32,6 +36,33 @@ sealed interface NotifyDecision {
 
     /** The world moved on — take the notification down before the reader acts on it. */
     data class Withdraw(val key: String) : NotifyDecision
+
+    /**
+     * A session just stopped on a usage limit.
+     *
+     * The most valuable notification in this whole wave, because it is the one
+     * nothing else reports: a stalled session looks exactly like an idle one, and
+     * the owner's own account of the problem is work sitting untouched until
+     * morning after a cap that cleared at half past midnight.
+     *
+     * [resetsAt] is the daemon's instant, never a clock this client formatted.
+     */
+    data class LimitHit(val session: String, val resetsAt: String?) : NotifyDecision
+
+    /** One or more sessions picked themselves back up. One notice, not N. */
+    data class Resumed(val sessions: List<String>) : NotifyDecision
+
+    /**
+     * A live session was moved down the ladder.
+     *
+     * [session] is the undo TARGET — `POST /v1/sessions/:name/headroom/undo` — so
+     * the toast's button has everything it needs without a second lookup. That is
+     * why this carries a name rather than a count.
+     */
+    data class Downgraded(val session: String, val to: String) : NotifyDecision
+
+    /** A session was put back on the model it started on, its window having reset. */
+    data class LadderUp(val session: String) : NotifyDecision
 }
 
 data class NotifyPlan(
@@ -73,11 +104,22 @@ object NotifyRules {
     ): NotifyPlan {
         val runsNow = watch.chats.mapValues { it.value.finishedRuns }
         val runningNow = watch.chats.filterValues { it.running }.keys
+        // Hoisted rather than dereferenced repeatedly: `watch.headroom` is a
+        // nullable property of another module and is not smart-cast across the
+        // reads below (gotcha 13 — the `r.lastRun.copy(...)` shape).
+        val hr = watch.headroom
+        val stalledNow = hr?.stalled?.toSet().orEmpty()
+        val ladderedNow = hr?.laddered.orEmpty()
         val next = WatchBaseline(
             seeded = true,
             sessions = watch.sessions,
             runs = runsNow,
             running = runningNow,
+            // A daemon with no headroom block leaves both EMPTY, which is the same
+            // baseline it has always had: nothing appears, nothing disappears, and
+            // no headroom decision is ever reached.
+            stalled = stalledNow,
+            laddered = ladderedNow,
         )
 
         // Absorbed silently. Note this happens even with notifications DISABLED:
@@ -99,6 +141,15 @@ object NotifyRules {
             if (watch.sessions[name] != ATTENTION) {
                 decisions += NotifyDecision.Withdraw(sessionKey(name))
             }
+        }
+
+        // A session that stopped being stalled is one the reader must not still be
+        // looking at a "hit the limit" for: it resumed, it was typed into, or it
+        // ended. Filed under the SESSION key, so opening the session takes it down
+        // like any other — and so a session that stalls, resumes and stalls again
+        // cannot leave two notices standing.
+        for (name in previous.stalled) {
+            if (name !in stalledNow) decisions += NotifyDecision.Withdraw(limitKey(name))
         }
 
         // --- attention edges
@@ -125,8 +176,51 @@ object NotifyRules {
             }
         }
 
+        // --- headroom edges, all four of them EDGES rather than states: the
+        // digest is a snapshot, and every one of these would otherwise re-fire on
+        // every poll for as long as the condition lasted.
+        if (enabled) {
+            val stalls = hr?.stalls.orEmpty()
+            for (name in stalledNow) {
+                if (name in previous.stalled) continue
+                decisions += NotifyDecision.LimitHit(name, stalls[name])
+            }
+
+            // ONE notice for however many resumed. Three sessions coming back
+            // together is one event — the window reset — and three toasts about it
+            // is the same news three times.
+            val resumed = previous.stalled.filter { it !in stalledNow && watch.sessions.containsKey(it) }
+            if (resumed.isNotEmpty()) decisions += NotifyDecision.Resumed(resumed.sorted())
+
+            for ((name, to) in ladderedNow) {
+                // A CHANGE of rung counts as well as an arrival: fable → opus →
+                // sonnet is two moves, and only reporting the first would leave
+                // the reader believing a session is still on opus.
+                if (previous.laddered[name] == to) continue
+                decisions += NotifyDecision.Downgraded(name, to)
+            }
+
+            for (name in previous.laddered.keys) {
+                if (name in ladderedNow) continue
+                // Gone from the digest entirely is not a ladder-up: the session
+                // ended, and "back on Fable" about something that no longer exists
+                // is a notification with nowhere to go.
+                if (!watch.sessions.containsKey(name)) continue
+                decisions += NotifyDecision.LadderUp(name)
+            }
+        }
+
         return NotifyPlan(decisions, next)
     }
+
+    /**
+     * The key a limit notice is filed under.
+     *
+     * The SESSION key, deliberately — the same one an attention notice uses — so
+     * that opening the session takes both down and a session cannot end up with a
+     * "needs you" and a "hit the limit" that outlive each other.
+     */
+    fun limitKey(name: String): String = sessionKey(name)
 
     /** The daemon's word for "this session is waiting on a human". */
     const val ATTENTION: String = "attention"

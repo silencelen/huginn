@@ -4,6 +4,19 @@ package com.silencelen.huginn.desktop.notify
 data class AnswerOption(val number: Int, val label: String)
 
 /**
+ * A button that is not an answer to a pane question.
+ *
+ * [AnswerOption] carries a NUMBER because it selects a row of a dialog Claude
+ * Code is showing, and it is refused without a fingerprint for the same reason.
+ * "Undo that downgrade" is not that shape: there is no pane, no rows, and no
+ * question — so it travels as a finished `huginn://` URL that this app built
+ * itself, which is the only thing a toast backend can activate anyway.
+ *
+ * Still BOUNDED: a fixed label and a URL from [Activations], never free text.
+ */
+data class ToastAction(val label: String, val url: String)
+
+/**
  * A notification, as the router describes it — before any platform has had an
  * opinion about what it can actually show.
  */
@@ -32,6 +45,11 @@ data class NotifyRequest(
      * the host will type into whatever is on the pane. See [Activations.parse].
      */
     val fingerprint: String? = null,
+    /**
+     * Buttons that activate a URL rather than answering a question. Rendered only
+     * where [Notifier.supportsActions] is true, like [options].
+     */
+    val actions: List<ToastAction> = emptyList(),
 )
 
 /**

@@ -994,6 +994,26 @@ data class WatchHeadroom(
     val mode: String = "ok",
     /** Session names currently stalled on a limit. */
     val stalled: List<String> = emptyList(),
+    /**
+     * The same sessions, each against the instant its window resets.
+     *
+     * [stalled] alone says WHICH sessions are sitting on a limit, which is enough
+     * to decide that a notification is due but not enough to write it: "hit the
+     * limit" with no reset time is the one sentence that leaves the reader with
+     * the question they opened it to answer. A name missing from here is still
+     * stalled — the notice is just shorter.
+     */
+    val stalls: Map<String, String?> = emptyMap(),
+    /**
+     * Sessions the ladder has MOVED, name → the family they are running on now.
+     *
+     * [lastLadderAt] is a clock, and a clock cannot name a session or say what it
+     * was moved to — so an Undo built from it would have nothing to undo. This map
+     * is what makes "downgraded" an event with a subject: a name appearing is a
+     * move down, a name leaving is a move back up, and the value is the words the
+     * toast says.
+     */
+    val laddered: Map<String, String> = emptyMap(),
     val lastResumeAt: Long = 0,
     val lastLadderAt: Long = 0,
     /** Armed sentinel names, e.g. `STOP-FABLE`. */

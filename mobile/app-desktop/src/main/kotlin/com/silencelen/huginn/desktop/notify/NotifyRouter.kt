@@ -1,6 +1,7 @@
 package com.silencelen.huginn.desktop.notify
 
 import com.silencelen.huginn.data.PanePrompt
+import com.silencelen.huginn.ui.HeadroomRules
 import com.silencelen.huginn.data.Watch
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
@@ -79,6 +80,68 @@ class NotifyRouter(
                 )
 
                 is NotifyDecision.Attention -> scope.launch { attention(decision.session, gen, enrich) }
+
+                // --- headroom. All plain news except the downgrade, which is the
+                // only one of the four the reader may want to reverse.
+
+                is NotifyDecision.LimitHit -> notifier().post(
+                    NotifyRequest(
+                        key = NotifyRules.limitKey(decision.session),
+                        title = "${decision.session} hit the usage limit",
+                        // The instant is the daemon's; the countdown is arithmetic
+                        // on two instants, which is the only time statement this
+                        // client is allowed to make. See HeadroomRules.
+                        body = HeadroomRules.shortUntil(decision.resetsAt, System.currentTimeMillis())
+                            ?.let { "Resets in $it" }
+                            ?: "Waiting for the window to reset",
+                        // NEWS, not "needs you". Nothing is being asked of the
+                        // reader — the daemon will pick it back up — and an urgent
+                        // toast that stays on screen for something nobody has to
+                        // act on is how the urgent ones stop being believed.
+                        urgent = false,
+                        target = NavTarget(TargetKind.SESSIONS, decision.session),
+                    )
+                )
+
+                is NotifyDecision.Resumed -> notifier().post(
+                    NotifyRequest(
+                        key = RESUMED_KEY,
+                        title = "Usage limit reset",
+                        body = "Resumed: " + decision.sessions.joinToString(", ").take(180),
+                        urgent = false,
+                        target = NavTarget(TargetKind.SESSIONS, decision.sessions.first()),
+                    )
+                )
+
+                is NotifyDecision.Downgraded -> {
+                    val target = NavTarget(TargetKind.SESSIONS, decision.session)
+                    notifier().post(
+                        NotifyRequest(
+                            key = "ladder:${decision.session}",
+                            title = "${decision.session} moved to ${decision.to}",
+                            body = "Its Fable window ran out. Undo puts it back and stops huginn moving it again.",
+                            urgent = false,
+                            target = target,
+                            // BOUNDED, and exactly two: put it back, or accept it.
+                            // No free text ever reaches a toast — the owner's rule
+                            // for answering from a lock screen or a notification.
+                            actions = listOf(
+                                ToastAction("Undo", Activations.undoUrl(decision.session)),
+                                ToastAction("OK", Activations.ackUrl("ladder:${decision.session}")),
+                            ),
+                        )
+                    )
+                }
+
+                is NotifyDecision.LadderUp -> notifier().post(
+                    NotifyRequest(
+                        key = "ladder:${decision.session}",
+                        title = "${decision.session} is back on its own model",
+                        body = "Its window reset.",
+                        urgent = false,
+                        target = NavTarget(TargetKind.SESSIONS, decision.session),
+                    )
+                )
             }
         }
     }
@@ -126,5 +189,12 @@ class NotifyRouter(
     companion object {
         /** How many freshly-waiting sessions still get their question fetched. */
         const val PROMPT_FETCH_CAP: Int = 3
+
+        /**
+         * One key for every resume, because a window resetting is ONE event
+         * however many sessions came back with it — and a second reset later
+         * replaces the first notice rather than stacking on it.
+         */
+        const val RESUMED_KEY: String = "headroom:resumed"
     }
 }
