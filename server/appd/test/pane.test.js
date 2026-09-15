@@ -6,7 +6,9 @@
 
 const { test } = require('node:test');
 const assert = require('node:assert');
-const { screenHash, stripAnsi, previewLines, detectPrompt, extractLoginUrl, parseStatusLine, loginPaneState } = require('../lib/pane');
+const fs = require('node:fs');
+const path = require('node:path');
+const { screenHash, stripAnsi, previewLines, detectPrompt, extractLoginUrl, parseStatusLine, loginPaneState, parseModelPicker } = require('../lib/pane');
 
 const ESC = '\u001B';
 const BEL = '\u0007';
@@ -814,4 +816,47 @@ test('prose piled under a numbered list is still not a prompt', () => {
     'The remaining question is whether to rotate the key.',
     'I will wait for your call on that.',
   ]), null);
+});
+
+// ---- the /model picker ------------------------------------------------------
+//
+// The ladder's only in-session lever. `/model <name>` always rewrites the host
+// default (measured); the picker's `s` key writes nothing — so the daemon has to
+// read this dialog off the pane and walk it.
+
+test('the /model picker is read by LABEL, with the ✔ and ❯ rows named', () => {
+  // Verbatim from a live pane (spike native-rl §3), kept as a fixture because
+  // the column layout is what the parser actually depends on.
+  const lines = fs.readFileSync(
+    path.join(__dirname, 'fixtures', 'prompts', 'model-picker-80.txt'), 'utf8',
+  ).replace(/\n$/, '').split('\n');
+  const rows = parseModelPicker(lines);
+  assert.ok(rows, 'the picker must be recognised');
+  assert.equal(rows.length, 5);
+  assert.deepEqual(rows.map((r) => r.label),
+    ['Default (recommended)', 'Opus (1M context)', 'Fable', 'Sonnet', 'Haiku']);
+  // The Default row names no model of its own: its DESCRIPTION says "Opus 5 with
+  // 1M context" only because that is today's host default, and reading a family
+  // off it would make "move this session to opus" land on the wrong row.
+  assert.equal(rows[0].family, null);
+  assert.deepEqual(rows.slice(1).map((r) => r.family), ['opus', 'fable', 'sonnet', 'haiku']);
+  const current = rows.find((r) => r.current);
+  assert.equal(current.label, 'Sonnet', '✔ marks the model this SESSION is on');
+  const cursor = rows.find((r) => r.cursor);
+  assert.equal(cursor.label, 'Sonnet', '❯ marks where the highlight sits');
+  assert.equal(cursor.n, 4);
+});
+
+test('a numbered list Claude WROTE is not a picker', () => {
+  // The heading is the gate. Without it, an answer that happens to be a list
+  // would read as a dialog and the ladder would start pressing keys into a live
+  // conversation.
+  assert.strictEqual(parseModelPicker([
+    'Here are the models I would consider:',
+    '  1. Fable — most capable',
+    '  2. Opus — everyday',
+    '  3. Sonnet — routine',
+  ]), null);
+  assert.strictEqual(parseModelPicker(['Select model', '  1. Fable']), null,
+    'one row is not a menu');
 });

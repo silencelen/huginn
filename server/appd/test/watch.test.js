@@ -113,3 +113,39 @@ test('the snippet is payload, not a change signal', () => {
   const b = digest([], [{ id: 'c1', running: true, snippet: 'still thinking' }]);
   assert.equal(a.hash, b.hash);
 });
+
+// ---- headroom ---------------------------------------------------------------
+//
+// These ARE alert facts: a limit arming a sentinel, a session stalling, a resume
+// landing and the model ladder moving are all things the phone is meant to hear
+// about with the app closed. They go INSIDE the hash for that reason — and the
+// function rebuilds from an explicit field list, so a fact added upstream that
+// is not named in both places evaporates without failing anything.
+
+const idle = { mode: 'ok', stalled: [], lastResumeAt: null, lastLadderAt: 0, sentinels: [] };
+
+test('a sentinel arming wakes a watching phone', () => {
+  const armed = { ...idle, sentinels: ['STOP-FABLE'] };
+  assert.notStrictEqual(digest([], [], idle).hash, digest([], [], armed).hash);
+});
+
+test('the headroom mode and the ladder are change signals, and survive the digest', () => {
+  assert.notStrictEqual(digest([], [], idle).hash, digest([], [], { ...idle, mode: 'red' }).hash);
+  assert.notStrictEqual(digest([], [], idle).hash, digest([], [], { ...idle, lastLadderAt: 5 }).hash);
+  assert.notStrictEqual(digest([], [], idle).hash, digest([], [], { ...idle, stalled: ['dev'] }).hash);
+  const d = digest([], [], { ...idle, mode: 'red', sentinels: ['STOP'] });
+  assert.equal(d.headroom.mode, 'red');
+  assert.deepEqual(d.headroom.sentinels, ['STOP']);
+});
+
+test('an idle headroom hashes exactly like no headroom argument at all', () => {
+  // A caller that has not wired it up yet (and an older daemon's two-argument
+  // call) must not read as a change on every poll.
+  assert.strictEqual(digest([], []).hash, digest([], [], idle).hash);
+  assert.strictEqual(digest([], []).hash, digest([], [], null).hash);
+  // Order is not a signal: the sentinel set is a set.
+  assert.strictEqual(
+    digest([], [], { ...idle, sentinels: ['STOP', 'STOP-FABLE'] }).hash,
+    digest([], [], { ...idle, sentinels: ['STOP-FABLE', 'STOP'] }).hash,
+  );
+});
