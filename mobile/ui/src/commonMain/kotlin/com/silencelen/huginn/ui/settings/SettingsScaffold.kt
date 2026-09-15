@@ -219,17 +219,28 @@ fun SettingsSearchField(query: String, onQuery: (String) -> Unit, modifier: Modi
     }
 }
 
-/** Categories, or results, depending on whether anything was typed. */
+/**
+ * Categories, or results, depending on whether anything was typed.
+ *
+ * PUBLIC because the desktop does not draw the two panes with [SettingsScaffold]
+ * — its list pane is the animated, clipped pane behind the seam, with the notch,
+ * Ctrl+B and the under-700dp fold hanging off it, so it hosts this half itself
+ * and hosts [SettingsCategoryPage] in its detail column. Shared rather than
+ * copied: "a hit that opens onto a hidden row" and "a result row that looks
+ * different on the two clients" are the same class of drift, and the search
+ * result list is exactly the part both shells were told to render identically.
+ */
 @Composable
-private fun SettingsListPane(
+fun SettingsListPane(
     shown: SettingsScaffoldRules.Shown,
     selected: String?,
     summaryOf: (SettingsCategory) -> String?,
     onOpenCategory: (String) -> Unit,
     onOpenHit: (SettingsSearch.Hit) -> Unit,
+    modifier: Modifier = Modifier,
 ) {
     val scroll = rememberScrollState()
-    Column(Modifier.fillMaxSize().verticalScroll(scroll)) {
+    Column(modifier.fillMaxSize().verticalScroll(scroll)) {
         if (shown.searching) {
             Text(
                 if (shown.hits.isEmpty()) "No settings match that."
