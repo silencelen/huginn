@@ -47,6 +47,26 @@ import com.silencelen.huginn.data.QuickActions
  * @param onSave handed the edited templates, `rev` included. The caller does the
  *   PATCH and owns the outcome sentence.
  */
+/**
+ * THE ONE BLURB. Both shells draw the editor and both used to introduce it, so
+ * the phone printed a sentence about quick actions and then the editor printed
+ * another one directly under it — and the editor's said "when you right-click
+ * selected text", which is not a gesture this phone has. Held here as a constant
+ * so the duplicate cannot come back as a paraphrase: a shell that wants to say
+ * something about quick actions says THIS.
+ *
+ * ⚠ PLATFORM-NEUTRAL. `:ui` is shared: the desktop right-clicks, the phone
+ * long-presses, and neither gesture may be named here. [QuickActionsBlurbTest]
+ * greps this string for the words.
+ */
+const val QUICK_ACTIONS_BLURB: String =
+    "What Explain, Execute and Ask in a new chat put in the composer when you select text and " +
+        "pick an action. {selection} is the text you selected. Nothing is ever sent — it is " +
+        "staged for you to edit."
+
+/** Gesture words a shared blurb may not use. One of them was in it. */
+val PLATFORM_GESTURE_WORDS: List<String> = listOf("right-click", "right click", "long-press", "long press", "tap")
+
 @Composable
 fun QuickActionsEditor(
     actions: QuickActions,
@@ -66,12 +86,7 @@ fun QuickActionsEditor(
         modifier.widthIn(max = SETTINGS_READING_WIDTH).fillMaxWidth(),
         verticalArrangement = Arrangement.spacedBy(2.dp),
     ) {
-        EditorNote(
-            "What Explain, Execute and Ask in a new chat put in the composer when you right-click " +
-                "selected text. {selection} is the text you selected. Nothing is ever sent — it is " +
-                "staged for you to edit.",
-            maxLines = 4,
-        )
+        EditorNote(QUICK_ACTIONS_BLURB, maxLines = 4)
 
         Field("Explain", explain) { explain = it }
         Field("Execute", execute) { execute = it }
@@ -82,6 +97,11 @@ fun QuickActionsEditor(
         EditorNote(
             "Quote always frames the selection as a > block; the lead-in sits above it.",
             Modifier.padding(top = 4.dp),
+            // THREE, because EditorNote's default is one and this sentence does
+            // not fit on one line of a phone: it ellipsised at "Quote always
+            // frames…", which turns the explanation of the only non-obvious field
+            // in this editor into three words and a dot-dot-dot.
+            maxLines = 3,
         )
 
         Button(
@@ -111,7 +131,11 @@ private fun Field(label: String, value: String, onChange: (String) -> Unit) {
         label = { Text(label) },
         minLines = 2,
         maxLines = 4,
-        modifier = Modifier.padding(top = 10.dp).widthIn(min = 280.dp, max = 560.dp),
+        // CAP BEFORE FILL, then fill. Without the fill the field is only as wide
+        // as its content asks for, so "Quote lead-in (optional, no {selection})"
+        // — the longest label of the four — overflowed the box it labels on a
+        // phone. The cap is what keeps it a readable measure on a desktop.
+        modifier = Modifier.padding(top = 10.dp).widthIn(min = 280.dp, max = 560.dp).fillMaxWidth(),
     )
 }
 
