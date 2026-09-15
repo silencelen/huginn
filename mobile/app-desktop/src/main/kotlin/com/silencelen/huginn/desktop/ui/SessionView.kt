@@ -24,6 +24,9 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.Send
+import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material3.Button
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CircularProgressIndicator
@@ -76,6 +79,8 @@ import androidx.compose.runtime.rememberCoroutineScope
 import com.silencelen.huginn.data.DraftBook
 import com.silencelen.huginn.data.HuginnClient
 import com.silencelen.huginn.data.QuickActions
+import com.silencelen.huginn.desktop.Composer
+import com.silencelen.huginn.desktop.SendQueue
 import com.silencelen.huginn.desktop.AppStore
 import com.silencelen.huginn.desktop.SessionController
 import com.silencelen.huginn.desktop.SessionTab
@@ -90,7 +95,11 @@ import com.silencelen.huginn.desktop.attach.appendDropped
 import com.silencelen.huginn.desktop.attach.attachmentDropTarget
 import com.silencelen.huginn.desktop.attach.composeMessage
 import com.silencelen.huginn.desktop.attach.rememberAttachmentController
+import com.silencelen.huginn.desktop.ui.common.ComposerAction
+import com.silencelen.huginn.desktop.ui.common.ComposerChips
+import com.silencelen.huginn.desktop.ui.common.ComposerFrame
 import com.silencelen.huginn.desktop.ui.common.DeskType
+import com.silencelen.huginn.desktop.ui.common.PaneScrollbar
 import com.silencelen.huginn.desktop.ui.common.SelectionVerbs
 import com.silencelen.huginn.desktop.ui.common.WithTranscriptSelectionMenu
 import com.silencelen.huginn.desktop.ui.common.rememberSelectionVerbs
@@ -935,6 +944,10 @@ private fun ConversationTab(
                     }
                 }
             }
+            // Over the transcript, beside the SelectionContainer rather than
+            // inside it. Same `listState` the follower drives, so the wheel, the
+            // keyboard and every scrollToNewest keep working exactly as they did.
+            PaneScrollbar(listState)
         }
         // Scrolling back to read something older must not look like the app has
         // stopped following: without this the reader cannot tell "nothing new" from
@@ -1299,15 +1312,13 @@ private fun Composer(
     ) {
         // ONLY when one is set. The empty-state invitation moved into the attach
         // button's chooser; what stays is the mark that a whole page is riding
-        // out with this message.
-        pads.firstOrNull { it.id == padRefId }?.let { chosen ->
-            Row(Modifier.fillMaxWidth().padding(bottom = 4.dp)) {
-                ScratchpadRefBadge(pad = chosen, pads = pads, onSelect = onPadRef)
-            }
-        }
-        pending?.let {
-            Row(Modifier.fillMaxWidth().padding(bottom = 6.dp)) {
-                AttachChip(it) { attachments.clear() }
+        // out with this message — beside the file chip on ONE wrapping line, so
+        // two attachments cost one band rather than two.
+        val chosenPad = pads.firstOrNull { it.id == padRefId }
+        if (chosenPad != null || pending != null) {
+            ComposerChips {
+                chosenPad?.let { ScratchpadRefBadge(pad = it, pads = pads, onSelect = onPadRef) }
+                pending?.let { AttachChip(it) { attachments.clear() } }
             }
         }
         failure?.let {
@@ -1321,33 +1332,58 @@ private fun Composer(
                 TextButton(onClick = { attachments.dismissFailure() }) { Text("dismiss") }
             }
         }
-        Row(
-            Modifier.fillMaxWidth(),
-            verticalAlignment = Alignment.Bottom,
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
-            AttachButton(
-                pads = pads,
-                padRefId = padRefId,
-                onPadRef = onPadRef,
-                onPickFile = { picking = true },
-            )
-    // Same TextFieldValue as the chat composer, for the same reason: Shift+Enter
-    // has to insert the newline itself, and appending to the String is silently
-    // discarded by the field's own editing buffer. See ChatView for the detail.
-    var field by remember { mutableStateOf(TextFieldValue(draft)) }
-    if (field.text != draft) {
-        field = TextFieldValue(draft, TextRange(draft.length))
-    }
+        // Same TextFieldValue as the chat composer, for the same reason: Shift+Enter
+        // has to insert the newline itself, and appending to the String is silently
+        // discarded by the field's own editing buffer. See ChatView for the detail.
+        var field by remember { mutableStateOf(TextFieldValue(draft)) }
+        if (field.text != draft) {
+            field = TextFieldValue(draft, TextRange(draft.length))
+        }
+        // What the daemon is still holding for this session, if anything. The poll
+        // that feeds it starts on a queued send and stops when the queue drains —
+        // see [SessionController.noteSend].
+        val queueState by controller.sendQueue.collectAsState()
+
+        // The shape is [ComposerFrame], shared with the chat composer — including
+        // the cap-before-fill that used to live on the line below, which is now one
+        // decision for both boxes instead of two that had already disagreed.
+        ComposerFrame(
+            attach = {
+                AttachButton(
+                    pads = pads,
+                    padRefId = padRefId,
+                    onPadRef = onPadRef,
+                    onPickFile = { picking = true },
+                )
+            },
+            actions = { layout ->
+                // Esc is how you stop Claude at the keyboard, so with nothing typed
+                // that is the action this composer should offer — and only then,
+                // since a Stop sitting beside half a written instruction is a
+                // keystroke away from throwing the instruction away.
+                if (working && draft.isBlank()) {
+                    ComposerAction(
+                        layout,
+                        "Interrupt",
+                        Icons.Filled.Stop,
+                        { controller.sendKeys(listOf("Escape")) },
+                        danger = true,
+                    )
+                }
+                ComposerAction(
+                    layout,
+                    "Send",
+                    Icons.AutoMirrored.Filled.Send,
+                    submit,
+                    enabled = canSend,
+                    prominent = true,
+                )
+            },
+        ) { fieldModifier, layout ->
             OutlinedTextField(
                 value = field,
                 onValueChange = { field = it; onDraft(it.text); exitRecallIfDiverged(recall, it.text) },
-                // Cap before fill. `fillMaxWidth` hands DOWN fixed constraints and a
-                // `widthIn` inside those can only coerce into them, so the cap would be
-                // swallowed and a composer meant to stop at a reading measure would
-                // span the whole window.
-                modifier = Modifier.widthIn(max = 900.dp).weight(1f)
-                    .heightIn(min = 56.dp, max = 160.dp)
+                modifier = fieldModifier
                     // ENTER SENDS, Shift+Enter is the newline — the same binding as
                     // the chat composer, because two boxes in one app where Enter
                     // means opposite things is worse than either choice. Ctrl+Enter
@@ -1381,19 +1417,41 @@ private fun Composer(
                             else -> false
                         }
                     },
-                placeholder = { Text("Send to the pane…  (Enter to send · Shift+Enter for a new line)") },
+                // ONE LINE, ALWAYS — see the same block in ChatView. This one
+                // wrapped to four lines at 768 wide, for an empty box.
+                placeholder = {
+                    Text(
+                        Composer.placeholder(
+                            "Send to the pane…",
+                            "Enter to send · Shift+Enter for a new line",
+                            layout,
+                        ),
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                },
                 textStyle = MaterialTheme.typography.bodyMedium,
             )
-            // Esc is how you stop Claude at the keyboard, so with nothing typed
-            // that is the action this composer should offer — and only then, since
-            // a Stop sitting beside half a written instruction is a keystroke away
-            // from throwing the instruction away.
-            if (working && draft.isBlank()) {
-                OutlinedButton(onClick = { controller.sendKeys(listOf("Escape")) }) {
-                    Text("Interrupt", color = MaterialTheme.colorScheme.error)
-                }
-            }
-            Button(onClick = submit, enabled = canSend) { Text("Send") }
+        }
+        // ⚠ WHAT HAPPENED TO THE MESSAGE. A send into a busy session is HELD by
+        // the daemon until the turn ends, and this composer empties on press — so
+        // with nothing said here the screen is identical to a message that was
+        // dropped, which is exactly how the owner read it ("it just disappears").
+        // The sentence is [SendQueue.line], a pure function of the daemon's own
+        // answer, and it clears itself when the queue drains.
+        SendQueue.line(queueState)?.let { note ->
+            Text(
+                note,
+                style = DeskType.rowMeta,
+                color = if (queueState.lastError.isNullOrBlank()) {
+                    MaterialTheme.colorScheme.onSurfaceVariant
+                } else {
+                    MaterialTheme.colorScheme.error
+                },
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.fillMaxWidth().padding(top = 6.dp),
+            )
         }
     }
 }
