@@ -179,6 +179,51 @@ class SessionControllerTest {
         scope.cancel()
     }
 
+    /**
+     * ⚠ THE OTHER FAILURE, and it is NOT the compat one.
+     *
+     * A 400 means the daemon HAS the route and rejected this id — so the strip
+     * stays alive with every other chip on it, and the daemon's own sentence
+     * goes on the strip where the reader will see it. Flipping
+     * `streamsSupported` here would take the whole picker away over one bad id,
+     * and the old code did neither: it showed the error only while nothing had
+     * ever loaded, so a reader who had already opened one agent got a chip that
+     * silently did nothing at all.
+     */
+    @Test
+    fun `a 400 keeps the strip alive and puts the daemon's words on it`() = runTest {
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.Unconfined)
+        var failAgent = true
+        val c = controller(scope) { path ->
+            when {
+                "/agents/" in path && failAgent ->
+                    HttpStatusCode.BadRequest to """{"error":"invalid agent id"}"""
+                "/agents/" in path -> HttpStatusCode.OK to page("agent one", nextOffset = 50)
+                else -> HttpStatusCode.OK to page("main line", nextOffset = 100)
+            }
+        }
+
+        c.selectStream("agent-aaa")
+        assertFalse(c.pollAgentOnce("agent-aaa"))
+        assertTrue(c.streamsSupported.value, "the route exists — it said so by answering 400")
+        assertEquals("invalid agent id", c.streamNote.value, "the daemon's text, verbatim")
+
+        // And the note is shown even once a page IS on screen: it sits on the
+        // strip, not in the conversation, so it costs the reader nothing.
+        failAgent = false
+        assertTrue(c.pollAgentOnce("agent-aaa"))
+        assertEquals(1, c.agentPage.value?.events?.size)
+        assertNull(c.streamNote.value, "a read that lands clears it again")
+
+        failAgent = true
+        assertFalse(c.pollAgentOnce("agent-aaa"))
+        assertEquals("invalid agent id", c.streamNote.value)
+        assertTrue(c.streamsSupported.value)
+        assertEquals(1, c.agentPage.value?.events?.size, "and the page already read stays put")
+
+        scope.cancel()
+    }
+
     @Test
     fun `selecting Main drops the agent page rather than leaving it behind`() = runTest {
         val scope = CoroutineScope(SupervisorJob() + Dispatchers.Unconfined)

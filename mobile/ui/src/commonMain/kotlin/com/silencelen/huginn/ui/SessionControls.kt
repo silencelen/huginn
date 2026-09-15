@@ -83,8 +83,16 @@ fun SessionStateMark(
     nowMs: Long,
     modifier: Modifier = Modifier,
     resetClock: String? = null,
+    /**
+     * The session's own stall record from `/v1/headroom`, when the caller has
+     * read it. It carries the clock Claude Code printed and the daemon's reason
+     * for not resuming — neither of which is on the `/v1/sessions` cell, which
+     * is why this mark used to say "resumes on reset" to a session the daemon
+     * had already given up on.
+     */
+    stall: com.silencelen.huginn.data.HeadroomStall? = null,
 ) {
-    val words = HeadroomRules.sessionMark(session, status, nowMs, resetClock) ?: return
+    val words = HeadroomRules.sessionMark(session, status, nowMs, resetClock, stall) ?: return
     // A stalled session is the urgent one; a laddered one is a fact about how it
     // is running. Same two tints the meters use for the same two ideas.
     val stalled = session?.stalled == true
