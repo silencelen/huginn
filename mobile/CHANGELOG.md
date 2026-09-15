@@ -15,10 +15,11 @@
   text in the composer for you to edit; none of them sends. "Ask in new chat" makes the chat and
   stages it there. The wording is the host's (Settings → Quick actions), so this phone and the
   desktop now say the same thing. You can still drag to select a phrase the usual way.
-- **A message sent into a busy session no longer looks lost.** It was always queued and delivered
-  when Claude finished its turn; now the composer says so — "Queued · will send when Claude
-  finishes its turn" — until it lands, the sessions list marks a session that has one waiting, and
-  a delivery problem is shown in the host's own words.
+- **A message sent into a busy session no longer looks lost.** With appd 3.0.3 it goes straight
+  to the pane, where Claude Code's own queue shows it and takes it up after the turn; the one thing
+  that still holds it is a dialog on screen, and then the composer says so — "Queued · waiting for
+  the dialog" with the count — until it lands. The sessions list marks a session that has one
+  waiting, and a delivery problem is shown in the host's own words.
 
 ## 3.0.1 — 2026-09-15
 

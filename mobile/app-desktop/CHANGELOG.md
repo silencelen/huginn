@@ -11,6 +11,29 @@
   dot; click either to go and answer it there, where every kind of question works. The cards took
   290-330dp for a five-option question — most of a narrow window's transcript — and could only
   answer some of them.
+- **The window adapts to its width.** Snap it to the side of a screen and the list pane folds
+  itself away rather than taking three quarters of what is left — the notch and Ctrl+B still bring
+  it back, and widening the window hands back exactly the seam you had dragged. Below about 560dp
+  of composer, Send, Interrupt and Attach become their own icons on a line under the text box, so
+  the box keeps its width instead of growing tall to fit a sentence about itself. The command
+  palette fits the window it is centred in. The window can no longer be dragged into a shape it
+  cannot draw.
+- **Every scrolling pane has a scrollbar.** Settings, Status, Devices, Rounds, the chat and session
+  lists and both transcripts now say how far down they are and let you drag there — drawn in the
+  app's own palette rather than Compose's default black, which on this theme was a dark smudge on
+  a dark ground.
+- **Settings, Status, Devices and Rounds read like pages.** They stop at a reading measure and
+  centre, the way the phone's already do, instead of setting 135 characters on one line across a
+  1440px window. At narrow widths "Add login" drops below its field rather than being crushed into
+  a vertical stripe, and the headroom thresholds put their label on its own line so the slider
+  stays a slider.
+- **The new-session and rename dialogs have a visible field.** It was a tinted box on a container
+  of the same tone, with no border, no label and no placeholder — you could not see where to type.
+- **A message held by a dialog says so.** With appd 3.0.3 a message sent into a busy session goes
+  straight to the pane; the one thing that still holds it is a dialog on screen. The composer now
+  carries a line saying it is queued and how many are waiting, clears it when the queue drains,
+  shows the daemon's own error verbatim if one appears, and the session's row in the list carries
+  an "n queued" mark.
 
 ## 1.0.1
 
