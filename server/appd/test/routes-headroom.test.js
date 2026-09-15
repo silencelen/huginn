@@ -24,6 +24,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const crypto = require('node:crypto');
+const h = require('../lib/headroom');
 
 // PORT ALLOCATION — every file here binds a real socket and `node --test` runs
 // the files CONCURRENTLY, so these ranges must not overlap. They did once: two
@@ -261,6 +262,9 @@ before(async () => {
       HUGINN_APPD_OAUTH_ACCOUNT_URL: `http://127.0.0.1:${acctServer.address().port}/account`,
       // One second, so a test can change the stubbed percentages and see them.
       HUGINN_APPD_PLAN_TTL_MS: '1000',
+      // The consent backstop waits two minutes in production. One millisecond
+      // here, so the second pass over an unanswered dialog acts.
+      HUGINN_APPD_CONSENT_GRACE_MS: '1',
       // A downgrade sends a notification; nothing may leave this host.
       HUGINN_APPD_TELEGRAM_SCRIPT: '',
     },
@@ -351,6 +355,43 @@ test('a valid PATCH is persisted and answered with the FULL settings', async () 
   const onDisk = JSON.parse(fs.readFileSync(path.join(dataDir, 'headroom-settings.json'), 'utf8'));
   assert.equal(onDisk.stopFablePct, 80);
   await tick({ stopFablePct: 88 });      // back to the default for later tests
+});
+
+test('a STORED settings file is validated field by field, not merely parsed', async () => {
+  // The file is hand-operable by design ("the operator must be able to arm one by
+  // hand"), and it is also what a crash half-writes. It used to be loaded as the
+  // BASE of validateSettings, which skips every per-field rule for a key that is
+  // not in the PATCH — so nothing could fail, and `/clear` on disk was typed into
+  // every stalled session at the next reset.
+  const file = path.join(dataDir, 'headroom-settings.json');
+  const good = JSON.parse(fs.readFileSync(file, 'utf8'));
+  const D = h.defaults();
+  const load = async () => (await api('/v1/headroom')).body.settings;
+  try {
+    // Only the ONE field is wrong, and every cross-field ordering still holds —
+    // so nothing but a per-field rule can catch it.
+    fs.writeFileSync(file, JSON.stringify({ ...good, resumePhrase: '/clear', stopFablePct: 70 }, null, 2));
+    const one = await load();
+    assert.notEqual(one.resumePhrase, '/clear',
+      'a stored slash command loaded straight into the resume path');
+    assert.equal(one.resumePhrase, D.resumePhrase);
+    assert.equal(one.stopFablePct, D.stopFablePct,
+      'a file that does not validate falls back to the DEFAULTS, not to half of itself');
+
+    // A non-string is the other half: `child.stdin.end(99)` throws inside the
+    // paste, which is a resume that fails with a stack trace rather than a phrase.
+    fs.writeFileSync(file, JSON.stringify({ ...good, resumePhrase: 99 }, null, 2));
+    const two = await load();
+    assert.equal(typeof two.resumePhrase, 'string');
+    assert.equal(two.resumePhrase, D.resumePhrase);
+
+    // And the heads-up note travels the same pane path, so the same rule applies.
+    fs.writeFileSync(file, JSON.stringify({ ...good, headsUpText: '/clear {pct}' }, null, 2));
+    const three = await load();
+    assert.equal(three.headsUpText, D.headsUpText);
+  } finally {
+    fs.writeFileSync(file, JSON.stringify(good, null, 2));
+  }
 });
 
 // ----------------------------------------------------------------- plan.account
@@ -603,4 +644,51 @@ test('/v1/autoswitch still answers its old shape, from the new settings', async 
   assert.deepEqual(onDisk.accountSwitch, { enabled: true, threshold: 90, margin: 20 });
   assert.equal((await api('/v1/autoswitch')).body.enabled, true);
   await api('/v1/autoswitch', { method: 'POST', body: JSON.stringify({ enabled: false }) });
+});
+
+// ------------------------------------------------------- the consent backstop
+
+test('the consent auto-answer RE-READS the pane immediately before the digit', async () => {
+  // ⚠ The digit is typed at a pane, not routed through /answer — so the ONLY
+  // thing standing between "appd answered the dialog" and "appd sent the number
+  // 2 as a chat message" is a capture taken immediately before the keystroke.
+  // The abort itself is a microsecond-wide race no test can drive; what a test
+  // CAN pin down is that the second read happens at all, with nothing between it
+  // and the key.
+  const name = `${PFX}-consent`;
+  const fixture = path.join(__dirname, 'fixtures', 'prompts', 'fable-consent-80.txt');
+  sh('tmux', ['new-session', '-d', '-s', name, '-c', tmp, '-x', '120', '-y', '40',
+    `sh -c 'cat ${fixture}; sleep 600'`]);
+  madeSessions.add(name);
+  writeState(name, { state: 'attention', sessionId: `sid-${name}` });
+  try {
+    const isDigit = (a) => a.includes('send-keys') && a.includes('-l') && a[a.length - 1] === '2';
+    const deadline = Date.now() + 20_000;
+    let calls = [];
+    for (;;) {
+      calls = tmuxCalls(name);
+      if (calls.some(isDigit)) break;
+      if (Date.now() > deadline) {
+        throw new Error(`the consent dialog was never answered. tmux calls:\n${calls.map((c) => c.join(' ')).join('\n')}`);
+      }
+      await api('/v1/headroom/settings', { method: 'PATCH', body: '{}' });
+      await wait(250);
+    }
+    // The call IMMEDIATELY before the keystroke must be the verification read.
+    // It is distinguishable from the decision read by shape: captureScreen asks
+    // for escapes and geometry (`capture-pane -p -e`, after a display-message),
+    // the verification is a bare `capture-pane -p` with nothing between it and
+    // the key.
+    const at = calls.findIndex(isDigit);
+    const prev = calls[at - 1] || [];
+    assert.ok(prev.includes('capture-pane') && !prev.includes('-e'),
+      `the digit was pressed against a stale capture; the call before it was: ${prev.join(' ')}`);
+    // And it really did answer: a pressed digit is followed by its Enter.
+    assert.ok(calls.slice(at + 1).some((a) => a.includes('send-keys') && a.includes('Enter')),
+      'the digit must be submitted, not merely typed');
+  } finally {
+    try { sh('tmux', ['kill-session', '-t', `=${name}`]); } catch { /* gone */ }
+    madeSessions.delete(name);
+    try { fs.unlinkSync(path.join(stateDir, name)); } catch { /* gone */ }
+  }
 });

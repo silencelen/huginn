@@ -27,7 +27,7 @@ const { execFile, spawn } = require('node:child_process');
 const {
   screenHash, previewLines, detectPrompt, promptFingerprint, multiToggleDigits,
   parseSpinner, parseStatusExtras, spinnerIsCompacting,
-  extractLoginUrl, parseStatusLine, loginPaneState, parseModelPicker,
+  extractLoginUrl, parseStatusLine, loginPaneState, parseModelPicker, sameConsent,
 } = require('./lib/pane');
 const { parseAskSidecar, fuseAskPrompt, degradedAskCard, parsePlanSidecar } = require('./lib/ask');
 const { readTranscript, liveActivity } = require('./lib/transcript');
@@ -3410,6 +3410,39 @@ function deliverOrphanedQueues() {
   }
 }
 
+/**
+ * A TEST-ONLY endpoint override, accepted only when it cannot leak a credential.
+ *
+ * All three of these URLs are handed a live secret: two send the access token in
+ * an `Authorization` header and the third sends the REFRESH token in its body.
+ * They exist so a route suite can stand up a local stub — and nothing else — but
+ * an env knob that redirects them is an env knob that exfiltrates the owner's
+ * login to whatever host a leftover drop-in names, with no symptom in the log.
+ *
+ * So: `https:` (the transport the real endpoints use), or a LOOPBACK host on any
+ * scheme (which is what a stub is, and cannot leave the machine). Anything else
+ * is refused at startup with the reason and the real URL is used instead. An
+ * accepted override logs one line too — "no production path sets it" is a claim
+ * the log should be able to settle.
+ */
+function testUrl(name, fallback) {
+  const v = process.env[name];
+  if (!v) return fallback;
+  let u = null;
+  try { u = new URL(v); } catch { u = null; }
+  if (!u) {
+    log(`${name}: refused (not a URL) — using the real endpoint`);
+    return fallback;
+  }
+  const loopback = u.hostname === '127.0.0.1' || u.hostname === 'localhost' || u.hostname === '::1';
+  if (u.protocol !== 'https:' && !loopback) {
+    log(`${name}: refused (${u.protocol}//${u.host}) — only https: or a loopback host is accepted; using the real endpoint`);
+    return fallback;
+  }
+  log(`${name}: TEST OVERRIDE active -> ${u.protocol}//${u.host}${u.pathname}`);
+  return v;
+}
+
 // Claude Code's own config directory. Injectable for exactly one reason: the
 // route suites need a credentials file and an OAuth lock of their own, and a
 // test that locked or rewrote the real ~/.claude would reach straight into the
@@ -3425,7 +3458,15 @@ const CLAUDE_DIR = process.env.HUGINN_APPD_CLAUDE_DIR || path.join(os.homedir(),
  * and silently reach api.anthropic.com through the other. No production path
  * sets it.
  */
-const USAGE_URL = process.env.HUGINN_APPD_USAGE_URL || 'https://api.anthropic.com/api/oauth/usage';
+const USAGE_URL = testUrl('HUGINN_APPD_USAGE_URL', 'https://api.anthropic.com/api/oauth/usage');
+/**
+ * The OAuth identity endpoint, in ONE place, on the same test-only terms.
+ * Read at startup rather than per call so an override is refused — and logged —
+ * once, at a moment somebody is looking, instead of silently on every refresh.
+ */
+const OAUTH_ACCOUNT_URL = testUrl('HUGINN_APPD_OAUTH_ACCOUNT_URL', 'https://api.anthropic.com/api/oauth/account');
+/** The token endpoint. This one carries the REFRESH token in its body. */
+const OAUTH_TOKEN_URL = testUrl('HUGINN_APPD_OAUTH_TOKEN_URL', oauthRefresh.TOKEN_URL);
 const CREDENTIALS_PATH = path.join(CLAUDE_DIR, '.credentials.json');
 const CLAUDE_CONFIG_PATH = `${CLAUDE_DIR.replace(/\/+$/, '')}.json`;
 const accounts = new AccountStore(path.join(DATA_DIR, 'accounts'), CREDENTIALS_PATH, CLAUDE_CONFIG_PATH);
@@ -3465,8 +3506,9 @@ async function resolveIdentity(creds) {
   const timer = setTimeout(() => ac.abort(), 10_000);
   try {
     // Overridable ONLY so a route suite can answer this itself instead of
-    // reaching api.anthropic.com with a fixture token. No production path sets it.
-    const url = process.env.HUGINN_APPD_OAUTH_ACCOUNT_URL || 'https://api.anthropic.com/api/oauth/account';
+    // reaching api.anthropic.com with a fixture token. Validated at startup by
+    // testUrl; no production path sets it.
+    const url = OAUTH_ACCOUNT_URL;
     const resp = await fetch(url, {
       headers: {
         Authorization: `Bearer ${token}`,
@@ -3576,7 +3618,7 @@ let refreshBusy = false;
  * local stub at it; there is no production path that sets this.
  */
 async function postRefreshToken(body, opts = {}) {
-  const url = process.env.HUGINN_APPD_OAUTH_TOKEN_URL || oauthRefresh.TOKEN_URL;
+  const url = OAUTH_TOKEN_URL;
   const ac = new AbortController();
   const timer = setTimeout(() => ac.abort(), 30_000);
   // The lock's compromise signal and our own timeout both have to be able to
@@ -4714,7 +4756,13 @@ function loadHeadroomSettings() {
   let raw = null;
   try { raw = JSON.parse(fs.readFileSync(HEADROOM_SETTINGS_FILE, 'utf8')); } catch { return headroomLib.defaults(); }
   if (!raw || typeof raw !== 'object') return headroomLib.defaults();
-  const v = headroomLib.validateSettings({}, raw);
+  // ⚠ THE FILE IS THE PATCH, NOT THE BASE. validateSettings skips every
+  // per-field rule for a key that is not in the PATCH, so passing the stored
+  // file as the base ran none of them: a hand-edited or half-written
+  // `resumePhrase: "/clear"` loaded clean and was typed into every stalled
+  // session at the next window reset. As the patch, each field is judged by the
+  // same rule the PATCH route applies, and a bad one falls back to the defaults.
+  const v = headroomLib.validateSettings(raw, headroomLib.defaults());
   if (v.ok) return v.settings;
   log(`headroom: ${HEADROOM_SETTINGS_FILE} does not validate (${v.error}); using defaults`);
   return headroomLib.defaults();
@@ -5339,6 +5387,10 @@ function writeSentinels(plan, state, settings) {
       const a = sentinelsLib.arm(HEADROOM_DIR, 'STOP', plan.reasons.STOP || plan.reason);
       state.sentinels.STOP = { since: a.since, reason: a.reason };
       if (a.created) log(`headroom: armed STOP (${a.reason})`);
+      // The HEARTBEAT. An armed sentinel with no expiry wedges every spawn for
+      // half an hour if this process dies while it is up; the gate ages it out
+      // against this mtime, so re-asserting the plan must also say "still me".
+      sentinelsLib.touch(HEADROOM_DIR, 'STOP');
     } else if (state.sentinels.STOP || sentinelsLib.state(HEADROOM_DIR).STOP) {
       if (sentinelsLib.clear(HEADROOM_DIR, 'STOP')) log('headroom: cleared STOP');
       state.sentinels.STOP = null;
@@ -5347,6 +5399,7 @@ function writeSentinels(plan, state, settings) {
       const a = sentinelsLib.arm(HEADROOM_DIR, 'STOP-FABLE', plan.reasons['STOP-FABLE'] || plan.reason);
       state.sentinels['STOP-FABLE'] = { since: a.since, reason: a.reason };
       if (a.created) log(`headroom: armed STOP-FABLE (${a.reason})`);
+      sentinelsLib.touch(HEADROOM_DIR, 'STOP-FABLE');
     } else if (state.sentinels['STOP-FABLE'] || sentinelsLib.state(HEADROOM_DIR)['STOP-FABLE']) {
       if (sentinelsLib.clear(HEADROOM_DIR, 'STOP-FABLE')) log('headroom: cleared STOP-FABLE');
       state.sentinels['STOP-FABLE'] = null;
@@ -5763,6 +5816,27 @@ async function consentWatch(state, settings, sessions, now) {
     const on = meta && typeof meta.autoResume === 'boolean' ? meta.autoResume : settings.autoResume !== false;
     if (!on) continue;
     const row = prompt.options.find((o) => o.number === prompt.recommended);
+    // ⚠ RE-READ IMMEDIATELY BEFORE THE KEY, and require the SAME dialog.
+    //
+    // consentRecommended's own contract says the number is validated against a
+    // freshly-read fingerprint, the way /answer does it for a person's tap. This
+    // path did not: it pressed a digit against a capture taken a grace period
+    // ago. If the owner answered in that window — or the dialog simply moved —
+    // a bare digit and an Enter are submitted as a chat message into a working
+    // conversation. The row is matched by LABEL as well as by number, because
+    // the number alone is what a renumbered list keeps.
+    // A LEAN read: the pane, straight, with none of captureScreen's geometry
+    // round trip — the only question being asked is "is the same dialog still
+    // there", and this has to sit as close to the keystroke as it can.
+    const again = await run('tmux', ['capture-pane', '-p', '-t', `=${s.name}:`]);
+    const fresh = again.err
+      ? null
+      : promptFor(s.name, again.stdout.replace(/\n$/, '').split('\n')).prompt;
+    if (!row || !sameConsent(prompt, fresh)) {
+      log(`headroom: the consent dialog on ${s.name} moved between the read and the keypress — nothing typed`);
+      consentSeen.delete(s.name);
+      continue;
+    }
     const typed = await run('tmux', ['send-keys', '-t', `=${s.name}:`, '-l', '--', String(prompt.recommended)]);
     if (typed.err) { log(`headroom: consent answer failed on ${s.name}: ${typed.stderr.trim()}`); continue; }
     await run('tmux', ['send-keys', '-t', `=${s.name}:`, 'Enter']);
