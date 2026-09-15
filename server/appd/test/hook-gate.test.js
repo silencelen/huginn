@@ -146,7 +146,17 @@ test('no sentinel: through in well under a second, holding nothing', async () =>
     `gate took ${ms}ms with nothing armed — budget ${budget}ms (baseline runs ${base.join('/')}ms)`);
   assert.deepEqual(heldNames(dir), [], 'a spawn that never waited is not a held spawn');
   assert.deepEqual(events(dir), ['start', 'release']);
-  assert.match(logLines(dir)[1], /id=a799b9ac6c215d25e type=workflow-subagent waited=0/);
+  // ⚠ `waited=` IS WHOLE SECONDS OF WALL TIME (`date +%s` minus START), not a
+  // count of polls — so a run that merely crosses a second boundary reports
+  // `waited=1` having waited on nothing at all, and pinning the literal 0 was a
+  // second timing assertion wearing a string's clothes. It cost a release gate
+  // once. The id and type are still pinned exactly; the wait is bounded by this
+  // run's OWN measured wall time, which is what "it did not wait" means.
+  const line = logLines(dir)[1];
+  assert.match(line, /event=release id=a799b9ac6c215d25e type=workflow-subagent waited=\d+/);
+  const waited = Number((line.match(/waited=(\d+)/) || [])[1]);
+  assert.ok(waited <= Math.ceil(ms / 1000),
+    `the gate says it waited ${waited}s while the whole run took ${ms}ms — it waited on something`);
 });
 
 test('STOP holds every spawn, and the release follows the rm within a poll', async () => {
