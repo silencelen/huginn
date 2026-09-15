@@ -86,6 +86,32 @@ object PlanFormat {
     }
 
     /**
+     * The line above the usage bars: WHOSE usage this is.
+     *
+     * `jacob@example.com · max_20x`, or the bare email when the plan word is
+     * missing, or "signed-in account" when the daemon sent no identity at all —
+     * which is what a daemon older than 3.0.0 always does. The fallback is
+     * deliberately not blank: a caption that disappears makes the bars look like
+     * they belong to whoever the reader last had in mind, and the account most
+     * likely to be wrong about is the one that was just switched away from.
+     *
+     * The subscription type is passed through as the server writes it. Prettying
+     * it here would be a second vocabulary for the same field, which Settings
+     * already renders raw two screens away.
+     */
+    fun accountCaption(plan: Plan?): String {
+        val account = plan?.account
+        val email = account?.email?.trim().orEmpty()
+        val sub = account?.subscriptionType?.trim().orEmpty()
+        return when {
+            email.isNotEmpty() && sub.isNotEmpty() -> "$email · $sub"
+            email.isNotEmpty() -> email
+            sub.isNotEmpty() -> sub
+            else -> "signed-in account"
+        }
+    }
+
+    /**
      * Minor units to money: `(10055, 2, "USD")` → `$100.55`.
      *
      * The exponent belongs to the currency, so it is applied here and nowhere
