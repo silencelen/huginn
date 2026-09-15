@@ -1,13 +1,16 @@
 package com.silencelen.huginn.desktop.ui
 
 import com.silencelen.huginn.data.Chat
+import com.silencelen.huginn.data.QuickActions
 import com.silencelen.huginn.data.Session
+import com.silencelen.huginn.ui.QuickActionRules
 import com.silencelen.huginn.desktop.Splitter
 import com.silencelen.huginn.desktop.View
 import com.silencelen.huginn.desktop.WindowLayout
 import com.silencelen.huginn.desktop.ui.common.ChatVerbs
 import com.silencelen.huginn.desktop.ui.common.HuginnMenuItem
 import com.silencelen.huginn.desktop.ui.common.Selection
+import com.silencelen.huginn.desktop.ui.common.SelectionVerbs
 import com.silencelen.huginn.desktop.ui.common.SessionVerbs
 import com.silencelen.huginn.desktop.ui.common.bgWorkTip
 import com.silencelen.huginn.desktop.ui.common.chatMenu
@@ -20,6 +23,7 @@ import com.silencelen.huginn.desktop.ui.common.noChatOpenCopy
 import com.silencelen.huginn.desktop.ui.common.noSessionOpenCopy
 import com.silencelen.huginn.desktop.ui.common.opensOnClick
 import com.silencelen.huginn.desktop.ui.common.railCountTip
+import com.silencelen.huginn.desktop.ui.common.selectionMenu
 import com.silencelen.huginn.desktop.ui.common.sessionMenu
 import com.silencelen.huginn.desktop.ui.common.sessionStateTip
 import com.silencelen.huginn.desktop.ui.common.timeTip
@@ -137,6 +141,88 @@ class DesktopSurfaceTest {
         val items = chatMenu(chat(id = "b"), setOf("a", "b", "c"), verbs)
         items.single().onClick()
         assertEquals(setOf("a", "b", "c"), deleted.toSet())
+    }
+
+    // ------------------------------------------------- selected text
+
+    private val hostActions = QuickActions(
+        rev = 3,
+        explain = "Explain this, briefly:\n\n{selection}",
+        execute = "Run this and show me the output:\n\n{selection}",
+        askInNewChat = "{selection}\n\nWhat is going on here?",
+        quote = "",
+    )
+
+    private fun noSelectionVerbs(
+        onExplain: (String) -> Unit = {},
+        onExecute: (String) -> Unit = {},
+        onQuote: (String) -> Unit = {},
+        onAsk: (String) -> Unit = {},
+    ) = SelectionVerbs(explain = onExplain, execute = onExecute, quote = onQuote, askInNewChat = onAsk)
+
+    @Test
+    fun `selected text offers the four verbs, in the order the phone shows them`() {
+        assertEquals(
+            listOf("Explain", "Execute", "Quote", "Ask in new chat"),
+            labelsOf(selectionMenu("ls -la", hostActions, noSelectionVerbs())),
+        )
+    }
+
+    @Test
+    fun `a daemon with no quick actions offers Quote alone`() {
+        // The feature probe, in the only form this menu ever sees it. Quote is the
+        // one verb whose text this client writes itself; the other three would be
+        // offering to compose a message out of wording nobody has.
+        assertEquals(
+            listOf("Quote"),
+            labelsOf(selectionMenu("ls -la", null, noSelectionVerbs())),
+        )
+    }
+
+    @Test
+    fun `a blank selection offers nothing at all`() {
+        // An EMPTY list rather than a disabled row: the toolkit's own Copy is
+        // drawn from the same menu, and anything returned here is prepended to it.
+        assertTrue(selectionMenu("", hostActions, noSelectionVerbs()).isEmpty())
+        assertTrue(selectionMenu("   \n ", hostActions, noSelectionVerbs()).isEmpty())
+    }
+
+    @Test
+    fun `a selection past the cap offers nothing`() {
+        // A drag that ran away down a long transcript. The composer it would land
+        // in is the one the reader then has to clear by hand.
+        val huge = "z".repeat(QuickActionRules.SELECTION_MAX + 1)
+        assertTrue(selectionMenu(huge, hostActions, noSelectionVerbs()).isEmpty())
+        assertEquals(1, labelsOf(selectionMenu("z".repeat(QuickActionRules.SELECTION_MAX), null, noSelectionVerbs())).size)
+    }
+
+    @Test
+    fun `no selection verb is marked destructive`() {
+        // Every one of them stages text in a composer. Red in this menu would be
+        // claiming one of them does something that cannot be undone.
+        val items = selectionMenu("ls -la", hostActions, noSelectionVerbs())
+            .filterIsInstance<HuginnMenuItem>()
+        assertEquals(emptyList(), items.filter { it.destructive }.map { it.label })
+    }
+
+    @Test
+    fun `each verb is handed the text that was selected`() {
+        val got = mutableMapOf<String, String>()
+        val items = selectionMenu(
+            "ls -la",
+            hostActions,
+            noSelectionVerbs(
+                onExplain = { got["explain"] = it },
+                onExecute = { got["execute"] = it },
+                onQuote = { got["quote"] = it },
+                onAsk = { got["ask"] = it },
+            ),
+        )
+        items.forEach { it.onClick() }
+        assertEquals(
+            mapOf("explain" to "ls -la", "execute" to "ls -la", "quote" to "ls -la", "ask" to "ls -la"),
+            got,
+        )
     }
 
     // ---------------------------------------------------------- tooltips
