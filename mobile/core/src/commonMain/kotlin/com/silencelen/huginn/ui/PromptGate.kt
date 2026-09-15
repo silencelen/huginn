@@ -40,8 +40,62 @@ enum class SessionFace {
 }
 
 /**
- * Whether the question surface — the prompt card, and the degraded ask card with
- * it — belongs on screen right now.
+ * WHICH SURFACE is asking — a tmux session, or a headless chat.
+ *
+ * The difference is not cosmetic and it is not a preference: a session HAS a live
+ * pane, and every prompt type Claude Code can put up is answerable there. A chat
+ * has no pane at all, so there is nowhere to send its reader and the card has to
+ * be answerable where it stands. One enum rather than two booleans at each call
+ * site, because "is this a chat" and "may this card be answered here" are the same
+ * question asked twice and they drifted apart once already.
+ */
+enum class PromptSurface {
+    /** A tmux session: three faces, and a terminal that can answer anything. */
+    SESSION,
+
+    /** A headless run: one face, no pane, no `/answer` route. */
+    CHAT,
+}
+
+/**
+ * How a pending question is presented on the face being looked at.
+ *
+ * THE OWNER'S DECISION 23, verbatim in its consequences: a session's Conversation
+ * and Overview stop rendering answerable cards and show a one-line bar that
+ * deep-links to the Screen tab, because the cards were costing 290-330dp for a
+ * five-option question (measured; `CardShell` is uncapped `fillMaxWidth` and every
+ * `AnswerButton` was full width) and only some prompt types were handled from
+ * them at all. The pane handles every type, so the steer is the honest surface.
+ *
+ * A CHAT KEEPS ITS CARD, compact. Not an exception to the rule — the opposite end
+ * of the same one: the rule is "answer it where it can actually be answered", and
+ * for a chat that is in place.
+ */
+enum class PromptPlacement {
+    /** One line: "Claude is asking a question · Answer on Screen →". */
+    LINK_TO_SCREEN,
+
+    /** The card itself, capped and wrapped. Answering happens here. */
+    INLINE_COMPACT,
+
+    /** Nothing. The dialog is already on screen, drawn by Claude Code. */
+    NONE;
+
+    companion object {
+        fun of(face: SessionFace, surface: PromptSurface): PromptPlacement = when {
+            // THE SCREEN FACE FIRST, and before the surface is even consulted. The
+            // terminal below IS the dialog; anything drawn over it is the bug this
+            // gate was written for (see [PromptGate]).
+            face == SessionFace.SCREEN -> NONE
+            surface == PromptSurface.CHAT -> INLINE_COMPACT
+            else -> LINK_TO_SCREEN
+        }
+    }
+}
+
+/**
+ * Whether the question surface — the link bar on a session, the compact card in a
+ * chat — belongs on screen right now.
  *
  * ONE SUPPRESSION, and it is not a preference. A question the card cannot answer
  * from where it stands offers "Answer on the Screen tab" and sends the reader to
@@ -55,12 +109,16 @@ enum class SessionFace {
  * steppable in a way a card of buttons cannot drive. A second copy of it below
  * is redundant at best, and at worst it is the thing in the way.
  *
- * Everywhere else the card stays exactly as it was, OVERVIEW included and
- * deliberately: nothing is covered there and nothing else on that face can
- * answer, so a card is the only way to act on a question without going to find
- * it first. Only the desktop has anything to draw there — the phone's overview
- * tab holds no card at all — but the rule is stated for the face rather than for
- * the client, so a phone that grows one inherits the right answer.
+ * Everywhere else there IS a surface, and since the owner's decision 23 it is no
+ * longer the card: a session's Conversation and Overview show the one-line link
+ * bar instead, which says the same fact in 40dp rather than 330 and hands the
+ * reader to the pane that can answer every prompt type rather than to buttons
+ * that handled some of them. [PromptPlacement] is where that choice is written
+ * down; this gate stays the answer to the narrower question of whether ANY
+ * question surface belongs on a face.
+ *
+ * The rule is stated for the face rather than for the client, so a shell that
+ * grows a new one inherits the right answer.
  */
 object PromptGate {
 
@@ -70,7 +128,44 @@ object PromptGate {
      * answerable in the terminal.
      */
     fun visible(hasQuestion: Boolean, face: SessionFace): Boolean =
-        hasQuestion && face != SessionFace.SCREEN
+        hasQuestion && PromptPlacement.of(face, PromptSurface.SESSION) != PromptPlacement.NONE
+
+    /**
+     * The dot on the session strip's Screen tab.
+     *
+     * The other half of the link bar, and the reason it can afford to be one line:
+     * a bar that scrolls out of view takes the only sign that anything is waiting
+     * with it, and the tab strip never scrolls. Shown on exactly the faces that
+     * steer — [PromptPlacement.LINK_TO_SCREEN] — because on the Screen tab the
+     * reader is already there and a dot pointing at the tab they are on is noise.
+     */
+    fun screenTabDot(hasQuestion: Boolean, face: SessionFace): Boolean =
+        hasQuestion && PromptPlacement.of(face, PromptSurface.SESSION) == PromptPlacement.LINK_TO_SCREEN
+
+    /** How much of a question a one-line bar can carry beside its own words. */
+    const val GIST_MAX: Int = 60
+
+    /**
+     * The question, shortened to fit beside the bar's label.
+     *
+     * Whitespace collapsed first — a TUI-scraped question arrives with the
+     * dialog's own line breaks in it, and those turn a one-line bar into three.
+     * Cut at a word boundary when there is one in the last third, so the tail
+     * reads as a trimmed phrase rather than a severed word.
+     *
+     * Null when there is nothing to show: no question, or a question that is only
+     * whitespace (the degraded ask, whose text the scrape could not read). The bar
+     * then shows its label alone, which is the whole fact anyway.
+     */
+    fun gist(question: String?, max: Int = GIST_MAX): String? {
+        val flat = question?.replace(Regex("\\s+"), " ")?.trim().orEmpty()
+        if (flat.isEmpty() || max <= 0) return null
+        if (flat.length <= max) return flat
+        val cut = flat.take(max)
+        val space = cut.lastIndexOf(' ')
+        val body = if (space > max * 2 / 3) cut.take(space) else cut
+        return body.trimEnd().trimEnd(',', ';', ':', '.', '-') + "…"
+    }
 
     /**
      * A pane-only prompt that is really a MULTI-QUESTION AskUserQuestion the scrape

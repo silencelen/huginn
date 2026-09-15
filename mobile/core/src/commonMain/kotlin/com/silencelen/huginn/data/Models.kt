@@ -839,6 +839,46 @@ data class HeadroomWindow(
     val label: String = "",
 )
 
+/**
+ * The three windows of one account, exactly as `headroom.json` keys them.
+ *
+ * A TYPED TRIPLE rather than a `Map<String, HeadroomWindow>`: the three keys are
+ * a closed set the daemon and both clients already name individually
+ * ([HeadroomRules.windowKeyWords], the reset records, the sentinels), and a map
+ * would turn every one of those into a lookup that can miss. Each is nullable
+ * because an account whose plan was never read has no figure for it — and a
+ * missing window must never read as 0 %.
+ */
+@Serializable
+data class HeadroomWindows(
+    val session: HeadroomWindow? = null,
+    @SerialName("weekly_all") val weeklyAll: HeadroomWindow? = null,
+    @SerialName("weekly_fable") val weeklyFable: HeadroomWindow? = null,
+)
+
+/**
+ * One saved login's headroom row, as `/v1/headroom.accounts` serves it.
+ *
+ * [live] is the whole reason this is decoded at all: the pill reports the WORST
+ * window anywhere, and the session-usage fill under the Status icon reports the
+ * 5-hour window of the account that is actually signed in. Those are different
+ * numbers on any host with more than one profile, and reading the second off the
+ * first is how a bar at 31 % gets painted from a week at 92 %.
+ *
+ * `red` (the per-window RED clocks) is deliberately not decoded: it is the
+ * arbiter's bookkeeping, nothing on a client renders it, and a shape pinned here
+ * would break the first time the daemon adds a word to it.
+ */
+@Serializable
+data class HeadroomAccount(
+    val email: String? = null,
+    /** When this row was last read. Epoch MILLISECONDS. */
+    val readAt: Long = 0,
+    /** This is the credentials file's account — the one work actually runs on. */
+    val live: Boolean = false,
+    val windows: HeadroomWindows = HeadroomWindows(),
+)
+
 /** The single worst window across every account: what the pill reports. */
 @Serializable
 data class HeadroomWorst(
@@ -1008,6 +1048,13 @@ data class Headroom(
     /** `ok` | `warn` | `red` | `exhausted` */
     val mode: String = "ok",
     val worst: HeadroomWorst? = null,
+    /**
+     * Every saved login the daemon reads, by slug — including the one that is
+     * [HeadroomAccount.live]. [worst] is the worst window across all of them and
+     * answers "what will stop work"; this answers "where is the account I am
+     * working on right now", which is what the session-usage fill draws.
+     */
+    val accounts: Map<String, HeadroomAccount> = emptyMap(),
     val sessions: List<HeadroomSession> = emptyList(),
     /**
      * Armed sentinels by name. The VALUE is left as raw JSON: a sentinel is
