@@ -1,925 +1,167 @@
 package com.silencelen.huginn.desktop.ui
 
-import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.BoxWithConstraints
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.PaddingValues
-import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.layout.widthIn
-import com.silencelen.huginn.desktop.device.LockProbe
-import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.Button
-import androidx.compose.material3.LinearProgressIndicator
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.RadioButton
-import androidx.compose.material3.Switch
-import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
-import com.silencelen.huginn.data.HeadroomSettings
-import com.silencelen.huginn.data.ModelChoice
-import com.silencelen.huginn.ui.HeadroomSettingsSection
-import com.silencelen.huginn.ui.settings.AccountsEditor
-import com.silencelen.huginn.ui.settings.AccountsIo
-import com.silencelen.huginn.ui.settings.QuickActionsEditor
-import kotlinx.serialization.json.JsonArray
-import kotlinx.serialization.json.JsonObject
-import kotlinx.serialization.json.JsonPrimitive
-import kotlinx.serialization.json.buildJsonObject
-import kotlinx.serialization.json.put
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
-import androidx.compose.runtime.setValue
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.platform.LocalClipboardManager
-import androidx.compose.ui.text.AnnotatedString
-import androidx.compose.ui.text.input.PasswordVisualTransformation
-import androidx.compose.ui.unit.Dp
-import androidx.compose.ui.unit.dp
-import com.silencelen.huginn.data.Account
-import com.silencelen.huginn.data.AppdRoutes
-import com.silencelen.huginn.data.Autoswitch
-import com.silencelen.huginn.data.LoginSession
-import com.silencelen.huginn.data.LoginState
-import com.silencelen.huginn.data.SavedAccount
 import com.silencelen.huginn.desktop.AppStore
-import com.silencelen.huginn.desktop.DesktopSettings
-import com.silencelen.huginn.desktop.ui.common.ReadingPane
-import com.silencelen.huginn.desktop.CliSync
-import com.silencelen.huginn.desktop.LocalServe
-import com.silencelen.huginn.desktop.diag.AppLog
-import com.silencelen.huginn.desktop.update.UpdateState
-import com.silencelen.huginn.desktop.update.installThenQuit
-import kotlinx.coroutines.launch
-import java.awt.Desktop
-import java.net.URI
+import com.silencelen.huginn.desktop.ui.common.PaneScrollbar
+import com.silencelen.huginn.desktop.ui.settings.AboutPage
+import com.silencelen.huginn.desktop.ui.settings.AppearancePage
+import com.silencelen.huginn.desktop.ui.settings.ChatsPage
+import com.silencelen.huginn.desktop.ui.settings.DevicesPage
+import com.silencelen.huginn.desktop.ui.settings.HostPage
+import com.silencelen.huginn.desktop.ui.settings.NotifyPage
+import com.silencelen.huginn.desktop.ui.settings.PrivacyPage
+import com.silencelen.huginn.desktop.ui.settings.SettingsFacts
+import com.silencelen.huginn.desktop.ui.settings.SettingsPaneState
+import com.silencelen.huginn.desktop.ui.settings.SettingsSummaries
+import com.silencelen.huginn.desktop.ui.settings.UpdatesPage
+import com.silencelen.huginn.desktop.ui.settings.UsagePage
+import com.silencelen.huginn.desktop.ui.settings.desktopProbe
+import com.silencelen.huginn.settings.SettingsCatalog
+import com.silencelen.huginn.settings.Surface as SettingsSurface
+import com.silencelen.huginn.ui.settings.SettingsCategoryPage
+import com.silencelen.huginn.ui.settings.SettingsListPane
+import com.silencelen.huginn.ui.settings.SettingsScaffoldRules
+import com.silencelen.huginn.ui.settings.SettingsSearchField
 
 /**
- * Connection, accounts, notifications, updates, diagnostics, and where the file
- * lives.
+ * Settings, as the app's own list-plus-detail: nine drawers on the left, one page
+ * at a time on the right.
  *
- * The address field REFUSES anything off the allowlist rather than saving it and
- * failing later: the bearer token follows the base URL on every request, so an
- * arbitrary address is a one-field path to handing a root-equivalent daemon token
- * to a stranger. The refusal is shown, not swallowed — a setting that silently
- * does not take is worse than one that says no.
+ * WHAT THIS REPLACED. One 1200-line composable drawing eleven `SectionHeader`
+ * bands down a single scroll — 82 interactive controls and ~54 read-only rows
+ * between the two clients, with account switching rendered three times in three
+ * vocabularies and six settings-shaped controls living outside Settings
+ * altogether. The owner's words: *"we keep adding different options / sections
+ * and now it not only is crowded but the UI is hard to navigate."* A flat screen
+ * cannot be told it is getting crowded; a catalog can, and `:core` holds it.
  *
- * Takes the whole [AppStore] rather than five parameters: accounts need the
- * client, diagnostics need every flow the store owns, and threading each one
- * through the shell would make adding a fact to the report a two-file change.
+ * WHY TWO ENTRY POINTS RATHER THAN ONE TWO-PANE COMPOSABLE. `:ui`'s
+ * [com.silencelen.huginn.ui.settings.SettingsScaffold] can draw both halves and
+ * the phone uses it that way. This shell does not, because its list pane is not a
+ * column in a Row — it is the animated, clipped pane behind the seam, with the
+ * notch, `Ctrl+B`, the persisted width and the under-700dp fold all hanging off
+ * it. Drawing a SECOND two-pane idiom inside the first would mean Settings had a
+ * seam that did nothing and a notch that hid the wrong thing. So [SettingsNavPane]
+ * goes where every other list goes, [SettingsView] goes where every other detail
+ * goes, [Splitter.showsList] says Settings has a list, and the narrow-window
+ * collapse to list→detail arrives for free.
+ *
+ * WHAT THEY SHARE is [SettingsPaneState], held by the shell above both: the
+ * selected drawer (written through to the settings file), the search query, and
+ * the arrival mark a search hit leaves on one row.
+ */
+
+/**
+ * The detail pane: one category's page.
+ *
+ * Also the pane that LOADS — it is composed for `View.SETTINGS` at every window
+ * width, while the list is not (a narrow window folds it away), so an effect
+ * living in the list would never run for the reader who most needs the summary.
  */
 @Composable
-fun SettingsView(store: AppStore) {
-    val settings = store.settings
-    val scope = rememberCoroutineScope()
-    val route by store.route.collectAsState()
-    val present by store.presence.present.collectAsState()
-    val notifyEnabled by settings.notifyEnabled.collectAsState(initial = true)
-
-    var url by remember(route) { mutableStateOf(route) }
-    var token by remember { mutableStateOf(settings.tokenNow()) }
-    var message by remember { mutableStateOf<String?>(null) }
-
-    // A reading pane: capped to a measure, centred, and with a scrollbar — this is
-    // the pane whose content most often runs off the bottom with nothing saying so.
-    ReadingPane(padding = PaddingValues(24.dp)) {
-        Text("Settings", style = MaterialTheme.typography.titleMedium)
-
-        SectionHeader("Server")
-        FieldAndButtonRow(top = 0.dp) {
-            OutlinedTextField(
-                value = url,
-                onValueChange = { url = it },
-                label = { Text("Base URL") },
-                singleLine = true,
-                modifier = Modifier.widthIn(min = 320.dp, max = 460.dp),
-            )
-            Button(onClick = {
-                scope.launch {
-                    message = runCatching { settings.selectRoute(url, pinned = true) }
-                        .fold({ "saved — route pinned" }, { it.message })
-                }
-            }) { Text("Save") }
-        }
-        Muted(
-            "known routes: " + AppdRoutes.ALL.joinToString("  ") { "${it.label} ${it.url}" },
-            Modifier.padding(top = 4.dp),
-        )
-
-        OutlinedTextField(
-            value = token,
-            onValueChange = { token = it },
-            label = { Text("Token") },
-            singleLine = true,
-            visualTransformation = PasswordVisualTransformation(),
-            modifier = Modifier.padding(top = 12.dp).widthIn(min = 320.dp, max = 460.dp),
-        )
-        Button(
-            onClick = { scope.launch { settings.setToken(token); message = "token saved" } },
-            modifier = Modifier.padding(top = 8.dp),
-        ) { Text("Save token") }
-
-        message?.let {
-            Text(
-                it,
-                style = MaterialTheme.typography.labelMedium,
-                color = MaterialTheme.colorScheme.primary,
-                modifier = Modifier.padding(top = 8.dp),
-            )
-        }
-
-        AccountsSection(store)
-
-        HeadroomSection(store)
-
-        QuickActionsSection(store)
-
-        SectionHeader("Notifications")
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Switch(
-                checked = notifyEnabled,
-                onCheckedChange = { scope.launch { settings.setNotifyEnabled(it) } },
-            )
-            Text("Claim the notification route", Modifier.padding(start = 12.dp), style = MaterialTheme.typography.bodyMedium)
-        }
-        // The reader has to be able to see WHY the claim is off, because "off"
-        // is also what a bug looks like.
-        Muted(
-            if (!notifyEnabled) "off — huginn falls back to Telegram"
-            else if (present) "claiming: this window has been attended recently"
-            else "not claiming: window hidden or unattended, so Telegram stays live",
-            Modifier.padding(top = 6.dp, start = 4.dp),
-            maxLines = 2,
-        )
-
-        DeviceSection(store)
-        LocalServeSection(store)
-
-        UpdateSection(store)
-        DiagnosticsSection(store)
-
-        SectionHeader("This install")
-        Muted(settings.path)
-        Muted("client id ${settings.clientIdNow()}", Modifier.padding(top = 2.dp))
-        Muted(
-            if (DesktopSettings.isPackaged()) "packaged build" else "running from source",
-            Modifier.padding(top = 2.dp),
-        )
-        // What the launch-time CLI sync did, when it did anything: the CLI on
-        // this machine rides along with the app instead of aging in place.
-        CliSync.summary.collectAsState().value?.let {
-            Muted(it, Modifier.padding(top = 2.dp))
-        }
-
-        RemoveAccessSection(store)
-    }
-}
-
-// ------------------------------------------------------------------ headroom
-
-/**
- * When huginn warns, when it moves a session down the ladder, and whether it
- * picks one back up.
- *
- * The form itself is `:ui`'s — both clients get the same fields and the same
- * refusals — and everything this adds is the frame: what to load it from, what to
- * do with a Save, and how to report a 400 the daemon raised that the form did not.
- */
-@Composable
-private fun HeadroomSection(store: AppStore) {
-    val scope = rememberCoroutineScope()
-    val headroom by store.headroom.collectAsState()
-    var models by remember { mutableStateOf<List<ModelChoice>>(emptyList()) }
-    var busy by remember { mutableStateOf(false) }
-    var note by remember { mutableStateOf<String?>(null) }
-
-    LaunchedEffect(Unit) {
-        // The pane may be opened before the 30s poll has run once.
-        store.refreshHeadroom()
-        runCatching { store.client.models() }.onSuccess { models = it }
+fun SettingsView(store: AppStore, state: SettingsPaneState) {
+    LaunchedEffect(store) {
+        // `/v1/status` ALONE, not [AppStore.refreshStatus]: this only wants the
+        // shelf that says whether the host has quick actions, a soft-end phrase
+        // and which appd it is, and the full refresh drags `/v1/usage` behind it,
+        // which walks every transcript on the host.
+        store.refreshStatusShelf()
+        state.loadAccounts(store)
     }
 
-    SectionHeader("Headroom")
-    val h = headroom
-    if (h == null) {
-        Muted("This host has no headroom subsystem — it is running a daemon older than 3.0.", maxLines = 2)
-        return
-    }
-    Muted(
-        "Everything the arbiter does with a usage window. The host validates these too; " +
-            "holding a foreground Agent call freezes the turn that made it.",
-        maxLines = 3,
-    )
-    HeadroomSettingsSection(
-        settings = h.settings,
-        models = models,
-        busy = busy,
-        note = note,
-        modifier = Modifier.padding(top = 8.dp),
-        onSave = { edited ->
-            scope.launch {
-                busy = true
-                note = null
-                runCatching { store.client.setHeadroomSettings(patchOf(edited)) }
-                    .fold(
-                        onSuccess = { note = "saved" },
-                        // The daemon's 400 NAMES the rule it refused. Shown as it
-                        // came: a form that says "invalid" about a sentence the
-                        // host already explained is throwing away the answer.
-                        onFailure = { note = it.message ?: "could not save" },
-                    )
-                store.refreshHeadroom()
-                busy = false
-            }
-        },
-    )
-}
+    val facts = settingsFacts(store, state)
+    val shown = SettingsScaffoldRules.shown(desktopProbe(facts), SettingsSurface.DESKTOP, state.query)
+    // The remembered drawer, unless it stopped existing — a daemon that answered
+    // /v1/headroom on Monday and 404s on Tuesday must not strand the pane on an
+    // empty page.
+    val landing = SettingsScaffoldRules.landing(shown, state.selected)
+    val category = landing?.let { SettingsCatalog.category(it) } ?: return
 
-/**
- * The whole settings object as a PATCH body.
- *
- * Whole rather than a diff, deliberately: the route is a PATCH so that two open
- * forms cannot clobber each other's UNTOUCHED fields, and this form edits every
- * field it can see. Sending what is on screen is therefore exactly what the
- * reader asked for, and computing a diff would only add a second place for the
- * two to disagree about what changed.
- */
-private fun patchOf(s: HeadroomSettings): JsonObject = buildJsonObject {
-    put("headsUpPct", JsonPrimitive(s.headsUpPct))
-    put("ladderPct", JsonPrimitive(s.ladderPct))
-    put("ladderUpBelowPct", JsonPrimitive(s.ladderUpBelowPct))
-    put("stopPct", JsonPrimitive(s.stopPct))
-    put("stopFablePct", JsonPrimitive(s.stopFablePct))
-    put("clearBelowPct", JsonPrimitive(s.clearBelowPct))
-    put("cooldownMs", JsonPrimitive(s.cooldownMs))
-    put("ladder", JsonArray(s.ladder.map { JsonPrimitive(it) }))
-    put("defaultModel", JsonPrimitive(s.defaultModel))
-    put("autoResume", JsonPrimitive(s.autoResume))
-    put("resumePhrase", JsonPrimitive(s.resumePhrase))
-    put("headsUpText", JsonPrimitive(s.headsUpText))
-    put("accountSwitch", buildJsonObject {
-        put("enabled", JsonPrimitive(s.accountSwitch.enabled))
-        put("threshold", JsonPrimitive(s.accountSwitch.threshold))
-        put("margin", JsonPrimitive(s.accountSwitch.margin))
-    })
-}
-
-// ------------------------------------------------------- taking it back out
-
-/**
- * The way out. One quiet row under "This install", because the honest place for
- * "undo the whole thing" is beside what it undoes rather than hidden.
- *
- * QUIET ON PURPOSE — no red, no warning triangle, no capitals. Nothing here is
- * destructive to anything that matters: the chats, sessions and Rounds live on
- * huginn and are untouched. What goes is this computer's ACCESS — the rows the
- * daemon holds for it, the token this app connects with, and the drafts typed
- * here. Dressing that up as danger would teach the reader to fear a button that
- * is the polite alternative to uninstalling.
- *
- * The dialog says exactly what will happen, in the order it happens, because the
- * ordering is the guarantee: the daemon first, this machine second, and on any
- * failure nothing here changes at all.
- */
-@Composable
-private fun RemoveAccessSection(store: AppStore) {
-    var confirming by remember { mutableStateOf(false) }
-    var busy by remember { mutableStateOf(false) }
-    var outcome by remember { mutableStateOf<String?>(null) }
-
-    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(top = 14.dp)) {
-        TextButton(onClick = { confirming = true }, enabled = !busy) {
-            Text("Remove this computer's access")
-        }
-    }
-    Muted(
-        "Unenrols this machine from huginn and forgets the token here. Your chats " +
-            "and sessions stay on huginn.",
-        Modifier.padding(start = 4.dp),
-        maxLines = 2,
-    )
-    outcome?.let {
-        Text(
-            it,
-            style = MaterialTheme.typography.labelMedium,
-            color = MaterialTheme.colorScheme.primary,
-            modifier = Modifier.padding(top = 8.dp, start = 4.dp),
-        )
-    }
-
-    if (confirming) {
-        AlertDialog(
-            onDismissRequest = { confirming = false },
-            title = { Text("Remove this computer's access?") },
-            text = {
-                Text(
-                    "huginn is asked first to drop every enrolment this machine holds — " +
-                        "the one that runs work here, and the local-AI one if this box " +
-                        "serves models. Then this app forgets its token, its enrolment and " +
-                        "any half-written messages, and asks for a server and token again.\n\n" +
-                        "Nothing on huginn is deleted: chats, sessions and Rounds are all " +
-                        "still there. If huginn cannot be reached, nothing changes here " +
-                        "either — try again when it is.",
-                )
-            },
-            confirmButton = {
-                TextButton(
-                    enabled = !busy,
-                    onClick = {
-                        confirming = false
-                        busy = true
-                        outcome = null
-                        // The APP's scope, not the composition's: navigating away
-                        // from Settings must not cancel a flow that is halfway
-                        // through retiring rows at the daemon.
-                        store.scope.launch {
-                            store.removeThisComputer()
-                                .onSuccess {
-                                    outcome = when (it) {
-                                        0 -> "removed — this computer held no enrolment; " +
-                                            "the token here is cleared"
-                                        1 -> "removed — 1 enrolment dropped and the token here is cleared"
-                                        else -> "removed — $it enrolments dropped and the token here is cleared"
-                                    }
-                                }
-                                .onFailure {
-                                    outcome = "could not reach huginn (${it.message}) — " +
-                                        "nothing changed here; try again when it answers"
-                                }
-                            busy = false
-                        }
-                    },
-                ) { Text("Remove") }
-            },
-            dismissButton = { TextButton(onClick = { confirming = false }) { Text("Cancel") } },
-        )
-    }
-}
-
-// ------------------------------------------------------------------ accounts
-
-/**
- * Saved Claude logins on the host, and the three-step flow that adds one.
- *
- * THE EDITOR MOVED TO `:ui` (`ui/settings/AccountsEditor.kt`), BODY UNCHANGED.
- * It was always the better of the two renderings — the state dot instead of a
- * row tint, the freshness word only when it is not `fresh`, the daemon's own
- * sentence rather than a hopeful one — and the phone was carrying a worse copy.
- * What is left here is the adapter: this client's `HuginnClient` as the small
- * surface the editor asks for, and this platform's browser.
- *
- * `autoswitchLine` went with it. The redesign collapses account switching to
- * ONE rendering — the headroom form's, the only place its threshold and margin
- * are also editable — so when the shell's own round lands, this call passes
- * `showAutoswitch = false` rather than drawing the sentence a second time.
- */
-@Composable
-private fun AccountsSection(store: AppStore) {
-    SectionHeader("Accounts")
-    AccountsEditor(
-        io = remember(store) { DesktopAccountsIo(store) },
-        openLink = ::openInBrowser,
-    )
-}
-
-/** [AccountsIo] over this client's daemon connection. Nothing but forwarding. */
-private class DesktopAccountsIo(private val store: AppStore) : AccountsIo {
-    override suspend fun account(): Account = store.client.account()
-
-    // plan=1: the weekly headroom per saved login is the only number that makes
-    // the list worth reading — it is what says which one to switch to.
-    override suspend fun savedAccounts(): List<SavedAccount> = store.client.savedAccounts(withPlan = true)
-    override suspend fun autoswitch(): Autoswitch = store.client.autoswitch()
-    override suspend fun refreshAccount(slug: String): String = store.client.refreshAccount(slug)
-    override suspend fun activateAccount(slug: String) { store.client.activateAccount(slug) }
-    override suspend fun forgetAccount(slug: String) { store.client.forgetAccount(slug) }
-    override suspend fun startLogin(email: String?): LoginSession = store.client.startLogin(email)
-    override suspend fun submitLoginCode(code: String): LoginState = store.client.submitLoginCode(code)
-}
-
-/**
- * Opens [url] in the user's browser. False when this JVM has no desktop
- * integration — headless, a bare WM, or a sandbox — which is not an error so much
- * as a reason to show the link instead of pretending it opened.
- */
-private fun openInBrowser(url: String): Boolean = runCatching {
-    if (!Desktop.isDesktopSupported()) return false
-    val desktop = Desktop.getDesktop()
-    if (!desktop.isSupported(Desktop.Action.BROWSE)) return false
-    desktop.browse(URI(url))
-    true
-}.getOrDefault(false)
-
-// -------------------------------------------------------------------- update
-
-/**
- * What the self-updater knows. It downloads and VERIFIES on its own; installing is
- * a button, never a background decision, because these builds are unsigned and an
- * update that runs itself is an update nobody chose.
- */
-@Composable
-private fun UpdateSection(store: AppStore) {
-    val scope = rememberCoroutineScope()
-    val state by store.updater.state.collectAsState()
-
-    SectionHeader("Update")
-    Text(
-        when (val s = state) {
-            UpdateState.Idle -> "installed ${store.updater.installedVersion} · not checked yet"
-            UpdateState.Checking -> "checking…"
-            is UpdateState.UpToDate -> "up to date (${s.version})"
-            is UpdateState.Downloading -> "downloading ${s.version}…"
-            is UpdateState.Ready -> "${s.version} downloaded and verified"
-            is UpdateState.Error -> "update check failed: ${s.message}"
-        },
-        style = MaterialTheme.typography.bodyMedium,
-        color = if (state is UpdateState.Error) MaterialTheme.colorScheme.error
-        else MaterialTheme.colorScheme.onSurface,
-    )
-    (state as? UpdateState.Downloading)?.fraction?.let { f ->
-        LinearProgressIndicator(progress = { f }, modifier = Modifier.padding(top = 6.dp).width(280.dp))
-    }
-    (state as? UpdateState.Ready)?.let { ready ->
-        if (ready.notes.isNotBlank()) Muted(ready.notes, Modifier.padding(top = 4.dp), maxLines = 4)
-    }
-    Row(Modifier.padding(top = 8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        Button(
-            enabled = state !is UpdateState.Checking && state !is UpdateState.Downloading,
-            onClick = { scope.launch { store.updater.check() } },
-        ) { Text("Check now") }
-        (state as? UpdateState.Ready)?.let { ready ->
-            // And restart, which until now it only claimed: the installer cannot
-            // replace files this process holds open, and it closes this client
-            // itself if we do not — killing the process TREE it is standing in,
-            // since it is a child of this JVM. So we leave, it installs, and its
-            // finish page brings the app back. [installThenQuit] holds the rule
-            // that this only happens when the launch really took.
-            Button(
-                enabled = ready.installable,
-                onClick = { installThenQuit(install = store.updater::install, quit = store::requestQuit) },
-            ) { Text("Install and restart") }
-        }
-    }
-    (state as? UpdateState.Ready)?.takeIf { !it.installable }?.let {
-        Muted("downloaded to ${it.file.absolutePath} — install it by hand on this platform", Modifier.padding(top = 4.dp), maxLines = 2)
-    }
-}
-
-// --------------------------------------------------------------- diagnostics
-
-/**
- * The paste-a-blob button.
- *
- * This exists so the owner can answer "why did it do that" himself. Every field
- * question about the Electron client — did the updater run, why did the stream
- * drop, is it claiming notifications — previously took an SSH session into a
- * laptop nobody can reach. The report carries the app version, the connection, the
- * watch stream, the claim state, the update state, the platform and the recent
- * log; it carries NO token, and that is a property of [com.silencelen.huginn.desktop.diag.Diagnostics.Input]
- * having no field for one rather than of anybody remembering.
- */
-@Composable
-private fun DiagnosticsSection(store: AppStore) {
-    val clipboard = LocalClipboardManager.current
-    val scope = rememberCoroutineScope()
-    var note by remember { mutableStateOf<String?>(null) }
-
-    SectionHeader("Diagnostics")
-    Button(onClick = {
-        scope.launch {
-            // Refreshed FIRST: the status snapshot is only fetched while the
-            // Status view is open, so a report copied from here otherwise said
-            // "appd version unknown" — which is the one line that says whether
-            // the client and the daemon are even the same generation.
-            runCatching { store.refreshStatus() }
-            val text = AppLog.diagnostics(store)
-            // Compose's clipboard, not AWT's. The Electron release that denied every
-            // permission also denied clipboard writes and broke every copy in the app
-            // silently for a whole release; the carry-over list names it.
-            clipboard.setText(AnnotatedString(text))
-            note = "copied ${text.lineSequence().count()} lines — paste it into a chat"
-        }
-    }) { Text("Copy diagnostics") }
-    note?.let {
-        Text(
-            it,
-            style = MaterialTheme.typography.labelMedium,
-            color = MaterialTheme.colorScheme.primary,
-            modifier = Modifier.padding(top = 8.dp),
-        )
-    }
-    Muted("log ${AppLog.path ?: "(memory only — the log file could not be opened)"}", Modifier.padding(top = 6.dp))
-}
-
-// ------------------------------------------------------------------ plumbing
-
-@Composable
-private fun DeviceSection(store: AppStore) {
-    val settings = store.settings
-    val enabled by settings.deviceEnabled.collectAsState()
-    val scopeWire by settings.deviceScope.collectAsState()
-    val root by settings.deviceRoot.collectAsState()
-    val claudePath by settings.deviceClaudePath.collectAsState()
-    val status by store.deviceRunner.status.collectAsState()
-
-    SectionHeader("Give Huginn access to this PC")
-
-    Muted(
-        "Lets huginn run work here, in this machine's own context. Nothing listens " +
-            "on a port: this app asks huginn for work and posts the results back, so " +
-            "it works the same on a laptop away from home.",
-        maxLines = 4,
-    )
-
-    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(top = 10.dp)) {
-        Switch(
-            checked = enabled,
-            onCheckedChange = { settings.setDeviceEnabled(it); store.syncDeviceRunner() },
-        )
-        Text(
-            if (enabled) "Available to huginn" else "Off",
-            Modifier.padding(start = 12.dp),
-            style = MaterialTheme.typography.bodyMedium,
-        )
-    }
-
-    // The status is the honest bit: "enrolled, waiting for work" and "claude was
-    // not found here" are the two things the owner will actually need to see, and
-    // neither is guessable from the toggle.
-    Muted(status.note, Modifier.padding(top = 6.dp, start = 4.dp), maxLines = 3)
-
-    if (enabled) {
-        SectionHeader("What it may do")
-        for ((wire, label, blurb) in SCOPE_CHOICES) {
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                modifier = Modifier.padding(top = 4.dp),
-            ) {
-                RadioButton(
-                    selected = scopeWire == wire,
-                    onClick = { settings.setDeviceScope(wire) },
-                )
-                Column(Modifier.padding(start = 6.dp)) {
-                    Text(label, style = MaterialTheme.typography.bodyMedium)
-                    Muted(blurb, maxLines = 2)
-                }
+    val scroll = rememberScrollState()
+    Box(Modifier.fillMaxSize()) {
+        SettingsCategoryPage(title = category.title, blurb = category.blurb, scroll = scroll) {
+            val mark = state.markFor(category.id)
+            when (category.id) {
+                "host" -> HostPage(store, mark)
+                "usage" -> UsagePage(store, mark)
+                "chats" -> ChatsPage(store, mark)
+                "notify" -> NotifyPage(store, mark)
+                "devices" -> DevicesPage(store, mark)
+                "privacy" -> PrivacyPage(store, mark)
+                "appearance" -> AppearancePage(store, mark)
+                "updates" -> UpdatesPage(store, mark)
+                "about" -> AboutPage(store, mark)
             }
         }
-
-        // Said plainly rather than implied by the word "work": overstating a fence
-        // is worse than not having one.
-        Muted(
-            "Work starts in the folder below. That is where a run begins, not a " +
-                "sandbox — a command that is allowed to run can leave any folder.",
-            Modifier.padding(top = 8.dp, start = 4.dp),
-            maxLines = 3,
-        )
-
-        OutlinedTextField(
-            value = root,
-            onValueChange = { settings.setDeviceRoot(it) },
-            label = { Text("Folder for Work runs") },
-            singleLine = true,
-            modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
-        )
-
-        OutlinedTextField(
-            value = claudePath,
-            onValueChange = { settings.setDeviceClaudePath(it) },
-            label = { Text("Path to claude (leave blank to use PATH)") },
-            singleLine = true,
-            modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
-        )
-
-        Muted(
-            if (LockProbe.supported()) {
-                if (status.locked) {
-                    "This machine reads as locked, so it is read-only until someone unlocks it."
-                } else {
-                    "While the screen is locked, this machine drops to Look and refuses Act."
-                }
-            } else {
-                "Lock detection is not available on this platform, so this machine " +
-                    "reports itself as locked and will only ever Look."
-            },
-            Modifier.padding(top = 10.dp, start = 4.dp),
-            maxLines = 3,
-        )
+        // The pane whose content most often runs off the bottom with nothing
+        // saying so — now on the page's own scroll state rather than a second one.
+        PaneScrollbar(scroll)
     }
 }
 
-private val SCOPE_CHOICES = listOf(
-    Triple("look", "Look", "Read files and search. No commands, no changes."),
-    Triple("work", "Work", "Read, change and run commands, starting in the folder below."),
-    Triple("own", "Own", "The whole machine."),
-)
-
 /**
- * The local-AI tier on THIS machine — a door to the same fetched manager the
- * `huginn local` verb drives (one implementation, two doors). The app holds no
- * serving state of its own: the services belong to systemd/WinSW, this section
- * only asks and relays. Serving is never remotely flippable — this section
- * exists only on the machine itself, which is the whole doctrine.
- *
- * Setting up happens HERE too, with the same consent the terminal takes: the
- * read-only `plan` (class, models, disk gate) is shown as a card, and only a
- * human's click on the sized button runs `on --yes`. Never a bare switch —
- * the button says what it will download before it downloads it.
- */
-/**
- * The enable/stop flow's state, held OUTSIDE the composition on purpose: an
- * install in flight must neither cancel nor vanish when the person clicks away
- * from Settings. The audit caught exactly that — state in remember{} and work
- * in the section's own scope meant leaving mid-download abandoned the log and
- * CANCELLED the reader while the elevated child kept running unwatched. One
- * flow at a time is all the manager allows anyway.
- */
-private object LocalServeFlow {
-    val busy = kotlinx.coroutines.flow.MutableStateFlow(false)
-    val log = kotlinx.coroutines.flow.MutableStateFlow(listOf<String>())
-    private val scope = kotlinx.coroutines.CoroutineScope(
-        kotlinx.coroutines.SupervisorJob() + kotlinx.coroutines.Dispatchers.IO,
-    )
-
-    fun line(l: String) { log.value = (log.value + l).takeLast(8) }
-
-    fun run(block: suspend () -> Unit) {
-        if (busy.value) return
-        busy.value = true
-        log.value = emptyList()
-        scope.launch { try { block() } finally { busy.value = false } }
-    }
-}
-
-@Composable
-private fun LocalServeSection(store: AppStore) {
-    val scope = rememberCoroutineScope()
-    var status by remember { mutableStateOf<LocalServe.Status?>(null) }
-    var error by remember { mutableStateOf<String?>(null) }
-    val busy by LocalServeFlow.busy.collectAsState()
-    val log by LocalServeFlow.log.collectAsState()
-    var plan by remember { mutableStateOf<LocalServe.Plan?>(null) }
-
-    fun refresh() {
-        scope.launch {
-            if (!LocalServe.managerFile().isFile) {
-                // A MACHINE-wide install (ProgramData on Windows) can exist
-                // while this user's fetched manager does not — the door must
-                // not claim "not set up" over a box that is serving. Fetch
-                // quietly and ask properly; a fetch failure falls through to
-                // the honest set-up state.
-                if (java.io.File(LocalServe.localDataDir(), "local.json").isFile) {
-                    LocalServe.fetchManager { }
-                } else { status = null; error = null; return@launch }
-            }
-            LocalServe.status()
-                .onSuccess { status = it; error = null }
-                .onFailure { status = null; error = it.message }
-        }
-    }
-    LaunchedEffect(Unit) { refresh() }
-    // The flow finishing — begun from ANY visit to this screen — is the moment
-    // the truth changed; re-ask the manager rather than trusting the last log line.
-    LaunchedEffect(busy) { if (!busy) refresh() }
-
-    SectionHeader("Serve local AI from this PC")
-    Muted(
-        "Runs small AI models here and offers them in huginn's chat model menus. " +
-            "Everything serves on this machine only (127.0.0.1), key-gated, and can " +
-            "only be set up or stopped from this machine — never remotely.",
-        maxLines = 4,
-    )
-
-    val s = status
-    val engineUp = s?.setup == true && s.engine.reachable && s.engine.models.isNotEmpty()
-    if (!engineUp) {
-        if (error != null) Muted("The manager did not answer: $error", Modifier.padding(top = 8.dp, start = 4.dp), maxLines = 2)
-        // Installed-but-dark gets its diagnosis AND the door back on — the
-        // audit caught Stop dead-ending this section with nothing but Refresh.
-        // An alive endpoint serving an EMPTY list is its own named state, not
-        // "not answering".
-        if (s?.setup == true) {
-            Muted(
-                if (s.engine.reachable) {
-                    "Set up as \"${s.deviceName ?: "?"}\" and the engine answers — but it serves NO models, " +
-                        "which is not healthy. Turning serving back on reinstalls the pinned models."
-                } else {
-                    "Set up as \"${s.deviceName ?: "?"}\" but the engine is NOT answering — services: " +
-                        "llm ${s.services.llm ?: "?"}, runner ${s.services.runner ?: "?"}."
-                },
-                Modifier.padding(top = 8.dp, start = 4.dp),
-                maxLines = 4,
-            )
-        }
-        val p = plan
-        when {
-            p == null -> {
-                Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(top = 6.dp)) {
-                    TextButton(
-                        onClick = {
-                            LocalServeFlow.run {
-                                LocalServe.plan { LocalServeFlow.line(it) }
-                                    .onSuccess { plan = it; LocalServeFlow.log.value = emptyList() }
-                                    .onFailure { LocalServeFlow.line(it.message ?: "could not read this machine") }
-                            }
-                        },
-                        enabled = !busy,
-                    ) {
-                        Text(
-                            when {
-                                busy -> "Working…"
-                                s?.setup == true -> "Turn serving back on…"
-                                else -> "Set up local AI…"
-                            },
-                        )
-                    }
-                    if (s?.setup == true) {
-                        TextButton(
-                            onClick = { LocalServeFlow.run { LocalServe.disable { LocalServeFlow.line(it) } } },
-                            enabled = !busy,
-                        ) { Text("Stop serving") }
-                    }
-                }
-                Muted(
-                    "Checks what this machine can serve and shows the exact plan before anything downloads. " +
-                        "Also available from a terminal:  huginn local on",
-                    Modifier.padding(start = 4.dp),
-                    maxLines = 3,
-                )
-            }
-            p.refuse != null -> {
-                Muted("This machine can't serve: ${p.refuse}", Modifier.padding(top = 8.dp, start = 4.dp), maxLines = 4)
-                TextButton(onClick = { plan = null }, enabled = !busy) { Text("Back") }
-            }
-            else -> {
-                // The consent card — the same lines the terminal flow prints.
-                Muted("class ${p.cls ?: "?"}${p.note?.let { " — $it" } ?: ""} → device \"${p.deviceName}\"", Modifier.padding(top = 8.dp, start = 4.dp), maxLines = 3)
-                p.downloads.forEach { d ->
-                    Muted("${d.bytes / (1024 * 1024)} MB  ${d.name}", Modifier.padding(start = 12.dp), maxLines = 1)
-                }
-                p.gate?.let { Muted(it.line, Modifier.padding(start = 4.dp, top = 2.dp), maxLines = 2) }
-                Muted(
-                    "Installs two always-on services and offers this machine's models to huginn." +
-                        if (p.platform == "win32") " Windows will show one administrator (UAC) prompt." else "",
-                    Modifier.padding(start = 4.dp, top = 2.dp),
-                    maxLines = 3,
-                )
-                Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(top = 6.dp)) {
-                    val url = store.settings.baseUrlNow()
-                    val token = store.settings.tokenNow()
-                    TextButton(
-                        onClick = {
-                            plan = null
-                            LocalServeFlow.run { LocalServe.enable(url, token) { LocalServeFlow.line(it) } }
-                        },
-                        enabled = !busy && p.gate?.ok == true,
-                    ) { Text(if (busy) "Setting up…" else "Download and turn on (${p.needBytes / (1024 * 1024)} MB)") }
-                    TextButton(onClick = { plan = null }, enabled = !busy) { Text("Cancel") }
-                }
-            }
-        }
-    } else {
-        // Non-null by engineUp's definition; bound once so it reads plainly.
-        val sv = checkNotNull(s)
-        val runnerState = sv.services.runner ?: "?"
-        val runnerUp = runnerState == "active" ||
-            runnerState.contains("Started", ignoreCase = true) ||
-            runnerState.contains("running", ignoreCase = true)
-        Muted(
-            "Serving ${sv.engine.models.joinToString(", ")} (class ${sv.cls ?: "?"}) as \"${sv.deviceName ?: "?"}\"." +
-                // The engine answering is HALF the path: without the runner,
-                // huginn queues work to a machine that never asks for it.
-                if (!runnerUp) " But the runner service is $runnerState — chats will queue until it runs." else "",
-            Modifier.padding(top = 8.dp, start = 4.dp),
-            maxLines = 3,
-        )
-        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(top = 6.dp)) {
-            TextButton(onClick = { refresh() }, enabled = !busy) { Text("Refresh") }
-            TextButton(
-                onClick = {
-                    // Elevated on Windows: stopping a LocalSystem service is
-                    // as privileged as installing one.
-                    LocalServeFlow.run { LocalServe.disable { LocalServeFlow.line(it) } }
-                },
-                enabled = !busy,
-            ) { Text("Stop serving") }
-        }
-    }
-    // The manager's own words, raw: if it ever lies, the lie is inspectable.
-    log.forEach { Muted(it, Modifier.padding(start = 8.dp), maxLines = 1) }
-}
-
-// -------------------------------------------------------- quick actions
-
-/**
- * The wording each right-click / long-press verb puts in the composer.
- *
- * EDITED HERE BECAUSE IT LIVES ON THE HOST, which is the whole point of the
- * feature: one copy of the phrasing, so the phone and this window stage the same
- * text and neither can drift. Same reasoning, and the same shelf on `/v1/status`,
- * as the soft-end phrase.
- *
- * HIDDEN ENTIRELY against a daemon that has no templates (3.0.x): an editor with
- * nothing behind it is four boxes whose Save can only 404. That is the same probe
- * the selection menu runs when it narrows itself to Quote.
- *
- * The REFUSALS are the daemon's — `{selection}` exactly once, never in the quote
- * lead-in, 400 characters each — and this reports its words rather than growing a
- * second copy of the rules that would eventually disagree with it.
+ * The list pane: the search field, then the drawers — or, once something is
+ * typed, the matches across all of them.
  */
 @Composable
-private fun QuickActionsSection(store: AppStore) {
-    val scope = rememberCoroutineScope()
+fun SettingsNavPane(store: AppStore, state: SettingsPaneState) {
+    val facts = settingsFacts(store, state)
+    val shown = SettingsScaffoldRules.shown(desktopProbe(facts), SettingsSurface.DESKTOP, state.query)
+
+    Column(Modifier.fillMaxSize()) {
+        SettingsSearchField(state.query, { state.query = it })
+        SettingsListPane(
+            shown = shown,
+            selected = SettingsScaffoldRules.landing(shown, state.selected),
+            summaryOf = { SettingsSummaries.of(it.id, facts) },
+            onOpenCategory = state::open,
+            onOpenHit = state::openHit,
+        )
+    }
+}
+
+/**
+ * Everything the list needs to know about the live world, collected once per
+ * pane from flows the store already keeps.
+ *
+ * The two that are NOT already kept — the signed-in account and the saved logins
+ * — are fetched once into [SettingsPaneState] rather than re-fetched here, so
+ * the two panes cannot ask the daemon the same question twice per frame.
+ */
+@Composable
+private fun settingsFacts(store: AppStore, state: SettingsPaneState): SettingsFacts {
     val status by store.status.collectAsState()
-    // HIDDEN ENTIRELY against a daemon with no templates (3.0.x): an editor with
-    // nothing behind it is four boxes whose Save can only 404. The same probe
-    // the selection menu runs when it narrows itself to Quote.
-    val actions = status?.quickActions ?: return
-    var busy by remember { mutableStateOf(false) }
-    var note by remember { mutableStateOf<String?>(null) }
+    val headroom by store.headroom.collectAsState()
+    val devices by store.devices.collectAsState()
+    val route by store.route.collectAsState()
+    val token by store.settings.tokenState.collectAsState()
+    val present by store.presence.present.collectAsState()
+    val notifyEnabled by store.settings.notifyEnabled.collectAsState(initial = true)
+    val closeToTray by store.settings.closeToTray.collectAsState()
+    val deviceEnabled by store.settings.deviceEnabled.collectAsState()
+    val update by store.updater.state.collectAsState()
 
-    SectionHeader("Quick actions")
-    // THE EDITOR MOVED TO `:ui` (`ui/settings/QuickActionsEditor.kt`), fields and
-    // wording unchanged. It was desktop-only though the templates are HOST-owned
-    // and the phone consumes them; the phone now calls the same editor.
-    QuickActionsEditor(
-        actions = actions,
-        busy = busy,
-        note = note,
-        onSave = { edited ->
-            scope.launch {
-                busy = true
-                note = runCatching {
-                    store.client.setQuickActions(
-                        explain = edited.explain,
-                        execute = edited.execute,
-                        askInNewChat = edited.askInNewChat,
-                        quote = edited.quote,
-                        rev = edited.rev,
-                    )
-                }.fold(
-                    { store.refreshStatus(); "saved — both clients use this wording now" },
-                    { it.message ?: "could not save" },
-                )
-                busy = false
-            }
-        },
+    return SettingsFacts(
+        account = state.account,
+        savedAccounts = state.savedAccounts,
+        status = status,
+        headroom = headroom,
+        devices = devices,
+        route = route,
+        tokenSet = token.isNotBlank(),
+        present = present,
+        notifyEnabled = notifyEnabled,
+        closeToTray = closeToTray,
+        deviceEnabled = deviceEnabled,
+        update = update,
+        installedVersion = store.updater.installedVersion,
     )
 }
-
-@Composable
-private fun SectionHeader(text: String) {
-    Text(
-        text,
-        style = MaterialTheme.typography.labelLarge,
-        color = MaterialTheme.colorScheme.primary,
-        modifier = Modifier.padding(top = 24.dp, bottom = 6.dp),
-    )
-}
-
-/**
- * A text field with its verb beside it — and, when there is no room beside it,
- * underneath it.
- *
- * ⚠ THE ROW THAT CANNOT SHRINK IS THE ONE THAT BREAKS. Every one of these pairs
- * is a field with a `widthIn(min = 280.dp)` next to a Button, and a Row measures
- * the field first: at 420dp of window the field takes its minimum and the button
- * is handed the remainder, which is nothing. It does not disappear — it renders
- * as a 32px-wide stripe with one letter per line, which reads as a rendering bug
- * rather than as a window that is too narrow. "Add login" did exactly that.
- *
- * So the row becomes a COLUMN under the width where both fit, rather than trying
- * to squeeze two controls into the space for one. Explicitly, with a measured
- * threshold, rather than by handing the problem to a flow layout: the two
- * controls here are always a field and its verb, and "which line is the verb on"
- * should be a decision this file makes rather than a consequence of measurement.
- */
-@Composable
-private fun FieldAndButtonRow(top: Dp = 6.dp, content: @Composable () -> Unit) {
-    BoxWithConstraints(Modifier.padding(top = top)) {
-        if (maxWidth < FIELD_ROW_STACK_BELOW) {
-            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) { content() }
-        } else {
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-            ) { content() }
-        }
-    }
-}
-
-/**
- * Where a field and its button stop fitting on one line: the field's own 280dp
- * minimum, the 8dp gap, and the widest verb in this pane ("Submit code"), with
- * enough left that the button is a button rather than a sliver.
- */
-private val FIELD_ROW_STACK_BELOW = 420.dp
