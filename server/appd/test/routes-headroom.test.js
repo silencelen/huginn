@@ -53,6 +53,7 @@ const h = require('../lib/headroom');
 // ⚠ 10450-10499 was ONE block in the wave-1 contract; it is SPLIT — resume keeps
 // the bottom ten, refresh the upper forty. Widening either back re-collides.
 //   routes-typing      10500 + pid%50    -> 10500-10549
+//   routes-quick-actions 10600 + pid%50  -> 10600-10649
 //
 // This file also binds TWO stub servers on ephemeral ports (port 0), so they
 // cannot collide with anything.
