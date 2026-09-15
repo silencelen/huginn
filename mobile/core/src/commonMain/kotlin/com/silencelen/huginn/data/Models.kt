@@ -1223,6 +1223,18 @@ data class Watch(
      */
     val pushesSent: Long? = null,
     /**
+     * Which epoch [pushesSent] is counted in — appd 3.0.5 and later.
+     *
+     * A random string minted when this install's counter is created or reset. It
+     * survives daemon restarts AND token rotations, and the rotation is what
+     * actually made the phone read "1274 of 916 pushes arrived": the daemon
+     * recreates the install row on rotation, so its count restarts while the
+     * phone's keeps climbing. NULLABLE because a pre-3.0.5 daemon sends none —
+     * see [com.silencelen.huginn.notify.PushTally], which keeps a `received >
+     * sent` guard for exactly that host.
+     */
+    val pushEpoch: String? = null,
+    /**
      * The headroom facts an alert turns on, inside the hash.
      *
      * ⚠ The daemon's digest is an explicit field list; a field that is not named
@@ -1375,6 +1387,8 @@ data class PushDevice(
     val seenAt: Long = 0,
     val failures: Int = 0,
     val tokenTail: String = "",
+    /** The same epoch [Watch.pushEpoch] carries, per device. Null before 3.0.5. */
+    val pushEpoch: String? = null,
 )
 
 @Serializable

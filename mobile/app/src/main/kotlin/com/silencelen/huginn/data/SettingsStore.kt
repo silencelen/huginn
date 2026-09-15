@@ -8,6 +8,7 @@ import androidx.datastore.preferences.core.longPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.core.stringSetPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
+import com.silencelen.huginn.notify.PushTally
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
@@ -52,6 +53,8 @@ class SettingsStore(private val context: Context) : HuginnSettings {
         private val LAST_PUSH_AT = longPreferencesKey("last_push_at")
         private val PUSHES_RECEIVED = longPreferencesKey("pushes_received")
         private val PUSHES_SENT = longPreferencesKey("pushes_sent")
+        private val PUSH_EPOCH = stringPreferencesKey("push_epoch")
+        private val PUSH_REBASELINED = booleanPreferencesKey("push_rebaselined")
         private val SEEDED = booleanPreferencesKey("watch_seeded")
         private val LAST_CONTACT = longPreferencesKey("last_contact_at")
         private val LAST_ALARM = longPreferencesKey("last_alarm_at")
@@ -174,6 +177,17 @@ class SettingsStore(private val context: Context) : HuginnSettings {
     val pushesReceived: Flow<Long> = context.dataStore.data.map { it[PUSHES_RECEIVED] ?: 0L }
     val pushesSent: Flow<Long> = context.dataStore.data.map { it[PUSHES_SENT] ?: 0L }
 
+    /**
+     * Which of the host's counter epochs [pushesReceived] belongs to.
+     *
+     * Empty means "no epoch seen yet", which is the state against a daemon older
+     * than 3.0.5. See [com.silencelen.huginn.notify.PushTally].
+     */
+    val pushEpoch: Flow<String> = context.dataStore.data.map { it[PUSH_EPOCH] ?: "" }
+
+    /** The phone has re-based its tally at least once, so the page can say so. */
+    val pushRebaselined: Flow<Boolean> = context.dataStore.data.map { it[PUSH_REBASELINED] ?: false }
+
     suspend fun notePushArrived(atMs: Long) {
         context.dataStore.edit {
             it[LAST_PUSH_AT] = atMs
@@ -181,9 +195,29 @@ class SettingsStore(private val context: Context) : HuginnSettings {
         }
     }
 
-    /** The host's own tally, learned from a watch response. */
-    suspend fun notePushesSent(count: Long) {
-        context.dataStore.edit { it[PUSHES_SENT] = count }
+    /**
+     * The host's own tally, learned from a watch response — AND the epoch it was
+     * counted in, which is what stops the two numbers being compared across a
+     * host-side restart.
+     *
+     * The whole reconciliation is [PushTally.reconcile]'s, tested in `:core`;
+     * this writes the answer down. Both keys move in ONE edit so a page reading
+     * them between two writes cannot see a count from one epoch labelled with
+     * the other.
+     */
+    suspend fun notePushesSent(count: Long, epoch: String? = null) {
+        context.dataStore.edit { prefs ->
+            val reading = PushTally.reconcile(
+                received = prefs[PUSHES_RECEIVED] ?: 0L,
+                storedEpoch = prefs[PUSH_EPOCH],
+                sent = count,
+                epoch = epoch?.takeIf { it.isNotBlank() },
+            )
+            prefs[PUSHES_SENT] = count
+            prefs[PUSHES_RECEIVED] = reading.received
+            reading.epoch?.let { prefs[PUSH_EPOCH] = it }
+            if (reading.rebaselined) prefs[PUSH_REBASELINED] = true
+        }
     }
 
     suspend fun notePushToken(token: String, atMs: Long) {
