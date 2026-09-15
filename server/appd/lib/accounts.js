@@ -50,6 +50,8 @@
 const crypto = require('node:crypto');
 const fs = require('node:fs');
 const path = require('node:path');
+const oauthlock = require('./oauthlock');
+const { freshnessOf } = require('./oauth-refresh');
 
 /** Where consolidate() puts records it folded into another. Never deleted. */
 const ARCHIVE_DIR = 'superseded';
@@ -109,13 +111,34 @@ function sameAccount(a, b) {
   return !!ta && !!tb && ta === tb;
 }
 
-/** Identifying fields, minus the secrets. */
-function describe(creds) {
+/**
+ * Identifying fields, minus the secrets.
+ *
+ * `freshness` is the one word that says whether this login can still be switched
+ * to, and it is computed here rather than in the caller so the list route, the
+ * activate route and the app can never disagree about it. A record saved before
+ * the refresher existed carries no `refresh` block and no
+ * `refreshTokenExpiresAt`; those read as null and the freshness falls out of
+ * `expiresAt` alone, exactly as it did when there was no such column.
+ */
+function describe(creds, opts = {}) {
   const o = (creds && creds.claudeAiOauth) || {};
+  const now = typeof opts.now === 'number' ? opts.now : Date.now();
+  const refresh = (opts.refresh && typeof opts.refresh === 'object') ? opts.refresh : null;
   return {
     subscriptionType: o.subscriptionType ?? null,
     expiresAt: o.expiresAt ?? null,
     scopes: Array.isArray(o.scopes) ? o.scopes.length : 0,
+    refreshTokenExpiresAt: o.refreshTokenExpiresAt ?? null,
+    freshness: freshnessOf(creds, now, { refresh, refreshing: opts.refreshing === true }),
+    refresh: refresh
+      ? {
+        lastAt: refresh.lastAt ?? null,
+        lastStatus: refresh.lastStatus ?? null,
+        nextAt: refresh.nextAt ?? null,
+        deadAt: refresh.deadAt ?? null,
+      }
+      : null,
   };
 }
 
@@ -274,6 +297,13 @@ class AccountStore {
       // Headroom last seen for this login, kept across rotations — it is the only
       // thing the auto-switcher can read once the stored access token expires.
       lastPlan: (base && base.lastPlan) ?? null,
+      // The refresher's own bookkeeping, carried across rotations for the same
+      // reason lastPlan is: every other writer of this record (the identity
+      // sweep on /v1/accounts, a switch, consolidate) calls save() without it,
+      // and a field that only survives when its own writer happens to be the
+      // last one is a field that silently resets — which here would mean a dead
+      // login being retried against the token endpoint forever.
+      refresh: rest.refresh ?? (base && base.refresh) ?? null,
       oauthAccount,
       credentials: creds,
     };
@@ -317,6 +347,23 @@ class AccountStore {
       at: Math.floor(Date.now() / 1000),
       limits: (plan && Array.isArray(plan.limits)) ? plan.limits : [],
     };
+    try { this._write(slug, rec); return true; } catch { return false; }
+  }
+
+  /**
+   * Records the outcome of a refresh attempt WITHOUT touching the credentials.
+   *
+   * Separate from save() on purpose: most attempts do not produce a new token
+   * pair (not needed yet, the lock was busy, the account is on hold), and
+   * routing those through save() would rewrite the credential blob — and its
+   * archive-the-superseded-pair machinery — for an attempt that changed nothing.
+   * Merged rather than replaced so a `deadAt` set by an earlier `invalid_grant`
+   * is not erased by the next tick's "lock_busy".
+   */
+  recordRefresh(slug, patch) {
+    const rec = this.readProfile(slug);
+    if (!rec) return false;
+    rec.refresh = { ...(rec.refresh || {}), ...(patch || {}) };
     try { this._write(slug, rec); return true; } catch { return false; }
   }
 
@@ -430,6 +477,7 @@ class AccountStore {
           firstSeen: Math.min(...members.map((m) => m.rec.firstSeen ?? m.rec.savedAt ?? 0).filter(Boolean)),
           savedAt: Math.max(...members.map((m) => m.rec.savedAt ?? 0)),
           lastPlan: ranked.map((m) => m.rec.lastPlan).find((v) => v != null) ?? null,
+          refresh: ranked.map((m) => m.rec.refresh).find((v) => v != null) ?? null,
           oauthAccount: freshest.oauthAccount ?? first('oauthAccount'),
           credentials: freshest.credentials,
         };
@@ -451,6 +499,7 @@ class AccountStore {
     let files = [];
     try { files = fs.readdirSync(this.dir).filter((f) => f.endsWith('.json')); } catch { return []; }
     const active = this.readActive();
+    const now = Date.now();
     const out = [];
     for (const f of files) {
       const rec = this._readFile(path.join(this.dir, f));
@@ -465,7 +514,7 @@ class AccountStore {
         firstSeen: rec.firstSeen ?? null,
         planSeenAt: (rec.lastPlan && rec.lastPlan.at) ?? null,
         isActive: sameAccount(rec.credentials, active),
-        ...describe(rec.credentials),
+        ...describe(rec.credentials, { refresh: rec.refresh, now }),
       });
     }
     out.sort((a, b) =>
@@ -481,11 +530,38 @@ class AccountStore {
   /**
    * Makes a stored account the active login. Snapshots the outgoing one first,
    * then writes atomically so a reader never sees a half-written file.
+   *
+   * Takes the CLI's own OAuth refresh lock for the duration of the write. Before
+   * this it did not, and that was survivable only while nothing else rotated a
+   * stored token pair. It does now: if a refresh lands between the snapshot
+   * above and the rename below, the credentials file is installed one rotation
+   * behind, the CLI's first refresh gets `invalid_grant`, and the CLI answers
+   * that by blanking its own credentials — the owner is signed out with no
+   * visible cause. One non-blocking attempt only: this runs inside a request
+   * handler, and the caller that can afford to wait (`performSwitch`) takes the
+   * lock itself and passes `held`.
    */
-  activate(slug, activeEmail) {
+  activate(slug, activeEmail, opts = {}) {
     const rec = this.readProfile(slug);
     if (!rec || !rec.credentials) return { ok: false, error: 'no such saved account' };
 
+    let lock = null;
+    if (!opts.held) {
+      lock = oauthlock.tryAcquire(path.dirname(this.credentialsPath), opts.lock || {});
+      if (!lock.ok) {
+        // Nothing has been written at this point, which is the property that
+        // matters: a refused switch must leave the live login exactly as it was.
+        return { ok: false, error: 'another process is refreshing this host\'s token', status: lock.status };
+      }
+    }
+    try {
+      return this._activateLocked(slug, rec, activeEmail);
+    } finally {
+      if (lock) { try { lock.release(); } catch { /* stolen at 60s anyway */ } }
+    }
+  }
+
+  _activateLocked(slug, rec, activeEmail) {
     const current = this.readActive();
     if (current && !sameAccount(current, rec.credentials)) {
       // Keyed by its own fingerprint, so this cannot overwrite the incoming one
