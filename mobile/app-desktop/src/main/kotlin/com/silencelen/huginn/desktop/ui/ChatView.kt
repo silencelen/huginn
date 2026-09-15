@@ -16,17 +16,18 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.text.selection.SelectionContainer
-import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.Send
+import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -55,6 +56,7 @@ import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.input.TextFieldValue
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.silencelen.huginn.data.DraftBook
 import com.silencelen.huginn.data.HuginnClient
@@ -67,6 +69,11 @@ import com.silencelen.huginn.ui.ModelLabels
 import com.silencelen.huginn.ui.SealedNote
 import com.silencelen.huginn.desktop.AppStore
 import com.silencelen.huginn.desktop.ChatController
+import com.silencelen.huginn.desktop.Composer
+import com.silencelen.huginn.desktop.ui.common.ComposerAction
+import com.silencelen.huginn.desktop.ui.common.PaneScrollbar
+import com.silencelen.huginn.desktop.ui.common.ComposerChips
+import com.silencelen.huginn.desktop.ui.common.ComposerFrame
 import com.silencelen.huginn.desktop.attach.AttachButton
 import com.silencelen.huginn.desktop.attach.AttachChip
 import com.silencelen.huginn.desktop.attach.AttachFilePicker
@@ -380,6 +387,12 @@ fun ChatView(
                     }
                 }
             }
+            // Over the transcript, not inside it: a sibling of the `when` so the
+            // bar is there whichever branch drew (and hides itself when the
+            // content fits, which is every loading and empty state). It reads the
+            // SAME `listState` the follow-the-tail effects drive, so nothing about
+            // scrolling changes — this is a second hand on one wheel.
+            PaneScrollbar(listState)
         }
 
         if (hasUnseen) {
@@ -543,19 +556,17 @@ private fun Composer(
     ) {
         // ONLY when one is set. The empty-state invitation moved into the attach
         // button's chooser; what stays is the mark that a whole page is riding
-        // out with this message.
-        pads.firstOrNull { it.id == padRefId }?.let { chosen ->
-            Row(Modifier.fillMaxWidth().padding(bottom = 4.dp)) {
-                ScratchpadRefBadge(pad = chosen, pads = pads, onSelect = onPadRef)
+        // out with this message — beside the file chip on ONE wrapping line, so
+        // two attachments cost one band rather than two.
+        val chosenPad = pads.firstOrNull { it.id == padRefId }
+        if (chosenPad != null || pending != null) {
+            ComposerChips {
+                chosenPad?.let { ScratchpadRefBadge(pad = it, pads = pads, onSelect = onPadRef) }
+                pending?.let { AttachChip(it) { attachments.clear() } }
             }
         }
-        pending?.let {
-            Row(Modifier.fillMaxWidth().padding(bottom = 6.dp)) {
-                AttachChip(it) { attachments.clear() }
-            }
-            it.detail?.takeIf { _ -> it.status == AttachStatus.READY }?.let { note ->
-                Muted(note, Modifier.padding(bottom = 6.dp), maxLines = 2)
-            }
+        pending?.detail?.takeIf { pending?.status == AttachStatus.READY }?.let { note ->
+            Muted(note, Modifier.padding(bottom = 6.dp), maxLines = 2)
         }
         failure?.let {
             Row(Modifier.fillMaxWidth().padding(bottom = 6.dp)) {
@@ -568,11 +579,6 @@ private fun Composer(
                 TextButton(onClick = { attachments.dismissFailure() }) { Text("dismiss") }
             }
         }
-        Row(
-            Modifier.fillMaxWidth(),
-            verticalAlignment = Alignment.Bottom,
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
     // The field owns a TextFieldValue rather than a bare String, because it has
     // to insert a newline AT THE CURSOR when Shift+Enter is pressed: Compose maps
     // Enter to a newline but nothing to Shift+Enter, so once Enter is taken for
@@ -588,20 +594,44 @@ private fun Composer(
     // cancelled-send, dropped text and suggestion chips all write to; when one of
     // them changes it underneath, this adopts the new text and puts the caret at
     // the end.
-    var field by remember { mutableStateOf(TextFieldValue(draft)) }
-    if (field.text != draft) {
-        field = TextFieldValue(draft, TextRange(draft.length))
-    }
-            AttachButton(
-                pads = pads,
-                padRefId = padRefId,
-                onPadRef = onPadRef,
-                onPickFile = { picking = true },
-            )
+        var field by remember { mutableStateOf(TextFieldValue(draft)) }
+        if (field.text != draft) {
+            field = TextFieldValue(draft, TextRange(draft.length))
+        }
+        // The shape is [ComposerFrame], shared with the session composer: below
+        // ~560dp of composer the field takes the whole width and Attach, Stop and
+        // Send become their own icons on a line beneath it. Nothing about the
+        // keyboard moves — see the block below, which is unchanged.
+        ComposerFrame(
+            attach = {
+                AttachButton(
+                    pads = pads,
+                    padRefId = padRefId,
+                    onPadRef = onPadRef,
+                    onPickFile = { picking = true },
+                )
+            },
+            actions = { layout ->
+                if (running) {
+                    ComposerAction(layout, "Stop", Icons.Filled.Stop, onStop)
+                }
+                // ONE send button whatever the state. A separate "Queue" verb was a
+                // second control for the same act — the message goes to the same
+                // place, and the transcript says it is waiting.
+                ComposerAction(
+                    layout,
+                    "Send",
+                    Icons.AutoMirrored.Filled.Send,
+                    submit,
+                    enabled = canSend,
+                    prominent = true,
+                )
+            },
+        ) { fieldModifier, layout ->
             OutlinedTextField(
                 value = field,
                 onValueChange = { field = it; onDraft(it.text); exitRecallIfDiverged(recall, it.text) },
-                modifier = Modifier.weight(1f).heightIn(min = 56.dp, max = 160.dp)
+                modifier = fieldModifier
                     // ENTER SENDS. Shift+Enter is the newline, which is what every
                     // chat this sits beside does — and the reverse binding, which
                     // this had, reads as a broken send rather than as a deliberate
@@ -643,19 +673,29 @@ private fun Composer(
                             else -> false
                         }
                     },
+                // ONE LINE, ALWAYS. The keyboard lesson is worth carrying, but an
+                // unbounded placeholder is what made an EMPTY composer 145px tall
+                // at 900 wide and five lines tall at 420 — the box grew to fit a
+                // sentence about the box. Ellipsised at desk widths, and dropped
+                // whole under the breakpoint (half a sentence about Shift+Enter
+                // teaches nothing; F1 still carries all of it).
                 placeholder = {
                     Text(
-                        if (running) "Send anyway — it will queue behind this turn"
-                        else "Message…  (Enter to send · Shift+Enter for a new line · paste, drop or clip a file)"
+                        if (running) {
+                            "Send anyway — it will queue behind this turn"
+                        } else {
+                            Composer.placeholder(
+                                "Message…",
+                                "Enter to send · Shift+Enter for a new line · paste, drop or clip a file",
+                                layout,
+                            )
+                        },
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
                     )
                 },
                 textStyle = MaterialTheme.typography.bodyMedium,
             )
-            if (running) TextButton(onClick = onStop) { Text("Stop") }
-            // ONE send button whatever the state. A separate "Queue" verb was a
-            // second control for the same act — the message goes to the same
-            // place, and the transcript says it is waiting.
-            Button(onClick = submit, enabled = canSend) { Text("Send") }
         }
     }
 }

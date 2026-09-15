@@ -47,6 +47,7 @@ import com.silencelen.huginn.desktop.ui.common.DeskType
 import com.silencelen.huginn.desktop.ui.common.EmptyBlock
 import com.silencelen.huginn.desktop.ui.common.Frame
 import com.silencelen.huginn.desktop.ui.common.LoadingBlock
+import com.silencelen.huginn.desktop.ui.common.PaneScrollbar
 import com.silencelen.huginn.desktop.ui.common.RowMenu
 import com.silencelen.huginn.desktop.ui.common.Selection
 import com.silencelen.huginn.desktop.ui.common.SessionVerbs
@@ -128,24 +129,30 @@ fun ChatsList(
             return@Column
         }
         val order = remember(chats) { chats.map { it.id } }
-        LazyColumn(Modifier.fillMaxSize(), state = rememberLazyListState()) {
-            itemsIndexed(chats, key = { _, it -> it.id }) { i, chat ->
-                RowMenu({ chatMenu(chat, selection.ids, verbs) }) {
-                    ChatRow(
-                        chat = chat,
-                        active = chat.id == activeId,
-                        selected = chat.id in selection && selection.size > 1,
-                        onClick = { ctrl, shift ->
-                            onSelect(clickSelection(selection, chat.id, order, ctrl, shift))
-                            if (opensOnClick(ctrl, shift)) onOpen(chat.id)
-                        },
-                    )
+        // The bar over the list, hoisted state and all: a desktop list pane with
+        // nothing saying how far down it is is a phone screenshot in a window.
+        val rows = rememberLazyListState()
+        Box(Modifier.fillMaxSize()) {
+            LazyColumn(Modifier.fillMaxSize(), state = rows) {
+                itemsIndexed(chats, key = { _, it -> it.id }) { i, chat ->
+                    RowMenu({ chatMenu(chat, selection.ids, verbs) }) {
+                        ChatRow(
+                            chat = chat,
+                            active = chat.id == activeId,
+                            selected = chat.id in selection && selection.size > 1,
+                            onClick = { ctrl, shift ->
+                                onSelect(clickSelection(selection, chat.id, order, ctrl, shift))
+                                if (opensOnClick(ctrl, shift)) onOpen(chat.id)
+                            },
+                        )
+                    }
+                    // Between rows only. A rule under the LAST row draws a line across
+                    // empty space and is the clearest tell that a list was laid out for
+                    // a screen that always scrolls.
+                    if (i < chats.lastIndex) RowRule()
                 }
-                // Between rows only. A rule under the LAST row draws a line across
-                // empty space and is the clearest tell that a list was laid out for
-                // a screen that always scrolls.
-                if (i < chats.lastIndex) RowRule()
             }
+            PaneScrollbar(rows)
         }
     }
 }
@@ -232,21 +239,25 @@ fun SessionsList(
             return@Column
         }
         val order = remember(sessions) { sessions.map { it.name } }
-        LazyColumn(Modifier.fillMaxSize(), state = rememberLazyListState()) {
-            itemsIndexed(sessions, key = { _, it -> it.name }) { i, s ->
-                RowMenu({ sessionMenu(s, selection.ids, verbs) }) {
-                    SessionRow(
-                        session = s,
-                        active = s.name == activeName,
-                        selected = s.name in selection && selection.size > 1,
-                        onClick = { ctrl, shift ->
-                            onSelect(clickSelection(selection, s.name, order, ctrl, shift))
-                            if (opensOnClick(ctrl, shift)) onOpen(s.name)
-                        },
-                    )
+        val rows = rememberLazyListState()
+        Box(Modifier.fillMaxSize()) {
+            LazyColumn(Modifier.fillMaxSize(), state = rows) {
+                itemsIndexed(sessions, key = { _, it -> it.name }) { i, s ->
+                    RowMenu({ sessionMenu(s, selection.ids, verbs) }) {
+                        SessionRow(
+                            session = s,
+                            active = s.name == activeName,
+                            selected = s.name in selection && selection.size > 1,
+                            onClick = { ctrl, shift ->
+                                onSelect(clickSelection(selection, s.name, order, ctrl, shift))
+                                if (opensOnClick(ctrl, shift)) onOpen(s.name)
+                            },
+                        )
+                    }
+                    if (i < sessions.lastIndex) RowRule()
                 }
-                if (i < sessions.lastIndex) RowRule()
             }
+            PaneScrollbar(rows)
         }
     }
 }
@@ -298,6 +309,18 @@ private fun SessionRow(
             if (work.isNotEmpty()) {
                 Tip(work) {
                     Muted(bgLabel(session.bgShells, session.bgAgents), Modifier.padding(end = Space.unit))
+                }
+            }
+            // A message the daemon is HOLDING for this session. It belongs on the
+            // row as well as under the composer: the send outlives the view it was
+            // typed in, and a reader who has walked away to another session would
+            // otherwise have no way to know anything is still owed to this one.
+            if (session.pendingSends > 0) {
+                Tip(
+                    "${session.pendingSends} message${if (session.pendingSends == 1) "" else "s"} " +
+                        "waiting to go in — the daemon sends them when the turn ends",
+                ) {
+                    Muted("${session.pendingSends} queued", Modifier.padding(end = Space.unit))
                 }
             }
             // "ctx N%" sits with the row's other metadata, only when the host

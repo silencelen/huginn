@@ -3,11 +3,9 @@ package com.silencelen.huginn.desktop.ui
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -21,6 +19,8 @@ import androidx.compose.ui.unit.dp
 import com.silencelen.huginn.data.Plan
 import com.silencelen.huginn.data.Status
 import com.silencelen.huginn.data.Usage
+import com.silencelen.huginn.desktop.ui.common.ReadingPane
+import com.silencelen.huginn.desktop.ui.common.Space
 import com.silencelen.huginn.ui.PlanSection
 import com.silencelen.huginn.ui.UsageSection
 import kotlinx.coroutines.delay
@@ -44,7 +44,10 @@ fun StatusView(status: Status?, plan: Plan?, usage: Usage?, route: String, watch
             delay(30_000)
         }
     }
-    Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(24.dp)) {
+    // A reading pane: capped to a measure, centred, and with a scrollbar. It used
+    // to run to the window edge, which put ~1300px of nothing between `host` and
+    // `huginn` and drew a 1340px progress bar for a percentage.
+    ReadingPane(padding = PaddingValues(Space.section)) {
         Text("Status", style = MaterialTheme.typography.titleMedium)
 
         Section("Host")

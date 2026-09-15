@@ -1,9 +1,12 @@
 package com.silencelen.huginn.ui
 
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -83,11 +86,54 @@ data class TranscriptMetrics(
 val LocalTranscriptMetrics = staticCompositionLocalOf { TranscriptMetrics() }
 
 /**
+ * Where a long-press on a transcript row reports to.
+ *
+ * THE SEAM, and it is a composition local for the same reason the metrics are:
+ * [TranscriptEventItem] is called from four places across two shells, and
+ * threading a nullable handler through all of them to reach a gesture only one
+ * client offers would change every signature in the module.
+ *
+ * NULL IS THE DESKTOP'S ANSWER, provided by simply not providing anything. That
+ * client already has the gesture — right-click over a selection, with the same
+ * four verbs — and adding a long-press to it would put a second, differently
+ * shaped entry point on the same text. A default of null therefore means "this
+ * shell has its own answer", not "this feature is broken here".
+ */
+fun interface TranscriptSelectionHost {
+    /** The whole row's text, as selected by a long press. */
+    fun onLongPress(text: String)
+}
+
+val LocalTranscriptSelection = staticCompositionLocalOf<TranscriptSelectionHost?> { null }
+
+/**
+ * The text a long-press on this row selects — the WHOLE row, not a word.
+ *
+ * A long press on a phone is a blunt instrument: it lands wherever the thumb did,
+ * and the toolkit's own word-and-drag selection is the thing it is worse than.
+ * What it is better at is "this message" — which is a unit the reader can see the
+ * boundaries of before pressing, and the unit every quick action actually wants.
+ *
+ * Empty for a row with nothing to quote (a tool card whose result has not arrived,
+ * a spinner), and an empty selection offers no verbs at all — [SelectionMode]
+ * already holds that rule.
+ */
+fun rowSelectionText(ev: TranscriptEvent): String = when (ev.kind) {
+    // The command and its output are one row on screen and one quote off it.
+    "tool", "tool_result" -> listOfNotNull(
+        ev.text?.takeIf { it.isNotBlank() },
+        ev.result?.takeIf { it.isNotBlank() },
+    ).joinToString("\n\n")
+    else -> ev.text.orEmpty()
+}.trim()
+
+/**
  * Renders one normalized transcript event. Shared by the session view and the
  * chat view: both read the same Claude Code transcript, so both get thinking,
  * tool calls, subagent output and workflow runs from the same code. Adding a new
  * event kind means changing this file only.
  */
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun TranscriptEventItem(
     ev: TranscriptEvent,
@@ -96,7 +142,28 @@ fun TranscriptEventItem(
     // Subagent output is indented under a marker rather than hidden: during a
     // fan-out it is most of what is happening, but it is not the main thread.
     val indent = if (ev.sidechain) 14.dp else 0.dp
-    Box(Modifier.padding(start = indent)) {
+    // The phone's long-press. Wrapped here, once, rather than on each row kind —
+    // and only when a shell provided a host, so the desktop gains no gesture and
+    // its right-click keeps being the only one.
+    //
+    // ⚠ It lives INSIDE the shell's SelectionContainer, so the toolkit's own
+    // word-drag selection is still there for anyone who wants a phrase; this is
+    // the coarser, faster answer for "this message", and it raises the action bar
+    // the toolkit has no room to offer. No ripple and no onClick: the rows below
+    // own their own taps (a tool card expands, a bubble reveals its stamp) and a
+    // clickable parent would take the indication for gestures it never handles.
+    val host = LocalTranscriptSelection.current
+    val selectable = remember(ev.seq, ev.text, ev.result) {
+        if (host == null) "" else rowSelectionText(ev)
+    }
+    val press = if (host == null || selectable.isEmpty()) Modifier else Modifier.combinedClickable(
+        interactionSource = remember { MutableInteractionSource() },
+        indication = null,
+        onLongClickLabel = "Select this message",
+        onLongClick = { host.onLongPress(selectable) },
+        onClick = {},
+    )
+    Box(Modifier.padding(start = indent).then(press)) {
         when (ev.kind) {
             "user" -> UserBubble(ev.text.orEmpty(), ev.queued)
             // A usage limit arrives AS an assistant record — Claude Code writes its

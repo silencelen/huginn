@@ -1,6 +1,8 @@
 package com.silencelen.huginn.desktop
 
 import com.silencelen.huginn.ui.PromptGate
+import com.silencelen.huginn.ui.PromptPlacement
+import com.silencelen.huginn.ui.PromptSurface
 import com.silencelen.huginn.ui.SessionFace
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -30,10 +32,34 @@ class SessionTabFaceTest {
     }
 
     @Test
-    fun `the card is withheld on the screen tab and drawn on the other two`() {
+    fun `the question surface is withheld on the screen tab and drawn on the other two`() {
         assertFalse(PromptGate.visible(hasQuestion = true, face = SessionTab.SCREEN.face))
         assertTrue(PromptGate.visible(hasQuestion = true, face = SessionTab.CONVERSATION.face))
         assertTrue(PromptGate.visible(hasQuestion = true, face = SessionTab.OVERVIEW.face))
+    }
+
+    @Test
+    fun `this client steers rather than drawing a card, and dots the tab it steers to`() {
+        // Owner decision 23: the Conversation and Overview show a one-line bar and
+        // the Screen tab answers. The mapping below is the only desktop-specific
+        // part of that, so it is also the only place it can be lost on this client
+        // while the shared tests stay green.
+        assertEquals(
+            PromptPlacement.LINK_TO_SCREEN,
+            PromptPlacement.of(SessionTab.CONVERSATION.face, PromptSurface.SESSION),
+        )
+        assertEquals(
+            PromptPlacement.LINK_TO_SCREEN,
+            PromptPlacement.of(SessionTab.OVERVIEW.face, PromptSurface.SESSION),
+        )
+        assertEquals(
+            PromptPlacement.NONE,
+            PromptPlacement.of(SessionTab.SCREEN.face, PromptSurface.SESSION),
+        )
+        // The dot rides the tab being steered TO, and never the tab already open.
+        assertTrue(PromptGate.screenTabDot(hasQuestion = true, face = SessionTab.CONVERSATION.face))
+        assertFalse(PromptGate.screenTabDot(hasQuestion = true, face = SessionTab.SCREEN.face))
+        assertFalse(PromptGate.screenTabDot(hasQuestion = false, face = SessionTab.CONVERSATION.face))
     }
 
     @Test

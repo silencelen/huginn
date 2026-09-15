@@ -255,12 +255,33 @@ test('a queued model job is dropped once the session has changed family', () => 
     'no probe installed means the rule cannot fire, not that it fires blindly');
 });
 
-test('a send that waited ten minutes is dropped, and says so', () => {
+test('an AUTOMATED send that waited ten minutes is dropped, and says so', () => {
   const now = Date.now();
-  const entry = { automated: false, at: now - t.QUEUE_MAX_WAIT_MS - 1 };
+  const entry = { automated: true, origin: 'headroom', at: now - t.QUEUE_MAX_WAIT_MS - 1 };
   assert.equal(t.dropReason(entry, { now }), 'timeout');
-  assert.equal(t.dropReason({ automated: false, at: now - 1000 }, { now }), null);
+  assert.equal(t.dropReason({ automated: true, at: now - 1000 }, { now }), null);
   assert.match(t.dropMessage('timeout'), /waited 10 minutes for a turn boundary and gave up/);
+});
+
+// HOTFIX 3.0.2: a person's message is never binned. 3.0.0 dropped it after ten
+// minutes, and because the boundary check also misread the CLI's bookkeeping
+// records as "still busy", 43 of the owner's messages vanished from one session.
+test('a HUMAN send is never dropped on timeout — late beats lost', () => {
+  const now = Date.now();
+  const stale = { automated: false, at: now - 3 * t.QUEUE_MAX_WAIT_MS };
+  assert.equal(t.dropReason(stale, { now }), null);
+});
+
+test('bookkeeping records after the turn marker do not hide the boundary', () => {
+  const tail = [
+    '{"type":"system","subtype":"turn_duration","durationMs":1200}',
+    '{"type":"last-prompt"}', '{"type":"ai-title"}', '{"type":"mode"}',
+    '{"type":"permission-mode"}', '{"type":"atis-latch"}', '{"type":"cost-state"}',
+    '{"type":"file-history-snapshot"}', '{"type":"queue-operation","operation":"enqueue"}',
+  ].join('\n');
+  assert.equal(t.boundaryFromTail(tail).idle, true, 'the turn ended; the records after it are not a turn');
+  const busy = '{"type":"assistant","message":{"content":[{"type":"text","text":"working"}]}}\n{"type":"mode"}';
+  assert.equal(t.boundaryFromTail(busy).idle, false, 'an assistant record is a turn in progress');
 });
 
 test('every drop has words for it — a queue that loses a message silently is the bug', () => {

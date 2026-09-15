@@ -361,8 +361,12 @@ fun main(args: Array<String>) {
         fun detailWidthDp(): Float = Splitter.detailWidth(
             windowWidth = windowState.size.width.value,
             railWidth = Frame.railWidth.value,
-            listWidth = settings.listWidth.value,
-            collapsed = settings.listCollapsedNow(),
+            // THE DRAWN width and the DRAWN collapse, not the persisted ones. A
+            // narrow window folds its list away without writing anything, so
+            // reading the settings file here would tell a one-pane window it is
+            // still paying 320dp for a pane that is not on screen.
+            listWidth = store.listWidthNow(),
+            collapsed = store.listCollapsedNow(),
         )
 
         /** Is the page panel actually on screen — the only thing Esc may close. */
@@ -547,7 +551,10 @@ fun main(args: Array<String>) {
                     // be a key press with nothing on screen to show for it, then a
                     // pane that turns out to be missing three views later.
                     shortcut == Shortcut.TOGGLE_LIST -> {
-                        if (Splitter.showsList(store.view.value)) settings.toggleListCollapsed()
+                        // Through the store, which is where "is this window narrow
+                        // enough that the pane folded itself" is known. On a wide
+                        // window this is still exactly the persisted flag.
+                        if (Splitter.showsList(store.view.value)) store.toggleList()
                         true
                     }
                     else -> false
@@ -557,6 +564,20 @@ fun main(args: Array<String>) {
             // PRESENCE, from window focus. This is what the notification claim
             // rides on, so it must reflect the desk rather than the process being
             // alive.
+            // ⚠ THE FLOOR, ENFORCED. `WindowLayout.MIN_W/MIN_H` had only ever been
+            // applied when RESTORING a saved rectangle, so every shape below it was
+            // one drag of a corner away — and the shapes below it were where the
+            // frame fell apart (a 40dp detail pane at 420 wide). AWT owns the
+            // resize, so AWT is where the floor has to be set; a Compose-side clamp
+            // would fight the window manager for a size it had already granted.
+            //
+            // Raw ints rather than a density conversion, deliberately consistent
+            // with `restore` above, which compares the SAME numbers against
+            // `Toolkit.screenSize`. One unit or the other, never half of each.
+            LaunchedEffect(Unit) {
+                window.minimumSize = java.awt.Dimension(WindowLayout.MIN_W, WindowLayout.MIN_H)
+            }
+
             val windowInfo = LocalWindowInfo.current
             LaunchedEffect(Unit) {
                 snapshotFlow { windowInfo.isWindowFocused }.collect {
@@ -666,7 +687,7 @@ fun main(args: Array<String>) {
                                         // Same gate as the chord: a seam that is
                                         // not drawn has nothing to toggle.
                                         Shortcut.TOGGLE_LIST ->
-                                            if (Splitter.showsList(store.view.value)) settings.toggleListCollapsed()
+                                            if (Splitter.showsList(store.view.value)) store.toggleList()
                                         else -> Unit
                                     }
                                 }

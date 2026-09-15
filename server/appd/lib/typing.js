@@ -127,7 +127,13 @@ function boundaryFromTail(jsonlTail) {
     let rec;
     try { rec = JSON.parse(line); } catch { continue; }
     if (!rec || typeof rec !== 'object') continue;
-    if (rec.type === 'attachment') continue;
+    // HOTFIX 3.0.2: only CONVERSATIONAL records decide the boundary. Claude Code
+    // appends bookkeeping records after a turn (last-prompt, ai-title, mode,
+    // permission-mode, atis-latch, cost-state, file-history-snapshot, ...), which
+    // made a busy session look un-idle forever and dropped queued human sends.
+    const conv = rec.type === 'user' || rec.type === 'assistant'
+      || (rec.type === 'system' && rec.subtype === 'turn_duration');
+    if (!conv) continue;
     return { idle: isBoundaryRecord(rec), lastKind: kindOf(rec) };
   }
   return { idle: false, lastKind: null };
@@ -222,8 +228,14 @@ function paneBlocks(why) {
  * at once through one buffer name is a message delivered into the wrong pane,
  * and `paste-buffer -d` on a shared name is a race with a second load.
  */
+// A random 24-bit name collided (birthday odds ~0.7 % per 500 sends — and it
+// did, twice, in the release gate). A buffer is deleted right after its paste,
+// so a per-process counter from a random start is unique for 16.7 M sends and
+// keeps the hg-<6hex> shape.
+let bufferSeq = randomBytes(3).readUIntBE(0, 3);
 function bufferName() {
-  return `hg-${randomBytes(3).toString('hex')}`;
+  bufferSeq = (bufferSeq + 1) & 0xffffff;
+  return `hg-${bufferSeq.toString(16).padStart(6, '0')}`;
 }
 
 /**
@@ -262,7 +274,9 @@ function dropReason(entry, ctx = {}) {
   if (entry.automated && entry.kind === 'model' && entry.family && ctx.family
       && ctx.family !== entry.family) return 'family';
   const now = Number(ctx.now) || 0;
-  if (now && entry.at && now - entry.at >= QUEUE_MAX_WAIT_MS) return 'timeout';
+  // HOTFIX 3.0.2: a person's message is never dropped on timeout (late beats
+  // lost); only automated sends time out.
+  if (entry.automated && now && entry.at && now - entry.at >= QUEUE_MAX_WAIT_MS) return 'timeout';
   return null;
 }
 

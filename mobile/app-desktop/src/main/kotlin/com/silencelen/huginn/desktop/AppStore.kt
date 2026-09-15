@@ -219,6 +219,74 @@ class AppStore(
         }
     }
 
+    // ------------------------------------------------------ the window's width
+
+    /**
+     * How wide the frame turned out to be, in dp, as the shell's own
+     * `BoxWithConstraints` measured it.
+     *
+     * HELD HERE RATHER THAN IN [settings] because it is not a setting: nothing
+     * about it is remembered, and it changes sixty times a second while a window
+     * is being dragged. It lives in the store because THREE places have to agree
+     * about it — the shell that draws the panes, the window's key handler (Ctrl+B
+     * must mean the same thing the notch means), and the page panel's fit check.
+     * Two of those are outside the composition, which is why the number has to
+     * come back out of it.
+     */
+    private val _frameWidthDp = MutableStateFlow(WindowLayout.DEFAULT_W.toFloat())
+    val frameWidthDp: StateFlow<Float> = _frameWidthDp.asStateFlow()
+
+    /**
+     * "Show me the list anyway, on this narrow window."
+     *
+     * In memory, never written to the settings file, and dropped the moment the
+     * window is wide enough to have its own opinion again — see [noteFrameWidth].
+     * Persisting it would be the auto-collapse quietly overwriting the very
+     * preference it exists to leave alone.
+     */
+    private val _listRevealed = MutableStateFlow(false)
+    val listRevealed: StateFlow<Boolean> = _listRevealed.asStateFlow()
+
+    /** Called by the frame on every measured width. */
+    fun noteFrameWidth(dp: Float) {
+        if (dp == _frameWidthDp.value) return
+        val wasCompact = Responsive.compact(_frameWidthDp.value)
+        _frameWidthDp.value = dp
+        // Leaving compact hands the persisted answer back, so the reveal must not
+        // survive the trip: a window widened to 1440 would otherwise be showing a
+        // list its own settings say is shut, and the notch would need TWO presses
+        // to agree with what is on screen.
+        if (wasCompact && !Responsive.compact(dp)) _listRevealed.value = false
+    }
+
+    /**
+     * The notch, and Ctrl+B. ONE verb, because the two must not diverge.
+     *
+     * On a window wide enough to hold both panes this is the persisted flag it
+     * always was. On a narrow one it flips the in-memory reveal instead — the
+     * reader gets their list, and the remembered preference is untouched.
+     */
+    fun toggleList() {
+        if (Responsive.compact(_frameWidthDp.value)) _listRevealed.value = !_listRevealed.value
+        else settings.toggleListCollapsed()
+    }
+
+    /** Put the pane back on screen, wherever it is being hidden from. */
+    fun revealList() {
+        settings.setListCollapsed(false)
+        _listRevealed.value = true
+    }
+
+    /** Is the list pane shut right now, by any of the three things that shut it. */
+    fun listCollapsedNow(): Boolean = Responsive.listCollapsed(
+        persisted = settings.listCollapsedNow(),
+        compact = Responsive.compact(_frameWidthDp.value),
+        revealed = _listRevealed.value,
+    )
+
+    /** What the list pane is really drawn at, window included. */
+    fun listWidthNow(): Float = Responsive.listWidth(settings.listWidth.value, _frameWidthDp.value)
+
     // ---------------------------------------------------------------- data
 
     private val _chats = MutableStateFlow<List<Chat>>(emptyList())
