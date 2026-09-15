@@ -52,6 +52,7 @@ const crypto = require('node:crypto');
 //   routes-resume       10450 + pid%10   -> 10450-10459
 //   routes-refresh      10460 + pid%40   -> 10460-10499   (this file)
 //   routes-quick-actions 10600 + pid%50  -> 10600-10649   (wave 2)
+//   routes-session-state 10750 + pid%50  -> 10750-10799
 //
 // ⚠ 10450-10499 was ONE block in the wave-1 contract; it is SPLIT — resume keeps
 // the bottom ten, refresh the upper forty. Widening either back re-collides.
