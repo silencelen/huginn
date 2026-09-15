@@ -4,6 +4,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -41,6 +42,7 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import com.silencelen.huginn.data.Chat
 import com.silencelen.huginn.data.Session
+import com.silencelen.huginn.desktop.Responsive
 import com.silencelen.huginn.desktop.ui.common.DeskType
 import com.silencelen.huginn.desktop.ui.common.Space
 
@@ -75,7 +77,7 @@ fun CommandPalette(
     LaunchedEffect(selected) { if (selected in shown.indices) listState.animateScrollToItem(selected) }
     LaunchedEffect(Unit) { focus.requestFocus() }
 
-    Box(
+    BoxWithConstraints(
         Modifier.fillMaxSize()
             .background(MaterialTheme.colorScheme.scrim.copy(alpha = 0.55f))
             // A click anywhere off the card dismisses; the card itself swallows
@@ -83,8 +85,15 @@ fun CommandPalette(
             .clickable(indication = null, interactionSource = remember { MutableInteraction() }) { onDismiss() },
         contentAlignment = Alignment.TopCenter,
     ) {
+        // SIZED FROM THE WINDOW, both ways. A flat `width(620.dp)` is wider than a
+        // 600px window: the card bled off both edges, lost its corners and set its
+        // text flush against the frame. A flat `heightIn(max = 360.dp)` clipped the
+        // last row mid-glyph at EVERY shape, including a 1400px window with 880px
+        // going unused. Both numbers are [Responsive]'s now, and both are asserted.
+        val cardWidth = Responsive.paletteWidth(maxWidth.value).dp
+        val listHeight = Responsive.paletteListHeight(maxHeight.value).dp
         Surface(
-            Modifier.padding(top = 96.dp).width(620.dp)
+            Modifier.padding(top = Responsive.PALETTE_TOP_DP.dp).width(cardWidth)
                 .clickable(indication = null, interactionSource = remember { MutableInteraction() }) {},
             shape = RoundedCornerShape(10.dp),
             color = MaterialTheme.colorScheme.surfaceContainerHigh,
@@ -128,7 +137,7 @@ fun CommandPalette(
                 if (shown.isEmpty()) {
                     Muted("Nothing matches.", Modifier.padding(16.dp))
                 } else {
-                    LazyColumn(state = listState, modifier = Modifier.heightIn(max = 360.dp)) {
+                    LazyColumn(state = listState, modifier = Modifier.heightIn(max = listHeight)) {
                         itemsIndexed(shown) { i, item ->
                             PaletteRow(item, i == selected) { onPick(item) }
                         }
