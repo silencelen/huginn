@@ -5286,7 +5286,17 @@ async function headroomTickInner() {
     // the consent dialog does not appear on an attended session in the first
     // place, and once it has, the owner may well prefer to stay where it put
     // them.
-    if (wasFamily === 'fable' && family && family !== 'fable'
+    //
+    // ⚠ NOT WHILE A HAND-SET MODEL IS STILL WARM. The family is read off the
+    // last assistant record, which still names the OLD model until the session
+    // next replies — so an undo (which moves the pane back to fable and stamps
+    // `humanSetModelAt`) was immediately followed by a tick that read the stale
+    // record as a brand-new native fallback and re-armed the very mark the undo
+    // had just cleared, leaving the session unladderable for good. Same grace
+    // window `decide` already holds ladder_down off for.
+    const handSet = rec.humanSetModelAt
+      && now - Number(rec.humanSetModelAt) < headroomLib.HUMAN_MODEL_GRACE_MS;
+    if (wasFamily === 'fable' && family && family !== 'fable' && !handSet
       && !(rec.ladder && rec.ladder.to) && !rec.nativeSwitch.seenAt) {
       rec.nativeSwitch = { seenAt: now, to: family, how: 'native' };
       log(`headroom: native fallback observed on ${s.name} -> ${family}`);
@@ -6407,6 +6417,10 @@ function headroomPayload() {
       stall: r.stall && r.stall.at ? r.stall : null,
       headsUpAt: r.headsUpAt ?? null,
       nativeSwitch: r.nativeSwitch || { seenAt: null, to: null },
+      // The other half of the native story: once the owner has answered the
+      // "back to Fable?" question, THIS is the field that says the arbiter must
+      // leave the session alone — and the clients have no other way to see it.
+      humanSetModelAt: r.humanSetModelAt ?? null,
     };
   });
   let sentinelState = st.sentinels || { STOP: null, 'STOP-FABLE': null };
@@ -7520,13 +7534,26 @@ const server = http.createServer(async (req, res) => {
     }
 
     /**
-     * Put a laddered session back on the model it started on.
+     * Put a session back on the model it started on.
      *
-     * The Undo button on the `headroom_downgraded` notification. It also stamps
-     * `humanSetModelAt`, which is what stops the arbiter from moving the session
-     * straight back down on the next tick — the owner has now answered the
-     * question the ladder was asking, and appd does not argue with that for the
-     * next ten minutes.
+     * TWO kinds of move end up here, because the phone and the desktop route
+     * both of their "back to Fable" buttons to this one route:
+     *
+     *   * the Undo on `headroom_downgraded` — a rung APPD typed, recorded in
+     *     `ladder`; and
+     *   * "Back to Fable" on `headroom_ladder_up` — a rung CLAUDE CODE took by
+     *     itself when the Fable week ran out, recorded in `nativeSwitch` with no
+     *     `ladder` at all, because appd typed nothing.
+     *
+     * ⚠ THE SECOND ONE USED TO BE UNPRESSABLE. The route insisted on
+     * `ladder.to`, which is precisely the field a native switch does not have —
+     * so the only sessions the offer is ever pushed for were the only sessions
+     * the route refused. A session with NEITHER is still a 409.
+     *
+     * Either way it stamps `humanSetModelAt`, which is what stops the arbiter
+     * from moving the session straight back down on the next tick — the owner
+     * has now answered the question the ladder was asking, and appd does not
+     * argue with that for the next ten minutes.
      */
     if ((m = p.match(/^\/v1\/sessions\/([A-Za-z0-9_][A-Za-z0-9_.-]{0,49})\/headroom\/undo$/)) && req.method === 'POST') {
       const name = m[1];
@@ -7535,18 +7562,45 @@ const server = http.createServer(async (req, res) => {
       if (!st || !st.sessionId) return sendErr(res, 409, 'this session has no Claude session id yet');
       const state = hstate();
       const rec = state.sessions[st.sessionId];
-      if (!rec || !rec.ladder || !rec.ladder.to) return sendErr(res, 409, 'huginn has not moved this session');
-      const back = rec.ladder.from;
-      rec.humanSetModelAt = Date.now();
+      const laddered = !!(rec && rec.ladder && rec.ladder.to);
+      const native = !laddered && rec && rec.nativeSwitch && rec.nativeSwitch.to ? rec.nativeSwitch : null;
+      if (!laddered && !native) return sendErr(res, 409, 'huginn has not moved this session');
+      // Where it was BEFORE the move. A native switch is observed rather than
+      // performed, so it does not record the rung it left; the ladder's own
+      // first rung is the answer, because that is the model the ladder exists
+      // to put sessions back on.
+      const back = laddered
+        ? rec.ladder.from
+        : (native.from || loadHeadroomSettings().ladder[0]);
+      const now = Date.now();
+      rec.humanSetModelAt = now;
+      // ⚠ MARK THE NATIVE MOVE IN FLIGHT. `decide` reads `ladder.delivery ===
+      // 'pending'` as "a model move is waiting for a turn boundary" and holds
+      // every other lever off; without a record here a tick landing between the
+      // button and the picker would start a ladder_down behind it.
+      if (native) {
+        rec.ladder = {
+          from: native.to, to: back, at: now, delivery: 'pending', sessionOnly: true, how: 'undo-native',
+        };
+      }
+      let settled = false;
       // The settle is what clears the record when the job only QUEUED. The
       // picker must not open inside a running turn, so an undo pressed mid-turn
       // waits for the boundary — and without this the session stayed marked as
       // laddered after the move had actually happened.
       const landed = () => {
+        settled = true;
         const st2 = hstate();
         const r2 = st2.sessions[st.sessionId];
         if (!r2) return;
         r2.ladder = null;
+        // ⚠ THE NATIVE MARK GOES TOO, and only for the native case. `decide`
+        // refuses to ladder a session carrying one at all ("appd never fights a
+        // native switch"), so a mark left standing after the owner has chosen
+        // Fable would mean this session could never be moved down again however
+        // red the week got. `humanSetModelAt` is what holds the arbiter off for
+        // the next ten minutes instead.
+        if (native) r2.nativeSwitch = { seenAt: null, to: null };
         r2.family = back;
         st2.arbiter.lastLadderAt = Date.now();
         st2.arbiter.lastAction = { type: 'ladder_up', at: Date.now(), name, to: back, by: 'undo' };
@@ -7560,6 +7614,11 @@ const server = http.createServer(async (req, res) => {
         onSettle: (v) => { if (v && v.result && v.result.ok) landed(); },
       });
       const result = out.result || {};
+      // A native undo that RAN and could not confirm must not leave behind a
+      // record claiming appd put this session on Fable — nothing moved, so the
+      // native mark is still the truth. A job that is merely queued keeps its
+      // pending record; the settle resolves that one.
+      if (native && !settled && out.result != null) rec.ladder = null;
       saveHeadroomState(state);
       // ⚠ `ok` IS "THE REQUEST WAS ACCEPTED", NOT "THE MODEL MOVED". A client
       // that reported success on any 2xx announced "put back on its own model"

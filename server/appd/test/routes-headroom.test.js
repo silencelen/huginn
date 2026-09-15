@@ -70,11 +70,17 @@ const TMUX_SOCK = `huginn-test-${process.pid}`;
 
 const TURN = JSON.stringify({ type: 'system', subtype: 'turn_duration', durationMs: 90 });
 const FABLE = JSON.stringify({ type: 'assistant', message: { model: 'claude-fable-5-1', content: [{ type: 'text', text: 'done' }] } });
+// What a NATIVE fallback looks like on the wire: the next assistant record
+// simply names a different model, and appd typed nothing to put it there.
+const OPUS = JSON.stringify({ type: 'assistant', message: { model: 'claude-opus-5', content: [{ type: 'text', text: 'done' }] } });
 const HUMAN = JSON.stringify({ type: 'user', message: { content: 'actually, wait' } });
 
 let tmp, stateDir, claudeDir, dataDir, headroomDir, token, daemon;
 let usageServer, acctServer, usageFile, shimLog, tmuxFail, pushLog, seededSwitchAt;
 const madeSessions = new Set();
+// Set by the native-undo test and read by the one after it: the follow-on
+// assertion is about what that undo LEFT BEHIND, so it must be the same session.
+let nativeUndoName = null;
 
 function sh(cmd, args) {
   if (cmd === 'tmux') args = ['-L', TMUX_SOCK, ...args];
@@ -863,11 +869,84 @@ test('an undo that only QUEUES says so, and clears the record when it lands', as
   assert.match(capture(name), /Set model to Fable for this session only/);
 });
 
+test('undo also puts back a session CLAUDE CODE moved off Fable by itself', async () => {
+  // ⚠ THE BUTTON THAT COULD NOT BE PRESSED. `offer_ladder_up` pushes
+  // "Back to Fable · Stay" for exactly this session — one appd never touched,
+  // so it has no `ladder` record — and both clients route that button to this
+  // route. The route answered 409 "huginn has not moved this session".
+  const name = mkPicker('undonative', [
+    { label: 'Fable', desc: 'Fable 5.1' },
+    { label: 'Opus (1M context)', desc: 'Opus 5', current: true },
+  ]);
+  nativeUndoName = name;
+  const transcript = writeTranscript(name, [FABLE, TURN]);
+  writeState(name, { sessionId: `sid-${name}`, transcript });
+  // Deliberately NOT red: the move under test is Claude Code's own, and a
+  // ladder_down racing it would write the very record this test must not have.
+  setUsage({ session: 5, weekly_all: 10, weekly_fable: 20 });
+  await tick({ cooldownMs: 0 });
+  await until((b) => b.sessions.some((s) => s.name === name && s.family === 'fable'),
+    15_000, 'the session to be seen on fable');
+
+  // The fallback happens: the next assistant record is opus.
+  fs.writeFileSync(transcript, `${FABLE}\n${TURN}\n${OPUS}\n${TURN}\n`);
+  const seen = await until((b) => {
+    const s = b.sessions.find((x) => x.name === name);
+    return s && s.nativeSwitch && s.nativeSwitch.seenAt;
+  }, 20_000, 'the native fallback to be noticed');
+  const row = seen.sessions.find((s) => s.name === name);
+  assert.equal(row.nativeSwitch.to, 'opus');
+  assert.equal(row.ladder, null, 'appd typed nothing, so there is no ladder record');
+
+  const r = await api(`/v1/sessions/${name}/headroom/undo`, { method: 'POST' });
+  assert.equal(r.status, 200, JSON.stringify(r.body));
+  assert.equal(r.body.to, 'fable', 'back to the rung the ladder starts on');
+  assert.equal(r.body.applied, true, 'this one ran: the session was at a turn boundary');
+  assert.equal(r.body.queued, false);
+  assert.equal(r.body.delivery, 'confirmed');
+  assert.match(capture(name), /Set model to Fable for this session only/);
+});
+
+test('that undo clears the native mark and records the human choice', async () => {
+  const name = nativeUndoName;
+  assert.ok(name, 'the native undo test must have run first');
+  const row = (await until((b) => {
+    const s = b.sessions.find((x) => x.name === name);
+    return s && s.nativeSwitch && !s.nativeSwitch.seenAt;
+  }, 20_000, 'the native mark to clear')).sessions.find((s) => s.name === name);
+  // ⚠ CLEARED, NOT LEFT STANDING. `decide` refuses to ladder a session carrying
+  // a native mark at all — "appd never fights a native switch" — so a mark left
+  // behind after the owner has chosen Fable would mean this session could never
+  // be moved down again however red the week got.
+  assert.equal(row.nativeSwitch.seenAt, null);
+  assert.equal(row.ladder, null, 'the in-flight record is gone too');
+  assert.equal(row.family, 'fable');
+  // And what holds the arbiter off in the meantime is the HUMAN stamp, which is
+  // the same thing the appd-laddered undo writes.
+  assert.ok(Number(row.humanSetModelAt) > Date.now() - 120_000,
+    `humanSetModelAt should be just now, got ${row.humanSetModelAt}`);
+
+  // It must STAY cleared: the transcript still ends on an opus record, and a
+  // tick that re-read that as a fresh native fallback would undo the undo.
+  await tick({});
+  await wait(1500);
+  const after = (await api('/v1/headroom')).body.sessions.find((s) => s.name === name);
+  assert.equal(after.nativeSwitch.seenAt, null, 'a stale transcript is not a new fallback');
+  assert.equal(after.ladder, null);
+});
+
 test('undo refuses a session huginn has not moved', async () => {
   const { name } = fableSession('nomove');
   const r = await api(`/v1/sessions/${name}/headroom/undo`, { method: 'POST' });
   assert.equal(r.status, 409);
   assert.match(r.body.error, /has not moved this session/);
+  // ⚠ NEITHER RUNG. The route now also accepts a session Claude Code moved
+  // itself, so the refusal is no longer "no ladder record" — it is "no ladder
+  // record AND no native switch", which is this session.
+  const row = (await until((b) => b.sessions.some((s) => s.name === name),
+    15_000, 'the session to be seen')).sessions.find((s) => s.name === name);
+  assert.equal(row.ladder, null);
+  assert.equal(row.nativeSwitch.seenAt, null);
   const gone = await api(`/v1/sessions/${PFX}-nope/headroom/undo`, { method: 'POST' });
   assert.equal(gone.status, 404);
 });
