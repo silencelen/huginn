@@ -220,6 +220,13 @@ fun Shell(store: AppStore) {
     // the window's key handler has to ask the same question — see its KDoc.
     val showsList = Splitter.showsList(view)
 
+    // Settings' two panes share one of these: which drawer is open (written
+    // through to the settings file), what is typed in the search field, and the
+    // row a search hit marked on arrival. It belongs to the STORE rather than to
+    // a remember here — the list pane, the detail pane and the command palette's
+    // per-drawer rows are three call sites, and the third is not in this frame.
+    val settingsPane = store.settingsPane
+
     // The rail and the footer count MACHINES, not credentials: a box serving
     // local AI beside its claude enrolment is one device to the person reading
     // a badge, exactly as it is one card in the list. Rows still exist under
@@ -406,6 +413,7 @@ fun Shell(store: AppStore) {
                                         }
                                     }
                                     View.SCRATCHPADS -> ScratchpadsList(store)
+                                    View.SETTINGS -> SettingsNavPane(store, settingsPane)
                                     View.SESSIONS -> SessionsList(
                                         sessions = sessions,
                                         loaded = sessionsLoaded,
@@ -474,10 +482,10 @@ fun Shell(store: AppStore) {
                             View.DEVICES -> DevicesPane(store)
 
                             View.STATUS -> StatusView(status, plan, usage, route, watchConnected)
-                            // The whole store: Settings now owns accounts, the update
-                            // state and the diagnostics report, and each of those needs
-                            // a different corner of it.
-                            View.SETTINGS -> SettingsView(store)
+                            // The whole store: each category page takes a different
+                            // corner of it — accounts, headroom, the device runner,
+                            // the updater, the diagnostics report.
+                            View.SETTINGS -> SettingsView(store, settingsPane)
                         }
                     }
                 }

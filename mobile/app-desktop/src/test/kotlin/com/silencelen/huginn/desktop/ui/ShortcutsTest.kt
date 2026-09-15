@@ -9,6 +9,9 @@ import kotlin.test.assertFalse
 import kotlin.test.assertNotEquals
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
+import com.silencelen.huginn.settings.SettingsCatalog
+import com.silencelen.huginn.settings.SettingsProbe
+import com.silencelen.huginn.settings.Surface
 
 class ShortcutsTest {
 
@@ -218,6 +221,29 @@ class ShortcutsTest {
         val hit = out.first() as PaletteItem.OpenScratchpad
         assertEquals("p1", hit.id)
         assertTrue(hit.detail.contains("40 characters"), "a picker must be able to tell a written page from a blank")
+    }
+
+    @Test
+    fun `a settings drawer is reachable by the word that is in it`() {
+        // Nine drawers is the count where "open Settings and look" stops being an
+        // answer. The rows are built from the VISIBLE categories, so the palette
+        // can never offer one the Settings list is hiding.
+        val shown = SettingsCatalog.visibleCategories(SettingsProbe(headroom = true), Surface.DESKTOP)
+        val items = paletteItems(emptyList(), emptyList(), emptyList(), shown)
+
+        val usage = items.filterIsInstance<PaletteItem.OpenSettings>().single { it.categoryId == "usage" }
+        assertEquals("Settings · Usage & headroom", usage.label)
+        assertTrue(filterPalette(items, "headroom").contains(usage), "found by the word that is in it")
+
+        // And a host with no headroom offers no row into a drawer it does not draw.
+        val bare = paletteItems(
+            emptyList(), emptyList(), emptyList(),
+            SettingsCatalog.visibleCategories(SettingsProbe(), Surface.DESKTOP),
+        )
+        assertTrue(
+            bare.filterIsInstance<PaletteItem.OpenSettings>().none { it.categoryId == "usage" },
+            "a palette row onto a hidden drawer is the same lie as a search hit onto a hidden row",
+        )
     }
 
     @Test

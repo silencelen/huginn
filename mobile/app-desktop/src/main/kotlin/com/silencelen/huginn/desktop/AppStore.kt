@@ -122,6 +122,21 @@ class AppStore(
     fun requestQuit() { _quitRequested.value = true }
 
     /**
+     * The keyboard cheat sheet, asked for from somewhere other than F1.
+     *
+     * Settings' *Appearance & behaviour* has a row into it, and the sheet is an
+     * overlay the WINDOW owns (the key handler has to know one is up, or
+     * shortcuts navigate the app behind it). A flag here is how a pane deep in
+     * the frame asks for it without the window handing a callback down six
+     * levels — the same shape `quitRequested` already uses.
+     */
+    private val _cheatsheet = MutableStateFlow(false)
+    val cheatsheet: StateFlow<Boolean> = _cheatsheet.asStateFlow()
+
+    fun openCheatsheet() { _cheatsheet.value = true }
+    fun closeCheatsheet() { _cheatsheet.value = false }
+
+    /**
      * The tmux size lease, held at APP level because its release paths do not
      * share a lifetime: leaving a session view is a composition event, minimizing
      * is a window event, and being killed is neither. A per-view owner could only
@@ -170,13 +185,40 @@ class AppStore(
     private val _sessionName = MutableStateFlow<String?>(null)
     val sessionName: StateFlow<String?> = _sessionName.asStateFlow()
 
+    /** Settings, at a named drawer — the palette's door, and the only one. */
+    fun openSettings(categoryId: String) {
+        settingsPane.open(categoryId)
+        openView(View.SETTINGS)
+    }
+
     fun openView(v: View) {
+        // A SEARCH IS A WAY IN, NOT A STATE OF THE APP. Leaving Settings with
+        // "token" still in the field would bring the reader back to a filtered
+        // list next time and read as nine drawers having gone missing.
+        if (_view.value == View.SETTINGS && v != View.SETTINGS) settingsPane.query = ""
         _view.value = v
         // Status is the one view the 5s list poll does not already feed, so
         // arriving on it would otherwise show an empty screen for up to five
         // seconds — indistinguishable from a daemon that is not answering.
         if (v == View.STATUS) scope.launch { refreshStatus() }
     }
+    /**
+     * Settings' own navigation: which drawer is open, what is typed in its search
+     * field, and the row a hit marked on arrival.
+     *
+     * HELD HERE, beside [view] and [chatId], because it is the same kind of thing
+     * — where the reader is — and because three call sites need it: the list
+     * pane, the detail pane, and the command palette's "Settings · Usage &
+     * headroom" rows, which are not inside the frame at all. A `remember` in the
+     * shell would have been invisible to the third.
+     */
+    val settingsPane by lazy {
+        com.silencelen.huginn.desktop.ui.settings.SettingsPaneState(
+            settings.settingsSectionNow(),
+            settings::setSettingsSection,
+        )
+    }
+
     fun openChat(id: String?) { _view.value = View.CHATS; _chatId.value = id }
     fun openSession(name: String?) { _view.value = View.SESSIONS; _sessionName.value = name }
 
@@ -868,6 +910,21 @@ class AppStore(
             .onFailure { note(Faults.STATUS, it) }
         runCatching { client.plan() }.onSuccess { _plan.value = it }
         runCatching { client.usage() }.onSuccess { _usage.value = it }
+    }
+
+    /**
+     * `/v1/status` ALONE — the shelf, not the whole Status pane.
+     *
+     * Settings asks three things of it (does this host hold quick actions, what
+     * is its soft-end phrase, which appd is it) and a reader who opens Settings
+     * has not asked for `/v1/usage`, which walks every transcript on the host to
+     * answer. Separated rather than made a parameter so no future caller can get
+     * the expensive one by forgetting an argument.
+     */
+    suspend fun refreshStatusShelf() {
+        runCatching { client.status() }
+            .onSuccess { _status.value = it; faults.ok(Faults.STATUS) }
+            .onFailure { note(Faults.STATUS, it) }
     }
 
     private fun note(source: String, t: Throwable) {

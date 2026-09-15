@@ -3,6 +3,10 @@ package com.silencelen.huginn.desktop
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
+import com.silencelen.huginn.desktop.ui.settings.SettingsFacts
+import com.silencelen.huginn.desktop.ui.settings.desktopProbe
+import com.silencelen.huginn.settings.SettingsCatalog
+import com.silencelen.huginn.settings.Surface as SettingsSurface
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.input.key.Key
@@ -446,6 +450,11 @@ fun main(args: Array<String>) {
                 }
 
                 Separator()
+                // MIRRORS the Appearance & behaviour row rather than duplicating
+                // it: one persisted flow, two places to reach it, and the tray is
+                // where you are standing when you decide the window should not
+                // have closed. (The row is the discoverable half — this checkbox
+                // was the setting's ONLY home until the redesign.)
                 CheckboxItem(
                     "Close to tray",
                     checked = closeToTray,
@@ -659,12 +668,24 @@ fun main(args: Array<String>) {
                             } else {
                                 emptyList()
                             },
+                            // The drawers this host actually has, so the palette
+                            // cannot offer one the Settings list does not show.
+                            settings = SettingsCatalog.visibleCategories(
+                                desktopProbe(
+                                    SettingsFacts(
+                                        status = store.status.collectAsState().value,
+                                        headroom = store.headroom.collectAsState().value,
+                                    ),
+                                ),
+                                SettingsSurface.DESKTOP,
+                            ),
                             onDismiss = { paletteOpen.value = false },
                             onPick = { item ->
                                 paletteOpen.value = false
                                 when (item) {
                                     is PaletteItem.OpenChat -> store.openChat(item.id)
                                     is PaletteItem.OpenSession -> store.openSession(item.name)
+                                    is PaletteItem.OpenSettings -> store.openSettings(item.categoryId)
                                     is PaletteItem.OpenScratchpad -> {
                                         store.openView(View.SCRATCHPADS)
                                         scope.launch { store.openPad(item.id) }
@@ -694,7 +715,16 @@ fun main(args: Array<String>) {
                             },
                         )
                     }
-                    if (cheatsOpen.value) Cheatsheet { cheatsOpen.value = false }
+                    // F1, or the Appearance & behaviour row that asks for the same
+                    // sheet — one overlay either way, because the key handler has
+                    // to know when one is up.
+                    val cheatsFromSettings by store.cheatsheet.collectAsState()
+                    if (cheatsOpen.value || cheatsFromSettings) {
+                        Cheatsheet {
+                            cheatsOpen.value = false
+                            store.closeCheatsheet()
+                        }
+                    }
                 }
             }
         }

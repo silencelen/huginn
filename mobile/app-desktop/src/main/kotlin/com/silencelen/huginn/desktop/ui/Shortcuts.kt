@@ -3,6 +3,8 @@ package com.silencelen.huginn.desktop.ui
 import com.silencelen.huginn.data.Chat
 import com.silencelen.huginn.data.Scratchpad
 import com.silencelen.huginn.data.Session
+import com.silencelen.huginn.settings.SettingsCatalog
+import com.silencelen.huginn.settings.SettingsCategory
 
 /**
  * The keyboard model, as data.
@@ -248,6 +250,20 @@ sealed interface PaletteItem {
     data class OpenSession(val name: String, override val label: String, override val detail: String) : PaletteItem
     data class OpenScratchpad(val id: String, override val label: String, override val detail: String) : PaletteItem
     data class Verb(val shortcut: Shortcut, override val label: String, override val detail: String) : PaletteItem
+
+    /**
+     * One Settings drawer, by name.
+     *
+     * The redesign's own argument, applied to the palette: nine categories is
+     * exactly the count where "open Settings and look" stops being an answer.
+     * Somebody who wants the ladder should be able to type "ladder" rather than
+     * knowing it lives under *Usage & headroom*.
+     */
+    data class OpenSettings(
+        val categoryId: String,
+        override val label: String,
+        override val detail: String,
+    ) : PaletteItem
 }
 
 private val VERBS = listOf(
@@ -265,8 +281,20 @@ fun paletteItems(
     chats: List<Chat>,
     sessions: List<Session>,
     pads: List<Scratchpad> = emptyList(),
+    /**
+     * The Settings drawers this host actually has — [SettingsCatalog.visibleCategories]
+     * for the live probe, never the raw nine. A palette row that opens a drawer
+     * the list does not show is the same lie as a search hit onto a hidden row.
+     */
+    settings: List<SettingsCategory> = emptyList(),
 ): List<PaletteItem> =
     VERBS +
+        // Right after the verbs, which is where "Settings" itself already is: the
+        // reader who typed a settings word wants the drawer, not a chat that
+        // mentions it.
+        settings.map {
+            PaletteItem.OpenSettings(it.id, "Settings · ${it.title}", it.blurb)
+        } +
         // Pages before the conversations: there are a handful of them and hundreds
         // of chats, and a page is looked up BY NAME, which is the one thing the
         // palette is better at than the rail.
