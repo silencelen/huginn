@@ -765,6 +765,15 @@ class SessionController(
     }
 
     // --------------------------------------------------------------- answering
+    //
+    // ⚠ NO CALLER IN THIS SHELL SINCE 2026-09-15, AND DELIBERATELY KEPT. The
+    // owner's decision 23 replaced the session's answerable card with a one-line
+    // steer to the Screen tab, so nothing in `SessionView` taps an option any
+    // more — the reader answers in the pane, which is the surface that handles
+    // every prompt type. This is still the client half of `POST /answer`,
+    // including its fingerprint and its 409 vocabulary, and it is what a
+    // notification action or a restored card would call. Deleting it and writing
+    // it again later is how the fingerprint rule gets lost.
 
     /**
      * Answers the question on the pane.
