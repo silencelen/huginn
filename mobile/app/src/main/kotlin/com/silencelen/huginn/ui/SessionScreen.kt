@@ -118,11 +118,21 @@ fun SessionScreen(
      */
     overviewPane: @Composable () -> Unit = {},
     // --------------------------------------------------------- headroom (3.0)
-    /** Every agent this session has spawned, for the stream strip. */
-    streamAgents: List<com.silencelen.huginn.data.AgentRun> = emptyList(),
+    /**
+     * The stream strip's rows, already built.
+     *
+     * Rows and not the raw agent list, because the strip keeps the agent being
+     * READ after it finishes and drops every other finished one — a rule that
+     * needs the selection as well as the rows, and that belongs where the
+     * selection lives rather than in a screen that happens to receive both.
+     */
+    streamItems: List<StreamPicker.Item> = emptyList(),
     /** The picked agent id, or null for the session's own transcript. */
     selectedStream: String? = null,
     onSelectStream: (String?) -> Unit = {},
+    /** Whether the strip's `…` pill is unfolded. */
+    streamsExpanded: Boolean = false,
+    onToggleStreamsExpanded: () -> Unit = {},
     /** The picked agent's transcript. Kept apart from [transcript] — see AgentStream. */
     agentPage: TranscriptPage? = null,
     loadingAgentHistory: Boolean = false,
@@ -140,12 +150,6 @@ fun SessionScreen(
     // showing" is answered the same way here as it is on the desktop rather than
     // by a `tab == 1` written out per render site.
     val face = SessionFace.ofTabIndex(tab)
-    // The daemon's clock, not the device's: the rows' timestamps are the host's,
-    // and a phone whose clock is minutes out would call every agent stale. Zero
-    // when the transcript has not said — [StreamPicker.items] reads that as "no
-    // clock, trust the flags" rather than as 1970.
-    val nowSec = transcript?.lastActivityTs?.takeIf { it > 0 } ?: 0L
-    val streamItems = remember(streamAgents, nowSec) { StreamPicker.items(streamAgents, nowSec) }
     Column(Modifier.fillMaxSize()) {
         TabRow(selectedTabIndex = tab) {
             Tab(selected = tab == 0, onClick = { onTab(0) }, text = { Text("Conversation") })
@@ -201,6 +205,8 @@ fun SessionScreen(
                     streamItems = streamItems,
                     selectedStream = selectedStream,
                     onSelectStream = onSelectStream,
+                    streamsExpanded = streamsExpanded,
+                    onToggleStreamsExpanded = onToggleStreamsExpanded,
                     agentPage = agentPage,
                     streamsSupported = streamsSupported,
                     streamNote = streamNote,
@@ -275,6 +281,8 @@ private fun SessionConversation(
     streamItems: List<StreamPicker.Item> = emptyList(),
     selectedStream: String? = null,
     onSelectStream: (String?) -> Unit = {},
+    streamsExpanded: Boolean = false,
+    onToggleStreamsExpanded: () -> Unit = {},
     agentPage: TranscriptPage? = null,
     streamsSupported: Boolean = true,
     streamNote: String? = null,
@@ -365,6 +373,8 @@ private fun SessionConversation(
             onPick = onSelectStream,
             enabled = streamsSupported,
             note = streamNote.takeIf { !streamsSupported },
+            expanded = streamsExpanded,
+            onToggleExpanded = onToggleStreamsExpanded,
         )
         when {
             shownError != null && shown == null ->
