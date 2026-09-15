@@ -2,6 +2,7 @@ package com.silencelen.huginn.desktop.notify
 
 import com.silencelen.huginn.data.Watch
 import com.silencelen.huginn.data.WatchChat
+import com.silencelen.huginn.data.WatchHeadroom
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
@@ -22,7 +23,15 @@ class NotifyRulesTest {
     private fun watch(
         sessions: Map<String, String?> = emptyMap(),
         chats: Map<String, WatchChat> = emptyMap(),
-    ) = Watch(hash = "h", sessions = sessions, chats = chats)
+        headroom: WatchHeadroom? = null,
+    ) = Watch(hash = "h", sessions = sessions, chats = chats, headroom = headroom)
+
+    private fun hr(
+        stalled: List<String> = emptyList(),
+        stalls: Map<String, String?> = emptyMap(),
+        laddered: Map<String, String> = emptyMap(),
+        mode: String = "ok",
+    ) = WatchHeadroom(mode = mode, stalled = stalled, stalls = stalls, laddered = laddered)
 
     private fun chat(running: Boolean = false, runs: Long = 0, title: String? = null, snippet: String? = null) =
         WatchChat(running = running, finishedRuns = runs, title = title, snippet = snippet)
@@ -191,5 +200,144 @@ class NotifyRulesTest {
     fun `keys name the list they belong to`() {
         assertEquals("sess:a", NotifyRules.sessionKey("a"))
         assertEquals("chat:a", NotifyRules.chatKey("a"))
+    }
+
+    // ------------------------------------------------------------- headroom
+    //
+    // Four new decisions, all of them EDGES. The digest is a snapshot: every one
+    // of these would re-fire on every poll for as long as its condition lasted if
+    // it were read as a state, which is the failure mode "3 sessions need you"
+    // already taught this file once.
+
+    private val live = mapOf("a" to "idle", "b" to "idle")
+
+    @Test
+    fun `a session that has just stalled is announced with its reset time`() {
+        // The most valuable notice in the wave: a stalled session looks exactly
+        // like an idle one, and work sat untouched overnight after a cap that
+        // cleared at half past midnight.
+        val base = seed(watch(sessions = live, headroom = hr()))
+        val plan = step(
+            base,
+            watch(
+                sessions = live,
+                headroom = hr(stalled = listOf("a"), stalls = mapOf("a" to "2026-09-15T10:30:00Z")),
+            ),
+        )
+        assertEquals(listOf(NotifyDecision.LimitHit("a", "2026-09-15T10:30:00Z")), plan.decisions)
+
+        // And NOT again on the next digest saying the same thing.
+        assertEquals(emptyList(), step(plan.baseline, watch(sessions = live, headroom = hr(stalled = listOf("a")))).decisions)
+    }
+
+    @Test
+    fun `a limit notice is withdrawn when the stall clears`() {
+        // A "hit the limit" that outlives its stall is the same failure as an
+        // attention that outlives its question: the reader opens it to find a
+        // session that has been working again for an hour.
+        val base = step(
+            seed(watch(sessions = live, headroom = hr())),
+            watch(sessions = live, headroom = hr(stalled = listOf("a"))),
+        ).baseline
+        val plan = step(base, watch(sessions = live, headroom = hr()))
+        assertTrue(NotifyDecision.Withdraw("sess:a") in plan.decisions)
+        // Filed under the SESSION key, so opening the session takes it down like
+        // any other notice about that session.
+        assertEquals("sess:a", NotifyRules.limitKey("a"))
+    }
+
+    @Test
+    fun `sessions that come back together are one notice, not three`() {
+        // A window resetting is ONE event. Three toasts about it is the same news
+        // three times, at whatever hour the window happened to reset.
+        val base = step(
+            seed(watch(sessions = mapOf("a" to "idle", "b" to "idle", "c" to "idle"), headroom = hr())),
+            watch(
+                sessions = mapOf("a" to "idle", "b" to "idle", "c" to "idle"),
+                headroom = hr(stalled = listOf("a", "b", "c")),
+            ),
+        ).baseline
+        val plan = step(base, watch(sessions = mapOf("a" to "idle", "b" to "idle", "c" to "idle"), headroom = hr()))
+        assertEquals(1, plan.decisions.filterIsInstance<NotifyDecision.Resumed>().size)
+        assertEquals(
+            listOf("a", "b", "c"),
+            plan.decisions.filterIsInstance<NotifyDecision.Resumed>().single().sessions,
+        )
+    }
+
+    @Test
+    fun `a session that ended while stalled is withdrawn, never announced as resumed`() {
+        // "Resumed: jtyper" about a session that was killed is a notification
+        // pointing at nothing, and the target it carries no longer exists.
+        val base = step(
+            seed(watch(sessions = mapOf("a" to "idle"), headroom = hr())),
+            watch(sessions = mapOf("a" to "idle"), headroom = hr(stalled = listOf("a"))),
+        ).baseline
+        val plan = step(base, watch(sessions = emptyMap(), headroom = hr()))
+        assertTrue(plan.decisions.none { it is NotifyDecision.Resumed })
+        assertTrue(NotifyDecision.Withdraw("sess:a") in plan.decisions)
+    }
+
+    @Test
+    fun `a downgrade carries the session the undo button has to name`() {
+        // The whole reason this decision holds a NAME rather than a count: the
+        // toast's Undo posts to /v1/sessions/:name/headroom/undo, and a decision
+        // that only said "something was downgraded" could not build that button.
+        val base = seed(watch(sessions = live, headroom = hr()))
+        val plan = step(base, watch(sessions = live, headroom = hr(laddered = mapOf("a" to "opus"))))
+        assertEquals(listOf(NotifyDecision.Downgraded("a", "opus")), plan.decisions)
+    }
+
+    @Test
+    fun `a second rung is its own event and going back up is the reverse`() {
+        val first = step(
+            seed(watch(sessions = live, headroom = hr())),
+            watch(sessions = live, headroom = hr(laddered = mapOf("a" to "opus"))),
+        )
+        // fable → opus → sonnet is TWO moves. Reporting only the first leaves the
+        // reader believing the session is still on opus.
+        val second = step(first.baseline, watch(sessions = live, headroom = hr(laddered = mapOf("a" to "sonnet"))))
+        assertEquals(listOf(NotifyDecision.Downgraded("a", "sonnet")), second.decisions)
+
+        val up = step(second.baseline, watch(sessions = live, headroom = hr()))
+        assertEquals(listOf(NotifyDecision.LadderUp("a")), up.decisions)
+
+        // A session that left the digest entirely did not ladder up — it ended.
+        val gone = step(second.baseline, watch(sessions = emptyMap(), headroom = hr()))
+        assertTrue(gone.decisions.none { it is NotifyDecision.LadderUp })
+    }
+
+    @Test
+    fun `the first look at a red host announces none of it`() {
+        // The seeding rule, at the place it matters most: launching the app while
+        // two sessions are stalled and one is laddered must not fire three toasts
+        // about things that happened before it started.
+        val plan = step(
+            WatchBaseline(),
+            watch(
+                sessions = live,
+                headroom = hr(
+                    mode = "red",
+                    stalled = listOf("a", "b"),
+                    laddered = mapOf("a" to "opus"),
+                ),
+            ),
+        )
+        assertEquals(emptyList(), plan.decisions)
+        // And the baseline absorbed it, so the next identical digest is silent too.
+        assertEquals(setOf("a", "b"), plan.baseline.stalled)
+        assertEquals(mapOf("a" to "opus"), plan.baseline.laddered)
+    }
+
+    @Test
+    fun `a daemon with no headroom block decides nothing new`() {
+        // The compat answer. `watch.headroom` is null on 2.85.0, every headroom
+        // baseline stays empty, and nothing here can ever appear or disappear —
+        // the file behaves exactly as it did before this section existed.
+        val base = seed(watch(sessions = live))
+        val plan = step(base, watch(sessions = mapOf("a" to "attention", "b" to "idle")))
+        assertEquals(listOf(NotifyDecision.Attention("a")), plan.decisions)
+        assertEquals(emptySet(), plan.baseline.stalled)
+        assertEquals(emptyMap(), plan.baseline.laddered)
     }
 }

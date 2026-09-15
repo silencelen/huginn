@@ -148,9 +148,19 @@ class WindowsToastNotifier private constructor(private val script: File) : Notif
         append("<text>${esc(request.title.take(100))}</text>")
         append("<text>${esc(request.body.take(200))}</text>")
         append("</binding></visual>")
+        // Actions, when the router gave any. These carry a finished URL rather
+        // than a pane option, so unlike the answer buttons they need no
+        // fingerprint — see [Activation.Undo].
+        append("<actions>${actionsXml(request)}</actions>")
         append("""<audio silent="true"/>""")
         append("</toast>")
     }
+
+    /** Up to two non-answer buttons, the same cap the bounded-choice rule implies. */
+    private fun actionsXml(request: NotifyRequest): String =
+        request.actions.take(2).joinToString("") { a ->
+            """<action content="${esc(a.label.take(40))}" activationType="protocol" arguments="${esc(a.url)}"/>"""
+        }
 
     private fun sessionOf(request: NotifyRequest): String = request.target.id
 

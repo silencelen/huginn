@@ -92,7 +92,10 @@ import com.silencelen.huginn.desktop.ui.common.Tip
 import com.silencelen.huginn.desktop.ui.common.WithHuginnMenus
 import com.silencelen.huginn.desktop.ui.common.connectionTip
 import com.silencelen.huginn.desktop.ui.common.railCountTip
+import com.silencelen.huginn.data.StatusHeadroom
+import com.silencelen.huginn.ui.HeadroomPill
 import com.silencelen.huginn.ui.groupByMachine
+import com.silencelen.huginn.ui.statusHeadroomOf
 import kotlinx.coroutines.launch
 import java.awt.Cursor
 import java.awt.Toolkit
@@ -146,6 +149,7 @@ fun Shell(store: AppStore) {
     val error by store.error.collectAsState()
     val route by store.route.collectAsState()
     val status by store.status.collectAsState()
+    val headroom by store.headroom.collectAsState()
     val plan by store.plan.collectAsState()
     val usage by store.usage.collectAsState()
     val listWidth by store.settings.listWidth.collectAsState()
@@ -435,6 +439,10 @@ fun Shell(store: AppStore) {
             StatusLine(
                 view = view,
                 route = route,
+                // The full answer FIRST: it is polled everywhere, and `/v1/status`
+                // is only read while the Status pane is open — so on every other
+                // pane the summary riding it is as old as the last visit there.
+                headroom = statusHeadroomOf(headroom) ?: status?.headroom,
                 watchConnected = watchConnected,
                 notifyEnabled = notifyEnabled,
                 chats = chats,
@@ -446,6 +454,7 @@ fun Shell(store: AppStore) {
                 error = error,
                 onDismissError = { store.clearError() },
                 onOpenSession = { store.openSession(it) },
+                onOpenStatus = { store.openView(View.STATUS) },
                 onClearSelection = { if (view == View.SESSIONS) sessionSel = Selection() else chatSel = Selection() },
             )
         }
@@ -940,6 +949,8 @@ private fun BoxScope.SeamNotch(collapsed: Boolean, onToggle: () -> Unit) {
 private fun StatusLine(
     view: View,
     route: String,
+    /** Null on a daemon older than 3.0.0, and the pill then costs no width. */
+    headroom: StatusHeadroom?,
     watchConnected: Boolean,
     notifyEnabled: Boolean,
     chats: List<Chat>,
@@ -951,11 +962,23 @@ private fun StatusLine(
     error: String?,
     onDismissError: () -> Unit,
     onOpenSession: (String) -> Unit,
+    onOpenStatus: () -> Unit,
     onClearSelection: () -> Unit,
 ) {
     val scheme = MaterialTheme.colorScheme
     val waiting = sessions.filter { it.state == "attention" }
     val working = sessions.count { it.state == "running" } + chats.count { it.running }
+
+    // Thirty seconds, like the Status pane's: the pill's coarsest unit is an hour
+    // and its finest is a minute, so anything faster recomposes the whole foot of
+    // the window to redraw identical text.
+    var nowMs by remember { mutableStateOf(System.currentTimeMillis()) }
+    LaunchedEffect(Unit) {
+        while (true) {
+            nowMs = System.currentTimeMillis()
+            kotlinx.coroutines.delay(30_000)
+        }
+    }
 
     HorizontalDivider(color = scheme.outlineVariant)
     Row(
@@ -1019,6 +1042,17 @@ private fun StatusLine(
             if (waiting.isEmpty() && working == 0) {
                 Text("Idle", style = DeskType.status, color = scheme.onSurfaceVariant)
             }
+            // AFTER the work count and before the slack: headroom is a condition of
+            // the host rather than of this window, and it belongs beside the other
+            // two facts about what is happening rather than out with the route.
+            //
+            // The countdown's finest unit is an hour here, so the clock is ticked
+            // by the poll that feeds it rather than by a timer of its own.
+            HeadroomPill(
+                status = headroom,
+                nowMs = nowMs,
+                onClick = onOpenStatus,
+            )
             Spacer(Modifier.weight(1f))
             if (selected > 1) {
                 Tip("Click to clear the selection") {
