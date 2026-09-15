@@ -24,6 +24,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import com.silencelen.huginn.data.HeadroomSettings
 import com.silencelen.huginn.data.ModelChoice
+import com.silencelen.huginn.ui.HeadroomRules
 import com.silencelen.huginn.ui.HeadroomSettingsSection
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
@@ -456,12 +457,15 @@ private fun AccountsSection(store: AppStore) {
                         scope.launch {
                             busy = true
                             // The daemon answers with a STATUS WORD, not a
-                            // boolean — `invalid_grant`, `lock_busy` and a
-                            // transport failure want three different things from
-                            // the reader — so it is shown verbatim.
+                            // boolean — `refresh_token_expired`, `lock_busy` and
+                            // `refresh_failed` want three different things from
+                            // the reader — so it is shown verbatim. The one
+                            // exception is `active_skipped`; see [refreshWords].
                             runCatching { store.client.refreshAccount(a.slug) }
                                 .fold(
-                                    onSuccess = { word -> loginNote = "${a.email ?: a.slug}: $word" },
+                                    onSuccess = { word ->
+                                        loginNote = "${a.email ?: a.slug}: ${HeadroomRules.refreshWords(word)}"
+                                    },
                                     onFailure = { loginNote = it.message ?: "could not refresh" },
                                 )
                             reload()
