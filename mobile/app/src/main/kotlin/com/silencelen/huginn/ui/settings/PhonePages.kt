@@ -26,6 +26,8 @@ import com.silencelen.huginn.data.HeadroomSettings
 import com.silencelen.huginn.data.ModelChoice
 import com.silencelen.huginn.data.PushStatus
 import com.silencelen.huginn.data.QuickActions
+import com.silencelen.huginn.notify.DeliveryCopy
+import com.silencelen.huginn.notify.PushTally
 import com.silencelen.huginn.ui.HeadroomSettingsSection
 import com.silencelen.huginn.ui.HuginnViewModel
 import com.silencelen.huginn.ui.agoWordsMs
@@ -236,8 +238,9 @@ fun NotifyPage(
     SettingsToggleRow(
         id = "notify.device-watch",
         title = "Tell me when a session needs me",
-        summary = "Checks huginn about every 10 minutes, including while the phone is asleep, " +
-            "and notifies when a session starts waiting for an answer.",
+        summary = "Checks huginn on a schedule, including while the phone is asleep, and notifies " +
+            "when a session starts waiting for an answer. The cadence and when it last ran are " +
+            "under Delivery below.",
         checked = notifyEnabled,
         onCheckedChange = onNotifyEnabled,
         highlighted = SettingsRowStyle.isHighlighted("notify.device-watch", highlight),
@@ -342,23 +345,34 @@ fun NotifyPage(
             if (ps.pushed > 0) SettingsNote("${ps.pushed} delivered so far")
             SettingsNote(
                 when {
-                    health.pushesReceived == 0L ->
+                    // ARRIVED, not received: the stored tally can still be from
+                    // before the host's counter restarted. PushTally clamps it so
+                    // this line cannot read "1274 of 916".
+                    health.pushesArrived == 0L ->
                         "No push has arrived here yet, so the backup check runs every 10 minutes " +
                             "until one proves it can."
                     health.pushesMissing > 0L ->
                         "${health.pushesMissing} push(es) huginn sent never arrived, so the backup " +
                             "check has tightened to every 10 minutes."
                     else ->
-                        "${health.pushesReceived} of ${health.pushesSent} pushes arrived — nothing " +
+                        "${health.pushesArrived} of ${health.pushesSent} pushes arrived — nothing " +
                             "dropped, so the backup check only runs hourly."
                 },
             )
+            // Said once, and only when it happened: otherwise a reader who
+            // remembers a bigger number has no way to learn where it went.
+            if (health.pushRebaselined) SettingsNote(PushTally.REBASELINED_NOTE)
         }
         // Two witnesses. The app's own record can only be written while the app is
         // alive, so it cannot testify about the hours that matter; huginn's was
         // taken by a machine that never slept.
         SettingsNote("This app last reached huginn ${witnessWords(health.lastContactAt, nowMs)}")
-        SettingsNote("Background check last ran ${witnessWords(health.lastAlarmAt, nowMs)}")
+        // ONE SENTENCE for the schedule AND the last run. They used to be two,
+        // several lines apart — "Checks huginn about every 10 minutes" above
+        // "Background check last ran 7h ago" — and printed together they read as
+        // one of the two lying, with no way to tell which. Both are true: Android
+        // defers the alarm, which DeliveryCopy.cadence now says out loud.
+        SettingsNote(DeliveryCopy.cadence(health.heartbeatIntervalMs, health.lastAlarmAt, nowMs))
         clients?.clients?.firstOrNull()?.let { c ->
             SettingsNote(
                 "huginn last heard from this phone " +
@@ -367,7 +381,15 @@ fun NotifyPage(
             )
         }
         if (health.lastError.isNotBlank()) {
-            SettingsNote("Last failure ${witnessWords(health.lastErrorAt, nowMs)}: ${health.lastError}")
+            // ⚠ THE DAEMON'S ADDRESS NEVER REACHES THIS SCREEN. The raw Ktor
+            // message carried it — "[url=http://…:8787/v1/watch]" — onto a page
+            // that gets screenshotted. DeliveryCopy.trouble maps the failure to
+            // household words and scrubs anything address-shaped out of what is
+            // left.
+            SettingsNote(
+                "Last failure ${witnessWords(health.lastErrorAt, nowMs)}: " +
+                    DeliveryCopy.trouble(health.lastError),
+            )
         }
         OutlinedButton(onClick = onRefreshDelivery, modifier = Modifier.padding(top = 6.dp)) {
             Text("Refresh")
