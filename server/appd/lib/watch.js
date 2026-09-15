@@ -11,10 +11,27 @@
 const { createHash } = require('node:crypto');
 
 /**
+ * A name -> value map, normalised so the hash depends on the contents and not
+ * on the order the daemon happened to iterate its state in. Null values are
+ * kept: "stalled, reset time unknown" is a real state and is not the same as
+ * not being stalled at all.
+ */
+function mapOf(v) {
+  if (!v || typeof v !== 'object' || Array.isArray(v)) return {};
+  const out = {};
+  for (const k of Object.keys(v).sort()) {
+    const x = v[k];
+    out[String(k)] = x == null ? null : String(x);
+  }
+  return out;
+}
+
+/**
  * @param sessions from listSessions()
  * @param chats    from listChats()
  * @param headroom the few headroom facts an alert turns on (huginn-appd's
- *        headroomFacts()): {mode, stalled:[names], lastResumeAt, lastLadderAt,
+ *        headroomFacts()): {mode, stalled:[names], stalls:{name->resetsAt},
+ *        laddered:{name->family}, lastResumeAt, lastLadderAt,
  *        sentinels:[names]}. Optional — an older caller passing two arguments
  *        gets the same hash it always did for an idle headroom.
  */
@@ -54,6 +71,14 @@ function digest(sessions, chats, headroom) {
   const h = {
     mode: typeof hr.mode === 'string' ? hr.mode : 'ok',
     stalled: Array.isArray(hr.stalled) ? [...hr.stalled].map(String).sort() : [],
+    // The two MAPS the desktop's notification rules need to build a sentence.
+    // `stalled` is a name list and answers "is anything stuck"; LimitHit has to
+    // say WHEN it comes back and Downgraded has to say WHAT it moved to, and
+    // neither fact is recoverable from a list of names. Values are carried
+    // inside the hash rather than beside it because a reset time moving is news
+    // — the notification already on the phone is now wrong.
+    stalls: mapOf(hr.stalls),
+    laddered: mapOf(hr.laddered),
     lastResumeAt: Number.isFinite(Number(hr.lastResumeAt)) && hr.lastResumeAt !== null
       ? Number(hr.lastResumeAt) : null,
     lastLadderAt: Number(hr.lastLadderAt) || 0,
@@ -70,7 +95,8 @@ function digest(sessions, chats, headroom) {
   const stable = JSON.stringify({
     s: Object.keys(s).sort().map((k) => [k, s[k]]),
     c: Object.keys(c).sort().map((k) => [k, c[k].running, c[k].pending, c[k].finishedRuns]),
-    h: [h.mode, h.stalled, h.lastResumeAt, h.lastLadderAt, h.sentinels],
+    h: [h.mode, h.stalled, h.lastResumeAt, h.lastLadderAt, h.sentinels,
+      Object.entries(h.stalls), Object.entries(h.laddered)],
   });
   return {
     hash: createHash('sha1').update(stable).digest('hex').slice(0, 16),
