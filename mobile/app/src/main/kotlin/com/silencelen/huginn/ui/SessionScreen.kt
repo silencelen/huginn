@@ -91,10 +91,6 @@ fun SessionScreen(
     suggestions: List<String>,
     micGranted: Boolean,
     onRequestMic: () -> Unit,
-    onAnswerPrompt: (Int) -> Unit,
-    onAnswerMulti: (List<Int>) -> Unit,
-    /** Answers the DEGRADED ask card (screen.ask) — carries that card's fingerprint. */
-    onAnswerDegraded: (Int) -> Unit = {},
     onForceResize: () -> Unit,
     onInterrupt: () -> Unit,
     onCopy: (String) -> Unit,
@@ -145,15 +141,51 @@ fun SessionScreen(
     headroom: com.silencelen.huginn.data.StatusHeadroom? = null,
     nowMs: Long = 0L,
     onAutoResume: (Boolean) -> Unit = {},
+    // ------------------------------------------------- selection (3.0.2)
+    /** The host's quick-action wording; null narrows the bar to Quote. */
+    quickActions: com.silencelen.huginn.data.QuickActions? = null,
+    /** A long-press verb was picked, with the row's whole text. */
+    onSelectionAction: (SelectionAction, String) -> Unit = { _, _ -> },
+    /**
+     * The composer's send-queue line, or null when nothing is waiting.
+     *
+     * A message typed into a busy session is held by the daemon until the turn
+     * ends. That was correct and INVISIBLE — the composer emptied, the transcript
+     * did not grow, and the message read as lost. This is the sentence that says
+     * otherwise; [com.silencelen.huginn.ui.SendQueue] writes it.
+     */
+    queueNote: String? = null,
 ) {
     // The tab index in the form the shared rules reason about, so "which face is
     // showing" is answered the same way here as it is on the desktop rather than
     // by a `tab == 1` written out per render site.
     val face = SessionFace.ofTabIndex(tab)
     Column(Modifier.fillMaxSize()) {
+        // Resolved BEFORE the strip, because the strip needs it: the Screen tab
+        // carries a dot while a question is waiting on another face. That is the
+        // other half of the link bar below — a bar scrolls out of view, a tab
+        // never does.
+        val rawPrompt = screen?.prompt
+        val readablePrompt = rawPrompt?.takeUnless { PromptGate.paneOnlyMultiQuestion(it) }
+        val degradedAsk = screen?.ask
+            ?: rawPrompt?.takeIf { PromptGate.paneOnlyMultiQuestion(it) }?.asMultiPartSteer()
+        val planPending = screen?.planPending
+        val hasQuestion = readablePrompt != null || degradedAsk != null || planPending != null
         TabRow(selectedTabIndex = tab) {
             Tab(selected = tab == 0, onClick = { onTab(0) }, text = { Text("Conversation") })
-            Tab(selected = tab == 1, onClick = { onTab(1) }, text = { Text("Screen") })
+            Tab(
+                selected = tab == 1,
+                onClick = { onTab(1) },
+                text = {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text("Screen")
+                        if (PromptGate.screenTabDot(hasQuestion, face)) {
+                            Spacer(Modifier.width(6.dp))
+                            TabAttentionDot(true)
+                        }
+                    }
+                },
+            )
             Tab(selected = tab == 2, onClick = { onTab(2) }, text = { Text("Overview") })
         }
         SessionControls(
@@ -184,20 +216,12 @@ fun SessionScreen(
             if (tab == 2) {
                 overviewPane()
             } else if (tab == 0) {
-                // The question surface, resolved once and gated like the desktop's.
-                // A pane-only MULTI-question prompt is re-presented as the read-only
-                // steer card (a single digit would over-answer the next question);
-                // a genuine degraded ask and a pending plan approval both draw here
-                // too. Everything below is drawn only on a face the card belongs on.
-                val rawPrompt = screen?.prompt
-                val readablePrompt = rawPrompt?.takeUnless { PromptGate.paneOnlyMultiQuestion(it) }
-                val degradedAsk = screen?.ask
-                    ?: rawPrompt?.takeIf { PromptGate.paneOnlyMultiQuestion(it) }?.asMultiPartSteer()
-                val planPending = screen?.planPending
-                val cardVisible = PromptGate.visible(
-                    hasQuestion = readablePrompt != null || degradedAsk != null || planPending != null,
-                    face = face,
-                )
+                // The question surface, gated like the desktop's and — since the
+                // owner's decision 23 — a ONE-LINE BAR rather than a card. The
+                // cards were 290-330dp for a five-option question and only some
+                // prompt types could be answered from them; the pane answers all
+                // of them, so the bar steers there instead.
+                val questionVisible = PromptGate.visible(hasQuestion = hasQuestion, face = face)
                 SessionConversation(
                     name = name,
                     page = transcript,
@@ -214,13 +238,17 @@ fun SessionScreen(
                     onLoadEarlierAgent = onLoadEarlierAgent,
                     sessionHeadroom = sessionHeadroom,
                     // Through the gate rather than straight from the pane: this
-                    // face draws the card, the Screen face does not, and the rule
-                    // that decides is the one the desktop reads too.
-                    prompt = readablePrompt?.takeIf { cardVisible },
-                    ask = degradedAsk?.takeIf { cardVisible },
-                    planPending = planPending?.takeIf { cardVisible },
-                    onAnswerDegraded = onAnswerDegraded,
+                    // face draws the bar, the Screen face does not, and the rule
+                    // that decides is the one the desktop reads too. A plan
+                    // approval carries no question text of its own, so it reaches
+                    // the bar as BLANK — which is a pending question with nothing
+                    // readable, not the absence of one.
+                    questionText = if (!questionVisible) null
+                    else readablePrompt?.question ?: degradedAsk?.question ?: "",
                     onOpenScreen = { onTab(1) },
+                    quickActions = quickActions,
+                    onSelectionAction = onSelectionAction,
+                    queueNote = queueNote,
                     spinner = screen?.spinner,
                     statusLines = screen?.statusLines ?: emptyList(),
                     transientLine = screen?.transientLine,
@@ -233,8 +261,6 @@ fun SessionScreen(
                     draft = draft,
                     onDraft = onDraft,
                     onSendText = onSendText,
-                    onAnswerPrompt = onAnswerPrompt,
-                    onAnswerMulti = onAnswerMulti,
                     onInterrupt = onInterrupt,
                     working = working,
                     onCopy = onCopy,
@@ -289,9 +315,14 @@ private fun SessionConversation(
     loadingAgentHistory: Boolean = false,
     onLoadEarlierAgent: () -> Unit = {},
     sessionHeadroom: com.silencelen.huginn.data.SessionHeadroom? = null,
-    prompt: com.silencelen.huginn.data.PanePrompt?,
-    ask: com.silencelen.huginn.data.DegradedAsk? = null,
-    planPending: com.silencelen.huginn.data.PlanPending? = null,
+    /**
+     * The pending question's text, or null when nothing is pending.
+     *
+     * BLANK IS A DIFFERENT ANSWER FROM NULL and both are real: a plan approval and
+     * an unreadable degraded ask are pending with no text to preview, and they
+     * still need the bar.
+     */
+    questionText: String?,
     spinner: String?,
     statusLines: List<String>,
     transientLine: String?,
@@ -304,10 +335,10 @@ private fun SessionConversation(
     onSendText: (String, Boolean) -> Unit,
     micGranted: Boolean,
     onRequestMic: () -> Unit,
-    onAnswerPrompt: (Int) -> Unit,
-    onAnswerMulti: (List<Int>) -> Unit,
-    onAnswerDegraded: (Int) -> Unit = {},
     onOpenScreen: () -> Unit = {},
+    quickActions: com.silencelen.huginn.data.QuickActions? = null,
+    onSelectionAction: (SelectionAction, String) -> Unit = { _, _ -> },
+    queueNote: String? = null,
     onInterrupt: () -> Unit,
     working: Boolean,
     onCopy: (String) -> Unit,
@@ -324,6 +355,16 @@ private fun SessionConversation(
 ) {
     val scope = rememberCoroutineScope()
     val listState = rememberLazyListState()
+
+    // WHAT IS SELECTED, hoisted out of the gesture so the rule "which verbs does
+    // this selection deserve" is `:core`'s ([SelectionMode.actions]) and asserted,
+    // rather than living inside a lambda where nothing can reach it.
+    var selection by remember(name) { mutableStateOf(SelectionMode.NONE) }
+    // Back exits the selection before it leaves the session — the same contract as
+    // every other transient surface on this phone.
+    androidx.activity.compose.BackHandler(enabled = selection.active) {
+        selection = SelectionMode.NONE
+    }
 
     // WHICH STREAM this body is showing. The main page goes on ticking
     // underneath either way: reading an agent is looking more closely at a
@@ -389,9 +430,25 @@ private fun SessionConversation(
             shown == null -> Box(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
                 CircularProgressIndicator(strokeWidth = 2.dp)
             }
-            else -> LazyColumn(
+            // ⚠ THE WEIGHT LIVES ON THE PLAIN BOX, never on the SelectionContainer.
+            // Handed it directly, the scroll area takes the whole remaining height
+            // and the composer is laid out past the bottom edge and clipped away —
+            // a screen with no way to type into it, and nothing in the logs. The
+            // desktop learned this at ChatView.kt:314 and SessionView.kt:278; the
+            // phone's first SelectionContainer inherits it rather than rediscovers.
+            else -> Box(Modifier.weight(1f).fillMaxWidth()) {
+              androidx.compose.foundation.text.selection.SelectionContainer {
+                androidx.compose.runtime.CompositionLocalProvider(
+                    // The long-press seam. Provided AROUND THE TRANSCRIPT ONLY —
+                    // the composer and the controls above are not rows and must
+                    // not grow a gesture that selects them.
+                    LocalTranscriptSelection provides TranscriptSelectionHost { text ->
+                        selection = SelectionMode.begin(text)
+                    },
+                ) {
+              LazyColumn(
                 state = listState,
-                modifier = Modifier.weight(1f).fillMaxWidth(),
+                modifier = Modifier.fillMaxSize(),
                 contentPadding = androidx.compose.foundation.layout.PaddingValues(
                     start = 14.dp, end = 14.dp, top = 8.dp, bottom = 10.dp,
                 ),
@@ -432,6 +489,9 @@ private fun SessionConversation(
                         TranscriptRowItem(rows[i], onCopy)
                     }
                 }
+              }
+                }
+              }
             }
         }
 
@@ -498,9 +558,7 @@ private fun SessionConversation(
         // Suggested next messages, at the turn boundary only. A live prompt's
         // buttons outrank them, typing dismisses them, and tapping one FILLS the
         // composer rather than sending — a suggestion is a draft, not a decision.
-        if (suggestions.isNotEmpty() && prompt == null && ask == null && planPending == null &&
-            !working && draft.isBlank()
-        ) {
+        if (suggestions.isNotEmpty() && questionText == null && !working && draft.isBlank()) {
             Row(
                 Modifier
                     .fillMaxWidth()
@@ -524,34 +582,34 @@ private fun SessionConversation(
             }
         }
 
-        // The SHARED cards (:ui PromptCards.kt), the same ones the desktop draws —
-        // so the fused prompt's descriptions, the "N of M" sibling counter and the
-        // PromptChoices reconciliation all reach the phone, and a degraded/unreadable
-        // ask or a pending plan is no longer invisible here.
-        prompt?.let {
-            PromptCard(
-                prompt = it,
-                onAnswer = onAnswerPrompt,
-                onAnswerMulti = onAnswerMulti,
-            )
-        }
-        ask?.let {
-            DegradedAskCard(
-                ask = it,
-                onAnswer = onAnswerDegraded,
-                onOpenScreen = onOpenScreen,
-            )
-        }
-        planPending?.let {
-            PlanApprovalCard(
-                plan = it,
-                // The approve/reject buttons ride the readable prompt when there is
-                // one; without it the plan card is the only surface, so it steers to
-                // the Screen tab where the numbered dialog can be answered.
-                hasButtons = prompt != null,
-                onOpenScreen = onOpenScreen,
-            )
-        }
+        // THE QUESTION IS A LINE NOW (owner decision 23, 2026-09-15), where three
+        // full cards used to stack: the prompt card, the degraded ask and the plan
+        // approval. On a 360dp phone a five-option question filled the screen, and
+        // the buttons only ever handled some prompt types. The Screen tab handles
+        // all of them, so the bar hands the reader over — and the Screen tab's dot
+        // says so from the strip while this scrolls.
+        //
+        // WHAT DID NOT CHANGE: `vm.answerPrompt` / `answerPromptMulti` and the
+        // daemon's `/answer` route, and the lock-screen notification buttons that
+        // call them for a single bounded question. This is presentation.
+        QuestionLinkBar(
+            question = questionText,
+            onOpenScreen = onOpenScreen,
+            modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
+        )
+
+        // The long-press verbs, ABOVE the composer and below everything else, so
+        // the text being acted on stays visible while the verb is chosen.
+        SelectionActionBar(
+            mode = selection,
+            actions = quickActions,
+            onAct = { action, text ->
+                onSelectionAction(action, text)
+                selection = SelectionMode.NONE
+            },
+            onCopy = { onCopy(it); selection = SelectionMode.NONE },
+            onDismiss = { selection = SelectionMode.NONE },
+        )
 
         Surface(color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f)) {
           Column {
@@ -569,6 +627,18 @@ private fun SessionConversation(
                 )
             }
             AttachmentBar(attachment, onClearAttachment)
+            // PERSISTENT, and above the row rather than below it: the input row
+            // owns `imePadding()` and `navigationBarsPadding()`, so anything
+            // placed after it is laid out under the keyboard or behind the
+            // navigation bar — visible in a preview and gone on the phone.
+            queueNote?.let {
+                Text(
+                    it,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(start = 14.dp, end = 14.dp, top = 4.dp),
+                )
+            }
             Row(
                 Modifier
                     .fillMaxWidth()

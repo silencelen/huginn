@@ -108,10 +108,21 @@ fun ChatScreen(
     pads: List<com.silencelen.huginn.data.Scratchpad> = emptyList(),
     padRefId: String? = null,
     onPadRef: (String?) -> Unit = {},
+    // ------------------------------------------------- selection (3.0.2)
+    /** The host's quick-action wording; null narrows the bar to Quote. */
+    quickActions: com.silencelen.huginn.data.QuickActions? = null,
+    /** A long-press verb was picked, with the row's whole text. */
+    onSelectionAction: (SelectionAction, String) -> Unit = { _, _ -> },
 ) {
     val scope = rememberCoroutineScope()
     val listState = rememberLazyListState()
     var voiceOpen by remember { mutableStateOf(false) }
+    // Hoisted, keyed on the chat: switching chats must not carry a selection into
+    // a transcript the selected text is not in.
+    var selection by remember(chatId) { mutableStateOf(SelectionMode.NONE) }
+    androidx.activity.compose.BackHandler(enabled = selection.active) {
+        selection = SelectionMode.NONE
+    }
     val events = page?.events ?: emptyList()
     val rows = remember(events) { TranscriptGroups.group(events) }
     val rowKeys = remember(rows) { TranscriptGroups.keys(rows) }
@@ -183,18 +194,35 @@ fun ChatScreen(
                 )
             }
         } else {
-            LazyColumn(
-                state = listState,
-                modifier = Modifier.weight(1f).fillMaxWidth(),
-                contentPadding = androidx.compose.foundation.layout.PaddingValues(
-                    start = 14.dp, end = 14.dp, top = 8.dp, bottom = 10.dp,
-                ),
-                verticalArrangement = Arrangement.spacedBy(9.dp),
-            ) {
-                items(rows.size, key = { rowKeys[it] }) { i -> TranscriptRowItem(rows[i], onCopy) }
-                if (streaming) {
-                    item { StreamingItem(streamingText, activeTool, waking, onCopy) }
+            // ⚠ THE WEIGHT LIVES ON THE PLAIN BOX, never on the SelectionContainer.
+            // Handed it directly, the scroll area takes the whole remaining height
+            // and the composer is laid out past the bottom edge and clipped away —
+            // a chat with no way to type into it, and nothing in the logs. Proven
+            // on the desktop at ChatView.kt:314; inherited here rather than
+            // rediscovered.
+            Box(Modifier.weight(1f).fillMaxWidth()) {
+              androidx.compose.foundation.text.selection.SelectionContainer {
+                androidx.compose.runtime.CompositionLocalProvider(
+                    // Around the transcript ONLY: the composer is not a row.
+                    LocalTranscriptSelection provides TranscriptSelectionHost { text ->
+                        selection = SelectionMode.begin(text)
+                    },
+                ) {
+                  LazyColumn(
+                      state = listState,
+                      modifier = Modifier.fillMaxSize(),
+                      contentPadding = androidx.compose.foundation.layout.PaddingValues(
+                          start = 14.dp, end = 14.dp, top = 8.dp, bottom = 10.dp,
+                      ),
+                      verticalArrangement = Arrangement.spacedBy(9.dp),
+                  ) {
+                      items(rows.size, key = { rowKeys[it] }) { i -> TranscriptRowItem(rows[i], onCopy) }
+                      if (streaming) {
+                          item { StreamingItem(streamingText, activeTool, waking, onCopy) }
+                      }
+                  }
                 }
+              }
             }
         }
 
@@ -227,6 +255,19 @@ fun ChatScreen(
                 }
             }
         }
+
+        // The long-press verbs, ABOVE the composer so the text stays visible while
+        // the verb is chosen. Nothing here sends — every one of them stages.
+        SelectionActionBar(
+            mode = selection,
+            actions = quickActions,
+            onAct = { action, text ->
+                onSelectionAction(action, text)
+                selection = SelectionMode.NONE
+            },
+            onCopy = { onCopy(it); selection = SelectionMode.NONE },
+            onDismiss = { selection = SelectionMode.NONE },
+        )
 
         Composer(
             sealedRun = sealedRun,
