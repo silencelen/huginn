@@ -289,6 +289,28 @@ async function until(fn, ms = 20_000, what = 'the condition') {
     await wait(150);
   }
 }
+/**
+ * `until`, with the nudging REMOVED — for waits where hurrying the daemon along
+ * is what destroys the thing being waited for.
+ *
+ * `until` PATCHes the settings route every 1.5 s because most of this file is
+ * waiting on a decision the headroom pass makes, and its own cadence is a minute
+ * at its fastest. That is exactly the wrong medicine when the question is which
+ * of two subsystems notices something first.
+ */
+async function untilQuiet(fn, ms = 30_000, what = 'the condition') {
+  const deadline = Date.now() + ms;
+  let last = null;
+  for (;;) {
+    last = (await api('/v1/headroom')).body;
+    if (await fn(last)) return last;
+    if (Date.now() > deadline) {
+      throw new Error(`${what} never became true. Last /v1/headroom sessions: `
+        + `${JSON.stringify((last && last.sessions) || null).slice(0, 700)}`);
+    }
+    await wait(150);
+  }
+}
 const sessionRow = (body, name) => (body.sessions || []).find((s) => s.name === name) || null;
 
 
@@ -809,9 +831,23 @@ test('a queued resume the pump DROPS leaves the stall unresumed and unspent', as
 
   // The owner speaks. The pump drops the automated send on its next pass.
   fs.appendFileSync(s.transcript, `${human(Date.now())}\n`);
-  const after = await until(async (b) => {
+
+  // ⚠ DO NOT HURRY THE TICK WHILE WAITING FOR THIS. Two subsystems race to
+  // notice that human record and both are right: the send queue's pump drops the
+  // entry for 'human' and its settle reconciles the stall, or a headroom pass
+  // gets there first and files the stall as `how:'human'` — after which the NEXT
+  // headroom pass BLANKS a resolved stall record outright, the row this test
+  // polls stops existing, and `!st.queuedAt` can never come true. It then waits
+  // out the full thirty seconds and fails as "the drop to be reconciled never
+  // became true", which is a sentence about scheduling and not about the daemon.
+  //
+  // The only thing making those passes frequent is `until` itself, which PATCHes
+  // the settings route every 1.5 s to re-evaluate immediately. Left alone the
+  // headroom cadence is a minute and the pump's 400 ms poll wins every time —
+  // so this wait uses `untilQuiet`, which is `until` without the nudging.
+  const after = await untilQuiet(async (b) => {
     const st = (sessionRow(b, s.name) || {}).stall;
-    return !!(st && !st.queuedAt);
+    return !!(st && st.at && !st.queuedAt);
   }, 30_000, 'the drop to be reconciled');
   const row = sessionRow(after, s.name).stall;
   assert.notEqual(row.how, 'appd', 'a send that was never delivered is not an appd resume');
@@ -820,6 +856,12 @@ test('a queued resume the pump DROPS leaves the stall unresumed and unspent', as
   // The owner speaking is itself a resolution, so the record may well end up
   // marked `human` — what it must never say is that appd typed the phrase.
   assert.match(row.why, /dropped|person answered/);
+  // And the queue's own account of it, which is what the client shows and the
+  // one place the reason survives whatever the stall record does next.
+  const q2 = (await api(`/v1/sessions/${s.name}/typing`)).body || {};
+  assert.equal(q2.queued, 0, 'the entry is out of the queue, not still waiting');
+  assert.match(String(q2.lastError || ''), /you typed first/,
+    'the queue says why it binned the send, in the words the client shows');
 });
 
 // ---------------------------------------- a stall that never learns its clock
