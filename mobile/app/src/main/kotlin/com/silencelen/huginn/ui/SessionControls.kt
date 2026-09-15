@@ -76,7 +76,12 @@ fun SessionControls(
             Modifier
                 .fillMaxWidth()
                 .horizontalScroll(rememberScrollState())
-                .padding(horizontal = 8.dp, vertical = 6.dp),
+                // END PADDING INSIDE THE SCROLL, and larger than the start's: the
+                // last chip is "resumes on reset", the widest thing in the row and
+                // the one the walk found sitting flush against the right edge
+                // looking cut off. The row does scroll — but a chip that ends
+                // exactly at the bezel reads as clipped, not as scrollable.
+                .padding(start = 8.dp, end = 16.dp, top = 6.dp, bottom = 6.dp),
             horizontalArrangement = Arrangement.spacedBy(6.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {

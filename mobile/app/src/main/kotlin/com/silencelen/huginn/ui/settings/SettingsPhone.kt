@@ -7,6 +7,8 @@ import com.silencelen.huginn.data.QuickActions
 import com.silencelen.huginn.data.StatusHeadroom
 import com.silencelen.huginn.settings.SettingsCategory
 import com.silencelen.huginn.settings.SettingsProbe
+import com.silencelen.huginn.notify.DeliveryCopy
+import com.silencelen.huginn.notify.PushTally
 import com.silencelen.huginn.ui.agoWordsMs
 import kotlin.math.roundToInt
 
@@ -267,7 +269,11 @@ fun diagnosticsBundle(f: PhoneSettingsFacts, nowMs: Long): String {
         !f.pushRegistered -> "configured, this phone not registered"
         else -> "on"
     }
-    lines += "pushes: huginn sent ${f.pushesSent}, this phone received ${f.pushesReceived}"
+    // ARRIVED, clamped: this bundle is pasted into chats and issues, and "received
+    // 1274" against "sent 916" sends whoever reads it looking for a bug that is
+    // two counters from two host epochs. PushTally is the same clamp the page uses.
+    lines += "pushes: huginn sent ${f.pushesSent}, this phone received " +
+        "${PushTally.arrived(f.pushesReceived, f.pushesSent)}"
     lines += "background check: every ${minutes(f.heartbeatIntervalMs)}"
     lines += "app last reached huginn: ${witness(f.lastContactAt, nowMs)}"
     lines += "background check last ran: ${witness(f.lastAlarmAt, nowMs)}"
@@ -278,7 +284,10 @@ fun diagnosticsBundle(f: PhoneSettingsFacts, nowMs: Long): String {
         } ?: "never"
         )
     if (f.lastError.isNotBlank()) {
-        lines += "last failure: ${witness(f.lastErrorAt, nowMs)} — ${f.lastError}"
+        // Scrubbed for the same reason the token is absent: this text is pasted
+        // somewhere else, and the raw transport message carries the daemon's LAN
+        // address. See the file header, and DeliveryCopy.
+        lines += "last failure: ${witness(f.lastErrorAt, nowMs)} — ${DeliveryCopy.trouble(f.lastError)}"
     }
     lines += "alerts from huginn: " + (
         f.alerts?.let { a ->

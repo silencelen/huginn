@@ -75,7 +75,7 @@ fun SessionsScreen(
         } else {
             LazyColumn(
                 Modifier.fillMaxSize(),
-                contentPadding = androidx.compose.foundation.layout.PaddingValues(bottom = 88.dp),
+                contentPadding = androidx.compose.foundation.layout.PaddingValues(bottom = LIST_FAB_CLEARANCE),
             ) {
                 items(sessions, key = { it.name }) { s ->
                     SessionRow(
