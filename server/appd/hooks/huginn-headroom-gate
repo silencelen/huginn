@@ -26,15 +26,34 @@
 # of every agent, and a dependency that is missing or slow here is felt as the
 # session hanging.
 set -u
+# 0700 on anything we create, whatever the spawning shell's umask happens to be.
+# This directory holds the daemon's sentinels and gate.log, and it is created by
+# whichever of us runs first on a fresh host; sentinels.ensureDir asks for 0700
+# and mkdir does NOT chmod a directory that already exists, so a gate that won
+# the race left it world-readable for good.
+umask 077
 
 DIR="${HUGINN_HEADROOM_DIR:-/var/lib/huginn-appd/headroom}"
 # Mirror of the `timeout` the installer writes into settings.json. Keep them in
 # step: this is how long the CLI will wait, and we must finish before it.
 GATE_TIMEOUT="${HUGINN_GATE_TIMEOUT:-1800}"
 POLL="${HUGINN_GATE_POLL:-2}"
+# How long a sentinel may go untouched before it is treated as abandoned.
+# The daemon heartbeats every armed sentinel on each headroom tick (a minute at
+# its fastest, five at its idlest), so fifteen minutes is several missed ticks
+# rather than one slow one. A sentinel older than this means the daemon is gone,
+# and a dead daemon must not hold every spawn on the host until the CLI's own
+# timeout.
+GATE_STALE_S="${HUGINN_GATE_STALE_S:-900}"
 LOG_MAX=1048576
 case "$GATE_TIMEOUT" in '' | *[!0-9]*) GATE_TIMEOUT=1800 ;; esac
+# A FLOOR, not just a shape check. DEADLINE is GATE_TIMEOUT-30, so anything
+# under 30 lands in the past and the first iteration releases with `waited=0` —
+# the gate silently disabled by a number that passed validation. It fails open,
+# which is the right direction, but unreadably.
+[ "$GATE_TIMEOUT" -lt 60 ] && GATE_TIMEOUT=60
 case "$POLL" in '' | *[!0-9]* | 0) POLL=2 ;; esac
+case "$GATE_STALE_S" in '' | *[!0-9]* | 0) GATE_STALE_S=900 ;; esac
 
 START="$(date +%s)"
 DEADLINE=$(( START + GATE_TIMEOUT - 30 ))
@@ -105,15 +124,35 @@ if [ -n "$SESSION_ID" ] && [ -f "$DIR/fable-sessions" ]; then
   fi
 fi
 
+# Is this sentinel armed AND still being heartbeaten by a live daemon?
+#
+# Existence alone used to be the whole test, and `arm` deliberately does not move
+# `since` on a re-arm — so there was nothing to age against and nothing cleared
+# the files on shutdown. A daemon that died with STOP armed blocked every
+# Agent/Workflow spawn for GATE_TIMEOUT-30 seconds each, and the only symptom was
+# sessions that looked hung. The daemon now touches what it asserts; a sentinel
+# nobody has touched for GATE_STALE_S is a sentinel nobody owns.
+fresh_sentinel() {
+  [ -e "$1" ] || return 1
+  mt="$(stat -c %Y "$1" 2>/dev/null || echo 0)"
+  case "$mt" in '' | *[!0-9]*) mt=0 ;; esac
+  # Unreadable mtime: treat it as armed. Failing OPEN on a file we can see but
+  # cannot stat would be a gate that any permissions accident switches off.
+  [ "$mt" = 0 ] && return 0
+  age=$(( $(date +%s) - mt ))
+  [ "$age" -gt "$GATE_STALE_S" ] && return 1
+  return 0
+}
+
 holding() {
-  [ -e "$DIR/STOP" ] && return 0
-  [ "$BIND_FABLE" = 1 ] && [ -e "$DIR/STOP-FABLE" ] && return 0
+  fresh_sentinel "$DIR/STOP" && return 0
+  [ "$BIND_FABLE" = 1 ] && fresh_sentinel "$DIR/STOP-FABLE" && return 0
   return 1
 }
 
 # ---- log -------------------------------------------------------------------
 logline() {
-  [ -d "$DIR" ] || mkdir -p "$DIR" 2>/dev/null || return 0
+  [ -d "$DIR" ] || mkdir -p -m 700 "$DIR" 2>/dev/null || return 0
   if [ -f "$DIR/gate.log" ]; then
     sz="$(stat -c %s "$DIR/gate.log" 2>/dev/null || echo 0)"
     case "$sz" in '' | *[!0-9]*) sz=0 ;; esac
@@ -128,7 +167,7 @@ logline() {
 # ---- held row --------------------------------------------------------------
 HELD="$DIR/held/$ID"
 hold_begin() {
-  mkdir -p "$DIR/held" 2>/dev/null || return 0
+  mkdir -p -m 700 "$DIR/held" 2>/dev/null || return 0
   printf '{"since":%s,"agent_type":"%s","session_id":"%s"}\n' \
     "$START" "$TYPE" "$SESSION_ID" > "$HELD.tmp" 2>/dev/null &&
     mv -f "$HELD.tmp" "$HELD" 2>/dev/null
@@ -159,5 +198,13 @@ if holding; then
 fi
 
 hold_end
-logline "event=release id=$ID type=$TYPE waited=$(( $(date +%s) - START ))"
+# WHICH kind of release was it? A sentinel still on disk but no longer
+# heartbeaten is a dead daemon, not a window that reopened, and the two are worth
+# telling apart in the log: one is routine and the other is an incident nothing
+# else reports.
+if [ -e "$DIR/STOP" ] || { [ "$BIND_FABLE" = 1 ] && [ -e "$DIR/STOP-FABLE" ]; }; then
+  logline "event=stale-release id=$ID type=$TYPE waited=$(( $(date +%s) - START )) stale_s=$GATE_STALE_S"
+else
+  logline "event=release id=$ID type=$TYPE waited=$(( $(date +%s) - START ))"
+fi
 exit 0
