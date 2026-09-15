@@ -4,10 +4,9 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.widthIn
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.MaterialTheme
@@ -30,6 +29,7 @@ import com.silencelen.huginn.data.Round
 import com.silencelen.huginn.desktop.AppStore
 import com.silencelen.huginn.desktop.ui.common.DeskType
 import com.silencelen.huginn.desktop.ui.common.Frame
+import com.silencelen.huginn.desktop.ui.common.ReadingPane
 import com.silencelen.huginn.ui.RoundDraft
 import com.silencelen.huginn.ui.RoundEditor
 import com.silencelen.huginn.ui.RoundsSection
@@ -119,9 +119,12 @@ fun RoundsPane(store: AppStore) {
         // Weight rather than fillMaxSize: inside a Column a child that fills the
         // height takes the WHOLE column's, band included, and lays its last row
         // out past the bottom edge.
-        Column(
-            Modifier.weight(1f).fillMaxWidth().verticalScroll(rememberScrollState())
-                .padding(vertical = 12.dp),
+        // A reading pane: capped, centred, scrollbarred. `Frame.prose` was applied
+        // to the EMPTY state only, so the one card this pane usually holds
+        // stretched to 1370px over 610px of content with 680px of pane beside it.
+        ReadingPane(
+            modifier = Modifier.weight(1f),
+            padding = PaddingValues(horizontal = 12.dp, vertical = 12.dp),
         ) {
             RoundsSection(
                 rounds = rounds,
