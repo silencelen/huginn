@@ -3895,7 +3895,15 @@ async function accountStatus() {
  * polls the settings screen and this is a network round trip.
  */
 const planCache = { at: 0, data: null, error: null, running: false };
-const PLAN_TTL_MS = 60_000;
+/**
+ * How long one reading of the usage endpoint is served for.
+ *
+ * A minute, because the phone polls the settings screen and this is a network
+ * round trip that rate-limits per account. Overridable ONLY so a route suite can
+ * change its stubbed percentages and see the next read — the same test knob
+ * HUGINN_APPD_OAUTH_ACCOUNT_URL is. No production path sets it.
+ */
+const PLAN_TTL_MS = Number(process.env.HUGINN_APPD_PLAN_TTL_MS) || 60_000;
 
 async function fetchPlan() {
   if (planCache.running) return;
