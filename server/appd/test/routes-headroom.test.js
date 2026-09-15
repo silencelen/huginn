@@ -620,6 +620,38 @@ test('nothing is typed into a session whose last record is a HUMAN speaking', as
     'a turn that is not over is a turn our line would be absorbed into');
 });
 
+test('the title hook\'s idle state is the boundary on a transcript that never gets one', async () => {
+  // ⚠ turn_duration IS NOT GUARANTEED. Census of the 25 most recent real
+  // transcripts in ~/.claude/projects: it is written 1:1 with
+  // system/stop_hook_summary — only when a Stop hook ran — and 14 of them
+  // contain none at all. An automated line queued behind a boundary that is
+  // never written waits ten minutes and is dropped. The hook's own state file
+  // is the second source, and on those sessions the only one.
+  const { name, sink, transcript } = fableSession('hookgate');
+  // A turn in progress, and this transcript will never say it ended.
+  fs.appendFileSync(transcript, `${JSON.stringify({ type: 'assistant', message: { stop_reason: 'tool_use', content: [] } })}\n`);
+  writeState(name, { sessionId: `sid-${name}`, transcript, state: 'running' });
+
+  setUsage({ session: 5, weekly_all: 10, weekly_fable: 86 });
+  await tick({ cooldownMs: 0 });
+  await until((b) => b.sessions.some((s) => s.name === name && s.headsUpAt), 12_000, 'the heads-up mark');
+  await wait(2_500);
+  const held = (await api(`/v1/sessions/${name}/typing`)).body;
+  assert.equal(held.queued, 1, 'held: the transcript is mid-turn and no marker is coming');
+  assert.equal(held.blockedBy, 'turn');
+  assert.equal(fs.existsSync(sink) ? fs.readFileSync(sink, 'utf8') : '', '', 'and nothing reached the pane');
+
+  // The Stop hook fires. Its ts is epoch SECONDS, so it must land in a LATER
+  // second than the send for the release to be evidence rather than a guess.
+  writeState(name, { sessionId: `sid-${name}`, transcript, state: 'idle' });
+  // ⚠ SYNCHRONOUS PREDICATE. This file's `until` does `if (fn(last))` with no
+  // await, so an async predicate is a Promise — always truthy, and the wait
+  // returns on its first poll having proved nothing.
+  await until(() => (fs.existsSync(sink) ? fs.readFileSync(sink, 'utf8') : '').includes('[huginn headroom]'),
+    15_000, 'the heads-up to land once the hook said idle');
+  assert.match(fs.readFileSync(sink, 'utf8'), /\[huginn headroom\]/);
+});
+
 // -------------------------------------------------------------- the ladder
 
 test('at the ladder threshold the picker is driven by LABEL and `s` is pressed', async () => {
