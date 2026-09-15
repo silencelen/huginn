@@ -1,8 +1,10 @@
 package com.silencelen.huginn.ui
 
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
@@ -156,7 +158,12 @@ fun HeadroomSettingsSection(
     val problems = HeadroomForm.problems(draft)
     val dirty = draft != settings
 
-    Column(modifier.fillMaxWidth().widthIn(max = 760.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+    // CAP BEFORE FILL. `fillMaxWidth` hands DOWN fixed constraints, and a `widthIn`
+    // inside fixed constraints can only coerce into them — so in the other order
+    // the 760 is silently swallowed and this column spans whatever it is given.
+    // Measured on the desktop at 1440: sliders 1105px wide for a 0-100 value, and
+    // the intro paragraph set ~135 characters on one line. Both clients, one file.
+    Column(modifier.widthIn(max = 760.dp).fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(6.dp)) {
         Label("Thresholds")
         PctRow("Heads-up at", draft.headsUpPct) { draft = draft.copy(headsUpPct = it) }
         PctRow("Move down the ladder at", draft.ladderPct) { draft = draft.copy(ladderPct = it) }
@@ -296,27 +303,79 @@ private fun Muted2(text: String) {
  */
 @Composable
 private fun PctRow(label: String, value: Int, min: Int = HeadroomForm.MIN_PCT, onChange: (Int) -> Unit) {
-    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-        Text(label, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.width(230.dp))
-        Slider(
-            value = value.toFloat(),
-            onValueChange = { onChange(it.toInt().coerceIn(min, HeadroomForm.MAX_PCT)) },
-            valueRange = min.toFloat()..HeadroomForm.MAX_PCT.toFloat(),
-            modifier = Modifier.weight(1f),
-        )
-        Spacer(Modifier.width(10.dp))
-        OutlinedTextField(
-            value = value.toString(),
-            // An empty field is a state the reader passes THROUGH while retyping a
-            // number, so it must not be rejected into the old value on every
-            // keystroke. Anything unparseable simply does not move the setting.
-            onValueChange = { raw -> raw.trim().toIntOrNull()?.let { onChange(it.coerceIn(1, 100)) } },
-            singleLine = true,
-            suffix = { Text("%") },
-            modifier = Modifier.width(96.dp),
-        )
+    // ⚠ THE SLIDER IS THE ONLY CHILD THAT CAN SHRINK, so it absorbs everything the
+    // other two refuse to give up: a 230dp label and a 96dp number box out of
+    // 340dp of pane left the track SIX PIXELS wide, which is a control that cannot
+    // be dragged at all. The number box still worked, so the setting was reachable
+    // — it simply looked broken, which is the worst of both.
+    //
+    // Under the width where all three fit, the label goes on its own line and the
+    // slider gets the whole of the next one. Same three controls, same order, and
+    // the slider never drops below a draggable track.
+    BoxWithConstraints(Modifier.fillMaxWidth()) {
+        val stacked = maxWidth < PCT_ROW_STACK_BELOW
+
+        @Composable
+        fun RowScope.Track() {
+            Slider(
+                value = value.toFloat(),
+                onValueChange = { onChange(it.toInt().coerceIn(min, HeadroomForm.MAX_PCT)) },
+                valueRange = min.toFloat()..HeadroomForm.MAX_PCT.toFloat(),
+                modifier = Modifier.weight(1f),
+            )
+        }
+
+        @Composable
+        fun Number() {
+            OutlinedTextField(
+                value = value.toString(),
+                // An empty field is a state the reader passes THROUGH while retyping a
+                // number, so it must not be rejected into the old value on every
+                // keystroke. Anything unparseable simply does not move the setting.
+                onValueChange = { raw -> raw.trim().toIntOrNull()?.let { onChange(it.coerceIn(1, 100)) } },
+                singleLine = true,
+                suffix = { Text("%") },
+                modifier = Modifier.width(PCT_NUMBER),
+            )
+        }
+
+        if (stacked) {
+            Column(Modifier.fillMaxWidth()) {
+                Text(label, style = MaterialTheme.typography.bodyMedium)
+                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                    Track()
+                    Spacer(Modifier.width(PCT_GAP))
+                    Number()
+                }
+            }
+        } else {
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                Text(label, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.width(PCT_LABEL))
+                Track()
+                Spacer(Modifier.width(PCT_GAP))
+                Number()
+            }
+        }
     }
 }
+
+/** The row's fixed halves: the setting's name, and the number you can type into. */
+private val PCT_LABEL = 230.dp
+private val PCT_NUMBER = 96.dp
+private val PCT_GAP = 10.dp
+
+/** The narrowest slider that is still a slider rather than a decoration. */
+private val MIN_TRACK = 160.dp
+
+/**
+ * Where a label, a slider and a number box stop fitting on one line.
+ *
+ * WRITTEN AS ITS PARTS rather than as a number, because that is what it has to
+ * keep agreeing with: change the label column or the number box and this follows
+ * on its own. Below it the label takes its own line and the slider gets a real
+ * track back — ~310dp at 420dp of window, rather than six pixels.
+ */
+private val PCT_ROW_STACK_BELOW = PCT_LABEL + PCT_NUMBER + PCT_GAP + MIN_TRACK
 
 @Composable
 private fun FamilyPicker(value: String?, onPick: (String) -> Unit) {
