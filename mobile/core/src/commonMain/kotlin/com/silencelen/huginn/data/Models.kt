@@ -47,6 +47,35 @@ data class Status(
      * drawn at 0 %.
      */
     val headroom: StatusHeadroom? = null,
+    /**
+     * The wording each selection quick action puts in the composer, held on the
+     * HOST for the same reason [softEndPhrase] is: one copy, edited in one place,
+     * so the phone and the desktop stage the same text.
+     *
+     * NULL means the daemon predates 3.0.1 and owns no templates — which is not
+     * the same as four blank ones. The selection menu then offers only Quote (the
+     * one verb whose text this client writes itself) and the Settings editor is
+     * hidden rather than drawn over a file that does not exist.
+     */
+    val quickActions: QuickActions? = null,
+)
+
+/**
+ * The four templates, as `/v1/status` serves them and `PATCH /v1/quick-actions`
+ * takes them back.
+ *
+ * `explain`, `execute` and `askInNewChat` carry `{selection}` exactly once — the
+ * daemon refuses zero or two — and `quote` is a LEAD-IN prepended above the quote
+ * block rather than a template, empty by default. The frame itself is
+ * `QuickActionRules.quoteBlock`: it is the one piece of this the client owns.
+ */
+@Serializable
+data class QuickActions(
+    val rev: Int = 0,
+    val explain: String = "",
+    val execute: String = "",
+    val askInNewChat: String = "",
+    val quote: String = "",
 )
 
 @Serializable
