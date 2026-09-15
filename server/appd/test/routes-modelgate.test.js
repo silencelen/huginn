@@ -122,7 +122,7 @@ before(async () => {
 
 after(() => {
   if (daemon) daemon.kill('SIGTERM');
-  if (tmp) fs.rmSync(tmp, { recursive: true, force: true });
+  if (tmp) fs.rmSync(tmp, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 });
 });
 
 test('an unknown model id on chat creation is a 400 naming the id', async () => {

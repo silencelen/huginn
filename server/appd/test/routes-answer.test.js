@@ -118,7 +118,7 @@ after(() => {
   // Reap the private server outright (-L targets only OUR socket, never default).
   try { sh('tmux', ['kill-server']); } catch { /* no server */ }
   if (daemon) daemon.kill('SIGTERM');
-  if (tmp) fs.rmSync(tmp, { recursive: true, force: true });
+  if (tmp) fs.rmSync(tmp, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 });
 });
 
 test('the fixture pane is seen as a live question, with a fingerprint', async () => {
