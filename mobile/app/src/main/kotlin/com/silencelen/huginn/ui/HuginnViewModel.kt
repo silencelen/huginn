@@ -49,6 +49,7 @@ import com.silencelen.huginn.notify.SessionWatchWorker
 import com.silencelen.huginn.ui.LiveInput
 import com.silencelen.huginn.notify.AppLock
 import com.silencelen.huginn.notify.Heartbeat
+import com.silencelen.huginn.notify.PushTally
 import com.silencelen.huginn.notify.HuginnMessagingService
 import com.silencelen.huginn.notify.WatchService
 import kotlinx.coroutines.CancellationException
@@ -485,11 +486,27 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
          */
         val pushesSent: Long = 0,
         val pushesReceived: Long = 0,
+        /** The tally has been re-based at least once against a host restart. */
+        val pushRebaselined: Boolean = false,
     ) {
+        /**
+         * What actually arrived, as the page is allowed to print it.
+         *
+         * ⚠ NEVER MORE THAN WERE SENT. Reconciliation happens when a watch
+         * response lands ([com.silencelen.huginn.notify.PushTally]); this screen
+         * can be opened before the first one does, and "1274 of 916 pushes
+         * arrived" must not be reachable by being quick.
+         */
+        val pushesArrived: Long get() = PushTally.arrived(pushesReceived, pushesSent)
+
         /** What the alarm will do next, in the same terms the rule is written in. */
-        val relaxed: Boolean get() = Heartbeat.intervalFor(pushesSent, pushesReceived) ==
+        val relaxed: Boolean get() = Heartbeat.intervalFor(pushesSent, pushesArrived) ==
             Heartbeat.RELAXED_INTERVAL_MS
-        val pushesMissing: Long get() = (pushesSent - pushesReceived).coerceAtLeast(0)
+
+        /** The interval the alarm is actually armed at, for the cadence line. */
+        val heartbeatIntervalMs: Long get() = Heartbeat.intervalFor(pushesSent, pushesArrived)
+
+        val pushesMissing: Long get() = PushTally.missing(pushesReceived, pushesSent)
     }
 
     private val _health = MutableStateFlow(DeliveryHealth())
@@ -503,6 +520,7 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
         dozeExempt = Heartbeat.isExemptFromDoze(getApplication()),
         pushesSent = settings.pushesSent.first(),
         pushesReceived = settings.pushesReceived.first(),
+        pushRebaselined = settings.pushRebaselined.first(),
     )
 
     /**

@@ -299,6 +299,14 @@ class ApiContractTest {
         assertTrue(live.headroom!!.stalls["promptprobe"]!!.startsWith("2026-"))
         assertEquals(listOf("STOP-FABLE"), live.headroom!!.sentinels)
         assertEquals(java.lang.Long.valueOf(214L), live.pushesSent)
+        // ⚠ THE FIELD NAME IS THE CONTRACT. appd 3.0.5 sends the counter's epoch
+        // beside the tally; get the spelling wrong and the phone silently keeps
+        // comparing counts across a host-side restart — which is exactly the bug
+        // that produced "1274 of 916 pushes arrived". See PushTally.
+        assertEquals("pe_01HQZ8K4", live.pushEpoch)
+        // And a pre-3.0.5 daemon sends none. Null, not "", so the reconciliation
+        // can tell "no epoch known" from "a new epoch called nothing".
+        assertNull("an older daemon has no epoch to send", never.pushEpoch)
     }
 
     @Test

@@ -71,7 +71,10 @@ object WatchNotifier {
         // Only when the response actually carried it. A frame without the tally
         // (an older daemon, or any shape that omits it) must leave the stored
         // count alone rather than reset it to zero.
-        watch.pushesSent?.let { settings.notePushesSent(it) }
+        // WITH THE EPOCH. The two counters are only comparable inside one of the
+        // host's counter epochs; stored without it, a token rotation silently
+        // reset the host's tally and left the phone's climbing past it.
+        watch.pushesSent?.let { settings.notePushesSent(it, watch.pushEpoch) }
 
         // Nothing has ever been observed, so there is no transition to speak of —
         // only a list of things that were already true. Announcing those would mean
