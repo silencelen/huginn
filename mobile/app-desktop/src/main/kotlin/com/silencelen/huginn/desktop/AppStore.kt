@@ -983,7 +983,14 @@ class AppStore(
                 // already going. This way it survives a settings file edited
                 // underneath the app as well as a toggle in the UI.
                 syncDeviceRunner()
-                if (_view.value == View.STATUS) refreshStatus()
+                // ⚠ ONCE PER RESUME as well as while Status is open. `/v1/status`
+                // is where the host's quick-action wording lives, and the thing
+                // that needs it is the right-click menu over a TRANSCRIPT —
+                // nowhere near the Status pane. Fetched only on that pane, every
+                // selection menu in the app offered Quote alone forever, which
+                // looks exactly like the other three verbs not being built. The
+                // per-view poll stays for the figures that actually move.
+                if (tick == 0 || _view.value == View.STATUS) refreshStatus()
                 // Every sixth pass, which is thirty seconds — the rate the design
                 // costed. Counted rather than given its own loop so it cannot
                 // outlive the visibility gate the rest of the polling obeys.
