@@ -327,40 +327,43 @@ test('a send lands at once when the transcript says the last turn finished', asy
   assert.equal(fs.readFileSync(out, 'utf8'), 'go ahead\n');
 });
 
-test('a send mid-turn is QUEUED, and /typing says what it is waiting for', async () => {
-  // ⚠ WHY THIS GATE EXISTS. A message delivered mid-turn is not merely late:
-  // the TUI splices it into the running turn ("reason":"absorbed_mid_turn") and
-  // the FIRST message's instruction is never carried out. Measured.
+test('a HUMAN send mid-turn LANDS AT ONCE — Claude Code\'s own queue takes it', async () => {
+  // ⚠ REVERSED IN 3.0.3. 3.0.0 held a person's message here until the turn
+  // ended, on the theory that a mid-turn message is absorbed into the running
+  // turn. In practice it made the message vanish from the sender's view for
+  // as long as an agent turn lasted (the owner's report), and 2.x had typed it
+  // at once with the TUI showing it queued under the composer. The turn gate
+  // now applies to the daemon's AUTOMATED lines only (see typing.test.js and
+  // routes-headroom.test.js); a person's text goes to the pane now.
   const { name, out } = mkSink('midturn');
   writeState(name, { state: 'running', transcript: writeTranscript(name, [TURN, USER]) });
   const { status, body } = await api(`/v1/sessions/${name}/keys`, {
     method: 'POST', body: JSON.stringify({ text: 'wait for me', keys: ['Enter'] }),
   });
   assert.equal(status, 200, JSON.stringify(body));
-  assert.equal(body.delivered, false, 'a user record is the last thing in the transcript');
-  assert.equal(body.queued, 1);
-  assert.equal(body.position, 1);
+  assert.equal(body.delivered, true, 'a running turn does not hold a person\'s message');
+  assert.equal(body.queued, 0);
   const st = await typingOf(name);
-  assert.equal(st.queued, 1);
-  assert.equal(st.blockedBy, 'turn');
-  assert.equal(st.delivering, false);
-  // The file exists from the moment the pane's shell opens the redirect, so
-  // "nothing arrived" is an EMPTY file, not a missing one.
-  assert.equal(fs.readFileSync(out, 'utf8'), '', 'and nothing has reached the pane');
+  assert.equal(st.queued, 0);
+  assert.equal(st.blockedBy, null);
+  for (let i = 0; i < 40 && !fs.existsSync(out); i++) await wait(100);
+  await wait(300);
+  assert.equal(fs.readFileSync(out, 'utf8'), 'wait for me\n', 'it reached the pane immediately');
 });
 
-test('appending a turn_duration record releases the queued send', async () => {
+test('a human send is never left waiting on a transcript that stays busy', async () => {
+  // The 3.0.0 hold had no floor: a session inside a long agent turn kept a
+  // person's message for the whole turn, then (3.0.0) dropped it at ten
+  // minutes. No transcript shape may hold a human send now — not a trailing
+  // user record, not an assistant record, not the CLI's bookkeeping.
   const { name, out } = mkSink('release');
-  const file = writeTranscript(name, [TURN, USER]);
+  const file = writeTranscript(name, [TURN, USER, JSON.stringify({ type: 'assistant', message: { content: [{ type: 'text', text: 'working' }] } })]);
   writeState(name, { state: 'running', transcript: file });
-  await api(`/v1/sessions/${name}/keys`, {
+  const { body } = await api(`/v1/sessions/${name}/keys`, {
     method: 'POST', body: JSON.stringify({ text: 'released', keys: ['Enter'] }),
   });
-  assert.equal((await typingOf(name)).queued, 1);
-  appendTranscript(file, TURN);
-  const st = await drains(name);
-  assert.equal(st.queued, 0, 'the 400 ms poll re-checks the gate and lets it go');
-  assert.equal(st.blockedBy, null);
+  assert.equal(body.delivered, true);
+  assert.equal((await typingOf(name)).queued, 0);
   for (let i = 0; i < 40 && !fs.existsSync(out); i++) await wait(100);
   await wait(300);
   assert.equal(fs.readFileSync(out, 'utf8'), 'released\n');
@@ -422,13 +425,14 @@ test('a TEXT send into a dialog is still queued, because there IS somewhere to h
   assert.equal((await typingOf(name)).blockedBy, 'modal');
 });
 
-test('keys are never queued: an interrupt jumps a message waiting on a turn', async () => {
-  // An Escape means nothing if it arrives at the next turn boundary — by then
-  // the thing it was interrupting has finished.
-  const name = mkSession('interrupt');
-  writeState(name, { state: 'running', transcript: writeTranscript(name, [TURN, USER]) });
+test('keys are never queued: an interrupt jumps a message waiting on a dialog', async () => {
+  // An Escape means nothing if it arrives later — by then the thing it was
+  // interrupting has finished. (Since 3.0.3 a turn no longer holds a person's
+  // message, so the only thing that can hold one is a dialog on screen.)
+  const name = mkModal('interrupt');
+  writeState(name, { transcript: writeTranscript(name, [TURN]) });
   await api(`/v1/sessions/${name}/keys`, {
-    method: 'POST', body: JSON.stringify({ text: 'queued behind the turn', keys: ['Enter'] }),
+    method: 'POST', body: JSON.stringify({ text: 'queued behind the dialog', keys: ['Enter'] }),
   });
   assert.equal((await typingOf(name)).queued, 1);
   const before = tmuxCalls('Escape').length;
@@ -444,8 +448,10 @@ test('keys are never queued: an interrupt jumps a message waiting on a turn', as
 // ------------------------------------------------------------ the list + poll
 
 test('a session row carries pendingSends while a message waits', async () => {
-  const name = mkSession('pending');
-  writeState(name, { state: 'running', transcript: writeTranscript(name, [TURN, USER]) });
+  // Only a dialog holds a person's message now (3.0.3), so a modal pane is the
+  // one way to have something waiting for the row to count.
+  const name = mkModal('pending');
+  writeState(name, { transcript: writeTranscript(name, [TURN]) });
   await api(`/v1/sessions/${name}/keys`, {
     method: 'POST', body: JSON.stringify({ text: 'still waiting', keys: ['Enter'] }),
   });
