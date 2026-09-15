@@ -414,14 +414,89 @@ class StreamPickerTest {
     // ----------------------------------------------------------------- labels
 
     @Test
-    fun `labels are clipped to forty characters including the ellipsis`() {
+    fun `labels are clipped to the chip width including the ellipsis`() {
+        // 28, not 40: at 40 a chip was wider than half a 411dp phone and the
+        // unfolded list laid out one per row — nine settled agents, nine
+        // full-width lines. See StreamPicker.LABEL_MAX.
+        assertEquals(28, StreamPicker.LABEL_MAX, "the width two chips a row is measured against")
         val long = "audit every nginx vhost on hermod and report what changed"
         val items = StreamPicker.items(listOf(agent("agent-x", task = long)), NOW)
         val label = items[1].label
-        assertEquals(StreamPicker.LABEL_MAX, label.length)
+        // AT MOST, not exactly: clip trims the trailing space before the ellipsis,
+        // so a cut that lands on a word boundary comes out one short. Never over
+        // is the rule the FlowRow's measurement depends on.
+        assertTrue(label.length <= StreamPicker.LABEL_MAX, "'$label' is ${label.length}")
+        assertEquals(StreamPicker.LABEL_MAX, StreamPicker.clip("x".repeat(90)).length, "the ellipsis is inside the budget")
         assertTrue(label.endsWith("…"), "a clipped label must say it was clipped")
         assertTrue(long.startsWith(label.dropLast(1).trimEnd()))
-        assertEquals("exactly forty characters long, honest", StreamPicker.clip("exactly forty characters long, honest"))
+        assertEquals("exactly twenty-eight chars ok", StreamPicker.clip("exactly twenty-eight chars ok", max = 29))
+    }
+
+    @Test
+    fun `a prompt body is never what a chip says`() {
+        // THE DEFECT, from the owner's phone: nine settled recon agents, nine
+        // chips reading "You are a READ-ONLY reconnaiss…". The daemon's `task` is
+        // literally the first line of the agent's first user record, and a
+        // fan-out hands every sibling the same opening paragraph — so the one
+        // field the strip was labelling with is the one field that cannot tell
+        // them apart.
+        val prompt = "You are a READ-ONLY reconnaissance agent on huginn (LXC 117). Audit the tree."
+        val agents = (1..9).map { agent("agent-recon$it", task = prompt, status = "done") }
+        val items = StreamPicker.items(agents, NOW, expanded = true)
+        val chips = items.filter { it.agentId != null }
+        assertEquals(9, chips.size)
+        assertTrue(
+            chips.none { it.label.lowercase().startsWith("you are") },
+            "the prompt body is boilerplate, not a name: ${chips.map { it.label }}",
+        )
+        assertEquals(
+            9, chips.map { it.label }.toSet().size,
+            "nine chips that read the same are one chip drawn nine times: ${chips.map { it.label }}",
+        )
+    }
+
+    @Test
+    fun `the agent's own summary outranks its task`() {
+        // The summary is the only string on an AgentRun written as an account of
+        // the work rather than as instructions for it.
+        val items = StreamPicker.items(
+            listOf(
+                AgentRun(
+                    id = "agent-sum",
+                    task = "You are a READ-ONLY reconnaissance agent. Go and look.",
+                    summary = "nginx vhosts audited\nsecond line ignored",
+                    active = true,
+                    updatedAt = NOW - 30,
+                ),
+            ),
+            NOW,
+        )
+        assertEquals("nginx vhosts audited", items[1].label)
+    }
+
+    @Test
+    fun `an ordinary task still labels its own chip`() {
+        // The fallback is for PROMPTS, not for every task. A short written task —
+        // which is what the Agent tool's own `description` produces — is the best
+        // label there is and must survive.
+        val items = StreamPicker.items(listOf(agent("agent-x", task = "audit the nginx vhosts")), NOW)
+        assertEquals("audit the nginx vhosts", items[1].label)
+    }
+
+    @Test
+    fun `identical labels are separated by the row's own short id`() {
+        val items = StreamPicker.items(
+            listOf(
+                agent("agent-aaaaaaaa11", task = "sweep the tree"),
+                agent("agent-bbbbbbbb22", task = "sweep the tree"),
+            ),
+            NOW,
+        )
+        val labels = items.filter { it.agentId != null }.map { it.label }
+        assertEquals(2, labels.toSet().size, "two identical chips: $labels")
+        assertTrue(labels.all { it.length <= StreamPicker.LABEL_MAX }, "still one chip wide: $labels")
+        assertTrue(labels.any { it.endsWith("aaaaaaaa") }, labels.toString())
+        assertTrue(labels.any { it.endsWith("bbbbbbbb") }, labels.toString())
     }
 
     @Test
@@ -461,7 +536,9 @@ class StreamPickerTest {
             ),
             NOW,
         )
-        assertEquals("workflow-subagent", items.first { it.agentId == "agent-notask" }.label)
+        // Type AND id: the type alone is what every member of a workflow run
+        // shares, so on its own it is the same wall the prompt body was.
+        assertEquals("workflow-subagent · notask", items.first { it.agentId == "agent-notask" }.label)
         assertEquals("abcdef12", items.first { it.agentId == "agent-abcdef123456" }.label)
     }
 
