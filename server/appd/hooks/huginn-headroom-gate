@@ -1,0 +1,163 @@
+#!/usr/bin/env bash
+# huginn-headroom-gate — the pause button, installed as a Claude Code hook.
+#
+# It is a DELAY, never a denial. When the daemon has armed a sentinel because the
+# account is close to a usage limit, this script sits on the spawn of a subagent
+# (SubagentStart) or of an Agent/Workflow tool call (PreToolUse) until the
+# sentinel clears, and then lets it through. Exit code is ALWAYS 0: the CLI reads
+# a non-zero hook as a block, and a gate that can block is a gate that can wedge
+# a session at 3am over a percentage.
+#
+# Measured facts this script is shaped by (spikes/hook-gate.md):
+#   * the CLI blocks the tool call for the whole lifetime of this process —
+#     verified to 142 s — so a sleep loop here really is a barrier;
+#   * the hook's `timeout` in settings.json is SECONDS, and on expiry the CLI
+#     SIGKILLs us and ALLOWS the spawn, silently (`outcome:"cancelled"`, nothing
+#     on stderr, nothing in the stream without --include-hook-events). A SIGKILL
+#     runs no trap, so a held/<id> file would be orphaned and the operator would
+#     be told a spawn is still waiting that is in fact running. That is why we
+#     self-release 30 s EARLY (DEADLINE below): every release is then ours, with
+#     the held file removed and a `timeout-release` line in the log.
+#   * SubagentStart is the only event that sees agents spawned inside a Workflow
+#     script, and its payload has no model — so "is this session on Fable?" is
+#     answered by the daemon's own `fable-sessions` list, not by the payload.
+#
+# No jq, no node, no network: coreutils and sed only. This runs on the spawn path
+# of every agent, and a dependency that is missing or slow here is felt as the
+# session hanging.
+set -u
+
+DIR="${HUGINN_HEADROOM_DIR:-/var/lib/huginn-appd/headroom}"
+# Mirror of the `timeout` the installer writes into settings.json. Keep them in
+# step: this is how long the CLI will wait, and we must finish before it.
+GATE_TIMEOUT="${HUGINN_GATE_TIMEOUT:-1800}"
+POLL="${HUGINN_GATE_POLL:-2}"
+LOG_MAX=1048576
+case "$GATE_TIMEOUT" in '' | *[!0-9]*) GATE_TIMEOUT=1800 ;; esac
+case "$POLL" in '' | *[!0-9]* | 0) POLL=2 ;; esac
+
+START="$(date +%s)"
+DEADLINE=$(( START + GATE_TIMEOUT - 30 ))
+
+# ---- payload ---------------------------------------------------------------
+# One JSON object on stdin. Flattening on commas keeps each `"key": "value"` on
+# its own short line, so the greedy `.*` in the sed below cannot reach across a
+# prompt that happens to quote a key name at us — and `1p` then takes the FIRST
+# occurrence, which is the envelope's own field rather than anything nested in
+# tool_input. Good enough for ids; it is not a JSON parser and must never be
+# asked to be one.
+PAYLOAD="$(cat 2>/dev/null || true)"
+FLAT="$(printf '%s' "$PAYLOAD" | tr '\n\r\t' '   ' | tr ',' '\n')"
+
+jget() {
+  printf '%s\n' "$FLAT" |
+    sed -n "s/.*\"$1\"[[:space:]]*:[[:space:]]*\"\([^\"]*\)\".*/\1/p" |
+    sed -n '1p'
+}
+# The id becomes a FILENAME under held/, from a payload we do not control. Strip
+# it to an alphabet that cannot traverse (no dot, no slash) rather than trusting
+# that agent ids stay hex forever.
+safe_id() { printf '%s' "${1:-}" | sed 's/[^A-Za-z0-9_-]//g' | cut -c1-128; }
+# Values that get printed back into a JSON line.
+safe_txt() { printf '%s' "${1:-}" | tr -d '\000-\037' | sed 's/[\\"]//g' | cut -c1-200; }
+
+EVENT="$(jget hook_event_name)"
+TOOL="$(jget tool_name)"
+AGENT_ID="$(jget agent_id)"
+AGENT_TYPE="$(jget agent_type)"
+SESSION_ID="$(jget session_id)"
+TOOL_USE_ID="$(jget tool_use_id)"
+TRANSCRIPT="$(jget transcript_path)"
+
+# SubagentStart carries agent_id; PreToolUse carries tool_use_id. Neither is
+# guaranteed, so the pid is the last resort — a held file with no id is still
+# better than two concurrent gates sharing one name.
+ID="$(safe_id "$AGENT_ID")"
+[ -n "$ID" ] || ID="$(safe_id "$TOOL_USE_ID")"
+[ -n "$ID" ] || ID="pid-$$"
+# What the operator sees in the log and on the held row: the agent type when we
+# have one, else the tool, else the event.
+TYPE="$(safe_txt "$AGENT_TYPE")"
+[ -n "$TYPE" ] || TYPE="$(safe_txt "$TOOL")"
+[ -n "$TYPE" ] || TYPE="$(safe_txt "$EVENT")"
+[ -n "$TYPE" ] || TYPE="-"
+SESSION_ID="$(safe_id "$SESSION_ID")"
+# Transcripts are named <sessionId>.jsonl — the one field that survives when the
+# envelope's session_id does not, and the difference between a Fable session
+# being held and slipping through ungated.
+if [ -z "$SESSION_ID" ] && [ -n "$TRANSCRIPT" ]; then
+  SESSION_ID="$(safe_id "$(basename "$TRANSCRIPT" .jsonl 2>/dev/null || true)")"
+fi
+
+# ---- which sentinels bind --------------------------------------------------
+# STOP binds everything. STOP-FABLE binds only sessions the daemon listed in
+# `fable-sessions` (one Claude session id per line, rewritten each tick), so an
+# Opus session keeps working while a Fable one waits out its weekly window.
+#
+# Decided ONCE, at start, on purpose: a session's model does not change under a
+# spawn that is already waiting, and re-reading the list every poll would let a
+# tick-time rewrite release (or capture) a hold for reasons the operator cannot
+# see in the log line.
+BIND_FABLE=0
+if [ -n "$SESSION_ID" ] && [ -f "$DIR/fable-sessions" ]; then
+  if [ -n "$(sed -n "/^${SESSION_ID}\$/p" "$DIR/fable-sessions" 2>/dev/null)" ]; then
+    BIND_FABLE=1
+  fi
+fi
+
+holding() {
+  [ -e "$DIR/STOP" ] && return 0
+  [ "$BIND_FABLE" = 1 ] && [ -e "$DIR/STOP-FABLE" ] && return 0
+  return 1
+}
+
+# ---- log -------------------------------------------------------------------
+logline() {
+  [ -d "$DIR" ] || mkdir -p "$DIR" 2>/dev/null || return 0
+  if [ -f "$DIR/gate.log" ]; then
+    sz="$(stat -c %s "$DIR/gate.log" 2>/dev/null || echo 0)"
+    case "$sz" in '' | *[!0-9]*) sz=0 ;; esac
+    # One generation kept. The gate writes two short lines per spawn; a megabyte
+    # is weeks of a busy host, and an unbounded log on a daemon's state dir is
+    # how /var fills on the night the fleet is already unhappy.
+    [ "$sz" -ge "$LOG_MAX" ] && mv -f "$DIR/gate.log" "$DIR/gate.log.1" 2>/dev/null
+  fi
+  printf '%s %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$1" >> "$DIR/gate.log" 2>/dev/null || true
+}
+
+# ---- held row --------------------------------------------------------------
+HELD="$DIR/held/$ID"
+hold_begin() {
+  mkdir -p "$DIR/held" 2>/dev/null || return 0
+  printf '{"since":%s,"agent_type":"%s","session_id":"%s"}\n' \
+    "$START" "$TYPE" "$SESSION_ID" > "$HELD.tmp" 2>/dev/null &&
+    mv -f "$HELD.tmp" "$HELD" 2>/dev/null
+  return 0
+}
+hold_end() { rm -f "$HELD" "$HELD.tmp" 2>/dev/null || true; }
+# Covers the ordinary exits and a SIGTERM; a SIGKILL from the CLI's own timeout
+# cannot be trapped, which is what the early DEADLINE is for.
+trap 'hold_end' EXIT INT TERM
+
+# ---- gate ------------------------------------------------------------------
+logline "event=start id=$ID type=$TYPE waited=0"
+
+if holding; then
+  hold_begin
+  while holding; do
+    now="$(date +%s)"
+    if [ "$now" -ge "$DEADLINE" ]; then
+      hold_end
+      logline "event=timeout-release id=$ID type=$TYPE waited=$(( now - START ))"
+      exit 0
+    fi
+    # Never sleep past the deadline: the release has to be ours, and a poll that
+    # overshoots is a hold the operator sees end late for no reason.
+    rem=$(( DEADLINE - now ))
+    if [ "$rem" -lt "$POLL" ]; then sleep "$rem"; else sleep "$POLL"; fi
+  done
+fi
+
+hold_end
+logline "event=release id=$ID type=$TYPE waited=$(( $(date +%s) - START ))"
+exit 0
