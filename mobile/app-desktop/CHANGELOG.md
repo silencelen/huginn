@@ -1,5 +1,12 @@
 # Huginn Desktop changelog
 
+## 1.1.0
+
+- **Settings is a place you can find things in.** Nine categories in the list pane, one page at a
+  time on the right, and a search field that finds a setting by what it does. Everything that was
+  there is still there, once — account switching had three renderings, quick actions were
+  desktop-only, and "Close to tray" lived in the tray menu.
+
 ## 1.0.2
 
 - **How much of your session is left, under the Status icon.** A 2px line under the rail's Status
