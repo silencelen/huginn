@@ -44,7 +44,7 @@ const roundsLib = require('./lib/rounds');
 const scratchpadsLib = require('./lib/scratchpads');
 const devicesLib = require('./lib/devices');
 const { taskDirFor, parsePs, scanTasks, extractBgIds } = require('./lib/tasks');
-const { agentsDirFor, listAgents } = require('./lib/agents');
+const { agentsDirFor, listAgents, listAgentFiles } = require('./lib/agents');
 const { sessionGraph, sessionOverview } = require('./lib/sessiongraph');
 const { suggestionContext, buildPrompt, parseSuggestions } = require('./lib/suggest');
 const { FIELDS: POLISH_FIELDS, buildPolishPrompt, parsePolish } = require('./lib/polish');
@@ -5033,16 +5033,77 @@ const server = http.createServer(async (req, res) => {
     }
 
     // --- the individual agents behind "0/4 agents done"
+    //
+    // `?all=1` is the STREAM PICKER's view: every agent this session ever
+    // spawned, not just the ones still warm. The default stays the 45-minute
+    // window because the progress popup that has always called this route wants
+    // "what is happening", and a sheet that grows to two hundred corpses is a
+    // worse answer to that question.
     if ((m = p.match(/^\/v1\/sessions\/([A-Za-z0-9_][A-Za-z0-9_.-]{0,49})\/agents$/)) && req.method === 'GET') {
       const name = m[1];
       if (!(await sessionExists(name))) return sendErr(res, 404, 'no such session');
       const st = readSessionState(name);
       const dir = st ? agentsDirFor(st.transcript, st.sessionId) : null;
-      const agents = dir ? listAgents(dir, Math.floor(Date.now() / 1000)) : [];
+      const all = u.searchParams.get('all') === '1';
+      const agents = dir
+        ? listAgents(dir, Math.floor(Date.now() / 1000), fs, all ? 200 : 24, { all })
+        : [];
       return sendJson(res, 200, {
         agents,
         active: agents.filter((a) => a.active).length,
         serverTime: Math.floor(Date.now() / 1000),
+      });
+    }
+
+    // --- ONE subagent's conversation, so the app can switch the transcript view
+    //     from the parent to whichever agent or workflow member it is watching.
+    //
+    // An agent file is an ordinary Claude transcript, so this is the session
+    // route's paging contract over a different file — same `offset`/`until`/
+    // `limit`, same page shape — and NOT the session route's extras: `activity`
+    // and `tasks` describe the parent's pane and its background shells, which
+    // belong to the parent no matter which stream is on screen.
+    //
+    // ⚠ The id is never joined onto a path. `agentId` is matched against the
+    // BASENAMES that listAgentFiles found; a `path.join` of a client-supplied
+    // value would make `../../..` a file read, and the regex alone is not the
+    // guard (a regex is a guess about what a path resolver will do — the
+    // enumeration is the fact).
+    if ((m = p.match(/^\/v1\/sessions\/([A-Za-z0-9_][A-Za-z0-9_.-]{0,49})\/agents\/([^/]{1,80})\/transcript$/)) && req.method === 'GET') {
+      const name = m[1];
+      // Decoded before matching, so a percent-encoded traversal is judged as
+      // what it means rather than as the literal it arrived as. A malformed
+      // escape is simply not a valid id.
+      let agentId = null;
+      try { agentId = decodeURIComponent(m[2]); } catch { agentId = null; }
+      if (!agentId || !/^agent-[0-9a-f]{6,32}$/.test(agentId)) {
+        return sendErr(res, 400, 'invalid agent id');
+      }
+      if (!(await sessionExists(name))) return sendErr(res, 404, 'no such session');
+      const st = readSessionState(name);
+      if (!st || !st.transcript || !st.sessionId) {
+        return sendErr(res, 409, 'no transcript recorded for this session yet — the Claude hook fires on the first prompt');
+      }
+      const dir = agentsDirFor(st.transcript, st.sessionId);
+      const hit = (dir ? listAgentFiles(dir) : [])
+        .find((f) => path.basename(f.file) === `${agentId}.jsonl`);
+      if (!hit) return sendErr(res, 404, 'no such agent');
+      const offsetParam = u.searchParams.get('offset');
+      const offsetNum = offsetParam == null ? null : Number(offsetParam);
+      if (offsetNum !== null && !Number.isFinite(offsetNum)) return sendErr(res, 400, 'offset must be a number');
+      const untilParam = u.searchParams.get('until');
+      const untilNum = untilParam == null ? null : Number(untilParam);
+      if (untilNum !== null && !Number.isFinite(untilNum)) return sendErr(res, 400, 'until must be a number');
+      const t = readTranscript(hit.file, {
+        offset: offsetNum,
+        until: untilNum,
+        limit: Math.max(1, Math.min(800, Number(u.searchParams.get('limit')) || 400)),
+      });
+      return sendJson(res, 200, {
+        ...t,
+        agentId,
+        workflowId: hit.workflow,
+        modelDisplay: formatModel(t.model),
       });
     }
 
