@@ -32,7 +32,7 @@
     }
    },
    "live": true,
-   "readAt": 1789460000
+   "readAt": 1789460000000
   },
   "spare": {
    "email": "<email scrubbed, 22 chars>",
@@ -47,7 +47,7 @@
     "weekly_fable": null
    },
    "live": false,
-   "readAt": 1789458200
+   "readAt": 1789458200000
   }
  },
  "sessions": [
@@ -58,14 +58,19 @@
    "ladder": {
     "from": "fable",
     "to": "opus",
-    "at": 1789460100,
+    "at": 1789460100000,
     "delivery": "confirmed",
     "sessionOnly": true,
     "repairedDefault": false
    },
    "autoResume": true,
    "stalled": false,
-   "headsUpAt": 1789459900
+   "headsUpAt": 1789459900000,
+   "stall": null,
+   "nativeSwitch": {
+    "seenAt": null,
+    "to": null
+   }
   },
   {
    "name": "btclab",
@@ -74,13 +79,30 @@
    "ladder": null,
    "autoResume": false,
    "stalled": true,
-   "headsUpAt": null
+   "headsUpAt": null,
+   "stall": {
+    "at": 1789459200000,
+    "window": "weekly_fable",
+    "resetsAt": 1789689600000,
+    "resetsAtSource": "endpoint",
+    "resumedAt": null,
+    "how": null,
+    "attempts": 0,
+    "nativeArmed": false,
+    "notifiedAt": 1789459200000,
+    "why": "auto-resume is off for this session",
+    "text": "You've hit your usage limit · resets 10:10pm (America/Los_Angeles)"
+   },
+   "nativeSwitch": {
+    "seenAt": 1789458000000,
+    "to": "opus"
+   }
   }
  ],
  "sentinels": {
   "STOP": null,
   "STOP-FABLE": {
-   "since": 1789459000,
+   "since": 1789459000000,
    "reason": "weekly_fable 92%"
   }
  },
@@ -88,7 +110,7 @@
   {
    "agentId": "a799b9c4d1",
    "agentType": "workflow-subagent",
-   "since": 1789459500
+   "since": 1789459500000
   }
  ],
  "resets": [
@@ -96,18 +118,25 @@
    "slug": "owner-max",
    "window": "session",
    "resetsAt": "2026-09-15T05:30:00+00:00",
-   "seenAt": 1789452100
+   "seenAt": 1789452100000,
+   "percent": 4.0,
+   "at": 1789452100000
   }
  ],
  "arbiter": {
   "lastSwitchAt": 0,
-  "lastLadderAt": 1789460100,
+  "lastLadderAt": 1789460100000,
   "lastAction": {
-   "action": "ladder_down",
-   "session": "w1kcore",
+   "type": "ladder_down",
+   "at": 1789460100000,
+   "name": "w1kcore",
+   "from": "fable",
    "to": "opus"
   },
-  "why": "weekly_fable 92% >= ladderPct 92; one lever per tick"
+  "why": "weekly_fable 92% >= ladderPct 92; one lever per tick",
+  "switches": 0,
+  "lastIdleWarnAt": 0,
+  "lastResumeAt": null
  },
  "settings": {
   "v": 1,
@@ -133,5 +162,5 @@
    "margin": 20
   }
  },
- "serverTime": 1789460000
+ "serverTime": 1789460000000
 }

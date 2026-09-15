@@ -4,7 +4,8 @@
 
 Huginn Desktop 1.0 — shares the Huginn 3 client work: the account caption on the usage bars, the
 headroom pill in the status line, the Headroom settings section, limit notices with auto-resume and
-the Fable step-down (Undo on the toast), the agent stream picker above a session's conversation,
+the Fable step-down (Undo on the toast; a mid-turn undo lands at the next turn boundary), the
+agent stream picker above a session's conversation,
 and account freshness in Settings.
 
 ## 0.19.0

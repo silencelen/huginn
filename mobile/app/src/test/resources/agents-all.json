@@ -1,7 +1,7 @@
 {
  "agents": [
   {
-   "id": "agent-3f9c1a",
+   "id": "3f9c1a",
    "workflow": "wf_01H9ZKQT",
    "workflowId": "wf_01H9ZKQT",
    "agentType": "workflow-subagent",
@@ -16,11 +16,11 @@
    "bytes": 184320
   },
   {
-   "id": "agent-77b210",
+   "id": "77b210",
    "workflow": "wf_01H9ZKQT",
    "workflowId": "wf_01H9ZKQT",
    "agentType": "workflow-subagent",
-   "status": "done",
+   "status": "failed",
    "depth": 1,
    "task": "<task scrubbed, 38 chars>",
    "lastLine": "<lastLine scrubbed, 55 chars>",
@@ -31,7 +31,7 @@
    "bytes": 402944
   },
   {
-   "id": "agent-c0d4e8",
+   "id": "c0d4e8",
    "workflow": null,
    "workflowId": null,
    "agentType": "general-purpose",
@@ -44,8 +44,38 @@
    "updatedAt": 1789457200,
    "startedAt": 1789456400,
    "bytes": 96256
+  },
+  {
+   "id": "af7ca864cee1939de",
+   "workflow": null,
+   "workflowId": null,
+   "agentType": null,
+   "status": "orphan",
+   "depth": null,
+   "task": null,
+   "lastLine": "<lastLine scrubbed, 33 chars>",
+   "summary": null,
+   "active": false,
+   "updatedAt": 1789455000,
+   "startedAt": 1789454800,
+   "bytes": 12288
+  },
+  {
+   "id": "b11c92",
+   "workflow": null,
+   "workflowId": null,
+   "agentType": "general-purpose",
+   "status": null,
+   "depth": 0,
+   "task": "<task scrubbed, 29 chars>",
+   "lastLine": null,
+   "summary": null,
+   "active": true,
+   "updatedAt": 1789459990,
+   "startedAt": 1789459985,
+   "bytes": 0
   }
  ],
- "active": 1,
+ "active": 2,
  "serverTime": 1789460000
 }

@@ -254,7 +254,7 @@ root SSH key: if a device carrying it is lost, rotate the file, restart the unit
 | GET | `/v1/headroom` | the whole usage picture: every account's three windows, what is stalled, what is held, what the arbiter last decided and why |
 | PATCH | `/v1/headroom/settings` | thresholds, ladder order, default model, auto-resume + phrase, account auto-switch |
 | POST | `/v1/sessions/<name>/headroom/undo` | put a laddered session back on the model it was moved off (the Undo button) |
-| POST | `/v1/accounts/<slug>/refresh` | refresh a saved INACTIVE login's OAuth token; refuses on the active one |
+| POST | `/v1/accounts/<slug>/refresh` | refresh one saved login's OAuth token now. It never refuses: asking it for the ACTIVE login answers `200 {ok:true, status:"active_skipped"}`, because a running `claude` holds that token in memory. The route that refuses is `/activate`, with a 409 whose text names the date |
 | POST | `/v1/rounds/polish` | `{field, title?, prompt?, goal?, mode?}`; one better draft of that field, as a proposal a person accepts — never applied, and 200 with `{error}` when the model cannot answer |
 | GET | `/v1/rounds` · POST | scheduled recurring runs (list); POST creates one from `{title, prompt, goal?, schedule, …}` |
 | GET | `/v1/rounds/<id>` · PATCH · DELETE | one round: view / edit its schedule+goal / delete it and its run history |

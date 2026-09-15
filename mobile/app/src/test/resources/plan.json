@@ -52,7 +52,7 @@
   "canPurchaseCredits": true,
   "canToggle": true
  },
- "fetchedAt": 1789460000,
+ "fetchedAt": 1789460000000,
  "account": {
   "email": "<email scrubbed, 24 chars>",
   "accountUuid": "<accountUuid scrubbed, 36 chars>",
