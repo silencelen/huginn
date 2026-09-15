@@ -133,6 +133,43 @@ function journalSummaries(journalFile, fsImpl = fs) {
 }
 
 /**
+ * Everything one journal says, in ONE read.
+ *
+ * `journalSummaries` and `journalSettled` each re-read the file; asking all
+ * three questions a status needs (settled? failed? started at all?) that way
+ * would mean three passes over a journal that reaches a megabyte on a real
+ * fan-out. Same tolerance for half-written lines — a journal is another
+ * process's file mid-write.
+ *
+ * `failed` is a real record type the runner writes (319 of them across this
+ * host's journals on 2026-09-15), which is what makes a *cheap* `failed` status
+ * possible at all: the parent's tool_result, which is how `/graph` tells a
+ * failure from a success, needs the whole parent transcript walked.
+ */
+function journalIndex(journalFile, fsImpl = fs) {
+  const out = { summaries: new Map(), settled: new Set(), failed: new Set(), started: new Set() };
+  let text = '';
+  try { text = fsImpl.readFileSync(journalFile, 'utf8'); } catch { return out; }
+  for (const line of text.split('\n')) {
+    if (!line.trim()) continue;
+    try {
+      const d = JSON.parse(line);
+      if (!d || !d.agentId) continue;
+      if (d.type === 'started') { out.started.add(d.agentId); continue; }
+      if (d.type === 'failed') { out.failed.add(d.agentId); continue; }
+      if (d.type !== 'result') continue;
+      out.settled.add(d.agentId);
+      const r = d.result;
+      const summary = typeof r === 'string' ? r
+        : r && typeof r.summary === 'string' ? r.summary
+          : null;
+      if (summary) out.summaries.set(d.agentId, summary.replace(/\s+/g, ' ').trim().slice(0, 160));
+    } catch { /* half-written line */ }
+  }
+  return out;
+}
+
+/**
  * Which agents in a workflow run have SETTLED, whatever they concluded.
  *
  * Separate from journalSummaries because a result is not always a summary: real
@@ -173,18 +210,64 @@ function agentLastLine(file) {
 }
 
 /**
+ * What an agent's `.meta.json` says about it: the type the parent asked for and
+ * how deep the spawn was. Absent for an agent whose meta never landed, which is
+ * the only cheap tell that nothing can attribute it to a parent.
+ */
+function agentMeta(file, fsImpl = fs) {
+  try {
+    const d = JSON.parse(fsImpl.readFileSync(file.replace(/\.jsonl$/, '.meta.json'), 'utf8'));
+    return d && typeof d === 'object' ? d : null;
+  } catch { return null; }
+}
+
+/**
+ * A status a STREAM PICKER can trust, from the meta file and the mtime alone.
+ *
+ * Deliberately narrower than `/graph`'s: that one walks the parent transcript
+ * to pair each spawn with its tool_result, which is the only place a DIRECT
+ * agent's outcome is written (an agent leaves no completion marker in its own
+ * file — see the header). This route must stay cheap enough to poll, so:
+ *
+ *   running  the file grew inside ACTIVE_S
+ *   done     a workflow journal `result` line names it
+ *   failed   a workflow journal `failed` line names it
+ *   orphan   cold and unattributable: no `.meta.json`, or a workflow member the
+ *            run journal never mentions
+ *   null     cold, attributable, and only the parent's tool_result can say how
+ *            it ended — `/graph` is where that answer lives, and guessing
+ *            "done" here would put a wrong word on a live picker row.
+ */
+function agentStatus({ fresh, meta, workflow, journal, id }) {
+  if (workflow && journal) {
+    if (journal.failed.has(id)) return 'failed';
+    if (journal.settled.has(id)) return 'done';
+    if (fresh) return 'running';
+    return journal.started.has(id) ? null : 'orphan';
+  }
+  if (fresh) return 'running';
+  return meta ? null : 'orphan';
+}
+
+/**
  * All recent agents of one session, newest activity first.
  *
- * @returns {Array<{id, workflow, task, lastLine, active, updatedAt, startedAt, bytes}>}
+ * `opts.all` lifts the RECENT_S filter: the sheet answers "what is happening"
+ * and settled agents stop being part of that answer, but a stream picker is
+ * asking a different question — "what ran in this session" — and a 45-minute
+ * window hides most of the answer to it.
+ *
+ * @returns {Array<{id, workflow, workflowId, agentType, status, depth, task,
+ *                  lastLine, summary, active, updatedAt, startedAt, bytes}>}
  */
-function listAgents(dir, nowSec, fsImpl = fs, max = 24) {
+function listAgents(dir, nowSec, fsImpl = fs, max = 24, opts = {}) {
   const files = listAgentFiles(dir, fsImpl);
   const out = [];
   for (const f of files) {
     let st;
     try { st = fsImpl.statSync(f.file); } catch { continue; }
     const updatedAt = Math.floor(st.mtimeMs / 1000);
-    if (nowSec - updatedAt > RECENT_S) continue;
+    if (!opts.all && nowSec - updatedAt > RECENT_S) continue;
     out.push({
       id: path.basename(f.file).replace(/^agent-|\.jsonl$/g, ''),
       workflow: f.workflow,
@@ -200,25 +283,33 @@ function listAgents(dir, nowSec, fsImpl = fs, max = 24) {
   // Journal summaries, one read per workflow run represented in the kept rows.
   // The journal sits beside the agent's OWN file rather than under an assumed
   // root — a run may have come from either workflow location (see workflowDirs).
-  const summaries = new Map();
+  const journals = new Map();
   for (const a of kept) {
-    if (!a.workflow || summaries.has(a.workflow)) continue;
-    summaries.set(a.workflow,
-      journalSummaries(path.join(path.dirname(a.file), 'journal.jsonl'), fsImpl));
+    if (!a.workflow || journals.has(a.workflow)) continue;
+    journals.set(a.workflow,
+      journalIndex(path.join(path.dirname(a.file), 'journal.jsonl'), fsImpl));
   }
   // The transcript reads are the expensive part; only the kept rows pay them.
   for (const a of kept) {
     a.task = agentTask(a.file, fsImpl);
     a.lastLine = agentLastLine(a.file);
-    const j = a.workflow ? summaries.get(a.workflow) : null;
-    a.summary = (j && j.get(a.id)) || null;
+    const j = a.workflow ? journals.get(a.workflow) : null;
+    a.summary = (j && j.summaries.get(a.id)) || null;
+    const meta = agentMeta(a.file, fsImpl);
+    // `workflowId` alongside `workflow`: the same fact under the name the rest
+    // of the wire already uses for it (`/graph` agents[], sessiongraph:731).
+    // `workflow` stays because clients on 2.88.0 read that one.
+    a.workflowId = a.workflow;
+    a.agentType = (meta && typeof meta.agentType === 'string') ? meta.agentType : null;
+    a.depth = (meta && typeof meta.spawnDepth === 'number') ? meta.spawnDepth : null;
+    a.status = agentStatus({ fresh: a.active, meta, workflow: a.workflow, journal: j, id: a.id });
     delete a.file;
   }
   return kept;
 }
 
 module.exports = {
-  agentsDirFor, workflowDirs, listAgentFiles, agentTask, agentLastLine,
-  journalSummaries, journalSettled, listAgents,
+  agentsDirFor, workflowDirs, listAgentFiles, agentTask, agentLastLine, agentMeta,
+  journalSummaries, journalSettled, journalIndex, agentStatus, listAgents,
   ACTIVE_S, RECENT_S,
 };
