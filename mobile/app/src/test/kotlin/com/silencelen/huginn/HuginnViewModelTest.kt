@@ -20,6 +20,7 @@ import com.silencelen.huginn.ui.fetchStreamAgents
 import com.silencelen.huginn.ui.errorTextFor
 import com.silencelen.huginn.ui.headroomPill
 import com.silencelen.huginn.ui.mergeTranscriptPage
+import com.silencelen.huginn.ui.saveQuickActions
 import com.silencelen.huginn.ui.statusHeadroomOf
 import io.ktor.client.engine.mock.MockEngine
 import io.ktor.client.engine.mock.respond
@@ -241,6 +242,65 @@ class HuginnViewModelTest {
         val asked = seen.single().url.toString().removePrefix(BASE)
         assertTrue("the folded list must be whole: $asked", "all=1" in asked)
         assertTrue(asked, asked.startsWith("/v1/sessions/jtyper/agents"))
+    }
+
+    // --------------------------------------------------- the quick actions
+
+    /**
+     * The editor the phone never had, and the guard that makes it safe to have.
+     *
+     * Two clients editing one set of host-owned templates is the ordinary case
+     * here — a desktop window and a phone, both open on Settings — and the `rev`
+     * is the only thing stopping the second Save from winning by being second.
+     * It cannot be asserted on the view model (no Application, no device), so it
+     * is asserted on the request the phone actually puts on the wire.
+     */
+    @Test
+    fun `saving quick actions sends all four templates and the rev it opened on`() = runTest {
+        val seen = mutableListOf<HttpRequestData>()
+        val client = HuginnClient(
+            baseUrlProvider = { BASE },
+            tokenProvider = { "t" },
+            engine = MockEngine { request ->
+                seen += request
+                respond(
+                    """{"rev":8,"explain":"E {selection}","execute":"X {selection}",""" +
+                        """"askInNewChat":"A {selection}","quote":"About this:"}""",
+                    HttpStatusCode.OK,
+                    headersOf("Content-Type", listOf("application/json")),
+                )
+            },
+        )
+
+        val back = saveQuickActions(
+            client,
+            QuickActions(
+                rev = 7,
+                explain = "E {selection}",
+                execute = "X {selection}",
+                askInNewChat = "A {selection}",
+                quote = "About this:",
+            ),
+        )
+
+        val sent = seen.single()
+        assertEquals("/v1/quick-actions", sent.url.encodedPath)
+        assertEquals("PATCH", sent.method.value)
+        val body = (sent.body as io.ktor.http.content.TextContent).text
+        // All four, every time: the editor holds all four, and "only what
+        // changed" would need this to decide what changed.
+        assertTrue(body, "\"explain\":\"E {selection}\"" in body)
+        assertTrue(body, "\"execute\":\"X {selection}\"" in body)
+        assertTrue(body, "\"askInNewChat\":\"A {selection}\"" in body)
+        assertTrue(body, "\"quote\":\"About this:\"" in body)
+        // The guard. Without it a stale copy overwrites a newer one in silence.
+        assertTrue("the rev guard was dropped: $body", "\"rev\":7" in body)
+
+        // And the daemon's answer comes back whole — the NEW rev especially,
+        // because the editor keys its fields on it and would otherwise go on
+        // saving against 7 forever.
+        assertEquals(8, back.rev)
+        assertEquals("About this:", back.quote)
     }
 
     /**
