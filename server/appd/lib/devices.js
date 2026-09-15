@@ -371,7 +371,8 @@ function localModelRows(state, now) {
   return rows;
 }
 
-function workItem({ id, chatId, prompt, mode, model, effort, resumeSessionId, roundId, now }) {
+function workItem({ id, chatId, prompt, mode, model, effort, resumeSessionId, roundId,
+  resumedAfterLimit = false, now }) {
   return {
     id,
     chatId,
@@ -383,6 +384,10 @@ function workItem({ id, chatId, prompt, mode, model, effort, resumeSessionId, ro
     effort: effort || null,
     resumeSessionId: resumeSessionId || null,
     roundId: roundId || null,
+    // This item is a RE-ISSUE of a turn a usage limit killed, not a new request.
+    // The device shows it as such, and a device that has learned to de-duplicate
+    // by prompt text has the one fact that tells it not to.
+    resumedAfterLimit: !!resumedAfterLimit,
     issuedAt: now,
   };
 }

@@ -310,6 +310,7 @@ function detectPrompt(lines) {
     if (t.includes('?')) { question = t.slice(0, 240); break; }
   }
   if (!question) question = questionFallback;
+  const recommended = consentRecommended(plain, opts);
   return {
     question,
     options: opts,
@@ -317,7 +318,60 @@ function detectPrompt(lines) {
     // the toggle-review-submit dance rather than digit-and-Enter.
     multiSelect: opts.some((o) => typeof o.checked === 'boolean'),
     ...(headers.length ? { headers } : {}),
+    // Additive, and absent for every ordinary dialog: appd has an opinion about
+    // exactly one prompt, and only because leaving it unanswered destroys work.
+    ...(recommended ? { recommended } : {}),
   };
+}
+
+// ---- the Fable consent dialog ----------------------------------------------
+//
+// When a Fable session passes the point where further Fable use bills usage
+// credits, the CLI shows a dialog on the interactive main thread: continue on
+// usage credits / switch for this session / cancel. Measured (native-rl §7), an
+// UNANSWERED one loses the turn outright — `{reason:"model_error"}`, "nothing
+// was sent" — which makes it the one prompt where doing nothing is the
+// expensive option rather than the safe one.
+//
+// So it is surfaced as an ordinary prompt card (the clients need no new
+// surface) carrying `recommended`: the session-only switch. That row is the
+// recommendation because it is the only one that neither spends money nor
+// throws the turn away, and because it writes nothing to the shared
+// `~/.claude/settings.json` that every concurrent session on this host reads.
+//
+// ⚠ THE HEADING IS THE GATE, exactly as it is for the model picker, and it is
+// NARROW on purpose. A session discussing its own usage limits will say "Fable"
+// and "usage credits" in the same sentence — that is ordinary prose, and a
+// numbered list under it is not a dialog. So the gate is the copy's own shape,
+// both measured spellings (native-rl §7):
+//
+//     Fable limit reached · continuing on <M> uses usage credits, …
+//     <Model> now uses usage credits · …
+//
+// on ONE line. Verified against the prose case in pane.test.js, which mentions
+// both words and must NOT be recommended.
+const CONSENT_HEAD_RE = /\bfable\b/i;
+const CONSENT_CREDITS_RE = /\busage credits\b/i;
+const CONSENT_COPY_RE = /\blimit reached\b|\bnow uses usage credits\b/i;
+// The row that changes the model for this session only. Never the one that
+// mentions credits — "Continue on Fable 5.1 (uses usage credits)" also contains
+// the word "session" in some renderings, and recommending THAT row would be
+// recommending the charge.
+const CONSENT_SESSION_ROW_RE = /\bfor this session\b/i;
+
+/**
+ * The row appd would pick on this dialog, or null when it is not that dialog.
+ *
+ * Returns a NUMBER, not a label: it is fed to the same `/answer` path a person's
+ * tap uses, which validates the digit against a freshly-read fingerprint.
+ */
+function consentRecommended(plain, opts) {
+  if (!Array.isArray(opts) || opts.length < 2) return null;
+  const isConsent = plain.some((l) => CONSENT_HEAD_RE.test(l)
+    && CONSENT_CREDITS_RE.test(l) && CONSENT_COPY_RE.test(l));
+  if (!isConsent) return null;
+  const row = opts.find((o) => CONSENT_SESSION_ROW_RE.test(o.label) && !CONSENT_CREDITS_RE.test(o.label));
+  return row ? row.number : null;
 }
 
 // ---- the `/model` picker ---------------------------------------------------
@@ -674,6 +728,7 @@ function loginPaneState(lines) {
 
 module.exports = {
   screenHash, stripAnsi, previewLines, detectPrompt, promptFingerprint, multiToggleDigits,
+  consentRecommended,
   parseModelPicker,
   parseSpinner, parseStatusExtras, spinnerIsCompacting,
   extractLoginUrl, parseStatusLine, loginPaneState,
