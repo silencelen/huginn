@@ -57,6 +57,20 @@ fun PlanSection(plan: Plan?, nowMs: Long, modifier: Modifier = Modifier) {
         error != null && limits.isEmpty() -> Warn(error, modifier)
         limits.isEmpty() && extra == null -> Hint("No limits reported for this account.", modifier)
         else -> Column(modifier, verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            // WHOSE usage this is, above the bars it belongs to.
+            //
+            // The numbers were anonymous for their whole life, and on a host with
+            // four saved logins that is the one thing that makes them actionable:
+            // "92 % of the weekly Fable window" is a different instruction
+            // depending on which account it is 92 % of. The identity travels WITH
+            // the plan rather than being fetched beside it, because the plan cache
+            // is not keyed on the account — a separately-fetched email captioned
+            // the old account's bars for a whole TTL after a switch.
+            Text(
+                PlanFormat.accountCaption(plan),
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
             limits.forEach { LimitBar(it, nowMs) }
             if (extra != null) ExtraUsageCard(extra)
         }
@@ -209,9 +223,16 @@ private fun Meter(percent: Double, color: Color) {
     )
 }
 
-/** Colour by headroom, not decoration: this is the number that stops work. */
+/**
+ * Colour by headroom, not decoration: this is the number that stops work.
+ *
+ * `internal` rather than private because the headroom pill colours by the SAME
+ * vocabulary — [HeadroomRules.severityColorKey] returns these very words — and a
+ * second colour scale for the same idea is how one surface calls 92 % red while
+ * the bar under it calls it amber.
+ */
 @Composable
-private fun meterColor(severity: String?, percent: Double): Color = when {
+internal fun meterColor(severity: String?, percent: Double): Color = when {
     severity == "critical" || severity == "high" || percent >= 90 -> MaterialTheme.colorScheme.error
     severity == "warning" || percent >= 70 -> MaterialTheme.colorScheme.primary
     else -> MaterialTheme.colorScheme.secondary

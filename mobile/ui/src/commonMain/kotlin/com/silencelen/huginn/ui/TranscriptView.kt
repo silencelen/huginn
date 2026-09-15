@@ -99,7 +99,10 @@ fun TranscriptEventItem(
     Box(Modifier.padding(start = indent)) {
         when (ev.kind) {
             "user" -> UserBubble(ev.text.orEmpty(), ev.queued)
-            "assistant" -> AssistantBlock(ev, onCopy)
+            // A usage limit arrives AS an assistant record — Claude Code writes its
+            // own error into the transcript the same way it writes an answer — so
+            // the kind cannot separate them and the flag has to. See [isLimitNotice].
+            "assistant" -> if (isLimitNotice(ev)) LimitNotice(ev) else AssistantBlock(ev, onCopy)
             "thinking" -> ThinkingBlock(ev.text.orEmpty())
             "tool" -> if (ev.ask != null) AskCard(ev) else ToolCard(ev)
             "tool_result" -> ToolResultOrphan(ev)
@@ -566,6 +569,98 @@ private fun CommandNote(text: String, isResult: Boolean) {
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
             )
+        }
+    }
+}
+
+/**
+ * Whether an event is the wall a session ran into rather than something it said.
+ *
+ * `apiError` is the daemon lifting `isApiErrorMessage` off the raw record; 429 is
+ * the only status that means "out of usage" rather than "something broke", and
+ * the distinction matters because the two want opposite things from the reader:
+ * a 500 is worth retrying now, a 429 is worth waiting for.
+ *
+ * Absent on a daemon older than 3.0.0, which is the compat answer this file
+ * needs: the event falls through to an ordinary assistant bubble showing the
+ * error text, exactly as it does today.
+ */
+fun isLimitNotice(ev: TranscriptEvent): Boolean = ev.apiError == LIMIT_STATUS
+
+/** The one API status that means headroom rather than failure. */
+const val LIMIT_STATUS: Int = 429
+
+/**
+ * The clock time Claude Code itself printed, lifted out of its own error text.
+ *
+ * ⚠ NEVER FORMATTED HERE. `:ui` is common code with no timezone database, and the
+ * one time a shell turned an instant into a wall clock by hand it printed UTC as
+ * if it were local. The only wall clock this surface may show is the one that
+ * arrived as text, which is what this reads — and null, meaning "say nothing", is
+ * a perfectly good answer.
+ */
+fun limitResetClock(text: String?): String? {
+    val raw = text?.trim().orEmpty()
+    if (raw.isEmpty()) return null
+    val at = raw.indexOf("resets ", ignoreCase = true)
+    if (at < 0) return null
+    val rest = raw.substring(at + 7).trimStart()
+    if (rest.isEmpty()) return null
+    // Up to the end of the clause: the sentence continues with a parenthesised
+    // timezone or another sentence, and neither belongs on a one-line notice.
+    val end = rest.indexOfFirst { it == '\n' || it == '(' || it == '.' }
+    val clock = (if (end < 0) rest else rest.substring(0, end)).trim()
+    return clock.takeIf { it.isNotEmpty() && it.length <= 24 }
+}
+
+/** The notice's headline. */
+fun limitNoticeTitle(ev: TranscriptEvent): String {
+    val clock = limitResetClock(ev.text)
+    return if (clock == null) "Usage limit hit" else "Usage limit hit · resets $clock"
+}
+
+/**
+ * A session sitting on a usage limit, drawn as what it is.
+ *
+ * NOT an assistant bubble. The error text renders as prose — it is prose — and as
+ * a bubble it reads as Claude answering a question, which is how a session that
+ * stopped hours ago looks like one that is still working. The second line is what
+ * the reader actually needs: whether anything is going to pick it back up.
+ */
+@Composable
+private fun LimitNotice(ev: TranscriptEvent) {
+    val session = LocalSessionHeadroom.current
+    val resume = HeadroomRules.resumeWords(
+        stalled = true,
+        // Without a session's own headroom (a chat transcript, an older daemon)
+        // the global default is the honest guess, and the daemon's default is on.
+        autoResume = session?.autoResume ?: true,
+        resetClock = limitResetClock(ev.text),
+    )
+    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.Center) {
+        Surface(
+            color = MaterialTheme.colorScheme.error.copy(alpha = 0.10f),
+            contentColor = MaterialTheme.colorScheme.error,
+            shape = RoundedCornerShape(10.dp),
+        ) {
+            Column(
+                Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
+            ) {
+                Text(
+                    limitNoticeTitle(ev),
+                    style = MaterialTheme.typography.labelMedium,
+                    fontWeight = FontWeight.SemiBold,
+                )
+                if (resume != null) {
+                    Spacer(Modifier.height(2.dp))
+                    Text(
+                        resume,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
         }
     }
 }
