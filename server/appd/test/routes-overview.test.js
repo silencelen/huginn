@@ -187,7 +187,9 @@ test('the overview is the header, with no map in it', async () => {
   assert.equal(body.totals.toolCalls, 1);
   assert.equal(body.totals.tokens.output, 10, 'two records, one requestId, one call');
   assert.equal(body.nodes, undefined, 'the cheap route stays cheap');
-  assert.deepEqual(body.meta, { goals: '', notes: '', updatedAt: 0 });
+  // `autoResume: null` = follow the global (W1 headroom): a per-session choice
+  // that has never been made is not the same answer as `false`.
+  assert.deepEqual(body.meta, { goals: '', notes: '', autoResume: null, updatedAt: 0 });
 });
 
 test('the overview says what the session would have billed at API list rates', async () => {

@@ -27,7 +27,7 @@ const { execFile, spawn } = require('node:child_process');
 const {
   screenHash, previewLines, detectPrompt, promptFingerprint, multiToggleDigits,
   parseSpinner, parseStatusExtras, spinnerIsCompacting,
-  extractLoginUrl, parseStatusLine, loginPaneState,
+  extractLoginUrl, parseStatusLine, loginPaneState, parseModelPicker,
 } = require('./lib/pane');
 const { parseAskSidecar, fuseAskPrompt, degradedAskCard, parsePlanSidecar } = require('./lib/ask');
 const { readTranscript, liveActivity } = require('./lib/transcript');
@@ -61,6 +61,12 @@ const { createPending, stepSoftEnd } = require('./lib/softend');
 // modal readers, and the queue's decisions. Pure, so they are asserted in
 // test/typing.test.js rather than discovered on a live pane.
 const typing = require('./lib/typing');
+// The usage model and the arbiter: percentages and settings in, a list of
+// actions out. Pure, so every judgment call it makes is asserted in
+// test/headroom.test.js rather than discovered on a live account.
+const headroomLib = require('./lib/headroom');
+// The sentinel files the hook gate watches, and the held/ directory it writes.
+const sentinelsLib = require('./lib/sentinels');
 
 const VERSION = '2.85.0';
 const PORT = Number(process.env.HUGINN_APPD_PORT || 8787);
@@ -588,7 +594,16 @@ function updateSessionMeta(id, mutate) {
 
 function sessionMetaView(id) {
   const m = loadSessionMeta(id);
-  return { goals: (m && m.goals) || '', notes: (m && m.notes) || '', updatedAt: (m && m.updatedAt) || 0 };
+  return {
+    goals: (m && m.goals) || '',
+    notes: (m && m.notes) || '',
+    // null means FOLLOW THE GLOBAL, which is a different answer from false and
+    // has to survive the round trip: a per-session `false` set on the phone must
+    // not be indistinguishable from "never chosen" the next time the global is
+    // turned on.
+    autoResume: m && typeof m.autoResume === 'boolean' ? m.autoResume : null,
+    updatedAt: (m && m.updatedAt) || 0,
+  };
 }
 
 // ---- durable session registry (survives a reboot) -------------------------
@@ -718,6 +733,10 @@ async function listSessions({ preview = false } = {}) {
       state: st.state ?? null,
       stateSince: st.stateSince ?? null,
       claudeSessionId: st.sessionId ?? null,
+      // Which model this run is on, whether the daemon moved it there, and
+      // whether it is waiting for a window. Cheap by construction: headroom.json
+      // in memory plus one session-meta read, never a transcript walk.
+      headroom: headroomForSession(st.sessionId ?? null),
       hasTranscript: !!(st.transcript && fs.existsSync(st.transcript)),
       title: null,
       preview: [],
@@ -1212,7 +1231,18 @@ async function pumpQueue(name) {
       q.blockedBy = null;
       q.delivering = true;
       let r;
-      try { r = await sendTextToPane(name, entry.text, { submit: entry.submit }); } finally { q.delivering = false; }
+      try {
+        // A JOB rather than a message: the ladder's `/model` picker script is
+        // several keystrokes with reads between them, and it needs the SAME two
+        // gates and the same drop rules as a send — a picker opened mid-turn is
+        // a modal that swallows the next message whole (spike E1), and a ladder
+        // job that finds the family already changed must be binned, not run.
+        // One queue, two payload shapes; nothing else differs.
+        if (typeof entry.run === 'function') r = await entry.run();
+        else r = await sendTextToPane(name, entry.text, { submit: entry.submit });
+      } catch (e) {
+        r = { ok: false, message: (e && e.message) || String(e) };
+      } finally { q.delivering = false; }
       if (!r.ok) {
         q.lastError = r.message;
         log(`typing: ${name}: delivery failed: ${r.message}`);
@@ -1249,6 +1279,8 @@ function enqueueSend(name, text, opts = {}) {
   const entry = {
     id: crypto.randomBytes(6).toString('hex'),
     text,
+    // Set only by enqueueJob: an async function run INSTEAD of pasting text.
+    run: typeof opts.run === 'function' ? opts.run : null,
     at: Date.now(),
     automated: !!opts.automated,
     origin: opts.origin || null,
@@ -1284,6 +1316,24 @@ function enqueueSend(name, text, opts = {}) {
     }
     return { id: entry.id, position: queued + 1, delivered: false, dropped: null, result: null, queued: q.entries.length };
   }).catch(() => ({ id: entry.id, position, delivered: false, dropped: null, result: null, queued: q.entries.length }));
+}
+
+/**
+ * Queue a pane SCRIPT — several keystrokes with reads between them — behind the
+ * same gates a message waits on.
+ *
+ * The ladder is the only caller: `/model` opens a picker, the cursor is walked
+ * to a row by label, `s` sets the model for this session only. Every one of
+ * those keys is destructive if it lands at the wrong moment (a picker opened
+ * mid-turn blocks input until somebody answers it, and the keys after it go
+ * into the dialog), so the script runs as ONE queue entry and starts only at a
+ * turn boundary with a bare caret.
+ *
+ * `fn` resolves `{ok, ...}` exactly like sendTextToPane, and a throw is caught
+ * by the pump rather than killing it.
+ */
+function enqueueJob(name, fn, opts = {}) {
+  return enqueueSend(name, null, { ...opts, run: fn, submit: false });
 }
 
 /**
@@ -3295,6 +3345,17 @@ function deliverOrphanedQueues() {
 // test that locked or rewrote the real ~/.claude would reach straight into the
 // owner's live CLI. Unset — which is every production path — it is ~/.claude.
 const CLAUDE_DIR = process.env.HUGINN_APPD_CLAUDE_DIR || path.join(os.homedir(), '.claude');
+/**
+ * The usage endpoint, in ONE place.
+ *
+ * Overridable for exactly one reason: the route suites stand up a local server
+ * that answers with the percentages the test needs. Two readers call it
+ * (`fetchPlan` for the active login, `planForCredentials` for a saved one) and
+ * before this they each carried their own literal — so a test could stub one
+ * and silently reach api.anthropic.com through the other. No production path
+ * sets it.
+ */
+const USAGE_URL = process.env.HUGINN_APPD_USAGE_URL || 'https://api.anthropic.com/api/oauth/usage';
 const CREDENTIALS_PATH = path.join(CLAUDE_DIR, '.credentials.json');
 const CLAUDE_CONFIG_PATH = `${CLAUDE_DIR.replace(/\/+$/, '')}.json`;
 const accounts = new AccountStore(path.join(DATA_DIR, 'accounts'), CREDENTIALS_PATH, CLAUDE_CONFIG_PATH);
@@ -3406,7 +3467,7 @@ async function planForCredentials(creds) {
   const ac = new AbortController();
   const timer = setTimeout(() => ac.abort(), 10_000);
   try {
-    const resp = await fetch('https://api.anthropic.com/api/oauth/usage', {
+    const resp = await fetch(USAGE_URL, {
       headers: {
         Authorization: `Bearer ${token}`,
         'Content-Type': 'application/json',
@@ -3854,7 +3915,7 @@ async function fetchPlan() {
     const timer = setTimeout(() => ac.abort(), 15_000);
     let resp;
     try {
-      resp = await fetch('https://api.anthropic.com/api/oauth/usage', {
+      resp = await fetch(USAGE_URL, {
         headers: {
           Authorization: `Bearer ${token}`,
           'Content-Type': 'application/json',
@@ -3870,7 +3931,35 @@ async function fetchPlan() {
       return;
     }
     if (!resp.ok) { planCache.error = `plan usage HTTP ${resp.status}`; return; }
-    planCache.data = normalizePlan(await resp.json());
+    const data = normalizePlan(await resp.json());
+    /**
+     * WHOSE usage this is, cached WITH the numbers.
+     *
+     * `planCache` is keyed on nothing: it is one slot holding "the plan", and a
+     * client that asks for identity separately gets whatever the credentials
+     * file says NOW. So after an account switch the new account's bars were
+     * captioned with the old account's email until the cache aged out — the
+     * numbers and the name came from two different moments. Resolving the
+     * identity here, and storing it inside `data`, makes them one fact that
+     * `performSwitch` invalidates together (it nulls `data`).
+     *
+     * Best effort: an identity lookup that fails leaves `account` null and the
+     * bars simply say "signed-in account", which is what an older daemon's
+     * clients already render.
+     */
+    const id = await resolveIdentity(creds);
+    let slug = null;
+    try { const rec = accounts.list().find((a) => a.isActive); slug = rec ? rec.slug : null; } catch { /* no store yet */ }
+    const o = (creds && creds.claudeAiOauth) || {};
+    data.account = (id && (id.email || id.uuid)) || slug
+      ? {
+        email: (id && id.email) || null,
+        accountUuid: (id && id.uuid) || null,
+        slug,
+        subscriptionType: o.subscriptionType || null,
+      }
+      : null;
+    planCache.data = data;
     planCache.at = Date.now();
     planCache.error = null;
   } catch (e) {
@@ -3971,6 +4060,10 @@ async function statusPayload() {
     // automatic) without carrying their own copy that could drift from the host.
     softEndPhrase: SOFT_END_PHRASE,
     softEndAuto: SOFT_END_AUTO,
+    // The one-line usage summary behind the clients' headroom pill. From
+    // headroom.json and the sentinel directory only — no network, so the status
+    // poll stays as cheap as it was.
+    headroom: headroomStatus(),
   };
 }
 
@@ -4394,154 +4487,846 @@ async function performSwitchLocked(slug) {
   return { ok: true, before, after };
 }
 
-// ------------------------------------------------------- automatic switching
+// ------------------------------------------------- autoswitch.json (history)
 //
-// The owner keeps three Max accounts so a hard limit is never a hard stop; the
-// rotation was manual, made at exactly the moment a limit-hit made everything
-// stall. The daemon can read every saved account's headroom, so it makes the
-// same move itself: when the active account's binding limit crosses the
-// threshold, switch to the freshest saved login. Decision rules (and their
-// anti-flap guards) live in lib/autoswitch, tested.
+// The account switcher's own store, kept READ-ONLY. Its rules now live in
+// lib/headroom.js and its two settings moved into `headroom-settings.json`
+// (migrated once, on the first boot that finds no headroom settings file); this
+// file is left on disk as the record of what the old switcher did and is never
+// written again. `GET/POST /v1/autoswitch` are aliases onto the new settings for
+// one release.
 const AUTOSWITCH_STATE = path.join(DATA_DIR, 'autoswitch.json');
-const AUTOSWITCH_POLL_MS = 5 * 60 * 1000;
 
 function loadAutoswitch() {
   try { return JSON.parse(fs.readFileSync(AUTOSWITCH_STATE, 'utf8')); }
   catch { return { enabled: false, lastSwitchAt: 0, switches: 0, last: null }; }
 }
-function saveAutoswitch(st) {
-  try {
-    fs.writeFileSync(`${AUTOSWITCH_STATE}.tmp`, JSON.stringify(st), { mode: 0o600 });
-    fs.renameSync(`${AUTOSWITCH_STATE}.tmp`, AUTOSWITCH_STATE);
-  } catch (e) { log('autoswitch: could not persist', e.message); }
+
+// ----------------------------------------------------------------- headroom
+//
+// One subsystem, one arbiter, one cooldown. The daemon reads how much room each
+// saved account has left, notices a window RESETTING (which nothing did before),
+// and has three levers instead of one:
+//
+//   switch account   helps NEW runs only — a running `claude` holds its token in
+//                    memory and cannot be moved to another login.
+//   the model ladder helps a LIVE session: a framed heads-up at 85% of the Fable
+//                    week so it writes its own handoff note, then a SESSION-ONLY
+//                    move to opus at 92%, typed into the `/model` picker at a
+//                    turn boundary. The host's default model is never rewritten.
+//   the sentinels    hold new agent spawns while the account is out of room.
+//
+// The rules live in lib/headroom.js, pure and tested. Everything here is the
+// I/O: reading the endpoint, reading transcripts, typing into panes, writing
+// files, sending notifications.
+
+const HEADROOM_SETTINGS_FILE = path.join(DATA_DIR, 'headroom-settings.json');
+const HEADROOM_STATE_FILE = path.join(DATA_DIR, 'headroom.json');
+// The hook gate reads this directory with `test -e` and no daemon access, which
+// is why it is a directory of FILES and not a field in headroom.json. The env
+// override exists so the gate's own tests and the route suites can point both
+// halves at a scratch dir.
+const HEADROOM_DIR = process.env.HUGINN_HEADROOM_DIR || path.join(DATA_DIR, 'headroom');
+
+// Cadence, re-evaluated every tick: a minute while anything is running, five
+// minutes while the host is idle. The endpoint rate-limits per account and an
+// idle host asking every minute all night spends that allowance on nothing.
+const HEADROOM_ACTIVE_MS = 60_000;
+const HEADROOM_IDLE_MS = 5 * 60_000;
+/** A saved (inactive) profile is priced at most this often — it is not moving. */
+const SAVED_PLAN_MS = 30 * 60_000;
+
+/** How long the picker has to appear after `/model` before we give up quietly. */
+const PICKER_WAIT_MS = 3_000;
+/** How long the `for this session only` line has to appear after `s`. */
+const LADDER_FEEDBACK_MS = 5_000;
+/** A picker is five or six rows; ten moves means we are not reading it right. */
+const MAX_CURSOR_MOVES = 10;
+/** Both spellings observed for the session-only confirmation (native-rl §4). */
+const LADDER_FEEDBACK_RE = /Set model to .* for this session only|Model set to .* for this session only/;
+
+// ---- settings --------------------------------------------------------------
+
+function saveHeadroomSettings(s) {
+  fs.mkdirSync(DATA_DIR, { recursive: true });
+  fs.writeFileSync(`${HEADROOM_SETTINGS_FILE}.tmp`, `${JSON.stringify(s, null, 2)}\n`, { mode: 0o600 });
+  fs.renameSync(`${HEADROOM_SETTINGS_FILE}.tmp`, HEADROOM_SETTINGS_FILE);
+  return s;
 }
-// A tick spans awaited network calls (plan fetches, a performSwitch), during which
-// the owner may POST /v1/autoswitch to change `enabled` or `threshold`. Writing the
-// tick's start-of-pass snapshot back wholesale would silently revert that change.
-// Re-read the freshest state, mutate only the field(s) the tick owns, then save —
-// the shape alertTick already uses for exactly this reason.
-function updateAutoswitch(mut) {
-  const fresh = loadAutoswitch();
-  mut(fresh);
-  saveAutoswitch(fresh);
-  return fresh;
+
+/**
+ * The owner's settings, or the defaults.
+ *
+ * A stored file that no longer validates falls back to the DEFAULTS rather than
+ * being half-honoured: a `ladderPct` below `headsUpPct` (hand-edited, or left by
+ * an older shape) makes the arbiter incoherent, and running on a mixture of a
+ * broken file and defaults is harder to diagnose than running on defaults and
+ * saying so.
+ */
+function loadHeadroomSettings() {
+  let raw = null;
+  try { raw = JSON.parse(fs.readFileSync(HEADROOM_SETTINGS_FILE, 'utf8')); } catch { return headroomLib.defaults(); }
+  if (!raw || typeof raw !== 'object') return headroomLib.defaults();
+  const v = headroomLib.validateSettings({}, raw);
+  if (v.ok) return v.settings;
+  log(`headroom: ${HEADROOM_SETTINGS_FILE} does not validate (${v.error}); using defaults`);
+  return headroomLib.defaults();
 }
 
-let autoswitchBusy = false;
-// The last tick's reasoning, so "it never fires" can be told apart from "it has
-// not needed to yet" without reading the log.
-let autoswitchWhy = 'not run yet';
-
-async function autoswitchTick() {
-  if (autoswitchBusy) return;
-  const st = loadAutoswitch();
-  if (!st.enabled) { autoswitchWhy = 'disabled'; return; }
-  autoswitchBusy = true;
+/**
+ * First boot: write the settings file, seeding `defaultModel` from whatever
+ * `~/.claude/settings.json` currently says and `accountSwitch` from the
+ * autoswitch state this replaces. Idempotent — an existing file is left alone.
+ *
+ * Also the body of `--seed-headroom-defaults`, which deploy.sh runs.
+ */
+function seedHeadroomDefaults() {
+  if (fs.existsSync(HEADROOM_SETTINGS_FILE)) {
+    return { created: false, settings: loadHeadroomSettings() };
+  }
+  const s = headroomLib.defaults();
   try {
-    // Keep the live login's profile in step with its rotating tokens, or it stops
-    // matching any stored record and this tick cannot tell which account is
-    // active at all.
-    await saveIdentified(null, accounts.readActive());
-
-    const saved = accounts.list();
-    if (saved.length < 2) { autoswitchWhy = 'only one account is saved'; return; }
-    const activeRec = saved.find((a) => a.isActive);
-    if (!activeRec) { autoswitchWhy = 'no saved profile matches the live credentials'; return; }
-
-    // Cheap first look: only the active account's plan. Candidates are only
-    // priced once the active one is actually hot.
-    const activePlan = await planForCredentials(accounts.readActive());
-    if (activePlan) accounts.recordPlan(activeRec.slug, activePlan);
-    const activeLimits = (activePlan && activePlan.limits) || [];
-    const active = { slug: activeRec.slug, email: activeRec.email, limits: activeLimits };
-
-    const threshold = typeof st.threshold === 'number' ? st.threshold : undefined;
-    const w = worstLimit(activeLimits);
-    if (!w || w.percent < (threshold ?? AUTOSWITCH_THRESHOLD)) {
-      autoswitchWhy = explainSwitch({ active, candidates: [], now: Date.now(), lastSwitchAt: st.lastSwitchAt || 0, threshold });
-      return;
+    const cur = JSON.parse(fs.readFileSync(path.join(CLAUDE_DIR, 'settings.json'), 'utf8'));
+    if (cur && typeof cur.model === 'string' && cur.model.trim()) s.defaultModel = cur.model.trim();
+  } catch { /* no settings file: the contract default stands */ }
+  let migrated = null;
+  try {
+    if (fs.existsSync(AUTOSWITCH_STATE)) {
+      s.accountSwitch = headroomLib.migrateAutoswitch(loadAutoswitch());
+      migrated = s.accountSwitch;
     }
+  } catch { /* history, not state: a bad file costs nothing */ }
+  saveHeadroomSettings(s);
+  log(`headroom: seeded ${HEADROOM_SETTINGS_FILE} (defaultModel ${s.defaultModel}`
+    + `${migrated ? `, accountSwitch migrated from autoswitch.json: ${migrated.enabled ? 'on' : 'off'} at ${migrated.threshold}%` : ''})`);
+  return { created: true, settings: s, migrated };
+}
 
-    const candidates = [];
-    for (const a of saved) {
-      if (a.isActive) continue;
-      const rec = accounts.readProfile(a.slug);
-      if (!rec) continue;
-      // Live figures if the stored token still authenticates, which it usually
-      // does not — an access token outlives its account's turn by hours at most.
-      // Otherwise the last reading taken while that account was active, aged
-      // forward; see agedLimits for why that is sound and which way it errs.
-      const plan = await planForCredentials(rec.credentials);
-      if (plan) accounts.recordPlan(a.slug, plan);
-      candidates.push({
-        slug: a.slug,
-        email: a.email,
-        limits: plan ? plan.limits : agedLimits(rec.lastPlan, Date.now()),
-      });
-    }
+// ---- state -----------------------------------------------------------------
 
-    const d = decideSwitch({
-      active,
-      candidates,
-      now: Date.now(),
-      lastSwitchAt: st.lastSwitchAt || 0,
-      threshold,
-    });
-    if (!d) {
-      autoswitchWhy = explainSwitch({ active, candidates, now: Date.now(), lastSwitchAt: st.lastSwitchAt || 0, threshold });
-      // Say so OUT LOUD when the account is at the threshold and we still cannot
-      // act, rather than only answering /v1/autoswitch when somebody thinks to
-      // ask. This is a feature whose whole job is to act unattended, so the one
-      // way it fails — armed, enabled, and with nothing it is allowed to switch
-      // to — otherwise announces itself as hitting a limit that was supposed to
-      // have been avoided. Candidates are priced with their STORED tokens and an
-      // expired one reports nothing, so a pool that has sat unused long enough
-      // simply empties, quietly.
-      //
-      // Only at the threshold, and once a day: below it there is nothing to warn
-      // about, and above it the reading changes every few minutes.
-      const worst = worstLimit(active.limits);
-      if (worst && worst.percent >= (threshold ?? AUTOSWITCH_THRESHOLD)) {
-        const lastWarn = st.lastIdleWarnAt || 0;
-        if (Date.now() - lastWarn > 24 * 60 * 60 * 1000) {
-          updateAutoswitch((s) => { s.lastIdleWarnAt = Date.now(); });
-          const text = `${active.email || active.slug} is at ${worst.percent}% (${worst.label}) and ` +
-            `auto-switch could not move: ${autoswitchWhy}. Sign in to another account, or ` +
-            `open one of the saved ones once so its headroom can be read.`;
-          const push = await deliverPush({ kind: 'account_switch', title: 'Auto-switch is stuck', text, subject: active.slug });
-          if (!push.sent) await deliverTelegram(`\u{26A0} Auto-switch is stuck\n${text}`);
-          log(`autoswitch: STUCK at ${worst.percent}% — ${autoswitchWhy}`);
-        }
+function blankStall() {
+  return { at: null, window: null, resetsAt: null, resumedAt: null, how: null, attempts: 0 };
+}
+
+function normalizeHeadroomState(o) {
+  const src = o && typeof o === 'object' ? o : {};
+  return {
+    v: 1,
+    mode: typeof src.mode === 'string' ? src.mode : 'ok',
+    accounts: src.accounts && typeof src.accounts === 'object' ? src.accounts : {},
+    resets: Array.isArray(src.resets) ? src.resets : [],
+    sessions: src.sessions && typeof src.sessions === 'object' ? src.sessions : {},
+    sentinels: src.sentinels && typeof src.sentinels === 'object' ? src.sentinels : { STOP: null, 'STOP-FABLE': null },
+    arbiter: {
+      lastSwitchAt: 0, lastLadderAt: 0, lastAction: null, why: 'not run yet',
+      switches: 0, lastIdleWarnAt: 0, lastResumeAt: null,
+      ...(src.arbiter && typeof src.arbiter === 'object' ? src.arbiter : {}),
+    },
+  };
+}
+
+let headroomStateCache = null;
+/** The live state, read from disk once and kept in memory thereafter. */
+function hstate() {
+  if (!headroomStateCache) {
+    let raw = null;
+    try { raw = JSON.parse(fs.readFileSync(HEADROOM_STATE_FILE, 'utf8')); } catch { /* first run */ }
+    headroomStateCache = normalizeHeadroomState(raw);
+  }
+  return headroomStateCache;
+}
+
+function saveHeadroomState(st) {
+  try {
+    fs.mkdirSync(DATA_DIR, { recursive: true });
+    fs.writeFileSync(`${HEADROOM_STATE_FILE}.tmp`, JSON.stringify(st, null, 2), { mode: 0o600 });
+    fs.renameSync(`${HEADROOM_STATE_FILE}.tmp`, HEADROOM_STATE_FILE);
+  } catch (e) { log('headroom: could not persist state', e.message); }
+}
+
+// ---- reading a session's model --------------------------------------------
+
+/**
+ * What model this session is ACTUALLY on, and whether a person put it there.
+ *
+ * Both answers come from the transcript rather than the pane: the status line
+ * carries a display name that has to be mapped back, while an assistant record
+ * carries the id verbatim. A human's `/model` leaves a command record with a
+ * timestamp, which is the only way to know that the owner has just answered the
+ * question the ladder is about to answer (and so must not be overruled).
+ *
+ * The `model_consent_fallback` scan is the CLI's own Fable-consent event. It is
+ * read off the raw tail because readTranscript does not surface system
+ * subtypes. ⚠ UNVERIFIED AGAINST A REAL CAPTURE — the shape comes from the
+ * binary's strings (spike native-rl §7), so it is written defensively: an
+ * absent record simply means nothing is detected, which is today's behaviour.
+ */
+function readSessionModel(name) {
+  const st = readSessionState(name);
+  const out = { model: null, humanSetModelAt: null, consent: null, transcript: null, sessionId: st ? st.sessionId : null };
+  if (!st || !st.transcript) return out;
+  out.transcript = st.transcript;
+  try {
+    const t = readTranscript(st.transcript, { limit: 24 });
+    if (t && t.model) out.model = t.model;
+    for (const ev of (t && t.events) || []) {
+      if (ev.kind === 'command' && /^\/model\b/.test(String(ev.text || ''))) {
+        out.humanSetModelAt = Number(ev.ts) ? Number(ev.ts) * 1000 : Date.now();
       }
-      return;
     }
-    autoswitchWhy = null;
+  } catch { /* unreadable transcript is not fatal for a tick */ }
+  const tail = transcriptTail(st.transcript, null, 32 * 1024);
+  if (tail && tail.text.includes('model_consent_fallback')) {
+    for (const line of tail.text.split('\n')) {
+      if (!line.includes('model_consent_fallback')) continue;
+      try {
+        const rec = JSON.parse(line);
+        if (rec && rec.type === 'system' && rec.subtype === 'model_consent_fallback') {
+          out.consent = {
+            choice: rec.choice ?? null,
+            to: rec.toModel ?? rec.to_model ?? rec.model ?? null,
+            persistedAsDefault: rec.persisted_as_default === true || rec.persistedAsDefault === true,
+          };
+        }
+      } catch { /* a truncated first line in the tail */ }
+    }
+  }
+  return out;
+}
 
-    const r = await performSwitch(d.to);
-    if (!r.ok) { log(`autoswitch: activate failed: ${r.error}`); return; }
+/**
+ * Put the host's default model back after the CLI wrote one itself.
+ *
+ * NOT the primary path and deliberately narrow. A `/model <name>` typed by a
+ * human persists their default and that is theirs to keep — this restores the
+ * key only when the native Fable consent dialog recorded
+ * `persisted_as_default: true`, i.e. when the CLI rewrote a shared host setting
+ * as a side effect of one session running out of Fable. Every other concurrent
+ * session on this host reads that file.
+ *
+ * Refuses on an unparseable file rather than replacing it: half of a settings
+ * file is worse than a wrong model.
+ */
+function repairDefaultModel(expected) {
+  const file = path.join(CLAUDE_DIR, 'settings.json');
+  let raw;
+  try { raw = fs.readFileSync(file, 'utf8'); } catch { return { ok: false, error: 'no settings.json to repair' }; }
+  let o;
+  try { o = JSON.parse(raw); } catch { return { ok: false, error: 'settings.json is unparseable — refusing to rewrite it' }; }
+  if (!o || typeof o !== 'object' || Array.isArray(o)) {
+    return { ok: false, error: 'settings.json is not an object — refusing to rewrite it' };
+  }
+  if (o.model === expected) return { ok: true, changed: false };
+  const was = o.model ?? null;
+  o.model = expected;
+  try {
+    // 2-space JSON, and the trailing newline the file had (or did not have).
+    const body = `${JSON.stringify(o, null, 2)}${raw.endsWith('\n') ? '\n' : ''}`;
+    fs.writeFileSync(`${file}.tmp`, body, { mode: 0o600 });
+    fs.renameSync(`${file}.tmp`, file);
+  } catch (e) { return { ok: false, error: e.message }; }
+  log(`headroom: restored the host default model to ${expected} (was ${was})`);
+  return { ok: true, changed: true, was };
+}
 
-    updateAutoswitch((s) => {
-      s.lastSwitchAt = Date.now();
-      s.switches = (s.switches || 0) + 1;
-      s.last = { at: Math.floor(Date.now() / 1000), ...d };
-    });
+// ---- the ladder ------------------------------------------------------------
 
-    // A silent identity change would be spooky: the phone and Telegram both
-    // hear about it, whatever the alert toggle says. Statement, not question.
-    const text = `${d.fromEmail || d.from} hit ${d.fromPercent}% (${d.fromLabel}) — ` +
-      `now on ${d.toEmail || d.to} at ${d.toPercent}%. Running sessions keep the ` +
-      `old account until they restart.`;
-    const push = await deliverPush({ kind: 'account_switch', title: 'Switched Claude account', text, subject: d.to });
-    if (!push.sent) await deliverTelegram(`\u{1F501} Switched Claude account\n${text}`);
-    log(`autoswitch: ${d.fromEmail} (${d.fromPercent}%) -> ${d.toEmail} (${d.toPercent}%)`);
+async function paneLines(name) {
+  const c = await run('tmux', ['capture-pane', '-p', '-t', `=${name}:`]);
+  if (c.err) return null;
+  return c.stdout.replace(/\n$/, '').split('\n');
+}
+
+/**
+ * Move a LIVE session to another model for THIS SESSION ONLY.
+ *
+ * Measured (native-rl spike): `/model <name>` takes no flags and always writes
+ * the host default; the argument-less picker's `s` key is the only in-session
+ * switch that writes nothing. So this drives the picker:
+ *
+ *   /model + Enter -> wait for `Select model` -> find the target row BY LABEL
+ *   -> walk the ❯ cursor one key at a time, re-reading the pane after each ->
+ *   press `s` -> expect `… for this session only`.
+ *
+ * ⚠ BY LABEL, NEVER BY ROW NUMBER. The list is built from the installed CLI's
+ * model table and a `claude update` renumbers it; a remembered number would
+ * press `s` on a different model and report success.
+ *
+ * Every failure path presses Esc and returns `delivery_unconfirmed` rather than
+ * guessing: an abandoned picker left open blocks the next message the owner
+ * types, and a ladder that claims a move it did not make is worse than one that
+ * says it could not.
+ *
+ * Runs as one queue JOB, so it starts only at a turn boundary with a bare caret.
+ */
+async function applyLadder(name, to) {
+  const target = `=${name}:`;
+  const esc = () => run('tmux', ['send-keys', '-t', target, 'Escape']).catch(() => { });
+  const fail = async (reason) => { await esc(); return { ok: false, delivery: 'delivery_unconfirmed', reason }; };
+
+  const typed = await run('tmux', ['send-keys', '-t', target, '-l', '--', '/model']);
+  if (typed.err) return { ok: false, delivery: 'delivery_unconfirmed', reason: 'could not type /model' };
+  await sleep(SUBMIT_BEAT_MS);
+  const ent = await run('tmux', ['send-keys', '-t', target, 'Enter']);
+  if (ent.err) return { ok: false, delivery: 'delivery_unconfirmed', reason: 'could not submit /model' };
+
+  let rows = null;
+  const openBy = Date.now() + PICKER_WAIT_MS;
+  for (;;) {
+    rows = parseModelPicker(await paneLines(name));
+    if (rows) break;
+    if (Date.now() >= openBy) break;
+    await sleep(200);
+  }
+  // Nothing typed further: if the picker is not there, the keys would land in
+  // whatever IS there — which is the failure this whole path exists to avoid.
+  if (!rows) return { ok: false, delivery: 'delivery_unconfirmed', reason: 'the model picker never appeared' };
+
+  let want = rows.find((r) => r.family === to);
+  if (!want) return fail(`the picker offers no ${to} row`);
+  let cursor = rows.find((r) => r.cursor) || null;
+  if (!cursor) return fail('the picker draws no cursor');
+
+  for (let moves = 0; cursor.label !== want.label; moves++) {
+    if (moves >= MAX_CURSOR_MOVES) return fail(`the cursor never reached ${want.label}`);
+    const key = cursor.n < want.n ? 'Down' : 'Up';
+    const r = await run('tmux', ['send-keys', '-t', target, key]);
+    if (r.err) return fail(`tmux refused ${key}`);
+    await sleep(150);
+    // Re-read EVERY time: verifying the highlighted label before the next key is
+    // what makes a shifted list a no-op instead of a wrong model.
+    const fresh = parseModelPicker(await paneLines(name));
+    if (!fresh) return fail('the picker vanished mid-move');
+    const c2 = fresh.find((x) => x.cursor);
+    const w2 = fresh.find((x) => x.family === to);
+    if (!c2 || !w2) return fail('the picker redrew without a cursor or a target row');
+    cursor = c2;
+    want = w2;
+  }
+
+  const set = await run('tmux', ['send-keys', '-t', target, '-l', '--', 's']);
+  if (set.err) return fail('tmux refused the s key');
+  const by = Date.now() + LADDER_FEEDBACK_MS;
+  for (;;) {
+    const lines = await paneLines(name);
+    if (lines && LADDER_FEEDBACK_RE.test(lines.join('\n'))) {
+      return { ok: true, delivery: 'confirmed', to };
+    }
+    if (Date.now() >= by) break;
+    await sleep(200);
+  }
+  return fail('no "for this session only" confirmation appeared');
+}
+
+// ---- the tick --------------------------------------------------------------
+
+let headroomBusy = false;
+let headroomTimer = null;
+const savedPlanAt = new Map();      // slug -> ms of its last pricing
+
+/** One account's row in `headroom.json`, carrying the RED clocks forward. */
+function accountRow(email, windows, live, now, prev, settings) {
+  const prevRed = (prev && prev.red) || {};
+  const red = {};
+  for (const w of headroomLib.WINDOWS) {
+    const win = windows[w];
+    const mode = win ? headroomLib.classify(win, settings) : 'ok';
+    if (mode === 'red' || mode === 'exhausted') {
+      // `since` is kept from the previous pass: a clock that restarts every tick
+      // cannot say how long a window has been red, which is the one thing it is
+      // for.
+      red[w] = { since: (prevRed[w] && prevRed[w].since) || now, resetsAt: (win && win.resetsAt) || (prevRed[w] && prevRed[w].resetsAt) || null };
+    } else {
+      red[w] = null;
+    }
+  }
+  return { email: email ?? null, readAt: now, live: !!live, windows, red };
+}
+
+function sessionRecord(state, id, name) {
+  let rec = state.sessions[id];
+  if (!rec) {
+    rec = {
+      name, model: null, family: null, ladder: null, headsUpAt: null,
+      nativeSwitch: { seenAt: null, to: null }, offeredLadderUpAt: null,
+      humanSetModelAt: null, stall: blankStall(),
+    };
+    state.sessions[id] = rec;
+  }
+  rec.name = name;
+  if (!rec.nativeSwitch) rec.nativeSwitch = { seenAt: null, to: null };
+  if (!rec.stall) rec.stall = blankStall();
+  return rec;
+}
+
+/** Whichever cadence the host is actually running at right now. */
+function headroomCadence(sessions) {
+  const busy = (sessions || []).some((s) => s.state === 'running' || s.state === 'attention')
+    || activeRuns.size > 0;
+  return busy ? HEADROOM_ACTIVE_MS : HEADROOM_IDLE_MS;
+}
+
+function scheduleHeadroom(ms) {
+  if (headroomTimer) clearTimeout(headroomTimer);
+  headroomTimer = setTimeout(() => {
+    headroomTick().catch((e) => log('headroom: tick failed', e.message));
+  }, ms);
+  if (headroomTimer.unref) headroomTimer.unref();
+}
+
+async function headroomTick() {
+  if (headroomBusy) return;
+  headroomBusy = true;
+  let next = HEADROOM_IDLE_MS;
+  try {
+    next = await headroomTickInner();
   } catch (e) {
-    autoswitchWhy = `last tick failed: ${e.message}`;
-    log('autoswitch: tick failed', e.message);
+    hstate().arbiter.why = `last tick failed: ${e.message}`;
+    log('headroom: tick failed', e.message);
   } finally {
-    autoswitchBusy = false;
+    headroomBusy = false;
+    scheduleHeadroom(next);
   }
 }
-setInterval(() => { autoswitchTick().catch(() => { }); }, AUTOSWITCH_POLL_MS).unref();
+
+async function headroomTickInner() {
+  const settings = loadHeadroomSettings();
+  const state = hstate();
+  const now = Date.now();
+  const prevAccounts = state.accounts || {};
+
+  // ---- 1. the accounts -----------------------------------------------------
+  // Keep the live login's profile in step with its rotating tokens first, or
+  // nothing below can tell which stored record is the active one.
+  await saveIdentified(null, accounts.readActive()).catch(() => null);
+  if (Date.now() - planCache.at > PLAN_TTL_MS && !planCache.running) await fetchPlan();
+
+  const saved = accounts.list();
+  const activeRec = saved.find((a) => a.isActive) || null;
+  const ident = (planCache.data && planCache.data.account) || null;
+  const activeSlug = (activeRec && activeRec.slug) || (ident && ident.slug) || 'active';
+  const activeEmail = (activeRec && activeRec.email) || (ident && ident.email) || null;
+  const activeWindows = headroomLib.windowsOf((planCache.data && planCache.data.limits) || []);
+
+  const nextAccounts = {};
+  // A host with no login at all gets NO active row rather than an empty one:
+  // "no active account is identifiable" is a true and useful `why`, while a row
+  // of nulls reads as an account whose usage nobody can see.
+  const haveActive = !!activeRec || !!(planCache.data && planCache.data.limits && planCache.data.limits.length);
+  if (haveActive) {
+    nextAccounts[activeSlug] = accountRow(activeEmail, activeWindows, true, now, prevAccounts[activeSlug], settings);
+  }
+
+  for (const a of saved) {
+    if (a.isActive || a.slug === activeSlug) continue;
+    const prev = prevAccounts[a.slug] || null;
+    const due = now - (savedPlanAt.get(a.slug) || 0) >= SAVED_PLAN_MS;
+    let windows = prev ? prev.windows : {};
+    if (due) {
+      savedPlanAt.set(a.slug, now);
+      const rec = accounts.readProfile(a.slug);
+      // A live read if the stored token still authenticates (it usually does
+      // not — an access token outlives its account's turn by hours at most);
+      // otherwise the last reading taken while it WAS active, aged forward.
+      const plan = rec ? await planForCredentials(rec.credentials) : null;
+      if (plan) {
+        accounts.recordPlan(a.slug, plan);
+        windows = headroomLib.windowsOf(plan.limits);
+      } else if (rec) {
+        windows = headroomLib.windowsOf(agedLimits(rec.lastPlan, now));
+      }
+    }
+    nextAccounts[a.slug] = accountRow(a.email, windows || {}, false, due ? now : (prev ? prev.readAt : now), prevAccounts[a.slug], settings);
+    if (!due && prev) nextAccounts[a.slug].readAt = prev.readAt;
+  }
+
+  // ---- 2. resets -----------------------------------------------------------
+  const resets = headroomLib.detectResets(prevAccounts, nextAccounts, now, settings);
+  for (const r of resets) {
+    state.resets.push({ ...r, at: now });
+    log(`headroom: ${r.window} reset for ${nextAccounts[r.slug] ? nextAccounts[r.slug].email || r.slug : r.slug} (now ${Math.round(r.percent)}%)`);
+  }
+  if (state.resets.length > 50) state.resets = state.resets.slice(-50);
+  state.accounts = nextAccounts;
+  const worst = headroomLib.worstWindow(activeWindows, settings);
+  state.mode = worst ? worst.mode : 'ok';
+  const lastFableResetAt = state.resets
+    .filter((r) => r.window === 'weekly_fable' && r.slug === activeSlug)
+    .reduce((acc, r) => Math.max(acc, Number(r.at) || 0), 0);
+
+  // ---- 3. the sessions -----------------------------------------------------
+  const live = (await listSessions()) || [];
+  const liveIds = new Set();
+  const model = [];
+  for (const s of live) {
+    if (!s.claudeSessionId) continue;
+    liveIds.add(s.claudeSessionId);
+    const rec = sessionRecord(state, s.claudeSessionId, s.name);
+    const read = readSessionModel(s.name);
+    const wasFamily = rec.family;
+    const family = headroomLib.familyOf(read.model) || rec.family;
+    rec.model = read.model || rec.model;
+    rec.family = family;
+    if (read.humanSetModelAt) rec.humanSetModelAt = read.humanSetModelAt;
+
+    // A NATIVE switch: the family moved away from fable and appd typed nothing.
+    // Recorded, logged, and never fought — the 92% ladder exists precisely so
+    // the consent dialog does not appear on an attended session in the first
+    // place, and once it has, the owner may well prefer to stay where it put
+    // them.
+    if (wasFamily === 'fable' && family && family !== 'fable'
+      && !(rec.ladder && rec.ladder.to) && !rec.nativeSwitch.seenAt) {
+      rec.nativeSwitch = { seenAt: now, to: family, how: 'native' };
+      log(`headroom: native fallback observed on ${s.name} -> ${family}`);
+    }
+    if (read.consent) {
+      if (!rec.nativeSwitch.seenAt) {
+        rec.nativeSwitch = { seenAt: now, to: read.consent.to || family, how: 'consent', choice: read.consent.choice };
+      }
+      if (read.consent.persistedAsDefault) {
+        const r = repairDefaultModel(settings.defaultModel);
+        if (r.ok && r.changed) rec.ladder = { ...(rec.ladder || {}), repairedDefault: true };
+        else if (!r.ok) log(`headroom: could not restore the host default model (${r.error})`);
+      }
+    }
+
+    model.push({
+      claudeSessionId: s.claudeSessionId,
+      name: s.name,
+      state: s.state,
+      model: rec.model,
+      family: rec.family,
+      ladder: rec.ladder,
+      headsUpAt: rec.headsUpAt,
+      nativeSwitch: rec.nativeSwitch,
+      offeredLadderUpAt: rec.offeredLadderUpAt,
+      humanSetModelAt: rec.humanSetModelAt,
+    });
+  }
+  // Prune records for sessions that are neither live nor on the restore
+  // registry: a ladder belongs to a run, and a run that has ended takes it.
+  const registered = new Set(Object.values(loadRegistry()).map((r) => r && r.claudeSessionId).filter(Boolean));
+  for (const id of Object.keys(state.sessions)) {
+    if (!liveIds.has(id) && !registered.has(id)) delete state.sessions[id];
+  }
+
+  // ---- 4. the arbiter ------------------------------------------------------
+  const candidates = Object.entries(nextAccounts)
+    .filter(([slug]) => slug !== activeSlug)
+    .map(([slug, a]) => ({ slug, email: a.email, windows: a.windows }));
+  const verdict = headroomLib.decide({
+    active: haveActive ? { slug: activeSlug, email: activeEmail, windows: activeWindows } : null,
+    candidates,
+    sessions: model,
+    settings,
+    state: { lastSwitchAt: state.arbiter.lastSwitchAt || 0, lastLadderAt: state.arbiter.lastLadderAt || 0 },
+    sentinels: state.sentinels,
+    lastFableResetAt,
+    now,
+  });
+  state.arbiter.why = verdict.why;
+
+  for (const action of verdict.actions) {
+    try {
+      await applyHeadroomAction(action, { state, settings, now, activeWindows, activeSlug, activeEmail });
+    } catch (e) {
+      log(`headroom: applying ${action.type} failed: ${e.message}`);
+    }
+  }
+
+  saveHeadroomState(state);
+  return headroomCadence(live);
+}
+
+/** One action from the arbiter, with its preconditions re-checked at apply time. */
+async function applyHeadroomAction(action, ctx) {
+  const { state, settings, now } = ctx;
+  switch (action.type) {
+    case 'switch_account': {
+      const d = action.detail;
+      const r = await performSwitch(action.slug);
+      if (!r.ok) { log(`headroom: activate failed: ${r.error}`); return; }
+      state.arbiter.lastSwitchAt = now;
+      state.arbiter.switches = (state.arbiter.switches || 0) + 1;
+      state.arbiter.lastAction = { type: 'switch_account', at: now, ...d };
+      // A silent identity change would be spooky: the phone and Telegram both
+      // hear about it, whatever the alert toggle says. Statement, not question.
+      const text = `${d.fromEmail || d.from} hit ${d.fromPercent}% (${d.fromLabel}) — `
+        + `now on ${d.toEmail || d.to} at ${d.toPercent}%. Running sessions keep the `
+        + `old account until they restart.`;
+      const push = await deliverPush({ kind: 'account_switch', title: 'Switched Claude account', text, subject: d.to });
+      if (!push.sent) await deliverTelegram(`\u{1F501} Switched Claude account\n${text}`);
+      log(`headroom: ${d.fromEmail} (${d.fromPercent}%) -> ${d.toEmail} (${d.toPercent}%)`);
+      return;
+    }
+    case 'heads_up': {
+      const rec = state.sessions[action.claudeSessionId];
+      if (!rec || rec.headsUpAt) return;
+      const text = settings.headsUpText
+        .replace(/\{pct\}/g, String(action.pct))
+        .replace(/\{next\}/g, action.next)
+        .replace(/\{ladderPct\}/g, String(settings.ladderPct));
+      // Through the queue: a line typed mid-turn is absorbed INTO that turn and
+      // silently rewrites what it was told to do (spike E4).
+      const out = await enqueueSend(action.name, text, { automated: true, origin: 'headroom', kind: 'headsUp' });
+      // Marked once it is accepted, not once it lands: the queue is the thing
+      // holding it, and re-queueing the same note every 60 s would pile up six
+      // copies behind one long turn.
+      rec.headsUpAt = now;
+      state.arbiter.lastAction = { type: 'heads_up', at: now, name: action.name, queued: !out.delivered };
+      log(`headroom: heads-up queued for ${action.name} at ${action.pct}% of the Fable week`);
+      return;
+    }
+    case 'ladder_down':
+    case 'ladder_up': {
+      const rec = state.sessions[action.claudeSessionId];
+      if (!rec) return;
+      const from = action.from;
+      const to = action.to;
+      const r = await enqueueJob(action.name, () => applyLadder(action.name, to), {
+        automated: true, origin: 'headroom', kind: 'model', family: from,
+      });
+      // One cooldown for every ladder move on the host, spent when the move is
+      // ATTEMPTED: a picker that never opened must not let the next tick try
+      // again immediately.
+      state.arbiter.lastLadderAt = now;
+      const result = r.result || {};
+      if (r.dropped) {
+        log(`headroom: ladder for ${action.name} dropped (${r.dropped})`);
+        return;
+      }
+      if (!result.ok) {
+        rec.ladder = { ...(rec.ladder || {}), from, to, at: now, delivery: 'delivery_unconfirmed', sessionOnly: true };
+        log(`headroom: ladder ${from} -> ${to} on ${action.name} unconfirmed (${result.reason || result.message || 'no confirmation'})`);
+        state.arbiter.lastAction = { type: action.type, at: now, name: action.name, delivery: 'delivery_unconfirmed' };
+        return;
+      }
+      if (action.type === 'ladder_up') {
+        rec.ladder = null;
+        rec.family = to;
+        log(`headroom: ${action.name} moved back to ${to}`);
+        state.arbiter.lastAction = { type: 'ladder_up', at: now, name: action.name, to };
+        return;
+      }
+      rec.ladder = { from, to, at: now, delivery: 'confirmed', sessionOnly: true, repairedDefault: false };
+      rec.family = to;
+      state.arbiter.lastAction = { type: 'ladder_down', at: now, name: action.name, from, to };
+      log(`headroom: ${action.name} moved ${from} -> ${to} for this session only`);
+      const text = `${action.name} was at ${action.pct}% of the Fable week — it is on ${to} for this `
+        + `session only. The host's default model is untouched.`;
+      const push = await deliverPush({
+        kind: 'headroom_downgraded', title: `Moved ${action.name} to ${to}`, text, subject: action.name,
+      });
+      if (!push.sent) await deliverTelegram(`\u{1F4C9} Moved ${action.name} to ${to}\n${text}`);
+      return;
+    }
+    case 'offer_ladder_up': {
+      // OFFERED, never applied: a native consent swap never returns to Fable by
+      // itself (measured), and the owner may prefer to stay on the cheaper model.
+      const rec = state.sessions[action.claudeSessionId];
+      if (!rec || rec.offeredLadderUpAt) return;
+      rec.offeredLadderUpAt = now;
+      const text = `${action.name} was moved to ${action.from} by Claude Code when Fable ran out. `
+        + 'The Fable week has reset — move it back?';
+      const push = await deliverPush({
+        kind: 'headroom_ladder_up', title: 'Back to Fable?', text, subject: action.name,
+      });
+      if (!push.sent) await deliverTelegram(`\u{1F199} Back to Fable?\n${text}`);
+      log(`headroom: offered ${action.name} a move back to fable`);
+      return;
+    }
+    case 'sentinels': {
+      const plan = action.plan;
+      writeSentinels(plan, state, ctx.settings);
+      return;
+    }
+    default:
+      log(`headroom: unknown action ${action.type}`);
+  }
+}
+
+/**
+ * Arm and clear the files the hook gate watches, and rewrite `fable-sessions`.
+ *
+ * The list is what lets a bash hook with no daemon access answer "is the session
+ * that is spawning on Fable?" — the SubagentStart payload carries no model.
+ */
+function writeSentinels(plan, state, settings) {
+  try {
+    if (plan.STOP) {
+      const a = sentinelsLib.arm(HEADROOM_DIR, 'STOP', plan.reasons.STOP || plan.reason);
+      state.sentinels.STOP = { since: a.since, reason: a.reason };
+      if (a.created) log(`headroom: armed STOP (${a.reason})`);
+    } else if (state.sentinels.STOP || sentinelsLib.state(HEADROOM_DIR).STOP) {
+      if (sentinelsLib.clear(HEADROOM_DIR, 'STOP')) log('headroom: cleared STOP');
+      state.sentinels.STOP = null;
+    }
+    if (plan.STOP_FABLE) {
+      const a = sentinelsLib.arm(HEADROOM_DIR, 'STOP-FABLE', plan.reasons['STOP-FABLE'] || plan.reason);
+      state.sentinels['STOP-FABLE'] = { since: a.since, reason: a.reason };
+      if (a.created) log(`headroom: armed STOP-FABLE (${a.reason})`);
+    } else if (state.sentinels['STOP-FABLE'] || sentinelsLib.state(HEADROOM_DIR)['STOP-FABLE']) {
+      if (sentinelsLib.clear(HEADROOM_DIR, 'STOP-FABLE')) log('headroom: cleared STOP-FABLE');
+      state.sentinels['STOP-FABLE'] = null;
+    }
+    const fable = Object.entries(state.sessions)
+      .filter(([, r]) => r && r.family === 'fable')
+      .map(([id]) => id);
+    sentinelsLib.writeFableSessions(HEADROOM_DIR, fable);
+  } catch (e) {
+    log('headroom: could not write the sentinels', e.message);
+  }
+  void settings;
+}
+
+// ---- what the rest of the daemon asks headroom -----------------------------
+
+/** The session's family RIGHT NOW, for the send queue's `kind:'model'` drop rule. */
+function familyOfSession(name) {
+  const st = hstate();
+  for (const rec of Object.values(st.sessions)) {
+    if (rec && rec.name === name) return rec.family || null;
+  }
+  return null;
+}
+setFamilyProbe(familyOfSession);
+
+/** The per-row block on `GET /v1/sessions`. Cheap: memory only, no transcript walk. */
+function headroomForSession(claudeSessionId) {
+  if (!claudeSessionId) return null;
+  const st = hstate();
+  const rec = st.sessions[claudeSessionId];
+  const meta = loadSessionMeta(claudeSessionId);
+  const settings = loadHeadroomSettings();
+  const autoResume = meta && typeof meta.autoResume === 'boolean' ? meta.autoResume : settings.autoResume;
+  return {
+    family: (rec && rec.family) || null,
+    ladder: (rec && rec.ladder && rec.ladder.to) || null,
+    autoResume,
+    // Stall detection and auto-resume are the next component; the field exists
+    // now so the clients can be built against the final shape.
+    stalled: !!(rec && rec.stall && rec.stall.at),
+  };
+}
+
+/** The facts the watch digest hashes. In-memory only — this runs on every poll. */
+function headroomFacts() {
+  const st = hstate();
+  const armed = Object.entries(st.sentinels || {}).filter(([, v]) => !!v).map(([k]) => k);
+  const stalled = Object.values(st.sessions || {})
+    .filter((r) => r && r.stall && r.stall.at).map((r) => r.name);
+  return {
+    mode: st.mode || 'ok',
+    stalled,
+    lastResumeAt: st.arbiter.lastResumeAt ?? null,
+    lastLadderAt: st.arbiter.lastLadderAt || 0,
+    sentinels: armed,
+  };
+}
+
+/** The one-line summary on `GET /v1/status`. */
+function headroomStatus() {
+  const st = hstate();
+  const settings = loadHeadroomSettings();
+  const active = Object.values(st.accounts || {}).find((a) => a && a.live) || null;
+  const worst = active ? headroomLib.worstWindow(active.windows, settings) : null;
+  let held = [];
+  try { held = sentinelsLib.listHeld(HEADROOM_DIR, Date.now()); } catch { /* no dir yet */ }
+  return {
+    worstPercent: worst ? worst.percent : null,
+    worstLabel: worst ? worst.label : null,
+    nextResetAt: worst ? worst.resetsAt : null,
+    mode: st.mode || 'ok',
+    sentinels: Object.entries(st.sentinels || {}).filter(([, v]) => !!v).map(([k]) => k),
+    paused: held.length,
+  };
+}
+
+/** The whole picture: `GET /v1/headroom`. */
+function headroomPayload() {
+  const st = hstate();
+  const settings = loadHeadroomSettings();
+  const now = Date.now();
+  const activeSlug = Object.keys(st.accounts || {}).find((k) => st.accounts[k] && st.accounts[k].live) || null;
+  const active = activeSlug ? st.accounts[activeSlug] : null;
+  const worst = active ? headroomLib.worstWindow(active.windows, settings) : null;
+  const sessions = Object.entries(st.sessions || {}).map(([id, r]) => {
+    const meta = loadSessionMeta(id);
+    return {
+      name: r.name,
+      claudeSessionId: id,
+      family: r.family || null,
+      ladder: r.ladder || null,
+      autoResume: meta && typeof meta.autoResume === 'boolean' ? meta.autoResume : settings.autoResume,
+      stalled: !!(r.stall && r.stall.at),
+      headsUpAt: r.headsUpAt ?? null,
+      nativeSwitch: r.nativeSwitch || { seenAt: null, to: null },
+    };
+  });
+  let sentinelState = st.sentinels || { STOP: null, 'STOP-FABLE': null };
+  let held = [];
+  try {
+    sentinelState = sentinelsLib.state(HEADROOM_DIR);
+    held = sentinelsLib.listHeld(HEADROOM_DIR, now);
+  } catch { /* the directory appears on the first armed sentinel */ }
+  return {
+    mode: st.mode || 'ok',
+    worst: worst
+      ? {
+        slug: activeSlug, email: active.email ?? null, window: worst.window,
+        percent: worst.percent, label: worst.label, resetsAt: worst.resetsAt,
+      }
+      : null,
+    accounts: st.accounts || {},
+    sessions,
+    sentinels: sentinelState,
+    held,
+    resets: (st.resets || []).slice(-20),
+    arbiter: st.arbiter,
+    settings,
+    serverTime: Math.floor(now / 1000),
+  };
+}
+
+/**
+ * `GET /v1/autoswitch`'s answer, rebuilt from headroom state.
+ *
+ * Kept for one release because the shipped clients still call it; the fields are
+ * the same ones they read, sourced from the arbiter instead of from
+ * autoswitch.json (which is now read-only history).
+ */
+function autoswitchAliasView() {
+  const st = hstate();
+  const settings = loadHeadroomSettings();
+  const last = st.arbiter.lastAction && st.arbiter.lastAction.type === 'switch_account'
+    ? { at: Math.floor((st.arbiter.lastAction.at || 0) / 1000), ...st.arbiter.lastAction }
+    : null;
+  return {
+    enabled: !!settings.accountSwitch.enabled,
+    switches: st.arbiter.switches || 0,
+    last,
+    accounts: accounts.list().length,
+    threshold: settings.accountSwitch.threshold,
+    // Null while a switch is in hand, as before.
+    idleBecause: st.arbiter.why ?? null,
+  };
+}
+
+/**
+ * The old tick, now a thin alias.
+ *
+ * `POST /v1/autoswitch` calls it to act immediately on being enabled, and the
+ * name survives one release so nothing else has to change at the same time as
+ * the arbiter landing.
+ */
+async function autoswitchTick() {
+  return headroomTick();
+}
+
+// The first pass runs a few seconds after start rather than immediately: the
+// session list, the state files and the account store all settle first, and a
+// tick that runs before them sees an empty host and writes it down.
+setTimeout(() => { headroomTick().catch(() => { }); }, 5_000).unref();
 
 
 let alertTimer = null;
@@ -4568,7 +5353,7 @@ async function alertTickInner(st) {
   // Unknown, not empty. Diffing against a snapshot we failed to take is how a
   // tmux blip turns into mass spurious resolutions; the next tick is 10s away.
   if (sessions === null) { log('alerts: skipping tick, session list unavailable'); return; }
-  const d = digest(sessions, chatStates());
+  const d = digest(sessions, chatStates(), headroomFacts());
   // When each running session's run began — the watcher's OWN ledger, carried
   // from the previous observation, not the state file's timestamp. The file is
   // rewritten by the hook on every tool call, so its ts means "seconds since a
@@ -4880,37 +5665,50 @@ const server = http.createServer(async (req, res) => {
       });
     }
 
-    // --- automatic account switching
+    // --- headroom: the whole usage picture, and the settings behind it
+    if (req.method === 'GET' && p === '/v1/headroom') {
+      return sendJson(res, 200, headroomPayload());
+    }
+    if (req.method === 'PATCH' && p === '/v1/headroom/settings') {
+      const body = JSON.parse(await readBody(req) || '{}');
+      // Validated BEFORE anything is written, and the rule that failed is the
+      // message: "invalid settings" makes a slider that silently will not move.
+      const v = headroomLib.validateSettings(body, loadHeadroomSettings());
+      if (!v.ok) return sendErr(res, 400, v.error);
+      saveHeadroomSettings(v.settings);
+      log('headroom: settings updated');
+      // Act on the new numbers now rather than at the next tick: a threshold
+      // lowered past where the account already sits should do something.
+      headroomTick().catch(() => { });
+      return sendJson(res, 200, v.settings);
+    }
+
+    // --- automatic account switching — ALIASES onto settings.accountSwitch,
+    //     kept for one release so the shipped clients keep working. Removed in
+    //     3.1; the response shape is deliberately unchanged.
     if (req.method === 'GET' && p === '/v1/autoswitch') {
-      const st = loadAutoswitch();
-      return sendJson(res, 200, {
-        enabled: !!st.enabled,
-        switches: st.switches || 0,
-        last: st.last || null,
-        accounts: accounts.list().length,
-        threshold: typeof st.threshold === 'number' ? st.threshold : AUTOSWITCH_THRESHOLD,
-        // Why the most recent look did nothing. Null while a switch is in hand.
-        idleBecause: autoswitchWhy,
-      });
+      return sendJson(res, 200, autoswitchAliasView());
     }
     if (req.method === 'POST' && p === '/v1/autoswitch') {
       const body = JSON.parse(await readBody(req) || '{}');
-      const st = loadAutoswitch();
-      if (typeof body.enabled === 'boolean') st.enabled = body.enabled;
+      const patch = {};
+      if (typeof body.enabled === 'boolean') patch.enabled = body.enabled;
       // The default fires at 95%, on the reasoning that a limit resetting in
       // twenty minutes is not worth spending a fresh account on. That is a taste
       // question, not a fact, so it is tunable without a deploy.
       if (typeof body.threshold === 'number' && body.threshold >= 50 && body.threshold <= 100) {
-        st.threshold = Math.round(body.threshold);
+        patch.threshold = Math.round(body.threshold);
       }
-      saveAutoswitch(st);
-      log(`autoswitch: ${st.enabled ? 'enabled' : 'disabled'} at ${st.threshold ?? AUTOSWITCH_THRESHOLD}%`);
+      const v = headroomLib.validateSettings({ accountSwitch: patch }, loadHeadroomSettings());
+      if (!v.ok) return sendErr(res, 400, v.error);
+      saveHeadroomSettings(v.settings);
+      log(`autoswitch: ${v.settings.accountSwitch.enabled ? 'enabled' : 'disabled'} at ${v.settings.accountSwitch.threshold}%`);
       // An immediate look, so enabling it against an already-dry account acts
       // now rather than in five minutes.
-      if (st.enabled) autoswitchTick().catch(() => { });
+      if (v.settings.accountSwitch.enabled) headroomTick().catch(() => { });
       return sendJson(res, 200, {
-        enabled: !!st.enabled,
-        threshold: typeof st.threshold === 'number' ? st.threshold : AUTOSWITCH_THRESHOLD,
+        enabled: v.settings.accountSwitch.enabled,
+        threshold: v.settings.accountSwitch.threshold,
       });
     }
 
@@ -4976,7 +5774,7 @@ const server = http.createServer(async (req, res) => {
 
         while (!req.destroyed && !res.writableEnded) {
           const sess = await listSessions();
-          const d = digest(sess ?? [], chatStates());
+          const d = digest(sess ?? [], chatStates(), headroomFacts());
           // A failed observation must not be published as a change: the phone
           // would see every session disappear and act on it.
           if (sess !== null && d.hash !== last) {
@@ -5017,11 +5815,11 @@ const server = http.createServer(async (req, res) => {
       // Cheap inputs on purpose: no previews, no transcripts. This runs in a loop
       // for as long as a phone is watching.
       let sess = await listSessions();
-      let d = digest(sess ?? [], chatStates());
+      let d = digest(sess ?? [], chatStates(), headroomFacts());
       while (known && (sess === null || d.hash === known) && Date.now() < deadline && !req.destroyed) {
         await sleep(3000);
         sess = await listSessions();
-        d = digest(sess ?? [], chatStates());
+        d = digest(sess ?? [], chatStates(), headroomFacts());
       }
       if (req.destroyed) return;
       const installId = String(req.headers['x-huginn-client'] || '').trim().slice(0, 64);
@@ -5329,6 +6127,10 @@ const server = http.createServer(async (req, res) => {
       if (Date.now() - planCache.at > PLAN_TTL_MS && !planCache.running) await fetchPlan();
       return sendJson(res, 200, {
         ...(planCache.data || { limits: [], extraUsage: null }),
+        // Explicit rather than only riding the spread: an older cache entry, or
+        // a lookup that failed, must still answer the field rather than omitting
+        // it — a missing key and a null one decode differently on the clients.
+        account: (planCache.data && planCache.data.account) || null,
         fetchedAt: planCache.at || null,
         error: planCache.error,
       });
@@ -5574,6 +6376,48 @@ const server = http.createServer(async (req, res) => {
       return sendJson(res, 200, { name, ...g, meta: sessionMetaView(st.sessionId) });
     }
 
+    /**
+     * Put a laddered session back on the model it started on.
+     *
+     * The Undo button on the `headroom_downgraded` notification. It also stamps
+     * `humanSetModelAt`, which is what stops the arbiter from moving the session
+     * straight back down on the next tick — the owner has now answered the
+     * question the ladder was asking, and appd does not argue with that for the
+     * next ten minutes.
+     */
+    if ((m = p.match(/^\/v1\/sessions\/([A-Za-z0-9_][A-Za-z0-9_.-]{0,49})\/headroom\/undo$/)) && req.method === 'POST') {
+      const name = m[1];
+      if (!(await sessionExists(name))) return sendErr(res, 404, 'no such session');
+      const st = readSessionState(name);
+      if (!st || !st.sessionId) return sendErr(res, 409, 'this session has no Claude session id yet');
+      const state = hstate();
+      const rec = state.sessions[st.sessionId];
+      if (!rec || !rec.ladder || !rec.ladder.to) return sendErr(res, 409, 'huginn has not moved this session');
+      const back = rec.ladder.from;
+      rec.humanSetModelAt = Date.now();
+      const out = await enqueueJob(name, () => applyLadder(name, back), {
+        automated: false, origin: 'headroom', kind: 'model',
+      });
+      const result = out.result || {};
+      if (result.ok) {
+        rec.ladder = null;
+        rec.family = back;
+        state.arbiter.lastLadderAt = Date.now();
+        state.arbiter.lastAction = { type: 'ladder_up', at: Date.now(), name, to: back, by: 'undo' };
+        log(`headroom: ${name} put back on ${back} by hand`);
+      }
+      saveHeadroomState(state);
+      return sendJson(res, 200, {
+        ok: true,
+        to: back,
+        // `queued` when the session is mid-turn: the picker must never open
+        // inside a running turn, so the job waits for the boundary like any
+        // other automated send.
+        queued: !result.ok && !out.dropped,
+        delivery: result.delivery || (out.dropped ? `dropped: ${out.dropped}` : 'queued'),
+      });
+    }
+
     if ((m = p.match(/^\/v1\/sessions\/([A-Za-z0-9_][A-Za-z0-9_.-]{0,49})\/meta$/)) && req.method === 'POST') {
       const name = m[1];
       if (!(await sessionExists(name))) return sendErr(res, 404, 'no such session');
@@ -5593,14 +6437,26 @@ const server = http.createServer(async (req, res) => {
       if (typeof body.notes === 'string' && body.notes.length > MAX_NOTES) {
         return sendErr(res, 400, `notes are at most ${MAX_NOTES.toLocaleString('en-US')} characters`);
       }
+      // THREE-valued on purpose: true / false / null, where null hands the
+      // decision back to the global setting. `'autoResume' in body` rather than
+      // a truthiness check, because `false` and `null` are both meaningful and
+      // both falsy.
+      if ('autoResume' in body && body.autoResume !== null && typeof body.autoResume !== 'boolean') {
+        return sendErr(res, 400, 'autoResume must be true, false or null');
+      }
       const saved = updateSessionMeta(st.sessionId, (meta) => {
         if (typeof body.goals === 'string') meta.goals = body.goals;
         if (typeof body.notes === 'string') meta.notes = body.notes;
+        if ('autoResume' in body) {
+          if (body.autoResume === null) delete meta.autoResume;
+          else meta.autoResume = body.autoResume;
+        }
       });
       return sendJson(res, 200, {
         ok: true,
         claudeSessionId: st.sessionId,
-        meta: { goals: saved.goals || '', notes: saved.notes || '', updatedAt: saved.updatedAt },
+        meta: sessionMetaView(st.sessionId),
+        autoResume: typeof saved.autoResume === 'boolean' ? saved.autoResume : null,
       });
     }
 
@@ -7020,6 +7876,26 @@ function resolveBind() {
   });
 }
 
+/**
+ * `node huginn-appd.js --seed-headroom-defaults`
+ *
+ * Run by deploy.sh after the install step. Writes `headroom-settings.json` if it
+ * is not there — taking `defaultModel` from whatever `~/.claude/settings.json`
+ * currently names and `accountSwitch` from the autoswitch state it replaces —
+ * and exits 0. Idempotent: a second run says so and changes nothing, so a
+ * re-deploy can never stomp the owner's edited thresholds.
+ *
+ * Before resolveBind(), because seeding must not need tailscaled, a port, or a
+ * token — it is a file write and a print.
+ */
+if (process.argv.includes('--seed-headroom-defaults')) {
+  const r = seedHeadroomDefaults();
+  console.log(r.created
+    ? `wrote ${HEADROOM_SETTINGS_FILE}`
+    : `${HEADROOM_SETTINGS_FILE} already exists — left alone`);
+  process.exit(0);
+}
+
 resolveBind().then(async (bind) => {
   // Recover from a previous crash BEFORE serving: a session left at `window-size
   // manual` by a killed daemon would otherwise keep a laptop's window shrunken
@@ -7066,6 +7942,10 @@ resolveBind().then(async (bind) => {
         `${c.failed ? `, ${c.failed} group(s) failed` : ''}`);
     }
   } catch (e) { log('accounts: consolidation failed', e.message); }
+  // Settings before the first tick, so a fresh host runs on the owner's default
+  // model and the migrated account-switch preference rather than on the
+  // contract defaults for one pass.
+  try { seedHeadroomDefaults(); } catch (e) { log('headroom: could not seed settings', e.message); }
   server.listen(PORT, bind, () => log(`huginn-appd ${VERSION} listening on ${bind}:${PORT}`));
 }).catch((e) => { console.error('FATAL:', e.message); process.exit(1); });
 

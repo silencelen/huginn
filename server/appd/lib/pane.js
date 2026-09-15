@@ -3,6 +3,7 @@
 // `node --test` against real captured panes (server/test/).
 
 const { createHash } = require('node:crypto');
+const { familyOf } = require('./models');
 
 /**
  * Cheap stable hash of the screen text. Used to answer "did anything change?"
@@ -319,6 +320,75 @@ function detectPrompt(lines) {
   };
 }
 
+// ---- the `/model` picker ---------------------------------------------------
+//
+// The argument-less `/model` opens a selector whose `s` key is the ONLY
+// in-session model change that does not rewrite `~/.claude/settings.json`
+// (measured, native-rl spike §3-4: `/model <name>` takes no flags and always
+// persists the host default). The ladder therefore drives this picker, which
+// means something has to read it off the pane.
+//
+// ⚠ ROWS ARE IDENTIFIED BY LABEL, NEVER BY NUMBER. The list is built from the
+// installed CLI's model table: a `claude update` that adds a 1M-context variant
+// renumbers every row below it, and a ladder that remembered "opus is 2" would
+// then press `s` on something else entirely and report success. The numbers are
+// parsed only so a caller can say how far the cursor has to travel.
+//
+// The heading is the gate. A numbered list is an extremely common thing for
+// Claude to WRITE, and a parser that accepted any numbered run would read an
+// answer as a dialog and start pressing keys into a live conversation.
+const PICKER_HEAD_RE = /^\s*Select model\s*$/;
+const PICKER_ROW_RE = /^(\s*)([❯>]?)\s*(\d{1,2})[.)]\s+(\S.*)$/;
+const CHECK_RE = /[✔✓]/;
+
+/**
+ * Read the `/model` picker off a captured pane.
+ *
+ * @returns {Array<{n:number,label:string,family:string|null,current:boolean,cursor:boolean}>|null}
+ *          null when this pane is not showing the picker.
+ *
+ *   n        the row's printed number — for counting cursor moves, nothing else
+ *   label    the row's name column ("Opus (1M context)"), check mark removed
+ *   family   fable|opus|sonnet|haiku from the label's first word, or null for
+ *            rows like "Default (recommended)" that name no model of their own
+ *   current  the ✔ row: the model this SESSION is on right now
+ *   cursor   the ❯ row: where the selector's highlight sits
+ */
+function parseModelPicker(lines) {
+  const arr = Array.isArray(lines) ? lines : String(lines || '').split('\n');
+  const plain = arr.map((l) => stripAnsi(String(l)).replace(/\s+$/, ''));
+  let head = -1;
+  for (let i = plain.length - 1; i >= 0; i--) {
+    if (PICKER_HEAD_RE.test(plain[i])) { head = i; break; }
+  }
+  if (head < 0) return null;
+
+  const rows = [];
+  for (let i = head + 1; i < plain.length; i++) {
+    const m = PICKER_ROW_RE.exec(plain[i]);
+    if (!m) {
+      if (rows.length) break;          // the run has ended: effort line, footer
+      if (plain[i].trim() && rows.length === 0 && /^\s*\S/.test(plain[i])) continue; // the blurb
+      continue;
+    }
+    // The name column is separated from the description by a run of spaces.
+    const cells = m[4].split(/\s{2,}/);
+    const nameCell = (cells[0] || '').trim();
+    rows.push({
+      n: Number(m[3]),
+      label: nameCell.replace(CHECK_RE, '').trim(),
+      family: familyOf(nameCell.replace(CHECK_RE, '').trim()),
+      current: CHECK_RE.test(nameCell),
+      cursor: m[2] === '❯' || m[2] === '>',
+    });
+  }
+  // Numbered from 1 and contiguous, or this is not the picker — the same
+  // strictness detectPrompt uses, for the same reason.
+  if (rows.length < 2) return null;
+  for (let i = 0; i < rows.length; i++) if (rows[i].n !== i + 1) return null;
+  return rows;
+}
+
 /**
  * The keystrokes that move a multi-select dialog from its CURRENT state to the
  * DESIRED one: a digit per option whose state must flip (digits toggle,
@@ -604,6 +674,7 @@ function loginPaneState(lines) {
 
 module.exports = {
   screenHash, stripAnsi, previewLines, detectPrompt, promptFingerprint, multiToggleDigits,
+  parseModelPicker,
   parseSpinner, parseStatusExtras, spinnerIsCompacting,
   extractLoginUrl, parseStatusLine, loginPaneState,
 };

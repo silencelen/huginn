@@ -39,6 +39,26 @@ function parseModelId(id) {
   return { family, version: parts, suffix: m[3] ? m[3].slice(1) : '' };
 }
 
+/**
+ * The FAMILY behind an id or a menu label — `claude-opus-5`, `opus`,
+ * `Opus (1M context)` and `Sonnet \u2714` all answer.
+ *
+ * Labels are read by their FIRST WORD and never by the description beside them.
+ * The `/model` picker draws `Default (recommended)  Opus 5 with 1M context …`,
+ * and reading the family off that description would make "move this session to
+ * opus" land on the Default row — which is not a model, it is a pointer to
+ * whatever the host default happens to be that day.
+ */
+function familyOf(model) {
+  if (typeof model !== 'string') return null;
+  const s = model.trim();
+  if (!s) return null;
+  const p = parseModelId(s);
+  if (p) return p.family;
+  const word = (s.split(/[\s(\u00B7]/)[0] || '').toLowerCase().replace(/[^a-z]/g, '');
+  return FAMILIES.includes(word) ? word : null;
+}
+
 /** `claude-opus-4-8` -> `Opus 4.8`. A display name is passed through unchanged. */
 function formatModel(model) {
   if (typeof model !== 'string' || !model.trim()) return null;
@@ -121,4 +141,4 @@ function discoverModels(binPath, timeoutMs = 60_000) {
   });
 }
 
-module.exports = { parseModelId, formatModel, selectModels, aliasModels, discoverModels, compareVersions };
+module.exports = { parseModelId, familyOf, formatModel, selectModels, aliasModels, discoverModels, compareVersions };

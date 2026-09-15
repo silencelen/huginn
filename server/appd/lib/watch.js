@@ -13,8 +13,12 @@ const { createHash } = require('node:crypto');
 /**
  * @param sessions from listSessions()
  * @param chats    from listChats()
+ * @param headroom the few headroom facts an alert turns on (huginn-appd's
+ *        headroomFacts()): {mode, stalled:[names], lastResumeAt, lastLadderAt,
+ *        sentinels:[names]}. Optional — an older caller passing two arguments
+ *        gets the same hash it always did for an idle headroom.
  */
-function digest(sessions, chats) {
+function digest(sessions, chats, headroom) {
   const s = {};
   for (const x of sessions || []) s[x.name] = x.state ?? null;
   const c = {};
@@ -37,6 +41,25 @@ function digest(sessions, chats) {
       createdAt: Number(x.createdAt) || 0,
     };
   }
+  // Headroom, which IS a change signal: a limit arming a sentinel, a session
+  // stalling on a 429, a resume landing and a model ladder moving are all things
+  // the phone is meant to hear about while the app is closed. Mode is in because
+  // crossing into `red` is what turns the pill and the notification on.
+  //
+  // ⚠ THIS FUNCTION REBUILDS FROM AN EXPLICIT FIELD LIST. Anything not named
+  // here evaporates silently — that is how `snippet` reached the alert code as
+  // null every time, and how a headroom fact added upstream would never wake a
+  // phone. Add the field in BOTH places: the object below and the `h:` tuple.
+  const hr = headroom && typeof headroom === 'object' ? headroom : {};
+  const h = {
+    mode: typeof hr.mode === 'string' ? hr.mode : 'ok',
+    stalled: Array.isArray(hr.stalled) ? [...hr.stalled].map(String).sort() : [],
+    lastResumeAt: Number.isFinite(Number(hr.lastResumeAt)) && hr.lastResumeAt !== null
+      ? Number(hr.lastResumeAt) : null,
+    lastLadderAt: Number(hr.lastLadderAt) || 0,
+    sentinels: Array.isArray(hr.sentinels) ? [...hr.sentinels].map(String).sort() : [],
+  };
+
   // Sorted keys so the hash depends on the values, not on directory order.
   //
   // Note which fields are IN the hash and which are only carried: the hash is a
@@ -47,11 +70,13 @@ function digest(sessions, chats) {
   const stable = JSON.stringify({
     s: Object.keys(s).sort().map((k) => [k, s[k]]),
     c: Object.keys(c).sort().map((k) => [k, c[k].running, c[k].pending, c[k].finishedRuns]),
+    h: [h.mode, h.stalled, h.lastResumeAt, h.lastLadderAt, h.sentinels],
   });
   return {
     hash: createHash('sha1').update(stable).digest('hex').slice(0, 16),
     sessions: s,
     chats: c,
+    headroom: h,
   };
 }
 
