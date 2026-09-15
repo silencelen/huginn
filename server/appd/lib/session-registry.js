@@ -54,6 +54,14 @@ function mergeLive(registry, live, now) {
       createdAt: (prev && prev.createdAt) || s.createdAt || now,
       claudeSessionId: s.claudeSessionId || (prev && prev.claudeSessionId) || null,
       cwd: s.cwd || (prev && prev.cwd) || null,
+      // When APPD last recreated this session (a reboot restore), or null for
+      // one that has simply been running. Carried through the merge because
+      // this function rebuilds an entry from an explicit field list and anything
+      // not named here evaporates on the next reconcile — which for this field
+      // would silently turn "restored, so the CLI's usage-limit wait died with
+      // the old process" back into "armed", and auto-resume would then wait 90
+      // seconds for a continuation nobody is going to send.
+      restoredAt: (prev && prev.restoredAt) || null,
       updatedAt: now,
     };
   }
