@@ -76,7 +76,27 @@ object WatchNotifier {
         // Nothing has ever been observed, so there is no transition to speak of —
         // only a list of things that were already true. Announcing those would mean
         // switching the feature on produces a burst of notifications about the past.
-        if (!settings.watchSeeded.first()) {
+        val seeded = settings.watchSeeded.first()
+
+        // Decided before the seeding shortcut returns, so the FIRST look records
+        // what is already stalled and laddered instead of announcing it. Its
+        // `next` baseline is written on both paths for the same reason.
+        val headroom = HeadroomNotices.plan(
+            previous = HeadroomNotices.Baseline(
+                stalled = settings.stalledSessions.first(),
+                laddered = settings.ladderedSessions.first(),
+            ),
+            watch = watch,
+            seeded = seeded,
+            // Withheld when it would describe the very screen the reader has
+            // open, exactly as an attention notice is — and consumed rather than
+            // deferred, since the baseline below advances either way.
+            focused = HeadroomNotices.focusedSession(),
+        )
+        settings.setStalledSessions(headroom.next.stalled)
+        settings.setLadderedSessions(headroom.next.laddered)
+
+        if (!seeded) {
             settings.setNotifiedSessions(needing)
             settings.setRunningChats(running)
             settings.setChatRuns(runsNow)
@@ -85,6 +105,29 @@ object WatchNotifier {
         }
 
         var posted = 0
+
+        // Headroom first: a session that stopped being stalled must have its
+        // "hit the limit" taken down before anything else claims that slot.
+        for (w in headroom.withdraw) {
+            runCatching {
+                NotificationManagerCompat.from(context).cancel(SessionWatchWorker.notificationIdFor(w.key))
+            }
+        }
+        for (n in headroom.notices) {
+            val a = HeadroomNotices.postArgs(n)
+            SessionWatchWorker.post(
+                context,
+                a.title,
+                a.text,
+                a.session,
+                replyChat = a.replyChat,
+                fingerprint = a.fingerprint,
+                actions = a.actions,
+                key = a.key,
+                isResult = a.isResult,
+            )
+            posted++
+        }
 
         val previouslyNeeding = settings.notifiedSessions.first()
 
