@@ -1,15 +1,14 @@
 package com.silencelen.huginn.desktop.ui
 
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.verticalScroll
 import com.silencelen.huginn.desktop.device.LockProbe
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
@@ -43,6 +42,7 @@ import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import com.silencelen.huginn.data.Account
 import com.silencelen.huginn.data.AppdRoutes
@@ -50,6 +50,7 @@ import com.silencelen.huginn.data.Autoswitch
 import com.silencelen.huginn.data.SavedAccount
 import com.silencelen.huginn.desktop.AppStore
 import com.silencelen.huginn.desktop.DesktopSettings
+import com.silencelen.huginn.desktop.ui.common.ReadingPane
 import com.silencelen.huginn.desktop.CliSync
 import com.silencelen.huginn.desktop.LocalServe
 import com.silencelen.huginn.desktop.diag.AppLog
@@ -86,11 +87,13 @@ fun SettingsView(store: AppStore) {
     var token by remember { mutableStateOf(settings.tokenNow()) }
     var message by remember { mutableStateOf<String?>(null) }
 
-    Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(24.dp)) {
+    // A reading pane: capped to a measure, centred, and with a scrollbar — this is
+    // the pane whose content most often runs off the bottom with nothing saying so.
+    ReadingPane(padding = PaddingValues(24.dp)) {
         Text("Settings", style = MaterialTheme.typography.titleMedium)
 
         SectionHeader("Server")
-        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        FieldAndButtonRow(top = 0.dp) {
             OutlinedTextField(
                 value = url,
                 onValueChange = { url = it },
@@ -416,7 +419,9 @@ private fun AccountsSection(store: AppStore) {
 
     saved.forEach { a ->
         Row(
-            Modifier.fillMaxWidth().widthIn(max = 760.dp).padding(top = 8.dp),
+            // Cap before fill — the other order hands this row fixed constraints
+            // and the 760 can only coerce into them. Measured at 1338px.
+            Modifier.widthIn(max = 760.dp).fillMaxWidth().padding(top = 8.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             // A dot, not a row tint or an accent bar: "active" is one bit and it
@@ -515,11 +520,12 @@ private fun AccountsSection(store: AppStore) {
 
     val pendingUrl = loginUrl
     if (pendingUrl == null) {
-        Row(
-            Modifier.padding(top = 6.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
+        // ⚠ WRAPS RATHER THAN CRUSHES. A `[TextField, Button]` Row gives the field
+        // its 280dp minimum first and hands the button whatever is left — which at
+        // 420dp of window is nothing, so "Add login" rendered as a 32px-wide yellow
+        // stripe with one letter per line. A FlowRow puts the button on its own
+        // line instead, which is the only shape where both controls still work.
+        FieldAndButtonRow {
             OutlinedTextField(
                 value = loginEmail,
                 onValueChange = { loginEmail = it },
@@ -559,11 +565,7 @@ private fun AccountsSection(store: AppStore) {
             maxLines = 2,
         )
     } else {
-        Row(
-            Modifier.padding(top = 6.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
+        FieldAndButtonRow {
             OutlinedTextField(
                 value = loginCode,
                 onValueChange = { loginCode = it },
@@ -1159,3 +1161,41 @@ private fun SectionHeader(text: String) {
         modifier = Modifier.padding(top = 24.dp, bottom = 6.dp),
     )
 }
+
+/**
+ * A text field with its verb beside it — and, when there is no room beside it,
+ * underneath it.
+ *
+ * ⚠ THE ROW THAT CANNOT SHRINK IS THE ONE THAT BREAKS. Every one of these pairs
+ * is a field with a `widthIn(min = 280.dp)` next to a Button, and a Row measures
+ * the field first: at 420dp of window the field takes its minimum and the button
+ * is handed the remainder, which is nothing. It does not disappear — it renders
+ * as a 32px-wide stripe with one letter per line, which reads as a rendering bug
+ * rather than as a window that is too narrow. "Add login" did exactly that.
+ *
+ * So the row becomes a COLUMN under the width where both fit, rather than trying
+ * to squeeze two controls into the space for one. Explicitly, with a measured
+ * threshold, rather than by handing the problem to a flow layout: the two
+ * controls here are always a field and its verb, and "which line is the verb on"
+ * should be a decision this file makes rather than a consequence of measurement.
+ */
+@Composable
+private fun FieldAndButtonRow(top: Dp = 6.dp, content: @Composable () -> Unit) {
+    BoxWithConstraints(Modifier.padding(top = top)) {
+        if (maxWidth < FIELD_ROW_STACK_BELOW) {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) { content() }
+        } else {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) { content() }
+        }
+    }
+}
+
+/**
+ * Where a field and its button stop fitting on one line: the field's own 280dp
+ * minimum, the 8dp gap, and the widest verb in this pane ("Submit code"), with
+ * enough left that the button is a button rather than a sliver.
+ */
+private val FIELD_ROW_STACK_BELOW = 420.dp

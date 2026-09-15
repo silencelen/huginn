@@ -16,6 +16,7 @@ import androidx.compose.foundation.interaction.collectIsHoveredAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxScope
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -32,7 +33,6 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.wrapContentWidth
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Chat
 import androidx.compose.material.icons.outlined.ChevronLeft
@@ -47,6 +47,7 @@ import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -64,7 +65,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.pointer.PointerIcon
 import androidx.compose.ui.input.pointer.pointerHoverIcon
@@ -76,6 +76,7 @@ import com.silencelen.huginn.data.Round
 import com.silencelen.huginn.data.Scratchpad
 import com.silencelen.huginn.data.Session
 import com.silencelen.huginn.desktop.AppStore
+import com.silencelen.huginn.desktop.Responsive
 import com.silencelen.huginn.desktop.Splitter
 import com.silencelen.huginn.desktop.View
 import com.silencelen.huginn.desktop.ui.common.ChatVerbs
@@ -219,16 +220,6 @@ fun Shell(store: AppStore) {
     // the window's key handler has to ask the same question — see its KDoc.
     val showsList = Splitter.showsList(view)
 
-    // THE FRACTION, not the width. Animating `listWidth` itself would put a 150ms
-    // lag on every frame of a DRAG — the seam would trail the pointer like wet
-    // paint. This is 1 while the pane is open and 0 while it is shut, so a drag
-    // moves the pane instantly and only the collapse is animated.
-    val openFraction by animateFloatAsState(
-        targetValue = if (listCollapsed) 0f else 1f,
-        animationSpec = tween(durationMillis = 150),
-        label = "list pane",
-    )
-
     // The rail and the footer count MACHINES, not credentials: a box serving
     // local AI beside its claude enrolment is one device to the person reading
     // a badge, exactly as it is one card in the list. Rows still exist under
@@ -236,347 +227,396 @@ fun Shell(store: AppStore) {
     val machines = groupByMachine(devices)
 
     WithHuginnMenus {
-        Column(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
-            Row(Modifier.fillMaxWidth().weight(1f)) {
-                NavRail(
-                    current = view,
-                    chats = chats.size,
-                    chatsRunning = chats.count { it.running },
-                    sessions = sessions.size,
-                    sessionsWaiting = sessions.count { it.state == "attention" },
-                    rounds = rounds.size,
-                    roundsWanting = rounds.count { it.lastRun?.status == "action" },
-                    roundsRunning = rounds.count { it.running },
-                    devices = machines.size,
-                    devicesOnline = machines.count { it.online },
-                    devicesBusy = machines.count { g -> g.rows.any { it.running } },
-                    pads = if (padsAvailable == true) pads else null,
-                    // The 5-hour session window, under the Status icon. Computed
-                    // here because this is where both halves already are; the rail
-                    // draws whatever it is handed and nothing when that is null.
-                    sessionUsage = SessionUsageFill.of(headroom, statusHeadroomOf(headroom) ?: status?.headroom),
-                    onSelect = { store.openView(it) },
-                )
-                VerticalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+        // ⚠⚠ THE FRAME HAD NO IDEA HOW WIDE IT WAS, which is the root under most
+        // of what the 2026-09-15 design audit found. Rail | list | detail were laid
+        // out from persisted numbers alone, so a window snapped to half a screen
+        // gave 320dp of its 420 to the list and left the detail pane FORTY dp: one
+        // letter per line down the whole window, a clipped tab strip with Overview
+        // unreachable, and a composer text field measured at 35px between two
+        // buttons that would not yield. Ctrl+B made it all usable — the app simply
+        // never did it itself.
+        //
+        // One BoxWithConstraints, at the root, asking the question the phone has
+        // asked since the Fold shipped. The arithmetic is [Responsive], kept out of
+        // the composition and asserted, because a frame that is wrong does not
+        // throw — it draws, and it looks deliberate.
+        BoxWithConstraints(Modifier.fillMaxSize()) {
+            val frameWidth = maxWidth
+            val compact = Responsive.compact(frameWidth.value)
 
-                if (showsList) {
-                    // TWO BOXES, and the inner one is the reason it slides rather
-                    // than squashes. The outer is what the Row measures, so it is
-                    // what narrows to nothing; the inner holds the list at its real
-                    // width throughout and the clip eats the difference.
-                    //
-                    // ⚠⚠ `requiredWidth`, NEVER `width`, AND IT SHIPPED WRONG ONCE.
-                    // `Modifier.width` is a PREFERENCE: it is coerced into whatever
-                    // constraints arrive, so an inner box asking for 320dp inside an
-                    // outer that has animated down to 90 measures 90 — and the whole
-                    // list re-lays-out on every frame of the slide. The list header's
-                    // "+ Ask" stacked vertically and every title re-truncated, sixty
-                    // times a second, to say "gone". `requiredWidth` ignores the
-                    // incoming constraints, which is exactly what a thing being
-                    // clipped rather than resized needs. It is the same trap the
-                    // notch below documents and solves with `requiredSize`.
-                    //
-                    // ⚠⚠ AND THE FIX FOR THAT ONE BROUGHT ITS OWN, WHICH ALIGNMENT
-                    // CANNOT REACH. A `requiredWidth` child VIOLATES its parent's
-                    // max width, and Compose does not simply let the overflow hang
-                    // off the end: `Placeable` coerces the reported width back into
-                    // the constraints and then places the real content at
-                    // `apparentToRealOffset` — `(coerced - measured) / 2` — so an
-                    // oversized child is silently CENTRED. The measured shift was
-                    // exactly `(320 - W) / 2` at every width. `contentAlignment`
-                    // does not help and reading it as the pin is the mistake: it
-                    // only chooses between positions the constraints can satisfy,
-                    // and this child's size is not one of them. So the pane ate its
-                    // names FIRST — "…ons 2", "…ress Huginn development notes" —
-                    // which is the opposite of the intent.
-                    //
-                    // `wrapContentWidth(Start, unbounded = true)` is the mechanism
-                    // that actually pins it: measure the child with NO width bound
-                    // (so nothing is violated and nothing re-wraps), report the
-                    // parent's width (so nothing is centred), and place the child's
-                    // start edge at zero. The overflow then hangs off the end where
-                    // the outer box's clip eats it, and the pane closes toward the
-                    // RAIL with the names — the left-hand column of every list here
-                    // — the last thing to go.
-                    Box(
-                        Modifier.width((listWidth * openFraction).dp).fillMaxHeight()
-                            .clipToBounds(),
-                    ) {
+            // Back OUT of the composition, because the window's key handler binds
+            // Ctrl+B and the page panel measures its own fit, and neither of those
+            // is a composable. One number, three readers.
+            LaunchedEffect(frameWidth) { store.noteFrameWidth(frameWidth.value) }
+
+            // The pane FOLDS rather than being told to stay shut: nothing is
+            // written, so widening the window hands the remembered answer straight
+            // back — and the notch still works meanwhile. See [AppStore.toggleList].
+            val listRevealed by store.listRevealed.collectAsState()
+            val listShut = Responsive.listCollapsed(listCollapsed, compact, listRevealed)
+
+            // And the seam gets a ceiling expressed in the WINDOW rather than in the
+            // pane. Splitter's own bounds are a readability decision and bound what
+            // a person DRAGS; neither has any idea how big the window is.
+            val paneWidth = Responsive.listWidth(listWidth, frameWidth.value)
+
+            // THE FRACTION, not the width. Animating the width itself would put a
+            // 150ms lag on every frame of a DRAG — the seam would trail the pointer
+            // like wet paint. This is 1 while the pane is open and 0 while it is
+            // shut, so a drag moves the pane instantly and only the collapse is
+            // animated. It reads [listShut] rather than the persisted flag, which
+            // is what makes the auto-fold SLIDE shut exactly like a pressed notch
+            // instead of the pane vanishing between two frames of a window drag.
+            val openFraction by animateFloatAsState(
+                targetValue = if (listShut) 0f else 1f,
+                animationSpec = tween(durationMillis = 150),
+                label = "list pane",
+            )
+            Column(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
+                Row(Modifier.fillMaxWidth().weight(1f)) {
+                    NavRail(
+                        current = view,
+                        chats = chats.size,
+                        chatsRunning = chats.count { it.running },
+                        sessions = sessions.size,
+                        sessionsWaiting = sessions.count { it.state == "attention" },
+                        rounds = rounds.size,
+                        roundsWanting = rounds.count { it.lastRun?.status == "action" },
+                        roundsRunning = rounds.count { it.running },
+                        devices = machines.size,
+                        devicesOnline = machines.count { it.online },
+                        devicesBusy = machines.count { g -> g.rows.any { it.running } },
+                        pads = if (padsAvailable == true) pads else null,
+                        // The 5-hour session window, under the Status icon. Computed
+                        // here because this is where both halves already are; the rail
+                        // draws whatever it is handed and nothing when that is null.
+                        sessionUsage = SessionUsageFill.of(headroom, statusHeadroomOf(headroom) ?: status?.headroom),
+                        onSelect = { store.openView(it) },
+                    )
+                    VerticalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+
+                    if (showsList) {
+                        // TWO BOXES, and the inner one is the reason it slides rather
+                        // than squashes. The outer is what the Row measures, so it is
+                        // what narrows to nothing; the inner holds the list at its real
+                        // width throughout and the clip eats the difference.
+                        //
+                        // ⚠⚠ `requiredWidth`, NEVER `width`, AND IT SHIPPED WRONG ONCE.
+                        // `Modifier.width` is a PREFERENCE: it is coerced into whatever
+                        // constraints arrive, so an inner box asking for 320dp inside an
+                        // outer that has animated down to 90 measures 90 — and the whole
+                        // list re-lays-out on every frame of the slide. The list header's
+                        // "+ Ask" stacked vertically and every title re-truncated, sixty
+                        // times a second, to say "gone". `requiredWidth` ignores the
+                        // incoming constraints, which is exactly what a thing being
+                        // clipped rather than resized needs. It is the same trap the
+                        // notch below documents and solves with `requiredSize`.
+                        //
+                        // ⚠⚠ AND THE FIX FOR THAT ONE BROUGHT ITS OWN, WHICH ALIGNMENT
+                        // CANNOT REACH. A `requiredWidth` child VIOLATES its parent's
+                        // max width, and Compose does not simply let the overflow hang
+                        // off the end: `Placeable` coerces the reported width back into
+                        // the constraints and then places the real content at
+                        // `apparentToRealOffset` — `(coerced - measured) / 2` — so an
+                        // oversized child is silently CENTRED. The measured shift was
+                        // exactly `(320 - W) / 2` at every width. `contentAlignment`
+                        // does not help and reading it as the pin is the mistake: it
+                        // only chooses between positions the constraints can satisfy,
+                        // and this child's size is not one of them. So the pane ate its
+                        // names FIRST — "…ons 2", "…ress Huginn development notes" —
+                        // which is the opposite of the intent.
+                        //
+                        // `wrapContentWidth(Start, unbounded = true)` is the mechanism
+                        // that actually pins it: measure the child with NO width bound
+                        // (so nothing is violated and nothing re-wraps), report the
+                        // parent's width (so nothing is centred), and place the child's
+                        // start edge at zero. The overflow then hangs off the end where
+                        // the outer box's clip eats it, and the pane closes toward the
+                        // RAIL with the names — the left-hand column of every list here
+                        // — the last thing to go.
                         Box(
-                            Modifier
-                                .wrapContentWidth(align = Alignment.Start, unbounded = true)
-                                .requiredWidth(listWidth.dp)
-                                .fillMaxHeight(),
+                            Modifier.width((paneWidth * openFraction).dp).fillMaxHeight()
+                                .clipToBounds(),
                         ) {
-                            when (view) {
-                                View.CHATS -> Column(Modifier.fillMaxSize()) {
-                                    // First-launch offer, once and dismissible: the
-                                    // machine may be able to SERVE, and the only
-                                    // door was a Settings section nobody is told
-                                    // about. Gone forever on either button, and
-                                    // never shown once anything already serves.
-                                    val offerSeen by store.settings.localOfferSeen.collectAsState(initial = true)
-                                    if (!offerSeen && devices.none { it.scope == "generate" }) {
-                                        Surface(
-                                            color = MaterialTheme.colorScheme.surfaceVariant,
-                                            modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 6.dp),
-                                        ) {
-                                            Column(Modifier.padding(12.dp)) {
-                                                Text("Serve local AI from this PC", style = MaterialTheme.typography.labelLarge)
-                                                Text(
-                                                    "This machine may be able to run small AI models and offer them " +
-                                                        "in huginn's chat menus — private, on your own hardware. " +
-                                                        "Setting up shows the exact plan before anything downloads.",
-                                                    style = MaterialTheme.typography.bodySmall,
-                                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                                )
-                                                Row(
-                                                    horizontalArrangement = Arrangement.End,
-                                                    modifier = Modifier.fillMaxWidth(),
-                                                ) {
-                                                    TextButton(onClick = {
-                                                        act { store.settings.setLocalOfferSeen() }
-                                                        store.openView(View.SETTINGS)
-                                                    }) { Text("Set up") }
-                                                    TextButton(onClick = {
-                                                        act { store.settings.setLocalOfferSeen() }
-                                                    }) { Text("Not now") }
+                            Box(
+                                Modifier
+                                    .wrapContentWidth(align = Alignment.Start, unbounded = true)
+                                    .requiredWidth(paneWidth.dp)
+                                    .fillMaxHeight(),
+                            ) {
+                                when (view) {
+                                    View.CHATS -> Column(Modifier.fillMaxSize()) {
+                                        // First-launch offer, once and dismissible: the
+                                        // machine may be able to SERVE, and the only
+                                        // door was a Settings section nobody is told
+                                        // about. Gone forever on either button, and
+                                        // never shown once anything already serves.
+                                        val offerSeen by store.settings.localOfferSeen.collectAsState(initial = true)
+                                        if (!offerSeen && devices.none { it.scope == "generate" }) {
+                                            Surface(
+                                                color = MaterialTheme.colorScheme.surfaceVariant,
+                                                modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 6.dp),
+                                            ) {
+                                                Column(Modifier.padding(12.dp)) {
+                                                    Text("Serve local AI from this PC", style = MaterialTheme.typography.labelLarge)
+                                                    Text(
+                                                        "This machine may be able to run small AI models and offer them " +
+                                                            "in huginn's chat menus — private, on your own hardware. " +
+                                                            "Setting up shows the exact plan before anything downloads.",
+                                                        style = MaterialTheme.typography.bodySmall,
+                                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                                    )
+                                                    Row(
+                                                        horizontalArrangement = Arrangement.End,
+                                                        modifier = Modifier.fillMaxWidth(),
+                                                    ) {
+                                                        TextButton(onClick = {
+                                                            act { store.settings.setLocalOfferSeen() }
+                                                            store.openView(View.SETTINGS)
+                                                        }) { Text("Set up") }
+                                                        TextButton(onClick = {
+                                                            act { store.settings.setLocalOfferSeen() }
+                                                        }) { Text("Not now") }
+                                                    }
                                                 }
                                             }
                                         }
+                                        Box(Modifier.weight(1f)) {
+                                            ChatsList(
+                                                chats = chats,
+                                                loaded = loaded,
+                                                activeId = chatId,
+                                                selection = chatSel,
+                                                onSelect = { chatSel = it },
+                                                onOpen = { store.openChat(it) },
+                                                onNew = { mode ->
+                                                    act {
+                                                        val made = store.client.createChat(mode)
+                                                        store.openChat(made.id)
+                                                        store.refreshChats()
+                                                    }
+                                                },
+                                                onNewLocal = if (devices.any { it.scope == "generate" && it.online }) {
+                                                    { act { store.startLocalChat() } }
+                                                } else {
+                                                    null
+                                                },
+                                                verbs = chatVerbs,
+                                            )
+                                        }
                                     }
-                                    Box(Modifier.weight(1f)) {
-                                        ChatsList(
-                                            chats = chats,
-                                            loaded = loaded,
-                                            activeId = chatId,
-                                            selection = chatSel,
-                                            onSelect = { chatSel = it },
-                                            onOpen = { store.openChat(it) },
-                                            onNew = { mode ->
-                                                act {
-                                                    val made = store.client.createChat(mode)
-                                                    store.openChat(made.id)
-                                                    store.refreshChats()
-                                                }
-                                            },
-                                            onNewLocal = if (devices.any { it.scope == "generate" && it.online }) {
-                                                { act { store.startLocalChat() } }
-                                            } else {
-                                                null
-                                            },
-                                            verbs = chatVerbs,
-                                        )
-                                    }
+                                    View.SCRATCHPADS -> ScratchpadsList(store)
+                                    View.SESSIONS -> SessionsList(
+                                        sessions = sessions,
+                                        loaded = sessionsLoaded,
+                                        activeName = sessionName,
+                                        selection = sessionSel,
+                                        onSelect = { sessionSel = it },
+                                        onOpen = { store.openSession(it) },
+                                        onNew = { namingSession = true },
+                                        verbs = sessionVerbs,
+                                    )
+                                    else -> Unit
                                 }
-                                View.SCRATCHPADS -> ScratchpadsList(store)
-                                View.SESSIONS -> SessionsList(
-                                    sessions = sessions,
-                                    loaded = sessionsLoaded,
-                                    activeName = sessionName,
-                                    selection = sessionSel,
-                                    onSelect = { sessionSel = it },
-                                    onOpen = { store.openSession(it) },
-                                    onNew = { namingSession = true },
-                                    verbs = sessionVerbs,
-                                )
-                                else -> Unit
                             }
+                        }
+                        Seam(
+                            collapsed = listShut,
+                            onDrag = { store.settings.nudgeListWidth(it) },
+                            // A reset on a SHUT seam has to include being on screen at
+                            // all: "put it back the way it was meant to be" cannot
+                            // sanely mean resizing something nobody can see. Expanding
+                            // and resetting together is the only reading of a
+                            // double-click here that leaves anything to look at.
+                            onReset = {
+                                store.revealList()
+                                store.settings.resetListWidth()
+                            },
+                            // ONE verb with the window's key handler, which is the
+                            // only way the notch and Ctrl+B can keep meaning the
+                            // same thing on a narrow window.
+                            onToggle = { store.toggleList() },
+                        )
+                    }
+
+                    Column(Modifier.fillMaxSize()) {
+                        when (view) {
+                            View.CHATS -> {
+                                val open = chatId
+                                if (open != null) {
+                                    ChatView(store.client, open)
+                                } else {
+                                    // The copy knows whether the list it points at is
+                                    // on screen — see [noChatOpenCopy].
+                                    val copy = noChatOpenCopy(listShut)
+                                    NothingOpen("No chat open", copy.sentence, copy.routes)
+                                }
+                            }
+
+                            View.SESSIONS -> {
+                                // Hoisted rather than `sessionName!!`: a `by`-delegated
+                                // value is not smart-cast across the read, and `!!` on
+                                // the owner's daily driver is a crash waiting for a race.
+                                val open = sessionName
+                                if (open != null) {
+                                    SessionView(store, open)
+                                } else {
+                                    val copy = noSessionOpenCopy(listShut)
+                                    NothingOpen("No session open", copy.sentence, copy.routes)
+                                }
+                            }
+
+                            View.SCRATCHPADS -> ScratchpadsDetail(store)
+
+                            // Full width, like Status: a Round row already carries its
+                            // report, so there is no detail half to split off.
+                            View.ROUNDS -> RoundsPane(store)
+                            View.DEVICES -> DevicesPane(store)
+
+                            View.STATUS -> StatusView(status, plan, usage, route, watchConnected)
+                            // The whole store: Settings now owns accounts, the update
+                            // state and the diagnostics report, and each of those needs
+                            // a different corner of it.
+                            View.SETTINGS -> SettingsView(store)
                         }
                     }
-                    Seam(
-                        collapsed = listCollapsed,
-                        onDrag = { store.settings.nudgeListWidth(it) },
-                        // A reset on a SHUT seam has to include being on screen at
-                        // all: "put it back the way it was meant to be" cannot
-                        // sanely mean resizing something nobody can see. Expanding
-                        // and resetting together is the only reading of a
-                        // double-click here that leaves anything to look at.
-                        onReset = {
-                            store.settings.setListCollapsed(false)
-                            store.settings.resetListWidth()
-                        },
-                        onToggle = { store.settings.toggleListCollapsed() },
-                    )
                 }
 
-                Column(Modifier.fillMaxSize()) {
-                    when (view) {
-                        View.CHATS -> {
-                            val open = chatId
-                            if (open != null) {
-                                ChatView(store.client, open)
-                            } else {
-                                // The copy knows whether the list it points at is
-                                // on screen — see [noChatOpenCopy].
-                                val copy = noChatOpenCopy(listCollapsed)
-                                NothingOpen("No chat open", copy.sentence, copy.routes)
-                            }
-                        }
-
-                        View.SESSIONS -> {
-                            // Hoisted rather than `sessionName!!`: a `by`-delegated
-                            // value is not smart-cast across the read, and `!!` on
-                            // the owner's daily driver is a crash waiting for a race.
-                            val open = sessionName
-                            if (open != null) {
-                                SessionView(store, open)
-                            } else {
-                                val copy = noSessionOpenCopy(listCollapsed)
-                                NothingOpen("No session open", copy.sentence, copy.routes)
-                            }
-                        }
-
-                        View.SCRATCHPADS -> ScratchpadsDetail(store)
-
-                        // Full width, like Status: a Round row already carries its
-                        // report, so there is no detail half to split off.
-                        View.ROUNDS -> RoundsPane(store)
-                        View.DEVICES -> DevicesPane(store)
-
-                        View.STATUS -> StatusView(status, plan, usage, route, watchConnected)
-                        // The whole store: Settings now owns accounts, the update
-                        // state and the diagnostics report, and each of those needs
-                        // a different corner of it.
-                        View.SETTINGS -> SettingsView(store)
-                    }
-                }
+                StatusLine(
+                    view = view,
+                    route = route,
+                    // The full answer FIRST: it is polled everywhere, and `/v1/status`
+                    // is only read while the Status pane is open — so on every other
+                    // pane the summary riding it is as old as the last visit there.
+                    headroom = statusHeadroomOf(headroom) ?: status?.headroom,
+                    watchConnected = watchConnected,
+                    notifyEnabled = notifyEnabled,
+                    chats = chats,
+                    sessions = sessions,
+                    rounds = rounds,
+                    devices = devices,
+                    pads = pads,
+                    selected = if (view == View.SESSIONS) sessionSel.size else chatSel.size,
+                    error = error,
+                    onDismissError = { store.clearError() },
+                    onOpenSession = { store.openSession(it) },
+                    onOpenStatus = { store.openView(View.STATUS) },
+                    onClearSelection = { if (view == View.SESSIONS) sessionSel = Selection() else chatSel = Selection() },
+                )
             }
 
-            StatusLine(
-                view = view,
-                route = route,
-                // The full answer FIRST: it is polled everywhere, and `/v1/status`
-                // is only read while the Status pane is open — so on every other
-                // pane the summary riding it is as old as the last visit there.
-                headroom = statusHeadroomOf(headroom) ?: status?.headroom,
-                watchConnected = watchConnected,
-                notifyEnabled = notifyEnabled,
-                chats = chats,
-                sessions = sessions,
-                rounds = rounds,
-                devices = devices,
-                pads = pads,
-                selected = if (view == View.SESSIONS) sessionSel.size else chatSel.size,
-                error = error,
-                onDismissError = { store.clearError() },
-                onOpenSession = { store.openSession(it) },
-                onOpenStatus = { store.openView(View.STATUS) },
-                onClearSelection = { if (view == View.SESSIONS) sessionSel = Selection() else chatSel = Selection() },
-            )
-        }
-
-        if (namingSession) {
-            NewSessionDialog(
-                taken = sessions.map { it.name }.toSet(),
-                onDismiss = { namingSession = false },
-                onConfirm = { name ->
-                    namingSession = false
-                    act {
-                        // Open what tmux CALLED it. The host reads the name back
-                        // rather than echoing the request, because tmux rewrites
-                        // a '.' to '_' and still succeeds — opening the requested
-                        // name would 404 on everything after it.
-                        val made = store.client.createSession(name)
-                        store.refreshSessions()
-                        store.openSession(made)
-                    }
-                },
-            )
-        }
-
-        renaming?.let { target ->
-            RenameDialog(
-                target = target,
-                onDismiss = { renaming = null },
-                onConfirm = { next ->
-                    renaming = null
-                    when (target) {
-                        is RenameTarget.OfChat -> act {
-                            store.client.renameChat(target.id, next)
-                            store.refreshChats()
-                        }
-                        is RenameTarget.OfSession -> act {
-                            store.client.renameSession(target.id, next)
-                            // MOVED, not dropped. A session's draft is keyed by
-                            // name, so a rename orphans it under a key nothing
-                            // will ever read again — and half a typed instruction
-                            // is worth keeping across a rename. The phone has done
-                            // this since sessions became renameable.
-                            store.drafts.move(
-                                DraftBook.sessionKey(target.id),
-                                DraftBook.sessionKey(next),
-                            )
-                            store.sentHistory.move(
-                                DraftBook.sessionKey(target.id),
-                                DraftBook.sessionKey(next),
-                            )
+            if (namingSession) {
+                NewSessionDialog(
+                    taken = sessions.map { it.name }.toSet(),
+                    onDismiss = { namingSession = false },
+                    onConfirm = { name ->
+                        namingSession = false
+                        act {
+                            // Open what tmux CALLED it. The host reads the name back
+                            // rather than echoing the request, because tmux rewrites
+                            // a '.' to '_' and still succeeds — opening the requested
+                            // name would 404 on everything after it.
+                            val made = store.client.createSession(name)
                             store.refreshSessions()
-                            // The open session is addressed by name, so a rename
-                            // that did not follow leaves the detail pane polling a
-                            // session that no longer exists.
-                            if (store.sessionName.value == target.id) store.openSession(next)
+                            store.openSession(made)
                         }
-                    }
-                },
-            )
-        }
+                    },
+                )
+            }
 
-        confirming?.let { target ->
-            ConfirmDialog(
-                target = target,
-                onDismiss = { confirming = null },
-                onConfirm = {
-                    confirming = null
-                    when (target) {
-                        // The drafts go with the targets. The detail views already
-                        // clear the OPEN one when it vanishes underneath them, but
-                        // a multi-select delete from the list never opens the other
-                        // rows — and the draft map is rewritten whole on every
-                        // save, so an orphan is paid for on every keystroke in
-                        // every other target, forever.
-                        is ConfirmTarget.DeleteChats -> act {
-                            // Per chat, each with its own cleanup: one refusal (a
-                            // run in flight) must not abort the loop mid-way and
-                            // leave already-deleted chats' drafts orphaned — the
-                            // exact cost the comment above says this exists to
-                            // prevent. The refusals that do happen are collected
-                            // and NAMED, not reported as one anonymous 409.
-                            val refused = mutableListOf<String>()
-                            target.ids.forEach { id ->
-                                runCatching { store.client.deleteChat(id) }
-                                    .onSuccess {
-                                        store.drafts.clear(DraftBook.chatKey(id))
-                                        store.sentHistory.clear(DraftBook.chatKey(id))
-                                        if (store.chatId.value == id) store.openChat(null)
-                                    }
-                                    .onFailure { e ->
-                                        val name = chats.firstOrNull { c -> c.id == id }?.title ?: id.take(8)
-                                        refused += "$name (${e.message ?: "refused"})"
-                                    }
+            renaming?.let { target ->
+                RenameDialog(
+                    target = target,
+                    onDismiss = { renaming = null },
+                    onConfirm = { next ->
+                        renaming = null
+                        when (target) {
+                            is RenameTarget.OfChat -> act {
+                                store.client.renameChat(target.id, next)
+                                store.refreshChats()
                             }
-                            chatSel = Selection()
-                            store.refreshChats()
-                            check(refused.isEmpty()) { "not deleted: ${refused.joinToString("; ")}" }
+                            is RenameTarget.OfSession -> act {
+                                store.client.renameSession(target.id, next)
+                                // MOVED, not dropped. A session's draft is keyed by
+                                // name, so a rename orphans it under a key nothing
+                                // will ever read again — and half a typed instruction
+                                // is worth keeping across a rename. The phone has done
+                                // this since sessions became renameable.
+                                store.drafts.move(
+                                    DraftBook.sessionKey(target.id),
+                                    DraftBook.sessionKey(next),
+                                )
+                                store.sentHistory.move(
+                                    DraftBook.sessionKey(target.id),
+                                    DraftBook.sessionKey(next),
+                                )
+                                store.refreshSessions()
+                                // The open session is addressed by name, so a rename
+                                // that did not follow leaves the detail pane polling a
+                                // session that no longer exists.
+                                if (store.sessionName.value == target.id) store.openSession(next)
+                            }
                         }
-                        is ConfirmTarget.KillSessions -> act {
-                            target.names.forEach { store.client.killSession(it) }
-                            target.names.forEach { store.drafts.clear(DraftBook.sessionKey(it)) }
-                            target.names.forEach { store.sentHistory.clear(DraftBook.sessionKey(it)) }
-                            if (store.sessionName.value in target.names) store.openSession(null)
-                            sessionSel = Selection()
-                            store.refreshSessions()
+                    },
+                )
+            }
+
+            confirming?.let { target ->
+                ConfirmDialog(
+                    target = target,
+                    onDismiss = { confirming = null },
+                    onConfirm = {
+                        confirming = null
+                        when (target) {
+                            // The drafts go with the targets. The detail views already
+                            // clear the OPEN one when it vanishes underneath them, but
+                            // a multi-select delete from the list never opens the other
+                            // rows — and the draft map is rewritten whole on every
+                            // save, so an orphan is paid for on every keystroke in
+                            // every other target, forever.
+                            is ConfirmTarget.DeleteChats -> act {
+                                // Per chat, each with its own cleanup: one refusal (a
+                                // run in flight) must not abort the loop mid-way and
+                                // leave already-deleted chats' drafts orphaned — the
+                                // exact cost the comment above says this exists to
+                                // prevent. The refusals that do happen are collected
+                                // and NAMED, not reported as one anonymous 409.
+                                val refused = mutableListOf<String>()
+                                target.ids.forEach { id ->
+                                    runCatching { store.client.deleteChat(id) }
+                                        .onSuccess {
+                                            store.drafts.clear(DraftBook.chatKey(id))
+                                            store.sentHistory.clear(DraftBook.chatKey(id))
+                                            if (store.chatId.value == id) store.openChat(null)
+                                        }
+                                        .onFailure { e ->
+                                            val name = chats.firstOrNull { c -> c.id == id }?.title ?: id.take(8)
+                                            refused += "$name (${e.message ?: "refused"})"
+                                        }
+                                }
+                                chatSel = Selection()
+                                store.refreshChats()
+                                check(refused.isEmpty()) { "not deleted: ${refused.joinToString("; ")}" }
+                            }
+                            is ConfirmTarget.KillSessions -> act {
+                                target.names.forEach { store.client.killSession(it) }
+                                target.names.forEach { store.drafts.clear(DraftBook.sessionKey(it)) }
+                                target.names.forEach { store.sentHistory.clear(DraftBook.sessionKey(it)) }
+                                if (store.sessionName.value in target.names) store.openSession(null)
+                                sessionSel = Selection()
+                                store.refreshSessions()
+                            }
+                            // A soft end SENDS a message; the session lives on and may
+                            // even stay (a wrap-up question cancels the auto-end) — so
+                            // drafts and history are deliberately NOT cleared here.
+                            is ConfirmTarget.SoftEndSessions -> act {
+                                target.names.forEach { store.client.softEndSession(it) }
+                                store.refreshSessions()
+                            }
                         }
-                        // A soft end SENDS a message; the session lives on and may
-                        // even stay (a wrap-up question cancels the auto-end) — so
-                        // drafts and history are deliberately NOT cleared here.
-                        is ConfirmTarget.SoftEndSessions -> act {
-                            target.names.forEach { store.client.softEndSession(it) }
-                            store.refreshSessions()
-                        }
-                    }
-                },
-            )
+                    },
+                )
+            }
         }
     }
 }
@@ -1104,6 +1144,8 @@ private fun StatusLine(
                 },
                 style = DeskType.status,
                 color = scheme.onSurfaceVariant,
+                maxLines = 1,
+                overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
             )
         }
 
@@ -1116,10 +1158,18 @@ private fun StatusLine(
                         .background(if (watchConnected) scheme.primary else scheme.error)
                 )
                 Spacer(Modifier.width(Space.tight))
+                // ⚠ ONE LINE, ALWAYS. This Row is `height(Frame.statusHeight)` —
+                // 26dp — and an unbounded route wrapped to two lines inside it at
+                // 420dp of window: the second line was clipped away mid-port
+                // ("127.0.0.1:8 / 787") and the connection dot came down on top of
+                // the count beside it. A status line that lies about the address it
+                // is connected to is worse than one that ellipsises it.
                 Text(
                     route.removePrefix("https://").removePrefix("http://").trimEnd('/'),
                     style = DeskType.status,
                     color = scheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
                 )
             }
         }
@@ -1186,7 +1236,12 @@ private fun NewSessionDialog(
         title = { Text("New session", style = MaterialTheme.typography.titleSmall) },
         text = {
             Column {
-                DialogField(text, ok || text.isEmpty()) { text = it }
+                DialogField(
+                    value = text,
+                    ok = ok || text.isEmpty(),
+                    label = "Session name",
+                    placeholder = "e.g. jtyper",
+                ) { text = it }
                 Text(
                     when {
                         clash -> "There is already a session called $canon."
@@ -1223,7 +1278,12 @@ private fun RenameDialog(
         title = { Text(if (session) "Rename session" else "Rename chat", style = MaterialTheme.typography.titleSmall) },
         text = {
             Column {
-                DialogField(text, ok) { text = it }
+                DialogField(
+                    value = text,
+                    ok = ok,
+                    label = if (session) "Session name" else "Chat title",
+                    placeholder = if (session) "e.g. jtyper" else "What this chat is about",
+                ) { text = it }
                 Text(
                     if (session) "Letters, digits, _ . and - ; starts with a letter or digit."
                     else "Only the title changes; the chat keeps its history.",
@@ -1242,24 +1302,40 @@ private fun RenameDialog(
     )
 }
 
+/**
+ * The one field a dialog has, and for a while it was INVISIBLE.
+ *
+ * It was a bare `Box` tinted `surfaceContainerHigh` — which is the same tone an
+ * `AlertDialog` paints its own container — with no border, no label and no
+ * placeholder. On screen that is a dialog with a title, a sentence of help, two
+ * buttons, and a hundred-odd pixels of nothing where the thing you are supposed
+ * to type into is. Not width-dependent: wrong at 1440 and wrong at 420.
+ *
+ * `OutlinedTextField` rather than a border on the Box, because the tinted-Box
+ * version also had no focus state, no error state and no label — four decisions
+ * Material has already made, and re-making them by hand is how the first one got
+ * lost. The invalid state stays in the OUTLINE (`isError`) rather than in the
+ * text colour: red letters as you type a name that is only half typed reads as a
+ * rejection of what you have written rather than of what you have written SO FAR.
+ */
 @Composable
-private fun DialogField(value: String, ok: Boolean, onChange: (String) -> Unit) {
-    Box(
-        Modifier.fillMaxWidth()
-            .background(MaterialTheme.colorScheme.surfaceContainerHigh)
-            .padding(horizontal = Space.wide, vertical = Space.unit),
-    ) {
-        BasicTextField(
-            value = value,
-            onValueChange = onChange,
-            singleLine = true,
-            textStyle = MaterialTheme.typography.bodyMedium.copy(
-                color = if (ok) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.error,
-            ),
-            cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
-            modifier = Modifier.fillMaxWidth(),
-        )
-    }
+private fun DialogField(
+    value: String,
+    ok: Boolean,
+    label: String,
+    placeholder: String,
+    onChange: (String) -> Unit,
+) {
+    OutlinedTextField(
+        value = value,
+        onValueChange = onChange,
+        singleLine = true,
+        isError = !ok,
+        label = { Text(label, style = DeskType.rowMeta) },
+        placeholder = { Text(placeholder, style = MaterialTheme.typography.bodyMedium) },
+        textStyle = MaterialTheme.typography.bodyMedium,
+        modifier = Modifier.fillMaxWidth(),
+    )
 }
 
 @Composable
