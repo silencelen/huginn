@@ -34,6 +34,8 @@ const { readTranscript, liveActivity } = require('./lib/transcript');
 const { summarizeUsage } = require('./lib/usage');
 const { normalizePlan } = require('./lib/plan');
 const { AccountStore, fingerprint, sameAccount, normUuid } = require('./lib/accounts');
+const oauthRefresh = require('./lib/oauth-refresh');
+const oauthlock = require('./lib/oauthlock');
 const { formatModel, discoverModels, parseModelId } = require('./lib/models');
 const sessreg = require('./lib/session-registry');
 const { pushPending, takePending, clearPending, drainPending, queuedEvents } = require('./lib/chatqueue');
@@ -2930,8 +2932,13 @@ function deliverOrphanedQueues() {
   }
 }
 
-const CREDENTIALS_PATH = path.join(os.homedir(), '.claude', '.credentials.json');
-const CLAUDE_CONFIG_PATH = path.join(os.homedir(), '.claude.json');
+// Claude Code's own config directory. Injectable for exactly one reason: the
+// route suites need a credentials file and an OAuth lock of their own, and a
+// test that locked or rewrote the real ~/.claude would reach straight into the
+// owner's live CLI. Unset — which is every production path — it is ~/.claude.
+const CLAUDE_DIR = process.env.HUGINN_APPD_CLAUDE_DIR || path.join(os.homedir(), '.claude');
+const CREDENTIALS_PATH = path.join(CLAUDE_DIR, '.credentials.json');
+const CLAUDE_CONFIG_PATH = `${CLAUDE_DIR.replace(/\/+$/, '')}.json`;
 const accounts = new AccountStore(path.join(DATA_DIR, 'accounts'), CREDENTIALS_PATH, CLAUDE_CONFIG_PATH);
 
 // Fingerprint of the login that was active when a sign-in flow started. When the
@@ -2968,7 +2975,10 @@ async function resolveIdentity(creds) {
   const ac = new AbortController();
   const timer = setTimeout(() => ac.abort(), 10_000);
   try {
-    const resp = await fetch('https://api.anthropic.com/api/oauth/account', {
+    // Overridable ONLY so a route suite can answer this itself instead of
+    // reaching api.anthropic.com with a fixture token. No production path sets it.
+    const url = process.env.HUGINN_APPD_OAUTH_ACCOUNT_URL || 'https://api.anthropic.com/api/oauth/account';
+    const resp = await fetch(url, {
       headers: {
         Authorization: `Bearer ${token}`,
         'Content-Type': 'application/json',
@@ -3020,10 +3030,11 @@ async function saveIdentified(label, creds, extra = {}) {
 
 /**
  * Plan utilization for a SAVED account, so you can see which login has headroom
- * before switching to it. Best effort: a stored access token expires, and this
- * daemon deliberately does not implement the refresh flow — an expired one
- * simply reports unknown, and refreshes itself once that account is active and
- * Claude Code runs under it.
+ * before switching to it. Best effort: a stored access token expires, and the
+ * daemon refreshes INACTIVE profiles on a timer; the active one is the CLI's.
+ * So a token that has expired between refreshes simply reports unknown here
+ * until the next refresh tick picks it up, and the ACTIVE account's token is
+ * never touched by this daemon at all — see refreshProfile.
  */
 async function planForCredentials(creds) {
   const o = (creds && creds.claudeAiOauth) || {};
@@ -3049,6 +3060,149 @@ async function planForCredentials(creds) {
     return normalizePlan(await resp.json());
   } catch { return null; } finally { clearTimeout(timer); }
 }
+
+// ------------------------------------------------------------ token refresh
+//
+// Keeping the SAVED, INACTIVE logins alive. Claude Code refreshes exactly one
+// account — whichever is in the credentials file — so every other profile here
+// goes dark within hours: its headroom stops being readable, the auto-switcher
+// has nothing it is allowed to switch to, and by the time somebody wants to
+// switch the token has been dead for days. The rules, the request shape and the
+// reasons all live in lib/oauth-refresh.js; this is the wiring.
+//
+// Two invariants hold everything up, and both are enforced below rather than
+// documented and hoped for:
+//
+//   * the ACTIVE account is never posted to the token endpoint (rotating it
+//     signs the owner out of their own CLI), and
+//   * nothing logs a token — a slug and one status word, that is the whole line.
+
+const REFRESH_TICK_MS = 60_000;
+/** Profiles with a POST in flight, so a row can read `refreshing` honestly. */
+const refreshInFlight = new Set();
+let refreshBusy = false;
+
+/**
+ * The refresh POST itself. The endpoint is overridable ONLY so tests can point a
+ * local stub at it; there is no production path that sets this.
+ */
+async function postRefreshToken(body, opts = {}) {
+  const url = process.env.HUGINN_APPD_OAUTH_TOKEN_URL || oauthRefresh.TOKEN_URL;
+  const ac = new AbortController();
+  const timer = setTimeout(() => ac.abort(), 30_000);
+  // The lock's compromise signal and our own timeout both have to be able to
+  // kill this request: a refresh continuing under a lock somebody else now holds
+  // is the double-write the lock exists to prevent.
+  const onAbort = () => { try { ac.abort(); } catch { /* already aborted */ } };
+  if (opts.signal) opts.signal.addEventListener('abort', onAbort, { once: true });
+  try {
+    const resp = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+      signal: ac.signal,
+    });
+    // Read as text first: an error body is not reliably JSON, and classifyError
+    // only needs to find a word in it.
+    const text = await resp.text();
+    let json = null;
+    try { json = JSON.parse(text); } catch { /* not JSON; the text is enough */ }
+    return { ok: resp.ok, status: resp.status, json, text };
+  } catch (e) {
+    return { ok: false, status: 0, json: null, text: e.name === 'AbortError' ? 'aborted' : e.message };
+  } finally {
+    clearTimeout(timer);
+    if (opts.signal) opts.signal.removeEventListener('abort', onAbort);
+  }
+}
+
+/**
+ * Refreshes one saved profile. Returns one of lib/oauth-refresh's status words.
+ *
+ * Inactive-only, re-checked inside the lock. Write-back happens before any
+ * enrichment, through AccountStore.save, so the slug survives the rotation and
+ * a crash mid-flight cannot lose a login.
+ */
+async function refreshProfile(slug) {
+  refreshInFlight.add(slug);
+  try {
+    const status = await oauthRefresh.refreshWithStore(accounts, slug, {
+      post: postRefreshToken,
+      lock: () => oauthlock.acquire(CLAUDE_DIR),
+    });
+    log(`refresh ${slug}: ${status}`);
+    return status;
+  } finally {
+    refreshInFlight.delete(slug);
+  }
+}
+
+/**
+ * Tells the owner a refresh token is about to expire, once.
+ *
+ * Past `refreshTokenExpiresAt` nothing this daemon can do brings the login back —
+ * only an interactive `claude auth login` does — so the warning has to arrive
+ * BEFORE the cliff. Sent once per profile and then recorded, because the
+ * condition stays true for the whole two days and a daily reminder of something
+ * the owner has already been told is how a channel gets muted.
+ */
+async function notifyRefreshWarning(rec) {
+  const at = rec.credentials.claudeAiOauth.refreshTokenExpiresAt;
+  const when = new Date(at).toISOString().slice(0, 16).replace('T', ' ');
+  const text = `${rec.email || rec.slug} needs a fresh sign-in by ${when} UTC — its refresh token `
+    + `expires then and huginn cannot renew it after that. Run \`claude auth login\` for that account.`;
+  log(`refresh ${rec.slug}: warning owner, refresh token expires soon`);
+  const push = await deliverPush({
+    kind: 'account_refresh', title: 'A saved Claude login is expiring', text, subject: rec.slug,
+  });
+  if (!push.sent) await deliverTelegram(`\u{26A0} A saved Claude login is expiring\n${text}`);
+  return true;
+}
+
+/**
+ * The timer. Refreshes only what is DUE, which is the difference between this
+ * and a sweep: a saved inactive profile is permanently past its access token's
+ * expiry between refreshes, so "refresh everything expired, every minute" would
+ * mean a POST per profile per minute against an endpoint that rate-limits per
+ * account. `refresh.nextAt` is the gate, written by every attempt.
+ */
+async function refreshTick() {
+  if (refreshBusy) return;
+  refreshBusy = true;
+  try {
+    const now = Date.now();
+    const activePrint = fingerprint(accounts.readActive());
+    for (const a of accounts.list()) {
+      const rec = accounts.readProfile(a.slug);
+      if (!rec || !rec.credentials) continue;
+      // Never the live login. Checked here too so the common tick does not even
+      // reach for the lock on the owner's own account.
+      if (activePrint && fingerprint(rec.credentials) === activePrint) continue;
+
+      if (oauthRefresh.refreshTokenWarnDue(rec, now) && !(rec.refresh && rec.refresh.warnedAt)) {
+        try {
+          await notifyRefreshWarning(rec);
+          accounts.recordRefresh(a.slug, { warnedAt: now });
+        } catch (e) { log(`refresh ${a.slug}: warning failed`, e.message); }
+      }
+
+      const nextAt = rec.refresh && typeof rec.refresh.nextAt === 'number' ? rec.refresh.nextAt : null;
+      // No schedule yet means this profile has never been through here: decide
+      // from the token itself rather than waiting for a tick that writes one.
+      const due = nextAt === null
+        ? ['expired', 'expiring'].includes(oauthRefresh.freshnessOf(rec, now))
+        : nextAt <= now;
+      if (!due) continue;
+      if (oauthRefresh.freshnessOf(rec, now) === 'unrefreshable') continue;
+      await refreshProfile(a.slug);
+    }
+  } catch (e) {
+    log('refresh: tick failed', e.message);
+  } finally {
+    refreshBusy = false;
+  }
+}
+setInterval(() => { refreshTick().catch(() => { }); }, REFRESH_TICK_MS).unref();
 
 // -------------------------------------------------------------- scratchpads
 //
@@ -3330,7 +3484,7 @@ async function fetchPlan() {
   try {
     let creds;
     try {
-      creds = JSON.parse(fs.readFileSync(path.join(os.homedir(), '.claude', '.credentials.json'), 'utf8'));
+      creds = JSON.parse(fs.readFileSync(CREDENTIALS_PATH, 'utf8'));
     } catch {
       planCache.error = 'no credentials on this host';
       return;
@@ -3842,6 +3996,26 @@ async function polishFor(field, draft, cap) {
  * Settings and for the auto-switcher, so they cannot drift.
  */
 async function performSwitch(slug) {
+  // Held across the WHOLE swap, not just the rename inside activate(). The
+  // snapshot below reads the live credentials and the activate() call replaces
+  // them; a refresh landing between those two rotates the account being left,
+  // and the pair we snapshotted is then a rotation behind — which is a dead
+  // login the next time anybody switches back to it. This is the caller that
+  // can afford to wait for the lock, so it uses the full ladder and hands
+  // activate() `held` rather than letting it take the lock a second time.
+  const lock = await oauthlock.acquire(CLAUDE_DIR);
+  if (!lock.ok) {
+    log(`switch ${slug}: ${lock.status}`);
+    return { ok: false, error: 'another process is refreshing this host\'s token', status: lock.status };
+  }
+  try {
+    return await performSwitchLocked(slug);
+  } finally {
+    try { lock.release(); } catch { /* stolen at 60s anyway */ }
+  }
+}
+
+async function performSwitchLocked(slug) {
   const before = await accountStatus();
   // Fold the outgoing account's CURRENT tokens into its own profile first. Its
   // refresh token has almost certainly rotated since it was last written, and
@@ -3850,7 +4024,7 @@ async function performSwitch(slug) {
   // under a name nothing else knows.
   await saveIdentified(before.email, accounts.readActive());
 
-  const r = accounts.activate(slug, before.email);
+  const r = accounts.activate(slug, before.email, { held: true });
   if (!r.ok) return { ok: false, error: r.error };
   const after = await accountStatus();
   const nowLive = accounts.readActive();
@@ -4567,6 +4741,10 @@ const server = http.createServer(async (req, res) => {
       try { accounts.consolidate(); } catch (e) { log('accounts: consolidate failed', e.message); }
 
       const saved = accounts.list();
+      // `freshness`, `expiresAt`, `refreshTokenExpiresAt` and `refresh` all come
+      // out of accounts.list(); the only thing it cannot know is which slugs
+      // have a POST in flight RIGHT NOW, so that one word is corrected here.
+      for (const a of saved) if (refreshInFlight.has(a.slug)) a.freshness = 'refreshing';
       // "Verified" stays a claim about THIS moment: the account's own token was
       // asked just now and answered. A stored uuid is identity enough to file the
       // profile under, but it is not a live proof that the login still works —
@@ -4611,9 +4789,45 @@ const server = http.createServer(async (req, res) => {
       return sendJson(res, 200, { ok: true });
     }
 
+    if ((m = p.match(/^\/v1\/accounts\/([a-z0-9-]{1,60})\/refresh$/)) && req.method === 'POST') {
+      const slug = m[1];
+      if (!accounts.readProfile(slug)) return sendErr(res, 404, 'no such saved account');
+      const status = await refreshProfile(slug);
+      // `ok` is about the profile being usable afterwards, not about a POST
+      // having happened: `not_needed` means the token is already good, and
+      // `active_skipped` means the CLI is keeping it fresh itself.
+      const ok = ['refreshed', 'not_needed', 'active_skipped'].includes(status);
+      return sendJson(res, 200, { ok, status });
+    }
+
     if ((m = p.match(/^\/v1\/accounts\/([a-z0-9-]{1,60})\/activate$/)) && req.method === 'POST') {
-      const r = await performSwitch(m[1]);
-      if (!r.ok) return sendErr(res, 404, r.error);
+      const slug = m[1];
+      const rec = accounts.readProfile(slug);
+      // Switching to a login whose refresh token has expired hands the CLI a
+      // dead pair: it starts, fails on its first call, and blanks the
+      // credentials file trying to recover. Refuse it here, with the date, so
+      // the answer is "sign in again" rather than a broken terminal.
+      if (rec && rec.credentials && !sameAccount(rec.credentials, accounts.readActive())) {
+        const freshness = oauthRefresh.freshnessOf(rec, Date.now());
+        if (freshness === 'unrefreshable') {
+          const at = oauthRefresh.deadSince(rec);
+          const when = at ? new Date(at).toISOString().slice(0, 10) : 'an unknown date';
+          return sendErr(res, 409,
+            `${rec.email || slug} cannot be switched to: its login expired on ${when} — sign in again`);
+        }
+        if (freshness === 'expired' || freshness === 'expiring') {
+          // Synchronous on purpose: the owner pressed a button and is waiting,
+          // and handing them a stale token now to save thirty seconds means
+          // handing them a session that dies on its first request.
+          const status = await refreshProfile(slug);
+          if (status !== 'refreshed' && status !== 'not_needed') {
+            return sendErr(res, 409,
+              `${rec.email || slug} could not be refreshed before switching (${status}) — try again, or sign in again`);
+          }
+        }
+      }
+      const r = await performSwitch(slug);
+      if (!r.ok) return sendErr(res, r.status ? 409 : 404, r.error);
       return sendJson(res, 200, { ok: true, ...r.after });
     }
 
