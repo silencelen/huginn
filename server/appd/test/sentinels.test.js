@@ -21,18 +21,53 @@ test('arm writes one JSON line, and re-arming keeps the original since', () => {
   const dir = path.join(scratch(), 'headroom'); // also proves it creates the dir
   const first = sent.arm(dir, 'STOP-FABLE', 'weekly_fable 89%', 1_789_459_000_000);
   assert.equal(first.created, true);
-  assert.equal(first.since, 1_789_459_000);
+  // MILLISECONDS, like every other epoch on /v1/headroom. This was the one
+  // seconds field in the payload, sitting beside `resets[].at` and
+  // `arbiter.last*At` with no field-name tell.
+  assert.equal(first.since, 1_789_459_000_000);
 
   const body = fs.readFileSync(path.join(dir, 'STOP-FABLE'), 'utf8');
-  assert.equal(body, `${JSON.stringify({ reason: 'weekly_fable 89%', since: 1_789_459_000 })}\n`);
+  assert.equal(body, `${JSON.stringify({ reason: 'weekly_fable 89%', since: 1_789_459_000_000 })}\n`);
 
   // Half an hour later the tick re-asserts the same plan. `since` is what the
   // operator reads as "held since", and what hysteresis measures against — a
   // value that resets every tick says the stop is always four seconds old.
   const again = sent.arm(dir, 'STOP-FABLE', 'weekly_fable 91%', 1_789_460_800_000);
   assert.equal(again.created, false);
-  assert.equal(again.since, 1_789_459_000);
+  assert.equal(again.since, 1_789_459_000_000);
   assert.equal(again.reason, 'weekly_fable 89%');
+});
+
+test('a sentinel file written by an older daemon still reads as a time', () => {
+  // `since` used to be seconds. A file left by the previous release must not
+  // read as 1970 on the way through /v1/headroom.
+  const dir = scratch();
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, 'STOP'), `${JSON.stringify({ reason: 'old', since: 1_789_459_000 })}\n`);
+  assert.deepEqual(sent.state(dir).STOP, { since: 1_789_459_000_000, reason: 'old' });
+});
+
+test('touch heartbeats an armed sentinel WITHOUT moving its since', () => {
+  // The gate ages a sentinel against its mtime, so the tick has to say "still
+  // me" on every pass — otherwise a daemon that dies with STOP armed wedges
+  // every Agent/Workflow spawn on the host for half an hour each, with no
+  // symptom but sessions that look hung. But `since` is what the operator reads
+  // as "held since", so the heartbeat must be the mtime and nothing else.
+  const dir = scratch();
+  sent.arm(dir, 'STOP', 'session 71%', 1_789_459_000_000);
+  const file = path.join(dir, 'STOP');
+  const stale = new Date(Date.now() - 3600_000);
+  fs.utimesSync(file, stale, stale);
+
+  assert.equal(sent.touch(dir, 'STOP'), true);
+  assert.ok(Date.now() - fs.statSync(file).mtimeMs < 5000, 'the mtime is the heartbeat');
+  assert.equal(sent.state(dir).STOP.since, 1_789_459_000_000, 'and `since` must NOT move');
+  assert.equal(sent.state(dir).STOP.reason, 'session 71%');
+
+  // Nothing armed: a no-op that says so, rather than creating one.
+  assert.equal(sent.touch(dir, 'STOP-FABLE'), false);
+  assert.equal(fs.existsSync(path.join(dir, 'STOP-FABLE')), false);
+  assert.throws(() => sent.touch(dir, 'NOPE'), /unknown sentinel/);
 });
 
 test('state reads both sentinels, and absence is null rather than a shape', () => {
@@ -41,7 +76,7 @@ test('state reads both sentinels, and absence is null rather than a shape', () =
 
   sent.arm(dir, 'STOP', 'session 71%', 1_789_459_000_000);
   const st = sent.state(dir);
-  assert.deepEqual(st.STOP, { since: 1_789_459_000, reason: 'session 71%' });
+  assert.deepEqual(st.STOP, { since: 1_789_459_000_000, reason: 'session 71%' });
   assert.equal(st['STOP-FABLE'], null);
 });
 
@@ -56,7 +91,7 @@ test('a sentinel touched by hand is still armed, with mtime as its since', () =>
   const st = sent.state(dir).STOP;
   assert.ok(st, 'an empty sentinel is armed');
   assert.equal(st.reason, '');
-  assert.ok(Math.abs(st.since - Math.floor(Date.now() / 1000)) < 5);
+  assert.ok(Math.abs(st.since - Date.now()) < 5000);
 });
 
 test('clear removes it and says whether there was anything to remove', () => {
@@ -101,9 +136,16 @@ test('listHeld maps the gate\'s rows and drops what it cannot trust', () => {
 
   const held = sent.listHeld(dir, now);
   assert.deepEqual(held.map((h) => h.agentId), ['a799b9ac6c215d25e', 'toolu_01Sun'], 'oldest first');
+  // The gate is bash — `date +%s` — so its rows arrive in SECONDS and are
+  // normalised here, because everything the route emits is milliseconds.
   assert.deepEqual(held[0], {
-    agentId: 'a799b9ac6c215d25e', agentType: 'workflow-subagent', sessionId: 'sess-1', since: nowS - 30,
+    agentId: 'a799b9ac6c215d25e', agentType: 'workflow-subagent', sessionId: 'sess-1', since: now - 30_000,
   });
+  assert.equal(held[1].since, now - 5_000);
+
+  // And a row already written in ms passes through unchanged.
+  writeHeld(dir, 'inms', JSON.stringify({ since: now - 10_000, agent_type: 'Agent', session_id: 'sess-3' }));
+  assert.equal(sent.listHeld(dir, now).find((h) => h.agentId === 'inms').since, now - 10_000);
 });
 
 test('listHeld forgets a row the gate never got to delete', () => {

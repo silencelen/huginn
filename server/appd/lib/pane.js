@@ -374,6 +374,32 @@ function consentRecommended(plain, opts) {
   return row ? row.number : null;
 }
 
+/**
+ * Is the dialog on screen NOW the same one a digit was chosen against?
+ *
+ * The auto-answer is a keystroke into a pane, and a keystroke into a pane that
+ * has moved on is a chat message: a bare digit and an Enter, submitted into a
+ * live conversation. `consentRecommended`'s contract says the number is checked
+ * against a freshly-read fingerprint the way `/answer` does it for a person's
+ * tap — this is that fingerprint, and it is deliberately BOTH halves. The number
+ * alone is what a renumbered list keeps; the label alone is what a dialog
+ * redrawn in a different order keeps. Neither on its own is identity.
+ *
+ * @param before the prompt the decision was taken on
+ * @param after  the prompt read immediately before the key goes out
+ */
+function sameConsent(before, after) {
+  if (!before || !after) return false;
+  if (before.recommended == null) return false;
+  if (after.recommended !== before.recommended) return false;
+  const rowOf = (p) => (Array.isArray(p.options) ? p.options : [])
+    .find((o) => o && o.number === p.recommended) || null;
+  const a = rowOf(before);
+  const b = rowOf(after);
+  if (!a || !b) return false;
+  return a.label === b.label;
+}
+
 // ---- the `/model` picker ---------------------------------------------------
 //
 // The argument-less `/model` opens a selector whose `s` key is the ONLY
@@ -729,6 +755,7 @@ function loginPaneState(lines) {
 module.exports = {
   screenHash, stripAnsi, previewLines, detectPrompt, promptFingerprint, multiToggleDigits,
   consentRecommended,
+  sameConsent,
   parseModelPicker,
   parseSpinner, parseStatusExtras, spinnerIsCompacting,
   extractLoginUrl, parseStatusLine, loginPaneState,
