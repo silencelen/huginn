@@ -1,11 +1,14 @@
 package com.silencelen.huginn
 
+import com.silencelen.huginn.data.AccountRefreshed
 import com.silencelen.huginn.data.AgentsInfo
 import com.silencelen.huginn.data.Headroom
+import com.silencelen.huginn.data.HeadroomSettings
 import com.silencelen.huginn.data.SavedAccounts
 import com.silencelen.huginn.data.SendKeysResult
 import com.silencelen.huginn.data.SessionList
 import com.silencelen.huginn.data.TranscriptPage
+import com.silencelen.huginn.data.UndoResult
 import com.silencelen.huginn.data.Watch
 import kotlinx.serialization.json.Json
 import kotlin.test.Test
@@ -72,7 +75,69 @@ class ModelsTest {
         val old = info.agents[1]
         assertNull(old.workflowId, "2.85.0 sends `workflow` only; the picker stays flat")
         assertNull(old.agentType)
-        assertEquals(0, old.depth)
+        assertNull(old.depth, "a depth nobody reported is not depth zero")
+    }
+
+    /**
+     * ⚠ THE DECODE THAT KILLED THE WHOLE RESPONSE.
+     *
+     * `normalizeHeadroomState` seeds `lastResumeAt: null` and the digest passed
+     * it through, so every `/v1/watch` on a daemon that had never resumed
+     * anything — i.e. every fresh install — threw on the explicit null and took
+     * the watch loop, the notification decisions and the headroom toasts with
+     * it. `explicitNulls = false` is an ENCODE option and does nothing here, and
+     * there is no `coerceInputValues` in this tree. Only a nullable field fixes
+     * it, and it stays nullable after the daemon starts sending 0.
+     */
+    @Test
+    fun `a watch digest decodes an explicit null lastResumeAt as well as a zero`() {
+        val never = json.decodeFromString<Watch>(
+            """{"hash":"a","serverTime":1789460000,
+                 "headroom":{"mode":"ok","lastResumeAt":null,"lastLadderAt":0}}""",
+        )
+        assertNull(never.headroom?.lastResumeAt, "never resumed is not resumed at the epoch")
+
+        val zero = json.decodeFromString<Watch>(
+            """{"hash":"a","serverTime":1789460000,
+                 "headroom":{"mode":"ok","lastResumeAt":0,"lastLadderAt":0}}""",
+        )
+        assertEquals(0L, zero.headroom?.lastResumeAt, "and the fixed daemon's 0 still decodes")
+    }
+
+    /**
+     * The same class of break one route over: an agent with no `.meta.json` —
+     * the deliberate `orphan` row — gets an explicit `null` depth, and a cold
+     * direct agent gets a null status. Either one used to fail the decode of the
+     * WHOLE list, which is the stream picker and the work sheet at once.
+     */
+    @Test
+    fun `an orphan agent decodes with a null depth and a null status`() {
+        val info = json.decodeFromString<AgentsInfo>(
+            """{"agents":[
+                 {"id":"af7ca864cee1939de","workflow":null,"workflowId":null,"agentType":null,
+                  "status":null,"depth":null,"active":false,"updatedAt":1789459000}
+               ],"active":0,"serverTime":1789460000}""",
+        )
+        val a = info.agents.single()
+        assertNull(a.depth)
+        assertNull(a.status)
+        assertEquals(
+            "af7ca864cee1939de", a.id,
+            "the list emits the BARE hex; nothing here may re-mint an id it did not make",
+        )
+    }
+
+    @Test
+    fun `an agent page names the stream it was read from`() {
+        val agent = json.decodeFromString<TranscriptPage>(
+            """{"events":[],"nextOffset":4096,"agentId":"agent-3f9c1a","workflowId":"wf_01H9ZKQT"}""",
+        )
+        assertEquals("agent-3f9c1a", agent.agentId, "the route echoes the id it validated")
+        assertEquals("wf_01H9ZKQT", agent.workflowId)
+
+        val own = json.decodeFromString<TranscriptPage>("""{"events":[],"nextOffset":4096}""")
+        assertNull(own.agentId, "a session's own page belongs to no agent")
+        assertNull(own.workflowId)
     }
 
     @Test
@@ -137,6 +202,130 @@ class ModelsTest {
         assertTrue(old.ok)
         assertEquals(0, old.queued)
         assertTrue(old.landed, "a daemon with no queue delivered it outright")
+    }
+
+    /**
+     * The stall record, which is where the two sentences the card needs live:
+     * the clock Claude Code printed and the daemon's reason for not resuming.
+     */
+    @Test
+    fun `a stalled session carries its stall record and its native switch`() {
+        val h = json.decodeFromString<Headroom>(
+            """{"mode":"red","serverTime":1789460000000,
+                 "sessions":[
+                   {"name":"btclab","claudeSessionId":"cs-2","family":"fable","ladder":null,
+                    "autoResume":false,"stalled":true,"headsUpAt":null,
+                    "stall":{"at":1789459000000,"window":"weekly_fable",
+                             "resetsAt":1789471800000,"resetsAtSource":"endpoint",
+                             "resumedAt":null,"how":null,"attempts":0,"nativeArmed":false,
+                             "why":"auto-resume is off for this session",
+                             "text":"You've hit your usage limit · resets 10:10pm (America/Los_Angeles)"},
+                    "nativeSwitch":{"seenAt":null,"to":null}}
+                 ]}""",
+        )
+        val s = h.sessions.single()
+        val stall = s.stall
+        assertNotNull(stall)
+        assertEquals("weekly_fable", stall.window)
+        assertEquals(1_789_471_800_000L, stall.resetsAt, "MILLISECONDS on this route, not an ISO string")
+        assertEquals("auto-resume is off for this session", stall.why)
+        assertNull(stall.resumedAt)
+        assertEquals(0, stall.attempts)
+        assertNotNull(s.nativeSwitch, "always present; both halves null when nothing was seen")
+        assertNull(s.nativeSwitch!!.to)
+
+        // And a session with no stall at all still decodes, which is the ordinary case.
+        val quiet = json.decodeFromString<Headroom>(
+            """{"mode":"ok","sessions":[{"name":"w1","stalled":false}]}""",
+        )
+        assertNull(quiet.sessions.single().stall)
+    }
+
+    @Test
+    fun `headroom carries the resets a stalled session is waiting for`() {
+        val h = json.decodeFromString<Headroom>(
+            """{"mode":"ok","serverTime":1789460000000,
+                 "resets":[{"slug":"owner-max","window":"session",
+                            "resetsAt":"2026-09-15T05:30:00+00:00","percent":4.0,
+                            "seenAt":1789452100000,"at":1789452100000}]}""",
+        )
+        val r = h.resets.single()
+        assertEquals("session", r.window)
+        assertEquals("2026-09-15T05:30:00+00:00", r.resetsAt, "the DUE instant stays ISO")
+        assertEquals(1_789_452_100_000L, r.at, "and the observation clocks are millis")
+        assertTrue(
+            json.decodeFromString<Headroom>("""{"mode":"ok"}""").resets.isEmpty(),
+            "a daemon that sends none reads as none, not as a failed decode",
+        )
+    }
+
+    @Test
+    fun `an undo says whether it applied or only queued`() {
+        val applied = json.decodeFromString<UndoResult>(
+            """{"ok":true,"applied":true,"queued":false,"to":"fable","delivery":"confirmed"}""",
+        )
+        assertTrue(applied.applied)
+        assertEquals("fable", applied.to)
+
+        // ⚠ THE CASE `ok` HIDES: mid-turn, so the picker could not be opened and
+        // the move is waiting for the turn boundary. Both answers are `ok:true`.
+        val queued = json.decodeFromString<UndoResult>(
+            """{"ok":true,"applied":false,"queued":true,"to":"fable","delivery":"queued"}""",
+        )
+        assertTrue(queued.ok)
+        assertFalse(queued.applied, "ok is not applied — that was the whole bug")
+        assertTrue(queued.queued)
+
+        // A daemon from before `applied` existed: nothing claimed, nothing lost.
+        val old = json.decodeFromString<UndoResult>("""{"ok":true,"to":"fable","queued":false}""")
+        assertFalse(old.applied)
+    }
+
+    @Test
+    fun `an on-demand refresh answers with the slug, the word and the record`() {
+        val r = json.decodeFromString<AccountRefreshed>(
+            """{"ok":true,"slug":"spare","status":"refreshed",
+                 "refresh":{"lastAt":1789460000000,"lastStatus":"refreshed",
+                            "nextAt":1789485600000,"deadAt":null}}""",
+        )
+        assertEquals("spare", r.slug)
+        assertEquals("refreshed", r.status)
+        assertEquals(1_789_460_000_000L, r.refresh?.lastAt)
+        assertNull(r.refresh?.deadAt)
+
+        // The word for asking it to refresh the ACTIVE login. It is a 200, not a
+        // refusal — the route that refuses is /activate.
+        val skipped = json.decodeFromString<AccountRefreshed>(
+            """{"ok":true,"slug":"owner-max","status":"active_skipped"}""",
+        )
+        assertTrue(skipped.ok)
+        assertEquals("active_skipped", skipped.status)
+
+        val dead = json.decodeFromString<AccountRefreshed>(
+            """{"ok":false,"slug":"old-org","status":"refresh_token_expired",
+                 "refresh":{"lastStatus":"known_dead_refresh_token","deadAt":1789000000000}}""",
+        )
+        assertFalse(dead.ok)
+        assertEquals(1_789_000_000_000L, dead.refresh?.deadAt)
+    }
+
+    /**
+     * ⚠ A FORM SAVED FROM ITS OWN DEFAULTS MUST NOT 400. The daemon rejects an
+     * empty `defaultModel` and a `headsUpText` with no `{pct}` in it, and three
+     * of these defaults used to be `""`, `"continue"` and `""` — none of which
+     * the daemon has ever held. Copied verbatim from `lib/headroom.js`
+     * `defaults()`.
+     */
+    @Test
+    fun `the settings defaults are the daemon's own, not placeholders`() {
+        val d = HeadroomSettings()
+        assertEquals("claude-fable-5-1", d.defaultModel)
+        assertTrue(d.resumePhrase.startsWith("Your usage limit has reset."))
+        assertTrue(d.resumePhrase.endsWith("do not repeat work that is already complete."))
+        assertTrue("{pct}" in d.headsUpText, "the daemon validates for this token")
+        assertTrue("{next}" in d.headsUpText)
+        assertTrue("{ladderPct}" in d.headsUpText)
+        assertTrue(d.headsUpText.startsWith("[huginn headroom] "))
     }
 
     @Test

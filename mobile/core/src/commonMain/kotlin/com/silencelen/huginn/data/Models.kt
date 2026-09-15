@@ -336,6 +336,18 @@ data class TranscriptPage(
     /** Background shells this session still has running. */
     val tasks: List<BgTask> = emptyList(),
     val bgAgents: Int = 0,
+    /**
+     * The agent this page came from, echoed back by the transcript route in the
+     * form it validated — `agent-` prefixed, whichever form was asked for.
+     *
+     * Null on a session's own page. Without it a page cannot be attributed to
+     * the stream it was read from, which is exactly what a picker that can
+     * switch streams mid-poll needs in order to drop a late answer for the chip
+     * the reader has already left.
+     */
+    val agentId: String? = null,
+    /** The workflow run the agent belongs to, when it is a run's member. */
+    val workflowId: String? = null,
 )
 
 /** Automatic account rotation state, held by the host. */
@@ -389,10 +401,25 @@ data class AgentRun(
     val workflowId: String? = null,
     /** e.g. `workflow-subagent`, from the agent's meta file when it has one. */
     val agentType: String? = null,
-    /** The agent's settled outcome word: running | done | failed | stalled. */
+    /**
+     * The agent's settled outcome word: `running` | `done` | `failed` |
+     * `orphan` | null.
+     *
+     * `orphan` is a real row, not a broken one: an agent transcript with no
+     * `.meta.json` beside it. NULL is also real — a cold direct agent the
+     * daemon has never seen settle — which is why this is nullable rather than
+     * defaulted to a word. (`stalled` was in this list and is emitted nowhere.)
+     */
     val status: String? = null,
-    /** How deep in the fan-out; 0 is a direct child of the session. */
-    val depth: Int = 0,
+    /**
+     * How deep in the fan-out; 0 is a direct child of the session.
+     *
+     * NULLABLE because the daemon sends an explicit `null` for an agent with no
+     * `.meta.json` — the `orphan` case — and kotlinx throws on an explicit null
+     * into a non-nullable field whatever the default says. A depth that is not
+     * known is not depth zero.
+     */
+    val depth: Int? = null,
 )
 
 @Serializable
@@ -700,13 +727,37 @@ data class SavedAccount(
 /** What the daemon's background token refresh last did for one profile. */
 @Serializable
 data class AccountRefresh(
+    /** Epoch MILLISECONDS. */
     val lastAt: Long? = null,
-    /** `ok` · `invalid_grant` · `lock_busy` · a transport error word. */
+    /**
+     * The daemon's own status WORD. THE WHOLE VOCABULARY, from
+     * `lib/oauth-refresh.js`:
+     *
+     * `refreshed` · `not_needed` · `active_skipped` · `no_refresh_token` ·
+     * `not_refreshable` · `refresh_token_expired` · `known_dead_refresh_token` ·
+     * `account_on_hold` · `lock_busy` · `lock_timeout` · `lock_error` ·
+     * `lock_compromised` · `refresh_failed` · `no_such_profile`.
+     *
+     * The three words this kdoc used to claim — `ok`, `invalid_grant` and "a
+     * transport error word" — are emitted by nothing.
+     */
     val lastStatus: String? = null,
+    /** Epoch MILLISECONDS. */
     val nextAt: Long? = null,
+    /**
+     * When the refresh token was found to be dead for good. Epoch MILLISECONDS.
+     * Set once by an `invalid_grant` and carried forward rather than re-derived.
+     */
+    val deadAt: Long? = null,
 )
 
-/** The answer to an on-demand refresh of one saved profile. */
+/**
+ * The answer to an on-demand refresh of one saved profile.
+ *
+ * `ok` is not the whole answer and never was: `not_needed` and `active_skipped`
+ * are both successes that did nothing, and a reader told only "ok" would press
+ * the button again. The [status] word is what the surface shows.
+ */
 @Serializable
 data class AccountRefreshed(
     val ok: Boolean = false,
@@ -714,6 +765,28 @@ data class AccountRefreshed(
     /** The status WORD, the same vocabulary as [AccountRefresh.lastStatus]. */
     val status: String = "",
     val refresh: AccountRefresh? = null,
+)
+
+/**
+ * What `POST /v1/sessions/:name/headroom/undo` did.
+ *
+ * [applied] and [queued] are the whole point: the picker cannot be opened
+ * inside a running turn, so a mid-turn undo is held to the next turn boundary
+ * like any other automated send. The route answers `ok:true` either way, and a
+ * toast built on `ok` alone told the reader a session was back on its own model
+ * while it was still running on the one it was moved to.
+ */
+@Serializable
+data class UndoResult(
+    val ok: Boolean = false,
+    /** The model change is ON THE PANE. Absent from a pre-fix daemon. */
+    val applied: Boolean = false,
+    /** Held for the turn boundary; it will land without anyone doing anything. */
+    val queued: Boolean = false,
+    /** The family it goes back to. */
+    val to: String? = null,
+    /** `confirmed` · `delivery_unconfirmed` · `queued` · `dropped: <why>` */
+    val delivery: String? = null,
 )
 
 @Serializable
@@ -755,10 +828,79 @@ data class HeadroomLadder(
     val from: String? = null,
     /** The family it moved TO; null means no move has been made. */
     val to: String? = null,
-    /** Epoch SECONDS, like every other daemon-side `at`. */
+    /**
+     * Epoch MILLISECONDS.
+     *
+     * ⚠ Every timestamp on `/v1/headroom` is milliseconds — this, [Headroom.serverTime],
+     * [HeadroomSession.headsUpAt], [HeadroomHeld.since], the stall clocks and the
+     * arbiter's. The payload used to mix both units with no field-name tell.
+     */
     val at: Long = 0,
     /** `confirmed` | `delivery_unconfirmed` — a picker that never appeared. */
     val delivery: String? = null,
+)
+
+/**
+ * What a session stalled on a usage limit is waiting for, as the daemon
+ * recorded it.
+ *
+ * The whole record rather than the [HeadroomSession.stalled] flag, because the
+ * flag cannot write the sentence: [text] is the only place Claude Code's own
+ * clock time ("resets 10:10pm") is ever written down, and [why] is the only
+ * place a REFUSAL to resume ("auto-resume is off for this session") is. Both
+ * are rendered verbatim — see [com.silencelen.huginn.ui.HeadroomRules].
+ *
+ * Every field is nullable: the daemon seeds a blank stall on every session it
+ * has ever seen and only fills what it has learned.
+ */
+@Serializable
+data class HeadroomStall(
+    /** When the 429 was noticed. Epoch MILLISECONDS. */
+    val at: Long? = null,
+    /** `session` | `weekly_all` | `weekly_fable` */
+    val window: String? = null,
+    /**
+     * When that window comes back. Epoch MILLISECONDS on this route — NOT the
+     * ISO string the `/v1/watch` digest carries for the same fact.
+     */
+    val resetsAt: Long? = null,
+    /** `endpoint` | `text` — how the reset instant was learned. */
+    val resetsAtSource: String? = null,
+    /** When it was picked back up, epoch MILLISECONDS; null while still stalled. */
+    val resumedAt: Long? = null,
+    /** `native` | `human` | `appd` | `rerun` — who resumed it. */
+    val how: String? = null,
+    val attempts: Int = 0,
+    /** Claude Code's own auto-continue was armed when the limit hit. */
+    val nativeArmed: Boolean = false,
+    /** The arbiter's one-line reason, for or against resuming. Verbatim. */
+    val why: String? = null,
+    /** The limit sentence Claude Code printed, carrying its own clock time. */
+    val text: String? = null,
+)
+
+/** A `/model` change Claude Code made by itself, which the arbiter defers to. */
+@Serializable
+data class HeadroomNativeSwitch(
+    /** Epoch MILLISECONDS; null when none has been seen. */
+    val seenAt: Long? = null,
+    val to: String? = null,
+)
+
+/** One usage window coming back, as the arbiter saw it happen. */
+@Serializable
+data class HeadroomReset(
+    val slug: String? = null,
+    /** `session` | `weekly_all` | `weekly_fable` */
+    val window: String? = null,
+    /** The instant the window was due back, ISO-8601 — not an epoch. */
+    val resetsAt: String? = null,
+    /** What the window read once it had reset. */
+    val percent: Double? = null,
+    /** When the arbiter noticed. Epoch MILLISECONDS. */
+    val seenAt: Long? = null,
+    /** The tick that recorded it. Epoch MILLISECONDS. */
+    val at: Long? = null,
 )
 
 /** One session as the headroom subsystem sees it. */
@@ -770,7 +912,12 @@ data class HeadroomSession(
     val ladder: HeadroomLadder? = null,
     val autoResume: Boolean = true,
     val stalled: Boolean = false,
+    /** When the heads-up note was typed into the pane. Epoch MILLISECONDS. */
     val headsUpAt: Long? = null,
+    /** The stall record behind [stalled]; null when the session is not stalled. */
+    val stall: HeadroomStall? = null,
+    /** Always present on 3.0.0, with both halves null when nothing was seen. */
+    val nativeSwitch: HeadroomNativeSwitch? = null,
 )
 
 /** A subagent spawn the hook gate is holding because a sentinel is armed. */
@@ -778,6 +925,7 @@ data class HeadroomSession(
 data class HeadroomHeld(
     val agentId: String = "",
     val agentType: String? = null,
+    /** Epoch MILLISECONDS, like every other timestamp on this route. */
     val since: Long = 0,
 )
 
@@ -807,10 +955,21 @@ data class HeadroomSettings(
     val clearBelowPct: Int = 50,
     val cooldownMs: Long = 1_800_000,
     val ladder: List<String> = listOf("fable", "opus", "sonnet"),
-    val defaultModel: String = "",
+    /**
+     * ⚠ COPIED VERBATIM from `server/appd/lib/headroom.js` `defaults()`. The
+     * daemon REJECTS an empty [defaultModel] and a [headsUpText] with no
+     * `{pct}` in it, so the three that used to read `""`, `"continue"` and `""`
+     * made a settings form saved straight from its own defaults answer 400.
+     */
+    val defaultModel: String = "claude-fable-5-1",
     val autoResume: Boolean = true,
-    val resumePhrase: String = "continue",
-    val headsUpText: String = "",
+    val resumePhrase: String =
+        "Your usage limit has reset. Continue the task you were working on when " +
+            "the limit was reached; do not repeat work that is already complete.",
+    val headsUpText: String =
+        "[huginn headroom] You are at {pct}% of this account's Fable weekly limit. " +
+            "Write a short handoff note now (what is done, what is next, which files " +
+            "matter), then continue. huginn will move this session to {next} at {ladderPct}%.",
     val accountSwitch: AccountSwitch = AccountSwitch(),
 )
 
@@ -829,9 +988,18 @@ data class Headroom(
      */
     val sentinels: Map<String, JsonElement?> = emptyMap(),
     val held: List<HeadroomHeld> = emptyList(),
+    /**
+     * Windows that have come back, newest last, the daemon's last twenty.
+     *
+     * The other half of a stall: a session sitting on a limit is waiting for one
+     * of these, and the arbiter will not resume it until the window it stalled
+     * on appears here.
+     */
+    val resets: List<HeadroomReset> = emptyList(),
     /** Arbiter bookkeeping, raw: it is displayed, never branched on. */
     val arbiter: JsonObject? = null,
     val settings: HeadroomSettings? = null,
+    /** The host clock. Epoch MILLISECONDS, like every other `at` on this route. */
     val serverTime: Long = 0,
 )
 
@@ -1014,7 +1182,19 @@ data class WatchHeadroom(
      * toast says.
      */
     val laddered: Map<String, String> = emptyMap(),
-    val lastResumeAt: Long = 0,
+    /**
+     * The last resume the arbiter landed, epoch MILLISECONDS.
+     *
+     * ⚠ NULLABLE, and not because the daemon still sends null — it sends 0 as of
+     * the Wave 1 fix round. It is nullable because the digest seeded this field
+     * from `normalizeHeadroomState`'s `lastResumeAt: null` on every daemon that
+     * had never resumed anything, and kotlinx throws on an explicit null into a
+     * non-nullable field whatever its default is. That throw failed the WHOLE
+     * `/v1/watch` decode — the watch loop, every notification decision and the
+     * headroom toasts — on a fresh install, which is the one install nobody
+     * tests against. A field an older daemon can null is nullable here forever.
+     */
+    val lastResumeAt: Long? = null,
     val lastLadderAt: Long = 0,
     /** Armed sentinel names, e.g. `STOP-FABLE`. */
     val sentinels: List<String> = emptyList(),
