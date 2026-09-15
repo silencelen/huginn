@@ -258,6 +258,36 @@ class HuginnClient(
     }
 
     /**
+     * Rewrites the host's quick-action wording — the text a selection verb puts in
+     * the composer on BOTH clients.
+     *
+     * A PATCH, and every field optional, because the editor saves what it was
+     * shown: sending only what changed is what keeps two people editing different
+     * fields from overwriting each other. [rev] is the copy the editor was opened
+     * on; the daemon 409s a stale one rather than silently taking the older text.
+     *
+     * The daemon owns the refusals (a template must carry `{selection}` exactly
+     * once, `quote` must not carry it at all, 400 characters each) and this
+     * surfaces its words rather than guessing at them here.
+     */
+    suspend fun setQuickActions(
+        explain: String? = null,
+        execute: String? = null,
+        askInNewChat: String? = null,
+        quote: String? = null,
+        rev: Int? = null,
+    ): QuickActions {
+        val body = buildJsonObject {
+            explain?.let { put("explain", JsonPrimitive(it)) }
+            execute?.let { put("execute", JsonPrimitive(it)) }
+            askInNewChat?.let { put("askInNewChat", JsonPrimitive(it)) }
+            quote?.let { put("quote", JsonPrimitive(it)) }
+            rev?.let { put("rev", JsonPrimitive(it)) }
+        }
+        return decode(call("/v1/quick-actions", HttpMethod.Patch, body = body))
+    }
+
+    /**
      * What the host has seen of this phone. Read from the host on purpose: asking
      * the phone whether it stayed awake is asking the witness to alibi itself.
      */
