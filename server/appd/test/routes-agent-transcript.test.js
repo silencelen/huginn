@@ -158,7 +158,7 @@ after(() => {
   }
   // Reap the private server outright (-L targets only OUR socket, never default).
   try { sh('tmux', ['kill-server']); } catch { /* no server */ }
-  if (tmp) fs.rmSync(tmp, { recursive: true, force: true });
+  if (tmp) fs.rmSync(tmp, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 });
 });
 
 // ------------------------------------------------------------- the list view

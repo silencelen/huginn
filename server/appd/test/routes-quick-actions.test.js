@@ -139,7 +139,7 @@ after(async () => {
   await stopDaemon();
   // -L targets only OUR socket, never the default server.
   try { execFileSync('tmux', ['-L', TMUX_SOCK, 'kill-server'], { stdio: 'ignore' }); } catch { /* none */ }
-  if (tmp) fs.rmSync(tmp, { recursive: true, force: true });
+  if (tmp) fs.rmSync(tmp, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 });
 });
 
 // ------------------------------------------------------------------- defaults
