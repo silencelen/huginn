@@ -4,6 +4,7 @@ import com.silencelen.huginn.data.Chat
 import com.silencelen.huginn.data.QuickActions
 import com.silencelen.huginn.data.Session
 import com.silencelen.huginn.ui.QuickActionRules
+import com.silencelen.huginn.ui.SelectionAction
 import com.silencelen.huginn.desktop.Splitter
 import com.silencelen.huginn.desktop.View
 import com.silencelen.huginn.desktop.WindowLayout
@@ -223,6 +224,69 @@ class DesktopSurfaceTest {
             mapOf("explain" to "ls -la", "execute" to "ls -la", "quote" to "ls -la", "ask" to "ls -la"),
             got,
         )
+    }
+
+    @Test
+    fun `each verb reads the selection when it is clicked, not when the menu was built`() {
+        // THE 1.1.0 BUG, at the level it actually lived. The toolkit caches a
+        // context menu's item list — `ContextMenuData.allItems` is `by lazy` and
+        // is only rebuilt when the area recomposes, which a new drag-selection
+        // does not do — so the rows built over the FIRST selection of a session
+        // were the rows every later right-click reused. With the text captured
+        // into the row, Quote staged what had been highlighted minutes earlier
+        // (and a right-click over nothing still staged it). Reading through the
+        // function inside the click is what makes a stale list harmless.
+        var live = "golf hotel india juliett."
+        val got = mutableMapOf<String, String>()
+        val items = selectionMenu(
+            { live },
+            hostActions,
+            noSelectionVerbs(
+                onExplain = { got["explain"] = it },
+                onExecute = { got["execute"] = it },
+                onQuote = { got["quote"] = it },
+                onAsk = { got["ask"] = it },
+            ),
+        )
+        live = "Kilo lima mike november oscar"
+        items.forEach { it.onClick() }
+        assertEquals(
+            mapOf(
+                "explain" to "Kilo lima mike november oscar",
+                "execute" to "Kilo lima mike november oscar",
+                "quote" to "Kilo lima mike november oscar",
+                "ask" to "Kilo lima mike november oscar",
+            ),
+            got,
+        )
+    }
+
+    @Test
+    fun `a verb whose selection is gone by click time stages nothing, not the old text`() {
+        // The other face of the same stale list: the reader cleared the selection
+        // and right-clicked anyway. The honest answer is an empty string, which
+        // the staging rule already refuses — never the last thing they highlighted.
+        var live = "o charlie delta ec"
+        var quoted: String? = null
+        val items = selectionMenu({ live }, null, noSelectionVerbs(onQuote = { quoted = it }))
+        live = ""
+        items.single().onClick()
+        assertEquals("", quoted)
+        assertEquals("", QuickActionRules.textFor(SelectionAction.QUOTE, null, quoted.orEmpty()))
+    }
+
+    @Test
+    fun `the quote frame carries the highlighted text verbatim, across rows and inside code`() {
+        // What the owner reads back in the composer, for the three drags the fix
+        // is proved against: inside one row, across two, and inside a code block.
+        assertEquals("> o charlie delta ec", QuickActionRules.quote("", "o charlie delta ec"))
+        assertEquals(
+            "> golf hotel india juliett.\n> Kilo lima mike november oscar pa",
+            QuickActionRules.quote("", "golf hotel india juliett.\nKilo lima mike november oscar pa"),
+        )
+        // Indentation inside a code block is the only part that matters, so it
+        // survives the frame untouched.
+        assertEquals("> echo one\n>   echo two", QuickActionRules.quote("", "echo one\n  echo two"))
     }
 
     // ---------------------------------------------------------- tooltips
