@@ -3,16 +3,23 @@ package com.silencelen.huginn.ui
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
@@ -54,6 +61,29 @@ import androidx.compose.ui.unit.dp
  */
 const val STREAM_FINISHED_HINT: String = "finished"
 
+/**
+ * How much of the surface's own text colour a settled chip keeps.
+ *
+ * DIMMED BUT READABLE. The strip's job while folded open is to let somebody find
+ * a transcript they remember; text they have to lean in to read is a list they
+ * scroll past. 0.6 over `onSurfaceVariant` — which is already the muted role —
+ * compounded to something close to 40 % of the body text on the owner's phone.
+ */
+const val STREAM_DIM_ALPHA: Float = 0.7f
+
+/** Disabled is the one state that should be hard to read: the chip cannot be used. */
+const val STREAM_DISABLED_ALPHA: Float = 0.5f
+
+/**
+ * The opacity a chip's label is drawn at — the one place the three states are
+ * compared, so "dimmed" cannot quietly drift under "disabled" again.
+ */
+fun streamChipTextAlpha(finished: Boolean, enabled: Boolean): Float = when {
+    !enabled -> STREAM_DISABLED_ALPHA
+    finished -> STREAM_DIM_ALPHA
+    else -> 1f
+}
+
 fun streamChipSelected(item: StreamPicker.Item, selected: String?): Boolean {
     if (item.header || item.overflow) return false
     if (item.agentId == null) return selected == null || selected == StreamPicker.MAIN_KEY
@@ -89,37 +119,78 @@ fun StreamPickerRow(
     // One row is the Main chip on its own, which is the state every session
     // without subagents is in. Nothing to pick between, so nothing to draw.
     if (items.size <= 1 && note == null) return
-    FlowRow(
-        modifier.padding(horizontal = 16.dp, vertical = 6.dp),
-        horizontalArrangement = Arrangement.spacedBy(6.dp),
-        verticalArrangement = Arrangement.spacedBy(6.dp),
-    ) {
-        items.forEach { item ->
-            if (item.header) {
-                RunHeader(item)
-            } else if (item.overflow) {
-                OverflowPill(item, expanded, onToggleExpanded)
-            } else {
-                StreamChip(
-                    item = item,
-                    selected = streamChipSelected(item, selected),
-                    // Main is always pickable: getting BACK to the session's own
-                    // transcript must never depend on a route the host may not have.
-                    enabled = enabled || item.agentId == null,
-                    onPick = { onPick(item.agentId) },
+
+    val chips: @Composable () -> Unit = {
+        FlowRow(
+            Modifier.padding(horizontal = 16.dp, vertical = 6.dp),
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+            verticalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+            items.forEach { item ->
+                if (item.header) {
+                    RunHeader(item)
+                } else if (item.overflow) {
+                    OverflowPill(item, expanded, onToggleExpanded)
+                } else {
+                    StreamChip(
+                        item = item,
+                        selected = streamChipSelected(item, selected),
+                        // Main is always pickable: getting BACK to the session's own
+                        // transcript must never depend on a route the host may not have.
+                        enabled = enabled || item.agentId == null,
+                        onPick = { onPick(item.agentId) },
+                    )
+                }
+            }
+            if (note != null) {
+                Text(
+                    note,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(horizontal = 4.dp, vertical = 3.dp),
                 )
             }
         }
-        if (note != null) {
-            Text(
-                note,
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.padding(horizontal = 4.dp, vertical = 3.dp),
-            )
-        }
+    }
+
+    // FOLDED: a strip, which is what a strip should cost — one or two rows above
+    // the transcript, no surface of its own.
+    if (!expanded) {
+        Box(modifier) { chips() }
+        return
+    }
+
+    // UNFOLDED: a SURFACE, and this is the fix. Up to forty settled agents at two
+    // chips a row is more than a phone has, and drawn with no ground of its own it
+    // read as loose text floating over the conversation — chip backgrounds at a
+    // quarter alpha let the transcript through between them and nothing said where
+    // the list stopped and the reading started. An opaque, tonally-raised panel
+    // with its own scroll says both: this is a list, it ends here, and the
+    // transcript underneath is not part of it.
+    Surface(
+        color = MaterialTheme.colorScheme.surface,
+        tonalElevation = STREAM_SHEET_ELEVATION,
+        shadowElevation = 2.dp,
+        modifier = modifier.fillMaxWidth(),
+    ) {
+        Column(
+            Modifier
+                .heightIn(max = STREAM_SHEET_MAX_HEIGHT)
+                .verticalScroll(rememberScrollState()),
+        ) { chips() }
     }
 }
+
+/**
+ * How tall the unfolded list is allowed to get before it scrolls inside itself.
+ *
+ * The cap is the point: the fold exists so a session that fanned out forty times
+ * does not own the screen, and an unfold with no ceiling gives it away again.
+ */
+private val STREAM_SHEET_MAX_HEIGHT = 240.dp
+
+/** Enough tonal lift to read as a panel in both themes; not a dialog. */
+private val STREAM_SHEET_ELEVATION = 3.dp
 
 /**
  * The `…` pill: everything this session has finished, folded into one row.
@@ -236,10 +307,11 @@ private fun StreamChip(
             style = MaterialTheme.typography.labelSmall,
             fontWeight = if (selected && !dim) FontWeight.SemiBold else FontWeight.Normal,
             color = when {
-                !enabled -> scheme.onSurfaceVariant.copy(alpha = 0.5f)
-                dim -> scheme.onSurfaceVariant.copy(alpha = 0.6f)
-                selected -> scheme.onSurface
-                else -> scheme.onSurfaceVariant
+                selected && enabled && !dim -> scheme.onSurface
+                // Dimmed over onSURFACE, not onSurfaceVariant: the muted role was
+                // already the dim one, so dimming it again was dimming twice.
+                dim && enabled -> scheme.onSurface.copy(alpha = streamChipTextAlpha(true, true))
+                else -> scheme.onSurfaceVariant.copy(alpha = streamChipTextAlpha(dim, enabled))
             },
             maxLines = 1,
         )
@@ -248,7 +320,7 @@ private fun StreamChip(
             Text(
                 STREAM_FINISHED_HINT,
                 style = MaterialTheme.typography.labelSmall,
-                color = scheme.onSurfaceVariant.copy(alpha = 0.6f),
+                color = scheme.onSurfaceVariant.copy(alpha = streamChipTextAlpha(true, enabled)),
                 maxLines = 1,
             )
         }

@@ -95,6 +95,21 @@ class StreamPickerRowTest {
     }
 
     @Test
+    fun `a settled chip is dimmed but still readable`() {
+        // The walk's finding: unfolded, the settled chips were the thing being
+        // read and were the hardest text on screen to read. 0.6 over the muted
+        // role compounds — the muted role IS the dim one — so the list a reader
+        // opened on purpose came out near 40 % of the body text.
+        assertEquals(0.7f, streamChipTextAlpha(finished = true, enabled = true), "dimmed, not faded out")
+        assertEquals(1f, streamChipTextAlpha(finished = false, enabled = true))
+        assertTrue(
+            streamChipTextAlpha(finished = true, enabled = true) >
+                streamChipTextAlpha(finished = true, enabled = false),
+            "a chip that cannot be used is the one that may be hard to read",
+        )
+    }
+
+    @Test
     fun `an agent that has gone away leaves nothing marked rather than falling back to main`() {
         // The controller is still pointed at a stream the host no longer lists.
         // Silently marking Main would say the main transcript is on screen while

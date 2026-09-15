@@ -74,8 +74,24 @@ object StreamPicker {
      */
     const val FOLDED_MAX: Int = 40
 
-    /** The longest a chip label may be; past this it is clipped with an ellipsis. */
-    const val LABEL_MAX: Int = 40
+    /**
+     * The longest a chip label may be; past this it is clipped with an ellipsis.
+     *
+     * ⚠ THIS IS A LAYOUT NUMBER, not a taste one. At 40 a chip was wider than half
+     * a 411dp phone, so the expanded list laid out ONE PER ROW and nine settled
+     * agents became nine full-width lines over the transcript. 28 is the widest
+     * label that still packs two to a row there, which is what makes an unfolded
+     * list readable as a list rather than as a wall.
+     */
+    const val LABEL_MAX: Int = 28
+
+    /**
+     * What a disambiguating id tail costs: `" · "` plus [shortId]'s eight.
+     *
+     * Subtracted from [LABEL_MAX] before the base is clipped, so a disambiguated
+     * chip is still exactly as wide as every other one.
+     */
+    private const val ID_TAIL: Int = 11
 
     /** One row of the strip. */
     data class Item(
@@ -159,8 +175,7 @@ object StreamPicker {
             ?.takeIf { it.isNotEmpty() && it != MAIN_KEY }
 
         val seen = HashSet<String>()
-        val live = ArrayList<Item>(agents.size)
-        val settled = ArrayList<Item>(agents.size)
+        val rows = ArrayList<Item>(agents.size)
         for (a in agents) {
             val id = a.id.trim()
             if (id.isEmpty()) continue
@@ -168,7 +183,7 @@ object StreamPicker {
             // cannot come back as a second row behind its own first one.
             if (!seen.add(id)) continue
             val alive = isAlive(a, nowSec)
-            val row = Item(
+            rows += Item(
                 key = "agent:$id",
                 agentId = id,
                 label = labelFor(a),
@@ -179,8 +194,13 @@ object StreamPicker {
                 agentType = a.agentType,
                 status = a.status,
             )
-            if (alive) live += row else settled += row
         }
+        // Across the WHOLE list, before the split: a live chip and a folded one
+        // that read identically are the same failure, and they are never compared
+        // once the two halves have gone their separate ways.
+        val labelled = disambiguate(rows)
+        val live = labelled.filter { it.running }
+        val settled = labelled.filter { !it.running }
 
         // Collapsed, the one settled agent being READ rides with the live ones —
         // it is the only chip on the strip whose body is already on screen.
@@ -282,19 +302,76 @@ object StreamPicker {
     }
 
     /**
+     * Openers that mean the text is the PROMPT an agent was handed rather than a
+     * name for it.
+     *
+     * The daemon's `task` is literally the first line of the agent's first user
+     * record (`lib/agents.js:agentTask`), and its own comment admits as much:
+     * "prompts often open with a boilerplate CONTEXT block; the first line is
+     * still the best available one-line label". On this host it usually is not.
+     * Nine read-only recon agents were dispatched with nine prompts that all open
+     * "You are a READ-ONLY reconnaissance agent on huginn (LXC 117)…", so the
+     * strip drew nine chips saying the same twenty-eight characters — a picker
+     * that cannot be picked from.
+     *
+     * A prompt is written TO the agent, so it opens in the second person. That is
+     * the signal, and it is the only one available without the daemon minting a
+     * title. When it fires the label falls back to what does identify the row:
+     * the agent's type and its own short id.
+     */
+    private val DIRECTIVE_OPENERS: List<String> = listOf(
+        "you are", "you're", "you will", "you must", "you have", "your task", "your job", "act as",
+    )
+
+    /** First line only, whitespace-trimmed; "" for null or blank. */
+    private fun firstLine(s: String?): String =
+        s.orEmpty().lineSequence().firstOrNull()?.trim().orEmpty()
+
+    private fun readsAsPrompt(s: String): Boolean {
+        val t = s.lowercase()
+        return DIRECTIVE_OPENERS.any { t.startsWith(it) }
+    }
+
+    /**
      * What a chip says.
      *
-     * The task is the only thing that identifies an agent to a person; an id
-     * does not. When there is no task the type is the next most useful thing,
-     * and the short id is the last resort — never nothing, because a blank chip
-     * cannot be picked on purpose.
+     * In order of how well it identifies the agent TO A PERSON:
+     *
+     * 1. the agent's own summary — the one string on an `AgentRun` that was
+     *    written as an account of the work rather than as instructions for it;
+     * 2. its task, but only when that does not read as a prompt body — see
+     *    [DIRECTIVE_OPENERS]. A chip must never be the prompt: it is the same
+     *    boilerplate on every sibling of a fan-out;
+     * 3. its type and short id, which are never the same for two rows.
+     *
+     * Never nothing, because a blank chip cannot be picked on purpose.
      */
     private fun labelFor(a: AgentRun): String {
-        val task = a.task?.trim().orEmpty()
-        if (task.isNotEmpty()) return clip(task)
+        val summary = firstLine(a.summary)
+        if (summary.isNotEmpty()) return clip(summary)
+        val task = firstLine(a.task)
+        if (task.isNotEmpty() && !readsAsPrompt(task)) return clip(task)
         val type = a.agentType?.trim().orEmpty()
-        if (type.isNotEmpty()) return clip(type)
-        return clip(shortId(a.id))
+        val short = shortId(a.id)
+        return clip(if (type.isEmpty()) short else "$type · $short")
+    }
+
+    /**
+     * Two chips that say the same words are, to a reader, one chip drawn twice.
+     *
+     * The keys are already unique — that is a crash rule and is enforced above —
+     * but uniqueness the LazyColumn can see is not uniqueness a thumb can. Any
+     * label shared by more than one row gets the row's own short id appended, and
+     * the base is clipped shorter first so the chip keeps its width.
+     */
+    private fun disambiguate(rows: List<Item>): List<Item> {
+        val counts = HashMap<String, Int>(rows.size)
+        for (r in rows) counts[r.label] = (counts[r.label] ?: 0) + 1
+        if (counts.values.none { it > 1 }) return rows
+        return rows.map { r ->
+            if ((counts[r.label] ?: 0) <= 1) r
+            else r.copy(label = clip(r.label, LABEL_MAX - ID_TAIL) + " · " + shortId(r.agentId.orEmpty()))
+        }
     }
 
     /** `wf_01H9…` → `Run 01H9…`, so a header reads as one. */
