@@ -1098,6 +1098,7 @@ async function sendLineToPane(name, text) {
 
 const sendQueues = new Map();   // session name -> { entries, blockedBy, delivering, lastError, timer, pumping }
 
+
 /**
  * How the queue learns a session's model family, without importing the
  * headroom machinery that owns that question.
@@ -1166,6 +1167,11 @@ function transcriptSize(file) {
  * Gate 2 (no modal) is the pane, because the transcript cannot see a dialog at
  * all. Only a DIALOG blocks — `paneReadyForInput`'s 'busy' (no caret) is not a
  * liveness verdict and must not be used as one here.
+ *
+ * Gate 3 is the title hook's state file, returned RAW because its verdict is
+ * per-entry: `{state:"idle", ts}` only releases a send it is NEWER than, and the
+ * pump knows each entry's `at`. It is the second boundary source and the only
+ * one a session whose transcript never gets a turn marker has at all.
  */
 async function checkGates(name) {
   const file = transcriptPath(name);
@@ -1181,7 +1187,7 @@ async function checkGates(name) {
   }
   const cap = await run('tmux', ['capture-pane', '-p', '-t', `=${name}:`]);
   const paneWhy = cap.err ? null : typing.paneReadyForInput(cap.stdout.replace(/\n$/, '').split('\n')).why;
-  return { idle, lastKind, paneWhy };
+  return { idle, lastKind, paneWhy, sessionState: readSessionState(name) };
 }
 
 /**
@@ -1235,14 +1241,21 @@ async function pumpQueue(name) {
     while (q.entries.length) {
       const entry = q.entries[0];
       const gate = await checkGates(name);
+      const now = Date.now();
       const reason = typing.dropReason(entry, {
         humanSpoke: entry.automated ? humanSpokeSince(entry, name) : false,
         family: entry.automated && familyProbe ? familyProbe(name) : null,
-        now: Date.now(),
+        now,
       });
       if (reason) {
         q.entries.shift();
         q.lastError = typing.dropMessage(reason, entry);
+        // ⚠ TWO LINES, AND THE FIRST ONE IS THE POINT. `lastError` lives in a
+        // struct only `GET /typing` reads, and nobody polls a session they have
+        // stopped expecting an answer from — which is how 43 dropped messages
+        // left no trace anywhere. A message leaving this queue undelivered says
+        // so in the journal, in one grep-able shape, every time.
+        log(typing.dropLogLine(name, entry, reason));
         log(`typing: ${name}: ${q.lastError}`);
         entry.settle({ delivered: false, dropped: reason });
         continue;
@@ -1257,7 +1270,15 @@ async function pumpQueue(name) {
       // A pane SCRIPT (the ladder's picker walk, even when a person asked for it
       // via Undo) keeps the turn gate: a picker opened mid-turn is a modal.
       const humanText = !entry.automated && typeof entry.run !== 'function';
-      const d = typing.releaseDecision(humanText ? { ...gate, idle: true } : gate);
+      // 3.0.4: the AUTOMATED lane gets a second boundary source — the title
+      // hook's state file. `{state:"idle", ts}` stamped after the send was
+      // queued is a turn that demonstrably ended, and it is the ONLY boundary a
+      // session whose transcript never gets a turn marker ever has; `attention`
+      // is the opposite verdict and holds, because a numbered prompt is on
+      // screen and prose typed into one is lost or misread.
+      const d = typing.releaseDecision(humanText
+        ? { ...gate, idle: true }
+        : { ...gate, state: typing.stateVerdict(gate.sessionState, entry.at) });
       if (!d.release) {
         q.blockedBy = d.blockedBy;
         armQueueTimer(name);
