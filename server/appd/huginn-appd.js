@@ -67,6 +67,11 @@ const typing = require('./lib/typing');
 const headroomLib = require('./lib/headroom');
 // The sentinel files the hook gate watches, and the held/ directory it writes.
 const sentinelsLib = require('./lib/sentinels');
+// Auto-resume: reading a 429 stall off a transcript, deciding whether Claude
+// Code's OWN wait covers it, and what appd should do when it does not. Pure, so
+// every rule is asserted in test/resume.test.js rather than on a live stall the
+// host sees a handful of times a year.
+const resumeLib = require('./lib/resume');
 
 const VERSION = '2.85.0';
 const PORT = Number(process.env.HUGINN_APPD_PORT || 8787);
@@ -1433,6 +1438,14 @@ async function restoreSessionsAfterReboot() {
       continue;
     }
     restored++;
+    // ⚠ MARKED AS RESTORED, and auto-resume depends on it. Claude Code's own
+    // wait at a usage limit is IN-PROCESS: the process that was waiting died
+    // with the box, and the CLI says so in as many words ("Claude Code
+    // relaunched during the wait, so the task will not resume on its own").
+    // Without this mark appd would see an interactive session, believe the
+    // native wait was armed, and sit out its 90-second grace waiting for a
+    // continuation that can never come — every time, on every restored session.
+    registryAdd(entry.name, { restoredAt: Math.floor(Date.now() / 1000) });
     if (canResume) log(`session restore: ${entry.name} resumed (${entry.claudeSessionId})`);
     else { fresh++; log(`session restore: ${entry.name} restarted fresh (nothing resumable on disk)`); }
   }
@@ -2020,7 +2033,16 @@ function startRun(meta, userText) {
   updateMeta(chatId, (m) => { m.updatedAt = now; m.lastSnippet = humanizeUserText(userText).slice(0, 120); });
 
   const args = ['-p', '--output-format', 'stream-json', '--verbose', '--include-partial-messages'];
+  // A chat that pinned a model gets it. One that did not, launched while the
+  // Fable weekly window is out of room, is told EXPLICITLY to use the next model
+  // down rather than being left to the CLI's silent swap: `-p` has no dialog
+  // channel, so the CLI picks from a hardcoded chain with no say from us and no
+  // record on the chat row (native-rl §7). `CLAUDE_CODE_NO_MODEL_FALLBACK` is
+  // deliberately NOT set — a silent swap beats a dead run, and the variable is
+  // documented for lanes that would rather fail.
+  const downgrade = meta.model ? null : fableRedDowngrade();
   if (meta.model) args.push('--model', meta.model);
+  else if (downgrade) args.push('--model', downgrade);
   if (meta.effort) args.push('--effort', meta.effort);
   if (meta.claudeSessionId) args.push('--resume', meta.claudeSessionId);
   let persona = '';
@@ -2031,7 +2053,13 @@ function startRun(meta, userText) {
   if (denied) args.push('--disallowedTools', denied);
 
   const run_ = new Run(chatId);
+  // What we ASKED for, so the result can say whether that is what answered.
+  run_.askedModel = meta.model || downgrade || null;
   activeRuns.set(chatId, run_);
+  if (downgrade) {
+    updateMeta(chatId, (m) => { m.ranOn = `${downgrade} (Fable limit)`; });
+    log(`chat ${chatId} launched on ${downgrade}: the Fable week is out of room`);
+  }
   // Durable "a run is in flight" marker. activeRuns is in memory, so after a
   // restart there is nothing left to say a run had been going — see
   // reconcileInterruptedRuns.
@@ -2141,6 +2169,11 @@ function handleClaudeEvent(meta, run_, ev) {
       break;
     }
     case 'assistant': {
+      // WHICH MODEL ANSWERED. In `-p` there is no consent dialog — the CLI
+      // swaps to a non-gated model silently (`no_dialog_fallback`, native-rl
+      // §7) — so the only evidence that a run did not get the model it asked
+      // for is the id on its own records.
+      if (ev.message && typeof ev.message.model === 'string') run_.sawModel = ev.message.model;
       const content = (ev.message && ev.message.content) || [];
       for (const block of content) {
         if (block.type === 'text' && block.text) {
@@ -2172,14 +2205,22 @@ function handleClaudeEvent(meta, run_, ev) {
       // arrives as is_error with the reason in `result` and no assistant text at
       // all; without this the Round could only report "no output", which is false
       // and unactionable when the truth was sitting in the event.
-      if (ev.is_error && typeof ev.result === 'string') rec.errorText = ev.result.slice(0, 500);
+      if (ev.is_error && typeof ev.result === 'string') {
+        rec.errorText = ev.result.slice(0, 500);
+        // Carried to settleRun, which is where a limit stall is recorded: a `-p`
+        // run reports the limit HERE, as a result event, and never as the
+        // transcript record an interactive session leaves behind.
+        run_.limitText = rec.errorText;
+      }
       appendMsg(chatId, rec);
       run_.emit('result', rec);
       const finalText = typeof ev.result === 'string' ? ev.result : run_.assistantText;
+      const ranOn = ranOnLabel(run_.askedModel, run_.sawModel);
       updateMeta(chatId, (m) => {
         m.updatedAt = ts;
         if (finalText) m.lastSnippet = finalText.slice(0, 120);
         m.turns = (m.turns || 0) + 1;
+        if (ranOn) m.ranOn = ranOn;
       });
       break;
     }
@@ -2288,6 +2329,15 @@ function settleRun(run_, { exitCode = null, failureText = null } = {}) {
   // concurrent runs" with nothing actually running, until somebody restarted the
   // daemon. A disk that is full is a bad day; a daemon that never runs anything
   // again until it is restarted is a worse one.
+  // A run that died on a usage limit is not finished, it is WAITING. Read before
+  // anything else settles, because the evidence is the failure text and the
+  // result record, both of which are about to be overwritten by bookkeeping.
+  let stalled = false;
+  if (!run_.cancelled) {
+    const limitText = run_.limitText || failureText || '';
+    try { stalled = noteRunStall(chatId, limitText); }
+    catch (e) { log(`chat ${chatId}: could not record a limit stall: ${e.message}`); }
+  }
   try {
     if (!run_.sawResult) {
       // Crashed / killed / cancelled with no result event — record what we know.
@@ -2317,6 +2367,17 @@ function settleRun(run_, { exitCode = null, failureText = null } = {}) {
     // A Round's run ends when its chat's run ends; the report is whatever it
     // left in the transcript.
     if (fresh.roundId) {
+      // ⚠ A ROUND RUN COUNTS ONCE. Filing the report now and re-running after the
+      // reset would put TWO runs in the Round's history for one scheduled job,
+      // with the first one reading "hit the usage limit" — and the report
+      // notification would go out twice. So a run waiting for a reset is left
+      // open: `currentChatId` still points at it, the chat is not sealed, and
+      // `finishRoundRun` files exactly one record when the re-run finishes,
+      // against the same stored report tag.
+      if (stalled) {
+        log(`round run ${chatId} held open for a usage-limit re-run`);
+        return;
+      }
       try { finishRoundRun(fresh, run_.cancelled ? 'cancelled' : null); }
       catch (e) { log(`round run ${chatId} could not be recorded: ${e.message}`); }
       // ⚠ RE-READ. finishRoundRun just wrote the seal, the verdict and endedAt;
@@ -2570,6 +2631,7 @@ function startRemoteRun(meta, userText) {
     effort: meta.effort,
     resumeSessionId: meta.claudeSessionId,
     roundId: meta.roundId,
+    resumedAfterLimit: !!meta.resumedAfterLimit,
     now,
   });
   remoteRuns.set(workId, { run_, deviceId, chatId, lastHeard: now, startedAt: now });
@@ -4553,6 +4615,75 @@ const MAX_CURSOR_MOVES = 10;
 /** Both spellings observed for the session-only confirmation (native-rl §4). */
 const LADDER_FEEDBACK_RE = /Set model to .* for this session only|Model set to .* for this session only/;
 
+// ---- auto-resume timings ---------------------------------------------------
+//
+// Both are overridable by env for the route suites ONLY: a test that had to wait
+// out ninety real seconds per case would take longer than the whole suite, and
+// the alternative — a test-only branch in the daemon — is a code path nobody
+// runs in production. The defaults are the contract's.
+const NATIVE_GRACE_MS = Number(process.env.HUGINN_APPD_NATIVE_GRACE_MS) || resumeLib.NATIVE_GRACE_MS;
+const CONSENT_GRACE_MS = Number(process.env.HUGINN_APPD_CONSENT_GRACE_MS) || resumeLib.CONSENT_GRACE_MS;
+/**
+ * How often stalls are re-read while the account is out of room.
+ *
+ * The headroom tick runs at a minute at its FASTEST and five minutes at its
+ * idlest — and a host whose window has just reset is, by definition, idle: every
+ * session is sitting on a 429 doing nothing. Waiting five minutes to notice the
+ * reset would be most of the delay this whole subsystem exists to remove, so a
+ * stalled host polls on its own short clock and stops again as soon as nothing
+ * is stalled.
+ */
+const RESUME_POLL_MS = 10_000;
+
+/**
+ * Claude Code's own session registry — `~/.claude/sessions/<pid>.json`, one file
+ * per live process (peer-registry spike §0).
+ *
+ * Read for exactly ONE field: `entrypoint`, which is `'cli'` for a real
+ * interactive TTY and `'sdk-cli'` for `-p` and SDK runs. That is the only honest
+ * discriminator in the file — `kind` says `"interactive"` even for a one-shot
+ * `claude -p`, and `tmux` is an inherited-env label that is ambiguous across
+ * sockets and simply wrong for a nested launch (three independent confirmations
+ * in the spike). Never resolve a session by either.
+ *
+ * Returns null when nothing matches, which is the honest answer for a process
+ * that has exited: its entry is removed within seconds.
+ */
+function nativeRegistryEntry(claudeSessionId) {
+  if (!claudeSessionId) return null;
+  const dir = path.join(CLAUDE_DIR, 'sessions');
+  let names = [];
+  try { names = fs.readdirSync(dir); } catch { return null; }
+  for (const n of names) {
+    if (!n.endsWith('.json')) continue;
+    try {
+      const o = JSON.parse(fs.readFileSync(path.join(dir, n), 'utf8'));
+      if (o && o.sessionId === claudeSessionId) return o;
+    } catch { /* a file being written, or one we have no business reading */ }
+  }
+  return null;
+}
+
+/**
+ * The raw records at the end of a transcript, newest last.
+ *
+ * `readTranscript` renders EVENTS, and the stall rules read raw record fields
+ * (`isApiErrorMessage`, `apiErrorStatus`, `isMeta`) that rendering deliberately
+ * drops. Unparseable lines are skipped, which also disposes of the partial first
+ * line every tail read starts with.
+ */
+function tailRecords(file, bytes = 64 * 1024) {
+  const tail = file ? transcriptTail(file, null, bytes) : null;
+  if (!tail || !tail.text) return [];
+  const out = [];
+  for (const line of tail.text.split('\n')) {
+    const t = line.trim();
+    if (!t) continue;
+    try { const rec = JSON.parse(t); if (rec && typeof rec === 'object') out.push(rec); } catch { /* partial */ }
+  }
+  return out;
+}
+
 // ---- settings --------------------------------------------------------------
 
 function saveHeadroomSettings(s) {
@@ -4613,7 +4744,10 @@ function seedHeadroomDefaults() {
 // ---- state -----------------------------------------------------------------
 
 function blankStall() {
-  return { at: null, window: null, resetsAt: null, resumedAt: null, how: null, attempts: 0 };
+  return {
+    at: null, window: null, resetsAt: null, resetsAtSource: null, resumedAt: null,
+    how: null, attempts: 0, nativeArmed: false, notifiedAt: null, why: null, text: null,
+  };
 }
 
 function normalizeHeadroomState(o) {
@@ -4998,6 +5132,11 @@ async function headroomTickInner() {
       }
     }
 
+    // Stall detection on EVERY tick (design §4). Cheap: one tail read per live
+    // session, the same read the ladder's model probe already pays for.
+    try { await noteStall(rec, s, settings, activeWindows, now); }
+    catch (e) { log(`headroom: reading ${s.name}'s tail failed: ${e.message}`); }
+
     model.push({
       claudeSessionId: s.claudeSessionId,
       name: s.name,
@@ -5039,6 +5178,33 @@ async function headroomTickInner() {
       await applyHeadroomAction(action, { state, settings, now, activeWindows, activeSlug, activeEmail });
     } catch (e) {
       log(`headroom: applying ${action.type} failed: ${e.message}`);
+    }
+  }
+
+  // Auto-resume runs AFTER the arbiter, deliberately: a session that just
+  // laddered to opus is not stalled, and a stalled session is not a candidate
+  // for a ladder (a 5-hour cap blocks every model, design §2). Letting the
+  // arbiter go first also means a `switch_account` has already landed before
+  // anything reads the window percentages back.
+  //
+  // ⚠ ONE RESUME PASS AT A TIME, ACROSS BOTH CLOCKS. The 10-second poll and this
+  // minute tick both apply resumes against the same in-memory state, and both
+  // await a send queue that can park for a turn boundary — so without this the
+  // window between "decide to resume" and "mark it resumed" is wide enough for
+  // the other clock to decide the same thing and type the phrase twice.
+  if (!resumeBusy) {
+    resumeBusy = true;
+    try {
+      await applyResumes({
+        state, settings, now, activeWindows,
+        resetWindows: recentResetWindows(state, now),
+        sessions: model,
+      });
+      await consentWatch(state, settings, live, now);
+    } catch (e) {
+      log(`headroom: applying resumes failed: ${e.message}`);
+    } finally {
+      resumeBusy = false;
     }
   }
 
@@ -5187,6 +5353,477 @@ function writeSentinels(plan, state, settings) {
   void settings;
 }
 
+
+// ---- auto-resume ------------------------------------------------------------
+//
+// Four things happen here, in this order, on every headroom tick and on the
+// 10-second poll a stalled host adds:
+//
+//   1. NOTICE.   A session whose last transcript record is the 429 is stalled.
+//                Recorded on the session's headroom row, announced once.
+//   2. WAIT.     If Claude Code's own in-process wait is armed for that session
+//                (interactive, not restored since the stall, reset inside 24 h)
+//                appd does nothing for NATIVE_GRACE_MS. Two continuations would
+//                run the task twice.
+//   3. RESUME.   Otherwise: the resume phrase through the send queue for a live
+//                session, a re-run for a headless chat or Round, a re-queue for
+//                a run that was executing on another machine.
+//   4. SAY SO.   One notification listing what came back, and how.
+//
+// The rules are all in lib/resume.js. What is here is the I/O and the one thing
+// a pure function cannot decide: whether it is still true NOW.
+
+/** What the owner calls each window in a notification. */
+function windowWords(w) {
+  if (w === 'session') return '5-hour';
+  if (w === 'weekly_fable') return 'weekly Fable';
+  if (w === 'weekly_all') return 'weekly';
+  return 'usage';
+}
+
+/** A reset time as a person reads it, or 'soon' when we never learned one. */
+function clockOf(ms) {
+  if (!ms) return 'soon';
+  try { return new Date(Number(ms)).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' }); }
+  catch { return 'soon'; }
+}
+
+/**
+ * Notice a stall, or notice one has cleared.
+ *
+ * ⚠ THE RECORD IS THE EVIDENCE, NOT THE PERCENTAGE. A session at 99% is still
+ * working and a session at 100% whose last record is a human message was stopped
+ * by a person — so this keys off the 429 record and nothing else (design §4).
+ *
+ * @returns the transcript tail it read, so the caller does not read it twice.
+ */
+async function noteStall(rec, s, settings, activeWindows, now) {
+  const file = transcriptPath(s.name);
+  const records = tailRecords(file);
+  if (!records.length) return records;
+  const found = resumeLib.stallOf(records, activeWindows, { now });
+  if (!found) {
+    // Cleared: the conversation moved on. The row stops saying `stalled` and the
+    // attempt counter goes with it, because the next stall is a new one.
+    if (rec.stall && rec.stall.at) rec.stall = blankStall();
+    return records;
+  }
+  if (rec.stall && rec.stall.at === found.at) {
+    // The same stall. Only ever UPGRADE what we know about it: a resetsAt that
+    // arrived from the endpoint after a text-derived guess is better evidence,
+    // and the reverse never is.
+    if (found.resetsAtSource === 'endpoint' && rec.stall.resetsAtSource !== 'endpoint' && found.resetsAt) {
+      rec.stall.resetsAt = found.resetsAt;
+      rec.stall.resetsAtSource = 'endpoint';
+    }
+    return records;
+  }
+  const entry = nativeRegistryEntry(s.claudeSessionId);
+  const reg = loadRegistry()[s.name] || null;
+  const armed = resumeLib.nativeArmed({
+    registryEntry: entry,
+    restoredAt: reg && reg.restoredAt ? reg.restoredAt * 1000 : null,
+    stallAt: found.at,
+    resetsAt: found.resetsAt,
+    now,
+  });
+  rec.stall = { ...blankStall(), ...found, nativeArmed: armed };
+  log(`headroom: ${s.name} stalled on the ${found.window || 'usage'} limit`
+    + `${found.resetsAt ? `, resets ${new Date(found.resetsAt).toISOString()}` : ''}`
+    + ` (native wait ${armed ? 'armed' : 'not armed'})`);
+  // ONE notification per stall, not per tick. The tick runs every minute while
+  // anything is live and the stall persists for as long as the window takes to
+  // reset — up to a week for a Fable weekly — so a per-tick notification would
+  // be ten thousand buzzes for one event.
+  rec.stall.notifiedAt = now;
+  const text = `${s.name} hit the ${windowWords(found.window)} limit · resets ${clockOf(found.resetsAt)}`;
+  const push = await deliverPush({
+    kind: 'headroom_limit', title: 'Usage limit reached', text, subject: s.name,
+  });
+  if (!push.sent) await deliverTelegram(`\u{1F6D1} Usage limit reached\n${text}`);
+  return records;
+}
+
+/**
+ * Act on one stalled SESSION.
+ *
+ * Returns a line for the notification (`"jtyper (native)"`) or null when there
+ * is nothing to say — which is the usual answer, because the usual answer is
+ * "the window has not reset yet".
+ */
+async function resumeSession(rec, s, settings, ctx) {
+  const { now, activeWindows, resetWindows } = ctx;
+  const stall = rec.stall;
+  const records = tailRecords(transcriptPath(s.name));
+  const after = resumeLib.recordsAfterStall(records);
+
+  // Did it come back WITHOUT us? Checked before eligibility, because anything
+  // that landed after the 429 — a native continuation included — would otherwise
+  // read as "the session moved on", which is true and the wrong reason.
+  //
+  // ⚠ THE INJECTED SENTENCE IS ITSELF A `user` RECORD, so the native test has to
+  // come first. Judged the other way round, every native resume would be filed
+  // as "a person answered it" and the notification would never say a session
+  // came back on its own.
+  if (after.length) {
+    const nativeLine = resumeLib.nativeResumed(after, null);
+    const human = after.some((r) => resumeLib.isHumanRecord(r));
+    if (nativeLine || human) {
+      stall.resumedAt = now;
+      stall.how = nativeLine ? 'native' : 'human';
+      stall.why = nativeLine ? 'Claude Code continued it itself' : 'a person answered it';
+      log(`headroom: ${s.name} resumed by ${stall.how}`);
+      return nativeLine ? `${s.name} (native)` : null;
+    }
+  }
+
+  const meta = loadSessionMeta(s.claudeSessionId);
+  const w = stall.window;
+  const percent = w && activeWindows && activeWindows[w] ? activeWindows[w].percent : null;
+  const verdict = resumeLib.eligible({
+    settings, meta, stall, records, resetSeen: resetWindows.has(w), percent, now,
+  });
+  if (!verdict.ok) { stall.why = verdict.why; return null; }
+
+  const cancelled = resumeLib.nativeCancelled(after.length ? after : records);
+  const plan = resumeLib.resumePlan({
+    kind: 'session', armed: !!stall.nativeArmed, stall, cancelled, now, graceMs: NATIVE_GRACE_MS,
+  });
+  stall.why = plan.why;
+  if (plan.action !== 'type_phrase') return null;
+
+  // Through the QUEUE, at a turn boundary, and the queue drops it by itself if
+  // the owner typed while it waited (typing.dropReason 'human'). A phrase typed
+  // mid-turn is absorbed into that turn and silently rewrites what it was told
+  // to do — the one failure this whole path must not cause.
+  const out = await enqueueSend(s.name, settings.resumePhrase, {
+    automated: true, origin: 'headroom', kind: 'resume',
+  });
+  if (out.dropped) {
+    stall.why = `the resume was dropped (${out.dropped})`;
+    log(`headroom: resume for ${s.name} dropped (${out.dropped})`);
+    return null;
+  }
+  stall.resumedAt = now;
+  stall.how = 'appd';
+  stall.attempts = (Number(stall.attempts) || 0) + 1;
+  log(`headroom: resumed ${s.name} (attempt ${stall.attempts}, ${plan.why})`);
+  return `${s.name} (${out.delivered ? 'typed' : 'queued'})`;
+}
+
+/**
+ * Act on every stalled session and every stalled chat, and say what came back.
+ *
+ * One notification for the lot. Six sessions resuming at 3 a.m. is one event —
+ * the window reset — and six notifications for it is how a channel is taught to
+ * be ignored.
+ */
+async function applyResumes(ctx) {
+  const { state, settings, now, sessions } = ctx;
+  const resumed = [];
+  for (const s of sessions) {
+    const rec = state.sessions[s.claudeSessionId];
+    if (!rec || !rec.stall || !rec.stall.at || rec.stall.resumedAt) continue;
+    try {
+      const line = await resumeSession(rec, s, settings, ctx);
+      if (line) resumed.push(line);
+    } catch (e) {
+      log(`headroom: resuming ${s.name} failed: ${e.message}`);
+    }
+  }
+  for (const line of await resumeStalledChats(settings, ctx)) resumed.push(line);
+  if (!resumed.length) return;
+  state.arbiter.lastResumeAt = Math.floor(now / 1000);
+  const text = `Usage limit reset · resumed: ${resumed.join(', ')}`;
+  const push = await deliverPush({
+    kind: 'headroom_resumed', title: 'Usage limit reset', text, subject: 'headroom',
+  });
+  if (!push.sent) await deliverTelegram(`\u{1F504} Usage limit reset\n${text}`);
+  log(`headroom: ${text}`);
+}
+
+/**
+ * The headless half: chats and Round runs whose `claude -p` died on a 429.
+ *
+ * These have no native wait at all — the feature is an interactive main-thread
+ * one (native-rl §1) — so there is nothing to defer to and no grace to serve.
+ * The moment the window is back, the turn is re-run.
+ */
+async function resumeStalledChats(settings, ctx) {
+  const { now, activeWindows, resetWindows } = ctx;
+  const out = [];
+  let ids = [];
+  try { ids = fs.readdirSync(CHATS_DIR); } catch { return out; }
+  for (const id of ids) {
+    const meta = loadMeta(id);
+    if (!meta || !meta.stall || !meta.stall.at || meta.stall.resumedAt) continue;
+    if (activeRuns.has(id)) continue;
+    const w = meta.stall.window;
+    const percent = w && activeWindows && activeWindows[w] ? activeWindows[w].percent : null;
+    // No per-chat toggle in 3.0 (design §4): chats and Rounds obey the global.
+    const verdict = resumeLib.eligible({
+      settings, meta: null, stall: meta.stall, records: null,
+      resetSeen: resetWindows.has(w), percent, now,
+    });
+    if (!verdict.ok) {
+      if (meta.stall.why !== verdict.why) updateMeta(id, (m) => { if (m.stall) m.stall.why = verdict.why; });
+      continue;
+    }
+    const r = rerunStalledRun(id);
+    if (r.ok) out.push(`${r.title} (re-run)`);
+    else log(`headroom: could not re-run ${id}: ${r.error}`);
+  }
+  return out;
+}
+
+/**
+ * Re-run the turn a usage limit killed, on the same conversation.
+ *
+ * `startRun` already does everything this needs — it appends `--resume
+ * <claudeSessionId>` whenever the meta carries one and writes the user text to
+ * the child's stdin — so the re-run is the ORIGINAL call with the original text,
+ * not a second code path that would drift from it. The only additions are the
+ * marks: `resumedAfterLimit` on the chat (which is also what stops a daemon
+ * restart re-running it a second time, inherited gotcha 3) and a `system` line
+ * in the transcript so the conversation says why it starts again.
+ */
+function rerunStalledRun(chatId) {
+  const meta = loadMeta(chatId);
+  if (!meta) return { ok: false, error: 'no such chat' };
+  const stall = meta.stall;
+  if (!stall || !stall.at) return { ok: false, error: 'that run did not stall on a limit' };
+  if (stall.resumedAt) return { ok: false, error: 'already re-run' };
+  const text = stall.userText;
+  if (!text) return { ok: false, error: 'the stalled turn left no text to re-send' };
+  const ts = Math.floor(Date.now() / 1000);
+  // Written BEFORE the run starts. If the spawn throws, a chat marked resumed is
+  // a chat that will not be resumed again in a loop; the opposite mistake pays
+  // for the same long answer twice.
+  updateMeta(chatId, (m) => {
+    m.resumedAfterLimit = true;
+    if (m.stall) {
+      m.stall.resumedAt = ts * 1000;
+      m.stall.how = 'rerun';
+      m.stall.attempts = (Number(m.stall.attempts) || 0) + 1;
+    }
+    // A Round run that was held open for this is live again.
+    if (m.roundId) m.sealed = false;
+  });
+  appendMsg(chatId, { type: 'system', text: 'resumed after the limit reset', ts });
+  const fresh = loadMeta(chatId);
+  const started = startRunAnywhere(fresh, text);
+  if (started && started.error) {
+    appendMsg(chatId, { type: 'error', text: `could not resume: ${started.error}`, ts });
+    return { ok: false, error: started.error };
+  }
+  const title = fresh.title || (fresh.roundId ? 'a scheduled run' : `chat ${chatId.slice(0, 8)}`);
+  log(`chat ${chatId} re-run after the limit reset (resume=${fresh.claudeSessionId || 'new'})`);
+  return { ok: true, title };
+}
+
+/**
+ * Record a run that died on a usage limit, so the reset can bring it back.
+ *
+ * Called from settleRun, which is the ONE place a run ends wherever it ran. The
+ * evidence is the failure text: a `-p` run reports the limit through its result
+ * event (`is_error` with the apology in `result`, kept as `errorText`) rather
+ * than as a transcript record, so `parseLimitError` reads the window off that.
+ *
+ * @returns true when a resume is pending — which for a Round run also means its
+ *   report must NOT be filed yet: the run is not over, it is waiting.
+ */
+function noteRunStall(chatId, failureText) {
+  const parsed = resumeLib.stallOf(
+    { type: 'assistant', isApiErrorMessage: true, apiErrorStatus: 429, message: { content: failureText || '' } },
+    activeWindowsNow(),
+    { now: Date.now() },
+  );
+  if (!parsed || !parsed.window) return false;
+  const settings = loadHeadroomSettings();
+  if (settings.autoResume === false) return false;
+  // The text of the turn that died, because it is the only copy: the run is over
+  // and the sender's composer was cleared when it was accepted.
+  const msgs = loadMsgs(chatId);
+  let userText = null;
+  for (let i = msgs.length - 1; i >= 0; i--) {
+    if (msgs[i] && msgs[i].type === 'user' && msgs[i].text) { userText = msgs[i].text; break; }
+  }
+  if (!userText) return false;
+  const prior = loadMeta(chatId);
+  const attempts = (prior && prior.stall && Number(prior.stall.attempts)) || 0;
+  if (attempts >= resumeLib.MAX_ATTEMPTS) return false;
+  updateMeta(chatId, (m) => {
+    m.stall = { ...blankStall(), ...parsed, attempts, userText };
+  });
+  log(`chat ${chatId} stalled on the ${parsed.window} limit; a re-run is pending the reset`);
+  return true;
+}
+
+/**
+ * The model a NEW headless run should be launched on, or null for "as configured".
+ *
+ * Only ever a downgrade, and only while the Fable weekly window is red: chats
+ * and Rounds are unattended, and an unattended run that meets a consent dialog
+ * it cannot answer does not get a slower answer, it gets no answer at all.
+ */
+function fableRedDowngrade() {
+  try {
+    const settings = loadHeadroomSettings();
+    const w = activeWindowsNow().weekly_fable;
+    if (!w || w.percent == null) return null;
+    const mode = headroomLib.classify(w.percent, settings);
+    if (mode !== 'red' && mode !== 'exhausted') return null;
+    return headroomLib.nextDown('fable', settings.ladder) || null;
+  } catch { return null; }
+}
+
+/**
+ * The chat row's "ran on" caption, or null when the run got what it asked for.
+ *
+ * The comparison is by FAMILY, not by id: `claude-opus-5` and the 1M-context
+ * variant are the same answer to "did this run get moved", and an id-level
+ * comparison would caption every run whose model string was spelled differently
+ * from the settings key.
+ */
+function ranOnLabel(askedModel, sawModel) {
+  if (!sawModel) return null;
+  const got = headroomLib.familyOf(sawModel);
+  if (!got) return null;                       // '<synthetic>' — the CLI wrote it, not a model
+  let want = null;
+  try { want = headroomLib.familyOf(askedModel || loadHeadroomSettings().defaultModel); } catch { /* defaults */ }
+  if (!want || want === got) return null;
+  // Named for the reason, because the reason is the whole point of the caption:
+  // an owner seeing "opus" on a chat they expected Fable to answer needs to know
+  // it was the cap and not a setting they mis-typed.
+  return want === 'fable' ? `${got} (Fable limit)` : got;
+}
+
+/** The active account's windows as the last tick read them. */
+function activeWindowsNow() {
+  const st = hstate();
+  const live = Object.values(st.accounts || {}).find((a) => a && a.live) || null;
+  return (live && live.windows) || {};
+}
+
+// ---- the Fable consent dialog ----------------------------------------------
+//
+// Measured (native-rl §7): when Fable passes the point where further use bills
+// usage credits, an interactive session gets a dialog — and an UNANSWERED one
+// loses the turn ("nothing was sent", `{reason:"model_error"}`). `detectPrompt`
+// surfaces it as an ordinary prompt card carrying `recommended`, so both clients
+// draw it with no new surface and a person can answer it from a lock screen.
+//
+// This is the backstop for when nobody does. After CONSENT_GRACE_MS on a session
+// whose auto-resume is on, appd presses the recommended row itself: a
+// session-only model change is a smaller loss than a destroyed turn, and it
+// writes nothing to the shared settings.json.
+const consentSeen = new Map();   // session name -> first seen at (ms)
+
+async function consentWatch(state, settings, sessions, now) {
+  const live = new Set();
+  for (const s of sessions) {
+    // Only where the dialog can BE: a session asking something, on a host whose
+    // Fable window is actually out of room. Capturing every pane every ten
+    // seconds to look for a dialog that appears twice a year is not a trade
+    // worth making.
+    if (s.state !== 'attention') continue;
+    live.add(s.name);
+    let screen = null;
+    try { screen = await captureScreen(s.name); } catch { /* pane gone */ }
+    const prompt = screen ? promptFor(s.name, screen.lines).prompt : null;
+    if (!prompt || !prompt.recommended) { consentSeen.delete(s.name); continue; }
+    const since = consentSeen.get(s.name) || now;
+    consentSeen.set(s.name, since);
+    if (now - since < CONSENT_GRACE_MS) continue;
+    const meta = loadSessionMeta(s.claudeSessionId);
+    const on = meta && typeof meta.autoResume === 'boolean' ? meta.autoResume : settings.autoResume !== false;
+    if (!on) continue;
+    const row = prompt.options.find((o) => o.number === prompt.recommended);
+    const typed = await run('tmux', ['send-keys', '-t', `=${s.name}:`, '-l', '--', String(prompt.recommended)]);
+    if (typed.err) { log(`headroom: consent answer failed on ${s.name}: ${typed.stderr.trim()}`); continue; }
+    await run('tmux', ['send-keys', '-t', `=${s.name}:`, 'Enter']);
+    consentSeen.delete(s.name);
+    const rec = s.claudeSessionId ? sessionRecord(state, s.claudeSessionId, s.name) : null;
+    const to = headroomLib.familyOf(row ? row.label : null) || (row ? row.label : null);
+    if (rec) rec.nativeSwitch = { seenAt: now, to, how: 'appd-consent' };
+    log(`headroom: answered the Fable consent dialog on ${s.name} with "${(row && row.label) || prompt.recommended}"`);
+    const text = `${s.name} was asked to keep going on Fable using usage credits and nobody answered — `
+      + `huginn switched it for this session instead.`;
+    const push = await deliverPush({
+      kind: 'headroom_downgraded', title: `Moved ${s.name} off Fable`, text, subject: s.name,
+    });
+    if (!push.sent) await deliverTelegram(`\u{1F4C9} Moved ${s.name} off Fable\n${text}`);
+  }
+  for (const name of [...consentSeen.keys()]) if (!live.has(name)) consentSeen.delete(name);
+}
+
+// ---- the stalled-host poll --------------------------------------------------
+
+let resumeTimer = null;
+let resumeBusy = false;
+/**
+ * Ten seconds, but ONLY while something is stalled or the account is out of
+ * room. The headroom tick's own cadence is a minute at its fastest and five
+ * minutes at its idlest, and a host waiting for a reset is idle by definition —
+ * so the one moment this subsystem exists for is the one moment the tick is
+ * slowest. This runs alongside it and stops as soon as there is nothing to watch.
+ */
+async function resumeTick() {
+  // The minute tick owns the same state and the same queue; it reschedules
+  // itself in a `finally`, so skipping a poll here costs ten seconds and never
+  // a stopped clock.
+  if (resumeBusy || headroomBusy) return;
+  const state = hstate();
+  const mode = state.mode || 'ok';
+  const anyStalled = Object.values(state.sessions || {}).some((r) => r && r.stall && r.stall.at && !r.stall.resumedAt);
+  if (!anyStalled && mode !== 'red' && mode !== 'exhausted') return;
+  resumeBusy = true;
+  try {
+    const settings = loadHeadroomSettings();
+    const now = Date.now();
+    const sessions = (await listSessions()) || [];
+    const activeWindows = activeWindowsNow();
+    const resetWindows = recentResetWindows(state, now);
+    const watched = [];
+    for (const s of sessions) {
+      if (!s.claudeSessionId) continue;
+      const rec = sessionRecord(state, s.claudeSessionId, s.name);
+      const records = await noteStall(rec, s, settings, activeWindows, now);
+      watched.push({ s, rec, records });
+    }
+    await applyResumes({
+      state, settings, now, activeWindows, resetWindows,
+      sessions: watched.map((x) => x.s),
+    });
+    await consentWatch(state, settings, sessions, now);
+    saveHeadroomState(state);
+  } catch (e) {
+    log(`headroom: resume poll failed: ${e.message}`);
+  } finally {
+    resumeBusy = false;
+  }
+}
+resumeTimer = setInterval(() => { resumeTick().catch(() => { }); }, RESUME_POLL_MS);
+if (resumeTimer.unref) resumeTimer.unref();
+
+/**
+ * Which windows have reset recently enough to count.
+ *
+ * `detectResets` fires once, on the tick that sees the drop; the resume that
+ * follows may need two or three passes (the queue waits for a turn boundary),
+ * so the event is remembered for an hour rather than consumed by whoever reads
+ * it first.
+ */
+const RESET_MEMORY_MS = 60 * 60 * 1000;
+function recentResetWindows(state, now) {
+  const out = new Set();
+  for (const r of state.resets || []) {
+    if (!r || !r.window) continue;
+    if (now - (Number(r.at) || 0) <= RESET_MEMORY_MS) out.add(r.window);
+  }
+  return out;
+}
+
 // ---- what the rest of the daemon asks headroom -----------------------------
 
 /** The session's family RIGHT NOW, for the send queue's `kind:'model'` drop rule. */
@@ -5221,11 +5858,25 @@ function headroomForSession(claudeSessionId) {
 function headroomFacts() {
   const st = hstate();
   const armed = Object.entries(st.sentinels || {}).filter(([, v]) => !!v).map(([k]) => k);
-  const stalled = Object.values(st.sessions || {})
-    .filter((r) => r && r.stall && r.stall.at).map((r) => r.name);
+  const rows = Object.values(st.sessions || {}).filter((r) => r && r.name);
+  const stalled = rows.filter((r) => r.stall && r.stall.at).map((r) => r.name);
+  // The two MAPS the desktop's notification rules need. `stalled` answers "is
+  // anything stuck"; `LimitHit(session, resetsAt)` has to say WHEN it comes back
+  // and `Downgraded(session, to)` has to say WHAT it moved to, and neither fact
+  // can be recovered from a list of names. ISO strings, not epochs: the client
+  // renders them, and a client that has to guess the unit renders 1970.
+  const stalls = {};
+  for (const r of rows) {
+    if (!r.stall || !r.stall.at) continue;
+    stalls[r.name] = r.stall.resetsAt ? new Date(Number(r.stall.resetsAt)).toISOString() : null;
+  }
+  const laddered = {};
+  for (const r of rows) if (r.ladder && r.ladder.to) laddered[r.name] = r.ladder.to;
   return {
     mode: st.mode || 'ok',
     stalled,
+    stalls,
+    laddered,
     lastResumeAt: st.arbiter.lastResumeAt ?? null,
     lastLadderAt: st.arbiter.lastLadderAt || 0,
     sentinels: armed,
@@ -5267,6 +5918,10 @@ function headroomPayload() {
       ladder: r.ladder || null,
       autoResume: meta && typeof meta.autoResume === 'boolean' ? meta.autoResume : settings.autoResume,
       stalled: !!(r.stall && r.stall.at),
+      // The whole record, not just the flag: the phone's card says which window
+      // and when it comes back, and `why` is the only place a refusal to resume
+      // ("auto-resume is off for this session") is ever written down.
+      stall: r.stall && r.stall.at ? r.stall : null,
       headsUpAt: r.headsUpAt ?? null,
       nativeSwitch: r.nativeSwitch || { seenAt: null, to: null },
     };
