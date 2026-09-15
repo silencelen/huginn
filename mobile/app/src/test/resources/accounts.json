@@ -15,9 +15,10 @@
    "expiresAt": 1789488000000,
    "refreshTokenExpiresAt": 1791993600000,
    "refresh": {
-    "lastAt": 1789458200,
-    "lastStatus": "ok",
-    "nextAt": 1789480000
+    "lastAt": 1789458200000,
+    "lastStatus": "refreshed",
+    "nextAt": 1789485600000,
+    "deadAt": null
    }
   },
   {
@@ -35,9 +36,10 @@
    "expiresAt": 1788000000000,
    "refreshTokenExpiresAt": 1791993600000,
    "refresh": {
-    "lastAt": 1789457000,
-    "lastStatus": "invalid_grant",
-    "nextAt": null
+    "lastAt": 1789457000000,
+    "lastStatus": "refresh_token_expired",
+    "nextAt": null,
+    "deadAt": 1789457000000
    }
   },
   {
@@ -55,9 +57,10 @@
    "expiresAt": 1780000000000,
    "refreshTokenExpiresAt": 1781000000000,
    "refresh": {
-    "lastAt": 1782200000,
-    "lastStatus": "invalid_grant",
-    "nextAt": null
+    "lastAt": 1782200000000,
+    "lastStatus": "known_dead_refresh_token",
+    "nextAt": null,
+    "deadAt": 1782200000000
    }
   }
  ]
