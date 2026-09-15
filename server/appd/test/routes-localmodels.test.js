@@ -118,7 +118,7 @@ before(async () => {
 
 after(() => {
   if (daemon) daemon.kill('SIGTERM');
-  if (tmp) fs.rmSync(tmp, { recursive: true, force: true });
+  if (tmp) fs.rmSync(tmp, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 });
 });
 
 test('a generate enrolment gets a minted llmSlug, echoed and stable across rename', async () => {

@@ -73,6 +73,32 @@ const UUID_IDLE = 'e12d3fa9-fb80-4e4a-b286-36890d487fd4';
 const UUID_DEAD = '3b2f6c11-0a44-4c98-9d0e-7f1a2b3c4d5e';
 const HOUR = 3600_000;
 
+/**
+ * A stored `lastPlan` — the reading taken while that account was last active,
+ * which is all the arbiter has to price an inactive login with.
+ *
+ * `resetsAt` is the load-bearing field, not the percentage: `agedLimits` zeroes
+ * every window whose reset instant has passed, so a snapshot dated in the PAST
+ * reads as 0% however full it was.
+ */
+const planSnapshot = (pct, resetsAt) => ({
+  at: Date.now(),
+  limits: [
+    { kind: 'session', percent: pct, severity: 'normal', resetsAt, label: 'Current session' },
+    { kind: 'weekly_all', percent: pct, severity: 'normal', resetsAt, label: 'Current week, all models' },
+    { kind: 'weekly_scoped', percent: pct, severity: 'normal', resetsAt, label: 'Current week (Fable)' },
+  ],
+});
+/** Empty, and every window long since rolled over: the freshest-looking candidate on the host. */
+const PLAN_SPENT_LONG_AGO = planSnapshot(0, new Date(Date.now() - HOUR).toISOString());
+/**
+ * Full, and its windows do NOT roll over during this file — so it is not a
+ * candidate, full stop. Dating these in the past instead (as this fixture once
+ * did) ages them to 0% too, which quietly turns "the other saved one is full"
+ * into a second 0% candidate and leaves the arbiter's choice to a tie-break.
+ */
+const PLAN_FULL = planSnapshot(99, new Date(Date.now() + 24 * HOUR).toISOString());
+
 let tmp, claudeDir, credPath, dataDir, accountsDir, token, daemon;
 let stub, stubUrl;
 /** Every body the daemon POSTed to the token endpoint. Counting is the test. */
@@ -118,6 +144,44 @@ async function api(pathname, init = {}) {
   return { status: res.status, body };
 }
 
+/**
+ * Poll `/v1/headroom` for a condition rather than sleeping a fixed time, nudging
+ * the daemon's tick as we go — the same shape routes-headroom.test.js uses.
+ *
+ * The nudge matters: the headroom cadence is a minute at its fastest, PATCH
+ * re-evaluates immediately by design, and a decision that needs two passes (read
+ * the numbers, then act on them) must not depend on luck about which one lands.
+ */
+async function until(fn, ms = 20_000, what = 'the condition') {
+  const deadline = Date.now() + ms;
+  let last = null;
+  let nextTick = 0;
+  for (;;) {
+    last = (await api('/v1/headroom')).body;
+    if (fn(last)) return last;
+    if (Date.now() > deadline) {
+      throw new Error(`${what} never became true. Last /v1/headroom: `
+        + `${JSON.stringify({ accounts: last && last.accounts, arbiter: last && last.arbiter }).slice(0, 900)}`);
+    }
+    if (Date.now() > nextTick) {
+      nextTick = Date.now() + 1_500;
+      await api('/v1/headroom/settings', { method: 'PATCH', body: '{}' });
+    }
+    await wait(150);
+  }
+}
+/** The worst percentage the daemon currently holds for a slug, or null. */
+function pricedAt(hr, slug) {
+  const row = hr && hr.accounts && hr.accounts[slug];
+  const windows = (row && row.windows) || {};
+  let worst = null;
+  for (const w of Object.values(windows)) {
+    if (!w || typeof w.percent !== 'number') continue;
+    if (worst === null || w.percent > worst) worst = w.percent;
+  }
+  return worst;
+}
+
 const liveBytes = () => fs.readFileSync(credPath);
 const profile = (slug) => JSON.parse(fs.readFileSync(path.join(accountsDir, `${slug}.json`), 'utf8'));
 const slugs = () => fs.readdirSync(accountsDir).filter((f) => f.endsWith('.json')).map((f) => f.slice(0, -5)).sort();
@@ -141,11 +205,28 @@ before(async () => {
   const live = creds('rt-LIVE');
   fs.writeFileSync(credPath, JSON.stringify(live), { mode: 0o600 });
   seed(UUID_LIVE, 'live@example.com', live);
-  seed(UUID_IDLE, 'idle@example.com', creds('rt-IDLE'));
+  // ⚠ `lastPlan` IS SEEDED HERE, BEFORE THE DAEMON EXISTS, and the arbiter test
+  // at the bottom of this file depends on it. The daemon prices every saved
+  // account exactly ONCE and then leaves it alone for SAVED_PLAN_MS (30 min),
+  // and its first headroom pass runs on a 5 s timer from start — so a fixture
+  // written by a test body is only ever read if the whole file got there in
+  // under five seconds. It does on an idle host (~2.6 s) and does not on one
+  // running parallel gradle builds, and the difference was a real flake: the
+  // boot tick priced the DEAD profile with no numbers at all (expired token, no
+  // lastPlan yet) and the IDLE one LIVE and green off its freshly refreshed
+  // token, leaving the healthy idle login as the arbiter's only candidate. It
+  // switched to it for real — rewriting the credentials file this file exists to
+  // protect — and every later tick then answered "cooling down for another
+  // 30 min". Seeded before start, the pricing is the same whenever it happens.
+  seed(UUID_IDLE, 'idle@example.com', creds('rt-IDLE'), { lastPlan: PLAN_FULL });
   // A login whose refresh token expired days ago: nothing but an interactive
   // sign-in brings it back, and switching to it would hand the CLI a dead pair.
+  // Its windows all reset in the PAST, so `agedLimits` zeroes them and it scores
+  // as the freshest thing on the host — which is the trap the arbiter has to not
+  // fall into, and the reason this file has an arbiter test at all.
   seed(UUID_DEAD, 'dead@example.com',
-    creds('rt-DEAD', { refreshTokenExpiresAt: Date.now() - 3 * 24 * HOUR }));
+    creds('rt-DEAD', { refreshTokenExpiresAt: Date.now() - 3 * 24 * HOUR }),
+    { lastPlan: PLAN_SPENT_LONG_AGO });
 
   // A `claude` that answers `auth status` instantly and does nothing else, so
   // performSwitch never shells out to the real CLI (which would read the real
@@ -248,10 +329,32 @@ before(async () => {
   }
 });
 
+/**
+ * SIGTERM, then SIGKILL if it will not go, and wait until the process is REAPED.
+ *
+ * ⚠ SIGTERM IS A REQUEST, AND THE SCRATCH TREE IS NOT OURS UNTIL IT IS ANSWERED.
+ * The daemon still has a headroom pass and a state save in flight, and on a
+ * loaded host those land after this hook has started walking the directory —
+ * rimraf deletes a file, the daemon writes another, and the rmdir fails
+ * ENOTEMPTY. `node --test` reports that as the whole FILE failing with every
+ * test inside it green, which reads like a mystery and is a race in the
+ * teardown. Reproduced 2026-09-15.
+ */
+function reap(child, ms = 10_000) {
+  if (child.exitCode !== null || child.signalCode) return Promise.resolve();
+  return new Promise((resolve) => {
+    const hard = setTimeout(() => { try { child.kill('SIGKILL'); } catch { /* gone */ } }, 3_000);
+    const giveUp = setTimeout(resolve, ms);
+    const done = () => { clearTimeout(hard); clearTimeout(giveUp); resolve(); };
+    child.once('exit', done);
+    try { child.kill('SIGTERM'); } catch { done(); }
+  });
+}
+
 after(async () => {
-  if (daemon) daemon.kill('SIGTERM');
   if (stub) await new Promise((r) => stub.close(r));
-  if (tmp) fs.rmSync(tmp, { recursive: true, force: true });
+  if (daemon) await reap(daemon);
+  if (tmp) fs.rmSync(tmp, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 });
 });
 
 test('an inactive expired profile is refreshed in place, under the same slug', async () => {
@@ -465,46 +568,54 @@ test('the arbiter refuses an unrefreshable profile too, and signs nobody out', a
   // MORE likely than the button to choose a dead profile: `agedLimits` zeroes
   // every window whose reset time has passed, so the profile nobody has read for
   // weeks scores as the freshest candidate on the host.
-  const gone = new Date(Date.now() - HOUR).toISOString();
-  const plan = (pct) => ({
-    at: Date.now(),
-    limits: [
-      { kind: 'session', percent: pct, severity: 'normal', resetsAt: gone, label: 'Current session' },
-      { kind: 'weekly_all', percent: pct, severity: 'normal', resetsAt: gone, label: 'Current week, all models' },
-      { kind: 'weekly_scoped', percent: pct, severity: 'normal', resetsAt: gone, label: 'Current week (Fable)' },
-    ],
-  });
-  // The dead login looks like the freshest thing on the host; the other saved
-  // one is full, so it is not a candidate at all.
-  const dead = profile(UUID_DEAD);
-  dead.lastPlan = plan(0);
-  fs.writeFileSync(path.join(accountsDir, `${UUID_DEAD}.json`), JSON.stringify(dead));
-  const idle = profile(UUID_IDLE);
-  idle.lastPlan = plan(99);
-  fs.writeFileSync(path.join(accountsDir, `${UUID_IDLE}.json`), JSON.stringify(idle));
+  // The candidates' `lastPlan` fixtures are seeded in before(), NOT here: the
+  // daemon prices each saved account once and then not again for half an hour,
+  // and the pass that does it is on a 5 s timer from daemon start. See the note
+  // at the seed() calls — writing them here was a flake, not a style choice.
+  //
+  // ⚠ ARM NOTHING UNTIL THAT PRICING HAS HAPPENED. Enabling the switcher against
+  // an accounts map the tick has not filled in yet is the same test with the
+  // preconditions missing: the dead profile is not a candidate, and whatever the
+  // arbiter does instead is not what this test is asking about.
+  const priced = await until(
+    (hr) => pricedAt(hr, UUID_DEAD) !== null,
+    20_000, 'the first tick to price the saved accounts');
+  assert.equal(pricedAt(priced, UUID_DEAD), 0,
+    'precondition: the dead login`s windows all rolled over, so it scores as the freshest on the host');
+  assert.equal(priced.arbiter.switches || 0, 0, 'precondition: nothing has switched yet');
 
   const liveBefore = liveBytes();
   const postsBefore = posts.filter((p) => p.url.includes('/oauth/token')).length;
 
   // The active account is out of room, and the switcher is on.
+  //
+  // `cooldownMs: 0` is deliberate and makes the test STRICTER: it removes the
+  // arbiter's one standing excuse for doing nothing, so a pass that declines to
+  // switch here declines on the merits. (It is also the difference between a
+  // failure that says `cannot be switched to` and one that says `cooling down
+  // for another 30 min`, which is a sentence about the test, not the daemon.)
   usage = { session: 100, weekly_all: 100, weekly_fable: 100 };
-  await wait(700);                                    // outlive the plan cache
   const on = await api('/v1/headroom/settings', {
     method: 'PATCH',
-    body: JSON.stringify({ accountSwitch: { enabled: true, threshold: 95, margin: 20 } }),
+    body: JSON.stringify({ accountSwitch: { enabled: true, threshold: 95, margin: 20 }, cooldownMs: 0 }),
   });
   assert.equal(on.status, 200, JSON.stringify(on.body));
+  // The plan endpoint is cached for PLAN_TTL_MS, so the tick the PATCH above
+  // started may well have decided on the PREVIOUS percentages. Wait for the
+  // daemon to actually be holding 100% rather than sleeping past the TTL and
+  // hoping.
+  await until((hr) => hr.worst && hr.worst.percent >= 95,
+    20_000, 'the active account to read as out of room');
 
-  // Give it several passes to do the wrong thing.
+  // Now give it several passes to do the wrong thing.
   let why = '';
-  const deadline = Date.now() + 20_000;
-  for (;;) {
-    const hr = (await api('/v1/headroom')).body;
-    why = String((hr.arbiter && hr.arbiter.why) || '');
-    if (/cannot be switched to/.test(why)) break;
-    if (Date.now() > deadline) break;
-    await api('/v1/headroom/settings', { method: 'PATCH', body: '{}' });
-    await wait(400);
+  try {
+    why = String(((await until((hr) => /cannot be switched to/.test(String((hr.arbiter && hr.arbiter.why) || '')),
+      20_000, 'the arbiter to refuse the dead profile')).arbiter || {}).why || '');
+  } catch (e) {
+    // Not a failure by itself — the assertions below say what was wrong and in
+    // which order it matters, starting with "was anybody signed out".
+    why = `«never refused it» ${e.message}`;
   }
 
   assert.deepEqual(liveBytes(), liveBefore,

@@ -62,7 +62,7 @@ async function bootLog(extra) {
   } finally {
     child.kill('SIGTERM');
     await new Promise((r) => { child.on('exit', r); setTimeout(r, 2000); });
-    fs.rmSync(tmp, { recursive: true, force: true });
+    fs.rmSync(tmp, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 });
   }
   assert.match(out, /listening on/, `the daemon never started:\n${out}`);
   return out;

@@ -115,7 +115,7 @@ before(async () => {
       + `test run — it answers ping but not our token. Find it with: ss -ltnp | grep ${PORT}`);
   }
 });
-after(() => { if (daemon) daemon.kill('SIGTERM'); if (tmp) fs.rmSync(tmp, { recursive: true, force: true }); });
+after(() => { if (daemon) daemon.kill('SIGTERM'); if (tmp) fs.rmSync(tmp, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 }); });
 
 const enrol = async (name, scope = 'own') =>
   (await api('/v1/devices', { method: 'POST', body: JSON.stringify({ name, platform: 'linux', scope }) })).body;
