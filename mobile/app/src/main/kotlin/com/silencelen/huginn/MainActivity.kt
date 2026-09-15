@@ -558,6 +558,7 @@ fun HuginnApp(
     // actually there, which is what the lifecycle effect below is for.
     val headroomPill by vm.headroomPill.collectAsState()
     val streamAgents by vm.streamAgents.collectAsState()
+    val streamsExpanded by vm.streamsExpanded.collectAsState()
     val selectedStream by vm.selectedStream.collectAsState()
     val agentPage by vm.agentPage.collectAsState()
     val loadingAgentHistory by vm.loadingAgentHistory.collectAsState()
@@ -1124,7 +1125,20 @@ fun HuginnApp(
             SessionScreen(
                 name = name,
                 transcript = transcript,
-                streamAgents = streamAgents,
+                // The daemon's clock, not the phone's: the rows' timestamps are
+                // the host's, and a phone minutes out would empty the strip in
+                // the middle of a live fan-out. Zero when the transcript has not
+                // said, which the picker reads as "no clock, trust the flags".
+                streamItems = remember(
+                    streamAgents,
+                    transcript?.lastActivityTs,
+                    selectedStream,
+                    streamsExpanded,
+                ) {
+                    vm.streamItems(transcript?.lastActivityTs?.takeIf { it > 0 } ?: 0L)
+                },
+                streamsExpanded = streamsExpanded,
+                onToggleStreamsExpanded = { vm.toggleStreamsExpanded() },
                 selectedStream = selectedStream,
                 onSelectStream = { vm.selectStream(name, it) },
                 agentPage = agentPage,

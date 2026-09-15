@@ -24,13 +24,15 @@ class StreamPickerRowTest {
     private fun agent(
         id: String,
         task: String = "audit the thing",
-        active: Boolean = false,
+        active: Boolean = true,
         workflow: String? = null,
+        status: String? = null,
     ) = AgentRun(
         id = id,
         task = task,
         active = active,
         updatedAt = nowSec - 30,
+        status = status,
         workflowId = workflow,
     )
 
@@ -63,6 +65,33 @@ class StreamPickerRowTest {
         assertFalse(streamChipSelected(header, null))
         assertFalse(streamChipSelected(header, header.workflowId))
         assertFalse(streamChipSelected(header, header.key))
+    }
+
+    @Test
+    fun `the chip held open for a finished stream is still the marked one`() {
+        // It is the only reason that chip is on the strip at all, so losing the
+        // mark would leave a body on screen that no chip claims.
+        val items = StreamPicker.items(
+            listOf(agent("agent-aaa", status = "done")),
+            nowSec,
+            selectedKey = "agent-aaa",
+        )
+        val chip = items.single { it.agentId == "agent-aaa" }
+        assertTrue(chip.finished, "held open, not live")
+        assertFalse(chip.running, "and therefore no live dot")
+        assertTrue(streamChipSelected(chip, "agent-aaa"))
+        assertEquals("finished", STREAM_FINISHED_HINT, "the word the dimmed chip says")
+    }
+
+    @Test
+    fun `the pill is never the marked chip`() {
+        // It has no agent id, so without a guard it would inherit Main's mark and
+        // leave two chips claiming the body on screen.
+        val items = StreamPicker.items(listOf(agent("agent-aaa", status = "done")), nowSec)
+        val pill = items.single { it.overflow }
+        assertFalse(streamChipSelected(pill, null), "Main is marked, the pill beside it is not")
+        assertFalse(streamChipSelected(pill, StreamPicker.MAIN_KEY))
+        assertFalse(streamChipSelected(pill, StreamPicker.OVERFLOW_KEY))
     }
 
     @Test

@@ -774,6 +774,7 @@ private fun ConversationTab(controller: SessionController) {
     val agents by controller.agents.collectAsState()
     val streamsSupported by controller.streamsSupported.collectAsState()
     val streamNote by controller.streamNote.collectAsState()
+    val streamsExpanded by controller.streamsExpanded.collectAsState()
     val error by controller.transcriptError.collectAsState()
     val neverRan by controller.neverRan.collectAsState()
     val clipboard = LocalClipboardManager.current
@@ -787,8 +788,13 @@ private fun ConversationTab(controller: SessionController) {
     // timestamps are the host's — a device clock a few minutes out would show
     // every running agent as settled. Zero when no page has landed, which
     // [StreamPicker.items] reads as "no clock, trust the flags".
+    //
+    // The list itself is the controller's, which is also what holds the picked
+    // stream: the strip keeps the agent being READ even once it has finished,
+    // and that judgment needs both facts at once.
     val nowSec = page?.lastActivityTs?.takeIf { it > 0 } ?: 0L
-    val items = remember(agents, nowSec) { StreamPicker.items(agents, nowSec) }
+    val items: List<StreamPicker.Item> =
+        remember(agents, nowSec, stream, streamsExpanded) { controller.streamItems(nowSec) }
 
     @Composable
     fun Picker() {
@@ -798,6 +804,8 @@ private fun ConversationTab(controller: SessionController) {
             onPick = { controller.selectStream(it) },
             enabled = streamsSupported,
             note = streamNote,
+            expanded = streamsExpanded,
+            onToggleExpanded = { controller.toggleStreamsExpanded() },
         )
     }
 

@@ -1,5 +1,12 @@
 # Huginn Desktop changelog
 
+## 1.0.1
+
+- **The stream picker shows live agents; finished ones fold away.** It listed every subagent a
+  session had ever used; it now offers the ones still running — the same set Claude Code's own
+  agent footer shows — with the finished ones behind a '…' pill you can expand to read back
+  through, and keeps the one you are reading in view.
+
 ## 1.0.0
 
 Huginn Desktop 1.0 — shares the Huginn 3 client work: the account caption on the usage bars, the
