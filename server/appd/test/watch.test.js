@@ -149,3 +149,31 @@ test('an idle headroom hashes exactly like no headroom argument at all', () => {
     digest([], [], { ...idle, sentinels: ['STOP-FABLE', 'STOP'] }).hash,
   );
 });
+
+test('the stall and ladder MAPS are in the hash, values and all', () => {
+  // `stalled` answers "is anything stuck". The maps answer the two questions a
+  // notification actually has to put in a sentence: LimitHit(session, resetsAt)
+  // needs WHEN it comes back and Downgraded(session, to) needs WHAT it moved to
+  // — neither recoverable from a list of names. So both are carried, and both
+  // are hashed: a reset time moving means the notification already on the phone
+  // is wrong, which is precisely a thing worth waking it for.
+  const stalled = { ...idle, stalled: ['dev'], stalls: { dev: '2026-09-15T10:00:00Z' } };
+  const later = { ...idle, stalled: ['dev'], stalls: { dev: '2026-09-15T11:00:00Z' } };
+  assert.notStrictEqual(digest([], [], stalled).hash, digest([], [], later).hash,
+    'the reset time MOVED — the value has to be in the hash, not just the key');
+  assert.equal(digest([], [], stalled).headroom.stalls.dev, '2026-09-15T10:00:00Z');
+
+  const opus = { ...idle, laddered: { dev: 'opus' } };
+  const sonnet = { ...idle, laddered: { dev: 'sonnet' } };
+  assert.notStrictEqual(digest([], [], opus).hash, digest([], [], sonnet).hash);
+  assert.equal(digest([], [], opus).headroom.laddered.dev, 'opus');
+
+  // Absent maps still hash like an idle headroom, so an older caller's
+  // two-argument digest does not read as a change on every poll.
+  assert.strictEqual(digest([], []).hash, digest([], [], { ...idle, stalls: {}, laddered: {} }).hash);
+  // A stall with no known reset time is a real state, and not the same as none.
+  assert.notStrictEqual(
+    digest([], [], { ...idle, stalls: { dev: null } }).hash,
+    digest([], [], idle).hash,
+  );
+});
