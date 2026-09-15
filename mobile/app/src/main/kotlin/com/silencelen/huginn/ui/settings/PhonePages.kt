@@ -134,10 +134,12 @@ fun ChatsPage(
     highlight: String?,
 ) {
     if (quickActions != null) {
+        // NO SUMMARY. The editor immediately below carries the one blurb
+        // (QUICK_ACTIONS_BLURB in `:ui`, shared with the desktop); a paraphrase of
+        // it here printed the same sentence twice, two lines apart.
         SettingsReadOnlyRow(
             id = "chats.quick-actions",
             title = "Quick actions",
-            summary = "What Explain, Execute and Ask in a new chat put in the composer for selected text.",
             highlighted = SettingsRowStyle.isHighlighted("chats.quick-actions", highlight),
         )
         Column(Modifier.padding(start = 8.dp)) {
