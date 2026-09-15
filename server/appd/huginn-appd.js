@@ -57,6 +57,10 @@ const {
 const pushLib = require('./lib/pushtokens');
 const { trySender } = require('./lib/fcm');
 const { createPending, stepSoftEnd } = require('./lib/softend');
+// Typing rules: the caps, the tmux command-line budget, the turn-boundary and
+// modal readers, and the queue's decisions. Pure, so they are asserted in
+// test/typing.test.js rather than discovered on a live pane.
+const typing = require('./lib/typing');
 
 const VERSION = '2.85.0';
 const PORT = Number(process.env.HUGINN_APPD_PORT || 8787);
@@ -286,14 +290,47 @@ function readBodyRaw(req, limit = 256 * 1024) {
   });
 }
 
+/**
+ * Socket isolation for tests (see TMUX_SOCKET): pin every tmux call to a
+ * private `-L` server. `-L` is a server flag, so it goes before the tmux
+ * subcommand. Empty TMUX_SOCKET (production) leaves argv untouched.
+ *
+ * ONE place, used by both run() and runStdin(), so a socket change lands once
+ * rather than in whichever of the two a later reader happened to edit.
+ */
+function tmuxArgs(args) {
+  return TMUX_SOCKET ? ['-L', TMUX_SOCKET, ...args] : args;
+}
+
 function run(cmd, args, opts = {}) {
-  // Socket isolation for tests (see TMUX_SOCKET): pin every tmux call to a
-  // private `-L` server. `-L` is a server flag, so it goes before the tmux
-  // subcommand. Empty TMUX_SOCKET (production) leaves argv untouched.
-  if (TMUX_SOCKET && cmd === 'tmux') args = ['-L', TMUX_SOCKET, ...args];
+  if (cmd === 'tmux') args = tmuxArgs(args);
   return new Promise((resolve) => {
     execFile(cmd, args, { timeout: 10_000, maxBuffer: 4 * 1024 * 1024, ...opts },
       (err, stdout, stderr) => resolve({ err, stdout: stdout ?? '', stderr: stderr ?? '' }));
+  });
+}
+
+/**
+ * run(), with something on the child's STDIN.
+ *
+ * `tmux load-buffer -b <name> -` is the whole reason this exists: a message on
+ * stdin has no length limit, while the same text in argv is bounded by tmux's
+ * ~16 KB command line (and by the OS above that). run() cannot write stdin at
+ * all, so a "just use run()" delivery path is capped at 16 KB forever.
+ *
+ * The stdin error handler is not optional: if tmux exits before reading the
+ * whole payload the write EPIPEs, and an unhandled 'error' on that stream takes
+ * the daemon down rather than failing the send.
+ */
+function runStdin(cmd, args, input, opts = {}) {
+  if (cmd === 'tmux') args = tmuxArgs(args);
+  return new Promise((resolve) => {
+    const child = execFile(cmd, args, { timeout: 10_000, maxBuffer: 4 * 1024 * 1024, ...opts },
+      (err, stdout, stderr) => resolve({ err, stdout: stdout ?? '', stderr: stderr ?? '' }));
+    if (child.stdin) {
+      child.stdin.on('error', () => { /* EPIPE: the exit code below is the verdict */ });
+      child.stdin.end(input);
+    }
   });
 }
 
@@ -669,6 +706,10 @@ async function listSessions({ preview = false } = {}) {
       // the watch digest (see lib/watch) — a winding-down session must not wake
       // parked phones.
       softEnding: softEnds.has(name),
+      // Messages waiting on a turn boundary or a modal. The clients draw a
+      // "queued" mark from this, so a send that is legitimately waiting reads
+      // as waiting rather than as a send that silently did nothing.
+      pendingSends: pendingSendCount(name),
       // Context-window pressure (filled from the pane on a preview list) and
       // whether this session is compacting (cheap marker check, so it works even
       // on the quick non-preview list).
@@ -911,6 +952,20 @@ setInterval(() => {
 // submitting. Named once so /keys and the soft-end share the same value.
 const SUBMIT_BEAT_MS = 150;
 
+/**
+ * The beat on the BRACKETED-PASTE path — a different number for a different
+ * reason, and the two must not be folded into one constant.
+ *
+ * `paste-buffer -p` wraps the payload in ESC[200~ … ESC[201~, so the Enter that
+ * follows arrives after an explicit paste-END marker and the TUI's parser can
+ * never read it as paste content. Measured: 5/5 clean with no beat at all. The
+ * 50 ms is insurance against a future TUI change, not a fix for an observed
+ * race — whereas SUBMIT_BEAT_MS above is load-bearing on the send-keys
+ * fallback, where there is no marker and a beatless Enter is inserted into the
+ * composer as a literal newline (proven at the byte level: got == payload+"\n").
+ */
+const PASTE_BEAT_MS = 50;
+
 const SOFT_END_PHRASE = process.env.HUGINN_APPD_SOFT_END_PHRASE ||
   'Finish outstanding items, commit your work, and prepare to end the session.';
 // Auto-end is ON by default (owner decision 2026-08-10): after the phrase lands,
@@ -920,12 +975,315 @@ const SOFT_END_AUTO = process.env.HUGINN_APPD_SOFT_END_AUTO !== '0';
 
 const softEnds = new Map(); // session name -> pending record (lib/softend)
 
-/** Type a line into a pane and submit it, with the anti-paste beat before Enter. */
+/**
+ * Put TEXT into a pane and submit it — the one delivery path.
+ *
+ *   printf %s "$text" | tmux load-buffer -b <buf> -     # stdin: no length limit
+ *   tmux paste-buffer -b <buf> -p -d -t '=<name>:'      # -p bracketed, -d self-deleting
+ *   sleep PASTE_BEAT_MS
+ *   tmux send-keys -t '=<name>:' Enter
+ *
+ * Why not chunked `send-keys -l`, which this replaces: measured on a 20,100-char
+ * message, bracketed paste is 0.011 s against 0.48-1.72 s, two tmux calls
+ * against three to eleven, has no size ceiling at all, needs no timing beat, and
+ * draws ONE `[Pasted text +400 lines]` placeholder in the pane instead of ten
+ * fragments. Byte-exactness is identical.
+ *
+ * ⚠ `-p` IS MANDATORY. Plain `paste-buffer` replaces every `\n` with `\r` —
+ * the pane renders three correct lines and the transcript stores
+ * `'line one\rline two\rline three'`. It looks right and arrives wrong, with no
+ * error anywhere. `-r` is byte-safe but has no paste-end marker, so it
+ * reintroduces exactly the timing dependency `-p` removes. Never call
+ * paste-buffer without `-p`.
+ *
+ * ⚠ `-d` deletes the buffer after pasting, so a message does not linger in the
+ * tmux buffer stack where any pane can paste it back. Every failure path issues
+ * delete-buffer itself, best effort — a load that succeeded and a paste that
+ * did not leaves the text sitting there otherwise.
+ *
+ * The fallback runs only when load-buffer itself fails (no tmux server, a
+ * refused buffer): chunked send-keys with the load-bearing 150 ms beat, and
+ * only for text that fits one command line. Anything longer is a 503 rather
+ * than a message delivered in visibly mangled pieces.
+ */
+async function sendTextToPane(name, text, { submit = true } = {}) {
+  const target = `=${name}:`;
+  const buf = typing.bufferName();
+  const lb = await runStdin('tmux', ['load-buffer', '-b', buf, '-'], text);
+  if (!lb.err) {
+    const pb = await run('tmux', ['paste-buffer', '-b', buf, '-p', '-d', '-t', target]);
+    if (pb.err) {
+      await run('tmux', ['delete-buffer', '-b', buf]);   // -d never ran
+      return { ok: false, code: 503, message: 'could not reach the pane buffer', stderr: pb.stderr };
+    }
+    if (!submit) return { ok: true, how: 'paste' };
+    await sleep(PASTE_BEAT_MS);
+    const en = await run('tmux', ['send-keys', '-t', target, 'Enter']);
+    if (en.err) return { ok: false, code: 500, message: `tmux: ${(en.stderr || '').trim()}`, stderr: en.stderr };
+    return { ok: true, how: 'paste' };
+  }
+  log(`typing: load-buffer failed for ${name} (${(lb.stderr || '').trim().slice(0, 120)}); falling back to send-keys`);
+  await run('tmux', ['delete-buffer', '-b', buf]);       // best effort: a partial load
+  if (!typing.sendKeysFits(text, target)) {
+    return { ok: false, code: 503, message: 'could not reach the pane buffer', stderr: lb.stderr };
+  }
+  for (const chunk of typing.chunks(text, target)) {
+    const r = await run('tmux', ['send-keys', '-t', target, '-l', '--', chunk]);
+    if (r.err) return { ok: false, code: 503, message: 'could not reach the pane buffer', stderr: r.stderr };
+    await sleep(SUBMIT_BEAT_MS);
+  }
+  if (!submit) return { ok: true, how: 'send-keys' };
+  const en = await run('tmux', ['send-keys', '-t', target, 'Enter']);
+  if (en.err) return { ok: false, code: 500, message: `tmux: ${(en.stderr || '').trim()}`, stderr: en.stderr };
+  return { ok: true, how: 'send-keys' };
+}
+
+/**
+ * Type a line into a pane and submit it, for the callers that send a FIXED
+ * phrase (soft end, /compact) rather than a queued message.
+ *
+ * Same delivery as sendTextToPane — these used chunk-free `send-keys -l`, which
+ * is the path with the newline trap — kept in run()'s `{err, stderr}` shape
+ * because that is what its two callers translate into an HTTP error. Not
+ * queued: both are deliberate interventions whose whole point is to arrive now.
+ */
 async function sendLineToPane(name, text) {
-  const a = await run('tmux', ['send-keys', '-t', `=${name}:`, '-l', '--', text]);
-  if (a.err) return a;
-  await sleep(SUBMIT_BEAT_MS);
-  return run('tmux', ['send-keys', '-t', `=${name}:`, 'Enter']);
+  const r = await sendTextToPane(name, text);
+  if (r.ok) return { err: null, stderr: '' };
+  return { err: new Error(r.message), stderr: r.stderr || r.message };
+}
+
+// ---- the send queue --------------------------------------------------------
+//
+// A message delivered mid-turn is not merely late. The TUI enqueues it and then
+// SPLICES it into the running turn — the transcript records
+// {"operation":"remove","reason":"absorbed_mid_turn"} and the first message's
+// instruction is never carried out (measured: a turn told to reply FIRSTDONE
+// never emitted it, because a second message landed while a tool was running).
+// A modal is worse: it swallows the next message whole and leaves no transcript
+// trace at all. So the queue lives HERE, daemon-side, and not in the TUI whose
+// own queue has the absorb semantics we are avoiding.
+//
+// Per session, FIFO, in memory only. A send does not survive a daemon restart
+// and is not meant to (W2, out of scope) — what it must never do is arrive at
+// the wrong moment.
+
+const sendQueues = new Map();   // session name -> { entries, blockedBy, delivering, lastError, timer, pumping }
+
+/**
+ * How the queue learns a session's model family, without importing the
+ * headroom machinery that owns that question.
+ *
+ * W1's ladder drops a queued `kind:'model'` job when the session already
+ * changed family (a native consent swap beat us to it, and appd never fights a
+ * native switch). Headroom installs the probe at startup; unset, the family
+ * rule simply never fires, which is the correct behaviour for a daemon built
+ * without it.
+ */
+let familyProbe = null;
+function setFamilyProbe(fn) { familyProbe = typeof fn === 'function' ? fn : null; }
+
+function queueFor(name) {
+  let q = sendQueues.get(name);
+  if (!q) {
+    q = { entries: [], blockedBy: null, delivering: false, lastError: null, timer: null, pumping: false };
+    sendQueues.set(name, q);
+  }
+  return q;
+}
+
+/** For the session list's `pendingSends` badge. Declaration, not const: listSessions is above. */
+function pendingSendCount(name) {
+  const q = sendQueues.get(name);
+  return q ? q.entries.length : 0;
+}
+
+/** The last 64 KB of a session's jsonl transcript, plus its size, or null. */
+function transcriptTail(file, from = null, bytes = 64 * 1024) {
+  let fd;
+  try {
+    const st = fs.statSync(file);
+    const start = from == null ? Math.max(0, st.size - bytes) : Math.max(0, Math.min(from, st.size));
+    const len = st.size - start;
+    if (len <= 0) return { text: '', size: st.size };
+    fd = fs.openSync(file, 'r');
+    const b = Buffer.alloc(len);
+    fs.readSync(fd, b, 0, len, start);
+    return { text: b.toString('utf8'), size: st.size };
+  } catch { return null; } finally {
+    if (fd !== undefined) { try { fs.closeSync(fd); } catch { } }
+  }
+}
+
+function transcriptPath(name) {
+  const st = readSessionState(name);
+  return st && st.transcript ? st.transcript : null;
+}
+
+/** Where the transcript ENDS right now — the watermark an entry's drop rules read from. */
+function transcriptSize(file) {
+  try { return fs.statSync(file).size; } catch { return null; }
+}
+
+/**
+ * Both gates, read fresh.
+ *
+ * Gate 1 (turn boundary) is the transcript, because the pane cannot be trusted
+ * for liveness: this build's busy marker is a randomised spinner verb. A
+ * session with NO transcript — a plain shell, or a Claude session whose title
+ * hook has not fired yet — passes: there are no turns to be mid-way through,
+ * and refusing to type into a shell would break every non-Claude pane the app
+ * can open.
+ *
+ * Gate 2 (no modal) is the pane, because the transcript cannot see a dialog at
+ * all. Only a DIALOG blocks — `paneReadyForInput`'s 'busy' (no caret) is not a
+ * liveness verdict and must not be used as one here.
+ */
+async function checkGates(name) {
+  const file = transcriptPath(name);
+  let idle = true;
+  let lastKind = null;
+  if (file) {
+    const tail = transcriptTail(file);
+    if (tail) {
+      const b = typing.boundaryFromTail(tail.text);
+      idle = b.idle;
+      lastKind = b.lastKind;
+    }
+  }
+  const cap = await run('tmux', ['capture-pane', '-p', '-t', `=${name}:`]);
+  const paneWhy = cap.err ? null : typing.paneReadyForInput(cap.stdout.replace(/\n$/, '').split('\n')).why;
+  return { idle, lastKind, paneWhy };
+}
+
+/** Has a human spoken since this entry was queued? Only the appended bytes are read. */
+function humanSpokeSince(entry) {
+  if (!entry.transcript || entry.transcriptAt == null) return false;
+  const tail = transcriptTail(entry.transcript, entry.transcriptAt);
+  if (!tail || !tail.text) return false;
+  return typing.hasHumanUserRecord(tail.text);
+}
+
+function armQueueTimer(name) {
+  const q = queueFor(name);
+  if (q.timer || !q.entries.length) return;
+  q.timer = setTimeout(() => {
+    q.timer = null;
+    pumpQueue(name).catch((e) => log(`typing: pump failed for ${name}: ${e.message}`));
+  }, typing.TYPING_POLL_MS);
+  if (q.timer.unref) q.timer.unref();
+}
+
+/**
+ * Release everything at the head of the queue whose gates are open, drop what
+ * has gone stale, and re-arm the poll if anything is left waiting.
+ *
+ * Re-entrancy matters: the poll timer and an incoming POST can both land here,
+ * and two pumps delivering the same entry is a message sent twice. `pumping` is
+ * the lock; the timer simply re-fires 400 ms later.
+ */
+async function pumpQueue(name) {
+  const q = queueFor(name);
+  if (q.pumping) return;
+  q.pumping = true;
+  try {
+    while (q.entries.length) {
+      const entry = q.entries[0];
+      const gate = await checkGates(name);
+      const reason = typing.dropReason(entry, {
+        humanSpoke: entry.automated ? humanSpokeSince(entry) : false,
+        family: entry.automated && familyProbe ? familyProbe(name) : null,
+        now: Date.now(),
+      });
+      if (reason) {
+        q.entries.shift();
+        q.lastError = typing.dropMessage(reason, entry);
+        log(`typing: ${name}: ${q.lastError}`);
+        entry.settle({ delivered: false, dropped: reason });
+        continue;
+      }
+      const d = typing.releaseDecision(gate);
+      if (!d.release) {
+        q.blockedBy = d.blockedBy;
+        armQueueTimer(name);
+        return;
+      }
+      q.entries.shift();
+      q.blockedBy = null;
+      q.delivering = true;
+      let r;
+      try { r = await sendTextToPane(name, entry.text, { submit: entry.submit }); } finally { q.delivering = false; }
+      if (!r.ok) {
+        q.lastError = r.message;
+        log(`typing: ${name}: delivery failed: ${r.message}`);
+      } else if (q.entries.length === 0) {
+        q.lastError = null;
+      }
+      entry.settle({ delivered: !!r.ok, result: r });
+    }
+    q.blockedBy = null;
+  } finally {
+    q.pumping = false;
+    if (q.entries.length) armQueueTimer(name);
+    else if (!q.lastError) sendQueues.delete(name);
+  }
+}
+
+/**
+ * Queue a message for a session, and deliver it the moment both gates are open.
+ *
+ * Resolves as soon as THIS entry's fate is known for the synchronous case (the
+ * gates were already open, so the paste has landed) and as soon as it is
+ * accepted otherwise — the caller gets `{delivered:false, position}` and the
+ * queue keeps working whether or not anyone is still listening. A dropped
+ * socket must never lose a send; that is why the progress surface is a poll
+ * (`GET /typing`) and not a stream on this request.
+ *
+ * opts: { automated, origin, kind, family } — W1's automated sends carry all
+ * four so the drop rules can tell an owner's message from appd's own.
+ */
+function enqueueSend(name, text, opts = {}) {
+  const q = queueFor(name);
+  const file = transcriptPath(name);
+  const at = file ? transcriptSize(file) : null;
+  const entry = {
+    id: crypto.randomBytes(6).toString('hex'),
+    text,
+    at: Date.now(),
+    automated: !!opts.automated,
+    origin: opts.origin || null,
+    kind: opts.kind || null,
+    family: opts.family || null,
+    // Whether the paste is followed by Enter. The Screen tab types without
+    // submitting (its Enter arrives as its own key op), every other caller
+    // means "send this".
+    submit: opts.submit !== false,
+    transcript: file,
+    transcriptAt: at,
+    settle: () => { },
+  };
+  const done = new Promise((resolve) => {
+    let fired = false;
+    entry.settle = (v) => { if (!fired) { fired = true; resolve(v); } };
+  });
+  q.entries.push(entry);
+  const position = q.entries.length;
+  // One pass now, so a session that is already idle answers `delivered: true`
+  // rather than making the client poll for something that has already happened.
+  const pass = pumpQueue(name).catch((e) => {
+    log(`typing: pump failed for ${name}: ${e.message}`);
+  });
+  return pass.then(() => {
+    const queued = q.entries.indexOf(entry);
+    if (queued === -1) {
+      // Settled during that pass: delivered, dropped, or failed.
+      return done.then((v) => ({
+        id: entry.id, position: 0, delivered: !!v.delivered, dropped: v.dropped || null,
+        result: v.result || null, queued: q.entries.length,
+      }));
+    }
+    return { id: entry.id, position: queued + 1, delivered: false, dropped: null, result: null, queued: q.entries.length };
+  }).catch(() => ({ id: entry.id, position, delivered: false, dropped: null, result: null, queued: q.entries.length }));
 }
 
 /**
@@ -5362,17 +5720,43 @@ const server = http.createServer(async (req, res) => {
     if ((m = p.match(/^\/v1\/sessions\/([A-Za-z0-9_][A-Za-z0-9_.-]{0,49})\/keys$/)) && req.method === 'POST') {
       const name = m[1];
       if (!(await sessionExists(name))) return sendErr(res, 404, 'no such session');
-      const body = JSON.parse(await readBody(req) || '{}');
+      /**
+       * 512 KB, not the 256 KB default.
+       *
+       * SESSION_TEXT_MAX is 100,000 CHARACTERS and the body is UTF-8: a message
+       * of emoji or CJK is four bytes a character, so a perfectly legal send
+       * exceeds 256 KB of body. Against the default limit that arrived as a
+       * malformed body — the sender was told their JSON was broken, for a
+       * message the route was about to accept.
+       */
+      const body = JSON.parse(await readBody(req, 512 * 1024) || '{}');
       let typedKeys = typeof body.text === 'string' ? body.text : '';
-      if (typedKeys.length > 8000) return sendErr(res, 400, 'text too long');
+      if (typedKeys.length > typing.SESSION_TEXT_MAX) return sendErr(res, 400, 'text too long');
+      // Validate the key names BEFORE anything is typed. They used to be checked
+      // after the text had already landed in the pane, so a bad key name gave a
+      // 400 for a send that had half happened.
+      const keys = Array.isArray(body.keys) ? body.keys : [];
+      if (keys.length > 32) return sendErr(res, 400, 'too many keys');
+      for (const k of keys) if (!validKey(k)) return sendErr(res, 400, `key not allowed: ${k}`);
+      /**
+       * The keys that are genuinely KEY PRESSES, as opposed to the composer's
+       * own submit.
+       *
+       * Both clients send `{text, keys:["Enter"]}` for "send this message", and
+       * that Enter is part of the message, not an interrupt: the paste path
+       * presses it, with the right beat, once. Everything else in `keys` — an
+       * Escape, a BTab, an arrow — is a raw press that cannot be queued and
+       * cannot wait, which is what the modal refusal below is about.
+       */
+      const rawKeys = keys.filter((k) => !(k === 'Enter' && typedKeys.length > 0));
       /**
        * A scratchpad reference, as a PATH rather than as the page itself.
        *
-       * A pane takes 8,000 characters at a time and a page holds up to
-       * 100,000, so pasting one in would refuse most of the pages worth
-       * attaching. The session's Claude has Read and the file is on this host,
-       * so it gets the better half of the trade: a pointer it can re-read,
-       * and a message that still fits.
+       * A pane takes a message and a page holds up to 100,000 characters, so
+       * pasting one in would refuse most of the pages worth attaching even now
+       * that the two caps match. The session's Claude has Read and the file is
+       * on this host, so it gets the better half of the trade: a pointer it can
+       * re-read, and a message that still fits.
        *
        * ⚠ OUTSIDE THE `text` GUARD, WHICH IS WHERE IT USED TO BE. A page with no
        * message is a legitimate thing to send — "read this" — and the reference
@@ -5392,30 +5776,74 @@ const server = http.createServer(async (req, res) => {
           : frame;
         // The SESSION wording, not the chat one: only this one line travels, so
         // the number the sender is given is the room left for what they typed.
-        const overflow = scratchpadsLib.sessionFitProblem(typedKeys, frame, 8000);
+        const overflow = scratchpadsLib.sessionFitProblem(typedKeys, frame, typing.SESSION_TEXT_MAX);
         if (overflow) return sendErr(res, 413, overflow);
       }
+      /**
+       * A dialog is up and this is a RAW KEY send.
+       *
+       * Keys are never queued — an Escape or a BTab is an interrupt and means
+       * nothing if it arrives at the next turn boundary — so there is nowhere to
+       * hold it, and a key pressed into a selector picks one of its rows. The
+       * jsonl cannot see a modal at all, which is why this reads the pane.
+       */
+      if (rawKeys.length) {
+        const cap = await run('tmux', ['capture-pane', '-p', '-t', `=${name}:`]);
+        if (!cap.err) {
+          const { why } = typing.paneReadyForInput(cap.stdout.replace(/\n$/, '').split('\n'));
+          if (typing.paneBlocks(why)) {
+            return sendErr(res, 409, 'that session has a dialog open — answer it on the Screen tab');
+          }
+        }
+      }
+      let queued = 0;
+      let position = 0;
+      let delivered = false;
       if (typedKeys.length > 0) {
-        const r = await run('tmux', ['send-keys', '-t', `=${name}:`, '-l', '--', typedKeys]);
+        /**
+         * Through the QUEUE, not straight at the pane.
+         *
+         * A message delivered mid-turn is absorbed into the running turn and can
+         * override what that turn was told to do; a message delivered into a
+         * modal is swallowed with no trace anywhere. Both gates are re-checked
+         * every 400 ms until they open, and the client watches
+         * `GET /v1/sessions/:name/typing` rather than holding this request open
+         * for what can legitimately be a ten-minute wait.
+         *
+         * The Enter rides WITH the text on the paste path: `keys:["Enter"]` from
+         * a composer send means "submit this message", and pressing it again
+         * after the paste has already submitted would send an empty second one.
+         */
+        const wantsEnter = keys.includes('Enter');
+        const out = await enqueueSend(name, typedKeys, { origin: 'client', submit: wantsEnter });
+        if (out.result && !out.result.ok) {
+          return sendErr(res, out.result.code || 500, out.result.message);
+        }
+        delivered = out.delivered;
+        position = out.position;
+        queued = out.queued;
+      }
+      for (const k of rawKeys) {
+        const r = await run('tmux', ['send-keys', '-t', `=${name}:`, k]);
         if (r.err) return sendErr(res, 500, `tmux: ${r.stderr.trim()}`);
-        // A beat before any Enter that follows. Text and Enter in one burst
-        // occasionally read to the TUI as a single paste, which INSERTS the
-        // newline instead of submitting — the message sat in Claude's composer
-        // until someone pressed Enter by hand. Rare because it needs the reads
-        // to coincide; the pause makes Enter a distinct keypress every time.
-        if (Array.isArray(body.keys) && body.keys.includes('Enter')) await sleep(150);
       }
-      if (Array.isArray(body.keys)) {
-        if (body.keys.length > 32) return sendErr(res, 400, 'too many keys');
-        for (const k of body.keys) {
-          if (!validKey(k)) return sendErr(res, 400, `key not allowed: ${k}`);
-        }
-        for (const k of body.keys) {
-          const r = await run('tmux', ['send-keys', '-t', `=${name}:`, k]);
-          if (r.err) return sendErr(res, 500, `tmux: ${r.stderr.trim()}`);
-        }
-      }
-      return sendJson(res, 200, { ok: true });
+      return sendJson(res, 200, { ok: true, queued, position, delivered });
+    }
+
+    /**
+     * Where a send got to — the progress poll behind the clients' "queued" mark.
+     *
+     * Cheap on purpose: the in-memory queue and the gate verdict cached by the
+     * last poll pass, no transcript walk and no tmux call. A poll rather than a
+     * stream on the POST because a dropped socket must not lose a send (a
+     * backgrounded phone drops one inside a doze window, and a send can wait ten
+     * minutes for a boundary), because two clients can watch one session, and
+     * because nothing else about a tmux session streams.
+     */
+    if ((m = p.match(/^\/v1\/sessions\/([A-Za-z0-9_][A-Za-z0-9_.-]{0,49})\/typing$/)) && req.method === 'GET') {
+      const name = m[1];
+      if (!(await sessionExists(name))) return sendErr(res, 404, 'no such session');
+      return sendJson(res, 200, typing.typingSnapshot(sendQueues.get(name), Date.now()));
     }
 
     // --- soft end: type a wrap-up phrase, and (when auto) end on settle
