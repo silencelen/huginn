@@ -221,6 +221,14 @@ class SessionWatchWorker(
          *        whose text is posted to that chat — so answering a finished chat
          *        costs a swipe-down and a sentence rather than unlocking, finding
          *        the app, finding the chat and scrolling to the bottom of it.
+         * @param actions bounded headroom buttons (Undo · OK, Back to Fable ·
+         *        Stay). Unlike [answers] these carry no fingerprint, because
+         *        there is no pane question they could answer stale — they reach
+         *        one named session's model. Also unlike the reply box, they carry
+         *        no free text, so they carry no authentication requirement either.
+         * @param key the notification's SLOT, when it is not the session's own.
+         *        A headroom ladder notice files under `ladder:<name>` so it
+         *        cannot replace a "needs you" that is still waiting.
          */
         fun post(
             context: Context,
@@ -231,6 +239,8 @@ class SessionWatchWorker(
             fingerprint: String? = null,
             replyChat: String? = null,
             isResult: Boolean = false,
+            actions: List<HeadroomNotices.Action> = emptyList(),
+            key: String? = null,
         ) {
             if (!canNotify(context)) return
             // By NATURE, not by type. A session waiting on you is blocking — work has
@@ -250,11 +260,11 @@ class SessionWatchWorker(
                 // one shared request code plus FLAG_UPDATE_CURRENT means the newest
                 // notification's extras are handed to every earlier one, so tapping
                 // an older alert opens whatever arrived last.
-                (session ?: replyChat)?.hashCode() ?: 0,
+                (key ?: session ?: replyChat)?.hashCode() ?: 0,
                 intent,
                 PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
             )
-            val notificationId = notificationIdFor(session ?: replyChat?.let { "chat:$it" })
+            val notificationId = notificationIdFor(key ?: session ?: replyChat?.let { "chat:$it" })
             val builder = NotificationCompat.Builder(context, channel)
                 .setSmallIcon(R.drawable.ic_stat_huginn)
                 .setContentTitle(title)
@@ -332,6 +342,34 @@ class SessionWatchWorker(
                     )
                 }
             }
+            // Headroom's bounded buttons. No fingerprint gate in front of them,
+            // and that is not an oversight: the fingerprint identifies a pane
+            // QUESTION, and these answer none — "put this session back on the
+            // model huginn moved it off" is true whatever the pane went on to do.
+            // They are still bounded choices with fixed labels, which is the bar
+            // the owner's rule actually sets, so they need no authentication.
+            for (a in actions.take(MAX_ACTIONS)) {
+                val undoIntent = Intent(context, UndoReceiver::class.java).apply {
+                    action = UndoReceiver.ACTION
+                    putExtra(UndoReceiver.EXTRA_SESSION, a.session)
+                    putExtra(UndoReceiver.EXTRA_VERB, a.verb)
+                    putExtra(UndoReceiver.EXTRA_NOTIFICATION_ID, notificationId)
+                }
+                builder.addAction(
+                    0,
+                    a.label.take(28),
+                    PendingIntent.getBroadcast(
+                        context,
+                        UndoReceiver.requestCodeFor(a.session, a.verb),
+                        undoIntent,
+                        // IMMUTABLE, unlike the reply box: nothing is written
+                        // into this intent after it is built, because nothing
+                        // about it is typed.
+                        PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+                    ),
+                )
+            }
+
             // A reply box for CHATS ONLY, and deliberately never for a session.
             //
             // A session's notification offers the options huginn itself put on the
