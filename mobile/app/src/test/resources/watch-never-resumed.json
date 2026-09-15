@@ -1,0 +1,19 @@
+{
+ "hash": "0000000000000000",
+ "sessions": {
+  "andrev": "idle"
+ },
+ "chats": {},
+ "headroom": {
+  "mode": "ok",
+  "stalled": [],
+  "stalls": {},
+  "laddered": {},
+  "lastResumeAt": null,
+  "lastLadderAt": 0,
+  "sentinels": []
+ },
+ "changed": false,
+ "serverTime": 1789460000,
+ "pushesSent": 0
+}

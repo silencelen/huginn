@@ -1,0 +1,37 @@
+{
+ "hash": "3c9a1f04be27d5aa",
+ "sessions": {
+  "andrev": "idle",
+  "huginnapp": "running",
+  "promptprobe": "attention"
+ },
+ "chats": {
+  "ch-41": {
+   "running": false,
+   "pending": 0,
+   "title": "<title scrubbed, 22 chars>",
+   "finishedRuns": 3,
+   "snippet": "<snippet scrubbed, 88 chars>"
+  }
+ },
+ "headroom": {
+  "mode": "red",
+  "stalled": [
+   "promptprobe"
+  ],
+  "stalls": {
+   "promptprobe": "2026-09-18T07:00:00.000Z"
+  },
+  "laddered": {
+   "andrev": "opus"
+  },
+  "lastResumeAt": 0,
+  "lastLadderAt": 1789460100000,
+  "sentinels": [
+   "STOP-FABLE"
+  ]
+ },
+ "changed": true,
+ "serverTime": 1789460000,
+ "pushesSent": 214
+}

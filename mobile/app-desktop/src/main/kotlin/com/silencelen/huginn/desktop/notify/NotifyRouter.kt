@@ -119,7 +119,12 @@ class NotifyRouter(
                         NotifyRequest(
                             key = "ladder:${decision.session}",
                             title = "${decision.session} moved to ${decision.to}",
-                            body = "Its Fable window ran out. Undo puts it back and stops huginn moving it again.",
+                            // "puts it back" only once the turn it is in has
+                            // ended — the /model picker cannot open inside a
+                            // running turn. Saying so here is cheaper than the
+                            // reader finding out from the outcome toast.
+                            body = "Its Fable window ran out. Undo puts it back at the next turn " +
+                                "boundary and stops huginn moving it again.",
                             urgent = false,
                             target = target,
                             // BOUNDED, and exactly two: put it back, or accept it.

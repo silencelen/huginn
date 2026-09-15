@@ -598,20 +598,12 @@ const val LIMIT_STATUS: Int = 429
  * if it were local. The only wall clock this surface may show is the one that
  * arrived as text, which is what this reads — and null, meaning "say nothing", is
  * a perfectly good answer.
+ *
+ * Delegates to [HeadroomRules.resetClockOf], which is the one implementation:
+ * the session mark reads the same clock out of the same sentence, and two copies
+ * of this parse are two sets of words for one reading.
  */
-fun limitResetClock(text: String?): String? {
-    val raw = text?.trim().orEmpty()
-    if (raw.isEmpty()) return null
-    val at = raw.indexOf("resets ", ignoreCase = true)
-    if (at < 0) return null
-    val rest = raw.substring(at + 7).trimStart()
-    if (rest.isEmpty()) return null
-    // Up to the end of the clause: the sentence continues with a parenthesised
-    // timezone or another sentence, and neither belongs on a one-line notice.
-    val end = rest.indexOfFirst { it == '\n' || it == '(' || it == '.' }
-    val clock = (if (end < 0) rest else rest.substring(0, end)).trim()
-    return clock.takeIf { it.isNotEmpty() && it.length <= 24 }
-}
+fun limitResetClock(text: String?): String? = HeadroomRules.resetClockOf(text)
 
 /** The notice's headline. */
 fun limitNoticeTitle(ev: TranscriptEvent): String {

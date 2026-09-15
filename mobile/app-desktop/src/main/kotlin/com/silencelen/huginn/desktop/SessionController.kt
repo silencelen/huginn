@@ -535,10 +535,20 @@ class SessionController(
     /**
      * ONE read of one agent's transcript, merged into [_agentPage].
      *
-     * A 404 here has exactly one expected cause and it is not a missing agent:
-     * a daemon older than 3.0.0 has no such route at all. Saying so and disabling
+     * TWO failures, and only one of them is about the feature.
+     *
+     * A **404** has exactly one expected cause and it is not a missing agent: a
+     * daemon older than 3.0.0 has no such route at all. Saying so and disabling
      * the strip is the documented compat answer — an empty body under a working
      * picker would read as "this agent did nothing".
+     *
+     * **ANYTHING ELSE** is about this one agent, so the strip stays alive and the
+     * daemon's own sentence goes on it. A 400 used to fall through here into the
+     * `_agentPage == null` branch, which showed the error only while nothing had
+     * ever loaded and never once turned the strip off — the reader got a chip
+     * that silently did nothing. It must NOT flip [streamsSupported]: a daemon
+     * that answers 400 has the route, and taking the picker away because one id
+     * was rejected loses every other chip with it.
      *
      * @return true when the read landed.
      */
@@ -562,7 +572,11 @@ class SessionController(
                 if (code == 404) {
                     _streamsSupported.value = false
                     _streamNote.value = STREAMS_UNSUPPORTED
-                } else if (_agentPage.value == null) {
+                } else {
+                    // Verbatim, and whether or not a page is already on screen:
+                    // the note sits on the STRIP, not in the conversation, so it
+                    // costs the reader nothing and it is the only place the
+                    // daemon's reason ever appears.
                     _streamNote.value = e.message ?: "could not read this agent"
                 }
             }
