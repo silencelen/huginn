@@ -269,7 +269,6 @@ test('anything that is not agent-<hex> is refused before any file is touched', a
     'agent-ZZZZZZ',                      // not hex
     'agent-abc',                         // too short
     `agent-${'a'.repeat(33)}`,           // too long
-    'af7ca864cee1939de',                 // the list row's `id`, which omits the prefix
     'agent-af7ca864cee1939de.jsonl',     // the basename, not the id
     'agent-%zz',                         // a malformed escape is not an id either
   ];
@@ -278,6 +277,24 @@ test('anything that is not agent-<hex> is refused before any file is touched', a
     assert.equal(status, 400, `expected 400 for ${id}, got ${status} ${JSON.stringify(body)}`);
     assert.match(body.error, /invalid agent id/);
   }
+});
+
+test('the BARE hex is accepted too, because that is what /agents emits', async () => {
+  // ⚠ `GET /agents` emits `path.basename(f).replace(/^agent-|\.jsonl$/g, '')` —
+  // the BARE hex — and the client hands that back verbatim. A route that took
+  // only the prefixed form 400'd every stream chip; and a 400 is not the 404 the
+  // client's compat path watches for, so it did not even degrade to "this daemon
+  // is too old" — the strip showed the raw daemon error instead.
+  const bare = DIRECT.replace(/^agent-/, '');
+  const prefixed = await api(`/v1/sessions/${SESS}/agents/${DIRECT}/transcript`);
+  const plain = await api(`/v1/sessions/${SESS}/agents/${bare}/transcript`);
+  assert.equal(prefixed.status, 200, JSON.stringify(prefixed.body));
+  assert.equal(plain.status, 200, JSON.stringify(plain.body));
+  // And BOTH echo the prefixed form, which is what the file on disk is called
+  // and what the client's own shortId() strips.
+  assert.equal(plain.body.agentId, DIRECT);
+  assert.equal(prefixed.body.agentId, DIRECT);
+  assert.deepEqual(plain.body.events, prefixed.body.events);
 });
 
 test('an id resolves against the enumeration, never against the filesystem', async () => {

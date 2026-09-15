@@ -389,8 +389,130 @@ function resumePlan({ kind = 'session', armed = false, stall = null, resumedNati
   };
 }
 
+/**
+ * How long a stall may sit with NO reset time before appd stops waiting for one.
+ *
+ * ⚠ THE MEASURED FABLE-WEEKLY APOLOGY CARRIES NO CLOCK ("You're out of usage
+ * credits. Run /usage-credits …"), so `parseLimitError` returns `resetsClock:
+ * null`. If the usage endpoint also has no `resetsAt` for that window at that
+ * instant — a failed plan fetch, a window not yet published — the stall is
+ * stored with `resetsAt: null`, `due` is permanently false, and the ONLY escape
+ * is a `detectResets` event that may never come. Meanwhile a held Round report is
+ * never filed and the ten-second poll runs for the life of the daemon.
+ *
+ * Six hours: longer than any session window and long enough that a transient
+ * gap in the endpoint has been re-read dozens of times.
+ */
+const STALL_MAX_AGE_MS = 6 * 60 * 60 * 1000;
+
+/**
+ * What to do about a stall that has no reset time.
+ *
+ * Deliberately does NOTHING until the stall is old: the endpoint usually catches
+ * up within a tick or two and `noteStall` upgrades the record itself. After that
+ * the active windows are the last source, and failing those this SAYS SO — a
+ * refusal that can be read is worth more than a wait that cannot end.
+ *
+ * @returns {{action:'clocked'|'wait'|'adopt'|'give_up', resetsAt?: number, why: string}}
+ */
+function unclockedVerdict({ stall = null, activeWindows = null, now = Date.now(),
+  maxAgeMs = STALL_MAX_AGE_MS } = {}) {
+  if (!stall || !stall.at) return { action: 'clocked', why: 'not stalled' };
+  if (stall.resetsAt != null) return { action: 'clocked', why: 'the stall has a reset time' };
+  if (now - Number(stall.at) < maxAgeMs) {
+    return { action: 'wait', why: 'the limit message carried no reset time; still waiting for one' };
+  }
+  const w = stall.window && activeWindows ? activeWindows[stall.window] : null;
+  const at = w && w.resetsAt != null ? Date.parse(w.resetsAt) : NaN;
+  if (Number.isFinite(at)) {
+    return { action: 'adopt', resetsAt: at, why: 'the reset time came from the usage endpoint instead' };
+  }
+  return {
+    action: 'give_up',
+    why: `the limit message carried no reset time and none appeared in ${Math.round(maxAgeMs / 3_600_000)} h `
+      + '— appd will not resume this one',
+  };
+}
+
+/**
+ * How long a reset event stays usable as proof.
+ *
+ * `detectResets` fires ONCE, on the tick that sees the drop; the resume that
+ * follows may need two or three passes (the queue waits for a turn boundary), so
+ * the event is remembered rather than consumed by whoever reads it first.
+ */
+const RESET_MEMORY_MS = 60 * 60 * 1000;
+
+/**
+ * Which windows have reset recently enough to count — FOR THIS ACCOUNT.
+ *
+ * ⚠ THE ACTIVE ACCOUNT'S RESETS ONLY. `detectResets` runs over every saved
+ * login, and for an inactive one the "fresh" reading is aged-forward history: a
+ * fabricated `percent: 0` for any window whose reset time has passed. So a
+ * second account's stale weekly_fable snapshot rolling over used to emit a
+ * weekly_fable reset that satisfied a session stalled on the ACTIVE account's
+ * Fable week, which is still full — the phrase is typed, the session re-stalls,
+ * and one of only three attempts is gone. Three of those and it is abandoned for
+ * the night.
+ *
+ * A reset carrying no slug at all is kept: it predates the field, and dropping
+ * it would silently stop resumes on an upgrade.
+ *
+ * @returns Map<window, ms of the most recent reset>
+ */
+function recentResetWindows(resets, { now = Date.now(), activeSlug = null, memoryMs = RESET_MEMORY_MS } = {}) {
+  const out = new Map();
+  for (const r of resets || []) {
+    if (!r || !r.window) continue;
+    if (activeSlug && r.slug && r.slug !== activeSlug) continue;
+    const at = Number(r.at) || 0;
+    if (now - at > memoryMs) continue;
+    if (at > (out.get(r.window) || 0)) out.set(r.window, at);
+  }
+  return out;
+}
+
+/**
+ * Should the ten-second stalled-host poll be running at all?
+ *
+ * ⚠ "A RESET IS NEAR", not "anything is stalled". A session stalled on a weekly
+ * window six days out used to keep the poll running every ten seconds for six
+ * days — a listSessions, a transcript tail per session and a capture-pane per
+ * attention session, all to watch a clock that cannot move — and nothing cleared
+ * the stall in the meantime, because the 429 stays the last record. So it never
+ * stopped.
+ *
+ * A stall with NO reset time still arms it: that is precisely the case the
+ * unclocked backstop is waiting to age out, and it has to be looked at to do so.
+ */
+function pollShouldArm({ stalls = [], chatStallsPending = false, mode = 'ok',
+  now = Date.now(), memoryMs = RESET_MEMORY_MS } = {}) {
+  if (chatStallsPending) return true;
+  if (mode === 'red' || mode === 'exhausted') return true;
+  for (const st of stalls || []) {
+    if (!st || !st.at || st.resumedAt || st.gaveUpAt) continue;
+    if (st.resetsAt == null) return true;
+    if (Number(st.resetsAt) - now <= memoryMs) return true;
+  }
+  return false;
+}
+
+/**
+ * Has THIS stall's window reset SINCE the stall?
+ *
+ * ⚠ Since the stall, not merely "recently". The reset log is a rolling hour and
+ * a host can stall twice in one: reading the earlier window's reset as this
+ * stall's confirmation resumes a session straight back into a full window.
+ */
+function resetSeenFor(map, stall) {
+  if (!stall || !stall.window || !map) return false;
+  return (map.get(stall.window) || 0) >= (Number(stall.at) || 0);
+}
+
 module.exports = {
-  NATIVE_GRACE_MS, CONSENT_GRACE_MS, MAX_ATTEMPTS, NATIVE_HORIZON_MS,
+  NATIVE_GRACE_MS, CONSENT_GRACE_MS, MAX_ATTEMPTS, NATIVE_HORIZON_MS, RESET_MEMORY_MS,
+  STALL_MAX_AGE_MS, unclockedVerdict,
+  recentResetWindows, resetSeenFor, pollShouldArm,
   NATIVE_CONTINUATION, CANCEL_PATTERNS,
   stallOf, recordsAfterStall, nativeArmed, nativeResumed, nativeCancelled, eligible, resumePlan,
   nextOccurrence, isHumanRecord, textOfRecord, tsOf,

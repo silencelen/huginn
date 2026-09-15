@@ -92,11 +92,25 @@ def fetch():
             "(systemctl status huginn-appd)")
 
 
-def ago(sec):
-    """Epoch SECONDS -> how long ago. The daemon writes these as seconds."""
-    if not isinstance(sec, (int, float)) or sec <= 0:
+def ago(ms):
+    """Epoch MILLISECONDS -> how long ago.
+
+    ⚠ MILLISECONDS. Every timestamp on /v1/headroom is ms (lib/headroom's
+    banner): serverTime, the sentinels' since, held[].since, resets[].seenAt,
+    arbiter.lastSwitchAt / lastLadderAt / lastResumeAt / lastAction.at,
+    sessions[].ladder.at and headsUpAt, accounts[].readAt. This read them as
+    seconds, so `arbiter` printed "just now" for ever -- a time that never ages
+    reads as a daemon that never acts.
+
+    A value that is plainly seconds (anything below the year-2001 line) is still
+    accepted, so this renderer keeps working against an older daemon rather than
+    printing 1970.
+    """
+    if not isinstance(ms, (int, float)) or ms <= 0:
         return ""
-    d = time.time() - sec
+    if ms < 1e11:
+        ms = ms * 1000
+    d = time.time() - ms / 1000.0
     if d < 0:
         return "just now"
     if d < 60:
@@ -294,10 +308,19 @@ def render(d):
     arb = d.get("arbiter") or {}
     last = arb.get("lastAction")
     if isinstance(last, dict):
-        bits = [clean(last.get("kind")) or clean(last.get("action")) or "acted"]
-        tgt = clean(last.get("session")) or clean(last.get("slug"))
+        # ⚠ THE DAEMON'S OWN FIELD NAMES: {type, at, name, to}. This read
+        # `kind`/`action` and `session`, which the daemon has never emitted, so
+        # every run printed a bare "Arbiter: acted" with no target. `kind` and
+        # `action` are still accepted so an older daemon still renders.
+        verb = (clean(last.get("type")) or clean(last.get("kind"))
+                or clean(last.get("action")) or "acted")
+        bits = [verb.replace("_", " ")]
+        tgt = clean(last.get("name")) or clean(last.get("session")) or clean(last.get("slug"))
         if tgt:
             bits.append("on " + tgt)
+        to = clean(last.get("to"))
+        if to:
+            bits.append("-> " + to)
         when = ago(last.get("at") or arb.get("lastLadderAt") or arb.get("lastSwitchAt"))
         if when:
             bits.append(when)

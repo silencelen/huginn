@@ -24,6 +24,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const crypto = require('node:crypto');
+const h = require('../lib/headroom');
 
 // PORT ALLOCATION — every file here binds a real socket and `node --test` runs
 // the files CONCURRENTLY, so these ranges must not overlap. They did once: two
@@ -72,7 +73,7 @@ const FABLE = JSON.stringify({ type: 'assistant', message: { model: 'claude-fabl
 const HUMAN = JSON.stringify({ type: 'user', message: { content: 'actually, wait' } });
 
 let tmp, stateDir, claudeDir, dataDir, headroomDir, token, daemon;
-let usageServer, acctServer, usageFile, shimLog;
+let usageServer, acctServer, usageFile, shimLog, tmuxFail, pushLog, seededSwitchAt;
 const madeSessions = new Set();
 
 function sh(cmd, args) {
@@ -133,6 +134,21 @@ async function api(pathname, init = {}) {
   return { status: res.status, body };
 }
 const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+/** Every push the daemon sent, as the FCM data message the phone would see. */
+function pushes(kind = null) {
+  let raw = '';
+  try { raw = fs.readFileSync(pushLog, 'utf8'); } catch { return []; }
+  const out = [];
+  for (const line of raw.split('\n')) {
+    if (!line.trim()) continue;
+    let body;
+    try { body = JSON.parse(line); } catch { continue; }
+    const data = body && body.message && body.message.data;
+    if (!data || (kind && data.kind !== kind)) continue;
+    out.push(data);
+  }
+  return out;
+}
 /** Every tmux argv the DAEMON ran, for the "and typed nothing further" checks. */
 function tmuxCalls(sessionName) {
   const raw = fs.existsSync(shimLog) ? fs.readFileSync(shimLog, 'utf8') : '';
@@ -200,6 +216,41 @@ before(async () => {
   fs.writeFileSync(path.join(claudeDir, 'settings.json'),
     `${JSON.stringify({ model: 'claude-fable-5-1', effortLevel: 'xhigh' }, null, 2)}\n`);
 
+  // A SEEDED arbiter action, written before the daemon starts.
+  //
+  // `/v1/autoswitch` is a compatibility alias rebuilt from `arbiter.lastAction`,
+  // and `AutoswitchEvent.at` has been epoch SECONDS since 2.x. There is no way
+  // to make the arbiter switch accounts from this file (it has one login), and
+  // the unit that matters is not worth leaving untested — so the state it reads
+  // is written by hand.
+  seededSwitchAt = Date.now() - 90_000;
+  fs.writeFileSync(path.join(dataDir, 'headroom.json'), JSON.stringify({
+    v: 1,
+    mode: 'ok',
+    accounts: {},
+    resets: [],
+    sessions: {},
+    sentinels: { STOP: null, 'STOP-FABLE': null },
+    arbiter: {
+      lastSwitchAt: seededSwitchAt,
+      lastLadderAt: 0,
+      lastResumeAt: 0,
+      switches: 1,
+      lastIdleWarnAt: 0,
+      why: 'seeded',
+      lastAction: {
+        type: 'switch_account',
+        at: seededSwitchAt,
+        from: 'slug-a',
+        to: 'slug-b',
+        fromEmail: 'a@example.test',
+        toEmail: 'b@example.test',
+        fromPercent: 97,
+        toPercent: 4,
+      },
+    },
+  }, null, 2));
+
   usageFile = path.join(tmp, 'usage.json');
   setUsage({});
 
@@ -240,16 +291,64 @@ before(async () => {
   const shimDir = path.join(tmp, 'shim');
   fs.mkdirSync(shimDir);
   shimLog = path.join(tmp, 'tmux-argv.log');
+  // It can also be told to FAIL one call: a glob written into $HG_TMUX_FAIL is
+  // matched against the argv once and then consumed. That is the only way to
+  // drive tmux refusing a keystroke mid-script, which is the case the ladder's
+  // clean-up paths exist for.
+  tmuxFail = path.join(tmp, 'tmux-fail');
   fs.writeFileSync(path.join(shimDir, 'tmux'),
     '#!/bin/sh\n'
     + '{ printf \'%s\\t\' "$@" | tr \'\\n\' \' \'; printf \'\\n\'; } >> "$HG_TMUX_LOG"\n'
+    + 'if [ -n "${HG_TMUX_FAIL:-}" ] && [ -f "$HG_TMUX_FAIL" ]; then\n'
+    + '  pat="$(cat "$HG_TMUX_FAIL")"\n'
+    + '  case "$*" in $pat) rm -f "$HG_TMUX_FAIL"; echo "tmux: forced failure" >&2; exit 1 ;; esac\n'
+    + 'fi\n'
     + `exec ${realTmux} "$@"\n`, { mode: 0o755 });
+
+  // ---- FCM, recorded rather than sent.
+  //
+  // The only way to see what a notification actually carries: the Telegram
+  // fallback is a line of text, so `kind`, `subject`, `options` and `payload` —
+  // everything that makes a notification actionable — exist ONLY on the push. A
+  // `--require`d fetch shim answers Google's two hosts and writes each send's
+  // body to a file. Nothing here reaches Google; the key is a throwaway.
+  pushLog = path.join(tmp, 'push-sends.jsonl');
+  fs.writeFileSync(pushLog, '');
+  const fetchShim = path.join(tmp, 'fetch-shim.js');
+  fs.writeFileSync(fetchShim, `'use strict';
+const fs = require('node:fs');
+const real = globalThis.fetch;
+globalThis.fetch = async (input, init) => {
+  const url = String(input && input.url ? input.url : input);
+  const json = (status, obj) => new Response(JSON.stringify(obj), {
+    status, headers: { 'content-type': 'application/json' },
+  });
+  if (url.includes('oauth2.googleapis.com')) return json(200, { access_token: 'stub', expires_in: 3600 });
+  if (url.includes('fcm.googleapis.com')) {
+    try { fs.appendFileSync(${JSON.stringify(pushLog)}, ((init && init.body) || '{}') + '\\n'); } catch {}
+    return json(200, { name: 'projects/x/messages/1' });
+  }
+  return real(input, init);
+};
+`);
+  const { privateKey } = crypto.generateKeyPairSync('rsa', { modulusLength: 2048 });
+  const fcmKey = path.join(tmp, 'fcm-service-account.json');
+  fs.writeFileSync(fcmKey, JSON.stringify({
+    type: 'service_account',
+    project_id: 'huginn-test',
+    client_email: 'test@huginn-test.iam.gserviceaccount.com',
+    private_key: privateKey.export({ type: 'pkcs8', format: 'pem' }).toString(),
+    token_uri: 'https://oauth2.googleapis.com/token',
+  }), { mode: 0o600 });
 
   daemon = spawn(process.execPath, [path.join(__dirname, '..', 'huginn-appd.js')], {
     env: {
       ...process.env,
+      NODE_OPTIONS: `${process.env.NODE_OPTIONS || ''} --require ${fetchShim}`.trim(),
+      HUGINN_FCM_KEY: fcmKey,
       PATH: `${shimDir}:${process.env.PATH}`,
       HG_TMUX_LOG: shimLog,
+      HG_TMUX_FAIL: tmuxFail,
       HUGINN_APPD_PORT: String(PORT),
       HUGINN_APPD_BIND: '127.0.0.1',
       HUGINN_APPD_DATA: dataDir,
@@ -261,6 +360,9 @@ before(async () => {
       HUGINN_APPD_OAUTH_ACCOUNT_URL: `http://127.0.0.1:${acctServer.address().port}/account`,
       // One second, so a test can change the stubbed percentages and see them.
       HUGINN_APPD_PLAN_TTL_MS: '1000',
+      // The consent backstop waits two minutes in production. One millisecond
+      // here, so the second pass over an unanswered dialog acts.
+      HUGINN_APPD_CONSENT_GRACE_MS: '1',
       // A downgrade sends a notification; nothing may leave this host.
       HUGINN_APPD_TELEGRAM_SCRIPT: '',
     },
@@ -313,6 +415,30 @@ test('/v1/headroom answers the whole picture, with the account read from the stu
   assert.equal(body.settings.ladderPct, 92);
 });
 
+test('/v1/autoswitch keeps `last.at` in SECONDS, and loses none of the row', async () => {
+  // ⚠ SPREAD ORDER. This view was built as `{ at: <seconds>, ...lastAction }`, so
+  // the spread's own millisecond `at` WON — silently changing an existing 2.x
+  // field by a factor of a thousand. It is the one pre-existing field this
+  // compatibility alias touches, and neither shipped client would have said so.
+  const { body } = await api('/v1/autoswitch');
+  assert.ok(body.last, 'a switch_account lastAction is what this view renders');
+  assert.equal(body.last.at, Math.floor(seededSwitchAt / 1000),
+    `last.at must be epoch SECONDS, got ${body.last.at}`);
+  assert.ok(body.last.at < 1e11, 'and it must not be milliseconds');
+  // …and overriding `at` must not drop the rest of the row.
+  assert.equal(body.last.type, 'switch_account');
+  assert.equal(body.last.toEmail, 'b@example.test');
+  assert.equal(body.last.fromPercent, 97);
+  assert.equal(body.switches, 1);
+
+  // The same instant on /v1/headroom is MILLISECONDS, which is the split this
+  // alias exists to hide — and `serverTime` is ms now too.
+  const hr = (await api('/v1/headroom')).body;
+  assert.equal(hr.arbiter.lastAction.at, seededSwitchAt, 'headroom epochs are milliseconds');
+  assert.ok(hr.serverTime > 1e11, 'including serverTime, which used to be the odd one out');
+  assert.equal(typeof hr.arbiter.lastResumeAt, 'number', 'and lastResumeAt is a NUMBER, never null');
+});
+
 test('/v1/status carries the one-line summary the pill draws', async () => {
   setUsage({ session: 4, weekly_all: 8, weekly_fable: 61 });
   await tick({});
@@ -351,6 +477,43 @@ test('a valid PATCH is persisted and answered with the FULL settings', async () 
   const onDisk = JSON.parse(fs.readFileSync(path.join(dataDir, 'headroom-settings.json'), 'utf8'));
   assert.equal(onDisk.stopFablePct, 80);
   await tick({ stopFablePct: 88 });      // back to the default for later tests
+});
+
+test('a STORED settings file is validated field by field, not merely parsed', async () => {
+  // The file is hand-operable by design ("the operator must be able to arm one by
+  // hand"), and it is also what a crash half-writes. It used to be loaded as the
+  // BASE of validateSettings, which skips every per-field rule for a key that is
+  // not in the PATCH — so nothing could fail, and `/clear` on disk was typed into
+  // every stalled session at the next reset.
+  const file = path.join(dataDir, 'headroom-settings.json');
+  const good = JSON.parse(fs.readFileSync(file, 'utf8'));
+  const D = h.defaults();
+  const load = async () => (await api('/v1/headroom')).body.settings;
+  try {
+    // Only the ONE field is wrong, and every cross-field ordering still holds —
+    // so nothing but a per-field rule can catch it.
+    fs.writeFileSync(file, JSON.stringify({ ...good, resumePhrase: '/clear', stopFablePct: 70 }, null, 2));
+    const one = await load();
+    assert.notEqual(one.resumePhrase, '/clear',
+      'a stored slash command loaded straight into the resume path');
+    assert.equal(one.resumePhrase, D.resumePhrase);
+    assert.equal(one.stopFablePct, D.stopFablePct,
+      'a file that does not validate falls back to the DEFAULTS, not to half of itself');
+
+    // A non-string is the other half: `child.stdin.end(99)` throws inside the
+    // paste, which is a resume that fails with a stack trace rather than a phrase.
+    fs.writeFileSync(file, JSON.stringify({ ...good, resumePhrase: 99 }, null, 2));
+    const two = await load();
+    assert.equal(typeof two.resumePhrase, 'string');
+    assert.equal(two.resumePhrase, D.resumePhrase);
+
+    // And the heads-up note travels the same pane path, so the same rule applies.
+    fs.writeFileSync(file, JSON.stringify({ ...good, headsUpText: '/clear {pct}' }, null, 2));
+    const three = await load();
+    assert.equal(three.headsUpText, D.headsUpText);
+  } finally {
+    fs.writeFileSync(file, JSON.stringify(good, null, 2));
+  }
 });
 
 // ----------------------------------------------------------------- plan.account
@@ -524,6 +687,115 @@ test('a picker that never appears is abandoned quietly, with nothing else typed'
   assert.equal(capture(name).includes('Select model'), false);
 });
 
+test('a ladder job that is merely QUEUED reads as pending, not as a failed delivery', async () => {
+  // ⚠ enqueueJob resolves after ONE pump pass, and the picker must not open
+  // inside a running turn — so `r.result` is null for a job that has not started.
+  // That was indistinguishable from a job that ran and could not confirm, and
+  // the record it wrote claimed a move that had not happened.
+  const name = mkPicker('pend', [
+    { label: 'Fable', desc: 'Fable 5.1', current: true },
+    { label: 'Opus (1M context)', desc: 'Opus 5' },
+  ]);
+  // Mid-turn: the transcript's last record is the owner speaking, so both gates
+  // are not open and the job waits for the boundary.
+  const transcript = writeTranscript(name, [FABLE, TURN, HUMAN]);
+  writeState(name, { sessionId: `sid-${name}`, transcript });
+  setUsage({ session: 5, weekly_all: 10, weekly_fable: 95 });
+  await tick({ cooldownMs: 0 });
+  const held = await until((b) => {
+    const row = b.sessions.find((x) => x.name === name);
+    return row && row.ladder && row.ladder.delivery === 'pending';
+  }, 25_000, 'a pending ladder record');
+  const row = held.sessions.find((x) => x.name === name);
+  assert.equal(row.ladder.to, 'opus');
+  assert.equal(row.family, 'fable', 'the session has NOT moved yet');
+  assert.equal(capture(name).includes('Select model'), false, 'the picker must never open mid-turn');
+
+  // The turn ends. The job runs, and its own settle resolves the record.
+  fs.appendFileSync(transcript, `${TURN}\n`);
+  const done = await until((b) => {
+    const r = b.sessions.find((x) => x.name === name);
+    return r && r.ladder && r.ladder.delivery === 'confirmed';
+  }, 30_000, 'the queued ladder to land');
+  assert.equal(done.sessions.find((x) => x.name === name).family, 'opus');
+  assert.match(capture(name), /Set model to Opus \(1M context\) for this session only/);
+});
+
+test('a /model that cannot be SUBMITTED leaves nothing in the composer', async () => {
+  // ⚠ `/model` is already typed by the time the Enter goes. This was the one
+  // early exit that skipped the clean-up after typing text, so the pump released
+  // the next entry into a composer holding `/model` and the session received
+  // `/modelYour usage limit has reset. Continue the task…`.
+  const name = mkPicker('entfail', [
+    { label: 'Fable', desc: 'Fable 5.1', current: true },
+    { label: 'Opus (1M context)', desc: 'Opus 5' },
+  ]);
+  const transcript = writeTranscript(name, [FABLE, TURN]);
+  writeState(name, { sessionId: `sid-${name}`, transcript });
+
+  // Spend the heads-up FIRST (once per Fable window), so the only `send-keys …
+  // Enter` left for this session is the ladder's own submit.
+  setUsage({ session: 5, weekly_all: 10, weekly_fable: 88 });
+  await tick({ cooldownMs: 0 });
+  await until((b) => {
+    const r = b.sessions.find((x) => x.name === name);
+    return !!(r && r.headsUpAt);
+  }, 25_000, 'the heads-up for entfail');
+
+  fs.writeFileSync(tmuxFail, `*send-keys*${name}*Enter*`);
+  setUsage({ session: 5, weekly_all: 10, weekly_fable: 95 });
+  await tick({ cooldownMs: 0 });
+  await until((b) => {
+    const r = b.sessions.find((x) => x.name === name);
+    return !!(r && r.ladder && r.ladder.delivery === 'delivery_unconfirmed');
+  }, 25_000, 'an unconfirmed ladder after the forced Enter failure');
+
+  const keys = tmuxCalls(name).filter((a) => a.includes('send-keys'));
+  assert.ok(keys.some((a) => a.includes('Escape')),
+    'Esc must close whatever /model opened');
+  assert.ok(keys.some((a) => a.includes('C-u')),
+    'and the composer must be cleared — /model is sitting in it');
+});
+
+test('the downgrade notification carries the buttons AND what they act on', async () => {
+  // ⚠ The Telegram fallback is a line of text. `kind`, `subject`, `options` and
+  // `payload` exist only on the PUSH — and without a payload an "Undo" button is
+  // a word the app cannot aim at anything. All four headroom_* pushes went out
+  // as plain text with no options and no payload.
+  const reg = await api('/v1/push/register', {
+    method: 'POST', body: JSON.stringify({ installId: 'hr-test-install', token: 'tok-hr-test', model: 'Pixel 9' }),
+  });
+  assert.equal(reg.status, 200, JSON.stringify(reg.body));
+
+  const name = mkPicker('pushd', [
+    { label: 'Fable', desc: 'Fable 5.1', current: true },
+    { label: 'Opus (1M context)', desc: 'Opus 5' },
+  ]);
+  const transcript = writeTranscript(name, [FABLE, TURN]);
+  writeState(name, { sessionId: `sid-${name}`, transcript });
+  setUsage({ session: 5, weekly_all: 10, weekly_fable: 96 });
+  await tick({ cooldownMs: 0 });
+  await until((b) => b.sessions.some((x) => x.name === name && x.ladder && x.ladder.delivery === 'confirmed'),
+    25_000, 'a confirmed ladder move');
+
+  const deadline = Date.now() + 10_000;
+  let sent = [];
+  for (;;) {
+    sent = pushes('headroom_downgraded').filter((d) => d.subject === name);
+    if (sent.length) break;
+    if (Date.now() > deadline) break;
+    await wait(200);
+  }
+  assert.ok(sent.length, `no headroom_downgraded push named ${name}: ${JSON.stringify(pushes())}`);
+  const d = sent[sent.length - 1];
+  assert.equal(d.subject, name, 'the tmux session name, so the app can open the thing it is about');
+  assert.deepEqual(JSON.parse(d.options), ['Undo', 'OK']);
+  const payload = JSON.parse(d.payload);
+  assert.equal(payload.session, name);
+  assert.equal(payload.to, 'opus');
+  assert.equal(payload.from, 'fable');
+});
+
 test('undo puts a laddered session back, and stops the arbiter arguing with it', async () => {
   const name = mkPicker('undo', [
     { label: 'Fable', desc: 'Fable 5.1', current: true },
@@ -539,6 +811,12 @@ test('undo puts a laddered session back, and stops the arbiter arguing with it',
   const r = await api(`/v1/sessions/${name}/headroom/undo`, { method: 'POST' });
   assert.equal(r.status, 200, JSON.stringify(r.body));
   assert.equal(r.body.to, 'fable');
+  // ⚠ `ok` IS "ACCEPTED", NOT "MOVED". A client reporting success on any 2xx
+  // announced "put back on its own model" for an undo still sitting in the
+  // queue — under the same toast key as the downgrade it claimed to reverse.
+  assert.equal(r.body.applied, true, 'this one ran: the session was at a turn boundary');
+  assert.equal(r.body.queued, false);
+  assert.equal(r.body.delivery, 'confirmed');
   const back = await until((b) => {
     const s = b.sessions.find((x) => x.name === name);
     return s && !s.ladder;
@@ -552,6 +830,37 @@ test('undo puts a laddered session back, and stops the arbiter arguing with it',
   await wait(1500);
   const after = (await api('/v1/headroom')).body.sessions.find((s) => s.name === name);
   assert.equal(after.ladder, null, 'a human model choice holds the ladder off');
+});
+
+test('an undo that only QUEUES says so, and clears the record when it lands', async () => {
+  const name = mkPicker('undoq', [
+    { label: 'Fable', desc: 'Fable 5.1', current: true },
+    { label: 'Opus (1M context)', desc: 'Opus 5' },
+  ]);
+  const transcript = writeTranscript(name, [FABLE, TURN]);
+  writeState(name, { sessionId: `sid-${name}`, transcript });
+  setUsage({ session: 5, weekly_all: 10, weekly_fable: 97 });
+  await tick({ cooldownMs: 0 });
+  await until((b) => b.sessions.some((x) => x.name === name && x.ladder && x.ladder.delivery === 'confirmed'),
+    25_000, 'the downgrade to undo');
+
+  // Mid-turn: the picker must not open inside a running turn, so the undo waits.
+  fs.appendFileSync(transcript, `${HUMAN}\n`);
+  const r = await api(`/v1/sessions/${name}/headroom/undo`, { method: 'POST' });
+  assert.equal(r.status, 200, JSON.stringify(r.body));
+  assert.equal(r.body.applied, false, 'nothing has moved yet');
+  assert.equal(r.body.queued, true);
+  assert.equal(r.body.to, 'fable');
+  assert.equal(r.body.delivery, undefined, 'there is no delivery to report on a job that has not run');
+
+  // The turn ends; the job runs; the record clears from the job's own settle.
+  fs.appendFileSync(transcript, `${TURN}\n`);
+  const back = await until((b) => {
+    const x = b.sessions.find((y) => y.name === name);
+    return x && !x.ladder;
+  }, 30_000, 'the queued undo to land');
+  assert.equal(back.sessions.find((x) => x.name === name).family, 'fable');
+  assert.match(capture(name), /Set model to Fable for this session only/);
 });
 
 test('undo refuses a session huginn has not moved', async () => {
@@ -603,4 +912,51 @@ test('/v1/autoswitch still answers its old shape, from the new settings', async 
   assert.deepEqual(onDisk.accountSwitch, { enabled: true, threshold: 90, margin: 20 });
   assert.equal((await api('/v1/autoswitch')).body.enabled, true);
   await api('/v1/autoswitch', { method: 'POST', body: JSON.stringify({ enabled: false }) });
+});
+
+// ------------------------------------------------------- the consent backstop
+
+test('the consent auto-answer RE-READS the pane immediately before the digit', async () => {
+  // ⚠ The digit is typed at a pane, not routed through /answer — so the ONLY
+  // thing standing between "appd answered the dialog" and "appd sent the number
+  // 2 as a chat message" is a capture taken immediately before the keystroke.
+  // The abort itself is a microsecond-wide race no test can drive; what a test
+  // CAN pin down is that the second read happens at all, with nothing between it
+  // and the key.
+  const name = `${PFX}-consent`;
+  const fixture = path.join(__dirname, 'fixtures', 'prompts', 'fable-consent-80.txt');
+  sh('tmux', ['new-session', '-d', '-s', name, '-c', tmp, '-x', '120', '-y', '40',
+    `sh -c 'cat ${fixture}; sleep 600'`]);
+  madeSessions.add(name);
+  writeState(name, { state: 'attention', sessionId: `sid-${name}` });
+  try {
+    const isDigit = (a) => a.includes('send-keys') && a.includes('-l') && a[a.length - 1] === '2';
+    const deadline = Date.now() + 20_000;
+    let calls = [];
+    for (;;) {
+      calls = tmuxCalls(name);
+      if (calls.some(isDigit)) break;
+      if (Date.now() > deadline) {
+        throw new Error(`the consent dialog was never answered. tmux calls:\n${calls.map((c) => c.join(' ')).join('\n')}`);
+      }
+      await api('/v1/headroom/settings', { method: 'PATCH', body: '{}' });
+      await wait(250);
+    }
+    // The call IMMEDIATELY before the keystroke must be the verification read.
+    // It is distinguishable from the decision read by shape: captureScreen asks
+    // for escapes and geometry (`capture-pane -p -e`, after a display-message),
+    // the verification is a bare `capture-pane -p` with nothing between it and
+    // the key.
+    const at = calls.findIndex(isDigit);
+    const prev = calls[at - 1] || [];
+    assert.ok(prev.includes('capture-pane') && !prev.includes('-e'),
+      `the digit was pressed against a stale capture; the call before it was: ${prev.join(' ')}`);
+    // And it really did answer: a pressed digit is followed by its Enter.
+    assert.ok(calls.slice(at + 1).some((a) => a.includes('send-keys') && a.includes('Enter')),
+      'the digit must be submitted, not merely typed');
+  } finally {
+    try { sh('tmux', ['kill-session', '-t', `=${name}`]); } catch { /* gone */ }
+    madeSessions.delete(name);
+    try { fs.unlinkSync(path.join(stateDir, name)); } catch { /* gone */ }
+  }
 });

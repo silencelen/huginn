@@ -378,15 +378,47 @@ test('a dialog on screen queues a text send and names the modal', async () => {
   assert.match(capture(name), /Switch model\?/, 'precondition: the dialog really is on screen');
 });
 
-test('a RAW KEY send into a dialog is refused, because there is nowhere to hold it', async () => {
+test('a RAW KEY send into a dialog LANDS: those are the keys that answer it', async () => {
+  // ⚠ REVERSED IN 3.0. A raw key is a PERSON driving the pane — the Screen tab
+  // sends every keypress this way, plus its dedicated Escape and BTab buttons —
+  // and Escape, the arrows, BTab and the digits are precisely the keys that
+  // dismiss or navigate a dialog. Refusing them took the terminal keyboard and
+  // the Interrupt button away at exactly the moment they are needed, and told
+  // the reader to go to the Screen tab they were already on. It broke the
+  // shipped 2.88.0 client identically.
   const name = mkModal('modalkeys');
   writeState(name, { transcript: writeTranscript(name, [TURN]) });
+  assert.match(capture(name), /Switch model\?/, 'precondition: the dialog really is on screen');
+
+  const before = tmuxCalls('Escape').length;
   const { status, body } = await api(`/v1/sessions/${name}/keys`, {
     method: 'POST', body: JSON.stringify({ keys: ['Escape'] }),
   });
-  assert.equal(status, 409, JSON.stringify(body));
-  assert.match(body.error, /dialog open/);
-  assert.match(body.error, /Screen tab/, 'and it says where to go, not just what is wrong');
+  assert.equal(status, 200, JSON.stringify(body));
+  assert.equal(body.queued, 0, 'a key is never queued — an interrupt at the next turn boundary is nothing');
+  assert.equal(tmuxCalls('Escape').length, before + 1, 'and it went to the pane NOW');
+
+  // BTab and the arrows too: navigating a selector is the whole point. (A DIGIT
+  // is not a named key — a dialog is answered by number through /answer, which
+  // validates it against a freshly-read fingerprint.)
+  for (const k of ['BTab', 'Down', 'Up', 'Tab']) {
+    const r = await api(`/v1/sessions/${name}/keys`, { method: 'POST', body: JSON.stringify({ keys: [k] }) });
+    assert.equal(r.status, 200, `${k}: ${JSON.stringify(r.body)}`);
+  }
+});
+
+test('a TEXT send into a dialog is still queued, because there IS somewhere to hold it', async () => {
+  // The turn-boundary queue survives the change above: a message delivered into
+  // a modal is swallowed with no trace anywhere, and unlike a keystroke it can
+  // wait.
+  const name = mkModal('modaltext2');
+  writeState(name, { transcript: writeTranscript(name, [TURN]) });
+  const { status, body } = await api(`/v1/sessions/${name}/keys`, {
+    method: 'POST', body: JSON.stringify({ text: 'this would be swallowed', keys: ['Enter'] }),
+  });
+  assert.equal(status, 200, JSON.stringify(body));
+  assert.equal(body.delivered, false);
+  assert.equal((await typingOf(name)).blockedBy, 'modal');
 });
 
 test('keys are never queued: an interrupt jumps a message waiting on a turn', async () => {
