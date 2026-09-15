@@ -1,5 +1,12 @@
 # Huginn changelog
 
+## 3.0.1 — 2026-09-15
+
+- **The stream picker shows live agents; finished ones fold away.** It listed every subagent a
+  session had ever used; it now offers the ones still running — the same set Claude Code's own
+  agent footer shows — with the finished ones behind a '…' pill you can expand to read back
+  through, and keeps the one you are reading in view.
+
 ## 3.0.0 — 2026-09-15
 
 Huginn 3.
