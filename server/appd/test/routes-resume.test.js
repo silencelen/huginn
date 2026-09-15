@@ -116,6 +116,22 @@ function sh(cmd, args) {
   if (cmd === 'tmux') args = ['-L', TMUX_SOCK, ...args];
   return execFileSync(cmd, args, { encoding: 'utf8' });
 }
+/** What a pane currently SHOWS, which is the only thing the daemon reads it by. */
+function paneText(name) {
+  try { return sh('tmux', ['capture-pane', '-p', '-t', `=${name}:`]); } catch { return ''; }
+}
+/** Poll a pane until it shows `re`, rather than assuming a fork+printf has landed. */
+async function paneShows(name, re, ms = 20_000) {
+  const deadline = Date.now() + ms;
+  for (;;) {
+    const text = paneText(name);
+    if (re.test(text)) return text;
+    if (Date.now() > deadline) {
+      throw new Error(`${name} never showed ${re} within ${ms}ms — pane held: ${JSON.stringify(text).slice(0, 400)}`);
+    }
+    await wait(100);
+  }
+}
 /** A pane that swallows whatever is typed at it, into a file we can read. */
 function mkSink(suffix) {
   const name = `${PFX}-${suffix}`;
@@ -133,7 +149,7 @@ function mkSink(suffix) {
  * one of its rows), so this is how a test holds a resume in the queue for as long
  * as it wants to look at it — and then lets it through.
  */
-function mkBlockedSink(suffix) {
+async function mkBlockedSink(suffix) {
   const name = `${PFX}-${suffix}`;
   const out = path.join(tmp, `${suffix}.typed`);
   const gate = path.join(tmp, `${suffix}.open`);
@@ -143,6 +159,17 @@ function mkBlockedSink(suffix) {
   sh('tmux', ['new-session', '-d', '-s', name, '-c', tmp, '-x', '120', '-y', '40',
     `sh -c 'stty -echo; printf "${dialog}"; while [ ! -f ${gate} ]; do sleep 0.2; done; clear; printf " ❯ "; cat > ${out}'`]);
   madeSessions.add(name);
+  // ⚠ NOT A MODAL UNTIL IT HAS PAINTED, and this is awaited HERE rather than at
+  // the call site on purpose: `stalledSession` writes the state file next, and
+  // that file is the whole of how the daemon discovers this session. Between the
+  // two, the pane is EMPTY — which `paneReadyForInput` reads as "ready for
+  // input", so the daemon's own ten-second resume poll types the phrase straight
+  // in instead of holding it behind the dialog. The test then waits thirty
+  // seconds for a `queuedAt` that already happened as a delivery, and fails as
+  // "the resume to be queued behind the dialog never became true". On an idle
+  // host the fork+printf wins that race by milliseconds; at load 11-23 on eight
+  // cores it does not. Reproduced 2026-09-15.
+  await paneShows(name, /Switch model\?/);
   return { name, out, open: () => fs.writeFileSync(gate, '') };
 }
 function writeState(name, { state = 'idle', sessionId, transcript } = {}) {
@@ -161,13 +188,22 @@ function writeTranscript(file, records) {
  * exists. `restored` writes appd's mark on the durable registry, which says the
  * process that was waiting is gone.
  */
-function stalledSession(suffix, { native = false, restored = false, extra = [], at = Date.now() - 5_000, make = mkSink } = {}) {
-  const pane = make(suffix);
+async function stalledSession(suffix, { native = false, restored = false, extra = [],
+  at = Date.now() - 5_000, make = mkSink, armStall = true } = {}) {
+  const pane = await make(suffix);
   const { name, out } = pane;
   const sid = `00000000-0000-4000-8000-${String(process.pid).padStart(12, '0').slice(-12)}`
     .replace(/.$/, suffix.slice(-1));
   const transcript = path.join(tmp, `${suffix}.jsonl`);
-  writeTranscript(transcript, [FABLE, TURN, stall(at), ...extra]);
+  // `armStall:false` leaves the 429 OUT of the transcript, so the session is
+  // visible to the daemon but not yet stalled — the caller arms it once whatever
+  // policy the test is about is actually in place. The window between the state
+  // file appearing and the next line of a test is small, and the ten-second
+  // resume poll does not care how small: it found the stall, decided the window
+  // was back and resumed the session before the test had written the override it
+  // was asking about. Reproduced at load 11-23 on eight cores, 2026-09-15.
+  const stalled = [FABLE, TURN, stall(at), ...extra];
+  writeTranscript(transcript, armStall ? stalled : [FABLE, TURN]);
   writeState(name, { sessionId: sid, transcript });
   if (native) {
     const dir = path.join(claudeDir, 'sessions');
@@ -186,7 +222,11 @@ function stalledSession(suffix, { native = false, restored = false, extra = [], 
     };
     fs.writeFileSync(file, JSON.stringify(o, null, 2));
   }
-  return { name, out, sid, transcript, open: pane.open };
+  return {
+    name, out, sid, transcript, open: pane.open,
+    /** Put the 429 in, making the session stallable from this instant. */
+    armStall: () => writeTranscript(transcript, stalled),
+  };
 }
 /** The percentages and the reset instant the stub endpoint answers with. */
 function setUsage({ session = 5, weekly_all = 10, weekly_fable = 20, resetsAt = null, noClock = false } = {}) {
@@ -250,6 +290,7 @@ async function until(fn, ms = 20_000, what = 'the condition') {
   }
 }
 const sessionRow = (body, name) => (body.sessions || []).find((s) => s.name === name) || null;
+
 
 /**
  * The stub `claude`.
@@ -389,15 +430,40 @@ before(async () => {
   }
 });
 
-after(() => {
+/**
+ * SIGTERM, then SIGKILL if it will not go, and wait until the process is REAPED.
+ *
+ * ⚠ SIGTERM IS A REQUEST, AND THE SCRATCH TREE IS NOT OURS UNTIL IT IS ANSWERED.
+ * The daemon still has a headroom pass, a state save and a chat write in flight,
+ * and on a loaded host those land after this hook has started walking the
+ * directory — rimraf deletes a file, the daemon writes another, and the rmdir
+ * fails ENOTEMPTY. `node --test` reports that as the whole FILE failing
+ * (`not ok N - routes-resume.test.js`) with all thirteen tests inside it green,
+ * which reads like a mystery and is a race in the teardown. Reproduced here at
+ * load 11-23 on eight cores, 2026-09-15.
+ */
+function reap(child, ms = 10_000) {
+  if (child.exitCode !== null || child.signalCode) return Promise.resolve();
+  return new Promise((resolve) => {
+    const hard = setTimeout(() => { try { child.kill('SIGKILL'); } catch { /* gone */ } }, 3_000);
+    const giveUp = setTimeout(resolve, ms);
+    const done = () => { clearTimeout(hard); clearTimeout(giveUp); resolve(); };
+    child.once('exit', done);
+    try { child.kill('SIGTERM'); } catch { done(); }
+  });
+}
+
+after(async () => {
   for (const name of madeSessions) {
     try { sh('tmux', ['kill-session', '-t', `=${name}`]); } catch { /* gone */ }
   }
   try { sh('tmux', ['kill-server']); } catch { /* no server */ }
-  if (daemon) daemon.kill('SIGTERM');
   if (usageServer) usageServer.close();
   if (acctServer) acctServer.close();
-  if (tmp) fs.rmSync(tmp, { recursive: true, force: true });
+  if (daemon) await reap(daemon);
+  // `maxRetries` as well as the reap: a stray write from anything else that
+  // shares this tree must not turn a green file red.
+  if (tmp) fs.rmSync(tmp, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 });
 });
 
 // ---------------------------------------------------------------- headless
@@ -475,7 +541,7 @@ test('a chat whose turn died on the limit is re-run with --resume and the SAME t
 // ---------------------------------------------------------------- sessions
 
 test('a stalled session is marked on /v1/sessions and announced once', async () => {
-  const s = stalledSession('a', { native: true });
+  const s = await stalledSession('a', { native: true });
   setUsage({ session: 100, weekly_all: 10, weekly_fable: 20, resetsAt: new Date(Date.now() + 3600_000).toISOString() });
   await tick({ cooldownMs: 0 });
   await until(async () => {
@@ -505,7 +571,7 @@ test('the phrase is typed only AFTER the native grace, and the notification says
   // ten-second grace, means the low reading is in place well before the phrase
   // is allowed to go.
   const resetsAt = Date.now() + 8_000;
-  const s = stalledSession('b', { native: true });
+  const s = await stalledSession('b', { native: true });
   setUsage({ session: 100, weekly_all: 10, weekly_fable: 20, resetsAt: new Date(resetsAt).toISOString() });
   await tick({ cooldownMs: 0 });
   await until(async (b) => !!(sessionRow(b, s.name) || {}).stall, 20_000, 'the stall on b');
@@ -531,7 +597,7 @@ test('the phrase is typed only AFTER the native grace, and the notification says
 
 test('a session appd restored gets no grace — its native wait died with the process', async () => {
   const at = Date.now() - 5_000;
-  const s = stalledSession('c', { native: true, restored: true, at });
+  const s = await stalledSession('c', { native: true, restored: true, at });
   // Already past: nothing to wait for but the daemon noticing.
   setUsage({ session: 100, weekly_all: 10, weekly_fable: 20, resetsAt: new Date(Date.now() - 1_000).toISOString() });
   await tick({ cooldownMs: 0 });
@@ -550,7 +616,7 @@ test('the CLI continuing by itself is seen, and NOTHING is typed', async () => {
   // what a stall is — and only then the continuation landing on top of it. A
   // transcript that arrives with both at once was never a stall as far as any
   // reader can tell, and tests the wrong thing.
-  const s = stalledSession('d', { native: true });
+  const s = await stalledSession('d', { native: true });
   setUsage({ session: 100, weekly_all: 10, weekly_fable: 20, resetsAt: new Date(Date.now() + 1_500).toISOString() });
   await tick({ cooldownMs: 0 });
   await until(async (b) => !!(sessionRow(b, s.name) || {}).stall, 20_000, 'the stall on d');
@@ -569,7 +635,7 @@ test('the CLI continuing by itself is seen, and NOTHING is typed', async () => {
 });
 
 test('a person answering it first cancels the resume', async () => {
-  const s = stalledSession('e', { native: true });
+  const s = await stalledSession('e', { native: true });
   setUsage({ session: 100, weekly_all: 10, weekly_fable: 20, resetsAt: new Date(Date.now() + 1_500).toISOString() });
   await tick({ cooldownMs: 0 });
   await until(async (b) => !!(sessionRow(b, s.name) || {}).stall, 20_000, 'the stall on e');
@@ -586,7 +652,15 @@ test('a person answering it first cancels the resume', async () => {
 });
 
 test('a per-session autoResume:false is honoured, and says which rule stopped it', async () => {
-  const s = stalledSession('f', { native: false });
+  // ⚠ THE POLICY GOES IN BEFORE THE SESSION CAN STALL. `armStall:false` creates
+  // the session without the 429, so there is nothing for the daemon's own
+  // ten-second poll to resume while this test is still writing the override it
+  // is about. Armed the other way round, that poll can resume the session in the
+  // gap between the state file appearing and the POST below landing — and the
+  // test then reads `the window reset and appd typed the resume phrase` and
+  // blames the override for being ignored. Seen once under parallel gradle load
+  // on 2026-09-15; the window is milliseconds on an idle host.
+  const s = await stalledSession('f', { native: false, armStall: false });
   // The override is written through the ordinary route, exactly as the phone
   // would write it — `null` there means FOLLOW THE GLOBAL and must not read as
   // false, which is why the API carries three states and not two.
@@ -594,6 +668,7 @@ test('a per-session autoResume:false is honoured, and says which rule stopped it
     method: 'POST', body: JSON.stringify({ autoResume: false }),
   });
   assert.ok(put.status < 300, JSON.stringify(put.body));
+  s.armStall();
   setUsage({ session: 100, weekly_all: 10, weekly_fable: 20, resetsAt: new Date(Date.now() - 1_000).toISOString() });
   await tick({ cooldownMs: 0 });
   setUsage({ session: 2, weekly_all: 10, weekly_fable: 20 });
@@ -609,7 +684,7 @@ test('a per-session autoResume:false is honoured, and says which rule stopped it
 });
 
 test('the limit notification is sent ONCE per stall, not once per tick', async () => {
-  const s = stalledSession('g', { native: true });
+  const s = await stalledSession('g', { native: true });
   setUsage({ session: 100, weekly_all: 10, weekly_fable: 20, resetsAt: new Date(Date.now() + 3600_000).toISOString() });
   await tick({ cooldownMs: 0 });
   await until(async (b) => !!(sessionRow(b, s.name) || {}).stall, 20_000, 'the stall on g');
@@ -685,7 +760,7 @@ test('a resume held in the queue is NOT recorded as resumed, and settles when it
   // reconciled it: applyResumes skipped the session forever and noteStall
   // eventually deleted the record. The one session appd most needs to speak to
   // was the one it silently gave up on.
-  const s = stalledSession('q', { make: mkBlockedSink });
+  const s = await stalledSession('q', { make: mkBlockedSink });
   setUsage({ session: 100, weekly_all: 10, weekly_fable: 20, resetsAt: new Date(Date.now() - 1_000).toISOString() });
   await tick({ cooldownMs: 0 });
   await until(async (b) => !!(sessionRow(b, s.name) || {}).stall, 20_000, 'the stall on q');
@@ -720,7 +795,7 @@ test('a queued resume the pump DROPS leaves the stall unresumed and unspent', as
   // Dropped for 'human': the owner typed while it waited, so the queue bins it.
   // Nothing was typed, so nothing was spent — and the record must say so rather
   // than reading as a resume that happened.
-  const s = stalledSession('h', { make: mkBlockedSink });
+  const s = await stalledSession('h', { make: mkBlockedSink });
   setUsage({ session: 100, weekly_all: 10, weekly_fable: 20, resetsAt: new Date(Date.now() - 1_000).toISOString() });
   await tick({ cooldownMs: 0 });
   await until(async (b) => !!(sessionRow(b, s.name) || {}).stall, 20_000, 'the stall on h');
