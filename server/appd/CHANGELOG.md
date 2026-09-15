@@ -9,6 +9,23 @@ appeared only as a side-note on the app releases it happened to ship with. Three
 undocumented, and the notes-cutting matcher could fuse two sections when an app and an appd
 version number collided. Entries below are reconstructed from the shipping commits.
 
+## 3.0.6 — 2026-09-15
+
+- **A session held up by a question says so again.** "Huginn needs you" went quiet: a session
+  sitting on an AskUserQuestion or a plan approval kept reporting `running`, so both clients drew
+  it as *working* — no red row, no notification, and the send queue's modal gate opened straight
+  into the dialog. The state word comes from the one flat file `huginn-claude-title` keeps per
+  session, and that file is last-writer-wins across the whole session: the PreToolUse that RAISES
+  the dialog writes `running`, the `Notification` that corrects it to `attention` arrives about
+  six seconds later (measured against a live dialog on Claude Code 2.1.258) — and fires exactly
+  once, so the next tool call from any background agent of that session puts `running` back and
+  nothing ever takes it off again. Wave 1 made background agents ordinary, which is when a
+  long-standing race became the normal case. The fix reads the marker the hook already keeps for
+  this and only this thread: the AskUserQuestion / ExitPlanMode sidecar, which is deliberately not
+  cleared by another tool's PreToolUse. A `running` session with a live sidecar for its own
+  session id now reports `attention`, dated from when the dialog was raised; `idle` is never
+  promoted, so a sidecar whose clear was missed cannot pin a session at "needs you".
+
 ## 3.0.5 — 2026-09-15
 
 - **The push counter survives a restart and carries an epoch.** The phone decides how often to
