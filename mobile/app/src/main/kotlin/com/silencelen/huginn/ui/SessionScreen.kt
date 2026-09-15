@@ -445,6 +445,13 @@ private fun SessionConversation(
                     LocalTranscriptSelection provides TranscriptSelectionHost { text ->
                         selection = SelectionMode.begin(text)
                     },
+                    // ⚠ And the platform's own Copy / Select all popup is held
+                    // back while that bar is up — one press raised BOTH, with
+                    // Android's floating over the conversation on top of the
+                    // app's. See GatedTextToolbar. Transcript only: the composer
+                    // below is a text field and keeps its own toolbar.
+                    androidx.compose.ui.platform.LocalTextToolbar provides
+                        rememberGatedTextToolbar(selection.active),
                 ) {
               LazyColumn(
                 state = listState,
@@ -716,6 +723,12 @@ fun SessionSubtitle(page: TranscriptPage?, screen: Screen?) {
         style = MaterialTheme.typography.labelSmall,
         color = MaterialTheme.colorScheme.onSurfaceVariant,
         fontWeight = FontWeight.Normal,
+        // ONE LINE. Four facts joined with a wide separator wrap on a phone, and
+        // the second line grew UNDER the bar's action slot — "auto mode · 77x50"
+        // reading out from behind an icon. The bar is a place for a title and a
+        // hint, not for a table; what does not fit is on the Overview tab.
+        maxLines = 1,
+        overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
     )
 }
 
