@@ -6,6 +6,7 @@
   session had ever used; it now offers the ones still running — the same set Claude Code's own
   agent footer shows — with the finished ones behind a '…' pill you can expand to read back
   through, and keeps the one you are reading in view.
+- **Right-click selected text** in a chat or session conversation for Explain · Execute · Quote · Ask in new chat, beside Copy. Every one of them stages text in the composer for you to edit; none of them sends. The wording is the host's (Settings → Quick actions), so the phone and desktop will say the same thing once the phone's long-press lands.
 
 ## 1.0.0
 
