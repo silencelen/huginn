@@ -23,6 +23,7 @@ import com.silencelen.huginn.data.PolishResult
 import com.silencelen.huginn.data.RouteResolver
 import com.silencelen.huginn.data.Session
 import com.silencelen.huginn.data.Status
+import com.silencelen.huginn.ui.QuickActionRules
 import com.silencelen.huginn.data.Usage
 import com.silencelen.huginn.data.Watch
 import com.silencelen.huginn.data.WatchEvent
@@ -409,12 +410,55 @@ class AppStore(
     }
 
     /**
-     * Stages a page into a target's composer: APPENDED, never sent, and never
+     * Stages text into a target's composer: APPENDED, never sent, and never
      * clobbering — a half-typed draft outranks anything arriving into it.
+     *
+     * Was `stagePadInDraft`, when a page was the only thing that arrived this way.
+     * A selection quick action stages under exactly the same contract, so this is
+     * one method with one rule ([QuickActionRules.appendToDraft], shared with the
+     * phone) rather than two that drift. The separator widened from one newline to
+     * a blank line with it: what lands here is a block — a page, or a quote — and
+     * a blank line is how a person would have typed it.
      */
-    fun stagePadInDraft(key: String, text: String) {
-        val current = drafts[key]
-        drafts.set(key, if (current.isBlank()) text else current + "\n" + text)
+    fun appendToDraft(key: String, text: String) {
+        drafts.set(key, QuickActionRules.appendToDraft(drafts[key], text))
+    }
+
+    /**
+     * "Ask in new chat": makes a chat, stages [text] in ITS composer, goes there.
+     *
+     * CREATES AND STAGES; NEVER SENDS — the same contract as [escalateWithDraft],
+     * which this is the selection-shaped sibling of. The text is a starting point
+     * to be read and edited, and a client that sent it would be answering a
+     * question nobody finished asking.
+     *
+     * A creation that fails does not lose the text: it goes into [fallbackKey],
+     * which is the composer the reader is actually looking at, with a line saying
+     * why it is there. Dropping it would be the worst outcome — they selected it.
+     *
+     * @param create the chat-making call, seamed so the rule this method exists
+     *   for (which draft the text lands in) is assertable without a daemon.
+     */
+    suspend fun askInNewChat(
+        text: String,
+        mode: String?,
+        fallbackKey: String,
+        create: suspend () -> Chat = { client.createChat(mode ?: "ask") },
+    ) {
+        runCatching { create() }
+            .onSuccess { made ->
+                appendToDraft(DraftBook.chatKey(made.id), text)
+                openChat(made.id)
+                openView(View.CHATS)
+                refreshChats()
+            }
+            .onFailure { t ->
+                appendToDraft(fallbackKey, text + NEW_CHAT_FAILED + (t.message ?: "no reason given") + ")")
+                // Faults.ACTION, not CHATS: a hand action's refusal belongs to the
+                // source no poll clears, or the next 5s chats poll erases the
+                // reason before anybody reads it.
+                note(Faults.ACTION, t)
+            }
     }
 
     private val _sessions = MutableStateFlow<List<Session>>(emptyList())
@@ -939,7 +983,14 @@ class AppStore(
                 // already going. This way it survives a settings file edited
                 // underneath the app as well as a toggle in the UI.
                 syncDeviceRunner()
-                if (_view.value == View.STATUS) refreshStatus()
+                // ⚠ ONCE PER RESUME as well as while Status is open. `/v1/status`
+                // is where the host's quick-action wording lives, and the thing
+                // that needs it is the right-click menu over a TRANSCRIPT —
+                // nowhere near the Status pane. Fetched only on that pane, every
+                // selection menu in the app offered Quote alone forever, which
+                // looks exactly like the other three verbs not being built. The
+                // per-view poll stays for the figures that actually move.
+                if (tick == 0 || _view.value == View.STATUS) refreshStatus()
                 // Every sixth pass, which is thirty seconds — the rate the design
                 // costed. Counted rather than given its own loop so it cannot
                 // outlive the visibility gate the rest of the polling obeys.
@@ -1016,6 +1067,9 @@ class AppStore(
     }
 
     companion object {
+
+        /** Appended below the text when "Ask in new chat" could not make one. */
+        const val NEW_CHAT_FAILED: String = "\n\n(could not open a new chat, so this is here instead: "
         const val POLL_MS: Long = 5_000
 
         /** Passes of the 5s poll between headroom reads: 6 × 5s = 30s. */
