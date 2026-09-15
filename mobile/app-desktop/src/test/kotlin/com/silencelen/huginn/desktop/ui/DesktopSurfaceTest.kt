@@ -520,7 +520,11 @@ class DesktopSurfaceTest {
         assertFalse(Splitter.showsList(View.ROUNDS))
         assertFalse(Splitter.showsList(View.DEVICES))
         assertFalse(Splitter.showsList(View.STATUS))
-        assertFalse(Splitter.showsList(View.SETTINGS))
+        // Settings is a list and a detail too, since the redesign: nine categories
+        // on the left, one page on the right, through the SAME seam, notch and
+        // Ctrl+B the other three use. A second list-pane idiom for one view is how
+        // the desktop ended up with a flat 1200-line scroll in the first place.
+        assertTrue(Splitter.showsList(View.SETTINGS), "Settings is two panes now")
     }
 
     @Test
