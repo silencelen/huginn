@@ -201,7 +201,16 @@ function migrateAutoswitch(oldState) {
   return { enabled: o.enabled === true, threshold, margin: d.margin };
 }
 
+/**
+ * A number, or null — with ABSENCE checked before validity.
+ *
+ * ⚠ `Number(null) === 0` and `Number('') === 0`. A missing percentage coerced
+ * through `Number` alone reads as a window at 0% — an account with unknown
+ * headroom would look like the freshest one on the host, and the switcher would
+ * move onto it.
+ */
 function numOrNull(v) {
+  if (v === null || v === undefined || v === '') return null;
   const n = Number(v);
   return Number.isFinite(n) ? n : null;
 }
@@ -551,7 +560,7 @@ function decide(input = {}) {
     if (!ladderUp && ladder && ladder.to && !native) {
       const reset = lastFableResetAt && lastFableResetAt > (Number(ladder.at) || 0);
       const low = fableEffective !== null && fableEffective < settings.ladderUpBelowPct;
-      if (reset && low && s.state === 'idle' && canLadderUp(ladder.from, settings.ladder)) {
+      if (reset && low && s.state === 'idle' && canLadderUp(ladder.to, settings.ladder)) {
         ladderUp = { type: 'ladder_up', claudeSessionId: s.claudeSessionId, name: s.name, from: ladder.to, to: ladder.from };
       }
     }
@@ -586,10 +595,13 @@ function decide(input = {}) {
     why = `${ladderDown.name}: fable -> ${ladderDown.to} at ${ladderDown.pct}% of the Fable week`;
   } else if (ladderUp) {
     why = `${ladderUp.name}: back to ${ladderUp.to} — the Fable week reset and is at ${fableEffective === null ? 'an unknown %' : `${Math.round(fableEffective)}%`}`;
-  } else if (headsUp.length) {
-    why = `handed ${headsUp.map((h) => h.name).join(', ')} a heads-up at ${headsUp[0].pct}% of the Fable week`;
   } else if (blocked.length) {
+    // A ladder move that was WANTED and refused is the more useful sentence:
+    // "it handed out a heads-up" does not answer "why is this session still on
+    // fable at 97%".
     why = blocked[0];
+  } else if (headsUp.length) {
+    why = `handed ${headsUp.map((x) => x.name).join(', ')} a heads-up at ${headsUp[0].pct}% of the Fable week`;
   } else if (acctCfg.enabled) {
     why = explainSwitch({
       active: { slug: active.slug, email: active.email ?? null, limits: limitsOf(active) },
