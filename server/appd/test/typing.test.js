@@ -110,6 +110,141 @@ test('boundaryFromTail is NOT idle for an empty or unreadable tail', () => {
   assert.equal(t.boundaryFromTail(null).idle, false, 'absence is never evidence of idleness');
 });
 
+// ------------------------------------------- the bookkeeping tail (3.0.2)
+
+// The record types Claude Code writes AFTER a turn has ended, as counted over
+// the last 40 real transcripts in ~/.claude/projects/-root-netplan: bookkeeping,
+// every one of them, and every one of them arrived after the turn marker.
+const BOOKKEEPING = [
+  'last-prompt', 'ai-title', 'mode', 'permission-mode', 'atis-latch', 'cost-state',
+  'file-history-snapshot', 'file-history-delta', 'queue-operation', 'bridge-session',
+  'frame-link', 'attachment', 'summary', 'custom-title', 'agent-name', 'pr-link',
+].map((type) => JSON.stringify({ type }));
+
+const TURN_REC = JSON.stringify({ type: 'system', subtype: 'turn_duration', durationMs: 900 });
+
+test('boundaryFromTail reads the last CONVERSATIONAL record, not the last LINE', () => {
+  // ⚠ THE 3.0.x DATA LOSS. The gate opened only when the transcript's very last
+  // record was the turn marker — but Claude Code appends its bookkeeping after
+  // it, so on a session that kept working the tail was
+  // [turn_duration, last-prompt, ai-title, mode, permission-mode, atis-latch]
+  // and the gate never opened: 43 messages on one session waited ten minutes
+  // and were dropped with no word to anyone. Measured live, 2026-09-15.
+  const live = [TURN_REC, ...['last-prompt', 'ai-title', 'mode', 'permission-mode', 'atis-latch']
+    .map((type) => JSON.stringify({ type }))].join('\n') + '\n';
+  assert.deepEqual(t.boundaryFromTail(live), { idle: true, lastKind: 'system/turn_duration' });
+});
+
+test('every bookkeeping record type is invisible to the gate, in any order', () => {
+  for (const rec of BOOKKEEPING) {
+    assert.equal(t.boundaryFromTail(`${TURN_REC}\n${rec}\n`).idle, true, `${rec} re-closed the gate`);
+    assert.equal(t.isConversationalRecord(JSON.parse(rec)), false, rec);
+  }
+  // All of them at once, which is what a real tail looks like.
+  assert.equal(t.boundaryFromTail([TURN_REC, ...BOOKKEEPING].join('\n')).idle, true);
+});
+
+test('a session mid-turn is still NOT idle, whatever bookkeeping lands after it', () => {
+  // The other half of the same rule: ignoring bookkeeping must not turn a
+  // running turn into an open gate. A mid-turn assistant record is a tool call
+  // (`stop_reason: "tool_use"`), and that is what the gate must hold on.
+  const working = JSON.stringify({ type: 'assistant', message: { stop_reason: 'tool_use', content: [] } });
+  assert.deepEqual(t.boundaryFromTail(`${TURN_REC}\n${working}\n`), { idle: false, lastKind: 'assistant' });
+  const withTail = [TURN_REC, working, ...BOOKKEEPING].join('\n');
+  assert.equal(t.boundaryFromTail(withTail).idle, false, 'bookkeeping cannot open a gate by itself');
+  assert.equal(t.boundaryFromTail(withTail).lastKind, 'assistant');
+});
+
+test('a system record that is not the turn marker is skipped, not read as busy', () => {
+  // stop_hook_summary lands immediately BEFORE every turn_duration (30/30 in the
+  // largest real transcript), and compact_boundary / local_command / informational
+  // can land after one. None of them is a turn.
+  for (const subtype of ['stop_hook_summary', 'compact_boundary', 'local_command', 'informational']) {
+    const rec = JSON.stringify({ type: 'system', subtype });
+    assert.equal(t.boundaryFromTail(`${TURN_REC}\n${rec}\n`).idle, true, subtype);
+    assert.equal(t.isConversationalRecord(JSON.parse(rec)), false, subtype);
+  }
+});
+
+test('a turn that ended with no turn_duration at all is still a boundary', () => {
+  // ⚠ MEASURED, NOT ASSUMED. turn_duration is written 1:1 with
+  // system/stop_hook_summary — i.e. only when a Stop hook ran. Census of the 25
+  // most recent real transcripts: 14 contain ZERO turn_duration records, and 11
+  // of them END on an assistant record carrying `stop_reason: "end_turn"`. On
+  // those sessions the queue was waiting for a marker that would never be
+  // written, so every send into one was dropped at the ten-minute mark.
+  const ended = JSON.stringify({ type: 'assistant', message: { stop_reason: 'end_turn', content: [] } });
+  assert.equal(t.isBoundaryRecord(JSON.parse(ended)), true);
+  assert.equal(t.boundaryFromTail(`${ended}\n`).idle, true);
+  assert.equal(t.boundaryFromTail([ended, ...BOOKKEEPING].join('\n')).idle, true);
+  // But a LATER user record re-closes it: that is a turn starting, not ending.
+  const user = JSON.stringify({ type: 'user', message: { content: 'and now this' } });
+  assert.equal(t.boundaryFromTail(`${ended}\n${user}\n`).idle, false);
+});
+
+test('isConversationalRecord is the whole filter, stated once', () => {
+  assert.equal(t.isConversationalRecord({ type: 'user', message: { content: 'hi' } }), true);
+  assert.equal(t.isConversationalRecord({ type: 'assistant', message: {} }), true);
+  assert.equal(t.isConversationalRecord({ type: 'system', subtype: 'turn_duration' }), true);
+  assert.equal(t.isConversationalRecord({ type: 'system', subtype: 'stop_hook_summary' }), false);
+  assert.equal(t.isConversationalRecord({ type: 'last-prompt' }), false);
+  assert.equal(t.isConversationalRecord(null), false);
+  assert.equal(t.isConversationalRecord({}), false);
+});
+
+// ------------------------------------------ the hook's state file as a gate
+
+test('stateVerdict releases on an idle state stamped AFTER the send was queued', () => {
+  // The Stop hook writes {state:"idle", ts} the moment a turn ends. It is the
+  // SECOND boundary source, and the only one on a session whose transcript
+  // never gets a turn marker.
+  const at = 1_757_900_000_000;                       // queued at this ms
+  const sec = Math.floor(at / 1000);
+  assert.equal(t.stateVerdict({ state: 'idle', stateSince: sec + 2 }, at), 'release');
+  assert.equal(t.stateVerdict({ state: 'idle', stateSince: sec - 2 }, at), null,
+    'an idle stamped BEFORE the send is the turn this send is waiting out');
+  assert.equal(t.stateVerdict({ state: 'running', stateSince: sec + 2 }, at), null);
+  assert.equal(t.stateVerdict(null, at), null);
+  assert.equal(t.stateVerdict({ state: 'idle' }, at), null, 'no timestamp is no evidence');
+});
+
+test('stateVerdict HOLDS while a question is waiting, however long it takes', () => {
+  // `attention` means a numbered prompt is on screen. Prose typed into one is
+  // lost or misread — the same reason /soft-end refuses — so this outranks the
+  // human deadline rather than racing it.
+  const at = 1_757_900_000_000;
+  assert.equal(t.stateVerdict({ state: 'attention', stateSince: Math.floor(at / 1000) + 5 }, at), 'hold');
+  assert.equal(t.stateVerdict({ state: 'attention', stateSince: Math.floor(at / 1000) - 5 }, at), 'hold');
+});
+
+test('releaseDecision takes the state file as a boundary of its own', () => {
+  assert.deepEqual(t.releaseDecision({ idle: false, paneWhy: null, state: 'release' }),
+    { release: true, blockedBy: null }, 'the hook saw the turn end even though the transcript did not');
+  assert.deepEqual(t.releaseDecision({ idle: true, paneWhy: null, state: 'hold' }),
+    { release: false, blockedBy: 'attention' }, 'a waiting question beats an open turn gate');
+  assert.deepEqual(t.releaseDecision({ idle: false, paneWhy: 'modal', state: 'release' }),
+    { release: false, blockedBy: 'modal' },
+    'and a dialog beats everything: text typed into one is swallowed with no trace');
+  // The shape a human text send arrives in since 3.0.3 — only the dialog holds it.
+  assert.deepEqual(t.releaseDecision({ idle: true, paneWhy: 'busy', state: null }),
+    { release: true, blockedBy: null });
+});
+
+// --------------------------------------------------- the drop journal line
+
+test('every drop writes ONE journal line naming the origin, kind, session and reason', () => {
+  // ⚠ WHY 43 MESSAGES VANISHED WITHOUT A TRACE. The drop wrote `lastError` into
+  // an in-memory struct nobody was polling; journalctl had nothing at all.
+  assert.equal(
+    t.dropLogLine('pctrooubleshoot', { origin: 'headroom', kind: 'resume' }, 'timeout'),
+    'typing: dropped headroom/resume for pctrooubleshoot: timeout',
+  );
+  assert.equal(
+    t.dropLogLine('jtyper', {}, 'human'),
+    'typing: dropped unknown/text for jtyper: human',
+  );
+});
+
 // ------------------------------------------------------- did a human speak?
 
 test('hasHumanUserRecord sees a person typing', () => {
@@ -294,10 +429,14 @@ test('every drop has words for it — a queue that loses a message silently is t
 });
 
 test('typingSnapshot reports the queue, and reports no block when nothing waits', () => {
-  const q = { entries: [{ id: 'a' }, { id: 'b' }], delivering: true, lastError: null, blockedBy: 'turn' };
+  const q = {
+    entries: [{ id: 'a', at: 1_757_900_000_123 - 4_000 }, { id: 'b' }],
+    delivering: true, lastError: null, blockedBy: 'turn',
+  };
   const s = t.typingSnapshot(q, 1_757_900_000_123);
   assert.deepEqual(s, {
-    queued: 2, delivering: true, lastError: null, blockedBy: 'turn', serverTime: 1_757_900_000,
+    queued: 2, delivering: true, lastError: null, blockedBy: 'turn',
+    waitedMs: 4_000, serverTime: 1_757_900_000,
   });
   const idle = t.typingSnapshot({ entries: [], delivering: false, lastError: 'x', blockedBy: 'turn' }, 0);
   assert.equal(idle.blockedBy, null, 'nothing queued cannot be blocked by anything');
@@ -306,7 +445,19 @@ test('typingSnapshot reports the queue, and reports no block when nothing waits'
 
 test('typingSnapshot of a session that has never sent is all zeroes, not a crash', () => {
   const s = t.typingSnapshot(undefined, 1_757_900_000_000);
-  assert.deepEqual(s, { queued: 0, delivering: false, lastError: null, blockedBy: null, serverTime: 1_757_900_000 });
+  assert.deepEqual(s, {
+    queued: 0, delivering: false, lastError: null, blockedBy: null, waitedMs: 0, serverTime: 1_757_900_000,
+  });
+});
+
+test('typingSnapshot says how long the head of the queue has waited', () => {
+  // The client's half of "late beats lost": a message held for 90 seconds can
+  // SAY so instead of looking like nothing happened.
+  const now = 1_757_900_000_000;
+  const q = { entries: [{ id: 'a', at: now - 90_000 }], delivering: false, lastError: null, blockedBy: 'turn' };
+  assert.equal(t.typingSnapshot(q, now).waitedMs, 90_000);
+  assert.equal(t.typingSnapshot({ entries: [{ id: 'a', at: now + 5_000 }] }, now).waitedMs, 0,
+    'a clock that went backwards reads as zero, never as a negative wait');
 });
 
 test('the poll interval and the give-up window are the contract\'s', () => {

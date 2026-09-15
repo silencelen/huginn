@@ -65,7 +65,7 @@ const TMUX_SOCK = `huginn-test-${process.pid}`;
 const TURN = JSON.stringify({ type: 'system', subtype: 'turn_duration', durationMs: 120 });
 const USER = JSON.stringify({ type: 'user', message: { content: 'what a human just said' } });
 
-let tmp, stateDir, token, daemon, shimLog, failFile;
+let tmp, stateDir, token, daemon, shimLog, failFile, daemonLog;
 const madeSessions = new Set();
 
 function sh(cmd, args) {
@@ -148,6 +148,11 @@ async function drains(name, ms = 6000) {
   }
 }
 
+/** Everything the daemon has written to its journal so far. */
+function journal() {
+  try { return fs.readFileSync(daemonLog, 'utf8'); } catch { return ''; }
+}
+
 before(async () => {
   tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'appd-typ-'));
   stateDir = path.join(tmp, 'state');
@@ -173,6 +178,13 @@ before(async () => {
     + 'fi\n'
     + `exec ${realTmux} "$@"\n`, { mode: 0o755 });
 
+  // ⚠ THE DAEMON'S OWN LOG IS AN ASSERTION TARGET HERE. The 3.0.x drop wrote its
+  // reason into an in-memory struct and nothing else; journalctl had nothing, so
+  // 43 lost messages looked exactly like 43 messages nobody had sent. What the
+  // journal says is now part of the contract, so it is captured rather than
+  // discarded.
+  daemonLog = path.join(tmp, 'daemon.log');
+  const logFd = fs.openSync(daemonLog, 'a');
   daemon = spawn(process.execPath, [path.join(__dirname, '..', 'huginn-appd.js')], {
     env: {
       ...process.env,
@@ -186,8 +198,9 @@ before(async () => {
       HUGINN_APPD_STATE_DIR: stateDir,
       HUGINN_APPD_TMUX_SOCKET: TMUX_SOCK,
     },
-    stdio: 'ignore',
+    stdio: ['ignore', logFd, logFd],
   });
+  fs.closeSync(logFd);
   daemon.on('error', (e) => { throw e; });
   for (let i = 0; i < 300; i++) {
     try { if ((await api('/v1/ping')).status === 200) break; } catch { /* not up */ }
@@ -409,6 +422,27 @@ test('a RAW KEY send into a dialog LANDS: those are the keys that answer it', as
     const r = await api(`/v1/sessions/${name}/keys`, { method: 'POST', body: JSON.stringify({ keys: [k] }) });
     assert.equal(r.status, 200, `${k}: ${JSON.stringify(r.body)}`);
   }
+});
+
+test('/typing says HOW LONG the held message has been waiting, not just that it is', async () => {
+  // ⚠ THE CLIENT'S HALF OF THE 43-MESSAGE BUG. `blockedBy` alone cannot tell a
+  // reader whether their message went a second ago or four minutes ago, so a
+  // send held behind a dialog looked exactly like a send that never happened.
+  const name = mkModal('waited');
+  writeState(name, { transcript: writeTranscript(name, [TURN]) });
+  const { body } = await api(`/v1/sessions/${name}/keys`, {
+    method: 'POST', body: JSON.stringify({ text: 'how long have I been here', keys: ['Enter'] }),
+  });
+  assert.equal(body.delivered, false, 'precondition: the dialog holds it');
+  const first = await typingOf(name);
+  assert.equal(typeof first.waitedMs, 'number');
+  await wait(1_200);
+  const later = await typingOf(name);
+  assert.equal(later.blockedBy, 'modal');
+  assert.ok(later.waitedMs >= 1_000, `the wait grows while it waits (got ${later.waitedMs})`);
+  assert.ok(later.waitedMs > first.waitedMs, 'and it is the HEAD entry\'s age, not a constant');
+  assert.equal((await typingOf(mkSession('unwaited'))).waitedMs, 0,
+    'a session with nothing queued has waited no time at all');
 });
 
 test('a TEXT send into a dialog is still queued, because there IS somewhere to hold it', async () => {
