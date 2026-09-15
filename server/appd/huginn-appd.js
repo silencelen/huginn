@@ -77,7 +77,7 @@ const resumeLib = require('./lib/resume');
 // disagree about them; the file and the route live here.
 const quickLib = require('./lib/quickactions');
 
-const VERSION = '3.0.5';
+const VERSION = '3.0.6';
 const PORT = Number(process.env.HUGINN_APPD_PORT || 8787);
 const DATA_DIR = process.env.HUGINN_APPD_DATA || '/var/lib/huginn-appd';
 const UPLOADS_DIR = path.join(DATA_DIR, 'uploads');
@@ -443,6 +443,10 @@ function canonName(raw) {
  * v2 (carrying the session id + transcript path, which is the only way to map a
  * tmux session to its transcript); a bare state word from an older hook is still
  * accepted so a half-updated host degrades instead of breaking.
+ *
+ * The word it reports is the flat file's, EXCEPT where a prompt sidecar says a
+ * question is waiting — see withPendingQuestion, which is the whole reason this
+ * is the one door every reader comes through.
  */
 function readSessionState(name) {
   let raw;
@@ -453,17 +457,17 @@ function readSessionState(name) {
   if (raw[0] === '{') {
     try {
       const o = JSON.parse(raw);
-      return ofThisIncarnation(name, {
+      return withPendingQuestion(name, ofThisIncarnation(name, {
         state: o.state || null,
         sessionId: o.sessionId || null,
         transcript: o.transcript || null,
         cwd: o.cwd || null,
         stateSince: o.ts || mtime,
-      });
+      }));
     } catch { /* fall through to the bare-word path */ }
   }
-  return ofThisIncarnation(name,
-    { state: raw, sessionId: null, transcript: null, cwd: null, stateSince: mtime });
+  return withPendingQuestion(name, ofThisIncarnation(name,
+    { state: raw, sessionId: null, transcript: null, cwd: null, stateSince: mtime }));
 }
 
 /**
@@ -1619,6 +1623,59 @@ function isCompacting(name) {
 }
 
 const SIDECAR_TTL_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * When the MAIN THREAD raised a dialog that has not been cleared — its ts, or
+ * null. Declarations, not consts: readSessionState is far above.
+ *
+ * The prompt sidecars are the only marker under STATE_DIR that belongs to the
+ * main thread alone. huginn-claude-title writes one on the PreToolUse that
+ * RAISES an AskUserQuestion / ExitPlanMode dialog and clears it on that tool's
+ * PostToolUse, on the next UserPromptSubmit, on Stop and on SessionEnd —
+ * deliberately NOT on some other tool's PreToolUse, because a background agent's
+ * tool calls fire in this same session while the question waits.
+ */
+function askPendingSince(name, sessionId) {
+  for (const kind of ['ask', 'plan']) {
+    const s = readSidecar(kind, name);
+    const ts = s && Number(s.ts);
+    if (!ts || Date.now() - ts * 1000 >= SIDECAR_TTL_MS) continue;
+    // A sidecar left by a PREVIOUS Claude run under the same tmux name says
+    // nothing about this one. Same reasoning as ofThisIncarnation.
+    if (sessionId && s.sessionId && s.sessionId !== sessionId) continue;
+    return ts;
+  }
+  return null;
+}
+
+/**
+ * A question on screen outranks the flat state file.
+ *
+ * ⚠ THE FLAT STATE FILE IS LAST-WRITER-WINS ACROSS THE WHOLE SESSION, and while
+ * the main thread sits on a dialog the only writers left are its background
+ * agents. Measured on 2026-09-15 against a live AskUserQuestion (Claude Code
+ * 2.1.258), with the dialog on screen throughout:
+ *
+ *   PreToolUse(AskUserQuestion)     -> running     (the event that RAISES it)
+ *   ...six seconds of dialog, state "running"...
+ *   Notification                    -> attention
+ *   any subagent's Pre/PostToolUse  -> running
+ *
+ * and it never comes back, because the Notification fires ONCE. So a session
+ * held up by a question read as `running` — "working" on both clients, no red
+ * row, no "needs you" — and the send queue's modal gate (typing.stateVerdict)
+ * opened straight into the dialog, which is where prose goes to be swallowed.
+ * The sidecar is the fact the hook kept for exactly this thread; it decides.
+ *
+ * Only `running` is promoted. `idle` means Stop or the idle nudge landed — the
+ * turn is over and nothing is being asked — which is also the floor under a
+ * sidecar whose clear was somehow missed.
+ */
+function withPendingQuestion(name, st) {
+  if (!st || st.state !== 'running') return st;
+  const since = askPendingSince(name, st.sessionId);
+  return since ? { ...st, state: 'attention', stateSince: since } : st;
+}
 
 /**
  * The one place "what question is on this pane" is decided, so /screen, /answer
