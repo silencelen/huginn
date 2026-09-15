@@ -336,3 +336,32 @@ fun KeyValueRow(key: String, value: String, valueColor: Color? = null) {
         )
     }
 }
+
+// ------------------------------------------------------------- FAB clearance
+
+/**
+ * The height Material gives an [androidx.compose.material3.ExtendedFloatingActionButton].
+ *
+ * Not exposed as a token by the library, and it is the number every list on this
+ * phone has to clear, so it is written down once with its source rather than
+ * three times as a magic 88.
+ */
+val FAB_HEIGHT = 56.dp
+
+/** The inset each FAB on this phone is placed with. */
+val FAB_INSET = 16.dp
+
+/**
+ * What a scrolling list must add to the BOTTOM of its content so its last row can
+ * be read and tapped.
+ *
+ * Chats and Sessions had this; Rounds had 24dp, which is less than the FAB it sits
+ * under, so the newest round was permanently behind "New round" with no scroll
+ * position that would move it. The fix is the same number in all three places and
+ * the number derived from the thing it is clearing, so the next list to grow a FAB
+ * cannot pick its own.
+ *
+ * A gap of [FAB_INSET] above the button as well, so the last row clears it rather
+ * than touching it.
+ */
+val LIST_FAB_CLEARANCE = FAB_HEIGHT + FAB_INSET + FAB_INSET

@@ -85,7 +85,6 @@ import com.silencelen.huginn.notify.Foreground
 import com.silencelen.huginn.notify.SessionWatchWorker
 import com.silencelen.huginn.ui.ChatScreen
 import com.silencelen.huginn.ui.EmptyState
-import com.silencelen.huginn.ui.HeadroomPill
 import com.silencelen.huginn.ui.LiveInput
 import com.silencelen.huginn.ui.ChatsScreen
 import com.silencelen.huginn.ui.DevicesScreen
@@ -833,7 +832,10 @@ fun HuginnApp(
         backFrom(dest, tab)?.let { dest = it }
     }
     val title = when (val d = dest) {
-        is Dest.Chats -> "Huginn"
+        // The TAB's name, not the app's. "Huginn" was the title on one of four
+        // tabs inside an app already called Huginn — it named nothing and told
+        // the reader nothing about where they were.
+        is Dest.Chats -> "Chats"
         is Dest.Chat -> chatTitle ?: "Chat"
         is Dest.Rounds -> "Rounds"
         is Dest.RoundEdit -> if (d.id == null) "New round" else "Edit round"
@@ -1457,22 +1459,19 @@ fun HuginnApp(
                         }
                     },
                     actions = {
-                        // FIRST, and on every screen. The desktop puts this beside
-                        // its connection dot in the status line; this phone has no
-                        // such dot in its bar, so the bar's own leading action slot
-                        // is the equivalent place — the one piece of chrome that is
-                        // on screen whatever the reader is doing. It draws nothing
-                        // at all when the daemon has no headroom to report, so an
-                        // older host costs no width.
-                        HeadroomPill(
-                            status = headroomPill,
-                            nowMs = nowMs,
-                            // Straight to the whole picture. A chip that says 92%
-                            // and cannot be asked "of what, and until when" is a
-                            // worse version of not saying anything.
-                            onClick = { tab = 2; dest = Dest.Status },
-                            modifier = Modifier.padding(end = 4.dp),
-                        )
+                        // ⚠ NO HEADROOM PILL HERE (owner decision 29, 2026-09-15).
+                        //
+                        // It used to be first and on every screen, and it cost the
+                        // TITLE its width: "Usage & headr…", "Appearance & …" and a
+                        // session called "Main documentation…" all truncated to make
+                        // room for "Fable 47% · resets 5d" — a reading that is
+                        // already on the Status page in full and already under the
+                        // Status icon as a 2px fill. Two surfaces said it; the third
+                        // was taking the one thing the bar exists to say.
+                        //
+                        // [HeadroomPill] stays in `:ui` while the desktop drops its
+                        // own use separately. TopBarNoPillTest keeps this file from
+                        // growing one back.
                         if (dest !is Dest.Chat && dest !is Dest.SessionView) {
                             IconButton(onClick = { vm.refreshAll() }) {
                                 Icon(Icons.Filled.Refresh, contentDescription = "Refresh")
