@@ -3,9 +3,9 @@
 #     if (Test-Path "$HOME\.huginn\huginn.ps1") { . "$HOME\.huginn\huginn.ps1" }
 # Targets the `huginn` SSH alias by default; override per-device with:  $env:HUGINN_HOST = 'my-host'
 # Self-update with:  huginn update   (pulls this file from the repo; gh -> scp fallback)
-# Version: 0.14.0
+# Version: 1.0.0
 
-$script:HUGINN_VERSION = '0.14.0'
+$script:HUGINN_VERSION = '1.0.0'
 $script:HUGINN_REPO    = 'silencelen/huginn'
 # Where `huginn update` may fetch a replacement for THIS FILE, which is then loaded
 # into the shell. Pinned, and deliberately NOT $HUGINN_HOST: that variable answers
@@ -386,6 +386,7 @@ function huginn {
   huginn end <name>           soft end: ask Claude to wrap up + commit, then
                               (if auto-end is on) end it once it goes idle
   huginn kill <name>          hard end: stop the session now
+  huginn headroom             usage left per account, what huginn moved or is holding, and why
   huginn -p "question"        one-shot headless query (reasoning + memory, read-only)
   huginn -y "task"            one-shot that may use tools (bash/files/web + memory)
   huginn usage [args]         Claude Code token/cost report (ccusage; default: daily)
@@ -477,6 +478,22 @@ function huginn {
   } elseif ($args[0] -eq 'rounds' -or $args[0] -eq 'round') {
     # Same host-side renderer the bash client calls; see huginn.sh.
     ssh -T $H huginn-rounds
+  } elseif ($args[0] -eq 'headroom') {
+    # Host-side like rounds/devices, and for a third reason on top of theirs:
+    # headroom is read out of the daemon with the bearer token, so rendering it
+    # anywhere but on the host would mean teaching this machine that credential.
+    # Flags are single-quote marshalled like the llm branch below - what follows
+    # the host name is parsed by a shell on the far side, so an argument typed
+    # here is remote shell input. -T, not -tt: the attach paths force a PTY
+    # because tmux needs one, but a tty on the far end would turn this
+    # renderer's newlines into CRLF on their way into a pipe or a variable.
+    $hrArgs = if ($args.Count -gt 1) { @($args[1..($args.Count - 1)]) } else { @() }
+    if ($hrArgs.Count) {
+      $hrStr = ($hrArgs | ForEach-Object { "'" + ($_ -replace "'", "'\''") + "'" }) -join ' '
+      ssh -T $H "huginn-headroom $hrStr"
+    } else {
+      ssh -T $H huginn-headroom
+    }
   } elseif ($args[0] -eq 'devices') {
     ssh -T $H huginn-devices
   } elseif ($args[0] -eq 'device') {
@@ -801,7 +818,7 @@ function _Huginn-Sessions {
 }
 Register-ArgumentCompleter -CommandName huginn, rclaude, rcc -ScriptBlock {
   param($word, $ast, $pos)
-  $cmds = 'list', 'status', 'rounds', 'devices', 'device', 'local', 'llm', 'solo', 'rename', 'kill', 'end', '-p', '-y', 'usage', 'cost', 'desktop', 'update', 'uninstall', 'version', 'help'
+  $cmds = 'list', 'status', 'rounds', 'headroom', 'devices', 'device', 'local', 'llm', 'solo', 'rename', 'kill', 'end', '-p', '-y', 'usage', 'cost', 'desktop', 'update', 'uninstall', 'version', 'help'
   # tokens already typed after the command name, excluding the partial word being completed
   $typed = @($ast.CommandElements | Select-Object -Skip 1 | ForEach-Object { $_.ToString() })
   if ($word -and $typed.Count -ge 1) { $typed = @($typed | Select-Object -SkipLast 1) }

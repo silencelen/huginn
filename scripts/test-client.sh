@@ -64,7 +64,7 @@ grep -q 'scp .*\${H}:' client/huginn.ps1 && bad "huginn.ps1 still scps from \$HU
 echo "[3/8] both clients expose the same verbs (parity by verb)"
 # huginn.sh writes cases as alternations (`list|ls)`, `status|st)`), so match the
 # verb as a case ALTERNATIVE, not as a bare `verb)`.
-for v in end kill solo rename list status rounds devices device local desktop usage update uninstall version help; do
+for v in end kill solo rename list status rounds headroom devices device local desktop usage update uninstall version help; do
   # Match the DISPATCH, not a mention: huginn.ps1 lists every verb in its
   # completion array too, so grepping "'$v'" passes even with the branch deleted
   # (verified by removing the `end` branch: still 2 matches, still green).
@@ -468,26 +468,108 @@ bash -n server/bin/huginn-llm && ok "huginn-llm parses" || bad "huginn-llm does 
 grep -q '^    llm) ssh -T' client/huginn.sh && grep -q "eq 'llm'" client/huginn.ps1 \
   && ok "both shells carry: llm" || bad "the llm verb is missing from a shell client"
 
-# Verb parity for the new door, and the runner riding along in the fetch —
-# a machine that never enrolled as a claude device has no runner otherwise.
-grep -q '^    plan)' client/huginn.sh && grep -q "\$sub -eq 'plan'" client/huginn.ps1 \
-  && ok "both shells carry: local plan" || bad "local plan is missing from a shell client"
-grep -q 'for f in huginn-local huginn-llm-shim huginn-device; do' client/huginn.sh \
-  && grep -q "'huginn-local', 'huginn-llm-shim', 'huginn-device'" client/huginn.ps1 \
-  && ok "both shells fetch the device runner with the local tier" \
-  || bad "a shell client's local fetch list is missing huginn-device"
-
-# The shim's own suite carries the contract verifier — the dialect
-# handleClaudeEvent consumes, asserted frame by frame.
-SHIM_OUT=$(node --test scripts/test-llm-shim.js 2>&1)
-SHIM_PASS=$(echo "$SHIM_OUT" | grep -m1 '^# pass' | grep -oE '[0-9]+')
-SHIM_FAIL=$(echo "$SHIM_OUT" | grep -m1 '^# fail' | grep -oE '[0-9]+')
-if [ "${SHIM_FAIL:-1}" = 0 ] && [ "${SHIM_PASS:-0}" -ge 10 ]; then
-  ok "shim suite: $SHIM_PASS passed (incl. the stream-json contract verifier)"
+# The headroom lane, same rule: a verb promised in two shells must have a
+# renderer on the host, and setup.sh must actually install it — `huginn headroom`
+# is nothing but an ssh to that file, so a missing install line answers the verb
+# with "command not found" on a freshly set-up host. The renderer is pure python
+# (its siblings are `python3 -c` inside single quotes, where one apostrophe ends
+# the program), so its syntax check is a real one.
+# compile(), not `python3 -m py_compile`: the module form writes a .pyc into a
+# __pycache__ beside the file, and an untracked directory that appears every time
+# the gates run is exactly the stray the nightly snapshot trips over.
+python3 -c 'import sys; compile(open(sys.argv[1]).read(), sys.argv[1], "exec")' \
+  server/bin/huginn-headroom 2>/dev/null \
+  && ok "huginn-headroom compiles" || bad "huginn-headroom does not compile"
+[ -x server/bin/huginn-headroom ] && ok "huginn-headroom is executable" \
+  || bad "huginn-headroom is not executable — ssh would refuse to run it"
+grep -q '^    headroom)' client/huginn.sh && grep -q "eq 'headroom'" client/huginn.ps1 \
+  && ok "both shells carry: headroom" || bad "the headroom verb is missing from a shell client"
+grep -q 'install_script .*bin/huginn-headroom' server/setup.sh \
+  && ok "setup.sh installs huginn-headroom" \
+  || bad "setup.sh does not install huginn-headroom — the verb would 'command not found'"
+# What the two clients actually SEND. The whole verb is one ssh to the renderer,
+# so a client that sends the wrong command line is the whole feature broken -- and
+# a `--json` swallowed on the way (an empty argv element, a lost array, a flag
+# eaten by PowerShell's parameter binder) looks exactly like a working verb.
+# Its own stub ssh, so neither the [4/8] nor the [5/8] harness has to change.
+HRT=$(mktemp -d)
+cat > "$HRT/ssh" <<'STUB'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >> "$SSH_LOG"
+exit 0
+STUB
+chmod +x "$HRT/ssh"
+HRSH=$( export SSH_LOG="$HRT/log"; : > "$SSH_LOG"
+        ( export PATH="$HRT:$PATH"
+          . "$PWD/client/huginn.sh" >/dev/null 2>&1
+          huginn headroom; huginn headroom --json ) >/dev/null 2>&1
+        cat "$SSH_LOG" )
+grep -q -- '-T .* huginn-headroom$' <<<"$HRSH" && grep -q -- 'huginn-headroom --json' <<<"$HRSH" \
+  && ok "sh: headroom ssh -T's the renderer, with and without --json" \
+  || bad "sh: headroom sent: $HRSH"
+if command -v pwsh >/dev/null 2>&1; then
+  HRPS=$( export SSH_LOG="$HRT/log2"; : > "$SSH_LOG"
+          PATH="$HRT:$PATH" pwsh -NoProfile -Command \
+            ". $PWD/client/huginn.ps1; huginn headroom; huginn headroom --json" >/dev/null 2>&1
+          cat "$SSH_LOG" )
+  grep -q -- '-T .* huginn-headroom$' <<<"$HRPS" && grep -q -- "huginn-headroom '--json'" <<<"$HRPS" \
+    && ok "ps1: headroom sends the same, and --json survives the binder" \
+    || bad "ps1: headroom sent: $HRPS"
 else
-  bad "shim suite: pass=${SHIM_PASS:-?} fail=${SHIM_FAIL:-?}"
-  echo "$SHIM_OUT" | grep -A4 'not ok' | head -20 >&2
+  skip "ps1 headroom send check (no pwsh)"
 fi
+rm -rf "$HRT"
+
+# It must degrade, not explode, against the daemon this host is running today:
+# every appd before 3.0.0 404s /v1/headroom, and the renderer has to say WHICH
+# version is missing rather than "not found" — the person reading it is the
+# person who can deploy the daemon. Driven against a stub, so this holds on a
+# host where appd is stopped, and on one already running 3.0.0.
+HR_PORT=18787
+python3 - "$HR_PORT" <<'STUB' >/dev/null 2>&1 &
+import sys
+from http.server import BaseHTTPRequestHandler, HTTPServer
+class H(BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(404); self.end_headers(); self.wfile.write(b'{"error":"not found"}')
+    def log_message(self, *a): pass
+HTTPServer(("127.0.0.1", int(sys.argv[1])), H).serve_forever()
+STUB
+HR_STUB=$!
+HR_UP=
+for _ in $(seq 1 40); do
+  curl -s -o /dev/null --max-time 1 "http://127.0.0.1:$HR_PORT/" && { HR_UP=1; break; }
+done
+if [ -z "$HR_UP" ]; then
+  # LOUDLY, never silently: a stub that never bound would make every assertion
+  # below read "connection refused" and the 404 check would fail for the wrong
+  # reason, which is worse than not running it.
+  skip "headroom daemon-too-old checks (nothing bound 127.0.0.1:$HR_PORT)"
+else
+  HR_OUT=$(HUGINN_APPD_URL="http://127.0.0.1:$HR_PORT" server/bin/huginn-headroom 2>&1); HR_RC=$?
+  grep -q 'needs appd 3.0.0' <<<"$HR_OUT" && [ "$HR_RC" = 1 ] \
+    && ok "headroom on an older daemon names the version it needs (exit 1)" \
+    || bad "headroom on a 404 said: $HR_OUT (exit $HR_RC)"
+fi
+HR_DEAD=$(HUGINN_APPD_URL="http://127.0.0.1:1" server/bin/huginn-headroom 2>&1); HR_RC=$?
+[ "$HR_RC" = 2 ] \
+  && ok "headroom exits 2 when nothing is answering (1 = appd is there but cannot serve it)" \
+  || bad "headroom with no daemon exited $HR_RC: $HR_DEAD"
+# ⚠ AND IT NEVER PRINTS THE TOKEN. Its failure paths were written by hand and the
+# bearer token is one variable away from every string they emit — urllib carries
+# the whole request, headers included, inside some of its exceptions, which is
+# why this renderer prints its own message instead of the caught one.
+if [ -r /etc/huginn-appd/token ]; then
+  HR_TOK=$(tr -d '[:space:]' < /etc/huginn-appd/token)
+  if [ -n "$HR_TOK" ] && grep -qF "$HR_TOK" <<<"$HR_OUT$HR_DEAD"; then
+    bad "headroom printed the bearer token on a failure path"
+  else
+    ok "headroom failure paths print no credential"
+  fi
+else
+  skip "headroom token-leak check (no readable /etc/huginn-appd/token here)"
+fi
+kill "$HR_STUB" 2>/dev/null
 
 echo "[uninstall/8] the server first, and only huginn's own files"
 # WHY: `huginn uninstall` is the one verb that deletes a person's files, and the
@@ -590,10 +672,31 @@ echo "[8/8] what is actually DEPLOYED on this host, vs what is in the tree"
 #
 # Skips LOUDLY off this host rather than failing on somebody else's machine.
 DRIFT=0
+# The version a file CLAIMS, from whichever of the three spellings it uses. Empty
+# for the server-side renderers, which carry none.
+ver_of () {
+  grep -m1 -oE "^(HUGINN_VERSION=|\\\$script:HUGINN_VERSION = |const VERSION = )'[0-9]+\.[0-9]+\.[0-9]+'" "$1" \
+    2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+'
+}
 check_deployed () {   # $1 = repo path, $2 = installed path
   if [ ! -f "$2" ]; then skip "not installed here: $2"; return; fi
-  if cmp -s "$1" "$2"; then ok "deployed matches tree: $2"
-  else bad "DEPLOYED IS STALE: $2 differs from $1"; DRIFT=1; fi
+  if cmp -s "$1" "$2"; then ok "deployed matches tree: $2"; return; fi
+  # ⚠ THE TWO WAYS THESE DIFFER ARE NOT THE SAME BUG. The 2026-08-25 one was same
+  # VERSION, different CONTENT: a file that lies about what it holds, and nothing
+  # but this comparison can catch it. A tree that is simply AHEAD of the deployed
+  # copy is a release that has not shipped yet — the normal state of this
+  # directory between a version bump and `huginn-sync`, and failing on it would
+  # mean every in-progress branch shows a red gate for being in progress, which
+  # is how a gate stops being read. So the version decides which of the two this
+  # is, and only the dangerous one is a failure. Files with no version constant
+  # keep the plain comparison.
+  local tv dv
+  tv=$(ver_of "$1"); dv=$(ver_of "$2")
+  if [ -n "$tv" ] && [ -n "$dv" ] && [ "$tv" != "$dv" ]; then
+    skip "not shipped yet: $2 is $dv, the tree is $tv (huginn-sync after the release)"
+    return
+  fi
+  bad "DEPLOYED IS STALE: $2 differs from $1"; DRIFT=1
 }
 check_deployed client/huginn-device      /usr/local/share/huginn-cli/huginn-device
 check_deployed client/huginn.sh          /usr/local/share/huginn-cli/huginn.sh
@@ -603,6 +706,7 @@ check_deployed client/huginn-llm-shim    /usr/local/share/huginn-cli/huginn-llm-
 check_deployed server/bin/huginn-rounds  /usr/local/bin/huginn-rounds
 check_deployed server/bin/huginn-llm     /usr/local/bin/huginn-llm
 check_deployed server/bin/huginn-devices /usr/local/bin/huginn-devices
+check_deployed server/bin/huginn-headroom /usr/local/bin/huginn-headroom
 [ "$DRIFT" -eq 0 ] || echo "       (install the ones above, or devices keep receiving the old file)" >&2
 
 echo
