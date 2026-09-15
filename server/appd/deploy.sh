@@ -14,9 +14,79 @@ TOKEN_FILE=/etc/huginn-appd/token
 # puts the DAEMON into production had no reason to be the weakest of the three.
 # The COUNT is asserted, not just the exit code: `node --test` with a glob matching
 # nothing exits 0 having run zero tests, so a moved test/ would turn this green.
+# ---- leaked test daemons ----------------------------------------------------
+# A huginn-appd.js running from anywhere but $DEST is a TEST daemon some earlier
+# run left behind. Every route suite binds a port out of a pid-derived range, and
+# a leaked daemon holding one answers /v1/ping happily (ping needs no token) and
+# rejects the suite's own token — so the file that collides with it fails
+# wholesale with `401 unauthorized`. Twenty-five routes-headroom tests went that
+# way on 2026-09-15, and it reads like a code bug for as long as it takes someone
+# to think of running `ss`. Named and REFUSED, never killed: this script does not
+# get to decide that another session's daemon is disposable.
+leaked_appd() {
+  # `pgrep -x node`, not `pgrep -f huginn-appd.js`: the latter also matches any
+  # shell whose own command line happens to contain the string — including, on a
+  # bad day, this script's.
+  local pid cmd where
+  for pid in $(pgrep -x node 2>/dev/null || true); do
+    cmd="$({ tr '\0' ' ' < "/proc/$pid/cmdline"; } 2>/dev/null || true)"
+    case " $cmd " in *"huginn-appd.js "*) ;; *) continue ;; esac
+    case " $cmd " in *" $DEST/huginn-appd.js "*) continue ;; esac
+    where="$(ss -ltnp 2>/dev/null | grep "pid=$pid," | awk '{print $4}' | tr '\n' ' ')"
+    echo "  pid $pid  listening on ${where:-<nothing>}  $cmd"
+  done
+}
+LEAKED="$(leaked_appd)"
+if [ -n "$LEAKED" ]; then
+  echo "[deploy] REFUSING: a leaked test daemon is running and will fail whichever suite collides with it:" >&2
+  echo "$LEAKED" >&2
+  echo "[deploy]          kill it yourself (it may be another session's), then re-run." >&2
+  exit 1
+fi
+
+# Which FILE failed, from node's own TAP: a failing test carries the absolute
+# path in its `location:` (node emits that line for failures only), and a file
+# whose before/after hook blew up is named by the `not ok` line itself.
+failed_files() {
+  {
+    sed -nE "s|^not ok [0-9]+ - (/.*\.test\.js)$|\1|p" "$1"
+    sed -nE "s|^[[:space:]]*location: '(/[^']*\.test\.js):[0-9]+:[0-9]+'.*|\1|p" "$1"
+  } | sort -u
+}
+
 TEST_LOG="$(mktemp)"
-node --test "$SRC"/test/*.test.js > "$TEST_LOG" 2>&1 || {
-  tail -40 "$TEST_LOG"; echo "[deploy] REFUSING: appd tests failed (full log: $TEST_LOG)" >&2; exit 1; }
+if ! node --test "$SRC"/test/*.test.js > "$TEST_LOG" 2>&1; then
+  # ONE flaky FILE gets ONE more chance, and only when it is the only one that
+  # failed. Four suites have each failed exactly once on this host while parallel
+  # gradle builds held it at load 11-23 on eight cores, each passing alone
+  # straight afterwards — and every refusal costs a ten-minute rerun of a tree
+  # that was green. Two failing files, a file we cannot name, or a second failure
+  # of the same one is refused exactly as before. The retry is never repeated and
+  # the pass COUNT below still comes from the FULL run.
+  RETRY=""; RETRY_N=0
+  while IFS= read -r f; do
+    [ -n "$f" ] || continue
+    RETRY_N=$((RETRY_N + 1)); RETRY="$f"
+  done <<EOF
+$(failed_files "$TEST_LOG")
+EOF
+  if [ "$RETRY_N" = 1 ] && [ -f "$RETRY" ]; then
+    echo "[deploy] one test file failed — re-running $RETRY alone, once."
+    RETRY_LOG="$(mktemp)"
+    if node --test "$RETRY" > "$RETRY_LOG" 2>&1; then
+      echo "[gate] retried once: $RETRY"
+      rm -f "$RETRY_LOG"
+    else
+      tail -40 "$RETRY_LOG"
+      echo "[deploy] REFUSING: appd tests failed twice on $RETRY (retry log: $RETRY_LOG)" >&2; exit 1
+    fi
+  else
+    tail -40 "$TEST_LOG"
+    echo "[deploy] REFUSING: appd tests failed (${RETRY_N} file(s); full log: $TEST_LOG)" >&2; exit 1
+  fi
+fi
+# The FULL run's count, never the retry's: a floor met by one file re-run alone
+# would be no floor at all.
 PASSED="$(grep -oE '^# pass [0-9]+' "$TEST_LOG" | grep -oE '[0-9]+' || echo 0)"
 rm -f "$TEST_LOG"
 . "$(cd "$SRC/../.." && pwd)/scripts/test-floors.env"
