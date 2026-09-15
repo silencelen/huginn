@@ -197,6 +197,35 @@ fun main(args: Array<String>) {
         }
     }
 
+    /**
+     * Put a laddered session back on its own model.
+     *
+     * Reported rather than swallowed, like the answer path: an Undo that may or
+     * may not have landed is worse than one that says which, and the session is
+     * still sitting on whatever model it is sitting on either way. The notice is
+     * posted under the SAME key as the downgrade it reverses, so the toast that
+     * offered the button is replaced by its own outcome.
+     */
+    fun undoFromActivation(a: Activation.Undo) {
+        scope.launch {
+            val outcome = runCatching { store.client.undoLadder(a.session) }
+                .fold(
+                    onSuccess = { "put back on its own model" },
+                    onFailure = { e -> (e as? HuginnClient.HuginnException)?.message ?: "could not undo" },
+                )
+            store.refreshHeadroom()
+            notifier.post(
+                NotifyRequest(
+                    key = "ladder:${a.session}",
+                    title = a.session,
+                    body = outcome,
+                    urgent = false,
+                    target = NavTarget(TargetKind.SESSIONS, a.session),
+                )
+            )
+        }
+    }
+
     fun handle(url: String?) {
         when (val activation = Activations.parse(url)) {
             // Includes an activation that was REFUSED — most importantly an
@@ -206,6 +235,11 @@ fun main(args: Array<String>) {
             null -> summon()
             is Activation.Open -> navigate(activation.target)
             is Activation.Answer -> answerFromActivation(activation)
+            is Activation.Undo -> undoFromActivation(activation)
+            // Dismissal, and nothing else: no window, no navigation. "OK" on a
+            // downgrade means "I have read that" — moving the reader somewhere is
+            // a different verb wearing the same word.
+            is Activation.Ack -> notifier.withdraw(activation.key)
         }
     }
 
