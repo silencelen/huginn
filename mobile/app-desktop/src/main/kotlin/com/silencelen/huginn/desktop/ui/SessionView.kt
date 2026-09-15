@@ -260,6 +260,10 @@ fun SessionView(store: AppStore, name: String) {
             models = rememberModels(store.client),
             headroom = row?.headroom,
             hostHeadroom = statusHeadroomOf(hostHeadroom),
+            // The STALL RECORD, from the host's own headroom read. The list row
+            // says only that the session is stalled; this is where the clock
+            // Claude Code printed and the daemon's reason for not resuming live.
+            stall = hostHeadroom?.sessions?.firstOrNull { it.name == name }?.stall,
             nowMs = headerNowMs,
             // Slash commands go in as a submitted line, exactly as typed by hand.
             onCommand = { controller.sendLine(it) },
@@ -507,6 +511,8 @@ private fun SessionHeader(
     models: List<ModelChoice>,
     /** This session's headroom cell, or null on a daemon older than 3.0.0. */
     headroom: SessionHeadroom?,
+    /** Its stall record, when `/v1/headroom` has one for it. */
+    stall: com.silencelen.huginn.data.HeadroomStall? = null,
     /** The host's worst window, for the percentage a laddered session moved for. */
     hostHeadroom: StatusHeadroom?,
     nowMs: Long,
@@ -569,7 +575,7 @@ private fun SessionHeader(
             // would otherwise be the only sign of it: a session laddered to opus
             // shows a model nobody here chose, and without the mark there is
             // nothing on screen to say who chose it or why.
-            SessionStateMark(headroom, hostHeadroom, nowMs)
+            SessionStateMark(headroom, hostHeadroom, nowMs, stall = stall)
             // And whether anything will pick it back up. Only when the host has a
             // headroom subsystem at all — a toggle for a feature that does not
             // exist would report a setting it cannot keep.
