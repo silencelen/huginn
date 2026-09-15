@@ -9,6 +9,24 @@ appeared only as a side-note on the app releases it happened to ship with. Three
 undocumented, and the notes-cutting matcher could fuse two sections when an app and an appd
 version number collided. Entries below are reconstructed from the shipping commits.
 
+## 3.0.4 — 2026-09-15
+
+- **The daemon's own lines stop waiting on a boundary that will never come.** With a person's
+  message out of the turn queue (3.0.3), what is left in it is headroom's heads-up, the model
+  ladder and the resume phrase — and on plenty of real sessions the marker they wait for is never
+  written at all: `system/turn_duration` appears only when a Stop hook ran, and 14 of the 25 most
+  recent transcripts on this host contain none. So an assistant record that ended its turn now
+  counts as a boundary too, and the title hook's own state file is read as a second source: an
+  `idle` stamped after the line was queued releases it, an `attention` holds it, because prose
+  typed into a numbered prompt is lost or misread.
+- **A held message can say how long it has been held.** `GET /v1/sessions/:name/typing` reports
+  `waitedMs` beside `blockedBy`, so a client showing a send queued behind a dialog can say "held
+  for 90 s" rather than looking like nothing happened.
+- **Nothing leaves the queue undelivered in silence.** Every drop writes one journal line naming
+  the origin, kind, session and reason. The reason used to live only in a struct that `GET
+  /typing` reads, which is why the 43 messages 3.0.2 fixed left no trace anywhere — that was half
+  the bug, and it is the half a log would have caught in a minute.
+
 ## 3.0.3 — 2026-09-15
 
 - **A person's message lands at once, busy session or not.** 3.0.0 held a message sent into a
