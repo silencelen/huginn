@@ -167,7 +167,7 @@ after(() => {
   // default one), so nothing survives even if a session name was missed.
   try { sh('tmux', ['kill-server']); } catch { /* no server */ }
   if (daemon) daemon.kill('SIGTERM');
-  if (tmp) fs.rmSync(tmp, { recursive: true, force: true });
+  if (tmp) fs.rmSync(tmp, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 });
 });
 
 test('a state file older than the session does not become its transcript', async () => {

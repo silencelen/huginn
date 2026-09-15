@@ -398,7 +398,7 @@ after(() => {
   if (daemon) daemon.kill('SIGTERM');
   if (usageServer) usageServer.close();
   if (acctServer) acctServer.close();
-  if (tmp) fs.rmSync(tmp, { recursive: true, force: true });
+  if (tmp) fs.rmSync(tmp, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 });
 });
 
 // ------------------------------------------------------------------ the shape
