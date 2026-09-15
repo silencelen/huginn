@@ -9,8 +9,10 @@ import com.silencelen.huginn.data.Screen
 import com.silencelen.huginn.data.SessionGraph
 import com.silencelen.huginn.data.SessionMeta
 import com.silencelen.huginn.data.SessionMetaSaver
+import com.silencelen.huginn.data.SendKeysResult
 import com.silencelen.huginn.data.SessionOverview
 import com.silencelen.huginn.data.TranscriptPage
+import com.silencelen.huginn.data.TypingState
 import com.silencelen.huginn.ui.LiveInput
 import com.silencelen.huginn.ui.LocalEcho
 import com.silencelen.huginn.ui.PromptGate
@@ -895,7 +897,73 @@ class SessionController(
                 keys = if (thenEnter) listOf("Enter") else emptyList(),
                 scratchpadId = scratchpadId,
             )
-        }.onFailure { _screenError.value = it.message ?: "could not send" }.isSuccess
+        }
+            .onSuccess { noteSend(it) }
+            .onFailure { _screenError.value = it.message ?: "could not send" }
+            .isSuccess
+    }
+
+    // ------------------------------------------------------------ the send queue
+    //
+    // ⚠ THE MESSAGE THAT "JUST DISAPPEARS" (owner, P1). A send into a session that
+    // is mid-turn is HELD by the daemon until the turn ends — `keys` answers
+    // `{ok, queued, position, delivered:false}` and the text lands minutes later.
+    // The desktop threw that answer away: the composer emptied, the transcript
+    // showed nothing, and there was no way to tell a queued message from a lost
+    // one. Which is the same screen as a bug, so it was read as one.
+    //
+    // The queue is the DAEMON'S, not this client's: two clients can have the same
+    // session open and the send outlives the socket, so this is a poll of
+    // `/typing` rather than anything remembered here. It is cheap (an in-memory
+    // queue and a cached gate result, no transcript) and it stops the moment the
+    // queue drains.
+
+    private val _sendQueue = MutableStateFlow(TypingState())
+
+    /** What the daemon is still holding for this session. Empty means nothing. */
+    val sendQueue: StateFlow<TypingState> = _sendQueue.asStateFlow()
+
+    private var queueWatch: Job? = null
+
+    /**
+     * What a send just did, folded in.
+     *
+     * [SendKeysResult.landed] rather than `delivered`, because an OLD daemon
+     * answers a bare `{"ok":true}` — which decodes to `delivered = false` with
+     * nothing queued. Reading `delivered` alone would put a permanent "Queued"
+     * line under the composer of every pre-queue host.
+     */
+    fun noteSend(result: SendKeysResult) {
+        if (result.landed) return
+        _sendQueue.value = TypingState(queued = result.queued, delivering = false)
+        watchQueue()
+    }
+
+    /**
+     * One reading of the daemon's queue. Returns whether anything is still held.
+     *
+     * Separate from the loop so it can be driven directly in a test — the loop
+     * itself is a `delay` on a real dispatcher, which is not where the mistakes
+     * live and is exactly where a suite becomes a race.
+     *
+     * A failed poll leaves the last known state ALONE rather than clearing it: a
+     * network blip is not evidence that a held message was delivered, and saying
+     * so is the very claim this exists to stop making.
+     */
+    suspend fun pollQueueOnce(): Boolean {
+        val state = runCatching { client.typingStatus(name) }.getOrNull() ?: return true
+        _sendQueue.value = state
+        return state.queued > 0
+    }
+
+    private fun watchQueue() {
+        if (queueWatch?.isActive == true) return
+        queueWatch = scope.launch {
+            while (currentCoroutineContext().isActive) {
+                delay(QUEUE_POLL_MS)
+                if (!pollQueueOnce()) break
+            }
+        }
     }
 
     /**
@@ -940,6 +1008,13 @@ class SessionController(
         /** Let a burst of keystrokes accumulate into one request. */
         const val BURST_MS: Long = 15
 
+        /**
+         * How often to ask what is still held. Two seconds: the thing being waited
+         * on is a Claude turn, which is measured in tens of seconds at best, and
+         * the route is cheap but not free.
+         */
+        const val QUEUE_POLL_MS: Long = 2_000
+
         /** Scrollback depth; the daemon clamps to 2000. */
         const val HISTORY_LINES: Int = 2_000
 
@@ -959,5 +1034,40 @@ class SessionController(
          * asserts the sentence a reader will actually see.
          */
         const val STREAMS_UNSUPPORTED: String = "needs appd 3.0"
+    }
+}
+
+/**
+ * What to say under the composer about a message the daemon is holding.
+ *
+ * ⚠ THE WHOLE POINT IS THAT SILENCE IS A LIE HERE. A send into a busy session is
+ * accepted, queued and delivered when the turn ends — but the composer empties on
+ * press, so with nothing said the screen is identical to a message that was
+ * dropped. The owner reported it as exactly that: it "just disappears".
+ *
+ * A pure function of the daemon's own answer, so the sentence can be asserted
+ * without a composition — and so the two ways it can be wrong are both testable:
+ * a line that never appears (the bug) and a line that never CLEARS (worse, since
+ * it would claim a delivered message is still waiting).
+ */
+object SendQueue {
+
+    /**
+     * The one line, or null for "say nothing".
+     *
+     * Errors win over the count and are shown VERBATIM: the daemon knows why it
+     * could not deliver (a dead pane, a refused write) and any paraphrase here
+     * would be this client guessing about the other end of a queue it does not own.
+     */
+    fun line(state: TypingState): String? {
+        state.lastError?.takeIf { it.isNotBlank() }?.let { return "Not sent — $it" }
+        if (state.queued <= 0) return null
+        val waiting = if (state.queued == 1) "1 waiting" else "${state.queued} waiting"
+        return when (state.blockedBy) {
+            // A question in the pane blocks the queue as surely as a turn does,
+            // and it is the one the reader can DO something about.
+            "modal" -> "Queued · waiting on a question in the pane ($waiting)"
+            else -> "Queued · will send when Claude finishes its turn ($waiting)"
+        }
     }
 }
