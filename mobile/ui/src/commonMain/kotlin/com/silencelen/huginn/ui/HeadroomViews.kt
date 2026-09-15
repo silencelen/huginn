@@ -1,24 +1,13 @@
 package com.silencelen.huginn.ui
 
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Surface
-import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.staticCompositionLocalOf
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.unit.dp
@@ -27,18 +16,20 @@ import com.silencelen.huginn.data.SessionHeadroom
 import com.silencelen.huginn.data.StatusHeadroom
 
 /**
- * The always-on headroom mark: one chip that says how close the host is to the
- * limit that will stop work, wherever the reader happens to be looking.
+ * The headroom READINGS every surface shares — and, since 3.1.1 / desktop 1.1.1,
+ * no chip.
  *
- * Usage used to be a DESTINATION — the desktop fetched the plan only while the
- * Status pane was open and the phone only from its Status screen — so the one
- * number that decides whether tonight's run finishes was the one number nobody
- * was looking at. This is the correction, and it is deliberately the smallest
- * possible: a chip, not a bar, with the full picture one click away.
+ * The always-on pill ("Fable 47% · resets 5d") lived in every top bar and the
+ * desktop status line from 3.0.0 until the owner retired it: the Status page says
+ * it in full, the fill under the Status icon says it in 2 px, and the third copy
+ * was taking the width the bar exists to give a title. The pure functions stay
+ * because they are the tested vocabulary those two surfaces still speak, and
+ * because the phone's session view still receives the summary for its limit
+ * notice.
  *
- * Every word it says comes from [HeadroomRules] in `:core`, which is where the
- * phone and the desktop are kept from disagreeing about the same reading — they
- * already did that once about a reset countdown.
+ * Every word here comes from [HeadroomRules] in `:core`, which is where the phone
+ * and the desktop are kept from disagreeing about the same reading — they already
+ * did that once about a reset countdown.
  */
 
 /** What a pill would draw, or null when it must not draw at all. */
@@ -97,62 +88,6 @@ fun statusHeadroomOf(headroom: Headroom?): StatusHeadroom? {
         sentinels = h.sentinels.filterValues { it != null }.keys.toList(),
         paused = h.held.size,
     )
-}
-
-/**
- * The chip itself.
- *
- * Drawn only when [headroomPill] has something to say, so a caller can place it
- * unconditionally and an older daemon simply costs no width.
- *
- * ⚠ The two Compose traps documented on the desktop's list pane apply to anything
- * with a fixed width inside an animating parent. This chip has none: it wraps its
- * text, so it can sit in a status line or a top bar without either of them.
- */
-@Composable
-fun HeadroomPill(
-    status: StatusHeadroom?,
-    nowMs: Long,
-    onClick: () -> Unit,
-    modifier: Modifier = Modifier,
-) {
-    val face = headroomPill(status, nowMs) ?: return
-    val tint = meterColor(face.severity, 0.0)
-    Surface(
-        color = tint.copy(alpha = 0.14f),
-        contentColor = tint,
-        shape = RoundedCornerShape(6.dp),
-        modifier = modifier.clickable(onClick = onClick),
-    ) {
-        Row(
-            Modifier.padding(horizontal = 7.dp, vertical = 2.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            // The dot carries the severity on its own, so the chip still reads as
-            // urgent to somebody who cannot separate the tints.
-            Spacer(Modifier.size(6.dp).clip(CircleShape).background(tint))
-            Spacer(Modifier.width(5.dp))
-            Text(
-                face.text,
-                style = MaterialTheme.typography.labelSmall,
-                maxLines = 1,
-                softWrap = false,
-            )
-            // Held spawns are the other half of "why is nothing happening": the
-            // gate is holding them and no session is failing, so nothing else on
-            // screen would say so.
-            if (face.paused > 0) {
-                Spacer(Modifier.width(6.dp))
-                Text(
-                    "${face.paused} held",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    maxLines = 1,
-                    softWrap = false,
-                )
-            }
-        }
-    }
 }
 
 /**

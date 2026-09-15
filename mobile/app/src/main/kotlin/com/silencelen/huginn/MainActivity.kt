@@ -1469,9 +1469,8 @@ fun HuginnApp(
                         // Status icon as a 2px fill. Two surfaces said it; the third
                         // was taking the one thing the bar exists to say.
                         //
-                        // [HeadroomPill] stays in `:ui` while the desktop drops its
-                        // own use separately. TopBarNoPillTest keeps this file from
-                        // growing one back.
+                        // The chip composable is gone from `:ui` (owner decision 29);
+                        // TopBarTitleTest keeps this file from growing one back.
                         if (dest !is Dest.Chat && dest !is Dest.SessionView) {
                             IconButton(onClick = { vm.refreshAll() }) {
                                 Icon(Icons.Filled.Refresh, contentDescription = "Refresh")
