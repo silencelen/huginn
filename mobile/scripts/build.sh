@@ -91,15 +91,85 @@ if [ -z "$APPD_DIR" ] || [ ! -d "$APPD_DIR/test" ]; then
   echo "[build] server/appd/test not found next to mobile/ — refusing." >&2
   exit 1
 fi
+# A huginn-appd.js running from anywhere but /opt/huginn-appd is a TEST daemon
+# an earlier run left behind. The route suites bind ports out of pid-derived
+# ranges, and a leaked daemon holding one answers /v1/ping (ping needs no token)
+# while rejecting the suite's own — so the file that collides with it fails
+# wholesale with `401 unauthorized`, which is what took out 25 routes-headroom
+# tests on 2026-09-15. Named and refused, never killed: it may be another
+# session's, and this script does not get to decide that.
+# `pgrep -x node`, not `pgrep -f huginn-appd.js`, so a shell whose command line
+# merely mentions the file is not mistaken for one.
+leaked_appd() {
+  local pid cmd where
+  for pid in $(pgrep -x node 2>/dev/null || true); do
+    cmd="$({ tr '\0' ' ' < "/proc/$pid/cmdline"; } 2>/dev/null || true)"
+    case " $cmd " in *"huginn-appd.js "*) ;; *) continue ;; esac
+    case " $cmd " in *" /opt/huginn-appd/huginn-appd.js "*) continue ;; esac
+    where="$(ss -ltnp 2>/dev/null | grep "pid=$pid," | awk '{print $4}' | tr '\n' ' ')"
+    echo "  pid $pid  listening on ${where:-<nothing>}  $cmd"
+  done
+}
+# Which FILE failed, from node's own TAP: a failing test carries the absolute
+# path in its `location:` (emitted for failures only), and a file whose
+# before/after hook blew up is named by the `not ok` line itself.
+appd_failed_files() {
+  {
+    sed -nE "s|^not ok [0-9]+ - (/.*\.test\.js)$|\1|p" "$1"
+    sed -nE "s|^[[:space:]]*location: '(/[^']*\.test\.js):[0-9]+:[0-9]+'.*|\1|p" "$1"
+  } | sort -u
+}
+
 if command -v node >/dev/null 2>&1; then
+  LEAKED_APPD="$(leaked_appd)"
+  if [ -n "$LEAKED_APPD" ]; then
+    echo "[build] a leaked test daemon is running and will fail whichever suite collides with it — refusing." >&2
+    echo "$LEAKED_APPD" >&2
+    echo "[build] kill it yourself (it may be another session's), then re-run." >&2
+    exit 1
+  fi
   NODE_LOG="$(mktemp)"
+  # ⚠ `set -o pipefail` IS ON AT THE TOP OF THIS FILE, so a failing suite made
+  # this pipeline the script's last act: `set -e` killed it right here and the
+  # `NODE_RC` line below — and everything that reads it — never ran. The refusal
+  # still happened, silently and with no reason printed, and nothing after it
+  # could ever run either. Disarmed around the pipeline only, so `tee` can keep
+  # showing the run live, which is why this gate is a pipeline at all.
+  set +e
   node --test "$APPD_DIR"/test/*.test.js | tee "$NODE_LOG"
   NODE_RC="${PIPESTATUS[0]}"
+  set -e
   # '# pass', not '# tests': the latter counts failures too. Matches deploy.sh and
-  # release-desktop.sh so all three gates measure the same thing.
+  # release-desktop.sh so all three gates measure the same thing. Read from the
+  # FULL run, never from a retry — a floor met by one file on its own is no floor.
   NODE_COUNT="$(grep -oE '^# pass [0-9]+' "$NODE_LOG" | grep -oE '[0-9]+' || echo 0)"
+  if [ "$NODE_RC" != 0 ]; then
+    # ONE flaky FILE gets ONE more chance, and only when it is the only one that
+    # failed. Four suites have each failed exactly once on this host while
+    # parallel gradle builds held it at load 11-23 on eight cores, passing alone
+    # straight afterwards, and every refusal costs a ten-minute rerun of a green
+    # tree. Two failing files, a file we cannot name, or a second failure of the
+    # same one is refused as before. Never more than one file, never twice.
+    RETRY_FILE=""; RETRY_N=0
+    while IFS= read -r f; do
+      [ -n "$f" ] || continue
+      RETRY_N=$((RETRY_N + 1)); RETRY_FILE="$f"
+    done <<EOF
+$(appd_failed_files "$NODE_LOG")
+EOF
+    if [ "$RETRY_N" = 1 ] && [ -f "$RETRY_FILE" ]; then
+      echo "[build] one test file failed — re-running $RETRY_FILE alone, once."
+      if node --test "$RETRY_FILE"; then
+        echo "[gate] retried once: $RETRY_FILE"
+      else
+        rm -f "$NODE_LOG"; echo "[build] server tests failed twice on $RETRY_FILE — refusing." >&2; exit 1
+      fi
+    else
+      rm -f "$NODE_LOG"
+      echo "[build] server tests failed ($RETRY_N file(s)) — refusing." >&2; exit 1
+    fi
+  fi
   rm -f "$NODE_LOG"
-  [ "$NODE_RC" = 0 ] || { echo "[build] server tests failed" >&2; exit 1; }
   # Honour the shared floor. This said `-gt 0` while test-floors.env — which this
   # script already sources — sets APPD_MIN=300 and says "never edit a copy in a
   # script". A >0 gate accepts a suite that lost 99% of its tests.
