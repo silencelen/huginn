@@ -38,6 +38,7 @@ const crypto = require('node:crypto');
 //   routes-overview     10200 + pid%50   -> 10200-10249
 //   push-retire         10250 + pid%50   -> 10250-10299
 //   routes-desktop      10300 + pid%50   -> 10300-10349
+//   routes-typing       10500 + pid%50   -> 10500-10549
 //
 // Also spoken for, outside this directory: scripts/test-llm-shim.js holds
 // 18790-18799.
@@ -754,14 +755,19 @@ test('the session refusal blames the message, because the page is not in it', as
   // The chat wording ("that page and this message … shorten one of them") points
   // at a fix that cannot work on this path: only the one-line reference travels,
   // so shortening a 90,000-character page changes the composed length by nothing.
+  //
+  // The cap is SESSION_TEXT_MAX (100,000) since 3.1.0, not the old 8,000: the
+  // pane's limit was the tmux command-line budget wearing a policy hat, and
+  // delivery travels on stdin now. A message AT the cap plus a reference is
+  // still over it, which is the case this asserts.
   const pad = await mkPad('Pointed at', 'y'.repeat(50_000));
   const { status, body } = await api(`/v1/sessions/${SESS}/keys`, {
-    method: 'POST', body: JSON.stringify({ text: 'z'.repeat(8_000), scratchpadId: pad.id }),
+    method: 'POST', body: JSON.stringify({ text: 'z'.repeat(100_000), scratchpadId: pad.id }),
   });
   assert.equal(413, status, JSON.stringify(body));
   assert.doesNotMatch(body.error, /that page and this message/);
-  assert.match(body.error, /one-line reference to that page takes \d+ of the 8,000 characters/);
-  assert.match(body.error, /this message is 8,000/);
+  assert.match(body.error, /one-line reference to that page takes \d+ of the 100,000 characters/);
+  assert.match(body.error, /this message is 100,000/);
 });
 
 test('a blank scratchpadId is refused on the session path too', async () => {
