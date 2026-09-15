@@ -74,6 +74,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.runtime.rememberCoroutineScope
 import com.silencelen.huginn.data.DraftBook
 import com.silencelen.huginn.data.HuginnClient
+import com.silencelen.huginn.data.QuickActions
 import com.silencelen.huginn.desktop.AppStore
 import com.silencelen.huginn.desktop.SessionController
 import com.silencelen.huginn.desktop.SessionTab
@@ -89,6 +90,9 @@ import com.silencelen.huginn.desktop.attach.attachmentDropTarget
 import com.silencelen.huginn.desktop.attach.composeMessage
 import com.silencelen.huginn.desktop.attach.rememberAttachmentController
 import com.silencelen.huginn.desktop.ui.common.DeskType
+import com.silencelen.huginn.desktop.ui.common.SelectionVerbs
+import com.silencelen.huginn.desktop.ui.common.WithTranscriptSelectionMenu
+import com.silencelen.huginn.desktop.ui.common.rememberSelectionVerbs
 import com.silencelen.huginn.desktop.ui.common.Space
 import com.silencelen.huginn.desktop.ui.common.Tip
 import com.silencelen.huginn.desktop.ui.session.ControlAction
@@ -217,6 +221,16 @@ fun SessionView(store: AppStore, name: String) {
     // Three surfaces still share the value, which is why it is read here rather
     // than inside the composer: the composer types it, a suggestion chip fills it,
     // and the interrupt control appears only while it is empty.
+    // The host's quick-action wording, and the verbs bound to THIS session's
+    // composer. Null wording is the 3.0.x probe: the menu narrows to Quote.
+    val status by store.status.collectAsState()
+    val quickActions = status?.quickActions
+    // Mode NULL, not the session's `liveMode`: that is a Claude Code permission
+    // mode ("plan", "acceptEdits") and a chat's mode is a different vocabulary —
+    // handing one to the other creates a chat the daemon refuses. A session has no
+    // chat mode, so "Ask in new chat" from one opens the default.
+    val selectionVerbs = rememberSelectionVerbs(store, draftKey, null, quickActions)
+
     val draftMap by store.drafts.drafts.collectAsState()
     val draft = draftMap[draftKey].orEmpty()
     val setDraft: (String) -> Unit = { store.drafts.set(draftKey, it) }
@@ -318,7 +332,7 @@ fun SessionView(store: AppStore, name: String) {
 
         Box(Modifier.weight(1f).fillMaxWidth()) {
             when (tab) {
-                SessionTab.CONVERSATION -> ConversationTab(controller)
+                SessionTab.CONVERSATION -> ConversationTab(controller, selectionVerbs, quickActions)
                 SessionTab.SCREEN -> ScreenTab(controller)
                 SessionTab.OVERVIEW -> OverviewTab(controller, store)
             }
@@ -767,7 +781,11 @@ private fun TabItem(label: String, active: Boolean, onClick: () -> Unit) {
  * has no opinion about how any of them look.
  */
 @Composable
-private fun ConversationTab(controller: SessionController) {
+private fun ConversationTab(
+    controller: SessionController,
+    selectionVerbs: SelectionVerbs,
+    quickActions: QuickActions?,
+) {
     val page by controller.page.collectAsState()
     val agentPage by controller.agentPage.collectAsState()
     val stream by controller.selectedStream.collectAsState()
@@ -881,48 +899,55 @@ private fun ConversationTab(controller: SessionController) {
             // The gap between rows is a density decision the shell owns, not a
             // property of a transcript row — same seam the chat view reads.
             val metrics = LocalTranscriptMetrics.current
-            SelectionContainer {
-                LazyColumn(
-                    Modifier.fillMaxSize().padding(horizontal = 16.dp).onScrollInput { scrolls.value++ },
-                    state = listState,
-                    contentPadding = PaddingValues(vertical = metrics.rowPadding),
-                    verticalArrangement = Arrangement.spacedBy(metrics.rowSpacing),
-                ) {
-                    // The conversation IS the history, so the top of the list is
-                    // a way into it rather than an apology for its absence. It
-                    // used to read "Showing the most recent part of this session."
-                    // and stop there — on a long session that was a sliver (51
-                    // events out of 3452, measured) with no way to ask for the
-                    // rest. Only the Screen tab has a genuine excuse: a Claude
-                    // pane runs on the alternate screen and has no scrollback at
-                    // all.
-                    if (hasEarlier) {
-                        item("earlier") {
-                            Row(
-                                Modifier.fillMaxWidth().padding(vertical = Space.unit),
-                                horizontalArrangement = Arrangement.Center,
-                            ) {
-                                if (loadingHistory) {
-                                    Muted("Loading earlier messages…")
-                                } else {
-                                    TextButton(onClick = {
-                                        if (onAgent) controller.loadEarlierAgent() else controller.loadEarlier()
-                                    }) {
-                                        Text("Load earlier messages", style = DeskType.rail)
+            // The four selection verbs, over the transcript and NOWHERE else: this
+            // provides LocalTextContextMenu, which every TextField reads, so wrapping
+            // any higher would put "Explain" in the right-click menu of the composer
+            // the text is being staged into — and on the Screen tab, which is a live
+            // terminal whose copy path is ScreenCopy.
+            WithTranscriptSelectionMenu(selectionVerbs, quickActions) {
+                SelectionContainer {
+                    LazyColumn(
+                        Modifier.fillMaxSize().padding(horizontal = 16.dp).onScrollInput { scrolls.value++ },
+                        state = listState,
+                        contentPadding = PaddingValues(vertical = metrics.rowPadding),
+                        verticalArrangement = Arrangement.spacedBy(metrics.rowSpacing),
+                    ) {
+                        // The conversation IS the history, so the top of the list is
+                        // a way into it rather than an apology for its absence. It
+                        // used to read "Showing the most recent part of this session."
+                        // and stop there — on a long session that was a sliver (51
+                        // events out of 3452, measured) with no way to ask for the
+                        // rest. Only the Screen tab has a genuine excuse: a Claude
+                        // pane runs on the alternate screen and has no scrollback at
+                        // all.
+                        if (hasEarlier) {
+                            item("earlier") {
+                                Row(
+                                    Modifier.fillMaxWidth().padding(vertical = Space.unit),
+                                    horizontalArrangement = Arrangement.Center,
+                                ) {
+                                    if (loadingHistory) {
+                                        Muted("Loading earlier messages…")
+                                    } else {
+                                        TextButton(onClick = {
+                                            if (onAgent) controller.loadEarlierAgent() else controller.loadEarlier()
+                                        }) {
+                                            Text("Load earlier messages", style = DeskType.rail)
+                                        }
                                     }
                                 }
                             }
                         }
-                    }
-                    // KEYED on the group's own identity, not on position. The
-                    // retained window drops events off the front, which shifts every
-                    // index — and a LazyColumn anchors scroll by position, so the
-                    // content slid under a reader who was scrolled up looking at
-                    // something. `TranscriptGroups.keys` also guarantees the keys
-                    // are distinct, because a duplicate key THROWS and takes the
-                    // whole conversation view with it.
-                    items(count = rows.size, key = { keys[it] }) { i ->
-                        TranscriptRowItem(rows[i], onCopy)
+                        // KEYED on the group's own identity, not on position. The
+                        // retained window drops events off the front, which shifts every
+                        // index — and a LazyColumn anchors scroll by position, so the
+                        // content slid under a reader who was scrolled up looking at
+                        // something. `TranscriptGroups.keys` also guarantees the keys
+                        // are distinct, because a duplicate key THROWS and takes the
+                        // whole conversation view with it.
+                        items(count = rows.size, key = { keys[it] }) { i ->
+                            TranscriptRowItem(rows[i], onCopy)
+                        }
                     }
                 }
             }
