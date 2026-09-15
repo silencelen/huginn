@@ -50,10 +50,10 @@ const { agentsDirFor, listAgents, listAgentFiles } = require('./lib/agents');
 const { sessionGraph, sessionOverview } = require('./lib/sessiongraph');
 const { suggestionContext, buildPrompt, parseSuggestions } = require('./lib/suggest');
 const { FIELDS: POLISH_FIELDS, buildPolishPrompt, parsePolish } = require('./lib/polish');
-const {
-  decideSwitch, worstLimit, agedLimits, explain: explainSwitch,
-  THRESHOLD: AUTOSWITCH_THRESHOLD,
-} = require('./lib/autoswitch');
+// Only `agedLimits` is still called from here: the account-switch DECISION moved
+// inside lib/headroom's arbiter, which imports the rest of this module itself so
+// its rules and its anti-flap guards stay exactly what they were.
+const { agedLimits } = require('./lib/autoswitch');
 const pushLib = require('./lib/pushtokens');
 const { trySender } = require('./lib/fcm');
 const { createPending, stepSoftEnd } = require('./lib/softend');
@@ -5713,7 +5713,7 @@ const server = http.createServer(async (req, res) => {
       log(`autoswitch: ${v.settings.accountSwitch.enabled ? 'enabled' : 'disabled'} at ${v.settings.accountSwitch.threshold}%`);
       // An immediate look, so enabling it against an already-dry account acts
       // now rather than in five minutes.
-      if (v.settings.accountSwitch.enabled) headroomTick().catch(() => { });
+      if (v.settings.accountSwitch.enabled) autoswitchTick().catch(() => { });
       return sendJson(res, 200, {
         enabled: v.settings.accountSwitch.enabled,
         threshold: v.settings.accountSwitch.threshold,
