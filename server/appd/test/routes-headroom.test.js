@@ -73,7 +73,7 @@ const FABLE = JSON.stringify({ type: 'assistant', message: { model: 'claude-fabl
 const HUMAN = JSON.stringify({ type: 'user', message: { content: 'actually, wait' } });
 
 let tmp, stateDir, claudeDir, dataDir, headroomDir, token, daemon;
-let usageServer, acctServer, usageFile, shimLog;
+let usageServer, acctServer, usageFile, shimLog, tmuxFail;
 const madeSessions = new Set();
 
 function sh(cmd, args) {
@@ -241,9 +241,18 @@ before(async () => {
   const shimDir = path.join(tmp, 'shim');
   fs.mkdirSync(shimDir);
   shimLog = path.join(tmp, 'tmux-argv.log');
+  // It can also be told to FAIL one call: a glob written into $HG_TMUX_FAIL is
+  // matched against the argv once and then consumed. That is the only way to
+  // drive tmux refusing a keystroke mid-script, which is the case the ladder's
+  // clean-up paths exist for.
+  tmuxFail = path.join(tmp, 'tmux-fail');
   fs.writeFileSync(path.join(shimDir, 'tmux'),
     '#!/bin/sh\n'
     + '{ printf \'%s\\t\' "$@" | tr \'\\n\' \' \'; printf \'\\n\'; } >> "$HG_TMUX_LOG"\n'
+    + 'if [ -n "${HG_TMUX_FAIL:-}" ] && [ -f "$HG_TMUX_FAIL" ]; then\n'
+    + '  pat="$(cat "$HG_TMUX_FAIL")"\n'
+    + '  case "$*" in $pat) rm -f "$HG_TMUX_FAIL"; echo "tmux: forced failure" >&2; exit 1 ;; esac\n'
+    + 'fi\n'
     + `exec ${realTmux} "$@"\n`, { mode: 0o755 });
 
   daemon = spawn(process.execPath, [path.join(__dirname, '..', 'huginn-appd.js')], {
@@ -251,6 +260,7 @@ before(async () => {
       ...process.env,
       PATH: `${shimDir}:${process.env.PATH}`,
       HG_TMUX_LOG: shimLog,
+      HG_TMUX_FAIL: tmuxFail,
       HUGINN_APPD_PORT: String(PORT),
       HUGINN_APPD_BIND: '127.0.0.1',
       HUGINN_APPD_DATA: dataDir,
@@ -563,6 +573,76 @@ test('a picker that never appears is abandoned quietly, with nothing else typed'
   assert.equal(keys.some((a) => a.includes('Up') || a.includes('Down')), false, 'no cursor keys');
   assert.equal(keys.some((a, i) => a.includes('-l') && a[a.length - 1] === 's'), false, 'no `s`');
   assert.equal(capture(name).includes('Select model'), false);
+});
+
+test('a ladder job that is merely QUEUED reads as pending, not as a failed delivery', async () => {
+  // ⚠ enqueueJob resolves after ONE pump pass, and the picker must not open
+  // inside a running turn — so `r.result` is null for a job that has not started.
+  // That was indistinguishable from a job that ran and could not confirm, and
+  // the record it wrote claimed a move that had not happened.
+  const name = mkPicker('pend', [
+    { label: 'Fable', desc: 'Fable 5.1', current: true },
+    { label: 'Opus (1M context)', desc: 'Opus 5' },
+  ]);
+  // Mid-turn: the transcript's last record is the owner speaking, so both gates
+  // are not open and the job waits for the boundary.
+  const transcript = writeTranscript(name, [FABLE, TURN, HUMAN]);
+  writeState(name, { sessionId: `sid-${name}`, transcript });
+  setUsage({ session: 5, weekly_all: 10, weekly_fable: 95 });
+  await tick({ cooldownMs: 0 });
+  const held = await until((b) => {
+    const row = b.sessions.find((x) => x.name === name);
+    return row && row.ladder && row.ladder.delivery === 'pending';
+  }, 25_000, 'a pending ladder record');
+  const row = held.sessions.find((x) => x.name === name);
+  assert.equal(row.ladder.to, 'opus');
+  assert.equal(row.family, 'fable', 'the session has NOT moved yet');
+  assert.equal(capture(name).includes('Select model'), false, 'the picker must never open mid-turn');
+
+  // The turn ends. The job runs, and its own settle resolves the record.
+  fs.appendFileSync(transcript, `${TURN}\n`);
+  const done = await until((b) => {
+    const r = b.sessions.find((x) => x.name === name);
+    return r && r.ladder && r.ladder.delivery === 'confirmed';
+  }, 30_000, 'the queued ladder to land');
+  assert.equal(done.sessions.find((x) => x.name === name).family, 'opus');
+  assert.match(capture(name), /Set model to Opus \(1M context\) for this session only/);
+});
+
+test('a /model that cannot be SUBMITTED leaves nothing in the composer', async () => {
+  // ⚠ `/model` is already typed by the time the Enter goes. This was the one
+  // early exit that skipped the clean-up after typing text, so the pump released
+  // the next entry into a composer holding `/model` and the session received
+  // `/modelYour usage limit has reset. Continue the task…`.
+  const name = mkPicker('entfail', [
+    { label: 'Fable', desc: 'Fable 5.1', current: true },
+    { label: 'Opus (1M context)', desc: 'Opus 5' },
+  ]);
+  const transcript = writeTranscript(name, [FABLE, TURN]);
+  writeState(name, { sessionId: `sid-${name}`, transcript });
+
+  // Spend the heads-up FIRST (once per Fable window), so the only `send-keys …
+  // Enter` left for this session is the ladder's own submit.
+  setUsage({ session: 5, weekly_all: 10, weekly_fable: 88 });
+  await tick({ cooldownMs: 0 });
+  await until((b) => {
+    const r = b.sessions.find((x) => x.name === name);
+    return !!(r && r.headsUpAt);
+  }, 25_000, 'the heads-up for entfail');
+
+  fs.writeFileSync(tmuxFail, `*send-keys*${name}*Enter*`);
+  setUsage({ session: 5, weekly_all: 10, weekly_fable: 95 });
+  await tick({ cooldownMs: 0 });
+  await until((b) => {
+    const r = b.sessions.find((x) => x.name === name);
+    return !!(r && r.ladder && r.ladder.delivery === 'delivery_unconfirmed');
+  }, 25_000, 'an unconfirmed ladder after the forced Enter failure');
+
+  const keys = tmuxCalls(name).filter((a) => a.includes('send-keys'));
+  assert.ok(keys.some((a) => a.includes('Escape')),
+    'Esc must close whatever /model opened');
+  assert.ok(keys.some((a) => a.includes('C-u')),
+    'and the composer must be cleared — /model is sitting in it');
 });
 
 test('undo puts a laddered session back, and stops the arbiter arguing with it', async () => {

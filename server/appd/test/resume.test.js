@@ -229,3 +229,61 @@ test('recordsAfterStall slices at the stall, not at a timestamp', () => {
   assert.equal(resume.recordsAfterStall(RECORDS).length, 0, 'the 429 is still the last word');
   assert.equal(resume.recordsAfterStall([]).length, 0);
 });
+
+// ---- whose reset was it? ---------------------------------------------------
+
+test('a reset on ANOTHER account is not proof for a stall on the active one', () => {
+  // ⚠ `detectResets` runs over EVERY saved login, and for an inactive one the
+  // "fresh" reading is aged-forward history — a fabricated 0% for any window
+  // whose reset time has passed. So a second account's stale weekly_fable
+  // snapshot rolling over used to satisfy a session stalled on the ACTIVE
+  // account's Fable week, which is still full: the phrase is typed, the session
+  // re-stalls, and one of only three attempts is gone.
+  const now = Date.now();
+  const stall = { at: now - 10 * 60_000, window: 'weekly_fable' };
+  const theirs = { slug: 'other-account', window: 'weekly_fable', at: now - 60_000 };
+  const mine = { slug: 'live-account', window: 'weekly_fable', at: now - 30_000 };
+
+  const onlyTheirs = resume.recentResetWindows([theirs], { now, activeSlug: 'live-account' });
+  assert.equal(resume.resetSeenFor(onlyTheirs, stall), false,
+    "another login's rollover is not this window resetting");
+
+  const withMine = resume.recentResetWindows([theirs, mine], { now, activeSlug: 'live-account' });
+  assert.equal(resume.resetSeenFor(withMine, stall), true, 'the active account\'s own reset does count');
+
+  // A reset that predates the stall is a DIFFERENT stall's proof.
+  const earlier = resume.recentResetWindows(
+    [{ slug: 'live-account', window: 'weekly_fable', at: stall.at - 60_000 }], { now, activeSlug: 'live-account' },
+  );
+  assert.equal(resume.resetSeenFor(earlier, stall), false);
+
+  // Aged out of the rolling window.
+  const old = resume.recentResetWindows(
+    [{ slug: 'live-account', window: 'weekly_fable', at: now - 2 * resume.RESET_MEMORY_MS }],
+    { now, activeSlug: 'live-account' },
+  );
+  assert.equal(resume.resetSeenFor(old, stall), false);
+
+  // A row from before the slug existed is kept: dropping it would stop resumes
+  // dead on an upgrade.
+  const legacy = resume.recentResetWindows([{ window: 'weekly_fable', at: now - 30_000 }],
+    { now, activeSlug: 'live-account' });
+  assert.equal(resume.resetSeenFor(legacy, stall), true);
+
+  // A different WINDOW is never this stall's proof either.
+  const otherWindow = resume.recentResetWindows(
+    [{ slug: 'live-account', window: 'session', at: now - 30_000 }], { now, activeSlug: 'live-account' },
+  );
+  assert.equal(resume.resetSeenFor(otherWindow, stall), false);
+});
+
+test('resetSeen short-circuits BOTH halves of the reset test, which is why whose it is matters', () => {
+  // The consequence of the bug above: with `resetSeen` true, neither the clock
+  // nor the fresh reading is consulted at all.
+  const now = Date.now();
+  const stall = { at: now - 60_000, window: 'weekly_fable', resetsAt: now + 6 * 86_400_000 };
+  const settings = { autoResume: true, clearBelowPct: 50 };
+  assert.equal(resume.eligible({ settings, stall, resetSeen: false, percent: 99, now }).ok, false);
+  assert.equal(resume.eligible({ settings, stall, resetSeen: true, percent: 99, now }).ok, true,
+    'a reset event overrides a window that still reads 99% — so it had better be the right account');
+});

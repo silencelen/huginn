@@ -78,6 +78,8 @@ let stub, stubUrl;
 let posts = [];
 /** What the next token POST should answer with. */
 let stubMode = 'ok';
+/** The percentages the local usage endpoint answers with. Green by default. */
+let usage = { session: 5, weekly_all: 10, weekly_fable: 20 };
 
 const wait = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -161,6 +163,23 @@ before(async () => {
       let body = null;
       try { body = JSON.parse(raw); } catch { /* recorded as null */ }
       posts.push({ url: req.url, body });
+      if (req.url.startsWith('/usage')) {
+        // The plan endpoint, local. Without this the daemon would read the REAL
+        // api.anthropic.com on every tick — which is both a network call this
+        // file promises not to make and the only way to drive the arbiter.
+        const resets = new Date(Date.now() + HOUR).toISOString();
+        res.writeHead(200, { 'content-type': 'application/json' });
+        return res.end(JSON.stringify({
+          limits: [
+            { kind: 'session', percent: usage.session, severity: 'normal', resets_at: resets },
+            { kind: 'weekly_all', percent: usage.weekly_all, severity: 'normal', resets_at: resets },
+            {
+              kind: 'weekly_scoped', percent: usage.weekly_fable, severity: 'normal', resets_at: resets,
+              scope: { model: { display_name: 'Fable' } },
+            },
+          ],
+        }));
+      }
       if (req.url.startsWith('/oauth/account')) {
         // The identity endpoint: a saved profile's token never authenticates,
         // and 401 is what the daemon is built to shrug off.
@@ -201,6 +220,8 @@ before(async () => {
       HUGINN_APPD_TMUX_SOCKET: TMUX_SOCK,
       HUGINN_APPD_CLAUDE_DIR: claudeDir,
       HUGINN_APPD_OAUTH_TOKEN_URL: `${stubUrl}/v1/oauth/token`,
+      HUGINN_APPD_USAGE_URL: `${stubUrl}/usage`,
+      HUGINN_APPD_PLAN_TTL_MS: '500',
       HUGINN_APPD_OAUTH_ACCOUNT_URL: `${stubUrl}/oauth/account`,
       // The lock ladder's arithmetic is oauthlock.test.js's job; here it only has
       // to not cost the suite fifteen seconds per contended call.
@@ -406,4 +427,69 @@ test('a switch is refused while another process holds the OAuth lock', async () 
     fs.rmSync(lock, { recursive: true, force: true });
   }
   assert.deepEqual(liveBytes(), liveBefore, 'a refused switch changes nothing');
+});
+
+// ------------------------------------------------- the UNATTENDED switch gate
+
+test('the arbiter refuses an unrefreshable profile too, and signs nobody out', async () => {
+  // ⚠ THE ARBITER IS THE MORE DANGEROUS CALLER, not the safer one. Installing a
+  // credential pair that is behind hands the CLI `invalid_grant`, and the CLI
+  // answers by blanking its own credentials file — the owner is signed out of
+  // Claude Code, at 3am, with nothing to read afterwards. And the arbiter is
+  // MORE likely than the button to choose a dead profile: `agedLimits` zeroes
+  // every window whose reset time has passed, so the profile nobody has read for
+  // weeks scores as the freshest candidate on the host.
+  const gone = new Date(Date.now() - HOUR).toISOString();
+  const plan = (pct) => ({
+    at: Date.now(),
+    limits: [
+      { kind: 'session', percent: pct, severity: 'normal', resetsAt: gone, label: 'Current session' },
+      { kind: 'weekly_all', percent: pct, severity: 'normal', resetsAt: gone, label: 'Current week, all models' },
+      { kind: 'weekly_scoped', percent: pct, severity: 'normal', resetsAt: gone, label: 'Current week (Fable)' },
+    ],
+  });
+  // The dead login looks like the freshest thing on the host; the other saved
+  // one is full, so it is not a candidate at all.
+  const dead = profile(UUID_DEAD);
+  dead.lastPlan = plan(0);
+  fs.writeFileSync(path.join(accountsDir, `${UUID_DEAD}.json`), JSON.stringify(dead));
+  const idle = profile(UUID_IDLE);
+  idle.lastPlan = plan(99);
+  fs.writeFileSync(path.join(accountsDir, `${UUID_IDLE}.json`), JSON.stringify(idle));
+
+  const liveBefore = liveBytes();
+  const postsBefore = posts.filter((p) => p.url.includes('/oauth/token')).length;
+
+  // The active account is out of room, and the switcher is on.
+  usage = { session: 100, weekly_all: 100, weekly_fable: 100 };
+  await wait(700);                                    // outlive the plan cache
+  const on = await api('/v1/headroom/settings', {
+    method: 'PATCH',
+    body: JSON.stringify({ accountSwitch: { enabled: true, threshold: 95, margin: 20 } }),
+  });
+  assert.equal(on.status, 200, JSON.stringify(on.body));
+
+  // Give it several passes to do the wrong thing.
+  let why = '';
+  const deadline = Date.now() + 20_000;
+  for (;;) {
+    const hr = (await api('/v1/headroom')).body;
+    why = String((hr.arbiter && hr.arbiter.why) || '');
+    if (/cannot be switched to/.test(why)) break;
+    if (Date.now() > deadline) break;
+    await api('/v1/headroom/settings', { method: 'PATCH', body: '{}' });
+    await wait(400);
+  }
+
+  assert.deepEqual(liveBytes(), liveBefore,
+    `performSwitch ran on a login whose refresh token is gone — this is the signed-out case (why: ${why})`);
+  assert.match(why, /dead@example\.com cannot be switched to/,
+    `the arbiter never said why it refused the dead profile; why was: ${why}`);
+  assert.equal(posts.filter((p) => p.url.includes('/oauth/token')).length, postsBefore,
+    'and a login past its refresh-token expiry is refused without spending a request on it');
+  const sw = (await api('/v1/autoswitch')).body;
+  assert.equal(sw.switches, 0);
+
+  usage = { session: 5, weekly_all: 10, weekly_fable: 20 };
+  await api('/v1/headroom/settings', { method: 'PATCH', body: JSON.stringify({ accountSwitch: { enabled: false } }) });
 });

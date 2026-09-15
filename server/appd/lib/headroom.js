@@ -550,6 +550,10 @@ function decide(input = {}) {
     if (!ladderDown && family === 'fable' && fableEffective !== null && fableEffective >= settings.ladderPct) {
       const to = nextDown(family, settings.ladder);
       if (!to) blocked.push(`${s.name} is already at the bottom of the ladder`);
+      // IN FLIGHT is not "already there". A queued job has not opened the picker
+      // yet — the session is still on the rung it was on — but a second move
+      // must not be started behind it either.
+      else if (ladder && ladder.delivery === 'pending') blocked.push(`${s.name} has a model move waiting for a turn boundary`);
       else if (ladder && ladder.to) blocked.push(`${s.name} is already on ${ladder.to}`);
       else if (native) blocked.push(`${s.name} was moved to ${native.to || 'another model'} by Claude Code itself — appd never fights a native switch`);
       else if (s.humanSetModelAt && now - Number(s.humanSetModelAt) < HUMAN_MODEL_GRACE_MS) {
@@ -565,7 +569,11 @@ function decide(input = {}) {
 
     // ladder up — only for sessions appd itself moved, only once the Fable week
     // has actually reset, only while the session is idle.
-    if (!ladderUp && ladder && ladder.to && !native) {
+    // ⚠ NEVER WHILE A MOVE IS PENDING. `ladder.to` is written the moment a job is
+    // accepted, so without this a queued ladder_down became a ladder_up
+    // candidate on the next tick — appd typing /model to move a session back
+    // from a rung it had not reached yet.
+    if (!ladderUp && ladder && ladder.to && !native && ladder.delivery !== 'pending') {
       const reset = lastFableResetAt && lastFableResetAt > (Number(ladder.at) || 0);
       const low = fableEffective !== null && fableEffective < settings.ladderUpBelowPct;
       if (reset && low && s.state === 'idle' && canLadderUp(ladder.to, settings.ladder)) {
