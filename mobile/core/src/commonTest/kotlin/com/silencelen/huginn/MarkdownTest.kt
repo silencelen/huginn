@@ -150,4 +150,58 @@ class TailRevisionTest {
         assertEquals(tailRevision(1000L, 12, 40), tailRevision(1000L, 12, 40))
         assertEquals(tailRevision(null, 0, null), tailRevision(null, 0, null))
     }
+
+    // ------------------------------------------------- plainInline (one-line rows)
+
+    @Test
+    fun `a list row's snippet loses the markers it cannot render`() {
+        // Verbatim from the owner's Fold, 2026-09-15: the chats list drew
+        // "**Creative is back online at 15:05.** Both players…" — the row is one
+        // style, so the asterisks were simply the first two characters.
+        assertEquals(
+            "Creative is back online at 15:05. Both players (silencelen, buttbuster420) are on it.",
+            Markdown.plainInline(
+                "**Creative is back online at 15:05.** Both players (silencelen, buttbuster420) are on it.",
+            ),
+        )
+        assertEquals(
+            "MemPalace on muninn upgraded 3.7.0 → 3.8.0",
+            Markdown.plainInline("**MemPalace on muninn upgraded 3.7.0 → 3.8.0**"),
+        )
+    }
+
+    @Test
+    fun `every inline marker the renderer knows is taken off`() {
+        assertEquals("bold italic code struck", Markdown.plainInline("**bold** *italic* `code` ~~struck~~"))
+        assertEquals("under", Markdown.plainInline("_under_"))
+        // snake_case is not emphasis to the renderer, so it is not stripped here.
+        assertEquals("a_b_c", Markdown.plainInline("a_b_c"))
+    }
+
+    @Test
+    fun `a link keeps its label`() {
+        assertEquals("the runbook (https://x/y)", Markdown.plainInline("[the runbook](https://x/y)"))
+        assertEquals("https://x/y", Markdown.plainInline("[https://x/y](https://x/y)"), "no point saying it twice")
+    }
+
+    @Test
+    fun `a snippet is one line`() {
+        assertEquals("first second", Markdown.plainInline("first\nsecond"))
+        assertEquals("first second", Markdown.plainInline("  first\r\nsecond  "))
+    }
+
+    @Test
+    fun `block syntax is left where it is`() {
+        // One leading character reads as the punctuation it is; a stray `**` pair
+        // reads as a bug. Only the inline markers are worth the risk of removing.
+        assertEquals("# a heading", Markdown.plainInline("# a heading"))
+        assertEquals("- a bullet", Markdown.plainInline("- a bullet"))
+    }
+
+    @Test
+    fun `an unmatched marker survives, exactly as the renderer leaves it`() {
+        // plainInline is inline() with the styling thrown away, so it cannot
+        // disagree with what the transcript shows for the same text.
+        assertEquals("2 ** 8 is 256", Markdown.plainInline("2 ** 8 is 256"))
+    }
 }

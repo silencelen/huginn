@@ -98,6 +98,30 @@ object Markdown {
     private val CONT = Regex("^\\s{2,}\\S.*$")
 
     /**
+     * The same inline markdown as [inline], with the markers REMOVED and nothing
+     * styled — for the places that render a one-line preview as plain text.
+     *
+     * A chats row showed `**Creative is back online at 15:05.** Both players…`
+     * and `**MemPalace on muninn upgraded 3.7.0 → 3…`: the asterisks are the
+     * FIRST characters of the snippet, so the one line a reader scans a list by
+     * opened with punctuation that meant nothing there. A one-line row cannot
+     * carry a bold span — it is drawn with a single style — so the only honest
+     * options are to show the markers or to take them off, and the markers are
+     * an instruction to a renderer that is not running.
+     *
+     * Reuses [inline] rather than growing a second scanner: two parsers of the
+     * same syntax disagree eventually, and the one a reader would notice is the
+     * one that leaves a stray `**` behind. Whatever [inline] treats as a marker
+     * is what this drops, by construction.
+     *
+     * Block syntax is NOT touched — a leading `#` or `-` is one character and
+     * reads as the punctuation it is, while a lost `**` pair reads as an error.
+     * Newlines become spaces, because the caller wanted one line.
+     */
+    fun plainInline(src: String): String =
+        inline(src.replace("\r\n", "\n")).text.replace('\n', ' ').trim()
+
+    /**
      * Inline spans: `code`, **bold**, *italic*, ~~strike~~ and [text](url).
      * Scanned in one pass so a marker inside a code span is left alone.
      */

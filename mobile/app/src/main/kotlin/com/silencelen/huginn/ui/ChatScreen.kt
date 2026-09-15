@@ -207,6 +207,10 @@ fun ChatScreen(
                     LocalTranscriptSelection provides TranscriptSelectionHost { text ->
                         selection = SelectionMode.begin(text)
                     },
+                    // And the platform's Copy / Select all popup stays down while
+                    // the app's bar is up. See GatedTextToolbar.
+                    androidx.compose.ui.platform.LocalTextToolbar provides
+                        rememberGatedTextToolbar(selection.active),
                 ) {
                   LazyColumn(
                       state = listState,
