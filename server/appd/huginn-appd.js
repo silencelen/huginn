@@ -68,7 +68,7 @@ const headroomLib = require('./lib/headroom');
 // The sentinel files the hook gate watches, and the held/ directory it writes.
 const sentinelsLib = require('./lib/sentinels');
 
-const VERSION = '2.85.0';
+const VERSION = '3.0.0';
 const PORT = Number(process.env.HUGINN_APPD_PORT || 8787);
 const DATA_DIR = process.env.HUGINN_APPD_DATA || '/var/lib/huginn-appd';
 const UPLOADS_DIR = path.join(DATA_DIR, 'uploads');
