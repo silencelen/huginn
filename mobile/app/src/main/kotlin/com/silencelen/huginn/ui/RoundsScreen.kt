@@ -82,7 +82,7 @@ fun RoundsScreen(
         } else {
             LazyColumn(
                 Modifier.fillMaxSize(),
-                contentPadding = PaddingValues(top = 6.dp, bottom = 24.dp),
+                contentPadding = PaddingValues(top = 6.dp, bottom = LIST_FAB_CLEARANCE),
             ) {
                 item(key = "rounds") {
                     RoundsSection(
