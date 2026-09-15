@@ -390,6 +390,51 @@ function resumePlan({ kind = 'session', armed = false, stall = null, resumedNati
 }
 
 /**
+ * How long a stall may sit with NO reset time before appd stops waiting for one.
+ *
+ * ⚠ THE MEASURED FABLE-WEEKLY APOLOGY CARRIES NO CLOCK ("You're out of usage
+ * credits. Run /usage-credits …"), so `parseLimitError` returns `resetsClock:
+ * null`. If the usage endpoint also has no `resetsAt` for that window at that
+ * instant — a failed plan fetch, a window not yet published — the stall is
+ * stored with `resetsAt: null`, `due` is permanently false, and the ONLY escape
+ * is a `detectResets` event that may never come. Meanwhile a held Round report is
+ * never filed and the ten-second poll runs for the life of the daemon.
+ *
+ * Six hours: longer than any session window and long enough that a transient
+ * gap in the endpoint has been re-read dozens of times.
+ */
+const STALL_MAX_AGE_MS = 6 * 60 * 60 * 1000;
+
+/**
+ * What to do about a stall that has no reset time.
+ *
+ * Deliberately does NOTHING until the stall is old: the endpoint usually catches
+ * up within a tick or two and `noteStall` upgrades the record itself. After that
+ * the active windows are the last source, and failing those this SAYS SO — a
+ * refusal that can be read is worth more than a wait that cannot end.
+ *
+ * @returns {{action:'clocked'|'wait'|'adopt'|'give_up', resetsAt?: number, why: string}}
+ */
+function unclockedVerdict({ stall = null, activeWindows = null, now = Date.now(),
+  maxAgeMs = STALL_MAX_AGE_MS } = {}) {
+  if (!stall || !stall.at) return { action: 'clocked', why: 'not stalled' };
+  if (stall.resetsAt != null) return { action: 'clocked', why: 'the stall has a reset time' };
+  if (now - Number(stall.at) < maxAgeMs) {
+    return { action: 'wait', why: 'the limit message carried no reset time; still waiting for one' };
+  }
+  const w = stall.window && activeWindows ? activeWindows[stall.window] : null;
+  const at = w && w.resetsAt != null ? Date.parse(w.resetsAt) : NaN;
+  if (Number.isFinite(at)) {
+    return { action: 'adopt', resetsAt: at, why: 'the reset time came from the usage endpoint instead' };
+  }
+  return {
+    action: 'give_up',
+    why: `the limit message carried no reset time and none appeared in ${Math.round(maxAgeMs / 3_600_000)} h `
+      + '— appd will not resume this one',
+  };
+}
+
+/**
  * How long a reset event stays usable as proof.
  *
  * `detectResets` fires ONCE, on the tick that sees the drop; the resume that
@@ -428,6 +473,31 @@ function recentResetWindows(resets, { now = Date.now(), activeSlug = null, memor
 }
 
 /**
+ * Should the ten-second stalled-host poll be running at all?
+ *
+ * ⚠ "A RESET IS NEAR", not "anything is stalled". A session stalled on a weekly
+ * window six days out used to keep the poll running every ten seconds for six
+ * days — a listSessions, a transcript tail per session and a capture-pane per
+ * attention session, all to watch a clock that cannot move — and nothing cleared
+ * the stall in the meantime, because the 429 stays the last record. So it never
+ * stopped.
+ *
+ * A stall with NO reset time still arms it: that is precisely the case the
+ * unclocked backstop is waiting to age out, and it has to be looked at to do so.
+ */
+function pollShouldArm({ stalls = [], chatStallsPending = false, mode = 'ok',
+  now = Date.now(), memoryMs = RESET_MEMORY_MS } = {}) {
+  if (chatStallsPending) return true;
+  if (mode === 'red' || mode === 'exhausted') return true;
+  for (const st of stalls || []) {
+    if (!st || !st.at || st.resumedAt || st.gaveUpAt) continue;
+    if (st.resetsAt == null) return true;
+    if (Number(st.resetsAt) - now <= memoryMs) return true;
+  }
+  return false;
+}
+
+/**
  * Has THIS stall's window reset SINCE the stall?
  *
  * ⚠ Since the stall, not merely "recently". The reset log is a rolling hour and
@@ -441,7 +511,8 @@ function resetSeenFor(map, stall) {
 
 module.exports = {
   NATIVE_GRACE_MS, CONSENT_GRACE_MS, MAX_ATTEMPTS, NATIVE_HORIZON_MS, RESET_MEMORY_MS,
-  recentResetWindows, resetSeenFor,
+  STALL_MAX_AGE_MS, unclockedVerdict,
+  recentResetWindows, resetSeenFor, pollShouldArm,
   NATIVE_CONTINUATION, CANCEL_PATTERNS,
   stallOf, recordsAfterStall, nativeArmed, nativeResumed, nativeCancelled, eligible, resumePlan,
   nextOccurrence, isHumanRecord, textOfRecord, tsOf,
