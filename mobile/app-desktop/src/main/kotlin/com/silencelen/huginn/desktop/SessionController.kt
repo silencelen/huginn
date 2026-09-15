@@ -1,5 +1,6 @@
 package com.silencelen.huginn.desktop
 
+import com.silencelen.huginn.data.AgentRun
 import com.silencelen.huginn.data.Backoff
 import com.silencelen.huginn.data.HuginnClient
 import com.silencelen.huginn.data.PaneLease
@@ -119,6 +120,45 @@ class SessionController(
     val transcriptError: StateFlow<String?> = _transcriptError.asStateFlow()
 
     /**
+     * Which stream the Conversation body is showing: null is the session's own
+     * transcript, anything else is an agent id.
+     */
+    private val _selectedStream = MutableStateFlow<String?>(null)
+    val selectedStream: StateFlow<String?> = _selectedStream.asStateFlow()
+
+    /** The agents this session has spawned, for the picker strip. */
+    private val _agents = MutableStateFlow<List<AgentRun>>(emptyList())
+    val agents: StateFlow<List<AgentRun>> = _agents.asStateFlow()
+
+    /**
+     * The PICKED agent's transcript, kept entirely apart from [_page].
+     *
+     * A SEPARATE page rather than a filter on the main one, and that is the whole
+     * design: the two describe different files, so the parent's byte offsets say
+     * nothing about the agent's, and merging them would hand `mergeTranscriptPage`
+     * two sequences of `seq` numbers that both start at 1. The main page goes on
+     * ticking while this one is on screen — switching streams must not cost the
+     * reader the tail they came back to.
+     */
+    private val _agentPage = MutableStateFlow<TranscriptPage?>(null)
+    val agentPage: StateFlow<TranscriptPage?> = _agentPage.asStateFlow()
+
+    /**
+     * Why the picker is disabled, or null when it is not.
+     *
+     * The one expected value is "needs appd 3.0": a daemon older than 3.0.0 404s
+     * the agent-transcript route entirely. The chips stay on screen saying so
+     * rather than vanishing, because a control that is absent is indistinguishable
+     * from a session that never spawned anything.
+     */
+    private val _streamNote = MutableStateFlow<String?>(null)
+    val streamNote: StateFlow<String?> = _streamNote.asStateFlow()
+
+    /** False once the host has proven it cannot serve an agent transcript. */
+    private val _streamsSupported = MutableStateFlow(true)
+    val streamsSupported: StateFlow<Boolean> = _streamsSupported.asStateFlow()
+
+    /**
      * The daemon's 404/409 for a session that has no transcript. Not a failure —
      * a session that has never prompted Claude has nothing to show, and rendering
      * that as an error made a brand-new session look broken.
@@ -197,6 +237,19 @@ class SessionController(
     private var transcriptOffset: Long? = null
 
     /**
+     * THE SECOND CURSOR PAIR, and it exists because there is no such thing as one
+     * cursor for two files.
+     *
+     * [transcriptOffset]/[historyStart] are byte positions in the session's own
+     * `.jsonl`; these are byte positions in one agent's. Reusing the first pair
+     * for both would tail an agent from an offset measured in the parent — a
+     * number that is meaningless there and, on a long session, past the end of the
+     * file. They are reset together with [_agentPage] on every stream switch.
+     */
+    private var agentOffset: Long? = null
+    private var agentHistoryStart: Long? = null
+
+    /**
      * The byte the OLDEST page on screen begins at, and the handle for reading
      * further back. Null until a page has landed; 0 once the whole conversation
      * is in view.
@@ -205,6 +258,9 @@ class SessionController(
 
     private val _loadingHistory = MutableStateFlow(false)
     val loadingHistory: StateFlow<Boolean> = _loadingHistory.asStateFlow()
+
+    private val _loadingAgentHistory = MutableStateFlow(false)
+    val loadingAgentHistory: StateFlow<Boolean> = _loadingAgentHistory.asStateFlow()
 
     /** True while there is still conversation above what is on screen. */
     val hasEarlier: StateFlow<Boolean> = _page
@@ -242,9 +298,34 @@ class SessionController(
 
     fun start() {
         scope.launch { transcriptLoop() }
+        scope.launch { agentLoop() }
+        scope.launch { agentListLoop() }
         scope.launch { screenSupervisor() }
         scope.launch { overviewSupervisor() }
         scope.launch { keyDrainer() }
+    }
+
+    /**
+     * Points the Conversation body at a stream.
+     *
+     * @param agentId null for the session's own transcript.
+     *
+     * The cursors and the page are dropped TOGETHER and before anything is
+     * fetched: a page left behind from the previous agent would be merged with the
+     * next one's first read, which is two agents' work in one conversation with no
+     * mark to say where one ended.
+     */
+    fun selectStream(agentId: String?) {
+        val next = agentId?.trim()?.takeIf { it.isNotEmpty() }
+        if (next == _selectedStream.value) return
+        _selectedStream.value = next
+        agentOffset = null
+        agentHistoryStart = null
+        _agentPage.value = null
+        _loadingAgentHistory.value = false
+        // The note belonged to the stream that is being left. A 404 for one agent
+        // says nothing about the next.
+        if (_streamsSupported.value) _streamNote.value = null
     }
 
     /**
@@ -376,42 +457,148 @@ class SessionController(
             if (!visible) return@collectLatest
             var failures = 0
             while (currentCoroutineContext().isActive) {
-                runCatching { client.sessionTranscript(name, transcriptOffset) }
-                    .onSuccess { page ->
-                        failures = 0
-                        // Same tmux name, different Claude session: both handles
-                        // into the old transcript are void (the offset is a byte
-                        // position in a file this session never wrote), so drop
-                        // them and let the next poll read the new tail.
-                        if (isTranscriptRestart(_page.value, page)) {
-                            transcriptOffset = null
-                            historyStart = null
-                        } else {
-                            transcriptOffset = page.nextOffset
-                            // The first page defines where history begins; later tail
-                            // reads are BELOW it and must not move the handle.
-                            if (historyStart == null) historyStart = page.windowStart
-                        }
-                        _page.value = mergeTranscriptPage(_page.value, page)
-                        _transcriptError.value = null
-                        _neverRan.value = false
-                    }
-                    .onFailure { e ->
-                        failures += 1
-                        // Only while nothing has ever landed. Once a page is on
-                        // screen a blip must leave it there rather than replacing
-                        // a session's whole history with an error sentence.
-                        if (_page.value == null) {
-                            val code = (e as? HuginnClient.HuginnException)?.code
-                            _neverRan.value = code == 404 || code == 409
-                            _transcriptError.value = e.message ?: "could not read the transcript"
-                        }
-                    }
+                failures = if (pollMainOnce()) 0 else failures + 1
                 // A session that never prompted Claude 409s forever. At the flat
                 // tick that is ~24 daemon errors a minute for as long as this view
                 // stays open, which is this client hammering its own host.
                 delay(Backoff.transcript(failures))
             }
+        }
+    }
+
+    /**
+     * ONE read of the session's own transcript, merged into [_page].
+     *
+     * The loop body is its own function so the merge and cursor rules can be
+     * driven a step at a time by a test — they are the part with the failures in
+     * them, and `delay` and `collectLatest` are not.
+     *
+     * @return true when the read landed.
+     */
+    internal suspend fun pollMainOnce(): Boolean {
+        var ok = false
+        runCatching { client.sessionTranscript(name, transcriptOffset) }
+            .onSuccess { page ->
+                ok = true
+                // Same tmux name, different Claude session: both handles
+                // into the old transcript are void (the offset is a byte
+                // position in a file this session never wrote), so drop
+                // them and let the next poll read the new tail.
+                if (isTranscriptRestart(_page.value, page)) {
+                    transcriptOffset = null
+                    historyStart = null
+                } else {
+                    transcriptOffset = page.nextOffset
+                    // The first page defines where history begins; later tail
+                    // reads are BELOW it and must not move the handle.
+                    if (historyStart == null) historyStart = page.windowStart
+                }
+                _page.value = mergeTranscriptPage(_page.value, page)
+                _transcriptError.value = null
+                _neverRan.value = false
+            }
+            .onFailure { e ->
+                // Only while nothing has ever landed. Once a page is on
+                // screen a blip must leave it there rather than replacing
+                // a session's whole history with an error sentence.
+                if (_page.value == null) {
+                    val code = (e as? HuginnClient.HuginnException)?.code
+                    _neverRan.value = code == 404 || code == 409
+                    _transcriptError.value = e.message ?: "could not read the transcript"
+                }
+            }
+        return ok
+    }
+
+    // -------------------------------------------------------- agent streams
+
+    /**
+     * Tails the PICKED agent's transcript, and only while one is picked.
+     *
+     * A second loop rather than a branch inside [transcriptLoop], for the reason
+     * [_agentPage] is a second page: the main tail must keep running underneath.
+     * Reading an agent stream is a way of looking more closely at a session that
+     * is still going, not a way of leaving it.
+     */
+    private suspend fun agentLoop() {
+        combine(presence.visible, _selectedStream) { visible, stream -> visible to stream }
+            .collectLatest { (visible, stream) ->
+                if (!visible || stream == null) return@collectLatest
+                var failures = 0
+                while (currentCoroutineContext().isActive) {
+                    failures = if (pollAgentOnce(stream)) 0 else failures + 1
+                    delay(Backoff.transcript(failures))
+                }
+            }
+    }
+
+    /**
+     * ONE read of one agent's transcript, merged into [_agentPage].
+     *
+     * A 404 here has exactly one expected cause and it is not a missing agent:
+     * a daemon older than 3.0.0 has no such route at all. Saying so and disabling
+     * the strip is the documented compat answer — an empty body under a working
+     * picker would read as "this agent did nothing".
+     *
+     * @return true when the read landed.
+     */
+    internal suspend fun pollAgentOnce(agentId: String): Boolean {
+        var ok = false
+        runCatching { client.agentTranscript(name, agentId, agentOffset) }
+            .onSuccess { page ->
+                ok = true
+                if (isTranscriptRestart(_agentPage.value, page)) {
+                    agentOffset = null
+                    agentHistoryStart = null
+                } else {
+                    agentOffset = page.nextOffset
+                    if (agentHistoryStart == null) agentHistoryStart = page.windowStart
+                }
+                _agentPage.value = mergeTranscriptPage(_agentPage.value, page)
+                _streamNote.value = null
+            }
+            .onFailure { e ->
+                val code = (e as? HuginnClient.HuginnException)?.code
+                if (code == 404) {
+                    _streamsSupported.value = false
+                    _streamNote.value = STREAMS_UNSUPPORTED
+                } else if (_agentPage.value == null) {
+                    _streamNote.value = e.message ?: "could not read this agent"
+                }
+            }
+        return ok
+    }
+
+    /**
+     * The agents themselves, for the strip. `all = true` because the picker's job
+     * is to reach a stream, and a run that finished twenty minutes ago is still
+     * the thing somebody wants to read.
+     */
+    private suspend fun agentListLoop() {
+        presence.visible.collectLatest { visible ->
+            if (!visible) return@collectLatest
+            while (currentCoroutineContext().isActive) {
+                runCatching { client.sessionAgents(name, all = true) }
+                    .onSuccess { _agents.value = it.agents }
+                delay(AGENTS_POLL_MS)
+            }
+        }
+    }
+
+    /** The picked agent's own history walk, the same shape as [loadEarlier]. */
+    fun loadEarlierAgent() {
+        val stream = _selectedStream.value ?: return
+        val until = agentHistoryStart ?: _agentPage.value?.windowStart ?: return
+        if (until <= 0L || _loadingAgentHistory.value) return
+        _loadingAgentHistory.value = true
+        scope.launch {
+            runCatching { client.agentTranscript(name, stream, until = until) }
+                .onSuccess { older ->
+                    agentHistoryStart = older.windowStart
+                    _agentPage.value = prependTranscriptPage(_agentPage.value, older)
+                }
+                .onFailure { e -> _streamNote.value = e.message ?: "could not read earlier history" }
+            _loadingAgentHistory.value = false
         }
     }
 
@@ -696,5 +883,19 @@ class SessionController(
 
         /** How often the map asks whether anything happened. Its cursor makes that cheap. */
         const val OVERVIEW_POLL_MS: Long = 5_000
+
+        /**
+         * How often the agent LIST is re-read. Slower than the transcript tail: a
+         * new subagent is a rarer event than a new line from one, and `?all=1`
+         * lifts the recency filter so the answer grows rather than churning.
+         */
+        const val AGENTS_POLL_MS: Long = 10_000
+
+        /**
+         * The one expected reason the strip is disabled — the daemon is older than
+         * 3.0.0 and has no agent-transcript route. A literal, because the test
+         * asserts the sentence a reader will actually see.
+         */
+        const val STREAMS_UNSUPPORTED: String = "needs appd 3.0"
     }
 }

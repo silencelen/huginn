@@ -47,6 +47,29 @@ sealed interface Activation {
      * making the field nullable here would move that decision to every call site.
      */
     data class Answer(val session: String, val option: Int, val fingerprint: String) : Activation
+
+    /**
+     * Put a session back on the model the ladder moved it off.
+     *
+     * NO FINGERPRINT, and that is not an oversight. The rule on `answer` is that
+     * an unstamped link approves whatever question happens to be on the pane at
+     * that instant, which on a root-equivalent host is an arbitrary tool-use
+     * approval. This verb has no such reach: its whole effect is to ask the daemon
+     * to put ONE NAMED session back on the model it was already using, which is
+     * neither destructive nor privileged, and the worst a forged link achieves is
+     * a model change the owner can make from the header in one click.
+     */
+    data class Undo(val session: String) : Activation
+
+    /**
+     * Dismiss a notification without going anywhere.
+     *
+     * The "OK" half of a bounded pair. It exists because the alternative reading
+     * of OK — navigate to the thing — is a different verb wearing the same word,
+     * and a button that says OK and moves the reader somewhere is a button that
+     * gets pressed once and then never again.
+     */
+    data class Ack(val key: String) : Activation
 }
 
 /**
@@ -57,6 +80,8 @@ sealed interface Activation {
  * ```
  * huginn://open?view=chats|sessions&id=…      focus + navigate
  * huginn://answer?session=…&option=N&fp=…     answer a pane prompt
+ * huginn://undo?session=…                     put a laddered session back
+ * huginn://ack?key=…                          take a notification down
  * ```
  *
  * Pure and side-effect free on purpose — every rule below is a security rule, and
@@ -112,6 +137,16 @@ object Activations {
                 Activation.Answer(session, option, fingerprint)
             }
 
+            "undo" -> {
+                val session = q["session"].orEmpty()
+                if (session.isEmpty()) null else Activation.Undo(session)
+            }
+
+            "ack" -> {
+                val key = q["key"].orEmpty()
+                if (key.isEmpty()) null else Activation.Ack(key)
+            }
+
             else -> null
         }
     }
@@ -147,6 +182,10 @@ object Activations {
 
     fun answerUrl(session: String, option: Int, fingerprint: String): String =
         "${PREFIX}answer?session=${enc(session)}&option=$option&fp=${enc(fingerprint)}"
+
+    fun undoUrl(session: String): String = "${PREFIX}undo?session=${enc(session)}"
+
+    fun ackUrl(key: String): String = "${PREFIX}ack?key=${enc(key)}"
 
     /**
      * [URLEncoder] and [URLDecoder] agree with each other about `+` (space out,

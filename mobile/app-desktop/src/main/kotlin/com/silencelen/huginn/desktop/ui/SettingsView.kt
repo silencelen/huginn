@@ -22,6 +22,14 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import com.silencelen.huginn.data.HeadroomSettings
+import com.silencelen.huginn.data.ModelChoice
+import com.silencelen.huginn.ui.HeadroomSettingsSection
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.put
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -125,6 +133,8 @@ fun SettingsView(store: AppStore) {
 
         AccountsSection(store)
 
+        HeadroomSection(store)
+
         SectionHeader("Notifications")
         Row(verticalAlignment = Alignment.CenterVertically) {
             Switch(
@@ -164,6 +174,95 @@ fun SettingsView(store: AppStore) {
 
         RemoveAccessSection(store)
     }
+}
+
+// ------------------------------------------------------------------ headroom
+
+/**
+ * When huginn warns, when it moves a session down the ladder, and whether it
+ * picks one back up.
+ *
+ * The form itself is `:ui`'s — both clients get the same fields and the same
+ * refusals — and everything this adds is the frame: what to load it from, what to
+ * do with a Save, and how to report a 400 the daemon raised that the form did not.
+ */
+@Composable
+private fun HeadroomSection(store: AppStore) {
+    val scope = rememberCoroutineScope()
+    val headroom by store.headroom.collectAsState()
+    var models by remember { mutableStateOf<List<ModelChoice>>(emptyList()) }
+    var busy by remember { mutableStateOf(false) }
+    var note by remember { mutableStateOf<String?>(null) }
+
+    LaunchedEffect(Unit) {
+        // The pane may be opened before the 30s poll has run once.
+        store.refreshHeadroom()
+        runCatching { store.client.models() }.onSuccess { models = it }
+    }
+
+    SectionHeader("Headroom")
+    val h = headroom
+    if (h == null) {
+        Muted("This host has no headroom subsystem — it is running a daemon older than 3.0.", maxLines = 2)
+        return
+    }
+    Muted(
+        "Everything the arbiter does with a usage window. The host validates these too; " +
+            "holding a foreground Agent call freezes the turn that made it.",
+        maxLines = 3,
+    )
+    HeadroomSettingsSection(
+        settings = h.settings,
+        models = models,
+        busy = busy,
+        note = note,
+        modifier = Modifier.padding(top = 8.dp),
+        onSave = { edited ->
+            scope.launch {
+                busy = true
+                note = null
+                runCatching { store.client.setHeadroomSettings(patchOf(edited)) }
+                    .fold(
+                        onSuccess = { note = "saved" },
+                        // The daemon's 400 NAMES the rule it refused. Shown as it
+                        // came: a form that says "invalid" about a sentence the
+                        // host already explained is throwing away the answer.
+                        onFailure = { note = it.message ?: "could not save" },
+                    )
+                store.refreshHeadroom()
+                busy = false
+            }
+        },
+    )
+}
+
+/**
+ * The whole settings object as a PATCH body.
+ *
+ * Whole rather than a diff, deliberately: the route is a PATCH so that two open
+ * forms cannot clobber each other's UNTOUCHED fields, and this form edits every
+ * field it can see. Sending what is on screen is therefore exactly what the
+ * reader asked for, and computing a diff would only add a second place for the
+ * two to disagree about what changed.
+ */
+private fun patchOf(s: HeadroomSettings): JsonObject = buildJsonObject {
+    put("headsUpPct", JsonPrimitive(s.headsUpPct))
+    put("ladderPct", JsonPrimitive(s.ladderPct))
+    put("ladderUpBelowPct", JsonPrimitive(s.ladderUpBelowPct))
+    put("stopPct", JsonPrimitive(s.stopPct))
+    put("stopFablePct", JsonPrimitive(s.stopFablePct))
+    put("clearBelowPct", JsonPrimitive(s.clearBelowPct))
+    put("cooldownMs", JsonPrimitive(s.cooldownMs))
+    put("ladder", JsonArray(s.ladder.map { JsonPrimitive(it) }))
+    put("defaultModel", JsonPrimitive(s.defaultModel))
+    put("autoResume", JsonPrimitive(s.autoResume))
+    put("resumePhrase", JsonPrimitive(s.resumePhrase))
+    put("headsUpText", JsonPrimitive(s.headsUpText))
+    put("accountSwitch", buildJsonObject {
+        put("enabled", JsonPrimitive(s.accountSwitch.enabled))
+        put("threshold", JsonPrimitive(s.accountSwitch.threshold))
+        put("margin", JsonPrimitive(s.accountSwitch.margin))
+    })
 }
 
 // ------------------------------------------------------- taking it back out
@@ -336,9 +435,40 @@ private fun AccountsSection(store: AppStore) {
                 val bits = listOfNotNull(
                     a.weeklyPercent?.let { "${it.roundToInt()}% of week" },
                     a.subscriptionType,
+                    // `fresh` is omitted: it is the ordinary state, and a word on
+                    // every row for the case that needs no attention is how the
+                    // one row that DOES need it stops standing out. Null — an
+                    // older daemon — says nothing rather than guessing `fresh`.
+                    a.freshness?.takeIf { it != "fresh" },
                     if (a.isActive) "active" else null,
                 )
                 if (bits.isNotEmpty()) Muted(bits.joinToString(" · "))
+            }
+            // A token that has expired but whose REFRESH token has not is one
+            // request away from working, and until now the only way to find that
+            // out was to press Use and read "could not switch". Offered only for
+            // that state: `unrefreshable` needs a re-login and `fresh` needs
+            // nothing, and a button that is always there teaches nothing.
+            if (a.freshness == "expired") {
+                TextButton(
+                    enabled = !busy,
+                    onClick = {
+                        scope.launch {
+                            busy = true
+                            // The daemon answers with a STATUS WORD, not a
+                            // boolean — `invalid_grant`, `lock_busy` and a
+                            // transport failure want three different things from
+                            // the reader — so it is shown verbatim.
+                            runCatching { store.client.refreshAccount(a.slug) }
+                                .fold(
+                                    onSuccess = { word -> loginNote = "${a.email ?: a.slug}: $word" },
+                                    onFailure = { loginNote = it.message ?: "could not refresh" },
+                                )
+                            reload()
+                            busy = false
+                        }
+                    },
+                ) { Text("Refresh") }
             }
             if (!a.isActive) {
                 TextButton(
@@ -347,6 +477,12 @@ private fun AccountsSection(store: AppStore) {
                         scope.launch {
                             busy = true
                             runCatching { store.client.activateAccount(a.slug) }
+                                // THE DAEMON'S OWN SENTENCE, verbatim. A 409 here
+                                // carries the reason — "its login expired on
+                                // <date> — sign in again" — and the string this
+                                // replaced ("could not switch") threw that away
+                                // and left the reader with the one question they
+                                // pressed the button to answer.
                                 .onFailure { loginNote = it.message ?: "could not switch" }
                             reload()
                             busy = false
