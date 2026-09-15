@@ -291,6 +291,9 @@ private fun SessionRow(
             }
 
             val meta = buildList {
+                // FIRST: a message this person typed is still waiting to reach the
+                // pane, and every other fact on this line is about the terminal.
+                SendQueue.rowMark(s.pendingSends)?.let { add(it) }
                 if (s.cols > 0) add("${s.cols}x${s.rows}")
                 if (s.attachedClients > 0) add("${s.attachedClients} attached")
                 if (s.sizeLeased) add("fitted to phone")
