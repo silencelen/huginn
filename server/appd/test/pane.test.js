@@ -893,6 +893,34 @@ test('the Fable consent dialog is a prompt, with the session-only row recommende
   assert.match(p.question, /Fable limit reached/);
 });
 
+test('the consent fingerprint is BOTH the number and the label', () => {
+  // consentWatch presses a bare digit into a live pane. If the owner answered in
+  // the window between the read and the keypress — or the dialog simply redrew —
+  // that digit and its Enter are submitted as a chat message into a working
+  // conversation. So the dialog is re-read immediately before the key, and this
+  // is the comparison that decides whether it is still the same one.
+  const { sameConsent } = require('../lib/pane');
+  const p = detectPrompt(consentLines());
+  assert.ok(p && p.recommended);
+  assert.equal(sameConsent(p, detectPrompt(consentLines())), true, 'an unchanged dialog must still be answered');
+
+  // Gone: the owner answered it, and the pane is back to a caret.
+  assert.equal(sameConsent(p, null), false);
+  assert.equal(sameConsent(p, detectPrompt(['> ', ''])), false);
+
+  // Renumbered — the list gained a row above the one we chose. The NUMBER still
+  // exists, so a number-only check would press it; the label is what catches it.
+  const renumbered = { ...p, options: p.options.map((o) => ({ ...o, label: `${o.label} (moved)` })) };
+  assert.equal(sameConsent(p, renumbered), false);
+
+  // A different row is recommended now.
+  assert.equal(sameConsent(p, { ...p, recommended: 1 }), false);
+  // And a prompt with no recommendation at all is not this dialog.
+  assert.equal(sameConsent({ ...p, recommended: null }, p), false);
+  assert.equal(sameConsent(p, { ...p, recommended: null }), false);
+  assert.equal(sameConsent(p, { ...p, options: [] }), false);
+});
+
 test('recommended is absent from every ordinary dialog', () => {
   // A permission dialog, the shape the app draws a hundred times a day. Marking
   // a row recommended here would put a hint on a question appd has no opinion

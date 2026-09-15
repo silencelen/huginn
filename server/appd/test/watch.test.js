@@ -122,7 +122,24 @@ test('the snippet is payload, not a change signal', () => {
 // function rebuilds from an explicit field list, so a fact added upstream that
 // is not named in both places evaporates without failing anything.
 
-const idle = { mode: 'ok', stalled: [], lastResumeAt: null, lastLadderAt: 0, sentinels: [] };
+const idle = { mode: 'ok', stalled: [], lastResumeAt: 0, lastLadderAt: 0, sentinels: [] };
+
+test('lastResumeAt is a NUMBER on the wire, never null', () => {
+  // ⚠ `WatchHeadroom.lastResumeAt` is a non-nullable `Long` and nothing in the
+  // client tree sets `coerceInputValues` — so ONE explicit null here failed the
+  // WHOLE /v1/watch decode: the watch loop, every notification decision and the
+  // headroom toasts, dead on a fresh 3.0.0 daemon until something resumed once.
+  // And "never resumed" is exactly the state a fresh daemon is in.
+  for (const v of [null, undefined, 'nope', NaN]) {
+    const d = digest([], [], { ...idle, lastResumeAt: v });
+    assert.strictEqual(d.headroom.lastResumeAt, 0, `lastResumeAt from ${String(v)}`);
+    assert.equal(typeof d.headroom.lastResumeAt, 'number');
+  }
+  // A real value still travels, and still moves the hash.
+  const seen = digest([], [], { ...idle, lastResumeAt: 1_789_460_000_000 });
+  assert.strictEqual(seen.headroom.lastResumeAt, 1_789_460_000_000);
+  assert.notStrictEqual(seen.hash, digest([], [], idle).hash);
+});
 
 test('a sentinel arming wakes a watching phone', () => {
   const armed = { ...idle, sentinels: ['STOP-FABLE'] };

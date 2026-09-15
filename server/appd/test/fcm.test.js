@@ -106,8 +106,44 @@ test('a send posts a high-priority data-only message to the right project', asyn
   assert.deepEqual(msg.data, {
     title: 'T', text: 'B', kind: 'k', subject: 's',
     // Empty when there is nothing to answer, present when there is.
-    options: '', fingerprint: '',
+    options: '', payload: '', fingerprint: '',
   });
+});
+
+// ⚠ An option is a WORD; acting on it needs the SUBJECT of the action.
+test('a payload travels with the buttons, so an option can actually be acted on', async () => {
+  const sender = new FcmSender(writeKey());
+  const f = stubFetch([TOKEN_OK, { status: 200, body: '{}' }]);
+  await sender.send('t', {
+    title: 'Moved jtyper to opus',
+    text: 'jtyper was at 94% of the Fable week',
+    kind: 'headroom_downgraded',
+    subject: 'jtyper',
+    options: ['Undo', 'OK'],
+    payload: { session: 'jtyper', to: 'opus', from: 'fable' },
+  }, f);
+  const data = JSON.parse(f.calls[1].opts.body).message.data;
+  assert.deepEqual(JSON.parse(data.options), ['Undo', 'OK']);
+  assert.equal(typeof data.payload, 'string', 'FCM data is string-to-string');
+  assert.deepEqual(JSON.parse(data.payload), { session: 'jtyper', to: 'opus', from: 'fable' });
+});
+
+test('a payload that cannot be serialised costs the buttons, never the delivery', async () => {
+  const { payloadJson } = require('../lib/fcm');
+  assert.equal(payloadJson(undefined), '');
+  assert.equal(payloadJson(null), '');
+  assert.equal(payloadJson({}), '', 'an empty object is nothing to carry');
+  assert.equal(payloadJson(['a']), '', 'the app reads an object');
+  assert.equal(payloadJson('session=jtyper'), '');
+  const cyclic = { session: 'jtyper' };
+  cyclic.self = cyclic;
+  assert.equal(payloadJson(cyclic), '');
+
+  const sender = new FcmSender(writeKey());
+  const f = stubFetch([TOKEN_OK, { status: 200, body: '{}' }]);
+  const r = await sender.send('t', { title: 'T', text: 'B', payload: cyclic }, f);
+  assert.equal(r.ok, true, 'a malformed payload must not fail the send');
+  assert.equal(JSON.parse(f.calls[1].opts.body).message.data.payload, '');
 });
 
 // What lets a notification offer "1) Yes  2) No" as buttons on a lock screen.

@@ -48,8 +48,20 @@ function writeAtomic(file, body, mode = 0o600) {
   fs.renameSync(`${file}.tmp`, file);
 }
 
-function secondsOf(ms) {
-  return Math.floor(ms / 1000);
+/**
+ * A stored epoch, in MILLISECONDS.
+ *
+ * ⚠ The whole headroom payload is milliseconds (lib/headroom.js's banner), and
+ * `since` used to be the one seconds field in it — beside `resets[].at`,
+ * `ladder.at` and `arbiter.last*At`, all ms, with no field-name tell. Older
+ * files (and the bash gate's held rows, which are written with `date +%s`) are
+ * normalised on READ rather than migrated: anything below the year-2001 line is
+ * seconds.
+ */
+function msOf(v) {
+  const n = Number(v);
+  if (!Number.isFinite(n) || n <= 0) return null;
+  return n < 1e11 ? Math.floor(n * 1000) : Math.floor(n);
 }
 
 /**
@@ -65,10 +77,39 @@ function arm(dir, name, reason, nowMs = Date.now()) {
   const file = path.join(dir, name);
   const existing = readSentinel(file);
   if (existing) return { name, since: existing.since, reason: existing.reason, created: false };
-  const since = secondsOf(nowMs);
+  const since = Math.floor(nowMs);
   const body = `${JSON.stringify({ reason: String(reason == null ? '' : reason), since })}\n`;
   writeAtomic(file, body);
   return { name, since, reason: String(reason == null ? '' : reason), created: true };
+}
+
+/**
+ * The HEARTBEAT on an armed sentinel — its mtime, and nothing else.
+ *
+ * An armed sentinel has no expiry of its own: `arm` is deliberately idempotent
+ * and does not move `since`, so there was nothing to age against. A daemon that
+ * died while STOP was armed therefore wedged every Agent/Workflow spawn until
+ * the CLI's own hook timeout — half an hour of sessions that merely look hung,
+ * with no symptom anybody can read. So the tick touches what it is asserting,
+ * and the gate treats a sentinel nobody has touched for HUGINN_GATE_STALE_S as
+ * abandoned and lets the spawn through.
+ *
+ * ⚠ mtime, never the BODY. `since` is the arming time and the operator reads it;
+ * rewriting the file each tick would make "armed 4 seconds ago" the permanent
+ * answer for a stop that has held all night.
+ *
+ * @returns true when there was a sentinel to touch.
+ */
+function touch(dir, name, nowMs = Date.now()) {
+  assertName(name);
+  const file = path.join(dir, name);
+  try {
+    const t = new Date(nowMs);
+    fs.utimesSync(file, t, t);
+    return true;
+  } catch {
+    return false;                    // not armed, or gone between the two calls
+  }
 }
 
 /** Disarm a sentinel. Returns true when one was actually there. */
@@ -91,12 +132,13 @@ function readSentinel(file) {
     return null;
   }
   let reason = '';
-  let since = secondsOf(st.mtimeMs);
+  let since = Math.floor(st.mtimeMs);
   try {
     const parsed = JSON.parse(fs.readFileSync(file, 'utf8'));
     if (parsed && typeof parsed === 'object') {
       if (typeof parsed.reason === 'string') reason = parsed.reason;
-      if (Number.isFinite(parsed.since) && parsed.since > 0) since = Math.floor(parsed.since);
+      const stored = msOf(parsed.since);
+      if (stored !== null) since = stored;
     }
   } catch {
     // Armed by hand with `touch`, or half-written. Still armed — mtime is the
@@ -168,10 +210,10 @@ function listHeld(dir, nowMs = Date.now()) {
       continue;
     }
     if (!rec || typeof rec !== 'object') continue;
-    const since = Number.isFinite(rec.since) && rec.since > 0
-      ? Math.floor(rec.since)
-      : secondsOf(st.mtimeMs);
-    if (nowMs - since * 1000 > HELD_STALE_MS) continue;
+    // The gate is bash and writes `date +%s`; msOf normalises that to the
+    // milliseconds the rest of the payload speaks.
+    const since = msOf(rec.since) ?? Math.floor(st.mtimeMs);
+    if (nowMs - since > HELD_STALE_MS) continue;
     out.push({
       agentId: name,
       agentType: typeof rec.agent_type === 'string' ? rec.agent_type : '',
@@ -186,7 +228,9 @@ function listHeld(dir, nowMs = Date.now()) {
 module.exports = {
   NAMES,
   HELD_STALE_MS,
+  msOf,
   arm,
+  touch,
   clear,
   state,
   writeFableSessions,

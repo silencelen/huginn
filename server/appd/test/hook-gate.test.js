@@ -7,9 +7,12 @@
 // every agent on the host. Nothing here reads or writes any settings file, and
 // no socket is bound (see the note in install-hooks.test.js).
 //
-// HUGINN_GATE_TIMEOUT is 40 in these tests rather than the installed 1800, which
-// puts the self-release deadline at 40-30 = 10 s. That arithmetic is the whole
+// HUGINN_GATE_TIMEOUT is 60 in these tests rather than the installed 1800, which
+// puts the self-release deadline at 60-30 = 30 s. That arithmetic is the whole
 // safety margin against the CLI's SIGKILL, so it is asserted rather than assumed.
+// 60 is also the FLOOR: anything under it lands the deadline in the past (or
+// within the margin) and the gate lets every spawn through with waited=0 — a
+// pause button silently switched off by a number that passed validation.
 
 const { test } = require('node:test');
 const assert = require('node:assert');
@@ -67,7 +70,7 @@ function startGate(dir, payload, env = {}) {
     env: {
       ...process.env,
       HUGINN_HEADROOM_DIR: dir,
-      HUGINN_GATE_TIMEOUT: '40',
+      HUGINN_GATE_TIMEOUT: '60',
       ...env,
     },
     stdio: ['pipe', 'pipe', 'pipe'],
@@ -187,7 +190,7 @@ test('STOP-FABLE does not bind a session that is not on the list', async () => {
 });
 
 test('the gate self-releases at timeout-30, before the CLI would SIGKILL it', async () => {
-  // 40 - 30 = 10 s. A hook killed by the CLI leaves the spawn ALLOWED, silently,
+  // 60 - 30 = 30 s. A hook killed by the CLI leaves the spawn ALLOWED, silently,
   // and its held row orphaned because SIGKILL runs no trap — so the gate has to
   // be the one that ends the hold, every time.
   const dir = scratch();
@@ -195,11 +198,66 @@ test('the gate self-releases at timeout-30, before the CLI would SIGKILL it', as
   const { done } = startGate(dir, SUBAGENT_PAYLOAD);
   const { code, ms } = await done;
   assert.equal(code, 0, 'a gate that gives up still ALLOWS the spawn');
-  assert.ok(ms >= 9000 && ms <= 13000, `self-released after ${ms}ms, expected ~10s`);
+  assert.ok(ms >= 29_000 && ms <= 34_000, `self-released after ${ms}ms, expected ~30s`);
   assert.ok(fs.existsSync(path.join(dir, 'STOP')), 'and it did not clear the sentinel itself');
   assert.deepEqual(heldNames(dir), [], 'the held row is removed on the way out');
   assert.deepEqual(events(dir), ['start', 'timeout-release']);
-  assert.match(logLines(dir)[1], / waited=(9|1[0-3])\b/);
+  assert.match(logLines(dir)[1], / waited=(29|3[0-4])\b/);
+});
+
+test('a HUGINN_GATE_TIMEOUT under the floor does not silently disable the gate', async () => {
+  // DEADLINE is START + GATE_TIMEOUT - 30, so anything under 30 lands in the
+  // past: the first iteration logged `timeout-release waited=0` and let the
+  // spawn straight through. `0` passed the digits-only validator too. It fails
+  // open, which is the right direction, and unreadably, which is not.
+  const dir = scratch();
+  fs.writeFileSync(path.join(dir, 'STOP'), '{"reason":"session 71%"}\n');
+  const { done } = startGate(dir, SUBAGENT_PAYLOAD, { HUGINN_GATE_TIMEOUT: '5', HUGINN_GATE_POLL: '1' });
+  await waitFor(() => heldNames(dir).length === 1);
+  await sleep(1500);
+  assert.deepEqual(heldNames(dir), ['a799b9ac6c215d25e'], 'the gate released instantly on a sub-floor timeout');
+  fs.rmSync(path.join(dir, 'STOP'));
+  const { code, ms } = await done;
+  assert.equal(code, 0);
+  assert.ok(ms >= 1000, `released after ${ms}ms — it never actually held`);
+  assert.deepEqual(events(dir), ['start', 'release']);
+});
+
+test('a sentinel nobody has heartbeaten is ABANDONED, not obeyed', async () => {
+  // `arm` is idempotent and deliberately does not move `since`, so an armed
+  // sentinel had no expiry and nothing cleared one on shutdown: a daemon that
+  // died with STOP up blocked every Agent/Workflow spawn for GATE_TIMEOUT-30
+  // seconds each, and the only symptom was sessions that looked hung. The tick
+  // now touches what it asserts.
+  const dir = scratch();
+  const stop = path.join(dir, 'STOP');
+  fs.writeFileSync(stop, '{"reason":"session 71%","since":1789459000}\n');
+  const old = new Date(Date.now() - 3600_000);
+  fs.utimesSync(stop, old, old);
+  const { done } = startGate(dir, SUBAGENT_PAYLOAD, { HUGINN_GATE_STALE_S: '60' });
+  const { code, ms } = await done;
+  assert.equal(code, 0);
+  assert.ok(ms < 2000, `a dead daemon's sentinel held the spawn for ${ms}ms`);
+  assert.ok(fs.existsSync(stop), 'the gate does not clear somebody else\'s sentinel');
+  assert.deepEqual(heldNames(dir), []);
+  // And it SAYS which kind of release it was: a stale sentinel is an incident,
+  // a cleared one is routine.
+  assert.deepEqual(events(dir), ['start', 'stale-release']);
+});
+
+test('a heartbeaten sentinel still holds, however old its `since` is', async () => {
+  const dir = scratch();
+  const stop = path.join(dir, 'STOP');
+  // Armed last night, touched a moment ago — exactly what a long hold looks like.
+  fs.writeFileSync(stop, '{"reason":"weekly_fable 96%","since":1789459000}\n');
+  const { done } = startGate(dir, SUBAGENT_PAYLOAD, { HUGINN_GATE_STALE_S: '60', HUGINN_GATE_POLL: '1' });
+  await waitFor(() => heldNames(dir).length === 1);
+  await sleep(1200);
+  assert.deepEqual(heldNames(dir), ['a799b9ac6c215d25e'], 'a live hold was dropped');
+  fs.rmSync(stop);
+  const { code } = await done;
+  assert.equal(code, 0);
+  assert.deepEqual(events(dir), ['start', 'release']);
 });
 
 test('gate.log rotates at 1 MB, one generation kept', async () => {

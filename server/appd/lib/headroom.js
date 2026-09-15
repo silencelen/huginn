@@ -24,11 +24,17 @@
 //   ladder    a SESSION-ONLY model change appd typed into a live pane.
 //   sentinel  a file the hook gate watches; arming one holds new spawns.
 //
-// ⚠ EVERY TIMESTAMP HERE IS MILLISECONDS — `now`, `lastSwitchAt`, `lastLadderAt`,
-// `ladder.at`, `headsUpAt`, `nativeSwitch.seenAt`, `humanSetModelAt`, and the
-// reset events. `headroom.json` stores them the same way. The daemon's other
+// ⚠ EVERY TIMESTAMP HERE IS MILLISECONDS, WITHOUT EXCEPTION — `now`,
+// `lastSwitchAt`, `lastLadderAt`, `lastResumeAt`, `ladder.at`, `headsUpAt`,
+// `nativeSwitch.seenAt`, `humanSetModelAt`, `readAt`, the reset events (`at` AND
+// `seenAt`), the sentinels' `since`, the held rows' `since`, and `serverTime` on
+// `/v1/headroom`. `headroom.json` stores them the same way. The daemon's other
 // stores use epoch SECONDS and mixing the two silently turns a 30-minute
 // cooldown into a 30-millisecond one, which is a cooldown that does not exist.
+//
+// This banner used to be HALF TRUE: `resets[].seenAt`, `sentinels.*.since` and
+// `arbiter.lastResumeAt` were seconds, sitting in the same payload as `ladder.at`
+// and `lastSwitchAt` in ms, with no field-name tell. A reader cannot guess.
 
 const { parseModelId, familyOf } = require('./models');
 const { isLimitStall, parseLimitError, lastNonAttachmentRecord } = require('./limits');
@@ -161,6 +167,14 @@ function validateSettings(patch, base = defaults(), { knownModels = null } = {})
     if (typeof patch.headsUpText !== 'string') return { ok: false, error: 'headsUpText must be text' };
     const v = stripC0(patch.headsUpText, true);
     if (v.length > 600) return { ok: false, error: 'headsUpText must be at most 600 characters' };
+    // Same refusal as resumePhrase, and for the same reason: this text travels
+    // the same enqueueSend -> sendTextToPane -> Enter path, so a leading slash
+    // is a slash COMMAND typed into a working session, not a note. Newlines are
+    // kept (bracketed paste carries them), but the first thing the pane sees
+    // decides how the whole paste is read.
+    if (v.trim().startsWith('/')) {
+      return { ok: false, error: 'headsUpText must not start with / — a slash command is not a note' };
+    }
     if (!v.includes('{pct}')) return { ok: false, error: 'headsUpText must contain {pct}' };
     s.headsUpText = v;
   }
@@ -308,7 +322,7 @@ function detectResets(prevAccounts, nextAccounts, nowMs = Date.now(), settings =
       const p = fresh ? numOrNull(fresh.percent) : null;
       if (p === null || fresh.severity === 'exceeded') continue;     // still unreadable / still exceeded
       if (p >= settings.clearBelowPct) continue;                     // the wire half
-      out.push({ slug, window, resetsAt, percent: p, seenAt: Math.floor(nowMs / 1000) });
+      out.push({ slug, window, resetsAt, percent: p, seenAt: nowMs });
     }
   }
   return out;
@@ -542,6 +556,10 @@ function decide(input = {}) {
     if (!ladderDown && family === 'fable' && fableEffective !== null && fableEffective >= settings.ladderPct) {
       const to = nextDown(family, settings.ladder);
       if (!to) blocked.push(`${s.name} is already at the bottom of the ladder`);
+      // IN FLIGHT is not "already there". A queued job has not opened the picker
+      // yet — the session is still on the rung it was on — but a second move
+      // must not be started behind it either.
+      else if (ladder && ladder.delivery === 'pending') blocked.push(`${s.name} has a model move waiting for a turn boundary`);
       else if (ladder && ladder.to) blocked.push(`${s.name} is already on ${ladder.to}`);
       else if (native) blocked.push(`${s.name} was moved to ${native.to || 'another model'} by Claude Code itself — appd never fights a native switch`);
       else if (s.humanSetModelAt && now - Number(s.humanSetModelAt) < HUMAN_MODEL_GRACE_MS) {
@@ -557,7 +575,11 @@ function decide(input = {}) {
 
     // ladder up — only for sessions appd itself moved, only once the Fable week
     // has actually reset, only while the session is idle.
-    if (!ladderUp && ladder && ladder.to && !native) {
+    // ⚠ NEVER WHILE A MOVE IS PENDING. `ladder.to` is written the moment a job is
+    // accepted, so without this a queued ladder_down became a ladder_up
+    // candidate on the next tick — appd typing /model to move a session back
+    // from a rung it had not reached yet.
+    if (!ladderUp && ladder && ladder.to && !native && ladder.delivery !== 'pending') {
       const reset = lastFableResetAt && lastFableResetAt > (Number(ladder.at) || 0);
       const low = fableEffective !== null && fableEffective < settings.ladderUpBelowPct;
       if (reset && low && s.state === 'idle' && canLadderUp(ladder.to, settings.ladder)) {

@@ -27,7 +27,7 @@ const { execFile, spawn } = require('node:child_process');
 const {
   screenHash, previewLines, detectPrompt, promptFingerprint, multiToggleDigits,
   parseSpinner, parseStatusExtras, spinnerIsCompacting,
-  extractLoginUrl, parseStatusLine, loginPaneState, parseModelPicker,
+  extractLoginUrl, parseStatusLine, loginPaneState, parseModelPicker, sameConsent,
 } = require('./lib/pane');
 const { parseAskSidecar, fuseAskPrompt, degradedAskCard, parsePlanSidecar } = require('./lib/ask');
 const { readTranscript, liveActivity } = require('./lib/transcript');
@@ -1180,10 +1180,27 @@ async function checkGates(name) {
   return { idle, lastKind, paneWhy };
 }
 
-/** Has a human spoken since this entry was queued? Only the appended bytes are read. */
-function humanSpokeSince(entry) {
-  if (!entry.transcript || entry.transcriptAt == null) return false;
-  const tail = transcriptTail(entry.transcript, entry.transcriptAt);
+/**
+ * Has a human spoken since this entry was queued? Only the appended bytes are read.
+ *
+ * ⚠ THE PATH IS RE-RESOLVED WHEN THE ENTRY HAS NONE. `entry.transcript` is
+ * captured once, at enqueue time — and a session whose title hook has not fired
+ * yet has no transcript then, so this returned false for the whole life of that
+ * entry and the 'human' drop rule was simply inert for it. That is the one rule
+ * that stops appd talking over the owner. A transcript that appears later is
+ * read from its START (offset 0): everything in it arrived after the entry was
+ * queued, which is exactly the window the rule is about.
+ */
+function humanSpokeSince(entry, name) {
+  let file = entry.transcript;
+  let from = entry.transcriptAt;
+  if (!file && name) {
+    file = transcriptPath(name);
+    from = 0;
+    if (file) { entry.transcript = file; entry.transcriptAt = 0; }
+  }
+  if (!file || from == null) return false;
+  const tail = transcriptTail(file, from);
   if (!tail || !tail.text) return false;
   return typing.hasHumanUserRecord(tail.text);
 }
@@ -1215,7 +1232,7 @@ async function pumpQueue(name) {
       const entry = q.entries[0];
       const gate = await checkGates(name);
       const reason = typing.dropReason(entry, {
-        humanSpoke: entry.automated ? humanSpokeSince(entry) : false,
+        humanSpoke: entry.automated ? humanSpokeSince(entry, name) : false,
         family: entry.automated && familyProbe ? familyProbe(name) : null,
         now: Date.now(),
       });
@@ -1260,7 +1277,11 @@ async function pumpQueue(name) {
   } finally {
     q.pumping = false;
     if (q.entries.length) armQueueTimer(name);
-    else if (!q.lastError) sendQueues.delete(name);
+    // ⚠ AND A QUEUE WHOSE SESSION IS GONE. `lastError` kept the map entry alive
+    // so `GET /typing` could still report the failure — but nothing ever removed
+    // it afterwards, so a long-lived daemon accumulated one row per session that
+    // ever failed a delivery. A session tmux no longer has cannot be polled about.
+    else if (!q.lastError || !(await sessionExists(name))) sendQueues.delete(name);
   }
 }
 
@@ -1301,7 +1322,20 @@ function enqueueSend(name, text, opts = {}) {
   };
   const done = new Promise((resolve) => {
     let fired = false;
-    entry.settle = (v) => { if (!fired) { fired = true; resolve(v); } };
+    entry.settle = (v) => {
+      if (fired) return;
+      fired = true;
+      // ⚠ THE CALLER'S RECONCILIATION POINT. enqueueSend resolves after ONE pump
+      // pass, so a caller that waits on it learns only "delivered" or "still
+      // queued" — and a send that waits ten minutes for a turn boundary and is
+      // then dropped used to be reconciled by nobody. Anything that writes state
+      // on the strength of a send (the resume record, the ladder row) hooks the
+      // real outcome here. Throwing must not take the pump down with it.
+      if (typeof opts.onSettle === 'function') {
+        try { opts.onSettle(v); } catch (e) { log(`typing: ${name}: settle hook failed: ${e.message}`); }
+      }
+      resolve(v);
+    };
   });
   q.entries.push(entry);
   const position = q.entries.length;
@@ -3042,7 +3076,7 @@ function fireRound(round, { manual = false } = {}) {
  * clean week — the worst failure here, because nobody goes looking for a report
  * they were never told was missing.
  */
-function finishRoundRun(meta, failure) {
+function finishRoundRun(meta, failure, { status: statusOverride = null } = {}) {
   const round = loadRound(meta.roundId);
   if (!round) return;                    // the Round was deleted mid-run; the chat stands alone
 
@@ -3088,6 +3122,10 @@ function finishRoundRun(meta, failure) {
     report = parsed;
   } else if (failure) {
     report = roundsLib.errorReport(failure);
+    // `action` is the default and the right one for a run that CRASHED. A run
+    // abandoned because appd could not identify a reset time did not fail — the
+    // arrangement did — so the caller may lower it to `attention`.
+    if (statusOverride) report.status = statusOverride;
   } else if (resultFailure) {
     report = roundsLib.errorReport(resultFailure);
   } else if (lastError) {
@@ -3410,6 +3448,39 @@ function deliverOrphanedQueues() {
   }
 }
 
+/**
+ * A TEST-ONLY endpoint override, accepted only when it cannot leak a credential.
+ *
+ * All three of these URLs are handed a live secret: two send the access token in
+ * an `Authorization` header and the third sends the REFRESH token in its body.
+ * They exist so a route suite can stand up a local stub — and nothing else — but
+ * an env knob that redirects them is an env knob that exfiltrates the owner's
+ * login to whatever host a leftover drop-in names, with no symptom in the log.
+ *
+ * So: `https:` (the transport the real endpoints use), or a LOOPBACK host on any
+ * scheme (which is what a stub is, and cannot leave the machine). Anything else
+ * is refused at startup with the reason and the real URL is used instead. An
+ * accepted override logs one line too — "no production path sets it" is a claim
+ * the log should be able to settle.
+ */
+function testUrl(name, fallback) {
+  const v = process.env[name];
+  if (!v) return fallback;
+  let u = null;
+  try { u = new URL(v); } catch { u = null; }
+  if (!u) {
+    log(`${name}: refused (not a URL) — using the real endpoint`);
+    return fallback;
+  }
+  const loopback = u.hostname === '127.0.0.1' || u.hostname === 'localhost' || u.hostname === '::1';
+  if (u.protocol !== 'https:' && !loopback) {
+    log(`${name}: refused (${u.protocol}//${u.host}) — only https: or a loopback host is accepted; using the real endpoint`);
+    return fallback;
+  }
+  log(`${name}: TEST OVERRIDE active -> ${u.protocol}//${u.host}${u.pathname}`);
+  return v;
+}
+
 // Claude Code's own config directory. Injectable for exactly one reason: the
 // route suites need a credentials file and an OAuth lock of their own, and a
 // test that locked or rewrote the real ~/.claude would reach straight into the
@@ -3425,7 +3496,15 @@ const CLAUDE_DIR = process.env.HUGINN_APPD_CLAUDE_DIR || path.join(os.homedir(),
  * and silently reach api.anthropic.com through the other. No production path
  * sets it.
  */
-const USAGE_URL = process.env.HUGINN_APPD_USAGE_URL || 'https://api.anthropic.com/api/oauth/usage';
+const USAGE_URL = testUrl('HUGINN_APPD_USAGE_URL', 'https://api.anthropic.com/api/oauth/usage');
+/**
+ * The OAuth identity endpoint, in ONE place, on the same test-only terms.
+ * Read at startup rather than per call so an override is refused — and logged —
+ * once, at a moment somebody is looking, instead of silently on every refresh.
+ */
+const OAUTH_ACCOUNT_URL = testUrl('HUGINN_APPD_OAUTH_ACCOUNT_URL', 'https://api.anthropic.com/api/oauth/account');
+/** The token endpoint. This one carries the REFRESH token in its body. */
+const OAUTH_TOKEN_URL = testUrl('HUGINN_APPD_OAUTH_TOKEN_URL', oauthRefresh.TOKEN_URL);
 const CREDENTIALS_PATH = path.join(CLAUDE_DIR, '.credentials.json');
 const CLAUDE_CONFIG_PATH = `${CLAUDE_DIR.replace(/\/+$/, '')}.json`;
 const accounts = new AccountStore(path.join(DATA_DIR, 'accounts'), CREDENTIALS_PATH, CLAUDE_CONFIG_PATH);
@@ -3465,8 +3544,9 @@ async function resolveIdentity(creds) {
   const timer = setTimeout(() => ac.abort(), 10_000);
   try {
     // Overridable ONLY so a route suite can answer this itself instead of
-    // reaching api.anthropic.com with a fixture token. No production path sets it.
-    const url = process.env.HUGINN_APPD_OAUTH_ACCOUNT_URL || 'https://api.anthropic.com/api/oauth/account';
+    // reaching api.anthropic.com with a fixture token. Validated at startup by
+    // testUrl; no production path sets it.
+    const url = OAUTH_ACCOUNT_URL;
     const resp = await fetch(url, {
       headers: {
         Authorization: `Bearer ${token}`,
@@ -3576,7 +3656,7 @@ let refreshBusy = false;
  * local stub at it; there is no production path that sets this.
  */
 async function postRefreshToken(body, opts = {}) {
-  const url = process.env.HUGINN_APPD_OAUTH_TOKEN_URL || oauthRefresh.TOKEN_URL;
+  const url = OAUTH_TOKEN_URL;
   const ac = new AbortController();
   const timer = setTimeout(() => ac.abort(), 30_000);
   // The lock's compromise signal and our own timeout both have to be able to
@@ -4518,6 +4598,53 @@ async function polishFor(field, draft, cap) {
 
 
 /**
+ * May this profile be switched TO at all?
+ *
+ * ⚠ THE UNATTENDED PATH NEEDS THIS AS MUCH AS THE BUTTON DOES — more, in fact.
+ * Installing a credential pair that is behind hands the CLI `invalid_grant`, and
+ * the CLI answers by blanking its own credentials file (lib/oauth-refresh's
+ * header). The owner pressing Activate at least sees a 409; the arbiter doing it
+ * at 3am signs the host out with nothing to read afterwards. And the arbiter is
+ * the MORE likely of the two to pick a dead profile: `agedLimits` zeroes every
+ * window whose reset time has passed, so the profile nobody has read for weeks
+ * scores as the freshest candidate on the host.
+ *
+ * Refuses a login whose refresh token is gone, and refreshes a stale one FIRST —
+ * synchronously, because handing out a stale token to save thirty seconds means
+ * handing out a session that dies on its first request.
+ *
+ * @returns {{ok: true}} or {{ok: false, error: string, why: string}}
+ */
+async function ensureSwitchable(slug) {
+  const rec = accounts.readProfile(slug);
+  // Not a profile we know, or already the active login: performSwitch owns both
+  // of those answers, and neither is a freshness question.
+  if (!rec || !rec.credentials) return { ok: true };
+  if (sameAccount(rec.credentials, accounts.readActive())) return { ok: true };
+  const freshness = oauthRefresh.freshnessOf(rec, Date.now());
+  if (freshness === 'unrefreshable') {
+    const at = oauthRefresh.deadSince(rec);
+    const when = at ? new Date(at).toISOString().slice(0, 10) : 'an unknown date';
+    return {
+      ok: false,
+      why: 'unrefreshable',
+      error: `${rec.email || slug} cannot be switched to: its login expired on ${when} — sign in again`,
+    };
+  }
+  if (freshness === 'expired' || freshness === 'expiring') {
+    const status = await refreshProfile(slug);
+    if (status !== 'refreshed' && status !== 'not_needed') {
+      return {
+        ok: false,
+        why: status,
+        error: `${rec.email || slug} could not be refreshed before switching (${status}) — try again, or sign in again`,
+      };
+    }
+  }
+  return { ok: true };
+}
+
+/**
  * Makes a saved login the active one, everywhere it has to happen at once:
  * credentials + identity block (accounts.activate), the label correction once
  * `auth status` is authoritative for the new login, and the plan cache, whose
@@ -4714,7 +4841,13 @@ function loadHeadroomSettings() {
   let raw = null;
   try { raw = JSON.parse(fs.readFileSync(HEADROOM_SETTINGS_FILE, 'utf8')); } catch { return headroomLib.defaults(); }
   if (!raw || typeof raw !== 'object') return headroomLib.defaults();
-  const v = headroomLib.validateSettings({}, raw);
+  // ⚠ THE FILE IS THE PATCH, NOT THE BASE. validateSettings skips every
+  // per-field rule for a key that is not in the PATCH, so passing the stored
+  // file as the base ran none of them: a hand-edited or half-written
+  // `resumePhrase: "/clear"` loaded clean and was typed into every stalled
+  // session at the next window reset. As the patch, each field is judged by the
+  // same rule the PATCH route applies, and a bad one falls back to the defaults.
+  const v = headroomLib.validateSettings(raw, headroomLib.defaults());
   if (v.ok) return v.settings;
   log(`headroom: ${HEADROOM_SETTINGS_FILE} does not validate (${v.error}); using defaults`);
   return headroomLib.defaults();
@@ -4754,6 +4887,7 @@ function seedHeadroomDefaults() {
 function blankStall() {
   return {
     at: null, window: null, resetsAt: null, resetsAtSource: null, resumedAt: null,
+    queuedAt: null, gaveUpAt: null,
     how: null, attempts: 0, nativeArmed: false, notifiedAt: null, why: null, text: null,
   };
 }
@@ -4769,7 +4903,12 @@ function normalizeHeadroomState(o) {
     sentinels: src.sentinels && typeof src.sentinels === 'object' ? src.sentinels : { STOP: null, 'STOP-FABLE': null },
     arbiter: {
       lastSwitchAt: 0, lastLadderAt: 0, lastAction: null, why: 'not run yet',
-      switches: 0, lastIdleWarnAt: 0, lastResumeAt: null,
+      // ⚠ 0, NEVER null. The Kotlin client declares `lastResumeAt: Long = 0`
+      // and the Json config has no `coerceInputValues`, so an explicit null
+      // fails the WHOLE /v1/watch decode — the desktop watch loop, every
+      // notification decision and the headroom toasts are dead on a fresh
+      // daemon until something resumes once.
+      switches: 0, lastIdleWarnAt: 0, lastResumeAt: 0,
       ...(src.arbiter && typeof src.arbiter === 'object' ? src.arbiter : {}),
     },
   };
@@ -4912,13 +5051,27 @@ async function paneLines(name) {
 async function applyLadder(name, to) {
   const target = `=${name}:`;
   const esc = () => run('tmux', ['send-keys', '-t', target, 'Escape']).catch(() => { });
-  const fail = async (reason) => { await esc(); return { ok: false, delivery: 'delivery_unconfirmed', reason }; };
+  // ⚠ ESCAPE **AND** C-u, because the two ways this can fail leave different
+  // wreckage. Esc closes whatever `/model` opened — a picker left open blocks
+  // the next message the owner types. C-u clears the COMPOSER, which is where
+  // `/model` itself is sitting if the Enter never went: the pump then released
+  // the next entry into it and the session received
+  // `/modelYour usage limit has reset. Continue the task…`.
+  const fail = async (reason) => {
+    await esc();
+    await run('tmux', ['send-keys', '-t', target, 'C-u']).catch(() => { });
+    return { ok: false, delivery: 'delivery_unconfirmed', reason };
+  };
 
   const typed = await run('tmux', ['send-keys', '-t', target, '-l', '--', '/model']);
   if (typed.err) return { ok: false, delivery: 'delivery_unconfirmed', reason: 'could not type /model' };
   await sleep(SUBMIT_BEAT_MS);
   const ent = await run('tmux', ['send-keys', '-t', target, 'Enter']);
-  if (ent.err) return { ok: false, delivery: 'delivery_unconfirmed', reason: 'could not submit /model' };
+  // ⚠ THROUGH fail(), because `/model` is ALREADY IN THE COMPOSER by here. This
+  // was the one early exit that skipped the Escape after typing text, so the
+  // pump released the next entry into a composer holding `/model` and the
+  // session received `/modelYour usage limit has reset. Continue the task…`.
+  if (ent.err) return fail('could not submit /model');
 
   let rows = null;
   const openBy = Date.now() + PICKER_WAIT_MS;
@@ -4954,6 +5107,15 @@ async function applyLadder(name, to) {
     want = w2;
   }
 
+  // One LAST read before the key that actually changes the model. Every cursor
+  // move re-reads, but the gap between the final move and `s` was not checked —
+  // and if the picker closed in it, `s` lands in the composer instead.
+  const lastLook = parseModelPicker(await paneLines(name));
+  if (!lastLook) return fail('the picker closed before the model could be set');
+  const stillThere = lastLook.find((x) => x.cursor);
+  if (!stillThere || stillThere.label !== want.label) {
+    return fail(`the cursor left ${want.label} before the model could be set`);
+  }
   const set = await run('tmux', ['send-keys', '-t', target, '-l', '--', 's']);
   if (set.err) return fail('tmux refused the s key');
   const by = Date.now() + LADDER_FEEDBACK_MS;
@@ -5205,7 +5367,7 @@ async function headroomTickInner() {
     try {
       await applyResumes({
         state, settings, now, activeWindows,
-        resetWindows: recentResetWindows(state, now),
+        resetWindows: recentResetWindows(state, now, activeSlug),
         sessions: model,
       });
       await consentWatch(state, settings, live, now);
@@ -5226,6 +5388,15 @@ async function applyHeadroomAction(action, ctx) {
   switch (action.type) {
     case 'switch_account': {
       const d = action.detail;
+      // The same gate the owner's own button has. Skipped, logged, and written
+      // into `why` rather than attempted: a dead pair installed unattended signs
+      // the host out of Claude Code entirely.
+      const gate = await ensureSwitchable(action.slug);
+      if (!gate.ok) {
+        log(`headroom: not switching to ${d.toEmail || action.slug}: ${gate.error}`);
+        state.arbiter.why = gate.error;
+        return;
+      }
       const r = await performSwitch(action.slug);
       if (!r.ok) { log(`headroom: activate failed: ${r.error}`); return; }
       state.arbiter.lastSwitchAt = now;
@@ -5267,6 +5438,7 @@ async function applyHeadroomAction(action, ctx) {
       const to = action.to;
       const r = await enqueueJob(action.name, () => applyLadder(action.name, to), {
         automated: true, origin: 'headroom', kind: 'model', family: from,
+        onSettle: (v) => resolvePendingLadder(state, action, v),
       });
       // One cooldown for every ladder move on the host, spent when the move is
       // ATTEMPTED: a picker that never opened must not let the next tick try
@@ -5275,6 +5447,23 @@ async function applyHeadroomAction(action, ctx) {
       const result = r.result || {};
       if (r.dropped) {
         log(`headroom: ladder for ${action.name} dropped (${r.dropped})`);
+        return;
+      }
+      // ⚠ QUEUED IS NOT FAILED. enqueueJob resolves after ONE pump pass and the
+      // picker may not open until the running turn ends, so `r.result` is null
+      // for a job that has not started — which used to be indistinguishable from
+      // a job that ran and could not confirm. The consequence was worse than the
+      // label: `rec.ladder.to` was written for a move that had not happened, so
+      // `decide` reported "already on opus" and the session later became a
+      // ladder_up candidate — appd typing /model to move a session BACK from a
+      // rung it never left. The record says `pending`, and the job's own settle
+      // (resolvePendingLadder) turns that into confirmed or unconfirmed.
+      if (r.result == null) {
+        rec.ladder = action.type === 'ladder_up'
+          ? { ...(rec.ladder || {}), delivery: 'pending' }
+          : { from, to, at: now, delivery: 'pending', sessionOnly: true };
+        state.arbiter.lastAction = { type: action.type, at: now, name: action.name, to, delivery: 'pending' };
+        log(`headroom: ladder ${from} -> ${to} on ${action.name} is queued for a turn boundary`);
         return;
       }
       if (!result.ok) {
@@ -5297,7 +5486,14 @@ async function applyHeadroomAction(action, ctx) {
       const text = `${action.name} was at ${action.pct}% of the Fable week — it is on ${to} for this `
         + `session only. The host's default model is untouched.`;
       const push = await deliverPush({
-        kind: 'headroom_downgraded', title: `Moved ${action.name} to ${to}`, text, subject: action.name,
+        kind: 'headroom_downgraded',
+        title: `Moved ${action.name} to ${to}`,
+        text,
+        subject: action.name,
+        // The buttons, and what they need to act on. An "Undo" with no session
+        // name is a button the app cannot aim.
+        options: ['Undo', 'OK'],
+        payload: { session: action.name, to, from },
       });
       if (!push.sent) await deliverTelegram(`\u{1F4C9} Moved ${action.name} to ${to}\n${text}`);
       return;
@@ -5311,7 +5507,12 @@ async function applyHeadroomAction(action, ctx) {
       const text = `${action.name} was moved to ${action.from} by Claude Code when Fable ran out. `
         + 'The Fable week has reset — move it back?';
       const push = await deliverPush({
-        kind: 'headroom_ladder_up', title: 'Back to Fable?', text, subject: action.name,
+        kind: 'headroom_ladder_up',
+        title: 'Back to Fable?',
+        text,
+        subject: action.name,
+        options: ['Back to Fable', 'Stay'],
+        payload: { session: action.name, to: action.to },
       });
       if (!push.sent) await deliverTelegram(`\u{1F199} Back to Fable?\n${text}`);
       log(`headroom: offered ${action.name} a move back to fable`);
@@ -5328,6 +5529,58 @@ async function applyHeadroomAction(action, ctx) {
 }
 
 /**
+ * Turn a `pending` ladder record into what actually happened.
+ *
+ * Runs from the queue entry's own settle, which is the ONLY place that knows —
+ * `applyHeadroomAction` returned minutes earlier, when the job was merely
+ * accepted. Only a record we ourselves marked pending is resolved: anything else
+ * has been rewritten since (an undo, a native switch, a later move), and the
+ * later writer is the one that is right.
+ */
+function resolvePendingLadder(state, action, v) {
+  const rec = state.sessions[action.claudeSessionId];
+  const cur = rec && rec.ladder;
+  if (!cur || cur.delivery !== 'pending') return;
+  const { name, from, to } = action;
+  const up = action.type === 'ladder_up';
+  const result = (v && v.result) || {};
+
+  if (v && v.dropped) {
+    // Binned before it ran (the family already moved, the owner typed, the wait
+    // timed out). Put the record back to what it was before we marked it.
+    rec.ladder = up ? { ...cur, delivery: 'confirmed' } : null;
+    log(`headroom: the queued ladder for ${name} was dropped (${v.dropped})`);
+  } else if (!result.ok) {
+    rec.ladder = { ...cur, delivery: 'delivery_unconfirmed' };
+    log(`headroom: queued ladder ${from} -> ${to} on ${name} unconfirmed (${result.reason || result.message || 'no confirmation'})`);
+  } else if (up) {
+    rec.ladder = null;
+    rec.family = to;
+    log(`headroom: ${name} moved back to ${to}`);
+  } else {
+    rec.ladder = { ...cur, delivery: 'confirmed', repairedDefault: false };
+    rec.family = to;
+    log(`headroom: ${name} moved ${from} -> ${to} for this session only`);
+    // The notification the synchronous path sends, sent here instead — the owner
+    // hears about the move when it HAPPENS, not when it was queued.
+    const text = `${name} was moved off Fable — it is on ${to} for this session only. `
+      + "The host's default model is untouched.";
+    deliverPush({
+      kind: 'headroom_downgraded',
+      title: `Moved ${name} to ${to}`,
+      text,
+      subject: name,
+      options: ['Undo', 'OK'],
+      payload: { session: name, to, from },
+    }).then((push) => {
+      if (!push.sent) return deliverTelegram(`\u{1F4C9} Moved ${name} to ${to}\n${text}`);
+      return null;
+    }).catch((e) => log(`headroom: could not announce the queued ladder: ${e.message}`));
+  }
+  saveHeadroomState(state);
+}
+
+/**
  * Arm and clear the files the hook gate watches, and rewrite `fable-sessions`.
  *
  * The list is what lets a bash hook with no daemon access answer "is the session
@@ -5339,6 +5592,10 @@ function writeSentinels(plan, state, settings) {
       const a = sentinelsLib.arm(HEADROOM_DIR, 'STOP', plan.reasons.STOP || plan.reason);
       state.sentinels.STOP = { since: a.since, reason: a.reason };
       if (a.created) log(`headroom: armed STOP (${a.reason})`);
+      // The HEARTBEAT. An armed sentinel with no expiry wedges every spawn for
+      // half an hour if this process dies while it is up; the gate ages it out
+      // against this mtime, so re-asserting the plan must also say "still me".
+      sentinelsLib.touch(HEADROOM_DIR, 'STOP');
     } else if (state.sentinels.STOP || sentinelsLib.state(HEADROOM_DIR).STOP) {
       if (sentinelsLib.clear(HEADROOM_DIR, 'STOP')) log('headroom: cleared STOP');
       state.sentinels.STOP = null;
@@ -5347,6 +5604,7 @@ function writeSentinels(plan, state, settings) {
       const a = sentinelsLib.arm(HEADROOM_DIR, 'STOP-FABLE', plan.reasons['STOP-FABLE'] || plan.reason);
       state.sentinels['STOP-FABLE'] = { since: a.since, reason: a.reason };
       if (a.created) log(`headroom: armed STOP-FABLE (${a.reason})`);
+      sentinelsLib.touch(HEADROOM_DIR, 'STOP-FABLE');
     } else if (state.sentinels['STOP-FABLE'] || sentinelsLib.state(HEADROOM_DIR)['STOP-FABLE']) {
       if (sentinelsLib.clear(HEADROOM_DIR, 'STOP-FABLE')) log('headroom: cleared STOP-FABLE');
       state.sentinels['STOP-FABLE'] = null;
@@ -5454,7 +5712,15 @@ async function noteStall(rec, s, settings, activeWindows, now) {
   rec.stall.notifiedAt = now;
   const text = `${s.name} hit the ${windowWords(found.window)} limit · resets ${clockOf(found.resetsAt)}`;
   const push = await deliverPush({
-    kind: 'headroom_limit', title: 'Usage limit reached', text, subject: s.name,
+    kind: 'headroom_limit',
+    title: 'Usage limit reached',
+    text,
+    subject: s.name,
+    payload: {
+      session: s.name,
+      window: found.window || '',
+      resetsAt: found.resetsAt ? new Date(found.resetsAt).toISOString() : '',
+    },
   });
   if (!push.sent) await deliverTelegram(`\u{1F6D1} Usage limit reached\n${text}`);
   return records;
@@ -5493,6 +5759,49 @@ async function resumeSession(rec, s, settings, ctx) {
     }
   }
 
+  // Already in the queue. It has NOT happened — re-queueing every pass would
+  // stack six copies of the phrase behind one long turn — and its settle is what
+  // decides. Age-bounded only for the daemon-restart case (see
+  // RESUME_QUEUE_MAX_MS).
+  if (stall.queuedAt && now - Number(stall.queuedAt) < RESUME_QUEUE_MAX_MS) {
+    stall.why = 'the resume is queued, waiting for a turn boundary';
+    return null;
+  }
+  if (stall.queuedAt) stall.queuedAt = null;
+
+  // A stall with NO reset time can never become `due`, so without this it waits
+  // for a `detectResets` event that may never come — for the life of the daemon,
+  // holding the ten-second poll open and, for a Round, holding its report unfiled.
+  if (stall.resetsAt == null) {
+    const v = resumeLib.unclockedVerdict({ stall, activeWindows, now });
+    if (v.action === 'adopt') {
+      stall.resetsAt = v.resetsAt;
+      stall.resetsAtSource = 'windows';
+      log(`headroom: ${s.name} had no reset time; taking ${new Date(v.resetsAt).toISOString()} from the ${stall.window} window`);
+    } else if (v.action === 'give_up') {
+      stall.gaveUpAt = now;
+      stall.why = v.why;
+      log(`headroom: giving up on ${s.name}: ${v.why}`);
+      // ONCE. The record is what carries the reason from here on.
+      if (!stall.gaveUpNotifiedAt) {
+        stall.gaveUpNotifiedAt = now;
+        const text = `${s.name} hit a usage limit that named no reset time, and none appeared. `
+          + 'It is waiting for you — auto-resume has stopped trying.';
+        const push = await deliverPush({
+          kind: 'headroom_limit',
+          title: 'Auto-resume gave up',
+          text,
+          subject: s.name,
+          payload: { session: s.name, window: stall.window || '' },
+        });
+        if (!push.sent) await deliverTelegram(`\u{1F6D1} Auto-resume gave up\n${text}`);
+      }
+      return null;
+    } else {
+      stall.why = v.why;
+    }
+  }
+
   const meta = loadSessionMeta(s.claudeSessionId);
   const w = stall.window;
   const percent = w && activeWindows && activeWindows[w] ? activeWindows[w].percent : null;
@@ -5512,19 +5821,68 @@ async function resumeSession(rec, s, settings, ctx) {
   // the owner typed while it waited (typing.dropReason 'human'). A phrase typed
   // mid-turn is absorbed into that turn and silently rewrites what it was told
   // to do — the one failure this whole path must not cause.
+  //
+  // ⚠ THE OUTCOME IS THE SETTLE, NOT THIS CALL. enqueueSend returns after one
+  // pump pass: a session behind a modal answers `delivered:false, dropped:null`,
+  // and ten minutes later the pump drops the entry for 'timeout' or 'human'.
+  // Marking the stall resumed here meant `applyResumes` skipped the session
+  // forever and `noteStall` eventually cleared the record — the one session appd
+  // most needed to speak to was the one it silently gave up on.
   const out = await enqueueSend(s.name, settings.resumePhrase, {
     automated: true, origin: 'headroom', kind: 'resume',
+    onSettle: (v) => settleResume(rec, s.name, v),
   });
   if (out.dropped) {
-    stall.why = `the resume was dropped (${out.dropped})`;
-    log(`headroom: resume for ${s.name} dropped (${out.dropped})`);
+    // settleResume has already written the reason and left it eligible.
     return null;
   }
-  stall.resumedAt = now;
-  stall.how = 'appd';
-  stall.attempts = (Number(stall.attempts) || 0) + 1;
-  log(`headroom: resumed ${s.name} (attempt ${stall.attempts}, ${plan.why})`);
-  return `${s.name} (${out.delivered ? 'typed' : 'queued'})`;
+  if (!out.delivered) {
+    stall.queuedAt = now;
+    stall.why = 'the resume is queued, waiting for a turn boundary';
+    log(`headroom: resume for ${s.name} queued for a turn boundary`);
+    return `${s.name} (queued)`;
+  }
+  // Delivered inside that first pass — settleResume ran synchronously and has
+  // already stamped `resumedAt`, `how` and `attempts`.
+  return `${s.name} (typed)`;
+}
+
+/**
+ * How long a queued resume may sit before the record stops believing in it.
+ *
+ * The pump drops an entry at QUEUE_MAX_WAIT_MS, so in a living daemon the settle
+ * always arrives. This is the DAEMON-RESTART case: `queuedAt` is persisted, the
+ * queue is not, so without an age bound a restart in the wrong second would
+ * leave the stall waiting on a send that no longer exists anywhere.
+ */
+const RESUME_QUEUE_MAX_MS = typing.QUEUE_MAX_WAIT_MS + 60_000;
+
+/**
+ * What became of a resume that went through the queue.
+ *
+ * The queue entry's own settle: delivered, dropped, or failed at the pane. This
+ * is the only place that knows, because `resumeSession` returned as soon as the
+ * send was ACCEPTED.
+ */
+function settleResume(rec, name, v) {
+  const stall = rec && rec.stall;
+  if (!stall || !stall.at) return;
+  stall.queuedAt = null;
+  if (v && v.delivered) {
+    stall.resumedAt = Date.now();
+    stall.how = 'appd';
+    stall.attempts = (Number(stall.attempts) || 0) + 1;
+    stall.why = 'the window reset and appd typed the resume phrase';
+    log(`headroom: resumed ${name} (attempt ${stall.attempts})`);
+    return;
+  }
+  // Nothing was typed, so nothing was spent: the session is still holding the
+  // 429 and the next eligible pass tries again. An attempt is only consumed by a
+  // phrase that actually reached the pane.
+  stall.why = v && v.dropped
+    ? `the resume was dropped (${v.dropped})`
+    : `the resume could not be delivered${v && v.result && v.result.message ? ` (${v.result.message})` : ''}`;
+  log(`headroom: resume for ${name} did not land: ${stall.why}`);
 }
 
 /**
@@ -5539,7 +5897,7 @@ async function applyResumes(ctx) {
   const resumed = [];
   for (const s of sessions) {
     const rec = state.sessions[s.claudeSessionId];
-    if (!rec || !rec.stall || !rec.stall.at || rec.stall.resumedAt) continue;
+    if (!rec || !rec.stall || !rec.stall.at || rec.stall.resumedAt || rec.stall.gaveUpAt) continue;
     try {
       const line = await resumeSession(rec, s, settings, ctx);
       if (line) resumed.push(line);
@@ -5549,10 +5907,19 @@ async function applyResumes(ctx) {
   }
   for (const line of await resumeStalledChats(settings, ctx)) resumed.push(line);
   if (!resumed.length) return;
-  state.arbiter.lastResumeAt = Math.floor(now / 1000);
+  // MILLISECONDS, like every other epoch in this payload (lib/headroom's banner).
+  state.arbiter.lastResumeAt = now;
   const text = `Usage limit reset · resumed: ${resumed.join(', ')}`;
+  // The lines read "jtyper (typed)"; the SUBJECT is the bare name, so a
+  // notification about one session can be opened at that session. Several at
+  // once is one event and keeps the host-wide subject.
+  const first = String(resumed[0] || '').split(' ')[0];
   const push = await deliverPush({
-    kind: 'headroom_resumed', title: 'Usage limit reset', text, subject: 'headroom',
+    kind: 'headroom_resumed',
+    title: 'Usage limit reset',
+    text,
+    subject: resumed.length === 1 && first ? first : 'headroom',
+    payload: { sessions: resumed.map((l) => String(l).split(' ')[0]).join(',') },
   });
   if (!push.sent) await deliverTelegram(`\u{1F504} Usage limit reset\n${text}`);
   log(`headroom: ${text}`);
@@ -5573,9 +5940,28 @@ async function resumeStalledChats(settings, ctx) {
   try { ids = fs.readdirSync(CHATS_DIR); } catch { chatStallsPending = false; return out; }
   for (const id of ids) {
     const meta = loadMeta(id);
-    if (!meta || !meta.stall || !meta.stall.at || meta.stall.resumedAt) continue;
+    if (!meta || !meta.stall || !meta.stall.at || meta.stall.resumedAt || meta.stall.gaveUpAt) continue;
     pending = true;
     if (activeRuns.has(id)) continue;
+    // The same backstop the sessions get. It matters MORE here: `noteRunStall`
+    // returning true is what holds a Round's report open, so a stall that can
+    // never become due is a scheduled job that never reports at all.
+    if (meta.stall.resetsAt == null) {
+      const v = resumeLib.unclockedVerdict({ stall: meta.stall, activeWindows, now });
+      if (v.action === 'adopt') {
+        updateMeta(id, (m) => {
+          if (m.stall) { m.stall.resetsAt = v.resetsAt; m.stall.resetsAtSource = 'windows'; }
+        });
+        meta.stall.resetsAt = v.resetsAt;
+      } else if (v.action === 'give_up') {
+        updateMeta(id, (m) => { if (m.stall) { m.stall.gaveUpAt = now; m.stall.why = v.why; } });
+        pending = false;
+        giveUpOnStalledRun(id, v.why);
+        continue;
+      } else if (meta.stall.why !== v.why) {
+        updateMeta(id, (m) => { if (m.stall) m.stall.why = v.why; });
+      }
+    }
     const w = meta.stall.window;
     const percent = w && activeWindows && activeWindows[w] ? activeWindows[w].percent : null;
     // No per-chat toggle in 3.0 (design §4): chats and Rounds obey the global.
@@ -5596,6 +5982,30 @@ async function resumeStalledChats(settings, ctx) {
   // host, and a latched one would poll for the life of the daemon.
   chatStallsPending = pending;
   return out;
+}
+
+/**
+ * Stop waiting for a reset that is never going to be identifiable, and let the
+ * Round say so.
+ *
+ * ⚠ A HELD ROUND IS THE REAL COST. `noteRunStall` returning true stops
+ * `finishRoundRun` being called at all — deliberately, so one scheduled job
+ * files one run — so a stall that can never become due is a job that reports
+ * NOTHING, for ever, with `currentChatId` still pointing at it. Filed as
+ * `attention` rather than `action`: nothing is wrong with the world, something
+ * is wrong with the arrangement.
+ */
+function giveUpOnStalledRun(chatId, why) {
+  const meta = loadMeta(chatId);
+  if (!meta) return;
+  const ts = Math.floor(Date.now() / 1000);
+  log(`chat ${chatId}: giving up on the usage-limit re-run (${why})`);
+  try {
+    appendMsg(chatId, { type: 'system', text: `the usage-limit re-run was abandoned: ${why}`, ts });
+  } catch (e) { log(`chat ${chatId}: could not note the give-up: ${e.message}`); }
+  if (!meta.roundId) return;
+  try { finishRoundRun(loadMeta(chatId) || meta, `did not finish: ${why}`, { status: 'attention' }); }
+  catch (e) { log(`round run ${chatId} could not be recorded: ${e.message}`); }
 }
 
 /**
@@ -5763,6 +6173,27 @@ async function consentWatch(state, settings, sessions, now) {
     const on = meta && typeof meta.autoResume === 'boolean' ? meta.autoResume : settings.autoResume !== false;
     if (!on) continue;
     const row = prompt.options.find((o) => o.number === prompt.recommended);
+    // ⚠ RE-READ IMMEDIATELY BEFORE THE KEY, and require the SAME dialog.
+    //
+    // consentRecommended's own contract says the number is validated against a
+    // freshly-read fingerprint, the way /answer does it for a person's tap. This
+    // path did not: it pressed a digit against a capture taken a grace period
+    // ago. If the owner answered in that window — or the dialog simply moved —
+    // a bare digit and an Enter are submitted as a chat message into a working
+    // conversation. The row is matched by LABEL as well as by number, because
+    // the number alone is what a renumbered list keeps.
+    // A LEAN read: the pane, straight, with none of captureScreen's geometry
+    // round trip — the only question being asked is "is the same dialog still
+    // there", and this has to sit as close to the keystroke as it can.
+    const again = await run('tmux', ['capture-pane', '-p', '-t', `=${s.name}:`]);
+    const fresh = again.err
+      ? null
+      : promptFor(s.name, again.stdout.replace(/\n$/, '').split('\n')).prompt;
+    if (!row || !sameConsent(prompt, fresh)) {
+      log(`headroom: the consent dialog on ${s.name} moved between the read and the keypress — nothing typed`);
+      consentSeen.delete(s.name);
+      continue;
+    }
     const typed = await run('tmux', ['send-keys', '-t', `=${s.name}:`, '-l', '--', String(prompt.recommended)]);
     if (typed.err) { log(`headroom: consent answer failed on ${s.name}: ${typed.stderr.trim()}`); continue; }
     await run('tmux', ['send-keys', '-t', `=${s.name}:`, 'Enter']);
@@ -5774,7 +6205,12 @@ async function consentWatch(state, settings, sessions, now) {
     const text = `${s.name} was asked to keep going on Fable using usage credits and nobody answered — `
       + `huginn switched it for this session instead.`;
     const push = await deliverPush({
-      kind: 'headroom_downgraded', title: `Moved ${s.name} off Fable`, text, subject: s.name,
+      kind: 'headroom_downgraded',
+      title: `Moved ${s.name} off Fable`,
+      text,
+      subject: s.name,
+      options: ['Undo', 'OK'],
+      payload: { session: s.name, to: to || '', from: 'fable' },
     });
     if (!push.sent) await deliverTelegram(`\u{1F4C9} Moved ${s.name} off Fable\n${text}`);
   }
@@ -5809,8 +6245,15 @@ async function resumeTick() {
   if (resumeBusy || headroomBusy) return;
   const state = hstate();
   const mode = state.mode || 'ok';
-  const anyStalled = Object.values(state.sessions || {}).some((r) => r && r.stall && r.stall.at && !r.stall.resumedAt);
-  if (!anyStalled && !chatStallsPending && mode !== 'red' && mode !== 'exhausted') return;
+  // Arms on "a reset is NEAR", not on "anything is stalled" — the rule, and the
+  // six-day loop it replaces, are lib/resume's.
+  const arm = resumeLib.pollShouldArm({
+    stalls: Object.values(state.sessions || {}).map((r) => r && r.stall).filter(Boolean),
+    chatStallsPending,
+    mode,
+    now: Date.now(),
+  });
+  if (!arm) return;
   resumeBusy = true;
   try {
     const settings = loadHeadroomSettings();
@@ -5848,30 +6291,21 @@ if (resumeTimer.unref) resumeTimer.unref();
  * so the event is remembered for an hour rather than consumed by whoever reads
  * it first.
  */
-const RESET_MEMORY_MS = 60 * 60 * 1000;
-function recentResetWindows(state, now) {
-  const out = new Map();
-  for (const r of state.resets || []) {
-    if (!r || !r.window) continue;
-    const at = Number(r.at) || 0;
-    if (now - at > RESET_MEMORY_MS) continue;
-    if (at > (out.get(r.window) || 0)) out.set(r.window, at);
-  }
-  return out;
+const RESET_MEMORY_MS = resumeLib.RESET_MEMORY_MS;
+/** The slug of the login that is live right now, or null. */
+function activeSlugOf(state) {
+  const accts = (state && state.accounts) || {};
+  return Object.keys(accts).find((k) => accts[k] && accts[k].live) || null;
+}
+/**
+ * The reset log, narrowed to what can prove anything about a stall on the
+ * CURRENTLY ACTIVE login. The rule itself is lib/resume's, with the reason.
+ */
+function recentResetWindows(state, now, activeSlug = activeSlugOf(state)) {
+  return resumeLib.recentResetWindows(state.resets, { now, activeSlug });
 }
 
-/**
- * Has THIS stall's window reset since the stall?
- *
- * ⚠ SINCE THE STALL, not merely "recently". The reset log is a rolling hour and
- * a host can stall twice in one: reading the earlier window's reset as this
- * stall's confirmation would resume a session straight back into a full window,
- * where it stalls again and spends one of only three attempts.
- */
-function resetSeenFor(resets, stall) {
-  if (!stall || !stall.window) return false;
-  return (resets.get(stall.window) || 0) >= (Number(stall.at) || 0);
-}
+const resetSeenFor = resumeLib.resetSeenFor;
 
 // ---- what the rest of the daemon asks headroom -----------------------------
 
@@ -5926,7 +6360,7 @@ function headroomFacts() {
     stalled,
     stalls,
     laddered,
-    lastResumeAt: st.arbiter.lastResumeAt ?? null,
+    lastResumeAt: Number(st.arbiter.lastResumeAt) || 0,
     lastLadderAt: st.arbiter.lastLadderAt || 0,
     sentinels: armed,
   };
@@ -5996,7 +6430,11 @@ function headroomPayload() {
     resets: (st.resets || []).slice(-20),
     arbiter: st.arbiter,
     settings,
-    serverTime: Math.floor(now / 1000),
+    // ⚠ MILLISECONDS. It used to be the one seconds field in a payload whose
+    // `ladder.at`, `headsUpAt`, `accounts[].readAt` and `arbiter.last*At` are
+    // all ms — and a client treats this as the host clock, so getting it wrong
+    // makes every relative time in the payload wrong by a factor of a thousand.
+    serverTime: now,
   };
 }
 
@@ -6010,8 +6448,13 @@ function headroomPayload() {
 function autoswitchAliasView() {
   const st = hstate();
   const settings = loadHeadroomSettings();
+  // ⚠ SPREAD FIRST, THEN OVERRIDE `at`. Written the other way round the spread
+  // WON, so this alias silently changed an existing 2.x field from seconds to
+  // milliseconds — the one pre-existing field this compatibility shim touched.
+  // `AutoswitchEvent.at` has been seconds since 2.x and is what the shipped
+  // clients parse.
   const last = st.arbiter.lastAction && st.arbiter.lastAction.type === 'switch_account'
-    ? { at: Math.floor((st.arbiter.lastAction.at || 0) / 1000), ...st.arbiter.lastAction }
+    ? { ...st.arbiter.lastAction, at: Math.floor((st.arbiter.lastAction.at || 0) / 1000) }
     : null;
   return {
     enabled: !!settings.accountSwitch.enabled,
@@ -6665,35 +7108,23 @@ const server = http.createServer(async (req, res) => {
       // having happened: `not_needed` means the token is already good, and
       // `active_skipped` means the CLI is keeping it fresh itself.
       const ok = ['refreshed', 'not_needed', 'active_skipped'].includes(status);
-      return sendJson(res, 200, { ok, status });
+      // `slug` and the `refresh` block travel too: the client's model declares
+      // both, and without them a settings screen has to re-fetch /v1/accounts to
+      // find out when the next attempt is due — for the row it is already
+      // looking at. `describe()` is the same shape /v1/accounts renders.
+      const after = accounts.readProfile(slug);
+      return sendJson(res, 200, {
+        ok,
+        slug,
+        status,
+        refresh: after ? (oauthRefresh.refreshOf(after) || null) : null,
+      });
     }
 
     if ((m = p.match(/^\/v1\/accounts\/([a-z0-9-]{1,60})\/activate$/)) && req.method === 'POST') {
       const slug = m[1];
-      const rec = accounts.readProfile(slug);
-      // Switching to a login whose refresh token has expired hands the CLI a
-      // dead pair: it starts, fails on its first call, and blanks the
-      // credentials file trying to recover. Refuse it here, with the date, so
-      // the answer is "sign in again" rather than a broken terminal.
-      if (rec && rec.credentials && !sameAccount(rec.credentials, accounts.readActive())) {
-        const freshness = oauthRefresh.freshnessOf(rec, Date.now());
-        if (freshness === 'unrefreshable') {
-          const at = oauthRefresh.deadSince(rec);
-          const when = at ? new Date(at).toISOString().slice(0, 10) : 'an unknown date';
-          return sendErr(res, 409,
-            `${rec.email || slug} cannot be switched to: its login expired on ${when} — sign in again`);
-        }
-        if (freshness === 'expired' || freshness === 'expiring') {
-          // Synchronous on purpose: the owner pressed a button and is waiting,
-          // and handing them a stale token now to save thirty seconds means
-          // handing them a session that dies on its first request.
-          const status = await refreshProfile(slug);
-          if (status !== 'refreshed' && status !== 'not_needed') {
-            return sendErr(res, 409,
-              `${rec.email || slug} could not be refreshed before switching (${status}) — try again, or sign in again`);
-          }
-        }
-      }
+      const gate = await ensureSwitchable(slug);
+      if (!gate.ok) return sendErr(res, 409, gate.error);
       const r = await performSwitch(slug);
       if (!r.ok) return sendErr(res, r.status ? 409 : 404, r.error);
       return sendJson(res, 200, { ok: true, ...r.after });
@@ -7107,27 +7538,42 @@ const server = http.createServer(async (req, res) => {
       if (!rec || !rec.ladder || !rec.ladder.to) return sendErr(res, 409, 'huginn has not moved this session');
       const back = rec.ladder.from;
       rec.humanSetModelAt = Date.now();
+      // The settle is what clears the record when the job only QUEUED. The
+      // picker must not open inside a running turn, so an undo pressed mid-turn
+      // waits for the boundary — and without this the session stayed marked as
+      // laddered after the move had actually happened.
+      const landed = () => {
+        const st2 = hstate();
+        const r2 = st2.sessions[st.sessionId];
+        if (!r2) return;
+        r2.ladder = null;
+        r2.family = back;
+        st2.arbiter.lastLadderAt = Date.now();
+        st2.arbiter.lastAction = { type: 'ladder_up', at: Date.now(), name, to: back, by: 'undo' };
+        log(`headroom: ${name} put back on ${back} by hand`);
+        saveHeadroomState(st2);
+      };
       const out = await enqueueJob(name, () => applyLadder(name, back), {
-        automated: false, origin: 'headroom', kind: 'model',
+        automated: false,
+        origin: 'headroom',
+        kind: 'model',
+        onSettle: (v) => { if (v && v.result && v.result.ok) landed(); },
       });
       const result = out.result || {};
-      if (result.ok) {
-        rec.ladder = null;
-        rec.family = back;
-        state.arbiter.lastLadderAt = Date.now();
-        state.arbiter.lastAction = { type: 'ladder_up', at: Date.now(), name, to: back, by: 'undo' };
-        log(`headroom: ${name} put back on ${back} by hand`);
-      }
       saveHeadroomState(state);
-      return sendJson(res, 200, {
-        ok: true,
-        to: back,
-        // `queued` when the session is mid-turn: the picker must never open
-        // inside a running turn, so the job waits for the boundary like any
-        // other automated send.
-        queued: !result.ok && !out.dropped,
-        delivery: result.delivery || (out.dropped ? `dropped: ${out.dropped}` : 'queued'),
-      });
+      // ⚠ `ok` IS "THE REQUEST WAS ACCEPTED", NOT "THE MODEL MOVED". A client
+      // that reported success on any 2xx announced "put back on its own model"
+      // for an undo that was still sitting in the queue — under the same toast
+      // key as the downgrade it claimed to have reversed. `applied` is the field
+      // that answers the question the reader is actually asking.
+      const applied = !!result.ok;
+      const queued = out.result == null && !out.dropped;
+      const body = { ok: true, applied, queued, to: back };
+      if (!queued) {
+        body.delivery = result.delivery
+          || (out.dropped ? `dropped: ${out.dropped}` : 'delivery_unconfirmed');
+      }
+      return sendJson(res, 200, body);
     }
 
     if ((m = p.match(/^\/v1\/sessions\/([A-Za-z0-9_][A-Za-z0-9_.-]{0,49})\/meta$/)) && req.method === 'POST') {
@@ -7214,11 +7660,18 @@ const server = http.createServer(async (req, res) => {
       // Decoded before matching, so a percent-encoded traversal is judged as
       // what it means rather than as the literal it arrived as. A malformed
       // escape is simply not a valid id.
-      let agentId = null;
-      try { agentId = decodeURIComponent(m[2]); } catch { agentId = null; }
-      if (!agentId || !/^agent-[0-9a-f]{6,32}$/.test(agentId)) {
-        return sendErr(res, 400, 'invalid agent id');
-      }
+      let raw = null;
+      try { raw = decodeURIComponent(m[2]); } catch { raw = null; }
+      // ⚠ BOTH SPELLINGS. `GET /agents` emits the BARE hex (the basename with
+      // `agent-` and `.jsonl` stripped) and the client hands that straight back
+      // here — so a route that took only the prefixed form 400'd every stream
+      // chip. A 400 is not the 404 the client's compat path watches for, so it
+      // did not even degrade: the strip showed the raw daemon error. Normalised
+      // to the prefixed form, which is what the file on disk is called and what
+      // this route has always echoed.
+      const idm = raw ? /^(?:agent-)?([0-9a-f]{6,32})$/.exec(raw) : null;
+      if (!idm) return sendErr(res, 400, 'invalid agent id');
+      const agentId = `agent-${idm[1]}`;
       if (!(await sessionExists(name))) return sendErr(res, 404, 'no such session');
       const st = readSessionState(name);
       if (!st || !st.transcript || !st.sessionId) {
@@ -7348,22 +7801,22 @@ const server = http.createServer(async (req, res) => {
         if (overflow) return sendErr(res, 413, overflow);
       }
       /**
-       * A dialog is up and this is a RAW KEY send.
+       * ⚠ RAW KEYS ARE NEVER REFUSED FOR A MODAL, and there is no gate here.
        *
-       * Keys are never queued — an Escape or a BTab is an interrupt and means
-       * nothing if it arrives at the next turn boundary — so there is nowhere to
-       * hold it, and a key pressed into a selector picks one of its rows. The
-       * jsonl cannot see a modal at all, which is why this reads the pane.
+       * A key send is a PERSON driving the pane — the Screen tab sends every
+       * keypress this way, plus its dedicated Escape and BTab buttons. Refusing
+       * them at a dialog took the terminal keyboard and the Interrupt button
+       * away at exactly the moment they are needed, since Escape, the arrows,
+       * BTab and the digits are the keys that ANSWER a dialog; and it told the
+       * reader to go to the Screen tab they were already on. It broke the
+       * shipped 2.88.0 client identically.
+       *
+       * The turn-boundary QUEUE below still applies to `text`, and only to
+       * `text`: a message absorbed into a running turn silently rewrites what
+       * that turn was told to do, and a message delivered into a modal is
+       * swallowed with no trace. Neither is true of a keystroke a person just
+       * pressed.
        */
-      if (rawKeys.length) {
-        const cap = await run('tmux', ['capture-pane', '-p', '-t', `=${name}:`]);
-        if (!cap.err) {
-          const { why } = typing.paneReadyForInput(cap.stdout.replace(/\n$/, '').split('\n'));
-          if (typing.paneBlocks(why)) {
-            return sendErr(res, 409, 'that session has a dialog open — answer it on the Screen tab');
-          }
-        }
-      }
       let queued = 0;
       let position = 0;
       let delivered = false;

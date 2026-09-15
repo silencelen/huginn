@@ -116,6 +116,11 @@ test('a window that was red, whose clock has passed and now reads low, has reset
   assert.equal(r.length, 1);
   assert.equal(r[0].window, 'weekly_fable');
   assert.equal(r[0].slug, 'a');
+  // ⚠ `seenAt` IS MILLISECONDS, like every other epoch this module emits. It was
+  // seconds, sitting in the same `resets[]` row as `at` (ms) on /v1/headroom —
+  // two epochs a thousand apart in one object, with no field-name tell.
+  assert.equal(r[0].seenAt, NOW);
+  assert.ok(r[0].seenAt > 1e11);
 });
 
 test('RESET BY CALENDAR, STILL RED ON THE WIRE is not a reset', () => {
@@ -421,6 +426,41 @@ test('going back up needs the week to be genuinely quiet, not merely reset', () 
   assert.equal(of(v, 'ladder_up').length, 0);
 });
 
+test('a ladder still in the queue is IN FLIGHT: no second move, and no move back', () => {
+  // `rec.ladder.to` is written the moment the job is accepted by the queue, so a
+  // downgrade waiting on a turn boundary used to read as a completed one — and
+  // on the next tick, with the week quiet, the session became a ladder_up
+  // candidate. appd would then type /model to move it BACK from a rung it had
+  // not reached yet.
+  const pending = { from: 'fable', to: 'opus', at: NOW - 60_000, delivery: 'pending' };
+  const up = h.decide({
+    active: { slug: 'a', email: 'a@x', windows: { weekly_fable: win(5) } },
+    candidates: [],
+    sessions: [sess({ family: 'fable', ladder: pending })],
+    now: NOW, settings: S(), state: {}, lastFableResetAt: NOW - 30_000,
+  });
+  assert.equal(of(up, 'ladder_up').length, 0, 'a move that has not happened cannot be undone');
+
+  // And the week filling up again must not start a SECOND move behind it.
+  const down = h.decide({
+    active: { slug: 'a', email: 'a@x', windows: { weekly_fable: win(96) } },
+    candidates: [],
+    sessions: [sess({ family: 'fable', ladder: pending })],
+    now: NOW, settings: S({ cooldownMs: 0 }), state: {},
+  });
+  assert.equal(of(down, 'ladder_down').length, 0);
+  assert.match(down.why, /waiting for a turn boundary/);
+
+  // Once it has actually landed, the ordinary rules resume.
+  const landed = h.decide({
+    active: { slug: 'a', email: 'a@x', windows: { weekly_fable: win(5) } },
+    candidates: [],
+    sessions: [sess({ family: 'opus', ladder: { ...pending, delivery: 'confirmed' } })],
+    now: NOW, settings: S(), state: {}, lastFableResetAt: NOW - 30_000,
+  });
+  assert.equal(of(landed, 'ladder_up').length, 1);
+});
+
 test('a session appd did not ladder is never laddered up', () => {
   const v = h.decide({
     active: { slug: 'a', email: 'a@x', windows: { weekly_fable: win(5) } },
@@ -511,6 +551,18 @@ test('the heads-up text must be able to say the percentage', () => {
   assert.match(h.validateSettings({ headsUpText: `${'x'.repeat(601)}{pct}` }).error, /at most 600/);
   const ok = h.validateSettings({ headsUpText: 'at {pct}%\nwrite a note' });
   assert.equal(ok.ok, true, 'newlines survive; other controls do not');
+  assert.ok(ok.settings.headsUpText.includes('\n'));
+});
+
+test('the heads-up text is never a slash command either', () => {
+  // It travels the same enqueueSend -> sendTextToPane -> Enter path the resume
+  // phrase does, and `/clear {pct}` satisfies the {pct} rule, so that check is
+  // no help at all here.
+  assert.match(h.validateSettings({ headsUpText: '/clear {pct}' }).error, /not start with \//);
+  assert.match(h.validateSettings({ headsUpText: '   /model opus {pct}' }).error, /not start with \//);
+  // And newlines still survive, because bracketed paste carries them.
+  const ok = h.validateSettings({ headsUpText: 'at {pct}%\n/clear is fine on a later line' });
+  assert.equal(ok.ok, true);
   assert.ok(ok.settings.headsUpText.includes('\n'));
 });
 
