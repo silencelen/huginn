@@ -211,5 +211,11 @@ test('an agent nothing can attribute is orphan, not silently dropped', () => {
     .find((a) => a.id === 'acdf276aeabf0df8f');
   assert.equal(row.status, 'orphan', 'no meta = no parent join = orphan');
   assert.equal(row.agentType, null);
-  assert.equal(row.depth, null);
+  // ⚠ `depth` IS A NUMBER, `agentType` AND `status` ARE NULLABLE — the split is
+  // the CLIENT's declaration, not a whim. `AgentRun.depth` is a non-nullable
+  // `Int` and there is no `coerceInputValues` anywhere in that tree, so one
+  // explicit null here failed the whole decode: the stream picker and the work
+  // sheet (which has called /agents since 2.x) both went blank the moment a
+  // single orphan agent existed.
+  assert.strictEqual(row.depth, 0, 'a non-nullable Int on the wire');
 });
