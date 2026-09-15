@@ -1,5 +1,40 @@
 # Huginn changelog
 
+## 3.1.1 — 2026-09-15
+
+A walk over 3.1.0 on a Fold's cover screen, and what it found.
+
+- **The stream picker's chips say which agent, not what it was told.** They were labelled with the
+  agent's PROMPT, and a fan-out hands every sibling the same opening paragraph — so nine finished
+  agents were nine chips all reading "You are a READ-ONLY reconnaiss…". A chip now takes the
+  agent's own summary of what it did, or its task when that is not a prompt, and falls back to its
+  type and short id; two chips that would say the same thing get told apart by id. Unfolding the
+  '…' pill also draws a proper panel now — opaque, its own scroll, two chips to a row — instead of
+  loose text over the conversation, and the finished ones are dimmed without being hard to read.
+- **The headroom pill is gone from the top bar.** The Status page and the line under the Status
+  icon already say it; the title gets its width back.
+- **One toolbar when you long-press a message.** Android's own Copy / Select all was floating over
+  the app's five verbs, having selected a single word. It stays down while the app's bar is up —
+  which carries Copy anyway — and the verbs still act on the whole message. Dragging to select a
+  phrase is unchanged.
+- **Chat snippets read as sentences.** A one-line preview is drawn in one style, so the `**` around
+  a bold opening line was just two characters of noise at the front of it. The markers come off.
+- **Every threshold's slider can reach the values it is allowed to hold.** "Move back up below" and
+  "Treat a window as cleared below" are the low end of the scale and were stuck on a 50–100 track,
+  so a typed 20 was snapped back to 50 by the next touch of the slider beside it. Each field's
+  slider and number box now share one range. The resume phrase is a multi-line field, the ladder
+  and model pickers look like pickers, and the sliders use the app's own colours.
+- **The push counts come from the same clock.** "1274 of 916 pushes arrived" was the phone's tally
+  since install against a host tally that restarts when the push token rotates. With appd 3.0.5 the
+  two carry a shared epoch and the phone re-bases itself when the host's restarts; against an older
+  host it simply never claims more arrived than were sent.
+- **Notifications says what went wrong in plain words** and no longer prints huginn's address on
+  screen, and the background-check line gives the schedule and the last run together: "runs every
+  10 minutes when Android lets it; last ran 7h ago — Android has been deferring it."
+- Smaller: the Chats tab is titled Chats, a session's subtitle stays on one line, the last control
+  chip is not flush against the edge, the New round button no longer covers the newest round, and
+  quick actions are introduced once in words that fit both a phone and a desktop.
+
 ## 3.1.0 — 2026-09-15
 
 - **Settings is a place you can find things in.** Nine categories, a search field at the top that
