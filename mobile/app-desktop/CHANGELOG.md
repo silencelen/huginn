@@ -1,5 +1,17 @@
 # Huginn Desktop changelog
 
+## 1.0.2
+
+- **How much of your session is left, under the Status icon.** A 2px line under the rail's Status
+  item shows the current 5-hour window for the account you are signed in to, tinted the same way
+  the headroom pill is. It is a different number from the pill — the pill reports the fullest limit
+  anywhere, usually the Fable week — and it draws nothing at all when the host has no reading yet.
+- **A question is now one line, not a card.** When Claude asks something, a session's Conversation
+  and Overview show "Claude is asking a question · Answer on Screen →" and the Screen tab carries a
+  dot; click either to go and answer it there, where every kind of question works. The cards took
+  290-330dp for a five-option question — most of a narrow window's transcript — and could only
+  answer some of them.
+
 ## 1.0.1
 
 - **The stream picker shows live agents; finished ones fold away.** It listed every subagent a
