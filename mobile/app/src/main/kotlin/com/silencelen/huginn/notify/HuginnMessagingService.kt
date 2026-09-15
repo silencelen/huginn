@@ -78,7 +78,53 @@ class HuginnMessagingService : FirebaseMessagingService() {
             }
         }
 
-        val redundant = kind == "session_resolved" || when (kind) {
+        // Headroom, which the daemon pushes for the two kinds a reader may want
+        // to act on — a ladder move and the one-shot offer to undo a native one.
+        // The other two (`headroom_limit`, `headroom_resumed`) ride the watch
+        // digest instead and are decided in WatchNotifier; both are handled here
+        // as well so that a daemon which later pushes them renders the same
+        // notice rather than an unknown-kind fallback. See HeadroomNotices.
+        val headroom = if (HeadroomNotices.isHeadroomKind(kind)) {
+            // The RAW title, not the "huginn" fallback above: a headroom notice
+            // has its own sentence to fall back to, and it names the session.
+            //
+            // `options` is a plain array of LABELS here, not the numbered answer
+            // rows `parseAnswers` reads — a headroom button selects nothing on a
+            // pane, so it has no number and needs no fingerprint. `payload`
+            // carries the session and the rungs.
+            HeadroomNotices.fromPush(
+                kind = kind,
+                title = data["title"].orEmpty(),
+                text = text,
+                subject = subject,
+                payload = data["payload"],
+                options = data["options"],
+            )
+        } else null
+        if (headroom != null) {
+            // The focused-target rule, same as everywhere else: a limit notice
+            // about the session on screen says nothing the screen does not. The
+            // ladder kinds are NOT suppressed — they carry buttons, and a button
+            // withheld is a choice the reader never gets offered.
+            val hidden = headroom.kind == HeadroomNotices.Kind.LIMIT &&
+                Foreground.showsSession(subject)
+            if (!hidden) {
+                val a = HeadroomNotices.postArgs(headroom)
+                SessionWatchWorker.post(
+                    applicationContext,
+                    a.title,
+                    a.text,
+                    a.session,
+                    replyChat = a.replyChat,
+                    fingerprint = a.fingerprint,
+                    actions = a.actions,
+                    key = a.key,
+                    isResult = a.isResult,
+                )
+            }
+        }
+
+        val redundant = headroom != null || kind == "session_resolved" || when (kind) {
             "chat_finished" -> Foreground.showsChat(subject)
             "session_attention", "session_finished" -> Foreground.showsSession(subject)
             else -> false
@@ -143,6 +189,22 @@ class HuginnMessagingService : FirebaseMessagingService() {
                 runCatching {
                     val settings = SettingsStore(applicationContext)
                     settings.setNotifiedSessions(settings.notifiedSessions.first() + subject)
+                }
+            }
+            // The same claim for a ladder move, and for the same reason: the
+            // reconcile below sees `laddered` gain this name and would post the
+            // identical notice a second time. The push already told the reader;
+            // claiming the name consumes the transition. Left deliberately blank
+            // as to WHICH family — any value ends the edge, and the digest writes
+            // the real one on the next pass.
+            val laddered = headroom?.takeIf { it.kind == HeadroomNotices.Kind.DOWNGRADED }?.session
+            if (laddered != null) {
+                runCatching {
+                    val settings = SettingsStore(applicationContext)
+                    val known = settings.ladderedSessions.first()
+                    if (!known.containsKey(laddered)) {
+                        settings.setLadderedSessions(known + (laddered to HeadroomNotices.PUSHED))
+                    }
                 }
             }
             withTimeoutOrNull(15_000) { reconcile(applicationContext) }

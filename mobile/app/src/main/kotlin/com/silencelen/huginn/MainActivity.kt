@@ -84,6 +84,7 @@ import com.silencelen.huginn.notify.Foreground
 import com.silencelen.huginn.notify.SessionWatchWorker
 import com.silencelen.huginn.ui.ChatScreen
 import com.silencelen.huginn.ui.EmptyState
+import com.silencelen.huginn.ui.HeadroomPill
 import com.silencelen.huginn.ui.LiveInput
 import com.silencelen.huginn.ui.ChatsScreen
 import com.silencelen.huginn.ui.DevicesScreen
@@ -551,6 +552,21 @@ fun HuginnApp(
     val nowMs = screenClock()
     val sessions by vm.sessions.collectAsState()
     val status by vm.status.collectAsState()
+    // Usage is no longer a DESTINATION. Everything else about it is fetched only
+    // from the Status screen; this one number decides whether tonight's run
+    // finishes, so it is polled wherever the reader is — and only while they are
+    // actually there, which is what the lifecycle effect below is for.
+    val headroomPill by vm.headroomPill.collectAsState()
+    val streamAgents by vm.streamAgents.collectAsState()
+    val selectedStream by vm.selectedStream.collectAsState()
+    val agentPage by vm.agentPage.collectAsState()
+    val loadingAgentHistory by vm.loadingAgentHistory.collectAsState()
+    val streamsSupported by vm.streamsSupported.collectAsState()
+    val streamNote by vm.streamNote.collectAsState()
+    LifecycleStartEffect(Unit) {
+        vm.startHeadroomPolling()
+        onStopOrDispose { vm.stopHeadroomPolling() }
+    }
     val statusError by vm.statusError.collectAsState()
     val loading by vm.loading.collectAsState()
     val connected by vm.connected.collectAsState()
@@ -1064,8 +1080,16 @@ fun HuginnApp(
             LifecycleStartEffect(name) {
                 vm.startTranscriptPolling(name)
                 vm.startScreenPolling(name)
+                // The strip's own list. Lifecycle-gated like everything else
+                // here: `?all=1` lifts the daemon's recency filter, so this is
+                // the one agents call that grows without bound and must not run
+                // from a pocket.
+                vm.startStreamAgentsPolling(name)
                 onStopOrDispose {
                     vm.stopScreenPolling(); vm.clearSuggestions(); vm.refreshSessions()
+                    // Every stream handle goes with the session: an offset into
+                    // one agent's file means nothing in the next session's.
+                    vm.stopStreamPolling()
                 }
             }
             // The staged photo is NOT lifecycle work, and it used to hang off the
@@ -1100,6 +1124,20 @@ fun HuginnApp(
             SessionScreen(
                 name = name,
                 transcript = transcript,
+                streamAgents = streamAgents,
+                selectedStream = selectedStream,
+                onSelectStream = { vm.selectStream(name, it) },
+                agentPage = agentPage,
+                loadingAgentHistory = loadingAgentHistory,
+                onLoadEarlierAgent = { vm.loadEarlierAgent(name) },
+                streamsSupported = streamsSupported,
+                streamNote = streamNote,
+                // The session's OWN row from the list, so the marks describe this
+                // session rather than the host's worst window.
+                sessionHeadroom = sessions.firstOrNull { s -> s.name == name }?.headroom,
+                headroom = headroomPill,
+                nowMs = nowMs,
+                onAutoResume = { vm.setSessionAutoResume(name, it) },
                 transcriptError = transcriptError,
                 screen = screen,
                 scrollback = scrollback,
@@ -1271,9 +1309,24 @@ fun HuginnApp(
             // by the system and can be revoked outside this app, so a cached
             // "granted" would keep reassuring long after it stopped being true.
             // The update check is check-only (no download), so it never spends data.
-            LaunchedEffect(Unit) { vm.refreshAccount(); vm.refreshDelivery(); vm.refreshAutoswitch(); vm.checkForUpdate() }
+            LaunchedEffect(Unit) {
+                vm.refreshAccount(); vm.refreshDelivery(); vm.refreshAutoswitch(); vm.checkForUpdate()
+                // The pane may open before the 30 s poll has run once, and the
+                // model list is what the default-model picker is drawn from.
+                vm.refreshHeadroom(); vm.refreshModels()
+            }
             val updateState by vm.updateState.collectAsState()
+            val headroom by vm.headroom.collectAsState()
+            val headroomSaving by vm.headroomSaving.collectAsState()
+            val headroomNote by vm.headroomNote.collectAsState()
+            val models by vm.models.collectAsState()
             SettingsScreen(
+                headroom = headroom,
+                models = models,
+                headroomSaving = headroomSaving,
+                headroomNote = headroomNote,
+                onSaveHeadroom = { vm.saveHeadroomSettings(it) },
+                onRefreshAccount = { vm.refreshSavedAccount(it) },
                 baseUrl = baseUrl,
                 token = token,
                 connected = connected,
@@ -1356,6 +1409,22 @@ fun HuginnApp(
                         }
                     },
                     actions = {
+                        // FIRST, and on every screen. The desktop puts this beside
+                        // its connection dot in the status line; this phone has no
+                        // such dot in its bar, so the bar's own leading action slot
+                        // is the equivalent place — the one piece of chrome that is
+                        // on screen whatever the reader is doing. It draws nothing
+                        // at all when the daemon has no headroom to report, so an
+                        // older host costs no width.
+                        HeadroomPill(
+                            status = headroomPill,
+                            nowMs = nowMs,
+                            // Straight to the whole picture. A chip that says 92%
+                            // and cannot be asked "of what, and until when" is a
+                            // worse version of not saying anything.
+                            onClick = { tab = 2; dest = Dest.Status },
+                            modifier = Modifier.padding(end = 4.dp),
+                        )
                         if (dest !is Dest.Chat && dest !is Dest.SessionView) {
                             IconButton(onClick = { vm.refreshAll() }) {
                                 Icon(Icons.Filled.Refresh, contentDescription = "Refresh")
