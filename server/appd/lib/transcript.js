@@ -479,16 +479,31 @@ function readTranscript(path, { offset = null, limit = 400, until = null, _resum
         // Claude Code stamps the effort level on each assistant record, so the
         // app can show the session's current setting without asking for it.
         if (d.effort) out.effort = d.effort;
+        // An API error is written as an ORDINARY assistant record whose text is
+        // the apology — "You've hit your session limit · resets 10:10pm …".
+        // Without this flag it renders as Claude choosing to say that, and the
+        // only thing that distinguishes a stalled session from an idle one is
+        // invisible to every client. The kind stays `assistant` so old clients
+        // keep rendering the text; `apiError` is the new, nullable fact.
+        // `?? 0` because the flag can land without a status and "an error with
+        // no number" must not read as "no error" (lib/limits.js keys on 429).
+        const apiError = d.isApiErrorMessage === true ? (d.apiErrorStatus ?? 0) : null;
         const c = m.content;
         if (!Array.isArray(c)) {
           const t = textOf(c);
-          if (t.trim()) out.events.push({ seq: ++seq, kind: 'assistant', ts, sidechain, text: t });
+          if (t.trim()) {
+            const ev = { seq: ++seq, kind: 'assistant', ts, sidechain, text: t };
+            if (apiError !== null) ev.apiError = apiError;
+            out.events.push(ev);
+          }
           continue;
         }
         for (const b of c) {
           if (!b || typeof b !== 'object') continue;
           if (b.type === 'text' && b.text && b.text.trim()) {
-            out.events.push({ seq: ++seq, kind: 'assistant', ts, sidechain, text: b.text });
+            const ev = { seq: ++seq, kind: 'assistant', ts, sidechain, text: b.text };
+            if (apiError !== null) ev.apiError = apiError;
+            out.events.push(ev);
           } else if (b.type === 'thinking' && typeof b.thinking === 'string' && b.thinking.trim()) {
             out.events.push({ seq: ++seq, kind: 'thinking', ts, sidechain, text: b.thinking });
           } else if (b.type === 'tool_use') {

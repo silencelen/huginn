@@ -124,3 +124,92 @@ test('a settled agent is one with a result line, summary or not', () => {
   assert.equal(s.has('a2'), false, 'started is not finished');
   assert.equal(journalSettled('/nope/journal.jsonl').size, 0);
 });
+
+// ------------------------------------------------- the stream picker's view
+//
+// `?all=1` and the four fields the picker needs, against the REAL fixture tree
+// in test/fixtures/agents (see its README). Copied into a scratch dir first:
+// mtimes are what the RECENT_S filter and `status` read, and a checked-out
+// file's mtime is whatever git felt like.
+
+const { listAgents } = require('../lib/agents');
+
+const FIXTURES = path2.join(__dirname, 'fixtures', 'agents', 'subagents');
+const NOW = 1_800_000_000;
+
+/** The fixture tree in a scratch dir, with mtimes we chose. */
+function stageAgents(ages) {
+  const dir = fs2.mkdtempSync(path2.join(os2.tmpdir(), 'agents-fx-'));
+  fs2.cpSync(FIXTURES, dir, { recursive: true });
+  for (const [rel, ageS] of Object.entries(ages)) {
+    const at = new Date((NOW - ageS) * 1000);
+    fs2.utimesSync(path2.join(dir, rel), at, at);
+  }
+  return dir;
+}
+
+const DIRECT_FRESH = 'agent-af7ca864cee1939de.jsonl';
+const DIRECT_OLD = 'agent-acdf276aeabf0df8f.jsonl';
+const WF_MEMBER = path2.join('workflows', 'wf_26d79030-31f', 'agent-a67c22d167ec48615.jsonl');
+
+test('?all=1 lifts the 45-minute filter that the progress sheet wants kept', () => {
+  // The sheet answers "what is happening" and settled agents stop being part of
+  // that answer. A stream picker asks "what ran in this session", and the same
+  // filter hides most of the answer to it — two hours after a fan-out the
+  // picker would offer nothing to switch to.
+  const dir = stageAgents({
+    [DIRECT_FRESH]: 10,
+    [DIRECT_OLD]: 3 * 60 * 60,        // settled hours ago
+    [WF_MEMBER]: 3 * 60 * 60,
+  });
+  const recent = listAgents(dir, NOW);
+  assert.deepEqual(recent.map((a) => a.id), ['af7ca864cee1939de'],
+    'default: only what is warm');
+  const all = listAgents(dir, NOW, fs2, 200, { all: true });
+  assert.equal(all.length, 3, 'all=1: every agent the session ever spawned');
+  assert.equal(all[0].id, 'af7ca864cee1939de', 'still newest-activity first');
+});
+
+test('rows carry workflowId, agentType, status and depth', () => {
+  const dir = stageAgents({ [DIRECT_FRESH]: 10, [DIRECT_OLD]: 3 * 60 * 60, [WF_MEMBER]: 3 * 60 * 60 });
+  const byId = new Map(listAgents(dir, NOW, fs2, 200, { all: true }).map((a) => [a.id, a]));
+
+  const fresh = byId.get('af7ca864cee1939de');
+  assert.equal(fresh.agentType, 'general-purpose', 'read from the .meta.json');
+  assert.equal(fresh.depth, 1, 'spawnDepth, under the name the graph uses');
+  assert.equal(fresh.workflowId, null, 'a direct agent belongs to no run');
+  assert.equal(fresh.workflow, null, 'the 2.88.0 field survives beside the new one');
+  assert.equal(fresh.status, 'running', 'the file grew inside ACTIVE_S');
+
+  // A cold DIRECT agent is the case where a cheap status has to say "I do not
+  // know": only the parent's tool_result records whether it came back, and that
+  // needs the whole parent transcript walked, which is /graph's job. Guessing
+  // "done" here would put a wrong word on a live picker row.
+  assert.equal(byId.get('acdf276aeabf0df8f').status, null);
+});
+
+test('a workflow member resolves through subagents/workflows/<run>/', () => {
+  const dir = stageAgents({ [DIRECT_FRESH]: 10, [DIRECT_OLD]: 3 * 60 * 60, [WF_MEMBER]: 3 * 60 * 60 });
+  const row = listAgents(dir, NOW, fs2, 200, { all: true })
+    .find((a) => a.id === 'a67c22d167ec48615');
+  assert.ok(row, 'the run directory is scanned, not just the top level');
+  assert.equal(row.workflowId, 'wf_26d79030-31f');
+  assert.equal(row.agentType, 'workflow-subagent',
+    'the workflow meta shape, which carries no toolUseId');
+  // The run journal is the only cheap place a member's outcome is written, and
+  // `failed` is a real record type in it — 319 of them across this host's
+  // journals — so this status costs one file read, not a transcript walk.
+  assert.equal(row.status, 'failed');
+});
+
+test('an agent nothing can attribute is orphan, not silently dropped', () => {
+  // It ran and it cost tokens. A picker that omits it is lying about the
+  // session; sessiongraph made the same call for the same reason.
+  const dir = stageAgents({ [DIRECT_FRESH]: 10, [DIRECT_OLD]: 3 * 60 * 60, [WF_MEMBER]: 3 * 60 * 60 });
+  fs2.rmSync(path2.join(dir, 'agent-acdf276aeabf0df8f.meta.json'));
+  const row = listAgents(dir, NOW, fs2, 200, { all: true })
+    .find((a) => a.id === 'acdf276aeabf0df8f');
+  assert.equal(row.status, 'orphan', 'no meta = no parent join = orphan');
+  assert.equal(row.agentType, null);
+  assert.equal(row.depth, null);
+});
