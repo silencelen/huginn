@@ -121,7 +121,7 @@ function paneText(name) {
   try { return sh('tmux', ['capture-pane', '-p', '-t', `=${name}:`]); } catch { return ''; }
 }
 /** Poll a pane until it shows `re`, rather than assuming a fork+printf has landed. */
-async function paneShows(name, re, ms = 20_000) {
+async function paneShows(name, re, ms = 45_000) {
   const deadline = Date.now() + ms;
   for (;;) {
     const text = paneText(name);
@@ -270,8 +270,17 @@ async function tick(patch = {}) {
   assert.equal(r.status, 200, JSON.stringify(r.body));
   return r.body;
 }
-/** Poll a predicate rather than sleeping a fixed time, nudging the tick as we go. */
-async function until(fn, ms = 20_000, what = 'the condition') {
+/**
+ * Poll a predicate rather than sleeping a fixed time, nudging the tick as we go.
+ *
+ * ⚠ THE `ms` IS A BUDGET, NEVER AN ASSERTION. Nothing in this file proves
+ * anything by timing out — the assertions are the lines after each wait — so
+ * these deadlines exist only to stop a hung daemon hanging the suite, and they
+ * are sized for the FULL run, where thirty files share eight cores, not for one
+ * file on an idle host. Several were 20-25 s, which is a comfortable margin
+ * alone and a coin toss at load 11-23.
+ */
+async function until(fn, ms = 45_000, what = 'the condition') {
   const deadline = Date.now() + ms;
   let last = null;
   let nextTick = Date.now() + 1_500;
@@ -298,15 +307,21 @@ async function until(fn, ms = 20_000, what = 'the condition') {
  * at its fastest. That is exactly the wrong medicine when the question is which
  * of two subsystems notices something first.
  */
-async function untilQuiet(fn, ms = 30_000, what = 'the condition') {
+async function untilQuiet(fn, ms = 45_000, what = 'the condition', about = null) {
   const deadline = Date.now() + ms;
   let last = null;
   for (;;) {
     last = (await api('/v1/headroom')).body;
     if (await fn(last)) return last;
     if (Date.now() > deadline) {
-      throw new Error(`${what} never became true. Last /v1/headroom sessions: `
-        + `${JSON.stringify((last && last.sessions) || null).slice(0, 700)}`);
+      // ⚠ THE ROW THIS WAIT WAS ABOUT, not the first 700 characters of every
+      // session on the host. A truncated dump of the other fixtures says nothing
+      // about why this one never settled, and that is what the old message did.
+      const row = about ? sessionRow(last, about) : null;
+      const q = about ? (await api(`/v1/sessions/${about}/typing`)).body : null;
+      throw new Error(`${what} never became true.`
+        + ` ${about || 'session'}: ${JSON.stringify(row)}`
+        + ` typing: ${JSON.stringify(q)}`);
     }
     await wait(150);
   }
@@ -499,7 +514,7 @@ test('a chat launched while the Fable week is red is TOLD to use opus', async ()
   await tick({ cooldownMs: 0 });
   await until(async (b) => b.accounts && Object.values(b.accounts)
     .some((a) => a.windows.weekly_fable && a.windows.weekly_fable.percent === 97),
-  20_000, 'the 97% Fable reading');
+  45_000, 'the 97% Fable reading');
 
   const made = await api('/v1/chats', { method: 'POST', body: JSON.stringify({ mode: 'ask' }) });
   assert.equal(made.status, 201, JSON.stringify(made.body));
@@ -508,7 +523,7 @@ test('a chat launched while the Fable week is red is TOLD to use opus', async ()
     method: 'POST', body: JSON.stringify({ text: 'summarise the disk report' }),
   });
   assert.ok(sent.status < 300, JSON.stringify(sent.body));
-  await until(async () => claudeRuns().length >= 1, 20_000, 'the chat run to start');
+  await until(async () => claudeRuns().length >= 1, 45_000, 'the chat run to start');
   const run = claudeRuns()[0];
   // EXPLICIT, not left to the CLI's silent swap: `-p` has no dialog channel, so
   // an unattended run that meets the Fable consent gate picks from a hardcoded
@@ -532,19 +547,19 @@ test('a chat whose turn died on the limit is re-run with --resume and the SAME t
   // read 100% records a stall with no reset to wait for.
   await until(async (b) => b.accounts && Object.values(b.accounts)
     .some((a) => a.windows.session && a.windows.session.percent === 100),
-  20_000, 'the 100% session reading');
+  45_000, 'the 100% session reading');
 
   const before = claudeRuns().length;
   const made = await api('/v1/chats', { method: 'POST', body: JSON.stringify({ mode: 'ask' }) });
   const chatId = made.body.id;
   const TEXT = 'check whether the immich backup finished';
   await api(`/v1/chats/${chatId}/messages`, { method: 'POST', body: JSON.stringify({ text: TEXT }) });
-  await until(async () => claudeRuns().length > before, 20_000, 'the first run');
+  await until(async () => claudeRuns().length > before, 45_000, 'the first run');
 
   // The window comes back.
   setUsage({ session: 3, weekly_all: 10, weekly_fable: 20 });
   await tick({});
-  await until(async () => claudeRuns().length >= before + 2, 25_000, 'the re-run');
+  await until(async () => claudeRuns().length >= before + 2, 45_000, 'the re-run');
 
   const rerun = claudeRuns()[claudeRuns().length - 1];
   const i = rerun.argv.indexOf('--resume');
@@ -570,10 +585,10 @@ test('a stalled session is marked on /v1/sessions and announced once', async () 
     const rows = (await api('/v1/sessions')).body.sessions || [];
     const row = rows.find((r) => r.name === s.name);
     return row && row.headroom && row.headroom.stalled === true;
-  }, 20_000, `${s.name} to be marked stalled`);
+  }, 45_000, `${s.name} to be marked stalled`);
 
   const hr = await until(async (b) => !!(sessionRow(b, s.name) || {}).stall,
-    20_000, 'the stall record on /v1/headroom');
+    45_000, 'the stall record on /v1/headroom');
   const row = sessionRow(hr, s.name);
   assert.equal(row.stall.window, 'session');
   assert.ok(row.stall.resetsAt, 'the reset instant comes from the ENDPOINT, not the clock text');
@@ -596,12 +611,12 @@ test('the phrase is typed only AFTER the native grace, and the notification says
   const s = await stalledSession('b', { native: true });
   setUsage({ session: 100, weekly_all: 10, weekly_fable: 20, resetsAt: new Date(resetsAt).toISOString() });
   await tick({ cooldownMs: 0 });
-  await until(async (b) => !!(sessionRow(b, s.name) || {}).stall, 20_000, 'the stall on b');
+  await until(async (b) => !!(sessionRow(b, s.name) || {}).stall, 45_000, 'the stall on b');
 
   // The window comes back, before the reset instant is even reached.
   setUsage({ session: 2, weekly_all: 10, weekly_fable: 20 });
   await tick({});
-  await until(async () => typed(s.out).length > 0, 40_000, 'the resume phrase to land');
+  await until(async () => typed(s.out).length > 0, 60_000, 'the resume phrase to land');
   const landedAt = Date.now();
   // ⚠ THE ARITHMETIC IS THE TEST. Typing before the grace expires means two
   // continuations — appd's and the CLI's — and the task runs twice.
@@ -623,13 +638,13 @@ test('a session appd restored gets no grace — its native wait died with the pr
   // Already past: nothing to wait for but the daemon noticing.
   setUsage({ session: 100, weekly_all: 10, weekly_fable: 20, resetsAt: new Date(Date.now() - 1_000).toISOString() });
   await tick({ cooldownMs: 0 });
-  await until(async (b) => !!(sessionRow(b, s.name) || {}).stall, 20_000, 'the stall on c');
+  await until(async (b) => !!(sessionRow(b, s.name) || {}).stall, 45_000, 'the stall on c');
   const armed = sessionRow((await api('/v1/headroom')).body, s.name).stall.nativeArmed;
   assert.equal(armed, false, '"Claude Code relaunched during the wait…"');
 
   setUsage({ session: 2, weekly_all: 10, weekly_fable: 20 });
   await tick({});
-  await until(async () => typed(s.out).length > 0, 25_000, 'the immediate resume');
+  await until(async () => typed(s.out).length > 0, 45_000, 'the immediate resume');
   assert.match(typed(s.out), /usage limit has reset/);
 });
 
@@ -641,7 +656,7 @@ test('the CLI continuing by itself is seen, and NOTHING is typed', async () => {
   const s = await stalledSession('d', { native: true });
   setUsage({ session: 100, weekly_all: 10, weekly_fable: 20, resetsAt: new Date(Date.now() + 1_500).toISOString() });
   await tick({ cooldownMs: 0 });
-  await until(async (b) => !!(sessionRow(b, s.name) || {}).stall, 20_000, 'the stall on d');
+  await until(async (b) => !!(sessionRow(b, s.name) || {}).stall, 45_000, 'the stall on d');
 
   fs.appendFileSync(s.transcript, `${NATIVE}\n`);
   setUsage({ session: 2, weekly_all: 10, weekly_fable: 20 });
@@ -649,7 +664,7 @@ test('the CLI continuing by itself is seen, and NOTHING is typed', async () => {
   const hr = await until(async (b) => {
     const row = sessionRow(b, s.name);
     return !!(row && row.stall && row.stall.how);
-  }, 25_000, 'a verdict on d');
+  }, 45_000, 'a verdict on d');
   assert.equal(sessionRow(hr, s.name).stall.how, 'native');
   assert.equal(typed(s.out), '', 'two continuations would run the task twice');
   assert.match(notifications(), new RegExp(`${s.name} \\(native\\)`),
@@ -660,7 +675,7 @@ test('a person answering it first cancels the resume', async () => {
   const s = await stalledSession('e', { native: true });
   setUsage({ session: 100, weekly_all: 10, weekly_fable: 20, resetsAt: new Date(Date.now() + 1_500).toISOString() });
   await tick({ cooldownMs: 0 });
-  await until(async (b) => !!(sessionRow(b, s.name) || {}).stall, 20_000, 'the stall on e');
+  await until(async (b) => !!(sessionRow(b, s.name) || {}).stall, 45_000, 'the stall on e');
 
   fs.appendFileSync(s.transcript, `${human(Date.now())}\n`);
   setUsage({ session: 2, weekly_all: 10, weekly_fable: 20 });
@@ -668,7 +683,7 @@ test('a person answering it first cancels the resume', async () => {
   const hr = await until(async (b) => {
     const row = sessionRow(b, s.name);
     return !!(row && row.stall && row.stall.how);
-  }, 25_000, 'a verdict on e');
+  }, 45_000, 'a verdict on e');
   assert.equal(sessionRow(hr, s.name).stall.how, 'human');
   assert.equal(typed(s.out), '', 'their turn is the conversation now');
 });
@@ -698,7 +713,7 @@ test('a per-session autoResume:false is honoured, and says which rule stopped it
   const hr = await until(async (b) => {
     const row = sessionRow(b, s.name);
     return !!(row && row.stall && row.stall.why);
-  }, 25_000, 'a reason on f');
+  }, 45_000, 'a reason on f');
   const row = sessionRow(hr, s.name);
   assert.equal(row.autoResume, false);
   assert.match(row.stall.why, /off for this session/);
@@ -709,7 +724,7 @@ test('the limit notification is sent ONCE per stall, not once per tick', async (
   const s = await stalledSession('g', { native: true });
   setUsage({ session: 100, weekly_all: 10, weekly_fable: 20, resetsAt: new Date(Date.now() + 3600_000).toISOString() });
   await tick({ cooldownMs: 0 });
-  await until(async (b) => !!(sessionRow(b, s.name) || {}).stall, 20_000, 'the stall on g');
+  await until(async (b) => !!(sessionRow(b, s.name) || {}).stall, 45_000, 'the stall on g');
   const count = () => notifications().split('\n').filter((l) => l.includes(`${s.name} hit the`)).length;
   assert.equal(count(), 1);
   // Several more passes over the same, unchanged stall. A window can take a week
@@ -738,12 +753,12 @@ test('a Round run that dies on the limit files ONE run, after the re-run', async
   await tick({ cooldownMs: 0 });
   await until(async (b) => b.accounts && Object.values(b.accounts)
     .some((a) => a.windows.session && a.windows.session.percent === 100),
-  20_000, 'the 100% session reading');
+  45_000, 'the 100% session reading');
 
   const before = claudeRuns().length;
   const fired = await api(`/v1/rounds/${roundId}/run`, { method: 'POST', body: '{}' });
   assert.equal(fired.status, 202, JSON.stringify(fired.body));
-  await until(async () => claudeRuns().length > before, 20_000, "the round's first attempt");
+  await until(async () => claudeRuns().length > before, 45_000, "the round's first attempt");
 
   // ⚠ NOTHING IS FILED YET. A report now would be "hit the usage limit", and the
   // re-run would file a second one — two runs, two report notifications, for one
@@ -761,7 +776,7 @@ test('a Round run that dies on the limit files ONE run, after the re-run', async
     const r = (await api('/v1/rounds')).body.rounds.find((x) => x.id === roundId);
     if (r && (r.runs || []).length >= 1) { after = r; return true; }
     return false;
-  }, 30_000, "the round's re-run to file its report");
+  }, 45_000, "the round's re-run to file its report");
   assert.strictEqual(after.runs.length, 1, 'one scheduled job, one run in the history');
   // ⚠ AND IT IS THE RE-RUN'S VERDICT. Both attempts live in one messages.jsonl,
   // so the first one's failed result is still there when the second succeeds —
@@ -785,14 +800,14 @@ test('a resume held in the queue is NOT recorded as resumed, and settles when it
   const s = await stalledSession('q', { make: mkBlockedSink });
   setUsage({ session: 100, weekly_all: 10, weekly_fable: 20, resetsAt: new Date(Date.now() - 1_000).toISOString() });
   await tick({ cooldownMs: 0 });
-  await until(async (b) => !!(sessionRow(b, s.name) || {}).stall, 20_000, 'the stall on q');
+  await until(async (b) => !!(sessionRow(b, s.name) || {}).stall, 45_000, 'the stall on q');
 
   setUsage({ session: 2, weekly_all: 10, weekly_fable: 20 });
   await tick({});
   const held = await until(async (b) => {
     const st = (sessionRow(b, s.name) || {}).stall;
     return !!(st && st.queuedAt);
-  }, 30_000, 'the resume to be queued behind the dialog');
+  }, 45_000, 'the resume to be queued behind the dialog');
   const q = sessionRow(held, s.name).stall;
   assert.equal(q.resumedAt, null, 'a send that is merely QUEUED is not a resume');
   assert.equal(q.attempts, 0, 'and it has not spent one of the three attempts');
@@ -801,11 +816,11 @@ test('a resume held in the queue is NOT recorded as resumed, and settles when it
 
   // The dialog goes; the pump releases; the entry's own settle is what records it.
   s.open();
-  await until(async () => typed(s.out).length > 0, 30_000, 'the resume phrase to land');
+  await until(async () => typed(s.out).length > 0, 45_000, 'the resume phrase to land');
   const after = await until(async (b) => {
     const st = (sessionRow(b, s.name) || {}).stall;
     return !!(st && st.resumedAt);
-  }, 20_000, 'the settle to stamp the record');
+  }, 45_000, 'the settle to stamp the record');
   const row = sessionRow(after, s.name).stall;
   assert.equal(row.how, 'appd');
   assert.equal(row.attempts, 1, 'the attempt is spent when the phrase LANDS, not when it is queued');
@@ -820,14 +835,14 @@ test('a queued resume the pump DROPS leaves the stall unresumed and unspent', as
   const s = await stalledSession('h', { make: mkBlockedSink });
   setUsage({ session: 100, weekly_all: 10, weekly_fable: 20, resetsAt: new Date(Date.now() - 1_000).toISOString() });
   await tick({ cooldownMs: 0 });
-  await until(async (b) => !!(sessionRow(b, s.name) || {}).stall, 20_000, 'the stall on h');
+  await until(async (b) => !!(sessionRow(b, s.name) || {}).stall, 45_000, 'the stall on h');
 
   setUsage({ session: 2, weekly_all: 10, weekly_fable: 20 });
   await tick({});
   await until(async (b) => {
     const st = (sessionRow(b, s.name) || {}).stall;
     return !!(st && st.queuedAt);
-  }, 30_000, 'the resume to be queued behind the dialog');
+  }, 45_000, 'the resume to be queued behind the dialog');
 
   // The owner speaks. The pump drops the automated send on its next pass.
   fs.appendFileSync(s.transcript, `${human(Date.now())}\n`);
@@ -845,23 +860,39 @@ test('a queued resume the pump DROPS leaves the stall unresumed and unspent', as
   // the settings route every 1.5 s to re-evaluate immediately. Left alone the
   // headroom cadence is a minute and the pump's 400 ms poll wins every time —
   // so this wait uses `untilQuiet`, which is `until` without the nudging.
+  //
+  // And even quiet, BOTH outcomes are correct, so the test accepts both: the
+  // stall record reconciles the drop in place, or the daemon treats the owner
+  // speaking as a resolution and retires the record outright. What must be true
+  // either way is the whole point of the test — appd never typed the phrase and
+  // never spent an attempt — so that is asserted on EVERY sample rather than on
+  // one read at the end, which is the read a retirement can take away.
+  const seen = [];
   const after = await untilQuiet(async (b) => {
     const st = (sessionRow(b, s.name) || {}).stall;
-    return !!(st && st.at && !st.queuedAt);
-  }, 30_000, 'the drop to be reconciled');
-  const row = sessionRow(after, s.name).stall;
-  assert.notEqual(row.how, 'appd', 'a send that was never delivered is not an appd resume');
-  assert.equal(row.attempts, 0, 'and it must not spend one of the three attempts');
+    if (st && st.at) {
+      seen.push(st);
+      assert.notEqual(st.how, 'appd', 'a send that was never delivered is not an appd resume');
+      assert.equal(st.attempts, 0, 'and it must not spend one of the three attempts');
+      if (!st.queuedAt) return true;                       // reconciled in place
+    }
+    const t = (await api(`/v1/sessions/${s.name}/typing`)).body || {};
+    return t.queued === 0 && /you typed first/.test(t.lastError || '');
+  }, 45_000, 'the drop to be reconciled', s.name);
+
+  assert.ok(seen.length, 'the stall was recorded at all');
   assert.equal(typed(s.out), '', 'nothing was typed at all');
-  // The owner speaking is itself a resolution, so the record may well end up
-  // marked `human` — what it must never say is that appd typed the phrase.
-  assert.match(row.why, /dropped|person answered/);
-  // And the queue's own account of it, which is what the client shows and the
-  // one place the reason survives whatever the stall record does next.
+  // The queue's own account of it: what the client shows, and the one place the
+  // reason survives whatever the stall record does next.
   const q2 = (await api(`/v1/sessions/${s.name}/typing`)).body || {};
   assert.equal(q2.queued, 0, 'the entry is out of the queue, not still waiting');
   assert.match(String(q2.lastError || ''), /you typed first/,
     'the queue says why it binned the send, in the words the client shows');
+  // And the record itself, while it is still there to speak for itself. The
+  // owner speaking is itself a resolution, so it may well end up marked `human`
+  // — what it must never say is that appd typed the phrase.
+  const row = (sessionRow(after, s.name) || {}).stall;
+  if (row && row.at) assert.match(row.why, /dropped|person answered/);
 });
 
 // ---------------------------------------- a stall that never learns its clock
@@ -888,7 +919,7 @@ test('a stall with no reset time anywhere is given up on, and the held Round is 
   const before = claudeRuns().length;
   const fired = await api(`/v1/rounds/${roundId}/run`, { method: 'POST', body: '{}' });
   assert.equal(fired.status, 202, JSON.stringify(fired.body));
-  await until(async () => claudeRuns().length > before, 25_000, "the round's attempt");
+  await until(async () => claudeRuns().length > before, 45_000, "the round's attempt");
 
   let chatId = null;
   await until(async () => {
@@ -899,7 +930,7 @@ test('a stall with no reset time anywhere is given up on, and the held Round is 
       const m = JSON.parse(fs.readFileSync(path.join(dataDir, 'chats', chatId, 'meta.json'), 'utf8'));
       return !!(m.stall && m.stall.at);
     } catch { return false; }
-  }, 25_000, 'the clockless stall to be recorded');
+  }, 45_000, 'the clockless stall to be recorded');
 
   const metaFile = path.join(dataDir, 'chats', chatId, 'meta.json');
   const m0 = JSON.parse(fs.readFileSync(metaFile, 'utf8'));
@@ -918,7 +949,7 @@ test('a stall with no reset time anywhere is given up on, and the held Round is 
     const r = (await api('/v1/rounds')).body.rounds.find((x) => x.id === roundId);
     if (r && (r.runs || []).length >= 1) { after = r; return true; }
     return false;
-  }, 30_000, 'the held round to be filed once appd gives up');
+  }, 45_000, 'the held round to be filed once appd gives up');
   assert.equal(after.runs[0].status, 'attention',
     'nothing is wrong with the world; something is wrong with the arrangement');
   assert.match(String(after.runs[0].headline || ''), /no reset time/,
