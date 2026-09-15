@@ -1,0 +1,137 @@
+{
+ "mode": "red",
+ "worst": {
+  "slug": "owner-max",
+  "email": "<email scrubbed, 24 chars>",
+  "window": "weekly_fable",
+  "percent": 92.0,
+  "label": "Current week (Fable)",
+  "resetsAt": "2026-09-18T07:00:00+00:00"
+ },
+ "accounts": {
+  "owner-max": {
+   "email": "<email scrubbed, 24 chars>",
+   "windows": {
+    "session": {
+     "percent": 31.0,
+     "resetsAt": "2026-09-15T10:30:00+00:00",
+     "severity": "normal",
+     "label": "Current session"
+    },
+    "weekly_all": {
+     "percent": 64.0,
+     "resetsAt": "2026-09-18T07:00:00+00:00",
+     "severity": "warning",
+     "label": "Current week (all models)"
+    },
+    "weekly_fable": {
+     "percent": 92.0,
+     "resetsAt": "2026-09-18T07:00:00+00:00",
+     "severity": "critical",
+     "label": "Current week (Fable)"
+    }
+   },
+   "live": true,
+   "readAt": 1789460000
+  },
+  "spare": {
+   "email": "<email scrubbed, 22 chars>",
+   "windows": {
+    "session": null,
+    "weekly_all": {
+     "percent": 11.0,
+     "resetsAt": "2026-09-19T07:00:00+00:00",
+     "severity": "normal",
+     "label": "Current week (all models)"
+    },
+    "weekly_fable": null
+   },
+   "live": false,
+   "readAt": 1789458200
+  }
+ },
+ "sessions": [
+  {
+   "name": "w1kcore",
+   "claudeSessionId": "<claudeSessionId scrubbed, 36 chars>",
+   "family": "opus",
+   "ladder": {
+    "from": "fable",
+    "to": "opus",
+    "at": 1789460100,
+    "delivery": "confirmed",
+    "sessionOnly": true,
+    "repairedDefault": false
+   },
+   "autoResume": true,
+   "stalled": false,
+   "headsUpAt": 1789459900
+  },
+  {
+   "name": "btclab",
+   "claudeSessionId": "<claudeSessionId scrubbed, 36 chars>",
+   "family": "fable",
+   "ladder": null,
+   "autoResume": false,
+   "stalled": true,
+   "headsUpAt": null
+  }
+ ],
+ "sentinels": {
+  "STOP": null,
+  "STOP-FABLE": {
+   "since": 1789459000,
+   "reason": "weekly_fable 92%"
+  }
+ },
+ "held": [
+  {
+   "agentId": "a799b9c4d1",
+   "agentType": "workflow-subagent",
+   "since": 1789459500
+  }
+ ],
+ "resets": [
+  {
+   "slug": "owner-max",
+   "window": "session",
+   "resetsAt": "2026-09-15T05:30:00+00:00",
+   "seenAt": 1789452100
+  }
+ ],
+ "arbiter": {
+  "lastSwitchAt": 0,
+  "lastLadderAt": 1789460100,
+  "lastAction": {
+   "action": "ladder_down",
+   "session": "w1kcore",
+   "to": "opus"
+  },
+  "why": "weekly_fable 92% >= ladderPct 92; one lever per tick"
+ },
+ "settings": {
+  "v": 1,
+  "headsUpPct": 85,
+  "ladderPct": 92,
+  "ladderUpBelowPct": 50,
+  "stopPct": 70,
+  "stopFablePct": 88,
+  "clearBelowPct": 50,
+  "cooldownMs": 1800000,
+  "ladder": [
+   "fable",
+   "opus",
+   "sonnet"
+  ],
+  "defaultModel": "claude-fable-5-1",
+  "autoResume": true,
+  "resumePhrase": "Your usage limit has reset. Continue the task you were working on when the limit was reached; do not repeat work that is already complete.",
+  "headsUpText": "[huginn headroom] You are at {pct}% of this account's Fable weekly limit. Write a short handoff note now (what is done, what is next, which files matter), then continue. huginn will move this session to {next} at {ladderPct}%.",
+  "accountSwitch": {
+   "enabled": false,
+   "threshold": 95,
+   "margin": 20
+  }
+ },
+ "serverTime": 1789460000
+}

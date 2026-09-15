@@ -29,6 +29,7 @@ import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.flowOn
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
@@ -447,8 +448,52 @@ class HuginnClient(
         call("/v1/accounts/$slug", HttpMethod.Delete)
     }
 
+    /**
+     * Refreshes one saved profile's token in the background, now.
+     *
+     * Returns the daemon's status WORD rather than a boolean, because the three
+     * failures need different things from the reader: `invalid_grant` means only
+     * a re-login helps, `lock_busy` means try again in a moment, and a transport
+     * word means the network. A bare false said the same thing to all three, and
+     * that was the bug the expired-token switch has had since it shipped.
+     */
+    suspend fun refreshAccount(slug: String): String =
+        decode<AccountRefreshed>(post("/v1/accounts/$slug/refresh")).status
+
     /** Plan utilization: the same numbers Claude Code's /usage shows. */
     suspend fun plan(): Plan = decode(call("/v1/plan"))
+
+    // --------------------------------------------------------- headroom
+
+    /**
+     * The whole headroom picture: every account's windows, the laddered
+     * sessions, held spawns, sentinels and the arbiter's own reasoning.
+     *
+     * 404s on a daemon older than 3.0.0 — callers treat the throw as "this host
+     * has no headroom subsystem" and hide the surface, rather than showing it
+     * empty, which would read as "nothing is wrong".
+     */
+    suspend fun headroom(): Headroom = decode(call("/v1/headroom"))
+
+    /**
+     * Patches the owner-editable settings. PARTIAL by design: the form sends the
+     * fields it changed, so two open settings screens cannot overwrite each
+     * other's untouched thresholds. The daemon validates and answers with the
+     * full settings; a rule broken comes back as a 400 whose text names it.
+     */
+    suspend fun setHeadroomSettings(patch: JsonObject): HeadroomSettings =
+        decode(call("/v1/headroom/settings", HttpMethod.Patch, body = patch))
+
+    /**
+     * Puts a session back on the model the daemon moved it off.
+     *
+     * Also stamps the session as human-decided, which is what keeps the arbiter
+     * from laddering it straight back down on the next tick — an Undo that gets
+     * silently undone is worse than no Undo.
+     */
+    suspend fun undoLadder(name: String) {
+        post("/v1/sessions/$name/headroom/undo")
+    }
 
     // ---------------------------------------------------------- sessions
 
@@ -506,6 +551,19 @@ class HuginnClient(
         decode<SessionMetaSaved>(post("/v1/sessions/$name/meta", body = buildJsonObject {
             goals?.let { put("goals", JsonPrimitive(it)) }
             notes?.let { put("notes", JsonPrimitive(it)) }
+        })).meta
+
+    /**
+     * Per-session auto-resume, on the same meta record as goals and notes.
+     *
+     * [value] has three states and null is one of them — "follow the global" —
+     * so it is sent as an EXPLICIT JSON null rather than omitted. Omitting it is
+     * how the other two fields say "do not touch me", and the two meanings would
+     * be indistinguishable on the wire otherwise.
+     */
+    suspend fun setSessionAutoResume(name: String, value: Boolean?): SessionMeta =
+        decode<SessionMetaSaved>(post("/v1/sessions/$name/meta", body = buildJsonObject {
+            put("autoResume", if (value == null) JsonNull else JsonPrimitive(value))
         })).meta
 
     /**
@@ -620,8 +678,35 @@ class HuginnClient(
         call("/v1/chats/$id", HttpMethod.Patch, body = buildJsonObject { put("title", JsonPrimitive(title)) })
     }
 
-    /** The individual agents behind a fan-out, for the work detail sheet. */
-    suspend fun sessionAgents(name: String): AgentsInfo = decode(call("/v1/sessions/$name/agents"))
+    /**
+     * The individual agents behind a fan-out, for the work detail sheet.
+     *
+     * @param all lifts the daemon's recent-activity filter, so the stream picker
+     * can offer a run that finished an hour ago. Off by default: the work sheet
+     * asks "what is happening", and everything that ever ran is a different
+     * question with a much longer answer.
+     */
+    suspend fun sessionAgents(name: String, all: Boolean = false): AgentsInfo =
+        decode(call("/v1/sessions/$name/agents${if (all) "?all=1" else ""}"))
+
+    /**
+     * One agent's own transcript, paged exactly like the parent session's.
+     *
+     * A second stream needs its own cursor pair — the parent's offsets describe
+     * a different file and a fan-out makes the parent's size lie about progress
+     * — so this is deliberately a separate call rather than a filter on
+     * [sessionTranscript].
+     */
+    suspend fun agentTranscript(
+        name: String,
+        agentId: String,
+        offset: Long? = null,
+        limit: Int = 400,
+        until: Long? = null,
+    ): TranscriptPage = decode(call(
+        "/v1/sessions/$name/agents/${agentId.encodeURLParameter()}/transcript?limit=$limit" +
+            (offset?.let { "&offset=$it" } ?: "") + (until?.let { "&until=$it" } ?: ""),
+    ))
 
     /**
      * [offset] tails forward from a byte already read; [until] reads BACKWARDS,
@@ -664,14 +749,28 @@ class HuginnClient(
         text: String? = null,
         keys: List<String> = emptyList(),
         scratchpadId: String? = null,
-    ) {
+    ): SendKeysResult {
         val payload = buildJsonObject {
             if (text != null) put("text", JsonPrimitive(text))
             if (keys.isNotEmpty()) put("keys", JsonArray(keys.map { JsonPrimitive(it) }))
             scratchpadId?.let { put("scratchpadId", JsonPrimitive(it)) }
         }
-        post("/v1/sessions/$name/keys", body = payload)
+        return decode(post("/v1/sessions/$name/keys", body = payload))
     }
+
+    /**
+     * What the daemon is still holding for this session, and what it is waiting
+     * on. Cheap: the in-memory queue and a cached gate result, no transcript.
+     *
+     * A poll rather than a stream on purpose — the send outlives the socket, and
+     * two clients can have the same session open.
+     */
+    suspend fun typingStatus(name: String): TypingState =
+        decode(call("/v1/sessions/$name/typing"))
+
+    /** Drops whatever is still queued for this session; returns what is left. */
+    suspend fun cancelTyping(name: String): TypingState =
+        decode(call("/v1/sessions/$name/typing", HttpMethod.Delete))
 
     // ------------------------------------------------------------- chats
 
