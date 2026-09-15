@@ -105,7 +105,10 @@ fun ChatsScreen(
                 }
             }
         } else {
-            LazyColumn(Modifier.fillMaxSize(), contentPadding = androidx.compose.foundation.layout.PaddingValues(bottom = 88.dp)) {
+            LazyColumn(
+                Modifier.fillMaxSize(),
+                contentPadding = androidx.compose.foundation.layout.PaddingValues(bottom = LIST_FAB_CLEARANCE),
+            ) {
                 items(chats, key = { it.id }) { chat ->
                     ChatRow(
                         chat,
@@ -324,7 +327,12 @@ private fun ChatRow(chat: Chat, selected: Boolean, onOpen: () -> Unit, onDelete:
             }
             Spacer(Modifier.size(2.dp))
             Text(
-                chat.lastSnippet ?: "No messages yet",
+                // MARKERS OFF. This row is drawn in ONE style, so `**` can only
+                // ever be two characters of noise at the front of the one line a
+                // reader scans the list by — and the front is exactly where an
+                // answer that opens with a bold headline puts them.
+                chat.lastSnippet?.let { Markdown.plainInline(it) }?.takeIf { it.isNotBlank() }
+                    ?: "No messages yet",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 maxLines = 2,

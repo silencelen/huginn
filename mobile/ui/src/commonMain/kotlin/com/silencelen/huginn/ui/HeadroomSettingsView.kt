@@ -10,12 +10,19 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.size
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.Icon
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Slider
+import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -48,9 +55,48 @@ object HeadroomForm {
     /** The families the daemon's ladder may contain, in its own order. */
     val FAMILIES: List<String> = listOf("fable", "opus", "sonnet", "haiku")
 
-    /** The slider range. Below 50 % none of these thresholds mean anything. */
-    const val MIN_PCT: Int = 50
+    const val MIN_PCT: Int = 1
     const val MAX_PCT: Int = 100
+
+    /**
+     * Thresholds that mean "this window is nearly gone": the heads-up, the ladder
+     * move, and the two spawn gates. Below 50 % none of them mean anything — a
+     * heads-up at 12 % is a session being warned about nothing.
+     */
+    val HIGH_RANGE: IntRange = 50..MAX_PCT
+
+    /**
+     * The two "…below" fields, which are the OTHER end of the same scale: a
+     * window counts as cleared, or a session is worth picking back up, when
+     * little enough of it is spent. They must be able to sit UNDER the high ones
+     * — the daemon refuses `clearBelowPct >= stopPct` and `ladderUpBelowPct >=
+     * ladderPct` — so 50 as a floor put the useful half of their range off the
+     * slider entirely. 99 rather than 100 for the same reason: 100 can never
+     * satisfy either ordering rule.
+     */
+    val BELOW_RANGE: IntRange = 1..(MAX_PCT - 1)
+
+    /** Account switching has its own two, and the margin is a difference, not a level. */
+    val SWITCH_AT_RANGE: IntRange = 1..MAX_PCT
+    val SWITCH_MARGIN_RANGE: IntRange = 0..MAX_PCT
+
+    /**
+     * The range ONE field's slider and its number box share.
+     *
+     * ⚠ ONE RANGE PER FIELD, read by both controls. They used to disagree: the
+     * slider was a flat 50..100 for everything and the box clamped to 1..100, so
+     * a typed 20 in "Treat a window as cleared below" was silently snapped back
+     * to 50 by the next touch of the slider beside it — the box accepted a value
+     * the control next to it could not hold, which is a form that argues with
+     * itself. Named for the daemon's own field names, the same strings
+     * [Problem.field] carries, so the two cannot drift apart.
+     */
+    fun range(field: String): IntRange = when (field) {
+        "ladderUpBelowPct", "clearBelowPct" -> BELOW_RANGE
+        "accountSwitch.threshold" -> SWITCH_AT_RANGE
+        "accountSwitch.margin" -> SWITCH_MARGIN_RANGE
+        else -> HIGH_RANGE
+    }
 
     const val PHRASE_MAX: Int = 300
     const val HEADS_UP_MAX: Int = 600
@@ -165,12 +211,12 @@ fun HeadroomSettingsSection(
     // the intro paragraph set ~135 characters on one line. Both clients, one file.
     Column(modifier.widthIn(max = 760.dp).fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(6.dp)) {
         Label("Thresholds")
-        PctRow("Heads-up at", draft.headsUpPct) { draft = draft.copy(headsUpPct = it) }
-        PctRow("Move down the ladder at", draft.ladderPct) { draft = draft.copy(ladderPct = it) }
-        PctRow("Move back up below", draft.ladderUpBelowPct) { draft = draft.copy(ladderUpBelowPct = it) }
-        PctRow("Hold new subagents at", draft.stopPct) { draft = draft.copy(stopPct = it) }
-        PctRow("Hold Fable subagents at", draft.stopFablePct) { draft = draft.copy(stopFablePct = it) }
-        PctRow("Treat a window as cleared below", draft.clearBelowPct) { draft = draft.copy(clearBelowPct = it) }
+        PctRow("Heads-up at", draft.headsUpPct, HeadroomForm.range("headsUpPct")) { draft = draft.copy(headsUpPct = it) }
+        PctRow("Move down the ladder at", draft.ladderPct, HeadroomForm.range("ladderPct")) { draft = draft.copy(ladderPct = it) }
+        PctRow("Move back up below", draft.ladderUpBelowPct, HeadroomForm.range("ladderUpBelowPct")) { draft = draft.copy(ladderUpBelowPct = it) }
+        PctRow("Hold new subagents at", draft.stopPct, HeadroomForm.range("stopPct")) { draft = draft.copy(stopPct = it) }
+        PctRow("Hold Fable subagents at", draft.stopFablePct, HeadroomForm.range("stopFablePct")) { draft = draft.copy(stopFablePct = it) }
+        PctRow("Treat a window as cleared below", draft.clearBelowPct, HeadroomForm.range("clearBelowPct")) { draft = draft.copy(clearBelowPct = it) }
         Muted2("Holding a foreground Agent call freezes the turn that made it — the parent waits too.")
 
         Label("Ladder")
@@ -204,7 +250,14 @@ fun HeadroomSettingsSection(
             value = draft.resumePhrase,
             onValueChange = { draft = draft.copy(resumePhrase = it) },
             label = { Text("What to type on resume") },
-            singleLine = true,
+            // MULTI-LINE, like the heads-up message below it. This is a sentence
+            // typed into a live session, up to PHRASE_MAX characters; on one line
+            // the owner's own phrase showed as "Your usage limit has reset.
+            // Continue the task" with the rest of it off the right edge, so the
+            // field could not be read, let alone checked before saving.
+            singleLine = false,
+            minLines = 2,
+            maxLines = 4,
             isError = problems.any { it.field == "resumePhrase" },
             modifier = Modifier.fillMaxWidth(),
         )
@@ -246,10 +299,10 @@ fun HeadroomSettingsSection(
             // Hoisted: a property of another module is not smart-cast through a
             // `copy` chain, and a local val is the fix rather than `!!`.
             val sw: AccountSwitch = draft.accountSwitch
-            PctRow("Switch at", sw.threshold, min = 1) {
+            PctRow("Switch at", sw.threshold, HeadroomForm.range("accountSwitch.threshold")) {
                 draft = draft.copy(accountSwitch = sw.copy(threshold = it))
             }
-            PctRow("Only to an account this much freer", sw.margin, min = 0) {
+            PctRow("Only to an account this much freer", sw.margin, HeadroomForm.range("accountSwitch.margin")) {
                 draft = draft.copy(accountSwitch = sw.copy(margin = it))
             }
         }
@@ -302,7 +355,13 @@ private fun Muted2(text: String) {
  * way to set 92 rather than 91 on a track a few hundred pixels wide.
  */
 @Composable
-private fun PctRow(label: String, value: Int, min: Int = HeadroomForm.MIN_PCT, onChange: (Int) -> Unit) {
+private fun PctRow(
+    label: String,
+    value: Int,
+    /** [HeadroomForm.range] for this field — the SAME object both controls use. */
+    range: IntRange,
+    onChange: (Int) -> Unit,
+) {
     // ⚠ THE SLIDER IS THE ONLY CHILD THAT CAN SHRINK, so it absorbs everything the
     // other two refuse to give up: a 230dp label and a 96dp number box out of
     // 340dp of pane left the track SIX PIXELS wide, which is a control that cannot
@@ -319,8 +378,15 @@ private fun PctRow(label: String, value: Int, min: Int = HeadroomForm.MIN_PCT, o
         fun RowScope.Track() {
             Slider(
                 value = value.toFloat(),
-                onValueChange = { onChange(it.toInt().coerceIn(min, HeadroomForm.MAX_PCT)) },
-                valueRange = min.toFloat()..HeadroomForm.MAX_PCT.toFloat(),
+                onValueChange = { onChange(it.toInt().coerceIn(range)) },
+                valueRange = range.first.toFloat()..range.last.toFloat(),
+                // THE THEME'S OWN MUTED SURFACE for the unspent part of the track.
+                // Material's default inactive track is secondaryContainer, which
+                // in this palette is a violet that appears nowhere else in the
+                // product — six sliders' worth of a colour the app does not use.
+                colors = SliderDefaults.colors(
+                    inactiveTrackColor = MaterialTheme.colorScheme.surfaceVariant,
+                ),
                 modifier = Modifier.weight(1f),
             )
         }
@@ -332,7 +398,9 @@ private fun PctRow(label: String, value: Int, min: Int = HeadroomForm.MIN_PCT, o
                 // An empty field is a state the reader passes THROUGH while retyping a
                 // number, so it must not be rejected into the old value on every
                 // keystroke. Anything unparseable simply does not move the setting.
-                onValueChange = { raw -> raw.trim().toIntOrNull()?.let { onChange(it.coerceIn(1, 100)) } },
+                // THE SAME RANGE the slider holds. Clamping to a wider one here is
+                // how a typed 20 became a 50 on the next slider touch.
+                onValueChange = { raw -> raw.trim().toIntOrNull()?.let { onChange(it.coerceIn(range)) } },
                 singleLine = true,
                 suffix = { Text("%") },
                 modifier = Modifier.width(PCT_NUMBER),
@@ -377,11 +445,43 @@ private val MIN_TRACK = 160.dp
  */
 private val PCT_ROW_STACK_BELOW = PCT_LABEL + PCT_NUMBER + PCT_GAP + MIN_TRACK
 
+/**
+ * A picker that looks like one.
+ *
+ * The ladder rungs and the default model were bare [TextButton]s: primary-tinted
+ * words with nothing around them and no caret, sitting in a form full of other
+ * primary-tinted words (every section heading is one). On the walk the owner's
+ * ladder read as the sentence "fable opus sonnet" and the default model as a
+ * label — three controls and a heading, drawn identically. A container tint and a
+ * caret are the whole fix: this is the vernacular every other dropdown in the
+ * product already uses.
+ */
+@Composable
+private fun PickerButton(label: String, onClick: () -> Unit) {
+    TextButton(
+        onClick = onClick,
+        colors = ButtonDefaults.textButtonColors(
+            containerColor = MaterialTheme.colorScheme.secondaryContainer,
+            contentColor = MaterialTheme.colorScheme.onSecondaryContainer,
+        ),
+        contentPadding = PaddingValues(start = 12.dp, end = 6.dp, top = 6.dp, bottom = 6.dp),
+    ) {
+        Text(label, maxLines = 1)
+        Icon(
+            Icons.Filled.ArrowDropDown,
+            // The tint and the caret say the same thing; a reader who cannot
+            // separate them still has one of the two.
+            contentDescription = "choose",
+            modifier = Modifier.size(18.dp),
+        )
+    }
+}
+
 @Composable
 private fun FamilyPicker(value: String?, onPick: (String) -> Unit) {
     var open by remember { mutableStateOf(false) }
     Column {
-        TextButton(onClick = { open = true }) { Text(value?.ifEmpty { "—" } ?: "—") }
+        PickerButton(value?.ifEmpty { "—" } ?: "—") { open = true }
         DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
             HeadroomForm.FAMILIES.forEach { f ->
                 DropdownMenuItem(text = { Text(f) }, onClick = { open = false; onPick(f) })
@@ -397,9 +497,9 @@ private fun ModelPicker(value: String, models: List<ModelChoice>, onPick: (Strin
     // serve one, which is the same rule the session's own picker follows.
     val options = ModelLabels.options(models, ModelLabels.PickerSite.SESSION)
     Column {
-        TextButton(onClick = { open = true }) {
-            Text(options.firstOrNull { it.first == value }?.second ?: value.ifEmpty { "host default" })
-        }
+        PickerButton(
+            options.firstOrNull { it.first == value }?.second ?: value.ifEmpty { "host default" },
+        ) { open = true }
         DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
             options.forEach { (id, text) ->
                 DropdownMenuItem(text = { Text(text) }, onClick = { open = false; onPick(id) })

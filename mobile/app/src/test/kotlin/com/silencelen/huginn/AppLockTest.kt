@@ -157,7 +157,23 @@ class DeliveryHealthTest {
         // would be nonsense on the screen, and it must not read as a fault.
         val h = health(0, 38)
         assertEquals(0L, h.pushesMissing)
-        assertTrue(h.relaxed)
+        assertEquals("never more arrived than were sent", 0L, h.pushesArrived)
+    }
+
+    @Test
+    fun `arrivals from a dead epoch no longer prove the push path`() {
+        // CHANGED, deliberately, with the "1274 of 916" fix (D2, 3.1.1). The old
+        // rule read sent=0 / received=38 as "nothing is being dropped, relax" —
+        // which is the same reasoning that printed "1274 of 916 pushes arrived —
+        // nothing dropped". Those 38 arrived against a counter the host no longer
+        // has; they say nothing about the path as it stands now.
+        //
+        // So the phone goes back to the tight cadence until one push arrives in
+        // THIS epoch and proves it, which is what Heartbeat already does for a
+        // fresh install. It self-corrects on the first arrival, and erring toward
+        // checking more often is the safe direction for a fallback.
+        assertFalse(health(0, 38).relaxed)
+        assertTrue("and one arrival is enough to relax again", health(1, 1).relaxed)
     }
 }
 
