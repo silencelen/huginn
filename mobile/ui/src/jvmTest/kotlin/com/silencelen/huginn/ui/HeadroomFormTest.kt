@@ -100,4 +100,69 @@ class HeadroomFormTest {
         val s = good.copy(accountSwitch = AccountSwitch(enabled = false, threshold = 120, margin = 20))
         assertEquals(listOf("accountSwitch"), fieldsBrokenBy(s))
     }
+
+    // ------------------------------------------------------------- slider ranges
+
+    @Test
+    fun `a threshold's slider and its number box share one range`() {
+        // THE DEFECT. The slider was a flat 50..100 for every field and the box
+        // clamped to 1..100, so a typed 20 in "Treat a window as cleared below"
+        // was snapped back to 50 by the next touch of the slider beside it — a
+        // form arguing with itself about a value it had just accepted.
+        assertEquals(1..99, HeadroomForm.range("clearBelowPct"))
+        assertEquals(1..99, HeadroomForm.range("ladderUpBelowPct"))
+        assertEquals(50..100, HeadroomForm.range("headsUpPct"))
+        assertEquals(50..100, HeadroomForm.range("ladderPct"))
+        assertEquals(50..100, HeadroomForm.range("stopPct"))
+        assertEquals(50..100, HeadroomForm.range("stopFablePct"))
+        assertEquals(1..100, HeadroomForm.range("accountSwitch.threshold"))
+        assertEquals(0..100, HeadroomForm.range("accountSwitch.margin"))
+    }
+
+    @Test
+    fun `every setting the daemon would accept is reachable on its own slider`() {
+        // A range that cannot express a valid setting is a control that lies about
+        // what the host will take. Walked field by field against the SAME
+        // `problems` the Save button is gated on.
+        val cases = listOf(
+            "clearBelowPct" to good.copy(clearBelowPct = 20),
+            "ladderUpBelowPct" to good.copy(ladderUpBelowPct = 20),
+            "headsUpPct" to good.copy(headsUpPct = 85),
+            "ladderPct" to good.copy(ladderPct = 92),
+            "stopPct" to good.copy(stopPct = 70),
+            "stopFablePct" to good.copy(stopFablePct = 88),
+        )
+        for ((field, settings) in cases) {
+            val value = when (field) {
+                "clearBelowPct" -> settings.clearBelowPct
+                "ladderUpBelowPct" -> settings.ladderUpBelowPct
+                "headsUpPct" -> settings.headsUpPct
+                "ladderPct" -> settings.ladderPct
+                "stopPct" -> settings.stopPct
+                else -> settings.stopFablePct
+            }
+            assertTrue(HeadroomForm.valid(settings), "$field=$value: " + HeadroomForm.problems(settings))
+            assertTrue(value in HeadroomForm.range(field), "$field=$value is off its own slider")
+        }
+    }
+
+    @Test
+    fun `no range lets a field out of the one to a hundred the daemon enforces`() {
+        // The daemon refuses anything outside 1..100 for a threshold; a slider
+        // that can reach 0 is a control whose Save can only 400.
+        for (field in listOf(
+            "headsUpPct", "ladderPct", "ladderUpBelowPct", "stopPct", "stopFablePct", "clearBelowPct",
+        )) {
+            val r = HeadroomForm.range(field)
+            assertTrue(r.first >= 1, "$field can reach ${r.first}")
+            assertTrue(r.last <= 100, "$field can reach ${r.last}")
+        }
+    }
+
+    @Test
+    fun `a below field can never be set to a hundred, which no ordering rule allows`() {
+        assertEquals(99, HeadroomForm.range("clearBelowPct").last)
+        assertTrue("clearBelowPct" in fieldsBrokenBy(good.copy(clearBelowPct = 100)))
+        assertTrue("ladderUpBelowPct" in fieldsBrokenBy(good.copy(ladderUpBelowPct = 100)))
+    }
 }
