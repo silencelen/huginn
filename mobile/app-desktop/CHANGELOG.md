@@ -1,5 +1,17 @@
 # Huginn Desktop changelog
 
+## 1.1.1
+
+- **Right-click over the transcript quotes what you just highlighted.** Explain, Execute, Quote and
+  Ask in a new chat were staging the FIRST thing selected after the window opened, every time —
+  the toolkit builds a context menu's rows once per area and caches them, and nothing about
+  dragging out a new selection rebuilt ours, so the text was frozen inside the row at the moment
+  the very first menu appeared. A right-click with nothing selected still offered all four. The
+  rows are now rebuilt each time a menu opens, and each verb reads the selection when it is
+  clicked rather than when it was drawn.
+- **The headroom pill is gone from the status line.** The Status pane and the line under the
+  Status icon already say it.
+
 ## 1.1.0
 
 - **Settings is a place you can find things in.** Nine categories in the list pane, one page at a
