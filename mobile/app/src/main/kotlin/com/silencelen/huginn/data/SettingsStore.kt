@@ -44,6 +44,8 @@ class SettingsStore(private val context: Context) : HuginnSettings {
         private val DRAFTS = stringPreferencesKey("drafts")
         private val CLIENT_ID = stringPreferencesKey("client_id")
         private val CHAT_RUNS = stringPreferencesKey("chat_runs")
+        private val HEADROOM_STALLED = stringSetPreferencesKey("headroom_stalled")
+        private val HEADROOM_LADDERED = stringPreferencesKey("headroom_laddered")
         private val APP_LOCK = booleanPreferencesKey("app_lock")
         private val PUSH_TOKEN = stringPreferencesKey("push_token")
         private val PUSH_TOKEN_AT = longPreferencesKey("push_token_at")
@@ -115,6 +117,37 @@ class SettingsStore(private val context: Context) : HuginnSettings {
     override suspend fun setChatRuns(value: Map<String, Long>) {
         val encoded = SettingsCodec.encodeChatRuns(value)
         context.dataStore.edit { it[CHAT_RUNS] = encoded }
+    }
+
+    /**
+     * Sessions sitting on a usage limit as of the last observation.
+     *
+     * Persisted for the reason every other watch baseline is: a session that
+     * stalls at 1am and is picked back up at 2am did both while this process was
+     * dead, and an in-memory baseline would have no record that either happened.
+     * The alarm then rediscovers the truth and the shade catches up.
+     */
+    val stalledSessions: Flow<Set<String>> =
+        context.dataStore.data.map { it[HEADROOM_STALLED] ?: emptySet() }
+
+    suspend fun setStalledSessions(value: Set<String>) {
+        context.dataStore.edit { it[HEADROOM_STALLED] = value }
+    }
+
+    /**
+     * Sessions the ladder has moved, name → the family they are on now.
+     *
+     * A MAP rather than a set, because a change of rung is an event too: a
+     * session going fable → opus → sonnet moves twice, and a set would report
+     * only the first, leaving the reader believing it is still on opus.
+     * Encoded with the drafts codec — the shape is the same string-to-string map.
+     */
+    val ladderedSessions: Flow<Map<String, String>> =
+        context.dataStore.data.map { SettingsCodec.decodeDrafts(it[HEADROOM_LADDERED]) }
+
+    suspend fun setLadderedSessions(value: Map<String, String>) {
+        val encoded = SettingsCodec.encodeDrafts(value)
+        context.dataStore.edit { it[HEADROOM_LADDERED] = encoded }
     }
 
     /**

@@ -1,3 +1,17 @@
+// ⚠ THE FACADE NAME, and it is load-bearing.
+//
+// `:ui` gained its own `SessionControls.kt` in this same package (the shared
+// AutoResumeChip and SessionStateMark). Two files with one name in one package
+// across two modules produce two `SessionControlsKt` classes — harmless until a
+// lambda in either one makes D8 mint `SessionControlsKt$$ExternalSyntheticLambda0`
+// on both sides, at which point `:app:assembleDebug` dies with "Type ... is defined
+// multiple times" and the phone cannot be built at all. Measured on this branch
+// BEFORE any change here: the collision arrived with `:ui`'s file.
+//
+// Renaming the facade is the whole fix and costs nothing — no Kotlin call site
+// names it, and `:ui` is left untouched.
+@file:JvmName("SessionControlBarKt")
+
 package com.silencelen.huginn.ui
 
 import androidx.compose.foundation.horizontalScroll
@@ -50,6 +64,12 @@ fun SessionControls(
     onCycleMode: () -> Unit,
     contextPercent: Int? = null,
     compacting: Boolean = false,
+    /** This session's headroom row (appd 3.0); null hides both marks. */
+    sessionHeadroom: com.silencelen.huginn.data.SessionHeadroom? = null,
+    /** The host's worst window, for the reset clock the state mark quotes. */
+    headroom: com.silencelen.huginn.data.StatusHeadroom? = null,
+    nowMs: Long = 0L,
+    onAutoResume: (Boolean) -> Unit = {},
 ) {
     Surface(color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)) {
         Row(
@@ -65,6 +85,15 @@ fun SessionControls(
             // nothing when there's nothing to say).
             if (compacting) CompactingChip()
             ContextMeter(contextPercent)
+            // What the limit has already done to this session, BEFORE the model
+            // chip it explains: a session laddered to opus shows a model nobody
+            // on this phone chose, and this is the only thing on screen that says
+            // who chose it. Draws nothing in the ordinary case.
+            SessionStateMark(
+                session = sessionHeadroom,
+                status = headroom,
+                nowMs = nowMs,
+            )
             PickerChip(
                 label = ModelLabels.model(model),
                 // SESSION site: Claude rows only — this chip types /model into a
@@ -88,6 +117,13 @@ fun SessionControls(
                     labelColor = MaterialTheme.colorScheme.onSurface,
                 ),
             )
+            // Last in the row, because it is the one control here that is about
+            // TOMORROW rather than about the turn in front of you. Hidden against
+            // a daemon with no headroom subsystem — a toggle whose host cannot
+            // store it is a promise this client cannot keep.
+            if (sessionHeadroom != null) {
+                AutoResumeChip(on = sessionHeadroom.autoResume, onToggle = onAutoResume)
+            }
         }
     }
 }

@@ -136,6 +136,15 @@
             android:exported="false"
             android:enabled="true" />
 
+        <!-- The Undo / OK / Back to Fable / Stay buttons on a headroom
+             notification. Not exported, like the answer buttons: only this app's
+             own notifications trigger it. Bounded choices with fixed labels — no
+             free text passes through here, which is why it needs no auth gate. -->
+        <receiver
+            android:name=".notify.UndoReceiver"
+            android:exported="false"
+            android:enabled="true" />
+
         <!-- Receives what was typed into a notification's reply box. Not exported
              for the same reason: the PendingIntent that carries the text has to be
              mutable, but only this app can hand it out. -->

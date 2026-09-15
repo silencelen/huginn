@@ -90,6 +90,151 @@ internal fun reattachPlan(meta: ChatDetail?): Reattach? {
     return Reattach(seed = meta.partialText ?: "", since = seq)
 }
 
+/**
+ * What the reader is told when a request fails.
+ *
+ * A top-level function rather than a method so the rule can be tested without an
+ * Application — and it is a rule, not a formatting detail. A 401 is the one code
+ * whose own text ("Unauthorized") tells nobody what to do, so it is replaced. **Every
+ * other code keeps the daemon's own sentence, verbatim.** That matters most for the
+ * 409 an account switch raises: the host answers "<email> cannot be switched to: its
+ * login expired on <date> — sign in again", which is the entire answer to the
+ * question the reader pressed the button to ask. The desktop replaced that with
+ * "could not switch" and threw it away; this client must never learn to.
+ */
+internal fun errorTextFor(e: Throwable): String = when (e) {
+    is HuginnClient.HuginnException ->
+        if (e.code == 401) "Rejected by huginn: check the token in Settings" else e.message
+    else -> e.message ?: e::class.java.simpleName
+}
+
+/**
+ * The headroom settings as a PATCH body.
+ *
+ * Pure and top-level for the same reason [reattachPlan] is: it is the shape of a
+ * request, and a request's shape is worth a test.
+ */
+internal fun headroomPatch(s: com.silencelen.huginn.data.HeadroomSettings): kotlinx.serialization.json.JsonObject =
+    kotlinx.serialization.json.buildJsonObject {
+        put("headsUpPct", kotlinx.serialization.json.JsonPrimitive(s.headsUpPct))
+        put("ladderPct", kotlinx.serialization.json.JsonPrimitive(s.ladderPct))
+        put("ladderUpBelowPct", kotlinx.serialization.json.JsonPrimitive(s.ladderUpBelowPct))
+        put("stopPct", kotlinx.serialization.json.JsonPrimitive(s.stopPct))
+        put("stopFablePct", kotlinx.serialization.json.JsonPrimitive(s.stopFablePct))
+        put("clearBelowPct", kotlinx.serialization.json.JsonPrimitive(s.clearBelowPct))
+        put("cooldownMs", kotlinx.serialization.json.JsonPrimitive(s.cooldownMs))
+        put("ladder", kotlinx.serialization.json.JsonArray(s.ladder.map { kotlinx.serialization.json.JsonPrimitive(it) }))
+        put("defaultModel", kotlinx.serialization.json.JsonPrimitive(s.defaultModel))
+        put("autoResume", kotlinx.serialization.json.JsonPrimitive(s.autoResume))
+        put("resumePhrase", kotlinx.serialization.json.JsonPrimitive(s.resumePhrase))
+        put("headsUpText", kotlinx.serialization.json.JsonPrimitive(s.headsUpText))
+        put("accountSwitch", kotlinx.serialization.json.buildJsonObject {
+            put("enabled", kotlinx.serialization.json.JsonPrimitive(s.accountSwitch.enabled))
+            put("threshold", kotlinx.serialization.json.JsonPrimitive(s.accountSwitch.threshold))
+            put("margin", kotlinx.serialization.json.JsonPrimitive(s.accountSwitch.margin))
+        })
+    }
+
+/**
+ * THE SECOND CURSOR PAIR, and everything that has to move with it.
+ *
+ * There is no such thing as one cursor for two files. `transcriptOffset` and
+ * `historyStart` on the view model are byte positions in the SESSION's own
+ * `.jsonl`; these are byte positions in one agent's. Reusing the first pair for
+ * both would tail an agent from an offset measured in the parent — meaningless
+ * there and, on a long session, past the end of the file.
+ *
+ * A class rather than four more fields on a 2500-line view model, because this is
+ * the part with the failures in it and the view model cannot be built without an
+ * Application. Pure Kotlin: the state machine is testable, and `delay` and the
+ * HTTP call around it are not the part worth testing.
+ */
+internal class AgentStream {
+
+    /** The picked agent id, or null for the session's own transcript. */
+    var selected: String? = null
+        private set
+
+    var page: TranscriptPage? = null
+        private set
+
+    var offset: Long? = null
+        private set
+
+    var historyStart: Long? = null
+        private set
+
+    /** Why the strip is disabled, or null when it is not. */
+    var note: String? = null
+        private set
+
+    /** False once the host has proven it cannot serve an agent transcript at all. */
+    var supported: Boolean = true
+        private set
+
+    /**
+     * Points at a stream.
+     *
+     * The cursors and the page are dropped TOGETHER and before anything is
+     * fetched: a page left behind from the previous agent would be merged into
+     * the next one's first read, which is two agents' work in one conversation
+     * with no mark to say where one ended.
+     *
+     * @return true when the selection actually moved.
+     */
+    fun select(agentId: String?): Boolean {
+        val next = agentId?.trim()?.takeIf { it.isNotEmpty() && it != StreamPicker.MAIN_KEY }
+        if (next == selected) return false
+        selected = next
+        offset = null
+        historyStart = null
+        page = null
+        // The note belonged to the stream being left. A failure reading one agent
+        // says nothing about the next — unless the whole ROUTE is missing, which
+        // is a fact about the host and outlives any selection.
+        if (supported) note = null
+        return true
+    }
+
+    /** One page landed. */
+    fun land(fresh: TranscriptPage) {
+        if (isTranscriptRestart(page, fresh)) {
+            offset = null
+            historyStart = null
+        } else {
+            offset = fresh.nextOffset
+            // The first page defines where history begins; later tail reads are
+            // BELOW it and must not move the handle.
+            if (historyStart == null) historyStart = fresh.windowStart
+        }
+        page = mergeTranscriptPage(page, fresh)
+        note = null
+    }
+
+    /** An older page, read backwards from [historyStart]. */
+    fun prepend(older: TranscriptPage) {
+        historyStart = older.windowStart
+        page = prependTranscriptPage(page, older)
+    }
+
+    /**
+     * A read failed.
+     *
+     * A 404 here has exactly one expected cause and it is not a missing agent: a
+     * daemon older than 3.0.0 has no such route. Saying so and disabling the
+     * strip is the documented compat answer — an empty body under a working
+     * picker would read as "this agent did nothing".
+     */
+    fun fail(code: Int?, message: String?) {
+        if (code == 404) {
+            supported = false
+            note = HuginnViewModel.STREAMS_UNSUPPORTED
+        } else if (page == null) {
+            note = message ?: "could not read this agent"
+        }
+    }
+}
+
 class HuginnViewModel(app: Application) : AndroidViewModel(app) {
 
     private val settings = SettingsStore(app)
@@ -599,11 +744,8 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    private fun errText(e: Throwable): String = when (e) {
-        is HuginnClient.HuginnException ->
-            if (e.code == 401) "Rejected by huginn: check the token in Settings" else e.message
-        else -> e.message ?: e::class.java.simpleName
-    }
+    /** See [errorTextFor] — the rule lives out there so it can be tested. */
+    private fun errText(e: Throwable): String = errorTextFor(e)
 
     fun copy(text: String, label: String = "huginn") {
         val cm = getApplication<Application>().getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
@@ -769,6 +911,122 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
+    // --------------------------------------------------------------- headroom
+
+    /**
+     * The whole headroom picture, polled WHEREVER THE READER IS.
+     *
+     * Everything else about usage on this client is a destination: the plan and
+     * the token tally are fetched only from the Status screen, and `/v1/usage`
+     * behind the second one walks every transcript on the host. That gate is
+     * right for those and wrong for this one — headroom is the number that
+     * decides whether tonight's run finishes, the daemon serves it from a file it
+     * already keeps, and a number nobody sees until they go looking for it is the
+     * exact failure this wave exists to fix.
+     *
+     * Null until the first answer, and null forever against a daemon older than
+     * 3.0.0, which has no such route. Null draws no pill: a pill at 0 % would
+     * claim somebody looked and found plenty.
+     */
+    private val _headroom = MutableStateFlow<com.silencelen.huginn.data.Headroom?>(null)
+    val headroom: StateFlow<com.silencelen.huginn.data.Headroom?> = _headroom.asStateFlow()
+
+    private var headroomJob: Job? = null
+
+    /**
+     * The pill's input, preferring the FULL answer over the summary.
+     *
+     * Both are on the wire and they age differently: `status.headroom` rides a
+     * poll that only runs on demand, while `/v1/headroom` is the one this screen
+     * keeps current. Folded into one shape by `:ui` so neither client builds a
+     * second opinion about the same reading.
+     */
+    val headroomPill: StateFlow<com.silencelen.huginn.data.StatusHeadroom?> =
+        kotlinx.coroutines.flow.combine(_headroom, _status) { h, s ->
+            statusHeadroomOf(h) ?: s?.headroom
+        }.stateIn(viewModelScope, SharingStarted.Eagerly, null)
+
+    /**
+     * Starts the headroom poll. LIFECYCLE-SCOPED by its caller, never a
+     * background poll: a backgrounded app that keeps asking is a battery cost for
+     * a chip nobody can see, and the notifications — which are what matters while
+     * the phone is in a pocket — come from the watch cycle and FCM instead.
+     */
+    fun startHeadroomPolling() {
+        headroomJob?.cancel()
+        headroomJob = viewModelScope.launch {
+            awaitReady()
+            while (isActive) {
+                refreshHeadroomOnce()
+                delay(HEADROOM_POLL_MS)
+            }
+        }
+    }
+
+    fun stopHeadroomPolling() {
+        headroomJob?.cancel()
+        headroomJob = null
+    }
+
+    /**
+     * One read.
+     *
+     * A failure is swallowed rather than toasted: the only expected failure is a
+     * 404 from a daemon with no headroom subsystem, and an error message on every
+     * screen about a feature that host never had would be permanent noise.
+     */
+    private suspend fun refreshHeadroomOnce() {
+        runCatching { client.headroom() }.onSuccess { _headroom.value = it }
+    }
+
+    /** For a screen that has just opened and cannot wait 30 s for the poll. */
+    fun refreshHeadroom() {
+        viewModelScope.launch { awaitReady(); refreshHeadroomOnce() }
+    }
+
+    private val _headroomSaving = MutableStateFlow(false)
+    val headroomSaving: StateFlow<Boolean> = _headroomSaving.asStateFlow()
+
+    private val _headroomNote = MutableStateFlow<String?>(null)
+    val headroomNote: StateFlow<String?> = _headroomNote.asStateFlow()
+
+    /**
+     * Saves the whole settings object as a PATCH body.
+     *
+     * Whole rather than a diff, deliberately: the route is a PATCH so two open
+     * forms cannot clobber each other's UNTOUCHED fields, and this form edits
+     * every field it can see. Computing a diff would only add a second place for
+     * the two to disagree about what changed.
+     */
+    fun saveHeadroomSettings(edited: com.silencelen.huginn.data.HeadroomSettings) {
+        if (_headroomSaving.value) return
+        _headroomSaving.value = true
+        _headroomNote.value = null
+        viewModelScope.launch {
+            awaitReady()
+            runCatching { client.setHeadroomSettings(headroomPatch(edited)) }
+                .fold(
+                    // The daemon's 400 NAMES the rule it refused. Shown as it
+                    // came: a form that says "invalid" about a sentence the host
+                    // already explained is throwing the answer away.
+                    onSuccess = { _headroomNote.value = "saved" },
+                    onFailure = { _headroomNote.value = errText(it) },
+                )
+            refreshHeadroomOnce()
+            _headroomSaving.value = false
+        }
+    }
+
+    /** Per-session auto-resume, straight onto the session's meta record. */
+    fun setSessionAutoResume(name: String, value: Boolean?) {
+        viewModelScope.launch {
+            awaitReady()
+            runCatching { client.setSessionAutoResume(name, value) }
+                .onSuccess { refreshSessions(); refreshHeadroomOnce() }
+                .onFailure { _toast.value = errText(it) }
+        }
+    }
+
     private val _savedAccounts = MutableStateFlow<List<SavedAccount>>(emptyList())
     val savedAccounts: StateFlow<List<SavedAccount>> = _savedAccounts.asStateFlow()
 
@@ -798,6 +1056,31 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
                         "Running sessions keep the old one until they restart."
                 }
                 .onFailure { _toast.value = errText(it) }
+            _switching.value = false
+        }
+    }
+
+    /**
+     * Refreshes ONE saved profile's token in the background, now.
+     *
+     * A token that has expired but whose refresh token has not is one request
+     * away from working, and until now the only way to find that out was to press
+     * Use and read the failure. The daemon answers with a STATUS WORD rather than
+     * a boolean — `invalid_grant` means only a re-login helps, `lock_busy` means
+     * try again in a moment, a transport word means the network — so it is shown
+     * verbatim, because a bare "failed" said the same thing to all three.
+     */
+    fun refreshSavedAccount(slug: String) {
+        if (_switching.value) return
+        _switching.value = true
+        viewModelScope.launch {
+            awaitReady()
+            runCatching { client.refreshAccount(slug) }
+                .fold(
+                    onSuccess = { word -> _toast.value = "$slug: $word" },
+                    onFailure = { _toast.value = errText(it) },
+                )
+            refreshSavedAccounts()
             _switching.value = false
         }
     }
@@ -1848,6 +2131,130 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
+    // --------------------------------------------------------- agent streams
+
+    /**
+     * The picked stream and its own cursors. See [AgentStream].
+     *
+     * The state machine is a plain object so it can be driven a step at a time by
+     * a test; these flows are only what Compose reads off it. They are pushed
+     * rather than derived because [AgentStream] is deliberately not observable —
+     * it is a cursor pair, and making it a flow of itself would invite somebody to
+     * treat a cursor as UI state.
+     */
+    private val stream = AgentStream()
+
+    private val _selectedStream = MutableStateFlow<String?>(null)
+    val selectedStream: StateFlow<String?> = _selectedStream.asStateFlow()
+
+    /**
+     * The PICKED agent's transcript, kept entirely apart from [_transcript].
+     *
+     * A separate page rather than a filter on the main one, and that is the whole
+     * design: the two describe different files, so the parent's byte offsets say
+     * nothing about the agent's, and merging them would hand `mergeTranscriptPage`
+     * two sequences of `seq` numbers that both start at 1. The MAIN page goes on
+     * ticking while this one is on screen — reading an agent is looking more
+     * closely at a session that is still going, not leaving it.
+     */
+    private val _agentPage = MutableStateFlow<TranscriptPage?>(null)
+    val agentPage: StateFlow<TranscriptPage?> = _agentPage.asStateFlow()
+
+    private val _streamNote = MutableStateFlow<String?>(null)
+    val streamNote: StateFlow<String?> = _streamNote.asStateFlow()
+
+    private val _streamsSupported = MutableStateFlow(true)
+    val streamsSupported: StateFlow<Boolean> = _streamsSupported.asStateFlow()
+
+    /** Every agent this session has spawned, for the picker strip. */
+    private val _streamAgents = MutableStateFlow<List<com.silencelen.huginn.data.AgentRun>>(emptyList())
+    val streamAgents: StateFlow<List<com.silencelen.huginn.data.AgentRun>> = _streamAgents.asStateFlow()
+
+    private var agentStreamJob: Job? = null
+    private var agentListJob: Job? = null
+
+    private fun publishStream() {
+        _selectedStream.value = stream.selected
+        _agentPage.value = stream.page
+        _streamNote.value = stream.note
+        _streamsSupported.value = stream.supported
+    }
+
+    /** @param agentId null (or "main") for the session's own transcript. */
+    fun selectStream(name: String, agentId: String?) {
+        if (!stream.select(agentId)) return
+        publishStream()
+        startAgentStreamPolling(name)
+    }
+
+    /**
+     * Tails the picked agent, and only while one is picked.
+     *
+     * A SECOND loop rather than a branch inside [startTranscriptPolling], for the
+     * reason [_agentPage] is a second page: the main tail must keep running
+     * underneath it.
+     */
+    private fun startAgentStreamPolling(name: String) {
+        agentStreamJob?.cancel()
+        val picked = stream.selected ?: return
+        agentStreamJob = viewModelScope.launch {
+            awaitReady()
+            while (isActive) {
+                runCatching { client.agentTranscript(name, picked, stream.offset) }
+                    .onSuccess { stream.land(it) }
+                    .onFailure { e ->
+                        stream.fail((e as? HuginnClient.HuginnException)?.code, e.message)
+                    }
+                publishStream()
+                delay(2500)
+            }
+        }
+    }
+
+    /**
+     * The agents themselves. `all = true` because the picker's job is to REACH a
+     * stream, and a run that finished twenty minutes ago is still the thing
+     * somebody wants to read — the work sheet's poll asks the other question
+     * ("what is happening") and keeps its own recency filter.
+     */
+    fun startStreamAgentsPolling(name: String) {
+        agentListJob?.cancel()
+        agentListJob = viewModelScope.launch {
+            awaitReady()
+            while (isActive) {
+                runCatching { client.sessionAgents(name, all = true) }
+                    .onSuccess { _streamAgents.value = it.agents }
+                delay(AGENTS_POLL_MS)
+            }
+        }
+    }
+
+    /** Leaving the session: every stream handle goes with it. */
+    fun stopStreamPolling() {
+        agentStreamJob?.cancel(); agentStreamJob = null
+        agentListJob?.cancel(); agentListJob = null
+        stream.select(null)
+        _streamAgents.value = emptyList()
+        publishStream()
+    }
+
+    private val _loadingAgentHistory = MutableStateFlow(false)
+    val loadingAgentHistory: StateFlow<Boolean> = _loadingAgentHistory.asStateFlow()
+
+    /** The picked agent's own history walk, the same shape as [loadEarlierTranscript]. */
+    fun loadEarlierAgent(name: String) {
+        val picked = stream.selected ?: return
+        val until = stream.historyStart ?: stream.page?.windowStart ?: return
+        if (until <= 0L || _loadingAgentHistory.value) return
+        _loadingAgentHistory.value = true
+        viewModelScope.launch {
+            runCatching { client.agentTranscript(name, picked, until = until) }
+                .onSuccess { stream.prepend(it); publishStream() }
+                .onFailure { _toast.value = errText(it) }
+            _loadingAgentHistory.value = false
+        }
+    }
+
     fun sendText(name: String, text: String, thenEnter: Boolean) {
         whenAttachmentSettled(sessionDraftKey(name)) { sendTextNow(name, text, thenEnter) }
     }
@@ -2505,6 +2912,32 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
 
         /** Reattach attempts after a chat stream drops with the run still going. */
         private const val CHAT_REATTACH_TRIES = 4
+
+        /**
+         * How often headroom is re-read while the app is in front of somebody.
+         *
+         * Thirty seconds, the rate the design costed: the daemon serves it from a
+         * file it already keeps, and a usage window does not move faster than
+         * this. The sessions list ticks at five because a session appearing is a
+         * thing you watch for; a percentage is not.
+         */
+        const val HEADROOM_POLL_MS: Long = 30_000
+
+        /**
+         * How often the agent LIST behind the stream picker is re-read.
+         *
+         * Slower than the transcript tail: a new subagent is a rarer event than a
+         * new line from one, and `?all=1` lifts the recency filter, so the answer
+         * grows rather than churning.
+         */
+        const val AGENTS_POLL_MS: Long = 10_000
+
+        /**
+         * The one expected reason the stream strip is disabled — the daemon is
+         * older than 3.0.0 and has no agent-transcript route at all. A literal,
+         * because the test asserts the sentence a reader will actually see.
+         */
+        const val STREAMS_UNSUPPORTED: String = "needs appd 3.0"
 
         fun sessionDraftKey(name: String) = "sess:$name"
         fun chatDraftKey(id: String) = "chat:$id"
