@@ -1,0 +1,365 @@
+#!/usr/bin/env python3
+# huginn-headroom - how much room is left, and what huginn did about it.
+#
+# HOST-SIDE ON PURPOSE, like huginn-rounds and huginn-devices beside it. Both CLI
+# clients (bash and PowerShell) just run this over ssh, so the rendering exists
+# ONCE. A client that formatted the JSON itself would be a second implementation
+# to keep in step, and the two would drift the first time a field was added --
+# which is exactly what already happened to the two clients' version constants.
+#
+# It also means the token never leaves this machine: the clients reach appd by
+# ssh'ing here and reading /etc/huginn-appd/token locally, and this keeps that
+# property rather than teaching a laptop a new credential. The token is read into
+# one header and is never echoed, not even on an error path -- a renderer that
+# prints the request it failed to make is a renderer that prints the credential.
+#
+# WHY PURE PYTHON, when rounds/devices are bash wrappers around `python3 -c`:
+# that program lives inside a single-quoted shell string, so one apostrophe in a
+# comment ends the program (huginn-rounds carries a warning about exactly that).
+# There is more to say here than in either of those, `--json` wants to pass a body
+# through untouched, and this way `python3 -m py_compile server/bin/huginn-headroom`
+# is a real gate instead of a check of the wrapper's quoting.
+#
+# Exit codes, because a client may branch on them:
+#   0  rendered
+#   1  no token, or appd answered but cannot serve headroom (too old / HTTP error)
+#   2  appd is not answering at all
+import json
+import os
+import sys
+import time
+import urllib.error
+import urllib.request
+
+TOKEN_FILE = "/etc/huginn-appd/token"
+BASE = os.environ.get("HUGINN_APPD_URL") or "http://127.0.0.1:8787"
+
+# ONE definition, used on every string that reaches the screen. A terminal
+# executes some of what it is handed, and several of these strings (an arbiter
+# `why`, a sentinel reason, a session name) are written by a model or by a person
+# naming a tmux session. huginn-rounds learned this the hard way: a title holding
+# ESC [ 2K CR erased its own line and reprinted, and the listing showed the wrong
+# status for a round with a DISK FULL headline.
+CTRL = dict.fromkeys(list(range(0, 32)) + list(range(127, 160)), 32)
+
+
+def clean(v, n=0):
+    if not isinstance(v, str):
+        return ""
+    out = " ".join(v.translate(CTRL).split())
+    return out[:n] if n else out
+
+
+def die(msg, code, hint=None):
+    sys.stderr.write("huginn-headroom: %s\n" % msg)
+    if hint:
+        sys.stderr.write("                 %s\n" % hint)
+    sys.exit(code)
+
+
+def fetch():
+    try:
+        with open(TOKEN_FILE) as fh:
+            token = fh.read().strip()
+    except OSError:
+        token = ""
+    if not token:
+        die("no appd token at %s" % TOKEN_FILE, 1)
+
+    req = urllib.request.Request(
+        BASE.rstrip("/") + "/v1/headroom",
+        headers={"Authorization": "Bearer " + token, "Accept": "application/json"},
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=10) as r:
+            return r.read().decode("utf-8", "replace")
+    except urllib.error.HTTPError as e:
+        # 404 is the FEATURE PROBE, not a bug: every appd before 3.0.0 serves
+        # /v1/status and /v1/rounds happily and has never heard of this route. Say
+        # which version is missing rather than "not found", because the person
+        # reading it is the person who can deploy the daemon.
+        if e.code == 404:
+            die("headroom needs appd 3.0.0 or newer", 1,
+                "(this host is running an older huginn-appd - deploy the daemon)")
+        if e.code in (401, 403):
+            die("appd refused the host token (HTTP %d)" % e.code, 1,
+                "(check %s against the running daemon)" % TOKEN_FILE)
+        die("appd answered HTTP %d for /v1/headroom" % e.code, 1)
+    except Exception:
+        # Deliberately not printing the exception: urllib puts the full request
+        # URL in some of them, and the header travels with the request object.
+        die("huginn-appd is not answering on %s" % BASE, 2,
+            "(systemctl status huginn-appd)")
+
+
+def ago(sec):
+    """Epoch SECONDS -> how long ago. The daemon writes these as seconds."""
+    if not isinstance(sec, (int, float)) or sec <= 0:
+        return ""
+    d = time.time() - sec
+    if d < 0:
+        return "just now"
+    if d < 60:
+        return "just now"
+    if d < 3600:
+        return "%dm ago" % (d // 60)
+    if d < 86400:
+        return "%dh ago" % (d // 3600)
+    return "%dd ago" % (d // 86400)
+
+
+def local_at(iso):
+    """An ISO reset time -> a LOCAL clock time a person can compare to a watch.
+
+    The endpoint speaks UTC with a trailing Z; the reader is sitting in front of
+    a terminal in some other timezone, and "resets 2026-09-15T10:30:00Z" is a
+    string nobody can act on. `fromisoformat` only learned to read Z in 3.11, so
+    the Z is rewritten first -- this file also runs on whatever python a freshly
+    set-up host has.
+    """
+    if not isinstance(iso, str) or not iso:
+        return "unknown"
+    txt = iso.strip()
+    if txt.endswith("Z"):
+        txt = txt[:-1] + "+00:00"
+    try:
+        import datetime
+        dt = datetime.datetime.fromisoformat(txt)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=datetime.timezone.utc)
+        loc = dt.astimezone()
+        now = datetime.datetime.now(loc.tzinfo)
+        clock = loc.strftime("%H:%M")
+        days = (loc.date() - now.date()).days
+        if days == 0:
+            return "today %s" % clock
+        if days == 1:
+            return "tomorrow %s" % clock
+        if 0 < days < 7:
+            return "%s %s" % (loc.strftime("%a"), clock)
+        return loc.strftime("%Y-%m-%d %H:%M")
+    except Exception:
+        return clean(iso, 40)
+
+
+# The same vocabulary the apps use, so a mode does not mean one thing on a screen
+# and another in a terminal.
+MODE_WORD = {"ok": "OK", "warn": "WARN", "red": "RED", "exhausted": "EXHAUSTED"}
+WINDOW_WORD = {"session": "session", "weekly_all": "this week",
+               "weekly_fable": "this week (Fable)"}
+
+
+def pct_of(w):
+    p = (w or {}).get("percent")
+    return p if isinstance(p, (int, float)) else None
+
+
+def window_line(key, w):
+    """`this week (Fable)  .  92%  .  resets today 17:00`"""
+    p = pct_of(w)
+    label = clean(w.get("label")) or WINDOW_WORD.get(key, key)
+    bits = [label, "%d%%" % round(p) if p is not None else "?%"]
+    # `exceeded` is the endpoint saying the cap is already hit. 100% and
+    # "exceeded" are not the same sentence and the second one is the one that
+    # stops work, so it is said out loud rather than left to the percentage.
+    if (w.get("severity") or "") == "exceeded":
+        bits.append("EXCEEDED")
+    bits.append("resets " + local_at(w.get("resetsAt")))
+    return "  .  ".join(bits)
+
+
+def fullest(windows):
+    """The one window that decides what this account can still do.
+
+    Whichever is fullest: an account at 12% session and 92% Fable-week is a 92%
+    account, and showing the first number first is how a limit arrives as a
+    surprise.
+    """
+    best_k, best_w, best_p = None, None, -1
+    for k, w in (windows or {}).items():
+        if not isinstance(w, dict):
+            continue
+        p = pct_of(w)
+        p = -1 if p is None else p
+        if p > best_p:
+            best_k, best_w, best_p = k, w, p
+    return best_k, best_w
+
+
+def render(d):
+    out = []
+    p = out.append
+    p("")
+
+    mode = clean(d.get("mode")) or "unknown"
+    worst = d.get("worst") or {}
+    head = "  Headroom: %s" % MODE_WORD.get(mode, mode.upper())
+    wp = pct_of(worst)
+    if worst and wp is not None:
+        head += "   (%s at %d%%, %s)" % (
+            clean(worst.get("label")) or WINDOW_WORD.get(worst.get("window"), "?"),
+            round(wp), "resets " + local_at(worst.get("resetsAt")))
+    p(head)
+    p("")
+
+    accounts = d.get("accounts") or {}
+    if not accounts:
+        p("  No usage read yet. huginn reads the plan endpoint once a minute while")
+        p("  anything is running, and every half hour for saved logins.")
+        p("")
+    for slug, a in accounts.items():
+        if not isinstance(a, dict):
+            continue
+        who = clean(a.get("email")) or clean(slug) or "?"
+        # ⚠ LIVE vs SAVED, said on the row. A saved login's numbers can be hours
+        # old and `agedLimits` zeroes a window whose reset has passed, so a cold
+        # row reading 0% is a guess, not a reading -- and an operator who cannot
+        # tell the two apart will switch to an account that is actually full.
+        p("  %s %s" % ("*" if a.get("live") else " ", who))
+        windows = a.get("windows") or {}
+        fk, fw = fullest(windows)
+        if fk:
+            p("      %s" % window_line(fk, fw))
+        rest = ["%s %s" % (clean(w.get("label")) or WINDOW_WORD.get(k, k),
+                           "%d%%" % round(pct_of(w)) if pct_of(w) is not None else "?%")
+                for k, w in windows.items() if k != fk and isinstance(w, dict)]
+        if rest:
+            p("      %s" % "  .  ".join(rest))
+        state = "live" if a.get("live") else "saved login, not active"
+        when = ago(a.get("readAt"))
+        p("      %s" % "  .  ".join(b for b in [state, ("read " + when) if when else ""] if b))
+        p("")
+
+    # Sessions huginn itself moved. Only these: a session a person moved by hand
+    # is not the daemon's to report on, and the daemon never ladders it back.
+    laddered = [s for s in (d.get("sessions") or [])
+                if isinstance(s, dict) and isinstance(s.get("ladder"), dict) and s["ladder"].get("to")]
+    stalled = [s for s in (d.get("sessions") or []) if isinstance(s, dict) and s.get("stalled")]
+    if laddered:
+        p("  Moved by huginn")
+        for s in laddered:
+            L = s["ladder"]
+            note = [clean(L.get("delivery")) or "pending"]
+            when = ago(L.get("at"))
+            if when:
+                note.append(when)
+            p("      %s: %s -> %s  (%s)" % (
+                clean(s.get("name"), 40) or "?", clean(L.get("from")) or "?",
+                clean(L.get("to")) or "?", ", ".join(note)))
+        p("")
+    if stalled:
+        p("  Waiting on a reset")
+        for s in stalled:
+            bits = [clean(s.get("name"), 40) or "?"]
+            bits.append("auto-resume on" if s.get("autoResume") else "auto-resume OFF")
+            p("      %s" % "  .  ".join(bits))
+        p("")
+
+    # Held spawns: the hook gate DELAYS agents while a sentinel is armed. Count
+    # first, because the count is the thing that is unusual; the types say what
+    # kind of work is queued behind it.
+    held = [h for h in (d.get("held") or []) if isinstance(h, dict)]
+    if held:
+        kinds = {}
+        for h in held:
+            k = clean(h.get("agentType")) or "agent"
+            kinds[k] = kinds.get(k, 0) + 1
+        types = ", ".join("%s%s" % (k, " x%d" % n if n > 1 else "")
+                          for k, n in sorted(kinds.items()))
+        p("  Holding %d new agent%s: %s" % (len(held), "" if len(held) == 1 else "s", types))
+        oldest = min((h.get("since") or 0) for h in held)
+        when = ago(oldest)
+        if when:
+            p("      oldest held %s" % when)
+        p("")
+
+    sentinels = d.get("sentinels") or {}
+    armed = [(k, v) for k, v in sentinels.items() if isinstance(v, dict)]
+    if armed:
+        p("  Sentinels")
+        for k, v in armed:
+            bits = [clean(k) or "?"]
+            when = ago(v.get("since"))
+            if when:
+                bits.append("armed " + when)
+            why = clean(v.get("reason"), 80)
+            if why:
+                bits.append(why)
+            p("      %s" % "  .  ".join(bits))
+        p("")
+    elif sentinels:
+        p("  Sentinels: none armed - new agents start normally")
+        p("")
+
+    arb = d.get("arbiter") or {}
+    last = arb.get("lastAction")
+    if isinstance(last, dict):
+        bits = [clean(last.get("kind")) or clean(last.get("action")) or "acted"]
+        tgt = clean(last.get("session")) or clean(last.get("slug"))
+        if tgt:
+            bits.append("on " + tgt)
+        when = ago(last.get("at") or arb.get("lastLadderAt") or arb.get("lastSwitchAt"))
+        if when:
+            bits.append(when)
+        p("  Arbiter: %s" % "  .  ".join(bits))
+    else:
+        p("  Arbiter: nothing done yet")
+    # `why` is the whole point of the verb: the interesting question is almost
+    # never "what did it do" but "why did it do NOTHING while I sat at 94%".
+    why = clean(arb.get("why"), 240)
+    if why:
+        p("      why: %s" % why)
+    p("")
+
+    s = d.get("settings") or {}
+    if s:
+        bits = []
+        if isinstance(s.get("headsUpPct"), (int, float)):
+            bits.append("heads-up %d%%" % s["headsUpPct"])
+        if isinstance(s.get("ladderPct"), (int, float)):
+            bits.append("step down %d%%" % s["ladderPct"])
+        if isinstance(s.get("stopPct"), (int, float)) and isinstance(s.get("stopFablePct"), (int, float)):
+            bits.append("hold agents %d%% session / %d%% Fable week" % (s["stopPct"], s["stopFablePct"]))
+        ladder = [clean(x) for x in (s.get("ladder") or []) if clean(x)]
+        if ladder:
+            bits.append("ladder " + " -> ".join(ladder))
+        bits.append("auto-resume " + ("on" if s.get("autoResume") else "OFF"))
+        if not s.get("autoResume"):
+            # An OFF switch explains a stalled session that nothing picked up, and
+            # that is the support question this line exists to answer in advance.
+            bits.append("(a stalled session waits for you)")
+        sw = s.get("accountSwitch") or {}
+        if isinstance(sw, dict):
+            bits.append("account switch " + ("on at %d%%" % sw["threshold"]
+                                             if sw.get("enabled") and isinstance(sw.get("threshold"), (int, float))
+                                             else "off"))
+        p("  Settings: %s" % "  .  ".join(bits))
+        p("")
+
+    return "\n".join(out)
+
+
+def main():
+    args = sys.argv[1:]
+    want_json = "--json" in args
+    for a in args:
+        if a not in ("--json",):
+            sys.stderr.write("usage: huginn-headroom [--json]\n")
+            sys.exit(1)
+
+    body = fetch()
+    if want_json:
+        # Straight through, unparsed on purpose: a client or a script asking for
+        # --json wants what the daemon said, including fields this renderer is
+        # too old to know about.
+        sys.stdout.write(body if body.endswith("\n") else body + "\n")
+        return
+    try:
+        d = json.loads(body)
+    except ValueError:
+        die("appd answered something that is not JSON", 1)
+    print(render(d))
+
+
+if __name__ == "__main__":
+    main()

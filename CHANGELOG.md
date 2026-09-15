@@ -10,6 +10,18 @@ Format loosely follows [Keep a Changelog](https://keepachangelog.com/); versions
 
 ## [Unreleased]
 
+## [1.0.0] - 2026-09-15
+
+Huginn 3 / CLI 1.0.
+
+### Added
+- `huginn headroom` — the fullest limit per saved account, what the daemon is holding or has moved,
+  and why it last did nothing. Rendered on the host like `rounds` and `devices`.
+
+### Changed
+- All version stores move to 1.0.0 together (bash, PowerShell, the device runner and the two
+  satellites); `scripts/test-client.sh` asserts the set.
+
 ## [0.14.0] - 2026-08-31
 
 Fixes from the 2026-08-30 program-wide audit.
