@@ -373,13 +373,21 @@ class ApiContractTest {
         assertTrue("a cold agent has no status word at all", info.agents.any { it.status == null })
         assertTrue("a failed agent is a real row", info.agents.any { it.status == "failed" })
 
-        val items = StreamPicker.items(info.agents, 1_789_460_000L)
+        // Two of the five are still writing; the other three — failed, done and
+        // the orphan — fold behind the pill rather than crowding the strip.
+        val now = 1_789_460_000L
+        val items = StreamPicker.items(info.agents, now)
         assertEquals("main", items.first().key)
-        assertEquals("one run header for the two members", 1, items.count { it.header })
+        assertEquals("only the live members earn a header", 1, items.count { it.header })
         assertEquals("keys must be unique", items.size, items.map { it.key }.toSet().size)
+        assertEquals("the settled three are counted, not dropped", 3, items.single { it.overflow }.count)
+        assertTrue("nothing settled has a chip of its own", items.none { it.agentId == "c0d4e8" })
+
+        val open = StreamPicker.items(info.agents, now, expanded = true)
+        assertEquals("keys stay unique across the fold", open.size, open.map { it.key }.toSet().size)
         assertTrue(
             "the picker addresses an agent by the id it was given",
-            items.any { it.agentId == "af7ca864cee1939de" },
+            open.any { it.agentId == "af7ca864cee1939de" },
         )
     }
 
