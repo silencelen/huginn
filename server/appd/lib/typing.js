@@ -228,8 +228,14 @@ function paneBlocks(why) {
  * at once through one buffer name is a message delivered into the wrong pane,
  * and `paste-buffer -d` on a shared name is a race with a second load.
  */
+// A random 24-bit name collided (birthday odds ~0.7 % per 500 sends — and it
+// did, twice, in the release gate). A buffer is deleted right after its paste,
+// so a per-process counter from a random start is unique for 16.7 M sends and
+// keeps the hg-<6hex> shape.
+let bufferSeq = randomBytes(3).readUIntBE(0, 3);
 function bufferName() {
-  return `hg-${randomBytes(3).toString('hex')}`;
+  bufferSeq = (bufferSeq + 1) & 0xffffff;
+  return `hg-${bufferSeq.toString(16).padStart(6, '0')}`;
 }
 
 /**
