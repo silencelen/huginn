@@ -197,7 +197,12 @@ object Splitter {
      * bug wearing the same disguise — the reader presses it again.
      */
     fun showsList(view: View): Boolean =
-        view == View.CHATS || view == View.SESSIONS || view == View.SCRATCHPADS
+        view == View.CHATS || view == View.SESSIONS || view == View.SCRATCHPADS ||
+            // Settings joined them in the redesign: nine categories on the left,
+            // one page at a time on the right. Through THIS answer rather than a
+            // two-pane layout of its own, so the seam, the notch, Ctrl+B and the
+            // narrow-window fold all mean the same thing there as everywhere else.
+            view == View.SETTINGS
 
     /**
      * The pane the page panel would come out of: the window, less the rail, less

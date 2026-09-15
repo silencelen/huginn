@@ -54,7 +54,6 @@ class DesktopSettings(private val file: File = defaultFile()) : HuginnSettings {
         /** The first-launch local-AI offer card: shown once, dismissed forever. */
         val localOfferSeen: Boolean = false,
         val clientId: String = "",
-        val fontScale: Float = HuginnSettings.DEFAULT_FONT_SCALE,
         val notifyEnabled: Boolean = true,
         val watchEnabled: Boolean = true,
         val watchSeeded: Boolean = false,
@@ -154,6 +153,23 @@ class DesktopSettings(private val file: File = defaultFile()) : HuginnSettings {
         val lastView: String = "",
         val lastChatId: String = "",
         val lastSessionName: String = "",
+
+        /**
+         * WHICH SETTINGS DRAWER WAS OPEN. Nine categories means a list you arrive
+         * at rather than a scroll you land in the middle of, and a two-pane frame
+         * that always opened on the first one would send the reader back to *Host
+         * & sign-in* every time they glanced away from *Usage*.
+         *
+         * Empty is the honest first-run answer and reads as "no opinion" — the
+         * frame lands on the first category that exists for this host, which is
+         * also what happens when a remembered one stops existing (a daemon that
+         * dropped /v1/headroom while Usage was open).
+         *
+         * ⚠ THIS IS NOT A LANDING. [Landing.persistable] still refuses to reopen
+         * the window into Settings at all; what is remembered here is only WHICH
+         * drawer, for when Settings is opened on purpose.
+         */
+        val settingsSection: String = "",
     )
 
     private val json = Json { ignoreUnknownKeys = true; encodeDefaults = true; prettyPrint = true }
@@ -169,7 +185,6 @@ class DesktopSettings(private val file: File = defaultFile()) : HuginnSettings {
     private val _baseUrl = MutableStateFlow(stored.baseUrl)
     private val _token = MutableStateFlow(stored.token)
     private val _routePinned = MutableStateFlow(stored.routePinned)
-    private val _fontScale = MutableStateFlow(stored.fontScale)
     private val _notifyEnabled = MutableStateFlow(stored.notifyEnabled)
     private val _watchEnabled = MutableStateFlow(stored.watchEnabled)
     private val _watchSeeded = MutableStateFlow(stored.watchSeeded)
@@ -204,7 +219,17 @@ class DesktopSettings(private val file: File = defaultFile()) : HuginnSettings {
     override val baseUrl: Flow<String> = _baseUrl.asStateFlow()
     override val token: Flow<String> = _token.asStateFlow()
     override val routePinned: Flow<Boolean> = _routePinned.asStateFlow()
-    override val fontScale: Flow<Float> = _fontScale.asStateFlow()
+    /**
+     * ⚠ NOT A DESKTOP SETTING, and the flow is a constant on purpose.
+     *
+     * Terminal text size is the phone's pinch-zoom (`TerminalScreen.kt`). On this
+     * client it was persisted, clamped and flowed with ZERO readers and ZERO
+     * writers — a settings key nothing could ever change, which the redesign's
+     * inventory found while counting what Settings actually holds. The contract
+     * stays (the phone's implementation of it is real); the dead plumbing behind
+     * it does not.
+     */
+    override val fontScale: Flow<Float> = MutableStateFlow(HuginnSettings.DEFAULT_FONT_SCALE).asStateFlow()
     override val notifyEnabled: Flow<Boolean> = _notifyEnabled.asStateFlow()
     override val watchEnabled: Flow<Boolean> = _watchEnabled.asStateFlow()
     override val watchSeeded: Flow<Boolean> = _watchSeeded.asStateFlow()
@@ -250,11 +275,8 @@ class DesktopSettings(private val file: File = defaultFile()) : HuginnSettings {
 
     override suspend fun clientId(): String = synchronized(lock) { stored.clientId }
 
-    override suspend fun setFontScale(value: Float) {
-        val next = value.coerceIn(HuginnSettings.MIN_FONT_SCALE, HuginnSettings.MAX_FONT_SCALE)
-        _fontScale.value = next
-        mutate { it.copy(fontScale = next) }
-    }
+    /** No-op here — see [fontScale]. The desktop has no terminal text size. */
+    override suspend fun setFontScale(value: Float) = Unit
 
     override suspend fun setNotifyEnabled(value: Boolean) {
         _notifyEnabled.value = value
@@ -537,6 +559,27 @@ class DesktopSettings(private val file: File = defaultFile()) : HuginnSettings {
                 stored.lastSessionName == session
             ) return
             mutate { it.copy(lastView = encoded, lastChatId = chat, lastSessionName = session) }
+        }
+    }
+
+    /**
+     * The Settings drawer that was open. Read synchronously for the same reason
+     * the landing is: the pane composes before any coroutine has run, and a list
+     * that snapped from *Host* to *Usage* a frame later would be worse than not
+     * remembering at all.
+     */
+    fun settingsSectionNow(): String = synchronized(lock) { stored.settingsSection }
+
+    /**
+     * Records it. NOT suspend, like the window geometry: it is written from a
+     * click on a category row, which has no coroutine scope worth acquiring to
+     * set a string that is already in memory — and unlike the seam it is one
+     * write per navigation rather than one per frame.
+     */
+    fun setSettingsSection(value: String) {
+        synchronized(lock) {
+            if (stored.settingsSection == value) return
+            mutate { it.copy(settingsSection = value) }
         }
     }
 
