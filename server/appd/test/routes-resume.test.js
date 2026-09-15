@@ -246,6 +246,39 @@ const wait = (ms) => new Promise((r) => setTimeout(r, ms));
 const typed = (out) => { try { return fs.readFileSync(out, 'utf8'); } catch { return ''; } };
 /** Every notification that reached a channel (push has no key here, so Telegram). */
 const notifications = () => { try { return fs.readFileSync(tgLog, 'utf8'); } catch { return ''; } };
+/** Poll a session's send-queue state — `GET /typing` is what the client reads. */
+async function untilTyping(name, fn, ms = 30_000, what = 'the queue') {
+  const deadline = Date.now() + ms;
+  for (;;) {
+    const t = (await api(`/v1/sessions/${name}/typing`)).body || {};
+    if (fn(t)) return t;
+    if (Date.now() > deadline) {
+      throw new Error(`${what} never became true within ${ms}ms. Last /typing: ${JSON.stringify(t)}`);
+    }
+    await wait(150);
+  }
+}
+/**
+ * Wait for a line to reach the notification log, rather than reading it once.
+ *
+ * ⚠ THE PANE WRITE AND THE TELEGRAM WRITE ARE NOT THE SAME AWAIT. A resume types
+ * the phrase and then announces itself, and the digest naming a session is
+ * written by the pass that resumed it — so a test that observes the phrase
+ * landing and reads the log in the next statement is reading it a beat early.
+ * Under load that beat is long enough to fail, and the digest it DOES find is
+ * some other session's, which reads as the wrong session being announced.
+ */
+async function untilLogged(re, ms = 30_000, what = 'the notification') {
+  const deadline = Date.now() + ms;
+  for (;;) {
+    const text = notifications();
+    if (re.test(text)) return text;
+    if (Date.now() > deadline) {
+      throw new Error(`${what} never reached the log within ${ms}ms. Log held: ${JSON.stringify(text).slice(0, 600)}`);
+    }
+    await wait(150);
+  }
+}
 /** Every `claude` the daemon spawned: {argv, stdin}, oldest first. */
 function claudeRuns() {
   let raw = '';
@@ -595,7 +628,7 @@ test('a stalled session is marked on /v1/sessions and announced once', async () 
   assert.equal(row.stall.resetsAtSource, 'endpoint');
   assert.equal(row.stall.nativeArmed, true, 'entrypoint:cli in the native registry, reset inside 24 h');
   assert.equal(row.stall.resumedAt, null);
-  assert.match(notifications(), new RegExp(`${s.name} hit the 5-hour limit`));
+  await untilLogged(new RegExp(`${s.name} hit the 5-hour limit`), 30_000, 'the limit notification');
   // Nothing typed: the window has not reset.
   assert.equal(typed(s.out), '');
 });
@@ -624,12 +657,18 @@ test('the phrase is typed only AFTER the native grace, and the notification says
     `typed ${resetsAt + GRACE_MS - landedAt}ms too early: the native wait was not given its turn`);
   assert.match(typed(s.out), /usage limit has reset/);
 
-  const hr = (await api('/v1/headroom')).body;
+  // Recorded, then announced — both after the phrase, neither in the same await.
+  const hr = await until(async (b) => {
+    const r = sessionRow(b, s.name);
+    return !!(r && r.stall && r.stall.how);
+  }, 45_000, 'the resume to be written onto the record');
   const row = sessionRow(hr, s.name);
   assert.equal(row.stall.how, 'appd');
   assert.equal(row.stall.attempts, 1);
   assert.ok(hr.arbiter.lastResumeAt, 'the digest fact the phone watches');
-  assert.match(notifications(), new RegExp(`Usage limit reset · resumed:.*${s.name}`));
+  const named = new RegExp(`Usage limit reset · resumed:.*${s.name}`);
+  await untilLogged(named, 30_000, `the resumed digest naming ${s.name}`);
+  assert.match(notifications(), named);
 });
 
 test('a session appd restored gets no grace — its native wait died with the process', async () => {
@@ -667,7 +706,9 @@ test('the CLI continuing by itself is seen, and NOTHING is typed', async () => {
   }, 45_000, 'a verdict on d');
   assert.equal(sessionRow(hr, s.name).stall.how, 'native');
   assert.equal(typed(s.out), '', 'two continuations would run the task twice');
-  assert.match(notifications(), new RegExp(`${s.name} \\(native\\)`),
+  const nativeNamed = new RegExp(`${s.name} \\(native\\)`);
+  await untilLogged(nativeNamed, 30_000, `the resumed digest naming ${s.name} (native)`);
+  assert.match(notifications(), nativeNamed,
     'a session that came back on its own is still listed — the owner asked what resumed');
 });
 
@@ -874,17 +915,24 @@ test('a queued resume the pump DROPS leaves the stall unresumed and unspent', as
       seen.push(st);
       assert.notEqual(st.how, 'appd', 'a send that was never delivered is not an appd resume');
       assert.equal(st.attempts, 0, 'and it must not spend one of the three attempts');
-      if (!st.queuedAt) return true;                       // reconciled in place
+      return !st.queuedAt;                                 // reconciled in place
     }
-    const t = (await api(`/v1/sessions/${s.name}/typing`)).body || {};
-    return t.queued === 0 && /you typed first/.test(t.lastError || '');
+    // No record at all. We only get here having already watched one (the wait
+    // above returned on its `queuedAt`), so this is the other correct outcome:
+    // the daemon took the owner speaking as a resolution and retired it.
+    return seen.length > 0;
   }, 45_000, 'the drop to be reconciled', s.name);
 
   assert.ok(seen.length, 'the stall was recorded at all');
   assert.equal(typed(s.out), '', 'nothing was typed at all');
   // The queue's own account of it: what the client shows, and the one place the
-  // reason survives whatever the stall record does next.
-  const q2 = (await api(`/v1/sessions/${s.name}/typing`)).body || {};
+  // reason survives whatever the stall record does next. POLLED, because the
+  // pump's settle and the stall record's reconciliation are not the same
+  // instant — whichever of the two this test saw first, the other is moments
+  // behind it, and reading either one in the next statement is reading early.
+  const q2 = await untilTyping(s.name,
+    (t) => t.queued === 0 && /you typed first/.test(String(t.lastError || '')),
+    30_000, 'the queue to report the drop');
   assert.equal(q2.queued, 0, 'the entry is out of the queue, not still waiting');
   assert.match(String(q2.lastError || ''), /you typed first/,
     'the queue says why it binned the send, in the words the client shows');
