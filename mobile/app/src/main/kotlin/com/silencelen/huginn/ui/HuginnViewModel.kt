@@ -40,6 +40,7 @@ import com.silencelen.huginn.data.SessionGraph
 import com.silencelen.huginn.data.SessionMeta
 import com.silencelen.huginn.data.SessionMetaSaver
 import com.silencelen.huginn.data.SessionOverview
+import com.silencelen.huginn.data.LoginSession
 import com.silencelen.huginn.data.LoginState
 import com.silencelen.huginn.data.RouteResolver
 import com.silencelen.huginn.data.UriByteStream
@@ -164,6 +165,32 @@ internal suspend fun fetchStreamAgents(
     client: HuginnClient,
     name: String,
 ): List<com.silencelen.huginn.data.AgentRun> = client.sessionAgents(name, all = true).agents
+
+/**
+ * The composer templates, saved.
+ *
+ * A function of its own, `internal`, for the same reason [fetchStreamAgents] is:
+ * the ARGUMENTS are the behaviour, and the view model cannot be built without an
+ * Application, so this is the only place they can be held to.
+ *
+ * ⚠ THE `rev` IS THE POINT. It is the copy the editor was opened on, and the
+ * daemon 409s a stale one rather than silently taking the older text — two
+ * clients editing the same four templates is the ordinary case here, not the
+ * exotic one, and without the guard the second Save wins by being second. All
+ * four fields go every time because the editor holds all four: sending only what
+ * changed would need this to know what "changed" means, and the editor already
+ * reloaded itself from the answer.
+ */
+internal suspend fun saveQuickActions(
+    client: HuginnClient,
+    edited: com.silencelen.huginn.data.QuickActions,
+): com.silencelen.huginn.data.QuickActions = client.setQuickActions(
+    explain = edited.explain,
+    execute = edited.execute,
+    askInNewChat = edited.askInNewChat,
+    quote = edited.quote,
+    rev = edited.rev,
+)
 
 internal class AgentStream {
 
@@ -1326,6 +1353,92 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
                 }
                 .onFailure { _toast.value = errText(it); _login.value = null }
             _loginBusy.value = false
+        }
+    }
+
+    // ------------------------------------------------- the shared editors' IO
+    //
+    // `AccountsEditor` is `:ui`'s and reaches the daemon through its own small
+    // interface; these are the phone's side of it. SUSPEND AND THROWING, on
+    // purpose: the editor's whole value is that it reads the daemon's own
+    // refusal — a duplicate, a mismatch, a 409 naming the expired login — and a
+    // forwarder that swallowed the exception into a toast would leave it with a
+    // blank where the sentence should be.
+    //
+    // They still go through the view model rather than handing the editor a
+    // client, so a switch made in the editor invalidates the caches every other
+    // switch does and the rest of the app hears about it.
+
+    suspend fun fetchAccount(): Account =
+        client.account().also { _account.value = it }
+
+    /** withPlan: the weekly figure is what says which login to switch TO. */
+    suspend fun fetchSavedAccounts(): List<SavedAccount> =
+        client.savedAccounts(withPlan = true).also { _savedAccounts.value = it }
+
+    suspend fun fetchAutoswitch(): Autoswitch =
+        client.autoswitch().also { _autoswitch.value = it }
+
+    /** Answers a STATUS WORD, not a boolean — `invalid_grant`, `lock_busy`, … */
+    suspend fun refreshAccountToken(slug: String): String =
+        client.refreshAccount(slug).also { runCatching { fetchSavedAccounts() } }
+
+    suspend fun activateAccountNow(slug: String) {
+        _account.value = client.activateAccount(slug)
+        // The plan figure belongs to the account that just stopped serving.
+        _plan.value = null
+        refreshPlan()
+        runCatching { fetchSavedAccounts() }
+    }
+
+    suspend fun forgetAccountNow(slug: String) {
+        client.forgetAccount(slug)
+        runCatching { fetchSavedAccounts() }
+    }
+
+    /** The URL goes to the editor, which opens it; this app never pastes it. */
+    suspend fun startLoginNow(email: String?): LoginSession = client.startLogin(email)
+
+    suspend fun submitLoginCodeNow(code: String): LoginState =
+        client.submitLoginCode(code.trim()).also { st ->
+            if (st.done) {
+                runCatching { fetchAccount() }
+                runCatching { fetchSavedAccounts() }
+            }
+        }
+
+    // -------------------------------------------------------- quick actions
+
+    private val _quickActionsSaving = MutableStateFlow(false)
+    val quickActionsSaving: StateFlow<Boolean> = _quickActionsSaving.asStateFlow()
+
+    /** The daemon's own words about the last save. Null until there has been one. */
+    private val _quickActionsNote = MutableStateFlow<String?>(null)
+    val quickActionsNote: StateFlow<String?> = _quickActionsNote.asStateFlow()
+
+    /**
+     * Saves the composer templates the host owns.
+     *
+     * ⚠ THE REFUSALS ARE THE DAEMON'S. `{selection}` exactly once, never in the
+     * quote lead-in, 400 characters each, and a `rev` guard that 409s a stale
+     * copy rather than silently taking the older text. None of those rules are
+     * re-implemented here: a second copy would eventually disagree with the one
+     * that decides, and then the app would refuse something the host accepts.
+     * What comes back is written straight into `status` so every composer on
+     * this phone stages the new wording immediately.
+     */
+    fun setQuickActions(edited: com.silencelen.huginn.data.QuickActions) {
+        if (_quickActionsSaving.value) return
+        _quickActionsSaving.value = true
+        _quickActionsNote.value = null
+        viewModelScope.launch {
+            runCatching { saveQuickActions(client, edited) }
+                .onSuccess { saved ->
+                    _status.value = _status.value?.copy(quickActions = saved)
+                    _quickActionsNote.value = "Saved."
+                }
+                .onFailure { _quickActionsNote.value = errText(it) }
+            _quickActionsSaving.value = false
         }
     }
 
