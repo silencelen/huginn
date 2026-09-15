@@ -374,13 +374,20 @@ object SettingsCatalog {
                 availability = { it.alerts },
                 inventory = listOf(9),
             ),
+            // ⚠ The four rows below are THIS PHONE's own — its watch, its doze
+            // exemption, its delivery witnesses, Android's permission. None of
+            // them needs the host's /v1/alerts route, and the old screen always
+            // showed them; gating them on `alerts` (as the first cut did) made an
+            // old or unreachable daemon hide the switch that decides whether the
+            // phone notifies at all. Only the two host-alert rows above are the
+            // host's to have or lack.
             SettingsItem(
                 id = "notify.device-watch",
                 title = "Tell me when a session needs me",
                 summary = "Whether this device raises its own notification, and whether it keeps watching between them.",
                 keywords = listOf("push", "notification", "watch", "continuously", "attention"),
                 surface = Surface.PHONE,
-                availability = { it.alerts },
+                availability = { true },
                 inventory = listOf(19, 20),
             ),
             SettingsItem(
@@ -389,7 +396,7 @@ object SettingsCatalog {
                 summary = "Lets Android keep this app's watch awake while the screen is off.",
                 keywords = listOf("doze", "battery", "background", "android", "exemption"),
                 surface = Surface.PHONE,
-                availability = { it.alerts },
+                availability = { true },
                 inventory = listOf(21),
             ),
             SettingsItem(
@@ -398,7 +405,7 @@ object SettingsCatalog {
                 summary = "Which route the last notifications actually took, and when each was last heard from.",
                 keywords = listOf("push", "fcm", "delivery", "witness", "cadence", "diagnostics"),
                 surface = Surface.PHONE,
-                availability = { it.alerts },
+                availability = { true },
                 inventory = listOf(22, 23),
             ),
             SettingsItem(
@@ -407,7 +414,7 @@ object SettingsCatalog {
                 summary = "Whether Android lets this app show notifications at all.",
                 keywords = listOf("permission", "allow", "android", "system", "blocked"),
                 surface = Surface.PHONE,
-                availability = { it.alerts },
+                availability = { true },
                 inventory = listOf(24, 25),
             ),
             SettingsItem(
