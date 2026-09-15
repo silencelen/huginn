@@ -24,11 +24,17 @@
 //   ladder    a SESSION-ONLY model change appd typed into a live pane.
 //   sentinel  a file the hook gate watches; arming one holds new spawns.
 //
-// ⚠ EVERY TIMESTAMP HERE IS MILLISECONDS — `now`, `lastSwitchAt`, `lastLadderAt`,
-// `ladder.at`, `headsUpAt`, `nativeSwitch.seenAt`, `humanSetModelAt`, and the
-// reset events. `headroom.json` stores them the same way. The daemon's other
+// ⚠ EVERY TIMESTAMP HERE IS MILLISECONDS, WITHOUT EXCEPTION — `now`,
+// `lastSwitchAt`, `lastLadderAt`, `lastResumeAt`, `ladder.at`, `headsUpAt`,
+// `nativeSwitch.seenAt`, `humanSetModelAt`, `readAt`, the reset events (`at` AND
+// `seenAt`), the sentinels' `since`, the held rows' `since`, and `serverTime` on
+// `/v1/headroom`. `headroom.json` stores them the same way. The daemon's other
 // stores use epoch SECONDS and mixing the two silently turns a 30-minute
 // cooldown into a 30-millisecond one, which is a cooldown that does not exist.
+//
+// This banner used to be HALF TRUE: `resets[].seenAt`, `sentinels.*.since` and
+// `arbiter.lastResumeAt` were seconds, sitting in the same payload as `ladder.at`
+// and `lastSwitchAt` in ms, with no field-name tell. A reader cannot guess.
 
 const { parseModelId, familyOf } = require('./models');
 const { isLimitStall, parseLimitError, lastNonAttachmentRecord } = require('./limits');
@@ -316,7 +322,7 @@ function detectResets(prevAccounts, nextAccounts, nowMs = Date.now(), settings =
       const p = fresh ? numOrNull(fresh.percent) : null;
       if (p === null || fresh.severity === 'exceeded') continue;     // still unreadable / still exceeded
       if (p >= settings.clearBelowPct) continue;                     // the wire half
-      out.push({ slug, window, resetsAt, percent: p, seenAt: Math.floor(nowMs / 1000) });
+      out.push({ slug, window, resetsAt, percent: p, seenAt: nowMs });
     }
   }
   return out;
