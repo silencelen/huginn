@@ -65,6 +65,7 @@ PS C:\> huginn solo
 | 💸 **Subscription, not metered** | Log Claude Code into your **Max/Pro** plan — flat cost, no per-token billing. (API key works too.) |
 | 🔌 **No daemon, no ports** | Just SSH. Add Tailscale/WireGuard and it works from anywhere. (The apps below are the opt-in exception.) |
 | 📲 **Native apps, opt-in** | An Android app and a Windows/Linux desktop app (one shared Kotlin codebase) with streaming chats, structured session views, push notifications, and permission prompts as tappable buttons — [see below](#-the-apps-optional). |
+| 📊 **Never silently capped** | *(with the daemon)* huginn watches the plan's usage windows: it warns a session before it runs out, steps it down a model **for that session only** (never rewriting your default), holds new subagent spawns while the account is tight, and resumes what stalled the moment the limit resets. `huginn headroom` shows the whole picture — [details](docs/USAGE.md#headroom-usage-limits). |
 | 🪶 **Tiny core** | The terminal path is a few shell scripts + a tmux config. The value is the *pattern*. |
 
 ## 🚀 Quick start

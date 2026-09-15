@@ -129,10 +129,42 @@ whole host, and two different usage readings:
 - **Plan usage** (on the Status tab) — the same rows `/usage` prints (current session, current week
   all-models, current week per-model), each with a bar and a reset countdown,
   read from `/api/oauth/usage` with the host's own credentials. The app is handed
-  percentages only; the token never leaves the daemon.
+  percentages only; the token never leaves the daemon. The section is **captioned
+  with the account the numbers belong to** — the signed-in email and plan, cached
+  with the numbers themselves, so a switch cannot leave the new account's bars
+  wearing the old name.
 - **Tokens** (on the Status tab) — volume for today and the last week from ccusage. Counts are exact;
   the dollar figures are list-price estimates that run high on a Max plan and are
   labelled as a trend, not a bill.
+
+**Headroom: the app knows what the plan has left, and says what huginn did
+about it.** Appd 3.0.0 made the daemon usage-aware; this is what surfaces.
+
+- **A pill in the top bar** — the fullest of the three windows and when it
+  resets, coloured as it fills. Tap it for the whole picture.
+- **Settings → Headroom** holds the policy: the percentage at which a Fable
+  session gets a handoff heads-up, the percentage at which it is stepped down to
+  the next model, the ladder order, the default model new runs launch with, the
+  percentages that hold subagent spawns, auto-resume and the phrase it resumes
+  with, and account auto-switch (which moved here from its own screen).
+- **A session that hits a usage limit says so.** It shows as a notice on the
+  session, not as an answer — the difference matters, because a limit is not
+  something Claude said. When the window resets huginn resumes it and tells you
+  which sessions came back and how; the per-session toggle on the control bar
+  overrides the global default for that one session.
+- **The Fable step-down is visible and reversible.** At the heads-up threshold
+  the session is asked, in its own pane, to write a handoff note; at the
+  step-down threshold it is moved to the next model for **that session only**,
+  and the notification carries **Undo**. Your host default model is never
+  rewritten.
+- **Watch any agent.** A picker above a session's conversation lists Main and
+  every subagent and workflow member, and reads that one's own transcript with
+  the same paging as the parent's — so a long workflow can be watched at the
+  level that is actually working.
+- **Accounts say whether they are still usable.** Every saved login shows fresh,
+  expiring, expired or gone, because the daemon now keeps the inactive ones
+  refreshed; a switch to a dead one is refused with the reason instead of
+  "could not switch".
 
 **Drafts persist.** An unsent message stays in its composer across navigation and
 app restarts, per session and per chat.
@@ -192,7 +224,8 @@ root SSH key: if a device carrying it is lost, rotate the file, restart the unit
 | GET | `/v1/sessions/<name>/screen` | `?cols=&rows=` leases a resize, `?history=` adds scrollback, `?hash=&wait=` long-polls, `?force=1` resizes past an attached client |
 | DELETE | `/v1/sessions/<name>/size` | release the resize lease now |
 | GET | `/v1/sessions/<name>/transcript` | structured events; `?offset=` tails |
-| POST | `/v1/sessions/<name>/keys` | `{text?, keys?, scratchpadId?}`; keys validated against an allowlist. A scratchpad is sent as a PATH the pane's Claude can read, not as its text — `null` means Main |
+| POST | `/v1/sessions/<name>/keys` | `{text?, keys?, scratchpadId?}`; keys validated against an allowlist. A scratchpad is sent as a PATH the pane's Claude can read, not as its text — `null` means Main. Text up to 100,000 chars, delivered by bracketed paste, and QUEUED until a real turn boundary so it is never spliced into the answer being written; interrupt keys are never queued |
+| GET | `/v1/sessions/<name>/typing` | what is waiting to be typed into this session and why it has not gone yet |
 | POST | `/v1/sessions/<name>/answer` | `{option}` or `{options:[…]}` for multi-select, plus `fingerprint?`; answers a numbered prompt. Refuses with 409 if the pane no longer shows that question |
 | GET | `/v1/watch` | change signal; `?stream=1` is SSE with a 25s keepalive, otherwise a long poll |
 | GET | `/v1/clients` | which phones have checked in, and how recently |
@@ -215,8 +248,13 @@ root SSH key: if a device carrying it is lost, rotate the file, restart the unit
 | GET | `/v1/desktop-kt/manifest` | the desktop client's appd-side update feed — the transition path for installed 0.5.x clients; newer ones fetch from the [GitHub release](#the-desktop-client) |
 | GET | `/v1/sessions/<name>/suggestions` | suggested next messages at a turn boundary (cached by transcript size) |
 | GET | `/v1/chats/<id>/suggestions` | the same, for a chat |
-| GET | `/v1/sessions/<name>/agents` | the individual agents behind a fan-out |
-| GET | `/v1/autoswitch` · POST | automatic account rotation state / `{enabled}` |
+| GET | `/v1/sessions/<name>/agents` | the individual agents behind a fan-out; `?all=1` adds every workflow member |
+| GET | `/v1/sessions/<name>/agents/<agentId>/transcript` | one agent's own transcript, paged like the parent's |
+| GET | `/v1/autoswitch` · POST | automatic account rotation state / `{enabled}`. An alias onto `headroom.settings.accountSwitch`, kept for one release |
+| GET | `/v1/headroom` | the whole usage picture: every account's three windows, what is stalled, what is held, what the arbiter last decided and why |
+| PATCH | `/v1/headroom/settings` | thresholds, ladder order, default model, auto-resume + phrase, account auto-switch |
+| POST | `/v1/sessions/<name>/headroom/undo` | put a laddered session back on the model it was moved off (the Undo button) |
+| POST | `/v1/accounts/<slug>/refresh` | refresh a saved INACTIVE login's OAuth token; refuses on the active one |
 | POST | `/v1/rounds/polish` | `{field, title?, prompt?, goal?, mode?}`; one better draft of that field, as a proposal a person accepts — never applied, and 200 with `{error}` when the model cannot answer |
 | GET | `/v1/rounds` · POST | scheduled recurring runs (list); POST creates one from `{title, prompt, goal?, schedule, …}` |
 | GET | `/v1/rounds/<id>` · PATCH · DELETE | one round: view / edit its schedule+goal / delete it and its run history |
@@ -230,7 +268,7 @@ root SSH key: if a device carrying it is lost, rotate the file, restart the unit
 | GET | `/v1/scratchpads/<id>` · PATCH · DELETE | PATCH is the autosave, `{rev, name?, content?}` — a stale `rev` comes back 409 with the current page to adopt. Main cannot be renamed or deleted |
 | GET | `/v1/sessions/<name>/overview` | what this run has spent and what it did; 409 until the Claude hook has recorded a transcript. Deliberately not in the session list or the watch digest |
 | GET | `/v1/sessions/<name>/graph` | the map of the same run; `?size=&agentBytes=` is a two-part cursor and answers `{unchanged:true}` while neither has moved |
-| POST | `/v1/sessions/<name>/meta` | `{goals?, notes?}`; kept against the Claude session id and not the window name, so 409 before a first prompt has landed |
+| POST | `/v1/sessions/<name>/meta` | `{goals?, notes?, autoResume?}`; `autoResume` is three-valued (`true`/`false`/`null` = follow the global setting). Kept against the Claude session id and not the window name, so 409 before a first prompt has landed |
 
 SSE events: `started`, `delta`, `assistant`, `tool_start`, `tool`, `result`,
 `error`, `done`. Each run keeps a bounded replay buffer so a phone that locks

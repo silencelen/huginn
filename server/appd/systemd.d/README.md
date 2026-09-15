@@ -1,11 +1,18 @@
 # Drop-ins for `huginn-appd.service`
 
-`deploy.sh` does NOT touch the unit — verified 2026-08-14: it installs huginn-appd.js
-and lib/*.js and restarts, nothing more, so a direct edit is not reverted. Drop-ins are
+`deploy.sh` does NOT touch the unit — verified 2026-08-14 and still true: it installs
+huginn-appd.js, lib/*.js, hooks/* and install-hooks.js, restarts, and (since appd
+3.0.0) runs `install-hooks.js` to add the headroom gate to `~/.claude/settings.json`.
+It never writes the unit, so a direct edit is not reverted. Drop-ins are
 still the right home for policy (they survive a future unit reinstall and keep the
 unit itself generic), so anything that must survive a deploy lives
 here and is installed to `/etc/systemd/system/huginn-appd.service.d/` instead of
 being edited into the unit.
+
+⚠ The hook gate's own knobs (`HUGINN_HEADROOM_DIR`, `HUGINN_GATE_TIMEOUT`,
+`HUGINN_GATE_POLL`) are **not** in the table below and a drop-in cannot set them:
+the gate runs as a Claude Code hook, in the CLI's environment, not the daemon's.
+`node install-hooks.js --uninstall` removes the two hook entries it added.
 
 | file | why |
 |---|---|

@@ -21,6 +21,43 @@ Huginn puts a capable AI coding agent on an always-on host and lets you drive it
 - **Richer credentials live behind it.** `/var/lib/huginn-appd/accounts/` holds a full OAuth blob per saved Claude login, and `/etc/huginn-appd/fcm-service-account.json` is a Google service-account key for push. Both are root-only on disk, and both are worth more to an attacker than the token that guards them.
 - **Uploads are not filtered by type**, up to 128 MB each, into `/var/lib/huginn-appd/uploads/`. Deliberate — an attachment is whatever the phone had, and an `act` chat may need to `unzip` or `sqlite3` it — but an authenticated client can put arbitrary bytes on the host's disk.
 
+## What's exposed — headroom (appd 3.0.0)
+
+Making the daemon usage-aware added two things that touch credentials and one that touches the
+host's own Claude Code configuration. All three are opt-out-able by not deploying the daemon.
+
+- **The hook gate edits `~/.claude/settings.json`.** `deploy.sh` runs `install-hooks.js`, which adds
+  two entries pointing at a local script (`hooks/huginn-headroom-gate`) — `SubagentStart` and
+  `PreToolUse Agent|Workflow`. From then on that script runs on the spawn path of every agent in
+  every session on the host, huginn's or not. It is deliberately small: bash, coreutils only, no
+  network, no jq, no node. It **delays and never denies** — it sleeps while a sentinel file exists
+  and then lets the spawn through, and it exits 0 unconditionally, because a non-zero hook is read
+  by the CLI as a block and a gate that can block is a gate that can wedge a session at 3am over a
+  percentage. A hook that outruns its `timeout` is SIGKILLed and the spawn is **allowed**, silently:
+  it fails open. The gate self-releases 30 s before that deadline so the release is its own and the
+  bookkeeping stays honest. The installer parses first and refuses on unreadable JSON rather than
+  overwriting a file that also holds your `model`, `permissions` and everyone else's hooks; it adds
+  by `command`, so a second run is a no-op, and `--uninstall` removes exactly those two entries.
+- **The daemon refreshes OAuth tokens — for inactive profiles only.** Every saved-but-not-active
+  Claude login in `/var/lib/huginn-appd/accounts/` is refreshed on a timer, five minutes before its
+  access token expires, using the same grant, public client id and **the same lock file
+  (`mkdir`-based, shared) the CLI uses**, and written back under that account's own id. It never
+  touches `~/.claude/.credentials.json`. That boundary is the entire safety story: the token
+  endpoint *rotates* the pair, so refreshing the active login moves the daemon's copy forward while
+  the CLI keeps the old refresh token — and the CLI's documented response to the `invalid_grant`
+  that follows is to blank its own credentials file. You would be signed out mid-session with no
+  visible cause. The active guard is therefore re-checked inside the lock, by refresh-token
+  fingerprint, immediately before the request. An unexpected non-200 fails **closed** — it records a
+  status and stops, rather than retrying against an endpoint whose shape was read out of the shipped
+  CLI binary and can change in any release. Nothing in that path logs, prints or returns a token
+  value: callers get an account slug and one status word.
+- **`/model <name>` persists the host default, so the daemon never types it.** Setting a model by
+  name writes `model` into `~/.claude/settings.json` about a second later — a host-wide change made
+  by a background daemon over a usage percentage, which is not a thing a daemon should do. The model
+  ladder therefore only ever uses the `/model` picker's **"use this session only"** key, which
+  writes nothing, and it requires the confirmation line before recording the move as delivered. Your
+  default model stays yours; a default a human set is never repaired or overruled.
+
 ## What's exposed — distributed execution (devices & the local tier)
 
 If you enrol *devices* (the daemon dispatching `act`/`generate` work to other
