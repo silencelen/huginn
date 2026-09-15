@@ -241,6 +241,18 @@ class AccountStore {
    * the caller must have resolved from these very credentials — see the ladder at
    * the top of this file. With no uuid the fingerprint is used, which is correct
    * but only until the token rotates.
+   *
+   * ⚠ `extra.keepSlug` IS THE THIRD RUNG, and it exists for exactly one caller.
+   * A refresh ROTATES the refresh token, so a record with no uuid gets a new
+   * fingerprint and therefore a new filename — leaving the old file holding the
+   * dead token AND the only `lastPlan`, which `consolidate()` will never merge
+   * (different fingerprints, no shared uuid). The login then shows twice on
+   * /v1/accounts, the refresher wastes a POST on the dead row until it is marked
+   * known_dead_refresh_token, and because `limitsOf` reads `lastPlan` the DEAD
+   * row is the only one the auto-switcher will consider a candidate at all.
+   * `refreshWithStore` passes the slug it read, which is the record it is
+   * REPLACING; nothing else may pass it, and it is honoured only when a record
+   * actually lives at that name.
    */
   save(email, creds, extra = {}) {
     const fp = fingerprint(creds);
@@ -254,7 +266,10 @@ class AccountStore {
     const uuid = normUuid(extra.accountUuid)
       ?? byFingerprint.map((e) => normUuid(e.rec.accountUuid)).find(Boolean)
       ?? null;
-    const slug = uuid || fp;
+    const keep = typeof extra.keepSlug === 'string' && all.some((e) => e.slug === extra.keepSlug)
+      ? extra.keepSlug
+      : null;
+    const slug = uuid || keep || fp;
 
     // Every record that is PROVABLY this same login: it carries the same account
     // uuid, or it holds the same refresh token, or it is the file we are writing.
@@ -276,7 +291,7 @@ class AccountStore {
       : ((base && base.oauthAccount) ?? null);
 
     const now = Math.floor(Date.now() / 1000);
-    const { accountUuid: _u, taggedId, ...rest } = extra;
+    const { accountUuid: _u, taggedId, keepSlug: _k, ...rest } = extra;
     const firstSeen = Math.min(
       ...mine.map((e) => e.rec.firstSeen ?? now),
       typeof extra.firstSeen === 'number' ? extra.firstSeen : now,
