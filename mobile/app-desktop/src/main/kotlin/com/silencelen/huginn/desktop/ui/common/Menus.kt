@@ -1,11 +1,15 @@
 package com.silencelen.huginn.desktop.ui.common
 
 import androidx.compose.foundation.ContextMenuArea
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.ContextMenuItem
 import androidx.compose.foundation.ContextMenuRepresentation
 import androidx.compose.foundation.ContextMenuState
 import androidx.compose.foundation.LocalContextMenuRepresentation
 import androidx.compose.foundation.background
+import androidx.compose.foundation.text.LocalTextContextMenu
+import androidx.compose.foundation.text.TextContextMenu
+import androidx.compose.foundation.text.TextContextMenuArea
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.hoverable
@@ -33,6 +37,7 @@ import androidx.compose.ui.input.key.KeyEventType
 import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
+import androidx.compose.ui.platform.LocalLocalization
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.DpOffset
 import androidx.compose.ui.unit.dp
@@ -40,7 +45,10 @@ import androidx.compose.ui.window.Popup
 import androidx.compose.ui.window.PopupProperties
 import androidx.compose.ui.window.rememberCursorPositionProvider
 import com.silencelen.huginn.data.Chat
+import com.silencelen.huginn.data.QuickActions
 import com.silencelen.huginn.data.Session
+import com.silencelen.huginn.ui.QuickActionRules
+import com.silencelen.huginn.ui.SelectionAction
 
 /**
  * Right-click menus.
@@ -270,3 +278,106 @@ fun sessionMenu(session: Session, selection: Set<String>, verbs: SessionVerbs): 
 
 /** Labels only — what a test asserts, and what a screenshot should show. */
 fun labelsOf(items: List<ContextMenuItem>): List<String> = items.map { it.label }
+
+// -------------------------------------------------------- selected text
+//
+// The verb surface a transcript already has: exactly one, the toolkit's Copy.
+// These four join it — Explain, Execute, Quote, Ask in a new chat — and every one
+// of them STAGES TEXT IN A COMPOSER. None of them sends. That is what makes
+// right-click safe to put over a conversation at all: the worst outcome of a
+// mis-click is text to delete.
+
+/**
+ * The handlers the selection menu needs. Named, so a call site cannot swap two —
+ * and swapping Explain for Execute here would be a mis-fire nobody could see in
+ * the menu, only in what appeared in the box.
+ */
+class SelectionVerbs(
+    val explain: (String) -> Unit,
+    val execute: (String) -> Unit,
+    val quote: (String) -> Unit,
+    val askInNewChat: (String) -> Unit,
+)
+
+/**
+ * What to offer over selected transcript text.
+ *
+ * Pure, and the decision it carries is [QuickActionRules.offered]'s — shared with
+ * the phone's action bar so the two clients never disagree about which verbs a
+ * selection deserves. An EMPTY list is the right answer more often than it looks:
+ * these items are PREPENDED to the toolkit's own, so returning nothing leaves
+ * Copy exactly as it was.
+ *
+ * @param actions the host's wording, or null on a daemon older than 3.0.1 — which
+ *   narrows this to Quote, the one verb whose text this client writes itself.
+ */
+fun selectionMenu(
+    selection: String,
+    actions: QuickActions?,
+    verbs: SelectionVerbs,
+): List<ContextMenuItem> = QuickActionRules.offered(selection, actions).map { action ->
+    // Not destructive, any of them: red would be claiming a verb does something
+    // that cannot be undone, and staging text in a composer is undone by Delete.
+    HuginnMenuItem(action.label) {
+        when (action) {
+            SelectionAction.EXPLAIN -> verbs.explain(selection)
+            SelectionAction.EXECUTE -> verbs.execute(selection)
+            SelectionAction.QUOTE -> verbs.quote(selection)
+            SelectionAction.ASK_IN_NEW_CHAT -> verbs.askInNewChat(selection)
+        }
+    }
+}
+
+/**
+ * Installs [selectionMenu] over the text selection inside [content].
+ *
+ * ⚠⚠ THIS IS [LocalTextContextMenu], NOT the [LocalContextMenuRepresentation]
+ * that [WithHuginnMenus] provides at the shell root. Two different composition
+ * locals, trivially conflated, and they answer different questions: the
+ * representation is the LOOK (drawn once, for every menu in the app), this is the
+ * CONTENT of the menu the toolkit opens over selected text. Providing the wrong
+ * one gets you a correctly-styled menu with no new entries in it and looks for
+ * all the world like the feature silently failed.
+ *
+ * Provided TIGHTLY, around the transcript's `SelectionContainer` and nothing
+ * else. Every `TextField` in the app reads the same local, so providing this any
+ * higher would put "Explain" in the right-click menu of the composer the text is
+ * being staged into.
+ *
+ * Our items are PREPENDED to the toolkit's own — Copy, and whatever else the
+ * selection manager offers — rather than replacing them, which is why this
+ * rebuilds the default's item list (from [LocalLocalization], so the wording
+ * stays the platform's) instead of calling `TextContextMenu.Default`: the default
+ * builds the area itself and there is no seam to add to.
+ */
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+fun WithTranscriptSelectionMenu(
+    verbs: SelectionVerbs,
+    actions: QuickActions?,
+    content: @Composable () -> Unit,
+) {
+    val localization = LocalLocalization.current
+    val menu = remember(verbs, actions, localization) {
+        object : TextContextMenu {
+            @Composable
+            override fun Area(
+                textManager: TextContextMenu.TextManager,
+                state: ContextMenuState,
+                content: @Composable () -> Unit,
+            ) {
+                val items = {
+                    selectionMenu(textManager.selectedText.text, actions, verbs) +
+                        listOfNotNull(
+                            textManager.cut?.let { ContextMenuItem(localization.cut, it) },
+                            textManager.copy?.let { ContextMenuItem(localization.copy, it) },
+                            textManager.paste?.let { ContextMenuItem(localization.paste, it) },
+                            textManager.selectAll?.let { ContextMenuItem(localization.selectAll, it) },
+                        )
+                }
+                TextContextMenuArea(textManager, items, state, content)
+            }
+        }
+    }
+    CompositionLocalProvider(LocalTextContextMenu provides menu, content = content)
+}

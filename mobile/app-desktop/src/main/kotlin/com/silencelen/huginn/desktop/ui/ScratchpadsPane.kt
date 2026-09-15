@@ -192,7 +192,7 @@ private fun PadEditor(store: AppStore, target: PadTarget?, modifier: Modifier) {
             // tell, and "nothing happened" is the least useful thing to say
             // about a page with nothing on it.
             onSendHere = target?.takeIf { text.isNotBlank() }?.let { t ->
-                { store.stagePadInDraft(t.draftKey, text) }
+                { store.appendToDraft(t.draftKey, text) }
             },
             onSendElsewhere = if (text.isNotBlank()) ({ picking = true }) else null,
             onRename = { name -> scope.launch { store.renamePad(pad?.id ?: return@launch, name) } },
@@ -214,13 +214,13 @@ private fun PadEditor(store: AppStore, target: PadTarget?, modifier: Modifier) {
                     onNewChat = null,
                     onSession = { name ->
                         picking = false
-                        store.stagePadInDraft(DraftBook.sessionKey(name), text)
+                        store.appendToDraft(DraftBook.sessionKey(name), text)
                         store.openSession(name)
                         store.openView(View.SESSIONS)
                     },
                     onChat = { id ->
                         picking = false
-                        store.stagePadInDraft(DraftBook.chatKey(id), text)
+                        store.appendToDraft(DraftBook.chatKey(id), text)
                         store.openChat(id)
                         store.openView(View.CHATS)
                     },

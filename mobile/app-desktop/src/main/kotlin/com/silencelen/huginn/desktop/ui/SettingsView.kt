@@ -136,6 +136,8 @@ fun SettingsView(store: AppStore) {
 
         HeadroomSection(store)
 
+        QuickActionsSection(store)
+
         SectionHeader("Notifications")
         Row(verticalAlignment = Alignment.CenterVertically) {
             Switch(
@@ -1064,6 +1066,88 @@ private fun LocalServeSection(store: AppStore) {
     }
     // The manager's own words, raw: if it ever lies, the lie is inspectable.
     log.forEach { Muted(it, Modifier.padding(start = 8.dp), maxLines = 1) }
+}
+
+// -------------------------------------------------------- quick actions
+
+/**
+ * The wording each right-click / long-press verb puts in the composer.
+ *
+ * EDITED HERE BECAUSE IT LIVES ON THE HOST, which is the whole point of the
+ * feature: one copy of the phrasing, so the phone and this window stage the same
+ * text and neither can drift. Same reasoning, and the same shelf on `/v1/status`,
+ * as the soft-end phrase.
+ *
+ * HIDDEN ENTIRELY against a daemon that has no templates (3.0.x): an editor with
+ * nothing behind it is four boxes whose Save can only 404. That is the same probe
+ * the selection menu runs when it narrows itself to Quote.
+ *
+ * The REFUSALS are the daemon's — `{selection}` exactly once, never in the quote
+ * lead-in, 400 characters each — and this reports its words rather than growing a
+ * second copy of the rules that would eventually disagree with it.
+ */
+@Composable
+private fun QuickActionsSection(store: AppStore) {
+    val scope = rememberCoroutineScope()
+    val status by store.status.collectAsState()
+    val actions = status?.quickActions ?: return
+
+    // Keyed on `rev`, so a save (or another client's) refills the boxes rather
+    // than leaving this window editing a copy the host has already moved past.
+    var explain by remember(actions.rev) { mutableStateOf(actions.explain) }
+    var execute by remember(actions.rev) { mutableStateOf(actions.execute) }
+    var askInNewChat by remember(actions.rev) { mutableStateOf(actions.askInNewChat) }
+    var quote by remember(actions.rev) { mutableStateOf(actions.quote) }
+    var busy by remember { mutableStateOf(false) }
+    var note by remember { mutableStateOf<String?>(null) }
+
+    SectionHeader("Quick actions")
+    Muted("What Explain, Execute and Ask in a new chat put in the composer when you right-click selected text. {selection} is the text you selected. Nothing is ever sent — it is staged for you to edit.")
+
+    @Composable
+    fun Field(label: String, value: String, onChange: (String) -> Unit) {
+        OutlinedTextField(
+            value = value,
+            onValueChange = onChange,
+            label = { Text(label) },
+            minLines = 2,
+            maxLines = 4,
+            modifier = Modifier.padding(top = 10.dp).widthIn(min = 320.dp, max = 560.dp),
+        )
+    }
+
+    Field("Explain", explain) { explain = it }
+    Field("Execute", execute) { execute = it }
+    Field("Ask in new chat", askInNewChat) { askInNewChat = it }
+    Field("Quote lead-in (optional, no {selection})", quote) { quote = it }
+    // The frame itself is not editable and is not shown as a field: "> " in front
+    // of every line is a markdown fact this client owns, not a phrase.
+    Muted("Quote always frames the selection as a > block; the lead-in sits above it.", Modifier.padding(top = 4.dp))
+
+    Button(
+        onClick = {
+            scope.launch {
+                busy = true
+                note = runCatching {
+                    store.client.setQuickActions(
+                        explain = explain,
+                        execute = execute,
+                        askInNewChat = askInNewChat,
+                        quote = quote,
+                        rev = actions.rev,
+                    )
+                }.fold(
+                    { store.refreshStatus(); "saved — both clients use this wording now" },
+                    { it.message ?: "could not save" },
+                )
+                busy = false
+            }
+        },
+        enabled = !busy,
+        modifier = Modifier.padding(top = 10.dp),
+    ) { Text("Save quick actions") }
+
+    note?.let { Muted(it, Modifier.padding(top = 6.dp), maxLines = 2) }
 }
 
 @Composable

@@ -58,6 +58,7 @@ import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.unit.dp
 import com.silencelen.huginn.data.DraftBook
 import com.silencelen.huginn.data.HuginnClient
+import com.silencelen.huginn.data.Status
 import com.silencelen.huginn.data.TranscriptEvent
 import com.silencelen.huginn.ui.Escalation
 import com.silencelen.huginn.ui.ScratchpadRefBadge
@@ -77,6 +78,8 @@ import com.silencelen.huginn.desktop.attach.attachmentDropTarget
 import com.silencelen.huginn.desktop.attach.composeMessage
 import com.silencelen.huginn.desktop.attach.rememberAttachmentController
 import com.silencelen.huginn.desktop.ui.chat.ChatTopBar
+import com.silencelen.huginn.desktop.ui.common.WithTranscriptSelectionMenu
+import com.silencelen.huginn.desktop.ui.common.rememberSelectionVerbs
 import com.silencelen.huginn.ui.HistoryWalk
 import com.silencelen.huginn.ui.handleHistoryKey
 import com.silencelen.huginn.ui.exitRecallIfDiverged
@@ -213,6 +216,12 @@ fun ChatView(
         }
     }
 
+    // The host's quick-action wording, and the verbs bound to THIS chat's
+    // composer. Null wording is the 3.0.x probe: the menu narrows to Quote.
+    val status by (store?.status ?: remember { MutableStateFlow<Status?>(null) }).collectAsState()
+    val quickActions = status?.quickActions
+    val selectionVerbs = rememberSelectionVerbs(store, draftKey, detail?.mode, quickActions)
+
     val events = page?.events ?: emptyList()
     val rows = remember(events) { TranscriptGroups.group(events) }
     val rowKeys = remember(rows) { TranscriptGroups.keys(rows) }
@@ -335,32 +344,38 @@ fun ChatView(
                         NewChatHint(detail?.mode ?: "ask")
                     }
 
-                else -> SelectionContainer {
-                    // The rows are the phone's rows and carry no outer margin of
-                    // their own, so the gap between them belongs to whoever lists
-                    // them — and that gap is a density decision the shell owns,
-                    // not a property of a transcript row.
-                    val metrics = LocalTranscriptMetrics.current
-                    LazyColumn(
-                        Modifier.fillMaxSize().padding(horizontal = 16.dp)
-                            .onScrollInput { scrolls.value++ },
-                        state = listState,
-                        contentPadding = PaddingValues(vertical = metrics.rowPadding),
-                        verticalArrangement = Arrangement.spacedBy(metrics.rowSpacing),
-                    ) {
-                        items(rows.size, key = { rowKeys[it] }) { i ->
-                            TranscriptRowItem(rows[i], onCopy = rememberCopy())
-                        }
-                        pendingSend?.let { text ->
-                            item("pending") {
-                                TranscriptEventItem(
-                                    TranscriptEvent(seq = -1, kind = "user", text = text),
-                                    onCopy = rememberCopy(),
-                                )
+                // The four selection verbs, over the transcript and NOWHERE else:
+                // this provides LocalTextContextMenu, which every TextField reads,
+                // so wrapping any higher would put "Explain" in the right-click
+                // menu of the composer the text is being staged into.
+                else -> WithTranscriptSelectionMenu(selectionVerbs, quickActions) {
+                    SelectionContainer {
+                        // The rows are the phone's rows and carry no outer margin of
+                        // their own, so the gap between them belongs to whoever lists
+                        // them — and that gap is a density decision the shell owns,
+                        // not a property of a transcript row.
+                        val metrics = LocalTranscriptMetrics.current
+                        LazyColumn(
+                            Modifier.fillMaxSize().padding(horizontal = 16.dp)
+                                .onScrollInput { scrolls.value++ },
+                            state = listState,
+                            contentPadding = PaddingValues(vertical = metrics.rowPadding),
+                            verticalArrangement = Arrangement.spacedBy(metrics.rowSpacing),
+                        ) {
+                            items(rows.size, key = { rowKeys[it] }) { i ->
+                                TranscriptRowItem(rows[i], onCopy = rememberCopy())
                             }
-                        }
-                        if (streaming) {
-                            item("streaming") { StreamingBlock(partial, activity) }
+                            pendingSend?.let { text ->
+                                item("pending") {
+                                    TranscriptEventItem(
+                                        TranscriptEvent(seq = -1, kind = "user", text = text),
+                                        onCopy = rememberCopy(),
+                                    )
+                                }
+                            }
+                            if (streaming) {
+                                item("streaming") { StreamingBlock(partial, activity) }
+                            }
                         }
                     }
                 }

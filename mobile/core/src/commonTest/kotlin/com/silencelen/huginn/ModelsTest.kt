@@ -7,6 +7,7 @@ import com.silencelen.huginn.data.HeadroomSettings
 import com.silencelen.huginn.data.SavedAccounts
 import com.silencelen.huginn.data.SendKeysResult
 import com.silencelen.huginn.data.SessionList
+import com.silencelen.huginn.data.Status
 import com.silencelen.huginn.data.TranscriptPage
 import com.silencelen.huginn.data.UndoResult
 import com.silencelen.huginn.data.Watch
@@ -53,6 +54,42 @@ class ModelsTest {
         val old = list.sessions[1]
         assertNull(old.headroom, "no cell is not an idle cell: the mark must be hidden")
         assertEquals(0, old.pendingSends, "a daemon with no queue really had nothing waiting")
+    }
+
+    @Test
+    fun `status carries the host's quick-action templates, or nothing at all`() {
+        // The whole point of serving these: one copy of the wording, on the host,
+        // so the phone and the desktop put the SAME text in the composer. A
+        // client that carried its own copy would drift the moment either was
+        // edited, which is the bug `softEndPhrase` was moved onto the wire for.
+        val live = json.decodeFromString<Status>(
+            """
+            {"host":"huginn","sessions":2,
+             "quickActions":{"rev":3,
+               "explain":"Explain this, briefly:\n\n{selection}",
+               "execute":"Run this and show me the output:\n\n{selection}",
+               "askInNewChat":"{selection}\n\nWhat is going on here?",
+               "quote":""}}
+            """.trimIndent(),
+        )
+        val qa = assertNotNull(live.quickActions)
+        assertEquals(3, qa.rev)
+        assertEquals("Explain this, briefly:\n\n{selection}", qa.explain)
+        assertEquals("Run this and show me the output:\n\n{selection}", qa.execute)
+        assertEquals("{selection}\n\nWhat is going on here?", qa.askInNewChat)
+        assertEquals("", qa.quote, "the quote lead-in is empty by default — the frame is the client's")
+    }
+
+    @Test
+    fun `a daemon that has never heard of quick actions leaves them null`() {
+        // NULL rather than a defaulted object, and the distinction is the whole
+        // feature probe: a 3.0.x daemon owns no templates, so the selection menu
+        // may offer only the one verb whose text this client writes itself
+        // (Quote) and Settings must not show an editor for a file that does not
+        // exist. An empty-string default would read as "the host says nothing",
+        // which is a different and wrong answer.
+        val old = json.decodeFromString<Status>("""{"host":"huginn","sessions":0}""")
+        assertNull(old.quickActions, "no templates is not four blank templates")
     }
 
     @Test
