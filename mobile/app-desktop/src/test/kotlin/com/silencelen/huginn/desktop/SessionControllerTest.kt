@@ -255,7 +255,88 @@ class SessionControllerTest {
         scope.cancel()
     }
 
+    // -------------------------------------------------------- the strip itself
+
+    /** One agent row, in the shape `/v1/sessions/:name/agents` emits. */
+    private fun agentRow(
+        id: String,
+        active: Boolean,
+        updatedAt: Long,
+        status: String? = null,
+        workflowId: String? = null,
+    ) = """{"id":"$id","active":$active,"updatedAt":$updatedAt,""" +
+        """"status":${status?.let { "\"$it\"" } ?: "null"},""" +
+        """"workflowId":${workflowId?.let { "\"$it\"" } ?: "null"},"task":"t $id"}"""
+
+    private fun agentsBody(vararg rows: String) =
+        """{"agents":[${rows.joinToString(",")}],"active":1,"serverTime":$NOW}"""
+
+    @Test
+    fun `the strip asks for every agent, because the pill has to reach them`() = runTest {
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.Unconfined)
+        val c = controller(scope) { HttpStatusCode.OK to agentsBody(agentRow("aaa", true, NOW - 10)) }
+
+        c.pollAgentListOnce()
+
+        val asked = paths().last()
+        // The live chips would not need `?all=1`. The `…` pill does: the route's
+        // default 45-minute window hides exactly the older runs somebody unfolds
+        // it to read, while the count on the pill goes on claiming they are there.
+        assertTrue("all=1" in asked, "the folded list must be whole: $asked")
+        assertEquals(1, c.agents.value.size)
+
+        scope.cancel()
+    }
+
+    @Test
+    fun `the strip offers live agents, folds the rest, and keeps the one being read`() = runTest {
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.Unconfined)
+        val body = agentsBody(
+            agentRow("live", true, NOW - 10, status = "running"),
+            agentRow("read", true, NOW - 10, status = "done", workflowId = "wf_01H9ZKQT"),
+            agentRow("gone", true, NOW - 20, status = "done", workflowId = "wf_01H9ZKQT"),
+            agentRow("silent", true, NOW - 4000),
+        )
+        val c = controller(scope) { path ->
+            when {
+                "/agents/" in path -> HttpStatusCode.OK to page("agent one", nextOffset = 50)
+                else -> HttpStatusCode.OK to body
+            }
+        }
+        c.pollAgentListOnce()
+
+        // Nothing picked: one live chip and a pill standing for the other three.
+        assertEquals(listOf("main", "agent:live", "more"), c.streamItems(NOW).map { it.key })
+        assertEquals(3, c.streamItems(NOW).single { it.overflow }.count)
+
+        // Reading one of them holds exactly that chip out of the fold — the
+        // controller's own selection is what `streamItems` passes through.
+        c.selectStream("read")
+        val held = c.streamItems(NOW)
+        assertEquals(listOf("main", "agent:live", "agent:read", "more"), held.map { it.key })
+        val chip = held.single { it.agentId == "read" }
+        assertTrue(chip.finished, "it is held open, not alive")
+        assertFalse(chip.running)
+
+        // Unfolding is the controller's state too, and survives the next poll.
+        c.toggleStreamsExpanded()
+        assertTrue(c.streamsExpanded.value)
+        c.pollAgentListOnce()
+        val open = c.streamItems(NOW)
+        assertTrue(open.any { it.agentId == "gone" }, "the pill is how a settled agent is reached")
+        assertEquals(1, open.count { it.agentId == "read" }, "held open and unfolded is still one row")
+        assertEquals(open.size, open.map { it.key }.toSet().size, "a duplicate key is a crash")
+
+        // And back to Main with the pill shut, where nothing is owed a chip.
+        c.toggleStreamsExpanded()
+        c.selectStream(null)
+        assertEquals(listOf("main", "agent:live", "more"), c.streamItems(NOW).map { it.key })
+
+        scope.cancel()
+    }
+
     private companion object {
         const val BASE = "http://appd.test"
+        const val NOW = 1_789_460_000L
     }
 }

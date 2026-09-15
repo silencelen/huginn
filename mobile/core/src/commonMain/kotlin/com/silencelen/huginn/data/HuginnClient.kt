@@ -697,10 +697,12 @@ class HuginnClient(
     /**
      * The individual agents behind a fan-out, for the work detail sheet.
      *
-     * @param all lifts the daemon's recent-activity filter, so the stream picker
-     * can offer a run that finished an hour ago. Off by default: the work sheet
-     * asks "what is happening", and everything that ever ran is a different
-     * question with a much longer answer.
+     * @param all lifts the daemon's 45-minute recent-activity filter. The stream
+     * picker passes it: its live chips would not need it, but the `…` pill folds
+     * the SETTLED agents away rather than dropping them, and the whole point of
+     * unfolding it is to reach a run that ended an hour ago. Off by default —
+     * the work sheet asks "what is happening", which is a different question
+     * with a much longer answer.
      */
     suspend fun sessionAgents(name: String, all: Boolean = false): AgentsInfo =
         decode(call("/v1/sessions/$name/agents${if (all) "?all=1" else ""}"))
