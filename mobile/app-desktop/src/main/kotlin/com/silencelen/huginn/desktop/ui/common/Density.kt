@@ -119,6 +119,24 @@ object Frame {
      */
     val prose = 420.dp
 
+    /**
+     * How wide a READING PANE is allowed to get — a whole screen of facts, rows
+     * and controls rather than one paragraph.
+     *
+     * [prose] is a sentence's measure and is right for an empty state; it is far
+     * too narrow for Settings. This is the phone's number (`MainActivity` centres
+     * Rounds, Status, Settings and Devices in `widthIn(max = 840.dp)`) rather than
+     * a second opinion, because the two clients are laying out the same content —
+     * and because a Status pane that reads one way in a pocket and another on a
+     * desk is two designs to keep in step.
+     *
+     * The audit measured what its absence costs: a `host …………… huginn` row with
+     * ~1300px of dead space between label and value, progress bars 1340px wide for
+     * a 0-100 percentage, and device cards with 600px of content and 600px of
+     * nothing, their verbs pinned to the far edge of the window.
+     */
+    val reading = 840.dp
+
     /** A state dot, in the row's own text flow. Never a bar. */
     val dot = 7.dp
 
