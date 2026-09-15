@@ -308,25 +308,49 @@ class SelectionVerbs(
  * these items are PREPENDED to the toolkit's own, so returning nothing leaves
  * Copy exactly as it was.
  *
+ * ⚠⚠ [selection] IS A FUNCTION, AND THAT IS THE WHOLE POINT. It is called TWICE
+ * and the two calls answer different questions: once now, to decide which verbs
+ * this selection deserves, and again INSIDE the click, to read the text that is
+ * actually staged. A captured `String` was the 1.1.0 bug — see the header of
+ * [WithTranscriptSelectionMenu] for why the list a menu was built from can be
+ * older than the selection the reader is looking at.
+ *
  * @param actions the host's wording, or null on a daemon older than 3.0.1 — which
  *   narrows this to Quote, the one verb whose text this client writes itself.
+ */
+fun selectionMenu(
+    selection: () -> String,
+    actions: QuickActions?,
+    verbs: SelectionVerbs,
+): List<ContextMenuItem> = QuickActionRules.offered(selection(), actions).map { action ->
+    // Not destructive, any of them: red would be claiming a verb does something
+    // that cannot be undone, and staging text in a composer is undone by Delete.
+    HuginnMenuItem(action.label) {
+        // READ AT CLICK TIME, never at build time. Every verb goes through this
+        // one line, so Explain, Execute and Ask in a new chat cannot drift from
+        // Quote — they were all staging the same stale string.
+        val text = selection()
+        when (action) {
+            SelectionAction.EXPLAIN -> verbs.explain(text)
+            SelectionAction.EXECUTE -> verbs.execute(text)
+            SelectionAction.QUOTE -> verbs.quote(text)
+            SelectionAction.ASK_IN_NEW_CHAT -> verbs.askInNewChat(text)
+        }
+    }
+}
+
+/**
+ * The same menu for a selection that cannot change under it — a fixed string.
+ *
+ * For callers (and assertions) that hold the text outright rather than a live
+ * manager. It is a convenience, NOT the path the transcript takes: anything
+ * reading a real selection must pass the function so the click can re-read it.
  */
 fun selectionMenu(
     selection: String,
     actions: QuickActions?,
     verbs: SelectionVerbs,
-): List<ContextMenuItem> = QuickActionRules.offered(selection, actions).map { action ->
-    // Not destructive, any of them: red would be claiming a verb does something
-    // that cannot be undone, and staging text in a composer is undone by Delete.
-    HuginnMenuItem(action.label) {
-        when (action) {
-            SelectionAction.EXPLAIN -> verbs.explain(selection)
-            SelectionAction.EXECUTE -> verbs.execute(selection)
-            SelectionAction.QUOTE -> verbs.quote(selection)
-            SelectionAction.ASK_IN_NEW_CHAT -> verbs.askInNewChat(selection)
-        }
-    }
-}
+): List<ContextMenuItem> = selectionMenu({ selection }, actions, verbs)
 
 /**
  * Installs [selectionMenu] over the text selection inside [content].
@@ -349,6 +373,31 @@ fun selectionMenu(
  * rebuilds the default's item list (from [LocalLocalization], so the wording
  * stays the platform's) instead of calling `TextContextMenu.Default`: the default
  * builds the area itself and there is no seam to add to.
+ *
+ * ⚠⚠ THE ITEM LIST IS CACHED BY THE TOOLKIT, ONCE, FOR THE LIFE OF ONE
+ * `ContextMenuData`. `ContextMenuArea` wraps the lambda handed to
+ * [TextContextMenuArea] in a `ContextMenuData` whose `allItems` is `by lazy`, and
+ * that object is only rebuilt when `ContextMenuArea` itself recomposes. Nothing
+ * about dragging out a new selection recomposes it — the selection lives in the
+ * `SelectionManager`, which this area never reads — so in 1.1.0 the list built on
+ * the FIRST right-click of a session was the list every later right-click used,
+ * with the first selection's text frozen inside every verb. Quote staged text the
+ * reader had highlighted minutes earlier, and a right-click with nothing selected
+ * at all still offered four verbs.
+ *
+ * TWO THINGS FIX IT AND BOTH ARE LOAD-BEARING:
+ *
+ *  * `remember(state.status, textManager)` below reads the menu's open/closed
+ *    state DURING COMPOSITION, so this area recomposes every time a menu opens.
+ *    That mints a fresh lambda, which mints a fresh `ContextMenuData`, which
+ *    recomputes `allItems` — the labels are decided against the selection the
+ *    reader can actually see. It is keyed on the OPEN rather than on the
+ *    selection on purpose: a selection key would rebuild this on every pointer
+ *    move of a drag, and reading `selectedText` to do it would rebuild the whole
+ *    selected string each frame.
+ *  * [selectionMenu] takes a FUNCTION, so the text a verb stages is read inside
+ *    the click rather than captured when the row was built. The list is cheap to
+ *    get wrong again; the text no longer depends on it being right.
  */
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
@@ -366,14 +415,21 @@ fun WithTranscriptSelectionMenu(
                 state: ContextMenuState,
                 content: @Composable () -> Unit,
             ) {
-                val items = {
-                    selectionMenu(textManager.selectedText.text, actions, verbs) +
-                        listOfNotNull(
-                            textManager.cut?.let { ContextMenuItem(localization.cut, it) },
-                            textManager.copy?.let { ContextMenuItem(localization.copy, it) },
-                            textManager.paste?.let { ContextMenuItem(localization.paste, it) },
-                            textManager.selectAll?.let { ContextMenuItem(localization.selectAll, it) },
-                        )
+                // The keys are the fix, not decoration: reading `state.status`
+                // here subscribes this area to the menu opening, and a new lambda
+                // identity is what makes the toolkit throw away its cached list.
+                // See the header. `verbs`, `actions` and `localization` are fixed
+                // for the life of this object, so they cannot be keys.
+                val items = remember(state.status, textManager) {
+                    {
+                        selectionMenu({ textManager.selectedText.text }, actions, verbs) +
+                            listOfNotNull(
+                                textManager.cut?.let { ContextMenuItem(localization.cut, it) },
+                                textManager.copy?.let { ContextMenuItem(localization.copy, it) },
+                                textManager.paste?.let { ContextMenuItem(localization.paste, it) },
+                                textManager.selectAll?.let { ContextMenuItem(localization.selectAll, it) },
+                            )
+                    }
                 }
                 TextContextMenuArea(textManager, items, state, content)
             }
