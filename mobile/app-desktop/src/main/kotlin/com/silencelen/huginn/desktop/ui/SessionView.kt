@@ -99,7 +99,14 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.launch
 import com.silencelen.huginn.data.ModelChoice
+import com.silencelen.huginn.data.SessionHeadroom
+import com.silencelen.huginn.data.StatusHeadroom
+import com.silencelen.huginn.ui.AutoResumeChip
 import com.silencelen.huginn.ui.CompactingChip
+import com.silencelen.huginn.ui.SessionStateMark
+import com.silencelen.huginn.ui.StreamPicker
+import com.silencelen.huginn.ui.StreamPickerRow
+import com.silencelen.huginn.ui.statusHeadroomOf
 import com.silencelen.huginn.ui.OverviewDensity
 import com.silencelen.huginn.ui.SessionOverviewView
 import com.silencelen.huginn.ui.ContextMeter
@@ -177,6 +184,17 @@ fun SessionView(store: AppStore, name: String) {
     }
 
     val row = sessions.firstOrNull { it.name == name }
+    val hostHeadroom by store.headroom.collectAsState()
+
+    // The state mark counts down to a reset, and this header can sit open all
+    // day. Thirty seconds, because its finest unit is a minute.
+    var headerNowMs by remember { mutableStateOf(System.currentTimeMillis()) }
+    LaunchedEffect(name) {
+        while (true) {
+            headerNowMs = System.currentTimeMillis()
+            kotlinx.coroutines.delay(30_000)
+        }
+    }
 
     // WORKING, from the hook state rather than from anything on the screen. The
     // TRANSCRIPT first and the sessions list only as a fallback: the list is polled
@@ -240,9 +258,22 @@ fun SessionView(store: AppStore, name: String) {
             cols = screen?.width,
             rows = screen?.height,
             models = rememberModels(store.client),
+            headroom = row?.headroom,
+            hostHeadroom = statusHeadroomOf(hostHeadroom),
+            nowMs = headerNowMs,
             // Slash commands go in as a submitted line, exactly as typed by hand.
             onCommand = { controller.sendLine(it) },
             onCycleMode = { controller.sendKeys(listOf("BTab")) },
+            // Optimism has no place here: the value shown is the list row's, and
+            // the list is re-read by the shell's poll. A local flip would show the
+            // new state for five seconds whether or not the host accepted it.
+            onAutoResume = { want ->
+                viewScope.launch {
+                    runCatching { store.client.setSessionAutoResume(name, want) }
+                        .onSuccess { store.refreshSessions() }
+                        .onFailure { store.noteError(it) }
+                }
+            },
         )
         val paneClipboard = LocalClipboardManager.current
         val paneCopy: (String) -> Unit = remember(paneClipboard) {
@@ -474,8 +505,14 @@ private fun SessionHeader(
     cols: Int?,
     rows: Int?,
     models: List<ModelChoice>,
+    /** This session's headroom cell, or null on a daemon older than 3.0.0. */
+    headroom: SessionHeadroom?,
+    /** The host's worst window, for the percentage a laddered session moved for. */
+    hostHeadroom: StatusHeadroom?,
+    nowMs: Long,
     onCommand: (String) -> Unit,
     onCycleMode: () -> Unit,
+    onAutoResume: (Boolean) -> Unit,
 ) {
     BoxWithConstraints(Modifier.fillMaxWidth()) {
         val tight = maxWidth < HEADER_TIGHT
@@ -528,6 +565,19 @@ private fun SessionHeader(
                 Muted("fitted ${cols}×${rows}", Modifier.padding(end = 10.dp))
             }
             if (!cramped) branch?.let { Muted(it, Modifier.padding(end = 4.dp)) }
+            // WHAT THE LIMIT HAS DONE TO THIS SESSION, next to the control that
+            // would otherwise be the only sign of it: a session laddered to opus
+            // shows a model nobody here chose, and without the mark there is
+            // nothing on screen to say who chose it or why.
+            SessionStateMark(headroom, hostHeadroom, nowMs)
+            // And whether anything will pick it back up. Only when the host has a
+            // headroom subsystem at all — a toggle for a feature that does not
+            // exist would report a setting it cannot keep.
+            if (headroom != null && !cramped) {
+                Tip("Whether huginn types this session's resume phrase when the window resets") {
+                    AutoResumeChip(headroom.autoResume, onAutoResume)
+                }
+            }
             // Permission mode has no slash command that sets it; Shift+Tab cycles it,
             // which is exactly what the key bar sends.
             ControlAction(mode?.replaceFirstChar { it.uppercase() } ?: "Mode", onClick = onCycleMode)
@@ -713,35 +763,74 @@ private fun TabItem(label: String, active: Boolean, onClick: () -> Unit) {
 @Composable
 private fun ConversationTab(controller: SessionController) {
     val page by controller.page.collectAsState()
+    val agentPage by controller.agentPage.collectAsState()
+    val stream by controller.selectedStream.collectAsState()
+    val agents by controller.agents.collectAsState()
+    val streamsSupported by controller.streamsSupported.collectAsState()
+    val streamNote by controller.streamNote.collectAsState()
     val error by controller.transcriptError.collectAsState()
     val neverRan by controller.neverRan.collectAsState()
     val clipboard = LocalClipboardManager.current
     val onCopy: (String) -> Unit = remember(clipboard) { { t -> clipboard.setText(AnnotatedString(t)) } }
 
-    val current = page
+    // The strip is ABOVE everything else in this tab, including the empty states:
+    // a reader who picked an agent that turns out to have written nothing still
+    // needs the chip that takes them back to Main.
+    //
+    // The clock is the daemon's, carried on the page, because the rows'
+    // timestamps are the host's — a device clock a few minutes out would show
+    // every running agent as settled. Zero when no page has landed, which
+    // [StreamPicker.items] reads as "no clock, trust the flags".
+    val nowSec = page?.lastActivityTs?.takeIf { it > 0 } ?: 0L
+    val items = remember(agents, nowSec) { StreamPicker.items(agents, nowSec) }
+
+    @Composable
+    fun Picker() {
+        StreamPickerRow(
+            items = items,
+            selected = stream,
+            onPick = { controller.selectStream(it) },
+            enabled = streamsSupported,
+            note = streamNote,
+        )
+    }
+
+    // Which stream this body is actually showing.
+    val onAgent = stream != null
+    val current = if (onAgent) agentPage else page
     // Hoisted, because a `by`-delegated value is not smart-cast: the idiom
     // `if (error != null) { use error }` reads a property twice across a module
     // boundary and does not compile, and `!!` in code the owner runs daily is not
     // the fix.
-    val note = error
+    val note = if (onAgent) streamNote else error
     if (current == null) {
-        Box(Modifier.fillMaxSize().padding(24.dp), contentAlignment = Alignment.Center) {
-            when {
-                // A session that has never prompted Claude has no transcript. That
-                // is a fact about the session, not a failure of this client, and
-                // rendering it as an error made every new session look broken.
-                neverRan -> Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                    Text("No conversation yet", style = MaterialTheme.typography.titleSmall)
-                    Muted(note ?: "This session has not prompted Claude.", Modifier.padding(top = 6.dp), maxLines = 3)
+        Column(Modifier.fillMaxSize()) {
+            Picker()
+            Box(Modifier.fillMaxSize().padding(24.dp), contentAlignment = Alignment.Center) {
+                when {
+                    // A session that has never prompted Claude has no transcript. That
+                    // is a fact about the session, not a failure of this client, and
+                    // rendering it as an error made every new session look broken.
+                    neverRan && !onAgent -> Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        Text("No conversation yet", style = MaterialTheme.typography.titleSmall)
+                        Muted(note ?: "This session has not prompted Claude.", Modifier.padding(top = 6.dp), maxLines = 3)
+                    }
+                    note != null -> Muted(note, maxLines = 4)
+                    else -> CircularProgressIndicator(strokeWidth = 2.dp)
                 }
-                note != null -> Muted(note, maxLines = 4)
-                else -> CircularProgressIndicator(strokeWidth = 2.dp)
             }
         }
         return
     }
 
-    val rows = remember(current.events) { TranscriptGroups.group(current.events) }
+    // INSIDE a picked agent's stream every event is that agent's, so the sidechain
+    // indent and its "subagent" marker say nothing — exactly as the folded card
+    // already does when it is opened. Flattened here rather than in `:ui` because
+    // it is a property of WHICH stream is on screen, not of the row.
+    val events = remember(current.events, onAgent) {
+        if (onAgent) current.events.map { if (it.sidechain) it.copy(sidechain = false) else it } else current.events
+    }
+    val rows = remember(events) { TranscriptGroups.group(events) }
     val keys = remember(rows) { TranscriptGroups.keys(rows) }
     val listState = rememberLazyListState()
     val scope = rememberCoroutineScope()
@@ -752,20 +841,28 @@ private fun ConversationTab(controller: SessionController) {
     // session. What this replaces scrolled to the last item on every revision, so a
     // reader who scrolled up to read something older was dragged back to the bottom
     // on the next poll tick — a conversation that cannot be read while it is live.
-    val hasEarlier by controller.hasEarlier.collectAsState()
-    val loadingHistory by controller.loadingHistory.collectAsState()
+    val mainHasEarlier by controller.hasEarlier.collectAsState()
+    val mainLoadingHistory by controller.loadingHistory.collectAsState()
+    val agentLoadingHistory by controller.loadingAgentHistory.collectAsState()
+    val hasEarlier = if (onAgent) (current.windowStart > 0L) else mainHasEarlier
+    val loadingHistory = if (onAgent) agentLoadingHistory else mainLoadingHistory
     val itemCount = rows.size + if (hasEarlier) 1 else 0
     val revision = tailRevision(current.nextOffset, rows.size, current.events.lastOrNull()?.text?.length)
     // A wheel tick is the reader taking the list, exactly as a drag is — and it
     // emits no DragInteraction, so without this the latch could never be broken
     // on a desktop: scrolling up to read something in a live session snapped back
     // to the tail on the next token.
-    val scrolls = remember(controller.name) { mutableStateOf(0) }
-    val unseen = FollowNewest(listState, itemCount, revision, key = controller.name, scrolls = scrolls)
+    // KEYED ON THE STREAM as well as the session: the follow latch and the scroll
+    // counter both describe one conversation, and carrying them across a switch
+    // would land the reader mid-way down a transcript they have never seen.
+    val followKey = controller.name + (stream?.let { ":$it" } ?: "")
+    val scrolls = remember(followKey) { mutableStateOf(0) }
+    val unseen = FollowNewest(listState, itemCount, revision, key = followKey, scrolls = scrolls)
 
     // A refresh that started failing after a page landed is a banner, not a
     // replacement: the transcript already on screen is still the best thing known.
     Column(Modifier.fillMaxSize()) {
+        Picker()
         if (note != null) {
             Muted(
                 "transcript refresh failing: $note",
@@ -802,7 +899,9 @@ private fun ConversationTab(controller: SessionController) {
                                 if (loadingHistory) {
                                     Muted("Loading earlier messages…")
                                 } else {
-                                    TextButton(onClick = { controller.loadEarlier() }) {
+                                    TextButton(onClick = {
+                                        if (onAgent) controller.loadEarlierAgent() else controller.loadEarlier()
+                                    }) {
                                         Text("Load earlier messages", style = DeskType.rail)
                                     }
                                 }

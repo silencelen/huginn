@@ -16,6 +16,7 @@ import com.silencelen.huginn.data.DraftBook
 import com.silencelen.huginn.data.SentHistory
 import com.silencelen.huginn.ui.AttachmentImageLoader
 import com.silencelen.huginn.ui.SkiaImageBytesDecoder
+import com.silencelen.huginn.data.Headroom
 import com.silencelen.huginn.data.HuginnClient
 import com.silencelen.huginn.data.Plan
 import com.silencelen.huginn.data.PolishResult
@@ -442,6 +443,20 @@ class AppStore(
     val usage: StateFlow<Usage?> = _usage.asStateFlow()
 
     /**
+     * Headroom, polled WHEREVER THE READER IS. Null until the first answer, and
+     * null forever on a daemon older than 3.0.0.
+     *
+     * Everything else about usage on this client is gated on the Status pane being
+     * open ([refreshStatus] is called only there, and `/v1/usage` behind it walks
+     * every transcript). That gate is right for those two and wrong for this one:
+     * headroom is the number that decides whether tonight's run finishes, the
+     * daemon serves it from a file it already keeps, and a number nobody sees
+     * until they go looking for it is the exact failure this wave exists to fix.
+     */
+    private val _headroom = MutableStateFlow<Headroom?>(null)
+    val headroom: StateFlow<Headroom?> = _headroom.asStateFlow()
+
+    /**
      * What the client is failing at NOW. See [Faults] — the single nullable string
      * this replaced was written on every failure and cleared only by a click, so
      * one 401 pinned "unauthorized" to the status line for the rest of the run.
@@ -722,6 +737,19 @@ class AppStore(
             .onFailure { note(Faults.SESSIONS, it) }
     }
 
+    /**
+     * One read of `/v1/headroom`.
+     *
+     * A failure is left to the fault sweeper rather than raised: the ONLY
+     * expected failure is a 404 from a daemon that has no headroom subsystem, and
+     * putting "not found" in the status line of every client talking to an older
+     * host would be a permanent error about a feature that host never had. The
+     * pill simply stays hidden, which is the documented compat answer.
+     */
+    suspend fun refreshHeadroom() {
+        runCatching { client.headroom() }.onSuccess { _headroom.value = it }
+    }
+
     suspend fun refreshStatus() {
         runCatching { client.status() }
             .onSuccess { _status.value = it; faults.ok(Faults.STATUS) }
@@ -891,6 +919,9 @@ class AppStore(
         // has to refresh on the frame it happens, not up to five seconds later.
         presence.visible.collectLatest { visible ->
             if (!visible) return@collectLatest
+            // Zero on every resume, so coming back from hidden reads headroom on
+            // the first pass rather than up to thirty seconds later.
+            var tick = 0
             while (scope.isActive) {
                 // Before the fetches, so a fault raised by a source that has no
                 // poll behind it (a rename that 400'd) ages out on the app's own
@@ -909,6 +940,11 @@ class AppStore(
                 // underneath the app as well as a toggle in the UI.
                 syncDeviceRunner()
                 if (_view.value == View.STATUS) refreshStatus()
+                // Every sixth pass, which is thirty seconds — the rate the design
+                // costed. Counted rather than given its own loop so it cannot
+                // outlive the visibility gate the rest of the polling obeys.
+                if (tick % HEADROOM_EVERY == 0) refreshHeadroom()
+                tick += 1
                 delay(POLL_MS)
             }
         }
@@ -981,6 +1017,9 @@ class AppStore(
 
     companion object {
         const val POLL_MS: Long = 5_000
+
+        /** Passes of the 5s poll between headroom reads: 6 × 5s = 30s. */
+        const val HEADROOM_EVERY: Int = 6
         const val MIN_BACKOFF_MS: Long = 1_000
         const val MAX_BACKOFF_MS: Long = 30_000
 
