@@ -72,8 +72,12 @@ const sentinelsLib = require('./lib/sentinels');
 // every rule is asserted in test/resume.test.js rather than on a live stall the
 // host sees a handful of times a year.
 const resumeLib = require('./lib/resume');
+// The quick-action templates: the wording either client puts in front of a
+// quoted selection. Pure — the rules live there so the two clients cannot
+// disagree about them; the file and the route live here.
+const quickLib = require('./lib/quickactions');
 
-const VERSION = '3.0.0';
+const VERSION = '3.0.1';
 const PORT = Number(process.env.HUGINN_APPD_PORT || 8787);
 const DATA_DIR = process.env.HUGINN_APPD_DATA || '/var/lib/huginn-appd';
 const UPLOADS_DIR = path.join(DATA_DIR, 'uploads');
@@ -4191,6 +4195,52 @@ async function mempalaceState() {
   return mpCache.value;
 }
 
+// ------------------------------------------------- host-owned quick actions
+//
+// The wording the clients put in front of a quoted selection. It lives on the
+// host for the same reason SOFT_END_PHRASE does — one copy, so the desktop and
+// the phone cannot end up sending two different prompts for the same button —
+// and unlike the soft-end phrase it is EDITABLE from either client, because it
+// is the operator's wording rather than a deployment setting.
+const QUICK_ACTIONS_FILE = path.join(DATA_DIR, 'quick-actions.json');
+
+/**
+ * The stored templates, or the built-in ones.
+ *
+ * ⚠ THE FILE IS A PATCH OVER THE DEFAULTS, exactly as loadHeadroomSettings
+ * treats its own — and for the same reason. A file written by an older build,
+ * or hand-edited, may be missing a field or carrying one that no longer
+ * validates; serving half a stored record and half nothing would put a template
+ * with no `{selection}` in front of the Explain button, which silently drops the
+ * selection. Every field goes through the same rule the PATCH route applies, and
+ * a file that fails falls back whole.
+ */
+function loadQuickActions() {
+  let raw = null;
+  try { raw = JSON.parse(fs.readFileSync(QUICK_ACTIONS_FILE, 'utf8')); }
+  catch { return quickLib.defaults(); }        // absent is the normal case, not an error
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return quickLib.defaults();
+  const v = quickLib.validate(raw);
+  if (!v.ok) {
+    log(`quick-actions: ${QUICK_ACTIONS_FILE} does not validate (${v.error}); using defaults`);
+    return quickLib.defaults();
+  }
+  const rec = { ...quickLib.defaults(), ...v.fields };
+  // The revision is state, not content: it survives a field that had to be
+  // dropped, so a client holding rev 4 is not silently handed rev 0 and told
+  // its next edit conflicts.
+  if (Number.isInteger(raw.rev) && raw.rev >= 0) rec.rev = raw.rev;
+  if (Number.isInteger(raw.updatedAt) && raw.updatedAt >= 0) rec.updatedAt = raw.updatedAt;
+  return rec;
+}
+
+function saveQuickActions(rec) {
+  fs.mkdirSync(DATA_DIR, { recursive: true });
+  fs.writeFileSync(`${QUICK_ACTIONS_FILE}.tmp`, `${JSON.stringify(rec, null, 2)}\n`, { mode: 0o600 });
+  fs.renameSync(`${QUICK_ACTIONS_FILE}.tmp`, QUICK_ACTIONS_FILE);
+  return rec;
+}
+
 async function statusPayload() {
   const [ver, mp, df, sessions] = await Promise.all([
     claudeVersion(), mempalaceState(),
@@ -4218,6 +4268,10 @@ async function statusPayload() {
     // automatic) without carrying their own copy that could drift from the host.
     softEndPhrase: SOFT_END_PHRASE,
     softEndAuto: SOFT_END_AUTO,
+    // Beside the soft-end phrase and for the same reason: the clients render
+    // host-owned copy rather than their own. One small file read per poll, which
+    // is nothing next to the df and the version shell-out above.
+    quickActions: quickLib.view(loadQuickActions()),
     // The one-line usage summary behind the clients' headroom pill. From
     // headroom.json and the sentinel directory only — no network, so the status
     // poll stays as cheap as it was.
@@ -6778,6 +6832,25 @@ const server = http.createServer(async (req, res) => {
     // --- ping / status
     if (req.method === 'GET' && p === '/v1/ping') return sendJson(res, 200, { ok: true, version: VERSION, host: os.hostname() });
     if (req.method === 'GET' && p === '/v1/status') return sendJson(res, 200, await statusPayload());
+
+    // --- the wording behind the four selection buttons, which /v1/status carries.
+    //     No GET: the current values already ride the status poll every client
+    //     runs, and a second way to read them is a second thing to keep in step.
+    if (req.method === 'PATCH' && p === '/v1/quick-actions') {
+      const body = JSON.parse(await readBody(req) || '{}');
+      // One call decides everything — the stale-revision check, the per-field
+      // rules and the new record — so there is no order in which the route can
+      // write a half-validated file.
+      const r = quickLib.merge(loadQuickActions(), body, Math.floor(Date.now() / 1000));
+      if (!r.ok) return sendErr(res, r.status, r.error);
+      if (r.changed) {
+        saveQuickActions(r.record);
+        log(`quick-actions: updated (rev ${r.record.rev})`);
+      }
+      // The WHOLE object, not just what changed: the client that sent one field
+      // needs the other three and the new rev to keep editing without a poll.
+      return sendJson(res, 200, quickLib.view(r.record));
+    }
 
     // --- host-side alerts, which reach a phone with the app closed
     if (req.method === 'GET' && p === '/v1/alerts') {

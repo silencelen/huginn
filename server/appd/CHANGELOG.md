@@ -9,6 +9,15 @@ appeared only as a side-note on the app releases it happened to ship with. Three
 undocumented, and the notes-cutting matcher could fuse two sections when an app and an appd
 version number collided. Entries below are reconstructed from the shipping commits.
 
+## 3.0.1 — 2026-09-15
+
+- **Quick-action templates are host-owned.** The wording the clients put in front of a quoted
+  selection (Explain · Execute · Ask in new chat · Quote) now lives on this host, is served on
+  `/v1/status` beside the soft-end phrase, and is editable from either client through
+  `PATCH /v1/quick-actions` — so the two clients cannot drift into two different prompts for the
+  same button. Control characters are stripped and each template is capped at 400 characters,
+  because these strings get typed into a terminal.
+
 ## 3.0.0 — 2026-09-15
 
 Huginn 3. The daemon becomes usage-aware: one subsystem, one arbiter, and every automated line it

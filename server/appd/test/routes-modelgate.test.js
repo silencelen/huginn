@@ -46,6 +46,7 @@ const crypto = require('node:crypto');
 // ⚠ 10450-10499 was ONE block in the wave-1 contract; it is SPLIT — resume keeps
 // the bottom ten, refresh the upper forty. Widening either back re-collides.
 //   routes-typing       10500 + pid%50   -> 10500-10549
+//   routes-quick-actions 10600 + pid%50  -> 10600-10649
 //
 // Also spoken for, outside this directory: scripts/test-llm-shim.js holds
 // 18790-18799.

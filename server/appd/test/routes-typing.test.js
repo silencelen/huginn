@@ -47,6 +47,7 @@ const typing = require('../lib/typing');
 //   push-retire         10250 + pid%50   -> 10250-10299
 //   routes-desktop      10300 + pid%50   -> 10300-10349
 //   routes-typing       10500 + pid%50   -> 10500-10549   (this file)
+//   routes-quick-actions 10600 + pid%50  -> 10600-10649
 //
 // 10350-10499 is reserved for wave 1; wave 2 owns 10500-10649.
 // Also spoken for, outside this directory: scripts/test-llm-shim.js holds
