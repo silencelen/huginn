@@ -5464,6 +5464,17 @@ const server = http.createServer(async (req, res) => {
       if (keys.length > 32) return sendErr(res, 400, 'too many keys');
       for (const k of keys) if (!validKey(k)) return sendErr(res, 400, `key not allowed: ${k}`);
       /**
+       * The keys that are genuinely KEY PRESSES, as opposed to the composer's
+       * own submit.
+       *
+       * Both clients send `{text, keys:["Enter"]}` for "send this message", and
+       * that Enter is part of the message, not an interrupt: the paste path
+       * presses it, with the right beat, once. Everything else in `keys` — an
+       * Escape, a BTab, an arrow — is a raw press that cannot be queued and
+       * cannot wait, which is what the modal refusal below is about.
+       */
+      const rawKeys = keys.filter((k) => !(k === 'Enter' && typedKeys.length > 0));
+      /**
        * A scratchpad reference, as a PATH rather than as the page itself.
        *
        * A pane takes a message and a page holds up to 100,000 characters, so
@@ -5501,7 +5512,7 @@ const server = http.createServer(async (req, res) => {
        * hold it, and a key pressed into a selector picks one of its rows. The
        * jsonl cannot see a modal at all, which is why this reads the pane.
        */
-      if (keys.length) {
+      if (rawKeys.length) {
         const cap = await run('tmux', ['capture-pane', '-p', '-t', `=${name}:`]);
         if (!cap.err) {
           const { why } = typing.paneReadyForInput(cap.stdout.replace(/\n$/, '').split('\n'));
@@ -5537,9 +5548,7 @@ const server = http.createServer(async (req, res) => {
         position = out.position;
         queued = out.queued;
       }
-      for (const k of keys) {
-        // The composer's own Enter, already pressed by the paste path above.
-        if (k === 'Enter' && typedKeys.length > 0) continue;
+      for (const k of rawKeys) {
         const r = await run('tmux', ['send-keys', '-t', `=${name}:`, k]);
         if (r.err) return sendErr(res, 500, `tmux: ${r.stderr.trim()}`);
       }
