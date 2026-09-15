@@ -1,0 +1,21 @@
+{
+ "host": "huginn",
+ "appdVersion": "2.0.0",
+ "uptimeSec": 31502,
+ "load": [
+  8.29,
+  8.84,
+  7.32
+ ],
+ "cores": 8,
+ "claude": "2.1.220 (Claude Code)",
+ "mempalace": "ok",
+ "disk": {
+  "size": "40G",
+  "used": "24G",
+  "free": "14G",
+  "usedPercent": "65%"
+ },
+ "sessions": 4,
+ "chatsRunning": 0
+}

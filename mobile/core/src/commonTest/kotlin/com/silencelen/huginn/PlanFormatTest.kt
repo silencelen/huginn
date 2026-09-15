@@ -2,6 +2,7 @@ package com.silencelen.huginn
 
 import com.silencelen.huginn.data.ExtraUsage
 import com.silencelen.huginn.data.Plan
+import com.silencelen.huginn.data.PlanAccount
 import com.silencelen.huginn.data.Spend
 import com.silencelen.huginn.ui.PlanFormat
 import kotlinx.serialization.json.Json
@@ -312,5 +313,34 @@ class PlanFormatTest {
         assertEquals(40.0, card.percent)
         assertNull(card.amountLine)
         assertEquals("on", card.state)
+    }
+
+    // ------------------------------------------------- whose usage this is
+
+    @Test
+    fun `the caption names the account and its plan`() {
+        val plan = Plan(account = PlanAccount(email = "jacob@example.com", subscriptionType = "max_20x"))
+        assertEquals("jacob@example.com \u00b7 max_20x", PlanFormat.accountCaption(plan))
+    }
+
+    @Test
+    fun `an older daemon sends no identity and the caption says so`() {
+        // 2.85.0 has no `account` block at all. A BLANK caption would leave the
+        // bars looking like they belong to whoever the reader last had in mind.
+        assertEquals("signed-in account", PlanFormat.accountCaption(Plan()))
+        assertEquals("signed-in account", PlanFormat.accountCaption(null))
+        assertEquals("signed-in account", PlanFormat.accountCaption(Plan(account = PlanAccount())))
+    }
+
+    @Test
+    fun `half an identity is still worth saying`() {
+        assertEquals(
+            "jacob@example.com",
+            PlanFormat.accountCaption(Plan(account = PlanAccount(email = "  jacob@example.com  "))),
+        )
+        assertEquals(
+            "max_20x",
+            PlanFormat.accountCaption(Plan(account = PlanAccount(subscriptionType = "max_20x"))),
+        )
     }
 }

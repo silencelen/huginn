@@ -1,0 +1,52 @@
+{
+ "mode": "ok",
+ "worst": {
+  "slug": "owner-max",
+  "email": "<email scrubbed, 24 chars>",
+  "window": "weekly_all",
+  "percent": 18.0,
+  "label": "Current week (all models)",
+  "resetsAt": "2026-09-18T07:00:00+00:00"
+ },
+ "accounts": {
+  "owner-max": {
+   "email": "<email scrubbed, 24 chars>",
+   "windows": {
+    "session": {
+     "percent": 4.0,
+     "resetsAt": "2026-09-15T10:30:00+00:00",
+     "severity": "normal",
+     "label": "Current session"
+    },
+    "weekly_all": {
+     "percent": 18.0,
+     "resetsAt": "2026-09-18T07:00:00+00:00",
+     "severity": "normal",
+     "label": "Current week (all models)"
+    },
+    "weekly_fable": {
+     "percent": 41.0,
+     "resetsAt": "2026-09-18T07:00:00+00:00",
+     "severity": "normal",
+     "label": "Current week (Fable)"
+    }
+   },
+   "live": true,
+   "readAt": 1789460000
+  }
+ },
+ "sessions": [],
+ "sentinels": {
+  "STOP": null,
+  "STOP-FABLE": null
+ },
+ "held": [],
+ "resets": [],
+ "arbiter": {
+  "lastSwitchAt": 0,
+  "lastLadderAt": 0,
+  "lastAction": null,
+  "why": "nothing above headsUpPct"
+ },
+ "serverTime": 1789460000
+}

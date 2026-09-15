@@ -1,0 +1,51 @@
+{
+ "agents": [
+  {
+   "id": "agent-3f9c1a",
+   "workflow": "wf_01H9ZKQT",
+   "workflowId": "wf_01H9ZKQT",
+   "agentType": "workflow-subagent",
+   "status": "running",
+   "depth": 1,
+   "task": "<task scrubbed, 44 chars>",
+   "lastLine": "<lastLine scrubbed, 61 chars>",
+   "summary": null,
+   "active": true,
+   "updatedAt": 1789459980,
+   "startedAt": 1789459100,
+   "bytes": 184320
+  },
+  {
+   "id": "agent-77b210",
+   "workflow": "wf_01H9ZKQT",
+   "workflowId": "wf_01H9ZKQT",
+   "agentType": "workflow-subagent",
+   "status": "done",
+   "depth": 1,
+   "task": "<task scrubbed, 38 chars>",
+   "lastLine": "<lastLine scrubbed, 55 chars>",
+   "summary": "<summary scrubbed, 210 chars>",
+   "active": false,
+   "updatedAt": 1789459640,
+   "startedAt": 1789459100,
+   "bytes": 402944
+  },
+  {
+   "id": "agent-c0d4e8",
+   "workflow": null,
+   "workflowId": null,
+   "agentType": "general-purpose",
+   "status": "done",
+   "depth": 0,
+   "task": "<task scrubbed, 71 chars>",
+   "lastLine": "<lastLine scrubbed, 48 chars>",
+   "summary": "<summary scrubbed, 96 chars>",
+   "active": false,
+   "updatedAt": 1789457200,
+   "startedAt": 1789456400,
+   "bytes": 96256
+  }
+ ],
+ "active": 1,
+ "serverTime": 1789460000
+}

@@ -2,6 +2,8 @@ package com.silencelen.huginn.data
 
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonObject
 
 // Wire models for huginn-appd's /v1 API. Every field the server may omit is
 // nullable with a default so an older app keeps parsing a newer server (the
@@ -37,6 +39,14 @@ data class Status(
      */
     val softEndPhrase: String? = null,
     val softEndAuto: Boolean = false,
+    /**
+     * Usage headroom, cheap enough to ride the ordinary status poll.
+     *
+     * NULL means the daemon predates 3.0.0 and has nothing to say — which is not
+     * the same as "plenty left". The pill is hidden in that case rather than
+     * drawn at 0 %.
+     */
+    val headroom: StatusHeadroom? = null,
 )
 
 @Serializable
@@ -72,6 +82,14 @@ data class Session(
     val bgShells: Int = 0,
     val bgAgents: Int = 0,
     val bgTask: String? = null,
+    /** Model ladder + resume state for this row; null on a pre-3.0.0 daemon. */
+    val headroom: SessionHeadroom? = null,
+    /**
+     * Sends the daemon is holding for this session because the turn has not
+     * ended yet. 0 on an older daemon, which is also the honest answer there:
+     * it had no queue, so nothing was ever waiting.
+     */
+    val pendingSends: Int = 0,
 )
 
 @Serializable
@@ -255,6 +273,13 @@ data class TranscriptEvent(
     val queued: Boolean = false,
     /** Present on AskUserQuestion tool events: the structured question card. */
     val ask: AskData? = null,
+    /**
+     * The HTTP status of an API error Claude Code recorded in place of a reply —
+     * 429 is the usage limit. The kind stays `assistant`, because that is what
+     * the record is; this field is what lets a client draw it as a limit notice
+     * instead of as something Claude said.
+     */
+    val apiError: Int? = null,
 )
 
 @Serializable
@@ -354,6 +379,20 @@ data class AgentRun(
     val updatedAt: Long = 0,
     val startedAt: Long = 0,
     val bytes: Long = 0,
+    /**
+     * The workflow run id, served from 3.0.0 as its own field.
+     *
+     * [workflow] has carried the run's DIRECTORY name since 2.x and still does;
+     * this is the daemon's own id for the run and the key the stream picker
+     * groups on. Absent from an older daemon, where the picker stays flat.
+     */
+    val workflowId: String? = null,
+    /** e.g. `workflow-subagent`, from the agent's meta file when it has one. */
+    val agentType: String? = null,
+    /** The agent's settled outcome word: running | done | failed | stalled. */
+    val status: String? = null,
+    /** How deep in the fan-out; 0 is a direct child of the session. */
+    val depth: Int = 0,
 )
 
 @Serializable
@@ -604,6 +643,25 @@ data class Plan(
     val spend: Spend? = null,
     val fetchedAt: Long? = null,
     val error: String? = null,
+    /**
+     * WHOSE usage these bars are, resolved by the daemon from the credentials it
+     * read them with and cached alongside them.
+     *
+     * It travels with the numbers on purpose: the plan cache is not keyed on the
+     * account, so an identity fetched separately would caption the new account's
+     * bars with the old email for a whole TTL after a switch. Null on a daemon
+     * older than 3.0.0 — see [com.silencelen.huginn.ui.PlanFormat.accountCaption].
+     */
+    val account: PlanAccount? = null,
+)
+
+/** Who a [Plan]'s numbers belong to. */
+@Serializable
+data class PlanAccount(
+    val email: String? = null,
+    val accountUuid: String? = null,
+    val slug: String? = null,
+    val subscriptionType: String? = null,
 )
 
 /** A saved login this host can switch to. */
@@ -622,10 +680,232 @@ data class SavedAccount(
     val verified: Boolean = false,
     /** Another saved profile is the same account, so switching changes nothing. */
     val duplicateOf: Boolean = false,
+    /**
+     * The daemon's word for how usable this profile's token is right now:
+     * `fresh` · `expiring` · `expired` · `unrefreshable`.
+     *
+     * One vocabulary, the daemon's, extended from the one [verified] and
+     * [duplicateOf] already render — a client that re-derived "expired" from
+     * [expiresAt] would be a second opinion about the same token. Null on a
+     * daemon older than 3.0.0: say nothing rather than guess `fresh`.
+     */
+    val freshness: String? = null,
+    /** When the access token stops working, epoch millis. */
+    val expiresAt: Long? = null,
+    /** When the REFRESH token stops working: past this, only a re-login helps. */
+    val refreshTokenExpiresAt: Long? = null,
+    val refresh: AccountRefresh? = null,
+)
+
+/** What the daemon's background token refresh last did for one profile. */
+@Serializable
+data class AccountRefresh(
+    val lastAt: Long? = null,
+    /** `ok` · `invalid_grant` · `lock_busy` · a transport error word. */
+    val lastStatus: String? = null,
+    val nextAt: Long? = null,
+)
+
+/** The answer to an on-demand refresh of one saved profile. */
+@Serializable
+data class AccountRefreshed(
+    val ok: Boolean = false,
+    val slug: String? = null,
+    /** The status WORD, the same vocabulary as [AccountRefresh.lastStatus]. */
+    val status: String = "",
+    val refresh: AccountRefresh? = null,
 )
 
 @Serializable
 data class SavedAccounts(val accounts: List<SavedAccount> = emptyList())
+
+// --------------------------------------------------------------- headroom
+//
+// Usage headroom (appd 3.0.0). One daemon subsystem, one arbiter: the client
+// reads what it decided and configures it, and decides nothing about limits
+// itself. Every field is nullable-or-defaulted, so a 2.85.0 daemon — which has
+// no `/v1/headroom` at all — degrades to "no pill, no marks" rather than to a
+// failed decode.
+
+/** One usage window of one account, as the daemon last read it. */
+@Serializable
+data class HeadroomWindow(
+    val percent: Double = 0.0,
+    val resetsAt: String? = null,
+    /** Claude's own word; the meter colours by the same vocabulary as a PlanLimit. */
+    val severity: String = "normal",
+    val label: String = "",
+)
+
+/** The single worst window across every account: what the pill reports. */
+@Serializable
+data class HeadroomWorst(
+    val slug: String? = null,
+    val email: String? = null,
+    /** `session` | `weekly_all` | `weekly_fable` */
+    val window: String? = null,
+    val percent: Double = 0.0,
+    val label: String = "",
+    val resetsAt: String? = null,
+)
+
+/** A model move the daemon made on a live session, and whether it landed. */
+@Serializable
+data class HeadroomLadder(
+    val from: String? = null,
+    /** The family it moved TO; null means no move has been made. */
+    val to: String? = null,
+    /** Epoch SECONDS, like every other daemon-side `at`. */
+    val at: Long = 0,
+    /** `confirmed` | `delivery_unconfirmed` — a picker that never appeared. */
+    val delivery: String? = null,
+)
+
+/** One session as the headroom subsystem sees it. */
+@Serializable
+data class HeadroomSession(
+    val name: String = "",
+    val claudeSessionId: String? = null,
+    val family: String? = null,
+    val ladder: HeadroomLadder? = null,
+    val autoResume: Boolean = true,
+    val stalled: Boolean = false,
+    val headsUpAt: Long? = null,
+)
+
+/** A subagent spawn the hook gate is holding because a sentinel is armed. */
+@Serializable
+data class HeadroomHeld(
+    val agentId: String = "",
+    val agentType: String? = null,
+    val since: Long = 0,
+)
+
+/** Account rotation, migrated out of `autoswitch.json` and into these settings. */
+@Serializable
+data class AccountSwitch(
+    val enabled: Boolean = false,
+    val threshold: Int = 95,
+    val margin: Int = 20,
+)
+
+/**
+ * The owner-editable half of headroom.
+ *
+ * The defaults here mirror the daemon's, so a settings form has something
+ * sensible to draw before the first `/v1/headroom` answers. They are NOT the
+ * validation authority: `validateSettings` on the daemon is, and a disagreement
+ * between the two is a bug in this file rather than a second opinion.
+ */
+@Serializable
+data class HeadroomSettings(
+    val headsUpPct: Int = 85,
+    val ladderPct: Int = 92,
+    val ladderUpBelowPct: Int = 50,
+    val stopPct: Int = 70,
+    val stopFablePct: Int = 88,
+    val clearBelowPct: Int = 50,
+    val cooldownMs: Long = 1_800_000,
+    val ladder: List<String> = listOf("fable", "opus", "sonnet"),
+    val defaultModel: String = "",
+    val autoResume: Boolean = true,
+    val resumePhrase: String = "continue",
+    val headsUpText: String = "",
+    val accountSwitch: AccountSwitch = AccountSwitch(),
+)
+
+/** Everything `/v1/headroom` reports. */
+@Serializable
+data class Headroom(
+    /** `ok` | `warn` | `red` | `exhausted` */
+    val mode: String = "ok",
+    val worst: HeadroomWorst? = null,
+    val sessions: List<HeadroomSession> = emptyList(),
+    /**
+     * Armed sentinels by name. The VALUE is left as raw JSON: a sentinel is
+     * either null (not armed) or an object whose fields are for a human to read,
+     * and pinning a shape here would break the client the first time the daemon
+     * adds a word to it.
+     */
+    val sentinels: Map<String, JsonElement?> = emptyMap(),
+    val held: List<HeadroomHeld> = emptyList(),
+    /** Arbiter bookkeeping, raw: it is displayed, never branched on. */
+    val arbiter: JsonObject? = null,
+    val settings: HeadroomSettings? = null,
+    val serverTime: Long = 0,
+)
+
+/**
+ * The headroom summary carried on `/v1/status` — enough for a pill, no more.
+ *
+ * Separate from [Headroom] because it rides a poll that every client already
+ * makes: the full picture costs a second request and only the Status pane and
+ * the settings form need it.
+ */
+@Serializable
+data class StatusHeadroom(
+    val worstPercent: Double? = null,
+    val worstLabel: String? = null,
+    val nextResetAt: String? = null,
+    val mode: String = "ok",
+    val sentinels: List<String> = emptyList(),
+    /** Subagent spawns held by the gate right now. */
+    val paused: Int = 0,
+)
+
+/**
+ * The headroom cell on a session list row.
+ *
+ * Deliberately not [HeadroomSession]: this is what `/v1/sessions` can answer
+ * without walking a transcript, and the list route must stay cheap.
+ */
+@Serializable
+data class SessionHeadroom(
+    val family: String? = null,
+    /** The family it was moved to, or null if it is still on its own model. */
+    val ladder: String? = null,
+    val autoResume: Boolean = true,
+    val stalled: Boolean = false,
+)
+
+// ------------------------------------------------------------ send queue
+//
+// The daemon holds a session send until the turn it would land in has ended.
+// Both models are additive: a pre-queue daemon answers `{"ok":true}` and every
+// field below falls to its default.
+
+/**
+ * What a send actually did.
+ *
+ * `sendKeys` used to return Unit, so the compat question is only what an old
+ * `{"ok":true}` decodes to: queued 0, position 0, delivered false. That is why
+ * [landed] does not read [delivered] alone — nothing queued is nothing waiting,
+ * which is exactly what the old daemon meant.
+ */
+@Serializable
+data class SendKeysResult(
+    val ok: Boolean = false,
+    /** How many sends are waiting for this session, this one included. */
+    val queued: Int = 0,
+    /** This send's place in that queue; 0 when it was not queued at all. */
+    val position: Int = 0,
+    /** Both gates were open: the text is already on the pane. */
+    val delivered: Boolean = false,
+) {
+    /** Nothing is waiting on this send — it landed, or there is no queue to wait in. */
+    val landed: Boolean get() = delivered || queued <= 0
+}
+
+/** What the daemon is holding for one session, and why. */
+@Serializable
+data class TypingState(
+    val queued: Int = 0,
+    val delivering: Boolean = false,
+    val lastError: String? = null,
+    /** `turn` | `modal` | null — what the queue is waiting on. */
+    val blockedBy: String? = null,
+    val serverTime: Long = 0,
+)
 
 /**
  * A model the host offers: the installed CLI's Claude models, and — when the
@@ -698,6 +978,26 @@ data class Watch(
      * frame overwrite the app's real count and disabled deficit detection.
      */
     val pushesSent: Long? = null,
+    /**
+     * The headroom facts an alert turns on, inside the hash.
+     *
+     * ⚠ The daemon's digest is an explicit field list; a field that is not named
+     * there evaporates silently, which is how a notification stops firing with
+     * nothing to see. Null on a daemon older than 3.0.0.
+     */
+    val headroom: WatchHeadroom? = null,
+)
+
+/** The headroom half of a watch digest: only facts a notification acts on. */
+@Serializable
+data class WatchHeadroom(
+    val mode: String = "ok",
+    /** Session names currently stalled on a limit. */
+    val stalled: List<String> = emptyList(),
+    val lastResumeAt: Long = 0,
+    val lastLadderAt: Long = 0,
+    /** Armed sentinel names, e.g. `STOP-FABLE`. */
+    val sentinels: List<String> = emptyList(),
 )
 
 /** State of an in-progress sign-in, read off the login session's pane. */
@@ -1302,6 +1602,14 @@ data class SessionMeta(
     val goals: String = "",
     val notes: String = "",
     val updatedAt: Long = 0,
+    /**
+     * Per-session override of the global auto-resume setting.
+     *
+     * NULL is a third state, not a default: it means "follow the global", and it
+     * is why this is a nullable Boolean rather than a Boolean with a default.
+     * Writing it requires sending an explicit JSON null.
+     */
+    val autoResume: Boolean? = null,
 )
 
 @Serializable

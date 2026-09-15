@@ -1,15 +1,25 @@
 package com.silencelen.huginn
 
+import com.silencelen.huginn.data.AgentsInfo
 import com.silencelen.huginn.data.ChatList
 import com.silencelen.huginn.data.DeviceList
+import com.silencelen.huginn.data.Headroom
+import com.silencelen.huginn.data.Plan
 import com.silencelen.huginn.data.RoundList
+import com.silencelen.huginn.data.SavedAccounts
 import com.silencelen.huginn.data.Screen
+import com.silencelen.huginn.data.SendKeysResult
 import com.silencelen.huginn.data.SessionList
 import com.silencelen.huginn.data.Status
 import com.silencelen.huginn.data.TranscriptPage
+import com.silencelen.huginn.ui.HeadroomRules
+import com.silencelen.huginn.ui.PlanFormat
+import com.silencelen.huginn.ui.StreamPicker
 import kotlinx.serialization.json.Json
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -156,4 +166,162 @@ class ApiContractTest {
         )
     }
 
+    // ------------------------------------------------- headroom (3.0.0)
+    //
+    // ⚠ AUTHORED FROM THE WAVE 1 CONTRACT on 2026-09-15, not captured: appd
+    // 3.0.0 does not exist yet. Every fixture below is hand-written from the
+    // example JSON in `design/w1-headroom.md` and MUST be re-captured from the
+    // live daemon once 3.0.0 deploys. Until then these prove the client can
+    // decode what the contract promises — not that the daemon sends it.
+
+    @Test
+    fun `a plan names the account its bars belong to`() {
+        val p = json.decodeFromString<Plan>(fixture("plan.json"))
+        assertTrue("limits must decode", p.limits.isNotEmpty())
+        assertNotNull("the whole point: whose usage this is", p.account)
+        assertTrue("an email is what a person recognises", !p.account!!.email.isNullOrBlank())
+        assertEquals("max_20x", p.account!!.subscriptionType)
+        assertTrue("the caption is built from it", PlanFormat.accountCaption(p).contains("max_20x"))
+    }
+
+    @Test
+    fun `a plan from an older daemon leaves the account null`() {
+        // 2.85.0 has no `account` block. The bars must still draw, captioned
+        // with the fallback rather than with the last account anyone looked at.
+        val p = json.decodeFromString<Plan>(fixture("plan-legacy.json"))
+        assertTrue("limits must still decode", p.limits.isNotEmpty())
+        assertNull("no identity on the wire", p.account)
+        assertEquals("signed-in account", PlanFormat.accountCaption(p))
+    }
+
+    @Test
+    fun `headroom decodes the whole picture the Status pane draws`() {
+        val h = json.decodeFromString<Headroom>(fixture("headroom.json"))
+        assertEquals("red", h.mode)
+        assertEquals("weekly_fable", h.worst?.window)
+        assertEquals(92.0, h.worst!!.percent, 0.001)
+        assertTrue("a laddered session must decode", h.sessions.any { it.ladder?.to == "opus" })
+        assertTrue("a stalled session must decode", h.sessions.any { it.stalled })
+        assertNotNull("STOP-FABLE is armed", h.sentinels["STOP-FABLE"])
+        assertEquals("one spawn held by the gate", 1, h.held.size)
+        assertNotNull("the arbiter's reasoning is displayed verbatim", h.arbiter)
+        // The client's defaults must MIRROR the daemon's, or a settings form
+        // opens showing thresholds the daemon is not using.
+        assertEquals(92, h.settings!!.ladderPct)
+        assertEquals(85, h.settings!!.headsUpPct)
+        assertEquals(listOf("fable", "opus", "sonnet"), h.settings!!.ladder)
+    }
+
+    @Test
+    fun `an idle daemon's headroom decodes with everything empty`() {
+        val h = json.decodeFromString<Headroom>(fixture("headroom-idle.json"))
+        assertEquals("ok", h.mode)
+        assertTrue(h.sessions.isEmpty())
+        assertTrue(h.held.isEmpty())
+        assertNull("settings are only sent when asked for", h.settings)
+        assertNull("an unarmed sentinel is null, not absent", h.sentinels["STOP"])
+    }
+
+    @Test
+    fun `status carries the pill's reading`() {
+        val s = json.decodeFromString<Status>(fixture("status.json"))
+        val hr = s.headroom
+        assertNotNull("the pill is built from this alone", hr)
+        assertEquals("red", hr!!.mode)
+        assertEquals(listOf("STOP-FABLE"), hr.sentinels)
+        assertEquals(2, hr.paused)
+        assertEquals(
+            "Fable 92% · resets 2d",
+            HeadroomRules.pillText(hr, 1_789_460_000_000L),
+        )
+    }
+
+    @Test
+    fun `status from an older daemon hides the pill instead of showing zero`() {
+        val s = json.decodeFromString<Status>(fixture("status-legacy.json"))
+        assertNotNull("the rest of the screen must still decode", s.host)
+        assertNull("no block means no pill", s.headroom)
+        assertNull(HeadroomRules.pillText(s.headroom, 1_789_460_000_000L))
+    }
+
+    @Test
+    fun `session rows carry the headroom cell and the queue depth`() {
+        val list = json.decodeFromString<SessionList>(fixture("sessions.json"))
+        val laddered = list.sessions.first { it.headroom?.ladder != null }
+        assertEquals("opus", laddered.headroom!!.ladder)
+        val stalled = list.sessions.first { it.headroom?.stalled == true }
+        assertFalse("auto-resume off must survive", stalled.headroom!!.autoResume)
+        assertEquals(
+            "stopped at the usage limit",
+            HeadroomRules.sessionMark(stalled.headroom, null, 1_789_460_000_000L),
+        )
+        assertTrue("a queued send must decode", list.sessions.any { it.pendingSends > 0 })
+        assertTrue(
+            "a session with no Claude session gets no cell at all",
+            list.sessions.any { it.headroom == null },
+        )
+    }
+
+    @Test
+    fun `agents with all=1 carry the run id the picker groups on`() {
+        val info = json.decodeFromString<AgentsInfo>(fixture("agents-all.json"))
+        assertEquals(3, info.agents.size)
+        assertEquals(2, info.agents.count { it.workflowId != null })
+        assertTrue("a status word must decode", info.agents.all { !it.status.isNullOrBlank() })
+        assertTrue("agentType must decode", info.agents.all { !it.agentType.isNullOrBlank() })
+
+        val items = StreamPicker.items(info.agents, 1_789_460_000L)
+        assertEquals("main", items.first().key)
+        assertEquals("one run header for the two members", 1, items.count { it.header })
+        assertEquals("keys must be unique", items.size, items.map { it.key }.toSet().size)
+    }
+
+    @Test
+    fun `an agent's own transcript is an ordinary TranscriptPage`() {
+        val p = json.decodeFromString<TranscriptPage>(fixture("agent-transcript.json"))
+        assertTrue("expected events", p.events.isNotEmpty())
+        assertTrue("nextOffset drives the agent cursor", p.nextOffset > 0)
+        assertEquals("Opus 5", p.modelDisplay)
+        val known = setOf("user", "assistant", "thinking", "tool", "tool_result", "system")
+        p.events.forEach { assertTrue("unhandled event kind '${it.kind}'", it.kind in known) }
+    }
+
+    @Test
+    fun `a limit stall decodes as an assistant record carrying its api error`() {
+        val p = json.decodeFromString<TranscriptPage>(fixture("transcript-limit.json"))
+        val last = p.events.last()
+        assertEquals("the record IS an assistant record", "assistant", last.kind)
+        assertEquals("only this field makes it a limit notice", 429, last.apiError)
+        assertTrue("every earlier event is ordinary", p.events.dropLast(1).all { it.apiError == null })
+    }
+
+    @Test
+    fun `saved accounts speak the daemon's freshness vocabulary`() {
+        val saved = json.decodeFromString<SavedAccounts>(fixture("accounts.json"))
+        assertTrue("expected saved logins", saved.accounts.isNotEmpty())
+        val words = setOf("fresh", "expiring", "expired", "unrefreshable")
+        saved.accounts.forEach {
+            assertTrue("unknown freshness word '${it.freshness}'", it.freshness in words)
+        }
+        val expired = saved.accounts.first { it.freshness == "expired" }
+        assertEquals("invalid_grant", expired.refresh?.lastStatus)
+        assertNotNull("expiry drives the Refresh button", expired.expiresAt)
+        assertNotNull("past this, only a re-login helps", expired.refreshTokenExpiresAt)
+    }
+
+    @Test
+    fun `a send result decodes from both the queued daemon and the old one`() {
+        val queued = json.decodeFromString<SendKeysResult>(
+            """{"ok":true,"queued":1,"position":1,"delivered":false}""",
+        )
+        assertEquals(1, queued.position)
+        assertFalse("still waiting for the turn to end", queued.landed)
+
+        // ⚠ The whole compat question for this route: `sendKeys` used to return
+        // Unit and the daemon answered `{"ok":true}`. That must still decode,
+        // and must not read as "queued forever".
+        val old = json.decodeFromString<SendKeysResult>("""{"ok":true}""")
+        assertTrue(old.ok)
+        assertTrue("no queue means it landed outright", old.landed)
+    }
 }

@@ -1,0 +1,64 @@
+{
+ "accounts": [
+  {
+   "slug": "owner-max",
+   "email": "<email scrubbed, 24 chars>",
+   "orgName": "<orgName scrubbed, 18 chars>",
+   "savedAt": 1785136601,
+   "isActive": true,
+   "subscriptionType": "max_20x",
+   "weeklyPercent": 64.0,
+   "sessionPercent": 31.0,
+   "verified": true,
+   "duplicateOf": false,
+   "freshness": "fresh",
+   "expiresAt": 1789488000000,
+   "refreshTokenExpiresAt": 1791993600000,
+   "refresh": {
+    "lastAt": 1789458200,
+    "lastStatus": "ok",
+    "nextAt": 1789480000
+   }
+  },
+  {
+   "slug": "spare",
+   "email": "<email scrubbed, 22 chars>",
+   "orgName": null,
+   "savedAt": 1786136601,
+   "isActive": false,
+   "subscriptionType": "max_5x",
+   "weeklyPercent": 11.0,
+   "sessionPercent": 0.0,
+   "verified": true,
+   "duplicateOf": false,
+   "freshness": "expired",
+   "expiresAt": 1788000000000,
+   "refreshTokenExpiresAt": 1791993600000,
+   "refresh": {
+    "lastAt": 1789457000,
+    "lastStatus": "invalid_grant",
+    "nextAt": null
+   }
+  },
+  {
+   "slug": "old-org",
+   "email": "<email scrubbed, 27 chars>",
+   "orgName": null,
+   "savedAt": 1782136601,
+   "isActive": false,
+   "subscriptionType": "pro",
+   "weeklyPercent": null,
+   "sessionPercent": null,
+   "verified": false,
+   "duplicateOf": false,
+   "freshness": "unrefreshable",
+   "expiresAt": 1780000000000,
+   "refreshTokenExpiresAt": 1781000000000,
+   "refresh": {
+    "lastAt": 1782200000,
+    "lastStatus": "invalid_grant",
+    "nextAt": null
+   }
+  }
+ ]
+}
