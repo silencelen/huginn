@@ -9,6 +9,16 @@ appeared only as a side-note on the app releases it happened to ship with. Three
 undocumented, and the notes-cutting matcher could fuse two sections when an app and an appd
 version number collided. Entries below are reconstructed from the shipping commits.
 
+## 3.0.2 — 2026-09-15
+
+- **A message sent into a busy session is never lost.** 3.0.0's turn-boundary queue only opened
+  when the transcript's LAST record was the turn marker, but Claude Code writes bookkeeping
+  records after it (last-prompt, ai-title, mode, permission-mode, atis-latch, cost-state), so on
+  a session that kept working a queued message waited ten minutes and was dropped without a
+  word — 43 of them on one session. The boundary is now read from the last CONVERSATIONAL record,
+  and a person's message is never dropped on timeout: it waits for the turn to end, however long
+  that takes. Automated lines (headroom's heads-up, ladder and resume sends) keep their timeout.
+
 ## 3.0.1 — 2026-09-15
 
 - **Quick-action templates are host-owned.** The wording the clients put in front of a quoted
