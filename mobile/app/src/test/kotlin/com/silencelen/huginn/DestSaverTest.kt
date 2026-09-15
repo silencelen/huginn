@@ -1,6 +1,7 @@
 package com.silencelen.huginn
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNull
 import org.junit.Test
 
 /**
@@ -25,6 +26,15 @@ class DestSaverTest {
             Dest.SessionView("andrev"),
             Dest.Scratchpads,
             Dest.Scratchpad("6f1c0f5e-0000-4000-8000-000000000001"),
+            // The four this list forgot. Devices, Rounds and RoundEdit have been
+            // restorable the whole time and nothing said so; SettingsSection is
+            // new, and it is the one whose id decides WHICH of nine drawers you
+            // come back to.
+            Dest.Devices,
+            Dest.Rounds,
+            Dest.RoundEdit(null),
+            Dest.RoundEdit("r-7"),
+            Dest.SettingsSection("usage"),
         )
         for (d in cases) {
             assertEquals("lost $d across a rebuild", d, keyToDest(destToKey(d)))
@@ -44,6 +54,28 @@ class DestSaverTest {
         // into with no sign anything was amiss.
         val p = keyToDest(destToKey(Dest.Scratchpad("pad-9"))) as Dest.Scratchpad
         assertEquals("pad-9", p.id)
+        // "New round" and "edit round r-7" are different screens and the null is
+        // the whole difference; restoring one as the other would open an editor
+        // over the wrong record.
+        assertNull(( keyToDest(destToKey(Dest.RoundEdit(null))) as Dest.RoundEdit).id)
+        assertEquals("r-7", (keyToDest(destToKey(Dest.RoundEdit("r-7"))) as Dest.RoundEdit).id)
+    }
+
+    @Test
+    fun `a settings drawer comes back as the drawer, not as the list`() {
+        // Restoring Settings instead of THE category reads as working — the
+        // screen is right, the nine rows are right — and silently throws away
+        // where the reader was, every fold, on the one screen they unfolded the
+        // phone to read.
+        for (id in listOf("host", "usage", "chats", "notify", "devices", "privacy",
+                          "appearance", "updates", "about")) {
+            val d = keyToDest(destToKey(Dest.SettingsSection(id)))
+            assertEquals("lost the drawer $id", Dest.SettingsSection(id), d)
+        }
+        // The home is still the home, and must not decode as a section with an
+        // empty id — that would open an empty page instead of the list.
+        assertEquals(Dest.Settings, keyToDest(destToKey(Dest.Settings)))
+        assertEquals(Dest.Settings, keyToDest("settings:"))
     }
 
     @Test

@@ -29,6 +29,7 @@ import androidx.compose.material.icons.filled.MonitorHeart
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Schedule
+import androidx.compose.material.icons.filled.Devices
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Terminal
 import androidx.compose.material.icons.outlined.EditNote
@@ -104,7 +105,7 @@ import com.silencelen.huginn.ui.SessionOverviewView
 import com.silencelen.huginn.ui.SessionScreen
 import com.silencelen.huginn.ui.SessionSubtitle
 import com.silencelen.huginn.ui.SessionsScreen
-import com.silencelen.huginn.ui.SettingsScreen
+import com.silencelen.huginn.ui.settings.SettingsPhoneScreen
 import com.silencelen.huginn.ui.SendTargetSheet
 import com.silencelen.huginn.ui.SignInDialog
 import com.silencelen.huginn.ui.StatusScreen
@@ -277,9 +278,14 @@ class MainActivity : FragmentActivity() {
 internal fun backFrom(dest: Dest, tab: Int): Dest? = when (dest) {
     is Dest.SessionView -> Dest.Sessions
     is Dest.Chat -> Dest.Chats
-    // Back to where it was opened from, not to a tab: Devices is only reachable
-    // through Settings, so Settings is the only honest answer.
-    is Dest.Devices -> Dest.Settings
+    // Back to where it was opened from, not to a tab: the fleet is reached from
+    // one row, in one drawer, so that drawer is the only honest answer. (It used
+    // to be the Settings home, which was a step above where the reader came
+    // from — correct while Settings was one scroll, wrong now that it is nine.)
+    is Dest.Devices -> Dest.SettingsSection("devices")
+    // Up is the list of drawers, and deliberately not tab-dependent: which tab
+    // Settings was opened from is the Settings HOME's problem, one level up.
+    is Dest.SettingsSection -> Dest.Settings
     is Dest.RoundEdit -> Dest.Rounds
     is Dest.Scratchpad -> Dest.Scratchpads
     // Pages are reachable from four different places, so "up" cannot mean the
@@ -394,6 +400,7 @@ internal fun destToKey(d: Dest): String = when (d) {
     is Dest.SessionView -> "session:${d.name}"
     is Dest.Status -> "status"
     is Dest.Settings -> "settings"
+    is Dest.SettingsSection -> "settings:${d.id}"
 }
 
 /** The decode half. Anything unrecognised lands on the home screen, never crashes. */
@@ -409,6 +416,11 @@ internal fun keyToDest(v: String): Dest = when {
     v.startsWith("session:") -> Dest.SessionView(v.removePrefix("session:"))
     v == "status" -> Dest.Status
     v == "settings" -> Dest.Settings
+    // An empty id is the HOME, not an empty drawer: a saved "settings:" from a
+    // build that spelled it differently must land on the nine rows rather than
+    // on a page with no category behind it.
+    v.startsWith("settings:") -> v.removePrefix("settings:")
+        .let { if (it.isEmpty()) Dest.Settings else Dest.SettingsSection(it) }
     else -> Dest.Sessions
 }
 
@@ -423,7 +435,15 @@ internal sealed interface Dest {
     data object Rounds : Dest
     /** null = writing a new one. A child of Rounds either way. */
     data class RoundEdit(val id: String?) : Dest
-    /** A child of Settings, not a bar item — see DevicesScreen for why. */
+    /**
+     * The fleet, as a destination in its own right.
+     *
+     * It was "a child of Settings, not a bar item" and shared the rail's Settings
+     * slot; the redesign gives it its own section, because Settings' *Devices*
+     * drawer now holds only the row that OPENS it and the fleet is a place you
+     * go rather than a setting you change. Reached from that row, so back is the
+     * drawer — see [backFrom].
+     */
     data object Devices : Dest
     /** The user's own pages. Reachable from every list and every conversation. */
     data object Scratchpads : Dest
@@ -432,7 +452,17 @@ internal sealed interface Dest {
     data object Sessions : Dest
     data class SessionView(val name: String) : Dest
     data object Status : Dest
+    /** The nine drawers, with the search field pinned above them. */
     data object Settings : Dest
+    /**
+     * One drawer, full screen.
+     *
+     * [id] is a [com.silencelen.huginn.settings.SettingsCatalog] category id and
+     * NEVER a title: ids are stable and titles are copy, and this one is written
+     * into the saved destination, so renaming a drawer must not strand a
+     * restored screen.
+     */
+    data class SettingsSection(val id: String) : Dest
 }
 
 // The two surfaces that read the pages poll. Named because on a wide screen they
@@ -549,6 +579,10 @@ fun HuginnApp(
     // scrolling) that means the countdowns simply stop: "in 4h" stays "in 4h" for
     // the rest of the evening. Thirty seconds and lifecycle-gated, exactly as the
     // desktop's Status pane does it — see [screenClock].
+    // Survives a fold, like the destination does: typing "token", unfolding the
+    // phone and finding an empty field is the same loss as landing back on the
+    // sessions list, and on a screen somebody opened to search.
+    var settingsQuery by rememberSaveable { mutableStateOf("") }
     val nowMs = screenClock()
     val sessions by vm.sessions.collectAsState()
     val status by vm.status.collectAsState()
@@ -791,7 +825,7 @@ fun HuginnApp(
     }
 
     val isChild = dest is Dest.Chat || dest is Dest.SessionView || dest is Dest.Settings ||
-        dest is Dest.Devices || dest is Dest.RoundEdit ||
+        dest is Dest.SettingsSection || dest is Dest.Devices || dest is Dest.RoundEdit ||
         dest is Dest.Scratchpads || dest is Dest.Scratchpad
     // The system gesture, going where the arrow goes. Without this the commonest
     // gesture on the phone closed the app from every child screen.
@@ -810,6 +844,8 @@ fun HuginnApp(
         is Dest.SessionView -> transcript?.title ?: d.name
         is Dest.Status -> "Status"
         is Dest.Settings -> "Settings"
+        is Dest.SettingsSection ->
+            com.silencelen.huginn.settings.SettingsCatalog.category(d.id)?.title ?: "Settings"
     }
 
     login?.let { st ->
@@ -933,9 +969,13 @@ fun HuginnApp(
             is Dest.Status -> 2
             is Dest.Rounds, is Dest.RoundEdit -> 3
             // Four, not three: Rounds took 3, and Settings has no bar item of its
-            // own so its number only has to be distinct. Devices shares it because
-            // it IS Settings as far as the rail's highlight is concerned.
-            is Dest.Settings, is Dest.Devices -> 4
+            // own so its number only has to be distinct. A drawer is Settings as
+            // far as the rail is concerned; the FLEET is not — it has been off
+            // the "child of Settings" footing since the redesign, and claiming
+            // the Settings slot while the reader is looking at machines is the
+            // last thing still saying it belongs there.
+            is Dest.Settings, is Dest.SettingsSection -> 4
+            is Dest.Devices -> 6
             // FIVE, which matches no bar item and no rail item — deliberately.
             // Pages are opened from wherever you already are, so highlighting a
             // section would claim you had navigated somewhere you had not.
@@ -1347,58 +1387,34 @@ fun HuginnApp(
                     vm.newChat(mode, host = d.id) { id -> vm.openChat(id); dest = Dest.Chat(id) }
                 },
                 onForget = { vm.forgetDevice(it.id) },
-                onOpenSettings = { dest = Dest.Settings },
+                onOpenSettings = { dest = Dest.SettingsSection("host") },
                 onStartPolling = { vm.startDevicesPolling() },
                 onStopPolling = { vm.stopDevicesPolling() },
             )
         }
-        val settingsPane: @Composable () -> Unit = {
-            // Re-read on every visit rather than once: the Doze exemption is held
-            // by the system and can be revoked outside this app, so a cached
-            // "granted" would keep reassuring long after it stopped being true.
-            // The update check is check-only (no download), so it never spends data.
-            LaunchedEffect(Unit) {
-                vm.refreshAccount(); vm.refreshDelivery(); vm.refreshAutoswitch(); vm.checkForUpdate()
-                // The pane may open before the 30 s poll has run once, and the
-                // model list is what the default-model picker is drawn from.
-                vm.refreshHeadroom(); vm.refreshModels()
-            }
-            val updateState by vm.updateState.collectAsState()
-            val headroom by vm.headroom.collectAsState()
-            val headroomSaving by vm.headroomSaving.collectAsState()
-            val headroomNote by vm.headroomNote.collectAsState()
-            val models by vm.models.collectAsState()
-            SettingsScreen(
-                headroom = headroom,
-                models = models,
-                headroomSaving = headroomSaving,
-                headroomNote = headroomNote,
-                onSaveHeadroom = { vm.saveHeadroomSettings(it) },
-                onRefreshAccount = { vm.refreshSavedAccount(it) },
-                baseUrl = baseUrl,
-                token = token,
-                connected = connected,
-                notifyEnabled = notifyEnabled,
-                onNotifyEnabled = { vm.setNotifyEnabled(it) },
-                health = health,
-                clients = clients,
-                push = push,
-                onRequestDozeExemption = { vm.requestDozeExemption() },
-                onRefreshDelivery = { vm.refreshDelivery() },
-                onAlertsMode = { vm.setAlertsMode(it) },
-                // Machines, and only the ones the sentence is TRUE of: "can run
-                // work" is the claude capability, which a serve-only machine
-                // does not have. It gets its own line via servingCount instead.
-                deviceCount = groupByMachine(devices).count { g -> g.rows.any { r -> r.scope != "generate" } },
-                servingCount = groupByMachine(devices).count { g -> g.rows.any { r -> r.scope == "generate" } },
-                onOpenDevices = { vm.refreshDevices(); dest = Dest.Devices },
-                appLock = appLock,
+        // ONE lambda for the list and for a drawer: the frame decides which of
+        // them is on screen, and on a wide display it draws both.
+        val settingsPane: @Composable (String?) -> Unit = { section ->
+            SettingsPhoneScreen(
+                vm = vm,
+                section = section,
+                onSelectCategory = { id ->
+                    dest = if (id == null) Dest.Settings else Dest.SettingsSection(id)
+                },
+                query = settingsQuery,
+                onQuery = { settingsQuery = it },
+                twoPane = wide,
+                nowMs = nowMs,
+                appVersion = vm.installedVersion,
+                appdVersion = status?.appdVersion,
                 appLockAvailable = remember { AppLock.canLock(context) },
-                onAppLock = { vm.setAppLock(it) },
-                onLockNow = onLockNow,
-                autoswitch = autoswitch,
-                onAutoswitch = { vm.setAutoswitch(it) },
                 notificationsAllowed = notificationsAllowed,
+                onOpenFleet = { vm.refreshDevices(); dest = Dest.Devices },
+                // Straight to the whole picture, the same place the headroom pill
+                // goes: a number you cannot ask "of what, and until when" is a
+                // worse version of not saying anything.
+                onOpenStatus = { tab = 2; dest = Dest.Status },
+                onLockNow = onLockNow,
                 onRequestNotifications = requestNotifications,
                 onOpenSystemNotificationSettings = {
                     runCatching {
@@ -1409,29 +1425,13 @@ fun HuginnApp(
                         )
                     }
                 },
-                account = account,
-                savedAccounts = savedAccounts,
-                switching = switching,
-                onSwitchAccount = { vm.activateAccount(it) },
-                onForgetAccount = { vm.forgetAccount(it) },
-                onSignIn = { vm.beginAddAccount() },
-                alerts = hostAlerts,
-                onAlertsEnabled = { vm.setAlertsEnabled(it) },
-                watchEnabled = watchEnabled,
-                onWatchEnabled = { vm.setWatchEnabled(it) },
-                onSignOut = { vm.logout() },
-                onSave = { u, t -> vm.saveSettings(u, t) },
-                routePinned = routePinned,
-                resolvingRoute = resolvingRoute,
-                onSelectRoute = { vm.selectRoute(it) },
-                onResolveRoute = { vm.resolveRoute() },
-                onUnpinRoute = { vm.unpinRoute() },
-                updateState = updateState,
-                installedVersion = vm.installedVersion,
-                updateRepo = vm.updateSourceRepo,
-                onCheckUpdate = { vm.checkForUpdate() },
-                onDownloadUpdate = { vm.downloadUpdate() },
-                onInstallUpdate = { vm.installUpdate() },
+                openLink = { url ->
+                    runCatching {
+                        context.startActivity(
+                            Intent(Intent.ACTION_VIEW, Uri.parse(url)).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                        )
+                    }.isSuccess
+                },
             )
         }
 
@@ -1478,7 +1478,9 @@ fun HuginnApp(
                                 Icon(Icons.Filled.Refresh, contentDescription = "Refresh")
                             }
                         }
-                        if (dest !is Dest.Settings && dest !is Dest.Chat && dest !is Dest.SessionView) {
+                        if (dest !is Dest.Settings && dest !is Dest.SettingsSection &&
+                            dest !is Dest.Chat && dest !is Dest.SessionView
+                        ) {
                             IconButton(onClick = { dest = Dest.Settings }) {
                                 Icon(Icons.Filled.Settings, contentDescription = "Settings")
                             }
@@ -1626,6 +1628,19 @@ fun HuginnApp(
                             label = { Text("Status") },
                         )
                         Spacer(Modifier.weight(1f))
+                        // Its own footing, at last. The fleet used to share the
+                        // Settings slot because it was "a child of Settings, not a
+                        // bar item"; Settings' Devices drawer now holds only the
+                        // row that opens this, so the machines are a place you go
+                        // rather than a setting you change. RAIL ONLY — the bottom
+                        // bar stays four, because giving this a bar slot would
+                        // cost one of the four a place it earns every day.
+                        NavigationRailItem(
+                            selected = section == 6,
+                            onClick = { vm.refreshDevices(); dest = Dest.Devices },
+                            icon = { Icon(Icons.Filled.Devices, contentDescription = "Devices") },
+                            label = { Text("Devices") },
+                        )
                         NavigationRailItem(
                             selected = section == 4,
                             onClick = { dest = Dest.Settings },
@@ -1649,7 +1664,13 @@ fun HuginnApp(
                             is Dest.Scratchpads -> scratchpadsPane()
                             is Dest.Scratchpad -> scratchpadPane(d.id)
                             is Dest.Status -> statusPane()
-                            is Dest.Settings -> settingsPane()
+                            // ONE call site for both, deliberately. Two `when`
+                            // branches are two composition groups, so opening a
+                            // drawer from a search hit would DISCARD the frame's
+                            // state — including which row the hit meant to mark,
+                            // which is the one thing the hit was for.
+                            is Dest.Settings, is Dest.SettingsSection ->
+                                settingsPane((dest as? Dest.SettingsSection)?.id)
                         }
                     } else {
                         when (val d = dest) {
@@ -1688,9 +1709,13 @@ fun HuginnApp(
                             is Dest.Status -> Box(Modifier.fillMaxSize(), contentAlignment = androidx.compose.ui.Alignment.TopCenter) {
                                 Box(Modifier.widthIn(max = 840.dp)) { statusPane() }
                             }
-                            is Dest.Settings -> Box(Modifier.fillMaxSize(), contentAlignment = androidx.compose.ui.Alignment.TopCenter) {
-                                Box(Modifier.widthIn(max = 840.dp)) { settingsPane() }
-                            }
+                            // List and detail side by side, the shape Chats,
+                            // Sessions and Pages already take when the fold
+                            // opens. The frame owns the seam and the reading cap,
+                            // so this hands it the whole width rather than
+                            // centring a column inside it.
+                            is Dest.Settings, is Dest.SettingsSection ->
+                                settingsPane((dest as? Dest.SettingsSection)?.id)
                             is Dest.Devices -> Box(Modifier.fillMaxSize(), contentAlignment = androidx.compose.ui.Alignment.TopCenter) {
                                 Box(Modifier.widthIn(max = 840.dp)) { devicesPane() }
                             }
