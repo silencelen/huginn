@@ -40,6 +40,7 @@ import com.silencelen.huginn.desktop.tray.RavenMark
 import com.silencelen.huginn.desktop.tray.TrayIcons
 import com.silencelen.huginn.desktop.tray.TrayModel
 import com.silencelen.huginn.desktop.ui.Shell
+import com.silencelen.huginn.ui.HeadroomRules
 import com.silencelen.huginn.ui.LocalAttachmentImages
 import com.silencelen.huginn.ui.LocalTranscriptMetrics
 import com.silencelen.huginn.ui.TranscriptMetrics
@@ -205,12 +206,17 @@ fun main(args: Array<String>) {
      * still sitting on whatever model it is sitting on either way. The notice is
      * posted under the SAME key as the downgrade it reverses, so the toast that
      * offered the button is replaced by its own outcome.
+     *
+     * ⚠ AND "landed" IS NOT "ok". A session mid-turn has its undo held to the
+     * next turn boundary; the route still answers `ok:true`, and this used to
+     * report it as done. [HeadroomRules.undoWords] is the one place those two
+     * outcomes are told apart.
      */
     fun undoFromActivation(a: Activation.Undo) {
         scope.launch {
             val outcome = runCatching { store.client.undoLadder(a.session) }
                 .fold(
-                    onSuccess = { "put back on its own model" },
+                    onSuccess = { HeadroomRules.undoWords(it) },
                     onFailure = { e -> (e as? HuginnClient.HuginnException)?.message ?: "could not undo" },
                 )
             store.refreshHeadroom()

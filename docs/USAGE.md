@@ -69,8 +69,8 @@ sessions the daemon has moved or is holding, and the one-line reason it last did
 rendered on the host, like `rounds` and `devices`, so the client stays a thin viewer.
 
 The acting half needs the daemon (`huginn-appd` 3.0.0+); without it this is a report and nothing
-more. What the daemon does with those numbers is configured in the apps under **Settings →
-Headroom**:
+more. What the daemon does with those numbers is configured in the phone and desktop apps under
+**Settings → Headroom**:
 
 | Field | What it sets |
 |---|---|

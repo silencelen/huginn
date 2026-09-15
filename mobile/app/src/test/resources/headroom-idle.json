@@ -32,7 +32,7 @@
     }
    },
    "live": true,
-   "readAt": 1789460000
+   "readAt": 1789460000000
   }
  },
  "sessions": [],
@@ -46,7 +46,34 @@
   "lastSwitchAt": 0,
   "lastLadderAt": 0,
   "lastAction": null,
-  "why": "nothing above headsUpPct"
+  "why": "nothing above headsUpPct",
+  "switches": 0,
+  "lastIdleWarnAt": 0,
+  "lastResumeAt": null
  },
- "serverTime": 1789460000
+ "serverTime": 1789460000000,
+ "settings": {
+  "v": 1,
+  "headsUpPct": 85,
+  "ladderPct": 92,
+  "ladderUpBelowPct": 50,
+  "stopPct": 70,
+  "stopFablePct": 88,
+  "clearBelowPct": 50,
+  "cooldownMs": 1800000,
+  "ladder": [
+   "fable",
+   "opus",
+   "sonnet"
+  ],
+  "defaultModel": "claude-fable-5-1",
+  "autoResume": true,
+  "resumePhrase": "Your usage limit has reset. Continue the task you were working on when the limit was reached; do not repeat work that is already complete.",
+  "headsUpText": "[huginn headroom] You are at {pct}% of this account's Fable weekly limit. Write a short handoff note now (what is done, what is next, which files matter), then continue. huginn will move this session to {next} at {ladderPct}%.",
+  "accountSwitch": {
+   "enabled": false,
+   "threshold": 95,
+   "margin": 20
+  }
+ }
 }
