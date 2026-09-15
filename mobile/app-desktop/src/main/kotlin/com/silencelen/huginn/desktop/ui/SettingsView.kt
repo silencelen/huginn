@@ -23,8 +23,10 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import com.silencelen.huginn.data.HeadroomSettings
 import com.silencelen.huginn.data.ModelChoice
-import com.silencelen.huginn.ui.HeadroomRules
 import com.silencelen.huginn.ui.HeadroomSettingsSection
+import com.silencelen.huginn.ui.settings.AccountsEditor
+import com.silencelen.huginn.ui.settings.AccountsIo
+import com.silencelen.huginn.ui.settings.QuickActionsEditor
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
@@ -40,13 +42,14 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.text.AnnotatedString
-import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import com.silencelen.huginn.data.Account
 import com.silencelen.huginn.data.AppdRoutes
 import com.silencelen.huginn.data.Autoswitch
+import com.silencelen.huginn.data.LoginSession
+import com.silencelen.huginn.data.LoginState
 import com.silencelen.huginn.data.SavedAccount
 import com.silencelen.huginn.desktop.AppStore
 import com.silencelen.huginn.desktop.DesktopSettings
@@ -59,7 +62,6 @@ import com.silencelen.huginn.desktop.update.installThenQuit
 import kotlinx.coroutines.launch
 import java.awt.Desktop
 import java.net.URI
-import kotlin.math.roundToInt
 
 /**
  * Connection, accounts, notifications, updates, diagnostics, and where the file
@@ -368,294 +370,40 @@ private fun RemoveAccessSection(store: AppStore) {
 /**
  * Saved Claude logins on the host, and the three-step flow that adds one.
  *
- * The sign-in cannot happen in this process: the daemon runs `claude` on huginn,
- * the browser step is Anthropic's, and the code comes back through the daemon's
- * login session. So all this client does is start it, open the URL, carry the
- * pasted code back — and REPORT THE OUTCOME HONESTLY. Duplicate and mismatch are
- * the two answers a hopeful UI hides, and both matter: a duplicate means the
- * switch you are about to make changes nothing, and a mismatch means the token
- * now saved belongs to somebody other than the account you were adding.
+ * THE EDITOR MOVED TO `:ui` (`ui/settings/AccountsEditor.kt`), BODY UNCHANGED.
+ * It was always the better of the two renderings — the state dot instead of a
+ * row tint, the freshness word only when it is not `fresh`, the daemon's own
+ * sentence rather than a hopeful one — and the phone was carrying a worse copy.
+ * What is left here is the adapter: this client's `HuginnClient` as the small
+ * surface the editor asks for, and this platform's browser.
+ *
+ * `autoswitchLine` went with it. The redesign collapses account switching to
+ * ONE rendering — the headroom form's, the only place its threshold and margin
+ * are also editable — so when the shell's own round lands, this call passes
+ * `showAutoswitch = false` rather than drawing the sentence a second time.
  */
 @Composable
 private fun AccountsSection(store: AppStore) {
-    val scope = rememberCoroutineScope()
-    var current by remember { mutableStateOf<Account?>(null) }
-    var saved by remember { mutableStateOf<List<SavedAccount>>(emptyList()) }
-    var autoswitch by remember { mutableStateOf<Autoswitch?>(null) }
-    var loaded by remember { mutableStateOf(false) }
-    var busy by remember { mutableStateOf(false) }
-
-    var loginEmail by remember { mutableStateOf("") }
-    var loginUrl by remember { mutableStateOf<String?>(null) }
-    var loginCode by remember { mutableStateOf("") }
-    var loginNote by remember { mutableStateOf<String?>(null) }
-    var forgetting by remember { mutableStateOf<SavedAccount?>(null) }
-
-    suspend fun reload() {
-        runCatching { store.client.account() }.onSuccess { current = it }
-        // plan=1: the weekly headroom per saved login is the only number that makes
-        // the list worth reading — it is what says which one to switch to.
-        runCatching { store.client.savedAccounts(withPlan = true) }.onSuccess { saved = it }
-        runCatching { store.client.autoswitch() }.onSuccess { autoswitch = it }
-        loaded = true
-    }
-
-    LaunchedEffect(Unit) { reload() }
-
     SectionHeader("Accounts")
-    Muted("Saved Claude logins on the host. The active one serves every chat and session.", maxLines = 2)
-
-    val who = current
-    Text(
-        when {
-            !loaded -> "Loading…"
-            who == null || !who.loggedIn -> "Signed in: nobody"
-            else -> "Signed in: ${who.email ?: "unknown"}" + (who.subscriptionType?.let { " · $it" } ?: "")
-        },
-        style = MaterialTheme.typography.bodyMedium,
-        modifier = Modifier.padding(top = 8.dp),
+    AccountsEditor(
+        io = remember(store) { DesktopAccountsIo(store) },
+        openLink = ::openInBrowser,
     )
-    Muted(autoswitchLine(autoswitch), Modifier.padding(top = 2.dp), maxLines = 2)
-
-    saved.forEach { a ->
-        Row(
-            // Cap before fill — the other order hands this row fixed constraints
-            // and the 760 can only coerce into them. Measured at 1338px.
-            Modifier.widthIn(max = 760.dp).fillMaxWidth().padding(top = 8.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            // A dot, not a row tint or an accent bar: "active" is one bit and it
-            // reads at a glance in the same vernacular as the nav rail's liveness.
-            StateDot(
-                if (a.isActive) MaterialTheme.colorScheme.primary
-                else MaterialTheme.colorScheme.outlineVariant
-            )
-            Column(Modifier.weight(1f)) {
-                Text(
-                    buildString {
-                        append(a.email ?: a.slug)
-                        if (!a.verified) append(" (unconfirmed)")
-                        if (a.duplicateOf) append(" (duplicate)")
-                    },
-                    style = MaterialTheme.typography.bodyMedium,
-                    fontWeight = if (a.isActive) FontWeight.SemiBold else FontWeight.Normal,
-                )
-                val bits = listOfNotNull(
-                    a.weeklyPercent?.let { "${it.roundToInt()}% of week" },
-                    a.subscriptionType,
-                    // `fresh` is omitted: it is the ordinary state, and a word on
-                    // every row for the case that needs no attention is how the
-                    // one row that DOES need it stops standing out. Null — an
-                    // older daemon — says nothing rather than guessing `fresh`.
-                    a.freshness?.takeIf { it != "fresh" },
-                    if (a.isActive) "active" else null,
-                )
-                if (bits.isNotEmpty()) Muted(bits.joinToString(" · "))
-            }
-            // A token that has expired but whose REFRESH token has not is one
-            // request away from working, and until now the only way to find that
-            // out was to press Use and read "could not switch". Offered only for
-            // that state: `unrefreshable` needs a re-login and `fresh` needs
-            // nothing, and a button that is always there teaches nothing.
-            if (a.freshness == "expired") {
-                TextButton(
-                    enabled = !busy,
-                    onClick = {
-                        scope.launch {
-                            busy = true
-                            // The daemon answers with a STATUS WORD, not a
-                            // boolean — `refresh_token_expired`, `lock_busy` and
-                            // `refresh_failed` want three different things from
-                            // the reader — so it is shown verbatim. The one
-                            // exception is `active_skipped`; see [refreshWords].
-                            runCatching { store.client.refreshAccount(a.slug) }
-                                .fold(
-                                    onSuccess = { word ->
-                                        loginNote = "${a.email ?: a.slug}: ${HeadroomRules.refreshWords(word)}"
-                                    },
-                                    onFailure = { loginNote = it.message ?: "could not refresh" },
-                                )
-                            reload()
-                            busy = false
-                        }
-                    },
-                ) { Text("Refresh") }
-            }
-            if (!a.isActive) {
-                TextButton(
-                    enabled = !busy,
-                    onClick = {
-                        scope.launch {
-                            busy = true
-                            runCatching { store.client.activateAccount(a.slug) }
-                                // THE DAEMON'S OWN SENTENCE, verbatim. A 409 here
-                                // carries the reason — "its login expired on
-                                // <date> — sign in again" — and the string this
-                                // replaced ("could not switch") threw that away
-                                // and left the reader with the one question they
-                                // pressed the button to answer.
-                                .onFailure { loginNote = it.message ?: "could not switch" }
-                            reload()
-                            busy = false
-                        }
-                    },
-                ) { Text("Use") }
-            }
-            TextButton(enabled = !busy, onClick = { forgetting = a }) {
-                Text("Forget", color = MaterialTheme.colorScheme.error)
-            }
-        }
-    }
-    if (loaded && saved.isEmpty()) Muted("No saved logins on the host yet.", Modifier.padding(top = 8.dp))
-
-    // The three steps, stated. A sign-in that leaves the app for a browser and
-    // comes back through a paste is not self-evident, and the step marker is the
-    // difference between "nothing happened" and "it is waiting for you".
-    val step = if (loginUrl == null) 1 else 3
-    Muted(
-        "1 · Start sign-in    2 · Approve in the browser    3 · Paste the code" +
-            "        (now: step $step)",
-        Modifier.padding(top = 14.dp),
-    )
-
-    val pendingUrl = loginUrl
-    if (pendingUrl == null) {
-        // ⚠ WRAPS RATHER THAN CRUSHES. A `[TextField, Button]` Row gives the field
-        // its 280dp minimum first and hands the button whatever is left — which at
-        // 420dp of window is nothing, so "Add login" rendered as a 32px-wide yellow
-        // stripe with one letter per line. A FlowRow puts the button on its own
-        // line instead, which is the only shape where both controls still work.
-        FieldAndButtonRow {
-            OutlinedTextField(
-                value = loginEmail,
-                onValueChange = { loginEmail = it },
-                label = { Text("email to add (optional)") },
-                singleLine = true,
-                modifier = Modifier.widthIn(min = 280.dp, max = 400.dp),
-            )
-            Button(
-                enabled = !busy,
-                onClick = {
-                    scope.launch {
-                        busy = true
-                        loginNote = "Starting sign-in on the host…"
-                        runCatching { store.client.startLogin(loginEmail.trim().ifBlank { null }) }
-                            .onSuccess { s ->
-                                val link = s.url
-                                if (link.isNullOrBlank()) {
-                                    loginNote = "The host did not produce a sign-in URL — check the login tmux session."
-                                } else {
-                                    loginUrl = link
-                                    loginNote = if (openInBrowser(link)) {
-                                        "Approve the sign-in in the browser, then paste the code here."
-                                    } else {
-                                        "No browser could be opened here — copy the link, approve it, then paste the code."
-                                    }
-                                }
-                            }
-                            .onFailure { loginNote = it.message ?: "could not start sign-in" }
-                        busy = false
-                    }
-                },
-            ) { Text("Add login") }
-        }
-        Muted(
-            "Naming the account aims the authorize page at it; leave it blank to use whatever session the browser carries.",
-            Modifier.padding(top = 4.dp),
-            maxLines = 2,
-        )
-    } else {
-        FieldAndButtonRow {
-            OutlinedTextField(
-                value = loginCode,
-                onValueChange = { loginCode = it },
-                label = { Text("paste the code from the browser") },
-                singleLine = true,
-                modifier = Modifier.widthIn(min = 280.dp, max = 400.dp),
-            )
-            Button(
-                enabled = loginCode.isNotBlank() && !busy,
-                onClick = {
-                    scope.launch {
-                        busy = true
-                        loginNote = "Checking…"
-                        runCatching { store.client.submitLoginCode(loginCode.trim()) }
-                            .onSuccess { s ->
-                                loginNote = when {
-                                    s.duplicate ->
-                                        "Already saved: ${s.email ?: "that account"} — the same login twice, so switching to it changes nothing."
-                                    s.mismatch ->
-                                        "Signed in as ${s.email ?: "someone else"}, not ${s.intendedEmail ?: "the intended account"}."
-                                    s.done -> "Added ${s.email ?: "account"}."
-                                    else -> s.message ?: "Still waiting on the host."
-                                }
-                                if (s.done) {
-                                    loginUrl = null
-                                    loginCode = ""
-                                    loginEmail = ""
-                                    reload()
-                                }
-                            }
-                            .onFailure { loginNote = it.message ?: "could not submit the code" }
-                        busy = false
-                    }
-                },
-            ) { Text("Submit code") }
-            TextButton(onClick = { loginUrl = null; loginCode = ""; loginNote = null }) { Text("Cancel") }
-        }
-        Row(
-            Modifier.padding(top = 4.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
-            Muted(pendingUrl, Modifier.weight(1f))
-            val clipboard = LocalClipboardManager.current
-            TextButton(onClick = { clipboard.setText(AnnotatedString(pendingUrl)) }) { Text("Copy link") }
-            TextButton(onClick = { openInBrowser(pendingUrl) }) { Text("Open again") }
-        }
-    }
-
-    loginNote?.let {
-        Text(
-            it,
-            style = MaterialTheme.typography.labelMedium,
-            color = MaterialTheme.colorScheme.primary,
-            modifier = Modifier.padding(top = 8.dp).widthIn(max = 760.dp),
-        )
-    }
-
-    val victim = forgetting
-    if (victim != null) {
-        AlertDialog(
-            onDismissRequest = { forgetting = null },
-            title = { Text("Forget saved login") },
-            text = {
-                Text(
-                    "Remove ${victim.email ?: victim.slug} from the host's saved logins? " +
-                        "Signing in again re-adds it."
-                )
-            },
-            confirmButton = {
-                TextButton(onClick = {
-                    forgetting = null
-                    scope.launch {
-                        runCatching { store.client.forgetAccount(victim.slug) }
-                            .onFailure { loginNote = it.message ?: "could not forget that login" }
-                        reload()
-                    }
-                }) { Text("Forget", color = MaterialTheme.colorScheme.error) }
-            },
-            dismissButton = { TextButton(onClick = { forgetting = null }) { Text("Cancel") } },
-        )
-    }
 }
 
-private fun autoswitchLine(a: Autoswitch?): String {
-    if (a == null) return "autoswitch: unknown"
-    if (!a.enabled) return "autoswitch off — a login that runs out stays the active one"
-    val last = a.last ?: return "autoswitch on · ${a.accounts} accounts · nothing switched yet"
-    return "autoswitch on · ${a.accounts} accounts · last: ${last.fromEmail ?: "?"} (${last.fromPercent}%) → " +
-        "${last.toEmail ?: "?"} (${last.toPercent}%)"
+/** [AccountsIo] over this client's daemon connection. Nothing but forwarding. */
+private class DesktopAccountsIo(private val store: AppStore) : AccountsIo {
+    override suspend fun account(): Account = store.client.account()
+
+    // plan=1: the weekly headroom per saved login is the only number that makes
+    // the list worth reading — it is what says which one to switch to.
+    override suspend fun savedAccounts(): List<SavedAccount> = store.client.savedAccounts(withPlan = true)
+    override suspend fun autoswitch(): Autoswitch = store.client.autoswitch()
+    override suspend fun refreshAccount(slug: String): String = store.client.refreshAccount(slug)
+    override suspend fun activateAccount(slug: String) { store.client.activateAccount(slug) }
+    override suspend fun forgetAccount(slug: String) { store.client.forgetAccount(slug) }
+    override suspend fun startLogin(email: String?): LoginSession = store.client.startLogin(email)
+    override suspend fun submitLoginCode(code: String): LoginState = store.client.submitLoginCode(code)
 }
 
 /**
@@ -1092,51 +840,31 @@ private fun LocalServeSection(store: AppStore) {
 private fun QuickActionsSection(store: AppStore) {
     val scope = rememberCoroutineScope()
     val status by store.status.collectAsState()
+    // HIDDEN ENTIRELY against a daemon with no templates (3.0.x): an editor with
+    // nothing behind it is four boxes whose Save can only 404. The same probe
+    // the selection menu runs when it narrows itself to Quote.
     val actions = status?.quickActions ?: return
-
-    // Keyed on `rev`, so a save (or another client's) refills the boxes rather
-    // than leaving this window editing a copy the host has already moved past.
-    var explain by remember(actions.rev) { mutableStateOf(actions.explain) }
-    var execute by remember(actions.rev) { mutableStateOf(actions.execute) }
-    var askInNewChat by remember(actions.rev) { mutableStateOf(actions.askInNewChat) }
-    var quote by remember(actions.rev) { mutableStateOf(actions.quote) }
     var busy by remember { mutableStateOf(false) }
     var note by remember { mutableStateOf<String?>(null) }
 
     SectionHeader("Quick actions")
-    Muted("What Explain, Execute and Ask in a new chat put in the composer when you right-click selected text. {selection} is the text you selected. Nothing is ever sent — it is staged for you to edit.")
-
-    @Composable
-    fun Field(label: String, value: String, onChange: (String) -> Unit) {
-        OutlinedTextField(
-            value = value,
-            onValueChange = onChange,
-            label = { Text(label) },
-            minLines = 2,
-            maxLines = 4,
-            modifier = Modifier.padding(top = 10.dp).widthIn(min = 320.dp, max = 560.dp),
-        )
-    }
-
-    Field("Explain", explain) { explain = it }
-    Field("Execute", execute) { execute = it }
-    Field("Ask in new chat", askInNewChat) { askInNewChat = it }
-    Field("Quote lead-in (optional, no {selection})", quote) { quote = it }
-    // The frame itself is not editable and is not shown as a field: "> " in front
-    // of every line is a markdown fact this client owns, not a phrase.
-    Muted("Quote always frames the selection as a > block; the lead-in sits above it.", Modifier.padding(top = 4.dp))
-
-    Button(
-        onClick = {
+    // THE EDITOR MOVED TO `:ui` (`ui/settings/QuickActionsEditor.kt`), fields and
+    // wording unchanged. It was desktop-only though the templates are HOST-owned
+    // and the phone consumes them; the phone now calls the same editor.
+    QuickActionsEditor(
+        actions = actions,
+        busy = busy,
+        note = note,
+        onSave = { edited ->
             scope.launch {
                 busy = true
                 note = runCatching {
                     store.client.setQuickActions(
-                        explain = explain,
-                        execute = execute,
-                        askInNewChat = askInNewChat,
-                        quote = quote,
-                        rev = actions.rev,
+                        explain = edited.explain,
+                        execute = edited.execute,
+                        askInNewChat = edited.askInNewChat,
+                        quote = edited.quote,
+                        rev = edited.rev,
                     )
                 }.fold(
                     { store.refreshStatus(); "saved — both clients use this wording now" },
@@ -1145,11 +873,7 @@ private fun QuickActionsSection(store: AppStore) {
                 busy = false
             }
         },
-        enabled = !busy,
-        modifier = Modifier.padding(top = 10.dp),
-    ) { Text("Save quick actions") }
-
-    note?.let { Muted(it, Modifier.padding(top = 6.dp), maxLines = 2) }
+    )
 }
 
 @Composable
