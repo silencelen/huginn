@@ -1,9 +1,11 @@
 package com.silencelen.huginn
 
 import com.silencelen.huginn.data.HeadroomSettings
+import com.silencelen.huginn.data.HeadroomStall
 import com.silencelen.huginn.data.HeadroomWorst
 import com.silencelen.huginn.data.SessionHeadroom
 import com.silencelen.huginn.data.StatusHeadroom
+import com.silencelen.huginn.data.UndoResult
 import com.silencelen.huginn.ui.HeadroomRules
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -229,5 +231,160 @@ class HeadroomRulesTest {
     @Test
     fun `resume words are null for a session that is not stalled`() {
         assertNull(HeadroomRules.resumeWords(stalled = false, autoResume = true, resetClock = "10:10pm"))
+    }
+
+    // ------------------------------------------- the stall record (3.0.0)
+
+    private fun stall(
+        at: Long? = 1_789_450_000_000L,
+        resetsAt: Long? = RESET_MS,
+        resumedAt: Long? = null,
+        why: String? = null,
+        text: String? = null,
+    ) = HeadroomStall(at = at, window = "weekly_fable", resetsAt = resetsAt, resumedAt = resumedAt, why = why, text = text)
+
+    @Test
+    fun `the stall record's own text supplies the clock`() {
+        val h = SessionHeadroom(family = "fable", stalled = true)
+        assertEquals(
+            "waiting for the limit to reset (10:10pm)",
+            HeadroomRules.sessionMark(
+                h, status(), NOW_3H12M,
+                stall = stall(text = "You've hit your usage limit · resets 10:10pm (America/Los_Angeles)"),
+            ),
+            "the one wall clock this object may show is the one that arrived as text",
+        )
+    }
+
+    @Test
+    fun `the stall's own reset is counted down in MILLISECONDS`() {
+        val h = SessionHeadroom(family = "fable", stalled = true)
+        assertEquals(
+            "waiting for the limit to reset (in 3h 12m)",
+            HeadroomRules.sessionMark(h, status(resetsAt = null), NOW_3H12M, stall = stall()),
+            "`stall.resetsAt` is a millisecond epoch on /v1/headroom, not an ISO string",
+        )
+    }
+
+    @Test
+    fun `a refusal is said in the daemon's own words`() {
+        val h = SessionHeadroom(family = "fable", stalled = true, autoResume = false)
+        assertEquals(
+            "auto-resume is off for this session",
+            HeadroomRules.sessionMark(h, status(), NOW_3H12M, stall = stall(why = "auto-resume is off for this session")),
+            "`why` is the only place a refusal is ever written down",
+        )
+        assertEquals(
+            "gave up after 3 attempts",
+            HeadroomRules.sessionMark(h, status(), NOW_3H12M, stall = stall(why = "gave up after 3 attempts")),
+        )
+        // No reason recorded: the old sentence, which is still true.
+        assertEquals(
+            "stopped at the usage limit",
+            HeadroomRules.sessionMark(h, status(), NOW_3H12M, stall = stall()),
+        )
+    }
+
+    @Test
+    fun `a resumed stall is not waiting for anything`() {
+        assertNull(
+            HeadroomRules.stallWords(stall(resumedAt = 1_789_460_000_000L), autoResume = true, nowMs = NOW_3H12M),
+            "it was picked back up; the mark falls through to the ladder",
+        )
+        assertNull(HeadroomRules.stallWords(null, autoResume = true, nowMs = NOW_3H12M))
+        assertNull(
+            HeadroomRules.stallWords(stall(at = null), autoResume = true, nowMs = NOW_3H12M),
+            "the daemon seeds a blank stall on every session it has ever seen",
+        )
+    }
+
+    @Test
+    fun `no stall record falls back to the list cell's sentence`() {
+        val h = SessionHeadroom(family = "fable", stalled = true)
+        assertEquals(
+            "waiting for the limit to reset (in 3h 12m)",
+            HeadroomRules.sessionMark(h, status(), NOW_3H12M, stall = null),
+            "a caller with only /v1/sessions still gets the worst window's reset",
+        )
+    }
+
+    // -------------------------------------------------- millisecond clocks
+
+    @Test
+    fun `the millisecond countdowns agree with the ISO ones`() {
+        assertEquals(HeadroomRules.coarseUntil(RESET, NOW_3H12M), HeadroomRules.coarseUntilMs(RESET_MS, NOW_3H12M))
+        assertEquals("3h", HeadroomRules.coarseUntilMs(RESET_MS, NOW_3H12M))
+        assertEquals("12m", HeadroomRules.coarseUntilMs(RESET_MS, NOW_12M))
+        assertEquals("2d", HeadroomRules.coarseUntilMs(RESET_MS, NOW_2D4H))
+        assertEquals("now", HeadroomRules.coarseUntilMs(RESET_MS, NOW_PAST))
+        assertEquals("2d 4h", HeadroomRules.shortUntilMs(RESET_MS, NOW_2D4H))
+        assertEquals("3h 12m", HeadroomRules.shortUntilMs(RESET_MS, NOW_3H12M))
+    }
+
+    @Test
+    fun `a millisecond epoch of zero or null renders nothing at all`() {
+        assertNull(HeadroomRules.coarseUntilMs(null, NOW_3H12M), "absent is not 1970")
+        assertNull(HeadroomRules.coarseUntilMs(0L, NOW_3H12M))
+        assertNull(HeadroomRules.shortUntilMs(0L, NOW_3H12M))
+        assertNull(HeadroomRules.shortUntilMs(-1L, NOW_3H12M))
+    }
+
+    // ---------------------------------------------------- the clock parse
+
+    @Test
+    fun `the reset clock parse is the one implementation`() {
+        assertEquals(
+            "10:10pm",
+            HeadroomRules.resetClockOf("You've hit your usage limit · resets 10:10pm (America/Los_Angeles)"),
+        )
+        assertEquals("3am", HeadroomRules.resetClockOf("resets 3am."))
+        assertNull(HeadroomRules.resetClockOf("Claude is having trouble responding."))
+        assertNull(HeadroomRules.resetClockOf(null))
+        assertNull(HeadroomRules.resetClockOf("resets "), "a clause with nothing in it says nothing")
+    }
+
+    // --------------------------------------------------------- undo words
+
+    @Test
+    fun `an applied undo and a queued one are different sentences`() {
+        assertEquals(
+            "put back on fable",
+            HeadroomRules.undoWords(UndoResult(ok = true, applied = true, to = "fable")),
+        )
+        // ⚠ THE BUG: both answers are `ok:true`, and this one was announced as done.
+        assertEquals(
+            "will go back to fable at the next turn boundary",
+            HeadroomRules.undoWords(UndoResult(ok = true, applied = false, queued = true, to = "fable")),
+        )
+        assertEquals(
+            "will go back at the next turn boundary",
+            HeadroomRules.undoWords(UndoResult(ok = true, queued = true)),
+        )
+        assertEquals(
+            "dropped: the session moved on",
+            HeadroomRules.undoWords(UndoResult(ok = true, to = "fable", delivery = "dropped: the session moved on")),
+            "neither applied nor queued: the daemon's own reason, verbatim",
+        )
+        assertEquals("could not undo", HeadroomRules.undoWords(UndoResult(ok = true)))
+    }
+
+    // ------------------------------------------------------ refresh words
+
+    @Test
+    fun `the refresh word is the daemon's except for the one that misreads`() {
+        assertEquals(
+            "that is the active login",
+            HeadroomRules.refreshWords("active_skipped"),
+            "not a failure and not a refresh — the route never refuses the active login",
+        )
+        assertEquals("refreshed", HeadroomRules.refreshWords("refreshed"))
+        assertEquals("refresh_token_expired", HeadroomRules.refreshWords("refresh_token_expired"))
+        assertEquals("lock_busy", HeadroomRules.refreshWords("lock_busy"))
+        assertEquals(
+            "some_word_added_later",
+            HeadroomRules.refreshWords("some_word_added_later"),
+            "an unknown word shown as itself beats a wrong one",
+        )
+        assertEquals("no answer", HeadroomRules.refreshWords("  "))
     }
 }

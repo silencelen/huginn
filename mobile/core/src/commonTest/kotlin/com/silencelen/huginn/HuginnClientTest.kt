@@ -481,4 +481,50 @@ class HuginnClientTest {
         assertEquals(1, pads.size)
         assertTrue(pads.single().main)
     }
+
+    // ------------------------------------------------------- headroom 3.0.0
+
+    @Test
+    fun `undoLadder decodes what the undo actually did`() = runTest {
+        val r = ok("""{"ok":true,"applied":false,"queued":true,"to":"fable","delivery":"queued"}""")
+            .undoLadder("jtyper")
+        assertEquals("http://appd.test/v1/sessions/jtyper/headroom/undo", seen.single().url.toString())
+        assertEquals("POST", seen.single().method.value)
+        assertTrue(r.ok)
+        assertFalse(r.applied, "mid-turn: the picker cannot be opened inside a running turn")
+        assertTrue(r.queued)
+        assertEquals("fable", r.to)
+    }
+
+    /**
+     * ⚠ THE ID GOES THROUGH VERBATIM. `/agents` emits the BARE hex; the
+     * transcript route takes bare or `agent-` prefixed. A client that added the
+     * prefix — or stripped it — would be a third opinion about an id it did not
+     * mint, and the strip 400'd on every chip when the two disagreed.
+     */
+    @Test
+    fun `agentTranscript sends the agent id exactly as the list gave it`() = runTest {
+        ok("""{"events":[],"nextOffset":0}""").agentTranscript("jtyper", "af7ca864cee1939de")
+        assertEquals(
+            "http://appd.test/v1/sessions/jtyper/agents/af7ca864cee1939de/transcript?limit=400",
+            seen.single().url.toString(),
+        )
+
+        seen.clear()
+        ok("""{"events":[],"nextOffset":0}""").agentTranscript("jtyper", "agent-3f9c1a")
+        assertEquals(
+            "http://appd.test/v1/sessions/jtyper/agents/agent-3f9c1a/transcript?limit=400",
+            seen.single().url.toString(),
+        )
+    }
+
+    @Test
+    fun `typing status is a GET, and there is no cancel route to call`() = runTest {
+        val t = ok("""{"queued":2,"delivering":false,"blockedBy":"turn","serverTime":1789460000}""")
+            .typingStatus("jtyper")
+        assertEquals("http://appd.test/v1/sessions/jtyper/typing", seen.single().url.toString())
+        assertEquals("GET", seen.single().method.value, "the daemon has never served anything else here")
+        assertEquals(2, t.queued)
+        assertEquals("turn", t.blockedBy)
+    }
 }
