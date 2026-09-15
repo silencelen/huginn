@@ -704,21 +704,15 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
     /** Stages shared content into an EXISTING chat: draft appended, photo owned. */
     fun stageShareInChat(id: String, text: String?, image: android.net.Uri?) {
         val key = chatDraftKey(id)
-        if (!text.isNullOrBlank()) {
-            val cur = _drafts.value[key].orEmpty()
-            // Appended, never clobbered: a half-typed draft outranks a share.
-            setDraft(key, if (cur.isBlank()) text else cur + "\n" + text)
-        }
+        // Appended, never clobbered: a half-typed draft outranks a share.
+        if (!text.isNullOrBlank()) appendToDraft(key, text)
         if (image != null) attachImage(image, key)
     }
 
     /** The same, into a session's conversation composer. */
     fun stageShareInSession(name: String, text: String?, image: android.net.Uri?) {
         val key = sessionDraftKey(name)
-        if (!text.isNullOrBlank()) {
-            val cur = _drafts.value[key].orEmpty()
-            setDraft(key, if (cur.isBlank()) text else cur + "\n" + text)
-        }
+        if (!text.isNullOrBlank()) appendToDraft(key, text)
         if (image != null) attachImage(image, key)
     }
 
@@ -759,6 +753,67 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
 
     private fun clearDraft(key: String) {
         if (_drafts.value.containsKey(key)) setDraft(key, "")
+    }
+
+    /**
+     * The long-press verbs, bound to a target's composer.
+     *
+     * A PLAIN CLASS holds the rules ([SelectionStaging]) because this is an
+     * `AndroidViewModel` and nothing inside one can be asserted on a host with no
+     * device and no `/dev/kvm`. Everything below is delegation.
+     */
+    val staging: SelectionStaging = SelectionStaging(
+        draftOf = { key -> _drafts.value[key].orEmpty() },
+        setDraft = { key, text -> setDraft(key, text) },
+        chatKeyOf = { id -> chatDraftKey(id) },
+    )
+
+    /**
+     * Stages text in a composer: APPENDED, never clobbered, never sent.
+     *
+     * ONE METHOD WITH ONE RULE ([QuickActionRules.appendToDraft], shared with the
+     * desktop) rather than the four hand-written copies this file used to hold —
+     * share-into-chat, share-into-session, page-into-chat, page-into-session, each
+     * with its own `if (cur.isBlank())`. The separator widens from one newline to
+     * a blank line with it: what lands here is a BLOCK — a page, a quote, a
+     * template — and a blank line is how a person would have typed it.
+     */
+    fun appendToDraft(key: String, text: String) = staging.append(key, text)
+
+    /**
+     * Runs one selection verb. Explain / Execute / Quote stage into [draftKey];
+     * "Ask in new chat" makes a chat, stages into ITS draft and reports the new id
+     * for the shell to navigate to.
+     *
+     * ⚠ VIEWMODEL SCOPE, not a composition's. "Ask in new chat" navigates, which
+     * tears down the composition that launched it — the same lesson the desktop's
+     * `rememberSelectionVerbs` carries in its header. A `rememberCoroutineScope`
+     * there is cancelled at its first suspension point, and the chat gets created,
+     * or not, depending on timing, with the staging never running.
+     */
+    fun runSelectionAction(
+        action: SelectionAction,
+        selection: String,
+        draftKey: String,
+        actions: com.silencelen.huginn.data.QuickActions?,
+        mode: String? = null,
+        onOpened: (String) -> Unit = {},
+    ) {
+        if (action != SelectionAction.ASK_IN_NEW_CHAT) {
+            staging.stage(action, selection, actions, draftKey)
+            return
+        }
+        viewModelScope.launch {
+            awaitReady()
+            staging.askInNewChat(
+                selection = selection,
+                actions = actions,
+                fallbackKey = draftKey,
+                create = { client.createChat(mode ?: _chatMode.value) },
+                onOpened = { id -> refreshChats(); onOpened(id) },
+                onFailure = { _toast.value = errText(it) },
+            )
+        }
     }
 
     init {
@@ -996,6 +1051,20 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
     val headroomPill: StateFlow<com.silencelen.huginn.data.StatusHeadroom?> =
         kotlinx.coroutines.flow.combine(_headroom, _status) { h, s ->
             statusHeadroomOf(h) ?: s?.headroom
+        }.stateIn(viewModelScope, SharingStarted.Eagerly, null)
+
+    /**
+     * The fill line under the Status destination's icon.
+     *
+     * A DIFFERENT NUMBER FROM THE PILL and computed from the same two flows: the
+     * pill reports the worst window anywhere (usually the Fable week), this
+     * reports the live account's 5-hour session window, which is the one that
+     * decides whether the next hour of work finishes. `:core` decides which is
+     * which; this only hands it both halves.
+     */
+    val sessionUsage: StateFlow<UsageFill?> =
+        kotlinx.coroutines.flow.combine(_headroom, _status) { h, s ->
+            SessionUsageFill.of(h, statusHeadroomOf(h) ?: s?.headroom)
         }.stateIn(viewModelScope, SharingStarted.Eagerly, null)
 
     /**
@@ -1649,17 +1718,9 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
      * draft outranks anything arriving into it, and nothing is sent on the
      * person's behalf.
      */
-    fun stagePadInChat(id: String, text: String) {
-        val key = chatDraftKey(id)
-        val cur = _drafts.value[key].orEmpty()
-        setDraft(key, if (cur.isBlank()) text else cur + "\n" + text)
-    }
+    fun stagePadInChat(id: String, text: String) = appendToDraft(chatDraftKey(id), text)
 
-    fun stagePadInSession(name: String, text: String) {
-        val key = sessionDraftKey(name)
-        val cur = _drafts.value[key].orEmpty()
-        setDraft(key, if (cur.isBlank()) text else cur + "\n" + text)
-    }
+    fun stagePadInSession(name: String, text: String) = appendToDraft(sessionDraftKey(name), text)
 
     /** Read once when the new-chat dialog opens, so a machine enrolled since the
      *  last app-wide refresh is actually offerable. */
@@ -2349,6 +2410,12 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
                     keys = if (thenEnter) listOf("Enter") else emptyList(),
                     scratchpadId = padId,
                 )
+            }.onSuccess { result ->
+                // A send into a BUSY session is queued and delivered at the next
+                // turn boundary. Seeded from the send's own answer rather than
+                // waited for from the first poll: two seconds of a composer that
+                // emptied with no explanation is the whole complaint.
+                noteSend(name, result)
             }.onFailure {
                 _toast.value = errText(it)
                 // A refused send hands everything back: the composer was emptied
@@ -2361,6 +2428,65 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
                 if (padId != null && padRefFor(padKey) == null) setPadRef(padKey, padId)
             }
         }
+    }
+
+    // ------------------------------------------------------- the send queue
+    //
+    // The daemon holds a session send until the turn it would land in has ended.
+    // Everything here is about SAYING SO: the facts were already on the wire and
+    // no client read any of them, so a queued message read as a lost one.
+
+    private val _typing = MutableStateFlow<Map<String, com.silencelen.huginn.data.TypingState>>(emptyMap())
+
+    /** What the daemon is holding, per session. Absent means nothing is waiting. */
+    val typing: StateFlow<Map<String, com.silencelen.huginn.data.TypingState>> = _typing.asStateFlow()
+
+    /** The composer's one-line status for a session, or null. */
+    fun queueNote(name: String): String? = SendQueue.note(_typing.value[name])
+
+    private fun setTyping(name: String, state: com.silencelen.huginn.data.TypingState?) {
+        _typing.value = _typing.value.toMutableMap().apply {
+            if (state == null) remove(name) else put(name, state)
+        }
+    }
+
+    private fun noteSend(name: String, result: com.silencelen.huginn.data.SendKeysResult) {
+        setTyping(name, SendQueue.seed(result))
+    }
+
+    private var typingJob: Job? = null
+
+    /**
+     * Follows the queue until it drains. LIFECYCLE-SCOPED by its caller.
+     *
+     * The REQUEST is made only while something is actually waiting — an idle
+     * session must not cost a round trip every two seconds for an answer that is
+     * always zero — but the loop itself keeps ticking, because the next send can
+     * queue at any moment and a poll that stopped for good would never notice.
+     */
+    fun startTypingPolling(name: String) {
+        typingJob?.cancel()
+        typingJob = viewModelScope.launch {
+            awaitReady()
+            while (isActive) {
+                if ((_typing.value[name]?.queued ?: 0) > 0) {
+                    runCatching { client.typingStatus(name) }
+                        .onSuccess { st ->
+                            // DRAINED CLEARS IT. A state with nothing queued and no
+                            // error is the absence of a queue, not a queue of zero,
+                            // and keeping the row would leave "(0 waiting)" under a
+                            // composer that is working perfectly.
+                            setTyping(name, st.takeIf { SendQueue.note(it) != null })
+                        }
+                }
+                delay(2_000)
+            }
+        }
+    }
+
+    fun stopTypingPolling() {
+        typingJob?.cancel()
+        typingJob = null
     }
 
     // ------------------------------------------------ live typing (ordered)
@@ -2531,6 +2657,18 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
+    /**
+     * ⚠ NO CALLER IN THIS APP SINCE 2026-09-15, AND DELIBERATELY KEPT.
+     *
+     * The owner's decision 23 replaced the session's answerable cards with a
+     * one-line steer to the Screen tab, so nothing in the UI taps an option any
+     * more — the reader answers in the pane, which handles every prompt type. The
+     * lock-screen notification buttons still answer, through their OWN client in
+     * `AnswerReceiver` (a broadcast receiver has no view model), so this and
+     * [answerPrompt] are the in-app half of `POST /answer`: the fingerprint, the
+     * 409 vocabulary and the toast wording. Deleting them and writing them again
+     * later is how the fingerprint rule gets lost.
+     */
     fun answerPromptMulti(name: String, options: List<Int>, fingerprint: String?) {
         viewModelScope.launch {
             runCatching { client.answerPromptMulti(name, options, fingerprint) }

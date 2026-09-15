@@ -31,9 +31,31 @@ data class WindowLayout(
         const val DEFAULT_W: Int = 1280
         const val DEFAULT_H: Int = 840
 
-        /** Below this the three panes stop being three panes. */
-        const val MIN_W: Int = 720
-        const val MIN_H: Int = 480
+        /**
+         * The narrowest and shortest the window may be DRAGGED to, now that it
+         * has something sensible to do down there.
+         *
+         * It was 720x480, and 720 was a claim about the three-pane layout: below
+         * it the panes stopped being panes. That claim was also never enforced —
+         * MIN_W was applied on RESTORE only, no `window.minimumSize` was ever set,
+         * and every shape underneath it was one drag away. So the number was
+         * simultaneously too high to allow a useful narrow window and too weak to
+         * prevent a useless one.
+         *
+         * 480 because the frame folds now: under [Responsive.COMPACT_BELOW_DP] the
+         * list pane gets out of the way, and 480 leaves 428dp of detail beside the
+         * 52dp rail — a real conversation column, wider than the phone this app
+         * shares its composables with. It is also what a half-screen portrait
+         * window is on the displays this actually happens on (a 960-wide scaled
+         * desktop snapped in two), which is the gesture the owner reported from.
+         *
+         * 600 tall rather than 480 because height has a floor made of parts: the
+         * status line (26), a view header, a composer that will not go below 56,
+         * and enough transcript above it to be worth reading. At 480 the
+         * conversation was the smaller half of its own window.
+         */
+        const val MIN_W: Int = 480
+        const val MIN_H: Int = 600
 
         /**
          * How much of the window's title bar must land on a screen for the window

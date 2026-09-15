@@ -1,12 +1,20 @@
 package com.silencelen.huginn
 
+import com.silencelen.huginn.data.Chat
 import com.silencelen.huginn.data.Headroom
 import com.silencelen.huginn.data.HuginnClient
+import com.silencelen.huginn.data.QuickActions
+import com.silencelen.huginn.data.SendKeysResult
+import com.silencelen.huginn.data.TypingState
 import com.silencelen.huginn.data.TranscriptEvent
 import com.silencelen.huginn.data.TranscriptPage
 import com.silencelen.huginn.data.AgentRun
 import com.silencelen.huginn.ui.AgentStream
 import com.silencelen.huginn.ui.HuginnViewModel
+import com.silencelen.huginn.ui.SelectionAction
+import com.silencelen.huginn.ui.SelectionMode
+import com.silencelen.huginn.ui.SelectionStaging
+import com.silencelen.huginn.ui.SendQueue
 import com.silencelen.huginn.ui.StreamPicker
 import com.silencelen.huginn.ui.fetchStreamAgents
 import com.silencelen.huginn.ui.errorTextFor
@@ -277,6 +285,121 @@ class HuginnViewModelTest {
         val shut = s.items(agents, STRIP_NOW)
         assertEquals(listOf("main", "agent:live", StreamPicker.OVERFLOW_KEY), shut.map { it.key })
         assertEquals("…", shut.single { it.overflow }.label)
+    }
+
+    // ------------------------------------------------------ selection staging
+
+    /**
+     * A map-backed stand-in for the view model's draft book.
+     *
+     * The rules below belong to [SelectionStaging] precisely so they can be
+     * reached: `HuginnViewModel` is an `AndroidViewModel` and nothing inside one
+     * can be constructed on a host with no device.
+     */
+    private class Drafts {
+        val map = mutableMapOf<String, String>()
+        fun staging() = SelectionStaging(
+            draftOf = { map[it].orEmpty() },
+            setDraft = { k, v -> if (v.isEmpty()) map.remove(k) else map[k] = v },
+            chatKeyOf = { HuginnViewModel.chatDraftKey(it) },
+        )
+    }
+
+    private val actions = QuickActions(
+        rev = 3,
+        explain = "Explain this:\n\n{selection}",
+        execute = "Run this:\n\n{selection}",
+        askInNewChat = "About this:\n\n{selection}",
+        quote = "",
+    )
+
+    @Test
+    fun `staging into a composer appends and never clobbers what was typed`() {
+        // THE STAGING CONTRACT. A half-typed message outranks anything arriving
+        // into it; a verb that replaced the draft would destroy work that cannot
+        // be recovered, and the reader pressed the verb, not Undo.
+        val d = Drafts()
+        val key = HuginnViewModel.sessionDraftKey("pctrooubleshoot")
+        d.map[key] = "half a thought"
+        d.staging().stage(SelectionAction.QUOTE, "alpha", actions, key)
+        assertEquals("half a thought\n\n> alpha", d.map[key])
+
+        // And twice over: a second verb joins the first rather than winning.
+        d.staging().stage(SelectionAction.QUOTE, "beta", actions, key)
+        assertEquals("half a thought\n\n> alpha\n\n> beta", d.map[key])
+    }
+
+    @Test
+    fun `ask in a new chat stages into the NEW chat's draft, not the old one`() = runTest {
+        // The whole bug this seam exists to pin: the composed text landing in the
+        // composer the reader just left, in a chat they are navigating away from.
+        val d = Drafts()
+        val from = HuginnViewModel.sessionDraftKey("pctrooubleshoot")
+        d.map[from] = "unsent"
+        var opened: String? = null
+        d.staging().askInNewChat(
+            selection = "alpha",
+            actions = actions,
+            fallbackKey = from,
+            create = { Chat(id = "c9", mode = "ask") },
+            onOpened = { opened = it },
+        )
+        assertEquals("c9", opened)
+        assertEquals("About this:\n\nalpha", d.map[HuginnViewModel.chatDraftKey("c9")])
+        assertEquals("the source composer is untouched", "unsent", d.map[from])
+
+        // A creation that FAILS does not lose the text — they selected it — so it
+        // falls back into the composer they are actually looking at.
+        val e = Drafts()
+        e.map[from] = "unsent"
+        e.staging().askInNewChat(
+            selection = "alpha",
+            actions = actions,
+            fallbackKey = from,
+            create = { throw IllegalStateException("offline") },
+            onOpened = { opened = "must not open" },
+        )
+        assertEquals("unsent\n\nAbout this:\n\nalpha", e.map[from])
+    }
+
+    @Test
+    fun `a daemon with no quick actions offers Quote alone`() {
+        // The templates are the HOST's (quick-actions.json, appd 3.0.1+). Against a
+        // daemon that owns none, three of the four verbs have no wording at all —
+        // and Quote is the one verb whose text this client writes itself.
+        assertEquals(
+            listOf(SelectionAction.QUOTE),
+            SelectionMode.begin("alpha").actions(null),
+        )
+        assertEquals(
+            SelectionAction.entries.toList(),
+            SelectionMode.begin("alpha").actions(actions),
+        )
+        // And a long-press that caught no words offers nothing, so the bar that
+        // draws what it is given draws nothing either.
+        assertTrue("a blank selection deserves no verbs", SelectionMode.begin("   ").actions(actions).isEmpty())
+        assertTrue("and a dismissed one none at all", SelectionMode.NONE.actions(actions).isEmpty())
+    }
+
+    // ---------------------------------------------------------- the send queue
+
+    @Test
+    fun `a queued send says so, and a drained poll clears it`() {
+        // The phone's half of the "my message just disappeared" report: a send into
+        // a busy session is held by the daemon until the turn ends, and until this
+        // the composer emptied with nothing anywhere to say why.
+        val queued = SendKeysResult(ok = true, queued = 2, position = 2, delivered = false)
+        val seeded = SendQueue.seed(queued)
+        assertNotNull("a send that did not land seeds the line from its own answer", seeded)
+        val note = SendQueue.note(seeded)
+        assertNotNull(note)
+        assertTrue("it must say what is happening: $note", note!!.startsWith("Queued"))
+        assertTrue("and how many are waiting: $note", note.contains("2 waiting"))
+
+        // DRAINED CLEARS IT — the half that rots. A poll that comes back empty must
+        // remove the line, not settle on "(0 waiting)" under a working composer.
+        assertNull(SendQueue.note(TypingState(queued = 0)))
+        assertNull("a delivered send never showed one", SendQueue.seed(SendKeysResult(ok = true, delivered = true)))
     }
 
 }

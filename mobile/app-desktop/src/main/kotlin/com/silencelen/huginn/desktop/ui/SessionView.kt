@@ -10,6 +10,7 @@ import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -23,6 +24,9 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.Send
+import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material3.Button
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CircularProgressIndicator
@@ -75,6 +79,8 @@ import androidx.compose.runtime.rememberCoroutineScope
 import com.silencelen.huginn.data.DraftBook
 import com.silencelen.huginn.data.HuginnClient
 import com.silencelen.huginn.data.QuickActions
+import com.silencelen.huginn.desktop.Composer
+import com.silencelen.huginn.desktop.SendQueue
 import com.silencelen.huginn.desktop.AppStore
 import com.silencelen.huginn.desktop.SessionController
 import com.silencelen.huginn.desktop.SessionTab
@@ -89,7 +95,11 @@ import com.silencelen.huginn.desktop.attach.appendDropped
 import com.silencelen.huginn.desktop.attach.attachmentDropTarget
 import com.silencelen.huginn.desktop.attach.composeMessage
 import com.silencelen.huginn.desktop.attach.rememberAttachmentController
+import com.silencelen.huginn.desktop.ui.common.ComposerAction
+import com.silencelen.huginn.desktop.ui.common.ComposerChips
+import com.silencelen.huginn.desktop.ui.common.ComposerFrame
 import com.silencelen.huginn.desktop.ui.common.DeskType
+import com.silencelen.huginn.desktop.ui.common.PaneScrollbar
 import com.silencelen.huginn.desktop.ui.common.SelectionVerbs
 import com.silencelen.huginn.desktop.ui.common.WithTranscriptSelectionMenu
 import com.silencelen.huginn.desktop.ui.common.rememberSelectionVerbs
@@ -114,7 +124,7 @@ import com.silencelen.huginn.ui.statusHeadroomOf
 import com.silencelen.huginn.ui.OverviewDensity
 import com.silencelen.huginn.ui.SessionOverviewView
 import com.silencelen.huginn.ui.ContextMeter
-import com.silencelen.huginn.ui.DegradedAskCard
+import com.silencelen.huginn.ui.QuestionLinkBar
 import com.silencelen.huginn.ui.HistoryWalk
 import com.silencelen.huginn.ui.exitRecallIfDiverged
 import com.silencelen.huginn.ui.handleHistoryKey
@@ -123,9 +133,10 @@ import com.silencelen.huginn.ui.FollowNewest
 import com.silencelen.huginn.ui.ModelLabels
 import com.silencelen.huginn.ui.NewestPill
 import com.silencelen.huginn.ui.onScrollInput
-import com.silencelen.huginn.ui.PlanApprovalCard
-import com.silencelen.huginn.ui.PromptCard
 import com.silencelen.huginn.ui.PromptGate
+import com.silencelen.huginn.ui.PromptPlacement
+import com.silencelen.huginn.ui.PromptSurface
+import com.silencelen.huginn.ui.TabAttentionDot
 import com.silencelen.huginn.ui.asMultiPartSteer
 import com.silencelen.huginn.ui.ScratchpadRefBadge
 import com.silencelen.huginn.ui.ScratchpadRules
@@ -297,7 +308,24 @@ fun SessionView(store: AppStore, name: String) {
         val paneCopy: (String) -> Unit = remember(paneClipboard) {
             { t -> paneClipboard.setText(AnnotatedString(t)) }
         }
-        TabStrip(tab, { controller.openTab(it) }) {
+        // Resolved BEFORE the strip because the strip needs it: the Screen tab
+        // carries a dot while a question is waiting elsewhere, which is the other
+        // half of the link bar below. A bar can scroll out of view; a tab cannot.
+        //
+        // A pane-only MULTI-question prompt (no fused sidecar) counts as a
+        // question but is never tap-answerable — a single digit there answers
+        // question 1 AND confirms question 2's default — so it is re-presented as
+        // the steer, exactly like a genuine degraded ask.
+        val rawPrompt = screen?.prompt
+        val prompt = rawPrompt?.takeUnless { PromptGate.paneOnlyMultiQuestion(it) }
+        val ask = screen?.ask ?: rawPrompt?.takeIf { PromptGate.paneOnlyMultiQuestion(it) }?.asMultiPartSteer()
+        val planPending = screen?.planPending
+        val hasQuestion = prompt != null || ask != null || planPending != null
+        TabStrip(
+            tab,
+            { controller.openTab(it) },
+            screenDot = PromptGate.screenTabDot(hasQuestion, tab.face),
+        ) {
             // Only on the Screen tab, and only when the pane holds something. The
             // conversation has its own selection and needs none of this.
             if (tab == SessionTab.SCREEN && com.silencelen.huginn.ui.hasCopyableText(screen)) {
@@ -327,9 +355,6 @@ fun SessionView(store: AppStore, name: String) {
         // it straight to a SelectionContainer let the scroll area take the whole
         // remaining height and the composer was laid out past the bottom edge and
         // clipped away — a session with no way to type into it, and nothing logged.
-        val answering by controller.answering.collectAsState()
-        val answerNote by controller.answerNote.collectAsState()
-
         Box(Modifier.weight(1f).fillMaxWidth()) {
             when (tab) {
                 SessionTab.CONVERSATION -> ConversationTab(controller, selectionVerbs, quickActions)
@@ -377,85 +402,36 @@ fun SessionView(store: AppStore, name: String) {
             SuggestionChips(suggestions, onPick = setDraft, modifier = rememberEdgeFade())
         }
 
-        // THE PROMPT LIVES OUTSIDE THE TABS — and on every face but one.
+        // THE QUESTION IS A LINE NOW, not a card. (Owner decision 23, 2026-09-15.)
         //
-        // OUTSIDE THE TABS, because a question is the one moment a reader must
-        // act, and making them find the Screen tab to click "1" while reading that
-        // very question in the transcript is a tab switch charged for nothing. One
-        // card below the tab body is that promise with one copy of the code.
+        // What was here: the full answerable card, below the tab body, on every
+        // face but the Screen. It worked, and it cost too much — 290-330dp for a
+        // five-option question (uncapped `CardShell`, five full-width
+        // `AnswerButton`s, the "Type something" button), which at a 768x1024
+        // window left about 250dp of transcript. And it only ever handled SOME
+        // prompt types; the pane handles all of them. So the card's job splits:
+        // the bar says a question is waiting, the Screen tab answers it.
         //
-        // NOT ON THE SCREEN FACE, which is not in tension with the above: there the
-        // tab switch has already happened, and the terminal below IS the dialog —
-        // drawn by Claude Code itself, with every part of a multi-part question
-        // steppable in a way a row of buttons cannot drive. The steering card
-        // ("Answer on the Screen tab") is what made the old behaviour indefensible:
-        // it sends the reader to the pane, and the card then FOLLOWED them there
-        // and covered the very terminal it had just sent them to use. Which faces
-        // draw it is [PromptGate]'s to say, shared with the phone so the two
-        // clients cannot drift.
+        // NOT ON THE SCREEN FACE, unchanged and for the original reason: there the
+        // tab switch has already happened and the terminal below IS the dialog,
+        // drawn by Claude Code itself. A steer drawn over its own destination was
+        // the bug [PromptGate] was written for.
         //
-        // BELOW THE TAB BODY, NOT OVER IT, on the faces that do draw it. Overlaying
-        // stopped the resize but hid what was underneath — one problem traded for
-        // another. It costs real height, and that is now free of consequence: the
-        // two faces that draw it are the transcript and the overview, and neither
-        // measures itself into tmux rows. Only the Screen face did, which was the
-        // other half of why it was the wrong place for a card.
-        //
-        // The card itself is the SHARED one (:ui PromptCards.kt) — one
-        // implementation for both shells; only the answer plumbing stays here. When
-        // the pane scrape cannot read the dialog but the hook knows a question is
-        // waiting, the degraded card renders instead of nothing; its answers verify
-        // against the live pane and steer to the Screen tab when that verification
-        // cannot see a run (reason=undetected).
-        // A pane-only MULTI-question prompt (no fused sidecar) is re-presented as
-        // the read-only steer card — a single digit there over-answers the next
-        // question. A genuine degraded ask and a pending plan approval draw here too.
-        val rawPrompt = screen?.prompt
-        val prompt = rawPrompt?.takeUnless { PromptGate.paneOnlyMultiQuestion(it) }
-        val ask = screen?.ask ?: rawPrompt?.takeIf { PromptGate.paneOnlyMultiQuestion(it) }?.asMultiPartSteer()
-        val planPending = screen?.planPending
-        if (PromptGate.visible(
-                hasQuestion = prompt != null || ask != null || planPending != null,
-                face = tab.face,
-            )
-        ) {
-            if (prompt != null) {
-                Box(Modifier.padding(horizontal = 12.dp, vertical = 6.dp)) {
-                    PromptCard(
-                        prompt = prompt,
-                        answering = answering,
-                        note = answerNote,
-                        onAnswer = controller::answer,
-                        onAnswerMulti = controller::answerMulti,
-                    )
-                }
-            } else if (ask != null) {
-                Box(Modifier.padding(horizontal = 12.dp, vertical = 6.dp)) {
-                    DegradedAskCard(
-                        ask = ask,
-                        answering = answering,
-                        note = answerNote,
-                        onAnswer = controller::answerDegraded,
-                        // A multi-part question can't be tapped from here — jump to
-                        // the Screen tab, where its parts are stepped through. This
-                        // card stops being drawn the moment that lands, which is the
-                        // point: it exists to hand the reader over, not to follow.
-                        onOpenScreen = { controller.openTab(SessionTab.SCREEN) },
-                    )
-                }
-            }
-            // The plan the owner is approving — shipped on every poll, previously
-            // rendered by nobody. When a readable prompt carries the approve/reject
-            // buttons this is context; when the pane was unreadable it is the only
-            // surface and steers to the Screen tab, where the dialog can be answered.
-            planPending?.let {
-                Box(Modifier.padding(horizontal = 12.dp, vertical = 6.dp)) {
-                    PlanApprovalCard(
-                        plan = it,
-                        hasButtons = prompt != null,
-                        onOpenScreen = { controller.openTab(SessionTab.SCREEN) },
-                    )
-                }
+        // WHAT DID NOT CHANGE: the answer path. `controller.answer`,
+        // `answerDegraded` and `answerMulti` still call the daemon's `/answer`
+        // route from the Screen tab's own controls, and the phone's lock-screen
+        // notification buttons are untouched. This is where a question is
+        // PRESENTED, not how it is answered.
+        if (PromptGate.visible(hasQuestion = hasQuestion, face = tab.face)) {
+            Box(Modifier.padding(horizontal = 12.dp, vertical = 6.dp)) {
+                QuestionLinkBar(
+                    // A plan approval carries no question text of its own, and the
+                    // bar's own sentence is the whole fact for it. BLANK, not null:
+                    // null means nothing is pending at all.
+                    question = prompt?.question ?: ask?.question ?: "",
+                    onOpenScreen = { controller.openTab(SessionTab.SCREEN) },
+                    placement = PromptPlacement.of(tab.face, PromptSurface.SESSION),
+                )
             }
         }
 
@@ -728,6 +704,8 @@ private fun OverviewTab(controller: SessionController, store: AppStore) {
 private fun TabStrip(
     current: SessionTab,
     onSelect: (SessionTab) -> Unit,
+    /** A question is waiting and this is where it gets answered. */
+    screenDot: Boolean = false,
     /**
      * Actions for the tab in view. HERE and not in the tab's own content, because
      * this row sits ABOVE the weighted box that the Screen tab measures into tmux
@@ -744,7 +722,7 @@ private fun TabStrip(
         verticalAlignment = Alignment.CenterVertically,
     ) {
         TabItem("Conversation", current == SessionTab.CONVERSATION) { onSelect(SessionTab.CONVERSATION) }
-        TabItem("Screen", current == SessionTab.SCREEN) { onSelect(SessionTab.SCREEN) }
+        TabItem("Screen", current == SessionTab.SCREEN, dot = screenDot) { onSelect(SessionTab.SCREEN) }
         TabItem("Overview", current == SessionTab.OVERVIEW) { onSelect(SessionTab.OVERVIEW) }
         Box(Modifier.weight(1f))
         // Out of the focus order: the Screen tab holds keyboard focus so live keys
@@ -756,12 +734,13 @@ private fun TabStrip(
 
 /** Selection is weight and a surface tint. No accent bar — house rule. */
 @Composable
-private fun TabItem(label: String, active: Boolean, onClick: () -> Unit) {
-    Box(
+private fun TabItem(label: String, active: Boolean, dot: Boolean = false, onClick: () -> Unit) {
+    Row(
         Modifier
             .background(if (active) MaterialTheme.colorScheme.surfaceContainerHigh else Color.Transparent)
             .clickable(onClick = onClick)
             .padding(horizontal = 14.dp, vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
     ) {
         Text(
             label,
@@ -769,6 +748,12 @@ private fun TabItem(label: String, active: Boolean, onClick: () -> Unit) {
             fontWeight = if (active) FontWeight.SemiBold else FontWeight.Normal,
             color = if (active) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurfaceVariant,
         )
+        // The SAME dot the rail and the session rows use — and the same one the
+        // link bar carries, so the two marks read as one fact in two places.
+        if (dot) {
+            Spacer(Modifier.width(6.dp))
+            TabAttentionDot(true)
+        }
     }
 }
 
@@ -959,6 +944,10 @@ private fun ConversationTab(
                     }
                 }
             }
+            // Over the transcript, beside the SelectionContainer rather than
+            // inside it. Same `listState` the follower drives, so the wheel, the
+            // keyboard and every scrollToNewest keep working exactly as they did.
+            PaneScrollbar(listState)
         }
         // Scrolling back to read something older must not look like the app has
         // stopped following: without this the reader cannot tell "nothing new" from
@@ -1323,15 +1312,13 @@ private fun Composer(
     ) {
         // ONLY when one is set. The empty-state invitation moved into the attach
         // button's chooser; what stays is the mark that a whole page is riding
-        // out with this message.
-        pads.firstOrNull { it.id == padRefId }?.let { chosen ->
-            Row(Modifier.fillMaxWidth().padding(bottom = 4.dp)) {
-                ScratchpadRefBadge(pad = chosen, pads = pads, onSelect = onPadRef)
-            }
-        }
-        pending?.let {
-            Row(Modifier.fillMaxWidth().padding(bottom = 6.dp)) {
-                AttachChip(it) { attachments.clear() }
+        // out with this message — beside the file chip on ONE wrapping line, so
+        // two attachments cost one band rather than two.
+        val chosenPad = pads.firstOrNull { it.id == padRefId }
+        if (chosenPad != null || pending != null) {
+            ComposerChips {
+                chosenPad?.let { ScratchpadRefBadge(pad = it, pads = pads, onSelect = onPadRef) }
+                pending?.let { AttachChip(it) { attachments.clear() } }
             }
         }
         failure?.let {
@@ -1345,33 +1332,58 @@ private fun Composer(
                 TextButton(onClick = { attachments.dismissFailure() }) { Text("dismiss") }
             }
         }
-        Row(
-            Modifier.fillMaxWidth(),
-            verticalAlignment = Alignment.Bottom,
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
-            AttachButton(
-                pads = pads,
-                padRefId = padRefId,
-                onPadRef = onPadRef,
-                onPickFile = { picking = true },
-            )
-    // Same TextFieldValue as the chat composer, for the same reason: Shift+Enter
-    // has to insert the newline itself, and appending to the String is silently
-    // discarded by the field's own editing buffer. See ChatView for the detail.
-    var field by remember { mutableStateOf(TextFieldValue(draft)) }
-    if (field.text != draft) {
-        field = TextFieldValue(draft, TextRange(draft.length))
-    }
+        // Same TextFieldValue as the chat composer, for the same reason: Shift+Enter
+        // has to insert the newline itself, and appending to the String is silently
+        // discarded by the field's own editing buffer. See ChatView for the detail.
+        var field by remember { mutableStateOf(TextFieldValue(draft)) }
+        if (field.text != draft) {
+            field = TextFieldValue(draft, TextRange(draft.length))
+        }
+        // What the daemon is still holding for this session, if anything. The poll
+        // that feeds it starts on a queued send and stops when the queue drains —
+        // see [SessionController.noteSend].
+        val queueState by controller.sendQueue.collectAsState()
+
+        // The shape is [ComposerFrame], shared with the chat composer — including
+        // the cap-before-fill that used to live on the line below, which is now one
+        // decision for both boxes instead of two that had already disagreed.
+        ComposerFrame(
+            attach = {
+                AttachButton(
+                    pads = pads,
+                    padRefId = padRefId,
+                    onPadRef = onPadRef,
+                    onPickFile = { picking = true },
+                )
+            },
+            actions = { layout ->
+                // Esc is how you stop Claude at the keyboard, so with nothing typed
+                // that is the action this composer should offer — and only then,
+                // since a Stop sitting beside half a written instruction is a
+                // keystroke away from throwing the instruction away.
+                if (working && draft.isBlank()) {
+                    ComposerAction(
+                        layout,
+                        "Interrupt",
+                        Icons.Filled.Stop,
+                        { controller.sendKeys(listOf("Escape")) },
+                        danger = true,
+                    )
+                }
+                ComposerAction(
+                    layout,
+                    "Send",
+                    Icons.AutoMirrored.Filled.Send,
+                    submit,
+                    enabled = canSend,
+                    prominent = true,
+                )
+            },
+        ) { fieldModifier, layout ->
             OutlinedTextField(
                 value = field,
                 onValueChange = { field = it; onDraft(it.text); exitRecallIfDiverged(recall, it.text) },
-                // Cap before fill. `fillMaxWidth` hands DOWN fixed constraints and a
-                // `widthIn` inside those can only coerce into them, so the cap would be
-                // swallowed and a composer meant to stop at a reading measure would
-                // span the whole window.
-                modifier = Modifier.widthIn(max = 900.dp).weight(1f)
-                    .heightIn(min = 56.dp, max = 160.dp)
+                modifier = fieldModifier
                     // ENTER SENDS, Shift+Enter is the newline — the same binding as
                     // the chat composer, because two boxes in one app where Enter
                     // means opposite things is worse than either choice. Ctrl+Enter
@@ -1405,19 +1417,41 @@ private fun Composer(
                             else -> false
                         }
                     },
-                placeholder = { Text("Send to the pane…  (Enter to send · Shift+Enter for a new line)") },
+                // ONE LINE, ALWAYS — see the same block in ChatView. This one
+                // wrapped to four lines at 768 wide, for an empty box.
+                placeholder = {
+                    Text(
+                        Composer.placeholder(
+                            "Send to the pane…",
+                            "Enter to send · Shift+Enter for a new line",
+                            layout,
+                        ),
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                },
                 textStyle = MaterialTheme.typography.bodyMedium,
             )
-            // Esc is how you stop Claude at the keyboard, so with nothing typed
-            // that is the action this composer should offer — and only then, since
-            // a Stop sitting beside half a written instruction is a keystroke away
-            // from throwing the instruction away.
-            if (working && draft.isBlank()) {
-                OutlinedButton(onClick = { controller.sendKeys(listOf("Escape")) }) {
-                    Text("Interrupt", color = MaterialTheme.colorScheme.error)
-                }
-            }
-            Button(onClick = submit, enabled = canSend) { Text("Send") }
+        }
+        // ⚠ WHAT HAPPENED TO THE MESSAGE. A send into a busy session is HELD by
+        // the daemon until the turn ends, and this composer empties on press — so
+        // with nothing said here the screen is identical to a message that was
+        // dropped, which is exactly how the owner read it ("it just disappears").
+        // The sentence is [SendQueue.line], a pure function of the daemon's own
+        // answer, and it clears itself when the queue drains.
+        SendQueue.line(queueState)?.let { note ->
+            Text(
+                note,
+                style = DeskType.rowMeta,
+                color = if (queueState.lastError.isNullOrBlank()) {
+                    MaterialTheme.colorScheme.onSurfaceVariant
+                } else {
+                    MaterialTheme.colorScheme.error
+                },
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.fillMaxWidth().padding(top = 6.dp),
+            )
         }
     }
 }
