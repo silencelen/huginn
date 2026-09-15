@@ -9,6 +9,7 @@
 | `huginn solo [name]` | attach **and detach all other clients** — resume full-screen (kick your phone) |
 | `huginn list` / `ls` | list running sessions + attach status |
 | `huginn status` / `st` | health: uptime, auth (subscription), sessions, disk |
+| `huginn headroom` | how much plan usage is left on each saved account, what the daemon is holding or has moved, and why — see [Headroom](#headroom-usage-limits) |
 | `huginn rename <old> <new>` / `mv` | rename a session (e.g. promote `main` to a name, freeing `main`) |
 | `huginn kill <name>` | end a session |
 | `huginn -p "question"` | one-shot **headless** query — reads files; **not a sandbox**, see [Headless one-shots](#headless-one-shots) |
@@ -60,6 +61,43 @@ Your session lives in tmux **on the host**, so a dropped link — laptop sleep, 
 
 The attach renames your terminal tab/window to **`huginn:<session>`** — so `huginn costtracking` shows a `huginn:costtracking` tab in Windows Terminal (and iTerm/Termux) — and restores the previous title when you leave. Disable with **`HUGINN_NO_TITLE=1`** (`$env:HUGINN_NO_TITLE='1'`). If a tab won't rename, check your terminal isn't configured to suppress application title changes (or has a pinned tab title).
 
+## Headroom (usage limits)
+
+`huginn headroom` prints, per saved Claude login, the **fullest** of the three windows a plan has
+(the 5-hour session cap, the week across all models, the week's Fable pool), when it resets, which
+sessions the daemon has moved or is holding, and the one-line reason it last did nothing. It is
+rendered on the host, like `rounds` and `devices`, so the client stays a thin viewer.
+
+The acting half needs the daemon (`huginn-appd` 3.0.0+); without it this is a report and nothing
+more. What the daemon does with those numbers is configured in the apps under **Settings →
+Headroom**:
+
+| Field | What it sets |
+|---|---|
+| Heads-up at | the percentage at which a Fable session is told, in its own pane, to write a handoff note (default 85 %) |
+| Step down at | the percentage at which that session is moved to the next model down, for that session only (default 92 %) |
+| Ladder | the order it steps through (default `fable → opus → sonnet`) |
+| Default model | the model chats, rounds and restored sessions are launched with |
+| Hold spawns at | session and Fable-week percentages at which new subagent spawns are made to wait (defaults 70 % / 88 %), cleared below 50 % |
+| Auto-resume | whether a session stalled on a usage limit is resumed when the window resets, and the phrase used to resume it |
+| Account auto-switch | the old auto-switch settings, which now live here |
+
+**Auto-resume is also per session.** The global setting is the default; a session's control bar
+carries its own toggle, so one long unattended run can resume itself while an attended session is
+left where you left it. A session that hits a limit shows it as a notice rather than as an answer,
+and the daemon says which sessions came back and how (Claude Code's own auto-continue, or huginn).
+
+**The model step-down is session-only.** It is the `/model` picker's "use this session only"
+choice; the host's default model in `~/.claude/settings.json` is never rewritten. Typing `/model
+<name>` yourself *does* persist it as the host default — that is the CLI's behaviour, not huginn's.
+
+**Cost-sensitive headless lanes: `CLAUDE_CODE_NO_MODEL_FALLBACK=1`.** When the Fable weekly pool is
+spent, Claude Code will silently run a `-p` one-shot on the next model down rather than fail. huginn
+leaves that alone (a silent swap beats a dead run) and launches chats and rounds with an explicit
+`--model` instead. If you have a lane where the *wrong model* is worse than *no answer* — a
+scheduled job whose output feeds something else, a budget you are holding — set this variable on
+the host for that lane and the run fails instead of falling back.
+
 ## Environment variables
 
 | Variable | Effect |
@@ -68,6 +106,7 @@ The attach renames your terminal tab/window to **`huginn:<session>`** — so `hu
 | `HUGINN_NO_RECONNECT` | set to `1` to disable auto-reconnect |
 | `HUGINN_NO_TITLE` | set to `1` to disable terminal-tab naming |
 | `HUGINN_WORKDIR` *(host)* | working directory new sessions open in (default `$HOME`) |
+| `CLAUDE_CODE_NO_MODEL_FALLBACK` *(host)* | set to `1` so a headless run FAILS instead of silently falling back to another model when the Fable pool is spent — see [Headroom](#headroom-usage-limits) |
 
 ## Uninstalling
 
