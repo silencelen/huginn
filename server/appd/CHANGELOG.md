@@ -9,6 +9,73 @@ appeared only as a side-note on the app releases it happened to ship with. Three
 undocumented, and the notes-cutting matcher could fuse two sections when an app and an appd
 version number collided. Entries below are reconstructed from the shipping commits.
 
+## 3.0.0 — 2026-09-15
+
+Huginn 3. The daemon becomes usage-aware: one subsystem, one arbiter, and every automated line it
+types into a session goes through the same turn-boundary queue.
+
+- **Headroom.** `lib/headroom.js` keeps a per-account model of the three windows Claude's `/usage`
+  shows (session, week, week-Fable) with their reset times, polled every minute while anything is
+  running, and notices a window resetting — which nothing did before. `GET /v1/headroom` is the
+  whole picture; `/v1/status` carries a one-line summary; `/v1/plan` now says WHOSE usage it is
+  (email, account id, plan), cached together with the numbers so a switch cannot label the new
+  account's bars with the old name.
+- **A long message reaches a session in one piece.** `POST /v1/sessions/:name/keys` accepted
+  8,000 characters and typed them with a single `tmux send-keys -l`; the cap is now 100,000, the
+  same as a chat body. Delivery switched from typing to **bracketed paste** (`tmux load-buffer`
+  on stdin, then `paste-buffer -p -d`), measured at 0.011s for 20KB against 1.7s for the same
+  text in 2KB chunks, with no length limit at all because the payload never touches the tmux
+  command line — which has a hard ~16,340-character budget that a long session name eats into
+  1:1. The pane shows ONE "[Pasted text]" placeholder instead of one per chunk. `-p` is not
+  optional: plain `paste-buffer` silently rewrites every newline to a carriage return, and the
+  pane renders correctly while the transcript stores the wrong bytes. `send-keys` with the
+  150ms submit beat survives as the fallback when the pane buffer cannot be reached.
+- **A message is no longer delivered into a turn that is still running.** The CLI queues a
+  mid-turn message and then splices it into the turn in flight — recorded in the transcript as
+  `"reason":"absorbed_mid_turn"` — so the message that was already running never finishes what
+  it was asked to do. Session sends are now queued in the daemon and released only at a real
+  turn boundary (one `system`/`turn_duration` record per completed turn) with the pane also
+  checked for an open dialog, which the transcript cannot see. New `GET
+  /v1/sessions/:name/typing` reports what is waiting and why; `pendingSends` joins the session
+  list rows. Interrupt keys are never queued. This is also the road every automated line takes:
+  the heads-up, the `/model` step-down and the resume phrase below are queued sends, which is
+  why none of them can land mid-answer. New pure module `lib/typing.js` with its own suite.
+- **One arbiter.** Account auto-switch (unchanged rules, now `settings.accountSwitch`), the Fable
+  model ladder for LIVE sessions (a framed heads-up at 85 % so Fable writes its own handoff note,
+  a session-only switch to Opus at 92 % at the next turn boundary — the `/model` picker's
+  "this session only" choice, so the host's default model is never rewritten — and back up when the
+  week resets, only for sessions the daemon itself moved), and the sentinels are decided in one place with one cooldown. A switch
+  helps new runs only — a running session keeps its token — which is why the ladder exists. If the
+  CLI moves a session off Fable by itself the daemon records it and never fights it.
+- **Auto-resume.** A session stalled on a usage limit is deterministic in its transcript (an API
+  error with status 429 and the reset time). Claude Code's own auto-continue handles the simple
+  case; the daemon watches it and covers what it cannot: sessions it restored after a reboot or
+  restart, a wait that was cancelled, a reset more than a day out, headless chats and rounds
+  (re-run the turn), and — through the hook gate — workflow subagents. Only if nothing was typed
+  since the error, at most three times, and it says which sessions resumed and how. Default on;
+  per-session override.
+- **The Fable consent dialog is a prompt card.** When Fable hits its cap the CLI asks whether to
+  bill usage credits, switch for this session, or cancel — and an unanswered dialog loses the turn.
+  The pane detector now recognises it and both clients offer its rows as buttons, the session-only
+  switch recommended; left unanswered for two minutes on a session with auto-resume on, the daemon
+  picks that row itself. The 92 % step-down exists so the dialog rarely appears at all.
+- **A hook gate for workflows.** `deploy.sh` installs a `SubagentStart` (and `PreToolUse
+  Agent|Workflow`) hook that HOLDS new agent spawns while `headroom/STOP` or `STOP-FABLE` exists —
+  verified to hold agents spawned inside a Workflow script while the parent keeps working. The
+  daemon arms the sentinels at 70 % session / 88 % Fable-week and clears them below 50 %. The gate
+  delays and never denies: a hook that times out fails open in Claude Code, so the hold self-releases
+  30 s before its own timeout.
+- **Idle logins stay signed in.** Saved accounts that are NOT active are refreshed on a timer
+  (five minutes before their access token expires) with the same grant, client id and lock file the
+  CLI uses, written back under the account's own id, never touching the live credentials file — the
+  active login is the CLI's to refresh, and refreshing it out from under a running `claude` is how
+  it signs itself out. A switch to a login whose refresh token has expired is refused with the
+  reason instead of failing on the next run. `activate()` now takes the CLI's refresh lock.
+- **Subagents are streams.** `GET /v1/sessions/:name/agents?all=1` lists every agent and workflow
+  member of a session, and `GET /v1/sessions/:name/agents/:agentId/transcript` reads one agent's own
+  transcript with the same paging as the parent's.
+- `GET/POST /v1/autoswitch` are kept as aliases for one release and go in 3.1.
+
 ## 2.85.0 — 2026-09-01
 
 - **Sessions survive a reboot / power cut.** Until now, when huginn lost power or

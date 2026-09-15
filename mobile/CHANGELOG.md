@@ -1,5 +1,23 @@
 # Huginn changelog
 
+## 3.0.0 — 2026-09-15
+
+Huginn 3.
+
+- **The usage bars say whose usage they are.** The Status tab captions the plan section with the
+  signed-in email and plan.
+- **A headroom pill in the top bar** — the fullest limit and when it resets — and a Headroom
+  section in Settings: the thresholds for the heads-up and the model step-down, the ladder order,
+  the default model, auto-resume and its phrase, and account auto-switch (which moved here).
+- **Sessions survive limits.** A session that hits a usage limit shows it as a notice, not as an
+  answer; when the limit resets huginn resumes it (default on, a toggle on the session's control
+  bar), and tells you which sessions resumed. On Fable, a session gets a handoff heads-up at 85 %
+  and is moved to Opus at 92 % with an Undo button on the notification.
+- **Watch any agent.** Above a session's conversation, pick Main or any subagent or workflow
+  member and read its own stream.
+- Saved accounts show whether their login is fresh, expiring, expired or gone, and a switch to a
+  dead one says why instead of "could not switch".
+
 ## 2.88.0 — 2026-08-31
 
 Fixes from the 2026-08-30 program-wide audit.

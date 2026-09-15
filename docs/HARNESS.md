@@ -70,6 +70,33 @@ of these breaks silently. Anchor test in parentheses.
     shape.
 12. `lib/models.js` **`strings(1)`** discovery — depends on model ids being
     literal strings in the bundle and on the npm-global binary path.
+13. `lib/pane.js` **`parseModelPicker`** — the `/model` picker, and the model
+    ladder's only in-session lever. Three pieces of TUI copy are load-bearing:
+    the `Select model` heading (the gate that stops an answer which merely
+    contains a numbered list from being walked with arrow keys), the row
+    **labels** (`Default (recommended)`, `Opus (1M context)`, `Fable`, …) which
+    are matched by name because row NUMBERS shift as models come and go, and the
+    `✔` / `❯` glyphs that say which model the session is on and where the
+    highlight sits. Then the `s` key ("use this session only") and its
+    confirmation line, `Set model to <X> … for this session only`. Rename a
+    label, reword the heading or reword that line and the ladder stops moving
+    anything — the symptom is a session that stays on Fable with
+    `delivery_unconfirmed` in `/v1/headroom`, not an error, because the walk
+    aborts rather than guessing. (`pane.test.js`, fixture
+    `test/fixtures/prompts/model-picker-80.txt`)
+14. **The Fable consent dialog is matched against a shape nobody has captured.**
+    When the Fable pool is spent the CLI offers to bill usage credits, switch
+    for this session, or cancel, and an unanswered dialog costs the turn. What
+    IS real and captured is the transcript side: the 429 record and the string
+    `You're out of usage credits. Run /usage-credits to keep using Fable 5.1 or
+    /model to switch models.` (`lib/limits.js`, asserted in `headroom.test.js`
+    and `transcript.test.js` from a live agent transcript). The PANE fixture for
+    the dialog itself is synthesised — the capture attempt has not landed on one
+    yet, the same way a real permission dialog is still missing from
+    `test/fixtures/prompts/`. So treat its row order and wording as unverified:
+    recapture it the first time a real one appears on a throwaway session, and
+    until then a copy change here fails quietly into "the dialog sat
+    unanswered".
 
 Plus the **hook event roster + `tool_input` shapes** (verify against
 `sdk-tools.d.ts`): a renamed field or event silently drops a sidecar back to the
