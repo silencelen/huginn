@@ -1180,10 +1180,27 @@ async function checkGates(name) {
   return { idle, lastKind, paneWhy };
 }
 
-/** Has a human spoken since this entry was queued? Only the appended bytes are read. */
-function humanSpokeSince(entry) {
-  if (!entry.transcript || entry.transcriptAt == null) return false;
-  const tail = transcriptTail(entry.transcript, entry.transcriptAt);
+/**
+ * Has a human spoken since this entry was queued? Only the appended bytes are read.
+ *
+ * ⚠ THE PATH IS RE-RESOLVED WHEN THE ENTRY HAS NONE. `entry.transcript` is
+ * captured once, at enqueue time — and a session whose title hook has not fired
+ * yet has no transcript then, so this returned false for the whole life of that
+ * entry and the 'human' drop rule was simply inert for it. That is the one rule
+ * that stops appd talking over the owner. A transcript that appears later is
+ * read from its START (offset 0): everything in it arrived after the entry was
+ * queued, which is exactly the window the rule is about.
+ */
+function humanSpokeSince(entry, name) {
+  let file = entry.transcript;
+  let from = entry.transcriptAt;
+  if (!file && name) {
+    file = transcriptPath(name);
+    from = 0;
+    if (file) { entry.transcript = file; entry.transcriptAt = 0; }
+  }
+  if (!file || from == null) return false;
+  const tail = transcriptTail(file, from);
   if (!tail || !tail.text) return false;
   return typing.hasHumanUserRecord(tail.text);
 }
@@ -1215,7 +1232,7 @@ async function pumpQueue(name) {
       const entry = q.entries[0];
       const gate = await checkGates(name);
       const reason = typing.dropReason(entry, {
-        humanSpoke: entry.automated ? humanSpokeSince(entry) : false,
+        humanSpoke: entry.automated ? humanSpokeSince(entry, name) : false,
         family: entry.automated && familyProbe ? familyProbe(name) : null,
         now: Date.now(),
       });
@@ -1260,7 +1277,11 @@ async function pumpQueue(name) {
   } finally {
     q.pumping = false;
     if (q.entries.length) armQueueTimer(name);
-    else if (!q.lastError) sendQueues.delete(name);
+    // ⚠ AND A QUEUE WHOSE SESSION IS GONE. `lastError` kept the map entry alive
+    // so `GET /typing` could still report the failure — but nothing ever removed
+    // it afterwards, so a long-lived daemon accumulated one row per session that
+    // ever failed a delivery. A session tmux no longer has cannot be polled about.
+    else if (!q.lastError || !(await sessionExists(name))) sendQueues.delete(name);
   }
 }
 
@@ -3055,7 +3076,7 @@ function fireRound(round, { manual = false } = {}) {
  * clean week — the worst failure here, because nobody goes looking for a report
  * they were never told was missing.
  */
-function finishRoundRun(meta, failure) {
+function finishRoundRun(meta, failure, { status: statusOverride = null } = {}) {
   const round = loadRound(meta.roundId);
   if (!round) return;                    // the Round was deleted mid-run; the chat stands alone
 
@@ -3101,6 +3122,10 @@ function finishRoundRun(meta, failure) {
     report = parsed;
   } else if (failure) {
     report = roundsLib.errorReport(failure);
+    // `action` is the default and the right one for a run that CRASHED. A run
+    // abandoned because appd could not identify a reset time did not fail — the
+    // arrangement did — so the caller may lower it to `attention`.
+    if (statusOverride) report.status = statusOverride;
   } else if (resultFailure) {
     report = roundsLib.errorReport(resultFailure);
   } else if (lastError) {
@@ -4862,7 +4887,7 @@ function seedHeadroomDefaults() {
 function blankStall() {
   return {
     at: null, window: null, resetsAt: null, resetsAtSource: null, resumedAt: null,
-    queuedAt: null,
+    queuedAt: null, gaveUpAt: null,
     how: null, attempts: 0, nativeArmed: false, notifiedAt: null, why: null, text: null,
   };
 }
@@ -5719,6 +5744,35 @@ async function resumeSession(rec, s, settings, ctx) {
   }
   if (stall.queuedAt) stall.queuedAt = null;
 
+  // A stall with NO reset time can never become `due`, so without this it waits
+  // for a `detectResets` event that may never come — for the life of the daemon,
+  // holding the ten-second poll open and, for a Round, holding its report unfiled.
+  if (stall.resetsAt == null) {
+    const v = resumeLib.unclockedVerdict({ stall, activeWindows, now });
+    if (v.action === 'adopt') {
+      stall.resetsAt = v.resetsAt;
+      stall.resetsAtSource = 'windows';
+      log(`headroom: ${s.name} had no reset time; taking ${new Date(v.resetsAt).toISOString()} from the ${stall.window} window`);
+    } else if (v.action === 'give_up') {
+      stall.gaveUpAt = now;
+      stall.why = v.why;
+      log(`headroom: giving up on ${s.name}: ${v.why}`);
+      // ONCE. The record is what carries the reason from here on.
+      if (!stall.gaveUpNotifiedAt) {
+        stall.gaveUpNotifiedAt = now;
+        const text = `${s.name} hit a usage limit that named no reset time, and none appeared. `
+          + 'It is waiting for you — auto-resume has stopped trying.';
+        const push = await deliverPush({
+          kind: 'headroom_limit', title: 'Auto-resume gave up', text, subject: s.name,
+        });
+        if (!push.sent) await deliverTelegram(`\u{1F6D1} Auto-resume gave up\n${text}`);
+      }
+      return null;
+    } else {
+      stall.why = v.why;
+    }
+  }
+
   const meta = loadSessionMeta(s.claudeSessionId);
   const w = stall.window;
   const percent = w && activeWindows && activeWindows[w] ? activeWindows[w].percent : null;
@@ -5814,7 +5868,7 @@ async function applyResumes(ctx) {
   const resumed = [];
   for (const s of sessions) {
     const rec = state.sessions[s.claudeSessionId];
-    if (!rec || !rec.stall || !rec.stall.at || rec.stall.resumedAt) continue;
+    if (!rec || !rec.stall || !rec.stall.at || rec.stall.resumedAt || rec.stall.gaveUpAt) continue;
     try {
       const line = await resumeSession(rec, s, settings, ctx);
       if (line) resumed.push(line);
@@ -5848,9 +5902,28 @@ async function resumeStalledChats(settings, ctx) {
   try { ids = fs.readdirSync(CHATS_DIR); } catch { chatStallsPending = false; return out; }
   for (const id of ids) {
     const meta = loadMeta(id);
-    if (!meta || !meta.stall || !meta.stall.at || meta.stall.resumedAt) continue;
+    if (!meta || !meta.stall || !meta.stall.at || meta.stall.resumedAt || meta.stall.gaveUpAt) continue;
     pending = true;
     if (activeRuns.has(id)) continue;
+    // The same backstop the sessions get. It matters MORE here: `noteRunStall`
+    // returning true is what holds a Round's report open, so a stall that can
+    // never become due is a scheduled job that never reports at all.
+    if (meta.stall.resetsAt == null) {
+      const v = resumeLib.unclockedVerdict({ stall: meta.stall, activeWindows, now });
+      if (v.action === 'adopt') {
+        updateMeta(id, (m) => {
+          if (m.stall) { m.stall.resetsAt = v.resetsAt; m.stall.resetsAtSource = 'windows'; }
+        });
+        meta.stall.resetsAt = v.resetsAt;
+      } else if (v.action === 'give_up') {
+        updateMeta(id, (m) => { if (m.stall) { m.stall.gaveUpAt = now; m.stall.why = v.why; } });
+        pending = false;
+        giveUpOnStalledRun(id, v.why);
+        continue;
+      } else if (meta.stall.why !== v.why) {
+        updateMeta(id, (m) => { if (m.stall) m.stall.why = v.why; });
+      }
+    }
     const w = meta.stall.window;
     const percent = w && activeWindows && activeWindows[w] ? activeWindows[w].percent : null;
     // No per-chat toggle in 3.0 (design §4): chats and Rounds obey the global.
@@ -5871,6 +5944,30 @@ async function resumeStalledChats(settings, ctx) {
   // host, and a latched one would poll for the life of the daemon.
   chatStallsPending = pending;
   return out;
+}
+
+/**
+ * Stop waiting for a reset that is never going to be identifiable, and let the
+ * Round say so.
+ *
+ * ⚠ A HELD ROUND IS THE REAL COST. `noteRunStall` returning true stops
+ * `finishRoundRun` being called at all — deliberately, so one scheduled job
+ * files one run — so a stall that can never become due is a job that reports
+ * NOTHING, for ever, with `currentChatId` still pointing at it. Filed as
+ * `attention` rather than `action`: nothing is wrong with the world, something
+ * is wrong with the arrangement.
+ */
+function giveUpOnStalledRun(chatId, why) {
+  const meta = loadMeta(chatId);
+  if (!meta) return;
+  const ts = Math.floor(Date.now() / 1000);
+  log(`chat ${chatId}: giving up on the usage-limit re-run (${why})`);
+  try {
+    appendMsg(chatId, { type: 'system', text: `the usage-limit re-run was abandoned: ${why}`, ts });
+  } catch (e) { log(`chat ${chatId}: could not note the give-up: ${e.message}`); }
+  if (!meta.roundId) return;
+  try { finishRoundRun(loadMeta(chatId) || meta, `did not finish: ${why}`, { status: 'attention' }); }
+  catch (e) { log(`round run ${chatId} could not be recorded: ${e.message}`); }
 }
 
 /**
@@ -6105,8 +6202,15 @@ async function resumeTick() {
   if (resumeBusy || headroomBusy) return;
   const state = hstate();
   const mode = state.mode || 'ok';
-  const anyStalled = Object.values(state.sessions || {}).some((r) => r && r.stall && r.stall.at && !r.stall.resumedAt);
-  if (!anyStalled && !chatStallsPending && mode !== 'red' && mode !== 'exhausted') return;
+  // Arms on "a reset is NEAR", not on "anything is stalled" — the rule, and the
+  // six-day loop it replaces, are lib/resume's.
+  const arm = resumeLib.pollShouldArm({
+    stalls: Object.values(state.sessions || {}).map((r) => r && r.stall).filter(Boolean),
+    chatStallsPending,
+    mode,
+    now: Date.now(),
+  });
+  if (!arm) return;
   resumeBusy = true;
   try {
     const settings = loadHeadroomSettings();

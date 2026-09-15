@@ -65,6 +65,14 @@ const SKEW_MS = 5 * 60 * 1000;
  * "is it expired" alone would hammer a per-account rate-limited endpoint forever.
  */
 const REFRESH_FLOOR_MS = 8 * 60 * 60 * 1000;
+/**
+ * How long a profile that cannot be refreshed at all is left alone.
+ *
+ * Nothing about "this record has no inference scope and no subscription" changes
+ * without the record being rewritten, and a rewrite moves `nextAt` regardless —
+ * so eight hours is a formality that stops a hot loop rather than a schedule.
+ */
+const NOT_REFRESHABLE_RETRY_MS = 8 * 60 * 60 * 1000;
 
 /** `fresh` stops at this much remaining life; below it the row reads `expiring`. */
 const FRESH_MS = 60 * 60 * 1000;
@@ -305,7 +313,12 @@ async function refreshWithStore(store, slug, deps = {}) {
   // with neither that scope nor a known subscription is not a Claude Code login
   // at all. Checked before anything touches the network.
   const canRefresh = (Array.isArray(o.scopes) && o.scopes.includes('user:inference')) || !!o.subscriptionType;
-  if (!canRefresh) return record('not_refreshable');
+  // ⚠ WITH A `nextAt`. `freshnessOf` does not call this state `unrefreshable`,
+  // so the tick found the record due on EVERY pass and re-derived the same
+  // verdict for ever. Disk-only (before the lock and before any POST), but it is
+  // a loop, and the answer cannot change without the record being rewritten —
+  // which moves `nextAt` anyway.
+  if (!canRefresh) return record('not_refreshable', { nextAt: now() + NOT_REFRESHABLE_RETRY_MS });
 
   const r0 = refreshOf(rec);
   if (r0 && r0.deadAt) return record('known_dead_refresh_token');
@@ -360,6 +373,11 @@ async function refreshWithStore(store, slug, deps = {}) {
     // the superseded pair is archived rather than dropped.
     store.save(rec.email, { claudeAiOauth: fresh }, {
       accountUuid: rec.accountUuid || null,
+      // ⚠ THE SLUG WE ARE REPLACING. With a uuid this is redundant; WITHOUT one
+      // the record is keyed by its refresh-token fingerprint, and we have just
+      // rotated that token — so the write would land in a NEW file and the old
+      // one would keep the dead pair and the only lastPlan. See save()'s note.
+      keepSlug: slug,
       taggedId: rec.taggedId || null,
       orgName: rec.orgName || null,
       firstSeen: rec.firstSeen || undefined,
@@ -383,7 +401,7 @@ async function refreshWithStore(store, slug, deps = {}) {
 
 module.exports = {
   TOKEN_URL, CLIENT_ID, SCOPES, STATUSES,
-  SKEW_MS, REFRESH_FLOOR_MS, FRESH_MS, WARN_AHEAD_MS,
+  SKEW_MS, REFRESH_FLOOR_MS, FRESH_MS, WARN_AHEAD_MS, NOT_REFRESHABLE_RETRY_MS,
   buildBody, applyResponse, classifyError, nextRefreshAt, freshnessOf,
   deadSince, refreshTokenWarnDue, projectScopes, oauthOf, refreshOf, printOf,
   refreshWithStore,

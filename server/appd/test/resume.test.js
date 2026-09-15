@@ -287,3 +287,71 @@ test('resetSeen short-circuits BOTH halves of the reset test, which is why whose
   assert.equal(resume.eligible({ settings, stall, resetSeen: true, percent: 99, now }).ok, true,
     'a reset event overrides a window that still reads 99% — so it had better be the right account');
 });
+
+// ---- a stall with no clock -------------------------------------------------
+
+test('a stall with no reset time is waited out, then re-derived, then given up on', () => {
+  // ⚠ The measured Fable-weekly apology carries NO clock ("You're out of usage
+  // credits. Run /usage-credits …"), so parseLimitError returns
+  // `resetsClock: null`. If the usage endpoint also has nothing for that window
+  // at that instant, `due` is false for ever and the only escape is a
+  // detectResets event that may never come — meanwhile a held Round report is
+  // never filed and the ten-second poll runs for the life of the daemon.
+  const now = Date.now();
+  const stall = { at: now - 60_000, window: 'weekly_fable', resetsAt: null };
+
+  // Young: nothing to do. The endpoint usually catches up within a tick or two.
+  const young = resume.unclockedVerdict({ stall, activeWindows: {}, now });
+  assert.equal(young.action, 'wait');
+  assert.match(young.why, /no reset time/);
+
+  // A stall that HAS a clock is never touched by this at all.
+  assert.equal(resume.unclockedVerdict({ stall: { ...stall, resetsAt: now + 1000 }, now }).action, 'clocked');
+
+  const old = { ...stall, at: now - resume.STALL_MAX_AGE_MS - 1 };
+  // Old, and the window now has a time: take it.
+  const iso = new Date(now + 3_600_000).toISOString();
+  const adopt = resume.unclockedVerdict({
+    stall: old, activeWindows: { weekly_fable: { percent: 100, resetsAt: iso } }, now,
+  });
+  assert.equal(adopt.action, 'adopt');
+  assert.equal(adopt.resetsAt, Date.parse(iso));
+
+  // Old, and still nothing anywhere: give up, and SAY SO.
+  const gone = resume.unclockedVerdict({ stall: old, activeWindows: { weekly_fable: { percent: 100 } }, now });
+  assert.equal(gone.action, 'give_up');
+  assert.match(gone.why, /no reset time/);
+  assert.match(gone.why, /6 h/);
+  // A window that is not this stall's is no help either.
+  assert.equal(resume.unclockedVerdict({
+    stall: old, activeWindows: { session: { resetsAt: iso } }, now,
+  }).action, 'give_up');
+  // Nor an unparseable one.
+  assert.equal(resume.unclockedVerdict({
+    stall: old, activeWindows: { weekly_fable: { resetsAt: 'soon' } }, now,
+  }).action, 'give_up');
+});
+
+test('the ten-second poll arms for a reset that is NEAR, not for anything stalled', () => {
+  const now = Date.now();
+  const far = { at: now - 60_000, resetsAt: now + 6 * 86_400_000 };
+  const near = { at: now - 60_000, resetsAt: now + 5 * 60_000 };
+
+  assert.equal(resume.pollShouldArm({ stalls: [far], now }), false,
+    'six days of listSessions and a transcript tail per session, to watch a clock that cannot move');
+  assert.equal(resume.pollShouldArm({ stalls: [near], now }), true);
+  assert.equal(resume.pollShouldArm({ stalls: [far, near], now }), true, 'any ONE near reset is enough');
+
+  // The other two reasons to be awake.
+  assert.equal(resume.pollShouldArm({ stalls: [far], mode: 'red', now }), true);
+  assert.equal(resume.pollShouldArm({ stalls: [far], mode: 'exhausted', now }), true);
+  assert.equal(resume.pollShouldArm({ stalls: [far], chatStallsPending: true, now }), true);
+
+  // No clock at all: the backstop has to be able to age it out, so it stays awake.
+  assert.equal(resume.pollShouldArm({ stalls: [{ at: now, resetsAt: null }], now }), true);
+
+  // Settled stalls are not stalls.
+  assert.equal(resume.pollShouldArm({ stalls: [{ ...near, resumedAt: now }], now }), false);
+  assert.equal(resume.pollShouldArm({ stalls: [{ ...near, gaveUpAt: now }], now }), false);
+  assert.equal(resume.pollShouldArm({}), false);
+});

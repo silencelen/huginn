@@ -188,8 +188,8 @@ function stalledSession(suffix, { native = false, restored = false, extra = [], 
   return { name, out, sid, transcript, open: pane.open };
 }
 /** The percentages and the reset instant the stub endpoint answers with. */
-function setUsage({ session = 5, weekly_all = 10, weekly_fable = 20, resetsAt = null } = {}) {
-  fs.writeFileSync(usageFile, JSON.stringify({ session, weekly_all, weekly_fable, resetsAt }));
+function setUsage({ session = 5, weekly_all = 10, weekly_fable = 20, resetsAt = null, noClock = false } = {}) {
+  fs.writeFileSync(usageFile, JSON.stringify({ session, weekly_all, weekly_fable, resetsAt, noClock }));
 }
 async function api(pathname, init = {}) {
   const res = await fetch(BASE + pathname, {
@@ -273,7 +273,13 @@ process.stdin.on('end', () => {
   // one log, and "the first run ever" is not the same as "the run that is meant
   // to hit the limit".
   const limited = /immich backup/.test(stdin) && !argv.includes('--resume');
-  if (limited) {
+  // The MEASURED Fable-weekly apology, which names no clock at all. That is the
+  // shape that leaves a stall with nothing to wait for.
+  const noClock = /fable credits/.test(stdin) && !argv.includes('--resume');
+  if (noClock) {
+    say({ type: 'result', subtype: 'error', is_error: true, num_turns: 1, duration_ms: 12,
+      result: "You're out of usage credits. Run /usage-credits to keep using Fable 5.1 or /model to switch models." });
+  } else if (limited) {
     say({ type: 'result', subtype: 'error', is_error: true, num_turns: 1, duration_ms: 12,
       result: "You've hit your session limit · resets 3:10am (America/Los_Angeles)" });
   } else {
@@ -318,7 +324,10 @@ before(async () => {
   setUsage({});
   usageServer = http.createServer((req, res) => {
     const u = JSON.parse(fs.readFileSync(usageFile, 'utf8'));
-    const resets = u.resetsAt || new Date(Date.now() + 3600_000).toISOString();
+    // `noClock: true` answers with percentages and NO reset time — the real
+    // shape when a window has not been published yet, and the one that leaves a
+    // stall with nothing to wait for.
+    const resets = u.noClock ? undefined : (u.resetsAt || new Date(Date.now() + 3600_000).toISOString());
     res.writeHead(200, { 'content-type': 'application/json' });
     res.end(JSON.stringify({
       limits: [
@@ -735,4 +744,68 @@ test('a queued resume the pump DROPS leaves the stall unresumed and unspent', as
   // The owner speaking is itself a resolution, so the record may well end up
   // marked `human` — what it must never say is that appd typed the phrase.
   assert.match(row.why, /dropped|person answered/);
+});
+
+// ---------------------------------------- a stall that never learns its clock
+
+test('a stall with no reset time anywhere is given up on, and the held Round is FILED', async () => {
+  // ⚠ `noteRunStall` returning true is what HOLDS a Round's report — one
+  // scheduled job, one filed run. So a stall that can never become due is a job
+  // that reports nothing, for ever, with `currentChatId` still pointing at it and
+  // the ten-second poll running for the life of the daemon.
+  const made = await api('/v1/rounds', {
+    method: 'POST',
+    body: JSON.stringify({
+      title: 'Fable credits check',
+      prompt: 'fable credits check',
+      schedule: { kind: 'weekly', days: [0], at: '19:00', tz: 'America/Los_Angeles' },
+    }),
+  });
+  assert.equal(made.status, 201, JSON.stringify(made.body));
+  const roundId = made.body.id;
+
+  // Percentages but NO reset times, and an apology that names no clock either.
+  setUsage({ session: 5, weekly_all: 10, weekly_fable: 100, noClock: true });
+  await tick({ cooldownMs: 0 });
+  const before = claudeRuns().length;
+  const fired = await api(`/v1/rounds/${roundId}/run`, { method: 'POST', body: '{}' });
+  assert.equal(fired.status, 202, JSON.stringify(fired.body));
+  await until(async () => claudeRuns().length > before, 25_000, "the round's attempt");
+
+  let chatId = null;
+  await until(async () => {
+    const r = (await api('/v1/rounds')).body.rounds.find((x) => x.id === roundId);
+    chatId = r && r.currentChatId;
+    if (!chatId) return false;
+    try {
+      const m = JSON.parse(fs.readFileSync(path.join(dataDir, 'chats', chatId, 'meta.json'), 'utf8'));
+      return !!(m.stall && m.stall.at);
+    } catch { return false; }
+  }, 25_000, 'the clockless stall to be recorded');
+
+  const metaFile = path.join(dataDir, 'chats', chatId, 'meta.json');
+  const m0 = JSON.parse(fs.readFileSync(metaFile, 'utf8'));
+  assert.equal(m0.stall.window, 'weekly_fable');
+  assert.equal(m0.stall.resetsAt, null,
+    'precondition: the apology named no clock and the endpoint published none either');
+  const held = (await api('/v1/rounds')).body.rounds.find((x) => x.id === roundId);
+  assert.strictEqual((held.runs || []).length, 0, 'precondition: the report is held open');
+
+  // Six hours later (on disk, because a test cannot wait).
+  m0.stall.at = Date.now() - 7 * 3600_000;
+  fs.writeFileSync(metaFile, JSON.stringify(m0));
+
+  let after = null;
+  await until(async () => {
+    const r = (await api('/v1/rounds')).body.rounds.find((x) => x.id === roundId);
+    if (r && (r.runs || []).length >= 1) { after = r; return true; }
+    return false;
+  }, 30_000, 'the held round to be filed once appd gives up');
+  assert.equal(after.runs[0].status, 'attention',
+    'nothing is wrong with the world; something is wrong with the arrangement');
+  assert.match(String(after.runs[0].headline || ''), /no reset time/,
+    'and the reason travels with it');
+
+  setUsage({ session: 5, weekly_all: 10, weekly_fable: 20 });
+  await tick({});
 });

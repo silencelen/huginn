@@ -196,6 +196,34 @@ test('refreshing an inactive profile rewrites it in place and keeps the slug', a
   assert.ok(rec.refresh.nextAt > Date.now(), 'and it schedules itself forward, not for right now');
 });
 
+test('a profile with NO accountUuid keeps its slug across a refresh', async () => {
+  // ⚠ THE TEST ABOVE PASSES FOR THE WRONG REASON WITHOUT THIS ONE. Every fixture
+  // in this file used to carry `accountUuid: UUID_A`, which is the rung that
+  // makes the slug stable. Drop it — an offline host, or a stored access token
+  // too old for the identity endpoint — and the record is keyed by its
+  // refresh-token FINGERPRINT, which a refresh rotates. The write then landed in
+  // a new file while the old one kept the dead token and the only `lastPlan`;
+  // consolidate() will not merge them (different fingerprints, no shared uuid),
+  // so the login shows twice and — because limitsOf reads lastPlan — the DEAD
+  // row is the only one the auto-switcher will consider a candidate at all.
+  const { store, root } = newStore();
+  const slug = store.save('nouuid@example.com', creds('rt-OLD', { expiresAt: Date.now() - HOUR }));
+  assert.ok(slug && slug !== UUID_A, 'keyed by fingerprint, as it must be with no uuid');
+  store.recordPlan(slug, { at: Date.now(), limits: [{ kind: 'session', percent: 12 }] });
+
+  const post = fakePost(okReply());
+  assert.equal(await refreshWithStore(store, slug, deps(root, post)), 'refreshed');
+
+  const list = store.list();
+  assert.equal(list.length, 1, 'one login, one profile — a rotation must not fork a second');
+  assert.equal(list[0].slug, slug, 'the slug survives the token rotation');
+  const rec = store.readProfile(slug);
+  assert.equal(rec.credentials.claudeAiOauth.refreshToken, 'rt-NEW');
+  assert.ok(rec.lastPlan, 'and the plan snapshot — the only thing the switcher can read — came with it');
+  assert.equal(rec.lastPlan.limits[0].percent, 12);
+  assert.equal(rec.email, 'nouuid@example.com');
+});
+
 test('the ACTIVE account is never posted to the token endpoint', async () => {
   const { store, credPath, root } = newStore();
   const live = creds('rt-LIVE', { expiresAt: Date.now() - HOUR });
@@ -319,6 +347,16 @@ test('a record with no refresh token, or no inference scope, is refused before t
 
   assert.equal(await refreshWithStore(store, 'nosuchslug', deps(root, post)), 'no_such_profile');
   assert.equal(post.calls.length, 0);
+
+  // ⚠ AND IT SCHEDULES ITSELF FORWARD. `freshnessOf` does not call this state
+  // `unrefreshable`, so without a `nextAt` the 60-second tick found the record
+  // due on EVERY pass and re-derived the same verdict for ever. Disk-only, but a
+  // loop — and the answer cannot change without the record being rewritten,
+  // which moves nextAt anyway.
+  const rec = store.readProfile(noScope);
+  assert.equal(rec.refresh.lastStatus, 'not_refreshable');
+  assert.ok(rec.refresh.nextAt > Date.now() + 7 * 3600_000,
+    `not_refreshable must not be retried on the next tick (nextAt: ${rec.refresh.nextAt})`);
 });
 
 test('an invalid_scope rejection is retried once with the record`s own scopes', async () => {
