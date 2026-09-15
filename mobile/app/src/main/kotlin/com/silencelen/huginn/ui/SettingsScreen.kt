@@ -79,6 +79,15 @@ fun SettingsScreen(
     onLockNow: () -> Unit,
     autoswitch: com.silencelen.huginn.data.Autoswitch?,
     onAutoswitch: (Boolean) -> Unit,
+    // -------------------------------------------------------- headroom (3.0)
+    /** Null against a daemon older than 3.0.0, which hides the whole section. */
+    headroom: com.silencelen.huginn.data.Headroom? = null,
+    models: List<com.silencelen.huginn.data.ModelChoice> = emptyList(),
+    headroomSaving: Boolean = false,
+    headroomNote: String? = null,
+    onSaveHeadroom: (com.silencelen.huginn.data.HeadroomSettings) -> Unit = {},
+    /** Refresh ONE saved profile's token, offered only where it can help. */
+    onRefreshAccount: (String) -> Unit = {},
     notificationsAllowed: Boolean,
     onRequestNotifications: () -> Unit,
     onOpenSystemNotificationSettings: () -> Unit,
@@ -403,6 +412,7 @@ fun SettingsScreen(
                         account = a,
                         enabled = !switching,
                         onSwitch = { onSwitchAccount(a.slug) },
+                        onRefresh = { onRefreshAccount(a.slug) },
                         onForget = { forgetTarget = a },
                     )
                 }
@@ -439,6 +449,32 @@ fun SettingsScreen(
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
+
+        // ------------------------------------------------------------ headroom
+        //
+        // Everything the arbiter does with a usage window. The FORM is `:ui`'s, so
+        // both clients offer the same fields and refuse the same values; what this
+        // screen owns is where it sits, what feeds it and what a Save does.
+        // Hidden entirely against a daemon with no headroom subsystem — a form for
+        // settings the host cannot store is a promise this client cannot keep.
+        if (headroom != null) {
+            Spacer(Modifier.height(8.dp))
+            Text("Headroom", style = MaterialTheme.typography.titleMedium)
+            Text(
+                "When huginn warns you, when it moves a live session down to a cheaper " +
+                    "model, and whether it picks one back up after the limit resets. " +
+                    "The host validates these too, and its refusal is shown as it came.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            HeadroomSettingsSection(
+                settings = headroom.settings,
+                models = models,
+                onSave = onSaveHeadroom,
+                busy = headroomSaving,
+                note = headroomNote,
+            )
+        }
 
         Spacer(Modifier.height(8.dp))
         Text("Notifications", style = MaterialTheme.typography.titleMedium)
@@ -772,6 +808,7 @@ private fun SavedAccountRow(
     account: SavedAccount,
     enabled: Boolean,
     onSwitch: () -> Unit,
+    onRefresh: () -> Unit,
     onForget: () -> Unit,
 ) {
     Surface(
@@ -793,6 +830,11 @@ private fun SavedAccountRow(
                 val bits = buildList {
                     account.subscriptionType?.let { add("$it plan") }
                     account.weeklyPercent?.let { add("${it.toInt()}% of the week used") }
+                    // `fresh` is OMITTED: it is the ordinary state, and a word on
+                    // every row for the case that needs no attention is how the
+                    // one row that DOES need it stops standing out. Null — an
+                    // older daemon — says nothing rather than guessing `fresh`.
+                    account.freshness?.takeIf { it != "fresh" }?.let { add(it) }
                     if (account.isActive) add("active")
                     if (!account.verified) add("name unconfirmed")
                 }
@@ -820,6 +862,15 @@ private fun SavedAccountRow(
                     modifier = Modifier.padding(horizontal = 10.dp),
                 )
             } else {
+                // A token that has expired but whose REFRESH token has not is one
+                // request away from working, and until now the only way to find
+                // that out was to press Use and read the refusal. Offered only
+                // for that state: `unrefreshable` needs a re-login and `fresh`
+                // needs nothing, and a button that is always there teaches
+                // nothing.
+                if (account.freshness == "expired") {
+                    TextButton(onClick = onRefresh, enabled = enabled) { Text("Refresh") }
+                }
                 TextButton(onClick = onSwitch, enabled = enabled) { Text("Use") }
             }
             IconButton(onClick = onForget, enabled = enabled && !account.isActive) {

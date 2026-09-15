@@ -117,11 +117,35 @@ fun SessionScreen(
      * lives.
      */
     overviewPane: @Composable () -> Unit = {},
+    // --------------------------------------------------------- headroom (3.0)
+    /** Every agent this session has spawned, for the stream strip. */
+    streamAgents: List<com.silencelen.huginn.data.AgentRun> = emptyList(),
+    /** The picked agent id, or null for the session's own transcript. */
+    selectedStream: String? = null,
+    onSelectStream: (String?) -> Unit = {},
+    /** The picked agent's transcript. Kept apart from [transcript] — see AgentStream. */
+    agentPage: TranscriptPage? = null,
+    loadingAgentHistory: Boolean = false,
+    onLoadEarlierAgent: () -> Unit = {},
+    streamsSupported: Boolean = true,
+    streamNote: String? = null,
+    /** This session's headroom row, for the state mark and the limit rows. */
+    sessionHeadroom: com.silencelen.huginn.data.SessionHeadroom? = null,
+    /** The worst window across the host, for the reset clock in the state mark. */
+    headroom: com.silencelen.huginn.data.StatusHeadroom? = null,
+    nowMs: Long = 0L,
+    onAutoResume: (Boolean) -> Unit = {},
 ) {
     // The tab index in the form the shared rules reason about, so "which face is
     // showing" is answered the same way here as it is on the desktop rather than
     // by a `tab == 1` written out per render site.
     val face = SessionFace.ofTabIndex(tab)
+    // The daemon's clock, not the device's: the rows' timestamps are the host's,
+    // and a phone whose clock is minutes out would call every agent stale. Zero
+    // when the transcript has not said — [StreamPicker.items] reads that as "no
+    // clock, trust the flags" rather than as 1970.
+    val nowSec = transcript?.lastActivityTs?.takeIf { it > 0 } ?: 0L
+    val streamItems = remember(streamAgents, nowSec) { StreamPicker.items(streamAgents, nowSec) }
     Column(Modifier.fillMaxSize()) {
         TabRow(selectedTabIndex = tab) {
             Tab(selected = tab == 0, onClick = { onTab(0) }, text = { Text("Conversation") })
@@ -142,6 +166,15 @@ fun SessionScreen(
             onCycleMode = { onSendKeys(listOf("BTab")) },
             contextPercent = screen?.contextPercent,
             compacting = screen?.compacting ?: false,
+            // What the limit has already done to this session, and what it will
+            // do when the window resets. Both read as facts about THIS session
+            // rather than as settings, which is why they sit beside the model
+            // chip: a session laddered to opus is showing a model nobody chose,
+            // and without the mark there is nothing on screen to say who did.
+            sessionHeadroom = sessionHeadroom,
+            headroom = headroom,
+            nowMs = nowMs,
+            onAutoResume = onAutoResume,
         )
         Box(Modifier.weight(1f)) {
             if (tab == 2) {
@@ -165,6 +198,15 @@ fun SessionScreen(
                     name = name,
                     page = transcript,
                     error = transcriptError,
+                    streamItems = streamItems,
+                    selectedStream = selectedStream,
+                    onSelectStream = onSelectStream,
+                    agentPage = agentPage,
+                    streamsSupported = streamsSupported,
+                    streamNote = streamNote,
+                    loadingAgentHistory = loadingAgentHistory,
+                    onLoadEarlierAgent = onLoadEarlierAgent,
+                    sessionHeadroom = sessionHeadroom,
                     // Through the gate rather than straight from the pane: this
                     // face draws the card, the Screen face does not, and the rule
                     // that decides is the one the desktop reads too.
@@ -230,6 +272,15 @@ private fun SessionConversation(
     name: String,
     page: TranscriptPage?,
     error: String?,
+    streamItems: List<StreamPicker.Item> = emptyList(),
+    selectedStream: String? = null,
+    onSelectStream: (String?) -> Unit = {},
+    agentPage: TranscriptPage? = null,
+    streamsSupported: Boolean = true,
+    streamNote: String? = null,
+    loadingAgentHistory: Boolean = false,
+    onLoadEarlierAgent: () -> Unit = {},
+    sessionHeadroom: com.silencelen.huginn.data.SessionHeadroom? = null,
     prompt: com.silencelen.huginn.data.PanePrompt?,
     ask: com.silencelen.huginn.data.DegradedAsk? = null,
     planPending: com.silencelen.huginn.data.PlanPending? = null,
@@ -265,12 +316,27 @@ private fun SessionConversation(
 ) {
     val scope = rememberCoroutineScope()
     val listState = rememberLazyListState()
-    val events = page?.events ?: emptyList()
+
+    // WHICH STREAM this body is showing. The main page goes on ticking
+    // underneath either way: reading an agent is looking more closely at a
+    // session that is still going, not leaving it.
+    val onAgent = selectedStream != null
+    val shown = if (onAgent) agentPage else page
+    val shownError = if (onAgent) streamNote else error
+
+    // INSIDE a picked agent's stream every event is that agent's, so the
+    // sidechain indent and its "subagent" marker say nothing — exactly as the
+    // folded card already does once it is opened. Flattened here rather than in
+    // `:ui` because it is a property of WHICH stream is on screen, not of the row.
+    val events = remember(shown?.events, onAgent) {
+        val raw = shown?.events ?: emptyList()
+        if (onAgent) raw.map { if (it.sidechain) it.copy(sidechain = false) else it } else raw
+    }
     // Grouped so a fan-out reads as delegated units instead of drowning the
     // main thread; recomputed only when the events actually change.
     val rows = remember(events) { TranscriptGroups.group(events) }
     val rowKeys = remember(rows) { TranscriptGroups.keys(rows) }
-    val headerItems = if (page?.truncated == true) 1 else 0
+    val headerItems = if (shown?.truncated == true) 1 else 0
 
     // Revision keys on nextOffset, which strictly increases as transcript bytes
     // arrive. Event COUNT is useless here: the retained window is capped, so on a
@@ -278,21 +344,39 @@ private fun SessionConversation(
     val hasUnseen = AutoScrollToNewest(
         listState = listState,
         itemCount = rows.size + headerItems,
-        revision = tailRevision(page?.nextOffset, events.size, events.lastOrNull()?.text?.length),
-        key = name,
+        revision = tailRevision(shown?.nextOffset, events.size, events.lastOrNull()?.text?.length),
+        // Keyed by STREAM as well as session: switching streams is a different
+        // conversation arriving, and following the old one's tail position into
+        // it would land wherever the byte counts happened to line up.
+        key = if (onAgent) "$name/$selectedStream" else name,
     )
 
+    val stripHasEarlier = if (onAgent) (shown?.windowStart ?: 0L) > 0L else hasEarlier
+    val stripLoadingHistory = if (onAgent) loadingAgentHistory else loadingHistory
+    val onLoadOlder = if (onAgent) onLoadEarlierAgent else onLoadEarlier
+
     Column(Modifier.fillMaxSize()) {
+        // ABOVE everything else in this tab, including the empty states: a picked
+        // agent that has written nothing yet must still offer the way back to
+        // Main, and a strip that disappears with the content is a trap.
+        StreamPickerRow(
+            items = streamItems,
+            selected = selectedStream,
+            onPick = onSelectStream,
+            enabled = streamsSupported,
+            note = streamNote.takeIf { !streamsSupported },
+        )
         when {
-            error != null -> Box(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
-                EmptyState(
-                    "No conversation yet",
-                    // The mapping is written by a hook that fires on the first
-                    // prompt, so a brand-new session genuinely has nothing here.
-                    error,
-                )
-            }
-            page == null -> Box(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
+            shownError != null && shown == null ->
+                Box(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
+                    EmptyState(
+                        if (onAgent) "Nothing from this agent" else "No conversation yet",
+                        // The mapping is written by a hook that fires on the first
+                        // prompt, so a brand-new session genuinely has nothing here.
+                        shownError,
+                    )
+                }
+            shown == null -> Box(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
                 CircularProgressIndicator(strokeWidth = 2.dp)
             }
             else -> LazyColumn(
@@ -310,22 +394,34 @@ private fun SessionConversation(
                 // of 3452, with no way to ask for the rest. Only the Screen tab
                 // has a real excuse: a Claude pane runs on the alternate screen
                 // and has no scrollback at all.
-                if (hasEarlier) {
+                if (stripHasEarlier) {
                     item {
                         Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
-                            if (loadingHistory) {
+                            if (stripLoadingHistory) {
                                 Text(
                                     "Loading earlier messages…",
                                     style = MaterialTheme.typography.labelSmall,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 )
                             } else {
-                                TextButton(onClick = onLoadEarlier) { Text("Load earlier messages") }
+                                TextButton(onClick = onLoadOlder) { Text("Load earlier messages") }
                             }
                         }
                     }
                 }
-                items(rows.size, key = { rowKeys[it] }) { i -> TranscriptRowItem(rows[i], onCopy) }
+                items(rows.size, key = { rowKeys[it] }) { i ->
+                    // PROVIDED AT THE ROW, not around the screen. The LimitNotice
+                    // row is the only thing that reads it, TranscriptEventItem is
+                    // called from four places across two shells, and threading a
+                    // nullable through all of them to reach one row that most
+                    // transcripts never contain is the trade the composition local
+                    // exists to avoid.
+                    androidx.compose.runtime.CompositionLocalProvider(
+                        LocalSessionHeadroom provides sessionHeadroom,
+                    ) {
+                        TranscriptRowItem(rows[i], onCopy)
+                    }
+                }
             }
         }
 
