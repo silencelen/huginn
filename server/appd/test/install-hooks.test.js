@@ -218,3 +218,78 @@ test('HUGINN_CLAUDE_SETTINGS is the path when --settings is not given', () => {
   const { hooks } = JSON.parse(fs.readFileSync(file, 'utf8'));
   assert.equal(ours(hooks, 'PreToolUse').length, 1);
 });
+
+// ------------------------------------------------------- W1 security fixes
+
+test('a symlinked settings.json is written THROUGH, keeping the link and the mode', () => {
+  // ~/.claude/settings.json linked into a dotfiles repo. readFileSync follows the
+  // link and renameSync REPLACES it, so the first deploy used to detach the file:
+  // every later repo edit then stopped reaching the CLI, and the gate entry never
+  // landed in the tracked copy.
+  const dir = scratch();
+  const real = path.join(dir, 'dotfiles', 'settings.json');
+  fs.mkdirSync(path.dirname(real));
+  fs.writeFileSync(real, `${JSON.stringify({ model: 'claude-fable-5-1' }, null, 2)}\n`, { mode: 0o644 });
+  const link = path.join(dir, 'settings.json');
+  fs.symlinkSync(real, link);
+
+  run(['--settings', link, '--script', SCRIPT]);
+
+  assert.ok(fs.lstatSync(link).isSymbolicLink(), 'the symlink was replaced by a regular file');
+  assert.equal(fs.readlinkSync(link), real);
+  const parsed = JSON.parse(fs.readFileSync(real, 'utf8'));
+  assert.equal(ours(parsed.hooks, 'SubagentStart').length, 1, 'the target never got the gate');
+  assert.equal(fs.statSync(real).mode & 0o777, 0o644, 'the target mode was not carried forward');
+  assert.deepEqual(fs.readdirSync(path.dirname(real)).sort(), ['settings.json'], 'no tmp left beside the target');
+});
+
+test('a present-but-non-object "hooks" is refused, exit 2, nothing written', () => {
+  for (const bad of [[], 'nope', 7, null]) {
+    const dir = scratch();
+    const file = path.join(dir, 'settings.json');
+    const body = `${JSON.stringify({ model: 'claude-fable-5-1', hooks: bad }, null, 2)}\n`;
+    fs.writeFileSync(file, body);
+    const { stderr } = run(['--settings', file, '--script', SCRIPT], { expect: 2 });
+    assert.match(stderr, /REFUSING/);
+    assert.match(stderr, /hooks/);
+    assert.equal(fs.readFileSync(file, 'utf8'), body,
+      `hooks: ${JSON.stringify(bad)} was overwritten instead of refused`);
+    assert.deepEqual(fs.readdirSync(dir), ['settings.json']);
+  }
+});
+
+test('a moved $DEST repoints our rule instead of appending a second, dead one', () => {
+  // A hook whose command does not exist is read by the CLI as a BLOCK on every
+  // Agent/Workflow call, so the old rule must not be left behind.
+  const dir = scratch();
+  const file = path.join(dir, 'settings.json');
+  const gone = '/opt/huginn-appd-OLD/hooks/huginn-headroom-gate';
+  fs.writeFileSync(file, `${JSON.stringify({
+    hooks: {
+      SubagentStart: [{ matcher: '*', hooks: [{ type: 'command', command: gone, timeout: 1800 }] }],
+      PreToolUse: [
+        { matcher: '.*', hooks: [{ type: 'command', command: '/usr/local/bin/huginn-claude-title PreToolUse', async: true }] },
+        { matcher: 'Agent|Workflow', hooks: [{ type: 'command', command: gone, timeout: 1800 }] },
+      ],
+    },
+  }, null, 2)}\n`);
+
+  run(['--settings', file, '--script', SCRIPT]);
+
+  const { hooks } = JSON.parse(fs.readFileSync(file, 'utf8'));
+  const commands = (event) => (hooks[event] || []).flatMap((r) => (r.hooks || []).map((h) => h.command));
+  assert.deepEqual(commands('SubagentStart'), [SCRIPT], 'the dead command survived');
+  assert.deepEqual(commands('PreToolUse'),
+    ['/usr/local/bin/huginn-claude-title PreToolUse', SCRIPT],
+    'somebody else\'s hook must stay, and ours must be repointed rather than duplicated');
+});
+
+test('a second run after a repoint is a no-op', () => {
+  const dir = scratch();
+  const file = copyFixture(dir);
+  run(['--settings', file, '--script', SCRIPT]);
+  const after = fs.readFileSync(file, 'utf8');
+  const { stdout } = run(['--settings', file, '--script', SCRIPT]);
+  assert.match(stdout, /already current/);
+  assert.equal(fs.readFileSync(file, 'utf8'), after);
+});

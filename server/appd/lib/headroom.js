@@ -161,6 +161,14 @@ function validateSettings(patch, base = defaults(), { knownModels = null } = {})
     if (typeof patch.headsUpText !== 'string') return { ok: false, error: 'headsUpText must be text' };
     const v = stripC0(patch.headsUpText, true);
     if (v.length > 600) return { ok: false, error: 'headsUpText must be at most 600 characters' };
+    // Same refusal as resumePhrase, and for the same reason: this text travels
+    // the same enqueueSend -> sendTextToPane -> Enter path, so a leading slash
+    // is a slash COMMAND typed into a working session, not a note. Newlines are
+    // kept (bracketed paste carries them), but the first thing the pane sees
+    // decides how the whole paste is read.
+    if (v.trim().startsWith('/')) {
+      return { ok: false, error: 'headsUpText must not start with / — a slash command is not a note' };
+    }
     if (!v.includes('{pct}')) return { ok: false, error: 'headsUpText must contain {pct}' };
     s.headsUpText = v;
   }

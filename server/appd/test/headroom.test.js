@@ -514,6 +514,18 @@ test('the heads-up text must be able to say the percentage', () => {
   assert.ok(ok.settings.headsUpText.includes('\n'));
 });
 
+test('the heads-up text is never a slash command either', () => {
+  // It travels the same enqueueSend -> sendTextToPane -> Enter path the resume
+  // phrase does, and `/clear {pct}` satisfies the {pct} rule, so that check is
+  // no help at all here.
+  assert.match(h.validateSettings({ headsUpText: '/clear {pct}' }).error, /not start with \//);
+  assert.match(h.validateSettings({ headsUpText: '   /model opus {pct}' }).error, /not start with \//);
+  // And newlines still survive, because bracketed paste carries them.
+  const ok = h.validateSettings({ headsUpText: 'at {pct}%\n/clear is fine on a later line' });
+  assert.equal(ok.ok, true);
+  assert.ok(ok.settings.headsUpText.includes('\n'));
+});
+
 test('defaultModel is a model id or a family alias and nothing else', () => {
   assert.equal(h.validateSettings({ defaultModel: 'opus' }).ok, true);
   assert.equal(h.validateSettings({ defaultModel: 'claude-opus-5' }).ok, true);
