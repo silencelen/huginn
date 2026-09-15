@@ -40,7 +40,15 @@ object StreamPicker {
     data class Item(
         /** Stable and unique across the whole list. */
         val key: String,
-        /** Null on the Main row and on a workflow header — neither is an agent. */
+        /**
+         * Null on the Main row and on a workflow header — neither is an agent.
+         *
+         * ⚠ EXACTLY WHAT THE DAEMON SENT, trimmed and no more. `/agents` emits
+         * the BARE hex and the transcript route accepts bare or `agent-`
+         * prefixed, so there is nothing to normalise and normalising would make
+         * this a second opinion about an id it did not mint. [shortId] shortens
+         * a LABEL; it never touches this.
+         */
         val agentId: String? = null,
         val label: String,
         /** Draw the live dot. */

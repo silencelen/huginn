@@ -1,9 +1,11 @@
 package com.silencelen.huginn.ui
 
 import com.silencelen.huginn.data.HeadroomSettings
+import com.silencelen.huginn.data.HeadroomStall
 import com.silencelen.huginn.data.HeadroomWorst
 import com.silencelen.huginn.data.SessionHeadroom
 import com.silencelen.huginn.data.StatusHeadroom
+import com.silencelen.huginn.data.UndoResult
 import kotlin.math.roundToInt
 
 /**
@@ -115,15 +117,25 @@ object HeadroomRules {
      * @param status the pill's reading, used only to name the window and the
      *   percentage a laddered session was moved for. Optional: without it the
      *   mark is still correct, just shorter (`on opus`).
+     * @param stall the session's own record from `/v1/headroom`, when the caller
+     *   has it. It carries the two things the list row cannot: the clock time
+     *   Claude Code printed, and the daemon's reason for not resuming. Without
+     *   it the mark falls back to the worst window's reset, which is the right
+     *   window most of the time and the wrong one when a session stalled on the
+     *   5-hour cap while the week is the fuller one.
      */
     fun sessionMark(
         session: SessionHeadroom?,
         status: StatusHeadroom? = null,
         nowMs: Long = 0L,
         resetClock: String? = null,
+        stall: HeadroomStall? = null,
     ): String? {
         val h = session ?: return null
-        if (h.stalled) return resumeWords(h.stalled, h.autoResume, resetClock, status?.nextResetAt, nowMs)
+        if (h.stalled) {
+            stallWords(stall, h.autoResume, status?.nextResetAt, nowMs)?.let { return it }
+            return resumeWords(h.stalled, h.autoResume, resetClock, status?.nextResetAt, nowMs)
+        }
         val to = h.ladder?.trim()?.takeIf { it.isNotEmpty() } ?: return null
         val pct = status?.worstPercent
         if (pct == null) return "on $to"
@@ -156,6 +168,110 @@ object HeadroomRules {
         val until = shortUntil(resetsAt, nowMs)
         if (until != null) return "waiting for the limit to reset (in $until)"
         return "resumes on reset"
+    }
+
+    /**
+     * The same sentence, read off the daemon's own stall record.
+     *
+     * Preferred over [resumeWords] wherever the record is in hand, because the
+     * record is where the two facts actually live:
+     *
+     * - [HeadroomStall.text] is Claude Code's own limit sentence, and the clock
+     *   time in it ("resets 10:10pm") is the ONLY wall clock anywhere in this
+     *   object — lifted verbatim, never formatted here (header rule 2).
+     * - [HeadroomStall.why] is the only place a REFUSAL is written down
+     *   ("auto-resume is off for this session", "gave up after 3 attempts").
+     *   A reader told "stopped at the usage limit" with no reason has to go and
+     *   find out which of those it was.
+     *
+     * Null when there is no stall to describe, or when it has already been
+     * resumed — a session that was picked back up is not waiting for anything.
+     */
+    fun stallWords(
+        stall: HeadroomStall?,
+        autoResume: Boolean,
+        resetsAt: String? = null,
+        nowMs: Long = 0L,
+    ): String? {
+        val st = stall ?: return null
+        if ((st.at ?: 0L) <= 0L) return null
+        if ((st.resumedAt ?: 0L) > 0L) return null
+        if (!autoResume) {
+            val why = st.why?.trim()?.takeIf { it.isNotEmpty() }
+            return why ?: "stopped at the usage limit"
+        }
+        val clock = resetClockOf(st.text)
+        if (clock != null) return "waiting for the limit to reset ($clock)"
+        // The stall's OWN reset, in milliseconds, before the worst window's ISO.
+        shortUntilMs(st.resetsAt, nowMs)?.let { return "waiting for the limit to reset (in $it)" }
+        shortUntil(resetsAt, nowMs)?.let { return "waiting for the limit to reset (in $it)" }
+        return "resumes on reset"
+    }
+
+    /**
+     * The clock time out of a Claude Code usage-limit sentence, or null.
+     *
+     * `You've hit your session limit · resets 10:10pm (America/Los_Angeles)` →
+     * `10:10pm`. Everything after the clause — the parenthesised timezone, a
+     * following sentence — is dropped: it does not fit on a one-line mark and
+     * the zone is already implied by it being the host's clock.
+     *
+     * ⚠ THE ONE IMPLEMENTATION. `:ui`'s `limitResetClock` delegates here; a
+     * second copy is a second set of words for the same reading, which is the
+     * failure this whole object exists to prevent.
+     */
+    fun resetClockOf(text: String?): String? {
+        val raw = text?.trim().orEmpty()
+        if (raw.isEmpty()) return null
+        val at = raw.indexOf("resets ", ignoreCase = true)
+        if (at < 0) return null
+        val rest = raw.substring(at + 7).trimStart()
+        if (rest.isEmpty()) return null
+        val end = rest.indexOfFirst { it == '\n' || it == '(' || it == '.' }
+        val clock = (if (end < 0) rest else rest.substring(0, end)).trim()
+        return clock.takeIf { it.isNotEmpty() && it.length <= 24 }
+    }
+
+    /**
+     * What an Undo actually did, said in the toast that offered it.
+     *
+     * ⚠ THE ROUTE ANSWERS `ok:true` EITHER WAY. The `/model` picker cannot be
+     * opened inside a running turn, so a mid-turn undo is held to the next turn
+     * boundary like any other automated send — and the toast built on `ok`
+     * alone announced "put back on its own model" over a session still running
+     * on the model it was moved to, under the same key as the downgrade it
+     * claimed to have reversed. [UndoResult.applied] is the fact; `queued` is
+     * the promise; neither is `ok`.
+     */
+    fun undoWords(result: UndoResult): String {
+        val to = result.to?.trim()?.takeIf { it.isNotEmpty() }
+        if (result.applied) return if (to == null) "put back on its own model" else "put back on $to"
+        if (result.queued) {
+            return if (to == null) "will go back at the next turn boundary"
+            else "will go back to $to at the next turn boundary"
+        }
+        // Neither applied nor queued and not an exception: the send was dropped.
+        // The daemon says why in `delivery` ("dropped: <reason>"), verbatim.
+        return result.delivery?.trim()?.takeIf { it.isNotEmpty() } ?: "could not undo"
+    }
+
+    /**
+     * What a Refresh button says after the daemon answers.
+     *
+     * The STATUS WORD, verbatim, because the words are the daemon's vocabulary
+     * and a reader who has to act on `refresh_token_expired` is not helped by
+     * "failed". The one word that needs translating is `active_skipped`: it is
+     * not a failure and it is not a refresh either — the route never refuses the
+     * active login, it declines to touch a token a running `claude` holds in
+     * memory — and "active_skipped" reads as something going wrong.
+     *
+     * Everything else passes through, including words added to the daemon after
+     * this was written: an unknown word shown as itself is a worse sentence than
+     * a known one, and a much better one than a wrong one.
+     */
+    fun refreshWords(status: String?): String {
+        val word = status?.trim()?.takeIf { it.isNotEmpty() } ?: return "no answer"
+        return if (word == "active_skipped") "that is the active login" else word
     }
 
     // ------------------------------------------------------------- pieces
@@ -227,6 +343,47 @@ object HeadroomRules {
             m > 0 -> "${m}m"
             else -> "now"
         }
+    }
+
+    /**
+     * [coarseUntil], from an epoch in MILLISECONDS.
+     *
+     * Every `at` on `/v1/headroom` is milliseconds; only `resetsAt` on a window
+     * is an ISO string. Two entry points rather than one guessing function: a
+     * magnitude heuristic that decides a unit for you is how a 1970 countdown
+     * gets rendered with nothing on screen to say it was guessed.
+     */
+    fun coarseUntilMs(atMs: Long?, nowMs: Long): String? {
+        val secs = secondsUntilMs(atMs, nowMs) ?: return null
+        return when {
+            secs <= 0 -> "now"
+            secs >= 86_400 -> "${secs / 86_400}d"
+            secs >= 3_600 -> "${secs / 3_600}h"
+            secs >= 60 -> "${secs / 60}m"
+            else -> "now"
+        }
+    }
+
+    /** [shortUntil], from an epoch in MILLISECONDS. */
+    fun shortUntilMs(atMs: Long?, nowMs: Long): String? {
+        val secs = secondsUntilMs(atMs, nowMs) ?: return null
+        if (secs <= 0) return "now"
+        val d = secs / 86_400
+        val h = (secs % 86_400) / 3_600
+        val m = (secs % 3_600) / 60
+        return when {
+            d > 0 -> "${d}d ${h}h"
+            h > 0 -> "${h}h ${m}m"
+            m > 0 -> "${m}m"
+            else -> "now"
+        }
+    }
+
+    /** The epoch guard of [secondsUntil], for a millisecond epoch. */
+    private fun secondsUntilMs(atMs: Long?, nowMs: Long): Long? {
+        val at = atMs ?: return null
+        if (at <= 0L) return null
+        return (at - nowMs) / 1000L
     }
 
     /**

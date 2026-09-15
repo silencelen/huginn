@@ -451,14 +451,26 @@ class HuginnClient(
     /**
      * Refreshes one saved profile's token in the background, now.
      *
-     * Returns the daemon's status WORD rather than a boolean, because the three
-     * failures need different things from the reader: `invalid_grant` means only
-     * a re-login helps, `lock_busy` means try again in a moment, and a transport
-     * word means the network. A bare false said the same thing to all three, and
-     * that was the bug the expired-token switch has had since it shipped.
+     * Returns the daemon's status WORD rather than a boolean, because the
+     * failures need different things from the reader: `refresh_token_expired`
+     * means only a re-login helps, `lock_busy` means try again in a moment, and
+     * `refresh_failed` means the network. A bare false said the same thing to
+     * all of them, and that was the bug the expired-token switch has had since
+     * it shipped. Two of the words are not failures at all — `not_needed` and
+     * `active_skipped` — which is the other half of why this is not a boolean.
+     *
+     * ⚠ THIS ROUTE NEVER REFUSES. Asking it to refresh the ACTIVE login answers
+     * `200 {ok:true, status:"active_skipped"}`; the route that refuses is
+     * `/activate`, with a 409 whose text names the date.
+     *
+     * The whole vocabulary is on [AccountRefreshed.status].
      */
     suspend fun refreshAccount(slug: String): String =
         decode<AccountRefreshed>(post("/v1/accounts/$slug/refresh")).status
+
+    /** The same call, whole — for a caller that needs more than the word. */
+    suspend fun refreshAccountFull(slug: String): AccountRefreshed =
+        decode(post("/v1/accounts/$slug/refresh"))
 
     /** Plan utilization: the same numbers Claude Code's /usage shows. */
     suspend fun plan(): Plan = decode(call("/v1/plan"))
@@ -476,10 +488,15 @@ class HuginnClient(
     suspend fun headroom(): Headroom = decode(call("/v1/headroom"))
 
     /**
-     * Patches the owner-editable settings. PARTIAL by design: the form sends the
-     * fields it changed, so two open settings screens cannot overwrite each
-     * other's untouched thresholds. The daemon validates and answers with the
-     * full settings; a rule broken comes back as a 400 whose text names it.
+     * Patches the owner-editable settings.
+     *
+     * ⚠ THE FORM SENDS THE WHOLE OBJECT, every field, every save — see
+     * `SettingsView.patchOf`, whose own kdoc says so ("Whole rather than a diff,
+     * deliberately"). The route ACCEPTS a partial body, and this kdoc used to
+     * claim the form sent one and that two open settings screens therefore could
+     * not clobber each other's untouched thresholds. They can, and they do: the
+     * last save wins outright. The daemon validates and answers with the full
+     * settings; a rule broken comes back as a 400 whose text names it.
      */
     suspend fun setHeadroomSettings(patch: JsonObject): HeadroomSettings =
         decode(call("/v1/headroom/settings", HttpMethod.Patch, body = patch))
@@ -491,9 +508,8 @@ class HuginnClient(
      * from laddering it straight back down on the next tick — an Undo that gets
      * silently undone is worse than no Undo.
      */
-    suspend fun undoLadder(name: String) {
-        post("/v1/sessions/$name/headroom/undo")
-    }
+    suspend fun undoLadder(name: String): UndoResult =
+        decode(post("/v1/sessions/$name/headroom/undo"))
 
     // ---------------------------------------------------------- sessions
 
@@ -696,6 +712,12 @@ class HuginnClient(
      * a different file and a fan-out makes the parent's size lie about progress
      * — so this is deliberately a separate call rather than a filter on
      * [sessionTranscript].
+     *
+     * ⚠ [agentId] GOES THROUGH VERBATIM (url-encoded, nothing else). The list
+     * route emits the BARE hex and the transcript route accepts it bare or
+     * `agent-` prefixed; a client that "helpfully" added or stripped the prefix
+     * would be a third opinion about an id it did not mint. `StreamPicker`'s
+     * `shortId` is display only — it never reaches a URL.
      */
     suspend fun agentTranscript(
         name: String,
@@ -768,9 +790,10 @@ class HuginnClient(
     suspend fun typingStatus(name: String): TypingState =
         decode(call("/v1/sessions/$name/typing"))
 
-    /** Drops whatever is still queued for this session; returns what is left. */
-    suspend fun cancelTyping(name: String): TypingState =
-        decode(call("/v1/sessions/$name/typing", HttpMethod.Delete))
+    // ⚠ NO `cancelTyping`. `/v1/sessions/:name/typing` is GET-only — there has
+    // never been a DELETE — so the method that used to sit here 404'd on every
+    // daemon it was ever shipped against. It had no call site, which is the only
+    // reason nobody found out. Do not re-add it without the route.
 
     // ------------------------------------------------------------- chats
 
