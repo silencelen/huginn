@@ -43,6 +43,20 @@ fi
 install -d "$DEST/lib"
 install -m 0644 "$SRC/huginn-appd.js" "$DEST/huginn-appd.js"
 install -m 0644 "$SRC"/lib/*.js "$DEST/lib/"
+
+# The headroom gate. It is a Claude Code hook, so the path in settings.json is the
+# one the CLI execs on every spawn — which must be the DEPLOYED copy under /opt,
+# never a working tree that a mid-pull checkout can empty. 0755 because a hook
+# without its exec bit fails open, silently, exactly like a missing one.
+install -d "$DEST/hooks"
+install -m 0755 "$SRC"/hooks/* "$DEST/hooks/"
+install -m 0644 "$SRC/install-hooks.js" "$DEST/install-hooks.js"
+# Idempotent by `command`: a second run keeps what is there and rewrites nothing.
+# It refuses (exit 2, nothing written) on a settings file it cannot parse, and
+# that refusal must stop the deploy — a daemon that arms sentinels nothing reads
+# is a pause button wired to nothing.
+node "$DEST/install-hooks.js" --script "$DEST/hooks/huginn-headroom-gate"
+
 systemctl restart huginn-appd
 sleep 2
 TOKEN="$(cat "$TOKEN_FILE")"
