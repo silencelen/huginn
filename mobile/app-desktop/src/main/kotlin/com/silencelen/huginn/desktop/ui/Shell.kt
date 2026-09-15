@@ -94,6 +94,9 @@ import com.silencelen.huginn.desktop.ui.common.connectionTip
 import com.silencelen.huginn.desktop.ui.common.railCountTip
 import com.silencelen.huginn.data.StatusHeadroom
 import com.silencelen.huginn.ui.HeadroomPill
+import com.silencelen.huginn.ui.SessionUsageFill
+import com.silencelen.huginn.ui.UsageFill
+import com.silencelen.huginn.ui.UsageFillLine
 import com.silencelen.huginn.ui.groupByMachine
 import com.silencelen.huginn.ui.statusHeadroomOf
 import kotlinx.coroutines.launch
@@ -248,6 +251,10 @@ fun Shell(store: AppStore) {
                     devicesOnline = machines.count { it.online },
                     devicesBusy = machines.count { g -> g.rows.any { it.running } },
                     pads = if (padsAvailable == true) pads else null,
+                    // The 5-hour session window, under the Status icon. Computed
+                    // here because this is where both halves already are; the rail
+                    // draws whatever it is handed and nothing when that is null.
+                    sessionUsage = SessionUsageFill.of(headroom, statusHeadroomOf(headroom) ?: status?.headroom),
                     onSelect = { store.openView(it) },
                 )
                 VerticalDivider(color = MaterialTheme.colorScheme.outlineVariant)
@@ -591,6 +598,8 @@ private fun NavRail(
     devicesBusy: Int,
     /** Null when this daemon has no scratchpads, which removes the item entirely. */
     pads: List<Scratchpad>?,
+    /** The 5-hour session window under the Status icon; null draws no line. */
+    sessionUsage: UsageFill?,
     onSelect: (View) -> Unit,
 ) {
     Column(
@@ -685,6 +694,10 @@ private fun NavRail(
             active = current == View.STATUS,
             tip = "Status · host, plan headroom and token usage",
             mark = null,
+            // The ONE rail item that carries a reading as well as a destination:
+            // this is where the usage lives, so the cheapest possible preview of
+            // it belongs on the way in. Every other item passes null.
+            fill = sessionUsage,
         ) { onSelect(View.STATUS) }
 
         Spacer(Modifier.weight(1f))
@@ -715,6 +728,8 @@ private fun RailItem(
     active: Boolean,
     tip: String,
     mark: Color?,
+    /** A hairline under the icon, for an item that also carries a reading. */
+    fill: UsageFill? = null,
     onClick: () -> Unit,
 ) {
     val interaction = remember { MutableInteractionSource() }
@@ -755,6 +770,12 @@ private fun RailItem(
                             .size(Frame.markDot).clip(CircleShape).background(it)
                     )
                 }
+            }
+            // UNDER the icon and above the count: it belongs to the icon, and a
+            // line below a number would read as underlining the number.
+            fill?.let {
+                Spacer(Modifier.height(Space.hair))
+                UsageFillLine(it, Modifier.width(20.dp))
             }
             if (count > 0) {
                 Spacer(Modifier.height(Space.hair))

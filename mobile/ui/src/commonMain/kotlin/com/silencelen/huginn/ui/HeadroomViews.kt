@@ -2,8 +2,12 @@ package com.silencelen.huginn.ui
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -148,6 +152,55 @@ fun HeadroomPill(
                 )
             }
         }
+    }
+}
+
+/**
+ * The severity key a [UsageFill] paints with, or null when there is no line.
+ *
+ * Pure, and it exists so the ONE colour decision is asserted rather than inferred
+ * from a screenshot: the fill borrows the headroom vocabulary
+ * ([HeadroomRules.severityColorKey] → [meterColor]) rather than growing a second
+ * scale, which is how one surface calls 92 % red while the bar under it calls it
+ * amber. Null in, null out: no reading, no line.
+ */
+fun usageFillSeverity(fill: UsageFill?): String? =
+    fill?.let { HeadroomRules.severityColorKey(it.modeKey) }
+
+/**
+ * How much of the current 5-hour session window is spent, as a hairline under the
+ * Status destination's icon.
+ *
+ * A LINE AND NOT A NUMBER, deliberately. This sits in a navigation bar under an
+ * icon that already carries a word; a percentage there would be a second reading
+ * competing with the headroom pill in the top bar, and the two answer different
+ * questions (this one is the session, the pill is the worst window anywhere). What
+ * a glance needs from a nav item is "roughly how much is left", which is a length.
+ *
+ * Drawn only when [SessionUsageFill.of] had something to say, so a caller may
+ * place it unconditionally and an older daemon simply costs 2dp of nothing.
+ */
+@Composable
+fun UsageFillLine(
+    fill: UsageFill?,
+    modifier: Modifier = Modifier,
+) {
+    val severity = usageFillSeverity(fill) ?: return
+    val tint = meterColor(severity, 0.0)
+    Box(
+        modifier
+            .height(2.dp)
+            .clip(RoundedCornerShape(1.dp))
+            // The TRACK at a fifth, so the line reads as a gauge with an end
+            // rather than as a stray underline whose length means nothing.
+            .background(tint.copy(alpha = 0.20f)),
+    ) {
+        Box(
+            Modifier.fillMaxHeight()
+                .fillMaxWidth(fill!!.fraction)
+                .clip(RoundedCornerShape(1.dp))
+                .background(tint),
+        )
     }
 }
 

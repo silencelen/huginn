@@ -25,6 +25,26 @@ class HeadroomViewsTest {
 
     private val nowMs = 1_800_000_000_000L
 
+    // ------------------------------------------------------ the usage fill
+
+    @Test
+    fun `the usage fill borrows the headroom colour vocabulary, and hides on null`() {
+        // ONE COLOUR DECISION. A second scale for the same idea is how one surface
+        // calls 92 % red while the bar under it calls it amber — the exact failure
+        // HeadroomRules.severityColorKey exists to prevent, now reused by a line
+        // in a navigation bar as well as by a pill.
+        assertEquals("critical", usageFillSeverity(UsageFill(1f, HeadroomRules.EXHAUSTED)))
+        assertEquals("high", usageFillSeverity(UsageFill(0.94f, HeadroomRules.RED)))
+        assertEquals("warning", usageFillSeverity(UsageFill(0.87f, HeadroomRules.WARN)))
+        assertEquals("normal", usageFillSeverity(UsageFill(0.31f, HeadroomRules.OK)))
+
+        // NO READING, NO LINE — the same rule the pill holds, in the same file, and
+        // for the same reason: a bar drawn at 0 % claims somebody looked and found
+        // plenty, which is the one thing this surface must never say by accident.
+        assertNull(usageFillSeverity(null))
+    }
+
+
     /**
      * Three hours and ten minutes past [nowMs], as the ISO instant the daemon
      * sends. Built from the clock rather than hard-coded so the arithmetic the

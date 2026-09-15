@@ -10,6 +10,7 @@ import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -114,7 +115,7 @@ import com.silencelen.huginn.ui.statusHeadroomOf
 import com.silencelen.huginn.ui.OverviewDensity
 import com.silencelen.huginn.ui.SessionOverviewView
 import com.silencelen.huginn.ui.ContextMeter
-import com.silencelen.huginn.ui.DegradedAskCard
+import com.silencelen.huginn.ui.QuestionLinkBar
 import com.silencelen.huginn.ui.HistoryWalk
 import com.silencelen.huginn.ui.exitRecallIfDiverged
 import com.silencelen.huginn.ui.handleHistoryKey
@@ -123,9 +124,10 @@ import com.silencelen.huginn.ui.FollowNewest
 import com.silencelen.huginn.ui.ModelLabels
 import com.silencelen.huginn.ui.NewestPill
 import com.silencelen.huginn.ui.onScrollInput
-import com.silencelen.huginn.ui.PlanApprovalCard
-import com.silencelen.huginn.ui.PromptCard
 import com.silencelen.huginn.ui.PromptGate
+import com.silencelen.huginn.ui.PromptPlacement
+import com.silencelen.huginn.ui.PromptSurface
+import com.silencelen.huginn.ui.TabAttentionDot
 import com.silencelen.huginn.ui.asMultiPartSteer
 import com.silencelen.huginn.ui.ScratchpadRefBadge
 import com.silencelen.huginn.ui.ScratchpadRules
@@ -297,7 +299,24 @@ fun SessionView(store: AppStore, name: String) {
         val paneCopy: (String) -> Unit = remember(paneClipboard) {
             { t -> paneClipboard.setText(AnnotatedString(t)) }
         }
-        TabStrip(tab, { controller.openTab(it) }) {
+        // Resolved BEFORE the strip because the strip needs it: the Screen tab
+        // carries a dot while a question is waiting elsewhere, which is the other
+        // half of the link bar below. A bar can scroll out of view; a tab cannot.
+        //
+        // A pane-only MULTI-question prompt (no fused sidecar) counts as a
+        // question but is never tap-answerable — a single digit there answers
+        // question 1 AND confirms question 2's default — so it is re-presented as
+        // the steer, exactly like a genuine degraded ask.
+        val rawPrompt = screen?.prompt
+        val prompt = rawPrompt?.takeUnless { PromptGate.paneOnlyMultiQuestion(it) }
+        val ask = screen?.ask ?: rawPrompt?.takeIf { PromptGate.paneOnlyMultiQuestion(it) }?.asMultiPartSteer()
+        val planPending = screen?.planPending
+        val hasQuestion = prompt != null || ask != null || planPending != null
+        TabStrip(
+            tab,
+            { controller.openTab(it) },
+            screenDot = PromptGate.screenTabDot(hasQuestion, tab.face),
+        ) {
             // Only on the Screen tab, and only when the pane holds something. The
             // conversation has its own selection and needs none of this.
             if (tab == SessionTab.SCREEN && com.silencelen.huginn.ui.hasCopyableText(screen)) {
@@ -327,9 +346,6 @@ fun SessionView(store: AppStore, name: String) {
         // it straight to a SelectionContainer let the scroll area take the whole
         // remaining height and the composer was laid out past the bottom edge and
         // clipped away — a session with no way to type into it, and nothing logged.
-        val answering by controller.answering.collectAsState()
-        val answerNote by controller.answerNote.collectAsState()
-
         Box(Modifier.weight(1f).fillMaxWidth()) {
             when (tab) {
                 SessionTab.CONVERSATION -> ConversationTab(controller, selectionVerbs, quickActions)
@@ -377,85 +393,36 @@ fun SessionView(store: AppStore, name: String) {
             SuggestionChips(suggestions, onPick = setDraft, modifier = rememberEdgeFade())
         }
 
-        // THE PROMPT LIVES OUTSIDE THE TABS — and on every face but one.
+        // THE QUESTION IS A LINE NOW, not a card. (Owner decision 23, 2026-09-15.)
         //
-        // OUTSIDE THE TABS, because a question is the one moment a reader must
-        // act, and making them find the Screen tab to click "1" while reading that
-        // very question in the transcript is a tab switch charged for nothing. One
-        // card below the tab body is that promise with one copy of the code.
+        // What was here: the full answerable card, below the tab body, on every
+        // face but the Screen. It worked, and it cost too much — 290-330dp for a
+        // five-option question (uncapped `CardShell`, five full-width
+        // `AnswerButton`s, the "Type something" button), which at a 768x1024
+        // window left about 250dp of transcript. And it only ever handled SOME
+        // prompt types; the pane handles all of them. So the card's job splits:
+        // the bar says a question is waiting, the Screen tab answers it.
         //
-        // NOT ON THE SCREEN FACE, which is not in tension with the above: there the
-        // tab switch has already happened, and the terminal below IS the dialog —
-        // drawn by Claude Code itself, with every part of a multi-part question
-        // steppable in a way a row of buttons cannot drive. The steering card
-        // ("Answer on the Screen tab") is what made the old behaviour indefensible:
-        // it sends the reader to the pane, and the card then FOLLOWED them there
-        // and covered the very terminal it had just sent them to use. Which faces
-        // draw it is [PromptGate]'s to say, shared with the phone so the two
-        // clients cannot drift.
+        // NOT ON THE SCREEN FACE, unchanged and for the original reason: there the
+        // tab switch has already happened and the terminal below IS the dialog,
+        // drawn by Claude Code itself. A steer drawn over its own destination was
+        // the bug [PromptGate] was written for.
         //
-        // BELOW THE TAB BODY, NOT OVER IT, on the faces that do draw it. Overlaying
-        // stopped the resize but hid what was underneath — one problem traded for
-        // another. It costs real height, and that is now free of consequence: the
-        // two faces that draw it are the transcript and the overview, and neither
-        // measures itself into tmux rows. Only the Screen face did, which was the
-        // other half of why it was the wrong place for a card.
-        //
-        // The card itself is the SHARED one (:ui PromptCards.kt) — one
-        // implementation for both shells; only the answer plumbing stays here. When
-        // the pane scrape cannot read the dialog but the hook knows a question is
-        // waiting, the degraded card renders instead of nothing; its answers verify
-        // against the live pane and steer to the Screen tab when that verification
-        // cannot see a run (reason=undetected).
-        // A pane-only MULTI-question prompt (no fused sidecar) is re-presented as
-        // the read-only steer card — a single digit there over-answers the next
-        // question. A genuine degraded ask and a pending plan approval draw here too.
-        val rawPrompt = screen?.prompt
-        val prompt = rawPrompt?.takeUnless { PromptGate.paneOnlyMultiQuestion(it) }
-        val ask = screen?.ask ?: rawPrompt?.takeIf { PromptGate.paneOnlyMultiQuestion(it) }?.asMultiPartSteer()
-        val planPending = screen?.planPending
-        if (PromptGate.visible(
-                hasQuestion = prompt != null || ask != null || planPending != null,
-                face = tab.face,
-            )
-        ) {
-            if (prompt != null) {
-                Box(Modifier.padding(horizontal = 12.dp, vertical = 6.dp)) {
-                    PromptCard(
-                        prompt = prompt,
-                        answering = answering,
-                        note = answerNote,
-                        onAnswer = controller::answer,
-                        onAnswerMulti = controller::answerMulti,
-                    )
-                }
-            } else if (ask != null) {
-                Box(Modifier.padding(horizontal = 12.dp, vertical = 6.dp)) {
-                    DegradedAskCard(
-                        ask = ask,
-                        answering = answering,
-                        note = answerNote,
-                        onAnswer = controller::answerDegraded,
-                        // A multi-part question can't be tapped from here — jump to
-                        // the Screen tab, where its parts are stepped through. This
-                        // card stops being drawn the moment that lands, which is the
-                        // point: it exists to hand the reader over, not to follow.
-                        onOpenScreen = { controller.openTab(SessionTab.SCREEN) },
-                    )
-                }
-            }
-            // The plan the owner is approving — shipped on every poll, previously
-            // rendered by nobody. When a readable prompt carries the approve/reject
-            // buttons this is context; when the pane was unreadable it is the only
-            // surface and steers to the Screen tab, where the dialog can be answered.
-            planPending?.let {
-                Box(Modifier.padding(horizontal = 12.dp, vertical = 6.dp)) {
-                    PlanApprovalCard(
-                        plan = it,
-                        hasButtons = prompt != null,
-                        onOpenScreen = { controller.openTab(SessionTab.SCREEN) },
-                    )
-                }
+        // WHAT DID NOT CHANGE: the answer path. `controller.answer`,
+        // `answerDegraded` and `answerMulti` still call the daemon's `/answer`
+        // route from the Screen tab's own controls, and the phone's lock-screen
+        // notification buttons are untouched. This is where a question is
+        // PRESENTED, not how it is answered.
+        if (PromptGate.visible(hasQuestion = hasQuestion, face = tab.face)) {
+            Box(Modifier.padding(horizontal = 12.dp, vertical = 6.dp)) {
+                QuestionLinkBar(
+                    // A plan approval carries no question text of its own, and the
+                    // bar's own sentence is the whole fact for it. BLANK, not null:
+                    // null means nothing is pending at all.
+                    question = prompt?.question ?: ask?.question ?: "",
+                    onOpenScreen = { controller.openTab(SessionTab.SCREEN) },
+                    placement = PromptPlacement.of(tab.face, PromptSurface.SESSION),
+                )
             }
         }
 
@@ -728,6 +695,8 @@ private fun OverviewTab(controller: SessionController, store: AppStore) {
 private fun TabStrip(
     current: SessionTab,
     onSelect: (SessionTab) -> Unit,
+    /** A question is waiting and this is where it gets answered. */
+    screenDot: Boolean = false,
     /**
      * Actions for the tab in view. HERE and not in the tab's own content, because
      * this row sits ABOVE the weighted box that the Screen tab measures into tmux
@@ -744,7 +713,7 @@ private fun TabStrip(
         verticalAlignment = Alignment.CenterVertically,
     ) {
         TabItem("Conversation", current == SessionTab.CONVERSATION) { onSelect(SessionTab.CONVERSATION) }
-        TabItem("Screen", current == SessionTab.SCREEN) { onSelect(SessionTab.SCREEN) }
+        TabItem("Screen", current == SessionTab.SCREEN, dot = screenDot) { onSelect(SessionTab.SCREEN) }
         TabItem("Overview", current == SessionTab.OVERVIEW) { onSelect(SessionTab.OVERVIEW) }
         Box(Modifier.weight(1f))
         // Out of the focus order: the Screen tab holds keyboard focus so live keys
@@ -756,12 +725,13 @@ private fun TabStrip(
 
 /** Selection is weight and a surface tint. No accent bar — house rule. */
 @Composable
-private fun TabItem(label: String, active: Boolean, onClick: () -> Unit) {
-    Box(
+private fun TabItem(label: String, active: Boolean, dot: Boolean = false, onClick: () -> Unit) {
+    Row(
         Modifier
             .background(if (active) MaterialTheme.colorScheme.surfaceContainerHigh else Color.Transparent)
             .clickable(onClick = onClick)
             .padding(horizontal = 14.dp, vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
     ) {
         Text(
             label,
@@ -769,6 +739,12 @@ private fun TabItem(label: String, active: Boolean, onClick: () -> Unit) {
             fontWeight = if (active) FontWeight.SemiBold else FontWeight.Normal,
             color = if (active) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurfaceVariant,
         )
+        // The SAME dot the rail and the session rows use — and the same one the
+        // link bar carries, so the two marks read as one fact in two places.
+        if (dot) {
+            Spacer(Modifier.width(6.dp))
+            TabAttentionDot(true)
+        }
     }
 }
 
