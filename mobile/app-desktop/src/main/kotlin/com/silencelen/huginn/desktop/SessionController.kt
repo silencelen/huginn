@@ -15,6 +15,7 @@ import com.silencelen.huginn.ui.LiveInput
 import com.silencelen.huginn.ui.LocalEcho
 import com.silencelen.huginn.ui.PromptGate
 import com.silencelen.huginn.ui.SessionFace
+import com.silencelen.huginn.ui.StreamPicker
 import com.silencelen.huginn.ui.isTranscriptRestart
 import com.silencelen.huginn.ui.mergeTranscriptPage
 import com.silencelen.huginn.ui.prependTranscriptPage
@@ -129,6 +130,35 @@ class SessionController(
     /** The agents this session has spawned, for the picker strip. */
     private val _agents = MutableStateFlow<List<AgentRun>>(emptyList())
     val agents: StateFlow<List<AgentRun>> = _agents.asStateFlow()
+
+    /**
+     * Whether the strip's `…` pill is unfolded.
+     *
+     * Per open session and NOT remembered: a reader who went digging through
+     * yesterday's finished agents does not want the next session they open to
+     * greet them with forty settled chips. This controller is built per session,
+     * so leaving one is what resets it.
+     */
+    private val _streamsExpanded = MutableStateFlow(false)
+    val streamsExpanded: StateFlow<Boolean> = _streamsExpanded.asStateFlow()
+
+    fun toggleStreamsExpanded() {
+        _streamsExpanded.value = !_streamsExpanded.value
+    }
+
+    /**
+     * The picker strip, built HERE rather than in the composable.
+     *
+     * The strip's rule needs three things the view does not own together — the
+     * agent list, which stream is being read, and whether the pill is open — and
+     * getting that pairing wrong is invisible until the moment it matters: read
+     * an agent, watch it finish, and the transcript under you is replaced by
+     * nothing. One caller, under test, is the whole point.
+     *
+     * @param nowSec the daemon's clock off the page, not this machine's.
+     */
+    fun streamItems(nowSec: Long): List<StreamPicker.Item> =
+        StreamPicker.items(_agents.value, nowSec, _selectedStream.value, _streamsExpanded.value)
 
     /**
      * The PICKED agent's transcript, kept entirely apart from [_page].
@@ -584,19 +614,28 @@ class SessionController(
     }
 
     /**
-     * The agents themselves, for the strip. `all = true` because the picker's job
-     * is to reach a stream, and a run that finished twenty minutes ago is still
-     * the thing somebody wants to read.
+     * The agents themselves, for the strip.
+     *
+     * `all = true`, and that is load-bearing now rather than habit: the strip
+     * shows only what is running, but the `…` pill exists to get BACK into a
+     * transcript that settled, and the route's default 45-minute window would
+     * hide exactly the older runs somebody unfolds the pill to reach — while the
+     * count on the pill went on claiming they were there.
      */
     private suspend fun agentListLoop() {
         presence.visible.collectLatest { visible ->
             if (!visible) return@collectLatest
             while (currentCoroutineContext().isActive) {
-                runCatching { client.sessionAgents(name, all = true) }
-                    .onSuccess { _agents.value = it.agents }
+                pollAgentListOnce()
                 delay(AGENTS_POLL_MS)
             }
         }
+    }
+
+    /** One pass of [agentListLoop]; the loop above is delay and presence only. */
+    internal suspend fun pollAgentListOnce() {
+        runCatching { client.sessionAgents(name, all = true) }
+            .onSuccess { _agents.value = it.agents }
     }
 
     /** The picked agent's own history walk, the same shape as [loadEarlier]. */

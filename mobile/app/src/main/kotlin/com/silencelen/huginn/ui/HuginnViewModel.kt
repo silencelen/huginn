@@ -149,6 +149,22 @@ internal fun headroomPatch(s: com.silencelen.huginn.data.HeadroomSettings): kotl
  * Application. Pure Kotlin: the state machine is testable, and `delay` and the
  * HTTP call around it are not the part worth testing.
  */
+/**
+ * The stream strip's agent list.
+ *
+ * A function of its own, and `internal`, for one reason: the ARGUMENT is the
+ * behaviour. `all = true` is load-bearing rather than habit — the strip shows
+ * only what is running, but the `…` pill exists to get BACK into a transcript
+ * that settled, and the route's default 45-minute window would hide exactly the
+ * older runs somebody unfolds the pill to reach while the pill's count went on
+ * claiming they were there. The view model cannot be built without an
+ * Application, so this is the only place that choice can be held to.
+ */
+internal suspend fun fetchStreamAgents(
+    client: HuginnClient,
+    name: String,
+): List<com.silencelen.huginn.data.AgentRun> = client.sessionAgents(name, all = true).agents
+
 internal class AgentStream {
 
     /** The picked agent id, or null for the session's own transcript. */
@@ -210,6 +226,42 @@ internal class AgentStream {
         page = mergeTranscriptPage(page, fresh)
         note = null
     }
+
+    /**
+     * Whether the strip's `…` pill is unfolded.
+     *
+     * Per open session and NOT remembered: a reader who went digging through
+     * yesterday's finished agents does not want the next session they open to
+     * greet them with forty settled chips. [reset] is the session boundary.
+     */
+    var expanded: Boolean = false
+        private set
+
+    fun toggleExpanded() {
+        expanded = !expanded
+    }
+
+    /** Leaving the session: the pick and the fold both go with it. */
+    fun reset() {
+        select(null)
+        expanded = false
+    }
+
+    /**
+     * The picker strip for this session.
+     *
+     * Here, on the thing that OWNS the selection and the fold, because the strip
+     * keeps the agent being read even once it has finished — a rule that needs
+     * the rows, the pick and the fold together, and that is silently wrong if a
+     * render site pairs them itself and forgets an argument. The screen would
+     * then replace a transcript somebody is scrolling with nothing.
+     *
+     * @param nowSec the daemon's clock off the transcript, not the phone's.
+     */
+    fun items(
+        agents: List<com.silencelen.huginn.data.AgentRun>,
+        nowSec: Long,
+    ): List<StreamPicker.Item> = StreamPicker.items(agents, nowSec, selected, expanded)
 
     /** An older page, read backwards from [historyStart]. */
     fun prepend(older: TranscriptPage) {
@@ -2170,6 +2222,10 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
     private val _streamAgents = MutableStateFlow<List<com.silencelen.huginn.data.AgentRun>>(emptyList())
     val streamAgents: StateFlow<List<com.silencelen.huginn.data.AgentRun>> = _streamAgents.asStateFlow()
 
+    /** Whether the strip's `…` pill is unfolded. @see AgentStream.expanded */
+    private val _streamsExpanded = MutableStateFlow(false)
+    val streamsExpanded: StateFlow<Boolean> = _streamsExpanded.asStateFlow()
+
     private var agentStreamJob: Job? = null
     private var agentListJob: Job? = null
 
@@ -2178,6 +2234,7 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
         _agentPage.value = stream.page
         _streamNote.value = stream.note
         _streamsSupported.value = stream.supported
+        _streamsExpanded.value = stream.expanded
     }
 
     /** @param agentId null (or "main") for the session's own transcript. */
@@ -2212,28 +2269,37 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     /**
-     * The agents themselves. `all = true` because the picker's job is to REACH a
-     * stream, and a run that finished twenty minutes ago is still the thing
-     * somebody wants to read — the work sheet's poll asks the other question
-     * ("what is happening") and keeps its own recency filter.
+     * The agents themselves, for the strip.
+     *
+     * See [fetchStreamAgents] for why this is the DEFAULT listing rather than
+     * `all = true`.
      */
     fun startStreamAgentsPolling(name: String) {
         agentListJob?.cancel()
         agentListJob = viewModelScope.launch {
             awaitReady()
             while (isActive) {
-                runCatching { client.sessionAgents(name, all = true) }
-                    .onSuccess { _streamAgents.value = it.agents }
+                runCatching { fetchStreamAgents(client, name) }
+                    .onSuccess { _streamAgents.value = it }
                 delay(AGENTS_POLL_MS)
             }
         }
+    }
+
+    /** The strip, from what has landed, what is picked, and whether the pill is open. */
+    fun streamItems(nowSec: Long): List<StreamPicker.Item> =
+        stream.items(_streamAgents.value, nowSec)
+
+    fun toggleStreamsExpanded() {
+        stream.toggleExpanded()
+        publishStream()
     }
 
     /** Leaving the session: every stream handle goes with it. */
     fun stopStreamPolling() {
         agentStreamJob?.cancel(); agentStreamJob = null
         agentListJob?.cancel(); agentListJob = null
-        stream.select(null)
+        stream.reset()
         _streamAgents.value = emptyList()
         publishStream()
     }

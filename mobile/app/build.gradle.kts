@@ -184,6 +184,11 @@ dependencies {
     // MockEngine now, which is multiplatform, which is what let that suite move.
     testImplementation("junit:junit:4.13.2")
     testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.9.0")
+    // ...and here for the same reason, in the one place it cannot move to :core:
+    // the ARGUMENTS this module's own poll calls the client with are behaviour
+    // (`?all=1` is what the stream picker's `…` pill can reach), and a recorded
+    // request is the only thing that holds them to it.
+    testImplementation(libs.ktor.client.mock)
 }
 
 // Export a built APK into dist/ under the stamped name
