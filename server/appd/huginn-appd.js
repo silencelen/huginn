@@ -5745,10 +5745,11 @@ const consentSeen = new Map();   // session name -> first seen at (ms)
 async function consentWatch(state, settings, sessions, now) {
   const live = new Set();
   for (const s of sessions) {
-    // Only where the dialog can BE: a session asking something, on a host whose
-    // Fable window is actually out of room. Capturing every pane every ten
-    // seconds to look for a dialog that appears twice a year is not a trade
-    // worth making.
+    // Only where the dialog can BE: a session that is asking something. The
+    // Fable window being red is NOT used as a second gate, deliberately — the
+    // reading can be stale or missing exactly when the cap has just been hit,
+    // and a backstop that switches itself off in the one situation it exists
+    // for is worse than one pane capture per attention session per pass.
     if (s.state !== 'attention') continue;
     live.add(s.name);
     let screen = null;
