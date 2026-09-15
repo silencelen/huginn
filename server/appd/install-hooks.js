@@ -75,9 +75,23 @@ function ruleFor(matcher, script) {
   };
 }
 
+/**
+ * Is this hook entry OURS?
+ *
+ * By BASENAME, not by full path. `$DEST` moving (a rename, a relocation of
+ * /opt/huginn-appd) used to append a SECOND rule and leave the old one pointing
+ * at a script that no longer exists — and a hook whose command cannot be
+ * executed is read by the CLI as a BLOCK on every Agent/Workflow call. The
+ * basename is the identity; the path is a detail this installer owns.
+ */
+function isOurCommand(h, script) {
+  return !!h && typeof h.command === 'string'
+    && path.basename(h.command) === path.basename(script);
+}
+
 function hasOurCommand(rule, script) {
   return Array.isArray(rule && rule.hooks)
-    && rule.hooks.some((h) => h && h.command === script);
+    && rule.hooks.some((h) => isOurCommand(h, script));
 }
 
 /**
@@ -86,7 +100,7 @@ function hasOurCommand(rule, script) {
  * on the parts we own — every other key, and every other rule, keeps its
  * identity (and therefore its bytes on the way back out through stringify).
  */
-function mergeHooks(settings, script, { uninstall = false } = {}) {
+function mergeHooks(settings, script, { uninstall = false, exists = fs.existsSync } = {}) {
   const changes = [];
   if (uninstall) {
     const hooks = settings.hooks;
@@ -100,7 +114,7 @@ function mergeHooks(settings, script, { uninstall = false } = {}) {
         if (!hasOurCommand(rule, script)) { kept.push(rule); continue; }
         // Only OUR command leaves; a rule that also carried somebody else's
         // hook keeps that hook and stays.
-        const others = rule.hooks.filter((h) => !(h && h.command === script));
+        const others = rule.hooks.filter((h) => !isOurCommand(h, script));
         removed += rule.hooks.length - others.length;
         if (others.length) { rule.hooks = others; kept.push(rule); }
       }
@@ -113,20 +127,42 @@ function mergeHooks(settings, script, { uninstall = false } = {}) {
     return { settings, changes };
   }
 
-  if (!settings.hooks || typeof settings.hooks !== 'object' || Array.isArray(settings.hooks)) {
-    settings.hooks = {};
-  }
+  // A present-but-wrong-shaped `hooks` is REFUSED by main() before we are
+  // called (it is somebody's file, not ours to replace with `{}`), so the only
+  // thing left to do here is create it when it is genuinely absent.
+  if (settings.hooks === undefined) settings.hooks = {};
   for (const [event, matcher] of ENTRIES) {
     const list = Array.isArray(settings.hooks[event]) ? settings.hooks[event] : [];
-    if (list.some((rule) => hasOurCommand(rule, script))) {
-      changes.push({ event, action: 'kept' });
-      settings.hooks[event] = list;
+    // Sweep OUR OWN entries first: prune one whose script is gone, repoint one
+    // that moved, and drop a second copy. Everyone else's hooks are untouched,
+    // and a rule that also carried somebody else's hook keeps that hook.
+    let pruned = 0;
+    let repointed = 0;
+    let seen = 0;
+    const kept = [];
+    for (const rule of list) {
+      if (!Array.isArray(rule && rule.hooks)) { kept.push(rule); continue; }
+      const hooks = [];
+      for (const h of rule.hooks) {
+        if (!isOurCommand(h, script)) { hooks.push(h); continue; }
+        if (h.command !== script && !exists(h.command)) { pruned += 1; continue; }
+        if (seen > 0) { pruned += 1; continue; }
+        if (h.command !== script) { h.command = script; repointed += 1; }
+        seen += 1;
+        hooks.push(h);
+      }
+      if (hooks.length !== rule.hooks.length) rule.hooks = hooks;
+      if (rule.hooks.length) kept.push(rule);
+    }
+    if (seen) {
+      changes.push({ event, action: pruned || repointed ? 'repaired' : 'kept' });
+      settings.hooks[event] = kept;
       continue;
     }
     // Appended, never prepended: the title hook on PreToolUse `.*` runs first
     // today and it is async, so it costs nothing to leave it where the operator
     // put it.
-    settings.hooks[event] = [...list, ruleFor(matcher, script)];
+    settings.hooks[event] = [...kept, ruleFor(matcher, script)];
     changes.push({ event, action: 'added' });
   }
   return { settings, changes };
@@ -180,6 +216,16 @@ function main(argv) {
       process.stderr.write(`[install-hooks] REFUSING: ${opts.settings} is not a JSON object\n`);
       return 2;
     }
+    // Same doctrine one level down. A `hooks` that is an array, a string or null
+    // — an older schema, a hand-edit, a generator — used to be REPLACED with an
+    // empty object and written away, which is the one thing the refusal above
+    // exists to prevent. Nothing is written; the message names the key.
+    if ('hooks' in settings
+      && (settings.hooks === null || typeof settings.hooks !== 'object' || Array.isArray(settings.hooks))) {
+      process.stderr.write(`[install-hooks] REFUSING: ${opts.settings} has a "hooks" value that is not an object\n`);
+      process.stderr.write('[install-hooks] nothing was written. Fix the file and re-run.\n');
+      return 2;
+    }
   }
 
   const { changes } = mergeHooks(settings, opts.script, { uninstall: opts.uninstall });
@@ -200,11 +246,26 @@ function main(argv) {
     process.stdout.write(`[install-hooks] ${opts.settings} already current: ${summary}\n`);
     return 0;
   }
-  const tmp = `${opts.settings}.huginn.tmp`;
+  // ⚠ WRITE THROUGH A SYMLINK, AND KEEP THE MODE.
+  //
+  // readFileSync FOLLOWS a link; renameSync REPLACES it. `~/.claude/settings.json`
+  // linked into a dotfiles repo was therefore detached by the first deploy —
+  // after which repo edits stopped reaching the CLI and our gate entry never
+  // landed in the tracked file. Resolving the target first keeps the link, and
+  // carrying the existing mode forward keeps whatever the owner chose (compare
+  // accounts.writeOauthAccount, which does the same twenty lines away).
+  let dest = opts.settings;
+  try { dest = fs.realpathSync(opts.settings); } catch { /* ENOENT: a new file */ }
+  let mode = 0o600;
+  try { mode = (fs.statSync(dest).mode & 0o777) || 0o600; } catch { /* a new file */ }
+  const tmp = `${dest}.huginn.tmp`;
   try {
-    fs.mkdirSync(path.dirname(opts.settings), { recursive: true });
-    fs.writeFileSync(tmp, body, { mode: 0o600 });
-    fs.renameSync(tmp, opts.settings);
+    fs.mkdirSync(path.dirname(dest), { recursive: true });
+    fs.writeFileSync(tmp, body, { mode });
+    // writeFileSync only applies `mode` when it CREATES the file; a tmp left by
+    // an interrupted run would keep its old bits.
+    fs.chmodSync(tmp, mode);
+    fs.renameSync(tmp, dest);
   } catch (e) {
     try { fs.unlinkSync(tmp); } catch { /* the rename is what matters */ }
     process.stderr.write(`[install-hooks] cannot write ${opts.settings}: ${e.message}\n`);
@@ -217,5 +278,5 @@ function main(argv) {
 if (require.main === module) process.exit(main(process.argv.slice(2)));
 
 module.exports = {
-  DEFAULT_SCRIPT, TIMEOUT_S, ENTRIES, mergeHooks, parseArgs, main,
+  DEFAULT_SCRIPT, TIMEOUT_S, ENTRIES, mergeHooks, parseArgs, main, isOurCommand,
 };
