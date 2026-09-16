@@ -1698,10 +1698,10 @@ fun HuginnApp(
                             // so they keep a readable measure. Where that measure
                             // HANGS FROM is the next line's business — Status is
                             // left-snapped, these are still centred.
-                            is Dest.Rounds -> Box(Modifier.fillMaxSize(), contentAlignment = androidx.compose.ui.Alignment.TopCenter) {
+                            is Dest.Rounds -> Box(Modifier.fillMaxSize(), contentAlignment = androidx.compose.ui.Alignment.TopStart) {
                                 Box(Modifier.widthIn(max = 840.dp)) { roundsPane() }
                             }
-                            is Dest.RoundEdit -> Box(Modifier.fillMaxSize(), contentAlignment = androidx.compose.ui.Alignment.TopCenter) {
+                            is Dest.RoundEdit -> Box(Modifier.fillMaxSize(), contentAlignment = androidx.compose.ui.Alignment.TopStart) {
                                 Box(Modifier.widthIn(max = 840.dp)) { roundEditPane(d.id) }
                             }
                             // ⚠ CAPPED AND LEFT-SNAPPED, not capped and centred.
@@ -1728,7 +1728,7 @@ fun HuginnApp(
                             // centring a column inside it.
                             is Dest.Settings, is Dest.SettingsSection ->
                                 settingsPane((dest as? Dest.SettingsSection)?.id)
-                            is Dest.Devices -> Box(Modifier.fillMaxSize(), contentAlignment = androidx.compose.ui.Alignment.TopCenter) {
+                            is Dest.Devices -> Box(Modifier.fillMaxSize(), contentAlignment = androidx.compose.ui.Alignment.TopStart) {
                                 Box(Modifier.widthIn(max = 840.dp)) { devicesPane() }
                             }
                             // List and editor side by side, the same shape the
