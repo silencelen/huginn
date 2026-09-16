@@ -41,6 +41,11 @@ never grows a concept of users.
 - **The device-declared model list is display, never routing authority.**
 - **Loopback only, authenticated.** No inference endpoint on any non-loopback interface;
   the API key is minted at activation; a keyless request must 401 or the install fails.
+  An **adopted** engine clears the same gate rather than being trusted for being local.
+- **Say whether it survives logout, everywhere.** A serving machine is an offer to every
+  client on the daemon, so "will this still be here when nobody is logged in" is part of
+  the offer. Status, `doctor`, the desktop section and the device row all answer it from
+  one computation, `null` included; `doctor` FAILS on a user unit with no linger.
 - **Pinned runtimes, gated bumps.** Runtime and model versions live in a generated
   manifest inside the manager; a bump is by construction a reviewed `cli-v*` release.
 - **No context egress.** The shim is not the claude CLI and loads nothing; generate-mode
@@ -127,9 +132,14 @@ The fetched **manager** (`client/huginn-local`, Node) owns:
 - **Enrolment**: `huginn-device on` with its own `HUGINN_DEVICE_DIR`, `--name
   <host>-llm`, `--scope generate`, `conf.claude` = the shim. The runner **aborts unless
   the daemon echoes `scope:"generate"`** (an old daemon would silently floor it).
-- **Adapter mode**: wrap an existing Ollama/LM Studio endpoint (loopback only, model
-  list read from the body) instead of installing the stack. Detect, never auto-activate.
-  Never bundle LM Studio (ToS) or GPU drivers (EULA) — detect and instruct.
+- **Adapter mode**: wrap an existing **llama-swap**, Ollama or LM Studio endpoint
+  (loopback only, model list read from the body) instead of installing the stack. Detect,
+  never auto-activate. Never bundle LM Studio (ToS) or GPU drivers (EULA) — detect and
+  instruct. `--adapter llama-swap` is this tier's own stack, ADOPTED rather than managed
+  (the hand-edited-yaml shape a real box in this fleet already runs): it clears the same
+  keyless-completions gate a managed install does, it is refused on top of a managed
+  install (they would share `local.json` and `api-key`), and `off` takes only the runner
+  down — an adopted engine is never stopped, uninstalled, or stripped of its key.
 - **`off`**: stop runner first, then llm; deregister with the device-off honesty;
   then **the credentials go with the row** — `local.json`, `api-key` and
   `device/appd-token` are removed, because a tier that is off has no business keeping a
@@ -201,6 +211,42 @@ unpiped. `test-client.sh` gains the local-tier section: version agreement, manif
 `--check`, unit env pinning, unknown-flag refusal, disk-gate refusal, off-honesty,
 contract replay through a `handleClaudeEvent`-shaped verifier, and two new
 deployed-vs-tree lines.
+
+## Persistence (decisions 33-35, 2026-09-15)
+
+The owner's ask — *"the ability to have it run persistently... so other huginn clients
+connected to the same huginn server can still utilize it as long as its running"* — was
+already true of the routing (any client holding the daemon bearer can pick a
+`local-<llmSlug>-<modelSlug>` row) and already true on Windows (WinSW installs both
+services as LocalSystem, in session 0). It was **false on Linux and said nowhere**.
+
+- **Linux = SYSTEM units behind ONE elevation prompt**, the Windows shape. `huginn local
+  on --system` re-runs the whole verb under `pkexec` (`sudo` second), carrying `HOME`,
+  `HUGINN_LOCAL_DIR` and `HUGINN_LOCAL_USER` explicitly because both elevators wipe the
+  environment, and hands `localDir` back to the owner afterwards (a root-owned 0600
+  `api-key` is a model server that 401s its own door). The desktop passes `--system` and
+  lets the manager own the elevation, so there is still one implementation behind both
+  doors.
+- **Declined or unavailable falls back to linger**, out loud. `loginctl enable-linger` is
+  attempted for user units on every Linux install and the result is printed either way;
+  `org.freedesktop.login1.set-self-linger` usually needs no password in an active session.
+- **`huginn local persist`** migrates an existing user install: the user half runs
+  unelevated first (root's `--user` bus is root's own, and would exit 0 having stopped
+  nothing), then the `/etc` half takes the one prompt. Declined, it puts the user units
+  back and enables linger instead.
+- **Everything reports it truthfully.** `statusInfo()` gains `systemUnits`, `linger`,
+  `persistent` (all tri-state — `null` means "this machine could not be asked") and
+  `adopted`; `status` prints a persistence line; `doctor` FAILS on user unit + no linger;
+  the consent card's "Installs two always-on services" branches per OS and per whether an
+  elevator exists (`plan --json` now carries `elevation`).
+- **A `persistent` facet on the generate device row** (nullable on the wire — absent from
+  an older CLI and absent all the way to the client) renders in the shared `describeDevice`
+  as "always on" / "only while someone is logged in", so the phone and the desktop get it
+  from one label. It rides the beat as well as the enrolment, because `persist` changes a
+  machine whose healthy runner never re-enrols.
+
+**Not in this cut** (decision 36): Rounds routing to a persistent box, Linux GPU serving
+(still refused — no pinned CUDA Linux asset), per-client identity, escalation auto-fallback.
 
 ## Release map
 
