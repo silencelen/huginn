@@ -2,6 +2,8 @@ package com.silencelen.huginn.desktop
 
 import com.silencelen.huginn.data.AppdRoutes
 import com.silencelen.huginn.data.HuginnSettings
+import com.silencelen.huginn.data.RouteBook
+import com.silencelen.huginn.data.RouteGuard
 import com.silencelen.huginn.data.SettingsCodec
 import com.silencelen.huginn.desktop.device.Unenrol
 import kotlinx.coroutines.flow.Flow
@@ -40,7 +42,21 @@ class DesktopSettings(private val file: File = defaultFile()) : HuginnSettings {
 
     @Serializable
     private data class Stored(
-        val baseUrl: String = HuginnSettings.DEFAULT_BASE_URL,
+        /**
+         * ⚠ DERIVED FROM THE ACTIVE ROUTE, and it stays — [AppStore] reads it
+         * synchronously to build the client before anything has collected a
+         * flow, and an older build rolled back onto this file would find the
+         * address exactly where it left it.
+         *
+         * ⚠ AND THE DEFAULT IS EMPTY, which it was not: it was the tailnet
+         * address, and that made a BRAND NEW install indistinguishable from a
+         * pre-routes one — both read the same string, so a fresh desktop would
+         * migrate itself two pins it had never been told about and start dialling
+         * one of them. A file that has been saved once always carries this key
+         * (`encodeDefaults = true`), so an upgrade still migrates; an absent file
+         * now honestly says nothing is pinned.
+         */
+        val baseUrl: String = "",
         /**
          * PLAINTEXT, and this is the one thing the Electron client does better:
          * it puts the token through `safeStorage` (libsecret on Linux) and falls
@@ -50,7 +66,20 @@ class DesktopSettings(private val file: File = defaultFile()) : HuginnSettings {
          * pretending to encrypt in the meantime would be worse than saying so.
          */
         val token: String = "",
+        /** Pre-routes. Read once, to migrate; never written again. */
         val routePinned: Boolean = false,
+        /**
+         * The pinned routes, [SettingsCodec]-encoded — the same JSON array the
+         * phone writes into `pinned_routes`.
+         *
+         * ⚠ EMPTY STRING MEANS "NEVER WRITTEN", which is what triggers the
+         * migration from [baseUrl] + [routePinned]. `"[]"` is a different answer
+         * — a book somebody emptied — and confusing the two would re-seed the
+         * built-ins on every launch after the owner deleted them.
+         */
+        val pinnedRoutes: String = "",
+        val activeRouteId: String = "",
+        val autoSwitch: Boolean = true,
         /** The first-launch local-AI offer card: shown once, dismissed forever. */
         val localOfferSeen: Boolean = false,
         val clientId: String = "",
@@ -182,9 +211,24 @@ class DesktopSettings(private val file: File = defaultFile()) : HuginnSettings {
     private val lock = Any()
     private var stored: Stored = load()
 
-    private val _baseUrl = MutableStateFlow(stored.baseUrl)
+    /**
+     * Migration happens HERE, once, at construction — the desktop store does
+     * have an open-and-upgrade moment where the phone's DataStore does not, so
+     * the book is settled before the first reader asks for an address.
+     */
+    private val _routeBook = MutableStateFlow(
+        SettingsCodec.decodeRoutes(stored.pinnedRoutes)
+            ?.let {
+                RouteBook(
+                    routes = it,
+                    activeId = stored.activeRouteId.takeIf { id -> id.isNotBlank() },
+                    autoSwitch = stored.autoSwitch,
+                ).normalized()
+            }
+            ?: AppdRoutes.migrate(stored.baseUrl, stored.routePinned)
+    )
+    private val _baseUrl = MutableStateFlow(_routeBook.value.activeUrl)
     private val _token = MutableStateFlow(stored.token)
-    private val _routePinned = MutableStateFlow(stored.routePinned)
     private val _notifyEnabled = MutableStateFlow(stored.notifyEnabled)
     private val _watchEnabled = MutableStateFlow(stored.watchEnabled)
     private val _watchSeeded = MutableStateFlow(stored.watchSeeded)
@@ -218,7 +262,7 @@ class DesktopSettings(private val file: File = defaultFile()) : HuginnSettings {
 
     override val baseUrl: Flow<String> = _baseUrl.asStateFlow()
     override val token: Flow<String> = _token.asStateFlow()
-    override val routePinned: Flow<Boolean> = _routePinned.asStateFlow()
+    override val routeBook: Flow<RouteBook> = _routeBook.asStateFlow()
     /**
      * ⚠ NOT A DESKTOP SETTING, and the flow is a constant on purpose.
      *
@@ -243,11 +287,26 @@ class DesktopSettings(private val file: File = defaultFile()) : HuginnSettings {
     override val lastWatchError: Flow<String> = _lastWatchError.asStateFlow()
     override val lastWatchErrorAt: Flow<Long> = _lastWatchErrorAt.asStateFlow()
 
-    override suspend fun setBaseUrl(value: String) {
-        val next = AppdRoutes.normalize(value)
-        require(isAllowedBaseUrl(next)) { REFUSED }
-        _baseUrl.value = next
-        mutate { it.copy(baseUrl = next) }
+    /**
+     * Writes the book AND the address it derives, in one mutation — so nothing
+     * can read a `baseUrl` belonging to a route the list no longer holds.
+     *
+     * The guard already ran: [RouteBook] refuses an address [RouteGuard] will
+     * not have, so by the time a book arrives here every URL in it is one this
+     * client is allowed to send a bearer to.
+     */
+    override suspend fun setRouteBook(value: RouteBook) {
+        val book = value.normalized()
+        _routeBook.value = book
+        _baseUrl.value = book.activeUrl
+        mutate {
+            it.copy(
+                pinnedRoutes = SettingsCodec.encodeRoutes(book.routes),
+                activeRouteId = book.activeId.orEmpty(),
+                autoSwitch = book.autoSwitch,
+                baseUrl = book.activeUrl,
+            )
+        }
     }
 
     override suspend fun setToken(value: String) {
@@ -263,14 +322,6 @@ class DesktopSettings(private val file: File = defaultFile()) : HuginnSettings {
     suspend fun setLocalOfferSeen() {
         _localOfferSeen.value = true
         mutate { it.copy(localOfferSeen = true) }
-    }
-
-    override suspend fun selectRoute(url: String, pinned: Boolean) {
-        val next = AppdRoutes.normalize(url)
-        require(isAllowedBaseUrl(next)) { REFUSED }
-        _baseUrl.value = next
-        _routePinned.value = pinned
-        mutate { it.copy(baseUrl = next, routePinned = pinned) }
     }
 
     override suspend fun clientId(): String = synchronized(lock) { stored.clientId }
@@ -587,7 +638,7 @@ class DesktopSettings(private val file: File = defaultFile()) : HuginnSettings {
     fun tokenNow(): String = _token.value
     fun clientIdNow(): String = synchronized(lock) { stored.clientId }
     fun notifyEnabledNow(): Boolean = _notifyEnabled.value
-    fun routePinnedNow(): Boolean = _routePinned.value
+    fun routeBookNow(): RouteBook = _routeBook.value
     val tokenState: StateFlow<String> get() = _token.asStateFlow()
 
     /** Where the settings live, for the Settings screen to show. */
@@ -691,30 +742,24 @@ class DesktopSettings(private val file: File = defaultFile()) : HuginnSettings {
     companion object {
         const val DEV_TOKEN_PATH: String = "/etc/huginn-appd/token"
 
-        const val REFUSED: String =
-            "refusing that server address — huginn only talks to its own daemon"
-
         /**
-         * Where this client is allowed to point, and NOT cosmetic validation: the
-         * bearer token follows the base URL on every single request, so an
-         * unvalidated setting is a one-field path to handing the daemon token —
-         * root-equivalent on this host — to any address someone can talk a user
-         * into typing. Kept in step with the Electron client's own list.
+         * ⚠ THE RULE MOVED TO `:core`, AND THAT IS THE POINT.
+         *
+         * This used to be four literal hosts — the tailnet address, the VLAN-2
+         * address, `localhost` and `127.0.0.1` — which cannot survive routes the
+         * owner adds themselves. What could not be allowed to move with it is
+         * the REASON: one bearer token follows the base URL on every request, so
+         * an unvalidated address field hands a root-equivalent daemon token to
+         * whoever owns the address. [RouteGuard] keeps that reason and replaces
+         * the list with a shape rule, and — the real prize — the PHONE is now
+         * behind it too, having had no guard at all.
+         *
+         * Kept as aliases because the refusal string is shown verbatim in the UI
+         * and this store's own tests name it.
          */
-        val ALLOWED_HOSTS: Set<String> = setOf(
-            "100.97.198.90", // tailnet
-            "192.168.2.117", // yggdrasil / VLAN 2
-            "localhost",
-            "127.0.0.1",
-        )
+        const val REFUSED: String = RouteGuard.REFUSED
 
-        fun isAllowedBaseUrl(raw: String): Boolean {
-            val u = runCatching { java.net.URI(raw.trim()) }.getOrNull() ?: return false
-            if (u.scheme != "http" && u.scheme != "https") return false
-            val path = u.path ?: ""
-            if (path.isNotEmpty() && path != "/") return false
-            return u.host in ALLOWED_HOSTS
-        }
+        fun isAllowedBaseUrl(raw: String): Boolean = RouteGuard.isAllowed(raw)
 
         /**
          * jpackage stamps this on every launcher it generates, and nothing else
