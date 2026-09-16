@@ -1348,8 +1348,9 @@ private fun Composer(
         // the cap-before-fill that used to live on the line below, which is now one
         // decision for both boxes instead of two that had already disagreed.
         ComposerFrame(
-            attach = {
+            attach = { layout ->
                 AttachButton(
+                    layout = layout,
                     pads = pads,
                     padRefId = padRefId,
                     onPadRef = onPadRef,
