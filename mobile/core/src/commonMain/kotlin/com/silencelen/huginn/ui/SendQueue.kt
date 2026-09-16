@@ -36,6 +36,10 @@ object SendQueue {
         // somebody has to answer it. Saying "when Claude finishes its turn" there
         // is an instruction to do nothing about the one thing blocking the send.
         if (s.blockedBy == "modal") return "Queued · a dialog is open on the screen $waiting"
+        // `starting` (appd 3.0.7): the session was just created and Claude has not
+        // drawn its composer yet — about two seconds, and it clears itself. The turn
+        // sentence would describe a turn that has not begun.
+        if (s.blockedBy == "starting") return "Queued · waiting for Claude to start $waiting"
         if (s.delivering) return "Sending $waiting"
         return "Queued · will send when Claude finishes its turn $waiting"
     }
