@@ -209,6 +209,35 @@ object Composer {
         (paneHeightDp * FIELD_MAX_FRACTION).coerceIn(FIELD_MIN_DP, FIELD_MAX_DP)
 
     /**
+     * The compact control's own square — Attach, Interrupt and Send, under the
+     * breakpoint. 32 rather than Material's 40: this is a mouse target on a narrow
+     * window, and the whole point of the shape is that the line under the field
+     * costs as little height as it can while staying hittable.
+     *
+     * ⚠ ONE CONSTANT FOR EVERY CONTROL ON THAT LINE, AND THAT IS THE WHOLE POINT.
+     * THE OWNER REPORTED THE ALTERNATIVE: *"the send button in desktop, when shrunk
+     * to its icon due to scaling, is not aligned properly with the attachment icon
+     * to its left, it should be centered vertically on the same horizontal plane as
+     * the attachment button."*
+     *
+     * It was not. Attach stayed a `TextButton` in BOTH shapes while Send and
+     * Interrupt became [CONTROL_DP] icon buttons, and a clickable M3 `Surface`
+     * carries `minimumInteractiveComponentSize()` — so the labelled button reported
+     * a 48dp box with its glyph centred at 24dp from the top of the line, while the
+     * 32dp icon buttons sat at the TOP of that line with their glyphs at 16dp.
+     * Measured on a 560px window: 8px apart, which is what the owner was looking at.
+     *
+     * Aligning the ROW would have hidden it rather than fixed it: two controls of
+     * different sizes on one line still read as two different controls. Every
+     * compact control is built from this number instead, so they cannot disagree —
+     * `ComposerControlSizeTest` is the gate that says they still all use it.
+     */
+    const val CONTROL_DP: Float = 32f
+
+    /** The glyph inside it. Sized to the control, not to the rail's 20dp icons. */
+    const val CONTROL_GLYPH_DP: Float = 18f
+
+    /**
      * The placeholder, which is also a keyboard lesson — and at a narrow width is
      * the thing that wraps to five lines.
      *
