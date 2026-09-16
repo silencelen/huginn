@@ -58,8 +58,11 @@ import com.silencelen.huginn.desktop.ComposerLayout
  * while the session's stopped at 900dp, so at 1440 one of them spanned the pane
  * and the other did not. A shape they share cannot drift.
  *
- * @param attach the clip button. Already an icon in both callers, so it is the
- *   one control that does not change between the two layouts.
+ * @param attach the clip button, handed the layout like [actions] are. It draws a
+ *   clip in both shapes, but NOT the same control: labelled-button geometry beside
+ *   two 32dp icon buttons is what put the owner's send icon 8dp above his attach
+ *   icon (see [Composer.CONTROL_DP]), so under the breakpoint it is an icon button
+ *   built from the same constant as the rest of the line.
  * @param actions Stop/Interrupt and Send, in that order. Called in a `RowScope`
  *   so a caller can still weight or space something unusual.
  * @param field the text field. Handed the modifier it must use — the width
@@ -69,7 +72,7 @@ import com.silencelen.huginn.desktop.ComposerLayout
  */
 @Composable
 fun ComposerFrame(
-    attach: @Composable () -> Unit,
+    attach: @Composable (ComposerLayout) -> Unit,
     actions: @Composable RowScope.(ComposerLayout) -> Unit,
     field: @Composable (Modifier, ComposerLayout) -> Unit,
 ) {
@@ -89,7 +92,7 @@ fun ComposerFrame(
                 verticalAlignment = Alignment.Bottom,
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
             ) {
-                attach()
+                attach(layout)
                 // CAP BEFORE FILL, and before the weight for the same reason: the
                 // weight hands down a fixed width, and a cap inside fixed
                 // constraints can only coerce into them. The chat composer had no
@@ -111,7 +114,7 @@ fun ComposerFrame(
                 // wrap rather than push Send off the edge — which is the failure
                 // this whole file exists to undo.
                 ComposerControlRow {
-                    attach()
+                    attach(layout)
                     actions(layout)
                 }
             }
@@ -140,7 +143,17 @@ fun ComposerChips(content: @Composable RowScope.() -> Unit) {
     }
 }
 
-/** The controls' own line, under a compact field. Trailing, like the buttons were. */
+/**
+ * The controls' own line, under a compact field. Trailing, like the buttons were.
+ *
+ * ⚠ A FlowRow ALIGNS ITS ITEMS TO THE TOP OF A LINE, so one control of a different
+ * height lands on a different centre from the rest — which is exactly the bug the
+ * owner reported about Send and the clip. Nothing here fixes that; what fixes it is
+ * that every control on this line is [Composer.CONTROL_DP] square, so the top and
+ * the centre are the same answer. Anything added here must be that size too
+ * (`ComposerControlSizeTest`), or this row needs a cross-axis alignment — which the
+ * foundation pinned in this build does not offer per item.
+ */
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun ComposerControlRow(content: @Composable RowScope.() -> Unit) {
@@ -217,11 +230,14 @@ fun RowScope.ComposerAction(
 }
 
 /**
- * The compact control's own square. 32dp rather than Material's 40: this is a
- * mouse target on a narrow window, and the whole point of the shape is that the
- * line under the field costs as little height as it can while staying hittable.
+ * The compact control's own square, and the glyph inside it — [Composer.CONTROL_DP]
+ * and [Composer.CONTROL_GLYPH_DP], NOT numbers of this file's own.
+ *
+ * They were private here, which is exactly how the attach button ended up a
+ * different size from the two controls beside it: a constant only one of three
+ * controls can see is not a shared constant. They live with the rest of the
+ * composer's geometry now, and `AttachButton` reads the same two.
  */
-private val COMPACT_CONTROL = 32.dp
+private val COMPACT_CONTROL = Composer.CONTROL_DP.dp
 
-/** The glyph inside it. Sized to the control, not to the rail's 20dp icons. */
-private val COMPACT_GLYPH = 18.dp
+private val COMPACT_GLYPH = Composer.CONTROL_GLYPH_DP.dp
