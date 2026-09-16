@@ -615,6 +615,110 @@ test('sequence numbers stay monotonic after a move', () => {
   assert.strictEqual(new Set(seqs).size, seqs.length, 'duplicate seq would break list keys');
 });
 
+// ------------------------------------------------ a DRAINED queue
+//
+// Owner report, 2026-09-15: "the response is put on top of the initial message
+// ... has happened when using the local 'escalate to claude' chat feature".
+//
+// `remove` and `dequeue` are NOT two names for one thing, and reading the second
+// as "the queue emptied, nothing to say about it" is what put the answer above
+// the question. Claude Code writes the FIRST prompt of every run as an enqueue
+// immediately followed by a dequeue, and THEN as an ordinary `user` record a
+// second or two later. With the dequeue a no-op the enqueue's bubble kept its
+// `queued` badge forever: the badge floated it to the bottom, and the real
+// `user` record was swallowed by the duplicate guard. Every chat and every
+// session opened with its own opening prompt printed LAST, and it was loudest in
+// the escalate-to-Claude handoff, where the whole conversation is one long
+// message and one answer — so the entire screen read upside down.
+//
+// Record shapes read off the real transcript of the owner's escalated chat,
+// session 421fe82c-bec6-45fd-9eb3-c3616eba17c8 on 2026-09-16T05:15Z. Across all
+// 907 transcripts on this host, 1,244 of 1,281 drained messages have a matching
+// `user` record after them and every `remove`d one has none — which is why a
+// drained bubble must swallow the record that follows it and a removed one
+// must not.
+
+test('the first prompt of a run is not printed under the answer to it', () => {
+  const p = writeFixture([
+    { type: 'queue-operation', operation: 'enqueue', content: 'Continuing from a local chat.', timestamp: T },
+    { type: 'queue-operation', operation: 'dequeue', timestamp: T },
+    { type: 'user', message: { content: 'Continuing from a local chat.' }, timestamp: T },
+    { type: 'assistant', timestamp: T, message: { content: [{ type: 'text', text: 'Picking it up from here.' }] } },
+  ]);
+  const evs = readTranscript(p).events;
+  const texts = evs.map((e) => e.text);
+  assert.deepStrictEqual(texts, ['Continuing from a local chat.', 'Picking it up from here.'],
+    `the question belongs above the answer: ${JSON.stringify(texts)}`);
+  assert.strictEqual(evs[0].queued, undefined,
+    'a delivered message must not keep the badge that floats it to the bottom');
+});
+
+test('a queue drained at the end of a turn delivers where it drained', () => {
+  // The mid-conversation shape, and the reason a drain MOVES rather than merely
+  // un-badging in place: the enqueue happened mid-turn, hundreds of records
+  // above, so left where it landed the message sits over the answer it was
+  // typed during and over the answer it actually prompted.
+  const p = writeFixture([
+    { type: 'user', message: { content: 'first question' }, timestamp: T },
+    { type: 'queue-operation', operation: 'enqueue', content: 'follow up', timestamp: T },
+    { type: 'assistant', timestamp: T, message: { content: [{ type: 'text', text: 'answer to first' }] } },
+    { type: 'queue-operation', operation: 'dequeue', timestamp: T },
+    { type: 'user', message: { content: 'follow up' }, timestamp: T },
+    { type: 'assistant', timestamp: T, message: { content: [{ type: 'text', text: 'answer to follow up' }] } },
+  ]);
+  const texts = readTranscript(p).events.map((e) => e.text);
+  assert.deepStrictEqual(texts, [
+    'first question',
+    'answer to first',
+    'follow up',
+    'answer to follow up',
+  ], `wrong order: ${JSON.stringify(texts)}`);
+});
+
+test('two messages drained together keep send order and neither is doubled', () => {
+  const p = writeFixture([
+    { type: 'queue-operation', operation: 'enqueue', content: 'one', timestamp: T },
+    { type: 'queue-operation', operation: 'enqueue', content: 'two', timestamp: T },
+    { type: 'queue-operation', operation: 'dequeue', timestamp: T },
+    { type: 'user', message: { content: 'one' }, timestamp: T },
+    { type: 'user', message: { content: 'two' }, timestamp: T },
+  ]);
+  const evs = readTranscript(p).events;
+  const texts = evs.map((e) => e.text);
+  assert.deepStrictEqual(texts, ['one', 'two'], `wrong: ${JSON.stringify(texts)}`);
+  assert.ok(evs.every((e) => !e.queued),
+    'both were delivered; a badge left on either would float it out of order the moment anything else is said');
+});
+
+test('the same words sent again after a drain are a second message', () => {
+  // The duplicate guard is ONE-SHOT per drained copy. Keyed by content and left
+  // standing, it swallowed every later message with the same words — "ok",
+  // "continue", "yes" — which is a message that vanishes for no visible reason.
+  const p = writeFixture([
+    { type: 'queue-operation', operation: 'enqueue', content: 'continue', timestamp: T },
+    { type: 'queue-operation', operation: 'dequeue', timestamp: T },
+    { type: 'user', message: { content: 'continue' }, timestamp: T },
+    { type: 'assistant', timestamp: T, message: { content: [{ type: 'text', text: 'done' }] } },
+    { type: 'user', message: { content: 'continue' }, timestamp: T },
+  ]);
+  const texts = readTranscript(p).events.map((e) => e.text);
+  assert.deepStrictEqual(texts, ['continue', 'done', 'continue'], `wrong: ${JSON.stringify(texts)}`);
+});
+
+test('a dequeue after a remove does not resurrect the delivered message', () => {
+  // A drain that runs over an already-empty queue must add nothing: `remove`
+  // took the message out, and a second delivery of it would be a message the
+  // reader never sent twice.
+  const p = writeFixture([
+    { type: 'queue-operation', operation: 'enqueue', content: 'do the thing', timestamp: T },
+    { type: 'queue-operation', operation: 'remove', content: 'do the thing', timestamp: T },
+    { type: 'queue-operation', operation: 'dequeue', timestamp: T },
+  ]);
+  const evs = readTranscript(p).events;
+  assert.deepStrictEqual(evs.map((e) => e.text), ['do the thing']);
+  assert.strictEqual(evs[0].queued, undefined);
+});
+
 // ------------------------------------------------ a queued message, split
 //
 // The enqueue and the remove land in DIFFERENT tail windows on nearly every
