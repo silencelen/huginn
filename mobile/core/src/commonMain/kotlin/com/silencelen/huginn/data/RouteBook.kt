@@ -1,0 +1,259 @@
+package com.silencelen.huginn.data
+
+import kotlinx.serialization.Serializable
+import kotlin.random.Random
+
+/**
+ * What kind of path an address describes. A BADGE, not a setting: computed from
+ * the URL by [RouteGuard.kindOf], because the guard has to work this out anyway
+ * to decide whether plain HTTP is safe to send a bearer over.
+ *
+ * `Yggdrasil` reads as [LAN] rather than [MESH], and that is correct: the pin's
+ * NAME says which path you take, the badge says what the address *is*, and
+ * huginn's yggdrasil route is its VLAN-2 address reached through the mesh
+ * gateway. [MESH] is for an overlay address proper (ULA, `fc00::/7`).
+ */
+@Serializable
+enum class RouteKind {
+    TAILNET,
+    MESH,
+    LAN,
+    LOCAL,
+    CUSTOM;
+
+    /** The word on the badge. */
+    val label: String
+        get() = when (this) {
+            TAILNET -> "Tailnet"
+            MESH -> "Mesh"
+            LAN -> "LAN"
+            LOCAL -> "Local"
+            CUSTOM -> "Custom"
+        }
+}
+
+/**
+ * One address the owner has pinned, in their own words.
+ *
+ * This is the record [AppdRoute] was not: it has an id (so a rename does not
+ * lose which route is active), an order (so "first healthy in my order" means
+ * something), and a timestamp (so a list can say which one is new).
+ *
+ * @param id stable for the life of the pin, and what [RouteBook.activeId] names.
+ *   Never derived from the URL or the name — both are editable.
+ * @param name the owner's word for it. "Tailscale", "the mesh", "work laptop".
+ * @param url normalized and guard-checked by [RouteGuard] before it gets here.
+ * @param kind the badge, recomputed whenever [url] changes.
+ * @param order the position, mirrored from the list index on every mutation so
+ *   a store that loses list order still restores the owner's preference.
+ */
+@Serializable
+data class PinnedRoute(
+    val id: String,
+    val name: String,
+    val url: String,
+    val kind: RouteKind = RouteKind.CUSTOM,
+    val order: Int = 0,
+    val addedAt: Long = 0,
+)
+
+/**
+ * The pinned routes, which one is active, and whether huginn may move between
+ * them — one value, because all three change together and a client that held
+ * them as three settings would be able to point `activeId` at a route that is
+ * no longer in the list.
+ *
+ * ⚠ PURE. Every operation returns a new book and nothing here touches a store,
+ * a clock or a socket; the shells persist what comes back. That is what makes
+ * the cap, the migration table and the ordering assertable in `:core` rather
+ * than twice over in two shells.
+ *
+ * ⚠ `base_url` IS DERIVED FROM THIS. [activeUrl] is the address ten background
+ * call sites still read through `HuginnSettings.baseUrl` — the watch service,
+ * the heartbeat, both notification receivers, the widget worker. They were not
+ * changed and must not need to be: whatever this book says is active IS the
+ * base URL, and both stores write it through on every save.
+ */
+data class RouteBook(
+    val routes: List<PinnedRoute> = emptyList(),
+    val activeId: String? = null,
+    val autoSwitch: Boolean = true,
+) {
+
+    val active: PinnedRoute? get() = routes.firstOrNull { it.id == activeId }
+
+    /**
+     * The derived base URL. Empty when nothing is pinned — which is the honest
+     * answer on a fresh install and is why the connect flow asks for an address
+     * rather than pre-filling one that may not reach anything.
+     */
+    val activeUrl: String get() = active?.url ?: ""
+
+    /** The name to show for the connection. Empty when nothing is pinned. */
+    val activeName: String get() = active?.name ?: ""
+
+    val isFull: Boolean get() = routes.size >= MAX_PINS
+
+    /**
+     * Repairs what a hand-edited settings file (or a half-written one) can
+     * break, and is called on every read AND every write by both stores.
+     *
+     * - `order` mirrors the list index.
+     * - `activeId` names a route that exists. An id pointing at nothing falls
+     *   back to the first pin rather than to null, because a book with pins and
+     *   no active route cannot address the daemon at all.
+     * - ⚠ **AN ADDRESS THE GUARD REFUSES IS DROPPED.** [add] and [setUrl] throw,
+     *   so the only way such a URL reaches a book is somebody editing the store
+     *   file by hand — and the old desktop allowlist had exactly this hole: it
+     *   checked the setter and read `baseUrl` back raw. Dropping is silent on
+     *   purpose; the route it removes is one this client would refuse to dial
+     *   anyway, and there is no reader to apologise to at load time.
+     */
+    fun normalized(): RouteBook {
+        val kept = routes.filter { RouteGuard.isAllowed(it.url) }
+        val ordered = kept.mapIndexed { i, r -> if (r.order == i) r else r.copy(order = i) }
+        val id = activeId?.takeIf { id -> ordered.any { it.id == id } } ?: ordered.firstOrNull()?.id
+        return if (ordered == routes && id == activeId) this else copy(routes = ordered, activeId = id)
+    }
+
+    /**
+     * Adds a pin at the end of the list.
+     *
+     * The FIRST pin becomes active, which is the owner's rule stated plainly:
+     * *"the first route they set when setting up the app becomes the first
+     * pinned route"*. Every one after it joins the order and changes nothing
+     * about where the app is currently talking.
+     *
+     * @throws IllegalArgumentException when the book is full, when the address
+     *   does not pass [RouteGuard], or when that address is already pinned —
+     *   two pins on one daemon would probe twice and read as two answers.
+     */
+    fun add(name: String, url: String, now: Long, id: String = newId(now)): RouteBook {
+        require(!isFull) { FULL }
+        val clean = RouteGuard.require(url)
+        require(routes.none { it.url == clean }) { DUPLICATE }
+        val route = PinnedRoute(
+            id = id,
+            name = name.trim().ifBlank { defaultName(clean) },
+            url = clean,
+            kind = RouteGuard.kindOf(clean),
+            order = routes.size,
+            addedAt = now,
+        )
+        return copy(routes = routes + route, activeId = activeId ?: route.id).normalized()
+    }
+
+    /** A blank name falls back to the address, never to an empty row. */
+    fun rename(id: String, name: String): RouteBook =
+        mapRoute(id) { it.copy(name = name.trim().ifBlank { defaultName(it.url) }) }
+
+    /**
+     * Editing a pin's URL is HOW an address is typed now — there is no "Base
+     * URL" field any more. Guard-checked like an add, and the badge follows.
+     */
+    fun setUrl(id: String, url: String): RouteBook {
+        val clean = RouteGuard.require(url)
+        require(routes.none { it.id != id && it.url == clean }) { DUPLICATE }
+        return mapRoute(id) { it.copy(url = clean, kind = RouteGuard.kindOf(clean)) }
+    }
+
+    /** Removing the active pin moves the connection to whatever is now first. */
+    fun remove(id: String): RouteBook =
+        copy(routes = routes.filterNot { it.id == id }).normalized()
+
+    /** Up or down by [delta] places, clamped. Unknown id: unchanged. */
+    fun move(id: String, delta: Int): RouteBook {
+        val from = routes.indexOfFirst { it.id == id }
+        if (from < 0) return this
+        val to = (from + delta).coerceIn(0, routes.lastIndex)
+        if (to == from) return this
+        val next = routes.toMutableList()
+        next.add(to, next.removeAt(from))
+        return copy(routes = next).normalized()
+    }
+
+    /**
+     * Chooses a route by hand. Unknown id: unchanged — a stale row must not be
+     * able to blank the connection.
+     */
+    fun activate(id: String): RouteBook =
+        if (routes.none { it.id == id }) this else copy(activeId = id)
+
+    fun withAutoSwitch(on: Boolean): RouteBook = copy(autoSwitch = on)
+
+    private fun mapRoute(id: String, f: (PinnedRoute) -> PinnedRoute): RouteBook {
+        if (routes.none { it.id == id }) return this
+        return copy(routes = routes.map { if (it.id == id) f(it) else it })
+    }
+
+    companion object {
+        /**
+         * Bounds the probe fan-out and the row height at once. Eight is the
+         * owner's number; every pin is a socket opened inside one three-second
+         * budget whenever the active route goes quiet.
+         */
+        const val MAX_PINS: Int = 8
+
+        const val FULL: String = "eight pinned routes is the limit — remove one first"
+        const val DUPLICATE: String = "that address is already pinned"
+
+        /** The address itself, when somebody adds a route without naming it. */
+        fun defaultName(url: String): String =
+            RouteGuard.authorityOf(url).ifBlank { AppdRoutes.normalize(url) }
+
+        /**
+         * A pin id. Not a UUID (there is no multiplatform one at this Kotlin
+         * level) and it does not need to be: it only has to be unique inside one
+         * list of at most eight, and stable once minted.
+         */
+        fun newId(now: Long, random: Random = Random.Default): String =
+            "r-" + now.toString(36) + "-" + random.nextInt(0, 1 shl 20).toString(36)
+    }
+}
+
+/**
+ * The per-route answer to "is this path there", kept so a row can show a state
+ * dot and say when it last worked.
+ *
+ * ⚠ NOT AN INPUT TO SELECTION. Ranking routes by round-trip time is exactly what
+ * makes a client flap between two equally-reachable paths; the order is the
+ * owner's, and this record is for the reader.
+ */
+data class RouteHealth(
+    val lastOkAt: Long = 0,
+    val lastFailAt: Long = 0,
+    val lastRttMs: Long = 0,
+) {
+    /** Null until it has been tried at all — which is a third state, not "bad". */
+    val reachable: Boolean?
+        get() = when {
+            lastOkAt == 0L && lastFailAt == 0L -> null
+            else -> lastOkAt >= lastFailAt
+        }
+}
+
+/**
+ * Counts consecutive failures on the active route, so the client can re-probe
+ * after the network has actually moved rather than on a timer.
+ *
+ * Deliberately a tiny mutable object rather than a rule scattered across two
+ * shells: the threshold, the reset and the "fires once" behaviour are the parts
+ * that go wrong. Not thread-safe — each shell holds one and touches it from its
+ * own scope.
+ */
+class RouteFailures(private val threshold: Int = RouteResolver.FAILURES_BEFORE_REPROBE) {
+
+    var count: Int = 0
+        private set
+
+    /** A call that worked. Clears the run. */
+    fun ok() { count = 0 }
+
+    /** @return true exactly on the [threshold]th failure in a row, then resets. */
+    fun fail(): Boolean {
+        count++
+        if (count < threshold) return false
+        count = 0
+        return true
+    }
+}
