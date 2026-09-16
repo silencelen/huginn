@@ -151,8 +151,18 @@ fun bgWorkTip(bgShells: Int, bgAgents: Int, bgTask: String?): String {
  * something OTHER than what is on screen: whether alerts from this daemon reach
  * this machine, or fall through to the household's Telegram.
  */
-fun connectionTip(connected: Boolean, route: String, notifyEnabled: Boolean): String {
-    val where = route.removePrefix("https://").removePrefix("http://").trimEnd('/')
+fun connectionTip(
+    connected: Boolean,
+    route: String,
+    notifyEnabled: Boolean,
+    routeName: String = "",
+): String {
+    val address = route.removePrefix("https://").removePrefix("http://").trimEnd('/')
+    // THE OWNER'S NAME FOR THE PATH FIRST. "Yggdrasil" is the fact that explains
+    // a dead stream; the address is the detail under it. An unnamed route — or
+    // an install that has not pinned one yet — falls back to the address alone
+    // rather than to an empty phrase.
+    val where = if (routeName.isBlank()) address else "$routeName · $address"
     return when {
         !connected ->
             "Watch stream detached from $where.\n" +

@@ -31,6 +31,9 @@ object Diagnostics {
         val heapUsedMb: Long,
         val heapMaxMb: Long,
         val baseUrl: String,
+        /** The owner's name for the active pin. Empty when nothing is pinned. */
+        val routeName: String,
+        /** True when the owner chose this route by hand — auto-switching is off. */
         val routePinned: Boolean,
         val hasToken: Boolean,
         val clientId: String,
@@ -66,7 +69,15 @@ object Diagnostics {
             add("heap            ${input.heapUsedMb}MB used / ${input.heapMaxMb}MB max")
             add("")
             add("## Connection")
-            add("server          ${input.baseUrl}${if (input.routePinned) " (pinned)" else ""}")
+            // THE NAME FIRST, then the address. "which route was it on" is the
+            // first question asked of a client that stopped hearing anything, and
+            // the owner's word for the path answers it faster than an octet does.
+            add(
+                "server          " +
+                    listOfNotNull(input.routeName.takeIf { it.isNotBlank() }, input.baseUrl.ifBlank { "none" })
+                        .joinToString(" · ") +
+                    (if (input.routePinned) " (pinned)" else ""),
+            )
             // The one honest thing to say about a secret in a shareable report.
             add("token           ${if (input.hasToken) "set" else "MISSING"}")
             add("client id       ${input.clientId}")

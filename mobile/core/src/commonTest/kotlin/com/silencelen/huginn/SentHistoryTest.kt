@@ -17,10 +17,10 @@ private class HistorySettings : HuginnSettings {
     override suspend fun setSentHistory(value: Map<String, List<String>>) { stored.value = value }
 
     override val baseUrl = flowOf(""); override val token = flowOf("")
-    override val routePinned = flowOf(false)
-    override suspend fun setBaseUrl(value: String) {}
+    override val routeBook = flowOf(com.silencelen.huginn.data.RouteBook())
+
     override suspend fun setToken(value: String) {}
-    override suspend fun selectRoute(url: String, pinned: Boolean) {}
+    override suspend fun setRouteBook(value: com.silencelen.huginn.data.RouteBook) {}
     override suspend fun clientId() = "t"
     override val fontScale = flowOf(9f)
     override suspend fun setFontScale(value: Float) {}

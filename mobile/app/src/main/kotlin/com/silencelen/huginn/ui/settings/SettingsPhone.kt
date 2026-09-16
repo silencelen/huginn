@@ -1,7 +1,6 @@
 package com.silencelen.huginn.ui.settings
 
 import com.silencelen.huginn.data.Alerts
-import com.silencelen.huginn.data.AppdRoutes
 import com.silencelen.huginn.data.HeadroomSettings
 import com.silencelen.huginn.data.QuickActions
 import com.silencelen.huginn.data.StatusHeadroom
@@ -43,6 +42,12 @@ import kotlin.math.roundToInt
 data class PhoneSettingsFacts(
     // --------------------------------------------------------------- host
     val baseUrl: String = "",
+    /**
+     * The ACTIVE PIN'S NAME — the owner's word for this path, not a label this
+     * app chose. Empty when nothing is pinned, which the summaries read as "no
+     * route" rather than inventing one.
+     */
+    val routeName: String = "",
     val connected: Boolean? = null,
     val accountEmail: String? = null,
     val savedAccounts: Int = 0,
@@ -160,9 +165,13 @@ fun phoneSummary(category: SettingsCategory, f: PhoneSettingsFacts): String? = w
  * connection problem reads as an account problem for ten minutes.
  */
 private fun hostSummary(f: PhoneSettingsFacts): String? {
-    if (f.connected == false) return "not connected · ${AppdRoutes.labelFor(f.baseUrl)}"
-    val who = f.accountEmail?.takeIf { it.isNotBlank() } ?: return AppdRoutes.labelFor(f.baseUrl)
-        .takeIf { f.baseUrl.isNotBlank() }
+    val where = routeWord(f)
+    // ⚠ NULL WHILE THE FACTS ARE STILL LANDING. A fresh launch has no address for
+    // a frame or two, and "no route yet" flashing on a phone that has three
+    // pinned would be a lie told at exactly the moment somebody is worried.
+    // "No route" is only said once a failed connection has proved it.
+    if (f.connected == false) return "not connected · ${where ?: "no route yet"}"
+    val who = f.accountEmail?.takeIf { it.isNotBlank() } ?: return where
     val logins = when (f.savedAccounts) {
         0 -> null
         1 -> "1 saved login"
@@ -222,6 +231,13 @@ private fun devicesSummary(f: PhoneSettingsFacts): String {
 }
 
 /**
+ * What to call the route in a one-line summary: the owner's name for it, the
+ * address when there is no name, and NULL when nothing is pinned at all.
+ */
+private fun routeWord(f: PhoneSettingsFacts): String? =
+    f.routeName.takeIf { it.isNotBlank() } ?: f.baseUrl.takeIf { it.isNotBlank() }?.let { hostOf(it) }
+
+/**
  * The host part of a base URL — `100.97.198.90:8787` — and never more.
  *
  * A base URL cannot carry a bearer in this app (the token is a separate setting
@@ -249,9 +265,10 @@ fun diagnosticsBundle(f: PhoneSettingsFacts, nowMs: Long): String {
     lines += "huginn diagnostics"
     lines += "app: ${f.appVersion.ifBlank { "?" }}${f.updateWord.takeIf { it.isNotBlank() }?.let { " ($it)" } ?: ""}"
     lines += "appd: ${f.appdVersion?.takeIf { it.isNotBlank() } ?: "not answering"}"
-    // The route by NAME first: "Tailscale" is the fact that explains a dead
-    // connection, and the address is the detail under it.
-    lines += "route: ${AppdRoutes.labelFor(f.baseUrl)} · ${hostOf(f.baseUrl)}"
+    // The route by the OWNER'S NAME first: which path this phone is on is the
+    // fact that explains a dead connection, and the address is the detail under
+    // it. A pin nobody named still has a name — its own address.
+    lines += "route: ${routeWord(f) ?: "none pinned"} · ${hostOf(f.baseUrl)}"
     lines += "connected: " + when (f.connected) {
         true -> "yes"
         false -> "no"

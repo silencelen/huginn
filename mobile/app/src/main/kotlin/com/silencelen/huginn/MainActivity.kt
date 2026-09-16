@@ -614,8 +614,6 @@ fun HuginnApp(
     val connected by vm.connected.collectAsState()
     val toast by vm.toast.collectAsState()
     val baseUrl by vm.baseUrl.collectAsState()
-    val routePinned by vm.routePinned.collectAsState()
-    val resolvingRoute by vm.resolvingRoute.collectAsState()
     val token by vm.token.collectAsState()
     val fontScale by vm.fontScale.collectAsState()
     val notifyEnabled by vm.notifyEnabled.collectAsState()

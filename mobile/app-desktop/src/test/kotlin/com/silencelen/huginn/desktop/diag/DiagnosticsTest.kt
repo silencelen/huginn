@@ -34,6 +34,7 @@ class DiagnosticsScrubTest {
                 heapUsedMb = 100,
                 heapMaxMb = 4096,
                 baseUrl = "https://user:$token@100.97.198.90",
+                routeName = "Tailscale",
                 routePinned = true,
                 hasToken = true,
                 clientId = "desktop-kt-1234",
@@ -81,6 +82,30 @@ class DiagnosticsScrubTest {
         assertTrue("NOT WIRED" in text, "an unwired notifier must not read as working")
     }
 
+    /**
+     * ⚠ THE NAME FIRST. "Which route was it on" is the first question asked of a
+     * client that stopped hearing anything, and the owner's word for the path
+     * answers it faster than an octet does. The report used to print the address
+     * alone, because there was no name to print.
+     */
+    @Test
+    fun `the connection line names the route and then gives the address`() {
+        val named = Diagnostics.build(sample(hasToken = true, watchConnected = true).copy(routeName = "the mesh"))
+        assertTrue(
+            Regex("""server\s+the mesh · https://100\.97\.198\.90""").containsMatchIn(named),
+            named.lines().first { it.startsWith("server") },
+        )
+
+        val pinned = Diagnostics.build(sample(hasToken = true, watchConnected = true).copy(routePinned = true))
+        assertTrue(pinned.lines().first { it.startsWith("server") }.endsWith("(pinned)"), pinned)
+
+        // Nothing pinned at all: the report says so instead of printing a blank.
+        val none = Diagnostics.build(
+            sample(hasToken = false, watchConnected = false).copy(routeName = "", baseUrl = ""),
+        )
+        assertTrue(Regex("""server\s+none""").containsMatchIn(none), none)
+    }
+
     @Test
     fun `an empty log says so rather than trailing off`() {
         val text = Diagnostics.build(sample(hasToken = true, watchConnected = true).copy(log = ""))
@@ -98,6 +123,7 @@ class DiagnosticsScrubTest {
         heapUsedMb = 1,
         heapMaxMb = 2,
         baseUrl = "https://100.97.198.90",
+        routeName = "Tailscale",
         routePinned = false,
         hasToken = hasToken,
         clientId = "desktop-kt-abc",

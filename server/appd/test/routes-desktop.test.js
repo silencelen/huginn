@@ -127,6 +127,22 @@ after(() => {
   if (tmp) fs.rmSync(tmp, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 });
 });
 
+test('ping says which listener answered, and only that one', async () => {
+  // Clients pin several routes to this one daemon now. `via` is the local end of
+  // the caller's OWN socket, which is how a client can tell that two of its pins
+  // are the same path wearing two names.
+  const r = await api('/v1/ping');
+  assert.equal(r.status, 200);
+  assert.ok(r.body.via, 'no via on the ping');
+  assert.equal(r.body.via.port, PORT, 'the port the caller dialled');
+  assert.ok(/127\.0\.0\.1$/.test(r.body.via.addr), `dialled loopback, got ${r.body.via.addr}`);
+
+  // ⚠ AND NOTHING ELSE. Ping needs no token, so a list of the daemon's other
+  // addresses here would be a disclosure to anyone who can reach the port.
+  const keys = Object.keys(r.body.via).sort();
+  assert.deepEqual(keys, ['addr', 'port'], `via grew fields: ${keys}`);
+});
+
 test('the surviving channel serves its manifest', async () => {
   const r = await api('/v1/desktop-kt/manifest');
   assert.equal(r.status, 200);

@@ -1,18 +1,14 @@
 package com.silencelen.huginn.ui.settings
 
-import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Visibility
 import androidx.compose.material.icons.filled.VisibilityOff
 import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -20,19 +16,22 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
-import com.silencelen.huginn.data.AppdRoutes
+import com.silencelen.huginn.data.HuginnSettings
+import com.silencelen.huginn.data.RouteBook
+import com.silencelen.huginn.data.RouteHealth
 
 /**
  * Which huginn this phone talks to, and which Claude login serves it.
  *
- * The connection half is this shell's own product and stays exactly as it was —
- * named chips, Find live route, pin/unpin, ONE Save and connect — because
- * Android runs one VPN at a time and the route is the setting that most often
- * explains a dead app. The accounts half is now the SHARED editor: the phone's
+ * The connection half is now the SHARED route list: the phone's named chips —
+ * two of them, spelling "Tailscale" and "Yggdrasil" into the interface — and its
+ * Base URL field are gone, replaced by pins the owner names and orders. Android
+ * still runs one VPN at a time and the route is still the setting that most
+ * often explains a dead app, which is exactly why the list has to be able to
+ * hold a third address. The accounts half is likewise the SHARED editor: the phone's
  * old `SavedAccountRow` and its sign-in/sign-out row pair are gone, replaced by
  * `AccountsEditor`, which already carried the discipline the phone's copy did
  * not — the state dot rather than a row tint, the freshness word only when it is
@@ -47,79 +46,40 @@ import com.silencelen.huginn.data.AppdRoutes
  */
 @Composable
 fun HostPage(
-    baseUrl: String,
+    routeBook: RouteBook,
+    routeHealth: Map<String, RouteHealth>,
+    routeNote: String?,
+    nowMs: Long,
     token: String,
     connected: Boolean?,
-    routePinned: Boolean,
     resolvingRoute: Boolean,
-    onSelectRoute: (String) -> Unit,
-    onResolveRoute: () -> Unit,
-    onUnpinRoute: () -> Unit,
-    onSave: (String, String) -> Unit,
+    routeActions: RouteListActions,
+    onSave: (String) -> Unit,
     accountsIo: AccountsIo,
     openLink: (String) -> Boolean,
     signedIn: Boolean,
     onSignOut: () -> Unit,
     highlight: String?,
 ) {
-    // Keyed on what the view model holds, so a route change from a chip refills
-    // the field rather than leaving it editing the address you just left.
-    var url by remember(baseUrl) { mutableStateOf(baseUrl) }
     var tok by remember(token) { mutableStateOf(token) }
     var reveal by remember { mutableStateOf(false) }
     var confirmSignOut by remember { mutableStateOf(false) }
 
     SettingsGroup("Connection")
 
-    SettingsReadOnlyRow(
-        id = "host.route",
-        title = "Route",
-        summary = "Android runs one VPN at a time, so the address that reaches huginn depends on " +
-            "which tunnel is up. Pick one, or let it find the live one.",
+    SettingsRouteListRow(
+        book = routeBook,
+        actions = routeActions,
+        health = routeHealth,
+        nowMs = nowMs,
+        summary = "Android runs one VPN at a time, so which address reaches huginn depends on " +
+            "which tunnel is up. These are tried in order.",
         highlighted = SettingsRowStyle.isHighlighted("host.route", highlight),
+        finding = resolvingRoute,
+        note = routeNote,
+        suggestedUrl = HuginnSettings.DEFAULT_BASE_URL,
     )
-    Row(
-        Modifier.padding(start = 8.dp, top = 2.dp),
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
-    ) {
-        for (route in AppdRoutes.ALL) {
-            FilterChip(
-                selected = AppdRoutes.normalize(baseUrl) == AppdRoutes.normalize(route.url),
-                onClick = { onSelectRoute(route.url) },
-                label = { Text(route.label) },
-            )
-        }
-    }
-    Row(
-        Modifier.padding(start = 8.dp, top = 6.dp),
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        OutlinedButton(onClick = onResolveRoute, enabled = !resolvingRoute) {
-            Text(if (resolvingRoute) "Finding…" else "Find live route")
-        }
-        if (routePinned) {
-            TextButton(onClick = onUnpinRoute) { Text("Pinned — unpin") }
-        } else {
-            Text(
-                "Auto",
-                style = MaterialTheme.typography.labelMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-        }
-    }
-    AppdRoutes.match(baseUrl)?.let {
-        SettingsNote("${it.label} · ${it.hint}", Modifier.padding(start = 8.dp, top = 4.dp))
-    }
 
-    SettingsFieldRow(
-        id = "host.base-url",
-        title = "Base URL",
-        value = url,
-        onValueChange = { url = it },
-        summary = "The address every request goes to.",
-        highlighted = SettingsRowStyle.isHighlighted("host.base-url", highlight),
-    )
     SettingsFieldRow(
         id = "host.token",
         title = "Token",
@@ -144,20 +104,20 @@ fun HostPage(
         color = MaterialTheme.colorScheme.onSurfaceVariant,
         modifier = Modifier.padding(start = 8.dp, top = 2.dp),
     )
-    // ONE save for both fields — the desktop's two separate saves is the split
-    // this redesign is not copying. The outcome is the summary rather than a
-    // fourth line below it: "did it work" is what the button is asking.
+    // The outcome is the summary rather than a fourth line below it: "did it
+    // work" is what the button is asking. The address is NOT here — editing a
+    // pin's URL in the list above is how an address is typed now.
     SettingsActionRow(
         id = "host.connect",
         title = "Save and connect",
         summary = when (connected) {
-            true -> "Connected."
-            false -> "Not connected. Check the URL, the token, and that the phone is on the tailnet."
-            null -> "Stores the address and the token together and reconnects with them."
+            true -> "Connected on ${routeBook.activeName.ifBlank { "this route" }}."
+            false -> "Not connected. Check the token, and that a route on this list is reachable."
+            null -> "Stores the token and reconnects on the route in use."
         },
         actionLabel = "Save",
-        onAction = { onSave(url, tok) },
-        enabled = url.isNotBlank() && tok.isNotBlank(),
+        onAction = { onSave(tok) },
+        enabled = tok.isNotBlank(),
         highlighted = SettingsRowStyle.isHighlighted("host.connect", highlight),
     )
 
