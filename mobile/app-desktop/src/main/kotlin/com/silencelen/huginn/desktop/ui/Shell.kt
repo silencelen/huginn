@@ -150,6 +150,7 @@ fun Shell(store: AppStore) {
     val watchConnected by store.watchConnected.collectAsState()
     val error by store.error.collectAsState()
     val route by store.route.collectAsState()
+    val routeBook by store.routeBook.collectAsState()
     val status by store.status.collectAsState()
     val headroom by store.headroom.collectAsState()
     val plan by store.plan.collectAsState()
@@ -491,6 +492,7 @@ fun Shell(store: AppStore) {
                 StatusLine(
                     view = view,
                     route = route,
+                    routeName = routeBook.activeName,
                     watchConnected = watchConnected,
                     notifyEnabled = notifyEnabled,
                     chats = chats,
@@ -1011,6 +1013,8 @@ private fun BoxScope.SeamNotch(collapsed: Boolean, onToggle: () -> Unit) {
 private fun StatusLine(
     view: View,
     route: String,
+    /** The owner's name for the active pin. Empty when nothing is pinned yet. */
+    routeName: String,
     watchConnected: Boolean,
     notifyEnabled: Boolean,
     chats: List<Chat>,
@@ -1130,7 +1134,7 @@ private fun StatusLine(
 
         // The connection, always last and always in the same place: it is the one
         // mark whose meaning is about something other than what is on screen.
-        Tip(connectionTip(watchConnected, route, notifyEnabled)) {
+        Tip(connectionTip(watchConnected, route, notifyEnabled, routeName)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Box(
                     Modifier.size(Frame.markDot).clip(CircleShape)
@@ -1143,8 +1147,13 @@ private fun StatusLine(
                 // ("127.0.0.1:8 / 787") and the connection dot came down on top of
                 // the count beside it. A status line that lies about the address it
                 // is connected to is worse than one that ellipsises it.
+                //
+                // THE NAME when there is one, because that is the shorter and more
+                // useful of the two here — the address is a click away in the tip,
+                // which prints both. A pin nobody named IS its address, so this
+                // falls back to it rather than to a blank.
                 Text(
-                    route.removePrefix("https://").removePrefix("http://").trimEnd('/'),
+                    routeName.ifBlank { route.removePrefix("https://").removePrefix("http://").trimEnd('/') },
                     style = DeskType.status,
                     color = scheme.onSurfaceVariant,
                     maxLines = 1,

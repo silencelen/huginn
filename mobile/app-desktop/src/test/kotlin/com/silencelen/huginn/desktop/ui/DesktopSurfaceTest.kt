@@ -355,6 +355,23 @@ class DesktopSurfaceTest {
         assertTrue(muted.contains("switched off in Settings"), muted)
     }
 
+    /**
+     * ⚠ THE NAME FIRST, THEN THE ADDRESS. This tip is the one liveness mark in
+     * the frame and it printed a stripped URL and nothing else — so the reader
+     * was told the stream had detached from an octet, rather than from the path
+     * they know by name. An install that has pinned nothing still gets the
+     * address alone rather than a dangling separator.
+     */
+    @Test
+    fun `the connection tip leads with the route's name when it has one`() {
+        val named = connectionTip(true, "http://192.168.2.117:8787", notifyEnabled = true, routeName = "the mesh")
+        assertTrue(named.startsWith("Watch stream attached to the mesh · 192.168.2.117:8787"), named)
+
+        val unnamed = connectionTip(true, "http://192.168.2.117:8787", notifyEnabled = true, routeName = "")
+        assertTrue(unnamed.startsWith("Watch stream attached to 192.168.2.117:8787"), unnamed)
+        assertTrue(!unnamed.contains(" · "), "no dangling separator when there is no name: $unnamed")
+    }
+
     @Test
     fun `an absent timestamp produces no tip at all`() {
         assertEquals("", timeTip("Last activity", 0, 1_000_000))
