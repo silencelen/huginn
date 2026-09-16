@@ -46,6 +46,7 @@ const crypto = require('node:crypto');
 //   routes-typing       10500 + pid%50   -> 10500-10549
 //   routes-quick-actions 10600 + pid%50  -> 10600-10649
 //   routes-session-state 10750 + pid%50  -> 10750-10799
+//   routes-session-start 10800 + pid%50  -> 10800-10849
 //
 // Also spoken for, outside this directory: scripts/test-llm-shim.js holds
 // 18790-18799.

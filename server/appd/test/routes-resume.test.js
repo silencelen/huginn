@@ -59,6 +59,7 @@ const crypto = require('node:crypto');
 //   routes-typing      10500 + pid%50   -> 10500-10549
 //   routes-quick-actions 10600 + pid%50  -> 10600-10649
 //   routes-session-state 10750 + pid%50  -> 10750-10799
+//   routes-session-start 10800 + pid%50  -> 10800-10849
 //
 // ⚠ 10450-10499 was ONE block in the wave-1 contract; refresh took the upper 40
 // of it, so this file keeps only the bottom ten. Widening it back re-collides.
