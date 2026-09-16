@@ -10,7 +10,6 @@ import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import com.silencelen.huginn.appVersion
 import com.silencelen.huginn.data.Account
-import com.silencelen.huginn.data.AppdRoutes
 import com.silencelen.huginn.data.Chat
 import com.silencelen.huginn.data.ChatDetail
 import com.silencelen.huginn.data.ChatEvent
@@ -42,6 +41,10 @@ import com.silencelen.huginn.data.SessionMetaSaver
 import com.silencelen.huginn.data.SessionOverview
 import com.silencelen.huginn.data.LoginSession
 import com.silencelen.huginn.data.LoginState
+import com.silencelen.huginn.data.RouteBook
+import com.silencelen.huginn.data.RouteFailures
+import com.silencelen.huginn.data.RouteGuard
+import com.silencelen.huginn.data.RouteHealth
 import com.silencelen.huginn.data.RouteResolver
 import com.silencelen.huginn.data.UriByteStream
 import com.silencelen.huginn.data.Watchers
@@ -319,7 +322,11 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
 
     private val settings = SettingsStore(app)
 
-    private var baseUrlNow = SettingsStore.DEFAULT_BASE_URL
+    // ⚠ EMPTY UNTIL THE STORE ANSWERS, not the tailnet address. This is what
+    // every call built before `init` finishes would dial, and on a fresh install
+    // — which now pins nothing — a hardcoded seed would have the app quietly
+    // talking to an address nobody had chosen.
+    private var baseUrlNow = ""
     private var tokenNow = ""
 
     /**
@@ -374,7 +381,7 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
 
     // ---- shared UI state
 
-    private val _baseUrl = MutableStateFlow(SettingsStore.DEFAULT_BASE_URL)
+    private val _baseUrl = MutableStateFlow("")
     val baseUrl: StateFlow<String> = _baseUrl.asStateFlow()
 
     private val _token = MutableStateFlow("")
@@ -873,15 +880,15 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
             _drafts.value = settings.drafts.first()
             _health.value = readHealth()
             _appLock.value = settings.appLock.first()
-            _routePinned.value = settings.routePinned.first()
+            _routeBook.value = settings.routeBook.first()
             AppLock.enabledCache = _appLock.value
             // Opened even when no token is configured: a caller must unblock and
             // get a real "not configured" failure rather than hang forever.
             ready.value = true
             if (tokenNow.isNotBlank()) {
-                // Only one VPN can hold the tunnel slot, so the reachable route
-                // changes when the owner switches between Tailscale and the
-                // yggdrasil mesh. Re-pick before the first fan-out of calls.
+                // Only one VPN can hold the tunnel slot, so which pinned route is
+                // reachable changes when the owner switches tunnels. Re-pick
+                // before the first fan-out of calls.
                 resolveRoute(silent = true)
                 refreshAll()
                 refreshModels()
@@ -905,76 +912,128 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
         _toast.value = "Copied"
     }
 
-    // ------------------------------------------------------- appd routes
+    // ------------------------------------------------------ pinned routes
 
-    private val _routePinned = MutableStateFlow(false)
-    val routePinned: StateFlow<Boolean> = _routePinned.asStateFlow()
+    private val _routeBook = MutableStateFlow(RouteBook())
+    val routeBook: StateFlow<RouteBook> = _routeBook.asStateFlow()
+
+    /** The state dots and "last reached" words. Never an input to selection. */
+    private val _routeHealth = MutableStateFlow<Map<String, RouteHealth>>(emptyMap())
+    val routeHealth: StateFlow<Map<String, RouteHealth>> = _routeHealth.asStateFlow()
+
     private val _resolvingRoute = MutableStateFlow(false)
     val resolvingRoute: StateFlow<Boolean> = _resolvingRoute.asStateFlow()
 
+    /** A refusal or an outcome, shown under the list rather than as a toast. */
+    private val _routeNote = MutableStateFlow<String?>(null)
+    val routeNote: StateFlow<String?> = _routeNote.asStateFlow()
+
     /**
-     * Moves to the first reachable route. Leaves the current setting alone when
-     * nothing answers — blanking it would turn "the network is down" into "the
-     * app is misconfigured".
+     * Consecutive network failures on the active route. ⚠ A 401 does not count:
+     * an answering daemon that rejects the token proves the ROUTE is fine, and
+     * re-resolving on it would go looking for a network problem that is not
+     * there.
      */
-    fun resolveRoute(silent: Boolean = false) {
+    private val routeFailures = RouteFailures()
+
+    /**
+     * Moves to the first healthy route IN THE OWNER'S ORDER. Leaves the current
+     * setting alone when nothing answers — blanking it would turn "the network
+     * is down" into "the app is misconfigured".
+     */
+    fun resolveRoute(silent: Boolean = false, force: Boolean = false) {
         viewModelScope.launch {
-            if (settings.routePinned.first()) {
-                if (!silent) _toast.value = "Route is pinned — unpin to switch automatically"
-                return@launch
-            }
             _resolvingRoute.value = true
-            val found = RouteResolver.resolve(AppdRoutes.candidates(baseUrlNow)) { client.probe(it) }
+            val outcome = RouteResolver.resolve(
+                book = _routeBook.value,
+                health = _routeHealth.value,
+                now = System.currentTimeMillis(),
+                force = force,
+            ) { client.probe(it.url) }
             _resolvingRoute.value = false
-            when {
-                found == null ->
+            _routeHealth.value = outcome.health
+            when (val choice = outcome.choice) {
+                is RouteResolver.Choice.Empty ->
+                    if (!silent) _toast.value = "No routes yet — add the address huginn answers on"
+                is RouteResolver.Choice.Pinned ->
+                    if (!silent) _toast.value = "Route is pinned — unpin to switch automatically"
+                is RouteResolver.Choice.NoRoute ->
                     if (!silent) _toast.value = "No route to huginn — is a VPN connected?"
-                AppdRoutes.normalize(found) == AppdRoutes.normalize(baseUrlNow) ->
-                    if (!silent) _toast.value = "Still on ${AppdRoutes.labelFor(found)}"
-                else -> {
-                    applyRoute(found, pinned = false)
-                    _toast.value = "Switched to ${AppdRoutes.labelFor(found)}"
+                is RouteResolver.Choice.Stay ->
+                    if (!silent) _toast.value = "Still on ${choice.route.name}"
+                is RouteResolver.Choice.Switched -> {
+                    applyBook(_routeBook.value.activate(choice.route.id))
+                    _toast.value = "Switched to ${choice.route.name}"
                 }
             }
         }
     }
 
-    /** Manual switch from the Settings picker; pins so auto-resolve won't move it. */
-    fun selectRoute(url: String) {
-        viewModelScope.launch { applyRoute(url, pinned = true) }
+    /** Manual pin from the list: this route, and stay on it until unpinned. */
+    fun activateRoute(id: String) = editRoutes { it.activate(id).withAutoSwitch(false) }
+
+    fun addRoute(name: String, url: String) = editRoutes { it.add(name, url, System.currentTimeMillis()) }
+
+    fun renameRoute(id: String, name: String) = editRoutes { it.rename(id, name) }
+
+    fun setRouteUrl(id: String, url: String) = editRoutes { it.setUrl(id, url) }
+
+    fun moveRoute(id: String, delta: Int) = editRoutes { it.move(id, delta) }
+
+    fun removeRoute(id: String) = editRoutes { it.remove(id) }
+
+    fun setAutoSwitch(on: Boolean) {
+        editRoutes { it.withAutoSwitch(on) }
+        if (on) resolveRoute()
     }
 
-    fun unpinRoute() {
+    /**
+     * Every list edit runs through here, so a refusal from [RouteGuard] or the
+     * eight-pin cap is REPORTED rather than swallowed — a setting that silently
+     * does not take is worse than one that says no.
+     */
+    private fun editRoutes(edit: (RouteBook) -> RouteBook) {
         viewModelScope.launch {
-            settings.selectRoute(baseUrlNow, pinned = false)
-            _routePinned.value = false
-            resolveRoute()
+            val next = runCatching { edit(_routeBook.value) }
+                .onFailure { _routeNote.value = it.message ?: RouteGuard.REFUSED }
+                .getOrNull() ?: return@launch
+            _routeNote.value = null
+            applyBook(next)
         }
     }
 
-    private suspend fun applyRoute(url: String, pinned: Boolean) {
-        settings.selectRoute(url, pinned)
-        baseUrlNow = AppdRoutes.normalize(url)
+    /**
+     * Persists the book and reconnects on the address it derives. ⚠ The store
+     * writes `base_url` through in the same edit, so the watch service and the
+     * notification receivers move with it.
+     */
+    private suspend fun applyBook(book: RouteBook) {
+        val settled = book.normalized()
+        settings.setRouteBook(settled)
+        _routeBook.value = settled
+        val moved = settled.activeUrl != baseUrlNow
+        baseUrlNow = settled.activeUrl
         _baseUrl.value = baseUrlNow
-        _routePinned.value = pinned
-        _connected.value = null
-        refreshAll()
+        if (moved) {
+            routeFailures.ok()
+            _connected.value = null
+            refreshAll()
+        }
     }
 
     // ---------------------------------------------------------- settings
 
-    fun saveSettings(url: String, tok: String) {
+    /**
+     * The bearer, and a reconnect with it. The ADDRESS is not here any more: it
+     * belongs to whichever route is active, which is the whole point of pinning
+     * them.
+     */
+    fun saveSettings(tok: String) {
         viewModelScope.launch {
-            // A hand-typed URL is a deliberate choice; don't let auto-resolve
-            // silently move off it.
-            settings.selectRoute(url, pinned = true)
-            _routePinned.value = true
             settings.setToken(tok)
             // A token registered against the previous host means nothing to the new one.
             HuginnMessagingService.syncToken(getApplication())
-            baseUrlNow = url.trim()
             tokenNow = tok.trim()
-            _baseUrl.value = baseUrlNow
             _token.value = tokenNow
             _connected.value = null
             testConnection()
@@ -1478,10 +1537,19 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
             awaitReady()
             _loading.value = true
             runCatching { client.status() }
-                .onSuccess { _status.value = it; _statusError.value = null; _connected.value = true }
+                .onSuccess {
+                    _status.value = it; _statusError.value = null; _connected.value = true
+                    routeFailures.ok()
+                }
                 .onFailure {
                     _statusError.value = errText(it)
                     if (it is HuginnClient.HuginnException && it.code == 401) _connected.value = false
+                    // ⚠ ONLY A NETWORK FAILURE COUNTS. A daemon that answered and
+                    // said 401 is proof the route works; looking for another one
+                    // would be answering a token problem with a network search.
+                    else if (it !is HuginnClient.HuginnException && routeFailures.fail()) {
+                        resolveRoute(silent = true)
+                    }
                 }
             runCatching { client.sessions(preview = true) }.onSuccess { _sessions.value = it }
             runCatching { client.chats() }.onSuccess { _chats.value = it }
