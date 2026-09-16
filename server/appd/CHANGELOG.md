@@ -9,6 +9,24 @@ appeared only as a side-note on the app releases it happened to ship with. Three
 undocumented, and the notes-cutting matcher could fuse two sections when an app and an appd
 version number collided. Entries below are reconstructed from the shipping commits.
 
+## 3.0.7 — 2026-09-15
+- **Your first message no longer prints under the answer to it.** Claude Code writes the opening
+  prompt of a run three ways — a queue `enqueue`, a `dequeue` when it drains, and the ordinary
+  `user` record — and the transcript reader treated the `dequeue` as nothing. The prompt stayed
+  "queued", floated to the bottom, and the real record was dropped as its duplicate. Every chat and
+  every session did this; escalating a local chat to Claude made it obvious, because there the whole
+  conversation is one long message and one reply. A drained queue is now DELIVERED at the point it
+  drained, in send order, and each delivered message swallows exactly one later copy of itself.
+  Replayed over all 907 transcripts on the host: 838 reorder, nothing gained, nothing lost.
+- **A message sent the instant a session is created is held until Claude is up, then delivered.**
+  `POST /v1/sessions` answers ~30 ms after tmux starts; Claude Code draws its composer about two
+  seconds later, in one write. A paste in that window vanished, or submitted and came back typed
+  but unsent. The send queue now knows a third reason to wait — `blockedBy: "starting"` — for a
+  session the daemon launched whose composer has not appeared; it releases the moment the caret
+  draws (20 s grace, then delivers anyway and says so in the journal). Only sessions appd started
+  are ever held; a plain shell pane is never. Clients that show the wait should render
+  `starting` as "waiting for Claude to start", not as a turn finishing.
+
 ## 3.0.6 — 2026-09-15
 
 - **A session held up by a question says so again.** "Huginn needs you" went quiet: a session
