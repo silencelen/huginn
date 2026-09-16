@@ -373,7 +373,11 @@ fun SettingsCategoryPage(
 ) {
     Column(
         modifier.fillMaxSize().verticalScroll(scroll),
-        horizontalAlignment = Alignment.CenterHorizontally,
+        // Capped AND left-snapped (owner, 09-15): the cap keeps a wide monitor from
+        // spreading a row's label and control across the screen; centring the capped
+        // column would then float it into the middle of the empty pane. Same rule as
+        // the Status page and the desktop's ReadingPane.
+        horizontalAlignment = Alignment.Start,
     ) {
         Column(
             Modifier.widthIn(max = SETTINGS_READING_WIDTH).fillMaxWidth().padding(20.dp),
