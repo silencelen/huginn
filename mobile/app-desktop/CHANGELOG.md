@@ -1,5 +1,27 @@
 # Huginn Desktop changelog
 
+## 1.2.0
+
+- **Pinned routes.** The same route list as the phone: name your addresses, order them, and the
+  desktop uses the first that answers. The four-address allowlist is gone; every pin is checked
+  against the shared rule instead (https anywhere, http only to private, loopback, tailnet or
+  mesh addresses). Your current address migrates to pin #1 with nothing to do.
+- **The desktop finds its way back on its own.** A Find live route button, and an automatic
+  re-check after three failed calls — this client had neither and never re-probed after launch.
+  The connection mark and the diagnostics report name the route, then its address.
+- **Turning on local AI installs services that survive logging out on Linux, not only on Windows.**
+  The section had always installed a login-session service while its card said "two always-on
+  services". The card now tells the truth per OS (one administrator prompt on Windows, one
+  password prompt on Linux), the status line says whether this machine keeps serving when you log
+  out, and offers **Make it permanent** when it does not. An adopted llama-swap is named as adopted;
+  stopping serving gives it back untouched.
+- **The compact composer's clip and send share one centre.** Below the breakpoint the attach
+  button was a text button with a 48 dp touch box beside 32 dp icon buttons, and the row
+  top-aligns; the clip sat 8 px high. One control size for all three.
+- **Capped panes snap left.** Status, Devices, Rounds and every Settings page keep their reading
+  width on a wide window and sit at the leading edge instead of the middle.
+- **A send into a session that is still starting says "waiting for Claude to start".**
+
 ## 1.1.1
 
 - **Right-click over the transcript quotes what you just highlighted.** Explain, Execute, Quote and

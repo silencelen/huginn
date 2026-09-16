@@ -1,5 +1,25 @@
 # Huginn changelog
 
+## 3.2.0 — 2026-09-16
+
+Connectivity becomes a list you keep, and the pages stop floating.
+
+- **Pinned routes replace the Tailscale and Yggdrasil chips and the Base URL field.** Pin as many
+  addresses as you need, name them whatever you call them, put them in the order you want tried,
+  and huginn uses the first one that answers. Your existing address becomes your first pin under
+  a name you can change; a fresh install starts with no routes and the first address you save
+  becomes pin #1. Every pin is checked against one rule before it is kept — https anywhere, plain
+  http only to a private, loopback, tailnet or mesh address — because the bearer follows the
+  address, and the phone had no such check before.
+- **A send into a session that is still starting says so.** The queued line reads "waiting for
+  Claude to start" instead of describing a turn that has not begun (appd 3.0.7 holds the send
+  until the composer draws, then delivers it).
+- **Capped pages snap left.** Status, Rounds, Round editing, Devices and every Settings page keep
+  their reading width on a wide screen, but the column now sits at the leading edge instead of
+  floating in the middle of the pane.
+- **Devices says whether a serving machine stays on.** A local-model box reads "always on" or
+  "only while someone is logged in" once its runner is on CLI 1.1.0.
+
 ## 3.1.1 — 2026-09-15
 
 A walk over 3.1.0 on a Fold's cover screen, and what it found.
