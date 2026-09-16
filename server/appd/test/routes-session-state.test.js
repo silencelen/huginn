@@ -35,6 +35,7 @@ const crypto = require('node:crypto');
 
 // PORT ALLOCATION — see the table in routes-lifecycle.test.js; this file owns
 // 10750 + pid%50 -> 10750-10799.
+// The next block, 10800-10849, is routes-session-start.test.js.
 const PORT = 10750 + (process.pid % 50);
 const BASE = `http://127.0.0.1:${PORT}`;
 require('./retry-fetch');
