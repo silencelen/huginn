@@ -130,7 +130,8 @@ object AppLog : RingLog(defaultLogFile()) {
                 heapUsedMb = (runtime.totalMemory() - runtime.freeMemory()) / 1024 / 1024,
                 heapMaxMb = runtime.maxMemory() / 1024 / 1024,
                 baseUrl = store.settings.baseUrlNow(),
-                routePinned = store.settings.routePinnedNow(),
+                routeName = store.routeName,
+                routePinned = !store.settings.routeBookNow().autoSwitch,
                 // The ONLY thing said about the token, and the reason the type has
                 // no field for the token itself.
                 hasToken = store.settings.tokenNow().isNotBlank(),
