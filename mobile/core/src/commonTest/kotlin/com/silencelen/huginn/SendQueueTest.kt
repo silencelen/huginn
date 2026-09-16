@@ -72,6 +72,18 @@ class SendQueueTest {
     }
 
     @Test
+    fun `a session still starting is a third wait, and names Claude starting`() {
+        // appd 3.0.7: a send into a session whose Claude has not drawn its composer
+        // yet is held with blockedBy "starting". "Finishes its turn" there describes
+        // a turn that has not begun; the reader should know they are waiting on a
+        // start, which clears itself in about two seconds.
+        val note = SendQueue.note(TypingState(queued = 1, blockedBy = "starting"))
+        assertNotNull(note)
+        assertTrue(note!!.contains("start"), note)
+        assertTrue(!note.contains("finishes its turn"), note)
+    }
+
+    @Test
     fun `the list row says only that there is a wait`() {
         assertEquals("3 queued", SendQueue.rowMark(3))
         assertNull(SendQueue.rowMark(0), "an empty queue is not a fact about a row")
