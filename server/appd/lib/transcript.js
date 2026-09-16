@@ -319,7 +319,44 @@ function readTranscript(path, { offset = null, limit = 400, until = null, _resum
   // forever, and the second `remove` then found nothing and pushed a THIRD
   // bubble. Two sends, three messages, one of them permanently "queued".
   const queued = new Map();
+  /**
+   * Messages the queue DRAINED, by content — a FIFO per content, for the same
+   * duplicate reason `queued` above is one.
+   *
+   * `remove` and `dequeue` are not two names for one thing. A `remove` hands a
+   * message into a turn that is STILL RUNNING, and Claude Code never writes it
+   * as a `user` record afterwards. A `dequeue` drains the queue into a Claude
+   * that has gone IDLE, and every message it drained is then written as an
+   * ordinary `user` record a second or two later. Measured across all 907
+   * transcripts on this host: 1,244 of 1,281 drained messages have a matching
+   * `user` record after them, and removed ones have none at all.
+   *
+   * So a drained message's bubble has to SWALLOW the record that follows it,
+   * once per drained copy — keyed by content and left standing, the guard would
+   * swallow every later "ok" / "continue" / "yes" as well.
+   */
+  const drained = new Map();
   let seq = 0;
+  /**
+   * A queued message has been delivered: un-badge it and move it to HERE.
+   *
+   * MOVED to the delivery point, not just un-badged where it sat. An enqueue
+   * happens mid-turn, so the bubble first appears INTERLEAVED into the output of
+   * the turn that was still running. Clearing the badge in place left it
+   * stranded there — above the rest of an answer it was sent after, and above
+   * the answer it actually prompted. What a reader expects is what the pane
+   * does: the message waits at the bottom while queued, then takes its real
+   * place in the conversation once delivered. Re-seq'd so ordering stays
+   * monotonic.
+   */
+  const deliverQueued = (ev, atTs) => {
+    const at = out.events.indexOf(ev);
+    if (at >= 0) out.events.splice(at, 1);
+    delete ev.queued;
+    ev.seq = ++seq;
+    if (atTs) ev.ts = atTs;
+    out.events.push(ev);
+  };
   // Which record each event came out of, by byte. Kept OUTSIDE the events so it
   // never reaches the wire, and in a WeakMap rather than a parallel array
   // because the queued-message handling below moves events around — an index
@@ -374,21 +411,10 @@ function readTranscript(path, { offset = null, limit = 400, until = null, _resum
           const ev = pending && pending.length ? pending.shift() : null;
           if (pending && pending.length === 0) queued.delete(content);
           if (ev) {
-            // MOVED to the delivery point, not just un-badged where it sat.
-            //
-            // An enqueue happens mid-turn, so the bubble first appears INTERLEAVED
-            // into the output of the turn that was still running. Clearing the
-            // badge in place left it stranded there — above the rest of an answer
-            // it was sent after, and above the answer it actually prompted. What a
-            // reader expects is what the pane does: the message waits at the
-            // bottom while queued, then takes its real place in the conversation
-            // once delivered. Re-seq'd so ordering stays monotonic.
-            const at = out.events.indexOf(ev);
-            if (at >= 0) out.events.splice(at, 1);
-            delete ev.queued;
-            ev.seq = ++seq;
-            if (ts) ev.ts = ts;
-            out.events.push(ev);
+            // Delivered INTO a running turn, so no `user` record will follow it
+            // and nothing needs to swallow one — the difference from the drain
+            // below, and the whole reason the two operations are read apart.
+            deliverQueued(ev, ts);
           }
           else if (content.trim() && !machineText(content)) {
             // The enqueue is outside this window, and what to do about that
@@ -415,8 +441,42 @@ function readTranscript(path, { offset = null, limit = 400, until = null, _resum
               out.deliveredQueued.push(content);
             }
           }
+        } else if (d.operation === 'dequeue') {
+          // THE QUEUE DRAINED, into a Claude that had gone idle: everything
+          // still waiting was delivered HERE, in the order it was sent.
+          //
+          // Read as a no-op until 2026-09-15, which is how the owner's opening
+          // message ended up UNDERNEATH the answer to it. A `dequeue` carries no
+          // content, so nothing cleared the `queued` badge its enqueue had set;
+          // the badge then floated the message to the bottom, and its real
+          // `user` record was swallowed by the duplicate guard as an echo of a
+          // message that was still, as far as this reader knew, waiting to be
+          // sent. Claude Code writes an enqueue/dequeue pair for the FIRST
+          // prompt of every run, so every chat and every session opened with its
+          // own opening prompt printed last — loudest in the escalate-to-Claude
+          // handoff, where the conversation is one long message and one answer
+          // and the whole screen therefore read upside down.
+          const waiting = [];
+          for (const [content, pending] of queued) {
+            for (const ev of pending) waiting.push({ content, ev, at: out.events.indexOf(ev) });
+          }
+          // SEND order, not content-bucket order: `queued` is grouped by text, so
+          // iterating it delivers all the copies of one message before the first
+          // copy of another. Position in the events list is the order they were
+          // typed, which is the order the queue hands them over.
+          waiting.sort((a, b) => a.at - b.at);
+          queued.clear();
+          for (const w of waiting) {
+            deliverQueued(w.ev, ts);
+            const copies = drained.get(w.content) || [];
+            copies.push(w.ev);
+            drained.set(w.content, copies);
+          }
         }
-        // `dequeue` carries no content and just means the queue drained.
+        // A `dequeue` whose enqueues are all above this window drained messages
+        // this pass never saw, and the record carries no content to name them
+        // with — so there is nothing to say about them here, and the `user`
+        // records that follow are read as the ordinary messages they are.
         continue;
       }
       case 'ai-title':
@@ -449,6 +509,17 @@ function readTranscript(path, { offset = null, limit = 400, until = null, _resum
         }
         const t = textOf(c);
         if (!t.trim() || queued.has(t)) continue;
+        // The record Claude Code writes for a message the queue just DRAINED.
+        // Its bubble is already in this window — moved down to the drain point a
+        // few records ago — so this is bookkeeping, not a second message. Shifted
+        // rather than merely looked up, because the guard is one-shot per drained
+        // copy: the same words typed again later are a real second message.
+        const drainedCopies = drained.get(t);
+        if (drainedCopies && drainedCopies.length) {
+          drainedCopies.shift();
+          if (!drainedCopies.length) drained.delete(t);
+          continue;
+        }
         if (machineText(t)) {
           // Slash-command bookkeeping arrives as ordinary user records.
           const d2 = describeMachineText(t);
