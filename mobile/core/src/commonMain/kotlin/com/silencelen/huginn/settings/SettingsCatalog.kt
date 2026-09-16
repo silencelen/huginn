@@ -482,8 +482,14 @@ object SettingsCatalog {
             SettingsItem(
                 id = "devices.local-ai",
                 title = "Local AI",
-                summary = "Whether this computer downloads and serves models locally for huginn.",
-                keywords = listOf("local", "llm", "serve", "models", "kvasir", "offline", "download"),
+                summary = "Whether this computer downloads and serves models locally for huginn, " +
+                    "and whether it keeps serving while you are logged out.",
+                keywords = listOf(
+                    "local", "llm", "serve", "models", "kvasir", "offline", "download",
+                    // What somebody types when they want the feature this page
+                    // actually decides: a machine that serves when nobody is at it.
+                    "persistent", "always on", "logout", "logged out", "linger", "service", "adopt",
+                ),
                 surface = Surface.DESKTOP,
                 availability = { it.localServe },
                 inventory = listOf(52, 53, 54, 55, 56, 57),
