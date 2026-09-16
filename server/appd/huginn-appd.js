@@ -1102,6 +1102,42 @@ async function sendLineToPane(name, text) {
 
 const sendQueues = new Map();   // session name -> { entries, blockedBy, delivering, lastError, timer, pumping }
 
+/**
+ * Sessions appd has just launched `claude` into, and when.
+ *
+ * ⚠ THE WHOLE POINT IS WHAT IS **NOT** IN HERE. `POST /v1/sessions` answers 201
+ * about 30 ms after `tmux new-session -d` returns, and `claude` takes another
+ * two seconds to draw anything that reads stdin — so a client that creates a
+ * session and sends into it immediately pastes into a pane with no application
+ * in it, and both the text and its Enter vanish (measured: t+1.1 s leaves no
+ * composer text, no turn and no transcript record at all). `lib/typing.js`
+ * `startingUp` holds those sends; this map is how it knows which sessions the
+ * rule may apply to.
+ *
+ * Only the two places appd itself starts `claude` write here. A tmux session
+ * the owner made in a terminal is never marked, so a send into a plain shell —
+ * which has no composer and never will — behaves exactly as it always has.
+ *
+ * In memory, and deliberately: a daemon restarted inside the two-second window
+ * simply falls back to the old behaviour for that one send, which is the bug
+ * this fixes and not a new one. Entries are pruned on write, so the map holds
+ * at most the sessions created in the last STARTUP_GRACE_MS.
+ */
+const launchingAt = new Map();  // session name -> ms epoch when appd ran `claude` in it
+
+function markLaunching(name) {
+  const now = Date.now();
+  for (const [k, t] of launchingAt) {
+    if (now - t > typing.STARTUP_GRACE_MS) launchingAt.delete(k);
+  }
+  launchingAt.set(name, now);
+}
+
+/** How long ago appd launched `claude` here, or null if it never did. */
+function launchAgeMs(name) {
+  const t = launchingAt.get(name);
+  return t == null ? null : Date.now() - t;
+}
 
 /**
  * How the queue learns a session's model family, without importing the
@@ -1176,6 +1212,11 @@ function transcriptSize(file) {
  * per-entry: `{state:"idle", ts}` only releases a send it is NEWER than, and the
  * pump knows each entry's `at`. It is the second boundary source and the only
  * one a session whose transcript never gets a turn marker has at all.
+ *
+ * Gate 4 is STARTUP, and it is the one gate that is about the pane
+ * having an application in it at all. It comes from the same capture as gate 2
+ * — a caret anywhere in the bottom region means Claude has painted its box —
+ * and applies only to the sessions appd started `claude` in itself.
  */
 async function checkGates(name) {
   const file = transcriptPath(name);
@@ -1190,8 +1231,36 @@ async function checkGates(name) {
     }
   }
   const cap = await run('tmux', ['capture-pane', '-p', '-t', `=${name}:`]);
-  const paneWhy = cap.err ? null : typing.paneReadyForInput(cap.stdout.replace(/\n$/, '').split('\n')).why;
-  return { idle, lastKind, paneWhy, sessionState: readSessionState(name) };
+  const lines = cap.err ? null : cap.stdout.replace(/\n$/, '').split('\n');
+  const paneWhy = lines ? typing.paneReadyForInput(lines).why : null;
+  // A capture that FAILED says nothing about startup — the session is probably
+  // gone, and holding a send on a pane we cannot read would be a wait with no
+  // end. Fall through to the old behaviour and let delivery report the failure.
+  const starting = lines ? startupGate(name, typing.composerDrawn(lines)) : false;
+  return { idle, lastKind, paneWhy, starting, sessionState: readSessionState(name) };
+}
+
+/**
+ * Is this send waiting on `claude` to come up — and has the wait ended?
+ *
+ * Both answers come out of one call because the mark has to be RETIRED
+ * somewhere, and the moment the composer appears is the only honest place: from
+ * then on the pane is a Claude pane like any other and this rule must never
+ * speak about it again. The grace expiring retires it too, with a journal line,
+ * because a `claude` that never drew a composer has fallen through to the login
+ * shell — the send still goes (a person's message is delivered or it is an
+ * error) and the reader deserves to know which pane it went into.
+ */
+function startupGate(name, composer) {
+  const ageMs = launchAgeMs(name);
+  if (ageMs == null) return false;            // not a session appd launched claude in
+  if (typing.startingUp({ launching: true, composer, ageMs })) return true;
+  launchingAt.delete(name);
+  if (!composer) {
+    log(`typing: ${name}: no composer ${Math.round(ageMs / 1000)}s after launch; `
+      + 'sending into the pane as it is (claude may have exited to the shell)');
+  }
+  return false;
 }
 
 /**
@@ -1273,6 +1342,9 @@ async function pumpQueue(name) {
       // swallowed with no trace). Automated lines keep both gates.
       // A pane SCRIPT (the ladder's picker walk, even when a person asked for it
       // via Undo) keeps the turn gate: a picker opened mid-turn is a modal.
+      // AND a person's message does not skip the STARTUP gate. "A human
+      // send never waits for a turn" is about Claude being BUSY; it was never
+      // about Claude not being there. `gate.starting` rides on both lanes below.
       const humanText = !entry.automated && typeof entry.run !== 'function';
       // 3.0.4: the AUTOMATED lane gets a second boundary source — the title
       // hook's state file. `{state:"idle", ts}` stamped after the send was
@@ -1432,6 +1504,7 @@ async function hardEndSession(name) {
   registryRemove(name);
   await releaseSize(name).catch(() => { });
   softEnds.delete(name);
+  launchingAt.delete(name);
   return { err: null };
 }
 
@@ -1511,6 +1584,10 @@ async function restoreSessionsAfterReboot() {
       continue;
     }
     restored++;
+    // Same startup hold as the create route: a restored session is a `claude`
+    // that has not come up yet either, and the phone reconnecting after a reboot
+    // is exactly when somebody types into one straight away.
+    markLaunching(entry.name);
     // ⚠ MARKED AS RESTORED, and auto-resume depends on it. Claude Code's own
     // wait at a usage limit is IN-PROCESS: the process that was waiting died
     // with the box, and the CLI says so in as many words ("Claude Code
@@ -7548,6 +7625,12 @@ const server = http.createServer(async (req, res) => {
       // until then a reboot would bring this session back as a fresh `claude`, which
       // is still the create route's own default and better than losing the name.
       registryAdd(created, { cwd: WORKDIR });
+      // ⚠ AND MARKED AS STILL COMING UP. This 201 is the client's cue to show a
+      // composer, and a message typed into it arrives while the pane is still
+      // empty — `claude` needs about two more seconds to paint anything that
+      // reads stdin, and a paste before that is lost whole, Enter included. The
+      // send queue holds those until the composer appears; see `launchingAt`.
+      markLaunching(created);
       return sendJson(res, 201, { ok: true, name: created });
     }
 
