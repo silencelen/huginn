@@ -9,6 +9,16 @@ appeared only as a side-note on the app releases it happened to ship with. Three
 undocumented, and the notes-cutting matcher could fuse two sections when an app and an appd
 version number collided. Entries below are reconstructed from the shipping commits.
 
+## 3.1.0 — 2026-09-16
+- **A serving device says whether it serves while nobody is logged in.** The generate-scope device
+  row carries a `persistent` facet, accepted at enrolment and on the 60-second beat, so Devices
+  can tell a machine that serves 24/7 from one that serves only while somebody is logged in.
+  Nullable on the wire: a runner that never said carries no field at all (older CLIs are
+  unaffected, and a client can tell "no" from "never said").
+- **`/v1/ping` says which of the daemon's addresses answered you** — `via: {addr, port}`, the
+  local end of the caller's own socket and nothing else. Clients with pinned routes use it to
+  label the route they are actually on.
+
 ## 3.0.7 — 2026-09-15
 - **Your first message no longer prints under the answer to it.** Claude Code writes the opening
   prompt of a run three ways — a queue `enqueue`, a `dequeue` when it drains, and the ordinary
