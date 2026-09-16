@@ -1655,6 +1655,16 @@ data class Device(
      */
     val models: List<DeviceModel> = emptyList(),
     /**
+     * Whether a SERVING machine keeps serving with nobody logged in.
+     *
+     * Three states, and the third is the reason this is nullable: the daemon
+     * omits the field entirely for a row whose runner never said, and a client
+     * that read absence as `false` would label every machine enrolled before
+     * this facet — including the Windows ones, which have always run as
+     * LocalSystem services — as stopping at logout. Null renders nothing.
+     */
+    val persistent: Boolean? = null,
+    /**
      * True when this daemon has not heard the device ASK FOR WORK since it
      * started, so whether it is free is not something it can currently say.
      *

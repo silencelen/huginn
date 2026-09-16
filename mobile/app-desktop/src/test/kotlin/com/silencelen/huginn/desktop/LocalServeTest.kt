@@ -80,6 +80,133 @@ class LocalServeTest {
         assertTrue(LocalServe.fetchTmpName("huginn-local").startsWith("huginn-local."))
     }
 
+    // ------------------------------------------------ persistence (decision 33)
+
+    @Test
+    fun `turning on from here asks Linux for system units`() {
+        // ⚠ THE BUG THIS FEATURE IS. Without --system the manager writes a
+        // systemd USER unit, which dies at logout — so every Linux machine set
+        // up from this door stopped serving the moment its owner logged out,
+        // under a card that said "Installs two always-on services". Windows
+        // needs no flag: WinSW installs LocalSystem services by construction,
+        // which is exactly what --system asks Linux for.
+        assertEquals(
+            listOf("on", "--yes", "--url", "http://100.64.0.1:8787", "--system"),
+            LocalServe.enableArgs("http://100.64.0.1:8787", windows = false),
+        )
+        assertEquals(
+            listOf("on", "--yes", "--url", "http://100.64.0.1:8787"),
+            LocalServe.enableArgs("http://100.64.0.1:8787", windows = true),
+        )
+    }
+
+    private fun status(
+        persistent: Boolean?,
+        systemUnits: Boolean? = null,
+        setup: Boolean = true,
+    ) = LocalServe.Status(setup = setup, persistent = persistent, systemUnits = systemUnits)
+
+    @Test
+    fun `the copy rule says the true thing about logging out on each OS`() {
+        assertEquals(
+            "Serves while you are logged out — Windows services (LocalSystem).",
+            LocalServe.persistenceCopy(status(true, systemUnits = true), windows = true).line,
+        )
+        assertEquals(
+            "Serves while you are logged out — system services.",
+            LocalServe.persistenceCopy(status(true, systemUnits = true), windows = false).line,
+        )
+        // Persistent WITHOUT system units is the linger fallback, and it is a
+        // different sentence: what keeps it alive there is a logind setting
+        // somebody can turn off, not the unit scope.
+        assertTrue(
+            LocalServe.persistenceCopy(status(true, systemUnits = false), windows = false)
+                .line.contains("linger"),
+        )
+    }
+
+    @Test
+    fun `only the broken state offers an action, and unknown never borrows the reassuring line`() {
+        val stops = LocalServe.persistenceCopy(status(false, systemUnits = false), windows = false)
+        assertEquals("Make it permanent", stops.action)
+        assertTrue(stops.line.contains("Stops when you log out"), stops.line)
+
+        // ⚠ null is "could not tell", not "yes". A machine with no logind to
+        // ask has done nothing wrong — but claiming it serves while logged out
+        // is the same lie in a quieter voice, and it would carry no action to
+        // fix it either.
+        val unknown = LocalServe.persistenceCopy(status(null), windows = false)
+        assertNull(unknown.action)
+        assertFalse(unknown.line.contains("Serves while you are logged out"), unknown.line)
+        assertFalse(unknown.line.contains("Stops when you log out"), unknown.line)
+
+        // Nothing at all to say about a machine that is not set up.
+        assertEquals("", LocalServe.persistenceCopy(status(null, setup = false), windows = false).line)
+        assertNull(LocalServe.persistenceCopy(status(true, setup = false), windows = true).action)
+    }
+
+    @Test
+    fun `the consent card never promises always-on where it cannot deliver`() {
+        assertTrue(LocalServe.consentServicesCopy("win32", null).contains("UAC"))
+        val elevated = LocalServe.consentServicesCopy("linux", "pkexec")
+        assertTrue(elevated.contains("logged out"), elevated)
+        assertTrue(elevated.contains("password once"), elevated)
+        // A Linux box with neither pkexec nor sudo gets the honest version —
+        // the old copy said "two always-on services" here and was simply wrong.
+        val bare = LocalServe.consentServicesCopy("linux", null)
+        assertFalse(bare.contains("always-on"), bare)
+        assertTrue(bare.contains("linger"), bare)
+        assertTrue(bare.contains("may stop serving when you log out"), bare)
+    }
+
+    @Test
+    fun `status decodes the three persistence fields and the adopted flag`() {
+        // A renamed or dropped field here silently turns the section's honest
+        // line back into the old lie, with nothing on screen looking wrong.
+        val s = json.decodeFromString<LocalServe.Status>(
+            """{"setup":true,"mode":"managed","class":"C","deviceName":"box-llm",
+                "systemUnits":false,"linger":false,"persistent":false,"adopted":false,
+                "services":{"llm":"active","runner":"active"}}""",
+        )
+        assertEquals(false, s.persistent)
+        assertEquals(false, s.linger)
+        assertEquals(false, s.systemUnits)
+        assertFalse(s.adopted)
+
+        // A manager older than the facet sends none of them, and the tri-state
+        // must survive that as null rather than defaulting to a claim.
+        val old = json.decodeFromString<LocalServe.Status>(
+            """{"setup":true,"mode":"managed","deviceName":"box-llm"}""",
+        )
+        assertNull(old.persistent)
+        assertNull(old.linger)
+        assertNull(old.systemUnits)
+
+        val adopted = json.decodeFromString<LocalServe.Status>(
+            """{"setup":true,"mode":"adapter","adopted":true,"persistent":true,"systemUnits":true}""",
+        )
+        assertTrue(adopted.adopted)
+    }
+
+    @Test
+    fun `the plan carries how the one elevation prompt would happen`() {
+        val p = json.decodeFromString<LocalServe.Plan>(
+            """{"version":"1.0.0","dir":"d","platform":"linux","elevated":true,"setup":false,
+                "deviceName":"x-llm","services":[],"cls":"C","plan":"C",
+                "elevation":"pkexec","persistent":true}""",
+        )
+        assertEquals("pkexec", p.elevation)
+        assertEquals(true, p.persistent)
+        // No elevator on this machine: null, which is what makes the consent
+        // card drop the "password once" promise.
+        val bare = json.decodeFromString<LocalServe.Plan>(
+            """{"version":"1.0.0","dir":"d","platform":"linux","elevated":true,"setup":false,
+                "deviceName":"x-llm","services":[],"cls":"C","plan":"C"}""",
+        )
+        assertNull(bare.elevation)
+        assertNull(bare.persistent)
+    }
+
     @Test
     fun `the elevated cmd quotes all three paths and redirects everything to the log`() {
         val text = LocalServe.elevatedCmdText(

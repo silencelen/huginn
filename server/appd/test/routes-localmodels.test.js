@@ -156,6 +156,37 @@ test('registration hygiene: caps, bad slugs dropped, catalogs only at generate',
   assert.equal(claude.body.llmSlug, undefined, 'and no slug');
 });
 
+test('the persistent facet rides the wire, nullable, and refreshes on the beat', async () => {
+  // Decision 34: the fleet view has to be able to tell a box that serves 24/7
+  // from one that serves while somebody is logged in. The daemon does not
+  // decide it — only the machine's own manager knows how its services were
+  // installed — so this asserts the CARRIAGE, including the absence.
+  const said = await enrolLlm({ name: 'alwaysbox', persistent: true });
+  assert.equal(said.persistent, true);
+
+  const quiet = await enrolLlm({ name: 'oldclibox' });
+  assert.equal('persistent' in quiet, false,
+    'an older CLI says nothing, and nothing must reach the client as nothing — not as false');
+
+  // ⚠ It must survive the read-back path too. The registration response is
+  // built by deviceView; the LIST is built by the same function from stored
+  // state, and a facet that only existed in the 201 would vanish from the one
+  // screen it was added for.
+  const list = await api('/v1/devices');
+  const row = (list.body.devices || []).find((d) => d.id === said.id);
+  assert.equal(row.persistent, true, JSON.stringify(row));
+  const old = (list.body.devices || []).find((d) => d.id === quiet.id);
+  assert.equal('persistent' in old, false);
+
+  // `huginn local persist` on a running machine changes it, and the runner
+  // carries the new answer on its 60s beat rather than on a re-enrolment that
+  // a healthy runner never performs.
+  const beat = await api(`/v1/devices/${quiet.id}/beat`, { method: 'POST', body: JSON.stringify({ persistent: true }) });
+  assert.equal(beat.status, 200);
+  const after = await api('/v1/devices');
+  assert.equal((after.body.devices || []).find((d) => d.id === quiet.id).persistent, true);
+});
+
 test('the catalog union is opt-in and computed from the registry', async () => {
   const dev = await enrolLlm({ name: 'rowbox' });
   const plain = await api('/v1/models');

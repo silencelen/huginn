@@ -184,6 +184,9 @@ private object LocalServeFlow {
     }
 }
 
+/** The shell's own platform, asked once — the manager reports its own. */
+private fun isWindowsHost() = System.getProperty("os.name")?.startsWith("Windows") == true
+
 @Composable
 internal fun LocalServeSection(store: AppStore) {
     val scope = rememberCoroutineScope()
@@ -291,11 +294,14 @@ internal fun LocalServeSection(store: AppStore) {
                     Muted("${d.bytes / (1024 * 1024)} MB  ${d.name}", Modifier.padding(start = 12.dp), maxLines = 1)
                 }
                 p.gate?.let { Muted(it.line, Modifier.padding(start = 4.dp, top = 2.dp), maxLines = 2) }
+                // ⚠ TRUE ON THE OS READING IT. This said "two always-on
+                // services" on every platform, and on Linux it was false: the
+                // manager wrote a systemd USER unit, which stops at logout.
+                // Persistence is the thing being consented to here.
                 Muted(
-                    "Installs two always-on services and offers this machine's models to huginn." +
-                        if (p.platform == "win32") " Windows will show one administrator (UAC) prompt." else "",
+                    LocalServe.consentServicesCopy(p.platform, p.elevation),
                     Modifier.padding(start = 4.dp, top = 2.dp),
-                    maxLines = 3,
+                    maxLines = 4,
                 )
                 Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(top = 6.dp)) {
                     val url = store.settings.baseUrlNow()
@@ -326,8 +332,30 @@ internal fun LocalServeSection(store: AppStore) {
             Modifier.padding(top = 8.dp, start = 4.dp),
             maxLines = 3,
         )
+        // The answer to "can other huginn clients still use this when I am not
+        // here", said on the machine that decides it. Nothing above this line
+        // could ever have told you: a user unit reports `active` right up
+        // until the session it belongs to ends.
+        val persistence = LocalServe.persistenceCopy(sv, isWindowsHost())
+        if (persistence.line.isNotBlank()) {
+            Muted(persistence.line, Modifier.padding(top = 4.dp, start = 4.dp), maxLines = 3)
+        }
+        if (sv.adopted) {
+            Muted(
+                "The model server itself was adopted, not installed here — stopping serving gives it " +
+                    "back untouched and only removes the runner.",
+                Modifier.padding(start = 4.dp),
+                maxLines = 3,
+            )
+        }
         Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(top = 6.dp)) {
             TextButton(onClick = { refresh() }, enabled = !busy) { Text("Refresh") }
+            persistence.action?.let { label ->
+                TextButton(
+                    onClick = { LocalServeFlow.run { LocalServe.persist { LocalServeFlow.line(it) } } },
+                    enabled = !busy,
+                ) { Text(label) }
+            }
             TextButton(
                 onClick = {
                     // Elevated on Windows: stopping a LocalSystem service is

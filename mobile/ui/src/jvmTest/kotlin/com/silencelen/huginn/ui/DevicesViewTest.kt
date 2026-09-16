@@ -87,11 +87,12 @@ class DevicesViewTest {
         online: Boolean = true,
         running: Boolean = false,
         models: List<DeviceModel> = listOf(DeviceModel("qwen3-8b", "Qwen3 8B")),
+        persistent: Boolean? = null,
     ) = Device(
         id = "d2", name = "datatreex-llm", platform = "windows",
         scope = "generate", effectiveScope = "generate",
         online = online, running = running, version = "0.12.1",
-        llmSlug = "datatreex-llm", models = models,
+        llmSlug = "datatreex-llm", models = models, persistent = persistent,
     )
 
     @Test
@@ -109,6 +110,32 @@ class DevicesViewTest {
     fun aServingRowIsHonestAboutReachabilityAndWork() {
         assertTrue(describeDevice(servingDevice(online = false)).contains("not reachable"))
         assertTrue(describeDevice(servingDevice(running = true)).contains("generating"))
+    }
+
+    @Test
+    fun aServingRowSaysWhetherItKeepsServingWhenNobodyIsLoggedIn() {
+        // The whole reason a serving row is interesting to ANOTHER client: a
+        // machine that only answers while its owner is sitting at it is a
+        // different offer from one that answers at 3am, and the two rendered
+        // identically. The informative half is the negative one.
+        assertTrue(describeDevice(servingDevice(persistent = true)).contains("always on"))
+        assertTrue(
+            describeDevice(servingDevice(persistent = false))
+                .contains("only while someone is logged in"),
+        )
+    }
+
+    @Test
+    fun aServingRowThatNeverSaidRendersNoClaimAtAll() {
+        // ⚠ A machine enrolled by a CLI older than the facet sends nothing, and
+        // the daemon omits the field. Drawing "only while someone is logged in"
+        // there would be a fact this client invented — and it would be wrong
+        // about every Windows box, which have been LocalSystem services since
+        // the tier shipped.
+        val line = describeDevice(servingDevice(persistent = null))
+        assertFalse(line.contains("always on"), line)
+        assertFalse(line.contains("logged in"), line)
+        assertEquals("windows · serves local models · Qwen3 8B · serving · v0.12.1", line)
     }
 
     @Test

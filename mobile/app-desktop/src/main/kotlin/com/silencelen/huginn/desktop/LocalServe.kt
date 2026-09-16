@@ -49,6 +49,28 @@ object LocalServe {
         val defaultModel: String? = null,
         val shimVersion: String? = null,
         val sessions: Int = 0,
+        /**
+         * The engine behind this row is somebody else's — an externally
+         * installed llama-swap this machine adopted rather than a stack the
+         * manager put there. What it changes here is what "Stop serving" can
+         * honestly promise.
+         */
+        val adopted: Boolean = false,
+        /**
+         * WILL THIS STILL BE SERVING AFTER I LOG OUT?
+         *
+         * The question no surface could answer. `services.llm: active` is true
+         * of a systemd USER unit five seconds before its owner logs out, which
+         * is exactly how this door came to say "always-on services" over a
+         * Linux install that was nothing of the kind.
+         *
+         * Three values, not two: null means the manager could not ask this
+         * machine (no logind), and that is different from a no. Null also
+         * arrives from a manager older than the facet.
+         */
+        val systemUnits: Boolean? = null,
+        val linger: Boolean? = null,
+        val persistent: Boolean? = null,
     )
 
     @Serializable
@@ -73,6 +95,17 @@ object LocalServe {
         val downloads: List<PlanDownload> = emptyList(),
         val needBytes: Long = 0,
         val gate: PlanGate? = null,
+        /**
+         * How the one elevation prompt would happen — "root", "pkexec",
+         * "sudo", or null when there is no way to become root on this machine.
+         * The consent card has to say which, because "Linux will ask for your
+         * password once" is a lie on a box with neither tool.
+         */
+        val elevation: String? = null,
+        /** What the install WOULD be. Null on Linux with no elevator: linger
+         *  is attempted and may not take, and promising in advance is the
+         *  mistake the old copy made. */
+        val persistent: Boolean? = null,
     )
 
     private val json = Json { ignoreUnknownKeys = true; explicitNulls = false }
@@ -251,13 +284,96 @@ object LocalServe {
             onLine("could not seed the daemon token: ${e.message}")
             return@withContext 2
         }
-        val args = listOf("on", "--yes", "--url", baseUrl)
+        val args = enableArgs(baseUrl, isWindows())
         if (isWindows()) runElevatedWindows(args, onLine) else run(*args.toTypedArray(), onLine = onLine)
+    }
+
+    /**
+     * What `on` is asked to install — and `--system` on Linux is the whole
+     * feature.
+     *
+     * Without it the manager writes a systemd USER unit, which dies at logout
+     * and does not exist until somebody has logged in once. This door has
+     * always run unelevated and never passed the flag, so every Linux machine
+     * set up from here stopped serving the moment its owner logged out, under
+     * a card that said "Installs two always-on services".
+     *
+     * The ELEVATION is not staged here the way Windows stages its UAC step:
+     * the manager re-runs itself under pkexec (sudo second) when it needs
+     * root, which is one prompt for the whole verb and keeps one
+     * implementation behind both doors. Declined, it falls back to linger and
+     * says so in its own output, which this section streams.
+     */
+    fun enableArgs(baseUrl: String, windows: Boolean): List<String> = buildList {
+        add("on"); add("--yes"); add("--url"); add(baseUrl)
+        // Windows needs no flag: WinSW installs LocalSystem services by
+        // construction, which is what --system is asking Linux for.
+        if (!windows) add("--system")
     }
 
     /** Stop serving — elevated on Windows for the same LocalSystem reason. */
     suspend fun disable(onLine: (String) -> Unit): Int = withContext(Dispatchers.IO) {
         if (isWindows()) runElevatedWindows(listOf("off"), onLine) else run("off", onLine = onLine)
+    }
+
+    /**
+     * Make an existing install survive logout. A no-op on Windows by
+     * construction, so it says so rather than shelling out to be told.
+     */
+    suspend fun persist(onLine: (String) -> Unit): Int = withContext(Dispatchers.IO) {
+        if (isWindows()) {
+            onLine("Windows already runs both services as LocalSystem — they serve while you are logged out.")
+            return@withContext 0
+        }
+        run("persist", "--yes", onLine = onLine)
+    }
+
+    /** One line, and the button that fixes it when there is one. */
+    data class PersistenceCopy(val line: String, val action: String?)
+
+    /**
+     * The copy rule, as a pure function, because it is the part of this
+     * feature that can be wrong while every pixel looks right.
+     *
+     * The load-bearing branch is `false`: it is the state every Linux install
+     * has silently been in, and it is the only one that earns an action. A
+     * `null` must never borrow the reassuring line — "could not tell" is its
+     * own answer, and saying "serves while you are logged out" about a machine
+     * nobody asked is the same lie in a quieter voice.
+     */
+    fun persistenceCopy(status: Status, windows: Boolean): PersistenceCopy = when {
+        !status.setup -> PersistenceCopy("", null)
+        status.persistent == true && windows ->
+            PersistenceCopy("Serves while you are logged out — Windows services (LocalSystem).", null)
+        status.persistent == true && status.systemUnits == true ->
+            PersistenceCopy("Serves while you are logged out — system services.", null)
+        status.persistent == true ->
+            PersistenceCopy("Serves while you are logged out — your services are kept alive by linger.", null)
+        status.persistent == false -> PersistenceCopy(
+            "Stops when you log out — this machine only serves while you are logged in.",
+            "Make it permanent",
+        )
+        else -> PersistenceCopy("Whether this survives logging out could not be determined on this machine.", null)
+    }
+
+    /**
+     * The consent card's line about the two services — TRUE on the OS reading
+     * it. "Installs two always-on services" was printed on Linux over a user
+     * unit that dies at logout, which is the single thing somebody is
+     * consenting to here.
+     */
+    fun consentServicesCopy(platform: String, elevation: String?): String = when {
+        platform == "win32" ->
+            "Installs two always-on services (LocalSystem) and offers this machine's models to huginn. " +
+                "Windows will show one administrator (UAC) prompt."
+        platform == "linux" && elevation != null ->
+            "Installs two system services, so this machine keeps serving while you are logged out, " +
+                "and offers its models to huginn. Linux will ask for your password once."
+        platform == "linux" ->
+            "Installs two services in your own login session and offers this machine's models to huginn. " +
+                "There is no pkexec or sudo here, so they can only be kept alive by linger — " +
+                "this machine may stop serving when you log out."
+        else -> "Installs two services and offers this machine's models to huginn."
     }
 
     /**
