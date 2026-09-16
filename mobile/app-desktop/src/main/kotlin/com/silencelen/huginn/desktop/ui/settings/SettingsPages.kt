@@ -24,7 +24,7 @@ import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.unit.dp
 import com.silencelen.huginn.data.Account
-import com.silencelen.huginn.data.AppdRoutes
+import com.silencelen.huginn.data.HuginnSettings
 import com.silencelen.huginn.data.Autoswitch
 import com.silencelen.huginn.data.HeadroomSettings
 import com.silencelen.huginn.data.LoginSession
@@ -46,7 +46,9 @@ import com.silencelen.huginn.ui.settings.QuickActionsEditor
 import com.silencelen.huginn.ui.settings.SettingsActionRow
 import com.silencelen.huginn.ui.settings.SettingsFieldRow
 import com.silencelen.huginn.ui.settings.SettingsNavRow
+import com.silencelen.huginn.ui.settings.RouteListActions
 import com.silencelen.huginn.ui.settings.SettingsReadOnlyRow
+import com.silencelen.huginn.ui.settings.SettingsRouteListRow
 import com.silencelen.huginn.ui.settings.SettingsToggleRow
 import com.silencelen.huginn.ui.settings.SettingsRowStyle
 import kotlinx.coroutines.launch
@@ -86,44 +88,51 @@ import java.net.URI
 /**
  * Where huginn is and which Claude login serves it.
  *
- * ⚠ THE ADDRESS FIELD REFUSES rather than saving and failing later: the bearer
- * token follows the base URL on every request, so an arbitrary address is a
- * one-field path to handing a root-equivalent daemon token to a stranger. The
- * refusal is the store's own sentence, shown verbatim — a setting that silently
- * does not take is worse than one that says no.
+ * ⚠ AN ADDRESS IS REFUSED rather than saved and failed later: the bearer token
+ * follows the base URL on every request, so an arbitrary address is a one-field
+ * path to handing a root-equivalent daemon token to a stranger. The rule now
+ * lives in `:core` as [com.silencelen.huginn.data.RouteGuard] rather than as
+ * this client's own four-host list — it had to stop being a list once the owner
+ * could add routes, and moving it put the PHONE behind the same guard for the
+ * first time. The refusal is that guard's sentence, shown verbatim.
+ *
+ * WHAT USED TO BE HERE: a read-only row printing `known routes: Tailscale
+ * http://… Yggdrasil http://…` as a flat string, and a Base URL box with its own
+ * Save. One could not be changed and the other could not be named.
  */
 @Composable
 fun ColumnScope.HostPage(store: AppStore, mark: String?) {
     val settings = store.settings
     val scope = rememberCoroutineScope()
-    val route by store.route.collectAsState()
+    val book by store.routeBook.collectAsState()
+    val health by store.routeHealth.collectAsState()
+    val resolving by store.resolvingRoute.collectAsState()
+    val routeNote by store.routeNote.collectAsState()
 
-    var url by remember(route) { mutableStateOf(route) }
     var token by remember { mutableStateOf(settings.tokenNow()) }
     var message by remember { mutableStateOf<String?>(null) }
 
-    SettingsReadOnlyRow(
-        id = "host.route",
-        title = "Route",
-        value = route,
-        summary = "known routes: " + AppdRoutes.ALL.joinToString("  ") { "${it.label} ${it.url}" },
-        highlighted = SettingsRowStyle.isHighlighted("host.route", mark),
-    )
-    SettingsFieldRow(
-        id = "host.base-url",
-        title = "Base URL",
-        value = url,
-        onValueChange = { url = it },
-        summary = "Which address reaches huginn. Saving it pins this route.",
-        highlighted = SettingsRowStyle.isHighlighted("host.base-url", mark),
-        trailing = {
-            Button(onClick = {
-                scope.launch {
-                    message = runCatching { settings.selectRoute(url, pinned = true) }
-                        .fold({ "saved — route pinned" }, { it.message })
-                }
-            }) { Text("Save") }
+    SettingsRouteListRow(
+        book = book,
+        actions = remember(store) {
+            RouteListActions(
+                activate = { store.activateRoute(it) },
+                rename = { id, name -> store.renameRoute(id, name) },
+                setUrl = { id, url -> store.setRouteUrl(id, url) },
+                move = { id, delta -> store.moveRoute(id, delta) },
+                remove = { store.removeRoute(it) },
+                add = { name, url -> store.addRoute(name, url) },
+                setAutoSwitch = { store.setAutoSwitch(it) },
+                findLive = { store.findLiveRoute() },
+            )
         },
+        health = health,
+        nowMs = System.currentTimeMillis(),
+        summary = "The addresses that reach huginn, tried in this order.",
+        highlighted = SettingsRowStyle.isHighlighted("host.route", mark),
+        finding = resolving,
+        note = routeNote,
+        suggestedUrl = HuginnSettings.DEFAULT_BASE_URL,
     )
     SettingsFieldRow(
         id = "host.token",
