@@ -75,6 +75,9 @@ class HuginnClient(
      * one only against the behaviour described beside it.
      */
     companion object {
+        /** What a call says when nothing is pinned yet. A first run, not a fault. */
+        const val NO_ROUTE: String = "No route yet — add the address huginn answers on in Settings"
+
         /** Establishing the connection. Short: a route that does not answer must fail fast enough for the resolver to try the next one. */
         const val CONNECT_TIMEOUT_MS: Long = 8_000
 
@@ -156,7 +159,16 @@ class HuginnClient(
      * builder's own extension, and a helper by that name resolves to the wrong
      * one there — silently, since both take a String.
      */
-    private fun absolute(path: String): String = withScheme(baseUrlProvider()) + path
+    private fun absolute(path: String): String {
+        val base = baseUrlProvider()
+        // ⚠ AN EMPTY BASE URL IS A STATE, NOT A URL. A fresh install pins no
+        // route, so this is what every call makes on first launch — and
+        // `withScheme("")` produces `http:///v1/status`, whose parse failure
+        // surfaced in the status bar as the word "v1". Said plainly instead, and
+        // said here so both shells say the same thing.
+        if (base.isBlank()) throw HuginnException(0, NO_ROUTE)
+        return withScheme(base) + path
+    }
 
     private fun withScheme(base: String): String {
         val b = base.trim().trimEnd('/')
