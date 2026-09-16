@@ -36,7 +36,8 @@ class DraftBookTest {
         // remembers more than drafts.
         override val baseUrl: Flow<String> = MutableStateFlow("")
         override val token: Flow<String> = MutableStateFlow("")
-        override val routePinned: Flow<Boolean> = MutableStateFlow(false)
+        override val routeBook: Flow<com.silencelen.huginn.data.RouteBook> =
+            MutableStateFlow(com.silencelen.huginn.data.RouteBook())
         override val fontScale: Flow<Float> = MutableStateFlow(9f)
         override val notifyEnabled: Flow<Boolean> = MutableStateFlow(true)
         override val watchEnabled: Flow<Boolean> = MutableStateFlow(true)
@@ -48,9 +49,9 @@ class DraftBookTest {
         override val lastAlarmAt: Flow<Long> = MutableStateFlow(0)
         override val lastWatchError: Flow<String> = MutableStateFlow("")
         override val lastWatchErrorAt: Flow<Long> = MutableStateFlow(0)
-        override suspend fun setBaseUrl(value: String) = Unit
+
         override suspend fun setToken(value: String) = Unit
-        override suspend fun selectRoute(url: String, pinned: Boolean) = Unit
+        override suspend fun setRouteBook(value: com.silencelen.huginn.data.RouteBook) = Unit
         override suspend fun clientId(): String = "test"
         override suspend fun setFontScale(value: Float) = Unit
         override suspend fun setNotifyEnabled(value: Boolean) = Unit
