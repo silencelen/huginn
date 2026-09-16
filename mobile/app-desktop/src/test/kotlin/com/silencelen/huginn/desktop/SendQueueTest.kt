@@ -65,6 +65,17 @@ class SendQueueTest {
     }
 
     @Test
+    fun `a session still starting says it is waiting for Claude to start`() {
+        // appd 3.0.7 holds a send into a just-created session until the composer
+        // draws (blockedBy "starting"). The turn sentence there would describe a
+        // turn that has not begun.
+        assertEquals(
+            "Queued · waiting for Claude to start (1 waiting)",
+            SendQueue.line(TypingState(queued = 1, blockedBy = "starting")),
+        )
+    }
+
+    @Test
     fun `an error is shown verbatim and wins over the count`() {
         // The daemon knows why it could not deliver; a paraphrase here would be
         // this client guessing about the other end of a queue it does not own.
