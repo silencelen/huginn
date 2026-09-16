@@ -238,10 +238,208 @@ function parseFlags(argv, known) {
   return { flags };
 }
 
+// ------------------------------------------------- running other programs
+
+/**
+ * EVERY external command this file runs goes through here.
+ *
+ * Not indirection for its own sake: the persistence rules are decisions about
+ * machines this code is never running on — a headless server with no logind, a
+ * laptop that logs out, a box with neither pkexec nor sudo — and the only
+ * honest way to gate a decision about a machine you are not sitting at is to
+ * drive the commands through a shim. The alternative is a test that asserts
+ * the behaviour of THIS box and calls it coverage.
+ */
+const realRun = (cmd, args, opts = {}) => spawnSync(cmd, args, { encoding: 'utf8', ...opts });
+let RUN = realRun;
+/** Tests only. Passing nothing restores the real one. */
+function setRunner(fn) { RUN = fn || realRun; }
+
+const isRoot = () => typeof process.getuid === 'function' && process.getuid() === 0;
+
+/**
+ * The human whose machine this is — the unit's `User=`, and the subject of
+ * linger.
+ *
+ * Under an elevation the process user is root, and `os.userInfo()` would name
+ * root: that installs a model server running as root and enables linger for an
+ * account that has no session. Both are wrong in a way nothing would ever
+ * report, so the invoking identity is carried explicitly and the two
+ * elevators' own breadcrumbs are the fallbacks.
+ */
+function serviceUser() {
+  const named = process.env.HUGINN_LOCAL_USER || process.env.SUDO_USER || null;
+  if (named && named !== 'root') return named;
+  if (process.env.PKEXEC_UID) {
+    const r = RUN('id', ['-nu', String(process.env.PKEXEC_UID)]);
+    const who = String((r && r.stdout) || '').trim();
+    if (who) return who;
+  }
+  return named || os.userInfo().username;
+}
+
+/** The numeric pair the elevated half needs to hand a tree back. */
+function userIds(user = serviceUser()) {
+  const one = (flag) => {
+    const r = RUN('id', [flag, user]);
+    const n = Number(String((r && r.stdout) || '').trim());
+    return Number.isInteger(n) ? n : null;
+  };
+  return { uid: one('-u'), gid: one('-g') };
+}
+
+/**
+ * `systemctl --user`, aimed at the RIGHT user manager.
+ *
+ * Under an elevation the process is root and root's `--user` bus is root's
+ * own — so a `stop` there exits 0 having stopped nothing, and the old
+ * session-scoped service keeps holding 127.0.0.1:8748 while the new system
+ * unit fails to bind it. `runuser` plus the user's own XDG_RUNTIME_DIR is the
+ * aim; everywhere else this is the plain call it always was.
+ */
+function userSystemctl(args) {
+  const user = serviceUser();
+  if (!isRoot() || user === 'root') return RUN('systemctl', ['--user', ...args]);
+  const { uid } = userIds(user);
+  const env = { ...process.env };
+  if (uid != null) env.XDG_RUNTIME_DIR = `/run/user/${uid}`;
+  return RUN('runuser', ['-u', user, '--', 'systemctl', '--user', ...args], { env });
+}
+
+// ------------------------------------------------------------ persistence
+
+/**
+ * Whether logind keeps this user's services running with nobody logged in.
+ *
+ * THREE answers, not two: yes, no, and "this machine cannot tell me" (no
+ * logind, an unknown user, a container with no session bus). The third is not
+ * a no — reading it as one would put a permanent false alarm on every box that
+ * has no logind to ask.
+ */
+function lingerState(user = serviceUser()) {
+  const r = RUN('loginctl', ['show-user', user, '--property=Linger']);
+  if (!r || r.error || r.status !== 0) return null;
+  const m = /Linger\s*=\s*(\w+)/i.exec(String(r.stdout || ''));
+  return m ? /^(yes|true|1)$/i.test(m[1]) : null;
+}
+
+function enableLinger(user = serviceUser()) {
+  const r = RUN('loginctl', ['enable-linger', user]);
+  if (!r || r.error) return { ok: false, error: (r && r.error && r.error.message) || 'loginctl is not on this machine' };
+  if (r.status !== 0) return { ok: false, error: String(r.stderr || '').trim() || `loginctl exited ${r.status}` };
+  return { ok: true };
+}
+
+/**
+ * Will this install still be serving after the person at the keyboard logs
+ * out? Three answers again, and the one that matters is `false` — it is the
+ * state every Linux install has landed in by default since this tier shipped,
+ * with `systemctl --user is-active` reporting `active` right up until logout.
+ */
+function persistence(conf, platform = process.platform) {
+  // WinSW installs both services as LocalSystem, in session 0. There is no
+  // logon for them to depend on and no linger concept to report.
+  if (platform === 'win32') return { systemUnits: true, linger: null, persistent: true };
+  if (platform !== 'linux') return { systemUnits: null, linger: null, persistent: null };
+  if (conf && conf.systemUnits) return { systemUnits: true, linger: null, persistent: true };
+  const linger = lingerState();
+  return { systemUnits: false, linger, persistent: linger === null ? null : linger };
+}
+
+/** The one sentence every surface says about it, so they cannot disagree. */
+function persistenceLine(p, platform = process.platform) {
+  if (p.persistent === true) {
+    if (platform === 'win32') return 'serves while you are logged out (LocalSystem services)';
+    return p.systemUnits
+      ? 'serves while you are logged out (systemd system units)'
+      : 'serves while you are logged out (user units, linger on)';
+  }
+  if (p.persistent === false) {
+    return 'STOPS WHEN YOU LOG OUT — user units with no linger. Make it permanent: huginn local persist';
+  }
+  return 'cannot tell whether this survives logging out — logind did not answer';
+}
+
+// -------------------------------------------------------------- elevation
+
+/** In preference order: the desktop's own prompt first, then the headless one. */
+const ELEVATORS = ['pkexec', 'sudo'];
+
+/**
+ * How this process could become root, ONCE — or null when it cannot.
+ *
+ * `null` is a real answer here and is never an error: a box with neither tool
+ * still gets a working local tier, it just gets the linger fallback and is
+ * told so. Silently installing something weaker than what was asked for is the
+ * failure this returns a value to avoid.
+ */
+function elevator({ platform = process.platform, root = isRoot() } = {}) {
+  if (platform !== 'linux') return null;
+  if (root) return 'root';
+  for (const e of ELEVATORS) {
+    const r = RUN('sh', ['-c', `command -v ${e}`]);
+    if (r && !r.error && r.status === 0 && String(r.stdout || '').trim()) return e;
+  }
+  return null;
+}
+
+/**
+ * ONE elevation, the Windows shape: the whole verb re-runs as root rather than
+ * a password prompt per systemctl call.
+ *
+ * pkexec and sudo both wipe the environment, and EVERY path this manager uses
+ * hangs off somebody's HOME — so the three variables that decide where it
+ * works and who it installs for are carried explicitly through `env`, never
+ * inherited and never guessed. A dropped HOME here is an install into
+ * /root/.config that reports success.
+ */
+function elevationArgv(tool, argv, env) {
+  const pairs = Object.entries(env)
+    .filter(([, v]) => v != null && v !== '')
+    .map(([k, v]) => `${k}=${v}`);
+  return [tool, ['env', ...pairs, process.execPath, __filename, ...argv]];
+}
+
+function runElevated(tool, argv) {
+  const [cmd, args] = elevationArgv(tool, argv, {
+    HOME: os.homedir(),
+    HUGINN_LOCAL_DIR: localDir(),
+    HUGINN_LOCAL_USER: serviceUser(),
+    HUGINN_SHIM_SOURCE: process.env.HUGINN_SHIM_SOURCE,
+  });
+  const r = RUN(cmd, args, { stdio: 'inherit' });
+  if (r && !r.error && r.status === 0) return { ok: true };
+  return { ok: false, status: r ? r.status : null, error: r && r.error ? r.error.message : null };
+}
+
+/**
+ * An elevated `on` writes every file as root into a directory the SERVICE then
+ * reads as the person who owns the machine — `api-key` at 0600 included, which
+ * root would keep to itself. Handing the tree back is not tidiness: without it
+ * llama-server starts under `User=` and cannot read the key it is given.
+ */
+function handBackOwnership(dir = localDir(), user = serviceUser()) {
+  if (!isRoot() || user === 'root') return false;
+  const { uid, gid } = userIds(user);
+  if (uid == null || gid == null) return false;
+  const walk = (p) => {
+    let st;
+    try { st = fs.lstatSync(p); } catch { return; }
+    try { fs.chownSync(p, uid, gid); } catch { /* best effort, per entry */ }
+    if (st.isDirectory()) {
+      let names = [];
+      try { names = fs.readdirSync(p); } catch { return; }
+      for (const n of names) walk(path.join(p, n));
+    }
+  };
+  walk(dir);
+  return true;
+}
+
 // -------------------------------------------------------------- detection
 
 function gpus() {
-  const r = spawnSync('nvidia-smi', ['--query-gpu=memory.total,uuid,name', '--format=csv,noheader,nounits'], { encoding: 'utf8' });
+  const r = RUN('nvidia-smi', ['--query-gpu=memory.total,uuid,name', '--format=csv,noheader,nounits']);
   if (r.error || r.status !== 0) return [];
   return r.stdout.trim().split('\n').filter(Boolean).map((l) => {
     const [mem, uuid, ...name] = l.split(',').map((s) => s.trim());
@@ -472,12 +670,30 @@ const LLM_SERVICE = 'huginn-local-llm';
 const RUNNER_SERVICE = 'huginn-local-runner';
 
 /**
+ * The engines adapter mode can WRAP — never install, never bundle (vendor
+ * terms), never start.
+ *
+ * `llama-swap` is this tier's own stack, adopted rather than managed: a box
+ * where somebody hand-edited llama-swap.yaml to add a model the pinned
+ * manifest does not carry is a real machine in this fleet, and the choice is
+ * between supporting that shape explicitly or having it stay off-book. It gets
+ * the keyless-completions gate because it CAN clear it — llama-server takes an
+ * --api-key-file. LM Studio and Ollama commonly run open on loopback, so the
+ * same gate there would refuse every ordinary install; they keep the note.
+ */
+const ADAPTERS = {
+  'llama-swap': { url: 'http://127.0.0.1:8748', keyGate: true },
+  lmstudio: { url: 'http://127.0.0.1:1234', keyGate: false },
+  ollama: { url: 'http://127.0.0.1:11434', keyGate: false },
+};
+
+/**
  * Both units pin HOME and HUGINN_LOCAL_DIR (and the runner HUGINN_DEVICE_DIR):
  * the device-unit lesson — a unit that pins HOME in a six-line comment and
  * then drops the variable that moves the same files produces a service that
  * loops forever while systemd reports it healthy.
  */
-function unitText(which, { system = false, user = os.userInfo().username, home = os.homedir(), dir = localDir(), node = process.execPath, runner = path.join(os.homedir(), '.huginn', 'huginn-device'), manifest = MANIFEST } = {}) {
+function unitText(which, { system = false, user = serviceUser(), home = os.homedir(), dir = localDir(), node = process.execPath, runner = path.join(os.homedir(), '.huginn', 'huginn-device'), manifest = MANIFEST } = {}) {
   if (which === 'llm') {
     return `[Unit]
 Description=Huginn local model server (llama-swap fronting llama-server, loopback only)
@@ -541,8 +757,38 @@ function winswXml(which, { dir = localDir(), node = process.execPath, manifest =
 }
 
 function sysctl(args, { user = false } = {}) {
-  const base = user ? ['--user'] : [];
-  return spawnSync('systemctl', [...base, ...args], { encoding: 'utf8' });
+  return user ? userSystemctl(args) : RUN('systemctl', args);
+}
+
+/** Where a unit file for [name] lives, in each of the two scopes. */
+function unitFile(name, { system, home = os.homedir() } = {}) {
+  return system
+    ? `/etc/systemd/system/${name}.service`
+    : path.join(home, '.config', 'systemd', 'user', `${name}.service`);
+}
+
+/**
+ * A systemd USER unit is bound to a login session: it dies at logout, and it
+ * does not exist at all until somebody has logged in once. Linger is the one
+ * switch that unbinds it — and nothing in this tool ever touched it, so every
+ * Linux install this manager has ever done quietly stopped serving the moment
+ * its owner logged out. Attempted, then REPORTED, whichever way it goes.
+ */
+function ensureLinger() {
+  const user = serviceUser();
+  if (lingerState(user) === true) {
+    console.log(`  linger  already on for ${user} — this install serves while you are logged out`);
+    return true;
+  }
+  const r = enableLinger(user);
+  const after = r.ok ? lingerState(user) : false;
+  if (r.ok && after !== false) {
+    console.log(`  linger  enabled for ${user} — this install serves while you are logged out`);
+    return true;
+  }
+  console.log(`  linger  NOT enabled for ${user}${r.error ? ` (${r.error})` : ''}`);
+  console.log('          this install STOPS when you log out — make it permanent: huginn local persist');
+  return false;
 }
 
 /**
@@ -554,8 +800,8 @@ function sysctl(args, { user = false } = {}) {
  */
 function isElevatedWin() {
   if (process.platform !== 'win32') return true;
-  const r = spawnSync('net', ['session'], { encoding: 'utf8' });
-  return r.status === 0;
+  const r = RUN('net', ['session']);
+  return !!r && r.status === 0;
 }
 
 function refuseUnelevated(doing) {
@@ -566,9 +812,7 @@ function refuseUnelevated(doing) {
 
 function installServiceLinux(which, { system }) {
   const name = which === 'llm' ? LLM_SERVICE : RUNNER_SERVICE;
-  const file = system
-    ? `/etc/systemd/system/${name}.service`
-    : path.join(os.homedir(), '.config', 'systemd', 'user', `${name}.service`);
+  const file = unitFile(name, { system });
   fs.mkdirSync(path.dirname(file), { recursive: true });
   fs.writeFileSync(file, unitText(which, { system }));
   let r = sysctl(['daemon-reload'], { user: !system });
@@ -601,7 +845,7 @@ function serviceState(which, conf) {
   if (process.platform === 'win32') {
     const exe = P('runtime', 'winsw', `${name}.exe`);
     if (!fs.existsSync(exe)) return 'not installed';
-    const r = spawnSync(exe, ['status'], { encoding: 'utf8' });
+    const r = RUN(exe, ['status']);
     return (r.stdout || '').trim() || 'unknown';
   }
   const r = sysctl(['is-active', name], { user: !(conf && conf.systemUnits) });
@@ -670,6 +914,7 @@ function runnerPath() {
 }
 
 function enrolDevice(conf, models) {
+  const p = persistence(conf);
   const devDir = P('device');
   fs.mkdirSync(devDir, { recursive: true });
   const devConf = path.join(devDir, 'device.json');
@@ -689,6 +934,11 @@ function enrolDevice(conf, models) {
     // scope refuses every claude mode anyway.
     llm: P('bin', 'huginn-llm-shim.js'),
     models: models.map((m) => ({ slug: m.slug, display: m.display })),
+    // The FACET the fleet view reads: does this box serve with nobody logged
+    // in? Written here because only the manager knows how the services were
+    // installed — the runner just forwards it. Omitted rather than guessed
+    // when this machine cannot answer, because `false` is a claim.
+    ...(typeof p.persistent === 'boolean' ? { persistent: p.persistent } : {}),
   }, null, 2) + '\n', { mode: 0o600 });
   const r = spawnSync(process.execPath, [runnerPath(), 'on'], {
     encoding: 'utf8',
@@ -714,9 +964,55 @@ function narrowClass(det, cls) {
   return null;
 }
 
+/**
+ * `--system` on Linux, resolved to ONE prompt or an honest fallback.
+ *
+ * Decision 33's shape: system units behind a single elevation, exactly as
+ * Windows installs LocalSystem services behind a single UAC prompt. A machine
+ * offering itself is a machine, not one person's session — so the whole verb
+ * re-runs as root rather than asking per systemctl call.
+ *
+ * When there is nothing to elevate WITH, or the prompt is declined, this does
+ * not fail and does not pretend: it drops to a user unit and marks the run as
+ * owing an explicit linger, which the caller then reports either way.
+ * Returns 'done' when the elevated child did the work and this process should
+ * stop, 'direct' when it should carry on itself.
+ */
+function resolveSystemInstall(flags, argv = process.argv.slice(2)) {
+  if (process.platform !== 'linux' || !flags.system || isRoot()) return 'direct';
+  const tool = elevator();
+  if (tool && tool !== 'root') {
+    console.log(`  elevating once with ${tool} — the services install into /etc/systemd/system`);
+    const r = runElevated(tool, argv);
+    if (r.ok) return 'done';
+    console.log(`  ${tool} did not elevate (${r.error || `exit ${r.status}`}) — falling back to a user unit kept alive by linger`);
+  } else {
+    console.log('  no pkexec and no sudo here — falling back to a user unit kept alive by linger');
+  }
+  flags.system = false;
+  flags.lingerFallback = true;
+  return 'direct';
+}
+
+/**
+ * Linger is settled BEFORE enrolment, not after: the device row carries a
+ * `persistent` facet computed from this very answer, and a row enrolled while
+ * linger was still off would tell the fleet view "only while someone is logged
+ * in" about a machine that had just been made permanent.
+ */
+function settlePersistence(conf) {
+  if (process.platform === 'linux' && !conf.systemUnits) ensureLinger();
+}
+
+/** Said once at the end, whichever road got us here. */
+function reportPersistence(conf) {
+  console.log(`  persist ${persistenceLine(persistence(conf))}`);
+}
+
 async function cmdOn(flags) {
   if (!MANIFEST) { console.error('this file was not generated correctly — run: node scripts/gen-local-manifest.js'); process.exit(2); }
   refuseUnelevated('turning on');
+  if (resolveSystemInstall(flags) === 'done') return;
   const det = detectClass();
   if (det.refuse && !flags.adapter) { console.error(`refused: ${det.refuse}`); process.exit(1); }
   if (flags.class) {
@@ -732,19 +1028,49 @@ async function cmdOn(flags) {
   if (flags.adapter) {
     // ---- adapter mode: wrap what already serves; install nothing heavy
     const kind = String(flags.adapter).toLowerCase();
-    if (!['ollama', 'lmstudio'].includes(kind)) { console.error(`unknown adapter "${flags.adapter}" — ollama or lmstudio`); process.exit(2); }
-    const url = flags['adapter-url'] || (kind === 'ollama' ? 'http://127.0.0.1:11434' : 'http://127.0.0.1:1234');
+    if (!ADAPTERS[kind]) { console.error(`unknown adapter "${flags.adapter}" — ${Object.keys(ADAPTERS).join(', ')}`); process.exit(2); }
+    // ⚠ NEVER ON TOP OF A MANAGED INSTALL. Adoption and management share
+    // local.json, api-key and the model dir, and `saveConf` here would
+    // overwrite the config of a tier this machine already runs — then `off`
+    // would delete a key that is not ours. Two tiers, two directories.
+    if (conf.mode === 'managed') {
+      console.error(`refused: ${localDir()} already holds a MANAGED install (class ${conf.class || '?'}) — adopting into it would overwrite its config and its api key. Turn that off first, or point HUGINN_LOCAL_DIR at a directory of its own.`);
+      process.exit(1);
+    }
+    const url = flags['adapter-url'] || ADAPTERS[kind].url;
     const host = new URL(url).hostname;
     if (!['127.0.0.1', 'localhost', '::1'].includes(host)) {
       console.error(`refused: the adapter must be on loopback (got ${host}) — the local tier's contract is loopback-only`);
       process.exit(1);
     }
     conf.mode = 'adapter';
+    // Said in the config, not inferred later: the engine behind an adapter
+    // belongs to somebody else — an externally installed llama-swap with its
+    // own yaml and its own extra models — and every later verb has to know
+    // that before it stops or deletes anything.
+    conf.adopted = true;
     conf.adapter = { kind, url, key: flags['adapter-key'] || null };
     const h = await health(conf);
     if (!h.models.length) {
       console.error(`refused: ${url} ${h.reachable ? `answered but serves NO models — an alive endpoint with an empty list is the trap, not a healthy install` : `is not answering (${h.error || h.status})`}`);
       process.exit(1);
+    }
+    // The SAME keyless-completions gate a managed install must clear, for the
+    // adapters that speak the same dialect. An adopted llama-swap is our own
+    // stack installed by hand, so it gets the hard gate: a keyless completion
+    // being answered means anything that reaches loopback can spend this
+    // machine's model, and enrolling it would offer that to the daemon.
+    if (ADAPTERS[kind].keyGate) {
+      const probe = await postStatus(`${url}/v1/chat/completions`, null,
+        { model: h.models[0], messages: [{ role: 'user', content: 'x' }], max_tokens: 1 });
+      if (probe === 0) {
+        console.log('  note: could not run the keyless-completions guardrail probe — verify by hand that a keyless completion is refused');
+      } else if (probe !== 401 && probe !== 403) {
+        console.error(`refused: a KEYLESS completions request to ${url} was answered ${probe} (expected 401/403) — this engine is NOT key-gated, so it is not adoptable. Give llama-server an --api-key-file and try again.`);
+        process.exit(1);
+      } else {
+        console.log('  ok: keyless completions are refused — the adopted engine enforces its key');
+      }
     }
     conf.class = det.refuse ? 'adapter' : det.cls;
     conf.modelsBySlug = {};
@@ -755,15 +1081,24 @@ async function cmdOn(flags) {
     });
     conf.defaultModel = models[0].slug;
     console.log(`adapter ${kind} at ${url}: ${h.models.length} model(s) — ${h.models.slice(0, 4).join(', ')}${h.models.length > 4 ? ', …' : ''}`);
+    // ⚠ RECORDED, not re-derived. `off`, `status` and `update` all ask
+    // conf.systemUnits which systemd scope to talk to, and the adapter branch
+    // never wrote it — so an adapter runner installed with --system was later
+    // looked for on the USER bus, where it does not exist: `status` reported
+    // "not installed" for a running service and `off` left it running.
+    conf.systemUnits = process.platform === 'win32' ? true : !!flags.system;
     installShimCopy();
     if (!flags.yes && !(await consent(`Wrap the existing ${kind} at ${url}, install the runner service, and offer "${conf.deviceName}" to huginn at ${conf.url}?`))) process.exit(1);
     saveConf(conf);
+    settlePersistence(conf);
     // Enrol before the runner service starts — see the managed branch: the
     // service's own enrolment must find the id already on disk.
     const e = enrolDevice(conf, models);
     conf.llmSlug = e.llmSlug; saveConf(conf);
     installRunnerService(flags);
-    console.log(`\nOn. ${conf.deviceName} serves ${models.length} adapter model(s) to huginn.`);
+    if (process.platform === 'linux' && isRoot()) handBackOwnership();
+    reportPersistence(conf);
+    console.log(`\nOn. ${conf.deviceName} serves ${models.length} adopted model(s) from ${kind} to huginn.`);
     return;
   }
 
@@ -779,7 +1114,7 @@ async function cmdOn(flags) {
 
   console.log('\nThe plan:');
   for (const d of plan.downloads) console.log(`  ${(d.bytes / (1024 * 1024)).toFixed(0).padStart(6)} MB  ${d.name}`);
-  console.log(`  services ${LLM_SERVICE} + ${RUNNER_SERVICE}${process.platform === 'win32' ? ' (WinSW, LocalSystem)' : (flags.system ? ' (systemd, system)' : ' (systemd, user — needs linger)')}`);
+  console.log(`  services ${LLM_SERVICE} + ${RUNNER_SERVICE}${servicePlanLine(flags)}`);
   console.log(`  llama-swap on 127.0.0.1:8748, api key at ${P('api-key')} — loopback only, authenticated`);
   console.log(`  device row "${conf.deviceName}" at scope generate → ${conf.url}`);
   if (!flags.yes && !(await consent('Install all of the above?'))) process.exit(1);
@@ -818,6 +1153,7 @@ async function cmdOn(flags) {
   saveConf(conf);
   // 5: services
   if (process.platform === 'win32') { installServiceWindows('llm'); } else { installServiceLinux('llm', { system: !!flags.system }); }
+  settlePersistence(conf);
   // 6: health, honestly
   let h = null;
   for (let i = 0; i < 30; i++) { h = await health(conf); if (h.models.length) break; await new Promise((r) => setTimeout(r, 2000)); }
@@ -855,7 +1191,22 @@ async function cmdOn(flags) {
     models: plan.models.map((m) => m.slug), manifestHash: manifestHash(),
   };
   saveConf(conf);
+  if (process.platform === 'linux' && isRoot()) handBackOwnership();
+  reportPersistence(conf);
   console.log(`\nOn. class ${conf.class}, ${plan.models.length} model(s), device "${conf.deviceName}"${conf.llmSlug ? ` (slug ${conf.llmSlug})` : ''}.`);
+}
+
+/**
+ * What the consent card says about the two services, TRUE on the OS reading
+ * it. "always-on" was printed on Linux for a user unit that dies at logout,
+ * which is the one thing about this tier somebody consents to.
+ */
+function servicePlanLine(flags, platform = process.platform) {
+  if (platform === 'win32') return ' (WinSW, LocalSystem — serve while you are logged out)';
+  if (platform !== 'linux') return '';
+  if (flags.system) return ' (systemd system units — serve while you are logged out)';
+  if (flags.lingerFallback) return ' (systemd USER units — kept alive by linger, or they stop when you log out)';
+  return ' (systemd user units — they STOP when you log out unless linger is on; --system makes them permanent)';
 }
 
 function installShimCopy() {
@@ -932,9 +1283,15 @@ async function cmdOff(flags) {
     try { fn(); console.log(`  ok      ${name}`); }
     catch (e) { failed += 1; console.error(`  FAILED  ${name}: ${e.message}`); }
   };
+  // ⚠ ONLY THE SERVICES THIS TIER INSTALLED. In adapter mode the model server
+  // belongs to somebody else — an externally installed llama-swap with its own
+  // yaml and its own extra models — and stopping it here would take down a
+  // service this tool never started, on the one kind of box where that is the
+  // whole point. Adoption ends by giving the engine back, untouched.
+  const ours = conf.mode === 'adapter' ? ['runner'] : ['runner', 'llm'];
   // Runner first, so nothing re-enrols while the rest comes down.
   if (process.platform === 'win32') {
-    for (const which of ['runner', 'llm']) {
+    for (const which of ours) {
       const name = which === 'runner' ? RUNNER_SERVICE : LLM_SERVICE;
       const exe = P('runtime', 'winsw', `${name}.exe`);
       if (fs.existsSync(exe)) {
@@ -943,7 +1300,7 @@ async function cmdOff(flags) {
       }
     }
   } else {
-    for (const name of [RUNNER_SERVICE, LLM_SERVICE]) {
+    for (const name of ours.map((w) => (w === 'runner' ? RUNNER_SERVICE : LLM_SERVICE))) {
       step(`disable ${name}`, () => {
         const r = sysctl(['disable', '--now', name], { user: !conf.systemUnits });
         if (r.status !== 0 && !/does not exist|not loaded/i.test(r.stderr)) throw new Error(r.stderr.trim());
@@ -970,7 +1327,13 @@ async function cmdOff(flags) {
   // Not conditional on --purge: a token is not a model, and nobody turns a
   // service off in order to keep its key.
   step('remove local.json + api-key', () => {
-    for (const f of ['local.json', 'local.json.tmp', 'api-key']) fs.rmSync(P(f), { force: true });
+    // api-key only when THIS tier minted it. An adopted engine authenticates
+    // with a key somebody else wrote, and deleting it would break a service
+    // `off` has just promised not to touch.
+    const files = conf.mode === 'adapter'
+      ? ['local.json', 'local.json.tmp']
+      : ['local.json', 'local.json.tmp', 'api-key'];
+    for (const f of files) fs.rmSync(P(f), { force: true });
     // Belt and braces — the delegation normally already did these.
     fs.rmSync(P('device', 'appd-token'), { force: true });
     fs.rmSync(P('device', 'device.json'), { force: true });
@@ -986,10 +1349,9 @@ async function cmdOff(flags) {
     }
     if (process.platform !== 'win32') {
       step('remove the systemd unit files', () => {
-        for (const name of [LLM_SERVICE, RUNNER_SERVICE]) {
-          fs.rmSync(conf.systemUnits
-            ? `/etc/systemd/system/${name}.service`
-            : path.join(os.homedir(), '.config', 'systemd', 'user', `${name}.service`), { force: true });
+        for (const which of ours) {
+          const name = which === 'runner' ? RUNNER_SERVICE : LLM_SERVICE;
+          fs.rmSync(unitFile(name, { system: !!conf.systemUnits }), { force: true });
         }
         sysctl(['daemon-reload'], { user: !conf.systemUnits });
       });
@@ -1017,16 +1379,27 @@ async function statusInfo() {
   const h = await health(conf).catch(() => ({ reachable: false, models: [] }));
   let shimVersion = null;
   try {
-    const r = spawnSync(process.execPath, [P('bin', 'huginn-llm-shim.js'), '--version'], { encoding: 'utf8' });
+    const r = RUN(process.execPath, [P('bin', 'huginn-llm-shim.js'), '--version']);
     shimVersion = (r.stdout || '').trim() || null;
   } catch { /* absent */ }
   let sessions = 0;
   try { sessions = fs.readdirSync(P('sessions')).length; } catch { /* none */ }
+  const p = persistence(conf);
   return {
     setup: true,
     mode: conf.mode, class: conf.class, deviceName: conf.deviceName, llmSlug: conf.llmSlug || null,
     port: conf.port || null, adapter: conf.adapter || null,
-    services: { llm: conf.mode === 'adapter' ? 'n/a (adapter)' : serviceState('llm', conf), runner: serviceState('runner', conf) },
+    // Whether the engine behind this row is ours to stop. True in adapter
+    // mode, and the reason `off` leaves the model server alone.
+    adopted: conf.adopted === true || conf.mode === 'adapter',
+    // ⚠ THE QUESTION NO SURFACE COULD ANSWER. `services.llm: active` is true
+    // of a user unit five seconds before its owner logs out. These three say
+    // which kind of install this is and whether it survives that; `null` is a
+    // real value and means this machine could not be asked.
+    systemUnits: p.systemUnits,
+    linger: p.linger,
+    persistent: p.persistent,
+    services: { llm: conf.mode === 'adapter' ? `n/a (adopted ${(conf.adapter && conf.adapter.kind) || 'engine'})` : serviceState('llm', conf), runner: serviceState('runner', conf) },
     engine: { reachable: h.reachable, models: h.models, base: h.base },
     models: Object.keys(conf.modelsBySlug || {}),
     defaultModel: conf.defaultModel || null,
@@ -1040,9 +1413,10 @@ async function cmdStatus(flags) {
   const s = await statusInfo();
   if (flags.json) { process.stdout.write(JSON.stringify(s) + '\n'); return; }
   if (!s.setup) { console.log('not set up — run: huginn local on'); return; }
-  console.log(`mode        ${s.mode} (class ${s.class})`);
+  console.log(`mode        ${s.mode}${s.adopted ? ` (adopted ${(s.adapter && s.adapter.kind) || 'engine'}, class ${s.class})` : ` (class ${s.class})`}`);
   console.log(`device      ${s.deviceName}${s.llmSlug ? ` (slug ${s.llmSlug})` : ''}`);
   console.log(`services    llm: ${s.services.llm} · runner: ${s.services.runner}`);
+  console.log(`persistence ${persistenceLine({ systemUnits: s.systemUnits, linger: s.linger, persistent: s.persistent })}`);
   console.log(`engine      ${s.engine.reachable ? `serving ${s.engine.models.length} model(s): ${s.engine.models.join(', ')}` : 'NOT ANSWERING'} at ${s.engine.base || '?'}`);
   console.log(`shim        ${s.shimVersion || 'not installed'}`);
   console.log(`sessions    ${s.sessions} file(s)`);
@@ -1056,6 +1430,22 @@ async function cmdUpdate(flags) {
   const conf = loadConf();
   if (!conf) { console.error('not set up — run: huginn local on'); process.exit(1); }
   refuseUnelevated('updating');
+  // A system unit cannot be restarted from an unprivileged shell, and this
+  // verb ends in a restart — so the whole update takes the same ONE prompt
+  // the install took rather than failing at its last step with the new
+  // runtime already on disk.
+  if (conf.systemUnits && process.platform === 'linux' && !isRoot()) {
+    const tool = elevator();
+    if (tool && tool !== 'root') {
+      console.log(`  elevating once with ${tool} — this install runs as system units`);
+      const r = runElevated(tool, process.argv.slice(2));
+      if (r.ok) return;
+      console.error(`refused: ${tool} did not elevate (${r.error || `exit ${r.status}`}) — nothing was changed`);
+      process.exit(1);
+    }
+    console.error('refused: this install runs as system units and there is no pkexec or sudo here — re-run as root');
+    process.exit(1);
+  }
   installShimCopy();
   console.log('  shim + runner copies refreshed from ~/.huginn');
   if (conf.mode === 'adapter') { console.log('adapter mode: nothing else to update.'); return; }
@@ -1101,17 +1491,38 @@ async function cmdUpdate(flags) {
 
 // ---------------------------------------------------------------- doctor
 
+/**
+ * The persistence verdict, as a doctor line.
+ *
+ * ⚠ IT FAILS, it does not note. "user unit + no linger" is a box that serves
+ * until its owner logs out and then quietly stops, while every other line on
+ * this screen stays green — `systemctl --user is-active` says `active` right
+ * up until the session ends. A checkup whose only word for that is a polite
+ * note is a checkup that agrees with the machine's own wrong answer.
+ */
+function persistenceVerdict(s) {
+  const line = persistenceLine({ systemUnits: s.systemUnits, linger: s.linger, persistent: s.persistent });
+  if (s.persistent === true) return { level: 'ok', line };
+  if (s.persistent === false) return { level: 'FAIL', line };
+  return { level: 'note', line };
+}
+
 async function cmdDoctor() {
   const s = await statusInfo();
   if (!s.setup) { console.log('not set up.'); return; }
   await cmdStatus({});
   console.log('\ndoctor:');
+  let failed = 0;
   const shim = P('bin', 'huginn-llm-shim.js');
-  const r = spawnSync(process.execPath, [shim, '--contract-check'], { encoding: 'utf8' });
-  const frames = (r.stdout || '').trim().split('\n').filter(Boolean);
-  const okShape = r.status === 0 && frames.length >= 3
+  const r = RUN(process.execPath, [shim, '--contract-check']);
+  const frames = ((r && r.stdout) || '').trim().split('\n').filter(Boolean);
+  const okShape = !!r && r.status === 0 && frames.length >= 3
     && frames[0].includes('"subtype":"init"') && frames[frames.length - 1].includes('"type":"result"');
+  if (!okShape) failed += 1;
   console.log(`  ${okShape ? 'ok    ' : 'FAIL  '}shim --contract-check (${frames.length} frames)`);
+  const pv = persistenceVerdict(s);
+  if (pv.level === 'FAIL') failed += 1;
+  console.log(`  ${pv.level.padEnd(6)}persistence: ${pv.line}`);
   const gate = diskGate(0, freeBytes());
   console.log(`  ok    disk: ${gate.line}`);
   const g = gpus();
@@ -1121,6 +1532,140 @@ async function cmdDoctor() {
     const list = probe.body && (probe.body.models || probe.body.data);
     if (Array.isArray(list)) console.log(`  note  an existing ${kind} serves ${list.length} model(s) here — adapter mode can wrap it`);
   }
+  if (failed) {
+    console.error(`\n${failed} check(s) FAILED — this install is not doing what it says.`);
+    process.exit(1);
+  }
+}
+
+// ---------------------------------------------------------------- persist
+
+/**
+ * Move a user-unit install onto system units, in order.
+ *
+ * Returned as data rather than done inline so the order can be gated: this
+ * sequence is the whole correctness of the verb. The runner stops first (or it
+ * re-enrols into the gap), the old unit FILES go before the new ones are
+ * written (or a logout later resurrects a second llama-swap onto the same
+ * port), and the system llm comes up before the system runner (the same
+ * enrolment race the managed install already avoids).
+ */
+function persistSteps({ home = os.homedir(), user = serviceUser() } = {}) {
+  return [
+    { kind: 'stop-user', names: [RUNNER_SERVICE, LLM_SERVICE] },
+    { kind: 'disable-user', names: [RUNNER_SERVICE, LLM_SERVICE] },
+    { kind: 'remove-user-units', files: [RUNNER_SERVICE, LLM_SERVICE].map((n) => unitFile(n, { system: false, home })) },
+    { kind: 'reload-user' },
+    { kind: 'write-system-units', files: [LLM_SERVICE, RUNNER_SERVICE].map((n) => unitFile(n, { system: true })) },
+    { kind: 'reload-system' },
+    { kind: 'enable-system', names: [LLM_SERVICE, RUNNER_SERVICE] },
+    { kind: 'hand-back', dir: localDir(), user },
+    { kind: 'record', conf: { systemUnits: true } },
+  ];
+}
+
+/**
+ * `huginn local persist` — make an existing install survive logout.
+ *
+ * The verb exists because the honest answer changed AFTER people had already
+ * installed: every Linux box activated before this release holds user units,
+ * and telling somebody to uninstall and re-download a 5 GB tier to move two
+ * text files would be a worse answer than moving them.
+ *
+ * The user half runs UNELEVATED first — `systemctl --user` as root talks to
+ * root's own manager and would exit 0 having stopped nothing — and only the
+ * /etc half asks for the one prompt.
+ */
+async function cmdPersist(flags) {
+  const conf = loadConf();
+  if (!conf) { console.error('not set up — run: huginn local on'); process.exit(1); }
+  if (process.platform === 'win32') {
+    console.log('Windows already installs both services as LocalSystem — they serve while you are logged out. Nothing to do.');
+    return;
+  }
+  if (process.platform !== 'linux') { console.error(`refused: persist is a systemd verb and this is ${process.platform}`); process.exit(1); }
+  if (conf.systemUnits) {
+    console.log(`already on system units — ${persistenceLine(persistence(conf))}`);
+    return;
+  }
+
+  let failed = 0;
+  const step = (name, fn) => {
+    try { fn(); console.log(`  ok      ${name}`); }
+    catch (e) { failed += 1; console.error(`  FAILED  ${name}: ${e.message}`); }
+  };
+  const steps = persistSteps();
+  const userHalf = steps.filter((x) => x.kind.endsWith('-user'));
+  const run = (list) => {
+    for (const st of list) {
+      switch (st.kind) {
+        case 'stop-user':
+          for (const n of st.names) step(`stop --user ${n}`, () => { sysctl(['stop', n], { user: true }); });
+          break;
+        case 'disable-user':
+          for (const n of st.names) step(`disable --user ${n}`, () => { sysctl(['disable', n], { user: true }); });
+          break;
+        case 'remove-user-units':
+          step('remove the user unit files', () => { for (const f of st.files) fs.rmSync(f, { force: true }); });
+          break;
+        case 'reload-user':
+          step('daemon-reload --user', () => { sysctl(['daemon-reload'], { user: true }); });
+          break;
+        case 'write-system-units':
+          step('write the system unit files', () => {
+            for (const which of ['llm', 'runner']) {
+              const f = unitFile(which === 'llm' ? LLM_SERVICE : RUNNER_SERVICE, { system: true });
+              fs.mkdirSync(path.dirname(f), { recursive: true });
+              fs.writeFileSync(f, unitText(which, { system: true }));
+            }
+          });
+          break;
+        case 'reload-system':
+          step('daemon-reload', () => { const r = sysctl(['daemon-reload']); if (r.status !== 0) throw new Error(String(r.stderr || '').trim()); });
+          break;
+        case 'enable-system':
+          for (const n of st.names) {
+            step(`enable --now ${n}`, () => { const r = sysctl(['enable', '--now', n]); if (r.status !== 0) throw new Error(String(r.stderr || '').trim()); });
+          }
+          break;
+        case 'hand-back':
+          step(`hand ${st.dir} back to ${st.user}`, () => { handBackOwnership(st.dir, st.user); });
+          break;
+        case 'record':
+          step('record systemUnits in local.json', () => { saveConf({ ...loadConf(), ...st.conf }); });
+          break;
+        default: break;
+      }
+    }
+  };
+
+  if (!isRoot()) {
+    // The half that MUST be unprivileged, before the prompt.
+    run(userHalf);
+    const tool = elevator();
+    if (tool && tool !== 'root') {
+      console.log(`  elevating once with ${tool} — the units move into /etc/systemd/system`);
+      const r = runElevated(tool, ['persist', ...(flags.yes ? ['--yes'] : [])]);
+      if (r.ok) return;
+      console.error(`  ${tool} did not elevate (${r.error || `exit ${r.status}`})`);
+    } else {
+      console.error('  no pkexec and no sudo here');
+    }
+    // Declined or unavailable: linger is the honest second-best, and the user
+    // units were just taken down — put them back before offering it.
+    console.log('  falling back to a user unit kept alive by linger');
+    step('reinstall the user units', () => {
+      for (const which of ['llm', 'runner']) installServiceLinux(which, { system: false });
+    });
+    const lingered = ensureLinger();
+    console.log(`  persist ${persistenceLine(persistence(loadConf() || {}))}`);
+    process.exit(failed || !lingered ? 1 : 0);
+  }
+
+  run(steps);
+  console.log(`  persist ${persistenceLine(persistence(loadConf() || {}))}`);
+  if (failed) { console.error(`\n${failed} step(s) failed — NOT migrated.`); process.exit(1); }
+  console.log('\nPersistent. This machine serves huginn with nobody logged in.');
 }
 
 // ------------------------------------------------------------------- plan
@@ -1149,6 +1694,14 @@ async function cmdPlan(flags) {
     setup: !!conf.mode,
     deviceName: flags.name || conf.deviceName || `${hostname}-llm`,
     services: [LLM_SERVICE, RUNNER_SERVICE],
+    // What the consent card needs to tell the truth about persistence BEFORE
+    // anything is installed. `elevation` is how the one prompt would happen
+    // (null = there is no way to become root here); `persistent` is what the
+    // install would BE — true when the services can be system-scoped, null on
+    // Linux with no elevator, because linger is attempted and may not take,
+    // and promising in advance is how the old "always-on" copy got it wrong.
+    elevation: elevator(),
+    persistent: process.platform === 'win32' ? true : (elevator() ? true : null),
   };
   if (det.refuse) { out.refuse = det.refuse; }
   else {
@@ -1181,15 +1734,22 @@ function usage() {
   console.log(`huginn-local ${VERSION} — serve local AI models to Huginn from this machine.
 
   huginn local on     [--class G8|G16|C|A] [--gpu-uuid U] [--name N] [--yes] [--system]
-                      [--adapter ollama|lmstudio [--adapter-url URL] [--adapter-key K]]
+                      [--adapter llama-swap|ollama|lmstudio [--adapter-url URL] [--adapter-key K]]
+                      --system installs SYSTEM services behind ONE elevation prompt, so
+                      this machine serves while you are logged out; without it (or when
+                      the prompt is declined) the user units are kept alive by linger
+  huginn local persist [--yes]
+                      make an existing install permanent: migrate user units to system
+                      units, or enable linger if there is nothing to elevate with
   huginn local plan   [--class G8|G16|C|A] [--name N] [--json]   what \`on\` would do, doing nothing
   huginn local off    [--purge-models] [--purge] [--yes]
                       off keeps the models; --purge-models takes those too;
-                      --purge removes the whole tier, ${localDir()} included
+                      --purge removes the whole tier, ${localDir()} included.
+                      An ADOPTED engine is never stopped or deleted — only the runner
   huginn local status [--json]
   huginn local unit   [--system] [--which llm|runner]
   huginn local update [--yes]
-  huginn local doctor`);
+  huginn local doctor   exits nonzero when this install is not doing what it says`);
 }
 
 async function main() {
@@ -1201,6 +1761,7 @@ async function main() {
   const flags = parsed.flags;
   switch (cmd) {
     case 'on': await cmdOn(flags); break;
+    case 'persist': await cmdPersist(flags); break;
     case 'plan': await cmdPlan(flags); break;
     case 'off': await cmdOff(flags); break;
     case 'status': await cmdStatus(flags); break;
@@ -1223,6 +1784,10 @@ if (require.main === module) {
   module.exports = {
     VERSION, MANIFEST, parseFlags, detectClass, planFor, diskGate, swapYamlFor,
     unitText, winswXml, mintKey, localDir, statusInfo, manifestHash, narrowClass,
-    LLM_SERVICE, RUNNER_SERVICE,
+    LLM_SERVICE, RUNNER_SERVICE, ADAPTERS,
+    // The persistence half, exported so it can be driven on a machine that has
+    // neither systemd nor logind — see setRunner.
+    setRunner, serviceUser, lingerState, enableLinger, persistence, persistenceLine,
+    persistenceVerdict, elevator, elevationArgv, unitFile, persistSteps, servicePlanLine,
   };
 }

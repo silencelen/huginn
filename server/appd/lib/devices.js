@@ -140,6 +140,18 @@ function validateRegistration(raw, now) {
           .filter((m) => MODEL_SLUG_RE.test(String(m.slug || '')))
           .map((m) => ({ slug: String(m.slug), display: cleanDisplay(m.display) || String(m.slug) })),
       } : {}),
+      // Whether the machine keeps serving with NOBODY logged in — the one
+      // fact that separates a box offering itself 24/7 from a box offering
+      // itself while somebody happens to be logged in, and the thing no
+      // surface could previously say.
+      //
+      // ⚠ NULLABLE ON THE WIRE, and the absence is load-bearing. A CLI older
+      // than this facet sends nothing, and nothing must stay nothing: a
+      // default of false would put "only while someone is logged in" on every
+      // machine enrolled before today, including the Windows ones that have
+      // always run as LocalSystem. Generate-scope only, like models — a claude
+      // row has no serving lifetime to describe.
+      ...(scope === 'generate' && typeof b.persistent === 'boolean' ? { persistent: b.persistent } : {}),
       // The grouping key: reported by current runners, derived from the name
       // for older ones so one box never renders as two devices either way.
       machine: normalizeMachine(b.machine) || deriveMachine({ name, scope }),
@@ -245,6 +257,11 @@ function noteSeen(state, id, now, patch = {}) {
   if (typeof patch.locked === 'boolean') d.locked = patch.locked;
   if (typeof patch.version === 'string') d.version = patch.version.slice(0, 40);
   if (SCOPES.includes(patch.scope)) d.scope = patch.scope;
+  // Carried on the beat too, so `huginn local persist` on a serving machine is
+  // reflected inside a minute rather than at its next re-enrolment (which for
+  // a healthy runner is never). Same rule as registration: only a serving row
+  // has this, and only a real boolean changes it.
+  if (typeof patch.persistent === 'boolean' && d.scope === 'generate') d.persistent = patch.persistent;
   return state;
 }
 
@@ -274,6 +291,9 @@ function deviceView(id, device, now) {
     machine: device.machine || deriveMachine(device),
     ...(device.llmSlug ? { llmSlug: device.llmSlug } : {}),
     ...(Array.isArray(device.models) ? { models: device.models } : {}),
+    // Omitted, never defaulted — see validateRegistration. A client that reads
+    // this as a tri-state renders nothing for a row that never said.
+    ...(typeof device.persistent === 'boolean' ? { persistent: device.persistent } : {}),
   };
 }
 
