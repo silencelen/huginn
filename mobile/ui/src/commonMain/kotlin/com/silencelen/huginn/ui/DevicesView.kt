@@ -257,6 +257,16 @@ fun describeDevice(device: Device, includePlatform: Boolean = true, nowMs: Long?
         if (includePlatform) parts += device.platform
         parts += "serves local models"
         if (device.models.isNotEmpty()) parts += device.models.joinToString(", ") { it.display.ifBlank { it.slug } }
+        // Whether this box serves when nobody is logged in. The INFORMATIVE
+        // half is the negative one: a machine that only serves while its owner
+        // is sitting at it looks identical here to one that serves at 3am, and
+        // the whole point of a serving row is that other clients can use it.
+        // A row that never said renders nothing rather than a guess.
+        when (device.persistent) {
+            true -> parts += "always on"
+            false -> parts += "only while someone is logged in"
+            null -> Unit
+        }
         parts += when {
             !device.online -> "not reachable"
             device.running -> "generating"
