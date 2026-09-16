@@ -18,6 +18,7 @@ import io.ktor.utils.io.readRemaining
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import com.silencelen.huginn.data.RouteGuard
 import kotlinx.coroutines.test.runTest
 import kotlinx.io.readByteArray
 import kotlin.test.Test
@@ -58,10 +59,35 @@ class HuginnClientTest {
 
     // ------------------------------------------------------ addressing
 
+    /**
+     * ⚠ AND THE GUARD KNOWS. This convenience is exactly the walk-past a URL
+     * check placed after it would have: type `example.com`, get `http://` for
+     * free, send the bearer to a stranger. [RouteGuard] therefore judges a bare
+     * address AS http and stamps the scheme on before anything is stored, so what
+     * reaches this client has already been seen with its scheme spelled out.
+     */
     @Test
     fun `a base URL without a scheme is assumed to be plain http`() = runTest {
         client(base = "192.168.2.117:8787") { respond("""{"ok":true}""") }.ping()
         assertEquals("http://192.168.2.117:8787/v1/ping", seen.single().url.toString())
+        assertEquals("http://192.168.2.117:8787", RouteGuard.normalize("192.168.2.117:8787"))
+        assertFalse(RouteGuard.isAllowed("example.com:8787"), "a bare public name never gets the free upgrade")
+    }
+
+    /**
+     * ⚠ A FRESH INSTALL PINS NOTHING, so this is what EVERY call makes on first
+     * launch. `withScheme("")` builds `http:///v1/status`, and the parse failure
+     * surfaced in the desktop's status bar as the single word "v1" in red — a
+     * first run reading as a crash. Said here so both shells say it the same way.
+     */
+    @Test
+    fun `no pinned route is a sentence rather than a malformed URL`() = runTest {
+        var dialled = false
+        val e = assertFailsWith<HuginnClient.HuginnException> {
+            client(base = "") { dialled = true; respond("""{"ok":true}""") }.ping()
+        }
+        assertEquals(HuginnClient.NO_ROUTE, e.message)
+        assertEquals(false, dialled, "and no socket was opened to find that out")
     }
 
     @Test

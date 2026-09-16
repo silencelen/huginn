@@ -30,12 +30,23 @@ private val Context.dataStore by preferencesDataStore(name = "huginn_settings")
  */
 class SettingsStore(private val context: Context) : HuginnSettings {
     companion object {
-        // Kept as aliases: these two names are read from a dozen call sites and
-        // from the settings screen's slider bounds. One definition, in :core.
-        const val DEFAULT_BASE_URL = HuginnSettings.DEFAULT_BASE_URL
+        // Kept as an alias: this name is read from the settings screen's slider
+        // bounds. One definition, in :core.
         const val DEFAULT_FONT_SCALE = HuginnSettings.DEFAULT_FONT_SCALE
+        /**
+         * ⚠ DERIVED, AND IT STAYS. Ten background call sites read the base URL
+         * straight out of this store and know nothing about routes; the route
+         * book writes this key through on every save so none of them had to
+         * change. It is also what an older APK would read if this phone were
+         * ever rolled back.
+         */
         private val BASE_URL = stringPreferencesKey("base_url")
+
+        /** Pre-routes. Read once, to migrate; never written again. */
         private val ROUTE_PINNED = booleanPreferencesKey("appd_route_pinned")
+        private val PINNED_ROUTES = stringPreferencesKey("pinned_routes")
+        private val ACTIVE_ROUTE_ID = stringPreferencesKey("active_route_id")
+        private val AUTO_SWITCH = booleanPreferencesKey("auto_switch")
         private val TOKEN = stringPreferencesKey("token")
         private val FONT_SCALE = floatPreferencesKey("terminal_font_sp")
         private val NOTIFY = booleanPreferencesKey("notify_attention")
@@ -249,7 +260,11 @@ class SettingsStore(private val context: Context) : HuginnSettings {
         context.dataStore.edit { it[LAST_ERROR] = message.take(120); it[LAST_ERROR_AT] = atMs }
     }
 
-    override val baseUrl: Flow<String> = context.dataStore.data.map { it[BASE_URL] ?: DEFAULT_BASE_URL }
+    /**
+     * The active route's address. Read off the book rather than off [BASE_URL]
+     * so the two can never disagree — the key is the mirror, this is the truth.
+     */
+    override val baseUrl: Flow<String> = context.dataStore.data.map { bookFrom(it).activeUrl }
     override val token: Flow<String> = context.dataStore.data.map { it[TOKEN] ?: "" }
 
     /** Terminal text size in sp. Drives the column count reported to the server. */
@@ -270,25 +285,40 @@ class SettingsStore(private val context: Context) : HuginnSettings {
      */
     override val notifiedSessions: Flow<Set<String>> = context.dataStore.data.map { it[NOTIFIED] ?: emptySet() }
 
-    override suspend fun setBaseUrl(value: String) {
-        context.dataStore.edit { it[BASE_URL] = value.trim() }
+    /**
+     * The pinned routes, the active one and the auto-switch flag.
+     *
+     * ⚠ MIGRATION HAPPENS ON READ, not at construction: DataStore has no "open
+     * and upgrade" moment, and a migration run from a coroutine somewhere would
+     * race the first background worker that asks for an address. [bookFrom] is
+     * pure, so every reader — foreground or worker, before or after the first
+     * write — computes the same book from the same stored bytes.
+     */
+    override val routeBook: Flow<RouteBook> = context.dataStore.data.map { bookFrom(it) }
+
+    private fun bookFrom(p: androidx.datastore.preferences.core.Preferences): RouteBook {
+        val stored = SettingsCodec.decodeRoutes(p[PINNED_ROUTES])
+            ?: return AppdRoutes.migrate(p[BASE_URL], p[ROUTE_PINNED] ?: false)
+        return RouteBook(
+            routes = stored,
+            activeId = p[ACTIVE_ROUTE_ID]?.takeIf { it.isNotBlank() },
+            autoSwitch = p[AUTO_SWITCH] ?: true,
+        ).normalized()
     }
 
     /**
-     * True when the route was chosen by hand, which stops auto-resolution from
-     * moving off it. Typing a custom URL pins it implicitly.
+     * Writes the book AND the address it derives, in one edit. One edit matters:
+     * DataStore publishes each `edit` as its own emission, and a worker that
+     * woke between two of them would build a client for a route the list no
+     * longer holds.
      */
-    override val routePinned: Flow<Boolean> = context.dataStore.data.map { it[ROUTE_PINNED] ?: false }
-
-    /**
-     * Switches the active route. Written to the same key the background workers
-     * already read, so a switch applies to notifications and the watch service
-     * too, not just the foreground UI.
-     */
-    override suspend fun selectRoute(url: String, pinned: Boolean) {
+    override suspend fun setRouteBook(value: RouteBook) {
+        val book = value.normalized()
         context.dataStore.edit {
-            it[BASE_URL] = url.trim()
-            it[ROUTE_PINNED] = pinned
+            it[PINNED_ROUTES] = SettingsCodec.encodeRoutes(book.routes)
+            it[ACTIVE_ROUTE_ID] = book.activeId.orEmpty()
+            it[AUTO_SWITCH] = book.autoSwitch
+            it[BASE_URL] = book.activeUrl
         }
     }
 

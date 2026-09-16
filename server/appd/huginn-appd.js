@@ -7017,7 +7017,20 @@ const server = http.createServer(async (req, res) => {
   try {
     let m;   // shared by the path-matching routes below
     // --- ping / status
-    if (req.method === 'GET' && p === '/v1/ping') return sendJson(res, 200, { ok: true, version: VERSION, host: os.hostname() });
+    if (req.method === 'GET' && p === '/v1/ping') {
+      // `via` — WHICH LISTENER ANSWERED. Clients pin several routes to this one
+      // daemon now (tailnet, mesh, loopback), and two pins that resolve to the
+      // same listener are one path wearing two names; this is how a client can
+      // tell without being told. Additive: the Ping model's fields are all
+      // nullable-with-defaults, so an older client ignores it.
+      //
+      // ⚠ PING IS UNAUTHENTICATED, so this echoes ONLY the address the caller
+      // already dialled — it is the local end of their own socket. A LIST of the
+      // daemon's other addresses would be a disclosure and belongs on
+      // token-gated /v1/status, which already carries the hostname.
+      const via = { addr: req.socket.localAddress || null, port: req.socket.localPort || null };
+      return sendJson(res, 200, { ok: true, version: VERSION, host: os.hostname(), via });
+    }
     if (req.method === 'GET' && p === '/v1/status') return sendJson(res, 200, await statusPayload());
 
     // --- the wording behind the four selection buttons, which /v1/status carries.
