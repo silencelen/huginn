@@ -1067,6 +1067,9 @@ object SendQueue {
             // A question in the pane blocks the queue as surely as a turn does,
             // and it is the one the reader can DO something about.
             "modal" -> "Queued · waiting on a question in the pane ($waiting)"
+            // A just-created session whose Claude has not drawn its composer yet
+            // (appd 3.0.7). Clears itself in about two seconds; a turn has not begun.
+            "starting" -> "Queued · waiting for Claude to start ($waiting)"
             else -> "Queued · will send when Claude finishes its turn ($waiting)"
         }
     }
