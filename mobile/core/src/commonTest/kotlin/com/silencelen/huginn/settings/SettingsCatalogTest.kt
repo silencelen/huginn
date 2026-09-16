@@ -117,6 +117,26 @@ class SettingsCatalogTest {
     }
 
     /**
+     * ⚠ IDS ARE IMMUTABLE, AND THIS IS HOW THAT PROMISE SURVIVES A MERGE.
+     * `host.base-url` named its own field until routes made the address a
+     * property of a pin. A saved destination or an old search hit carrying that
+     * id has to keep arriving somewhere real rather than onto a blank page — so
+     * it resolves to the row that absorbed it rather than to nothing.
+     */
+    @Test
+    fun aRetiredIdStillResolvesToTheRowThatAbsorbedIt() {
+        assertEquals("host.route", SettingsCatalog.resolveId("host.base-url"))
+        assertEquals("host.route", SettingsCatalog.item("host.base-url")?.id)
+        assertEquals("host", SettingsCatalog.categoryOf("host.base-url")?.id)
+        // An alias is a redirect, not a second row: the inventory count above
+        // would catch a duplicate, and this catches a resurrection.
+        assertTrue(SettingsCatalog.items.none { it.id == "host.base-url" })
+        for ((from, to) in SettingsCatalog.aliases) {
+            assertTrue(SettingsCatalog.items.any { it.id == to }, "$from points at $to, which does not exist")
+        }
+    }
+
+    /**
      * ⚠ SUMMARIES SAY WHAT A SETTING DOES. The owner's standing note is that copy
      * must not narrate the UI, and the phone screen had a whole paragraph
      * ("What this app can do") doing exactly that. A summary that tells the

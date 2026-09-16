@@ -139,17 +139,13 @@ object SettingsCatalog {
         items = listOf(
             SettingsItem(
                 id = "host.route",
-                title = "Route",
-                summary = "Which named address reaches huginn, and whether it stays pinned to that one.",
-                keywords = listOf("tailscale", "yggdrasil", "network", "address", "pin", "unpin", "auto", "connection"),
-                inventory = listOf(1, 2, 3),
-            ),
-            SettingsItem(
-                id = "host.base-url",
-                title = "Base URL",
-                summary = "The address every request goes to.",
-                keywords = listOf("server", "host", "url", "address", "connection", "allowlist"),
-                inventory = listOf(4, 29, 30),
+                title = "Routes",
+                summary = "The addresses that reach huginn, in the order they are tried, and which one is in use.",
+                keywords = listOf(
+                    "tailscale", "yggdrasil", "network", "address", "pin", "unpin", "auto", "connection",
+                    "route", "routes", "server", "host", "url", "base url", "switch", "vpn", "allowlist",
+                ),
+                inventory = listOf(1, 2, 3, 4, 29, 30),
             ),
             SettingsItem(
                 id = "host.token",
@@ -680,10 +676,30 @@ object SettingsCatalog {
     val items: List<SettingsItem> = categories.flatMap { it.items }
 
     /** The category an item belongs to, or null for an id nothing owns. */
-    fun categoryOf(itemId: String): SettingsCategory? =
-        categories.firstOrNull { c -> c.items.any { it.id == itemId } }
+    fun categoryOf(itemId: String): SettingsCategory? {
+        val id = resolveId(itemId)
+        return categories.firstOrNull { c -> c.items.any { it.id == id } }
+    }
 
-    fun item(itemId: String): SettingsItem? = items.firstOrNull { it.id == itemId }
+    /**
+     * Ids a previous version handed out that now resolve to the row which
+     * absorbed them.
+     *
+     * Ids are declared immutable two hundred lines up, and this is how that
+     * promise is kept when two settings become one: `host.base-url` was its own
+     * field until routes made the address a property of a pin, and a search hit
+     * or a saved destination carrying that id has to keep arriving somewhere
+     * real rather than onto a blank page.
+     */
+    val aliases: Map<String, String> = mapOf("host.base-url" to "host.route")
+
+    /** The id that actually names a row today — see [aliases]. */
+    fun resolveId(itemId: String): String = aliases[itemId] ?: itemId
+
+    fun item(itemId: String): SettingsItem? {
+        val id = resolveId(itemId)
+        return items.firstOrNull { it.id == id }
+    }
 
     fun category(categoryId: String): SettingsCategory? = categories.firstOrNull { it.id == categoryId }
 
