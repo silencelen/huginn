@@ -82,7 +82,9 @@ fun SettingsPhoneScreen(
     val baseUrl by vm.baseUrl.collectAsStateWithLifecycle()
     val token by vm.token.collectAsStateWithLifecycle()
     val connected by vm.connected.collectAsStateWithLifecycle()
-    val routePinned by vm.routePinned.collectAsStateWithLifecycle()
+    val routeBook by vm.routeBook.collectAsStateWithLifecycle()
+    val routeHealth by vm.routeHealth.collectAsStateWithLifecycle()
+    val routeNote by vm.routeNote.collectAsStateWithLifecycle()
     val resolvingRoute by vm.resolvingRoute.collectAsStateWithLifecycle()
     val account by vm.account.collectAsStateWithLifecycle()
     val savedAccounts by vm.savedAccounts.collectAsStateWithLifecycle()
@@ -113,6 +115,7 @@ fun SettingsPhoneScreen(
 
     val facts = PhoneSettingsFacts(
         baseUrl = baseUrl,
+        routeName = routeBook.activeName,
         connected = connected,
         accountEmail = account?.takeIf { it.loggedIn }?.email,
         savedAccounts = savedAccounts.size,
@@ -148,6 +151,21 @@ fun SettingsPhoneScreen(
     )
     val probe = phoneProbe(facts)
     val accountsIo = remember(vm) { PhoneAccountsIo(vm) }
+    // One bundle rather than eight lambdas threaded through HostPage, and
+    // remembered on the view model so the list does not rebuild its callbacks on
+    // every recomposition of a page it is not even on.
+    val routeActions = remember(vm) {
+        RouteListActions(
+            activate = { vm.activateRoute(it) },
+            rename = { id, name -> vm.renameRoute(id, name) },
+            setUrl = { id, url -> vm.setRouteUrl(id, url) },
+            move = { id, delta -> vm.moveRoute(id, delta) },
+            remove = { vm.removeRoute(it) },
+            add = { name, url -> vm.addRoute(name, url) },
+            setAutoSwitch = { vm.setAutoSwitch(it) },
+            findLive = { vm.resolveRoute(force = true) },
+        )
+    }
 
     Column(Modifier.fillMaxSize().navigationBarsPadding()) {
         SettingsScaffold(
@@ -167,15 +185,15 @@ fun SettingsPhoneScreen(
             ) {
                 when (categoryId) {
                     "host" -> HostPage(
-                        baseUrl = baseUrl,
+                        routeBook = routeBook,
+                        routeHealth = routeHealth,
+                        routeNote = routeNote,
+                        nowMs = nowMs,
                         token = token,
                         connected = connected,
-                        routePinned = routePinned,
                         resolvingRoute = resolvingRoute,
-                        onSelectRoute = { vm.selectRoute(it) },
-                        onResolveRoute = { vm.resolveRoute() },
-                        onUnpinRoute = { vm.unpinRoute() },
-                        onSave = { u, t -> vm.saveSettings(u, t) },
+                        routeActions = routeActions,
+                        onSave = { t -> vm.saveSettings(t) },
                         accountsIo = accountsIo,
                         openLink = openLink,
                         signedIn = account?.loggedIn == true,

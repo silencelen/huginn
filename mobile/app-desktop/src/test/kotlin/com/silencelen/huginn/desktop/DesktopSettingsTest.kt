@@ -1,6 +1,7 @@
 package com.silencelen.huginn.desktop
 
 import com.silencelen.huginn.data.HuginnSettings
+import com.silencelen.huginn.data.RouteBook
 import java.io.File
 import java.nio.file.Files
 import kotlinx.coroutines.flow.first
@@ -288,12 +289,111 @@ class DesktopSettingsTest {
     }
 
     @Test
-    fun `removal keeps the address, which is not a credential`() {
-        // The connect screen would only ask for the same one back.
+    fun `removal keeps the routes, which are not credentials`() {
+        // The connect screen would only ask for the same addresses back.
         val settings = DesktopSettings(freshFile())
-        runBlocking { settings.setBaseUrl(HuginnSettings.DEFAULT_BASE_URL) }
+        runBlocking { settings.setRouteBook(RouteBook().add("Tailnet", HuginnSettings.DEFAULT_BASE_URL, now = 1)) }
         settings.clearForRemoval()
         assertEquals(HuginnSettings.DEFAULT_BASE_URL, settings.baseUrlNow())
+        assertEquals(listOf("Tailnet"), settings.routeBookNow().routes.map { it.name })
+    }
+
+    // -------------------------------------------------------------- routes
+
+    /**
+     * ⚠ `base_url` IS A DERIVED KEY AND IT MUST FOLLOW THE ACTIVE ROUTE, because
+     * ten background call sites on the phone and this client's own synchronous
+     * reader take the address from it and know nothing about routes. Asserted
+     * THROUGH THE FILE rather than through the flow: the flow is easy to keep in
+     * step and the file is what a rolled-back build, or a worker that started
+     * before anything collected, would read.
+     */
+    @Test
+    fun `the derived base URL is rewritten on disk whenever the active route changes`() {
+        val file = freshFile()
+        val settings = DesktopSettings(file)
+        val book = RouteBook()
+            .add("Tailnet", "http://100.97.198.90:8787", now = 1, id = "t")
+            .add("Mesh", "http://192.168.2.117:8787", now = 2, id = "m")
+
+        runBlocking { settings.setRouteBook(book) }
+        assertEquals("http://100.97.198.90:8787", settings.baseUrlNow())
+        assertTrue("\"baseUrl\": \"http://100.97.198.90:8787\"" in file.readText(), file.readText())
+
+        runBlocking { settings.setRouteBook(book.activate("m")) }
+        assertEquals("http://192.168.2.117:8787", settings.baseUrlNow())
+        assertTrue("\"baseUrl\": \"http://192.168.2.117:8787\"" in file.readText(), file.readText())
+
+        // And a relaunch reads it back the same way round.
+        val relaunched = DesktopSettings(file)
+        assertEquals("http://192.168.2.117:8787", relaunched.baseUrlNow())
+        assertEquals("m", relaunched.routeBookNow().activeId)
+    }
+
+    /**
+     * An install that predates routes has a `baseUrl` and an `appd_route_pinned`
+     * and nothing else. It must come up talking to the same address, under a name
+     * it recognises, with the same refusal to move.
+     */
+    @Test
+    fun `a settings file written before routes existed migrates on load`() {
+        val file = freshFile()
+        file.parentFile.mkdirs()
+        file.writeText(
+            """{"baseUrl":"http://192.168.2.117:8787","token":"t","routePinned":true,"clientId":"desktop-kt-old"}""",
+        )
+        val book = DesktopSettings(file).routeBookNow()
+        assertEquals(listOf("Yggdrasil", "Tailscale"), book.routes.map { it.name })
+        assertEquals("yggdrasil", book.activeId)
+        assertEquals("http://192.168.2.117:8787", book.activeUrl)
+        assertFalse(book.autoSwitch, "appd_route_pinned became autoSwitch=false")
+    }
+
+    /**
+     * ⚠ A BRAND NEW INSTALL PINS NOTHING. It used to be indistinguishable from a
+     * pre-routes one, because `Stored.baseUrl` defaulted to the tailnet address —
+     * so a fresh desktop migrated itself two pins nobody had told it about and
+     * started dialling one. A file that has been saved once always carries the
+     * key, so an upgrade still migrates; an absent file says nothing.
+     */
+    @Test
+    fun `a first launch has no routes and no address rather than a guess`() {
+        val settings = DesktopSettings(freshFile())
+        assertEquals(emptyList(), settings.routeBookNow().routes)
+        assertEquals("", settings.baseUrlNow())
+        assertTrue(settings.routeBookNow().autoSwitch, "and it is willing to move once it has somewhere to go")
+    }
+
+    /**
+     * ⚠ EMPTY IS NOT UNWRITTEN. An owner who deletes every pin must not find the
+     * two built-ins back on the next launch.
+     */
+    @Test
+    fun `an emptied route list stays empty across a restart`() {
+        val file = freshFile()
+        runBlocking { DesktopSettings(file).setRouteBook(RouteBook()) }
+        val book = DesktopSettings(file).routeBookNow()
+        assertEquals(emptyList(), book.routes)
+        assertEquals("", DesktopSettings(file).baseUrlNow())
+    }
+
+    /**
+     * ⚠ THE HOLE THE FOUR-HOST ALLOWLIST HAD: it checked the setter and read the
+     * address straight back out of the file. A hand-edited store is now judged on
+     * load, by the same `:core` guard both shells use.
+     */
+    @Test
+    fun `a hand-edited settings file cannot point this client at a public http host`() {
+        val file = freshFile()
+        file.parentFile.mkdirs()
+        file.writeText(
+            """{"pinnedRoutes":"[{\"id\":\"evil\",\"name\":\"Home\",\"url\":\"http://attacker.example\",\"kind\":\"LAN\",\"order\":0,\"addedAt\":0}]","activeRouteId":"evil","token":"t"}""",
+        )
+        val settings = DesktopSettings(file)
+        assertEquals(emptyList(), settings.routeBookNow().routes, "the refused address was dropped on load")
+        assertEquals("", settings.baseUrlNow())
+        assertFalse(DesktopSettings.isAllowedBaseUrl("http://attacker.example"))
+        assertTrue(DesktopSettings.isAllowedBaseUrl("http://192.168.2.117:8787"))
     }
 
     @Test

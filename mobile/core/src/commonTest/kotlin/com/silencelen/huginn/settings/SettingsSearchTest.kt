@@ -59,7 +59,14 @@ class SettingsSearchTest {
     /** OR across fields: title, keywords and the category title all count. */
     @Test
     fun aKeywordFindsARowWhoseTitleDoesNotSayIt() {
+        // ⚠ "tailscale" STAYS A KEYWORD even though nothing in the interface says
+        // it any more: it is what somebody who has used this app for a year will
+        // type when their connection dies, and routes are exactly what they want.
         assertTrue("host.route" in ids("tailscale"), "found ${ids("tailscale")}")
+        assertTrue("host.route" in ids("yggdrasil"), "found ${ids("yggdrasil")}")
+        // And the row that absorbed the Base URL field answers to its old name.
+        assertTrue("host.route" in ids("base url"), "found ${ids("base url")}")
+        assertTrue("host.route" in ids("server"), "found ${ids("server")}")
         val onPhone = ids("fingerprint", surface = Surface.PHONE)
         assertTrue("privacy.app-lock" in onPhone, "found $onPhone")
     }

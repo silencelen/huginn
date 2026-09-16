@@ -1,6 +1,5 @@
 package com.silencelen.huginn.desktop
 
-import com.silencelen.huginn.data.AppdRoutes
 import com.silencelen.huginn.data.Chat
 import com.silencelen.huginn.data.Device
 import com.silencelen.huginn.data.Round
@@ -20,6 +19,10 @@ import com.silencelen.huginn.data.Headroom
 import com.silencelen.huginn.data.HuginnClient
 import com.silencelen.huginn.data.Plan
 import com.silencelen.huginn.data.PolishResult
+import com.silencelen.huginn.data.RouteBook
+import com.silencelen.huginn.data.RouteFailures
+import com.silencelen.huginn.data.RouteGuard
+import com.silencelen.huginn.data.RouteHealth
 import com.silencelen.huginn.data.RouteResolver
 import com.silencelen.huginn.data.Session
 import com.silencelen.huginn.data.Status
@@ -632,6 +635,102 @@ class AppStore(
     private val _route = MutableStateFlow(settings.baseUrlNow())
     val route: StateFlow<String> = _route.asStateFlow()
 
+    // ------------------------------------------------------ pinned routes
+
+    private val _routeBook = MutableStateFlow(settings.routeBookNow())
+    val routeBook: StateFlow<RouteBook> = _routeBook.asStateFlow()
+
+    /** The state dots and "last reached" words. Never an input to selection. */
+    private val _routeHealth = MutableStateFlow<Map<String, RouteHealth>>(emptyMap())
+    val routeHealth: StateFlow<Map<String, RouteHealth>> = _routeHealth.asStateFlow()
+
+    private val _resolvingRoute = MutableStateFlow(false)
+    val resolvingRoute: StateFlow<Boolean> = _resolvingRoute.asStateFlow()
+
+    /** A refusal or an outcome, shown under the list rather than swallowed. */
+    private val _routeNote = MutableStateFlow<String?>(null)
+    val routeNote: StateFlow<String?> = _routeNote.asStateFlow()
+
+    /**
+     * ⚠ A 401 DOES NOT COUNT. An answering daemon that rejects the token proves
+     * the route works, and re-resolving on it would answer a token problem with
+     * a network search.
+     */
+    private val routeFailures = RouteFailures()
+
+    /** The name the connection indicator and the diagnostics report say. */
+    val routeName: String get() = _routeBook.value.activeName
+
+    fun activateRoute(id: String) = editRoutes { it.activate(id).withAutoSwitch(false) }
+
+    fun addRoute(name: String, url: String) = editRoutes { it.add(name, url, System.currentTimeMillis()) }
+
+    fun renameRoute(id: String, name: String) = editRoutes { it.rename(id, name) }
+
+    fun setRouteUrl(id: String, url: String) = editRoutes { it.setUrl(id, url) }
+
+    fun moveRoute(id: String, delta: Int) = editRoutes { it.move(id, delta) }
+
+    fun removeRoute(id: String) = editRoutes { it.remove(id) }
+
+    fun setAutoSwitch(on: Boolean) {
+        editRoutes { it.withAutoSwitch(on) }
+        if (on) findLiveRoute()
+    }
+
+    /**
+     * THE MANUAL RE-PROBE THIS CLIENT NEVER HAD. Until routes, the desktop
+     * resolved exactly once — from [start] — and then never again: no button, no
+     * failure-driven retry. A laptop that moved between the tailnet and the mesh
+     * after launch simply stayed broken until it was restarted.
+     */
+    fun findLiveRoute() {
+        scope.launch { resolveRoute(force = true) }
+    }
+
+    /**
+     * Every list edit runs through here, so a refusal from the guard or the
+     * eight-pin cap is REPORTED rather than swallowed.
+     */
+    private fun editRoutes(edit: (RouteBook) -> RouteBook) {
+        scope.launch {
+            val next = runCatching { edit(_routeBook.value) }
+                .onFailure { _routeNote.value = it.message ?: RouteGuard.REFUSED }
+                .getOrNull() ?: return@launch
+            _routeNote.value = null
+            applyBook(next)
+        }
+    }
+
+    private suspend fun applyBook(book: RouteBook) {
+        val settled = book.normalized()
+        settings.setRouteBook(settled)
+        _routeBook.value = settled
+        if (settled.activeUrl == _route.value) return
+        _route.value = settled.activeUrl
+        routeFailures.ok()
+        // ⚠ RECONNECT NOW, not on the next poll tick. Adding the first route on a
+        // fresh install is the case that made this obvious: the list said the pin
+        // was in use while the status bar still carried "No route yet" and every
+        // dot was grey, because the poll is gated on window visibility and the
+        // last error is only cleared by a call that succeeds.
+        if (settled.activeUrl.isNotBlank()) {
+            refreshStatus()
+            refreshChats()
+            refreshSessions()
+        }
+    }
+
+    /**
+     * Counts a failed call against the active route and looks for another one
+     * after three in a row. Called from the poll loop's own error path, which is
+     * the one place that sees every ordinary request fail.
+     */
+    private fun noteRouteFailure(t: Throwable) {
+        if (t is HuginnClient.HuginnException) { routeFailures.ok(); return }
+        if (routeFailures.fail()) scope.launch { resolveRoute() }
+    }
+
     /**
      * Every watch digest, handed to the always-on layer (the notification router
      * and the tray) on the watch loop's own coroutine.
@@ -906,7 +1005,7 @@ class AppStore(
 
     suspend fun refreshStatus() {
         runCatching { client.status() }
-            .onSuccess { _status.value = it; faults.ok(Faults.STATUS) }
+            .onSuccess { _status.value = it; faults.ok(Faults.STATUS); routeFailures.ok() }
             .onFailure { note(Faults.STATUS, it) }
         runCatching { client.plan() }.onSuccess { _plan.value = it }
         runCatching { client.usage() }.onSuccess { _usage.value = it }
@@ -923,7 +1022,7 @@ class AppStore(
      */
     suspend fun refreshStatusShelf() {
         runCatching { client.status() }
-            .onSuccess { _status.value = it; faults.ok(Faults.STATUS) }
+            .onSuccess { _status.value = it; faults.ok(Faults.STATUS); routeFailures.ok() }
             .onFailure { note(Faults.STATUS, it) }
     }
 
@@ -940,6 +1039,11 @@ class AppStore(
         // clears one, so a refresh cut short by a presence flip leaves whatever was
         // true before it exactly as it was.
         if (t is kotlinx.coroutines.CancellationException) return
+        // Three network failures in a row on the active route and this client
+        // goes looking for another one. ⚠ THE DESKTOP NEVER DID THIS: it
+        // resolved once from start() and then stayed wherever it was, so a
+        // laptop that moved networks was broken until it was restarted.
+        noteRouteFailure(t)
         faults.fail(
             source,
             when (t) {
@@ -986,19 +1090,32 @@ class AppStore(
     }
 
     /**
-     * Picks a reachable address before the first real call. Skipped when the route
-     * was pinned by hand — auto-resolution moving off a deliberately chosen route
-     * is the bug the pin exists to prevent.
+     * Picks the first healthy route IN THE OWNER'S ORDER. Skipped when a route
+     * was pinned by hand — auto-resolution moving off a deliberately chosen
+     * route is the bug the pin exists to prevent.
+     *
+     * Nothing answering leaves the setting alone rather than blanking it, so a
+     * laptop opened off-network still knows where home is.
      */
-    private suspend fun resolveRoute() {
-        if (settings.routePinnedNow()) return
-        val current = settings.baseUrlNow()
-        val found = RouteResolver.resolve(AppdRoutes.candidates(current)) { client.probe(it) }
-        // Null means nothing answered: leave the setting alone rather than blank
-        // it, so a laptop opened off-network still knows where home is.
-        if (found != null && found != current) {
-            runCatching { settings.selectRoute(found, pinned = false) }
-            _route.value = found
+    private suspend fun resolveRoute(force: Boolean = false) {
+        _resolvingRoute.value = true
+        val outcome = RouteResolver.resolve(
+            book = _routeBook.value,
+            health = _routeHealth.value,
+            now = System.currentTimeMillis(),
+            force = force,
+        ) { client.probe(it.url) }
+        _resolvingRoute.value = false
+        _routeHealth.value = outcome.health
+        _routeNote.value = when (val choice = outcome.choice) {
+            is RouteResolver.Choice.Empty -> null
+            is RouteResolver.Choice.Pinned -> "pinned to ${choice.route.name} — switch automatically to move"
+            is RouteResolver.Choice.NoRoute -> "no route answered — is a VPN connected?"
+            is RouteResolver.Choice.Stay -> "still on ${choice.route.name}"
+            is RouteResolver.Choice.Switched -> {
+                applyBook(_routeBook.value.activate(choice.route.id))
+                "switched to ${choice.route.name}"
+            }
         }
     }
 

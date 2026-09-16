@@ -1,6 +1,7 @@
 package com.silencelen.huginn.data
 
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.map
 import kotlinx.serialization.builtins.MapSerializer
 import kotlinx.serialization.builtins.serializer
 import kotlinx.serialization.json.Json
@@ -28,17 +29,49 @@ interface HuginnSettings {
 
     // ------------------------------------------------------ connection
 
+    /**
+     * The address every request goes to — DERIVED from whichever route is
+     * active, and persisted under its own key on both stores.
+     *
+     * ⚠ THIS IS THE PROJECTION EVERY NON-UI PATH DEPENDS ON. Ten background call
+     * sites read it straight and none of them know routes exist: the watch
+     * service, the heartbeat, the session watch worker, both push handlers, the
+     * three notification-action receivers, the widget refresh worker and the
+     * widget's ask activity. They were not changed when routes arrived and must
+     * not need to be — [setRouteBook] writes this through on every save, and
+     * [RouteBookTest] holds it to that.
+     *
+     * Empty on a fresh install, which is the honest answer: nothing is pinned
+     * yet and no address has been chosen.
+     */
     val baseUrl: Flow<String>
     val token: Flow<String>
 
-    /** True when the route was chosen by hand, which stops auto-resolution moving off it. */
-    val routePinned: Flow<Boolean>
+    /**
+     * The pinned routes, which one is active, and whether huginn may move
+     * between them. One value rather than three settings — see [RouteBook].
+     */
+    val routeBook: Flow<RouteBook>
 
-    suspend fun setBaseUrl(value: String)
     suspend fun setToken(value: String)
 
-    /** Switches the active route, for the UI and the background workers at once. */
-    suspend fun selectRoute(url: String, pinned: Boolean)
+    /**
+     * Stores the whole book: the list, the active id, the auto-switch flag AND
+     * the derived [baseUrl], in one write, so a background worker can never read
+     * an address that belongs to a route the list no longer holds.
+     */
+    suspend fun setRouteBook(value: RouteBook)
+
+    /** The pins alone, for a list that does not care which is active. */
+    val pinnedRoutes: Flow<List<PinnedRoute>>
+        get() = routeBook.map { it.routes }
+
+    val activeRouteId: Flow<String>
+        get() = routeBook.map { it.activeId.orEmpty() }
+
+    /** False when the owner pinned a route by hand — today's `routePinned`, inverted. */
+    val autoSwitch: Flow<Boolean>
+        get() = routeBook.map { it.autoSwitch }
 
     /**
      * Stable id for this installation, minted once. Sent to the host so it can
@@ -114,7 +147,14 @@ interface HuginnSettings {
     suspend fun noteWatchError(message: String, atMs: Long)
 
     companion object {
-        /** huginn's tailnet address, which is where the daemon binds. */
+        /**
+         * huginn's tailnet address, which is where the daemon binds.
+         *
+         * ⚠ NO LONGER A DEFAULT SETTING. A fresh install pins nothing (the first
+         * address the owner saves becomes pin #1), so this is what the add-a-
+         * route field SUGGESTS and what [AppdRoutes.migrate] seeds an upgrade
+         * with — not what an unconfigured client quietly points at.
+         */
         const val DEFAULT_BASE_URL: String = "http://100.97.198.90:8787"
         const val DEFAULT_FONT_SCALE: Float = 9f
 
@@ -141,6 +181,29 @@ object SettingsCodec {
         String.serializer(),
         kotlinx.serialization.builtins.ListSerializer(String.serializer()),
     )
+    private val routes = kotlinx.serialization.builtins.ListSerializer(PinnedRoute.serializer())
+
+    /**
+     * The pinned routes, as both stores hold them: one JSON array in one string
+     * preference, the same shape on the phone and the desktop.
+     *
+     * ⚠ NULL MEANS "NEVER WRITTEN", which is the signal to migrate from the old
+     * `base_url` / `appd_route_pinned` pair. An EMPTY ARRAY is a different
+     * answer entirely — a fresh install whose owner has not pinned anything yet
+     * — and must not be confused with it, or every launch would re-seed the two
+     * built-ins the owner deleted.
+     *
+     * Unreadable input also reads as null, so a half-written settings file falls
+     * back to the migration rather than to an empty list: `base_url` is still
+     * there, and rebuilding the book from it is kinder than forgetting where
+     * home is.
+     */
+    fun decodeRoutes(raw: String?): List<PinnedRoute>? {
+        if (raw.isNullOrEmpty()) return null
+        return runCatching { json.decodeFromString(routes, raw) }.getOrNull()
+    }
+
+    fun encodeRoutes(value: List<PinnedRoute>): String = json.encodeToString(routes, value)
 
     fun decodeSentHistory(raw: String?): Map<String, List<String>> =
         if (raw.isNullOrEmpty()) emptyMap()
