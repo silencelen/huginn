@@ -387,6 +387,20 @@ node scripts/gen-local-manifest.js --check >/dev/null \
   && ok "the embedded manifest matches shared/local-runtime.json" \
   || bad "manifest drift — run: node scripts/gen-local-manifest.js and READ the diff"
 
+# The PERSISTENCE half: whether this install still serves after its owner logs
+# out, and whether every surface says so. Driven through an injectable command
+# runner rather than the real systemd, because every fact it decides is a fact
+# about a machine nobody is sitting at — see the file's own header. Captured,
+# never piped: this script runs under `set -o pipefail`.
+LT_OUT=$(node --test scripts/test-local-tier.js 2>&1); LT_RC=$?
+LT_N=$(grep -oE '^# pass [0-9]+' <<<"$LT_OUT" | grep -oE '[0-9]+')
+if [ "$LT_RC" -eq 0 ] && [ "${LT_N:-0}" -ge 20 ]; then
+  ok "the local tier's persistence gate (${LT_N} tests)"
+else
+  bad "local-tier gate FAILED (exit $LT_RC, ${LT_N:-0} passed):"
+  grep -E '^not ok|error:' <<<"$LT_OUT" | head -12 >&2
+fi
+
 # The device-unit lesson, re-applied: a unit that drops the env var that moves
 # its own files is a service that loops forever while systemd calls it healthy.
 UNIT_LLM=$(HUGINN_LOCAL_DIR=/tmp/hl-gate node client/huginn-local unit --system --which llm)
