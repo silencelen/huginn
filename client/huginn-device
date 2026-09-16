@@ -454,6 +454,12 @@ async function enrol(conf) {
     // Display-only advertisement (what a serving row says it serves). The
     // daemon renders it untrusted; it is never routing authority.
     models: Array.isArray(conf.models) ? conf.models : undefined,
+    // Whether this machine serves with NOBODY logged in — written into the
+    // config by `huginn local`, which is the only thing that knows how the
+    // services were installed. ABSENT from an older manager, and absent must
+    // stay absent all the way to the daemon: `false` is a claim about a box,
+    // and defaulting it would label every pre-facet machine wrongly.
+    persistent: typeof conf.persistent === 'boolean' ? conf.persistent : undefined,
   });
   // ⚠ THE SCOPE ECHO IS THE FENCE against an old daemon. An appd without the
   // generate rung files an unknown scope as its own floor — which would
@@ -766,8 +772,13 @@ async function serve() {
       // report a change in what it is willing to do.
       clearInterval(beat);
       beat = setInterval(() => {
+        const live = loadConf();
         api('POST', `/v1/devices/${id}/beat`, {
-          locked: locked(), scope: parseScope(loadConf().scope), version: VERSION,
+          locked: locked(), scope: parseScope(live.scope), version: VERSION,
+          // Rides the beat as well as the enrolment so `huginn local persist`
+          // is reflected within a minute, without waiting for a re-enrol that
+          // only happens when the runner restarts.
+          ...(typeof live.persistent === 'boolean' ? { persistent: live.persistent } : {}),
         }).then((r) => { if (r && r.cancel) activeRun?.cancel(); }).catch(() => {});
       }, 60000);
 
