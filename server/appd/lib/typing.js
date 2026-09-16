@@ -48,6 +48,27 @@ const TYPING_POLL_MS = 400;
 const QUEUE_MAX_WAIT_MS = 10 * 60 * 1000;
 
 /**
+ * How long a send waits for a freshly launched `claude` to draw its composer.
+ *
+ * Measured on this host against Claude Code 2.1.258, sampling the pane every
+ * 30 ms from the instant `tmux new-session` returns:
+ *
+ *   t+0.03 s   new-session returns; the pane is COMPLETELY EMPTY
+ *   t+0.8 s    (in a repo with startup warnings) plain console text, no box
+ *   t+2.1 s    the whole TUI is painted in one write — banner + composer box
+ *   t+3.2 s    the placeholder clears and the status line names the session
+ *
+ * 20 s is that 2-3 s with a very wide margin for a loaded host, an MCP-heavy
+ * cwd or a cold node. It is a CEILING, not a delay: the gate opens the moment
+ * the composer appears, which is the normal case a couple of seconds in. When
+ * it does expire the send goes out anyway — a person's message is delivered or
+ * it is an error, never quietly binned, and a `claude` that never drew a
+ * composer has fallen through to the shell, which is the same pane appd would
+ * have typed into before any of this existed.
+ */
+const STARTUP_GRACE_MS = 20 * 1000;
+
+/**
  * Does this text fit in ONE `send-keys -l` command line for this target?
  *
  * Computed, never hardcoded: a long session name eats the budget character for
@@ -280,6 +301,85 @@ function paneBlocks(why) {
 }
 
 /**
+ * Has Claude Code drawn its composer yet — i.e. is there an application in this
+ * pane that will READ what we paste?
+ *
+ * ⚠ THE CARET IS NOT THE LAST LINE, and that is why this is a separate function
+ * rather than `paneReadyForInput(...).ready`. On 2.1.258 the box is followed by
+ * one to three status lines, every real session on this host included:
+ *
+ *   ────────────────────────────────────────
+ *   ❯                                            <- the composer
+ *   ────────────────────────────────────────
+ *     [jtyper] Fable 5.1 · ctx 43% · main ~5     <- statusline
+ *     ⏵⏵ auto mode on (shift+tab to cycle)       <- mode hint
+ *
+ * `paneReadyForInput` reads the LAST non-blank line, so on this build its
+ * `ready` is false for every live Claude pane there is. That costs nothing
+ * where it is used — the daemon consumes only `.why`, and 'busy' blocks nothing
+ * — but it means the existing verdict cannot answer "is Claude up yet", which
+ * is the question the startup race turns on. So this scans the bottom REGION,
+ * the same window the dialog rules already use.
+ *
+ * Deliberately generous about what counts: a dialog's own cursored row is a
+ * caret too, and a pane showing the trust dialog has demonstrably got a running
+ * Claude in it. Being sure the app is THERE is this function's whole job;
+ * whether it may be typed into is `paneBlocks`', and that check comes first.
+ */
+function composerDrawn(lines) {
+  const arr = Array.isArray(lines) ? lines : String(lines || '').split('\n');
+  const plain = arr.map((l) => stripAnsi(String(l)).replace(/\s+$/, ''));
+  let last = -1;
+  for (let i = plain.length - 1; i >= 0; i--) { if (plain[i].trim()) { last = i; break; } }
+  if (last < 0) return false;   // an empty pane has drawn nothing at all
+  const from = Math.max(0, last - DIALOG_LOOKBACK);
+  return plain.slice(from, last + 1).some((l) => CARET_EMPTY_RE.test(l) || CARET_TYPED_RE.test(l));
+}
+
+/**
+ * Is this session still coming UP, so that anything pasted into it is lost?
+ *
+ * ⚠ THE P1 THIS EXISTS FOR (reported 2026-09-15): "a user creates a session and
+ * can send a message before claude is brought up in the background, the text
+ * seems to still generate paste into the claude code session box, but it forces
+ * the user to switch to the session tab and enter live view to hit enter".
+ *
+ * `POST /v1/sessions` answers 201 the instant `tmux new-session -d` returns —
+ * about 30 ms — and `claude` needs a couple of SECONDS after that before
+ * anything in the pane is reading stdin. A send in between is not merely early.
+ * Measured against 2.1.258 (bracketed paste + Enter, exactly as the daemon
+ * sends it):
+ *
+ *   pasted at t+1.1 s  the pane is empty; the message and its Enter VANISH —
+ *                      no composer text, no turn, no transcript, no trace
+ *   pasted at t+1.8 s  the message submits AND a copy of it reappears in the
+ *                      composer seconds later, typed but unsent
+ *   pasted at t+2.1 s  normal
+ *
+ * Either way the sender sees a composer that emptied and a session that did
+ * nothing, which is the same screen a DROPPED message draws — the very thing
+ * the send queue was built to stop.
+ *
+ * `launching` is the discriminator and it is deliberately narrow: appd sets it
+ * only for the sessions it started `claude` in itself (the create route and the
+ * reboot restore). A tmux session somebody else made is never held here, which
+ * matters because a plain shell has no composer and never will — holding those
+ * would break every non-Claude pane the app can open.
+ */
+function startingUp({ launching = false, composer = false, ageMs = null } = {}) {
+  if (!launching || composer) return false;
+  // ⚠ `ageMs == null`, NOT `Number.isFinite(Number(ageMs))`. `Number(null)` is 0
+  // and 0 is a perfectly good age, so the coercing spelling reads "I have no
+  // idea when this launched" as "it launched this instant" and holds a send on
+  // a session nothing knows anything about. The same trap cost the overview
+  // route a first fetch (`Number(null)` is also an empty transcript's cursor).
+  if (ageMs == null) return false;
+  const age = Number(ageMs);
+  if (!Number.isFinite(age)) return false;
+  return age < STARTUP_GRACE_MS;
+}
+
+/**
  * A per-send tmux buffer name.
  *
  * Unique per send, not per session and never a constant: two sessions pasting
@@ -308,12 +408,18 @@ function bufferName() {
  * Order is the order of harm:
  *   modal      a dialog SWALLOWS a message with no trace anywhere, and nothing
  *              overrides that.
+ *   starting   there is no application in the pane yet, so the paste and its
+ *              Enter go nowhere at all. Outranks everything below, and unlike
+ *              the turn gate it holds a PERSON's message too — 3.0.3's rule is
+ *              that a human send never waits for CLAUDE to finish, not that it
+ *              may be thrown at a pane where Claude has not started.
  *   attention  a question is waiting; prose typed into a numbered prompt is
  *              lost or misread. Held, never dropped, for as long as it takes.
  *   then either boundary — the transcript's or the hook's — lets it go.
  */
-function releaseDecision({ idle, paneWhy, state = null }) {
+function releaseDecision({ idle, paneWhy, state = null, starting = false }) {
   if (paneBlocks(paneWhy)) return { release: false, blockedBy: 'modal' };
+  if (starting) return { release: false, blockedBy: 'starting' };
   if (state === 'hold') return { release: false, blockedBy: 'attention' };
   if (idle || state === 'release') return { release: true, blockedBy: null };
   return { release: false, blockedBy: 'turn' };
@@ -403,10 +509,10 @@ function typingSnapshot(q, nowMs = Date.now()) {
 
 module.exports = {
   SESSION_TEXT_MAX, SENDKEYS_BUDGET, CHUNK_SIZE, TYPING_POLL_MS,
-  QUEUE_MAX_WAIT_MS,
+  QUEUE_MAX_WAIT_MS, STARTUP_GRACE_MS,
   sendKeysFits, chunks,
   isBoundaryRecord, isConversationalRecord, boundaryFromTail, stateVerdict,
   hasHumanUserRecord, kindOf,
-  paneReadyForInput, paneBlocks, bufferName,
+  paneReadyForInput, paneBlocks, composerDrawn, startingUp, bufferName,
   releaseDecision, dropReason, dropMessage, dropLogLine, typingSnapshot,
 };
