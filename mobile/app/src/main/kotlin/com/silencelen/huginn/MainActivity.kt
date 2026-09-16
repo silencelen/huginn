@@ -1694,17 +1694,31 @@ fun HuginnApp(
                                     }
                                 }
                             }
-                            // Reading surfaces: full width helps nobody at 900dp, so
-                            // they keep a readable measure, centred.
-                            // A reading surface like Status: full width helps nobody
-                            // at 900dp, so it keeps a readable measure, centred.
+                            // Reading surfaces: full width helps nobody at 900dp,
+                            // so they keep a readable measure. Where that measure
+                            // HANGS FROM is the next line's business — Status is
+                            // left-snapped, these are still centred.
                             is Dest.Rounds -> Box(Modifier.fillMaxSize(), contentAlignment = androidx.compose.ui.Alignment.TopCenter) {
                                 Box(Modifier.widthIn(max = 840.dp)) { roundsPane() }
                             }
                             is Dest.RoundEdit -> Box(Modifier.fillMaxSize(), contentAlignment = androidx.compose.ui.Alignment.TopCenter) {
                                 Box(Modifier.widthIn(max = 840.dp)) { roundEditPane(d.id) }
                             }
-                            is Dest.Status -> Box(Modifier.fillMaxSize(), contentAlignment = androidx.compose.ui.Alignment.TopCenter) {
+                            // ⚠ CAPPED AND LEFT-SNAPPED, not capped and centred.
+                            // THE OWNER REPORTED THE CENTRED VERSION: *"instead of
+                            // it hitting its limit and staying centered, lets have
+                            // it stay snapped on the left."* The cap is right and
+                            // stays; what centring adds is a column that TRACKS the
+                            // window, so every label slides sideways when the fold
+                            // opens and the eye has to find `host` again. The
+                            // desktop's `ReadingPane` made the same change, which is
+                            // what keeps the two clients one page.
+                            //
+                            // Rounds, RoundEdit and Devices above and below are the
+                            // same cap+centre and are deliberately UNTOUCHED: they
+                            // are four separate call sites rather than one shared
+                            // modifier, and only this one was reported.
+                            is Dest.Status -> Box(Modifier.fillMaxSize(), contentAlignment = androidx.compose.ui.Alignment.TopStart) {
                                 Box(Modifier.widthIn(max = 840.dp)) { statusPane() }
                             }
                             // List and detail side by side, the shape Chats,
