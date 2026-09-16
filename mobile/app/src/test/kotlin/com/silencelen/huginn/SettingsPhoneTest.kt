@@ -42,6 +42,7 @@ class SettingsPhoneTest {
     fun `the home screen says what each drawer is set to`() {
         val f = PhoneSettingsFacts(
             baseUrl = AppdRoutes.TAILSCALE.url,
+            routeName = "Tailscale",
             connected = true,
             accountEmail = "jacob@monahanhosting.com",
             savedAccounts = 2,
@@ -80,11 +81,44 @@ class SettingsPhoneTest {
         // account is broken" for ten minutes.
         val f = PhoneSettingsFacts(
             baseUrl = AppdRoutes.YGGDRASIL.url,
+            routeName = "Yggdrasil",
             connected = false,
             accountEmail = "jacob@monahanhosting.com",
             savedAccounts = 2,
         )
         assertEquals("not connected · Yggdrasil", phoneSummary(category("host"), f))
+    }
+
+    /**
+     * ⚠ THE NAME IS THE OWNER'S, NOT THIS APP'S. Routes are pinned and renamable
+     * now, so the summary says whatever the reader called the path — and falls
+     * back to its address rather than to a word this app invented.
+     */
+    @Test
+    fun `the host line says the owner's name for the route`() {
+        val renamed = PhoneSettingsFacts(
+            baseUrl = AppdRoutes.YGGDRASIL.url,
+            routeName = "the mesh",
+            connected = false,
+        )
+        assertEquals("not connected · the mesh", phoneSummary(category("host"), renamed))
+
+        val unnamed = PhoneSettingsFacts(baseUrl = "http://10.0.0.9:8787", connected = false)
+        assertEquals("not connected · 10.0.0.9:8787", phoneSummary(category("host"), unnamed))
+    }
+
+    /**
+     * A fresh install has pinned nothing. ⚠ It says so only once a failed
+     * connection has PROVED it — "no route yet" on a launching app that has three
+     * pinned would be a lie told at the moment somebody is already worried.
+     */
+    @Test
+    fun `with no route pinned the host line asks for one, but only once it knows`() {
+        assertNull("silent while the facts land", phoneSummary(category("host"), PhoneSettingsFacts()))
+        assertEquals(
+            "not connected · no route yet",
+            phoneSummary(category("host"), PhoneSettingsFacts(connected = false)),
+        )
     }
 
     @Test
@@ -171,22 +205,30 @@ class SettingsPhoneTest {
     fun `the diagnostics bundle always names the route`() {
         // The first question asked of a phone that stopped notifying is which
         // address it was on — the tunnel, not the app, is usually the answer.
-        val tailscale = diagnosticsBundle(PhoneSettingsFacts(baseUrl = AppdRoutes.TAILSCALE.url), NOW)
+        val tailscale = diagnosticsBundle(
+            PhoneSettingsFacts(baseUrl = AppdRoutes.TAILSCALE.url, routeName = "Tailscale"), NOW,
+        )
         assertTrue(tailscale, "route: Tailscale · 100.97.198.90:8787" in tailscale)
 
-        val ygg = diagnosticsBundle(PhoneSettingsFacts(baseUrl = AppdRoutes.YGGDRASIL.url), NOW)
-        assertTrue(ygg, "route: Yggdrasil · 192.168.2.117:8787" in ygg)
+        // The owner's own word for the path, when they have renamed it — this is
+        // the line somebody pastes into a chat, and "the mesh" is what they will
+        // say out loud in the next message.
+        val renamed = diagnosticsBundle(
+            PhoneSettingsFacts(baseUrl = AppdRoutes.YGGDRASIL.url, routeName = "the mesh"), NOW,
+        )
+        assertTrue(renamed, "route: the mesh · 192.168.2.117:8787" in renamed)
 
-        // A hand-typed address is still named, as Custom — "no route line" and
-        // "an address nobody recognises" are different problems.
-        val custom = diagnosticsBundle(PhoneSettingsFacts(baseUrl = "http://10.0.0.9:8787"), NOW)
-        assertTrue(custom, "route: Custom · 10.0.0.9:8787" in custom)
+        // A pin nobody named still has a name — its own address. "No route line"
+        // and "an address nobody recognises" are different problems.
+        val unnamed = diagnosticsBundle(PhoneSettingsFacts(baseUrl = "http://10.0.0.9:8787"), NOW)
+        assertTrue(unnamed, "route: 10.0.0.9:8787 · 10.0.0.9:8787" in unnamed)
     }
 
     @Test
     fun `the bundle carries the delivery facts the question is actually about`() {
         val f = PhoneSettingsFacts(
             baseUrl = AppdRoutes.TAILSCALE.url,
+            routeName = "Tailscale",
             appVersion = "3.1.0",
             appdVersion = "3.0.5",
             notifyEnabled = true,
