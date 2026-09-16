@@ -338,6 +338,97 @@ test('only a dialog BLOCKS a send: busy is not a liveness verdict', () => {
   assert.equal(t.paneBlocks(null), false);
 });
 
+// -------------------------------------------------------- is claude up yet
+
+// A real 2.1.258 pane, bottom five lines, captured off this host. The point is
+// where the caret ISN'T: the box has status lines under it, so the composer is
+// three lines from the bottom and never the last one.
+const LIVE_COMPOSER = [
+  '                                    tmux detected · scroll with PgUp/PgDn',
+  '──────────────────────────────────────────────────────────────────────────',
+  '❯ ',
+  '──────────────────────────────────────────────────────────────────────────',
+  '  [jtyper] Fable 5.1 · ctx 43% · main ~5',
+  '  ⏵⏵ auto mode on (shift+tab to cycle) · ← for agents',
+];
+
+test('composerDrawn finds the caret under the status lines, where ready cannot', () => {
+  // ⚠ THE MEASUREMENT THIS RULE EXISTS FOR. `paneReadyForInput` reads the LAST
+  // non-blank line, and on this build that is the auto-mode hint — so `ready` is
+  // false for every live Claude pane on the host. It costs nothing where it is
+  // used (the daemon consumes only `.why`, and 'busy' blocks nothing), but it
+  // means the old verdict cannot answer "has Claude come up", which is the whole
+  // startup question. Asserted together so the two stay honest about each other.
+  assert.equal(t.composerDrawn(LIVE_COMPOSER), true);
+  assert.equal(t.paneReadyForInput(LIVE_COMPOSER).ready, false,
+    'not a regression: this is why composerDrawn is a separate rule');
+});
+
+test('composerDrawn is false for every pane a booting claude draws', () => {
+  // The three real frames, in order, sampled every 30 ms off a live startup.
+  assert.equal(t.composerDrawn([]), false, 't+0.03s: new-session returns, pane EMPTY');
+  assert.equal(t.composerDrawn(['', '   ', '']), false, 'still nothing but whitespace');
+  assert.equal(t.composerDrawn([
+    'Claude Code v2.1.258',
+    'Permission allow rule (settings): a wildcard before the rest of the command',
+    'matches more than it looks like it does.',
+  ]), false, 't+0.8s: console text, no box — the frame that looks up and is not');
+});
+
+test('composerDrawn counts a DIALOG as claude being up — it is a caret too', () => {
+  // Being sure the app is THERE is this rule's only job. Whether it may be typed
+  // into is paneBlocks', and releaseDecision asks that one first.
+  assert.equal(t.composerDrawn(TRUST_DIALOG), true);
+  assert.equal(t.composerDrawn(MODEL_MODAL), true);
+});
+
+test('startingUp holds only a session appd itself launched claude in', () => {
+  // A plain shell has no composer and never will. Holding those would break
+  // every non-Claude pane the app can open, so the mark is the discriminator.
+  assert.equal(t.startingUp({ launching: false, composer: false, ageMs: 10 }), false);
+  assert.equal(t.startingUp({ launching: true, composer: false, ageMs: 10 }), true);
+  assert.equal(t.startingUp({}), false, 'no mark, no age: nothing to hold');
+});
+
+test('startingUp ends the moment the composer appears, and at the grace either way', () => {
+  assert.equal(t.startingUp({ launching: true, composer: true, ageMs: 10 }), false,
+    'claude is up: this rule must never speak about the pane again');
+  assert.equal(t.startingUp({ launching: true, composer: false, ageMs: t.STARTUP_GRACE_MS - 1 }), true);
+  assert.equal(t.startingUp({ launching: true, composer: false, ageMs: t.STARTUP_GRACE_MS }), false,
+    'a wait with no end is the same bug wearing a different hat');
+  assert.equal(t.startingUp({ launching: true, composer: false, ageMs: null }), false);
+});
+
+test('releaseDecision holds a send while claude is still coming up', () => {
+  // ⚠ AND IT HOLDS A PERSON'S TOO. 3.0.3's rule is that a human send never waits
+  // for Claude to finish a TURN; it was never that it may be thrown at a pane
+  // where Claude has not started. The pump passes `idle: true` for human text
+  // and `starting` rides alongside it.
+  assert.deepEqual(t.releaseDecision({ idle: true, paneWhy: 'busy', starting: true }),
+    { release: false, blockedBy: 'starting' });
+  assert.deepEqual(t.releaseDecision({ idle: true, paneWhy: 'busy', starting: false }),
+    { release: true, blockedBy: null });
+});
+
+test('a dialog OUTRANKS startup: the trust pane is never released by the new gate', () => {
+  // The trust dialog pre-selects "No, exit" and has a caret of its own, so the
+  // one ordering that must not slip is this one: a pane that is both starting
+  // and showing a dialog reports the dialog and stays shut.
+  assert.deepEqual(t.releaseDecision({ idle: true, paneWhy: 'trust', starting: true }),
+    { release: false, blockedBy: 'modal' });
+  assert.deepEqual(t.releaseDecision({ idle: true, paneWhy: 'modal', starting: true }),
+    { release: false, blockedBy: 'modal' });
+});
+
+test('startup outranks the attention hold and the turn gate below it', () => {
+  // Order of harm: a message at a dialog is swallowed, a message at a pane with
+  // nothing in it is lost outright, and everything below those is merely early.
+  assert.deepEqual(t.releaseDecision({ idle: true, paneWhy: 'busy', starting: true, state: 'hold' }),
+    { release: false, blockedBy: 'starting' });
+  assert.deepEqual(t.releaseDecision({ idle: false, paneWhy: 'busy', starting: true }),
+    { release: false, blockedBy: 'starting' });
+});
+
 // ------------------------------------------------------------- buffer names
 
 test('bufferName is unique per send and shaped hg-<6hex>', () => {
