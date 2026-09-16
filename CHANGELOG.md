@@ -10,6 +10,34 @@ Format loosely follows [Keep a Changelog](https://keepachangelog.com/); versions
 
 ## [Unreleased]
 
+## [1.1.0] - 2026-09-15
+
+Local AI that keeps serving after you log out.
+
+### Added
+- `huginn local on --system` installs systemd **system** units behind ONE elevation prompt
+  (pkexec, then sudo) on Linux, so a serving machine keeps serving with nobody logged in — the
+  shape Windows already had. Elevation declined or unavailable falls back to a user unit kept
+  alive by `loginctl enable-linger`, and says which one you got; linger is now attempted on every
+  Linux user-unit install (it was never touched before).
+- `huginn local persist` migrates an existing user-unit install to system units, or enables
+  linger where there is nothing to elevate with.
+- `--adapter llama-swap` adopts an externally installed llama-swap behind the same loopback and
+  keyless-completions gates. `off` never stops, uninstalls or de-keys an adopted engine; adoption
+  is refused on top of a managed install.
+- `huginn-device` reports whether this machine serves while logged out (`persistent`), at
+  enrolment and on its heartbeat, so Devices can tell "always on" from "only while someone is
+  logged in".
+
+### Changed
+- `status`, `status --json` and `plan --json` report unit type, linger, persistence and adoption
+  truthfully; `doctor` now **fails** (exit 1) on a user unit with no linger.
+
+### Fixed
+- Adapter mode never recorded the unit scope, so an adapter runner installed with `--system` was
+  later looked for on the user bus: `status` said "not installed" about a running service and
+  `off` left it running.
+
 ## [1.0.0] - 2026-09-15
 
 Huginn 3 / CLI 1.0.
