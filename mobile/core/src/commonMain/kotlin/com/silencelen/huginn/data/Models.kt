@@ -10,7 +10,28 @@ import kotlinx.serialization.json.JsonObject
 // devstore lesson: one missing field must not fail the whole decode).
 
 @Serializable
-data class Ping(val ok: Boolean = false, val version: String? = null, val host: String? = null)
+data class Ping(
+    val ok: Boolean = false,
+    val version: String? = null,
+    val host: String? = null,
+    /**
+     * WHICH LISTENER ANSWERED — the local end of this client's own socket, as the
+     * daemon saw it. Present from appd 3.0.7; null against anything older, which
+     * is why routes never depend on it.
+     *
+     * What it is FOR: several pinned routes can address one daemon (tailnet,
+     * mesh, loopback), and two pins that land on the same listener are one path
+     * wearing two names. `host` alone cannot tell them apart.
+     *
+     * ⚠ NOT A DIRECTORY. `/v1/ping` needs no token, so this carries only the
+     * address the caller already dialled. Any LIST of the daemon's addresses
+     * belongs on token-gated `/v1/status`.
+     */
+    val via: PingVia? = null,
+)
+
+@Serializable
+data class PingVia(val addr: String? = null, val port: Int? = null)
 
 @Serializable
 data class Disk(
