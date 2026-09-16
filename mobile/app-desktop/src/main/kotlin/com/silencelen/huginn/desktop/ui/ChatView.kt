@@ -603,8 +603,9 @@ private fun Composer(
         // Send become their own icons on a line beneath it. Nothing about the
         // keyboard moves — see the block below, which is unchanged.
         ComposerFrame(
-            attach = {
+            attach = { layout ->
                 AttachButton(
+                    layout = layout,
                     pads = pads,
                     padRefId = padRefId,
                     onPadRef = onPadRef,

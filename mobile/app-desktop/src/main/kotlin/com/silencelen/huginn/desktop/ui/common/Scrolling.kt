@@ -83,16 +83,34 @@ private fun deskScrollbar(): ScrollbarStyle {
 }
 
 /**
- * A full-width pane that is actually READ: capped to a measure, centred, scrolled,
- * and with a bar saying how far down it is.
+ * A full-width pane that is actually READ: capped to a measure, LEFT-SNAPPED,
+ * scrolled, and with a bar saying how far down it is.
  *
  * `Frame.prose` has existed since the frame did and was applied to EMPTY STATES
  * ONLY — so the one place the app set a reading measure was the place with the
  * least to read. Status, Devices, Rounds and Settings ran to the pane edge:
  * >90 characters a line from about 1000px of window onward, and the Headroom
  * intro set ~135 characters on one line at 1440. The phone had already solved
- * this (`MainActivity` centres Rounds/Status/Settings/Devices in `widthIn(max =
+ * this (`MainActivity` caps Rounds/Status/Settings/Devices at `widthIn(max =
  * 840.dp)`); this is that constant, arrived at from the same direction.
+ *
+ * ⚠ CAPPED, NOT CENTRED — THE OWNER REPORTED THE CENTRED VERSION: *"the status
+ * page is looking much better on mobile and small horizontal windows, it scales
+ * well but now i notice that it hits a limit. the limit is a good idea so that we
+ * dont have a situation with a really wide monitor and row content being really
+ * far apart across the screen. instead of it hitting its limit and staying
+ * centered, lets have it stay snapped on the left."*
+ *
+ * The cap is the right idea and stays. What centring adds is a column that TRACKS
+ * THE WINDOW: drag a 1500px window wider and every label slides right, so the eye
+ * has to find `host` again after a resize. Left-snapped, the pane grows to the
+ * right and nothing the reader is looking at moves. The gutter it leaves at 1500px
+ * is one gutter instead of two, which is also the shape the rail and the list pane
+ * on the left already commit this frame to.
+ *
+ * ONE alignment for Status, Devices and Rounds, because it is one pane composable
+ * — the cap they share is the cap the owner is describing, and three panes that
+ * disagree about which edge they hang from is the drift this file exists to stop.
  *
  * ⚠ CAP BEFORE FILL. The cap is on the OUTSIDE of the `fillMaxWidth`, because
  * `fillMaxWidth` hands down fixed constraints and a `widthIn` inside fixed
@@ -114,7 +132,7 @@ fun ReadingPane(
     Box(modifier.fillMaxSize()) {
         Column(
             Modifier.fillMaxSize().verticalScroll(scroll),
-            horizontalAlignment = Alignment.CenterHorizontally,
+            horizontalAlignment = Alignment.Start,
         ) {
             Column(
                 Modifier.widthIn(max = Frame.reading).fillMaxWidth().padding(padding),

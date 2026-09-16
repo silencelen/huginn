@@ -11,6 +11,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.IconButtonDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -38,6 +39,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.AwtWindow
 import com.silencelen.huginn.data.HuginnClient
 import com.silencelen.huginn.data.Scratchpad
+import com.silencelen.huginn.desktop.Composer
+import com.silencelen.huginn.desktop.ComposerLayout
 import com.silencelen.huginn.ui.AttachChooser
 import com.silencelen.huginn.ui.AttachChooserItems
 import com.silencelen.huginn.ui.AttachRow
@@ -125,8 +128,27 @@ fun AttachChip(attachment: ComposerAttachment, onRemove: () -> Unit) {
 }
 
 /**
- * The clip button, and the choice behind it. A TextButton so it sits on the
- * composer's baseline with Send.
+ * The clip button, and the choice behind it. A TextButton at desk widths, so it
+ * sits on the composer's baseline with a labelled Send.
+ *
+ * ⚠ AND AN ICON BUTTON UNDER THE BREAKPOINT, WHICH IS NOT COSMETIC. THE OWNER
+ * REPORTED THE TEXTBUTTON-IN-BOTH-SHAPES VERSION: *"the send button in desktop,
+ * when shrunk to its icon due to scaling, is not aligned properly with the
+ * attachment icon to its left, it should be centered vertically on the same
+ * horizontal plane as the attachment button."*
+ *
+ * A clickable M3 `Surface` — which is what a `TextButton` is — carries
+ * `minimumInteractiveComponentSize()`, so this reported a 48dp box with its glyph
+ * centred at 24dp from the top of the control line, while Send and Interrupt were
+ * [Composer.CONTROL_DP] icon buttons sitting at the TOP of that line with their
+ * glyphs at 16dp. Measured on a 560px window: 8px of disagreement, on the one
+ * line whose whole job is to be three symbols in a row.
+ *
+ * Centring the row would have hidden that rather than fixed it — a 58dp-wide
+ * labelled button beside two 32dp squares is still two different controls, and it
+ * spends horizontal space on the window shape that had none. So the compact form
+ * is built from the SAME constant the other two are, which is what makes one
+ * vertical centre a property of the line rather than a coincidence of alignment.
  *
  * Two menus on ONE anchor, opened in sequence: the chooser ("Local file" /
  * "Notes page"), and then — if the page row is taken — the pages themselves. A
@@ -137,11 +159,15 @@ fun AttachChip(attachment: ComposerAttachment, onRemove: () -> Unit) {
  * With pages unavailable there is only one row, and the button goes STRAIGHT to
  * the file dialog exactly as it did before this menu existed — [AttachChooser.direct].
  *
+ * @param layout which shape the composer is in, handed down by `ComposerFrame`
+ *   exactly as it is to `ComposerAction`. Defaulted to [ComposerLayout.FULL] so a
+ *   caller outside a composer gets the labelled button it always had.
  * @param pads already gated by the caller's feature probe: empty means the daemon
  *   has no pages route, which is the only form this control sees that fact in.
  */
 @Composable
 fun AttachButton(
+    layout: ComposerLayout = ComposerLayout.FULL,
     enabled: Boolean = true,
     pads: List<Scratchpad> = emptyList(),
     padRefId: String? = null,
@@ -159,16 +185,35 @@ fun AttachButton(
         onNotesPage = { pagePicker = true },
     )
     val sole = AttachChooser.direct(rows)
+    val label = if (sole != null) "Attach a file" else "Attach"
+    val open = { if (sole != null) sole.onPick() else chooser = true }
 
     Box {
-        TextButton(
-            onClick = { if (sole != null) sole.onPick() else chooser = true },
-            enabled = enabled,
-        ) {
-            Icon(
-                Icons.Filled.AttachFile,
-                contentDescription = if (sole != null) "Attach a file" else "Attach",
-            )
+        if (layout == ComposerLayout.COMPACT) {
+            IconButton(
+                onClick = open,
+                enabled = enabled,
+                modifier = Modifier.size(Composer.CONTROL_DP.dp),
+                // The clip keeps the PRIMARY tint it has in the labelled form. An
+                // `IconButton` defaults to `LocalContentColor`, so the compact clip
+                // came out grey on the first build of this — a control that changes
+                // COLOUR as the window narrows reads as a different control, and the
+                // complaint being fixed here was already that the two shapes of one
+                // line did not look like one line.
+                colors = IconButtonDefaults.iconButtonColors(
+                    contentColor = MaterialTheme.colorScheme.primary,
+                ),
+            ) {
+                Icon(
+                    Icons.Filled.AttachFile,
+                    contentDescription = label,
+                    modifier = Modifier.size(Composer.CONTROL_GLYPH_DP.dp),
+                )
+            }
+        } else {
+            TextButton(onClick = open, enabled = enabled) {
+                Icon(Icons.Filled.AttachFile, contentDescription = label)
+            }
         }
         DropdownMenu(expanded = chooser, onDismissRequest = { chooser = false }) {
             AttachChooserItems(rows) { chooser = false; it.onPick() }
