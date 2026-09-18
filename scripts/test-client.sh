@@ -489,6 +489,96 @@ else
     || ok "ps1: no fetch redirects into its temp file with '>'"
 fi
 
+echo "[5e/8] the address a device is told to dial is a URL"
+# ⚠ WHY: $SSH_CONNECTION's third field is a BARE address, and all four wrapper
+# call sites built `--url "http://$srv:8787"` from it. On a machine whose ssh to
+# the host landed on IPv6 that is `http://fd00::1:8787` - not a URL - and
+# `huginn device on` / `huginn local on` died with the bare "huginn-device:
+# Invalid URL" after saveConf() had already PERSISTED it, so a later flagless
+# `on` repeated it and `serve` logged "not reaching huginn: Invalid URL -
+# retrying in 15s" forever. `huginn local on` reached it only after installing
+# the whole model tier.
+#
+# Bracketing alone is not the fix: appd's resolveBind() takes `tailscale ip -4`
+# and this deployment overrides it with 0.0.0.0, so nothing listens on v6 and a
+# bracketed URL would only turn a cryptic error into a persisted ECONNREFUSED.
+# An IPv4 the host actually holds is preferred, and the bracketed v6 is the last
+# answer - correct syntax, honest failure.
+UT=$(mktemp -d); STUB_DIRS+=("$UT")
+cat > "$UT/ssh" <<'USSH'
+#!/usr/bin/env bash
+cmd="${!#}"
+case "$cmd" in
+  *'/etc/huginn-appd/token'*) echo 'gate-token' ;;
+  *SSH_CONNECTION*)           echo "$SSHCONN" ;;
+  *'ip -4'*)                  [ -n "${HOSTV4:-}" ] && echo "$HOSTV4" ;;
+esac
+exit 0
+USSH
+chmod +x "$UT/ssh"
+url_home () {   # a home whose ~/.huginn already holds runners that print argv
+  rm -rf "$UT/home"; mkdir -p "$UT/home/.huginn"
+  local f
+  for f in huginn-device huginn-local huginn-llm-shim; do
+    printf 'console.log(process.argv.slice(2).join(" "));\n' > "$UT/home/.huginn/$f"
+  done
+}
+url_sh () {   # $1 = the huginn command, $2 = SSH_CONNECTION, $3 = the host's IPv4
+  url_home
+  ( export PATH="$UT:$PATH" HOME="$UT/home" SSHCONN="$2" HOSTV4="${3:-}"
+    export HUGINN_LOCAL_DIR="$UT/home/localdir"
+    . "$PWD/client/huginn.sh" >/dev/null 2>&1
+    eval "$1" ) 2>&1
+}
+U6=$(url_sh 'huginn device on' 'fd00::2 5000 fd00::1 22' '10.0.0.5')
+grep -q -- '--url http://10.0.0.5:8787' <<<"$U6" \
+  && ok "sh: an IPv6 ssh path dials an IPv4 the host actually holds" \
+  || bad "sh: device on over IPv6 passed: $U6"
+U6B=$(url_sh 'huginn device on' 'fd00::2 5000 fd00::1 22' '')
+grep -q -- '--url http://\[fd00::1\]:8787' <<<"$U6B" \
+  && ok "sh: and with no IPv4 to be had, the v6 literal is BRACKETED" \
+  || bad "sh: device on over IPv6 with no v4 passed: $U6B"
+U4=$(url_sh 'huginn device on' '192.168.2.50 5000 192.168.2.117 22' '10.0.0.5')
+grep -q -- '--url http://192.168.2.117:8787' <<<"$U4" \
+  && ok "sh: an IPv4 ssh path is untouched" || bad "sh: device on over IPv4 passed: $U4"
+UL=$(url_sh 'huginn local on' 'fd00::2 5000 fd00::1 22' '10.0.0.5')
+grep -q -- '--url http://10.0.0.5:8787' <<<"$UL" \
+  && ok "sh: and huginn local on builds the same url" || bad "sh: local on passed: $UL"
+if command -v pwsh >/dev/null 2>&1; then
+  url_ps () {
+    url_home
+    HOME="$UT/home" SSHCONN="$2" HOSTV4="${3:-}" HUGINN_LOCAL_DIR="$UT/home/localdir" \
+      PATH="$UT:$PATH" pwsh -NoProfile -Command ". $PWD/client/huginn.ps1; $1" 2>&1 | tr -d '\r'
+  }
+  P6=$(url_ps 'huginn device on' 'fd00::2 5000 fd00::1 22' '10.0.0.5')
+  grep -q -- '--url http://10.0.0.5:8787' <<<"$P6" \
+    && ok "ps1: an IPv6 ssh path dials an IPv4 the host actually holds" \
+    || bad "ps1: device on over IPv6 passed: $P6"
+  P6B=$(url_ps 'huginn device on' 'fd00::2 5000 fd00::1 22' '')
+  grep -q -- '--url http://\[fd00::1\]:8787' <<<"$P6B" \
+    && ok "ps1: and with no IPv4 to be had, the v6 literal is BRACKETED" \
+    || bad "ps1: device on over IPv6 with no v4 passed: $P6B"
+  P4=$(url_ps 'huginn device on' '192.168.2.50 5000 192.168.2.117 22' '')
+  grep -q -- '--url http://192.168.2.117:8787' <<<"$P4" \
+    && ok "ps1: an IPv4 ssh path is untouched" || bad "ps1: device on over IPv4 passed: $P4"
+  PL=$(url_ps 'huginn local on' 'fd00::2 5000 fd00::1 22' '10.0.0.5')
+  grep -q -- '--url http://10.0.0.5:8787' <<<"$PL" \
+    && ok "ps1: and huginn local on builds the same url" || bad "ps1: local on passed: $PL"
+else
+  skip "ps1 device-url checks (no pwsh)"
+fi
+# ⚠ AND THE RUNNER NAMES THE ADDRESS. A bare "Invalid URL" on a machine with
+# nobody at it is a message that cannot be acted on - and this one is reached
+# AFTER the url has been written to disk.
+UD=$(mktemp -d); STUB_DIRS+=("$UD")
+UE=$(HUGINN_DEVICE_DIR="$UD" node client/huginn-device on --url 'http://fd00::1:8787' 2>&1)
+grep -q 'fd00::1' <<<"$UE" && grep -qi 'bracket' <<<"$UE" \
+  && ok "huginn-device names the address it cannot dial, and how to spell it" \
+  || bad "huginn-device on a bad url said: $UE"
+[ ! -e "$UD/device.json" ] \
+  && ok "and it does not persist a url it has just refused" \
+  || bad "huginn-device saved an unusable url: $(cat "$UD/device.json")"
+
 echo "[6/8] desktop links come from GitHub, and reach it WITHOUT the host"
 # The whole point of the verb is that it works on a machine that cannot ssh here
 # (that is why it does not use /v1/desktop-kt, whose every route needs the token).
