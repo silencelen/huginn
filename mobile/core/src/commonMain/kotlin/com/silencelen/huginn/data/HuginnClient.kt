@@ -1382,6 +1382,11 @@ class HuginnClient(
     // first and draw an empty state on the second — the same shape as
     // [scratchpads]'s silent 404, made explicit because there are two of them
     // now and "it threw" is a poor way to carry a fact this load-bearing.
+    //
+    // ⚠⚠ AND THREE MORE ANSWER A 409 WITH A VALUE. An untrusted working
+    // directory, a spawn under the headroom arbiter's STOP, a save that lost a
+    // race: each arrives with the whole fix or the whole current state inside
+    // it, and each is a state of the house rather than a fault in the request.
 
     /** A GET whose 404 is an answer: null, not an exception. */
     private suspend fun probeGet(path: String): String? {
@@ -1393,32 +1398,60 @@ class HuginnClient(
     }
 
     /**
-     * Every project, or NULL when this daemon has no projects feature at all.
+     * Every project and the host's cap, or NULL when this daemon has no projects
+     * feature at all.
      *
      * ⚠ NULL AND EMPTY ARE DIFFERENT ANSWERS. See the block comment above.
+     *
+     * @param all include archived projects. The daemon leaves them out otherwise,
+     *   because `archived` is terminal and a tree that kept them would only grow.
      */
-    suspend fun projects(): List<Project>? =
-        probeGet("/v1/projects")?.let { decode<ProjectList>(it).projects }
+    suspend fun projects(all: Boolean = false): ProjectList? =
+        probeGet(if (all) "/v1/projects?all=1" else "/v1/projects")?.let { decode<ProjectList>(it) }
 
-    suspend fun project(id: String): Project = decode(call("/v1/projects/$id"))
+    /**
+     * One project: the record, the row the tree draws, and every member's live
+     * state.
+     *
+     * Decoded twice out of one body on purpose — the daemon spreads the project
+     * into the top level and hangs `row` and `live` beside it, and a model that
+     * repeated all fifteen project fields would be a second place to get the
+     * record wrong.
+     */
+    suspend fun project(id: String): ProjectDetail {
+        val text = call("/v1/projects/$id")
+        val extras = decode<ProjectDetailExtras>(text)
+        return ProjectDetail(decode<Project>(text), extras.row, extras.live)
+    }
 
     /** The members' overviews, summed. Polled while the dashboard is on screen. */
     suspend fun projectDashboard(id: String): ProjectDashboard =
         decode(call("/v1/projects/$id/dashboard"))
 
     /**
-     * Start a project: the daemon launches its lead session.
+     * Start a project: the daemon launches its lead session and types the brief
+     * into it.
+     *
+     * [brief] is not optional and is not a description — it is the WHOLE first
+     * message the lead receives, and the thing it sizes the project from.
      *
      * ⚠ THE 409 IS AN ANSWER, NOT A THROW. The commonest refusal is a working
      * directory Claude Code has not been trusted in, and the daemon's sentence
      * about it IS the fix — so it comes back as [ProjectCreated.refusal] for the
-     * sheet to show under the field, with the name the person typed still in it.
-     * Every other status still throws, because a 400 about a name is a refusal of
-     * the request rather than a state of the house.
+     * sheet to show under the field, with everything the person typed still in
+     * it. Every other status still throws, because a 400 about a name is a
+     * refusal of the request rather than a state of the house.
      */
-    suspend fun createProject(name: String, cwd: String? = null): ProjectCreated {
+    suspend fun createProject(
+        name: String,
+        kind: String,
+        brief: String,
+        cwd: String? = null,
+    ): ProjectCreated {
         val body = buildJsonObject {
             put("name", JsonPrimitive(name))
+            put("kind", JsonPrimitive(kind))
+            put("brief", JsonPrimitive(brief))
             cwd?.takeIf { it.isNotBlank() }?.let { put("cwd", JsonPrimitive(it)) }
         }
         val resp = http.request { build("/v1/projects", HttpMethod.Post, Tier.NORMAL, body) }
@@ -1432,38 +1465,85 @@ class HuginnClient(
     }
 
     /**
-     * Spawn the approved members. Answers PER MEMBER.
+     * Rename, re-brief, pause/resume, archive, or replace the manifest.
      *
-     * ⚠ AND A 409 IS AN ANSWER TOO, for a different reason: the daemon refuses
-     * to spawn while the headroom arbiter's STOP sentinel is armed. Spawning
-     * twelve sessions into a red usage window is how a cluster dies half-born,
-     * so that refusal is a state of the house and belongs on the card as a line,
-     * not on the failure path as an error.
+     * [rev] is what the editor last read, and it is what makes the save safe.
+     *
+     * ⚠ THE 409 HAS TWO SHAPES. A stale rev comes back as the CURRENT PROJECT,
+     * bare, to be adopted — the saveScratchpad contract, which both shells
+     * already know. An illegal status move comes back as an `{error}` with no
+     * project in it, which is a refusal rather than a race. Told apart by whether
+     * the body carries an id, because the status code cannot tell them apart.
      */
-    suspend fun spawnMembers(id: String, members: List<SpawnRequest>): SpawnOutcome {
+    suspend fun saveProject(
+        id: String,
+        rev: Int,
+        name: String? = null,
+        brief: String? = null,
+        status: String? = null,
+        manifest: ProjectManifest? = null,
+    ): ProjectSave {
         val body = buildJsonObject {
-            put(
-                "members",
-                JsonArray(
-                    members.map {
-                        buildJsonObject {
-                            put("name", JsonPrimitive(it.name))
-                            put("role", JsonPrimitive(it.role))
-                            put("prompt", JsonPrimitive(it.prompt))
-                        }
-                    },
-                ),
-            )
+            put("rev", JsonPrimitive(rev))
+            name?.let { put("name", JsonPrimitive(it)) }
+            brief?.let { put("brief", JsonPrimitive(it)) }
+            status?.let { put("status", JsonPrimitive(it)) }
+            // The daemon re-validates an edited manifest with the SAME parser the
+            // lead's own block goes through, so this travels as the parsed shape
+            // rather than as a fence.
+            manifest?.let { put("manifest", json.encodeToJsonElement(ProjectManifest.serializer(), it)) }
+        }
+        val resp = http.request { build("/v1/projects/$id", HttpMethod.Patch, Tier.NORMAL, body) }
+        val text = resp.bodyAsText()
+        if (resp.status.value == 409) {
+            val current = runCatching { decode<Project>(text) }.getOrNull()?.takeIf { it.id.isNotBlank() }
+            if (current != null) return ProjectSave(current, conflict = true)
+            val why = runCatching { decode<ApiError>(text).error }.getOrNull()
+            return ProjectSave(null, conflict = false, refusal = why ?: "that change was refused")
+        }
+        if (!resp.status.isSuccess()) throw errorFrom(resp.status.value, text)
+        return ProjectSave(decode<Project>(text), conflict = false)
+    }
+
+    /**
+     * Create the members the owner approved.
+     *
+     * ⚠⚠ THE BODY IS THE APPROVAL AND THE REV, AND NOTHING ELSE. The client does
+     * not say which members to make — the manifest already does, and a client
+     * that re-sent the roles would be a second opinion about the plan the owner
+     * has just looked at. [manifestRev] is what the card was drawn from, so a
+     * notification that has been sitting on a lock screen while the lead revised
+     * its plan cannot spawn the revision.
+     *
+     * ⚠ AND THE 200 IS NOT A VERDICT. Spawning is a loop over tmux, so a partial
+     * result comes back as `ok:false` with both lists inside a 200 — see
+     * [SpawnResult]. The 409s are the STOP sentinel and the stale rev, and both
+     * are answers.
+     */
+    suspend fun spawnProject(id: String, manifestRev: Int): SpawnOutcome {
+        val body = buildJsonObject {
+            put("approve", JsonPrimitive(true))
+            put("manifestRev", JsonPrimitive(manifestRev))
         }
         val resp = http.request { build("/v1/projects/$id/spawn", HttpMethod.Post, Tier.NORMAL, body) }
         val text = resp.bodyAsText()
         if (resp.status.value == 409) {
             val why = runCatching { decode<ApiError>(text).error }.getOrNull()
-            return SpawnOutcome(emptyList(), why ?: "the host is not spawning sessions right now")
+            // A stale rev carries the CURRENT project, so the card can redraw
+            // itself around the plan that is actually on offer.
+            val current = runCatching { decode<SpawnResult>(text).project }.getOrNull()
+            return SpawnOutcome(null, why ?: "the host is not spawning sessions right now", current)
         }
         if (!resp.status.isSuccess()) throw errorFrom(resp.status.value, text)
-        return SpawnOutcome(decode<SpawnResult>(text).results, null)
+        return SpawnOutcome(decode<SpawnResult>(text), null)
     }
+
+    /**
+     * Turn the proposal down. The manifest is KEPT at its rev so an editor can
+     * still open it; only the status moves back to drafting, and the lead is told
+     * so it does not wait forever for an approval that is not coming.
+     */
+    suspend fun discardProposal(id: String): Project = decode(post("/v1/projects/$id/discard"))
 
     /**
      * Type a line into one member, from another.
@@ -1471,8 +1551,12 @@ class HuginnClient(
      * ⚠ THIS IS NOT PEER MESSAGING. A `SendMessage` between two Claude sessions
      * travels their own socket and triggers a turn with no keypress; the daemon
      * routes none of it. This route is the daemon TYPING into a pane, so it rides
-     * the send queue and its gates — which is why the answer carries [queued] and
-     * [blockedBy] exactly as an ordinary send does.
+     * the send queue and its gates — which is why the answer carries
+     * [ProjectMessageResult.queued] and [ProjectMessageResult.blockedBy] exactly
+     * as an ordinary send does.
+     *
+     * [from] and [to] each name a role, a tmux name or a `<slug>/<role>` peer
+     * name; the daemon resolves all three.
      */
     suspend fun messageProject(id: String, from: String, to: String, text: String): ProjectMessageResult =
         decode(
@@ -1486,10 +1570,22 @@ class HuginnClient(
             ),
         )
 
-    /** Forget the project. The member sessions are the daemon's business, not ours. */
-    suspend fun deleteProject(id: String) {
-        call("/v1/projects/$id", HttpMethod.Delete)
-    }
+    /**
+     * Forget the project, and optionally end its sessions.
+     *
+     * ⚠ THE DEFAULT ENDS NOTHING. `graceful` puts the wind-down phrase in each
+     * composer and lets the settle timer close them; `now` kills them. Anything
+     * else deletes the record and leaves twelve live sessions alone, which is the
+     * safe reading of a button labelled Delete.
+     */
+    suspend fun deleteProject(id: String, end: String? = null): ProjectDeleted =
+        decode(
+            call(
+                "/v1/projects/$id",
+                HttpMethod.Delete,
+                body = buildJsonObject { end?.let { put("end", JsonPrimitive(it)) } },
+            ),
+        )
 
     // ---- consoles: the internal pages this host serves
 
@@ -1501,6 +1597,33 @@ class HuginnClient(
      * `consoles` list means present and empty.
      */
     suspend fun consoles(): ConsoleList? = probeGet("/v1/consoles")?.let { decode<ConsoleList>(it) }
+
+    /**
+     * Add a console. The row comes back with no observation on it — a brand new
+     * console has never been probed, which is not the same as being down.
+     *
+     * A refusal here IS a refusal of the request (the address is not on this
+     * host, the LAN, the tailnet or the mesh; the scheme is not http) and still
+     * throws — [ConsoleRules.urlProblem] mirrors the rule so the field can answer
+     * before the round trip.
+     */
+    suspend fun createConsole(
+        name: String,
+        url: String,
+        kind: String? = null,
+        notes: String? = null,
+    ): Console =
+        decode(
+            post(
+                "/v1/consoles",
+                body = buildJsonObject {
+                    put("name", JsonPrimitive(name))
+                    put("url", JsonPrimitive(url))
+                    kind?.let { put("kind", JsonPrimitive(it)) }
+                    notes?.let { put("notes", JsonPrimitive(it)) }
+                },
+            ),
+        )
 
     /**
      * Edit one console. [version] is the copy this edit was made against.
@@ -1537,6 +1660,11 @@ class HuginnClient(
         }
         if (!resp.status.isSuccess()) throw errorFrom(resp.status.value, text)
         return ConsoleSave(decode(text), conflict = false, refusal = null)
+    }
+
+    /** Remove a console from the registry. A second delete is a 404, not a second success. */
+    suspend fun deleteConsole(id: String) {
+        call("/v1/consoles/$id", HttpMethod.Delete)
     }
 
     /**
