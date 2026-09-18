@@ -105,7 +105,6 @@
       }
     ],
     "manifest": {
-      "tag": "a1b2c3d4e5",
       "rev": 1,
       "receivedAt": 1789380000,
       "type": "software",

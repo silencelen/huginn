@@ -2458,6 +2458,19 @@ data class ProjectRow(
     val waiting: Int = 0,
     val lead: ProjectLead? = null,
     val manifestRev: Int = 0,
+    /**
+     * The rev a spawn was last carried out at, beside the rev being proposed.
+     *
+     * `manifestRev > spawnedRev` is "this proposal is still waiting for an
+     * answer", which a list could otherwise only learn by GETting every project —
+     * one call per row to draw one list. Read through
+     * [ProjectRules.alreadySpawned].
+     *
+     * ⚠ 0 IS "NOT SPAWNED", AND THAT IS THE SAFE DEFAULT. A daemon older than
+     * this field sends nothing; reading the absence as "already done" would hide
+     * Spawn on a proposal nobody has answered.
+     */
+    val spawnedRev: Int = 0,
     val manifestSummary: String? = null,
     val untaggedSeen: Boolean = false,
     val endedReason: String? = null,
@@ -2482,26 +2495,25 @@ data class ProjectList(
     val max: Int = 0,
 )
 
-/** The two extra fields `GET /v1/projects/:id` hangs off the project record. */
-@Serializable
-data class ProjectDetailExtras(
-    val row: ProjectRow? = null,
-    val live: List<ProjectLive> = emptyList(),
-)
-
 /**
  * `GET /v1/projects/:id` — the whole record, the row the tree draws, and every
  * member's live state in one answer.
  *
- * Assembled by the client rather than decoded whole, because the daemon SPREADS
- * the project into the top level (`{...project, row, live}`) and a model that
- * repeated all fifteen of its fields beside `row` would be two places to get the
- * record wrong.
+ * ⚠ AN ENVELOPE, AND IT IS DECODED ONCE. The route used to SPREAD the project
+ * into the top level (`{...project, row, live}`), which reserves two words in
+ * the project's own namespace without saying so: the day a project gains a field
+ * called `row` or `live` — neither is a strange name for one — the spread
+ * overwrites the daemon's own and the tree draws a project out of whatever the
+ * record happened to hold, with nothing to see in the diff. Three named keys
+ * cannot collide, so this decodes whole instead of being assembled out of two
+ * passes over the same body (`lib/projects.js`, and the daemon's own
+ * "the detail route answers {project, row, live}" test).
  */
+@Serializable
 data class ProjectDetail(
-    val project: Project,
-    val row: ProjectRow?,
-    val live: List<ProjectLive>,
+    val project: Project = Project(),
+    val row: ProjectRow? = null,
+    val live: List<ProjectLive> = emptyList(),
 )
 
 /**
@@ -2542,16 +2554,21 @@ data class ProjectDashboardMember(
 /**
  * The cluster's pace, as the dashboard route reports it.
  *
- * ⚠ NOT [GraphRate], AND THE FIELD NAMES ARE THE TELL. A single session's rate
- * says `tokensPerMin10`; the project aggregate says `tokensPer10m`, because it
- * is the members' rates ADDED rather than one session's own. Two shapes, two
- * types — a shared one would decode each into the other's zeroes.
+ * ⚠ TOKENS PER MINUTE, MEASURED OVER A 10- OR 60-MINUTE WINDOW — the same unit
+ * a single session's [GraphRate] reports, and the same spelling. The members'
+ * rates are ADDED, and a sum of per-minute rates is still per minute. It was
+ * briefly `tokensPer10m` here, which read as "tokens per 10 minutes" and was
+ * wrong by a factor of ten to anyone who believed it — while the dashboard
+ * beside it rendered the number as "N tokens/min over 10m", which is the tell.
+ *
+ * ⚠ STILL NOT [GraphRate]. Two types remain, because this one has no `all` pair
+ * and no `lastActivityTs`; only the lie in the spelling is gone.
  */
 @Serializable
 data class ProjectRate(
     val activeRecently: Boolean = false,
-    val tokensPer10m: Long = 0,
-    val tokensPer60m: Long = 0,
+    val tokensPerMin10: Long = 0,
+    val tokensPerMin60: Long = 0,
 )
 
 /**
@@ -2672,6 +2689,31 @@ data class ProjectDeleted(
 )
 
 /**
+ * The 409 body `POST /v1/projects` refuses with: the sentence, and which of the
+ * three refusals it is.
+ *
+ * ⚠ THREE REFUSALS SHARE THAT STATUS AND THEY HAVE THREE DIFFERENT FIXES —
+ * `untrusted-cwd` (trust the directory in Claude Code once), `slug-taken` (pick
+ * another name) and `name-taken` (go and end the tmux session squatting the
+ * lead's name). No client can tell them apart from a sentence, so [reason] is
+ * the discriminator to branch on while [error] stays the thing a person reads,
+ * because it is also the instruction.
+ */
+@Serializable
+data class ProjectRefusal(
+    val error: String? = null,
+    /**
+     * `untrusted-cwd` · `slug-taken` · `name-taken`, or NULL.
+     *
+     * ⚠ NULL IS A REAL ANSWER: a daemon older than this field sends the sentence
+     * and nothing else, and a newer one may invent a fourth word. Either way the
+     * sentence is still the whole fix, so an unrecognised refusal must stay
+     * showable rather than be mapped onto one of these.
+     */
+    val reason: String? = null,
+)
+
+/**
  * The answer to `POST /v1/projects`: the project, or the daemon's refusal.
  *
  * ⚠ A 409 IS AN ANSWER HERE, NOT A THROW — the [ScratchpadSave] precedent, for
@@ -2681,8 +2723,16 @@ data class ProjectDeleted(
  * is the entire fix. Thrown, it would arrive on the failure path as a red line
  * with no project attached; answered, the sheet keeps everything the person
  * typed and shows what to do under the field.
+ *
+ * [reason] is which of the three it was, so the sheet can put the sentence under
+ * the directory field or the name field rather than at the bottom of the form.
+ * See [ProjectRefusal].
  */
-data class ProjectCreated(val project: Project?, val refusal: String?) {
+data class ProjectCreated(
+    val project: Project?,
+    val refusal: String?,
+    val reason: String? = null,
+) {
     val ok: Boolean get() = project != null
 }
 
