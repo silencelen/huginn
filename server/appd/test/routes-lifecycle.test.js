@@ -529,6 +529,62 @@ async function screenDecided(name, ms = 20_000) {
   }
 }
 
+/** The COLOR_PANE dialog, with every keystroke sent into the pane captured. */
+function mkAnswerable(suffix) {
+  const name = `${PFX}-${suffix}`;
+  const out = path.join(tmp, `${suffix}.keys`);
+  sh('tmux', ['new-session', '-d', '-s', name, '-c', tmp, '-x', '100', '-y', '30',
+    `sh -c 'printf "${COLOR_PANE}\\n"; stty -echo; cat > ${out}'`]);
+  madeSessions.add(name);
+  return { name, out };
+}
+
+test('two answers to the same question type ONE digit (#11)', async () => {
+  // ⚠ CHECK-AND-ACT WITH NOTHING BETWEEN THE CHECK AND THE ACT. The route
+  // captures the pane, validates the fingerprint, then types — four awaits
+  // apart, with no per-session lock — so two answers for the SAME question both
+  // passed the guard before either typed. Measured window 10-15 ms idle, ~90 ms
+  // with a modelled repaint lag. Against a real TUI the first digit answers the
+  // dialog and the second lands in the composer, where its Enter submits a bare
+  // digit as a new prompt into a working conversation. The realistic trigger is
+  // one push answered on two devices, or the desktop's toast activation firing
+  // twice (Main.kt bypasses SessionController's in-flight guard).
+  const { name, out } = mkAnswerable('race');
+  writeAskSidecar(name, COLOR_Q);
+  const { body } = await screenDecided(name);
+  const fingerprint = body.prompt.fingerprint;
+
+  const answer = () => api(`/v1/sessions/${name}/answer`, {
+    method: 'POST', body: JSON.stringify({ option: 1, fingerprint }),
+  });
+  const [a, b] = await Promise.all([answer(), answer()]);
+  const codes = [a.status, b.status].sort();
+  assert.deepEqual([200, 409], codes, `${JSON.stringify(a.body)} / ${JSON.stringify(b.body)}`);
+
+  await wait(500);
+  const typed = fs.existsSync(out) ? fs.readFileSync(out, 'utf8') : '';
+  assert.equal('1\n', typed, 'one digit and one Enter reached the pane, not two');
+});
+
+test('the same answer sent twice is refused the second time (#11)', async () => {
+  // The lock serialises them; this is what the loser then sees. Without the memo
+  // the second request re-reads the SAME dialog — a pane does not repaint
+  // instantly, and a fixture pane never does — validates the same fingerprint
+  // and types the digit again.
+  const { name, out } = mkAnswerable('twice');
+  writeAskSidecar(name, COLOR_Q);
+  const { body } = await screenDecided(name);
+  const send = () => api(`/v1/sessions/${name}/answer`, {
+    method: 'POST', body: JSON.stringify({ option: 1, fingerprint: body.prompt.fingerprint }),
+  });
+  assert.equal(200, (await send()).status);
+  const second = await send();
+  assert.equal(409, second.status, JSON.stringify(second.body));
+  assert.equal(false, second.body.ok);
+  await wait(400);
+  assert.equal('1\n', fs.existsSync(out) ? fs.readFileSync(out, 'utf8') : '');
+});
+
 test('screen fuses the hook sidecar: hook labels + descriptions, TUI extras flagged', async () => {
   const name = mkSessionWithPane('fuse', COLOR_PANE);
   writeAskSidecar(name, COLOR_Q);
