@@ -236,7 +236,10 @@ fun Shell(store: AppStore) {
         delete = { ids -> confirming = ConfirmTarget.DeleteChats(ids) },
     )
     val sessionVerbs = SessionVerbs(
-        open = { store.openSession(it) },
+        // Guarded like the row's own click: the menu reaches the same pane, and
+        // a session the daemon will not route to bounces it. See
+        // [sessionAddressable].
+        open = { if (sessionAddressable(it)) store.openSession(it) },
         rename = { renaming = RenameTarget.OfSession(it.name, it.name) },
         // The pane's own interrupt, sent as the key rather than as a verb the
         // daemon would have to invent: Esc is what a person at that tmux window
@@ -485,7 +488,7 @@ fun Shell(store: AppStore) {
                                         activeName = sessionName,
                                         selection = sessionSel,
                                         onSelect = { sessionSel = it },
-                                        onOpen = { store.openSession(it) },
+                                        onOpen = { if (sessionAddressable(it)) store.openSession(it) },
                                         onNew = { namingSession = true },
                                         verbs = sessionVerbs,
                                         archives = if (archiveAvailable == true) archives else emptyList(),
