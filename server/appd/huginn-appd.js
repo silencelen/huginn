@@ -1746,11 +1746,16 @@ async function checkGates(name) {
   // holding nothing is proof no selector is up, whatever the state file says.
   // `null` — no composer at all — is NOT that proof (see humanAttentionHold).
   const composerEmpty = lines ? typing.composerEmpty(lines) : null;
+  // And the two facts the SUBMIT refusal turns on (#15): is Claude up at all,
+  // and is what is down there a shell prompt waiting to run whatever it is given.
+  const composer = lines ? typing.composerDrawn(lines) : false;
+  const shell = lines ? typing.shellPrompt(lines) : false;
   // A capture that FAILED says nothing about startup — the session is probably
   // gone, and holding a send on a pane we cannot read would be a wait with no
   // end. Fall through to the old behaviour and let delivery report the failure.
   const starting = lines ? await startupGate(name, lines) : false;
-  return { idle, lastKind, paneWhy, starting, composerEmpty, sessionState: readSessionState(name) };
+  return { idle, lastKind, paneWhy, starting, composerEmpty, composer, shell,
+    sessionState: readSessionState(name) };
 }
 
 /**
@@ -1953,7 +1958,15 @@ async function pumpQueue(name) {
         // a modal that swallows the next message whole (spike E1), and a ladder
         // job that finds the family already changed must be binned, not run.
         // One queue, two payload shapes; nothing else differs.
-        if (typeof entry.run === 'function') r = await entry.run();
+        const refusal = typeof entry.run === 'function' ? null
+          : typing.submitRefusal({ submit: entry.submit, composer: gate.composer, shell: gate.shell });
+        if (refusal) {
+          // ⚠ NOT DELIVERED, AND SAID SO. The pane is a root shell and the Enter
+          // would make bash run the owner's message (#15). 409 rather than 500:
+          // the request was fine, the pane is not what the sender thinks it is.
+          log(`typing: ${name}: refusing to submit into a shell prompt — claude is not running here`);
+          r = { ok: false, code: 409, message: refusal };
+        } else if (typeof entry.run === 'function') r = await entry.run();
         else r = await sendTextToPane(name, entry.text, { submit: entry.submit });
       } catch (e) {
         r = { ok: false, message: (e && e.message) || String(e) };

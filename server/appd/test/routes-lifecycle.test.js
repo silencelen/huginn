@@ -193,6 +193,56 @@ test('/keys delivers literal text into the pane', async () => {
   assert.match(await paneShows(name, /HELLO-FROM-KEYS/), /HELLO-FROM-KEYS/);
 });
 
+/** A pane that has fallen through to a login shell: a prompt drawn, no composer,
+ *  and everything typed into it captured so the test can prove what arrived. */
+function mkShellPane(suffix) {
+  const name = `${PFX}-${suffix}`;
+  const out = path.join(tmp, `${suffix}.txt`);
+  sh('tmux', ['new-session', '-d', '-s', name, '-c', tmp, '-x', '100', '-y', '30',
+    `sh -c 'printf "root@huginn:~/netplan# "; cat > ${out}'`]);
+  madeSessions.add(name);
+  return { name, out };
+}
+
+test('a message is NOT submitted into a pane that has dropped to a shell (#15)', async () => {
+  // ⚠ WHAT THIS PREVENTS. `claude` exits — a broken install, a node upgrade, or
+  // the owner's own /exit in a `cc` session — and the pane underneath is a root
+  // login shell. The chat composer sends text+Enter, so bash RAN the owner's
+  // message: `please rewrite > notes.txt tomorrow` truncated notes.txt to zero
+  // bytes. The route answered 200 and /typing reported no error.
+  const { name, out } = mkShellPane('shellfall');
+  writeState(name, 'idle');
+  await paneShows(name, /netplan#/);
+  const { status, body } = await api(`/v1/sessions/${name}/keys`, {
+    method: 'POST', body: JSON.stringify({ text: 'please rewrite > notes.txt tomorrow', keys: ['Enter'] }),
+  });
+  assert.equal(status, 409, JSON.stringify(body));
+  assert.match(body.error, /shell/i, 'the client can say WHY');
+  await wait(600);
+  const landed = fs.existsSync(out) ? fs.readFileSync(out, 'utf8') : '';
+  assert.equal(landed, '', 'bash was never handed a line to run');
+  assert.doesNotMatch(capture(name), /notes\.txt/, 'nothing was even typed at the prompt');
+});
+
+test('text WITHOUT Enter still reaches a shell pane (#15)', async () => {
+  // The refusal is about the SUBMIT, not about the pane: the Screen tab types
+  // into whatever is there and sends its Enter as a raw key, and a person
+  // driving a shell deliberately must keep working.
+  const { name, out } = mkShellPane('shellnoenter');
+  writeState(name, 'idle');
+  await paneShows(name, /netplan#/);
+  const { status, body } = await api(`/v1/sessions/${name}/keys`, {
+    method: 'POST', body: JSON.stringify({ text: 'ls -la' }),
+  });
+  assert.equal(status, 200, JSON.stringify(body));
+  assert.equal(body.delivered, true);
+  // It is at the prompt, echoed, and NOT run: the tty hands `cat` a line only
+  // when an Enter closes one, so the capture file staying empty is the proof.
+  await paneShows(name, /ls -la/);
+  await wait(300);
+  assert.equal(fs.existsSync(out) ? fs.readFileSync(out, 'utf8') : '', '', 'typed, not submitted');
+});
+
 test('DELETE kills the session AND removes its state file', async () => {
   const name = mkSession('del');
   writeState(name, 'idle');
