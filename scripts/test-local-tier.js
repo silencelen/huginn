@@ -197,6 +197,51 @@ test('one elevation, preferring the desktop prompt, and null is a real answer', 
   assert.equal(local.elevator({ platform: 'win32', root: false }), null);
 });
 
+// ⚠ AND THE LIST IS A CHAIN, NOT A PREFERENCE. elevator() picked the first tool
+// that merely EXISTS and no caller ever tried the next one - so on a headless box
+// where polkitd is installed but no agent is registered (the default for any ssh
+// session without a tty agent) pkexec exits non-zero and a WORKING sudo sat
+// unused: `on --system` downgraded to a user unit + linger, `update` hard-aborted
+// "nothing was changed", and `persist` tore the user units down and put them
+// back. CHANGELOG.md, docs/LOCAL-TIER.md and LocalServe.kt all document
+// "pkexec, then sudo" as a chain.
+test('a pkexec that cannot ASK falls through to sudo', () => {
+  shim({
+    sh: (args) => (/pkexec|sudo/.test(args[1]) ? { stdout: '/usr/bin/x\n' } : { status: 1 }),
+    // 127 is pkexec's "the authentication failed / no agent" - nothing could ask.
+    pkexec: { status: 127, stderr: 'No authentication agent found' },
+    sudo: { status: 0 },
+  });
+  const r = local.elevateOnce(['on', '--yes'], () => {}, { platform: 'linux', root: false });
+  assert.equal(r.ok, true, 'sudo was available and would have worked');
+  assert.equal(r.tool, 'sudo');
+  assert.ok(calls.some((c) => c.startsWith('sudo env ')),
+    'sudo was never tried: ' + calls.join(' | '));
+});
+
+test('a DISMISSED pkexec dialog does not re-prompt with sudo', () => {
+  shim({
+    sh: (args) => (/pkexec|sudo/.test(args[1]) ? { stdout: '/usr/bin/x\n' } : { status: 1 }),
+    // 126 is "the user dismissed the authentication dialog". A person said no;
+    // asking again with sudo would break the one rule this shape exists for.
+    pkexec: { status: 126 },
+    sudo: { status: 0 },
+  });
+  const r = local.elevateOnce(['on', '--yes'], () => {}, { platform: 'linux', root: false });
+  assert.equal(r.ok, false);
+  assert.equal(r.declined, true, 'a dismissed dialog is a decision, not a missing agent');
+  assert.ok(!calls.some((c) => c.startsWith('sudo env ')),
+    'ONE elevation prompt: ' + calls.join(' | '));
+});
+
+test('update names the one word that fixes a failed elevation', () => {
+  // The refusal used to end at "nothing was changed" and never mention sudo,
+  // though `sudo huginn local update` works - the block is gated on !isRoot().
+  const msg = local.updateElevationRefusal('exit 127');
+  assert.match(msg, /sudo huginn local update/);
+  assert.match(msg, /nothing was changed/);
+});
+
 test('the elevated argv carries the three variables that decide where it works', () => {
   const [cmd, args] = local.elevationArgv('pkexec', ['on', '--yes'], {
     HOME: '/home/owner', HUGINN_LOCAL_DIR: '/srv/hl', HUGINN_LOCAL_USER: 'owner',
@@ -370,6 +415,91 @@ test('off still stops both services for a managed install', () => {
   const seen = fs.readFileSync(log, 'utf8');
   assert.match(seen, /huginn-local-runner/);
   assert.match(seen, /huginn-local-llm/);
+});
+
+// ⚠ `off` DELETES local.json, AND ITS OWN MESSAGE INVITES A SECOND RUN.
+// "off, not gone: N model file(s) remain ... (or --purge for everything)" sends
+// somebody back for `off --purge`, which then arrives with `conf = stored || {}`
+// and has lost the install's SCOPE and MODE. On a --system install every
+// systemd call in that second run flipped to user scope: the purge deleted
+// $HOME/.config/systemd/user/huginn-local-{llm,runner}.service - files this
+// install never owned - never touched /etc/systemd/system, and printed
+// "ok remove the systemd unit files" and "Off." at exit 0.
+test('off then off --purge removes the units it really installed, and only those', () => {
+  const root = fs.mkdtempSync(path.join(tmp, 'purge-'));
+  const dir = path.join(root, 'data');
+  const bin = path.join(root, 'bin');
+  const etc = path.join(root, 'etc');            // a stand-in /etc/systemd/system
+  const userUnits = path.join(root, 'home', '.config', 'systemd', 'user');
+  fs.mkdirSync(path.join(dir, 'bin'), { recursive: true });
+  fs.mkdirSync(path.join(dir, 'models'), { recursive: true });
+  fs.mkdirSync(etc, { recursive: true });
+  fs.mkdirSync(userUnits, { recursive: true });
+  const log = path.join(root, 'systemctl.log');
+  stubBin(bin, 'systemctl', `echo "$@" >> ${log}\nexit 0`);
+  stubBin(bin, 'loginctl', 'echo Linger=yes');
+  stubRunuser(bin);
+  // A deregistration that succeeds, so run 1 gets as far as deleting local.json
+  // - which is the precondition this whole case is about.
+  fs.writeFileSync(path.join(dir, 'bin', 'huginn-device.js'), 'process.exit(0);\n');
+  fs.writeFileSync(path.join(dir, 'models', 'tiny.gguf'), 'x');
+  fs.writeFileSync(path.join(dir, 'api-key'), 'secret\n');
+  fs.writeFileSync(path.join(dir, 'local.json'), JSON.stringify({
+    mode: 'managed', class: 'C', deviceName: 'box-llm', port: 1, systemUnits: true,
+  }));
+  for (const n of ['huginn-local-llm', 'huginn-local-runner']) {
+    fs.writeFileSync(path.join(etc, `${n}.service`), '[Unit]\n');
+  }
+  // Not ours, in the directory a scope-guessing purge reached into.
+  fs.writeFileSync(path.join(userUnits, 'someone-elses.service'), 'NOT OURS\n');
+  const env = { HUGINN_SYSTEMD_SYSTEM_DIR: etc };
+  const home = path.join(root, 'home');
+  const one = runMgr(['off'], { dir, bin, home, env });
+  assert.ok(!fs.existsSync(path.join(dir, 'local.json')),
+    'off takes the credentials with it - that is the whole verb: ' + one.stdout + one.stderr);
+  fs.rmSync(log, { force: true });
+  const two = runMgr(['off', '--purge', '--yes'], { dir, bin, home, env });
+  for (const n of ['huginn-local-llm', 'huginn-local-runner']) {
+    assert.ok(!fs.existsSync(path.join(etc, `${n}.service`)),
+      `${n} was installed in /etc and the purge never looked there: ` + two.stdout + two.stderr);
+  }
+  assert.ok(fs.existsSync(path.join(userUnits, 'someone-elses.service')),
+    'a purge reaches for its OWN unit names, never for a directory');
+  // ...and the reload is aimed at the bus the units were actually on. A purge
+  // that guessed user scope also ran `systemctl --user daemon-reload`, which
+  // tells the wrong manager about a change it did not have.
+  const seen = fs.readFileSync(log, 'utf8');
+  assert.match(seen, /^daemon-reload$/m,
+    'the system bus was never told the units went: ' + seen);
+});
+
+// ⚠ AND THE LOST `mode` IS THE NASTIER HALF. On an ADAPTER install the second
+// run deletes <localDir>/api-key - the adopted engine's key, which the code has
+// a comment explaining it must preserve - and disables the engine `off` promised
+// never to stop. An adapter install only ever wrote the RUNNER unit, so what is
+// on disk still says which kind this is.
+test('off --purge with no config keeps an adopted engine key and its engine', () => {
+  const root = fs.mkdtempSync(path.join(tmp, 'purgead-'));
+  const dir = path.join(root, 'data');
+  const bin = path.join(root, 'bin');
+  const etc = path.join(root, 'etc');
+  const log = path.join(root, 'systemctl.log');
+  fs.mkdirSync(path.join(dir, 'bin'), { recursive: true });
+  fs.mkdirSync(etc, { recursive: true });
+  stubBin(bin, 'systemctl', `echo "$@" >> ${log}\nexit 0`);
+  stubBin(bin, 'loginctl', 'echo Linger=yes');
+  stubRunuser(bin);
+  fs.writeFileSync(path.join(dir, 'bin', 'huginn-device.js'), 'process.exit(0);\n');
+  fs.writeFileSync(path.join(dir, 'api-key'), 'somebody-elses-key\n');
+  // Adapter mode: the runner unit only. No local.json - this is the second run.
+  fs.writeFileSync(path.join(etc, 'huginn-local-runner.service'), '[Unit]\n');
+  const two = runMgr(['off', '--purge-models', '--yes'],
+    { dir, bin, home: path.join(root, 'home'), env: { HUGINN_SYSTEMD_SYSTEM_DIR: etc } });
+  assert.ok(fs.existsSync(path.join(dir, 'api-key')),
+    'the adopted engine authenticates with a key this tier did not mint: ' + two.stdout + two.stderr);
+  const seen = fs.existsSync(log) ? fs.readFileSync(log, 'utf8') : '';
+  assert.doesNotMatch(seen, /huginn-local-llm/,
+    'adapter mode never installed the model server - stopping it takes down somebody else\'s service');
 });
 
 test('adopting on top of a managed install is refused, not merged', () => {

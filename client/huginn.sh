@@ -27,30 +27,73 @@ HUGINN_UPDATE_HOST_DEFAULT='huginn'
 # themselves, and a client that never enrols should not be shipping a daemon.
 _huginn_device_runner() { printf '%s' "$HOME/.huginn/huginn-device"; }
 
+# The daemon URL this machine should be enrolled with, worked out from the ssh
+# link it has ALREADY been trusted on. $SSH_CONNECTION's third field is the
+# address THIS machine just reached the host at, which is better than choosing on
+# the device's behalf between a LAN address, a tailnet name and whatever
+# `hostname` happens to say. $1 = the ssh alias; prints http://<authority>:8787.
+#
+# ⚠ IT IS A BARE ADDRESS, AND A BARE IPv6 LITERAL IS NOT A URL. `http://fd00::1:8787`
+# has no valid port, so `huginn device on` / `huginn local on` from a machine
+# whose ssh landed on IPv6 died with nothing but "huginn-device: Invalid URL" -
+# after saveConf() had already PERSISTED it, so a later flagless `on` repeated it
+# and `serve` logged "not reaching huginn: Invalid URL - retrying in 15s" forever.
+#
+# ⚠ AND BRACKETING ALONE WOULD ONLY CHANGE THE ERROR. appd's resolveBind() takes
+# `tailscale ip -4` and this deployment overrides it with 0.0.0.0, so nothing is
+# listening on v6: a bracketed v6 url is a persisted ECONNREFUSED. So on a v6 ssh
+# path the host is asked for an IPv4 it actually holds, and the bracketed literal
+# is kept only as the last answer - correct syntax, and an honest failure.
+_huginn_srv_url() {
+  local H="$1" a v4
+  a="$(ssh -T "$H" 'echo $SSH_CONNECTION' 2>/dev/null | awk '{print $3}' | tr -d '[:space:]')"
+  [ -n "$a" ] || return 1
+  case "$a" in
+    *:*) ;;
+    *) printf 'http://%s:8787' "$a"; return 0 ;;
+  esac
+  v4="$(ssh -T "$H" "ip -4 -o addr show scope global 2>/dev/null | awk '{print \$4}' | cut -d/ -f1 | head -1" \
+        2>/dev/null | tr -d '[:space:]')"
+  case "$v4" in
+    [0-9]*.[0-9]*.[0-9]*.[0-9]*) printf 'http://%s:8787' "$v4"; return 0 ;;
+  esac
+  printf 'http://[%s]:8787' "$a"
+}
+
 _huginn_device_fetch() {
-  local dest tmp got= uh
+  local dest tmp got= uh why=
   dest="$(_huginn_device_runner)"
   [ "${1:-}" = force ] || [ ! -s "$dest" ] || return 0
   mkdir -p "$HOME/.huginn"; tmp="$dest.tmp.js"
+  # ⚠ EACH SOURCE IS VALIDATED INSIDE ITS OWN BRANCH, so a bad answer from one
+  # really does fall through to the other. This side always checked gh's EXIT
+  # status (the ps1 twin did not, which is the whole of #112 there); what
+  # neither checked is whether a 200 is the FILE - a proxy error page is a
+  # perfectly successful fetch of something that is not JavaScript, and the
+  # syntax check sat AFTER the scp block, so it cleared `got` with the mirror
+  # already skipped and told the caller to fix a download it never made.
   if command -v gh >/dev/null 2>&1; then
-    gh api "repos/$HUGINN_REPO/contents/client/huginn-device" \
-      -H "Accept: application/vnd.github.raw" >"$tmp" 2>/dev/null && [ -s "$tmp" ] && got=1
+    if gh api "repos/$HUGINN_REPO/contents/client/huginn-device" \
+         -H "Accept: application/vnd.github.raw" >"$tmp" 2>/dev/null \
+       && [ -s "$tmp" ] && node --check "$tmp" 2>/dev/null; then got=1
+    else why="gh did not return a usable runner"; fi
+  else
+    why="gh is not installed"
   fi
   if [ -z "$got" ]; then
     # PINNED, exactly like `huginn update` and for the same reason: this
     # downloads code that a systemd unit will then run in a loop, so the host it
     # comes from is a trust root and not a convenience. Never $HUGINN_HOST.
     uh="${HUGINN_UPDATE_HOST:-$HUGINN_UPDATE_HOST_DEFAULT}"
-    scp -o BatchMode=yes "$uh:/usr/local/share/huginn-cli/huginn-device" "$tmp" >/dev/null 2>&1 && got=1
+    if scp -o BatchMode=yes "$uh:/usr/local/share/huginn-cli/huginn-device" "$tmp" >/dev/null 2>&1 \
+       && [ -s "$tmp" ] && node --check "$tmp" 2>/dev/null; then got=1
+    else why="$why; the $uh mirror did not either"; fi
   fi
-  [ -n "$got" ] || {
-    echo "huginn device: could not fetch the runner (gh and the mirror both failed)" >&2
-    rm -f "$tmp"; return 1; }
-  # Validate BEFORE installing, same as the client's own update. A truncated
+  # Validated BEFORE installing, same as the client's own update. A truncated
   # download that systemd then restarts every ten seconds is worse than none.
-  if ! node --check "$tmp" 2>/dev/null; then
-    echo "huginn device: the downloaded runner failed its syntax check - keeping what is here" >&2
-    rm -f "$tmp"; return 1; fi
+  [ -n "$got" ] || {
+    echo "huginn device: could not fetch the runner ($why)" >&2
+    rm -f "$tmp"; return 1; }
   mv -f "$tmp" "$dest"; chmod 0755 "$dest"
 }
 
@@ -81,13 +124,11 @@ _huginn_device() {
           echo "huginn device: could not read the appd token from $H" >&2; return 1
         fi
       fi
-      # $SSH_CONNECTION's third field is the address THIS machine just reached the
-      # host on, which is exactly the one its daemon should be dialled at - better
-      # than choosing on the device's behalf between a LAN address, a tailnet name
-      # and whatever `hostname` happens to say.
-      srv="$(ssh -T "$H" 'echo $SSH_CONNECTION' 2>/dev/null | awk '{print $3}')"
+      # See _huginn_srv_url: the address is the one this machine just reached the
+      # host at, bracketed when it is an IPv6 literal.
+      srv="$(_huginn_srv_url "$H")"
       [ -n "$srv" ] || { echo "huginn device: could not work out how to reach $H's daemon" >&2; return 1; }
-      node "$runner" on --url "http://$srv:8787" "$@"
+      node "$runner" on --url "$srv" "$@"
       ;;
     update)
       _huginn_device_fetch force && echo "huginn device: runner is now $(node "$runner" version)" ;;
@@ -107,31 +148,35 @@ _huginn_device() {
 _huginn_local_manager() { printf '%s' "$HOME/.huginn/huginn-local"; }
 
 _huginn_local_fetch() {
-  local f dest tmp got uh
+  local f dest tmp got uh why
   # huginn-device rides along: managed mode installs a runner SERVICE, and a
   # machine that never enrolled as a claude device has no runner otherwise
   # (found wiring the desktop door - enrolment died on a bare spawn error).
   for f in huginn-local huginn-llm-shim huginn-device; do
-    dest="$HOME/.huginn/$f"; got=
+    dest="$HOME/.huginn/$f"; got=; why=
     [ "${1:-}" = force ] || [ ! -s "$dest" ] || continue
     mkdir -p "$HOME/.huginn"; tmp="$dest.tmp.js"
+    # Each source validated inside its own branch - see _huginn_device_fetch.
     if command -v gh >/dev/null 2>&1; then
-      gh api "repos/$HUGINN_REPO/contents/client/$f" \
-        -H "Accept: application/vnd.github.raw" >"$tmp" 2>/dev/null && [ -s "$tmp" ] && got=1
+      if gh api "repos/$HUGINN_REPO/contents/client/$f" \
+           -H "Accept: application/vnd.github.raw" >"$tmp" 2>/dev/null \
+         && [ -s "$tmp" ] && node --check "$tmp" 2>/dev/null; then got=1
+      else why="gh did not return a usable $f"; fi
+    else
+      why="gh is not installed"
     fi
     if [ -z "$got" ]; then
       # PINNED, like the device runner and `huginn update`: this downloads code
       # a service will run in a loop, so the source is a trust root. Never
       # $HUGINN_HOST.
       uh="${HUGINN_UPDATE_HOST:-$HUGINN_UPDATE_HOST_DEFAULT}"
-      scp -o BatchMode=yes "$uh:/usr/local/share/huginn-cli/$f" "$tmp" >/dev/null 2>&1 && got=1
+      if scp -o BatchMode=yes "$uh:/usr/local/share/huginn-cli/$f" "$tmp" >/dev/null 2>&1 \
+         && [ -s "$tmp" ] && node --check "$tmp" 2>/dev/null; then got=1
+      else why="$why; the $uh mirror did not either"; fi
     fi
     [ -n "$got" ] || {
-      echo "huginn local: could not fetch $f (gh and the mirror both failed)" >&2
+      echo "huginn local: could not fetch $f ($why)" >&2
       rm -f "$tmp"; return 1; }
-    if ! node --check "$tmp" 2>/dev/null; then
-      echo "huginn local: the downloaded $f failed its syntax check - keeping what is here" >&2
-      rm -f "$tmp"; return 1; fi
     mv -f "$tmp" "$dest"; chmod 0755 "$dest"
   done
 }
@@ -162,9 +207,9 @@ _huginn_local() {
           echo "huginn local: could not read the appd token from $H" >&2; return 1
         fi
       fi
-      srv="$(ssh -T "$H" 'echo $SSH_CONNECTION' 2>/dev/null | awk '{print $3}')"
+      srv="$(_huginn_srv_url "$H")"
       [ -n "$srv" ] || { echo "huginn local: could not work out how to reach $H's daemon" >&2; return 1; }
-      HUGINN_LOCAL_DIR="$dir" node "$mgr" on --url "http://$srv:8787" "$@"
+      HUGINN_LOCAL_DIR="$dir" node "$mgr" on --url "$srv" "$@"
       ;;
     update)
       _huginn_local_fetch force || return 1
@@ -365,11 +410,43 @@ _huginn_uninstall() {
   echo "The 'huginn' command is still loaded in this shell. Open a new one, or: unset -f huginn rclaude rcc"
 }
 
-# A session name is letters, digits, and underscore only - no '-', '*', spaces or
-# other shell-special characters. This keeps a typo'd flag (e.g. 'huginn --hlp')
-# from falling through to the attach path and spawning a junk tmux session, and
-# keeps names safe to pass through the remote shell. Enforced again server-side in cc.
-_huginn_valid_name() { [[ "$1" =~ ^[A-Za-z0-9_]+$ ]]; }
+# ONE session-name rule for the whole product: lowercase letters, digits, '_'
+# and '-', starting with a letter, digit or '_', at most 50 characters. Compared
+# case-folded, because names are case-insensitive here (see _huginn_canon_name).
+# It still keeps a typo'd flag (e.g. 'huginn --hlp') from falling through to the
+# attach path and spawning a junk tmux session - a leading '-' is not a name -
+# and it still keeps names safe to pass through the remote shell. Enforced again
+# server-side in cc.
+#
+# ⚠ '-' IS LEGAL, AND USED TO BE REFUSED HERE. The daemon accepts a dash and
+# honours it end to end, the desktop dialogs offer one, and keyboard-made
+# sessions routinely carry one (dev-phonefarm) - so `huginn build-box`, and
+# solo/kill/end/archive/rename of it, refused LOCALLY, before any network, for a
+# session `huginn ls` had just listed and tab-completion had just offered. The
+# same session was openable from both GUI clients, and `huginn revive build-box`
+# was accepted while `huginn archive build-box` was not.
+#
+# ⚠ '.' IS BANNED, everywhere, on purpose. tmux silently rewrites '.' to '_' in
+# a session name, so a dotted name is a name that comes back different from the
+# one that was asked for - the daemon, the desktop and the phone ban it too.
+_huginn_valid_name() { [[ "${1,,}" =~ ^[a-z0-9_][a-z0-9_-]{0,49}$ ]]; }
+# The refusal has TWO causes and they are not the same message. A typo is the
+# caller's mistake. A name the GUI clients can mint but this one cannot address
+# is a session sitting on the host, and "invalid session name" about a row
+# `huginn ls` has just printed sends somebody looking for an error they did not
+# make. The completion cache is already live `tmux ls` output, so telling them
+# apart costs no round trip and no ssh.
+_huginn_bad_name() {   # $1 = the name, $2 = the noun for the message
+  local H="${HUGINN_HOST:-huginn}"
+  if [ -n "$_HUGINN_SESS_CACHE" ] && grep -qxF -- "$1" <<<"$_HUGINN_SESS_CACHE"; then
+    echo "huginn: '$1' exists on the host but this client cannot address it" >&2
+    echo "        (names here are lowercase letters, digits, _ and -). Rename it from the" >&2
+    echo "        desktop app, or: ssh $H -t \"tmux attach -t '=$1'\"" >&2
+  else
+    echo "huginn: invalid ${2:-session name} '$1' (use lowercase letters, digits, _ and -; no dots, spaces or *)" >&2
+  fi
+  return 1
+}
 # tmux resolves -t targets by EXACT match, then PREFIX, then glob. A unique prefix
 # resolves silently, so 'huginn kill andvari' would destroy a session actually named
 # 'andvariautofill', and 'huginn solo jt' would evict the real client of 'jtyper'.
@@ -383,12 +460,43 @@ _huginn_canon_name() { printf '%s' "${1,,}"; }
 
 # Reach huginn-appd, which listens on the HOST's loopback. The bearer token is
 # root-only on the host, so the call runs THERE (over the ssh alias) and only the
-# result comes back - the token never touches a client device. $1=method $2=path.
-# Prints the raw JSON body; non-zero exit on any HTTP error or an unreachable
-# daemon, which the callers use to fall back.
+# result comes back - the token never touches a client device.
+# $1=method $2=path $3=optional JSON request body.
+#
+# ⚠ NOT `curl -sf`, WHICH THREW THE ANSWER AWAY. -f discards the response BODY on
+# every HTTP >= 400 and exits 22, collapsing four different refusals into one
+# exit code: `huginn end` printed "is huginn-appd running? is the session a live
+# Claude pane?" - naming two causes that are both fine - for the daemon's 409
+# "answer the waiting question first", for the 409 "no Claude state recorded ...
+# pass force", for a 404, and for a 500 "tmux: ...". The Kotlin client sets
+# expectSuccess=false for exactly this reason, and this file's own `archive`
+# comment already named `curl -sf` as the reason archive is rendered host-side.
+#
+# The status rides home on its own LAST line (-w '\n%{http_code}'), so one ssh
+# still answers both questions. Prints the body and sets _HUGINN_APPD_CODE.
+# Exit: 0 = 2xx  ·  1 = an HTTP error, body holds the daemon's own `error`
+#       7 = curl never CONNECTED (code 000) or ssh itself failed - and that is
+#           the ONLY case in which a caller may fall back to raw tmux.
+_HUGINN_APPD_CODE=
 _huginn_appd() {
-  local H="${HUGINN_HOST:-huginn}"
-  ssh -T "$H" "curl -sf -X $1 -H \"Authorization: Bearer \$(cat /etc/huginn-appd/token 2>/dev/null)\" \"http://127.0.0.1:8787$2\"" 2>/dev/null
+  local H="${HUGINN_HOST:-huginn}" raw body data=''
+  _HUGINN_APPD_CODE=
+  [ -z "${3:-}" ] || data=" -H 'Content-Type: application/json' --data '$3'"
+  raw="$(ssh -T "$H" "curl -s -w '\n%{http_code}' -X $1$data -H \"Authorization: Bearer \$(cat /etc/huginn-appd/token 2>/dev/null)\" \"http://127.0.0.1:8787$2\"" 2>/dev/null)" || return 7
+  _HUGINN_APPD_CODE="${raw##*$'\n'}"
+  body="${raw%$'\n'*}"
+  # No newline at all means curl printed nothing but the status line.
+  [ "$body" != "$raw" ] || body=''
+  printf '%s' "$body"
+  case "$_HUGINN_APPD_CODE" in
+    2*)  return 0 ;;
+    000) return 7 ;;
+    *)   return 1 ;;
+  esac
+}
+# The daemon's own sentence out of an error body ({"error":"..."}), or empty.
+_huginn_appd_error() {
+  printf '%s' "$1" | sed -n 's/.*"error"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p'
 }
 
 # --- desktop download links ---
@@ -548,8 +656,9 @@ EOF
   huginn list | ls            list sessions + attach status
   huginn status | st          health: uptime, auth, sessions, disk
   huginn rename <old> <new>   rename a session (alias: mv)
-  huginn end <name>           soft end: ask Claude to wrap up + commit, then
+  huginn end <name> [--force] soft end: ask Claude to wrap up + commit, then
                               (if auto-end is on) end it once it goes idle
+                              (--force: send it into a pane with no Claude state)
   huginn rounds               what this host does on a schedule, and what it found
   huginn headroom             usage left per account, what huginn moved or is holding, and why
   huginn devices              machines that can run a chat in their own context
@@ -776,41 +885,71 @@ EOF
       esac ;;
     solo)
       local s="${2:-main}"
-      _huginn_valid_name "$s" || { echo "huginn: invalid session name '$s' (use letters, digits, underscore; no - or *)" >&2; return 1; }
+      _huginn_valid_name "$s" || { _huginn_bad_name "$s"; return 1; }
       _huginn_attach "$H" "$s" solo ;;
     rename|mv)
       [ -n "$2" ] && [ -n "$3" ] || { echo "usage: huginn rename <old> <new>" >&2; return 1; }
       # Validate BOTH names: the old one is interpolated into a remote root shell.
-      _huginn_valid_name "$2" || { echo "huginn: invalid session name '$2' (use letters, digits, underscore; no - or *)" >&2; return 1; }
-      _huginn_valid_name "$3" || { echo "huginn: invalid new name '$3' (use letters, digits, underscore; no - or *)" >&2; return 1; }
+      _huginn_valid_name "$2" || { _huginn_bad_name "$2"; return 1; }
+      _huginn_valid_name "$3" || { _huginn_bad_name "$3" "new name"; return 1; }
       local ro rn; ro="$(_huginn_canon_name "$2")"; rn="$(_huginn_canon_name "$3")"
       ssh -T "$H" "tmux rename-session -t '$(_huginn_tmux_target "$ro")' '$rn' && echo 'renamed: $ro -> $rn'" ;;
     kill)
       [ -n "$2" ] || { echo "usage: huginn kill <name>" >&2; return 1; }
-      _huginn_valid_name "$2" || { echo "huginn: invalid session name '$2' (use letters, digits, underscore; no - or *)" >&2; return 1; }
+      _huginn_valid_name "$2" || { _huginn_bad_name "$2"; return 1; }
       local kn; kn="$(_huginn_canon_name "$2")"
       # Prefer the daemon's DELETE: it also removes the orphaned /run state file
       # and releases the pane lease, which a bare tmux kill-session leaves behind
       # (Claude's SessionEnd hook never fires on a kill). Fall back to tmux if the
       # daemon is unreachable - kill must work even when appd is down.
       # '=' anchor on the fallback: without it 'huginn kill andvari' kills 'andvariautofill'.
-      if _huginn_appd DELETE "/v1/sessions/$kn" >/dev/null 2>&1; then
+      #
+      # ⚠ THE FALLBACK IS FOR AN UNREACHABLE DAEMON, NOT AN HTTP STATUS. DELETE has
+      # no 409 guard, so the realistic failure is a GLOBAL 401 - an unreadable or
+      # rotated token - with the daemon perfectly healthy. Falling back there killed
+      # the session with raw tmux, skipping clearSessionState / registryRemove /
+      # releaseSize, so a deliberately killed session came back on the next reboot
+      # restore and nothing ever said why.
+      local kr krc; kr="$(_huginn_appd DELETE "/v1/sessions/$kn")"; krc=$?
+      if [ "$krc" -eq 0 ]; then
         echo "killed: $kn"
-      else
+      elif [ "$krc" -eq 7 ]; then
         ssh -T "$H" "tmux kill-session -t '$(_huginn_tmux_target "$kn")' && echo 'killed: $kn'"
+      else
+        local kmsg; kmsg="$(_huginn_appd_error "$kr")"
+        echo "huginn: could not kill '$kn': ${kmsg:-huginn-appd answered HTTP $_HUGINN_APPD_CODE}" >&2
+        return 1
       fi ;;
     end)
-      [ -n "$2" ] || { echo "usage: huginn end <name>" >&2; return 1; }
-      _huginn_valid_name "$2" || { echo "huginn: invalid session name '$2' (use letters, digits, underscore; no - or *)" >&2; return 1; }
-      local en; en="$(_huginn_canon_name "$2")"
+      [ -n "$2" ] || { echo "usage: huginn end <name> [--force]" >&2; return 1; }
+      _huginn_valid_name "$2" || { _huginn_bad_name "$2"; return 1; }
+      local en force=; en="$(_huginn_canon_name "$2")"
+      # --force is the answer to one specific refusal, and it used to be
+      # UNREACHABLE: neither client sent a request body and `end` parsed no flags,
+      # so the daemon's "pass force to send anyway" named something nobody could do.
+      case "${3:-}" in
+        --force) force='{"force":true}' ;;
+        '') ;;
+        *) echo "usage: huginn end <name> [--force]" >&2; return 1 ;;
+      esac
       # Soft end: ask Claude to wrap up (finish, commit, prepare to end) and - when
       # auto-end is on for the host - end the session once it settles. This is a
       # DAEMON feature (it types into the pane and watches state), so there is no
       # tmux fallback; the phrase is whatever the host is configured to send.
-      local r; r="$(_huginn_appd POST "/v1/sessions/$en/soft-end")" || {
-        echo "huginn: soft-end failed for '$en' (is huginn-appd running? is the session a live Claude pane?)" >&2; return 1; }
-      local phrase auto; phrase="$(printf '%s' "$r" | sed -n 's/.*"phrase":"\([^"]*\)".*/\1/p')"
-      printf '%s' "$r" | grep -q '"auto":true' && auto=' (auto-ends when it goes idle)' || auto=''
+      local r rc; r="$(_huginn_appd POST "/v1/sessions/$en/soft-end" "$force")"; rc=$?
+      if [ "$rc" -ne 0 ]; then
+        if [ "$rc" -eq 7 ]; then
+          echo "huginn: could not reach huginn-appd on $H - a soft-end is a daemon feature, so there is no tmux fallback" >&2
+        else
+          local msg; msg="$(_huginn_appd_error "$r")"
+          echo "huginn: could not end '$en': ${msg:-huginn-appd answered HTTP $_HUGINN_APPD_CODE}" >&2
+          case "$msg" in *force*) echo "        send it anyway with: huginn end $en --force" >&2 ;; esac
+        fi
+        return 1
+      fi
+      local phrase auto
+      phrase="$(printf '%s' "$r" | sed -n 's/.*"phrase"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')"
+      printf '%s' "$r" | grep -q '"auto"[[:space:]]*:[[:space:]]*true' && auto=' (auto-ends when it goes idle)' || auto=''
       echo "soft-ended '$en': sent \"${phrase:-wrap-up phrase}\"${auto}" ;;
     # Archive: end the session for good AND keep the way back into it — the
     # title, the cwd, the last thing said, a COPY of the transcript, and the
@@ -826,7 +965,7 @@ EOF
     # follows the host name is parsed by a shell on the far side.
     archive)
       if [ -z "${2:-}" ]; then ssh -T "$H" huginn-archive; return; fi
-      _huginn_valid_name "$2" || { echo "huginn: invalid session name '$2' (use letters, digits, underscore; no - or *)" >&2; return 1; }
+      _huginn_valid_name "$2" || { _huginn_bad_name "$2"; return 1; }
       local ar; ar="$(_huginn_canon_name "$2")"
       # Guarded on $#, like the headroom branch: `printf '%q ' ` with no arguments
       # still runs the format once and emits '', which the renderer would rightly
@@ -867,7 +1006,8 @@ EOF
       # Persona-aware: if the host carries persona.md, inject it + memory tools; else plain headless query.
       ssh -T "$H" "cd \"\${HUGINN_WORKDIR:-\$HOME}\" 2>/dev/null || cd \"\$HOME\"; P=\"\$(cat /usr/local/share/huginn-cli/persona.md 2>/dev/null)\"; if [ -n \"\$P\" ]; then echo '$q' | claude -p --append-system-prompt \"\$P\" --allowedTools '$tools' $dflag; else echo '$q' | claude -p; fi" ;;
     *)
-      _huginn_valid_name "$1" || { echo "huginn: invalid session name '$1' (use letters, digits, underscore; no - or *). Did you mean a subcommand? Try 'huginn help'." >&2; return 1; }
+      _huginn_valid_name "$1" || { _huginn_bad_name "$1"
+        echo "        Did you mean a subcommand? Try 'huginn help'." >&2; return 1; }
       _huginn_attach "$H" "$1" ;;
   esac
 }

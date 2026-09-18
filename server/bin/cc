@@ -12,15 +12,22 @@ SOLO=
 for a in "$@"; do
   if [ "$a" = solo ]; then SOLO=1; else SESSION="$a"; fi
 done
+# Session names are case-insensitive: lowercase so 'Test' and 'test' map to ONE
+# tmux session (tmux itself is case-sensitive). Backstop to the client-side canon,
+# and done BEFORE the check so the rule is written once, in one case.
+SESSION="${SESSION,,}"
 # Reject malformed names so a typo'd flag (e.g. 'huginn --hlp') can't spawn a junk
-# session. Allowed: letters, digits, underscore - matches the client-side check.
-if ! [[ "$SESSION" =~ ^[A-Za-z0-9_]+$ ]]; then
-  echo "cc: invalid session name '$SESSION' (allowed: letters, digits, underscore)" >&2
+# session - a leading '-' is not a name. Allowed: lowercase letters, digits,
+# underscore and '-', at most 50 characters - the SAME rule the daemon, the
+# desktop and the phone enforce, and the same one huginn.sh/huginn.ps1 check.
+#
+# ⚠ '-' was refused here and accepted by the daemon, so `ssh huginn cc build-box`
+# exited 2 for a session both GUI clients could open. '.' stays banned: tmux
+# rewrites it to '_' and hands back a name nobody asked for.
+if ! [[ "$SESSION" =~ ^[a-z0-9_][a-z0-9_-]{0,49}$ ]]; then
+  echo "cc: invalid session name '$SESSION' (allowed: lowercase letters, digits, underscore and -; max 50)" >&2
   exit 2
 fi
-# Session names are case-insensitive: lowercase so 'Test' and 'test' map to ONE
-# tmux session (tmux itself is case-sensitive). Backstop to the client-side canon.
-SESSION="${SESSION,,}"
 # '=' anchors an EXACT tmux target. tmux resolves -t by exact, then PREFIX, then
 # glob, so a unique prefix silently resolves: `cc jt solo` would force-detach the
 # real client of a session named 'jtyper'. `new-session -s` below is unaffected
