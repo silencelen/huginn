@@ -197,11 +197,63 @@ test('an unknown model, effort or mode becomes null rather than losing the propo
   assert.equal('plan', m.sessions[0].mode);
 });
 
+/**
+ * The projection every route answers with.
+ *
+ * ⚠ THE TAG IS THE WHOLE ANTI-INJECTION CONTROL, so it must not be readable
+ * anywhere a session or a client can get at it. It lives in the lead's system
+ * prompt and in the store, and a response body that carried it would hand any
+ * reader of that body — including the member sessions, whose personas are kept
+ * free of it on purpose — the one string needed to write a proposal the daemon
+ * would treat as the lead's own.
+ */
+test('A RESPONSE NEVER CARRIES THE MANIFEST TAG, AND THE STORE STILL DOES', () => {
+  const stored = {
+    id: 'p1', name: 'Stick', slug: 'stick', kind: 'docs', status: 'proposed', cwd: CWD,
+    lead: { role: 'lead', name: 'stick-lead' }, members: [],
+    manifest: { tag: TAG, rev: 2, summary: 'two sessions', sessions: [], untaggedSeen: false, spawnedRev: 0 },
+    rev: 3,
+  };
+  const wire = projects.publicProject(stored);
+  assert.equal(false, 'tag' in wire.manifest, 'the one field that must never be on the wire');
+  assert.equal(false, JSON.stringify(wire).includes(TAG));
+  // Everything else survives: this is a projection, not a redaction of the card.
+  assert.equal(2, wire.manifest.rev);
+  assert.equal('two sessions', wire.manifest.summary);
+  assert.equal(false, wire.manifest.untaggedSeen);
+  assert.equal('stick', wire.slug);
+  assert.equal(3, wire.rev);
+  assert.deepEqual(
+    ['rev', 'summary', 'sessions', 'untaggedSeen', 'spawnedRev'],
+    Object.keys(wire.manifest),
+    'the manifest contract minus the tag, in order',
+  );
+  // ⚠ AND THE STORED RECORD IS UNTOUCHED. The tag is what the next turn's block
+  // is checked against; a projection that mutated the record would disarm the
+  // control it exists to protect.
+  assert.equal(TAG, stored.manifest.tag);
+
+  // A project with no manifest at all is a project, not a crash.
+  assert.equal('p2', projects.publicProject({ id: 'p2' }).id);
+  assert.equal(null, projects.publicProject({ id: 'p3', manifest: null }).manifest);
+});
+
 test('the tag is in the lead\'s contract and nowhere else', () => {
-  const p = { id: 'x', name: 'Stick', slug: 'stick', kind: 'docs', manifest: { tag: TAG } };
+  const p = { id: 'x', name: 'Stick', slug: 'stick', kind: 'docs', brief: 'go', manifest: { tag: TAG } };
   assert.match(projects.leadPersona(p), new RegExp(TAG));
   assert.ok(!projects.memberPersona(p, { role: 'docs' }).includes(TAG),
     'a member that could read the tag could write its own proposal');
+  // And not in anything appd TYPES into a pane. Every one of these lands in a
+  // member's composer and therefore in a transcript, which is a file the member
+  // — and its agents — can read back.
+  for (const text of [
+    projects.briefFrame(p),
+    projects.firstPromptFrame(p, 'docs', 'write the README'),
+    projects.spawnedFrame(p, ['stick/docs']),
+    projects.peerMessageFrame('stick/lead', 'the pinout changed'),
+  ]) {
+    assert.ok(!text.includes(TAG), 'a frame carrying the tag hands it to the session it is typed into');
+  }
   // Both personas carry the escalation rule, because a peer message reaches them
   // through a path this daemon cannot gate.
   for (const text of [projects.leadPersona(p), projects.memberPersona(p, { role: 'docs' })]) {
@@ -289,6 +341,56 @@ test('`waiting` is a needs-you, and a word this daemon has never seen is null', 
   assert.equal(true, lead.needsYou, 'the title hook\'s promoted attention says it instead');
 });
 
+/**
+ * ⚠ THE FAIL-FIRST CASE, and it is a dashboard that lies for the first few
+ * seconds of a cluster's life. `alive` comes from the NATIVE registry row, which
+ * Claude Code writes when it starts — so between `tmux new-session` returning
+ * and that row appearing, every member of a freshly approved manifest reads dead
+ * and `ProjectRow.alive` says 0 of 4 on the one screen the owner is watching to
+ * see the spawn work.
+ *
+ * The grace needs BOTH halves to be evidence-shaped: tmux says the session
+ * exists, and the record says appd launched it seconds ago. A native row that
+ * says the process is gone still wins — that is an observation, and a guess
+ * never beats one.
+ */
+test('a member spawned seconds ago reads as starting, not as dead', () => {
+  const p = project({
+    members: [{ role: 'docs', name: 'stick-docs', claudeName: 'stick/docs', sessionId: null, spawnedAt: NOW - 5 }],
+  });
+  const live = [{ name: 'stick-docs', claudeSessionId: null }];
+  const docsOf = (rows) => rows.find((r) => r.role === 'docs');
+
+  assert.equal(true, docsOf(projects.joinMembers(p, live, [], NOW)).alive,
+    'inside the grace, with a tmux session and no registry row yet');
+
+  assert.equal(false, docsOf(projects.joinMembers(p, live, [], NOW + projects.MEMBER_STARTUP_GRACE_S)).alive,
+    'past the grace it is the honest answer again — this never becomes a permanent guess');
+
+  assert.equal(false, docsOf(projects.joinMembers(p, [], [], NOW)).alive,
+    'no tmux session is nothing to be starting in');
+
+  // A clock that ran backwards must not open the window forever.
+  const future = project({
+    members: [{ role: 'docs', name: 'stick-docs', claudeName: 'stick/docs', sessionId: null, spawnedAt: NOW + 9_000 }],
+  });
+  assert.equal(false, docsOf(projects.joinMembers(future, live, [], NOW)).alive);
+
+  // ⚠ AND AN OBSERVATION BEATS THE GRACE. A row that says the process is gone is
+  // evidence; "it is young" is not.
+  const known = project({
+    members: [{ role: 'docs', name: 'stick-docs', claudeName: 'stick/docs', sessionId: 'sid-a', spawnedAt: NOW - 5 }],
+  });
+  assert.equal(false, docsOf(projects.joinMembers(known,
+    [{ name: 'stick-docs', claudeSessionId: 'sid-a' }], [nativeRow({ alive: false })], NOW)).alive);
+
+  // An ended member is not starting, whatever its spawn stamp says.
+  const ended = project({
+    members: [{ role: 'docs', name: 'stick-docs', claudeName: 'stick/docs', sessionId: null, spawnedAt: NOW - 5, endedAt: NOW - 1 }],
+  });
+  assert.equal(false, docsOf(projects.joinMembers(ended, live, [], NOW)).alive);
+});
+
 test('a member whose tmux session is gone is present:false, not missing', () => {
   const rows = projects.joinMembers(project(), [], [], NOW);
   assert.equal(2, rows.length, 'the lead and the member both have a row');
@@ -348,7 +450,12 @@ test('a dashboard sums what is additive and unions what is not', () => {
   // ⚠ WALL TIME IS NOT SUMMED. Twelve sessions running an hour each took an
   // hour, not twelve.
   assert.equal((NOW + 60 - (NOW - 600)) * 1000, totals.wallMs);
-  assert.equal(4, rate.tokensPer10m, 'the rates add; the member with no overview contributes nothing');
+  // ⚠ PER MINUTE, MEASURED OVER TEN — the member rates are already per-minute,
+  // so adding them keeps the unit. The old spelling (`tokensPer10m`) read as
+  // "per 10 minutes" and was a factor of ten out to whoever believed it.
+  assert.equal(4, rate.tokensPerMin10, 'the rates add; the member with no overview contributes nothing');
+  assert.equal(2, rate.tokensPerMin60);
+  assert.deepEqual(['activeRecently', 'tokensPerMin10', 'tokensPerMin60'], Object.keys(rate).sort());
   assert.equal(true, rate.activeRecently);
 });
 
@@ -414,6 +521,14 @@ test('a project row says what the tree draws, with every field present', () => {
   assert.equal(1, row.waiting);
   assert.equal(true, row.lead.present);
   assert.equal(1, row.manifestRev);
+  // ⚠ manifestRev ALONE CANNOT TELL A RUNNING PROPOSAL FROM A WAITING ONE. The
+  // rev that was last carried out is the other half of that sentence, and
+  // without it a list has to GET every project to know which cards are still
+  // asking for an answer.
+  assert.equal(0, row.spawnedRev, 'nothing has been spawned at this rev yet');
+  assert.equal(1, projects.projectRow(project({ manifest: { tag: TAG, rev: 1, spawnedRev: 1, sessions: [] } }), joined).spawnedRev);
+  assert.equal(0, projects.projectRow({ ...project(), manifest: null }, joined).spawnedRev,
+    'a project with no manifest is a row, not a hole');
   for (const k of ['id', 'name', 'slug', 'kind', 'status', 'cwd', 'alive', 'untaggedSeen', 'endedReason']) {
     assert.ok(k in row, `${k} is on the row, so a row that decoded is a row that renders`);
   }
