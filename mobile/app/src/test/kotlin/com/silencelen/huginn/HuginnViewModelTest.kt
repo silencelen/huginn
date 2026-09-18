@@ -25,7 +25,9 @@ import com.silencelen.huginn.ui.SelectionMode
 import com.silencelen.huginn.ui.SelectionStaging
 import com.silencelen.huginn.ui.applyAutoSwitch
 import com.silencelen.huginn.ui.pageStillWanted
+import com.silencelen.huginn.ui.SESSION_NAME
 import com.silencelen.huginn.ui.detachWanted
+import com.silencelen.huginn.ui.sessionGoneWords
 import com.silencelen.huginn.widget.AskAttempt
 import com.silencelen.huginn.ui.SendQueue
 import com.silencelen.huginn.ui.StreamPicker
@@ -226,6 +228,37 @@ class HuginnViewModelTest {
         // Leaving the chat surface entirely is unconditional.
         assertTrue(detachWanted(null, "chat-B"))
         assertTrue(detachWanted(null, null))
+    }
+
+    // --------------------------- contract 1 + #85 what a session name is, and is not
+
+    @Test
+    fun `a session name may not contain a dot, and may contain a dash`() {
+        // tmux silently rewrites '.' to '_', so a dotted name existed under a
+        // name nothing could route to and every later call 404ed. The phone had
+        // it exactly backwards: rename accepted dots, create refused dashes.
+        assertFalse("tmux would rewrite this", SESSION_NAME.matches("web.api"))
+        assertFalse(SESSION_NAME.matches("a.b.c"))
+        assertTrue("dashes survive tmux untouched", SESSION_NAME.matches("web-api"))
+        assertTrue(SESSION_NAME.matches("pctrooubleshoot"))
+        assertTrue(SESSION_NAME.matches("_scratch"))
+        assertTrue(SESSION_NAME.matches("j7"))
+
+        assertFalse("a leading dash is not a filename", SESSION_NAME.matches("-lead"))
+        assertFalse(SESSION_NAME.matches(""))
+        assertFalse("upper case is folded before this is asked", SESSION_NAME.matches("Web"))
+        assertTrue(SESSION_NAME.matches("a".repeat(50)))
+        assertFalse(SESSION_NAME.matches("a".repeat(51)))
+    }
+
+    @Test
+    fun `a 404 for a session still in the list is not a session that ended`() {
+        val listed = listOf("pctrooubleshoot", "web.api")
+        assertEquals("Session gone-one ended", sessionGoneWords("gone-one", listed))
+        // Listed, and unreachable: saying it "ended" about a row the reader can
+        // still see sends them looking for the wrong problem.
+        assertTrue(sessionGoneWords("web.api", listed).contains("cannot address"))
+        assertFalse(sessionGoneWords("web.api", listed).contains("ended"))
     }
 
     // ---------------------------------------- #72 a late page belongs to its session
