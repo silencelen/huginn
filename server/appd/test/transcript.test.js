@@ -10,7 +10,7 @@ const assert = require('node:assert');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const { readTranscript, workflowName, digestToolInput, machineText, describeMachineText, humanRemainder, startsAtBoundary } = require("../lib/transcript");
+const { readTranscript, workflowName, digestToolInput, machineText, describeMachineText, humanRemainder, startsAtBoundary, injectedByTool, typedByHuman, skillNameFromBody } = require("../lib/transcript");
 
 function writeFixture(records) {
   const p = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'tr-')), 's.jsonl');
@@ -931,4 +931,125 @@ test('the apology text says which window ran out', () => {
   for (const bad of ['', '   ', 'Disk is at 62%.', null, undefined, 42, {}]) {
     assert.deepEqual(parseLimitError(bad), { window: null, resetsClock: null, tz: null });
   }
+});
+
+// ------------------------------------------------------- a skill is not a user
+//
+// Owner report: "when huginn calls a skill, the skill is being printed in the
+// session chat tab as a message from the user."
+//
+// Against the real records (test/fixtures/transcripts/skill-invocation.jsonl,
+// see its README), because the shape is the whole difficulty: the injected body
+// is a `type: 'user'` record whose text is just the skill's prose, so nothing in
+// the CONTENT distinguishes it from something a person typed. Only
+// `sourceToolUseID` does.
+
+const SKILL_FIXTURE = path.join(__dirname, 'fixtures', 'transcripts', 'skill-invocation.jsonl');
+const CMD_FIXTURE = path.join(__dirname, 'fixtures', 'transcripts', 'slash-command.jsonl');
+
+test('a skill body injected by the Skill tool is never a user bubble', () => {
+  const t = readTranscript(SKILL_FIXTURE);
+  const users = t.events.filter((e) => e.kind === 'user');
+  // Exactly one thing in this window was said by a person.
+  assert.deepEqual(users.map((e) => e.text),
+    ['checking on the meshmonitor and the pihole DNS monitor-down alert']);
+  // ...and neither skill's instructions leaked into the conversation anywhere.
+  const all = t.events.map((e) => e.text || '').join('\n');
+  assert.ok(!/Base directory for this skill/.test(all), 'project-skill body leaked');
+  assert.ok(!/Workflow authoring reference/.test(all), 'bundled-skill body leaked');
+});
+
+test('a Skill invocation renders as ONE non-user event, naming the skill', () => {
+  const t = readTranscript(SKILL_FIXTURE);
+  const skills = t.events.filter((e) => e.kind === 'tool' && e.name === 'Skill');
+  assert.equal(skills.length, 2, 'one card per invocation, and only one');
+  assert.deepEqual(skills.map((e) => e.detail), ['incident-triage', 'workflow-authoring']);
+  // Opened, the card is the invocation: the prompt that asked for it and the
+  // CLI's own confirmation. Never the raw input JSON, which is what it showed.
+  assert.match(skills[0].input, /^Kuma monitor-down spam/);
+  assert.match(skills[0].result, /^Launching skill: incident-triage/);
+  assert.equal(skills[1].input, '', 'no args means nothing behind the tap, not "{}"');
+  // Two invocations, two events, and the whole window is four events plus them.
+  assert.deepEqual(t.events.map((e) => e.kind),
+    ['user', 'assistant', 'tool', 'assistant', 'tool']);
+});
+
+test('a skill whose Skill call is above the window still leaves a chip', () => {
+  // Paging backwards can start the window between the call and the body, and
+  // then the body is the only trace a skill loaded at all. Dropped outright it
+  // would be a silent gap; it gets the compact chip instead.
+  const p = writeFixture([
+    {
+      type: 'user', timestamp: T, isMeta: true, sourceToolUseID: 'toolu_gone',
+      message: { content: [{ type: 'text', text: 'Base directory for this skill: /root/netplan/.claude/skills/incident-triage\n\n# Incident triage\n' }] },
+    },
+    {
+      type: 'user', timestamp: T, isMeta: true, sourceToolUseID: 'toolu_gone2',
+      message: { content: [{ type: 'text', text: '# Workflow authoring reference\n\nA workflow structures work.\n' }] },
+    },
+  ]);
+  const r = readTranscript(p);
+  assert.deepEqual(r.events.map((e) => e.kind), ['command', 'command'],
+    'a kind both clients already draw, as a centered chip');
+  // A project skill names itself through its directory; a bundled one carries
+  // no marker, and a guessed name would be worse than an honest generic one.
+  assert.deepEqual(r.events.map((e) => e.text), ['Skill: incident-triage', 'Skill loaded']);
+  assert.equal(r.events.filter((e) => e.kind === 'user').length, 0);
+});
+
+test('a typed slash command is a chip, and the message after it is still the user', () => {
+  const t = readTranscript(CMD_FIXTURE);
+  // The command and its stdout are both chips — neither is a message — and the
+  // sentence typed afterwards is the only user bubble in the window.
+  assert.deepEqual(t.events.map((e) => e.kind), ['command', 'command_result', 'user']);
+  assert.equal(t.events[0].text, '/chrome');
+  assert.equal(t.events[2].text, 'lets look at the 2x32GB kit then');
+  assert.equal(t.events.filter((e) => e.kind === 'user').length, 1);
+});
+
+test('a person who types "<command-name>" still gets their message', () => {
+  // The CLI writes its command bookkeeping as a `user` record with the same
+  // tags a person could type, so the TEXT cannot separate them. `origin.kind`
+  // can: the CLI never sets it on its own records. Absent (older transcripts),
+  // injected wins — the safe direction, and the behaviour that shipped.
+  const typed = writeFixture([
+    {
+      type: 'user', timestamp: T, promptSource: 'typed', origin: { kind: 'human' },
+      message: { content: '<command-name>/model</command-name> why does this show up in my chat?' },
+    },
+  ]);
+  const r = readTranscript(typed);
+  assert.deepEqual(r.events.map((e) => e.kind), ['user']);
+  assert.match(r.events[0].text, /why does this show up in my chat\?$/);
+  assert.equal(r.model, null, 'and it must not be read as actually setting the model');
+
+  // The CLI's own record, byte-identical in content, still collapses to a chip.
+  const cli = writeFixture([
+    { type: 'user', timestamp: T, message: { content: '<command-name>/model</command-name>\n<command-args>opus</command-args>' } },
+  ]);
+  const c = readTranscript(cli);
+  assert.deepEqual(c.events.map((e) => e.kind), ['command']);
+  assert.equal(c.model, 'opus');
+});
+
+test('injectedByTool keys on the field, not on isMeta', () => {
+  // isMeta is much broader, and two of the things it marks must keep rendering:
+  // a resumed session's opening instruction and the owner's own image captions.
+  assert.equal(injectedByTool({ isMeta: true, sourceToolUseID: 'toolu_1' }), true);
+  assert.equal(injectedByTool({ isMeta: true }), false);
+  assert.equal(injectedByTool({ sourceToolUseID: '' }), false);
+  assert.equal(injectedByTool({}), false);
+  // A resumed session's "Continue from where you left off." is isMeta and IS
+  // the instruction the run is answering — it has to stay a message.
+  const p = writeFixture([
+    { type: 'user', timestamp: T, isMeta: true, message: { content: 'Continue from where you left off.' } },
+  ]);
+  assert.deepEqual(readTranscript(p).events.map((e) => e.kind), ['user']);
+});
+
+test('skillNameFromBody takes the directory, or admits it does not know', () => {
+  assert.equal(skillNameFromBody('Base directory for this skill: /root/netplan/.claude/skills/bybrynn-deploy\n\n# x'), 'bybrynn-deploy');
+  assert.equal(skillNameFromBody('Base directory for this skill: /tmp/scratch/skills/kratos-kvm/'), 'kratos-kvm');
+  assert.equal(skillNameFromBody('# Workflow authoring reference\n\nA workflow...'), '');
+  for (const bad of ['', null, undefined, 42]) assert.equal(skillNameFromBody(bad), '');
 });
