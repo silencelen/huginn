@@ -1415,10 +1415,9 @@ private fun Composer(
                         when {
                             e.type != KeyEventType.KeyDown -> false
                             e.key == Key.Enter && e.isShiftPressed -> {
-                                val at = field.selection.start
-                                val next = field.text.substring(0, at) + "\n" + field.text.substring(field.selection.end)
-                                field = TextFieldValue(next, TextRange(at + 1))
-                                onDraft(next)
+                                val next = newlineIn(field)
+                                field = next
+                                onDraft(next.text)
                                 true
                             }
                             e.key == Key.Enter -> { submit(); true }
@@ -1467,4 +1466,26 @@ private fun Composer(
             )
         }
     }
+}
+
+/**
+ * Shift+Enter's newline, spliced over whatever is selected.
+ *
+ * Shared by BOTH composers (this one and the chat's) because the two blocks were
+ * byte-identical, and a splice that differs between two boxes in one app is the
+ * kind of divergence nobody notices until one of them corrupts a draft.
+ *
+ * ⚠ min/max, NOT start/end. A [TextRange] is DIRECTED: Shift+Left, Shift+Home,
+ * Shift+Up and a right-to-left drag all produce `start > end`, and Compose's
+ * legacy TextFieldValue path hands that to onValueChange unnormalised. Splicing
+ * `substring(0, start) + "\n" + substring(end)` on a reversed range OVERLAPS
+ * instead of replacing — "hello world" with "world" selected backwards became
+ * "hello world\nworld", Shift+Home from the end doubled the whole draft, and the
+ * result was written straight through onDraft to the drafts book.
+ */
+internal fun newlineIn(field: TextFieldValue): TextFieldValue {
+    val lo = field.selection.min
+    val hi = field.selection.max
+    val next = field.text.substring(0, lo) + "\n" + field.text.substring(hi)
+    return TextFieldValue(next, TextRange(lo + 1))
 }
