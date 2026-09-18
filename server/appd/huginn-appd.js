@@ -46,6 +46,7 @@ const roundsLib = require('./lib/rounds');
 const scratchpadsLib = require('./lib/scratchpads');
 const archiveLib = require('./lib/archive');
 const devicesLib = require('./lib/devices');
+const consolesLib = require('./lib/consoles');   // next to devices on purpose: it is the registry devices is NOT (lib/consoles.js)
 const { taskDirFor, parsePs, scanTasks, extractBgIds } = require('./lib/tasks');
 const { agentsDirFor, listAgents, listAgentFiles } = require('./lib/agents');
 const { sessionGraph, sessionOverview, CACHE_MAX: GRAPH_CACHE_MAX } = require('./lib/sessiongraph');
@@ -10753,6 +10754,89 @@ const server = http.createServer(async (req, res) => {
       return sendErr(res, 404, 'no such project route');
     }
 
+
+    // ---- consoles: the internal pages this host serves ------------------------
+    //
+    // A hand-curated registry of URLs with a liveness probe. NOT a second devices
+    // registry — a Device is a machine that enrols under a scope lattice, a
+    // console is an address (lib/consoles.js opens with the whole argument).
+    //
+    // ⚠ NOTHING IN HERE RUNS ANYTHING. The one operational step this feature
+    // needs — binding three units to 0.0.0.0 here, four rules in heimdall's
+    // /etc/pve/firewall/117.fw — is the OWNER's to run in a netplan session
+    // (decision 47). It travels as text on `approval`, with `applied:false`
+    // until the marker file the daemon never creates shows up.
+    //
+    // One block, one store: consolesLib.store() is memoised per DATA_DIR, so the
+    // probe cache and the five-minute sweep are built once however often this is
+    // called. Everything else about consoles lives in the lib, which is what
+    // keeps this branch's footprint in this file to one require and one block.
+    if (p === '/v1/consoles' || p.startsWith('/v1/consoles/')) {
+      const consoles = consolesLib.store(DATA_DIR, { log });
+      const CONSOLE_ID = '([a-z0-9][a-z0-9-]{0,23})';
+
+      // The list, and the FEATURE PROBE both clients use — a 404 from an older
+      // daemon hides the whole surface rather than showing a door that leads to
+      // an error (the archive/scratchpads precedent).
+      //
+      // ⚠ IT DOES NOT AWAIT THE NETWORK. `refreshSoon` schedules a sweep when the
+      // last one has aged out and returns immediately; this list is polled while
+      // a view is open, and a route that waited for four probes would turn one
+      // wedged listener into a slow app. Rows carry the last observation, and
+      // `up:null` where there has never been one.
+      if (req.method === 'GET' && p === '/v1/consoles') {
+        consoles.refreshSoon();
+        return sendJson(res, 200, {
+          consoles: consoles.rows(),
+          max: consolesLib.MAX_CONSOLES,
+          kinds: consolesLib.KINDS,
+          // Said once at the top as well as on every row: the probe ran HERE.
+          reachableFrom: 'host',
+          probeIntervalMs: consolesLib.PROBE_INTERVAL_MS,
+          approval: consoles.approval(),
+        });
+      }
+
+      if (req.method === 'POST' && p === '/v1/consoles') {
+        const body = JSON.parse(await readBody(req, 16 * 1024) || '{}');
+        const r = consoles.add(body);
+        if (!r.ok) return sendErr(res, r.status || 400, r.error);
+        log(`consoles: added ${r.console.id} (${r.console.url})`);
+        return sendJson(res, 201, consolesLib.consoleRow(r.console, consoles.probeOf(r.console.id)));
+      }
+
+      const probeMatch = p.match(new RegExp(`^/v1/consoles/${CONSOLE_ID}/probe$`));
+      if (probeMatch && req.method === 'POST') {
+        // On demand, awaited, and still bounded by the same 2 s deadline — the
+        // person tapping this is looking at a spinner, and an unbounded probe
+        // here is a request that never comes back.
+        const row = await consoles.probeNow(probeMatch[1]);
+        if (!row) return sendErr(res, 404, 'no such console');
+        return sendJson(res, 200, row);
+      }
+
+      const idMatch = p.match(new RegExp(`^/v1/consoles/${CONSOLE_ID}$`));
+      if (idMatch) {
+        const id = idMatch[1];
+        if (req.method === 'PATCH') {
+          const body = JSON.parse(await readBody(req, 16 * 1024) || '{}');
+          const r = consoles.patch(id, body);
+          // 409 CARRIES THE CURRENT ROW, not just a sentence: the editor that
+          // collided needs to show what it collided WITH, which is the contract
+          // saveScratchpad already knows how to adopt as an answer.
+          if (!r.ok && r.status === 409) return sendJson(res, 409, { error: r.error, console: r.console });
+          if (!r.ok) return sendErr(res, r.status || 400, r.error);
+          return sendJson(res, 200, consolesLib.consoleRow(r.console, consoles.probeOf(id)));
+        }
+        if (req.method === 'DELETE') {
+          const r = consoles.remove(id);
+          if (!r.ok) return sendErr(res, r.status || 404, r.error);
+          log(`consoles: removed ${id}`);
+          return sendJson(res, 200, { ok: true });
+        }
+      }
+      return sendErr(res, 404, 'no such consoles route');
+    }
 
     // ---- scratchpads: the user's own pages, and nothing this host writes to
     if (req.method === 'GET' && p === '/v1/scratchpads') {
