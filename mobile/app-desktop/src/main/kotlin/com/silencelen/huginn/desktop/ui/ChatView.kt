@@ -72,18 +72,18 @@ import com.silencelen.huginn.desktop.ChatController
 import com.silencelen.huginn.desktop.Composer
 import com.silencelen.huginn.desktop.ui.common.ComposerAction
 import com.silencelen.huginn.desktop.ui.common.PaneScrollbar
-import com.silencelen.huginn.desktop.ui.common.ComposerChips
 import com.silencelen.huginn.desktop.ui.common.ComposerFrame
 import com.silencelen.huginn.desktop.attach.AttachButton
-import com.silencelen.huginn.desktop.attach.AttachChip
 import com.silencelen.huginn.desktop.attach.AttachFilePicker
 import com.silencelen.huginn.desktop.attach.AttachStatus
 import com.silencelen.huginn.desktop.attach.AttachmentController
 import com.silencelen.huginn.desktop.attach.AwtTransfer
 import com.silencelen.huginn.desktop.attach.appendDropped
 import com.silencelen.huginn.desktop.attach.attachmentDropTarget
-import com.silencelen.huginn.desktop.attach.composeMessage
+import com.silencelen.huginn.desktop.attach.chip
 import com.silencelen.huginn.desktop.attach.rememberAttachmentController
+import com.silencelen.huginn.ui.AttachChipRow
+import com.silencelen.huginn.ui.composeMessage
 import com.silencelen.huginn.desktop.ui.chat.ChatTopBar
 import com.silencelen.huginn.desktop.ui.common.WithTranscriptSelectionMenu
 import com.silencelen.huginn.desktop.ui.common.rememberSelectionVerbs
@@ -491,16 +491,16 @@ private fun Composer(
         SealedNote(Modifier.fillMaxWidth(), onContinue = onContinueRound)
         return
     }
-    val attachment by attachments.current.collectAsState()
+    val pending by attachments.items.collectAsState()
     val failure by attachments.failure.collectAsState()
     var picking by remember { mutableStateOf(false) }
     var dragOver by remember { mutableStateOf(false) }
 
     // Hoisted so the enabled rule and the submit path agree: an attachment that
     // FAILED is not something to send a message about, so it does not enable Send
-    // on its own — exactly the Electron rule.
-    val pending = attachment
-    val canSend = draft.isNotBlank() || (pending != null && pending.status != AttachStatus.FAILED)
+    // on its own — exactly the Electron rule. With several of them the rule is
+    // per-item: four uploads and one refusal still have three things to say.
+    val canSend = draft.isNotBlank() || pending.any { it.status != AttachStatus.FAILED }
 
     // Up/Down recalls previously sent messages, like a shell. The reducer is in
     // :core (HistoryWalk); this holds only the active walk. The composer is
@@ -516,8 +516,8 @@ private fun Composer(
             var posted = false
             scope.launch {
                 try {
-                    val marker = attachments.take()
-                    val full = composeMessage(body, marker)
+                    val taken = attachments.take()
+                    val full = composeMessage(body, taken.markers)
                     // Cancellation is cooperative, so a scope killed while take()
                     // was returning would otherwise let this through to a launch
                     // that never runs, and count as sent.
@@ -536,9 +536,9 @@ private fun Composer(
         }
     }
 
-    AttachFilePicker(picking) { file ->
+    AttachFilePicker(picking) { files ->
         picking = false
-        if (file != null) attachments.attachFile(file)
+        if (files.isNotEmpty()) attachments.attachFiles(files)
     }
 
     Column(
@@ -559,13 +559,17 @@ private fun Composer(
         // out with this message — beside the file chip on ONE wrapping line, so
         // two attachments cost one band rather than two.
         val chosenPad = pads.firstOrNull { it.id == padRefId }
-        if (chosenPad != null || pending != null) {
-            ComposerChips {
-                chosenPad?.let { ScratchpadRefBadge(pad = it, pads = pads, onSelect = onPadRef) }
-                pending?.let { AttachChip(it) { attachments.clear() } }
-            }
-        }
-        pending?.detail?.takeIf { pending?.status == AttachStatus.READY }?.let { note ->
+        AttachChipRow(
+            pending.map { it.chip() },
+            attachments::remove,
+            Modifier.fillMaxWidth().padding(bottom = 6.dp),
+            leading = chosenPad?.let { pad ->
+                { ScratchpadRefBadge(pad = pad, pads = pads, onSelect = onPadRef) }
+            },
+        )
+        // The binary warning, once, however many binaries are riding out: the
+        // sentence is about act mode rather than about a particular file.
+        pending.firstOrNull { it.status == AttachStatus.READY && it.detail != null }?.detail?.let { note ->
             Muted(note, Modifier.padding(bottom = 6.dp), maxLines = 2)
         }
         failure?.let {
