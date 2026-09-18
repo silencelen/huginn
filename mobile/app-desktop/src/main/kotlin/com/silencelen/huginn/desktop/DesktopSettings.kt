@@ -107,6 +107,39 @@ class DesktopSettings(private val file: File = defaultFile()) : HuginnSettings {
         val closeToTray: Boolean = true,
 
         /**
+         * STARTS WITH THE SESSION. Off by default, like every other thing this
+         * app does to the machine it is installed on — a client that adds itself
+         * to somebody's login without being asked is a client they uninstall.
+         *
+         * The FLAG is what the owner chose; the Startup shortcut / `.desktop`
+         * file is only its effect, and the two are reconciled at launch
+         * ([com.silencelen.huginn.desktop.setup.Autostart.reconcile]) because the
+         * file can go without this app being told — an upgrade that replaced the
+         * launcher, a restored profile, the desktop's own Startup editor.
+         */
+        val autostart: Boolean = false,
+
+        /**
+         * HOW FAR THROUGH FIRST-RUN SETUP THIS INSTALL GOT, as one
+         * [com.silencelen.huginn.settings.SetupFlow]-encoded string.
+         *
+         * Persisted because this window CLOSES TO THE TRAY rather than quitting,
+         * so "halfway through setup" is a state that lasts days rather than
+         * minutes — and starting somebody over at the address they typed on
+         * Tuesday is how a flow gets abandoned. Unreadable content reads as no
+         * progress rather than as a throw; see `SetupFlow.decode`.
+         */
+        val setupProgress: String = "",
+
+        /**
+         * The flow has been to its end once. What this gates is only whether it
+         * OPENS ITSELF — "Run setup again" is always available, and is
+         * idempotent and never destructive, which is the property that makes it
+         * safe to press on a working install.
+         */
+        val setupDone: Boolean = false,
+
+        /**
          * THIS MACHINE AS A DEVICE. Off by default and it must stay that way: this
          * is the switch that lets another machine run commands here, and a feature
          * that arrives already on is a feature nobody consented to.
@@ -242,6 +275,7 @@ class DesktopSettings(private val file: File = defaultFile()) : HuginnSettings {
     private val _lastWatchError = MutableStateFlow(stored.lastWatchError)
     private val _lastWatchErrorAt = MutableStateFlow(stored.lastWatchErrorAt)
     private val _closeToTray = MutableStateFlow(stored.closeToTray)
+    private val _autostart = MutableStateFlow(stored.autostart)
     private val _deviceEnabled = MutableStateFlow(stored.deviceEnabled)
     private val _deviceUnenrolPending = MutableStateFlow(stored.deviceUnenrolPending)
     private val _deviceScope = MutableStateFlow(stored.deviceScope)
@@ -509,6 +543,49 @@ class DesktopSettings(private val file: File = defaultFile()) : HuginnSettings {
     }
 
     fun closeToTrayNow(): Boolean = _closeToTray.value
+
+    // ------------------------------------------------------- setup + autostart
+    //
+    // Same shape as close-to-tray and for the same reasons: desktop-only (the
+    // phone has no login session and no first-run flow yet), and NOT suspend,
+    // because both are written from a click on a row and from a step of a flow
+    // that owns no coroutine scope worth acquiring to set a boolean already in
+    // memory.
+
+    val autostart: StateFlow<Boolean> = _autostart.asStateFlow()
+
+    fun autostartNow(): Boolean = _autostart.value
+
+    /**
+     * Records the CHOICE. Writing the Startup shortcut or the `.desktop` file is
+     * [com.silencelen.huginn.desktop.setup.Autostart]'s job and is deliberately
+     * NOT done here: this store is read synchronously at construction by code
+     * that must not spawn a PowerShell, and a settings setter that shells out is
+     * a settings setter that can hang the window.
+     */
+    fun setAutostart(value: Boolean) {
+        _autostart.value = value
+        mutate { it.copy(autostart = value) }
+    }
+
+    /** The encoded flow, or empty for an install that has never run it. */
+    fun setupProgressNow(): String = synchronized(lock) { stored.setupProgress }
+
+    fun setSetupProgress(value: String) {
+        synchronized(lock) {
+            if (stored.setupProgress == value) return
+            mutate { it.copy(setupProgress = value) }
+        }
+    }
+
+    fun setupDoneNow(): Boolean = synchronized(lock) { stored.setupDone }
+
+    fun setSetupDone(value: Boolean) {
+        synchronized(lock) {
+            if (stored.setupDone == value) return
+            mutate { it.copy(setupDone = value) }
+        }
+    }
 
     // ------------------------------------------------------- window + layout
     //

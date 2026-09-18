@@ -166,6 +166,11 @@ fun ColumnScope.HostPage(store: AppStore, mark: String?) {
         showAutoswitch = false,
         modifier = Modifier.padding(top = 10.dp),
     )
+
+    // The door back into the first-run flow. It lives HERE, under the address
+    // and the token, because those two are the steps somebody comes to this
+    // page to fix — and re-checking them is what the flow does first.
+    RunSetupAgainRow(mark)
 }
 
 /** [AccountsIo] over this client's daemon connection. Nothing but forwarding. */
@@ -541,6 +546,9 @@ fun ColumnScope.AppearancePage(store: AppStore, mark: String?) {
         highlighted = SettingsRowStyle.isHighlighted("appearance.shortcuts", mark),
         trailingText = "F1",
     )
+    // Beside close-to-tray on purpose: the two of them are the whole answer to
+    // "is this thing running when I am not looking at it".
+    StartupRow(store, mark)
 }
 
 // ----------------------------------------------------- updates & diagnostics
