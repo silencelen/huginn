@@ -1,6 +1,7 @@
 package com.silencelen.huginn.data
 
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.json.Json
 import kotlin.random.Random
 
 /**
@@ -46,6 +47,14 @@ enum class RouteKind {
  * @param kind the badge, recomputed whenever [url] changes.
  * @param order the position, mirrored from the list index on every mutation so
  *   a store that loses list order still restores the owner's preference.
+ * @param byHand whether a PERSON put this address here. ⚠ NOT COSMETIC: a plain
+ *   http route carries the bearer in cleartext, and the two addresses the
+ *   migration seeds are hard-coded literals in a public repo — whoever holds one
+ *   of them on the network the phone is on today would be handed the token by an
+ *   automatic switch. [RouteResolver] will not adopt a plain-http route with
+ *   this false without a person saying so. Defaults TRUE so every route that
+ *   arrives through [RouteBook.add] — which is the only path a person has — is
+ *   trusted the way it always was, and only [AppdRoutes.seed] says otherwise.
  */
 @Serializable
 data class PinnedRoute(
@@ -55,6 +64,7 @@ data class PinnedRoute(
     val kind: RouteKind = RouteKind.CUSTOM,
     val order: Int = 0,
     val addedAt: Long = 0,
+    val byHand: Boolean = true,
 )
 
 /**
@@ -219,6 +229,7 @@ data class RouteBook(
  * makes a client flap between two equally-reachable paths; the order is the
  * owner's, and this record is for the reader.
  */
+@Serializable
 data class RouteHealth(
     val lastOkAt: Long = 0,
     val lastFailAt: Long = 0,
@@ -230,6 +241,43 @@ data class RouteHealth(
             lastOkAt == 0L && lastFailAt == 0L -> null
             else -> lastOkAt >= lastFailAt
         }
+}
+
+/**
+ * The health map as text, so a shell can put it in its own store.
+ *
+ * ⚠ THE CACHE BEING IN MEMORY ONLY IS A SECURITY PROPERTY IN REVERSE. With an
+ * empty map every cold start skips the hysteresis, probes everything, and takes
+ * the first route that answers in the owner's order — which is how a stranger
+ * occupying a route pinned above the real daemon wins on every app start even
+ * while huginn is up. Persisting what the last resolution learned is what makes
+ * "the route that has been working keeps the connection" survive a restart.
+ *
+ * Kept here rather than in either store because both shells need the same bytes,
+ * and a second hand-rolled encoding is a second thing to get wrong. The shells
+ * wire it into their stores separately; nothing in `:core` persists anything.
+ */
+@Serializable
+data class RouteHealthSnapshot(
+    val health: Map<String, RouteHealth> = emptyMap(),
+    /** When it was written. For a reader that wants to age the whole snapshot out. */
+    val savedAt: Long = 0,
+) {
+    companion object {
+        private val json = Json { ignoreUnknownKeys = true }
+
+        fun encode(health: Map<String, RouteHealth>, now: Long = 0): String =
+            json.encodeToString(serializer(), RouteHealthSnapshot(health, now))
+
+        /**
+         * Whatever was stored, or an empty map. Never throws: a half-written or
+         * hand-edited store must cost the dots, not the launch.
+         */
+        fun decode(text: String?): Map<String, RouteHealth> {
+            if (text.isNullOrBlank()) return emptyMap()
+            return runCatching { json.decodeFromString(serializer(), text).health }.getOrDefault(emptyMap())
+        }
+    }
 }
 
 /**
