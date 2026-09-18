@@ -443,6 +443,24 @@ data class TranscriptEvent(
      * instead of as something Claude said.
      */
     val apiError: Int? = null,
+    /**
+     * Who sent this, when it came from ANOTHER SESSION rather than from the owner.
+     *
+     * ⚠⚠ THE FIELD THAT STOPS A TEAMMATE READING AS THE OWNER. A `SendMessage`
+     * between two Claude sessions lands in the receiver's transcript as an
+     * ordinary user record — `isMeta`, `promptSource:"system"`,
+     * `userType:"external"` — and a reader that looks at none of those draws it
+     * as a bubble the person in front of it appears to have typed. On a Projects
+     * screen, where the sessions talk constantly, that is the whole surface
+     * lying. So the daemon re-kinds it as `system` and hangs the sender here
+     * (decision 50): an older client that has never heard of `peer` still draws a
+     * system note, which is wrong about the detail and right about the category.
+     *
+     * ⚠ LABEL FROM [ProjectPeer.name], NEVER FROM THE RENDERED TEXT — the
+     * `@handle` form slugifies the slash (`lora-stick/docs` → `@lora-stick-docs`),
+     * so the preview cannot be parsed back into an addressable name.
+     */
+    val peer: ProjectPeer? = null,
 )
 
 @Serializable
@@ -2165,4 +2183,376 @@ data class SessionGraph(
     val workflows: List<GraphWorkflow> = emptyList(),
     val cursor: GraphCursor = GraphCursor(),
     val meta: SessionMeta = SessionMeta(),
+)
+
+// ----------------------------------------------------------------- projects
+//
+// A PROJECT is a durable cluster of tmux sessions with roles: a lead that sizes
+// the work and proposes the cluster, members that do it, and a dashboard that
+// sums what they have done. The daemon owns membership, the names and the
+// personas; Claude Code owns the messaging between them.
+//
+// ⚠ EVERY FIELD HERE IS NULLABLE OR DEFAULTED, INCLUDING THE IDS. These models
+// are written against a daemon that does not exist yet (the two route branches
+// are being built beside this one), so the one thing they must do under drift is
+// decode into something a screen can draw rather than throw and take the whole
+// list with them. A renamed field is caught by the fixtures in ApiContractTest,
+// not by a decode failure on a phone.
+
+/**
+ * A session addressed by its Claude Code peer name — the lead, or the sender of
+ * a peer message.
+ *
+ * [name] is the `--name <slug>/<role>` form ("lora-stick/lead"), which is what
+ * `SendMessage` addresses and what a transcript labels a peer message with.
+ * [sessionId] is Claude Code's own uuid; null before the session has registered.
+ */
+@Serializable
+data class ProjectPeer(
+    val name: String = "",
+    val sessionId: String? = null,
+)
+
+/**
+ * One member of a project's cluster.
+ *
+ * [state] is the SESSION vocabulary — `running` | `attention` | `idle` — and is
+ * deliberately a String rather than an enum: a newer daemon inventing a fifth
+ * word must leave the row drawn without a mark, not fail the decode of every
+ * other member beside it. [ProjectRules.stateWord] is where a word becomes a
+ * colour, and where an unknown one becomes null.
+ *
+ * [needsYou] is the promotion the daemon already does for session rows (a live
+ * permission dialog is `attention`); it is nullable because an older daemon does
+ * not compute it and "not known" is not "no".
+ */
+@Serializable
+data class ProjectMember(
+    /** The peer name: `<slug>/<role>`. The thing the lead addresses. */
+    val name: String = "",
+    val role: String = "",
+    val sessionId: String? = null,
+    val spawnedAt: Long = 0,
+    /** `running` | `attention` | `idle` | null. Unknown words are not errors. */
+    val state: String? = null,
+    val needsYou: Boolean? = null,
+    /** Sends the daemon is holding for this member. Null on a daemon with no queue. */
+    val pendingSends: Int? = null,
+    val lastActivityTs: Long? = null,
+    /** Set once this member's session has ended; the row stays, greyed. */
+    val endedAt: Long? = null,
+)
+
+/**
+ * The lead's proposal, as the card shows it.
+ *
+ * ⚠ FREE-FORM ON PURPOSE, AND PARSED AS TEXT. The daemon does the structured
+ * parse (a tagged fenced block, the Rounds anti-injection shape) and decides
+ * what is legal; a client re-parsing the same block would be a second opinion
+ * about something the owner is about to approve. So the card renders [summary]
+ * and [text] and nothing here tries to understand them.
+ */
+@Serializable
+data class ProjectManifest(
+    /** The revision a Spawn quotes back, so a stale card cannot approve a new plan. */
+    val rev: Int = 0,
+    val receivedAt: Long? = null,
+    /** The one line the card leads with. One line by the daemon's rule, not ours. */
+    val summary: String? = null,
+    /** The body of the proposal, verbatim. */
+    val text: String? = null,
+    /**
+     * The lead wrote a proposal block WITHOUT its tag, so the daemon ignored it.
+     * Said on the card: an untagged block looks to its author like a proposal
+     * that was made and to the owner like nothing happened.
+     */
+    val untaggedSeen: Boolean = false,
+)
+
+/** A cluster of sessions with roles, and the proposal that made it. */
+@Serializable
+data class Project(
+    val id: String = "",
+    val name: String = "",
+    /** The cluster's working directory. Null means the daemon's own WORKDIR. */
+    val cwd: String? = null,
+    val createdAt: Long = 0,
+    /** Set when the project was ended; the row stays until it is deleted. */
+    val endedAt: Long? = null,
+    val lead: ProjectPeer? = null,
+    val members: List<ProjectMember> = emptyList(),
+    /** Present once the lead has proposed a cluster. */
+    val manifest: ProjectManifest? = null,
+)
+
+/**
+ * `GET /v1/projects`.
+ *
+ * ⚠ ALSO THE FEATURE PROBE — see [HuginnClient.projects], which turns the 404
+ * from a daemon that has never heard of projects into a null rather than into an
+ * error a screen would have to explain.
+ */
+@Serializable
+data class ProjectList(val projects: List<Project> = emptyList())
+
+/**
+ * A member as the dashboard sees it: the membership row plus what the session
+ * itself is doing.
+ *
+ * The extra two are both additive and both optional. [headroom] is the same cell
+ * the session list already carries — the one number a twelve-session cluster
+ * actually needs — and [streams] are the member's own agents.
+ *
+ * ⚠ STREAMS ARE NOT ROLLED UP ACROSS THE PROJECT, and that is a decision rather
+ * than an omission: an agent id is scoped to the session that spawned it, so a
+ * project-wide list of them would be a list of ids that address nothing.
+ */
+@Serializable
+data class ProjectDashboardMember(
+    val name: String = "",
+    val role: String = "",
+    val sessionId: String? = null,
+    val spawnedAt: Long = 0,
+    val state: String? = null,
+    val needsYou: Boolean? = null,
+    val pendingSends: Int? = null,
+    val lastActivityTs: Long? = null,
+    val endedAt: Long? = null,
+    /** The model ladder + resume cell, as on a session row. Null on an older daemon. */
+    val headroom: SessionHeadroom? = null,
+    /** This member's own agents. Session-scoped ids: never addressed project-wide. */
+    val streams: List<AgentRun> = emptyList(),
+    /** What this member has done, when the daemon has walked its transcript. */
+    val totals: GraphTotals? = null,
+) {
+    /** The membership row inside it, so one set of rules serves both surfaces. */
+    fun asMember(): ProjectMember = ProjectMember(
+        name = name, role = role, sessionId = sessionId, spawnedAt = spawnedAt,
+        state = state, needsYou = needsYou, pendingSends = pendingSends,
+        lastActivityTs = lastActivityTs, endedAt = endedAt,
+    )
+}
+
+/**
+ * `GET /v1/projects/:id/dashboard`.
+ *
+ * [totals] and [rate] are the members' own overviews SUMMED BY THE DAEMON, in
+ * exactly the additive `GraphTotals` shape a single session's overview carries —
+ * which is why the dashboard can reuse `StatsHeader` and `ProjectionsCard`
+ * instead of growing a second vocabulary for one set of facts. Both are nullable
+ * because walking twelve transcripts is work the daemon may not have done yet,
+ * and a header of zeroes reads as a cluster that has done nothing.
+ */
+@Serializable
+data class ProjectDashboard(
+    val project: Project? = null,
+    val members: List<ProjectDashboardMember> = emptyList(),
+    /** Epoch SECONDS, like every clock on this route. */
+    val updatedAt: Long = 0,
+    val totals: GraphTotals? = null,
+    val rate: GraphRate? = null,
+)
+
+/** One member a Spawn asks for: `POST /v1/projects/:id/spawn`. */
+@Serializable
+data class SpawnRequest(
+    val name: String = "",
+    val role: String = "",
+    /** The WHOLE first message this session receives. */
+    val prompt: String = "",
+)
+
+/**
+ * What became of one requested member.
+ *
+ * [error] is the daemon's own sentence and is shown verbatim — "the directory is
+ * not trusted" and "a session called that already exists" are different problems
+ * with different fixes, and a client summary of either helps nobody.
+ */
+@Serializable
+data class SpawnMemberResult(
+    val name: String = "",
+    val ok: Boolean = false,
+    val error: String? = null,
+)
+
+/**
+ * `POST /v1/projects/:id/spawn`.
+ *
+ * ⚠ PARTIAL RESULTS ARE THE NORMAL CASE. Spawning is a loop over tmux, and the
+ * fourth member failing does not un-spawn the first three. So this is a list of
+ * outcomes rather than an ok/failed pair, and the card reports it as one —
+ * anything that collapses it to a single boolean loses which member to retry.
+ */
+@Serializable
+data class SpawnResult(val results: List<SpawnMemberResult> = emptyList())
+
+/** `POST /v1/projects/:id/message` — a line typed into a member, through the queue. */
+@Serializable
+data class ProjectMessageResult(
+    /** How many sends are waiting for that member, this one included. */
+    val queued: Int = 0,
+    val delivered: Boolean = false,
+    /** `turn` | `modal` | null — what the queue is waiting on. */
+    val blockedBy: String? = null,
+)
+
+/**
+ * The answer to `POST /v1/projects`: the project, or the daemon's refusal.
+ *
+ * ⚠ A 409 IS AN ANSWER HERE, NOT A THROW — the [ScratchpadSave] precedent, for
+ * the same reason. The commonest refusal is an untrusted working directory, and
+ * the daemon's sentence about it ("open that directory in Claude Code once, then
+ * create the project") is the entire fix. Thrown, it would arrive on the failure
+ * path as a red line with no project attached; answered, the sheet keeps the
+ * name the person typed and shows what to do under the field.
+ */
+data class ProjectCreated(val project: Project?, val refusal: String?) {
+    val ok: Boolean get() = project != null
+}
+
+/**
+ * The answer to a Spawn: the per-member results, or a refusal that stopped the
+ * whole thing before any session was made.
+ *
+ * ⚠ THE 409 THAT MATTERS IS THE STOP SENTINEL. Spawning twelve sessions into a
+ * red usage window is how a cluster dies half-born, so the daemon refuses while
+ * the headroom arbiter's STOP is armed — and that refusal is a state of the
+ * house, not an error in the request. It is shown as the card's own line.
+ */
+data class SpawnOutcome(val results: List<SpawnMemberResult>, val refusal: String?) {
+    val ok: Boolean get() = refusal == null
+}
+
+// ----------------------------------------------------------------- consoles
+//
+// A CONSOLE is a URL on the huginn host — armap, the jtyper trainer, the board
+// view, the BTC sim — with a name, a note, and a liveness probe that runs ON
+// THAT HOST. It is not a Device: a device is another machine that enrols and
+// decides for itself what it will do. There is no shared key, no shared
+// lifecycle and no shared security story, so there is no shared model either.
+
+/**
+ * One internal page this host serves.
+ *
+ * ⚠⚠ [up] IS A TRI-STATE AND THE THIRD ONE IS LOAD-BEARING. `false` means the
+ * probe ran and nothing answered; `null` means no probe has produced a verdict —
+ * and the daemon keeps probe state IN MEMORY ONLY, so every restart puts every
+ * row back to null. Folding that to `false` would draw four outages on a host
+ * where nothing is wrong. See [ConsoleRules.reachabilityWords], which refuses to
+ * say "not answering" about it.
+ *
+ * ⚠ [lastProbeAt] IS 0, NOT NULL, WHEN NOTHING HAS BEEN PROBED — the daemon's
+ * own default. `0` is the same "no stamp" every time-word helper here already
+ * renders as nothing, so it needs no second case; what it must never become is a
+ * date in 1970.
+ */
+@Serializable
+data class Console(
+    val id: String = "",
+    val name: String = "",
+    val url: String = "",
+    /** One of `ConsoleRules.KINDS`. An unknown word becomes `other`, never null. */
+    val kind: String? = null,
+    val notes: String? = null,
+    /** Epoch SECONDS. */
+    val addedAt: Long = 0,
+    /** The revision a PATCH quotes back, so two clients cannot silently overwrite. */
+    val version: Int = 1,
+    /** true up · false not answering · NULL no verdict yet. Never collapse the third. */
+    val up: Boolean? = null,
+    /** Epoch SECONDS; 0 when nothing has been probed. */
+    val lastProbeAt: Long = 0,
+    val latencyMs: Int? = null,
+    /** The status the probe saw. A 401 or 403 page is UP: something answered. */
+    val httpStatus: Int? = null,
+    /** Where the probe ran. `host` in this version — said out loud in the row's words. */
+    val reachableFrom: String? = "host",
+)
+
+/**
+ * One step of the work that would make these pages reachable from beyond the
+ * host: where it runs, what it does, and the exact commands.
+ *
+ * [file] is the file a step edits, when it edits one — `/etc/pve/firewall/117.fw`
+ * lives on heimdall, not here, and naming it is half of what makes the step
+ * followable.
+ */
+@Serializable
+data class ConsoleApprovalStep(
+    val id: String = "",
+    /** The machine it runs on. Often not this one. */
+    val where: String = "",
+    val summary: String = "",
+    val file: String? = null,
+    /** Shown VERBATIM, in this order. Never re-derived, never reformatted. */
+    val commands: List<String> = emptyList(),
+)
+
+/**
+ * The whole rebind job, and whether it has been done.
+ *
+ * ⚠⚠ NOTHING IN THIS PRODUCT APPLIES IT, AND THERE IS NO ROUTE THAT COULD. The
+ * steps rebind a systemd unit on this host and add firewall lines on a different
+ * machine; the daemon has no business doing either and a client has less. The
+ * card that draws this has a Copy control and no other — see
+ * [ConsoleRules.APPROVAL_NEVER_RUN], which is the sentence that keeps a
+ * button-less card from reading as an unfinished one.
+ *
+ * [applied] is read from a marker file on the host ([markerPath]); it is the one
+ * field that changes what a console row SAYS, because "up from the host" stops
+ * being the necessary caveat once the rebind is in.
+ */
+@Serializable
+data class ConsoleApproval(
+    val applied: Boolean = false,
+    /** `owner`. The card never implies anyone else runs these. */
+    val runBy: String = "owner",
+    val markerPath: String? = null,
+    val title: String? = null,
+    val why: String? = null,
+    val steps: List<ConsoleApprovalStep> = emptyList(),
+    val note: String? = null,
+)
+
+/**
+ * `GET /v1/consoles` — the registry, its caps, and the approval that governs the
+ * whole list.
+ *
+ * ⚠ ALSO THE FEATURE PROBE. A daemon older than consoles answers 404 here and
+ * [HuginnClient.consoles] returns null for it — `consolesAvailable = false`, the
+ * `padsAvailable` pattern — rather than throwing at a screen that would then
+ * have to explain the absence of something nobody asked for.
+ *
+ * ⚠ THE APPROVAL IS LIST-LEVEL, NOT PER ROW. The rebind and the four firewall
+ * lines are one job covering every console, so one card covers them; a copy on
+ * each row would be the same four commands drawn four times.
+ */
+@Serializable
+data class ConsoleList(
+    val consoles: List<Console> = emptyList(),
+    val max: Int = 0,
+    /** The daemon's closed vocabulary for `kind`, so an editor can offer it. */
+    val kinds: List<String> = emptyList(),
+    val reachableFrom: String? = null,
+    val probeIntervalMs: Long = 0,
+    val approval: ConsoleApproval? = null,
+)
+
+/**
+ * The answer to a console edit: what the server now holds, and whether it took
+ * ours.
+ *
+ * A conflict is NOT an exception — the [ScratchpadSave] shape, for its reason.
+ * It is the expected outcome of the other client having saved first, it arrives
+ * carrying the current row and its version, and that is everything the editor
+ * needs to adopt it.
+ */
+data class ConsoleSave(val console: Console, val conflict: Boolean, val refusal: String? = null)
+
+/** The 409 body of a console edit: the refusal, and the row as the host holds it. */
+@Serializable
+data class ConsoleConflict(
+    val error: String? = null,
+    val console: Console? = null,
 )

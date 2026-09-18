@@ -1,0 +1,19 @@
+{
+  "results": [
+    {
+      "name": "statusflap/db",
+      "ok": true,
+      "error": null
+    },
+    {
+      "name": "statusflap/web",
+      "ok": true,
+      "error": null
+    },
+    {
+      "name": "statusflap/docs",
+      "ok": false,
+      "error": "a session called statusflap-docs already exists"
+    }
+  ]
+}
