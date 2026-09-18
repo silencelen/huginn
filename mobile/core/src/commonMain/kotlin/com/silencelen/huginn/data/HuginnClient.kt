@@ -211,9 +211,15 @@ class HuginnClient(
         return withScheme(base) + path
     }
 
+    /**
+     * ⚠ CASE-INSENSITIVELY. A scheme is a scheme however it is spelled, and 2.x's
+     * setter only trimmed — so `HTTP://192.168.2.117:8787` was storable, and this
+     * helper used to build `http://HTTP//192.168.2.117:8787/v1/ping` out of it.
+     */
     private fun withScheme(base: String): String {
         val b = base.trim().trimEnd('/')
-        return if (b.startsWith("http://") || b.startsWith("https://")) b else "http://$b"
+        val schemed = b.startsWith("http://", ignoreCase = true) || b.startsWith("https://", ignoreCase = true)
+        return if (schemed) b else "http://$b"
     }
 
     private enum class Tier { NORMAL, POLL, STREAM, WATCH }
