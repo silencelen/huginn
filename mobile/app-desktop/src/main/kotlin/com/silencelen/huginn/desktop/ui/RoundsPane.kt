@@ -77,7 +77,7 @@ fun RoundsPane(store: AppStore) {
     // A ticking clock, because this pane can sit open for hours and its rows are
     // all relative times. Thirty seconds: the rows round to minutes at the finest,
     // so anything faster would recompose to redraw identical text.
-    var nowMs by remember { mutableStateOf(0L) }
+    var nowMs by remember { mutableStateOf(paneClockSeed()) }
     LaunchedEffect(Unit) {
         while (true) {
             nowMs = System.currentTimeMillis()
@@ -213,3 +213,20 @@ private fun RoundEditorPane(
         )
     }
 }
+
+/**
+ * What a pane's relative-time clock starts at.
+ *
+ * ⚠ NOT ZERO, and the ticker is not enough on its own. The clock was seeded at
+ * 0 and written from a `LaunchedEffect`, and compose flushes effects BEFORE the
+ * composition that reads them — so the FIRST painted frame of the Rounds list,
+ * on every entry to the destination including a return from the editor, drew
+ * every row against 1970: a round due tomorrow read "in 20715 days" and a run
+ * from days ago read "just now" (TimeWords.agoMs clamps a negative delta rather
+ * than branching on it). It corrected two frames later, which is exactly long
+ * enough to land in a screenshot.
+ *
+ * Hoisted out of the composable so the seed itself can be asserted; this module
+ * has no composition harness to paint a first frame in.
+ */
+internal fun paneClockSeed(): Long = System.currentTimeMillis()
