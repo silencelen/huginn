@@ -219,6 +219,17 @@ function memberName(m) {
   return clean(m && (m.name || m.claudeName || m.tmuxName), 60);
 }
 
+// ⚠ TWO NAMESPACES, AND THE TERMINAL NEEDS THE OTHER ONE. A member's peer name
+// is `<slug>/<role>` — that is what `--name` got, what a lead addresses with
+// SendMessage, and what `msg` takes — but a slash is not a tmux name character,
+// so its tmux session is `<slug>-<role>`. Suggesting `huginn <peer name>` would
+// not attach anything: `huginn` would take the first path segment for a session
+// name and CREATE a new one beside the project. Prefer whatever the daemon
+// reported as the tmux name; the slash rewrite is the documented fallback.
+function attachName(m) {
+  return clean(m && m.tmuxName, 60) || memberName(m).replace(/\//g, '-');
+}
+
 // -------------------------------------------------------------- rendering
 
 function renderList(d) {
@@ -307,7 +318,11 @@ function renderShow(d) {
   p('');
   p(`  ${live.length} member${live.length === 1 ? '' : 's'}` +
     (waiting ? `, ${waiting} needs you` : ''));
-  p('  huginn <name>   to attach one');
+  // The names in the table are PEER names; the attach name is the same thing
+  // with the slash written as a dash. Said once, here, rather than left to be
+  // discovered by typing one and getting an empty new session.
+  const sample = attachName(live[0]);
+  p(`  huginn ${sample}   to attach one (a member's tmux session is its name with / as -)`);
   p('');
   return out.join('\n');
 }
@@ -444,7 +459,7 @@ async function main() {
       const lead = clean((p.lead && (p.lead.name || p.lead.tmuxName)) || '', 60);
       return `\n  started ${clean(p.name, 60) || name}` +
              (clean(p.cwd) ? `\n  in ${clean(p.cwd, 120)}` : '') +
-             (lead ? `\n  its lead session is ${lead} — attach it with:  huginn ${lead.split('/')[0]}` : '') +
+             (lead ? `\n  its lead session is ${lead} — attach it with:  huginn ${attachName(p.lead)}` : '') +
              '\n  It sizes the work and proposes the members; approve them in the app,' +
              '\n  or spawn them by hand:  huginn projects spawn ' +
              `${JSON.stringify(clean(p.name, 60) || name)} <member>:<role> --prompt "..."\n`;
