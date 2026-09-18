@@ -127,6 +127,17 @@ class SendQueueTest {
     }
 
     @Test
+    fun `a question waiting on the screen holds a send, and says so`() {
+        // appd 3.4.0 reports blockedBy "attention" for a human send held behind a
+        // pending question. The turn sentence there would be an instruction to wait
+        // for something that is not happening.
+        val note = SendQueue.note(TypingState(queued = 1, blockedBy = "attention"))
+        assertNotNull(note)
+        assertTrue(note!!.contains("question"), note)
+        assertTrue(!note.contains("finishes its turn"), note)
+    }
+
+    @Test
     fun `the list row says only that there is a wait`() {
         assertEquals("3 queued", SendQueue.rowMark(3))
         assertNull(SendQueue.rowMark(0), "an empty queue is not a fact about a row")

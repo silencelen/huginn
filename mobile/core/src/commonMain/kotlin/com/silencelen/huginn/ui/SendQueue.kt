@@ -40,6 +40,9 @@ object SendQueue {
         // drawn its composer yet — about two seconds, and it clears itself. The turn
         // sentence would describe a turn that has not begun.
         if (s.blockedBy == "starting") return "Queued · waiting for Claude to start $waiting"
+        // `attention` (appd 3.4.0): a question is waiting on the screen and the daemon
+        // holds a human send behind it until somebody answers — same family as a modal.
+        if (s.blockedBy == "attention") return "Queued · a question is waiting on the screen $waiting"
         if (s.delivering) return "Sending $waiting"
         return "Queued · will send when Claude finishes its turn $waiting"
     }

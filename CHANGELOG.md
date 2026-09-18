@@ -10,6 +10,38 @@ Format loosely follows [Keep a Changelog](https://keepachangelog.com/); versions
 
 ## [Unreleased]
 
+## [1.3.0] - 2026-09-18
+
+Projects on the command line, and nine edge-case fixes.
+
+### Added
+- `huginn projects` — the host's clusters of sessions, their members and who is waiting, rendered
+  host-side by `huginn-projects`: `list`, `show <id|name>`, `new <name> [--cwd]`,
+  `spawn <project> <member>:<role> [--prompt …|-]`, `msg <project> <from> <to> <text>`,
+  `end <project> [--now]`, plus `--json`. Exits 2 when appd is not answering, 3 when appd has no
+  Projects (an older daemon, said in one line), and 1 when a spawn only partly started.
+- `huginn end <name> --force` sends the force the daemon's own 409 asks for.
+
+### Changed
+- Session names: `-` is accepted by huginn.sh, huginn.ps1 and `cc` (the rule is
+  `^[a-z0-9_][a-z0-9_-]{0,49}$`, case folded, dots banned), so a session named `build-box` is no
+  longer listed but unopenable; a refused name that exists on the host says so.
+- `huginn end` and `huginn kill` print the daemon's own refusal instead of guessing that appd is
+  down; `kill` falls back to raw tmux only when the daemon could not be reached at all.
+- `huginn local --system`, `update` and `persist` fall through to sudo when pkexec cannot
+  authenticate at all; a dismissed pkexec dialog still stops there.
+- `huginn local off --purge` after a plain `off` finds the system units it really installed.
+
+### Fixed
+- huginn.ps1: `huginn device on|update` and `huginn local on|update|plan` fall back to the pinned
+  mirror when gh returns an error body, and write downloads with `Set-Content` instead of `>`
+  (Windows PowerShell 5.1 wrote UTF-16 that node could not parse).
+- An ssh path over IPv6 no longer builds an unusable url; huginn-device names an address it cannot
+  dial instead of saving it and retrying forever.
+- huginn-device says "the local engine" instead of blaming claude, keeps the line of stderr that
+  names the missing file, and stops delivery once on a 401 instead of re-posting every 500 ms.
+- test-client.sh stubs bind port 0, so a gate run cannot pass or fail on somebody else's listener.
+
 ## [1.2.0] - 2026-09-17
 
 Archive and revive.

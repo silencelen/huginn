@@ -1081,6 +1081,8 @@ object SendQueue {
             // A just-created session whose Claude has not drawn its composer yet
             // (appd 3.0.7). Clears itself in about two seconds; a turn has not begun.
             "starting" -> "Queued · waiting for Claude to start ($waiting)"
+            // A question waiting on the screen holds a human send too (appd 3.4.0).
+            "attention" -> "Queued · waiting on a question in the pane ($waiting)"
             else -> "Queued · will send when Claude finishes its turn ($waiting)"
         }
     }
