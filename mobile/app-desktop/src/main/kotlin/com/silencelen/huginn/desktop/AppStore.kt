@@ -54,6 +54,8 @@ import kotlinx.coroutines.flow.debounce
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 
 /** Which of the destinations the window is showing. */
 enum class View {
@@ -1122,6 +1124,9 @@ class AppStore(
     /** The name the connection indicator and the diagnostics report say. */
     val routeName: String get() = _routeBook.value.activeName
 
+    /** Forgets the note under the route list — a form opening or being cancelled. */
+    fun clearRouteNote() { _routeNote.value = null }
+
     fun activateRoute(id: String) = editRoutes { it.activate(id).withAutoSwitch(false) }
 
     fun addRoute(name: String, url: String) = editRoutes { it.add(name, url, System.currentTimeMillis()) }
@@ -1130,13 +1135,29 @@ class AppStore(
 
     fun setRouteUrl(id: String, url: String) = editRoutes { it.setUrl(id, url) }
 
+    /**
+     * A name and an address saved together, as ONE book operation — which is
+     * what the route form's Save is. See [routeEdits].
+     */
+    fun editRoute(id: String, name: String, url: String) =
+        editRoutes { it.rename(id, name).setUrl(id, url) }
+
     fun moveRoute(id: String, delta: Int) = editRoutes { it.move(id, delta) }
 
     fun removeRoute(id: String) = editRoutes { it.remove(id) }
 
+    /**
+     * ⚠ PERSIST, THEN PROBE. Both halves used to be launched independently, so
+     * the probe read the book with autoSwitch still false, `RouteResolver.resolve`
+     * short-circuited on the pin, and turning the setting ON answered "pinned to
+     * <name> — switch automatically to move". force=true as well: on a fresh
+     * health map an unforced resolve answers Stay and probes nothing.
+     */
     fun setAutoSwitch(on: Boolean) {
-        editRoutes { it.withAutoSwitch(on) }
-        if (on) findLiveRoute()
+        scope.launch {
+            editRoutesNow { it.withAutoSwitch(on) }
+            if (on) resolveRoute(force = true)
+        }
     }
 
     /**
@@ -1150,18 +1171,33 @@ class AppStore(
     }
 
     /**
+     * ⚠ ONE EDIT AT A TIME. Every mutation here is read-modify-write across a
+     * SUSPENSION and `_routeBook` is only republished afterwards, so two edits
+     * launched from one gesture — the route form's Save used to send a rename and
+     * an address change as two — both read the pre-edit book and whichever wrote
+     * last silently discarded the other. On this client the coroutines run on the
+     * Default pool, which made the casualty random rather than merely wrong.
+     */
+    private val routeEdits = Mutex()
+
+    /**
      * Every list edit runs through here, so a refusal from the guard or the
      * eight-pin cap is REPORTED rather than swallowed.
      */
     private fun editRoutes(edit: (RouteBook) -> RouteBook) {
-        scope.launch {
+        scope.launch { editRoutesNow(edit) }
+    }
+
+    /** [editRoutes], awaited — for a caller that must act on the SETTLED book. */
+    private suspend fun editRoutesNow(edit: (RouteBook) -> RouteBook): Boolean =
+        routeEdits.withLock {
             val next = runCatching { edit(_routeBook.value) }
                 .onFailure { _routeNote.value = it.message ?: RouteGuard.REFUSED }
-                .getOrNull() ?: return@launch
+                .getOrNull() ?: return@withLock false
             _routeNote.value = null
             applyBook(next)
+            true
         }
-    }
 
     private suspend fun applyBook(book: RouteBook) {
         val settled = book.normalized()
@@ -1638,7 +1674,7 @@ class AppStore(
             is RouteResolver.Choice.NoRoute -> "no route answered — is a VPN connected?"
             is RouteResolver.Choice.Stay -> "still on ${choice.route.name}"
             is RouteResolver.Choice.Switched -> {
-                applyBook(_routeBook.value.activate(choice.route.id))
+                editRoutesNow { it.activate(choice.route.id) }
                 "switched to ${choice.route.name}"
             }
         }

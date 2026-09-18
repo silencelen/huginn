@@ -78,10 +78,17 @@ class WatchService : Service() {
         // Android requires the notification promptly after start, so it goes up
         // before anything is known.
         startForegroundCompat(ongoing("Watching huginn", "Connecting…"))
-        if (job == null) start()
+        // ⚠ LIVENESS, NOT NULLNESS. `job` was nulled only in onDestroy, so once
+        // the loop coroutine completed for any reason every later start() was a
+        // permanent no-op with the service still running and its notification
+        // still up. The repo's own convention elsewhere is `job?.isActive == true`.
+        if (needsRevival(job)) start()
         // Restart if the system kills us; the watch is the point of the service.
         return START_STICKY
     }
+
+    /** The three settings reads this loop opens each pass with — see [start]. */
+    private data class Preamble(val token: String, val base: String, val id: String)
 
     /**
      * Reconnects the moment the network comes back, instead of waiting out a
@@ -99,20 +106,38 @@ class WatchService : Service() {
     private fun start() {
         val cs = CoroutineScope(SupervisorJob())
         scope = cs
-        job = cs.launch {
+        val started = cs.launch {
             val settings = SettingsStore(applicationContext)
             var backoff = 5_000L
             var knownHash: String? = null
 
             while (isActive) {
-                val token = settings.token.first()
-                val base = settings.baseUrl.first()
+                // ⚠ INSIDE A GUARD. This preamble sits outside the try/catch
+                // below, and the launch carries no CoroutineExceptionHandler, so
+                // an unguarded settings read on a device that cannot read its
+                // store took down the whole process — every other settings read
+                // in the always-on layer is swallowed. A failure here is worth
+                // one backoff, not a crash.
+                val read = runCatching {
+                    Preamble(
+                        token = settings.token.first(),
+                        base = settings.baseUrl.first(),
+                        id = settings.clientId(),
+                    )
+                }.getOrNull()
+                if (read == null) {
+                    update(ongoing("Watching huginn", "Could not read this phone's settings"))
+                    delay(30_000)
+                    continue
+                }
+                val token = read.token
+                val base = read.base
                 if (token.isBlank()) {
                     update(ongoing("Watching huginn", "No token set"))
                     delay(30_000)
                     continue
                 }
-                val id = settings.clientId()
+                val id = read.id
                 val canNotify = SessionWatchWorker.canNotify(applicationContext)
                 val client = HuginnClient({ base }, { token }, { id }, { canNotify })
 
@@ -166,6 +191,11 @@ class WatchService : Service() {
                 }
             }
         }
+        // Clears the handle the moment the loop ends, however it ends, so the
+        // next onStartCommand (START_STICKY, a heartbeat tick, app start) sees a
+        // service with no loop and starts one.
+        started.invokeOnCompletion { if (job === started) job = null }
+        job = started
     }
 
     /** Sleeps, but wakes early if the network returns in the meantime. */
@@ -286,3 +316,14 @@ class WatchService : Service() {
         }
     }
 }
+
+/**
+ * Whether the watch service should start its loop.
+ *
+ * Top-level and pure so the gate can be asserted: `job` is nulled in onDestroy
+ * and nowhere else, so gating on NULLNESS meant a loop that had completed — by
+ * cancellation or by returning — could never be revived while the service went
+ * on living, notification and all. A completed job is not a running one, and
+ * `job?.isActive == true` is this codebase's convention everywhere else.
+ */
+internal fun needsRevival(job: Job?): Boolean = job?.isActive != true
