@@ -1852,6 +1852,11 @@ async function pumpQueue(name) {
   try {
     while (q.entries.length) {
       const entry = q.entries[0];
+      // What the LAST pass decided about this queue's head, read before the
+      // gate is re-read: a non-null value means this queue was HELD, and that
+      // is what makes the entries behind the head queued prompts rather than
+      // interjections (#10).
+      const heldBefore = q.blockedBy;
       const gate = await checkGates(name);
       const now = Date.now();
       const reason = typing.dropReason(entry, {
@@ -1898,19 +1903,44 @@ async function pumpQueue(name) {
       // taller than its own window for three releases — was the only thing
       // holding a human send. Pane-BACKED, so a state file nobody will refresh
       // cannot hold it forever; see typing.humanAttentionHold.
+      const holdForQuestion = humanText && typing.humanAttentionHold({
+        state: stateSays, composerEmpty: gate.composerEmpty, waitedMs: now - entry.at,
+      });
+      // #10: an entry marked below waits for a REAL boundary. The 10-minute
+      // backstop is the same ceiling the automated lane drops at — except this
+      // one RELEASES, because a person's message is never thrown away.
+      const overdue = humanText && entry.at && now - entry.at >= typing.QUEUE_MAX_WAIT_MS;
+      if (overdue && entry.queuedBehindHuman && !entry.overdueLogged) {
+        entry.overdueLogged = true;
+        log(`typing: ${name}: a queued message has waited ${Math.round((now - entry.at) / 1000)}s `
+          + 'for a turn boundary that never came; sending it now');
+      }
       const d = typing.releaseDecision(humanText
         ? {
           ...gate,
-          idle: true,
-          state: typing.humanAttentionHold({
-            state: stateSays, composerEmpty: gate.composerEmpty, waitedMs: now - entry.at,
-          }) ? 'hold' : null,
+          // A person's message never waits for CLAUDE (3.0.3) — but one they
+          // QUEUED behind a gate is not an interjection, and flushing it into
+          // the turn the previous message just started is how the first
+          // instruction gets absorbed and never carried out.
+          idle: entry.queuedBehindHuman ? (gate.idle || overdue) : true,
+          state: holdForQuestion ? 'hold' : (entry.queuedBehindHuman ? stateSays : null),
         }
         : { ...gate, state: stateSays });
       if (!d.release) {
         q.blockedBy = d.blockedBy;
         armQueueTimer(name);
         return;
+      }
+      // ⚠ THE GATE JUST OPENED ON A QUEUE THAT WAS HELD (#10). Everything a
+      // person queued behind it is a separate PROMPT, not a comment on the
+      // turn the head is about to start: release the head, and make the rest
+      // wait for a boundary the way the automated lane does. An interjection
+      // typed into a running turn never comes through here — that queue was
+      // not blocked — so 3.0.3's immediate paste is untouched.
+      if (heldBefore && humanText) {
+        for (const e of q.entries) {
+          if (e !== entry && !e.automated && typeof e.run !== 'function') e.queuedBehindHuman = true;
+        }
       }
       q.entries.shift();
       q.blockedBy = null;
