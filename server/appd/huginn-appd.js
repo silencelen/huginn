@@ -1338,6 +1338,31 @@ async function requireSession(res, name) {
 }
 
 /**
+ * The pane gate the send queue has, for the two routes that do not use it.
+ *
+ * ⚠ #9. `/soft-end` and `/compact` were guarded only by `st.state ===
+ * 'attention'`, read off the flat state file — and `running` is the NORMAL
+ * reading while a dialog is up: a plain tool-permission dialog gets no sidecar
+ * at all, and a background agent's PreToolUse rewrites that file to `running`
+ * while the main thread sits on the question. So both pasted their fixed phrase
+ * into a live selector while the send queue, on the same pane in the same
+ * second, correctly held a person's message with blockedBy:"modal".
+ *
+ * Returns the 409 sentence, or null when the pane is fine. A pane that cannot be
+ * READ is not refused — these are deliberate interventions and a capture that
+ * failed says nothing about what is on screen.
+ */
+async function dialogRefusal(name) {
+  const lines = await capturePaneLines(name);
+  if (!lines) return null;
+  const why = typing.paneReadyForInput(lines).why;
+  if (!typing.paneBlocks(why)) return null;
+  return why === 'trust'
+    ? 'this session is waiting on the folder-trust dialog — answer that first'
+    : 'a question is on screen in this session — answer it first';
+}
+
+/**
  * ONE check-and-act at a time, per session.
  *
  * ⚠ THE RACE (#11). `/answer` captures the pane, validates the fingerprint and
@@ -9882,15 +9907,49 @@ const server = http.createServer(async (req, res) => {
       if (!st && !body.force) {
         return sendErr(res, 409, 'no Claude state recorded for this session — it may be a plain shell; pass force to send anyway');
       }
+      // The state file cannot see a dialog; the pane can (#9).
+      const blocked = await dialogRefusal(name);
+      if (blocked) return sendErr(res, 409, blocked);
       const phrase = (typeof body.phrase === 'string' && body.phrase.trim())
         ? body.phrase.slice(0, 8000) : SOFT_END_PHRASE;
       const auto = typeof body.auto === 'boolean' ? body.auto : SOFT_END_AUTO;
       const queued = !!(st && st.state === 'running'); // mid-turn text queues in the composer
-      const r = await sendLineToPane(name, phrase);
-      if (r.err) return sendErr(res, 500, `tmux: ${(r.stderr || '').trim()}`);
-      if (auto) softEnds.set(name, createPending(Date.now()));
-      else softEnds.delete(name);
-      return sendJson(res, 200, { ok: true, phrase, auto, queued });
+      // ⚠ THROUGH THE QUEUE, AND THE AUTO-END ARMS FROM THE SETTLE (#9). This
+      // used to paste straight at the pane and arm on the 200 — so a phrase that
+      // went nowhere still armed a kill, defeating the expire branch written for
+      // exactly that case. `automated:false` because a person asked for it: the
+      // modal gate holds it, the turn gate does not.
+      if (!auto) softEnds.delete(name);
+      const out = await enqueueSend(name, phrase, {
+        origin: 'soft-end',
+        submit: true,
+        onSettle: (v) => {
+          if (!auto) return;
+          const r = v.result || {};
+          // ⚠ `submitted !== false`, NOT `settled === true`. The state that must
+          // never arm a kill is the one where the phrase is demonstrably still
+          // sitting in a composer — `recoveryDecision` returning 'leave', which
+          // skips the Enter, and a confirmSubmitted that timed out with the text
+          // still there. Both report `submitted: false`. A pane with no composer
+          // at all (a plain shell, an inert pane) reports `null`, and refusing to
+          // arm there would break the auto-end for every non-Claude pane.
+          if (v.delivered && r.ok && r.submitted !== false) {
+            softEnds.set(name, createPending(Date.now()));
+            return;
+          }
+          log(`soft-end: ${name}: the wrap-up phrase did not land `
+            + `(${v.dropped || (r.message || 'not submitted')}); not arming the auto-end`);
+        },
+      });
+      if (out.result && !out.result.ok) {
+        return sendErr(res, out.result.code || 500, out.result.message);
+      }
+      return sendJson(res, 200, {
+        ok: true, phrase, auto,
+        queued: queued || !out.delivered,
+        delivered: out.delivered,
+        blockedBy: out.blockedBy || null,
+      });
     }
 
     // --- manual context compaction (the "context manager" action)
@@ -9912,10 +9971,21 @@ const server = http.createServer(async (req, res) => {
       if (st.state === 'attention') {
         return sendErr(res, 409, 'answer the waiting question first, then compact');
       }
+      const blocked = await dialogRefusal(name);
+      if (blocked) return sendErr(res, 409, blocked);
       const queued = st.state === 'running';
-      const r = await sendLineToPane(name, '/compact');
-      if (r.err) return sendErr(res, 500, `tmux: ${(r.stderr || '').trim()}`);
-      return sendJson(res, 200, { ok: true, sent: '/compact', queued });
+      // Through the queue for the same reason as /soft-end: a slash command
+      // typed into a selector is swallowed, and this route reported it as sent.
+      const out = await enqueueSend(name, '/compact', { origin: 'compact', submit: true });
+      if (out.result && !out.result.ok) {
+        return sendErr(res, out.result.code || 500, out.result.message);
+      }
+      return sendJson(res, 200, {
+        ok: true, sent: '/compact',
+        queued: queued || !out.delivered,
+        delivered: out.delivered,
+        blockedBy: out.blockedBy || null,
+      });
     }
 
     // --- answering a question from a notification, without opening the app
