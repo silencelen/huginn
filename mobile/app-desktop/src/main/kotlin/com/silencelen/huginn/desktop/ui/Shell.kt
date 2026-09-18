@@ -74,8 +74,10 @@ import com.silencelen.huginn.data.DraftBook
 import com.silencelen.huginn.data.Device
 import com.silencelen.huginn.data.Round
 import com.silencelen.huginn.data.Scratchpad
+import com.silencelen.huginn.data.ArchivedSession
 import com.silencelen.huginn.data.Session
 import com.silencelen.huginn.desktop.AppStore
+import com.silencelen.huginn.ui.ArchiveRules
 import com.silencelen.huginn.desktop.Responsive
 import com.silencelen.huginn.desktop.Splitter
 import com.silencelen.huginn.desktop.View
@@ -134,6 +136,8 @@ fun Shell(store: AppStore) {
     val view by store.view.collectAsState()
     val chats by store.chats.collectAsState()
     val sessions by store.sessions.collectAsState()
+    val archives by store.archives.collectAsState()
+    val archiveAvailable by store.archiveAvailable.collectAsState()
     val rounds by store.rounds.collectAsState()
     val devices by store.devices.collectAsState()
     val pads by store.pads.collectAsState()
@@ -210,6 +214,9 @@ fun Shell(store: AppStore) {
         // when it starts; a 409 (waiting question / plain shell) surfaces its note.
         compact = { name -> act { store.client.compactSession(name) } },
         softEnd = { names -> confirming = ConfirmTarget.SoftEndSessions(names) },
+        // Null on a daemon without the feature, which keeps the item out of the
+        // menu entirely rather than offering a verb that can only 404.
+        archive = if (archiveAvailable == true) ({ names -> confirming = ConfirmTarget.ArchiveSessions(names) }) else null,
         kill = { names -> confirming = ConfirmTarget.KillSessions(names) },
     )
 
@@ -422,6 +429,11 @@ fun Shell(store: AppStore) {
                                         onOpen = { store.openSession(it) },
                                         onNew = { namingSession = true },
                                         verbs = sessionVerbs,
+                                        archives = if (archiveAvailable == true) archives else emptyList(),
+                                        archiveAvailable = archiveAvailable,
+                                        onRevive = { row -> act { store.reviveArchive(row) } },
+                                        onCopyResume = { row -> row.resumeCommand?.let { copy(it) } },
+                                        onForgetArchive = { confirming = ConfirmTarget.ForgetArchive(it) },
                                     )
                                     else -> Unit
                                 }
@@ -616,6 +628,17 @@ fun Shell(store: AppStore) {
                                 target.names.forEach { store.client.softEndSession(it) }
                                 store.refreshSessions()
                             }
+                            // Drafts and history ARE cleared, unlike a wind-down:
+                            // this session is going, and the text typed at it is
+                            // not coming with it. The store re-throws a refusal so
+                            // the daemon's own sentence ("answer the waiting
+                            // question first…") reaches the status line intact.
+                            is ConfirmTarget.ArchiveSessions -> act {
+                                store.archiveSessions(target.names)
+                                if (store.sessionName.value in target.names) store.openSession(null)
+                                sessionSel = Selection()
+                            }
+                            is ConfirmTarget.ForgetArchive -> act { store.deleteArchive(target.row) }
                         }
                     },
                 )
@@ -1195,6 +1218,12 @@ sealed interface ConfirmTarget {
     data class KillSessions(val names: List<String>) : ConfirmTarget
     /** A wrap-up request, not a destruction: the session ends only after it settles. */
     data class SoftEndSessions(val names: List<String>) : ConfirmTarget
+
+    /** End for good, keeping the way back. A wind-down that leaves a row behind. */
+    data class ArchiveSessions(val names: List<String>) : ConfirmTarget
+
+    /** Forget an archived row AND the copy of the conversation it was keeping. */
+    data class ForgetArchive(val row: ArchivedSession) : ConfirmTarget
 }
 
 /**
@@ -1357,6 +1386,32 @@ private fun ConfirmDialog(target: ConfirmTarget, onDismiss: () -> Unit, onConfir
                     "End ${target.names.size}",
                 )
             }
+        is ConfirmTarget.ArchiveSessions ->
+            if (target.names.size == 1) {
+                Triple(
+                    "Archive ${target.names.first()}?",
+                    "Claude is asked to wrap up, and the session ends once it settles. It moves " +
+                        "to Archived with the directory it ran in, a copy of the conversation and " +
+                        "the exact resume command, so you can bring it back.",
+                    "Archive",
+                )
+            } else {
+                Triple(
+                    "Archive ${target.names.size} sessions?",
+                    "Each is asked to wrap up and ends once it settles, keeping its directory, a " +
+                        "copy of its conversation and the command that brings it back.",
+                    "Archive ${target.names.size}",
+                )
+            }
+        is ConfirmTarget.ForgetArchive ->
+            Triple(
+                "Forget ${ArchiveRules.label(target.row)}?",
+                // Named for what is actually lost. "Delete" against a row that
+                // looks like a list entry reads as tidying; the kept copy of the
+                // conversation going with it is the part worth a sentence.
+                "The row and the kept copy of its conversation are removed. This cannot be undone.",
+                "Forget",
+            )
         is ConfirmTarget.SoftEndSessions ->
             if (target.names.size == 1) {
                 Triple(
@@ -1374,8 +1429,9 @@ private fun ConfirmDialog(target: ConfirmTarget, onDismiss: () -> Unit, onConfir
                 )
             }
     }
-    // A wind-down sends a message; only the truly destructive verbs are red.
-    val destructive = target !is ConfirmTarget.SoftEndSessions
+    // A wind-down sends a message and an archive keeps everything it ends; only
+    // the verbs that actually lose something are red.
+    val destructive = target !is ConfirmTarget.SoftEndSessions && target !is ConfirmTarget.ArchiveSessions
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text(title, style = MaterialTheme.typography.titleSmall) },
