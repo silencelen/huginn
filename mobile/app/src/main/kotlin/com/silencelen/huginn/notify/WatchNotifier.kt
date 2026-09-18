@@ -7,6 +7,8 @@ import com.silencelen.huginn.data.SettingsStore
 import com.silencelen.huginn.data.Watch
 import com.silencelen.huginn.widget.FleetWidget
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 
 /**
  * Turns one observation of huginn into Android notifications, if anything changed.
@@ -47,11 +49,43 @@ object WatchNotifier {
      * on which noticed first, which is the drift this shared cycle exists to prevent.
      * Optional, so a caller with no client still works and simply gets the plain text.
      */
+    /**
+     * ⚠ ONE OBSERVATION AT A TIME, PROCESS-WIDE.
+     *
+     * [apply] is an unguarded read-modify-write over three persisted baselines
+     * (notified, stalled/laddered, running/runs) with up to three `client.screen()`
+     * round trips in between — 35-42 ms on loopback, hundreds from a phone — and
+     * FIVE same-process callers reach it with no mutual exclusion: the watch
+     * service, the heartbeat, the session worker, the widget worker and the push
+     * reconcile. Two cycles observing the same transition both computed the same
+     * non-empty `fresh` and both posted under the same per-session id, so whichever
+     * landed second won — and when the later cycle's prompt fetch came back null
+     * (a transient screen error, or a caller with no client) a question with its
+     * answer buttons was replaced by the buttonless "Waiting for your answer". A
+     * lost baseline update can also strand a "needs you" that can never be
+     * cancelled, or cancel a valid one.
+     *
+     * A Mutex rather than a per-baseline edit because the baselines are read and
+     * written either side of network calls; the whole cycle is the critical
+     * section. Contention is rare and the alternative is a shade that lies.
+     */
+    private val gate = Mutex()
+
+    /** Runs [block] under the observation gate. See [gate]. */
+    internal suspend fun <T> guarded(block: suspend () -> T): T = gate.withLock { block() }
+
     suspend fun apply(
         context: Context,
         settings: SettingsStore,
         watch: Watch,
         client: HuginnClient? = null,
+    ): WatchCycle.Outcome = guarded { applyNow(context, settings, watch, client) }
+
+    private suspend fun applyNow(
+        context: Context,
+        settings: SettingsStore,
+        watch: Watch,
+        client: HuginnClient?,
     ): WatchCycle.Outcome {
         // The widget's snapshot, recorded on EVERY observation and before the
         // seeding shortcut below: the very first look carries no transitions
