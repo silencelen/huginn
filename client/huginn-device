@@ -477,7 +477,7 @@ function api(method, p, body, { timeoutMs = 20000 } = {}) {
     // every 15 seconds forever on a machine with nobody at it, so the difference
     // between "there is no file" and "the file is there and holds a newline" is
     // the difference between a fix and an afternoon.
-    return Promise.reject(new Error(`no appd token — ${tokenOrWhy().why || 'reason unknown'}`));
+    return Promise.reject(noTokenError(tokenOrWhy().why || 'reason unknown'));
   }
 
   return new Promise((resolve, reject) => {
@@ -631,8 +631,36 @@ function batchLines(lines) {
   return out;
 }
 
+/**
+ * The pre-flight rejection when this machine has no token at all.
+ *
+ * FLAGGED, not worded: the delivery loop has to recognise it, and matching the
+ * prose of an error message is how a reworded sentence silently turns a handled
+ * case back into an unhandled one.
+ */
+const noTokenError = (why) => Object.assign(new Error(`no appd token — ${why}`), { noToken: true });
+
 /** True when the daemon will never accept this again, however many times we try. */
 const permanent = (e) => / → (40[034]|413) /.test(String(e && e.message));
+
+/**
+ * True when DELIVERY is not authorised: a 401, or no token to send.
+ *
+ * ⚠ DELIBERATELY NOT FOLDED INTO permanent(). That branch sets cancelled and
+ * kills the child, and a token rotated mid-run would then stop a claude that
+ * may be mid-edit. Delivery is dead here; the work is not. `authorized()` on
+ * the daemon compares against the token it read at START, so retrying cannot
+ * succeed either - and the old code retried it every 500 ms for the life of the
+ * run (measured: 52 POSTs in 24.6 s), with `pending` growing the whole time.
+ */
+const authFailed = (e) => !!(e && (e.noToken === true || / → 401 /.test(String(e.message))));
+
+/**
+ * How long to wait before retrying a delivery blip. Exponential from half a
+ * second, capped at 30 s: the flush interval is 500 ms, so an outage used to be
+ * two requests a second until the child exited.
+ */
+const retryDelayMs = (blips) => Math.min(30000, 500 * (2 ** Math.max(0, Math.min(blips, 6))));
 
 // How long a just-spawned engine may produce NO output before it is treated as
 // wedged at startup. Generous — a working engine emits its init frame near-instantly,
@@ -731,8 +759,13 @@ function runWork(id, work, conf) {
     };
 
     let flushing = false;
+    let deliveryDead = false;   // a 401 / no token: stop delivering, keep the child
+    let blips = 0;
+    let backoffUntil = 0;
     const flush = setInterval(async () => {
-      if (!pending.length || done || flushing) return;
+      if (done || flushing) return;
+      if (deliveryDead) { pending = []; return; }
+      if (!pending.length || Date.now() < backoffUntil) return;
       flushing = true;
       const batch = pending; pending = [];
       try {
@@ -741,6 +774,7 @@ function runWork(id, work, conf) {
             { lines: chunk, locked: lock });
           if (ack && ack.cancel && !cancelled) { cancelled = true; child.kill(); }
         }
+        blips = 0; backoffUntil = 0;
       } catch (e) {
         if (permanent(e)) {
           // ⚠ NOT RETRYABLE, and retrying was its own bug: after a daemon
@@ -750,10 +784,20 @@ function runWork(id, work, conf) {
           log(`giving up on ${work.id}: ${e.message}`);
           cancelled = true;
           try { child.kill(); } catch { /* already gone */ }
+        } else if (authFailed(e)) {
+          // ⚠ TERMINAL FOR DELIVERY, NOT FOR THE CHILD. See authFailed: this is
+          // the token being rotated or deleted under a live run, and killing the
+          // child there could stop a claude mid-edit. Said ONCE, and the buffer
+          // is dropped rather than grown - nothing can accept it now.
+          deliveryDead = true;
+          log(`delivery for ${work.id} is not authorised (${e.message}) — dropped ${batch.length + pending.length} line(s); the child keeps running`);
+          pending = [];
         } else {
           // Put them back: a blip mid-run must not silently eat the answer.
           pending = batch.concat(pending);
-          log(`batch failed (will retry): ${e.message}`);
+          blips += 1;
+          backoffUntil = Date.now() + retryDelayMs(blips);
+          log(`batch failed (retrying in ${Math.round(retryDelayMs(blips) / 1000)}s): ${e.message}`);
         }
       } finally {
         flushing = false;
@@ -796,7 +840,7 @@ function runWork(id, work, conf) {
       clearTimeout(startupTimer);
       activeRun = null;
       clearInterval(flush);
-      const tail = pending; pending = [];
+      const tail = deliveryDead ? [] : pending; pending = [];
       // ⚠ THE TAIL FIRST, THEN THE ENDING ALONE. These used to go in one POST,
       // so an oversized tail took the terminal frame down with it — and its retry
       // was identically 413, meaning the ending could NEVER be delivered. The
@@ -1184,5 +1228,6 @@ if (require.main === module) {
     VERSION, MAX_LINE_BYTES, MAX_BATCH_BYTES,
     shrinkLine, batchLines, parseFlags, tokenOrWhy, cwdFor, effectiveScope, allows, argvFor,
     engineRefusal, execFor, engineWords, errWords, notFoundText, exitedText, urlRefusal,
+    permanent, authFailed, noTokenError, retryDelayMs,
   };
 }

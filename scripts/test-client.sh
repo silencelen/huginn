@@ -811,6 +811,33 @@ assert.ok(/claude exited 1/.test(r.exitedText("ask", "kratos", 1, "")), "ask kee
 ' && ok "a local-engine failure is reported as a local-engine failure" \
    || bad "the runner still blames claude for the local engine, or keeps the wrong end of stderr"
 
+# ⚠ A 401 IS NOT A BLIP, AND IT IS NOT A REASON TO KILL THE CHILD. permanent()
+# matched only 400/403/404/413, so a token rotated or deleted mid-run fell into
+# the retry branch and was re-POSTed every 500 ms for the life of the run
+# (measured: 52 POSTs in 24.6 s, both finish() frames failing, `pending` growing
+# the whole time) - and after `huginn device off --force` or `huginn uninstall`
+# the child could no longer be cancelled either, because cancel rides on a
+# successful POST. Widening permanent() to 401 is the WRONG fix: that branch
+# kills the child, possibly mid-edit.
+node -e '
+const assert = require("assert");
+const r = require(process.cwd() + "/client/huginn-device");
+const four01 = new Error("POST /v1/devices/x/work/y/events → 401 unauthorized");
+assert.equal(r.permanent(four01), false,
+  "a 401 must not reach the branch that kills a live child");
+assert.equal(r.authFailed(four01), true, "a 401 is a delivery failure");
+assert.equal(r.authFailed(r.noTokenError("the token file is empty")), true,
+  "the pre-flight no-token rejection is a delivery failure too");
+assert.equal(r.authFailed(new Error("no appd token — the token file is empty")), false,
+  "recognised by the FLAG on the Error, never by matching its prose");
+assert.equal(r.authFailed(new Error("POST /x → 502 bad gateway")), false, "a 502 is a blip");
+assert.equal(r.permanent(new Error("POST /x → 404 gone")), true, "404 still tears down");
+assert.ok(r.retryDelayMs(1) >= 1000 && r.retryDelayMs(1) <= 2000, "the first retry backs off");
+assert.ok(r.retryDelayMs(3) > r.retryDelayMs(1), "and it grows");
+assert.equal(r.retryDelayMs(99), 30000, "capped, so a long outage is not a busy loop");
+' && ok "a 401 stops delivery without stopping the child, and blips back off" \
+   || bad "a 401 is still retried twice a second, or kills the run"
+
 echo "[local/8] the local tier: manager, shim, manifest, units"
 node --check client/huginn-local && ok "huginn-local parses" || bad "huginn-local does not parse"
 node --check client/huginn-llm-shim && ok "huginn-llm-shim parses" || bad "huginn-llm-shim does not parse"
