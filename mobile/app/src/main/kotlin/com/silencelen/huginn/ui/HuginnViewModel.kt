@@ -108,6 +108,36 @@ internal fun reattachPlan(meta: ChatDetail?): Reattach? {
 }
 
 /**
+ * ⚠ WHAT A SESSION NAME IS, on this client. One rule, shared by create and
+ * rename, matching the daemon's own and the other three clients' (contract 1 of
+ * the 2026-09-17 edge hunt).
+ *
+ * DOTS ARE BANNED. tmux silently rewrites `.` to `_` in a session name and
+ * reports the rewritten one nowhere the old readbacks looked, so a session
+ * created or renamed with a dot existed under a name nothing could route to:
+ * every subsequent call 404ed. Dashes survive tmux untouched and are ordinary
+ * in names typed at a keyboard, so they are allowed — the phone used to refuse
+ * them on create and accept dots on rename, which was exactly backwards.
+ */
+internal val SESSION_NAME = Regex("^[a-z0-9_][a-z0-9_-]{0,49}$")
+
+internal const val SESSION_NAME_HELP: String =
+    "Start with a letter, digit or _; letters, digits, _ and - after that"
+
+/**
+ * What to say when the pane poll 404s.
+ *
+ * ⚠ A NAME STILL IN THE SESSION LIST DID NOT END. The daemon lists it and then
+ * cannot address it — the dotted-name case above, from before the rule was
+ * enforced — and "Session x ended" about a session the reader can still see in
+ * the list is a lie that sends them looking for the wrong problem. (The Android
+ * half of the desktop's #85.)
+ */
+internal fun sessionGoneWords(name: String, known: List<String>): String =
+    if (known.contains(name)) "huginn cannot address a session named \"$name\" — rename it in tmux"
+    else "Session $name ended"
+
+/**
  * Whether a chat screen's teardown is still tearing down the CURRENT chat.
  *
  * Pure for the same reason [pageStillWanted] is: the check was simply absent.
@@ -2679,8 +2709,8 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
 
     fun createSession(name: String, onCreated: (String) -> Unit) {
         val canon = name.trim().lowercase()
-        if (!canon.matches(Regex("^[a-z0-9_]{1,50}$"))) {
-            _toast.value = "Name can use letters, digits and underscore only"
+        if (!canon.matches(SESSION_NAME)) {
+            _toast.value = SESSION_NAME_HELP
             return
         }
         viewModelScope.launch {
@@ -2812,11 +2842,8 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
 
     fun renameSession(from: String, to: String) {
         val canon = to.trim().lowercase()
-        // Matches what the daemon will route to (NAME_RE): a leading alphanumeric
-        // or underscore keeps the name usable as a filename under /run, and dashes
-        // and dots are ordinary in sessions made at the keyboard.
-        if (!canon.matches(Regex("^[a-z0-9_][a-z0-9_.-]{0,49}$"))) {
-            _toast.value = "Start with a letter or digit; letters, digits, _ . - after that"
+        if (!canon.matches(SESSION_NAME)) {
+            _toast.value = SESSION_NAME_HELP
             return
         }
         viewModelScope.launch {
@@ -2938,10 +2965,11 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
                     }
                 }.onFailure { e ->
                     if (e is HuginnClient.HuginnException && e.code == 404) {
-                        // The session died under the viewer. Saying so in a toast
-                        // while leaving them staring at a dead screen is not
-                        // enough — the UI collects this and navigates back.
-                        _toast.value = "Session $name ended"
+                        // The session died under the viewer — or the daemon cannot
+                        // ADDRESS it, which is a different sentence and must not be
+                        // reported as an ending. The UI collects this and navigates
+                        // back either way; a screen it cannot fetch is no screen.
+                        _toast.value = sessionGoneWords(name, _sessions.value.map { it.name })
                         _sessionGone.value = name
                         return@launch
                     }
