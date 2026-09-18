@@ -693,6 +693,19 @@ if [ "$LINUX_ONLY" = 0 ]; then
       [ -f "$PROBE_HOME/settings.json" ] && break
       sleep 5
     done
+    # settings.json is written EARLY in main() (the client id on construction);
+    # the installer's answer file is consumed LATER, after the setup controller
+    # is built. Under wine's software renderer that gap is tens of seconds, and
+    # 1.4.0 was refused for an answer file the app had simply not reached yet —
+    # the first smoke that ever exercised the path, because every earlier one
+    # found a settings.json from the previous smoke and the installer wrote no
+    # answers at all. Give it a minute before pulling the plug.
+    if [ -f "$FIRST_RUN_JSON" ]; then
+      for _ in $(seq 1 12); do
+        [ -f "$FIRST_RUN_JSON" ] || break
+        sleep 5
+      done
+    fi
     # Bracketed so the pattern cannot match the shell that is running it — a
     # `pkill -f` of a literal string reliably kills its own invoking command line.
     pkill -f '[h]uginn-desktop-kt\.exe' >/dev/null 2>&1 || true
