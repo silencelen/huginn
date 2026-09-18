@@ -100,22 +100,46 @@ private fun osc8Target(body: String): String? {
     return uri.takeIf { it.startsWith("http://") || it.startsWith("https://") }
 }
 
-/** Rows that reached the pane's width, rejoined into the lines they were before. */
+/**
+ * Rows that reached the pane's width, rejoined into the lines they were before.
+ *
+ * ⚠ MEASURED IN COLUMNS, on the STRIPPED row. `line.length` counts UTF-16 units
+ * of a row that is mostly escape bytes, which is wrong in both directions: SGR
+ * made a two-column row read as full (6 of 25 rows on a live pane) and weld
+ * itself to the next one, manufacturing links out of two unrelated rows; a wide
+ * glyph made a genuinely wrapped row read as short, so it was never rejoined and
+ * the URL that wrapped stayed in pieces. [TerminalGrid.charWidth] is the same
+ * wcwidth rule the painter lays the grid out with, so the two agree by
+ * construction.
+ */
 internal fun logicalLines(lines: List<String>, width: Int): List<String> {
-    if (width <= 0) return lines
+    val plain = lines.map { stripAnsi(it) }
+    if (width <= 0) return plain
     val out = mutableListOf<String>()
     val buf = StringBuilder()
-    for (line in lines) {
+    for (line in plain) {
         buf.append(line)
-        // Shorter than the pane means the writer ended it. Only a row that filled
+        // Narrower than the pane means the writer ended it. Only a row that filled
         // every column can have been continued.
-        if (line.length < width) {
+        if (displayWidth(line) < width) {
             out.add(buf.toString())
             buf.clear()
         }
     }
     if (buf.isNotEmpty()) out.add(buf.toString())
     return out
+}
+
+/** Columns this text occupies in a terminal — not characters, not code points. */
+private fun displayWidth(s: String): Int {
+    var w = 0
+    var i = 0
+    while (i < s.length) {
+        val cp = s.codePointAt(i)
+        i += if (cp > 0xFFFF) 2 else 1
+        w += TerminalGrid.charWidth(cp)
+    }
+    return w
 }
 
 // ⚠ ESC IS IN THE NEGATED CLASS, and not only because the scan now runs on
@@ -142,7 +166,6 @@ fun linksOn(screen: Screen?): List<String> {
     // URI exactly, so there is nothing to guess at.
     val hyperlinked = screen.lines.flatMap { unescape(it).links }
     val scraped = logicalLines(screen.lines, screen.width)
-        .map { stripAnsi(it) }
         .flatMap { line -> URL_RE.findAll(line).map { it.value } }
         .map { it.trimEnd { c -> c in TRAILING } }
     return (hyperlinked + scraped)
