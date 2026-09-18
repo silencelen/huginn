@@ -24,6 +24,7 @@ import com.silencelen.huginn.ui.SelectionAction
 import com.silencelen.huginn.ui.SelectionMode
 import com.silencelen.huginn.ui.SelectionStaging
 import com.silencelen.huginn.ui.applyAutoSwitch
+import com.silencelen.huginn.ui.pageStillWanted
 import com.silencelen.huginn.ui.SendQueue
 import com.silencelen.huginn.ui.StreamPicker
 import com.silencelen.huginn.ui.fetchStreamAgents
@@ -208,6 +209,21 @@ class HuginnViewModelTest {
             "Rejected by huginn: check the token in Settings",
             errorTextFor(HuginnClient.HuginnException(401, "Unauthorized")),
         )
+    }
+
+    // ---------------------------------------- #72 a late page belongs to its session
+
+    @Test
+    fun `a history page arriving late belongs only to the session that asked`() {
+        assertTrue(pageStillWanted("pctrooubleshoot", "pctrooubleshoot"))
+        // The failure: A's "load earlier" comes back after the reader opened B,
+        // and there is nothing in a TranscriptPage to say it is not B's. It was
+        // welded above B's tail for the life of the view, and B's next "load
+        // earlier" then asked for a byte offset into A's file.
+        assertFalse(pageStillWanted("pctrooubleshoot", "opensession"))
+        // Left the session screen altogether — backgrounding clears it too, and
+        // coming back reloads the tail from scratch.
+        assertFalse(pageStillWanted("pctrooubleshoot", null))
     }
 
     // ------------------------------------------ #80 transport failures in words

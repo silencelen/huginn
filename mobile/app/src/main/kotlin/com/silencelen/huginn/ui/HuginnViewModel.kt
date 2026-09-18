@@ -108,6 +108,23 @@ internal fun reattachPlan(meta: ChatDetail?): Reattach? {
 }
 
 /**
+ * Whether a history page that has just arrived still belongs on the screen.
+ *
+ * Pure and top-level beside [reattachPlan] and [applyAutoSwitch], because the
+ * thing it decides is an identity check that was simply absent: "load earlier"
+ * launched an untracked coroutine, the view model outlives the session screen,
+ * and `TranscriptPage` carries no session of its own — so a page fetched for
+ * session A landed in whichever session was open when it came back, welded
+ * permanently above B's tail with none of the restart guards firing (the merge
+ * keeps the CURRENT page's claudeSessionId, so `isTranscriptRestart` stays
+ * false from then on). The request can be in flight for tens of seconds.
+ *
+ * Null [openNow] — the reader left the session list entirely — wants nothing.
+ */
+internal fun pageStillWanted(requestedFor: String, openNow: String?): Boolean =
+    openNow != null && openNow == requestedFor
+
+/**
  * Turning "switch automatically" on is TWO steps, and their ORDER is the whole
  * rule: persist first, then probe.
  *
@@ -2943,6 +2960,13 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
         _screen.value = null
         _transcript.value = null
         _transcriptError.value = null
+        // The history handles belong to the session being left. Kept, they made
+        // the NEXT session's first "load earlier" ask for a byte offset into a
+        // file it never wrote — and a spinner left true here can never be
+        // cleared, since only the in-flight request clears it and that request
+        // is now for somebody else.
+        historyStart = null
+        _loadingHistory.value = false
         // Hand the pane size back so an attached laptop re-fits immediately
         // instead of waiting out the server-side lease.
         if (name != null) {
@@ -2977,15 +3001,27 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
         if (until <= 0L || _loadingHistory.value) return
         _loadingHistory.value = true
         viewModelScope.launch {
-            runCatching { client.sessionTranscript(name, until = until) }
-                .onSuccess { older ->
-                    historyStart = older.windowStart
-                    _transcript.value = prependTranscriptPage(_transcript.value, older)
-                }
-                .onFailure { _toast.value = errText(it) }
-            _loadingHistory.value = false
+            val page = runCatching { client.sessionTranscript(name, until = until) }
+                .onFailure { if (stillReading(name)) _toast.value = errText(it) }
+                .getOrNull()
+            // ⚠ THE ANSWER IS ONLY FOR THE SESSION THAT ASKED. This launch is
+            // tracked by no field and the view model outlives the screen, so a
+            // page that arrives after the reader has opened another session used
+            // to be welded on top of THAT session's transcript — another
+            // conversation, permanently, with no restart guard to undo it
+            // (prependTranscriptPage keeps the current page's claudeSessionId).
+            // The request can be in flight for tens of seconds: the daemon reads
+            // backwards with a doubling window and this call has no timeout.
+            if (page != null && stillReading(name)) {
+                historyStart = page.windowStart
+                _transcript.value = prependTranscriptPage(_transcript.value, page)
+            }
+            if (stillReading(name)) _loadingHistory.value = false
         }
     }
+
+    /** Whether [name] is still the session on screen — see [loadEarlierTranscript]. */
+    private fun stillReading(name: String): Boolean = pageStillWanted(name, currentSession)
 
     /** Tails the session's Claude transcript: the structured conversation view. */
     fun startTranscriptPolling(name: String) {
@@ -3168,10 +3204,17 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
         if (until <= 0L || _loadingAgentHistory.value) return
         _loadingAgentHistory.value = true
         viewModelScope.launch {
-            runCatching { client.agentTranscript(name, picked, until = until) }
-                .onSuccess { stream.prepend(it); publishStream() }
-                .onFailure { _toast.value = errText(it) }
-            _loadingAgentHistory.value = false
+            val page = runCatching { client.agentTranscript(name, picked, until = until) }
+                .onFailure { if (stillReading(name)) _toast.value = errText(it) }
+                .getOrNull()
+            // The identical untracked-launch shape as [loadEarlierTranscript],
+            // and the same rule: this page belongs to the session AND the agent
+            // that asked for it.
+            if (page != null && stillReading(name) && stream.selected == picked) {
+                stream.prepend(page)
+                publishStream()
+            }
+            if (stillReading(name)) _loadingAgentHistory.value = false
         }
     }
 
