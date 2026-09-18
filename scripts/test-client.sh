@@ -859,6 +859,17 @@ class H(BaseHTTPRequestHandler):
             self._send(404, {"error": "no"})
     def do_POST(self):
         self._log()
+        n = int(self.headers.get("content-length") or 0)
+        sent = self.rfile.read(n) if n else b""
+        if self.path.endswith("/spawn") and b"flood" in sent:
+            # A spawn that refused HUNDREDS of members: >64 KB of rendered output
+            # on a code path that ends in a non-zero exit. See the assertion.
+            self._send(200, {"ok": False, "spawned": [],
+                             "failed": [{"role": "r%03d" % i,
+                                         "reason": "refused because " + ("x" * 100)}
+                                        for i in range(800)] +
+                                       [{"role": "last", "reason": "THE-LAST-LINE"}]})
+            return
         if self.path.endswith("/spawn"):
             # A PARTIAL spawn on purpose: HTTP 200 with one member started and
             # one refused is the daemon's documented normal failure, and the
@@ -949,6 +960,18 @@ else
   grep -q "lora-stick-repo already exists" <<<"$PJ_SPAWN" && [ "$PJ_RC" != 0 ] \
     && ok "a partial spawn names the member that did not start, and exits non-zero" \
     || bad "partial spawn exited $PJ_RC: $PJ_SPAWN"
+  # ⚠ A NON-ZERO EXIT MUST NOT EAT THE OUTPUT. Node's stdout is ASYNCHRONOUS
+  # when it is a pipe on POSIX -- and a pipe is the normal case here, because both
+  # clients run this renderer as `ssh -T <host> huginn-projects` and capture or
+  # page what comes back -- so a buffered write followed by process.exit() is
+  # DISCARDED. A short reply hides it completely; this drives the exiting path
+  # with >64 KB (a spawn that refused 800 members) through a pipe and asserts the
+  # LAST line survived. Only the tail is kept, so a failure does not dump 90 KB.
+  PJ_FLOOD=$(HUGINN_APPD_URL="http://127.0.0.1:$PJ_PORT" \
+             server/bin/huginn-projects spawn "LoRa sensor stick" flood:flood 2>&1 | cat | tail -3)
+  grep -q "THE-LAST-LINE" <<<"$PJ_FLOOD" \
+    && ok "a long reply on the non-zero-exit path survives the pipe" \
+    || bad "output was truncated by the exit; tail was: $PJ_FLOOD"
 fi
 # ⚠ AN OLDER DAEMON IS NOT A BROKEN ONE. /v1/projects does not exist before the
 # Wave 3 appd, and "404" on its own sends somebody looking for a bug in the
