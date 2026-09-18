@@ -1,0 +1,158 @@
+{
+  "project": {
+    "id": "6f0d2c41-0000-4000-8000-0000000000b2",
+    "name": "Status page flap",
+    "cwd": "/root/netplan/status-page",
+    "createdAt": 1789450000,
+    "endedAt": null,
+    "lead": {
+      "name": "statusflap/lead",
+      "sessionId": "0123abcd-0000-4000-8000-00000000c000"
+    },
+    "members": [],
+    "manifest": null
+  },
+  "members": [
+    {
+      "name": "statusflap/db",
+      "role": "db",
+      "sessionId": "0123abcd-0000-4000-8000-00000000d001",
+      "spawnedAt": 1789452000,
+      "state": "running",
+      "needsYou": false,
+      "pendingSends": 0,
+      "lastActivityTs": 1789459400,
+      "endedAt": null,
+      "headroom": {
+        "family": "fable",
+        "ladder": "opus",
+        "autoResume": true,
+        "stalled": false
+      },
+      "streams": [
+        {
+          "id": "af7ca864cee1939de",
+          "task": "placeholder",
+          "active": true,
+          "updatedAt": 1789459400,
+          "startedAt": 1789458000,
+          "bytes": 20480,
+          "status": "running",
+          "depth": 0
+        },
+        {
+          "id": "c0d4e8",
+          "task": "placeholder",
+          "active": false,
+          "updatedAt": 1789458800,
+          "startedAt": 1789458100,
+          "bytes": 8192,
+          "status": "done",
+          "depth": null
+        }
+      ],
+      "totals": {
+        "wallMs": 7400000,
+        "turns": 14,
+        "userMessages": 6,
+        "toolCalls": 92,
+        "errors": 2,
+        "tokens": {
+          "input": 41000,
+          "output": 18000,
+          "cacheRead": 2100000,
+          "cacheCreation": 96000
+        },
+        "agentCount": 2,
+        "agentTokens": {
+          "input": 9000,
+          "output": 4000,
+          "cacheRead": 210000,
+          "cacheCreation": 12000
+        },
+        "estCost": null,
+        "compactions": 0,
+        "droppedTokens": 0,
+        "filesTouched": 11,
+        "models": ["claude-fable-5-1"],
+        "efforts": ["high"]
+      }
+    },
+    {
+      "name": "statusflap/web",
+      "role": "web",
+      "sessionId": "0123abcd-0000-4000-8000-00000000d002",
+      "spawnedAt": 1789452100,
+      "state": "attention",
+      "needsYou": true,
+      "pendingSends": 2,
+      "lastActivityTs": 1789459400,
+      "endedAt": null,
+      "headroom": {
+        "family": "fable",
+        "ladder": null,
+        "autoResume": false,
+        "stalled": true
+      },
+      "streams": [],
+      "totals": null
+    },
+    {
+      "name": "statusflap/probe",
+      "role": "probe",
+      "sessionId": "0123abcd-0000-4000-8000-00000000d003",
+      "spawnedAt": 1789452200,
+      "state": "teleporting",
+      "needsYou": null,
+      "pendingSends": null,
+      "lastActivityTs": null,
+      "endedAt": null,
+      "headroom": null,
+      "streams": [],
+      "totals": null
+    }
+  ],
+  "updatedAt": 1789459400,
+  "totals": {
+    "wallMs": 7400000,
+    "startedAt": 1789452000,
+    "lastActivityTs": 1789459400,
+    "turns": 31,
+    "userMessages": 12,
+    "toolCalls": 184,
+    "errors": 3,
+    "tokens": {
+      "input": 88000,
+      "output": 39000,
+      "cacheRead": 4300000,
+      "cacheCreation": 190000
+    },
+    "agentCount": 3,
+    "agentTokens": {
+      "input": 12000,
+      "output": 5000,
+      "cacheRead": 260000,
+      "cacheCreation": 14000
+    },
+    "estCost": {
+      "usd": 4.18,
+      "unpricedTokens": 0,
+      "byModel": []
+    },
+    "agentEstCostUsd": 0.42,
+    "activeAgents": 1,
+    "compactions": 1,
+    "droppedTokens": 120000,
+    "filesTouched": 23,
+    "models": ["claude-fable-5-1", "claude-opus-5"],
+    "efforts": ["high"]
+  },
+  "rate": {
+    "tokensPerMin10": 1800,
+    "tokensPerMin60": 1400,
+    "allTokensPerMin10": 42000,
+    "allTokensPerMin60": 39000,
+    "lastActivityTs": 1789459400,
+    "activeRecently": true
+  }
+}
