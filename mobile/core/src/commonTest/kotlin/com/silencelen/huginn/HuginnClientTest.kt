@@ -22,6 +22,7 @@ import com.silencelen.huginn.data.RouteGuard
 import kotlinx.coroutines.test.runTest
 import kotlinx.io.readByteArray
 import kotlin.test.Test
+import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
@@ -574,5 +575,47 @@ class HuginnClientTest {
         assertEquals("GET", seen.single().method.value, "the daemon has never served anything else here")
         assertEquals(2, t.queued)
         assertEquals("turn", t.blockedBy)
+    }
+
+    // ------------------------------------------- image file paths (wave 2)
+
+    /**
+     * The route `w2-imageroute` is building, stubbed here so this side can be
+     * finished and asserted without it: `GET /v1/files/image?path=…&session=…`,
+     * bearer-gated, an image MIME allowlist, 403 for anything outside the
+     * allowed roots. The client's whole job is to address it correctly — the
+     * containment decision is the daemon's and must never be copied here.
+     */
+    @Test
+    fun `imageBytes addresses the daemon's file route with the path encoded whole`() = runTest {
+        val png = byteArrayOf(0x89.toByte(), 0x50, 0x4E, 0x47)
+        val bytes = client { respond(png, HttpStatusCode.OK, headersOf(HttpHeaders.ContentType, "image/png")) }
+            .imageBytes("/tmp/claude-0/a shot.png")
+        assertContentEquals(png, bytes)
+        assertEquals(
+            "http://appd.test/v1/files/image?path=%2Ftmp%2Fclaude-0%2Fa%20shot.png",
+            seen.single().url.toString(),
+        )
+        assertEquals("GET", seen.single().method.value)
+        assertEquals("Bearer test-token", seen.single().headers[HttpHeaders.Authorization])
+    }
+
+    @Test
+    fun `a session widens the daemon's search without widening the client's`() = runTest {
+        client { respond(byteArrayOf(1), HttpStatusCode.OK) }.imageBytes("/w/out.png", session = "jtyper")
+        assertEquals(
+            "http://appd.test/v1/files/image?path=%2Fw%2Fout.png&session=jtyper",
+            seen.single().url.toString(),
+        )
+    }
+
+    @Test
+    fun `a refused path is the daemon's 403, surfaced as it was sent`() = runTest {
+        val e = assertFailsWith<HuginnClient.HuginnException> {
+            client { respondError(HttpStatusCode.Forbidden, """{"error":"outside the allowed roots"}""") }
+                .imageBytes("/etc/shadow.png")
+        }
+        assertEquals(403, e.code)
+        assertEquals("outside the allowed roots", e.message)
     }
 }

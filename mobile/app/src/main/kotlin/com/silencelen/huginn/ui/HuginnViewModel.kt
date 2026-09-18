@@ -373,6 +373,10 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
         com.silencelen.huginn.ui.AttachmentImageLoader(
             fetch = { client.uploadBytes(it) },
             decoder = com.silencelen.huginn.ui.AndroidImageBytesDecoder(),
+            // Image files an answer NAMES, through the daemon's own containment
+            // check. Against a daemon with no such route this 404s into the
+            // negative cache and the placeholder renders.
+            fetchPath = { path, session -> client.imageBytes(path, session) },
         )
 
     /**

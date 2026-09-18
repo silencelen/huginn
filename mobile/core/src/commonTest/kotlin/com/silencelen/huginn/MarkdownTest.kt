@@ -3,6 +3,7 @@ package com.silencelen.huginn
 import com.silencelen.huginn.ui.MdBlock
 import com.silencelen.huginn.ui.Markdown
 import com.silencelen.huginn.ui.tailRevision
+import androidx.compose.ui.text.LinkAnnotation
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
 import kotlin.test.Test
@@ -91,10 +92,102 @@ class MarkdownTest {
         assertEquals("some_long_name here", Markdown.inline("some_long_name here").text)
     }
 
+    /**
+     * WAS `a link keeps its label and appends the url only when it adds
+     * something`, and the parens URL was pinned here since the renderer had no
+     * way to make a label clickable. It has one now (decision 44), so the URL
+     * lives in the link annotation instead of in the prose — the text people
+     * read, and copy, is the label alone.
+     */
     @Test
-    fun `a link keeps its label and appends the url only when it adds something`() {
-        assertEquals("docs (https://x.test/a)", Markdown.inline("[docs](https://x.test/a)").text)
+    fun `a link keeps its label and nothing else`() {
+        assertEquals("docs", Markdown.inline("[docs](https://x.test/a)").text)
         assertEquals("https://x.test", Markdown.inline("[https://x.test](https://x.test)").text)
+    }
+
+    @Test
+    fun `a link becomes a real link span carrying the url`() {
+        val s = Markdown.inline("see [docs](https://x.test/a) now")
+        val link = s.getLinkAnnotations(0, s.length).single()
+        assertEquals("https://x.test/a", (link.item as LinkAnnotation.Url).url)
+        assertEquals("docs", s.text.substring(link.start, link.end))
+        assertEquals("see docs now", s.text)
+    }
+
+    /**
+     * ⚠ THE SECURITY LINE OF THIS FEATURE. Claude's output is text from a model,
+     * and a clickable `huginn://` in it would reach the desktop's own scheme
+     * handler — which is fingerprint-gated precisely because it is reachable from
+     * outside. `file:` and `javascript:` are the same argument. A refused scheme
+     * is not hidden: the label is still shown, it simply is not a link.
+     */
+    @Test
+    fun `a non-http scheme is refused as a link and shown as ordinary text`() {
+        val refused = listOf(
+            "file:///etc/passwd",
+            "huginn://open/session/x",
+            "javascript:alert(1)",
+            "mailto:someone@x.test",
+            "/docs/page",
+            "ftp://x.test/a",
+        )
+        for (u in refused) {
+            val s = Markdown.inline("[x]($u)")
+            assertEquals("x", s.text, "label still shown for $u")
+            assertTrue(s.getLinkAnnotations(0, s.length).isEmpty(), "must not be a link: $u")
+        }
+    }
+
+    @Test
+    fun `a bare url is auto-linked without swallowing the sentence punctuation after it`() {
+        val s = Markdown.inline("see https://x.test/a. done")
+        assertEquals("see https://x.test/a. done", s.text, "the text is untouched")
+        val link = s.getLinkAnnotations(0, s.length).single()
+        assertEquals("https://x.test/a", (link.item as LinkAnnotation.Url).url)
+        assertEquals("https://x.test/a", s.text.substring(link.start, link.end))
+    }
+
+    @Test
+    fun `an auto-linked url keeps its own parentheses and drops the one closing a sentence`() {
+        // Wikipedia-shaped URLs really do carry parens, and a URL written inside
+        // a parenthetical really does not own the closing one. Counting is the
+        // only thing that tells them apart.
+        assertEquals("https://x.test/a_(b)", firstUrl("(see https://x.test/a_(b))"))
+        assertEquals("https://x.test/a", firstUrl("(https://x.test/a)"))
+        assertEquals("http://h:8787/v1/ping", firstUrl("try http://h:8787/v1/ping!"))
+        assertEquals("https://x.test/a", firstUrl("https://x.test/a, then"))
+    }
+
+    @Test
+    fun `a url inside a code span is left as code, not linked`() {
+        val s = Markdown.inline("run `curl https://x.test/a` first")
+        assertTrue(s.getLinkAnnotations(0, s.length).isEmpty(), "code is quoted, not clicked")
+    }
+
+    @Test
+    fun `an image on its own line becomes an image block`() {
+        val b = Markdown.parse("here it is\n\n![a shot](/tmp/shot.png)\n")
+        val img = b.filterIsInstance<MdBlock.Image>().single()
+        assertEquals("/tmp/shot.png", img.src)
+        assertEquals("a shot", img.alt)
+        assertEquals(1, b.filterIsInstance<MdBlock.Paragraph>().size)
+    }
+
+    /**
+     * Half an image in the middle of a sentence has nowhere to draw — the
+     * paragraph is one text flow — so it degrades to what was written rather
+     * than to a link, which is what the `[` branch would have made of it.
+     */
+    @Test
+    fun `an image inside a paragraph stays literal text`() {
+        val p = Markdown.parse("look ![a](/tmp/x.png) there").single() as MdBlock.Paragraph
+        assertEquals("look ![a](/tmp/x.png) there", p.text.text)
+        assertTrue(p.text.getLinkAnnotations(0, p.text.length).isEmpty())
+    }
+
+    private fun firstUrl(src: String): String? {
+        val s = Markdown.inline(src)
+        return (s.getLinkAnnotations(0, s.length).firstOrNull()?.item as? LinkAnnotation.Url)?.url
     }
 
     @Test
@@ -178,9 +271,16 @@ class TailRevisionTest {
         assertEquals("a_b_c", Markdown.plainInline("a_b_c"))
     }
 
+    /**
+     * The other half of decision 44, and the one the contract missed:
+     * `plainInline` DELEGATES to `inline`, so dropping the parens URL from a
+     * transcript link drops it from every chats-list snippet too. That is the
+     * wanted answer — a one-line row cannot carry a link, and a bare URL in it
+     * was noise — but it is a second visible change, not a side effect.
+     */
     @Test
     fun `a link keeps its label`() {
-        assertEquals("the runbook (https://x/y)", Markdown.plainInline("[the runbook](https://x/y)"))
+        assertEquals("the runbook", Markdown.plainInline("[the runbook](https://x/y)"))
         assertEquals("https://x/y", Markdown.plainInline("[https://x/y](https://x/y)"), "no point saying it twice")
     }
 

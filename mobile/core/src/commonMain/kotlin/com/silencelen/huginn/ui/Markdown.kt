@@ -1,11 +1,14 @@
 package com.silencelen.huginn.ui
 
 import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.LinkAnnotation
 import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.TextLinkStyles
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.withLink
 import androidx.compose.ui.text.withStyle
 
 /**
@@ -24,16 +27,31 @@ sealed interface MdBlock {
     data class Bullet(val text: AnnotatedString, val ordinal: String?) : MdBlock
     data class Code(val code: String, val lang: String?) : MdBlock
     data class Quote(val text: AnnotatedString) : MdBlock
+    /**
+     * `![alt](src)` standing alone on a line. `src` is whatever was written —
+     * a host path, an uploads path, or a URL — because this parser has no way to
+     * resolve one and the renderer is the thing that knows which of those it can
+     * fetch. A src it cannot draw falls back to [alt] as ordinary prose.
+     */
+    data class Image(val src: String, val alt: String) : MdBlock
     data object Rule : MdBlock
 }
 
 object Markdown {
 
-    fun parse(src: String): List<MdBlock> {
+    /**
+     * @param linkStyles how a link is painted. A parameter rather than a constant
+     * because the colour is the theme's — `:core` has no theme — and null keeps
+     * the old signature working for every caller that renders text with no
+     * colours at all ([plainInline] and the chats-list snippets).
+     */
+    fun parse(src: String, linkStyles: TextLinkStyles? = null): List<MdBlock> {
         val out = mutableListOf<MdBlock>()
         val lines = src.replace("\r\n", "\n").split("\n")
         var i = 0
         val para = StringBuilder()
+
+        fun inline(s: String) = inline(s, linkStyles)
 
         fun flushPara() {
             if (para.isNotBlank()) out.add(MdBlock.Paragraph(inline(para.toString().trim())))
@@ -59,6 +77,17 @@ object Markdown {
                 }
                 line.isBlank() -> { flushPara(); i++ }
                 RULE.matches(line.trim()) -> { flushPara(); out.add(MdBlock.Rule); i++ }
+                // An image is a BLOCK only when it is the whole line. One in the
+                // middle of a sentence has nowhere to draw — a paragraph is a
+                // single text flow — so [inline] leaves that one as it was
+                // written, which is the same degrade-to-literal rule as the rest
+                // of this parser.
+                IMAGE_LINE.matches(line.trim()) -> {
+                    flushPara()
+                    val m = IMAGE_LINE.find(line.trim())!!
+                    out.add(MdBlock.Image(m.groupValues[2].trim(), m.groupValues[1].trim()))
+                    i++
+                }
                 HEADING.matches(line) -> {
                     flushPara()
                     val m = HEADING.find(line)!!
@@ -96,6 +125,42 @@ object Markdown {
     private val QUOTE = Regex("^>\\s?(.*)$")
     private val RULE = Regex("^(-{3,}|\\*{3,}|_{3,})$")
     private val CONT = Regex("^\\s{2,}\\S.*$")
+    private val IMAGE_LINE = Regex("^!\\[([^\\]]*)\\]\\(([^()]+)\\)$")
+
+    /**
+     * The schemes a label is allowed to become a clickable link for.
+     *
+     * ⚠ THE SECURITY LINE OF THIS FILE, and the reason it is an allowlist rather
+     * than a denylist. This text comes from a model, and both shells hand a link
+     * click to the operating system. `huginn://` is the desktop's own scheme —
+     * fingerprint-gated precisely because it is reachable from outside — and a
+     * clickable one in an answer would walk straight through that gate. `file:`
+     * reads the disk, `javascript:` is self-explanatory, and `mailto:` opens a
+     * composer nobody asked for. Everything that is not http(s) renders as the
+     * label it was written with and is simply not a link.
+     */
+    private val LINK_SCHEMES = setOf("http", "https")
+
+    /** Whether [url] may become a link span. See [LINK_SCHEMES]. */
+    fun isLinkable(url: String): Boolean {
+        val t = url.trim()
+        val colon = t.indexOf(':')
+        if (colon <= 0) return false
+        val scheme = t.substring(0, colon).lowercase()
+        if (scheme !in LINK_SCHEMES) return false
+        return t.length > colon + 3 && t.regionMatches(colon, "://", 0, 3)
+    }
+
+    /** What a link looks like when the caller named no colours: underlined, as it always was. */
+    private val PLAIN_LINK_STYLES = TextLinkStyles(
+        style = SpanStyle(textDecoration = androidx.compose.ui.text.style.TextDecoration.Underline),
+    )
+
+    /** `<` `>` `"` and a backtick end a URL; so does any whitespace. */
+    private const val URL_STOP = "<>\"`"
+
+    /** Trailing characters that belong to the sentence, not to the URL. */
+    private const val URL_TRAILING = ".,;:!?'"
 
     /**
      * The same inline markdown as [inline], with the markers REMOVED and nothing
@@ -124,8 +189,15 @@ object Markdown {
     /**
      * Inline spans: `code`, **bold**, *italic*, ~~strike~~ and [text](url).
      * Scanned in one pass so a marker inside a code span is left alone.
+     *
+     * A `[label](url)` becomes a REAL link annotation carrying the URL, and the
+     * rendered text is the label alone — the appended `" (url)"` this used to
+     * write is gone (decision 44). A bare `https://…` in prose is auto-linked in
+     * place. Both are subject to [isLinkable]; a refused URL leaves the label as
+     * ordinary text rather than hiding it.
      */
-    fun inline(src: String): AnnotatedString = buildAnnotatedString {
+    fun inline(src: String, linkStyles: TextLinkStyles? = null): AnnotatedString = buildAnnotatedString {
+        val styles = linkStyles ?: PLAIN_LINK_STYLES
         var i = 0
         while (i < src.length) {
             val c = src[i]
@@ -168,29 +240,103 @@ object Markdown {
                         i = end + 2
                     } else { append(c); i++ }
                 }
+                // `![alt](src)` inside a paragraph: left exactly as written. The
+                // block form is handled by [parse]; this branch exists so the `[`
+                // branch below cannot turn half an image into a link.
+                c == '!' && i + 1 < src.length && src[i + 1] == '[' -> {
+                    val span = imageSpan(src, i)
+                    if (span > i) { append(src.substring(i, span)); i = span } else { append(c); i++ }
+                }
                 c == '[' -> {
                     val close = src.indexOf(']', i)
                     if (close > i && close + 1 < src.length && src[close + 1] == '(') {
-                        val paren = src.indexOf(')', close)
+                        val paren = destEnd(src, close + 1)
                         if (paren > close) {
                             val label = src.substring(i + 1, close)
-                            val url = src.substring(close + 2, paren)
-                            // The label carries the meaning on a phone; the URL is
-                            // appended only when it adds information.
-                            withStyle(SpanStyle(textDecoration = androidx.compose.ui.text.style.TextDecoration.Underline)) {
+                            val url = src.substring(close + 2, paren).trim()
+                            // The label carries the meaning; the URL is the click
+                            // target and the hover/long-press reveal, not prose.
+                            if (isLinkable(url)) {
+                                withLink(LinkAnnotation.Url(url, styles = styles)) { append(label) }
+                            } else {
                                 append(label)
-                            }
-                            if (url.isNotBlank() && url != label) {
-                                append(" (")
-                                append(url)
-                                append(")")
                             }
                             i = paren + 1
                         } else { append(c); i++ }
                     } else { append(c); i++ }
                 }
+                // A bare URL in prose. The boundary rules are the whole trick:
+                // a sentence's full stop is not part of the address, and a URL
+                // written inside a parenthetical does not own the closing paren —
+                // but a URL that carries its own balanced parens does.
+                (c == 'h' || c == 'H') && startsUrl(src, i) -> {
+                    val end = urlEnd(src, i)
+                    val url = src.substring(i, end)
+                    if (isLinkable(url)) {
+                        withLink(LinkAnnotation.Url(url, styles = styles)) { append(url) }
+                    } else {
+                        append(url)
+                    }
+                    i = end
+                }
                 else -> { append(c); i++ }
             }
         }
+    }
+
+    /** End index (exclusive) of a complete `![alt](src)` at [at], or [at] if there is not one. */
+    private fun imageSpan(src: String, at: Int): Int {
+        val close = src.indexOf(']', at + 1)
+        if (close < at + 2) return at
+        if (close + 1 >= src.length || src[close + 1] != '(') return at
+        val paren = destEnd(src, close + 1)
+        return if (paren > close) paren + 1 else at
+    }
+
+    /**
+     * Index of the `)` closing the destination that opens at [from], or -1.
+     *
+     * Counts depth rather than taking the first `)`: `[x](javascript:alert(1))`
+     * otherwise ends one character early, and the leftover `)` lands in the
+     * rendered prose — which is exactly how a refused URL still managed to look
+     * like a rendering bug.
+     */
+    private fun destEnd(src: String, from: Int): Int {
+        var depth = 0
+        var k = from
+        while (k < src.length) {
+            when (src[k]) {
+                '(' -> depth++
+                ')' -> { depth--; if (depth == 0) return k }
+                '\n' -> return -1
+            }
+            k++
+        }
+        return -1
+    }
+
+    private fun startsUrl(src: String, at: Int): Boolean {
+        val isUrl = src.startsWith("http://", at, ignoreCase = true) ||
+            src.startsWith("https://", at, ignoreCase = true)
+        if (!isUrl) return false
+        // Not mid-word: `foohttps://x` is not an address, it is a typo.
+        val prev = if (at == 0) null else src[at - 1]
+        return prev == null || !(prev.isLetterOrDigit() || prev == '/' || prev == '@')
+    }
+
+    private fun urlEnd(src: String, at: Int): Int {
+        var j = at
+        while (j < src.length && !src[j].isWhitespace() && src[j] !in URL_STOP) j++
+        while (j > at) {
+            val ch = src[j - 1]
+            if (ch in URL_TRAILING) { j--; continue }
+            if (ch == ')' || ch == ']') {
+                val open = if (ch == ')') '(' else '['
+                val seg = src.substring(at, j)
+                if (seg.count { it == ch } > seg.count { it == open }) { j--; continue }
+            }
+            break
+        }
+        return j
     }
 }
