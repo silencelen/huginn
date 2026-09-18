@@ -49,15 +49,39 @@ function _Huginn-TmuxTarget { param([string]$Name) return "=$Name" }
 # Base64 for the same reason as the -p/-y path below: PS 5.1 mangles embedded
 # double quotes when marshalling to a native exe, and this command carries both
 # quotes and a $(...) that must be evaluated on the host.
-# Returns the raw body on success (possibly empty) or $null on any HTTP error /
-# unreachable daemon, which callers use to fall back.
+#
+# NOT `curl -sf`, WHICH THREW THE ANSWER AWAY. -f discards the response BODY on
+# every HTTP >= 400, collapsing four different refusals into one failure: `huginn
+# end` printed "is huginn-appd running? is the session a live Claude pane?" -
+# naming two causes that are both fine - for the daemon's 409 "answer the waiting
+# question first", for the 409 "no Claude state recorded ... pass force", for a
+# 404, and for a 500 "tmux: ...". The Kotlin client sets expectSuccess = false
+# for exactly this reason.
+#
+# The status rides home on its own last line, so one ssh still answers both
+# questions. Returns @{ Reached; Code; Body }: Reached is $false only when curl
+# never CONNECTED (code 000) or ssh itself failed, and that is the ONLY case in
+# which a caller may fall back to raw tmux.
 function _Huginn-Appd {
-  param([string]$H, [string]$Method, [string]$Path)
-  $remote = 'curl -sf -X ' + $Method + ' -H "Authorization: Bearer $(cat /etc/huginn-appd/token 2>/dev/null)" "http://127.0.0.1:8787' + $Path + '"'
+  param([string]$H, [string]$Method, [string]$Path, [string]$Body)
+  $data = if ($Body) { " -H 'Content-Type: application/json' --data '" + $Body + "'" } else { '' }
+  $remote = 'curl -s -w "\n%{http_code}" -X ' + $Method + $data + ' -H "Authorization: Bearer $(cat /etc/huginn-appd/token 2>/dev/null)" "http://127.0.0.1:8787' + $Path + '"'
   $b64 = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($remote))
   $out = ssh -T -o BatchMode=yes -o ConnectTimeout=10 $H "echo $b64 | base64 -d | bash -s" 2>$null
-  if ($LASTEXITCODE -ne 0) { return $null }
-  return ($out -join '')
+  if ($LASTEXITCODE -ne 0) { return [pscustomobject]@{ Reached = $false; Code = ''; Body = '' } }
+  $lines = @($out)
+  $code = if ($lines.Count) { ([string]$lines[-1]).Trim() } else { '' }
+  $body = if ($lines.Count -gt 1) { ($lines[0..($lines.Count - 2)] -join '') } else { '' }
+  return [pscustomobject]@{ Reached = ($code -ne '000' -and $code -ne ''); Code = $code; Body = $body }
+}
+# The daemon's own sentence out of an error body ({"error":"..."}), or ''.
+function _Huginn-AppdError {
+  param([string]$Body)
+  if (-not $Body) { return '' }
+  try { $j = $Body | ConvertFrom-Json; if ($j.error) { return [string]$j.error } } catch {}
+  $m = [regex]::Match($Body, '"error"\s*:\s*"([^"]*)"')
+  if ($m.Success) { return $m.Groups[1].Value }
+  return ''
 }
 
 # --- desktop download links ---
@@ -396,8 +420,9 @@ function huginn {
   huginn list | ls            list sessions + attach status
   huginn status | st          health: uptime, auth, sessions, disk
   huginn rename <old> <new>   rename a session (alias: mv)
-  huginn end <name>           soft end: ask Claude to wrap up + commit, then
+  huginn end <name> [--force] soft end: ask Claude to wrap up + commit, then
                               (if auto-end is on) end it once it goes idle
+                              (--force: send it into a pane with no Claude state)
   huginn kill <name>          hard end: stop the session now
   huginn archive <name>       end it for good and keep the way back: the title,
                               the cwd, a copy of the transcript and the exact
@@ -783,24 +808,53 @@ function huginn {
     # SessionEnd hook never fires on a kill). Fall back to tmux when the daemon is
     # unreachable - kill must work even when appd is down.
     # '=' anchor on the fallback: without it 'huginn kill andvari' kills 'andvariautofill'.
-    if ($null -ne (_Huginn-Appd -H $H -Method 'DELETE' -Path "/v1/sessions/$kn")) {
+    #
+    # THE FALLBACK IS FOR AN UNREACHABLE DAEMON, NOT AN HTTP STATUS. DELETE has no
+    # 409 guard, so the realistic failure is a GLOBAL 401 - an unreadable or rotated
+    # token - with the daemon perfectly healthy. Falling back there killed the
+    # session with raw tmux, skipping clearSessionState / registryRemove /
+    # releaseSize, so a deliberately killed session came back on the next reboot
+    # restore and nothing ever said why.
+    $kr = _Huginn-Appd -H $H -Method 'DELETE' -Path "/v1/sessions/$kn"
+    if (-not $kr.Reached) {
+      ssh -T $H "tmux kill-session -t '$(_Huginn-TmuxTarget $kn)' && echo 'killed: $kn'"
+    } elseif ($kr.Code -match '^2') {
       Write-Host "killed: $kn"
     } else {
-      ssh -T $H "tmux kill-session -t '$(_Huginn-TmuxTarget $kn)' && echo 'killed: $kn'"
+      $m = _Huginn-AppdError $kr.Body
+      if (-not $m) { $m = "huginn-appd answered HTTP $($kr.Code)" }
+      Write-Host "huginn: could not kill '$kn': $m" -ForegroundColor Red
     }
   } elseif ($args[0] -eq 'end') {
-    if ($args.Count -lt 2) { Write-Host "usage: huginn end <name>"; return }
+    if ($args.Count -lt 2) { Write-Host "usage: huginn end <name> [--force]"; return }
     if (-not (_Huginn-ValidName $args[1])) { Write-Host "huginn: invalid session name '$($args[1])' (use lowercase letters, digits, _ and -; no dots, spaces or *)" -ForegroundColor Red; return }
     $en = _Huginn-CanonName $args[1]
+    # --force is the answer to one specific refusal, and it used to be UNREACHABLE:
+    # neither client sent a request body and `end` parsed no flags, so the daemon's
+    # "pass force to send anyway" named something nobody could do.
+    $force = ''
+    if ($args.Count -ge 3) {
+      if ($args[2] -eq '--force') { $force = '{"force":true}' }
+      else { Write-Host "usage: huginn end <name> [--force]"; return }
+    }
     # Soft end: ask Claude to wrap up (finish, commit, prepare to end) and - when
     # auto-end is on for the host - end the session once it settles. This is a DAEMON
     # feature (it types into the pane and watches state), so there is no tmux fallback;
     # the phrase is whatever the host is configured to send.
-    $r = _Huginn-Appd -H $H -Method 'POST' -Path "/v1/sessions/$en/soft-end"
-    if ($null -eq $r) { Write-Host "huginn: soft-end failed for '$en' (is huginn-appd running? is the session a live Claude pane?)" -ForegroundColor Red; return }
+    $r = _Huginn-Appd -H $H -Method 'POST' -Path "/v1/sessions/$en/soft-end" -Body $force
+    if (-not $r.Reached) {
+      Write-Host "huginn: could not reach huginn-appd on $H - a soft-end is a daemon feature, so there is no tmux fallback" -ForegroundColor Red; return
+    }
+    if ($r.Code -notmatch '^2') {
+      $m = _Huginn-AppdError $r.Body
+      if (-not $m) { $m = "huginn-appd answered HTTP $($r.Code)" }
+      Write-Host "huginn: could not end '$en': $m" -ForegroundColor Red
+      if ($m -match 'force') { Write-Host "        send it anyway with: huginn end $en --force" }
+      return
+    }
     $phrase = 'wrap-up phrase'; $auto = ''
     try {
-      $j = $r | ConvertFrom-Json
+      $j = $r.Body | ConvertFrom-Json
       if ($j.phrase) { $phrase = $j.phrase }
       if ($j.auto)   { $auto = ' (auto-ends when it goes idle)' }
     } catch {}

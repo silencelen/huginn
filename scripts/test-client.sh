@@ -270,6 +270,128 @@ cc_try build.box >/dev/null 2>&1; CC_RC=$?
   && ok "cc: a dotted name is refused with exit 2 and never reaches tmux" \
   || bad "cc: 'build.box' exited $CC_RC, tmux saw: $(cat "$CCT/log")"
 
+echo "[5c/8] the daemon's own refusal survives the trip home"
+# ⚠ WHY: `curl -sf` discards the response body on every HTTP >= 400 and exits 22,
+# so four different refusals arrived as ONE exit code and `huginn end` answered
+# all of them with "is huginn-appd running? is the session a live Claude pane?" -
+# two causes that are both fine when the daemon is saying "answer the waiting
+# question first". `huginn kill` was worse: DELETE has no 409 guard, so the
+# realistic case is a GLOBAL 401 (rotated or unreadable token) with the daemon
+# up, where the bare tmux fallback skipped clearSessionState/registryRemove and
+# the killed session came back on the next reboot restore.
+#
+# Driven against a REAL curl: the stub ssh runs the command the client actually
+# composed, with the daemon address and the token PATH rewritten to this lane's
+# own stub and a throwaway token file. So this asserts the composed request and
+# the reply handling together, not a re-implementation of either.
+APT=$(mktemp -d); STUB_DIRS+=("$APT")
+printf 'gate-token\n' > "$APT/token"
+AP_PF="$APT/appd.port"
+python3 - "$AP_PF" "${HUGINN_TEST_APPD_PORT:-0}" <<'APSTUB' >/dev/null 2>&1 &
+import json, sys
+from http.server import BaseHTTPRequestHandler, HTTPServer
+class H(BaseHTTPRequestHandler):
+    def _send(self, code, obj):
+        # Compact, exactly like the daemon's JSON.stringify: the sh client reads
+        # `phrase` with sed, and a stub that pretty-printed would test a shape
+        # appd never sends.
+        b = json.dumps(obj, separators=(",", ":")).encode()
+        self.send_response(code); self.send_header("content-type", "application/json")
+        self.send_header("content-length", str(len(b))); self.end_headers(); self.wfile.write(b)
+    def do_POST(self):
+        n = int(self.headers.get("content-length") or 0)
+        body = json.loads(self.rfile.read(n) or b"{}") if n else {}
+        if self.path.startswith("/v1/sessions/attention/"):
+            self._send(409, {"error": "answer the waiting question first, then end the session"})
+        elif self.path.startswith("/v1/sessions/shell/"):
+            if body.get("force"):
+                self._send(200, {"ok": True, "phrase": "WRAPUP", "auto": True})
+            else:
+                self._send(409, {"error": "no Claude state recorded for this session - it may be a plain shell; pass force to send anyway"})
+        else:
+            self._send(200, {"ok": True, "phrase": "WRAPUP", "auto": True})
+    def do_DELETE(self):
+        if self.path.startswith("/v1/sessions/locked"):
+            self._send(401, {"error": "unauthorized"})
+        else:
+            self._send(200, {"ok": True})
+    def log_message(self, *a): pass
+srv = HTTPServer(("127.0.0.1", int(sys.argv[2])), H)
+with open(sys.argv[1], "w") as fh: fh.write(str(srv.server_port))
+srv.serve_forever()
+APSTUB
+AP_STUB=$!; STUB_PIDS+=("$AP_STUB")
+AP_PORT=$(stub_port "$AP_PF")
+if [ -z "${AP_PORT:-}" ]; then
+  skip "daemon-refusal checks (the stub never bound a port)"
+else
+  cat > "$APT/ssh" <<'APSSH'
+#!/usr/bin/env bash
+# What ssh would run on the host: the LAST argument. A base64 payload (the ps1
+# client marshals that way) is decoded first.
+cmd="${!#}"
+case "$cmd" in
+  *"base64 -d"*) cmd="$(sed -E 's/^echo ([A-Za-z0-9+/=]+).*/\1/' <<<"$cmd" | base64 -d)" ;;
+esac
+cmd="${cmd//127.0.0.1:8787/127.0.0.1:$APPD_PORT}"
+cmd="${cmd//\/etc\/huginn-appd\/token/$APPD_TOKEN}"
+printf '%s\n' "$cmd" >> "$SSH_LOG"
+eval "$cmd"
+APSSH
+  chmod +x "$APT/ssh"
+  # `kill` may legitimately fall back to raw tmux, and eval would then run the
+  # REAL one. Stubbed, and its invocation is itself an assertion below.
+  printf '#!/usr/bin/env bash\nprintf "tmux %%s\\n" "$*" >> "$SSH_LOG"\nexit 0\n' > "$APT/tmux"
+  chmod +x "$APT/tmux"
+  aemit () {   # $1 = the huginn command; $2 = the daemon port to aim ssh at
+    export SSH_LOG="$APT/log" APPD_TOKEN="$APT/token" APPD_PORT="${2:-$AP_PORT}"
+    : > "$SSH_LOG"
+    ( export PATH="$APT:$PATH"
+      . "$PWD/client/huginn.sh" >/dev/null 2>&1
+      eval "$1" ) >"$APT/out" 2>&1
+    cat "$APT/out"
+  }
+  AE=$(aemit 'huginn end attention')
+  grep -q "answer the waiting question first" <<<"$AE" \
+    && ok "sh: end repeats the daemon's 409, not a guess about the daemon being down" \
+    || bad "sh: end on a 409 said: $AE"
+  grep -q "is huginn-appd running" <<<"$AE" \
+    && bad "sh: end still blames the daemon for a refusal it issued itself" \
+    || ok "sh: and it no longer names two causes that are both fine"
+  AF=$(aemit 'huginn end shell')
+  grep -q "plain shell" <<<"$AF" && grep -q -- "--force" <<<"$AF" \
+    && ok "sh: the 'pass force' refusal names the flag that answers it" \
+    || bad "sh: end on the no-state 409 said: $AF"
+  AG=$(aemit 'huginn end shell --force')
+  grep -q "WRAPUP" <<<"$AG" \
+    && ok "sh: end --force is reachable and carries force to the daemon" \
+    || bad "sh: end --force said: $AG"
+  AK=$(aemit 'huginn kill locked')
+  grep -q "unauthorized" <<<"$AK" \
+    && ok "sh: kill on a 401 says what the daemon said" || bad "sh: kill on a 401 said: $AK"
+  grep -q '^tmux kill-session' "$APT/log" \
+    && bad "sh: kill fell back to raw tmux on an HTTP status - the session returns at reboot" \
+    || ok "sh: and it does NOT silently fall back to raw tmux"
+  AD=$(aemit 'huginn kill stranded' 1)
+  grep -q '^tmux kill-session' "$APT/log" \
+    && ok "sh: kill DOES fall back to tmux when nothing answered at all" \
+    || bad "sh: kill with no daemon sent: $(cat "$APT/log") / said: $AD"
+  if command -v pwsh >/dev/null 2>&1; then
+    pemit () { export SSH_LOG="$APT/log" APPD_TOKEN="$APT/token" APPD_PORT="${2:-$AP_PORT}"
+               : > "$SSH_LOG"
+               PATH="$APT:$PATH" pwsh -NoProfile -Command ". $PWD/client/huginn.ps1; $1" 2>&1 | tr -d '\r'; }
+    PE=$(pemit 'huginn end attention')
+    grep -q "answer the waiting question first" <<<"$PE" \
+      && ok "ps1: end repeats the daemon's 409 too" || bad "ps1: end on a 409 said: $PE"
+    PK=$(pemit 'huginn kill locked')
+    grep -q "unauthorized" <<<"$PK" && ! grep -q '^tmux kill-session' "$APT/log" \
+      && ok "ps1: kill on a 401 says so and keeps its hands off tmux" \
+      || bad "ps1: kill on a 401 said: $PK / tmux saw: $(cat "$APT/log")"
+  else
+    skip "ps1 daemon-refusal checks (no pwsh)"
+  fi
+fi
+
 echo "[6/8] desktop links come from GitHub, and reach it WITHOUT the host"
 # The whole point of the verb is that it works on a machine that cannot ssh here
 # (that is why it does not use /v1/desktop-kt, whose every route needs the token).
