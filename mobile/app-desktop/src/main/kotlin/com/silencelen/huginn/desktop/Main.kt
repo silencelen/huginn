@@ -113,7 +113,16 @@ fun main(args: Array<String>) {
     val trayState = TrayState()
     val notifier = Notifiers.choose(configDir, DesktopSettings.isPackaged(), trayState)
     println("[huginn] ${Notifiers.describe(notifier)}")
-    println("[huginn] ${SchemeRegistrar.register()}")
+    // ALSO to AppLog, not only to a stdout nobody on Windows ever sees: the
+    // packaged launcher is a GUI binary with no console attached, so for six
+    // weeks this line reported a half-finished registration into the void while
+    // toast buttons answered "don't know how to open the link huginn". In the log
+    // ring it rides along in "Copy diagnostics", which is where the next person
+    // to ask "why did that button do nothing" will look.
+    val schemeStatus = SchemeRegistrar.register()
+    println("[huginn] $schemeStatus")
+    if (schemeStatus.startsWith("scheme registration failed")) AppLog.warn("notify", schemeStatus)
+    else AppLog.info("notify", schemeStatus)
 
     // Named in the diagnostics report, because which path a notification took is
     // the first thing worth knowing when one did not arrive. Null for NoNotifier,

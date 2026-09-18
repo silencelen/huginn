@@ -114,6 +114,23 @@ grep -qF "WinShell::SetLnkAUMI $LNK" "$NSI" || {
   echo "REFUSING: $PLUGIN_DIR/WinShell.dll is missing — nothing can stamp the AUMID" >&2; exit 1; }
 echo "  toast identity: $KT_AUMID (app and installer agree)"
 
+# The AUMID decides whether a toast is SHOWN. This decides whether its BUTTONS do
+# anything. Both are one feature and both used to be half-missing; the AUMID half
+# was caught by a gate, the scheme half was caught by a field report six weeks
+# later ("don't know how to open the link huginn"). So it gets a gate too.
+#
+# Source-level, and deliberately checking the one key that was absent — the
+# installer had written the other two since forever, which is exactly the state
+# that produces the dialog: a scheme claimed with nothing registered to run it.
+grep -qF 'WriteRegStr HKCU "Software\Classes\huginn\shell\open\command"' "$NSI" || {
+  echo "REFUSING: $NSI does not register huginn://shell/open/command — every toast button would answer 'don't know how to open the link huginn'" >&2
+  exit 1; }
+grep -qF 'WriteRegStr HKCU "Software\Classes\huginn" "URL Protocol"' "$NSI" || {
+  echo "REFUSING: $NSI does not write the URL Protocol flag" >&2; exit 1; }
+grep -qF 'DeleteRegKey HKCU "Software\Classes\huginn"' "$NSI" || {
+  echo "REFUSING: $NSI registers huginn:// but never removes it" >&2; exit 1; }
+echo "  huginn:// scheme: installer registers and uninstaller removes it"
+
 # Never overwrite what is already live, and never publish BACKWARDS. Equality was
 # the original hazard — a client that has downloaded and verified 0.2.0 would
 # find different bytes under the same version and the same hash claim — but a
@@ -559,6 +576,17 @@ if [ "$LINUX_ONLY" = 0 ]; then
     INSTALLED="$WINEPREFIX/drive_c/users/$(id -un)/AppData/Local/Programs/huginn-desktop-kt"
     [ -f "$INSTALLED/huginn-desktop-kt.exe" ] || {
       echo "REFUSING: the installer did not put a launcher in $INSTALLED" >&2; exit 1; }
+
+    # READ THE REGISTRY THE INSTALLER JUST WROTE. The source gate above proves the
+    # instruction is in the .nsi; this proves it survived compilation and ran.
+    # wine keeps HKCU in a plain text file, so no wine invocation is needed and
+    # this cannot hang the release.
+    SCHEME_CMD=$(sed -n '/^\[Software\\\\Classes\\\\huginn\\\\shell\\\\open\\\\command\]/,/^$/p' \
+      "$WINEPREFIX/user.reg" | sed -n 's/^@="\(.*\)"$/\1/p' | head -1)
+    [ -n "$SCHEME_CMD" ] || {
+      echo "REFUSING: the installed app has no huginn:// open command in HKCU — its toast buttons would answer 'don't know how to open the link huginn'" >&2
+      exit 1; }
+    echo "  huginn:// open command registered: $SCHEME_CMD"
 
     # A settings file it wrote itself is the proof. "The process is still alive"
     # is not: a JVM that failed to find its main class is alive too. The client
