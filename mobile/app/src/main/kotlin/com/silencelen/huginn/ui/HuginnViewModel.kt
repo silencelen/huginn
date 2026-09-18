@@ -108,6 +108,16 @@ internal fun reattachPlan(meta: ChatDetail?): Reattach? {
 }
 
 /**
+ * Whether a chat screen's teardown is still tearing down the CURRENT chat.
+ *
+ * Pure for the same reason [pageStillWanted] is: the check was simply absent.
+ * A null [disposingChat] is an unconditional detach — leaving the chat surface
+ * rather than hopping between two of them.
+ */
+internal fun detachWanted(disposingChat: String?, openNow: String?): Boolean =
+    disposingChat == null || disposingChat == openNow
+
+/**
  * Whether a history page that has just arrived still belongs on the screen.
  *
  * Pure and top-level beside [reattachPlan] and [applyAutoSwitch], because the
@@ -3613,7 +3623,16 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
     private var streamJob: Job? = null
     private var chatPollJob: Job? = null
 
+    /**
+     * The chat this view model is addressing. Set SYNCHRONOUSLY at the top of
+     * [openChat], before its first suspension, so a teardown arriving from the
+     * outgoing screen's recomposition can tell whether it is still the one on
+     * screen — see [detachStream].
+     */
+    private var openChatId: String? = null
+
     fun openChat(id: String) {
+        openChatId = id
         _chatPage.value = null
         _streamingText.value = null
         _activeTool.value = null
@@ -3648,6 +3667,11 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
             runCatching { client.chatTranscript(id) }
                 .onSuccess { _chatPage.value = it; _chatError.value = null }
                 .onFailure { e ->
+                    // A cancellation is this job being replaced or the screen
+                    // going away, not a chat that would not load. Drawn as one,
+                    // it opened a perfectly good chat under "Could not load this
+                    // conversation / StandaloneCoroutine was cancelled".
+                    if (e is CancellationException) return@onFailure
                     // 409 is the only failure that MEANS "nothing here yet" — the
                     // chat exists but has never run. Anything else is a failure to
                     // read history that exists, and must not be drawn as its absence.
@@ -3843,8 +3867,23 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    /** Detaches the stream WITHOUT cancelling the server-side run. */
-    fun detachStream() {
+    /**
+     * Detaches the stream WITHOUT cancelling the server-side run.
+     *
+     * ⚠ PASS THE CHAT BEING TORN DOWN. Every chat-to-chat hop calls openChat(new)
+     * and then moves the destination in one callback, while the recomposition
+     * that disposes the OUTGOING DisposableEffect(id) waits for the next vsync —
+     * 8-16 ms, and a warm daemon GET measures 1-2 ms. So the new chat had already
+     * loaded when the old screen's onDispose fired and wiped _chatPage, _sending
+     * and _streamingText, leaving an indefinite spinner with no "Try again"; if
+     * the target was mid-run its reattach went too. A teardown keyed to no chat
+     * cannot tell that it is tearing down someone else's.
+     *
+     * Null [chat] means "no chat at all" — leaving the chat surface entirely.
+     */
+    fun detachStream(chat: String? = null) {
+        if (!detachWanted(chat, openChatId)) return
+        openChatId = null
         streamJob?.cancel()
         streamJob = null
         chatPollJob?.cancel()

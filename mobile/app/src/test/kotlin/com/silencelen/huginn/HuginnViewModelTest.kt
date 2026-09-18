@@ -25,6 +25,7 @@ import com.silencelen.huginn.ui.SelectionMode
 import com.silencelen.huginn.ui.SelectionStaging
 import com.silencelen.huginn.ui.applyAutoSwitch
 import com.silencelen.huginn.ui.pageStillWanted
+import com.silencelen.huginn.ui.detachWanted
 import com.silencelen.huginn.ui.SendQueue
 import com.silencelen.huginn.ui.StreamPicker
 import com.silencelen.huginn.ui.fetchStreamAgents
@@ -209,6 +210,21 @@ class HuginnViewModelTest {
             "Rejected by huginn: check the token in Settings",
             errorTextFor(HuginnClient.HuginnException(401, "Unauthorized")),
         )
+    }
+
+    // --------------------------------------- #73 a teardown tears down its own chat
+
+    @Test
+    fun `the outgoing chat's teardown does not blank the chat just opened`() {
+        // openChat(B) runs, then the outgoing DisposableEffect(A) disposes on the
+        // next vsync — 8-16 ms later, while a warm daemon GET is 1-2 ms. A
+        // teardown keyed to no chat wiped B's page, its send flag and its live
+        // stream, leaving an indefinite spinner.
+        assertFalse(detachWanted("chat-A", "chat-B"))
+        assertTrue(detachWanted("chat-B", "chat-B"))
+        // Leaving the chat surface entirely is unconditional.
+        assertTrue(detachWanted(null, "chat-B"))
+        assertTrue(detachWanted(null, null))
     }
 
     // ---------------------------------------- #72 a late page belongs to its session
