@@ -76,6 +76,14 @@ class SendQueueTest {
     }
 
     @Test
+    fun `a question waiting on the screen holds a send, and says so`() {
+        assertEquals(
+            "Queued · waiting on a question in the pane (1 waiting)",
+            SendQueue.line(TypingState(queued = 1, blockedBy = "attention")),
+        )
+    }
+
+    @Test
     fun `an error is shown verbatim and wins over the count`() {
         // The daemon knows why it could not deliver; a paraphrase here would be
         // this client guessing about the other end of a queue it does not own.
