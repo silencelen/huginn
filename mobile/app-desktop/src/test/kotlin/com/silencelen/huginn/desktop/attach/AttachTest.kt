@@ -1,8 +1,26 @@
 package com.silencelen.huginn.desktop.attach
 
+import com.silencelen.huginn.data.HuginnClient
+import com.silencelen.huginn.ui.AttachBatch
 import com.silencelen.huginn.ui.AttachmentText
+import com.silencelen.huginn.ui.PANE_SEPARATOR
+import com.silencelen.huginn.ui.composeMessage
+import io.ktor.client.engine.mock.MockEngine
+import io.ktor.client.engine.mock.respond
+import io.ktor.http.HttpStatusCode
+import io.ktor.http.headersOf
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.runBlocking
+import java.awt.datatransfer.DataFlavor
+import java.awt.datatransfer.Transferable
+import java.awt.image.BufferedImage
+import java.io.File
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 /**
@@ -111,6 +129,17 @@ class ComposeMessageTest {
         // would send half the message and strand the marker on the next prompt.
         assertTrue('\n' !in line, "no newline may reach a tmux pane mid-message")
         assertTrue(line.startsWith("look at this "))
+    }
+
+    @Test
+    fun `and still does not with THREE markers on the line`() {
+        // THE MULTI-ATTACH VERSION OF THE SAME BUG. Joining the text to the first
+        // marker with a space while joining marker TO marker with "\n" reads
+        // correct for one attachment and submits half a message for three.
+        val markers = listOf("/tmp/u/a.jpg", "/tmp/u/b.jpg", "/tmp/u/c.jpg").map(AttachmentText::marker)
+        val line = composeMessage("look at these", markers, PANE_SEPARATOR)
+        assertTrue('\n' !in line, "no newline may reach a tmux pane mid-message")
+        assertEquals(3, AttachmentText.imagePaths(line).size, "all three ride the one line")
     }
 }
 
@@ -276,5 +305,190 @@ class ImageTranscodeTest {
         // a reader, and a null here is what becomes an honest chip instead of an
         // upload Claude cannot open.
         assertEquals(null, ImageTranscode.fromBytes("this is not an image".toByteArray()))
+    }
+}
+
+/**
+ * Reading a multi-file drop out of an AWT [Transferable].
+ *
+ * `files(t).firstOrNull()` was the whole multi-file drop bug: the OS hands over
+ * the entire list and eight of nine dragged files were discarded at the call
+ * site, silently.
+ */
+class AwtTransferFilesTest {
+
+    /** Three files, offered exactly the way a file manager offers a drop. */
+    private class FileListTransferable(private val files: List<File>) : Transferable {
+        override fun getTransferDataFlavors(): Array<DataFlavor> =
+            arrayOf(DataFlavor.javaFileListFlavor, DataFlavor.stringFlavor)
+
+        override fun isDataFlavorSupported(flavor: DataFlavor): Boolean =
+            flavor == DataFlavor.javaFileListFlavor || flavor == DataFlavor.stringFlavor
+
+        override fun getTransferData(flavor: DataFlavor): Any =
+            if (flavor == DataFlavor.javaFileListFlavor) files
+            // The string flavour a file manager ALSO offers for the same drop.
+            // Taking it would attach the paths as prose instead of the files.
+            else files.joinToString("\n") { it.absolutePath }
+    }
+
+    /** What a controller would have been told, without needing a client or a socket. */
+    private class RecordingSink : AttachSink {
+        val files = mutableListOf<File>()
+        var images = 0
+        override fun attachFiles(files: List<File>) { this.files += files }
+        override fun attachImage(image: BufferedImage, name: String) { images++ }
+        override fun attachImageBytes(bytes: ByteArray, name: String) { images++ }
+    }
+
+    private val three = listOf(File("/tmp/one.txt"), File("/tmp/two.pdf"), File("/tmp/three.png"))
+
+    @Test
+    fun `the whole file list comes back, in drop order`() {
+        val got = AwtTransfer.files(FileListTransferable(three))
+        assertEquals(3, got.size, "the OS handed over three; all three must survive")
+        assertEquals(listOf("one.txt", "two.pdf", "three.png"), got.map { it.name })
+    }
+
+    @Test
+    fun `and the whole list reaches the sink, not its first entry`() {
+        val sink = RecordingSink()
+        val took = AwtTransfer.consume(FileListTransferable(three), sink) { }
+        assertTrue(took, "a file drop is consumed")
+        assertEquals(listOf("one.txt", "two.pdf", "three.png"), sink.files.map { it.name })
+        assertEquals(0, sink.images, "files win over every other flavour on the same drop")
+    }
+
+    @Test
+    fun `a text-only transferable still falls through to the draft`() {
+        val t = object : Transferable {
+            override fun getTransferDataFlavors() = arrayOf(DataFlavor.stringFlavor)
+            override fun isDataFlavorSupported(flavor: DataFlavor) = flavor == DataFlavor.stringFlavor
+            override fun getTransferData(flavor: DataFlavor): Any = "a quoted paragraph"
+        }
+        var dropped: String? = null
+        assertTrue(AwtTransfer.consume(t, RecordingSink()) { dropped = it })
+        assertEquals("a quoted paragraph", dropped)
+    }
+}
+
+/**
+ * The batch contract: order, partial failure, and ONE settle budget.
+ *
+ * Driven through a real [AttachmentController] against a mock engine, because the
+ * three things that matter here — that order survives uploads finishing out of
+ * order, that a failure does not take the batch with it, and that the wait is
+ * whole-batch — are all properties of the controller rather than of a pure
+ * function it calls.
+ */
+class AttachmentBatchTest {
+
+    // runBlocking, NOT runTest, for everything that calls take(): runTest's
+    // virtual clock fast-forwards the 20s settle budget the instant the test
+    // coroutine idles, which cancels uploads that are merely running on another
+    // dispatcher and makes a clean batch look like a wholly failed one.
+    private val BASE = "http://h"
+
+    /** A file with a known name, so the marker can be read back by it. */
+    private fun tempFile(name: String, size: Int = 32): File =
+        File(System.getProperty("java.io.tmpdir"), "w2attach-$name").apply {
+            writeBytes(ByteArray(size) { 'x'.code.toByte() })
+            deleteOnExit()
+        }
+
+    /** Uploads succeed and echo the name back as a path, except [failing]. */
+    private fun client(failing: Set<String> = emptySet()) = HuginnClient(
+        baseUrlProvider = { BASE },
+        tokenProvider = { "t" },
+        engine = MockEngine { request ->
+            val name = request.url.parameters["name"].orEmpty()
+            if (name in failing) {
+                respond("""{"error":"that type is not allowed"}""", HttpStatusCode.UnsupportedMediaType,
+                    headersOf("Content-Type", listOf("application/json")))
+            } else {
+                respond("""{"ok":true,"path":"/up/$name","bytes":32,"readable":true}""",
+                    HttpStatusCode.OK, headersOf("Content-Type", listOf("application/json")))
+            }
+        },
+    )
+
+    @Test
+    fun `markers come back in attach order, one per file`() = runBlocking {
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.Unconfined)
+        val c = AttachmentController(client(), scope)
+        val files = listOf(tempFile("a.txt"), tempFile("b.txt"), tempFile("c.txt"))
+
+        c.attachFiles(files)
+        val taken = c.take()
+
+        // THE SIZE IS THE ASSERTION. The slot this replaced returned one marker
+        // for a three-file drop and read as working.
+        assertEquals(3, taken.markers.size, "three files, three markers")
+        assertEquals(
+            listOf("w2attach-a.txt", "w2attach-b.txt", "w2attach-c.txt"),
+            taken.markers.map { it.substringAfter("/up/").substringBefore(" ") },
+            "intake order is marker order",
+        )
+        assertTrue(taken.failed.isEmpty())
+        assertTrue(c.items.value.isEmpty(), "taking clears the composer")
+    }
+
+    @Test
+    fun `a failed upload is named in the composer line and the rest still send`() = runBlocking {
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.Unconfined)
+        val c = AttachmentController(client(failing = setOf("w2attach-bad.txt")), scope)
+        c.attachFiles(listOf(tempFile("ok1.txt"), tempFile("bad.txt"), tempFile("ok2.txt")))
+
+        val taken = c.take()
+
+        assertEquals(2, taken.markers.size, "the two that landed still go")
+        assertEquals(listOf("w2attach-bad.txt"), taken.failed, "and the one that did not is named")
+        val line = c.failure.value
+        assertTrue(line != null && "w2attach-bad.txt" in line, "the composer says which: $line")
+        assertEquals(AttachBatch.failureLine(taken.failed, 3), line, "one wording, from :core")
+    }
+
+    @Test
+    fun `the cap is ten, and the eleventh is refused out loud`() = runBlocking {
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.Unconfined)
+        val c = AttachmentController(client(), scope)
+        c.attachFiles((1..12).map { tempFile("f$it.txt") })
+
+        assertEquals(10, c.items.value.size, "ten is the cap on both shells")
+        assertTrue(c.failure.value!!.contains("2 left off"))
+    }
+
+    @Test
+    fun `the settle budget is whole-batch, not per item`() = runBlocking {
+        // Three uploads that are never coming back, and a 300ms budget. Per item
+        // this waits 900ms; as a batch it waits 300. At ten files that is the
+        // difference between 20 seconds and three minutes of held composer, which
+        // is exactly the wedged-socket case the timeout exists to prevent.
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+        val jobs = (1..3).map { scope.launch { kotlinx.coroutines.delay(60_000) } }
+        val started = System.currentTimeMillis()
+        val settled = settleAll(jobs, 300)
+        val took = System.currentTimeMillis() - started
+        jobs.forEach { it.cancel() }
+
+        assertTrue(!settled, "nothing settled")
+        assertTrue(took < 700, "one budget for the batch, not one each — waited ${took}ms")
+    }
+
+    @Test
+    fun `removing one chip leaves the others, by id`() = runBlocking {
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.Unconfined)
+        val c = AttachmentController(client(), scope)
+        c.attachFiles(listOf(tempFile("x.txt"), tempFile("y.txt"), tempFile("z.txt")))
+
+        val second = c.items.value[1].id
+        c.remove(second)
+
+        assertEquals(
+            listOf("w2attach-x.txt", "w2attach-z.txt"),
+            c.items.value.map { it.label },
+            "identity is the id, never the index",
+        )
+        assertNull(c.items.value.firstOrNull { it.id == second })
     }
 }
