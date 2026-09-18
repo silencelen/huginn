@@ -329,3 +329,32 @@ test('a BUSY watch stream keeps stamping its own client (#32/#41/#44)', async ()
     `a streaming client must be stamped by its own frames (${atConnect} -> ${after.checkIns})`);
   assert.equal(true, after.fresh, 'and must not read as a client that stopped checking in');
 });
+
+// ---------------------------------------- how a client proves this is a daemon
+
+test('every response carries X-Huginn-Appd, the 401 included (contract 2)', async () => {
+  // ⚠ WHAT THE HEADER IS FOR. The phone and desktop probe an address before
+  // handing it a root-equivalent bearer token, and `probe()` accepted "something
+  // answered" — so any HTTP responder on the LAN address the built-in route
+  // names was called huginn and auto-switch leaked the token to it (kcore
+  // #59/#78). The client side becomes an unauthenticated GET that must answer
+  // 401 with the daemon's own error shape; this header is the stronger marker it
+  // prefers when it is there, so it has to be on the UNAUTHENTICATED answer too.
+  // /v1/ping needs the bearer like everything else, so the UNAUTHENTICATED
+  // probe's whole answer is this 401 — which is exactly why the marker has to
+  // ride on it.
+  const unauth = await fetch(`${BASE}/v1/ping`);
+  assert.equal(401, unauth.status);
+  assert.match(unauth.headers.get('x-huginn-appd') || '', /^\d+\.\d+\.\d+$/,
+    'the refusal is the one response an un-enrolled client can see');
+  assert.deepEqual({ error: 'unauthorized' }, await unauth.json());
+
+  const ping = await fetch(`${BASE}/v1/ping`, { headers: { authorization: `Bearer ${token}` } });
+  assert.equal(200, ping.status);
+  assert.equal((await ping.json()).version, ping.headers.get('x-huginn-appd'),
+    'and it agrees with the version in the body');
+
+  const authed = await fetch(`${BASE}/v1/sessions`, { headers: { authorization: `Bearer ${token}` } });
+  assert.equal(200, authed.status);
+  assert.ok(authed.headers.get('x-huginn-appd'));
+});

@@ -8765,6 +8765,18 @@ const server = http.createServer(async (req, res) => {
   const p = u.pathname.replace(/\/+$/, '') || '/';
   res.on('finish', () => log(`${req.method} ${p} ${res.statusCode} ${Date.now() - t0}ms`));
 
+  // ⚠ ON EVERY RESPONSE, INCLUDING THE 401 (cross-batch contract 2). The
+  // clients' route probe has to be able to tell huginn-appd from ANY OTHER
+  // HTTP responder on a LAN address before it hands over a root-equivalent
+  // bearer token: `probe()` used to accept "something answered", so a printer
+  // or a router on 192.168.2.117:8787 was called a daemon and auto-switch
+  // leaked the token to it (kcore #59/#78). The probe becomes an
+  // unauthenticated GET that must come back 401 with the daemon's error shape;
+  // this header is the stronger marker the client prefers when it is present.
+  // `setHeader`, not writeHead: it then rides on every path out of this
+  // function, streamed artifacts and the auth refusal included.
+  res.setHeader('X-Huginn-Appd', VERSION);
+
   if (!authorized(req)) return sendErr(res, 401, 'unauthorized');
 
   try {
