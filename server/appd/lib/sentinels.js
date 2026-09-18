@@ -76,11 +76,20 @@ function arm(dir, name, reason, nowMs = Date.now()) {
   ensureDir(dir);
   const file = path.join(dir, name);
   const existing = readSentinel(file);
-  if (existing) return { name, since: existing.since, reason: existing.reason, created: false };
+  if (existing) {
+    return { name, since: existing.since, reason: existing.reason, by: existing.by, created: false };
+  }
   const since = Math.floor(nowMs);
-  const body = `${JSON.stringify({ reason: String(reason == null ? '' : reason), since })}\n`;
+  // ⚠ `by` IS WHAT MAKES THE ESCAPE HATCH REAL (#12). The tick has to keep
+  // reclaiming a sentinel a CRASHED daemon left armed — that is what the
+  // else-branch in writeSentinels is for — but it was reaping the operator's
+  // hand-`touch`ed STOP with it, because the two are indistinguishable from
+  // outside. A file this daemon wrote says so; a file somebody touched cannot,
+  // and that asymmetry is exactly the signal. Measured lifetimes for a
+  // hand-armed hold before this: 299 s idle, 23 ms after a settings PATCH.
+  const body = `${JSON.stringify({ reason: String(reason == null ? '' : reason), since, by: 'appd' })}\n`;
   writeAtomic(file, body);
-  return { name, since, reason: String(reason == null ? '' : reason), created: true };
+  return { name, since, reason: String(reason == null ? '' : reason), by: 'appd', created: true };
 }
 
 /**
@@ -132,11 +141,13 @@ function readSentinel(file) {
     return null;
   }
   let reason = '';
+  let by = null;
   let since = Math.floor(st.mtimeMs);
   try {
     const parsed = JSON.parse(fs.readFileSync(file, 'utf8'));
     if (parsed && typeof parsed === 'object') {
       if (typeof parsed.reason === 'string') reason = parsed.reason;
+      if (typeof parsed.by === 'string' && parsed.by) by = parsed.by;
       const stored = msOf(parsed.since);
       if (stored !== null) since = stored;
     }
@@ -144,10 +155,14 @@ function readSentinel(file) {
     // Armed by hand with `touch`, or half-written. Still armed — mtime is the
     // arming time and that is the whole reason the file carries one.
   }
-  return { since, reason };
+  // `by` stays null for a hand-armed file AND for one an older daemon wrote.
+  // Both are "not mine to reap", which is the safe side of that ambiguity: the
+  // worst case is a stale sentinel a human can delete, against the old worst
+  // case of a fleet-wide pause evaporating inside one tick.
+  return { since, reason, by };
 }
 
-/** { STOP: {since, reason} | null, 'STOP-FABLE': {since, reason} | null } */
+/** { STOP: {since, reason, by} | null, 'STOP-FABLE': {since, reason, by} | null } */
 function state(dir) {
   const out = {};
   for (const name of NAMES) out[name] = readSentinel(path.join(dir, name));
