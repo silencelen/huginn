@@ -732,10 +732,22 @@ private fun TabStrip(
         TabItem("Screen", current == SessionTab.SCREEN, dot = screenDot) { onSelect(SessionTab.SCREEN) }
         TabItem("Overview", current == SessionTab.OVERVIEW) { onSelect(SessionTab.OVERVIEW) }
         Box(Modifier.weight(1f))
+        // ⚠ A ROW, NOT A BOX. The slot takes MORE THAN ONE child — "Copy link"/
+        // "Copy N links" and "Copy screen" on the Screen tab, plus "Pages"/"Hide
+        // pages" whenever the panel fits — and a Box stacks its children on top of
+        // one another. At 1600px with pages available they painted in the same
+        // place: overlaid glyphs, and the click went to whichever won the hit test,
+        // so "Copy screen" could not be pressed at all. It only reproduced on a
+        // wide window, which is why it survived a narrow walk.
+        //
         // Out of the focus order: the Screen tab holds keyboard focus so live keys
         // reach the pane, and a button that took focus on click would silently stop
         // typing from working until the reader clicked the pane again.
-        Box(Modifier.focusProperties { canFocus = false }) { trailing() }
+        Row(
+            Modifier.focusProperties { canFocus = false },
+            horizontalArrangement = Arrangement.spacedBy(Space.hair),
+            verticalAlignment = Alignment.CenterVertically,
+        ) { trailing() }
     }
 }
 
