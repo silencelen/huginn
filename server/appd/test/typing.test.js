@@ -210,6 +210,27 @@ test('stateVerdict releases on an idle state stamped AFTER the send was queued',
   assert.equal(t.stateVerdict({ state: 'idle' }, at), null, 'no timestamp is no evidence');
 });
 
+test('stateVerdict reads a MILLISECOND stamp exactly (#7)', () => {
+  // ⚠ THE 999 ms THAT COULD NOT BE CROSSED. The hook stamped `ts` in seconds and
+  // this compared `sec * 1000 > at` against a millisecond `at`, so an idle
+  // written in the SAME wall-clock second as the enqueue could never release it
+  // — and when the transcript gate was blind at the same time (a final record
+  // larger than the 64 KB window), the automated send was dropped as 'timeout'
+  // ten minutes later. The hook writes milliseconds now; the unit is read off
+  // the magnitude so a state file written by an older hook still works.
+  const at = 1_757_900_000_500;                       // queued mid-second
+  assert.equal(t.stateVerdict({ state: 'idle', stateSinceMs: at + 1 }, at), 'release',
+    'one millisecond after the send was queued is after the send was queued');
+  assert.equal(t.stateVerdict({ state: 'idle', stateSinceMs: at - 1 }, at), null);
+  assert.equal(t.stateVerdict({ state: 'idle', stateSince: at + 1 }, at), 'release',
+    'a millisecond stamp arriving as stateSince is read as milliseconds');
+  // A legacy SECONDS stamp keeps the old, deliberately conservative reading:
+  // it may hold wrongly, it may never release wrongly.
+  const sec = Math.floor(at / 1000);
+  assert.equal(t.stateVerdict({ state: 'idle', stateSince: sec }, at), null);
+  assert.equal(t.stateVerdict({ state: 'idle', stateSince: sec + 1 }, at), 'release');
+});
+
 test('stateVerdict HOLDS while a question is waiting, however long it takes', () => {
   // `attention` means a numbered prompt is on screen. Prose typed into one is
   // lost or misread — the same reason /soft-end refuses — so this outranks the
