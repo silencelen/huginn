@@ -51,6 +51,10 @@ import com.silencelen.huginn.desktop.tray.TrayModel
 import com.silencelen.huginn.desktop.ui.Shell
 import com.silencelen.huginn.ui.HeadroomRules
 import com.silencelen.huginn.ui.LocalAttachmentImages
+import com.silencelen.huginn.ui.LocalLinkPeek
+import com.silencelen.huginn.desktop.ui.common.DesktopLinkPeek
+import com.silencelen.huginn.desktop.ui.common.rememberLinkUriHandler
+import androidx.compose.ui.platform.LocalUriHandler
 import com.silencelen.huginn.ui.LocalTranscriptMetrics
 import com.silencelen.huginn.ui.TranscriptMetrics
 import com.silencelen.huginn.ui.theme.HuginnTheme
@@ -699,6 +703,19 @@ fun main(args: Array<String>) {
                     // Photo attachments render as real thumbnails; without this
                     // (or against an old daemon) the rows fall back to the pill.
                     LocalAttachmentImages provides store.attachmentImages,
+                    // A link in an answer opens in the browser — http(s) ONLY, and
+                    // never this app's own `huginn://`, which is fingerprint-gated
+                    // precisely because it is reachable from outside. What cannot
+                    // be opened is copied instead of failing silently.
+                    LocalUriHandler provides rememberLinkUriHandler { url ->
+                        runCatching {
+                            java.awt.Toolkit.getDefaultToolkit().systemClipboard
+                                .setContents(java.awt.datatransfer.StringSelection(url), null)
+                        }
+                    },
+                    // Where a link goes, on hover, in a tooltip — a pointer can ask
+                    // a question of a thing without doing anything to it.
+                    LocalLinkPeek provides DesktopLinkPeek,
                 ) {
                     Shell(store)
 
