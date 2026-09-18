@@ -732,7 +732,16 @@ class DesktopSettings(private val file: File = defaultFile()) : HuginnSettings {
         // a copy: the next save would otherwise overwrite the only record of it,
         // and "my token vanished" is unanswerable without one.
         if (file.exists() && file.length() > 0L) {
-            runCatching { file.copyTo(File(file.parentFile, file.name + ".corrupt"), overwrite = true) }
+            runCatching {
+                val salvage = file.copyTo(File(file.parentFile, file.name + ".corrupt"), overwrite = true)
+                // ⚠ AND AS PRIVATE AS WHAT IT COPIED. Kotlin's copyTo is delete +
+                // stream copy, so the new file takes the process UMASK rather than
+                // the source's mode: 0644 at the usual 022, in a 0755 config dir,
+                // beside a deliberately 0600 original — carrying the same
+                // plaintext root-equivalent daemon bearer, with nothing in the app
+                // that ever removes or re-restricts it.
+                restrictToOwner(salvage)
+            }
         }
         Stored()
     }
