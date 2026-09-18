@@ -6898,6 +6898,67 @@ async function applyLadder(name, to) {
   return fail('no "for this session only" confirmation appeared');
 }
 
+
+/**
+ * Is the installed SubagentStart gate watching the directory this daemon arms
+ * sentinels in?
+ *
+ * ⚠ #28, the daemon's half. `HUGINN_APPD_DATA` is a documented knob and it moves
+ * HEADROOM_DIR to <dataDir>/headroom, while the bash gate has its own
+ * compiled-in `/var/lib/huginn-appd/headroom`. install-hooks binds the two
+ * together now (`env HUGINN_HEADROOM_DIR=… <script>`, written by deploy.sh with
+ * the dir the SERVICE will use) — but a hook installed by an older deploy, or a
+ * drop-in added after the last deploy, leaves them pointing at different
+ * directories with NO symptom: the gate releases every spawn at waited=0, writes
+ * no held row, drops its log into the abandoned directory, and /v1/headroom
+ * cheerfully reports the sentinel armed. One line at startup is the whole fix
+ * available on this side; the repair is a re-run of deploy.sh.
+ *
+ * Read-only and best-effort: this must never keep the daemon from starting.
+ */
+const GATE_SCRIPT_NAME = 'huginn-headroom-gate';
+const GATE_COMPILED_DIR = '/var/lib/huginn-appd/headroom';
+function gateBoundDir(command) {
+  let s = String(command || '').trim();
+  let dir = null;
+  if (/^env\s/.test(s)) {
+    s = s.replace(/^env\s+/, '');
+    for (;;) {
+      const m = /^([A-Za-z_][A-Za-z0-9_]*)=(?:'([^']*)'|"([^"]*)"|(\S*))\s+/.exec(s);
+      if (!m) break;
+      if (m[1] === 'HUGINN_HEADROOM_DIR') dir = m[2] ?? m[3] ?? m[4] ?? '';
+      s = s.slice(m[0].length);
+    }
+  }
+  const script = /^(?:'([^']*)'|"([^"]*)"|(\S+))/.exec(s);
+  const scriptPath = script ? (script[1] ?? script[2] ?? script[3]) : s;
+  if (path.basename(scriptPath || '') !== GATE_SCRIPT_NAME) return null;
+  return dir || GATE_COMPILED_DIR;
+}
+
+function warnIfGateDetached() {
+  try {
+    const file = process.env.HUGINN_CLAUDE_SETTINGS || path.join(CLAUDE_DIR, 'settings.json');
+    const settings = JSON.parse(fs.readFileSync(file, 'utf8'));
+    const hooks = (settings && settings.hooks) || {};
+    const bound = new Set();
+    for (const rules of Object.values(hooks)) {
+      for (const rule of Array.isArray(rules) ? rules : []) {
+        for (const h of (rule && Array.isArray(rule.hooks) ? rule.hooks : [])) {
+          const dir = gateBoundDir(h && h.command);
+          if (dir) bound.add(path.resolve(dir));
+        }
+      }
+    }
+    if (!bound.size) return;                       // no gate installed: not this line's business
+    const mine = path.resolve(HEADROOM_DIR);
+    if (bound.has(mine)) return;
+    log(`headroom: ⚠ the installed spawn gate watches ${[...bound].join(', ')} but this daemon `
+      + `arms sentinels in ${mine} — the pause button is wired to nothing; re-run deploy.sh `
+      + '(install-hooks.js --headroom-dir) to bind them');
+  } catch { /* no settings file, unparseable, unreadable: nothing to say */ }
+}
+
 // ---- the tick --------------------------------------------------------------
 
 let headroomBusy = false;
@@ -12009,6 +12070,7 @@ resolveBind().then(async (bind) => {
   // model and the migrated account-switch preference rather than on the
   // contract defaults for one pass.
   try { seedHeadroomDefaults(); } catch (e) { log('headroom: could not seed settings', e.message); }
+  warnIfGateDetached();
   server.listen(PORT, bind, () => log(`huginn-appd ${VERSION} listening on ${bind}:${PORT}`));
 }).catch((e) => { console.error('FATAL:', e.message); process.exit(1); });
 

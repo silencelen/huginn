@@ -28,9 +28,11 @@ const crypto = require('node:crypto');
 // the files CONCURRENTLY, so ranges must not overlap. The full table lives in
 // routes-typing.test.js; this file's block is the w3 edge-hunt reservation:
 //
-//   routes-session-names 11400 + pid%25  -> 11400-11424
-//   routes-tmux-health   11425 + pid%25  -> 11425-11449   (this file)
-const PORT = 11425 + (process.pid % 25);
+//   routes-session-names 11400 + pid%20  -> 11400-11419
+//   routes-tmux-health   11420 + pid%20  -> 11420-11439   (this file)
+//   …plus 11440 + pid%9 -> 11440-11448 for this file's throwaway daemons.
+const PORT = 11420 + (process.pid % 20);
+const SPARE_PORT = 11440 + (process.pid % 9);
 const BASE = `http://127.0.0.1:${PORT}`;
 require('./retry-fetch');
 const PFX = `hlth-${process.pid}`;
@@ -204,4 +206,72 @@ test('DELETE of an absent session is 404 and still tidies up after it', async ()
   assert.equal(404, r.status, JSON.stringify(r.body));
   assert.equal(false, fs.existsSync(path.join(stateDir, name)),
     'the orphaned state file goes with it');
+});
+
+// ------------------------------------------- the daemon's own wiring at startup
+
+test('a gate bound to a different sentinel directory is called out at startup (#28)', async () => {
+  // ⚠ A PAUSE BUTTON WIRED TO NOTHING, WITH NO SYMPTOM. HUGINN_APPD_DATA is a
+  // documented knob and it moves the daemon's sentinel directory to
+  // <dataDir>/headroom, while the bash gate has its own compiled-in
+  // /var/lib/huginn-appd/headroom. install-hooks binds the two together now
+  // (the appd-libs half of this finding), but a hook installed by an older
+  // deploy still points somewhere else: the gate releases every held spawn at
+  // waited=0, writes no held row, drops its log into the abandoned directory,
+  // and /v1/headroom cheerfully reports the sentinel armed. One line at startup
+  // is all this side can do; the repair is a re-run of deploy.sh.
+  const scratch = fs.mkdtempSync(path.join(os.tmpdir(), 'appd-gatedir-'));
+  const settings = path.join(scratch, 'settings.json');
+  fs.writeFileSync(settings, JSON.stringify({
+    hooks: {
+      SubagentStart: [{
+        matcher: '*',
+        hooks: [{
+          type: 'command',
+          command: 'env HUGINN_HEADROOM_DIR=/var/lib/huginn-appd/headroom /opt/huginn-appd/hooks/huginn-headroom-gate',
+          timeout: 1800,
+        }],
+      }],
+    },
+  }, null, 2));
+  const out = path.join(scratch, 'out.log');
+
+  const spawnWith = async (env) => {
+    fs.writeFileSync(out, '');
+    const fd = fs.openSync(out, 'a');
+    const child = spawn(process.execPath, [path.join(__dirname, '..', 'huginn-appd.js')], {
+      env: {
+        ...process.env,
+        HUGINN_APPD_PORT: String(SPARE_PORT),
+        HUGINN_APPD_BIND: '127.0.0.1',
+        HUGINN_APPD_TOKEN_FILE: path.join(tmp, 'token'),
+        HUGINN_APPD_STATE_DIR: path.join(scratch, 'state'),
+        HUGINN_APPD_WORKDIR: scratch,
+        HUGINN_APPD_TMUX_SOCKET: TMUX_SOCK,
+        HUGINN_CLAUDE_SETTINGS: settings,
+        ...env,
+      },
+      stdio: ['ignore', fd, fd],
+    });
+    fs.closeSync(fd);
+    for (let i = 0; i < 200; i++) {
+      if (/listening on/.test(fs.readFileSync(out, 'utf8'))) break;
+      await wait(100);
+    }
+    const text = fs.readFileSync(out, 'utf8');
+    child.kill('SIGKILL');
+    await wait(200);
+    return text;
+  };
+
+  const moved = await spawnWith({ HUGINN_APPD_DATA: path.join(scratch, 'data') });
+  assert.match(moved, /pause button is wired to nothing/,
+    `the mismatch must be said out loud. Log: ${moved.slice(0, 600)}`);
+
+  // …and when they agree, it says nothing at all.
+  const matched = await spawnWith({ HUGINN_HEADROOM_DIR: '/var/lib/huginn-appd/headroom' });
+  assert.doesNotMatch(matched, /pause button is wired to nothing/);
+  assert.match(matched, /listening on/, 'precondition: this daemon came up');
+
+  fs.rmSync(scratch, { recursive: true, force: true });
 });
