@@ -43,7 +43,9 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import com.silencelen.huginn.data.ArchivedSession
+import com.silencelen.huginn.data.ProjectRow
 import com.silencelen.huginn.data.Session
 
 /**
@@ -74,6 +76,19 @@ fun SessionsScreen(
     onRevive: (ArchivedSession) -> Unit = {},
     onCopyResume: (ArchivedSession) -> Unit = {},
     onDeleteArchive: (ArchivedSession) -> Unit = {},
+    /**
+     * The sessions, grouped by the project that owns them.
+     *
+     * EMPTY means no grouping at all — either the daemon has no projects route or
+     * nothing is grouped yet — and the list then draws exactly as it always has.
+     * Non-empty, it REPLACES the flat list: the groups already contain every
+     * session, with the unaffiliated ones last, so rendering both would draw each
+     * session twice.
+     */
+    groups: List<SessionGroup> = emptyList(),
+    onOpenProject: (ProjectRow) -> Unit = {},
+    /** The way to the whole tree. Null hides it — see projectEntries. */
+    onOpenProjects: (() -> Unit)? = null,
 ) {
     var showNew by remember { mutableStateOf(false) }
     var newName by remember { mutableStateOf("") }
@@ -115,7 +130,10 @@ fun SessionsScreen(
                 Modifier.fillMaxSize(),
                 contentPadding = androidx.compose.foundation.layout.PaddingValues(bottom = LIST_FAB_CLEARANCE),
             ) {
-                items(sessions, key = { it.name }) { s ->
+                // ONE row renderer, used flat or under a heading. Two copies of
+                // it is how a session row grows an action in one arrangement and
+                // not the other.
+                val row: @Composable (Session) -> Unit = { s ->
                     SessionRow(
                         s,
                         selected = s.name == selectedName,
@@ -126,6 +144,24 @@ fun SessionsScreen(
                         onRename = { renaming = s.name; renameTo = s.name },
                     )
                     HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+                }
+                if (groups.isEmpty()) {
+                    items(sessions, key = { it.name }) { s -> row(s) }
+                } else {
+                    for (g in groups) {
+                        val p = g.project
+                        if (p != null) {
+                            item(key = "project:${p.id}") {
+                                ProjectHeader(p, onOpen = { onOpenProject(p) }, onSeeAll = onOpenProjects)
+                            }
+                        } else if (groups.size > 1) {
+                            // Only when there is something above it: a lone
+                            // heading over every session on the host would be
+                            // naming a category nothing is outside of.
+                            item(key = "ungrouped") { SectionLabel(SESSIONS_UNGROUPED) }
+                        }
+                        items(g.sessions, key = { it.name }) { s -> row(s) }
+                    }
                 }
                 // At the BOTTOM of the live list, collapsed, rather than a fifth
                 // bottom tab. An archive is a footnote to the sessions list —
@@ -432,5 +468,54 @@ private fun SessionRow(
                 )
             }
         }
+    }
+}
+
+
+/**
+ * The heading over one project's sessions.
+ *
+ * ⚠ THE COUNTS ARE THE DAEMON'S, not a tally of the rows underneath. The rollup
+ * was summed across three registries this client cannot read, and a heading that
+ * counted the sessions it happened to be drawing would disagree with the Projects
+ * tree about the same cluster — which is the one thing a heading must never do.
+ * A member whose tmux session is gone is in the count and not in the list, and
+ * that difference is exactly what the reader needs to see.
+ */
+@Composable
+private fun ProjectHeader(project: ProjectRow, onOpen: () -> Unit, onSeeAll: (() -> Unit)?) {
+    Row(
+        Modifier.fillMaxWidth().clickable(onClick = onOpen).padding(start = 16.dp, end = 4.dp, top = 14.dp, bottom = 4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Column(Modifier.weight(1f)) {
+            Text(
+                ProjectRules.label(project).uppercase(),
+                style = MaterialTheme.typography.labelMedium,
+                fontWeight = FontWeight.Medium,
+                color = MaterialTheme.colorScheme.primary,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            Text(
+                groupWords(project),
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
+        // The whole tree, when the shell has somewhere to put it. On the heading
+        // rather than beside every project, because "all of them" is one place.
+        onSeeAll?.let {
+            TextButton(onClick = it, contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 8.dp, vertical = 2.dp)) {
+                Text("All", style = MaterialTheme.typography.labelMedium)
+            }
+        }
+        Icon(
+            Icons.AutoMirrored.Filled.KeyboardArrowRight,
+            contentDescription = null,
+            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
     }
 }
