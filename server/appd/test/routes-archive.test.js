@@ -442,6 +442,37 @@ test('a revive takes the old name back and resumes the conversation', async () =
   assert.equal(true, row.live);
 });
 
+test('a revive whose archived name carries a dot reports the name tmux made (#103)', async () => {
+  // ⚠ tmux REWRITES '.' TO '_' AND STILL EXITS 0. The readback asked for the
+  // requested name with a trailing colon — `-t '=a.b:'` — which cannot resolve a
+  // rewritten name: tmux answered with an empty string and exit 0, and the
+  // `|| want` fallback echoed the dotted name back. The 201 named a session that
+  // does not exist, `revivedAs` persisted the phantom, and every per-session
+  // route on that name 404s. The create route has the identical readback.
+  //
+  // Dotted names are refused at the door now, but an archive card written by an
+  // older daemon still carries one, and that is what this row is.
+  const { name, id } = mkArchivable('dotrevive');
+  await api(`/v1/sessions/${name}/archive`, { method: 'POST', body: JSON.stringify({ mode: 'now' }) });
+  const file = path.join(dataDir, 'archive', id, 'record.json');
+  const rec = JSON.parse(fs.readFileSync(file, 'utf8'));
+  const dotted = `${PFX}-dot.revive`;
+  rec.tmuxName = dotted;
+  fs.writeFileSync(file, JSON.stringify(rec, null, 2));
+
+  const r = await api(`/v1/archive/${id}/revive`, { method: 'POST' });
+  assert.equal(201, r.status, JSON.stringify(r.body));
+  madeSessions.add(r.body.name);
+  madeSessions.add(dotted.replace('.', '_'));
+  assert.ok(liveNames().includes(r.body.name),
+    `the 201 named ${r.body.name}, and tmux holds ${JSON.stringify(liveNames())}`);
+  assert.equal(false, r.body.name.includes('.'), 'no live session can carry a dot');
+
+  const row = (await archives()).find((a) => a.id === id);
+  assert.equal(r.body.name, row.revivedAs, 'and the phantom is not persisted either');
+  assert.equal(true, row.live);
+});
+
 test('a name taken in the meantime makes the revive land on <name>2', async () => {
   const { name, id } = mkArchivable('coll');
   await api(`/v1/sessions/${name}/archive`, { method: 'POST', body: JSON.stringify({ mode: 'now' }) });
