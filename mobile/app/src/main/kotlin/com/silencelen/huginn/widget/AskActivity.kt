@@ -42,6 +42,7 @@ import androidx.fragment.app.FragmentActivity
 import com.silencelen.huginn.MainActivity
 import com.silencelen.huginn.data.HuginnClient
 import com.silencelen.huginn.data.SettingsStore
+import com.silencelen.huginn.data.lockEnabledOrLocked
 import com.silencelen.huginn.notify.AppLock
 import com.silencelen.huginn.notify.SessionWatchWorker
 import com.silencelen.huginn.ui.theme.HuginnTheme
@@ -76,7 +77,9 @@ class AskActivity : FragmentActivity() {
         super.onCreate(savedInstanceState)
         // The same blocking read MainActivity makes at creation, for the same
         // reason: the lock decision cannot wait on DataStore.
-        val lockEnabled = runBlocking { SettingsStore(applicationContext).appLock.first() }
+        val lockEnabled = runBlocking {
+            lockEnabledOrLocked { SettingsStore(applicationContext).appLock.first() }
+        }
         if (lockEnabled) {
             window.setFlags(
                 WindowManager.LayoutParams.FLAG_SECURE,
