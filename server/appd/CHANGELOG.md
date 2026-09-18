@@ -9,6 +9,57 @@ appeared only as a side-note on the app releases it happened to ship with. Three
 undocumented, and the notes-cutting matcher could fuse two sections when an app and an appd
 version number collided. Entries below are reconstructed from the shipping commits.
 
+## 3.4.0 — 2026-09-18
+
+Wave 3 — Projects and Consoles — and the daemon's share of a 99-finding edge-case hunt.
+
+- **Projects.** `POST /v1/projects` makes a cluster: a lead session and, once the lead writes a
+  tagged manifest, members it proposes — each spawned through the create path with a native peer
+  name (`<slug>/<role>`) and the startup hold, so a member's first prompt is never lost. `GET
+  /v1/projects` lists rows with live counts (alive, busy, waiting), `GET …/:id` answers
+  `{project, row, live}`, `…/dashboard` rolls up state, needs-you, headroom, pending sends, turns,
+  tokens and cost per member with a cursor that does not re-walk twelve spines on every poll,
+  `…/spawn {approve, manifestRev}` answers per role with HTTP 200 even when part of it failed,
+  `…/message` relays one member's words to another THROUGH the send queue (turn, modal and
+  startup holds all apply) and the transcript reader draws the arrival as a system note with the
+  sender's name, never as your own bubble. An untrusted project folder is refused rather than
+  pre-trusted behind Claude Code's back; spawning is refused with the arbiter's reason while STOP
+  is armed; `MAX_MEMBERS` is 12. The manifest's tag — the anti-injection secret a proposal is
+  checked against — never leaves the daemon: seven send sites strip it.
+- **Consoles.** `GET /v1/consoles` lists the host's internal pages from a hand-edited registry with a
+  liveness probe as seen FROM THE HOST — bounded at 2 s, so a page that accepts connections and
+  never answers reads as down instead of hanging the request; `up` is null until the first probe.
+  `POST`/`PATCH`/`DELETE` edit the list (per-row `version`, 409 with the current row),
+  `POST …/:id/probe` checks one on demand. The rebind and the four heimdall firewall rules that
+  would make these openable from a phone ride the list as an approval card the app shows and
+  nothing executes; it says `applied: false` until the owner runs them and touches
+  `consoles-rebind-applied`.
+- **A send never goes where it should not.** Composer text that starts "1." no longer reads as a
+  dialog (it held every send forever); a tall question dialog is a modal at any pane height; a
+  human send is held behind a waiting question (`blockedBy: "attention"`) until somebody answers,
+  and two messages queued behind a dialog go out one per boundary instead of spliced into one
+  turn; text with Enter is refused with a 409 rather than typed into a login shell — the shell was
+  RUNNING chat messages; `/soft-end`, `/compact` and a graceful archive refuse to type their phrase
+  into a live dialog and arm their auto-end only from the send's own settle.
+- **Session names and tmux.** Dots are banned (tmux silently rewrites them to `_`, and the rename
+  route was migrating another session's state onto the rewritten name); `login`, `ask`, `plan` and
+  `compacting` are reserved; every readback comes from tmux itself and a rename that cannot be read
+  back is a 500, never a guess; the hook's sidecar dirs are dotted so a session named `ask` no
+  longer collides with them; "tmux is not answering" is a 503, not a 404 that ends a session;
+  `/answer` is serialised per session so two answers cannot both type a digit.
+- **Transcripts, chats, uploads.** A message the queue drained between polls no longer appears
+  twice; the newest record no longer vanishes when the tail window opens mid-character; a queued
+  Round message is delivered or explained when its run finishes, never dropped; a stalled chat does
+  not spawn a second run; a store error on an upload answers 507 with the errno instead of 413;
+  a spawn failure never renders as a negative exit code; every JSON body is validated (400) and an
+  unhandled error answers a generic 500; an agent's task label survives a very large first prompt.
+- **Headroom and hooks.** A hand-armed STOP sentinel survives the tick and shows on `/v1/status`;
+  the heads-up fires for a second Fable window; the hook gate is installed bound to the daemon's
+  real sentinel dir and the daemon warns at startup if they disagree; DST no longer misdates a
+  reset; the settings file is rewritten through a `realpath`, keeping its mode.
+- **`X-Huginn-Appd: <version>` on every response, including the 401.** A client can prove it is
+  talking to huginn before it offers a bearer.
+
 ## 3.3.0 — 2026-09-18
 - **`GET /v1/files/image`** — a host image Claude named by path, served to the client instead of
   printed as a path. Roots are the uploads dir, the scratchpad render dir, Claude's own scratch dir,

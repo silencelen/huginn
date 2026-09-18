@@ -1,5 +1,30 @@
 # Huginn Desktop changelog
 
+## 1.5.0
+
+- **Projects.** A rail item with the cluster tree in the list pane and a project dashboard beside
+  it; a lead's proposal arrives as a card with Spawn · Edit · Discard, and a member opens its own
+  session without leaving the project. Right-click a project for Rename, Pause/Resume, Archive and
+  Delete; right-click a member for Message and End. `Ctrl+Shift+J` opens Projects. A message from
+  another session names its sender.
+- **Consoles.** A rail item listing the internal pages this host serves, with their reachability as
+  seen from the host, a probe-now control, and a card carrying the exact rebind commands for you to
+  run yourself. Both rail items appear only on a host that has them (appd 3.4.0).
+- **Routes.** An address counts as huginn only once it proves it, so the token is never offered to
+  a stranger that answers HTTP; a plain-http route you did not add by hand is offered, not adopted;
+  editing a route's name and address in one Save keeps both; a refused address stays on the form
+  with the reason; turning "Switch automatically" on looks for a live route.
+- **Windows and screens.** The window position survives on a second monitor; the elevated command
+  quotes every argument and refuses the characters quoting cannot contain; a job whose folder is
+  missing is refused before it starts instead of running in the app's own folder; a libnotify that
+  fails hands notifications to the fallback instead of keeping the claim.
+- **Editing.** Shift+Enter over a selection made right-to-left inserts where you expect; the
+  session-name rule is the same as the phone's (dots refused, dashes allowed) and a row huginn
+  cannot address says so instead of opening nothing; percentage boxes and the monthly dates field
+  behave as on the phone; "0m" reads "1m"; the Rounds pane no longer flashes 1970 on its first
+  frame; a salvaged settings copy is owner-only; the pane lease release is bounded even where it
+  cannot be cancelled.
+
 ## 1.4.0
 
 - **Links and pictures.** Same link and image rendering as the phone, from the same renderer: labels
