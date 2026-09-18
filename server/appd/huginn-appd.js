@@ -44,6 +44,7 @@ const { decideAlerts, routeAlerts, telegramText, pruneSent, carryRunStarts } = r
 const clientsLib = require('./lib/clients');
 const roundsLib = require('./lib/rounds');
 const scratchpadsLib = require('./lib/scratchpads');
+const archiveLib = require('./lib/archive');
 const devicesLib = require('./lib/devices');
 const { taskDirFor, parsePs, scanTasks, extractBgIds } = require('./lib/tasks');
 const { agentsDirFor, listAgents, listAgentFiles } = require('./lib/agents');
@@ -619,6 +620,204 @@ function sessionMetaView(id) {
   };
 }
 
+// ---- archive store: sessions ended on purpose --------------------------------
+//
+// One directory per archived session under DATA_DIR/archive/<claude session id>:
+// `record.json` (the card, tmp+rename at 0600 like every other store here) and
+// `transcript.jsonl` (a COPY of Claude Code's own, taken at archive time).
+//
+// ⚠ THE COPY IS THE WHOLE POINT, not a nicety. `cleanupPeriodDays` (21 on this
+// host) means Claude Code deletes its own transcript while the archive row sits
+// there still offering `claude --resume <uuid>` — a revive that succeeds, opens
+// in the right directory, and has no memory of anything. See lib/archive.js.
+//
+// Keyed by the CLAUDE SESSION ID and never the tmux name, for the reason
+// session-meta gives above: names are reused here within hours, and an archive
+// filed under a reused name would hand the next `dev` a stranger's conversation.
+
+const ARCHIVE_DIR = path.join(DATA_DIR, 'archive');
+
+/**
+ * The per-transcript copy cap, overridable for a host with less room than this
+ * one — and by the route suite, which needs a cap it can actually exceed without
+ * writing a 32 MB fixture. Not a URL and not a credential path: it decides how
+ * many bytes of a local file are copied to another local file.
+ */
+const ARCHIVE_TRANSCRIPT_CAP = Number(process.env.HUGINN_APPD_ARCHIVE_CAP) > 0
+  ? Number(process.env.HUGINN_APPD_ARCHIVE_CAP)
+  : archiveLib.TRANSCRIPT_CAP_BYTES;
+
+function archiveDirFor(id) { return path.join(ARCHIVE_DIR, id); }
+function archiveRecordPath(id) { return path.join(archiveDirFor(id), 'record.json'); }
+function archiveTranscriptPath(id) { return path.join(archiveDirFor(id), 'transcript.jsonl'); }
+
+function loadArchive(id) {
+  if (!sessreg.UUID_RE.test(String(id || ''))) return null;
+  try { return JSON.parse(fs.readFileSync(archiveRecordPath(id), 'utf8')); } catch { return null; }
+}
+
+/** tmp+rename at 0600, like every other store here: a reader never sees half a row. */
+function saveArchive(rec) {
+  const file = archiveRecordPath(rec.id);
+  fs.mkdirSync(archiveDirFor(rec.id), { recursive: true });
+  fs.writeFileSync(`${file}.tmp`, JSON.stringify(rec, null, 2), { mode: 0o600 });
+  fs.renameSync(`${file}.tmp`, file);
+  refreshArchivedIds();
+  return rec;
+}
+
+function listArchives() {
+  let dirs = [];
+  try { dirs = fs.readdirSync(ARCHIVE_DIR); } catch { return []; }
+  const out = [];
+  for (const d of dirs) {
+    const rec = loadArchive(d);
+    if (rec && rec.id) out.push(rec);
+  }
+  return out;
+}
+
+/** Reload, change, save — the updateRound/updatePad funnel, for the same reason. */
+function updateArchive(id, mutate) {
+  const rec = loadArchive(id);
+  if (!rec) return null;
+  mutate(rec);
+  return saveArchive(rec);
+}
+
+/** The row AND its transcript copy. The copy is the bulk; leaving it would be a leak. */
+function removeArchive(id) {
+  if (!sessreg.UUID_RE.test(String(id || ''))) return false;
+  try { fs.rmSync(archiveDirFor(id), { recursive: true, force: true }); } catch { return false; }
+  refreshArchivedIds();
+  return true;
+}
+
+/**
+ * The claude session ids that GET /v1/sessions must not report.
+ *
+ * Normally a no-op — an archived session has been through hardEndSession and is
+ * not in tmux to be listed. It earns its place in the two windows where it is
+ * not: a crash between writing the row and the kill landing, and a name reused
+ * fast enough to be listed before the reconcile notices. Kept in memory because
+ * listSessions runs on a five-second poll from every open client and must not
+ * grow a directory scan.
+ *
+ * Only FINISHED archives are here. A row whose `endedAt` is still null belongs to
+ * a session that is genuinely alive, and hiding a live session is the failure
+ * listSessions names in its own comment ("a monitoring app that drops a session
+ * from the list is worse than one that cannot open it"). A REVIVED row is out for
+ * the same reason: the session it names is back, and it is the archive list that
+ * marks it as running, not this one that hides it.
+ */
+const archivedIds = new Set();
+
+function refreshArchivedIds() {
+  archivedIds.clear();
+  for (const rec of listArchives()) {
+    if (rec.endedAt && !rec.revivedAt) archivedIds.add(rec.id);
+  }
+}
+
+/**
+ * Copies a transcript into the archive, tail-first when it is over the cap.
+ *
+ * ⚠ THE TAIL IS SNAPPED FORWARD TO A RECORD BOUNDARY. A jsonl file opened at an
+ * arbitrary byte begins with half a record, and readTranscript's own boundary
+ * guard would then drop a real message off the top of the window — so the copy
+ * starts after the first newline in it, and the archive holds whole records only.
+ *
+ * Best effort: a transcript that cannot be copied costs the revive its memory
+ * later, never the archive itself now. Said out loud in the log and on the row.
+ */
+function copyTranscriptForArchive(id, src) {
+  let sfd, dfd;
+  try {
+    const size = fs.statSync(src).size;
+    const w = archiveLib.transcriptWindow(size, ARCHIVE_TRANSCRIPT_CAP);
+    fs.mkdirSync(archiveDirFor(id), { recursive: true });
+    const dst = archiveTranscriptPath(id);
+    const tmp = `${dst}.tmp`;
+    sfd = fs.openSync(src, 'r');
+    let start = w.start;
+    if (w.truncated && start > 0) {
+      const probe = Buffer.alloc(Math.min(1 << 20, size - start));
+      const n = fs.readSync(sfd, probe, 0, probe.length, start);
+      const nl = probe.subarray(0, n).indexOf(0x0a);
+      if (nl >= 0) start += nl + 1;
+    }
+    dfd = fs.openSync(tmp, 'w', 0o600);
+    const buf = Buffer.alloc(1 << 20);
+    let pos = start;
+    let written = 0;
+    for (;;) {
+      const n = fs.readSync(sfd, buf, 0, buf.length, pos);
+      if (n <= 0) break;
+      fs.writeSync(dfd, buf, 0, n);
+      pos += n;
+      written += n;
+    }
+    fs.closeSync(dfd); dfd = undefined;
+    fs.renameSync(tmp, dst);
+    return { bytes: written, truncated: w.truncated };
+  } catch (e) {
+    log(`archive: could not copy the transcript for ${id}: ${e.message}`);
+    return { bytes: 0, truncated: false };
+  } finally {
+    if (sfd !== undefined) { try { fs.closeSync(sfd); } catch { } }
+    if (dfd !== undefined) { try { fs.closeSync(dfd); } catch { } }
+  }
+}
+
+/**
+ * Puts the archived transcript back where Claude Code looks for it, so that
+ * `claude --resume <id>` has something to resume.
+ *
+ * ⚠ AN EXISTING FILE IS NEVER OVERWRITTEN — not even an older one. Claude Code's
+ * own copy is the file it is about to read and append to, while ours may be a
+ * truncated TAIL of a conversation that was over the size cap; writing one over
+ * the other would silently delete history to restore history. Absent is the only
+ * case this handles, and absent is the only case that needs handling: the reason
+ * this function exists is the 21-day sweep, which removes the file outright.
+ */
+function restoreArchivedTranscript(id, cwd) {
+  const copy = archiveTranscriptPath(id);
+  if (!fs.existsSync(copy)) return { restored: false, reason: 'no transcript was kept for this archive' };
+  const existing = findTranscriptFile(id);
+  if (existing) return { restored: false, reason: 'Claude Code still has its own copy' };
+  const slug = String(cwd || WORKDIR).replace(/\//g, '-');
+  const dir = path.join(os.homedir(), '.claude', 'projects', slug);
+  const dst = path.join(dir, `${id}.jsonl`);
+  try {
+    fs.mkdirSync(dir, { recursive: true });
+    fs.copyFileSync(copy, `${dst}.tmp`);
+    fs.renameSync(`${dst}.tmp`, dst);
+    log(`archive: restored the kept transcript for ${id} to ${dst}`);
+    return { restored: true, reason: null, path: dst };
+  } catch (e) {
+    log(`archive: could not restore the transcript for ${id}: ${e.message}`);
+    return { restored: false, reason: e.message };
+  }
+}
+
+/**
+ * Brings the store back to the cap, oldest archive first.
+ *
+ * Rows never time-expire — an archive whose promise is "still here when you want
+ * it" cannot carry a clock — so this is the only thing that ever removes one, and
+ * it says which, because a conversation disappearing silently is the failure mode
+ * a cap has.
+ */
+function enforceArchiveCap() {
+  const drop = archiveLib.evictions(listArchives());
+  for (const rec of drop) {
+    removeArchive(rec.id);
+    log(`archive: at the ${archiveLib.MAX_ARCHIVES}-row cap, dropped the oldest `
+      + `(${rec.tmuxName || rec.id}${rec.title ? `: ${rec.title}` : ''})`);
+  }
+  return drop.length;
+}
+
 // ---- durable session registry (survives a reboot) -------------------------
 //
 // The one store here that is deliberately keyed by tmux NAME rather than by Claude
@@ -703,7 +902,7 @@ async function listSessions({ preview = false } = {}) {
     log(`tmux list-sessions failed: ${(stderr || err.message || '').trim().slice(0, 120)}`);
     return null;
   }
-  const rows = [];
+  let rows = [];
   const seen = new Set();
   for (const line of stdout.trim().split('\n')) {
     if (!line) continue;
@@ -764,6 +963,21 @@ async function listSessions({ preview = false } = {}) {
   // in the map has ended. Pruning matters because a NEW session of a pruned name
   // must be born-stamped afresh rather than inheriting its predecessor's stamp.
   for (const name of [...sessionBorn.keys()]) if (!seen.has(name)) sessionBorn.delete(name);
+
+  // An ARCHIVED conversation is not a session any more. Normally this removes
+  // nothing — an archive goes through hardEndSession, so tmux has already
+  // forgotten it — and it exists for the window where that is not yet true: a
+  // crash between the row being written and the kill landing. Matched on the
+  // CLAUDE SESSION ID, never the name, so a reused name cannot hide a live
+  // stranger; and only finished, un-revived archives are in that set, so this can
+  // never hide a session that is genuinely still yours to use (see archivedIds).
+  const hidden = archivedIds.size
+    ? rows.filter((r) => r.claudeSessionId && archivedIds.has(r.claudeSessionId)).map((r) => r.name)
+    : [];
+  if (hidden.length) {
+    rows = rows.filter((r) => !(r.claudeSessionId && archivedIds.has(r.claudeSessionId)));
+    log(`sessions: ${hidden.join(', ')} still in tmux but archived; listed under /v1/archive instead`);
+  }
 
   if (preview) {
     // Background work rides along so the LIST can say a session is not stalled:
@@ -861,6 +1075,41 @@ async function ensureTmuxServerScope() {
     return;
   }
   log(`tmux: server started in ${TMUX_SCOPE}.scope, independent of this daemon`);
+}
+
+/**
+ * Every live tmux session mapped to the Claude conversation running in it.
+ *
+ * Null on a tmux read failure, never an empty map: the archive routes use this to
+ * decide "is this conversation already back" and "which names are taken", and
+ * read as "nothing is live" a failed listing would answer both questions wrongly
+ * — a second Claude on one transcript, under a name already in use. The same
+ * failure-to-observe guard listSessions and the registry reconcile carry.
+ */
+async function liveSessionIds() {
+  const { err, stdout, stderr } = await run('tmux', ['list-sessions', '-F', '#{session_name}\t#{session_created}']);
+  if (err) {
+    if (/no server running|no such file or directory/i.test(stderr || '')) return new Map();
+    return null;
+  }
+  const out = new Map();
+  const reg = loadRegistry();
+  for (const line of stdout.trim().split('\n')) {
+    if (!line) continue;
+    const [name, created] = line.split('\t');
+    if (!name) continue;
+    rememberBorn(name, created);
+    const st = readSessionState(name);
+    // ⚠ THE REGISTRY IS THE FALLBACK, AND IT MATTERS FOR EXACTLY ONE WINDOW. A
+    // just-revived session has no state file yet — the title hook writes one on
+    // its first event, seconds later — and for those seconds the archive list
+    // would show its row as revivable again and offer a SECOND Claude on the
+    // same transcript. The revive route records the id on the registry at the
+    // moment it creates the session, which is the only thing that knows sooner.
+    const entry = reg[name];
+    out.set(name, (st && st.sessionId) || (entry && entry.claudeSessionId) || null);
+  }
+  return out;
 }
 
 async function sessionExists(name) {
@@ -1566,6 +1815,99 @@ function enqueueJob(name, fn, opts = {}) {
   return enqueueSend(name, null, { ...opts, run: fn, submit: false });
 }
 
+// ---- archiving a session ----------------------------------------------------
+//
+// An archive is a session ended ON PURPOSE that leaves a tombstone. Everything
+// about ending it is the existing path — the soft-end phrase, its guards, its
+// settle timer, and hardEndSession as the one true-death boundary — and the only
+// new thing is that the card is written just BEFORE the kill.
+//
+// Before, deliberately. A crash between the two then leaves a row whose session
+// is still live, which the list can see and say ("running as x") — where the
+// other order would leave a dead session with no row and nothing to bring back,
+// which nothing could ever notice.
+
+/**
+ * Sessions whose wind-down should end in an archive rather than a plain kill.
+ *
+ * In memory beside `softEnds`, and for the same reason: the intent only has to
+ * outlive the seconds between the phrase being typed and the session settling. A
+ * daemon restarted in that window loses the intent and the session is simply not
+ * archived — visibly, because it is still there.
+ */
+const archiveIntents = new Map();   // tmux name -> { note }
+
+/**
+ * Writes the card for a live session. Must run BEFORE the kill: everything it
+ * reads (the /run state file, the transcript path, the pane's session id) is
+ * removed by hardEndSession.
+ *
+ * Returns `{err}` for a session with nothing to archive — a pane that has never
+ * run Claude has no session id, and a row whose resume command cannot work is
+ * worse than being told no.
+ */
+function captureArchive(name, { note = null } = {}) {
+  const st = readSessionState(name);
+  const id = st && st.sessionId;
+  if (!id || !sessreg.UUID_RE.test(id)) {
+    return { err: 'no Claude session recorded here yet — there is nothing to bring back, so this can only be ended' };
+  }
+  // The transcript the hook recorded, or wherever it moved to. Both are checked
+  // because a session resumed after a cwd change sits under a different project
+  // slug, and findTranscriptFile is the one that knows how to look.
+  const recorded = st.transcript && fs.existsSync(st.transcript) ? st.transcript : null;
+  const tpath = recorded || findTranscriptFile(id);
+
+  // ONE read of the tail, which is both the card and the preview — the same
+  // trick the sessions list uses, at a bigger limit because the last thing SAID
+  // can sit behind a run of tool calls.
+  let t = null;
+  if (tpath) { try { t = readTranscript(tpath, { limit: 60 }); } catch { /* unreadable: not fatal */ } }
+
+  const entry = loadRegistry()[name] || {};
+  const copied = tpath ? copyTranscriptForArchive(id, tpath) : { bytes: 0, truncated: false };
+  const rec = archiveLib.buildRecord({
+    claudeSessionId: id,
+    tmuxName: name,
+    title: (t && t.title) || null,
+    cwd: st.cwd || (t && t.cwd) || entry.cwd || WORKDIR,
+    model: (t && t.model) || null,
+    effort: (t && t.effort) || null,
+    permissionMode: (t && t.permissionMode) || null,
+    gitBranch: (t && t.gitBranch) || null,
+    archivedAt: Math.floor(Date.now() / 1000),
+    lastMessage: t ? archiveLib.lastMessageOf(t.events) : '',
+    transcriptPath: tpath,
+    transcriptBytes: copied.bytes,
+    transcriptTruncated: copied.truncated,
+    note,
+  });
+  saveArchive(rec);
+  if (copied.truncated) {
+    log(`archive: ${name} transcript was over the ${ARCHIVE_TRANSCRIPT_CAP} byte cap; kept the last ${copied.bytes}`);
+  }
+  return { rec };
+}
+
+/**
+ * Card, then kill, then stamp the death.
+ *
+ * `endedAt` is written LAST and is what separates a finished archive from the
+ * crash window above — and it is also what puts the id on the list
+ * GET /v1/sessions filters by, so a row is never hidden from the sessions list
+ * before the session it names has actually gone.
+ */
+async function archiveAndEnd(name, opts = {}) {
+  const cap = captureArchive(name, opts);
+  if (cap.err) return { err: cap.err };
+  const { err, stderr } = await hardEndSession(name);
+  if (err) return { err: `tmux: ${(stderr || err.message || '').trim() || 'could not end the session'}`, rec: cap.rec };
+  const rec = updateArchive(cap.rec.id, (r) => { r.endedAt = Math.floor(Date.now() / 1000); }) || cap.rec;
+  enforceArchiveCap();
+  log(`archive: ${name} archived as ${rec.id}`);
+  return { rec };
+}
+
 /**
  * The one hard-end path. Kills the session AND cleans up what a bare
  * `tmux kill-session` used to leak: the /run state file (Claude's SessionEnd
@@ -1585,6 +1927,10 @@ async function hardEndSession(name) {
   await releaseSize(name).catch(() => { });
   softEnds.delete(name);
   launchingAt.delete(name);
+  // An archive intent belongs to a session that was going to be archived when it
+  // settled. Whatever just ended it got there first, so the intent is stale —
+  // left behind it would archive the NEXT session to take this name.
+  archiveIntents.delete(name);
   return { err: null };
 }
 
@@ -1690,13 +2036,30 @@ async function softEndTick() {
     const st = readSessionState(name);
     const { pending: next, action } = stepSoftEnd(pending, st ? st.state : null, now);
     if (action === 'kill') {
-      log(`soft-end: ${name} settled, ending`);
-      await hardEndSession(name).catch((e) => log(`soft-end kill ${name} failed: ${e.message}`));
+      // THE ONE HOOK ARCHIVE ADDS TO THIS PATH. A session wound down by
+      // POST /archive gets its card written here, in the instant before the
+      // kill, because that is the last moment its state file, its transcript
+      // path and its session id still exist.
+      const intent = archiveIntents.get(name);
+      if (intent) {
+        log(`soft-end: ${name} settled, archiving`);
+        archiveIntents.delete(name);
+        const r = await archiveAndEnd(name, intent).catch((e) => ({ err: e.message }));
+        if (r.err) log(`archive: ${name} could not be archived on settle: ${r.err}`);
+      } else {
+        log(`soft-end: ${name} settled, ending`);
+        await hardEndSession(name).catch((e) => log(`soft-end kill ${name} failed: ${e.message}`));
+      }
     } else if (action === 'cancel') {
+      // A wrap-up that turned into a question is not an archive either: the
+      // session is alive and waiting on a person, which is the one state this
+      // feature refuses to end from.
       log(`soft-end: ${name} asked a question, auto-end cancelled`);
+      archiveIntents.delete(name);
       softEnds.delete(name);
     } else if (action === 'expire') {
       log(`soft-end: ${name} never started a run, auto-end dropped`);
+      archiveIntents.delete(name);
       softEnds.delete(name);
     } else {
       softEnds.set(name, next);
@@ -8920,6 +9283,222 @@ const server = http.createServer(async (req, res) => {
       return sendErr(res, 404, 'no such round route');
     }
 
+    // ---- archive: a session ended on purpose, kept with the way back
+    //
+    // Its OWN routes rather than a flag on Session, and that is the whole design.
+    // An archived session never appears in /v1/sessions, so the send-target
+    // picker, the desktop's command palette and the home-screen widget — three
+    // surfaces that take a plain session list and have no concept of state —
+    // inherit nothing and are correct for free.
+
+    // Archive a live session. GRACEFUL by default: the wrap-up phrase goes in,
+    // the turn is allowed to finish, and the card is written in the instant
+    // before the kill. `mode: "now"` is the escape hatch for a session there is
+    // nothing to wrap up in.
+    if ((m = p.match(/^\/v1\/sessions\/([A-Za-z0-9_][A-Za-z0-9_.-]{0,49})\/archive$/)) && req.method === 'POST') {
+      const name = m[1];
+      if (!(await sessionExists(name))) return sendErr(res, 404, 'no such session');
+      const body = JSON.parse(await readBody(req) || '{}');
+      // The query string as well as the body: the CLI reaches this through a
+      // bodyless `curl -X POST` over ssh (see server/bin/huginn-archive), and a
+      // verb whose only option needs a JSON body would mean teaching a laptop to
+      // build one.
+      const mode = String(body.mode || u.searchParams.get('mode') || 'graceful');
+      if (mode !== 'graceful' && mode !== 'now') return sendErr(res, 400, 'mode is "graceful" or "now"');
+      const note = typeof body.note === 'string' ? body.note : null;
+
+      const st = readSessionState(name);
+      // Nothing to bring back. A pane that has never run Claude has no session
+      // id, so its "archive" would be a row whose resume command cannot work —
+      // the same refusal /meta makes, in the same words.
+      if (!st || !st.sessionId) {
+        return sendErr(res, 409, 'no Claude session recorded for this one yet — there is nothing to bring back, so it can only be ended');
+      }
+      if (mode === 'graceful') {
+        // ⚠ THE SAME GUARD /soft-end HAS, AND FOR A SHARPER REASON. A question is
+        // on screen waiting for a person; typing prose into a numbered prompt is
+        // lost or misread, and archiving a session mid-question throws away the
+        // one thing it was waiting to be told.
+        if (st.state === 'attention') {
+          return sendErr(res, 409, 'answer the waiting question first, then archive the session');
+        }
+        // Mid-turn is fine and is not a wait the caller has to sit through: the
+        // phrase queues in the composer, and the settle timer will not end
+        // anything until idle has held. The 202 says so.
+        const queued = st.state === 'running';
+        const r = await sendLineToPane(name, SOFT_END_PHRASE);
+        if (r.err) return sendErr(res, 500, `tmux: ${(r.stderr || '').trim()}`);
+        // Armed regardless of the host's softEndAuto. That setting decides
+        // whether a WIND-DOWN ends the session; an archive was asked for by name
+        // and has to end it, or the row would describe a session still running.
+        softEnds.set(name, createPending(Date.now()));
+        archiveIntents.set(name, { note });
+        return sendJson(res, 202, {
+          ok: true,
+          id: st.sessionId,
+          archived: false,
+          pending: true,
+          mode: 'graceful',
+          phrase: SOFT_END_PHRASE,
+          queued,
+        });
+      }
+      const r = await archiveAndEnd(name, { note });
+      if (r.err) return sendErr(res, r.rec ? 500 : 409, r.err);
+      return sendJson(res, 202, { ok: true, id: r.rec.id, archived: true, pending: false, mode: 'now', archive: r.rec });
+    }
+
+    // The list, and the FEATURE PROBE both clients use. A daemon without archive
+    // answers 404 here and the clients hide the whole section rather than showing
+    // a door that leads to an error — the scratchpads/refreshRounds precedent.
+    if (req.method === 'GET' && p === '/v1/archive') {
+      const liveIds = await liveSessionIds();
+      const rows = archiveLib.sortArchives(listArchives()).map((rec) => archiveLib.archiveRow(rec, {
+        // Live means THIS conversation is running under that name — the id has to
+        // match, because a tmux name is reused and a stranger holding it is not
+        // this archive coming back.
+        live: !!(rec.tmuxName && liveIds.get(rec.tmuxName) === rec.id),
+        // Recomputed every list, never stored: the thing it describes (Claude
+        // Code's 21-day sweep of its own transcripts) happens while this daemon
+        // is not looking.
+        transcriptPresent: fs.existsSync(archiveTranscriptPath(rec.id)) || !!findTranscriptFile(rec.id),
+      }));
+      return sendJson(res, 200, { archives: rows, max: archiveLib.MAX_ARCHIVES });
+    }
+
+    // The conversation of an archived session, read from the COPY.
+    //
+    // No sessionExists gate — that is the point. Every other transcript route
+    // begins by checking the tmux session is live and then reads state keyed on
+    // its NAME, and both of those are gone by the time a session is archived. The
+    // row carries its own path instead, and readTranscript is pure and takes one.
+    if ((m = p.match(/^\/v1\/archive\/([0-9a-f-]{36})\/transcript$/)) && req.method === 'GET') {
+      const id = m[1];
+      const rec = loadArchive(id);
+      if (!rec) return sendErr(res, 404, 'no such archived session');
+      const kept = archiveTranscriptPath(id);
+      // The kept copy FIRST and Claude Code's own only as a fallback: ours cannot
+      // be swept out from under this route, and after a revive the two are the
+      // same file anyway.
+      const file = fs.existsSync(kept) ? kept : findTranscriptFile(id);
+      if (!file) return sendErr(res, 409, 'no transcript was kept for this archive, and Claude Code no longer has one');
+      const offsetParam = u.searchParams.get('offset');
+      const offsetNum = offsetParam == null ? null : Number(offsetParam);
+      if (offsetNum !== null && !Number.isFinite(offsetNum)) return sendErr(res, 400, 'offset must be a number');
+      const untilParam = u.searchParams.get('until');
+      const untilNum = untilParam == null ? null : Number(untilParam);
+      if (untilNum !== null && !Number.isFinite(untilNum)) return sendErr(res, 400, 'until must be a number');
+      const t = readTranscript(file, {
+        offset: offsetNum,
+        until: untilNum,
+        limit: Math.max(1, Math.min(800, Number(u.searchParams.get('limit')) || 400)),
+      });
+      return sendJson(res, 200, {
+        ...t,
+        modelDisplay: formatModel(t.model),
+        claudeSessionId: id,
+        archived: true,
+        // Said on every window, because an archive of a truncated transcript
+        // starts mid-conversation and a reader scrolling to the top would
+        // otherwise conclude that is where it began.
+        transcriptTruncated: !!rec.transcriptTruncated,
+      });
+    }
+
+    // Bring one back to life: recreate the tmux session and resume into it.
+    if ((m = p.match(/^\/v1\/archive\/([0-9a-f-]{36})\/revive$/)) && req.method === 'POST') {
+      const id = m[1];
+      const rec = loadArchive(id);
+      if (!rec) return sendErr(res, 404, 'no such archived session');
+      const body = JSON.parse(await readBody(req) || '{}');
+
+      const liveIds = await liveSessionIds();
+      if (liveIds === null) return sendErr(res, 503, 'tmux is not answering right now');
+      // Already back. Reviving again would put a SECOND Claude on one transcript,
+      // and two processes appending to one jsonl is how a conversation becomes
+      // unreadable to both of them.
+      for (const [liveName, liveId] of liveIds) {
+        if (liveId === id) return sendErr(res, 409, `that conversation is already running as '${liveName}'`);
+      }
+
+      let asked = null;
+      if (typeof body.name === 'string' && body.name.trim()) {
+        asked = canonName(body.name);
+        if (!asked) return sendErr(res, 400, 'invalid session name (letters, digits, underscore)');
+      }
+      const want = archiveLib.reviveName(asked || rec.tmuxName || 'session', new Set(liveIds.keys()));
+      const cwd = rec.cwd || WORKDIR;
+
+      // ⚠ THE TRANSCRIPT GOES BACK FIRST. `claude --resume <id>` with nothing on
+      // disk to resume is not an error: the CLI opens a fresh conversation, so a
+      // revive that ran after the 21-day sweep would come up looking exactly like
+      // a success and remember nothing. Restoring before the launch is the only
+      // ordering where that cannot happen.
+      const restored = restoreArchivedTranscript(id, cwd);
+      const hasTranscript = !!findTranscriptFile(id);
+      const { canResume, command } = sessreg.resumeCommand({ claudeSessionId: id }, hasTranscript);
+
+      // Whatever the last holder of this name left behind goes now, exactly as the
+      // create route does it, and for the same reason: the new session must not be
+      // observed through a corpse's state file.
+      clearSessionState(want);
+      await ensureTmuxServerScope();
+      const r = await run('tmux', ['new-session', '-d', '-s', want, '-c', cwd, command]);
+      if (r.err) return sendErr(res, 500, `tmux: ${(r.stderr || r.err.message || '').trim() || 'could not recreate the session'}`);
+      // What tmux CALLED it. A '.' becomes '_' with a zero exit, and a client told
+      // the wrong name gets a 404 on everything it does next.
+      const q = await run('tmux', ['display-message', '-p', '-t', `=${want}:`, '#S']);
+      const created = (q.stdout || '').trim() || want;
+
+      // On the restore list again, with the id already known this time — and
+      // marked `restoredAt`, which means "the CLI's in-process usage-limit wait
+      // died with the old process". As true for a revive as for a reboot: without
+      // it auto-resume sits out its 90-second native grace waiting for a
+      // continuation that can never come.
+      registryAdd(created, { cwd, claudeSessionId: id, restoredAt: Math.floor(Date.now() / 1000) });
+      // The same startup hold the create route takes: `claude` needs about two
+      // seconds before anything reads stdin, and a revive is followed immediately
+      // by somebody typing into it.
+      markLaunching(created);
+
+      const saved = updateArchive(id, (rr) => {
+        rr.revivedAt = Math.floor(Date.now() / 1000);
+        rr.revivedAs = created;
+      }) || rec;
+      log(`archive: ${id} revived as ${created}${canResume ? '' : ' (nothing resumable on disk — fresh)'}`);
+      return sendJson(res, 201, {
+        ok: true,
+        name: created,
+        // Whether the conversation actually came back, or only the name and the
+        // directory did. The clients say which; a revive that quietly started a
+        // blank session is the failure this whole feature exists to prevent.
+        resumed: canResume,
+        restoredTranscript: !!restored.restored,
+        archive: saved,
+      });
+    }
+
+    if ((m = p.match(/^\/v1\/archive\/([0-9a-f-]{36})$/))) {
+      const id = m[1];
+      const rec = loadArchive(id);
+      if (!rec) return sendErr(res, 404, 'no such archived session');
+      if (req.method === 'GET') {
+        const liveIds = await liveSessionIds();
+        return sendJson(res, 200, archiveLib.archiveRow(rec, {
+          live: !!(rec.tmuxName && liveIds && liveIds.get(rec.tmuxName) === rec.id),
+          transcriptPresent: fs.existsSync(archiveTranscriptPath(id)) || !!findTranscriptFile(id),
+        }));
+      }
+      if (req.method === 'DELETE') {
+        // The row AND its transcript copy. The copy is the bulk of what an archive
+        // costs, and a delete that left it behind would be a store that only grows.
+        removeArchive(id);
+        log(`archive: ${id} deleted${rec.title ? ` (${rec.title})` : ''}`);
+        return sendJson(res, 200, { ok: true });
+      }
+      return sendErr(res, 404, 'no such archive route');
+    }
+
     // ---- scratchpads: the user's own pages, and nothing this host writes to
     if (req.method === 'GET' && p === '/v1/scratchpads') {
       // Main is minted HERE and not at startup, so listing is also what creates
@@ -9500,6 +10079,11 @@ resolveBind().then(async (bind) => {
   // manual` by a killed daemon would otherwise keep a laptop's window shrunken
   // with nothing left to release it.
   await sweepStrandedSizes('startup');
+  // Which conversations are archived, BEFORE anything can list a session or plan
+  // a restore. The set is what keeps an archived session out of /v1/sessions, and
+  // a daemon that learned it only on the next archive would spend its first
+  // minutes reporting sessions somebody deliberately ended.
+  refreshArchivedIds();
   // Bring back the tmux sessions a reboot/power-cut killed. A no-op when the tmux
   // server survived (an ordinary appd restart), so it is safe to run every start.
   // Before listen, like the sweep above, so the session list is whole by the time a
