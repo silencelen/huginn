@@ -2,7 +2,10 @@ package com.silencelen.huginn
 
 import com.silencelen.huginn.notify.ReplyStep
 import com.silencelen.huginn.notify.WatchNotifier
+import com.silencelen.huginn.notify.needsRevival
 import com.silencelen.huginn.notify.replyStep
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
@@ -87,5 +90,32 @@ class WatchNotifierTest {
         WatchNotifier.guarded { ran++ }
         WatchNotifier.guarded { ran++ }
         assertEquals(2, ran)
+    }
+}
+
+/**
+ * The watch service's revival gate.
+ *
+ * The service itself is an Android component; whether it should start its loop
+ * is one comparison, and it was the wrong one.
+ */
+class WatchServiceRevivalTest {
+
+    @Test
+    fun `a job that has finished is not a job that is running`() {
+        val live = Job()
+        assertEquals(false, needsRevival(live))
+
+        // The silent variant: the loop coroutine COMPLETED (cancelled, or
+        // returned) while `job` stayed non-null, because only onDestroy ever
+        // nulled it. Every later start() was then a permanent no-op with the
+        // service still alive and its notification still up.
+        val done = Job().apply { complete() }
+        assertEquals(true, needsRevival(done))
+
+        val cancelled = Job().apply { cancel() }
+        assertEquals(true, needsRevival(cancelled))
+
+        assertEquals(true, needsRevival(null))
     }
 }
