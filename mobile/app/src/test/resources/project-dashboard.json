@@ -18,6 +18,7 @@
       "present": true
     },
     "manifestRev": 1,
+    "spawnedRev": 1,
     "manifestSummary": "four sessions: db, web, probe and docs",
     "untaggedSeen": true,
     "endedReason": null,
@@ -64,8 +65,8 @@
   },
   "rate": {
     "activeRecently": true,
-    "tokensPer10m": 1800,
-    "tokensPer60m": 1400
+    "tokensPerMin10": 1800,
+    "tokensPerMin60": 1400
   },
   "members": [
     {
