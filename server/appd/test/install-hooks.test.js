@@ -293,3 +293,35 @@ test('a second run after a repoint is a no-op', () => {
   assert.match(stdout, /already current/);
   assert.equal(fs.readFileSync(file, 'utf8'), after);
 });
+
+// ------------------------------------------------- an empty --settings target
+
+test('an empty or dangling --settings is REFUSED, never the live settings file', () => {
+  // `--settings "$VAR"` with VAR unset looked exactly like passing no flag at
+  // all, so the tool silently operated on ~/.claude/settings.json and exited 0
+  // — proved with `--settings "" --uninstall`, which strips both gate rules out
+  // of the live shared file. A dangling `--settings` is worse: it swallows the
+  // next flag, so `--settings --dry-run` did a REAL install into a file called
+  // `./--dry-run`. `--script` has always refused the same input; this is the
+  // asymmetry, not a new rule.
+  const { stderr } = run(['--settings', '', '--script', SCRIPT, '--dry-run'], { expect: 2 });
+  assert.match(stderr, /--settings needs a path/);
+
+  const swallowed = run(['--settings', '--dry-run', '--script', SCRIPT], { expect: 2 });
+  assert.match(swallowed.stderr, /--settings needs a path/);
+  assert.equal(fs.existsSync(path.join(process.cwd(), '--dry-run')), false);
+
+  // The env-var default is PRESENCE-based for the same reason: the run() helper
+  // above sets HUGINN_CLAUDE_SETTINGS to '' on every invocation precisely so a
+  // case that forgets --settings cannot reach the operator's file. It must fail
+  // loudly rather than fall back to it.
+  const bare = run(['--script', SCRIPT, '--dry-run'], { expect: 2 });
+  assert.match(bare.stderr, /HUGINN_CLAUDE_SETTINGS/);
+});
+
+test('--script keeps refusing an empty or dangling value', () => {
+  const dir = scratch();
+  const file = copyFixture(dir);
+  assert.match(run(['--settings', file, '--script', ''], { expect: 2 }).stderr, /--script needs a path/);
+  assert.match(run(['--settings', file, '--script', '--dry-run'], { expect: 2 }).stderr, /--script needs a path/);
+});
