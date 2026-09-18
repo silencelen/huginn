@@ -1414,8 +1414,7 @@ private fun NewSessionDialog(
                 Text(
                     when {
                         clash -> "There is already a session called $canon."
-                        else -> "Letters, digits, _ . and - ; starts with a letter or digit. " +
-                            "Claude Code starts in it automatically."
+                        else -> "$SESSION_NAME_HELP Claude Code starts in it automatically."
                     },
                     style = DeskType.rowMeta,
                     color = if (clash) MaterialTheme.colorScheme.error
@@ -1454,7 +1453,7 @@ private fun RenameDialog(
                     placeholder = if (session) "e.g. jtyper" else "What this chat is about",
                 ) { text = it }
                 Text(
-                    if (session) "Letters, digits, _ . and - ; starts with a letter or digit."
+                    if (session) SESSION_NAME_HELP
                     else "Only the title changes; the chat keeps its history.",
                     style = DeskType.rowMeta,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -1607,5 +1606,22 @@ private fun ConfirmDialog(target: ConfirmTarget, onDismiss: () -> Unit, onConfir
     )
 }
 
-/** What the daemon will route to; kept in step with the phone's copy of it. */
-private val SESSION_NAME = Regex("^[a-z0-9_][a-z0-9_.-]{0,49}$")
+/**
+ * What the daemon will route to; kept in step with the phone's copy of it.
+ *
+ * ⚠ NO DOT, and that is the whole point of this line. tmux rewrites '.' to '_'
+ * in a session name and exits 0 about it, so a name this field accepted with a
+ * dot in it never existed: the create route reported `api.v2` back while tmux
+ * held `api_v2`, and a rename moved the open pane, its draft and its sent
+ * history to a name every route then 404s. The pane closes as if the session
+ * had ended and the draft that was just moved there is deleted with the key.
+ * '.' was the ONLY character this field allowed that tmux rewrites — '-' and
+ * '_' survive it untouched — so banning it here removes the failure rather
+ * than reporting it, and matches the rule the daemon, the phone and the CLI
+ * all hold.
+ */
+internal val SESSION_NAME = Regex("^[a-z0-9_][a-z0-9_-]{0,49}$")
+
+/** The one sentence both name fields explain themselves with. */
+internal const val SESSION_NAME_HELP =
+    "Letters, digits, _ and - ; starts with a letter or digit."
