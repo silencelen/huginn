@@ -645,6 +645,54 @@ class HuginnClient(
     suspend fun compactSession(name: String): CompactResult =
         decode(post("/v1/sessions/$name/compact", body = buildJsonObject {}))
 
+    // ---- archive: sessions ended on purpose, and the way back into them
+
+    /**
+     * Every archived session, newest first.
+     *
+     * ALSO THE FEATURE PROBE. A daemon older than archive answers 404 here and
+     * both clients hide the Archived section and the Archive action on that,
+     * rather than showing a door that leads to an error — the same shape as
+     * [scratchpads] and the silent-404 refreshRounds precedent.
+     */
+    suspend fun archives(): List<ArchivedSession> =
+        decode<ArchiveList>(call("/v1/archive")).archives
+
+    /**
+     * End a session for good and keep the card that brings it back.
+     *
+     * GRACEFUL by default: the host types its wrap-up phrase, lets the turn
+     * finish, and writes the card in the instant before the kill — so the 202
+     * says `pending`, not `archived`, and the row appears when the session
+     * settles. [now] is the escape hatch for a session with nothing to wrap up.
+     *
+     * ⚠ 409 ON A WAITING QUESTION, and the message is the point. "answer the
+     * waiting question first, then archive the session" tells somebody exactly
+     * what to do, so it is thrown as a [HuginnException] whose message the UI
+     * shows verbatim rather than replacing with a summary of its own.
+     */
+    suspend fun archiveSession(name: String, now: Boolean = false): ArchiveResult =
+        decode(post("/v1/sessions/$name/archive", body = buildJsonObject {
+            put("mode", JsonPrimitive(if (now) "now" else "graceful"))
+        }))
+
+    /**
+     * Bring one back: the host recreates the tmux session, restores its kept
+     * transcript if Claude Code has swept its own, and resumes into it.
+     *
+     * [name] is a REQUEST, not a promise — the old name is taken when free, a
+     * numbered one when not, and the result carries what tmux actually called it.
+     */
+    suspend fun reviveArchive(id: String, name: String? = null): ReviveResult =
+        decode(post("/v1/archive/$id/revive", body = buildJsonObject {
+            name?.let { put("name", JsonPrimitive(it)) }
+        }))
+
+    /** Forgets the row AND the transcript copy it was keeping. There is no undo. */
+    suspend fun deleteArchive(id: String) {
+        call("/v1/archive/$id", HttpMethod.Delete)
+    }
+
     suspend fun renameSession(from: String, to: String) {
         post("/v1/sessions/$from/rename", body = jsonBody("name" to to))
     }

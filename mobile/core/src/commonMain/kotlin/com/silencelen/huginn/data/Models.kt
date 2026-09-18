@@ -262,6 +262,119 @@ data class CompactResult(
     val queued: Boolean = false,
 )
 
+/**
+ * A session that was ended ON PURPOSE, and everything needed to bring it back.
+ *
+ * Deliberately NOT a flag on [Session]: the daemon never lists an archived
+ * conversation under /v1/sessions, so the send-target picker, the desktop
+ * palette and the home-screen widget — three surfaces that take a plain session
+ * list and have no concept of state — inherit nothing and stay correct with no
+ * code of their own.
+ *
+ * Every field is nullable-with-a-default, the house rule, so a row from a newer
+ * daemon still decodes here and a row from an older one still renders.
+ */
+@Serializable
+data class ArchivedSession(
+    /** The Claude session uuid. The key for everything — never the tmux name,
+     *  which is reused within hours on this host. */
+    val id: String,
+    /** The tmux name it had, and the name a revive asks for first. */
+    val tmuxName: String? = null,
+    /** Claude Code's own generated title, which is what the row leads with. */
+    val title: String? = null,
+    val cwd: String? = null,
+    val model: String? = null,
+    val effort: String? = null,
+    val permissionMode: String? = null,
+    val gitBranch: String? = null,
+    /**
+     * The exact command that brings this conversation back, cwd included —
+     * `cd '<dir>' && claude --resume <uuid>`. Built by the host, never by a
+     * client: this is the one string a person copies into a terminal, and two
+     * implementations of it would eventually disagree about a directory with a
+     * space in it. Null when the session had no resumable id.
+     */
+    val resumeCommand: String? = null,
+    val archivedAt: Long = 0,
+    /** When the session actually died. Null while the kill has not landed. */
+    val endedAt: Long? = null,
+    val lastMessage: String? = null,
+    val transcriptBytes: Long = 0,
+    /** The copy is a TAIL of an over-cap conversation, not the whole of it. */
+    val transcriptTruncated: Boolean = false,
+    val revivedAt: Long? = null,
+    /** The tmux name it came back under, which can differ from [tmuxName]. */
+    val revivedAs: String? = null,
+    /**
+     * This conversation is running RIGHT NOW under [revivedAs] (or [tmuxName]).
+     * Such a row offers Open, never Revive: a second Claude on one transcript
+     * leaves a jsonl neither of them can read.
+     */
+    val live: Boolean = false,
+    /**
+     * There is still something to resume — the host's own copy, or Claude Code's.
+     *
+     * ⚠ FALSE IS THE ROW'S MOST IMPORTANT STATE. Claude Code deletes its own
+     * transcripts after `cleanupPeriodDays`, and a revive past that opens a
+     * blank conversation in the right directory and looks exactly like a
+     * success. Recomputed by the host on every list, because the thing it
+     * describes happens while nobody is watching.
+     */
+    val transcriptPresent: Boolean = false,
+)
+
+/**
+ * GET /v1/archive.
+ *
+ * ALSO THE FEATURE PROBE. A daemon older than archive has no such route and
+ * answers 404; both clients hide the whole Archived section on that rather than
+ * parsing a version — the scratchpads precedent, for its reason: a version
+ * string is a claim about what a build contains, a 404 is the route answering.
+ */
+@Serializable
+data class ArchiveList(
+    val archives: List<ArchivedSession> = emptyList(),
+    /** How many rows this host keeps before the oldest is dropped. */
+    val max: Int = 0,
+)
+
+/** What POST /v1/sessions/:name/archive reports back. */
+@Serializable
+data class ArchiveResult(
+    val ok: Boolean = false,
+    /** The Claude session uuid the archive will be filed under. */
+    val id: String? = null,
+    /** Done. False means accepted and winding down — see [pending]. */
+    val archived: Boolean = false,
+    /** The wrap-up phrase has been sent; the row appears when the session settles. */
+    val pending: Boolean = false,
+    /** "graceful" or "now". */
+    val mode: String? = null,
+    /** The phrase the HOST typed. Never a client copy of it. */
+    val phrase: String? = null,
+    /** The session was mid-turn, so the wrap-up queued behind it. */
+    val queued: Boolean = false,
+)
+
+/** What POST /v1/archive/:id/revive reports back. */
+@Serializable
+data class ReviveResult(
+    val ok: Boolean = false,
+    /** The name tmux ACTUALLY used — `<name>2` when the old one was taken, and
+     *  read back from tmux, which rewrites some characters and still succeeds. */
+    val name: String = "",
+    /**
+     * Whether the CONVERSATION came back, or only the name and the directory.
+     * False means there was nothing resumable left on disk and this is a fresh
+     * Claude — the failure the whole feature exists to prevent, so it is said.
+     */
+    val resumed: Boolean = false,
+    /** The host put its kept transcript back because Claude Code had swept its own. */
+    val restoredTranscript: Boolean = false,
+    val archive: ArchivedSession? = null,
+)
+
 @Serializable
 data class Screen(
     val width: Int = 80,

@@ -3,10 +3,12 @@ package com.silencelen.huginn.desktop
 import com.silencelen.huginn.data.Chat
 import com.silencelen.huginn.data.Device
 import com.silencelen.huginn.data.Round
+import com.silencelen.huginn.data.ArchivedSession
 import com.silencelen.huginn.data.Scratchpad
 import com.silencelen.huginn.data.ScratchpadSaver
 import com.silencelen.huginn.data.SessionMetaSaver
 import com.silencelen.huginn.ui.RoundDraft
+import com.silencelen.huginn.ui.ArchiveRules
 import com.silencelen.huginn.ui.ScratchpadRules
 import com.silencelen.huginn.ui.toSchedule
 import com.silencelen.huginn.desktop.device.DeviceRunner
@@ -577,6 +579,20 @@ class AppStore(
     private val _sessions = MutableStateFlow<List<Session>>(emptyList())
     val sessions: StateFlow<List<Session>> = _sessions.asStateFlow()
 
+    /** Sessions ended on purpose, kept with the command that brings them back. */
+    private val _archives = MutableStateFlow<List<ArchivedSession>>(emptyList())
+    val archives: StateFlow<List<ArchivedSession>> = _archives.asStateFlow()
+
+    /**
+     * Whether this daemon HAS archive. Null until the first probe answers.
+     *
+     * FEATURE DETECTION, not version parsing — the scratchpads precedent. False
+     * hides the Archived section AND the right-click verb, because a menu entry
+     * whose only outcome is a 404 is worse than no entry.
+     */
+    private val _archiveAvailable = MutableStateFlow<Boolean?>(null)
+    val archiveAvailable: StateFlow<Boolean?> = _archiveAvailable.asStateFlow()
+
     /** Null until the first fetch settles, so a cold start never claims "no chats". */
     private val _listsLoaded = MutableStateFlow(false)
     val listsLoaded: StateFlow<Boolean> = _listsLoaded.asStateFlow()
@@ -991,6 +1007,70 @@ class AppStore(
     }
 
     /**
+     * The archived list, and the flag that says whether this daemon has them.
+     *
+     * Silent on failure and only a 404 is recorded — the same shape as
+     * [refreshPads] and refreshRounds. A status bar that permanently reports a
+     * missing feature as a fault is a status bar people stop reading.
+     */
+    suspend fun refreshArchives() {
+        runCatching { client.archives() }
+            .onSuccess { _archives.value = ArchiveRules.ordered(it); _archiveAvailable.value = true }
+            .onFailure {
+                if (it is HuginnClient.HuginnException && it.code == 404) _archiveAvailable.value = false
+            }
+    }
+
+    /**
+     * Archive sessions: end them for good, keeping the way back into each.
+     *
+     * Graceful, like the wind-down it is built on — so this returns while they
+     * are still on screen winding down, and the rows appear when they settle.
+     *
+     * ⚠ THE REFUSAL IS RE-THROWN, not swallowed. "answer the waiting question
+     * first, then archive the session" is the most useful thing this action ever
+     * says, and [act]'s note surfaces the daemon's own sentence; a caught-and-
+     * summarised failure here would turn it into "could not archive".
+     */
+    suspend fun archiveSessions(names: List<String>, now: Boolean = false) {
+        val refused = mutableListOf<String>()
+        for (n in names) {
+            runCatching { client.archiveSession(n, now = now) }
+                .onSuccess {
+                    drafts.clear(DraftBook.sessionKey(n))
+                    sentHistory.clear(DraftBook.sessionKey(n))
+                }
+                .onFailure { refused += "$n: ${it.message}" }
+        }
+        refreshSessions()
+        refreshArchives()
+        check(refused.isEmpty()) { refused.joinToString("; ") }
+    }
+
+    /**
+     * Bring one back and open it.
+     *
+     * The name comes from the HOST, never from the row: the old one is taken when
+     * free and numbered when not, so opening `row.tmuxName` would show a session
+     * that does not exist — or a stranger that reused the name.
+     */
+    suspend fun reviveArchive(row: ArchivedSession) {
+        runCatching { client.reviveArchive(row.id) }
+            .onSuccess { r ->
+                refreshSessions()
+                refreshArchives()
+                openSession(r.name)
+            }
+            .onFailure { note(Faults.ACTION, it) }
+    }
+
+    suspend fun deleteArchive(row: ArchivedSession) {
+        runCatching { client.deleteArchive(row.id) }
+            .onSuccess { refreshArchives() }
+            .onFailure { note(Faults.ACTION, it) }
+    }
+
+    /**
      * One read of `/v1/headroom`.
      *
      * A failure is left to the fault sweeper rather than raised: the ONLY
@@ -1221,6 +1301,14 @@ class AppStore(
                 // for the same reason the transcript is not in this loop: a poll
                 // that overwrote what somebody is typing is not a refresh.
                 refreshPads()
+                // ⚠ THE TWO SESSION LISTS MOVE TOGETHER. A graceful archive leaves
+                // the session on screen for as long as its turn runs and then
+                // moves it — so a Sessions poll that did not also fetch the
+                // archive would show a row vanish with nothing appearing anywhere.
+                // Every fourth pass, not every one: an archive changes when
+                // somebody presses something, while the sessions list changes on
+                // its own.
+                if (tick % 4 == 0) refreshArchives()
                 // Cheap, because start() returns immediately when the runner is
                 // already going. This way it survives a settings file edited
                 // underneath the app as well as a toggle in the UI.

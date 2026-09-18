@@ -801,6 +801,27 @@ function restoreArchivedTranscript(id, cwd) {
 }
 
 /**
+ * Is THIS conversation running right now, and under what name?
+ *
+ * ⚠ BOTH NAMES ARE CHECKED, and only one of them is obvious. A revive under a
+ * taken name lands on `<name>2` and stamps `revivedAs`, so a row matched on
+ * `tmuxName` alone reports a session that came back ten seconds ago as still
+ * archived — and offers Revive again, which is how a second Claude ends up
+ * appending to one transcript. Caught by a screenshot fixture, not by a test,
+ * which is why there is now a test.
+ *
+ * The ID has to match either way: a tmux name is reused within hours here, and a
+ * stranger holding the old name is not this archive coming back.
+ */
+function archiveLiveName(rec, liveIds) {
+  if (!liveIds) return null;
+  for (const name of [rec.revivedAs, rec.tmuxName]) {
+    if (name && liveIds.get(name) === rec.id) return name;
+  }
+  return null;
+}
+
+/**
  * Brings the store back to the cap, oldest archive first.
  *
  * Rows never time-expire — an archive whose promise is "still here when you want
@@ -9357,7 +9378,7 @@ const server = http.createServer(async (req, res) => {
         // Live means THIS conversation is running under that name — the id has to
         // match, because a tmux name is reused and a stranger holding it is not
         // this archive coming back.
-        live: !!(rec.tmuxName && liveIds.get(rec.tmuxName) === rec.id),
+        live: !!archiveLiveName(rec, liveIds),
         // Recomputed every list, never stored: the thing it describes (Claude
         // Code's 21-day sweep of its own transcripts) happens while this daemon
         // is not looking.
@@ -9485,7 +9506,7 @@ const server = http.createServer(async (req, res) => {
       if (req.method === 'GET') {
         const liveIds = await liveSessionIds();
         return sendJson(res, 200, archiveLib.archiveRow(rec, {
-          live: !!(rec.tmuxName && liveIds && liveIds.get(rec.tmuxName) === rec.id),
+          live: !!archiveLiveName(rec, liveIds),
           transcriptPresent: fs.existsSync(archiveTranscriptPath(id)) || !!findTranscriptFile(id),
         }));
       }

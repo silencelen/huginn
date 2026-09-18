@@ -19,6 +19,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.DriveFileRenameOutline
+import androidx.compose.material.icons.filled.Inventory2
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.DropdownMenu
@@ -42,6 +43,7 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import com.silencelen.huginn.data.ArchivedSession
 import com.silencelen.huginn.data.Session
 
 /**
@@ -59,18 +61,54 @@ fun SessionsScreen(
     onKill: (String) -> Unit,
     onSoftEnd: (String) -> Unit = {},
     onRename: (String, String) -> Unit,
+    /** Sessions ended on purpose, kept with the way back. Empty on a daemon
+     *  without the feature — see [archiveAvailable]. */
+    archives: List<ArchivedSession> = emptyList(),
+    /**
+     * Whether this daemon HAS archive. Null until the probe answers; false hides
+     * the section AND the row action, because a control whose only outcome is a
+     * 404 is worse than no control.
+     */
+    archiveAvailable: Boolean? = null,
+    onArchive: (String) -> Unit = {},
+    onRevive: (ArchivedSession) -> Unit = {},
+    onCopyResume: (ArchivedSession) -> Unit = {},
+    onDeleteArchive: (ArchivedSession) -> Unit = {},
 ) {
     var showNew by remember { mutableStateOf(false) }
     var newName by remember { mutableStateOf("") }
     var confirmKill by remember { mutableStateOf<String?>(null) }
     var confirmSoftEnd by remember { mutableStateOf<String?>(null) }
+    var confirmArchive by remember { mutableStateOf<String?>(null) }
+    var confirmDeleteArchive by remember { mutableStateOf<ArchivedSession?>(null) }
+    // Collapsed by default and remembered only for as long as the screen is:
+    // the archive is a footnote to this list, and a section that came back open
+    // would push the live sessions off a phone screen every time.
+    var archivesOpen by remember { mutableStateOf(false) }
     var renaming by remember { mutableStateOf<String?>(null) }
     var renameTo by remember { mutableStateOf("") }
+    val nowMs = remember(archives) { System.currentTimeMillis() }
 
     Box(Modifier.fillMaxSize()) {
         if (sessions.isEmpty()) {
+            // ⚠ THE ARCHIVE STILL SHOWS HERE. A host whose sessions have all been
+            // archived has an empty session list and is not an empty host, and
+            // "No sessions" with no way to reach what was put away is the one
+            // screen this feature could make worse.
             Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.Center) {
                 EmptyState("No sessions", "Create one and it opens Claude Code on the host, same as cc.")
+                if (archiveAvailable == true) {
+                    ArchivedSessionsSection(
+                        rows = archives,
+                        nowMs = nowMs,
+                        expanded = archivesOpen,
+                        onToggle = { archivesOpen = !archivesOpen },
+                        onRevive = onRevive,
+                        onCopyResume = onCopyResume,
+                        onDelete = { confirmDeleteArchive = it },
+                        onOpenLive = onOpen,
+                    )
+                }
             }
         } else {
             LazyColumn(
@@ -84,9 +122,28 @@ fun SessionsScreen(
                         onOpen = { onOpen(s.name) },
                         onKill = { confirmKill = s.name },
                         onSoftEnd = { confirmSoftEnd = s.name },
+                        onArchive = if (archiveAvailable == true) ({ confirmArchive = s.name }) else null,
                         onRename = { renaming = s.name; renameTo = s.name },
                     )
                     HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+                }
+                // At the BOTTOM of the live list, collapsed, rather than a fifth
+                // bottom tab. An archive is a footnote to the sessions list —
+                // somewhere you look once a week — and the tab bar already holds
+                // four destinations.
+                if (archiveAvailable == true) {
+                    item {
+                        ArchivedSessionsSection(
+                            rows = archives,
+                            nowMs = nowMs,
+                            expanded = archivesOpen,
+                            onToggle = { archivesOpen = !archivesOpen },
+                            onRevive = onRevive,
+                            onCopyResume = onCopyResume,
+                            onDelete = { confirmDeleteArchive = it },
+                            onOpenLive = onOpen,
+                        )
+                    }
                 }
             }
         }
@@ -162,6 +219,39 @@ fun SessionsScreen(
         )
     }
 
+    confirmArchive?.let { name ->
+        AlertDialog(
+            onDismissRequest = { confirmArchive = null },
+            title = { Text("Archive $name?") },
+            text = {
+                Text(
+                    "Claude is asked to wrap up, and the session is ended once it settles. " +
+                        "It moves to Archived with the directory it ran in, a copy of the " +
+                        "conversation and the exact resume command, so you can bring it back.",
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = { confirmArchive = null; onArchive(name) }) { Text("Archive") }
+            },
+            dismissButton = { TextButton(onClick = { confirmArchive = null }) { Text("Cancel") } },
+        )
+    }
+
+    confirmDeleteArchive?.let { row ->
+        AlertDialog(
+            onDismissRequest = { confirmDeleteArchive = null },
+            title = { Text("Forget ${ArchiveRules.label(row)}?") },
+            // Named for what is actually lost. "Delete" against a row that looks
+            // like a list entry reads as tidying; the copy of the conversation
+            // going with it is the part worth a sentence.
+            text = { Text("The row and the kept copy of its conversation are removed. This cannot be undone.") },
+            confirmButton = {
+                TextButton(onClick = { val r = row; confirmDeleteArchive = null; onDeleteArchive(r) }) { Text("Forget") }
+            },
+            dismissButton = { TextButton(onClick = { confirmDeleteArchive = null }) { Text("Cancel") } },
+        )
+    }
+
     confirmSoftEnd?.let { name ->
         AlertDialog(
             onDismissRequest = { confirmSoftEnd = null },
@@ -187,6 +277,8 @@ private fun SessionRow(
     onOpen: () -> Unit,
     onKill: () -> Unit,
     onSoftEnd: () -> Unit = {},
+    /** Null on a daemon without the archive feature, which is what hides the item. */
+    onArchive: (() -> Unit)? = null,
     onRename: () -> Unit,
 ) {
     var menu by remember { mutableStateOf(false) }
@@ -322,6 +414,17 @@ private fun SessionRow(
                     text = { Text("Wind down…") },
                     onClick = { menu = false; onSoftEnd() },
                 )
+                // Between the wind-down and the end, where it belongs: it is a
+                // wind-down that leaves something behind. Not styled destructive —
+                // ending a session you can bring back is the least destructive of
+                // the three.
+                if (onArchive != null) {
+                    DropdownMenuItem(
+                        text = { Text("Archive…") },
+                        leadingIcon = { Icon(Icons.Filled.Inventory2, contentDescription = null) },
+                        onClick = { menu = false; onArchive() },
+                    )
+                }
                 DropdownMenuItem(
                     text = { Text("End session") },
                     leadingIcon = { Icon(Icons.Filled.Delete, contentDescription = null) },

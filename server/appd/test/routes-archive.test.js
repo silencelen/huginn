@@ -456,6 +456,29 @@ test('a name taken in the meantime makes the revive land on <name>2', async () =
   assert.ok(liveNames().includes(`${name}2`));
 });
 
+test('a row revived under a DIFFERENT name still reads as live', async () => {
+  // ⚠ THE ROW IS MATCHED ON BOTH NAMES. A revive onto a taken name lands on
+  // `<name>2` and stamps revivedAs; matched on tmuxName alone the row reports a
+  // session that came back ten seconds ago as still archived — and offers Revive
+  // again, which is how a second Claude ends up appending to one transcript.
+  // Found by a screenshot fixture, which is why this exists.
+  const { name, id } = mkArchivable('renamed');
+  await api(`/v1/sessions/${name}/archive`, { method: 'POST', body: JSON.stringify({ mode: 'now' }) });
+  mkSession('renamed');                       // somebody took the old name back
+
+  const r = await api(`/v1/archive/${id}/revive`, { method: 'POST' });
+  assert.equal(201, r.status, JSON.stringify(r.body));
+  assert.equal(`${name}2`, r.body.name);
+  madeSessions.add(r.body.name);
+
+  const row = (await archives()).find((a) => a.id === id);
+  assert.equal(true, row.live, 'it is running — under revivedAs, not under tmuxName');
+  assert.equal(`${name}2`, row.revivedAs);
+  // And the stranger holding the OLD name must not be mistaken for it.
+  writeState(name, 'idle', { sessionId: crypto.randomUUID(), transcript: null });
+  assert.equal(true, (await archives()).find((a) => a.id === id).live);
+});
+
 test('a revive restores the kept transcript when Claude Code has swept its own', async () => {
   // THE 21-DAY CASE, which is the entire reason the copy exists. Without the
   // restore, `claude --resume <id>` finds nothing, opens a blank conversation,

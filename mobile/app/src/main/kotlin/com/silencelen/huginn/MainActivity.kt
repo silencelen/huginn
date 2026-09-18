@@ -1124,6 +1124,8 @@ fun HuginnApp(
                 vm.startSessionsPolling()
                 onStopOrDispose { vm.stopSessionsPolling() }
             }
+            val archives by vm.archives.collectAsState()
+            val archiveAvailable by vm.archiveAvailable.collectAsState()
             SessionsScreen(
                 sessions = sessions,
                 selectedName = if (twoPane) (dest as? Dest.SessionView)?.name else null,
@@ -1132,6 +1134,16 @@ fun HuginnApp(
                 onKill = { vm.killSession(it) },
                 onSoftEnd = { vm.softEndSession(it) },
                 onRename = { from, to -> vm.renameSession(from, to) },
+                archives = archives,
+                archiveAvailable = archiveAvailable,
+                onArchive = { vm.archiveSession(it) },
+                // Straight into it. A revive that left you looking at the list
+                // would make the whole verb feel like it had not worked, and the
+                // NAME has to be the host's answer — the old one is taken when
+                // free and numbered when not.
+                onRevive = { row -> vm.reviveArchive(row) { name -> dest = Dest.SessionView(name) } },
+                onCopyResume = { row -> row.resumeCommand?.let { vm.copy(it, "claude --resume") } },
+                onDeleteArchive = { vm.deleteArchive(it) },
             )
         }
         val sessionDetail: @Composable (String) -> Unit = { name ->
