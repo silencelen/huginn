@@ -715,3 +715,76 @@ class HuginnClientTest {
         assertEquals("outside the allowed roots", e.message)
     }
 }
+
+/**
+ * THE UNAUTHENTICATED PROBE, AND WHAT IT CAN SAY OUT LOUD.
+ *
+ * ⚠⚠ `/v1/ping` IS TOKEN-GATED — `huginn-appd.js` authorizes before the ping
+ * handler — so the first-run flow's Address step, which called `ping()`, failed
+ * with the word "unauthorized" against a perfectly correct address. On every
+ * fresh install: the step exists precisely to separate "nothing answers there"
+ * from "something answers and does not like your bearer", and it was reporting
+ * the second for the first, pointing the reader at a token the flow had not
+ * asked for yet.
+ *
+ * [HuginnClient.provesDaemon] already knew the real contract — the 401 plus the
+ * `X-Huginn-Appd` header IS the proof — and [HuginnClient.probe] already used it.
+ * What was missing is that a boolean cannot carry a sentence, so the step had
+ * nothing to print. [HuginnClient.probeDaemon] answers with the version off the
+ * header, which is the same fact `ping()` would have given and needs no token.
+ */
+class DaemonProbeTest {
+
+    private val seen = mutableListOf<HttpRequestData>()
+
+    private fun client(
+        respond: suspend io.ktor.client.engine.mock.MockRequestHandleScope.(HttpRequestData) -> io.ktor.client.request.HttpResponseData,
+    ) = HuginnClient(
+        baseUrlProvider = { "http://appd.test" },
+        tokenProvider = { "test-token" },
+        engine = MockEngine { request -> seen += request; respond(request) },
+    )
+
+    @Test
+    fun `a token-gated 401 proves the daemon and carries its version`() = runTest {
+        val probe = client {
+            respond(
+                """{"error":"unauthorized"}""",
+                HttpStatusCode.Unauthorized,
+                headersOf(HuginnClient.APPD_HEADER, "3.4.0"),
+            )
+        }.probeDaemon("http://192.168.2.117:8787")
+
+        assertTrue(probe.proven, "a 401 with the version header is the daemon answering")
+        assertEquals("3.4.0", probe.version)
+        assertNull(seen.last().headers[HttpHeaders.Authorization], "the probe must never carry the bearer")
+        assertEquals(
+            "appd 3.4.0 answered at 192.168.2.117:8787",
+            HuginnClient.probeWords(probe),
+            "the step prints the world's own words, not a paraphrase",
+        )
+    }
+
+    @Test
+    fun `a daemon too old to stamp the header still proves itself by its refusal`() = runTest {
+        val probe = client { respond("""{"error":"unauthorized"}""", HttpStatusCode.Unauthorized) }
+            .probeDaemon("http://192.168.2.117:8787")
+        assertTrue(probe.proven, "the JSON error shape is the older marker and still counts")
+        assertNull(probe.version)
+        assertEquals("huginn answered at 192.168.2.117:8787", HuginnClient.probeWords(probe))
+    }
+
+    @Test
+    fun `a stranger at that address is not the daemon`() = runTest {
+        val probe = client { respond("<html>NAS login</html>", HttpStatusCode.OK) }
+            .probeDaemon("http://192.168.2.117:8787")
+        assertFalse(probe.proven, "a 200 of somebody else's web page is not huginn")
+    }
+
+    @Test
+    fun `an empty route is a state rather than an address`() = runTest {
+        val probe = client { respond("", HttpStatusCode.OK) }.probeDaemon("   ")
+        assertFalse(probe.proven)
+        assertEquals(HuginnClient.NO_ROUTE, HuginnClient.probeWords(probe))
+    }
+}
