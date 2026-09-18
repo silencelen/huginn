@@ -542,3 +542,84 @@ test('a claude that cannot be started says so, not "claude exited -13" (#43)', a
     fs.rmSync(scratch, { recursive: true, force: true });
   }
 });
+
+test('a restart does not seal a Round chat over its queued messages (#38)', async () => {
+  // ⚠ A 202 THAT MEANT NOTHING. A message queued into a Round's run in flight
+  // was drained by `settleRun` — and `reconcileInterruptedRound`, the path a
+  // huginn-appd RESTART takes (which deploy.sh does routinely), does not go
+  // through settleRun. So the chat was sealed and `meta.pending` stayed on disk
+  // forever: never delivered, never dropped, no note in the conversation, and
+  // POST /messages answers 409 "this run has finished". Round chats are filtered
+  // out of /v1/chats and skipped by `deliverOrphanedQueues` and `chatStates`, so
+  // no notification path could ever surface it. The drain belongs inside
+  // `finishRoundRun`, before its deleted-Round early return.
+  //
+  // The restart is real: the state is written to disk and a daemon is started
+  // against it, which is exactly what the reconcile sees.
+  const scratch = fs.mkdtempSync(path.join(os.tmpdir(), 'appd-roundq-'));
+  const data = path.join(scratch, 'data');
+  const roundId = crypto.randomUUID();
+  const chatId = crypto.randomUUID();
+  fs.mkdirSync(path.join(data, 'rounds'), { recursive: true });
+  fs.mkdirSync(path.join(data, 'chats', chatId), { recursive: true });
+  fs.writeFileSync(path.join(data, 'rounds', `${roundId}.json`), JSON.stringify({
+    id: roundId, title: 'nightly check', prompt: 'Check things.', mode: 'ask', host: 'local',
+    schedule: { kind: 'weekly', days: [0], at: '19:00', tz: 'America/Los_Angeles' },
+    notifyWhen: 'never', runs: [], currentChatId: chatId, createdAt: 1,
+  }, null, 2));
+  const ts = Math.floor(Date.now() / 1000);
+  fs.writeFileSync(path.join(data, 'chats', chatId, 'meta.json'), JSON.stringify({
+    id: chatId, mode: 'ask', host: 'local', createdAt: ts, updatedAt: ts,
+    roundId, roundStartedAt: ts, runStartedAt: ts, running: true,
+    pending: [{ text: 'while you are in there, check the disk too', ts }],
+  }, null, 2));
+  fs.writeFileSync(path.join(data, 'chats', chatId, 'messages.jsonl'),
+    `${JSON.stringify({ type: 'user', text: 'Check things.', ts })}\n`);
+
+  const fd = fs.openSync(path.join(scratch, 'daemon.log'), 'a');
+  const child = spawn(process.execPath, [path.join(__dirname, '..', 'huginn-appd.js')], {
+    env: {
+      ...process.env,
+      HUGINN_APPD_PORT: String(SPARE_PORT),
+      HUGINN_APPD_BIND: '127.0.0.1',
+      HUGINN_APPD_DATA: data,
+      HUGINN_APPD_TOKEN_FILE: path.join(tmp, 'token'),
+      HUGINN_APPD_STATE_DIR: path.join(scratch, 'state'),
+      HUGINN_APPD_WORKDIR: scratch,
+      HUGINN_APPD_TMUX_SOCKET: TMUX_SOCK,
+    },
+    stdio: ['ignore', fd, fd],
+  });
+  fs.closeSync(fd);
+  try {
+    for (let i = 0; i < 200; i++) {
+      try {
+        const r = await fetch(`http://127.0.0.1:${SPARE_PORT}/v1/ping`, {
+          headers: { authorization: `Bearer ${token}` },
+        });
+        if (r.status === 200) break;
+      } catch { /* not up */ }
+      await wait(100);
+    }
+    // Give the startup reconcile a moment to land on disk.
+    let meta = null;
+    const deadline = Date.now() + 15_000;
+    while (Date.now() < deadline) {
+      meta = JSON.parse(fs.readFileSync(path.join(data, 'chats', chatId, 'meta.json'), 'utf8'));
+      if (meta.sealed) break;
+      await wait(200);
+    }
+    assert.equal(true, meta.sealed, 'precondition: the interrupted round run was sealed');
+    assert.deepEqual([], meta.pending || [],
+      'the queue must not be sealed in with the run that will never read it');
+    const msgs = fs.readFileSync(path.join(data, 'chats', chatId, 'messages.jsonl'), 'utf8')
+      .split('\n').filter(Boolean).map((l) => JSON.parse(l));
+    assert.ok(msgs.some((m) => m.type === 'system' && /was not delivered/.test(m.text || '')
+      && /check the disk too/.test(m.text || '')),
+    `the conversation has to SAY so: ${JSON.stringify(msgs).slice(0, 400)}`);
+  } finally {
+    child.kill('SIGKILL');
+    await wait(200);
+    fs.rmSync(scratch, { recursive: true, force: true });
+  }
+});
