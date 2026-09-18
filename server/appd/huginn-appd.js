@@ -1338,6 +1338,58 @@ async function requireSession(res, name) {
 }
 
 /**
+ * ONE check-and-act at a time, per session.
+ *
+ * ⚠ THE RACE (#11). `/answer` captures the pane, validates the fingerprint and
+ * then types the digit, with four awaits in between and nothing holding the
+ * session — so two answers for the SAME question both passed the guard before
+ * either typed, and both got {ok:true}. Measured window: one tmux round trip,
+ * 10-15 ms idle, ~90 ms once the pane's repaint lag is modelled. Against a real
+ * TUI the first digit answers the dialog and the second lands in the composer,
+ * where its Enter submits a bare digit as a new prompt into a working
+ * conversation — the exact harm this route's own comment exists to prevent, and
+ * the harm `consentWatch`'s re-read guard exists to prevent on the other side.
+ * Reachable today from one push answered on two devices, or the desktop's toast
+ * activation firing twice (`Main.kt answerFromActivation` bypasses
+ * SessionController's in-flight guard).
+ *
+ * A promise chain, the same shape the send queue's `pumping` flag has. The
+ * loser runs after the winner and re-reads the pane, so the ordinary guards do
+ * the refusing; `answeredRecently` below covers the case where the pane has not
+ * repainted yet — a fixture pane never does.
+ */
+const answerLocks = new Map();      // session name -> tail of the chain
+function withAnswerLock(name, fn) {
+  const prev = answerLocks.get(name) || Promise.resolve();
+  const run = prev.then(() => fn(), () => fn());
+  const tail = run.then(() => { }, () => { });
+  answerLocks.set(name, tail);
+  tail.then(() => { if (answerLocks.get(name) === tail) answerLocks.delete(name); });
+  return run;
+}
+
+/**
+ * The last question answered on each session, so the SAME answer arriving twice
+ * is refused rather than typed twice at a pane that has not caught up.
+ *
+ * Short-lived on purpose: it is a de-duplicator for a double tap or a retried
+ * delivery, not a record. A genuinely new question has a different fingerprint,
+ * and the same question legitimately re-asked after the TTL is a new question as
+ * far as anyone tapping a notification is concerned.
+ */
+const ANSWER_MEMO_TTL_MS = 60_000;
+const answeredMemo = new Map();     // session name -> { fingerprint, at }
+function answeredRecently(name, fingerprint, now = Date.now()) {
+  const memo = answeredMemo.get(name);
+  if (!memo) return false;
+  if (now - memo.at >= ANSWER_MEMO_TTL_MS) { answeredMemo.delete(name); return false; }
+  return memo.fingerprint === fingerprint;
+}
+function rememberAnswered(name, fingerprint, now = Date.now()) {
+  answeredMemo.set(name, { fingerprint, at: now });
+}
+
+/**
  * A pane read came back empty. Say whether the session is GONE or tmux merely
  * did not answer — `captureScreen`/`peekHash` cannot tell the difference, and
  * the screen poll's 404 is the one answer a client acts on irreversibly (both
@@ -7936,9 +7988,23 @@ async function consentWatch(state, settings, sessions, now) {
       consentSeen.delete(s.name);
       continue;
     }
-    const typed = await run('tmux', ['send-keys', '-t', `=${s.name}:`, '-l', '--', String(prompt.recommended)]);
-    if (typed.err) { log(`headroom: consent answer failed on ${s.name}: ${typed.stderr.trim()}`); continue; }
-    await run('tmux', ['send-keys', '-t', `=${s.name}:`, 'Enter']);
+    // ⚠ UNDER /answer's LOCK (#11). This types a digit at the same pane the
+    // /answer route does, and the two can meet: a person taps the notification
+    // in the same second the grace expires here, and both digits land. The lock
+    // is per session and the memo is checked inside it, so whichever gets there
+    // second types nothing.
+    const pressed = await withAnswerLock(s.name, async () => {
+      if (answeredRecently(s.name, fresh.fingerprint, now)) {
+        log(`headroom: the consent dialog on ${s.name} was answered elsewhere — nothing typed`);
+        return false;
+      }
+      const t = await run('tmux', ['send-keys', '-t', `=${s.name}:`, '-l', '--', String(prompt.recommended)]);
+      if (t.err) { log(`headroom: consent answer failed on ${s.name}: ${t.stderr.trim()}`); return false; }
+      await run('tmux', ['send-keys', '-t', `=${s.name}:`, 'Enter']);
+      rememberAnswered(s.name, fresh.fingerprint, now);
+      return true;
+    });
+    if (!pressed) { consentSeen.delete(s.name); continue; }
     consentSeen.delete(s.name);
     const rec = s.claudeSessionId ? sessionRecord(state, s.claudeSessionId, s.name) : null;
     const to = headroomLib.familyOf(row ? row.label : null) || (row ? row.label : null);
@@ -9876,104 +9942,119 @@ const server = http.createServer(async (req, res) => {
         return sendErr(res, 400, 'options must be small positive integers');
       }
 
-      const screen = await captureScreen(name);
-      const pf = screen ? promptFor(name, screen.lines) : { prompt: null, ask: null };
-      const prompt = pf.prompt;
-      if (!prompt) {
-        // The hook may still say a question is waiting (a wrap/preview the pane
-        // scrape cannot read). Distinguish that from "gone" so the client can
-        // deep-link to the Screen tab instead of reporting the question vanished.
-        if (pf.ask) {
+      // ⚠ SERIALISED PER SESSION (#11). Everything from here on is check-and-act
+      // against a live pane: two answers that pass the guard concurrently both
+      // type, and the second digit lands wherever the first one's Enter left the
+      // TUI. The loser runs after the winner, re-reads, and is refused by the
+      // ordinary guards — or by the memo, when the pane has not repainted yet.
+      return withAnswerLock(name, async () => {
+        if (answeredRecently(name, body.fingerprint)) {
           return sendJson(res, 409, {
-            ok: false, reason: 'undetected',
-            error: 'the question is on screen but not answerable from here — use the Screen tab',
+            ok: false, reason: 'gone',
+            error: 'that question has already been answered',
           });
         }
-        return sendJson(res, 409, {
-          ok: false, reason: 'gone',
-          error: 'that question is no longer on screen',
-        });
-      }
-      const live = prompt.fingerprint;
-      // REQUIRED, not merely honoured when offered. This used to read
-      // `if (body.fingerprint && body.fingerprint !== live)`, which made the
-      // whole check-and-act guard opt-in: a caller that omitted the field — or
-      // sent an empty string, which is equally falsy — got its digit typed into
-      // whatever question happened to be on the pane. Both were reachable from
-      // the shipping clients (HuginnClient omits the key for a null,
-      // AnswerReceiver turns a blank notification extra into null, and
-      // lib/fcm.js puts `String(fingerprint ?? '')` on the wire), so the
-      // guarantee this route's comment above describes did not exist.
-      //
-      // The empty-string case is called out separately in the tests because it
-      // is a JavaScript truthiness trap: `if (!body.fingerprint)` reads as a
-      // presence check and silently also accepts ''. The Electron client (since
-      // deleted) rejected both in its own notification path; the host did not.
-      if (typeof body.fingerprint !== 'string' || body.fingerprint === '') {
-        return sendErr(res, 400, 'fingerprint required');
-      }
-      if (body.fingerprint !== live) {
-        return sendJson(res, 409, {
-          ok: false, reason: 'changed',
-          error: 'the session is asking something else now',
-          prompt, fingerprint: live,
-        });
-      }
-      // A SET of options: the multi-select dialog. Digits toggle, Right opens
-      // the review tab, Enter submits — the whole sequence verified live before
-      // this was written. The digits are a DIFF against the current checkbox
-      // state, because the owner may have half-answered in tmux already and
-      // blindly pressing every desired digit would un-check those.
-      if (Array.isArray(body.options)) {
-        if (!prompt.multiSelect) {
+        const screen = await captureScreen(name);
+        const pf = screen ? promptFor(name, screen.lines) : { prompt: null, ask: null };
+        const prompt = pf.prompt;
+        if (!prompt) {
+          // The hook may still say a question is waiting (a wrap/preview the pane
+          // scrape cannot read). Distinguish that from "gone" so the client can
+          // deep-link to the Screen tab instead of reporting the question vanished.
+          if (pf.ask) {
+            return sendJson(res, 409, {
+              ok: false, reason: 'undetected',
+              error: 'the question is on screen but not answerable from here — use the Screen tab',
+            });
+          }
           return sendJson(res, 409, {
-            ok: false, reason: 'changed',
-            error: 'this question takes a single answer', prompt, fingerprint: live,
+            ok: false, reason: 'gone',
+            error: 'that question is no longer on screen',
           });
         }
-        const desired = body.options.map(Number);
-        const valid = new Set(prompt.options
-          .filter((o) => typeof o.checked === 'boolean').map((o) => o.number));
-        if (!desired.every((n) => Number.isInteger(n) && valid.has(n))) {
+        const live = prompt.fingerprint;
+        // REQUIRED, not merely honoured when offered. This used to read
+        // `if (body.fingerprint && body.fingerprint !== live)`, which made the
+        // whole check-and-act guard opt-in: a caller that omitted the field — or
+        // sent an empty string, which is equally falsy — got its digit typed into
+        // whatever question happened to be on the pane. Both were reachable from
+        // the shipping clients (HuginnClient omits the key for a null,
+        // AnswerReceiver turns a blank notification extra into null, and
+        // lib/fcm.js puts `String(fingerprint ?? '')` on the wire), so the
+        // guarantee this route's comment above describes did not exist.
+        //
+        // The empty-string case is called out separately in the tests because it
+        // is a JavaScript truthiness trap: `if (!body.fingerprint)` reads as a
+        // presence check and silently also accepts ''. The Electron client (since
+        // deleted) rejected both in its own notification path; the host did not.
+        if (typeof body.fingerprint !== 'string' || body.fingerprint === '') {
+          return sendErr(res, 400, 'fingerprint required');
+        }
+        if (body.fingerprint !== live) {
           return sendJson(res, 409, {
             ok: false, reason: 'changed',
-            error: 'an option is not offered any more', prompt, fingerprint: live,
+            error: 'the session is asking something else now',
+            prompt, fingerprint: live,
           });
         }
-        const digits = multiToggleDigits(prompt.options, desired);
-        for (const d of digits) {
-          const t = await run('tmux', ['send-keys', '-t', `=${name}:`, '-l', '--', d]);
-          if (t.err) return sendErr(res, 500, `tmux: ${t.stderr.trim()}`);
-          await sleep(120);                        // let the TUI apply each toggle
+        // A SET of options: the multi-select dialog. Digits toggle, Right opens
+        // the review tab, Enter submits — the whole sequence verified live before
+        // this was written. The digits are a DIFF against the current checkbox
+        // state, because the owner may have half-answered in tmux already and
+        // blindly pressing every desired digit would un-check those.
+        if (Array.isArray(body.options)) {
+          if (!prompt.multiSelect) {
+            return sendJson(res, 409, {
+              ok: false, reason: 'changed',
+              error: 'this question takes a single answer', prompt, fingerprint: live,
+            });
+          }
+          const desired = body.options.map(Number);
+          const valid = new Set(prompt.options
+            .filter((o) => typeof o.checked === 'boolean').map((o) => o.number));
+          if (!desired.every((n) => Number.isInteger(n) && valid.has(n))) {
+            return sendJson(res, 409, {
+              ok: false, reason: 'changed',
+              error: 'an option is not offered any more', prompt, fingerprint: live,
+            });
+          }
+          const digits = multiToggleDigits(prompt.options, desired);
+          for (const d of digits) {
+            const t = await run('tmux', ['send-keys', '-t', `=${name}:`, '-l', '--', d]);
+            if (t.err) return sendErr(res, 500, `tmux: ${t.stderr.trim()}`);
+            await sleep(120);                        // let the TUI apply each toggle
+          }
+          const right = await run('tmux', ['send-keys', '-t', `=${name}:`, 'Right']);
+          if (right.err) return sendErr(res, 500, `tmux: ${right.stderr.trim()}`);
+          await sleep(250);                          // the review tab needs a beat
+          const enter2 = await run('tmux', ['send-keys', '-t', `=${name}:`, 'Enter']);
+          if (enter2.err) return sendErr(res, 500, `tmux: ${enter2.stderr.trim()}`);
+          const labels = prompt.options
+            .filter((o) => desired.includes(o.number)).map((o) => o.label);
+          rememberAnswered(name, live);
+          log(`answer: ${name} <- multi [${desired.join(',')}] (${labels.join(', ').slice(0, 80)})`);
+          return sendJson(res, 200, { ok: true, options: desired, labels });
         }
-        const right = await run('tmux', ['send-keys', '-t', `=${name}:`, 'Right']);
-        if (right.err) return sendErr(res, 500, `tmux: ${right.stderr.trim()}`);
-        await sleep(250);                          // the review tab needs a beat
-        const enter2 = await run('tmux', ['send-keys', '-t', `=${name}:`, 'Enter']);
-        if (enter2.err) return sendErr(res, 500, `tmux: ${enter2.stderr.trim()}`);
-        const labels = prompt.options
-          .filter((o) => desired.includes(o.number)).map((o) => o.label);
-        log(`answer: ${name} <- multi [${desired.join(',')}] (${labels.join(', ').slice(0, 80)})`);
-        return sendJson(res, 200, { ok: true, options: desired, labels });
-      }
 
-      const chosen = prompt.options.find((o) => o.number === option);
-      if (!chosen) {
-        return sendJson(res, 409, {
-          ok: false, reason: 'changed',
-          error: `option ${option} is not offered any more`,
-          prompt, fingerprint: live,
-        });
-      }
+        const chosen = prompt.options.find((o) => o.number === option);
+        if (!chosen) {
+          return sendJson(res, 409, {
+            ok: false, reason: 'changed',
+            error: `option ${option} is not offered any more`,
+            prompt, fingerprint: live,
+          });
+        }
 
-      // The digit and Enter separately, literal digit first, so a multi-digit option
-      // cannot be split across a submit.
-      const typed = await run('tmux', ['send-keys', '-t', `=${name}:`, '-l', '--', String(option)]);
-      if (typed.err) return sendErr(res, 500, `tmux: ${typed.stderr.trim()}`);
-      const enter = await run('tmux', ['send-keys', '-t', `=${name}:`, 'Enter']);
-      if (enter.err) return sendErr(res, 500, `tmux: ${enter.stderr.trim()}`);
-      log(`answer: ${name} <- ${option} (${chosen.label.slice(0, 60)})`);
-      return sendJson(res, 200, { ok: true, option, label: chosen.label });
+        // The digit and Enter separately, literal digit first, so a multi-digit option
+        // cannot be split across a submit.
+        const typed = await run('tmux', ['send-keys', '-t', `=${name}:`, '-l', '--', String(option)]);
+        if (typed.err) return sendErr(res, 500, `tmux: ${typed.stderr.trim()}`);
+        const enter = await run('tmux', ['send-keys', '-t', `=${name}:`, 'Enter']);
+        if (enter.err) return sendErr(res, 500, `tmux: ${enter.stderr.trim()}`);
+        rememberAnswered(name, live);
+        log(`answer: ${name} <- ${option} (${chosen.label.slice(0, 60)})`);
+        return sendJson(res, 200, { ok: true, option, label: chosen.label });
+      });
     }
 
     // --- chats
