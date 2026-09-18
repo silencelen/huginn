@@ -391,6 +391,10 @@ process.stdin.on('end', () => {
   // The MEASURED Fable-weekly apology, which names no clock at all. That is the
   // shape that leaves a stall with nothing to wait for.
   const noClock = /fable credits/.test(stdin) && !argv.includes('--resume');
+  // A run that takes long enough for a second message to be QUEUED behind it —
+  // the window #39 lives in, which is otherwise a race against a 50 ms stub.
+  const slow = /take your time/.test(stdin) && !argv.includes('--resume');
+  if (slow) { const t = Date.now(); while (Date.now() - t < 2500) {} }
   if (noClock) {
     say({ type: 'result', subtype: 'error', is_error: true, num_turns: 1, duration_ms: 12,
       result: "You're out of usage credits. Run /usage-credits to keep using Fable 5.1 or /model to switch models." });
@@ -1008,4 +1012,56 @@ test('a stall with no reset time anywhere is given up on, and the held Round is 
 
   setUsage({ session: 5, weekly_all: 10, weekly_fable: 20 });
   await tick({});
+});
+
+// ------------------------------------------------- a stall keeps its own turn
+
+test('a stalled chat does not drain its queue into the dry window (#39)', async () => {
+  // ⚠ THE SECOND MESSAGE ATE THE FIRST. `settleRun` honoured the `stalled` flag
+  // only on the `roundId` branch; a plain chat fell through to the unconditional
+  // `takePending` drain and spawned the queued message against the SAME
+  // exhausted window, where it died on the limit too — and that second failure's
+  // `noteRunStall` replaced `meta.stall` wholesale, so the stall now carried
+  // message B's text and the re-run after the reset answered only B. Message A
+  // was never run again: two limit apologies in the chat, and after the reset an
+  // answer to the later question only. Measured 100 ms apart.
+  const resetsAt = new Date(Date.now() + 6_000).toISOString();
+  setUsage({ session: 100, weekly_all: 10, weekly_fable: 20, resetsAt });
+  await tick({ cooldownMs: 0 });
+  await until(async (b) => b.accounts && Object.values(b.accounts)
+    .some((a) => a.windows.session && a.windows.session.percent === 100),
+  45_000, 'the 100% session reading');
+
+  const before = claudeRuns().length;
+  const made = await api('/v1/chats', { method: 'POST', body: JSON.stringify({ mode: 'ask' }) });
+  const chatId = made.body.id;
+  const A = 'take your time with the immich backup and say when it finished';
+  const B = 'and then tell me how full the disk is';
+  await api(`/v1/chats/${chatId}/messages`, { method: 'POST', body: JSON.stringify({ text: A }) });
+  // Queued behind the run that is about to die on the limit.
+  const queued = await api(`/v1/chats/${chatId}/messages`, { method: 'POST', body: JSON.stringify({ text: B }) });
+  assert.equal(202, queued.status, JSON.stringify(queued.body));
+  assert.equal(true, queued.body.queued, 'precondition: B really is behind A');
+
+  // The run dies on the limit. B must NOT be spawned against the same window.
+  const row = async () => (await api('/v1/chats')).body.chats.find((c) => c.id === chatId);
+  const deadline = Date.now() + 30_000;
+  while (Date.now() < deadline && (await row()).running) await wait(200);
+  await wait(1500);
+  assert.equal(before + 1, claudeRuns().length,
+    `only A ran: ${JSON.stringify(claudeRuns().slice(before).map((r) => r.stdin))}`);
+  assert.equal(1, (await row()).pending, 'B stays on the queue, on disk, for the re-run');
+
+  // …and when the window comes back it is A that is re-run, not B.
+  setUsage({ session: 3, weekly_all: 10, weekly_fable: 20 });
+  await tick({});
+  await until(async () => claudeRuns().length >= before + 2, 45_000, 'the re-run');
+  const rerun = claudeRuns()[before + 1];
+  assert.ok(rerun.argv.includes('--resume'), `the re-run resumes: ${rerun.argv.join(' ')}`);
+  assert.equal(A, rerun.stdin, 'the stall kept the turn that actually stalled');
+
+  // …and B, which waited on disk the whole time, goes next.
+  await until(async () => claudeRuns().length >= before + 3, 45_000, 'the queued message');
+  assert.equal(B, claudeRuns()[before + 2].stdin, 'the queue drains once there is room for it');
+  assert.equal(0, (await row()).pending);
 });
