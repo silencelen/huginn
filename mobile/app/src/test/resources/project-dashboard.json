@@ -2,157 +2,231 @@
   "project": {
     "id": "6f0d2c41-0000-4000-8000-0000000000b2",
     "name": "Status page flap",
+    "slug": "statusflap",
+    "kind": "software",
+    "status": "active",
     "cwd": "/root/netplan/status-page",
-    "createdAt": 1789450000,
-    "endedAt": null,
+    "memberCount": 4,
+    "alive": 3,
+    "busy": 1,
+    "waiting": 1,
     "lead": {
-      "name": "statusflap/lead",
-      "sessionId": "0123abcd-0000-4000-8000-00000000c000"
+      "role": "lead",
+      "name": "statusflap-lead",
+      "claudeName": "statusflap/lead",
+      "sessionId": "sid-lead",
+      "present": true
     },
-    "members": [],
-    "manifest": null
+    "manifestRev": 1,
+    "manifestSummary": "four sessions: db, web, probe and docs",
+    "untaggedSeen": true,
+    "endedReason": null,
+    "createdAt": 1789373600,
+    "updatedAt": 1789459880,
+    "rev": 4
+  },
+  "generatedAt": 1789460000,
+  "totals": {
+    "wallMs": 7200000,
+    "startedAt": 1789452800,
+    "lastActivityTs": 1789460000,
+    "turns": 31,
+    "userMessages": 2,
+    "toolCalls": 4,
+    "errors": 0,
+    "tokens": {
+      "input": 88000,
+      "output": 39000,
+      "cacheRead": 1760000,
+      "cacheCreation": 88000
+    },
+    "agentCount": 3,
+    "agentTokens": {
+      "input": 2,
+      "output": 2,
+      "cacheRead": 0,
+      "cacheCreation": 0
+    },
+    "estCost": {
+      "usd": 4.18,
+      "unpricedTokens": 6
+    },
+    "compactions": 0,
+    "droppedTokens": 0,
+    "filesTouched": 4,
+    "models": [
+      "claude-fable-5-1",
+      "claude-opus-5"
+    ],
+    "efforts": [
+      "high"
+    ]
+  },
+  "rate": {
+    "activeRecently": true,
+    "tokensPer10m": 1800,
+    "tokensPer60m": 1400
   },
   "members": [
     {
-      "name": "statusflap/db",
-      "role": "db",
-      "sessionId": "0123abcd-0000-4000-8000-00000000d001",
-      "spawnedAt": 1789452000,
-      "state": "running",
+      "role": "lead",
+      "name": "statusflap-lead",
+      "claudeName": "statusflap/lead",
+      "sessionId": "sid-lead",
+      "lead": true,
+      "present": true,
+      "alive": true,
+      "status": "busy",
+      "waitingFor": null,
       "needsYou": false,
+      "state": "running",
+      "stateSince": 1789459970,
       "pendingSends": 0,
-      "lastActivityTs": 1789459400,
+      "headroom": {
+        "family": "fable",
+        "ladder": null,
+        "autoResume": true,
+        "stalled": false
+      },
+      "title": null,
+      "turns": 17,
+      "tokens": {
+        "input": 47000,
+        "output": 21000,
+        "cacheRead": 940000,
+        "cacheCreation": 47000
+      },
+      "estCostUsd": 1.58,
+      "agentCount": 1,
+      "lastActivityTs": 1789460000,
       "endedAt": null,
+      "spawnedAt": 1789373600
+    },
+    {
+      "role": "db",
+      "name": "statusflap-db",
+      "claudeName": "statusflap/db",
+      "sessionId": "sid-db",
+      "lead": false,
+      "present": true,
+      "alive": true,
+      "status": "busy",
+      "waitingFor": null,
+      "needsYou": false,
+      "state": "running",
+      "stateSince": 1789459880,
+      "pendingSends": 0,
       "headroom": {
         "family": "fable",
         "ladder": "opus",
         "autoResume": true,
         "stalled": false
       },
-      "streams": [
-        {
-          "id": "af7ca864cee1939de",
-          "task": "placeholder",
-          "active": true,
-          "updatedAt": 1789459400,
-          "startedAt": 1789458000,
-          "bytes": 20480,
-          "status": "running",
-          "depth": 0
-        },
-        {
-          "id": "c0d4e8",
-          "task": "placeholder",
-          "active": false,
-          "updatedAt": 1789458800,
-          "startedAt": 1789458100,
-          "bytes": 8192,
-          "status": "done",
-          "depth": null
-        }
-      ],
-      "totals": {
-        "wallMs": 7400000,
-        "turns": 14,
-        "userMessages": 6,
-        "toolCalls": 92,
-        "errors": 2,
-        "tokens": {
-          "input": 41000,
-          "output": 18000,
-          "cacheRead": 2100000,
-          "cacheCreation": 96000
-        },
-        "agentCount": 2,
-        "agentTokens": {
-          "input": 9000,
-          "output": 4000,
-          "cacheRead": 210000,
-          "cacheCreation": 12000
-        },
-        "estCost": null,
-        "compactions": 0,
-        "droppedTokens": 0,
-        "filesTouched": 11,
-        "models": ["claude-fable-5-1"],
-        "efforts": ["high"]
-      }
+      "title": "DISTINCT ON over 1.5M rows",
+      "turns": 14,
+      "tokens": {
+        "input": 41000,
+        "output": 18000,
+        "cacheRead": 820000,
+        "cacheCreation": 41000
+      },
+      "estCostUsd": 2.6,
+      "agentCount": 2,
+      "lastActivityTs": 1789460000,
+      "endedAt": null,
+      "spawnedAt": 1789452800
     },
     {
-      "name": "statusflap/web",
       "role": "web",
-      "sessionId": "0123abcd-0000-4000-8000-00000000d002",
-      "spawnedAt": 1789452100,
-      "state": "attention",
+      "name": "statusflap-web",
+      "claudeName": "statusflap/web",
+      "sessionId": "sid-web",
+      "lead": false,
+      "present": true,
+      "alive": true,
+      "status": "waiting",
+      "waitingFor": "input needed",
       "needsYou": true,
+      "state": "attention",
+      "stateSince": 1789459600,
       "pendingSends": 2,
-      "lastActivityTs": 1789459400,
-      "endedAt": null,
       "headroom": {
         "family": "fable",
         "ladder": null,
         "autoResume": false,
         "stalled": true
       },
-      "streams": [],
-      "totals": null
-    },
-    {
-      "name": "statusflap/probe",
-      "role": "probe",
-      "sessionId": "0123abcd-0000-4000-8000-00000000d003",
-      "spawnedAt": 1789452200,
-      "state": "teleporting",
-      "needsYou": null,
-      "pendingSends": null,
+      "title": null,
+      "turns": 0,
+      "tokens": {
+        "input": 0,
+        "output": 0,
+        "cacheRead": 0,
+        "cacheCreation": 0
+      },
+      "estCostUsd": null,
+      "agentCount": 0,
       "lastActivityTs": null,
       "endedAt": null,
+      "spawnedAt": 1789452900
+    },
+    {
+      "role": "probe",
+      "name": "statusflap-probe",
+      "claudeName": "statusflap/probe",
+      "sessionId": "sid-probe",
+      "lead": false,
+      "present": true,
+      "alive": true,
+      "status": null,
+      "waitingFor": null,
+      "needsYou": false,
+      "state": "idle",
+      "stateSince": 1789459100,
+      "pendingSends": 0,
       "headroom": null,
-      "streams": [],
-      "totals": null
+      "title": null,
+      "turns": 0,
+      "tokens": {
+        "input": 0,
+        "output": 0,
+        "cacheRead": 0,
+        "cacheCreation": 0
+      },
+      "estCostUsd": null,
+      "agentCount": 0,
+      "lastActivityTs": null,
+      "endedAt": null,
+      "spawnedAt": 1789453000
+    },
+    {
+      "role": "docs",
+      "name": "statusflap-docs",
+      "claudeName": "statusflap/docs",
+      "sessionId": "sid-docs",
+      "lead": false,
+      "present": false,
+      "alive": false,
+      "status": null,
+      "waitingFor": null,
+      "needsYou": false,
+      "state": null,
+      "stateSince": null,
+      "pendingSends": 0,
+      "headroom": null,
+      "title": null,
+      "turns": 0,
+      "tokens": {
+        "input": 0,
+        "output": 0,
+        "cacheRead": 0,
+        "cacheCreation": 0
+      },
+      "estCostUsd": null,
+      "agentCount": 0,
+      "lastActivityTs": null,
+      "endedAt": 1789459700,
+      "spawnedAt": 1789453100
     }
-  ],
-  "updatedAt": 1789459400,
-  "totals": {
-    "wallMs": 7400000,
-    "startedAt": 1789452000,
-    "lastActivityTs": 1789459400,
-    "turns": 31,
-    "userMessages": 12,
-    "toolCalls": 184,
-    "errors": 3,
-    "tokens": {
-      "input": 88000,
-      "output": 39000,
-      "cacheRead": 4300000,
-      "cacheCreation": 190000
-    },
-    "agentCount": 3,
-    "agentTokens": {
-      "input": 12000,
-      "output": 5000,
-      "cacheRead": 260000,
-      "cacheCreation": 14000
-    },
-    "estCost": {
-      "usd": 4.18,
-      "unpricedTokens": 0,
-      "byModel": []
-    },
-    "agentEstCostUsd": 0.42,
-    "activeAgents": 1,
-    "compactions": 1,
-    "droppedTokens": 120000,
-    "filesTouched": 23,
-    "models": ["claude-fable-5-1", "claude-opus-5"],
-    "efforts": ["high"]
-  },
-  "rate": {
-    "tokensPerMin10": 1800,
-    "tokensPerMin60": 1400,
-    "allTokensPerMin10": 42000,
-    "allTokensPerMin60": 39000,
-    "lastActivityTs": 1789459400,
-    "activeRecently": true
-  }
+  ]
 }

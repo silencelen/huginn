@@ -1,19 +1,157 @@
 {
-  "results": [
+  "ok": false,
+  "spawned": [
     {
-      "name": "statusflap/db",
-      "ok": true,
-      "error": null
+      "role": "db",
+      "name": "statusflap-db",
+      "claudeName": "statusflap/db",
+      "sessionId": null,
+      "cwd": "/root/netplan/status-page",
+      "model": "opus",
+      "effort": "high",
+      "mode": "act",
+      "firstPrompt": "profile the checks table",
+      "spawnedAt": 1789452800,
+      "endedAt": null
     },
     {
-      "name": "statusflap/web",
-      "ok": true,
-      "error": null
-    },
-    {
-      "name": "statusflap/docs",
-      "ok": false,
-      "error": "a session called statusflap-docs already exists"
+      "role": "web",
+      "name": "statusflap-web",
+      "claudeName": "statusflap/web",
+      "sessionId": null,
+      "cwd": "/root/netplan/status-page",
+      "model": null,
+      "effort": null,
+      "mode": null,
+      "firstPrompt": "redraw the incident banner",
+      "spawnedAt": 1789452900,
+      "endedAt": null
     }
-  ]
+  ],
+  "failed": [
+    {
+      "role": "probe",
+      "reason": "duplicate session: statusflap-probe"
+    }
+  ],
+  "project": {
+    "id": "6f0d2c41-0000-4000-8000-0000000000b2",
+    "name": "Status page flap",
+    "slug": "statusflap",
+    "kind": "software",
+    "status": "active",
+    "brief": "The public status page flaps every few minutes. Find out why and fix it.",
+    "cwd": "/root/netplan/status-page",
+    "lead": {
+      "role": "lead",
+      "name": "statusflap-lead",
+      "claudeName": "statusflap/lead",
+      "sessionId": "sid-lead",
+      "spawnedAt": 1789373600,
+      "endedAt": null
+    },
+    "members": [
+      {
+        "role": "db",
+        "name": "statusflap-db",
+        "claudeName": "statusflap/db",
+        "sessionId": "sid-db",
+        "cwd": "/root/netplan/status-page",
+        "model": "opus",
+        "effort": "high",
+        "mode": "act",
+        "firstPrompt": "profile the checks table",
+        "spawnedAt": 1789452800,
+        "endedAt": null
+      },
+      {
+        "role": "web",
+        "name": "statusflap-web",
+        "claudeName": "statusflap/web",
+        "sessionId": "sid-web",
+        "cwd": "/root/netplan/status-page",
+        "model": null,
+        "effort": null,
+        "mode": null,
+        "firstPrompt": "redraw the incident banner",
+        "spawnedAt": 1789452900,
+        "endedAt": null
+      },
+      {
+        "role": "probe",
+        "name": "statusflap-probe",
+        "claudeName": "statusflap/probe",
+        "sessionId": "sid-probe",
+        "cwd": "/root/netplan/status-page",
+        "model": null,
+        "effort": null,
+        "mode": null,
+        "firstPrompt": "watch the scrape",
+        "spawnedAt": 1789453000,
+        "endedAt": null
+      },
+      {
+        "role": "docs",
+        "name": "statusflap-docs",
+        "claudeName": "statusflap/docs",
+        "sessionId": "sid-docs",
+        "cwd": "/root/netplan/status-page",
+        "model": null,
+        "effort": null,
+        "mode": null,
+        "firstPrompt": "write it up",
+        "spawnedAt": 1789453100,
+        "endedAt": 1789459700
+      }
+    ],
+    "manifest": {
+      "tag": "a1b2c3d4e5",
+      "rev": 1,
+      "receivedAt": 1789380000,
+      "type": "software",
+      "scope": "rebuild the flap detector and prove it",
+      "summary": "four sessions: db, web, probe and docs",
+      "sessions": [
+        {
+          "role": "db",
+          "firstPrompt": "profile the checks table",
+          "cwd": null,
+          "model": "opus",
+          "effort": "high",
+          "mode": "act"
+        },
+        {
+          "role": "web",
+          "firstPrompt": "redraw the incident banner",
+          "cwd": null,
+          "model": null,
+          "effort": null,
+          "mode": null
+        },
+        {
+          "role": "probe",
+          "firstPrompt": "watch the scrape",
+          "cwd": null,
+          "model": null,
+          "effort": null,
+          "mode": null
+        },
+        {
+          "role": "docs",
+          "firstPrompt": "write it up",
+          "cwd": null,
+          "model": null,
+          "effort": null,
+          "mode": null
+        }
+      ],
+      "untaggedSeen": true,
+      "spawnedRev": 1
+    },
+    "endedReason": null,
+    "endedAt": null,
+    "createdAt": 1789373600,
+    "updatedAt": 1789459880,
+    "rev": 4
+  }
 }
