@@ -468,3 +468,77 @@ test('an upload over the cap is still a 413 (#42 control)', async () => {
   assert.equal(413, res.status);
   assert.match((await res.json()).error, /too large/);
 });
+
+test('a claude that cannot be started says so, not "claude exited -13" (#43)', async (t) => {
+  // ⚠ A NEGATIVE NUMBER IS NOT AN EXIT STATUS. Node reports a SPAWN failure as a
+  // 'close' with a negative code — -2 for ENOENT, -13 for EACCES, -24 for EMFILE
+  // — and emits no 'exit' event at all, so a fix hooked there would miss it. The
+  // close handler rendered that as "claude exited -13", which reaches the chat
+  // list subtitle, the chat_finished push and its Telegram body; for a ROUND run
+  // it becomes the Round's whole verdict, the one surface where that number is
+  // all the owner sees. The actionable sentence was one line above it the whole
+  // time, in the 'error' handler that records WHY.
+  //
+  // ⚠ THE DAEMON'S PATH IS EXACTLY ONE DIRECTORY, holding one unexecutable
+  // `claude`. Anything wider and execvp walks on to the REAL Claude Code and
+  // spends the owner's quota, which is what a first draft of this test did.
+  const scratch = fs.mkdtempSync(path.join(os.tmpdir(), 'appd-spawnfail-'));
+  const onlyBin = path.join(scratch, 'bin');
+  fs.mkdirSync(onlyBin);
+  fs.writeFileSync(path.join(onlyBin, 'claude'), '#!/bin/sh\nexit 0\n', { mode: 0o644 });
+  const fd = fs.openSync(path.join(scratch, 'daemon.log'), 'a');
+  const child = spawn(process.execPath, [path.join(__dirname, '..', 'huginn-appd.js')], {
+    env: {
+      PATH: onlyBin,
+      HOME: scratch,
+      HUGINN_APPD_PORT: String(SPARE_PORT),
+      HUGINN_APPD_BIND: '127.0.0.1',
+      HUGINN_APPD_DATA: path.join(scratch, 'data'),
+      HUGINN_APPD_TOKEN_FILE: path.join(tmp, 'token'),
+      HUGINN_APPD_STATE_DIR: path.join(scratch, 'state'),
+      HUGINN_APPD_WORKDIR: scratch,
+      HUGINN_APPD_TMUX_SOCKET: TMUX_SOCK,
+    },
+    stdio: ['ignore', fd, fd],
+  });
+  fs.closeSync(fd);
+  const base = `http://127.0.0.1:${SPARE_PORT}`;
+  const call = async (p, init = {}) => {
+    const r = await fetch(base + p, {
+      ...init,
+      headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json', ...(init.headers || {}) },
+    });
+    return { status: r.status, body: await r.json().catch(() => null) };
+  };
+  try {
+    let up = false;
+    for (let i = 0; i < 200; i++) {
+      try { if ((await call('/v1/ping')).status === 200) { up = true; break; } } catch { /* not up */ }
+      await wait(100);
+    }
+    if (!up) { t.skip('the daemon would not start with a one-directory PATH'); return; }
+
+    const made = await call('/v1/chats', { method: 'POST', body: JSON.stringify({ mode: 'ask' }) });
+    const chatId = made.body.id;
+    await call(`/v1/chats/${chatId}/messages`, { method: 'POST', body: JSON.stringify({ text: 'anything' }) });
+    let msgs = [];
+    const deadline = Date.now() + 25_000;
+    while (Date.now() < deadline) {
+      msgs = (await call(`/v1/chats/${chatId}`)).body.messages || [];
+      if (msgs.some((m) => m.type === 'error')) break;
+      await wait(200);
+    }
+    const errors = msgs.filter((m) => m.type === 'error').map((m) => m.text || '');
+    assert.ok(errors.length, `the run must record an error: ${JSON.stringify(msgs).slice(0, 300)}`);
+    for (const text of errors) {
+      assert.doesNotMatch(text, /exited -\d/, `a spawn failure is not an exit status: ${text}`);
+      assert.match(text, /could not start claude|never started/, text);
+    }
+    const row = (await call('/v1/chats')).body.chats.find((c) => c.id === chatId);
+    assert.doesNotMatch(row.snippet || '', /exited -\d/, 'and the list row says something usable too');
+  } finally {
+    child.kill('SIGKILL');
+    await wait(200);
+    fs.rmSync(scratch, { recursive: true, force: true });
+  }
+});
