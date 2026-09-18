@@ -27,6 +27,39 @@ HUGINN_UPDATE_HOST_DEFAULT='huginn'
 # themselves, and a client that never enrols should not be shipping a daemon.
 _huginn_device_runner() { printf '%s' "$HOME/.huginn/huginn-device"; }
 
+# The daemon URL this machine should be enrolled with, worked out from the ssh
+# link it has ALREADY been trusted on. $SSH_CONNECTION's third field is the
+# address THIS machine just reached the host at, which is better than choosing on
+# the device's behalf between a LAN address, a tailnet name and whatever
+# `hostname` happens to say. $1 = the ssh alias; prints http://<authority>:8787.
+#
+# ⚠ IT IS A BARE ADDRESS, AND A BARE IPv6 LITERAL IS NOT A URL. `http://fd00::1:8787`
+# has no valid port, so `huginn device on` / `huginn local on` from a machine
+# whose ssh landed on IPv6 died with nothing but "huginn-device: Invalid URL" -
+# after saveConf() had already PERSISTED it, so a later flagless `on` repeated it
+# and `serve` logged "not reaching huginn: Invalid URL - retrying in 15s" forever.
+#
+# ⚠ AND BRACKETING ALONE WOULD ONLY CHANGE THE ERROR. appd's resolveBind() takes
+# `tailscale ip -4` and this deployment overrides it with 0.0.0.0, so nothing is
+# listening on v6: a bracketed v6 url is a persisted ECONNREFUSED. So on a v6 ssh
+# path the host is asked for an IPv4 it actually holds, and the bracketed literal
+# is kept only as the last answer - correct syntax, and an honest failure.
+_huginn_srv_url() {
+  local H="$1" a v4
+  a="$(ssh -T "$H" 'echo $SSH_CONNECTION' 2>/dev/null | awk '{print $3}' | tr -d '[:space:]')"
+  [ -n "$a" ] || return 1
+  case "$a" in
+    *:*) ;;
+    *) printf 'http://%s:8787' "$a"; return 0 ;;
+  esac
+  v4="$(ssh -T "$H" "ip -4 -o addr show scope global 2>/dev/null | awk '{print \$4}' | cut -d/ -f1 | head -1" \
+        2>/dev/null | tr -d '[:space:]')"
+  case "$v4" in
+    [0-9]*.[0-9]*.[0-9]*.[0-9]*) printf 'http://%s:8787' "$v4"; return 0 ;;
+  esac
+  printf 'http://[%s]:8787' "$a"
+}
+
 _huginn_device_fetch() {
   local dest tmp got= uh why=
   dest="$(_huginn_device_runner)"
@@ -91,13 +124,11 @@ _huginn_device() {
           echo "huginn device: could not read the appd token from $H" >&2; return 1
         fi
       fi
-      # $SSH_CONNECTION's third field is the address THIS machine just reached the
-      # host on, which is exactly the one its daemon should be dialled at - better
-      # than choosing on the device's behalf between a LAN address, a tailnet name
-      # and whatever `hostname` happens to say.
-      srv="$(ssh -T "$H" 'echo $SSH_CONNECTION' 2>/dev/null | awk '{print $3}')"
+      # See _huginn_srv_url: the address is the one this machine just reached the
+      # host at, bracketed when it is an IPv6 literal.
+      srv="$(_huginn_srv_url "$H")"
       [ -n "$srv" ] || { echo "huginn device: could not work out how to reach $H's daemon" >&2; return 1; }
-      node "$runner" on --url "http://$srv:8787" "$@"
+      node "$runner" on --url "$srv" "$@"
       ;;
     update)
       _huginn_device_fetch force && echo "huginn device: runner is now $(node "$runner" version)" ;;
@@ -176,9 +207,9 @@ _huginn_local() {
           echo "huginn local: could not read the appd token from $H" >&2; return 1
         fi
       fi
-      srv="$(ssh -T "$H" 'echo $SSH_CONNECTION' 2>/dev/null | awk '{print $3}')"
+      srv="$(_huginn_srv_url "$H")"
       [ -n "$srv" ] || { echo "huginn local: could not work out how to reach $H's daemon" >&2; return 1; }
-      HUGINN_LOCAL_DIR="$dir" node "$mgr" on --url "http://$srv:8787" "$@"
+      HUGINN_LOCAL_DIR="$dir" node "$mgr" on --url "$srv" "$@"
       ;;
     update)
       _huginn_local_fetch force || return 1
