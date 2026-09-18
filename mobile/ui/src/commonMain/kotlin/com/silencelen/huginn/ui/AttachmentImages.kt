@@ -9,6 +9,7 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.selection.DisableSelection
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -209,30 +210,38 @@ class ImageViewerState {
 fun FullImageViewer(state: ImageViewerState) {
     val bitmap = state.bitmap ?: return
     Dialog(onDismissRequest = state::close) {
-        Surface(
-            color = MaterialTheme.colorScheme.surface,
-            shape = RoundedCornerShape(12.dp),
-            tonalElevation = 3.dp,
-        ) {
-            Column(
-                Modifier
-                    .padding(10.dp)
-                    .clickable(onClick = state::close),
-                horizontalAlignment = Alignment.CenterHorizontally,
+        // ⚠ THE CAPTION MUST NOT JOIN THE TRANSCRIPT'S SELECTION. This viewer is
+        // opened from a thumbnail inside [MarkdownText], which draws inside the
+        // transcript's `SelectionContainer` — and a dialog is a separate layout
+        // root that inherits the registrar anyway. A `Text` registered from here
+        // makes the next press-drag in the transcript throw "layouts are not part
+        // of the same hierarchy". See OverlaysDisableSelectionTest.
+        DisableSelection {
+            Surface(
+                color = MaterialTheme.colorScheme.surface,
+                shape = RoundedCornerShape(12.dp),
+                tonalElevation = 3.dp,
             ) {
-                Image(
-                    bitmap = bitmap,
-                    contentDescription = state.path,
-                    contentScale = ContentScale.Fit,
-                    modifier = Modifier.heightIn(max = 720.dp).widthIn(max = 960.dp),
-                )
-                state.path?.let {
-                    Spacer(Modifier.height(6.dp))
-                    Text(
-                        it,
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                Column(
+                    Modifier
+                        .padding(10.dp)
+                        .clickable(onClick = state::close),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                ) {
+                    Image(
+                        bitmap = bitmap,
+                        contentDescription = state.path,
+                        contentScale = ContentScale.Fit,
+                        modifier = Modifier.heightIn(max = 720.dp).widthIn(max = 960.dp),
                     )
+                    state.path?.let {
+                        Spacer(Modifier.height(6.dp))
+                        Text(
+                            it,
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
                 }
             }
         }

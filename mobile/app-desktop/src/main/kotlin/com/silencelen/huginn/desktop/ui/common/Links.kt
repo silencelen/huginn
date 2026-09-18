@@ -6,6 +6,7 @@ import androidx.compose.foundation.TooltipPlacement
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.selection.DisableSelection
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -82,7 +83,11 @@ fun rememberLinkUriHandler(onCopy: (String) -> Unit): UriHandler = remember(onCo
 @OptIn(ExperimentalFoundationApi::class)
 val DesktopLinkPeek = LinkPeek { url, content ->
     TooltipArea(
-        tooltip = { if (!url.isNullOrBlank()) UrlCard(url) },
+        // DisableSelection for the same reason [Tip] has it, and this one is
+        // drawn over text that is being READ WITH A POINTER — hover a link,
+        // start dragging out a quote, and the URL card's `Text` is a selectable
+        // in another layout root. See OverlaysDisableSelectionTest.
+        tooltip = { DisableSelection { if (!url.isNullOrBlank()) UrlCard(url) } },
         // Shorter than the 400ms of an explanatory Tip: this is not an
         // explanation, it is the thing the click is about to do.
         delayMillis = 220,
