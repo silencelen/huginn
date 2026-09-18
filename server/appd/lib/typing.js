@@ -337,6 +337,193 @@ function composerDrawn(lines) {
 }
 
 /**
+ * ─── PASTE SETTLED ─────────────────────────────────────────────────────────
+ *
+ * ⚠ THE P1 THIS SECTION EXISTS FOR (reported 2026-09-16, after 3.0.7 shipped
+ * the `starting` gate): "im still seeing some errors with the first chat sent
+ * during a new session being stuck in the screen views text box but not sent".
+ *
+ * Swept against the REAL `claude` 2.1.258 in the daemon's own WORKDIR, launched
+ * exactly the way `POST /v1/sessions` launches it, pasting exactly the way
+ * `sendTextToPane` pastes (load-buffer | paste-buffer -p -d, 50 ms, Enter), 30 ms
+ * pane samples, outcome read from the transcript rather than the pane. 53 runs:
+ *
+ *   paste AFTER the composer, +0 ms to +3000 ms      31/31 submitted, clean
+ *   paste ~2.0 s to ~0.85 s BEFORE the composer       6/6  STUCK IN THE BOX
+ *   paste ~0.6 s to ~0.3 s BEFORE the composer        4/4  lost without trace
+ *
+ * So the bug is not a window AFTER the composer — there is none. It is the
+ * middle band, and it is the owner's screenshot exactly: the bytes sit in the
+ * pty until the TUI starts reading, the TUI renders them into the composer the
+ * instant it paints, and the `\r` that rode with them is dropped. Text in the
+ * box, no turn, no transcript record, and nothing on fire anywhere.
+ *
+ * The gate alone cannot close that band, because a send can reach a pane with no
+ * composer three ways it does not control: the 20 s startup grace expiring on a
+ * loaded host (measured in production 2026-09-17 23:54:49Z — `typing: mcserver:
+ * no composer 22s after launch`, then the owner's first message 82 ms later), a
+ * session created by `cc`/`huginn <name>` rather than by the route (never marked
+ * at all), and a rename inside the grace. So the delivery path itself checks:
+ * after pasting, WAIT until the pane visibly holds what was pasted, and only
+ * then press Enter. Re-swept with that check in place, the stuck band is gone
+ * (0/9 stuck; the four sends with bytes left to catch all submitted).
+ */
+
+/** How long a paste may take to become visible before Enter goes anyway. */
+const PASTE_SETTLE_MS = 3_000;
+/** How often the settle check re-reads the pane. One capture-pane each. */
+const PASTE_SETTLE_POLL_MS = 50;
+/** How long after Enter the composer has to empty before that is worth logging. */
+const SUBMIT_CONFIRM_MS = 1_000;
+const SUBMIT_CONFIRM_POLL_MS = 100;
+
+/**
+ * The composer's own content, as opposed to anything else with a caret on it.
+ *
+ * ⚠ AND IT IS THE **LAST** CARET, NOT THE FIRST. Claude Code echoes a SUBMITTED
+ * message above the box with the same `❯` glyph, so a rule that reads the bottom
+ * REGION — which is what `composerDrawn` and the dialog rules correctly do —
+ * sees every successful send as text still sitting in the composer. That cost a
+ * whole sweep: nine runs came back "submitted AND reappeared in the box" when
+ * the box was empty in every one of them. Scanning UP from the bottom finds the
+ * composer first, because the echo is above it and the status lines below carry
+ * no caret.
+ *
+ * Wrapped input continues on the rows beneath the caret with no caret of their
+ * own, so they are joined in, stopping at the box's closing rule.
+ *
+ * Returns null when there is no composer at all — a plain shell, a pane still
+ * booting — which is a different answer from "the composer is empty" and the
+ * callers below rely on the difference.
+ */
+const RULE_RE = /^[─━—–_=-]{3,}$/;
+function composerText(lines) {
+  const arr = Array.isArray(lines) ? lines : String(lines || '').split('\n');
+  const plain = arr.map((l) => stripAnsi(String(l)).replace(/\s+$/, ''));
+  let last = -1;
+  for (let i = plain.length - 1; i >= 0; i--) { if (plain[i].trim()) { last = i; break; } }
+  if (last < 0) return null;
+  const from = Math.max(0, last - DIALOG_LOOKBACK);
+  let caret = -1;
+  for (let i = last; i >= from; i--) { if (/^\s*❯/.test(plain[i])) { caret = i; break; } }
+  if (caret < 0) return null;
+  const out = [plain[caret].replace(/^\s*❯\s?/, '')];
+  for (let i = caret + 1; i <= last; i++) {
+    if (RULE_RE.test(plain[i].trim())) break;
+    out.push(plain[i]);
+  }
+  return out.join('\n');
+}
+
+/**
+ * Comparison spelling for pane text: ANSI stripped and ALL whitespace removed.
+ *
+ * Whitespace goes because tmux wraps a long line at the pane width with no
+ * separator at all, so a 200-character message arrives as three rows split
+ * mid-word. Removing whitespace from both sides of the comparison makes the
+ * wrap invisible instead of making the match impossible.
+ */
+function squashPane(s) { return stripAnsi(String(s || '')).replace(/\s+/g, ''); }
+
+/**
+ * What a COLLAPSED paste looks like in the composer — and it is most of them.
+ *
+ * Anything with a newline in it renders as `[Pasted text #1 +40 lines]` and the
+ * text itself is never on screen at all (measured: a 40-line paste shows the
+ * marker 60 ms after paste-buffer and nothing else, forever). A rule that looked
+ * only for the text would time out on every multi-line message there is, which
+ * is most of what a person sends from a phone. Matched against the squashed
+ * spelling, hence no spaces; `#N` is the paste index and is optional because it
+ * is not in every build.
+ */
+const PASTED_MARKER_RE = /\[Pastedtext(?:#\d+)?\+\d+lines?\]/i;
+
+/** The needle: enough of the message to be unmistakable, short enough to fit a row. */
+function pasteProbe(text) { return squashPane(text).slice(0, 32); }
+
+/**
+ * Where a settle check looks: the composer if there is one, else the bottom of
+ * the pane.
+ *
+ * The fallback is not a shortcut. A pane that is still booting has no composer
+ * yet — that is the whole case — and a plain shell never will; both are panes
+ * appd legitimately types into, and both echo at the bottom when they echo at
+ * all. The composer is preferred when present because it is the precise answer.
+ */
+function settleRegion(lines) {
+  const c = composerText(lines);
+  if (c !== null) return squashPane(c);
+  const arr = Array.isArray(lines) ? lines : String(lines || '').split('\n');
+  return squashPane(arr.slice(Math.max(0, arr.length - (DIALOG_LOOKBACK + 4))).join('\n'));
+}
+
+/**
+ * Has the paste visibly LANDED — i.e. is there now an application holding it?
+ */
+function pasteLanded(lines, text) {
+  const probe = pasteProbe(text);
+  if (!probe) return true;                       // nothing was sent; nothing to wait for
+  const region = settleRegion(lines);
+  return region.includes(probe) || PASTED_MARKER_RE.test(region);
+}
+
+/**
+ * Was the probe ALREADY on screen before the paste went out?
+ *
+ * Then the check above cannot speak: a pane that already showed the text (a
+ * resend of the same message, a collapsed-paste marker left over from an earlier
+ * one) is indistinguishable from one that has just received it. The caller
+ * treats that as landed immediately, which is exactly what the daemon did before
+ * this check existed — no worse, and never a wait that cannot end.
+ */
+function pasteIndistinguishable(beforeLines, text) {
+  if (beforeLines == null) return false;
+  const probe = pasteProbe(text);
+  if (!probe) return true;
+  const region = settleRegion(beforeLines);
+  return region.includes(probe) || PASTED_MARKER_RE.test(region);
+}
+
+/**
+ * After Enter: has the composer let go of the message?
+ *
+ * Composer-ONLY, never the region — see `composerText`. A pane with no composer
+ * (a shell) returns null rather than false: there is nothing here that can
+ * answer, and reporting a stall for every shell send would make the journal line
+ * below worthless.
+ */
+function composerCleared(lines, text) {
+  const c = composerText(lines);
+  if (c === null) return null;
+  const probe = pasteProbe(text);
+  if (!probe) return true;
+  const squashed = squashPane(c);
+  return !(squashed.includes(probe) || PASTED_MARKER_RE.test(squashed));
+}
+
+/**
+ * The journal lines for the two ways delivery can go wrong quietly.
+ *
+ * Both carry the bottom of the pane, because the question a reader has is "what
+ * was in the pane instead" and the answer is never in a counter. One grep-able
+ * shape, like `dropLogLine` — the rule since the 43 messages that vanished
+ * without a trace is that anything short of a delivered message says so on disk.
+ */
+function paneTail(lines, rows = 6) {
+  const arr = Array.isArray(lines) ? lines : String(lines || '').split('\n');
+  return arr.map((l) => stripAnsi(String(l)).replace(/\s+$/, ''))
+    .filter((l) => l.trim()).slice(-rows).join(' | ');
+}
+function pasteLostLogLine(name, waitedMs, lines) {
+  return `typing: ${name}: pasted text never appeared in the pane after ${waitedMs}ms; `
+    + `pressing Enter anyway | pane: ${paneTail(lines)}`;
+}
+function submitStalledLogLine(name, waitedMs, lines) {
+  return `typing: ${name}: composer still holds the message ${waitedMs}ms after Enter; `
+    + `it may be sitting there unsent | pane: ${paneTail(lines)}`;
+}
+
+/**
  * Is this session still coming UP, so that anything pasted into it is lost?
  *
  * ⚠ THE P1 THIS EXISTS FOR (reported 2026-09-15): "a user creates a session and
@@ -510,6 +697,9 @@ function typingSnapshot(q, nowMs = Date.now()) {
 module.exports = {
   SESSION_TEXT_MAX, SENDKEYS_BUDGET, CHUNK_SIZE, TYPING_POLL_MS,
   QUEUE_MAX_WAIT_MS, STARTUP_GRACE_MS,
+  PASTE_SETTLE_MS, PASTE_SETTLE_POLL_MS, SUBMIT_CONFIRM_MS, SUBMIT_CONFIRM_POLL_MS,
+  composerText, pasteProbe, pasteLanded, pasteIndistinguishable, composerCleared,
+  paneTail, pasteLostLogLine, submitStalledLogLine,
   sendKeysFits, chunks,
   isBoundaryRecord, isConversationalRecord, boundaryFromTail, stateVerdict,
   hasHumanUserRecord, kindOf,

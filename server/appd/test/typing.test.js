@@ -555,3 +555,115 @@ test('the poll interval and the give-up window are the contract\'s', () => {
   assert.equal(t.TYPING_POLL_MS, 400);
   assert.equal(t.QUEUE_MAX_WAIT_MS, 10 * 60 * 1000);
 });
+
+// ------------------------------------------------ paste settled (3.1.x P1)
+//
+// Fixtures are REAL pane captures taken from the sweep that found the bug
+// (2026-09-17, Claude Code 2.1.258, /root/netplan): the same 5 rows the daemon
+// reads, one from a send that is sitting unsent in the composer and one from a
+// send that went. A hand-written pane would have agreed with whatever the rules
+// happened to say.
+
+/** A pane whose composer is HOLDING the message: the owner's screenshot. */
+const STUCK_PANE = [
+  '',
+  '                                                             ◉ xhigh · /effort',
+  '────────────────────────────────────────────────────────────────────────────────',
+  '❯ RACEPROBE-abs-0 reply with only the word RACEOK',
+  '────────────────────────────────────────────────────────────────────────────────',
+  '  [r2-abs-0] Fable 5.1 · main ~5 · ⚠ 3 sessions in this tree',
+  '  ⏵⏵ auto mode on (shift+tab to cycle)',
+];
+
+/** The SAME message, delivered: echoed above the box, composer empty. */
+const SENT_PANE = [
+  '❯ RACEPROBE-settle-0 reply with only the word RACEOK',
+  '',
+  '✢ Actioning…',
+  '                                                             ◉ xhigh · /effort',
+  '────────────────────────────────────────────────────────────────────────────────',
+  '❯ ',
+  '────────────────────────────────────────────────────────────────────────────────',
+  '  [r2-settle-0] Fable 5.1 · main ~5 · ⚠ 3 sessions in this tree',
+  '  ⏵⏵ auto mode on (shift+tab to cycle) · ← for agents',
+];
+
+const STUCK_TEXT = 'RACEPROBE-abs-0 reply with only the word RACEOK';
+const SENT_TEXT = 'RACEPROBE-settle-0 reply with only the word RACEOK';
+
+test('the composer is the LAST caret, not the first — an echoed message is not a draft', () => {
+  // ⚠ THE TRAP THIS RULE EXISTS FOR. Claude Code echoes a SUBMITTED message
+  // above the box with the same ❯ glyph, so reading the bottom REGION (which is
+  // right for `composerDrawn` and for the dialog rules) calls every successful
+  // send "still sitting in the box". It did: nine runs of the verification sweep
+  // came back "submitted AND reappeared" with an empty composer in every one.
+  assert.equal(t.composerText(SENT_PANE), '');
+  assert.equal(t.composerText(STUCK_PANE), STUCK_TEXT);
+});
+
+test('a pane with no caret at all has no composer — which is not an empty one', () => {
+  // null, not ''. A shell and a booting claude both have nothing to say about a
+  // composer, and `composerCleared` must not read that as "the message went".
+  assert.equal(t.composerText(['root@huginn:~/netplan# ']), null);
+  assert.equal(t.composerText([]), null);
+});
+
+test('the settle check sees the message land, and the confirm sees it leave', () => {
+  assert.equal(t.pasteLanded(STUCK_PANE, STUCK_TEXT), true);
+  assert.equal(t.composerCleared(STUCK_PANE, STUCK_TEXT), false, 'this is the bug: still in the box');
+  assert.equal(t.composerCleared(SENT_PANE, SENT_TEXT), true, 'and this one went');
+});
+
+test('a COLLAPSED paste counts as landed — the text itself is never on screen', () => {
+  // Measured: a 40-line paste renders as `[Pasted text #1 +40 lines]` 60 ms
+  // after paste-buffer and the text never appears at all. A settle rule that
+  // only looked for the text would time out on every multi-line message there
+  // is, which is most of what a person sends from a phone.
+  const collapsed = ['──────────', '❯ [Pasted text #1 +40 lines]', '──────────', '  paste again to expand'];
+  const long = `first line of the block\n${'x'.repeat(2000)}`;
+  assert.equal(t.pasteLanded(collapsed, long), true);
+  assert.equal(t.composerCleared(collapsed, long), false);
+});
+
+test('tmux WRAPPING a long message does not hide it from the settle check', () => {
+  // capture-pane breaks a long line at the pane width with no separator, so the
+  // probe is compared against a whitespace-free spelling of both sides.
+  const text = 'please summarise the last three commits and say which one touched the daemon';
+  const wrapped = ['──────────', '❯ please summarise the last three commits and say which', 'one touched the daemon', '──────────'];
+  assert.equal(t.pasteLanded(wrapped, text), true);
+});
+
+test('a pane that ALREADY showed the text cannot be waited on, and says so', () => {
+  // A resend of the same message is indistinguishable from one that has just
+  // landed. The caller treats that as landed immediately — exactly what the
+  // daemon did before this check existed, and never a wait that cannot end.
+  assert.equal(t.pasteIndistinguishable(STUCK_PANE, STUCK_TEXT), true);
+  assert.equal(t.pasteIndistinguishable(SENT_PANE, SENT_TEXT), false);
+  assert.equal(t.pasteIndistinguishable(null, STUCK_TEXT), false, 'no capture is not a match');
+});
+
+test('a booting pane has not landed anything, however much it has drawn', () => {
+  const booting = ['Claude Code v2.1.258', 'Permission allow rule (settings): a wildcard', 'matches more than it looks like it does.'];
+  assert.equal(t.pasteLanded(booting, STUCK_TEXT), false);
+  assert.equal(t.composerCleared(booting, STUCK_TEXT), null, 'nothing here can answer');
+});
+
+test('both quiet failures write a journal line carrying the pane itself', () => {
+  // The rule since the 43 messages that vanished: anything short of a delivered
+  // message says so on disk, in one grep-able shape, with what was there instead.
+  const lost = t.pasteLostLogLine('mcserver', 3000, STUCK_PANE);
+  assert.match(lost, /mcserver/);
+  assert.match(lost, /never appeared/);
+  assert.match(lost, /pane: /);
+  const stalled = t.submitStalledLogLine('mcserver', 1000, STUCK_PANE);
+  assert.match(stalled, /composer still holds the message/);
+  assert.match(stalled, /RACEPROBE-abs-0/, 'the tail is the evidence; it must be IN the line');
+});
+
+test('the settle bounds are the measured ones, not a round number someone liked', () => {
+  // 3 s covers the whole stuck band with margin: the widest gap measured between
+  // a paste and the paint that rendered it was 1,987 ms.
+  assert.equal(t.PASTE_SETTLE_MS, 3_000);
+  assert.equal(t.PASTE_SETTLE_POLL_MS, 50);
+  assert.equal(t.SUBMIT_CONFIRM_MS, 1_000);
+});
