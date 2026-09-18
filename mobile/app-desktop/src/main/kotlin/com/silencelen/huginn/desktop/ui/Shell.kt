@@ -756,6 +756,25 @@ fun railViews(
     add(View.SETTINGS)
 }
 
+/**
+ * Whether this pass of the poll should ask `GET /v1/consoles` again.
+ *
+ * ⚠⚠ UNTIL IT HAS ANSWERED, NOT ONCE. The old condition was `tick == 0 ||
+ * view == CONSOLES`, and on a fresh install tick 0 lands while the setup flow is
+ * still open and no token has been saved: the call comes back 401, which is an
+ * answer about the BEARER and not about the feature. Nothing asked again — and
+ * the one place that would have, the Consoles pane, is behind the rail item
+ * [railViews] had just hidden. Consoles was therefore unreachable for the whole
+ * first session while the daemon served four rows the entire time; Projects and
+ * Pages survived the identical 401 only because they are refreshed every tick.
+ *
+ * So: null is "no answer yet" and gets asked again, `true`/`false` are answers
+ * and stop the probing, and the pane in front of the reader keeps its own poll
+ * either way because the ROWS move even when the feature question is settled.
+ */
+fun shouldProbeConsoles(available: Boolean?, view: View): Boolean =
+    available == null || view == View.CONSOLES
+
 @Composable
 private fun NavRail(
     current: View,
