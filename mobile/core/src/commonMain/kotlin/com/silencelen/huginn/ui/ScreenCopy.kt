@@ -118,7 +118,10 @@ internal fun logicalLines(lines: List<String>, width: Int): List<String> {
     return out
 }
 
-private val URL_RE = Regex("""https?://[^\s<>"'`]+""")
+// ⚠ ESC IS IN THE NEGATED CLASS, and not only because the scan now runs on
+// stripped text: a regex that treats an escape byte as an ordinary URL
+// character is how a coloured URL came back with its SGR tail attached.
+private val URL_RE = Regex("""https?://[^\s<>"'`\u001B]+""")
 
 /** Punctuation that ends a sentence rather than a URL. */
 private const val TRAILING = ".,;:!?)]}>\"'"
@@ -132,9 +135,17 @@ private const val TRAILING = ".,;:!?)]}>\"'"
  */
 fun linksOn(screen: Screen?): List<String> {
     if (screen == null) return emptyList()
-    return logicalLines(screen.lines, screen.width)
+    // ⚠ THE OSC 8 TARGET FIRST, because it is the one thing a reader could not
+    // have copied off the pane by hand: the visible text of a hyperlink is a
+    // LABEL ("Security guide") and the URI lives only in the escape. Not trimmed
+    // of trailing punctuation the way scraped text is — the escape delimits the
+    // URI exactly, so there is nothing to guess at.
+    val hyperlinked = screen.lines.flatMap { unescape(it).links }
+    val scraped = logicalLines(screen.lines, screen.width)
+        .map { stripAnsi(it) }
         .flatMap { line -> URL_RE.findAll(line).map { it.value } }
         .map { it.trimEnd { c -> c in TRAILING } }
+    return (hyperlinked + scraped)
         // A bare scheme is what a truncated pane leaves behind, and copying it
         // would look like it worked.
         .filter { it.length > "https://".length }

@@ -149,6 +149,39 @@ class ScreenCopyTest {
         assertEquals(" Security guide", screenText(screen(80, row)))
     }
 
+    /**
+     * ⚠ AND THE LINK COPY WAS THE WORST OF THE THREE. `URL_RE` excludes
+     * whitespace and `<>"'` and backtick — but not ESC — and `TRAILING` trims no
+     * part of an SGR tail, so a coloured URL came back with the escape bytes
+     * attached and often with the next label welded on. On the real
+     * `trust-dialog-80.txt` row it produced
+     * `https://code.claude.com/docs/en/security<ESC>\\Security`; for the 450-char
+     * sign-in URL wrapped in OSC 8 it produced a 909-character double.
+     */
+    @Test
+    fun aStyledUrlIsCopiedWithoutItsColours() {
+        val s = screen(80, "see $E[4mhttps://example.com/x$E[24m for more")
+        assertEquals(listOf("https://example.com/x"), linksOn(s))
+    }
+
+    /**
+     * An OSC 8 hyperlink's TARGET is not on the screen at all — the visible text
+     * is a label. Copy link has to offer the target, which is the only thing a
+     * person could not have read off the pane themselves.
+     */
+    @Test
+    fun anOsc8HyperlinkOffersItsTargetRatherThanItsLabel() {
+        val row = " $E[38;5;246m$E]8;id=zaxmda;https://code.claude.com/docs/en/security$E\\" +
+            "Security guide$E[39m$E]8;;$E\\"
+        assertEquals(listOf("https://code.claude.com/docs/en/security"), linksOn(screen(80, row)))
+    }
+
+    @Test
+    fun aHyperlinkWhoseLabelIsItsOwnUrlIsOneOffer() {
+        val row = "$E]8;;https://example.com/a$E\\https://example.com/a$E]8;;$E\\"
+        assertEquals(listOf("https://example.com/a"), linksOn(screen(80, row)))
+    }
+
     @Test
     fun aScreenOfNothingButStylingHasNothingToCopy() {
         assertFalse(hasCopyableText(screen(20, "$E[39m", "$E[0m  ")))
