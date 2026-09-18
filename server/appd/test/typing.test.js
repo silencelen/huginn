@@ -87,8 +87,10 @@ test('isBoundaryRecord accepts system/turn_duration and a turn that died on an a
 test('boundaryFromTail is idle only when the LAST record is the boundary', () => {
   const user = JSON.stringify({ type: 'user', message: { content: 'hi' } });
   const turn = JSON.stringify({ type: 'system', subtype: 'turn_duration', durationMs: 900 });
-  assert.deepEqual(t.boundaryFromTail(`${user}\n${turn}\n`), { idle: true, lastKind: 'system/turn_duration' });
-  assert.deepEqual(t.boundaryFromTail(`${turn}\n${user}\n`), { idle: false, lastKind: 'user' });
+  assert.deepEqual(t.boundaryFromTail(`${user}\n${turn}\n`),
+    { idle: true, lastKind: 'system/turn_duration', unknown: false });
+  assert.deepEqual(t.boundaryFromTail(`${turn}\n${user}\n`),
+    { idle: false, lastKind: 'user', unknown: false });
 });
 
 test('boundaryFromTail ignores attachment records landing after the boundary', () => {
@@ -106,9 +108,10 @@ test('boundaryFromTail tolerates a truncated first line — a tail starts mid-re
 });
 
 test('boundaryFromTail is NOT idle for an empty or unreadable tail', () => {
-  assert.deepEqual(t.boundaryFromTail(''), { idle: false, lastKind: null });
-  assert.deepEqual(t.boundaryFromTail('\n\n  \n'), { idle: false, lastKind: null });
-  assert.deepEqual(t.boundaryFromTail('not json at all\n{oops'), { idle: false, lastKind: null });
+  assert.deepEqual(t.boundaryFromTail(''), { idle: false, lastKind: null, unknown: true });
+  assert.deepEqual(t.boundaryFromTail('\n\n  \n'), { idle: false, lastKind: null, unknown: true });
+  assert.deepEqual(t.boundaryFromTail('not json at all\n{oops'),
+    { idle: false, lastKind: null, unknown: true });
   assert.equal(t.boundaryFromTail(null).idle, false, 'absence is never evidence of idleness');
 });
 
@@ -134,7 +137,8 @@ test('boundaryFromTail reads the last CONVERSATIONAL record, not the last LINE',
   // and were dropped with no word to anyone. Measured live, 2026-09-15.
   const live = [TURN_REC, ...['last-prompt', 'ai-title', 'mode', 'permission-mode', 'atis-latch']
     .map((type) => JSON.stringify({ type }))].join('\n') + '\n';
-  assert.deepEqual(t.boundaryFromTail(live), { idle: true, lastKind: 'system/turn_duration' });
+  assert.deepEqual(t.boundaryFromTail(live),
+    { idle: true, lastKind: 'system/turn_duration', unknown: false });
 });
 
 test('every bookkeeping record type is invisible to the gate, in any order', () => {
@@ -151,7 +155,8 @@ test('a session mid-turn is still NOT idle, whatever bookkeeping lands after it'
   // running turn into an open gate. A mid-turn assistant record is a tool call
   // (`stop_reason: "tool_use"`), and that is what the gate must hold on.
   const working = JSON.stringify({ type: 'assistant', message: { stop_reason: 'tool_use', content: [] } });
-  assert.deepEqual(t.boundaryFromTail(`${TURN_REC}\n${working}\n`), { idle: false, lastKind: 'assistant' });
+  assert.deepEqual(t.boundaryFromTail(`${TURN_REC}\n${working}\n`),
+    { idle: false, lastKind: 'assistant', unknown: false });
   const withTail = [TURN_REC, working, ...BOOKKEEPING].join('\n');
   assert.equal(t.boundaryFromTail(withTail).idle, false, 'bookkeeping cannot open a gate by itself');
   assert.equal(t.boundaryFromTail(withTail).lastKind, 'assistant');
@@ -192,6 +197,34 @@ test('isConversationalRecord is the whole filter, stated once', () => {
   assert.equal(t.isConversationalRecord({ type: 'last-prompt' }), false);
   assert.equal(t.isConversationalRecord(null), false);
   assert.equal(t.isConversationalRecord({}), false);
+});
+
+test('boundaryFromTail says UNKNOWN when the window holds nothing conversational (#5)', () => {
+  // ⚠ A 64 KB WINDOW FULL OF BOOKKEEPING. The 9.2% case measured across this
+  // host's own transcripts is not a huge final MESSAGE — it is a large
+  // NON-conversational record appended after the turn ended (a 94 KB
+  // `attachment` was the one caught in the act): the post-boundary lines inside
+  // the window parse fine but are not conversational, and the fragment of the
+  // big record does not parse at all. "No boundary" and "I could not see the
+  // boundary" then looked identical, and every AUTOMATED send blocked on 'turn'
+  // and was dropped as a timeout ten minutes later.
+  const bookkeeping = JSON.stringify({ type: 'system', subtype: 'ai_title', text: 'x' });
+  const fragment = '{"type":"attachment","content":"AAAA';   // a torn first line
+  const blind = t.boundaryFromTail(`${fragment}\n${bookkeeping}\n`);
+  assert.equal(blind.idle, false);
+  assert.equal(blind.lastKind, null);
+  assert.equal(blind.unknown, true, 'the caller has to be able to widen the window');
+
+  // A window that DOES hold a conversational record is never unknown, whichever
+  // way it decides.
+  const ended = JSON.stringify({ type: 'assistant', message: { stop_reason: 'end_turn', content: [] } });
+  const mid = JSON.stringify({ type: 'user', message: { content: 'go' } });
+  assert.deepEqual(t.boundaryFromTail(`${ended}\n${bookkeeping}\n`),
+    { idle: true, lastKind: 'assistant', unknown: false });
+  assert.deepEqual(t.boundaryFromTail(`${mid}\n`),
+    { idle: false, lastKind: 'user', unknown: false });
+  // An EMPTY tail is unknown too — an absence is not an observation.
+  assert.equal(t.boundaryFromTail('').unknown, true);
 });
 
 // ------------------------------------------ the hook's state file as a gate
