@@ -4,10 +4,10 @@
       "id": "armap",
       "name": "Architecture map",
       "url": "http://huginn:8088/",
-      "kind": "dashboard",
+      "kind": "docs",
       "notes": "Static armap dashboard (docs/current/armap).",
       "addedAt": 1789000000,
-      "version": 3,
+      "version": 1,
       "up": true,
       "lastProbeAt": 1789459940,
       "latencyMs": 12,
@@ -19,8 +19,8 @@
       "name": "jtyper trainer",
       "url": "http://huginn:8091/",
       "kind": "lab",
-      "notes": "Blind test, chat and hole-fill flywheel.",
-      "addedAt": 1789000100,
+      "notes": "Blind test + chat + hole-fill flywheel.",
+      "addedAt": 1789000000,
       "version": 1,
       "up": true,
       "lastProbeAt": 1789459940,
@@ -32,13 +32,13 @@
       "id": "board",
       "name": "PCB board view",
       "url": "http://huginn:8092/",
-      "kind": "hardware",
+      "kind": "tool",
       "notes": "Live KiCad board review (brokkr renders).",
-      "addedAt": 1789000200,
+      "addedAt": 1789000000,
       "version": 1,
       "up": false,
       "lastProbeAt": 1789459940,
-      "latencyMs": null,
+      "latencyMs": 2000,
       "httpStatus": null,
       "reachableFrom": "host"
     },
@@ -46,9 +46,9 @@
       "id": "btc15m",
       "name": "BTC 15m simulator",
       "url": "http://huginn:8093/",
-      "kind": null,
-      "notes": null,
-      "addedAt": 1789459990,
+      "kind": "lab",
+      "notes": "Paper-trading sim for the 15-minute lab.",
+      "addedAt": 1789000000,
       "version": 1,
       "up": null,
       "lastProbeAt": 0,
@@ -58,31 +58,39 @@
     }
   ],
   "max": 32,
-  "kinds": ["dashboard", "tool", "docs", "lab", "other"],
+  "kinds": [
+    "dashboard",
+    "tool",
+    "docs",
+    "lab",
+    "other"
+  ],
   "reachableFrom": "host",
   "probeIntervalMs": 300000,
   "approval": {
     "applied": false,
     "runBy": "owner",
-    "markerPath": "/var/lib/huginn-appd/consoles-rebind.applied",
-    "title": "Reach these consoles from outside the host",
-    "why": "Every page below is bound to this host's own address, so the probe can see them and a phone cannot. These steps rebind them and open the four ports on the hypervisor's firewall.",
+    "markerPath": "/var/lib/huginn-appd/consoles-rebind-applied",
+    "title": "Open these from your phone or laptop",
+    "why": "Three of these pages are bound to this host only, so the probe below can reach them and your devices cannot. Applying this changes that. Huginn does not run these commands.",
     "steps": [
       {
         "id": "rebind",
-        "where": "huginn",
-        "summary": "Bind the four services to 0.0.0.0 instead of the tailnet address",
+        "where": "huginn (this host)",
+        "summary": "Bind the three units to 0.0.0.0. btc15m-sim already does.",
         "file": null,
         "commands": [
-          "systemctl edit armap jtyper-trainer boardserver",
+          "systemctl edit armap.service            # ExecStart: bind 0.0.0.0 instead of the tailnet address",
+          "systemctl edit jtyper-trainer.service   # same",
+          "systemctl edit boardserver.service      # same",
           "systemctl restart armap jtyper-trainer boardserver",
-          "ss -ltnp | grep -E '8088|8091|8092|8093'"
+          "ss -ltnp | grep -E '8088|8091|8092'"
         ]
       },
       {
         "id": "firewall",
         "where": "heimdall",
-        "summary": "Allow the four ports from the LAN gateway",
+        "summary": "Add four rules to /etc/pve/firewall/117.fw, one source and one port each.",
         "file": "/etc/pve/firewall/117.fw",
         "commands": [
           "IN ACCEPT -source 192.168.2.131 -p tcp -dport 8088 -log nolog",
@@ -92,6 +100,6 @@
         ]
       }
     ],
-    "note": "Run these in a netplan session; the second step is on the hypervisor, not on huginn."
+    "note": "Copy these into a netplan session and run them there. When they are done, `touch /var/lib/huginn-appd/consoles-rebind-applied` and every console row will say so."
   }
 }

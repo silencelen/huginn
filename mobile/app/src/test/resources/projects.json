@@ -3,79 +3,81 @@
     {
       "id": "6f0d2c41-0000-4000-8000-0000000000a1",
       "name": "LoRa sensor stick",
+      "slug": "lora-stick",
+      "kind": "hardware",
+      "status": "proposed",
       "cwd": "/root/netplan/dev-ledger/lora-stick",
-      "createdAt": 1789459900,
-      "endedAt": null,
+      "memberCount": 0,
+      "alive": 0,
+      "busy": 0,
+      "waiting": 0,
       "lead": {
-        "name": "lora-stick/lead",
-        "sessionId": "0123abcd-0000-4000-8000-00000000abcd"
+        "role": "lead",
+        "name": "lora-stick-lead",
+        "claudeName": "lora-stick/lead",
+        "sessionId": "0123abcd-0000-4000-8000-00000000abcd",
+        "present": true
       },
-      "members": [],
-      "manifest": {
-        "rev": 2,
-        "receivedAt": 1789460050,
-        "summary": "Two sessions: docs writes the README, repo runs the fab checks.",
-        "text": "scope: finish the sensor stick package\nsessions:\n  docs — writes README.md and the BOM notes\n  repo — runs the DRC and files the fab package",
-        "untaggedSeen": false
-      }
+      "manifestRev": 2,
+      "manifestSummary": "two sessions: docs writes the README, fw brings up the radio",
+      "untaggedSeen": false,
+      "endedReason": null,
+      "createdAt": 1789459400,
+      "updatedAt": 1789459950,
+      "rev": 1
     },
     {
       "id": "6f0d2c41-0000-4000-8000-0000000000b2",
       "name": "Status page flap",
+      "slug": "statusflap",
+      "kind": "software",
+      "status": "active",
       "cwd": "/root/netplan/status-page",
-      "createdAt": 1789450000,
-      "endedAt": null,
+      "memberCount": 4,
+      "alive": 3,
+      "busy": 1,
+      "waiting": 1,
       "lead": {
-        "name": "statusflap/lead",
-        "sessionId": null
+        "role": "lead",
+        "name": "statusflap-lead",
+        "claudeName": "statusflap/lead",
+        "sessionId": "sid-lead",
+        "present": true
       },
-      "members": [
-        {
-          "name": "statusflap/db",
-          "role": "db",
-          "sessionId": "0123abcd-0000-4000-8000-00000000d001",
-          "spawnedAt": 1789452000,
-          "state": "running",
-          "needsYou": false,
-          "pendingSends": 0,
-          "lastActivityTs": 1789459400,
-          "endedAt": null
-        },
-        {
-          "name": "statusflap/web",
-          "role": "web",
-          "sessionId": "0123abcd-0000-4000-8000-00000000d002",
-          "spawnedAt": 1789452100,
-          "state": "attention",
-          "needsYou": true,
-          "pendingSends": 2,
-          "lastActivityTs": 1789459400,
-          "endedAt": null
-        },
-        {
-          "name": "statusflap/probe",
-          "role": "probe",
-          "sessionId": "0123abcd-0000-4000-8000-00000000d003",
-          "spawnedAt": 1789452200,
-          "state": "teleporting",
-          "needsYou": null,
-          "pendingSends": null,
-          "lastActivityTs": null,
-          "endedAt": null
-        },
-        {
-          "name": "statusflap/docs",
-          "role": "docs",
-          "sessionId": null,
-          "spawnedAt": 1789452300,
-          "state": "idle",
-          "needsYou": false,
-          "pendingSends": 0,
-          "lastActivityTs": 1789455000,
-          "endedAt": 1789455200
-        }
-      ],
-      "manifest": null
+      "manifestRev": 1,
+      "manifestSummary": "four sessions: db, web, probe and docs",
+      "untaggedSeen": true,
+      "endedReason": null,
+      "createdAt": 1789373600,
+      "updatedAt": 1789459880,
+      "rev": 4
+    },
+    {
+      "id": "6f0d2c41-0000-4000-8000-0000000000c3",
+      "name": "Auvik lab",
+      "slug": "auvik-lab",
+      "kind": "infra",
+      "status": "archived",
+      "cwd": "/root/netplan",
+      "memberCount": 0,
+      "alive": 0,
+      "busy": 0,
+      "waiting": 0,
+      "lead": {
+        "role": "lead",
+        "name": "auvik-lab-lead",
+        "claudeName": "auvik-lab/lead",
+        "sessionId": null,
+        "present": false
+      },
+      "manifestRev": 0,
+      "manifestSummary": null,
+      "untaggedSeen": false,
+      "endedReason": "the lead session is gone",
+      "createdAt": 1789060000,
+      "updatedAt": 1789370000,
+      "rev": 7
     }
-  ]
+  ],
+  "max": 64
 }

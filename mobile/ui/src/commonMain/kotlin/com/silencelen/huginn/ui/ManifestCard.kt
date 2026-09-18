@@ -9,6 +9,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
@@ -19,22 +20,28 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import com.silencelen.huginn.data.ManifestSession
 import com.silencelen.huginn.data.ProjectManifest
 
 /**
  * The lead's proposal, and the three things that may be done about it.
  *
  * ⚠ THREE BOUNDED CHOICES AND NO MORE — Spawn · Edit · Discard. The same card
- * appears as a notification with the same three buttons, and the notification
- * rule the house learned the hard way is that a notification asks a CLOSED
- * question. Edit opens the app rather than editing in the shade; nothing here
- * takes free text.
+ * appears as a notification with two of them, and the notification rule the
+ * house learned the hard way is that a notification asks a CLOSED question. Edit
+ * opens the app rather than editing in the shade; nothing here takes free text.
+ *
+ * ⚠⚠ SPAWN SENDS THE REV, NOT THE PLAN. `POST …/spawn` takes `{approve:true,
+ * manifestRev}` and nothing else: the manifest on the daemon IS the plan, and a
+ * card that re-sent the roles would be approving a copy of a proposal rather
+ * than the proposal. The rev is what makes a card that has been sitting on a
+ * lock screen unable to approve a plan its owner never saw — which is why
+ * [ProjectManifest.rev] is drawn on the card as well as sent with the verb.
  *
  * ⚠ THE PROPOSAL IS RENDERED, NEVER RE-PARSED. The daemon does the structured
- * parse — a tagged fenced block, the Rounds anti-injection shape — and a client
- * that formed its own opinion about what the lead asked for would be a second
- * reading of the thing the owner is about to approve. So the body is text, drawn
- * as text.
+ * parse — a tagged fenced block, the Rounds anti-injection shape — and refuses
+ * anything that decides what gets created. This draws the result: the summary
+ * line, then one row per session with the settings it will start under.
  */
 @Composable
 fun ManifestCard(
@@ -47,9 +54,9 @@ fun ManifestCard(
     busy: Boolean = false,
     /**
      * The daemon's refusal, shown VERBATIM. The one that matters is the STOP
-     * sentinel — "the host is holding new sessions while usage is red" — which is
-     * a state of the house rather than a fault in the proposal, and reads that
-     * way only if it is said in the daemon's own words.
+     * sentinel — "there is no room on this account right now (…)" — which is a
+     * state of the house rather than a fault in the proposal, and reads that way
+     * only if it is said in the daemon's own words.
      */
     refusal: String? = null,
 ) {
@@ -59,30 +66,52 @@ fun ManifestCard(
         modifier = modifier.padding(horizontal = 14.dp).fillMaxWidth(),
     ) {
         Column(Modifier.padding(horizontal = 12.dp, vertical = 10.dp)) {
-            Text(
-                "Proposal",
-                style = MaterialTheme.typography.labelMedium,
-                fontWeight = FontWeight.SemiBold,
-            )
+            Row(Modifier.fillMaxWidth()) {
+                Text(
+                    "Proposal",
+                    style = MaterialTheme.typography.labelMedium,
+                    fontWeight = FontWeight.SemiBold,
+                    modifier = Modifier.weight(1f),
+                )
+                // The rev, said out loud. It is what Spawn quotes back, and a card
+                // showing a different one from the one that is live is exactly the
+                // thing the rev check exists to catch.
+                Text(
+                    "rev ${manifest.rev}",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
             ProjectRules.manifestSummary(manifest)?.let {
                 Spacer(Modifier.height(4.dp))
                 Text(it, style = MaterialTheme.typography.bodyMedium)
             }
-            manifest.text?.takeIf { it.isNotBlank() }?.let {
-                Spacer(Modifier.height(6.dp))
-                // Capped and scrollable rather than truncated: the body is what the
-                // owner is approving, and a card that ate the last two roles would
-                // be asking for consent to something it had not shown.
-                Column(Modifier.fillMaxWidth().heightIn(max = 260.dp)) {
-                    Text(
-                        it,
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
+            manifest.scope.trim().takeIf { it.isNotEmpty() }?.let {
+                Spacer(Modifier.height(4.dp))
+                Text(
+                    it,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 6,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+            Spacer(Modifier.height(6.dp))
+            Text(
+                ProjectRules.manifestWords(manifest),
+                style = MaterialTheme.typography.labelSmall,
+                fontWeight = FontWeight.Medium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            // ⚠ EVERY SESSION IS SHOWN. A card that ate the last two roles would
+            // be asking for consent to something it had not shown, so the list is
+            // capped in height and scrolls rather than being truncated.
+            Column(Modifier.fillMaxWidth().heightIn(max = 260.dp)) {
+                manifest.sessions.forEach { SessionRow(it) }
             }
             // ⚠ THE SILENT FAILURE, SAID. An untagged block is a proposal its
-            // author believes it made and the owner never saw.
+            // author believes it made and the owner never saw — and the same
+            // signal a planted block would raise.
             ProjectRules.manifestCaution(manifest)?.let {
                 Spacer(Modifier.height(6.dp))
                 Text(
@@ -90,6 +119,15 @@ fun ManifestCard(
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.error,
                     maxLines = 3,
+                )
+            }
+            if (ProjectRules.alreadySpawned(manifest)) {
+                Spacer(Modifier.height(6.dp))
+                Text(
+                    MANIFEST_ALREADY_SPAWNED,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 2,
                 )
             }
             refusal?.takeIf { it.isNotBlank() }?.let {
@@ -107,6 +145,49 @@ fun ManifestCard(
                 CardAction("Spawn", enabled = !busy, onClick = onSpawn)
                 CardAction("Edit", enabled = !busy, onClick = onEdit)
                 CardAction("Discard", enabled = !busy, onClick = onDiscard)
+            }
+        }
+    }
+}
+
+/**
+ * One proposed session: the role, and what it will be started with.
+ *
+ * The first prompt is NOT here. It is the whole first message that session gets
+ * — a paragraph, sometimes several — and a card that inlined twelve of them
+ * would stop being a card. Edit is where it is read.
+ */
+@Composable
+private fun SessionRow(session: ManifestSession) {
+    Row(
+        Modifier.fillMaxWidth().padding(top = 4.dp),
+    ) {
+        Text(
+            session.role,
+            style = MaterialTheme.typography.bodySmall,
+            fontWeight = FontWeight.Medium,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
+        Spacer(Modifier.width(8.dp))
+        Column(Modifier.weight(1f)) {
+            Text(
+                ProjectRules.sessionWords(session),
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            // Only when it is not the project's own directory — an absent fact is
+            // absent rather than a line saying "the usual place".
+            ProjectRules.sessionCwd(session)?.let {
+                Text(
+                    it,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
             }
         }
     }
@@ -135,3 +216,15 @@ private fun CardAction(label: String, enabled: Boolean, onClick: () -> Unit) {
         )
     }
 }
+
+/**
+ * Said when this exact rev has already been carried out.
+ *
+ * The daemon stamps `spawnedRev` when it spawns and keeps the manifest, so a
+ * card redrawn from a notification that has been sitting on a lock screen can
+ * still be looking at a plan that is already running. The daemon would refuse
+ * (the project is `active`, not `proposed`); saying so first is cheaper than
+ * finding out by pressing.
+ */
+const val MANIFEST_ALREADY_SPAWNED: String =
+    "These sessions have already been created from this proposal."

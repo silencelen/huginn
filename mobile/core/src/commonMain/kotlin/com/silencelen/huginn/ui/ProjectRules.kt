@@ -1,8 +1,10 @@
 package com.silencelen.huginn.ui
 
+import com.silencelen.huginn.data.ManifestSession
 import com.silencelen.huginn.data.Project
 import com.silencelen.huginn.data.ProjectManifest
-import com.silencelen.huginn.data.ProjectMember
+import com.silencelen.huginn.data.ProjectMemberState
+import com.silencelen.huginn.data.ProjectRow
 import com.silencelen.huginn.data.SpawnResult
 
 /**
@@ -20,12 +22,21 @@ import com.silencelen.huginn.data.SpawnResult
  * literals rather than derived from anything (the [ScratchpadRules] precedent:
  * the writer is in another language, so a shared helper would let both sides
  * drift together and stay green).
+ *
+ * ⚠⚠ AND THE COUNTS ARE THE DAEMON'S, NOT OURS. `alive`, `busy` and `waiting`
+ * arrive already summed on a [ProjectRow] — they are a join across three
+ * registries (the project store, tmux, and Claude Code's own pid-keyed rows)
+ * that no client can perform. [rollupWords] renders them; it never recomputes
+ * them from a member list it happens to be holding.
  */
 object ProjectRules {
 
     // ------------------------------------------------------------- the caps
 
     const val MAX_NAME: Int = 60
+
+    /** The whole first message the lead gets. The daemon's cap, to the character. */
+    const val MAX_BRIEF: Int = 4_000
 
     /**
      * The most members one project may hold.
@@ -39,6 +50,60 @@ object ProjectRules {
 
     /** The lead's role name. Reserved: nothing else may claim it. */
     const val LEAD_ROLE: String = "lead"
+
+    // ------------------------------------------------------ the vocabularies
+
+    /** What a project IS. The daemon's closed list, mirrored for the create sheet. */
+    val KINDS: List<String> = listOf("software", "infra", "hardware", "docs", "research", "other")
+
+    /**
+     * Where a project is in its life.
+     *
+     *   drafting  the lead is up, no manifest yet (or the last one was discarded)
+     *   proposed  a tagged manifest arrived; waiting for Spawn · Edit · Discard
+     *   active    members exist
+     *   paused    auto-resume is suspended for the cluster; the sessions stay
+     *   archived  over — the owner filed it, or the lead is gone. Terminal.
+     */
+    val STATUSES: List<String> = listOf("drafting", "proposed", "active", "paused", "archived")
+
+    /** The legal moves, and nothing else. `archived` is terminal on purpose. */
+    val TRANSITIONS: Map<String, List<String>> = mapOf(
+        "drafting" to listOf("proposed", "archived"),
+        "proposed" to listOf("drafting", "active", "archived"),
+        "active" to listOf("paused", "archived"),
+        "paused" to listOf("active", "archived"),
+        "archived" to emptyList(),
+    )
+
+    /**
+     * The word, or NULL if this daemon has invented one.
+     *
+     * ⚠ UNKNOWN IS NULL AND NEVER A GUESS, on every vocabulary in this file. A
+     * newer daemon's sixth kind must leave a chip undrawn rather than be shown as
+     * `other`, which is a real member of the list and means something.
+     */
+    fun kindWord(raw: String?): String? = raw?.trim()?.lowercase()?.takeIf { it in KINDS }
+
+    fun statusWord(raw: String?): String? = raw?.trim()?.lowercase()?.takeIf { it in STATUSES }
+
+    /** Whether this move is one the daemon will take. An unknown target is never legal. */
+    fun canTransition(from: String?, to: String?): Boolean {
+        val f = statusWord(from) ?: return false
+        val t = statusWord(to) ?: return false
+        if (f == t) return true
+        return t in (TRANSITIONS[f] ?: emptyList())
+    }
+
+    /** What a status reads as under a name. Null for a word this client does not know. */
+    fun statusWords(raw: String?): String? = when (statusWord(raw)) {
+        "drafting" -> "the lead is sizing it"
+        "proposed" -> "waiting for your answer"
+        "active" -> "running"
+        "paused" -> "paused"
+        "archived" -> "archived"
+        else -> null
+    }
 
     // ------------------------------------------------------------ the names
 
@@ -76,20 +141,67 @@ object ProjectRules {
     }
 
     /**
-     * Why this working directory cannot be used, or null.
+     * The tmux and peer namespace a display name produces.
      *
-     * ⚠ TRUST IS NOT CHECKED HERE AND CANNOT BE. Claude Code refuses to start in
-     * a directory it has not been trusted in, that trust lives in the CLI's own
-     * state on the host, and the daemon answers the create with a 409 saying so.
-     * That refusal is shown verbatim — see [com.silencelen.huginn.data.ProjectCreated].
-     * All this rules out is a shape that could never work.
+     * ⚠ NO DOTS, EVER. tmux rewrites a `.` to `_` and still exits 0, so a slug
+     * carrying one is a name that comes back different from the one asked for —
+     * which is the whole class of bug this grammar exists to avoid. Lowercase for
+     * the same family of reason: the daemon lowercases anyway.
      */
+    fun slugFor(name: String): String =
+        cleanName(name).lowercase()
+            .replace(NOT_SLUG, "-")
+            .trim('-')
+            .take(24)
+            .trimEnd('-')
+
+    private val NOT_SLUG = Regex("""[^a-z0-9]+""")
+
+    /** Slugs that already mean something else on this daemon. */
+    val RESERVED_SLUGS: List<String> = listOf("login", "main", "huginn", "lead")
+
+    /**
+     * Why the slug this name produces cannot be used, or null.
+     *
+     * Checked on its own terms rather than folded into [nameProblem], because two
+     * different display names can land on one slug — and the slug is the
+     * namespace every member is about to be named in.
+     */
+    fun slugProblem(slug: String, takenSlugs: List<String> = emptyList()): String? {
+        if (slug.isEmpty()) return "that name does not produce a usable slug — use some letters or digits"
+        if (!SLUG_RE.matches(slug)) return "a slug is lowercase letters, digits and dashes, 1-24 characters"
+        if (slug in RESERVED_SLUGS) return "\"$slug\" is reserved"
+        if (takenSlugs.any { it.lowercase() == slug.lowercase() }) return "there is already a project with that slug"
+        return null
+    }
+
+    private val SLUG_RE = Regex("""^[a-z0-9][a-z0-9-]{0,23}$""")
+
+    /** Why this working directory cannot be used, or null. */
     fun cwdProblem(raw: String): String? {
         val cwd = raw.trim()
-        if (cwd.isEmpty()) return null              // blank = the daemon's own WORKDIR
+        if (cwd.isEmpty()) return null // blank = the daemon's own WORKDIR
         if (!cwd.startsWith("/")) return "a project directory must be an absolute path"
         return null
     }
+
+    /**
+     * Why this brief cannot be sent, or null.
+     *
+     * ⚠ A BRIEF IS NOT OPTIONAL AND IT IS NOT A DESCRIPTION. It is typed straight
+     * into the lead's composer as the whole first message it ever gets, and a
+     * project created without one is a session sitting there with nothing to size.
+     */
+    fun briefProblem(raw: String): String? {
+        val brief = raw.trim()
+        if (brief.isEmpty()) return "a project needs a brief — it is the whole first message the lead gets"
+        if (brief.length > MAX_BRIEF) return "a brief is at most $MAX_BRIEF characters"
+        return null
+    }
+
+    /** Why this is not a kind, or null. The daemon refuses a create without one. */
+    fun kindProblem(raw: String?): String? =
+        if (kindWord(raw) == null) "kind is one of ${KINDS.joinToString(", ")}" else null
 
     /**
      * Why this role name cannot be used, or null.
@@ -120,6 +232,11 @@ object ProjectRules {
             null
         }
 
+    /** The two composers, mirrored — the only two forms a project session's name takes. */
+    fun tmuxNameFor(slug: String, role: String): String = "$slug-$role"
+
+    fun claudeNameFor(slug: String, role: String): String = "$slug/$role"
+
     // ------------------------------------------------------------ the marks
 
     /**
@@ -128,40 +245,61 @@ object ProjectRules {
      *
      * ⚠ THE SAME WORDS AS A SESSION ROW ON PURPOSE. A member IS a session, and a
      * cluster where the dot means one thing on the project screen and another on
-     * the sessions list is a cluster nobody can read at a glance. Both shells
-     * already own a dot for these three words; this is what feeds it.
+     * the sessions list is a cluster nobody can read at a glance.
      *
-     * An ENDED member has no mark at all: it is not idle, it is gone, and a grey
-     * dot beside a live grey dot says the wrong thing.
+     * ⚠ TWO VOCABULARIES, READ IN ONE ORDER. `needsYou` is the daemon's own
+     * promotion and wins outright; then the NATIVE registry's `status`
+     * (`busy`/`idle`/`waiting`), which is the pid-keyed truth; then the title
+     * hook's `state`, which is what every other session row here already draws.
+     *
+     * An ENDED member has no mark at all, and neither has one whose tmux session
+     * and process are both gone: they are not idle, they are not there.
      *
      * ⚠ UNKNOWN IS NULL, NEVER A GUESS. A newer daemon inventing a word must
-     * leave the row unmarked rather than have it picked up by the `else` branch
-     * and drawn as idle — the one exception is `waiting`, which the native
-     * registry started emitting beside `busy`/`idle` and which means precisely
-     * "input needed".
+     * leave the row unmarked rather than have it picked up by an `else` branch
+     * and drawn as idle.
      */
-    fun stateWord(member: ProjectMember): String? {
+    fun stateWord(member: ProjectMemberState): String? {
         if (ended(member)) return null
-        if (member.needsYou == true) return "attention"
+        if (gone(member)) return null
+        if (member.needsYou) return "attention"
+        when (member.status) {
+            "busy" -> return "running"
+            "waiting" -> return "attention"
+            "idle" -> return "idle"
+        }
         return when (member.state) {
-            "running", "busy" -> "running"
-            "attention", "waiting" -> "attention"
+            "running" -> "running"
+            "attention" -> "attention"
             "idle" -> "idle"
             else -> null
         }
     }
 
     /** True once this member's session has ended. The row stays; the mark goes. */
-    fun ended(member: ProjectMember): Boolean = member.endedAt != null
+    fun ended(member: ProjectMemberState): Boolean = member.endedAt != null
+
+    /** Neither a tmux session nor a live process: nothing to say a state about. */
+    fun gone(member: ProjectMemberState): Boolean = !member.present && !member.alive
 
     /** True when this member is the reason the owner is being asked to look. */
-    fun needsYou(member: ProjectMember): Boolean = stateWord(member) == "attention"
+    fun needsYou(member: ProjectMemberState): Boolean = stateWord(member) == "attention"
 
-    /** What one member's state is, in words, for the row under the name. */
-    fun memberWords(member: ProjectMember): String = when {
+    /**
+     * What one member's state is, in words, for the row under the name.
+     *
+     * [ProjectMemberState.waitingFor] is appended when the registry said what it
+     * is waiting for, because "needs you" and "needs you — input needed" are a
+     * different amount of help.
+     */
+    fun memberWords(member: ProjectMemberState): String = when {
         ended(member) -> "ended"
+        gone(member) -> "not running"
         else -> when (stateWord(member)) {
-            "attention" -> "needs you"
+            "attention" -> {
+                val why = member.waitingFor?.trim()?.takeIf { it.isNotEmpty() }
+                if (why == null) "needs you" else "needs you — $why"
+            }
             "running" -> "working"
             "idle" -> "idle"
             else -> "no state yet"
@@ -177,70 +315,105 @@ object ProjectRules {
      * the alphabet happens to leave it. Sorted HERE rather than trusted from the
      * daemon, so the two shells cannot disagree about which row is at the top.
      *
+     * ⚠ AND THE LEAD IS ALWAYS FIRST unless a member is asking for something. It
+     * is the session the owner talks to, and burying it among twelve members it
+     * spawned is how a cluster loses its front door.
+     *
      * Role breaks every tie, so the order is total and the rows do not swap
      * places between five-second polls.
      */
-    fun ordered(members: List<ProjectMember>): List<ProjectMember> =
+    fun <T : ProjectMemberState> ordered(members: List<T>): List<T> =
         members.sortedWith(compareBy({ rank(it) }, { it.role }, { it.name }))
 
-    private fun rank(m: ProjectMember): Int = when {
-        ended(m) -> 4
+    private fun rank(m: ProjectMemberState): Int = when {
         needsYou(m) -> 0
-        stateWord(m) == "running" -> 1
-        stateWord(m) == "idle" -> 2
-        else -> 3
+        ended(m) -> 6
+        gone(m) -> 5
+        m.lead -> 1
+        stateWord(m) == "running" -> 2
+        stateWord(m) == "idle" -> 3
+        else -> 4
     }
 
     // ----------------------------------------------------------- the rollup
 
-    /** The counts a project row is summarised from. Live excludes ended members. */
+    /**
+     * The counts a project row is summarised from, AS THE DAEMON COUNTED THEM.
+     *
+     * ⚠ THE LEAD IS NOT IN ANY OF THESE. `lib/projects.js` filters it out of
+     * every count before it emits the row, because the lead is always there and
+     * counting it would make an idle cluster read as one session busy.
+     */
     data class Rollup(
-        val live: Int,
-        val working: Int,
-        val needsYou: Int,
-        val idle: Int,
-        val ended: Int,
+        /** Members on the record — what was created, alive or not. */
+        val members: Int,
+        /** Members whose `claude` process is answering. */
+        val alive: Int,
+        /** Members the native registry calls `busy`. */
+        val busy: Int,
+        /** Members that need a person: native `waiting`, or a promoted `attention`. */
+        val waiting: Int,
     )
 
-    fun rollup(members: List<ProjectMember>): Rollup {
-        val live = members.filterNot { ended(it) }
+    fun rollup(row: ProjectRow): Rollup =
+        Rollup(members = row.memberCount, alive = row.alive, busy = row.busy, waiting = row.waiting)
+
+    /**
+     * The same counts off a live member list, for a surface holding rows rather
+     * than a [ProjectRow] — the dashboard's own members, say.
+     *
+     * The lead is dropped here too, so the two paths cannot disagree.
+     */
+    fun rollup(members: List<ProjectMemberState>): Rollup {
+        val rows = members.filterNot { it.lead }
         return Rollup(
-            live = live.size,
-            working = live.count { stateWord(it) == "running" },
-            needsYou = live.count { needsYou(it) },
-            idle = live.count { stateWord(it) == "idle" },
-            ended = members.count { ended(it) },
+            members = rows.size,
+            alive = rows.count { it.alive },
+            busy = rows.count { stateWord(it) == "running" },
+            waiting = rows.count { needsYou(it) },
         )
     }
 
     /**
-     * The one line under a project's name: "3 of 5 working · 1 needs you".
+     * The one line under a project's name: "2 of 3 working · 1 needs you".
      *
      * ⚠ THE DENOMINATOR IS THE LIVE MEMBERS, NOT EVERY ROW EVER SPAWNED. "3 of
-     * 12 working" on a cluster where seven finished hours ago reads as a project
-     * in trouble. Ended members get their own clause, at the end, where a count
-     * is information rather than an accusation.
+     * 12 working" on a cluster where nine have finished reads as a project in
+     * trouble. The ones that are no longer running get their own clause, at the
+     * end, where a count is information rather than an accusation.
      *
      * Asserted as literals in ProjectRulesTest: this sentence is read more often
      * than any other string in the feature, and it is built from counts that are
      * easy to get subtly wrong.
      */
-    fun rollupWords(members: List<ProjectMember>): String {
-        val r = rollup(members)
-        if (r.live == 0 && r.ended == 0) return "no members yet"
+    fun rollupWords(r: Rollup): String {
+        if (r.members == 0) return "no members yet"
         val parts = mutableListOf<String>()
-        if (r.live > 0) parts += "${r.working} of ${r.live} working"
-        if (r.needsYou > 0) parts += "${r.needsYou} need${if (r.needsYou == 1) "s" else ""} you"
-        if (r.ended > 0) parts += "${r.ended} ended"
+        parts += if (r.alive > 0) "${r.busy} of ${r.alive} working" else "none running"
+        if (r.waiting > 0) parts += "${r.waiting} need${if (r.waiting == 1) "s" else ""} you"
+        val down = (r.members - r.alive).coerceAtLeast(0)
+        if (down > 0 && r.alive > 0) parts += "$down not running"
         return parts.joinToString(" · ")
     }
 
-    /** The lead's own line, when there is one. Null when no lead has registered. */
-    fun leadWords(project: Project): String? =
-        project.lead?.name?.takeIf { it.isNotBlank() }?.let { "led by $it" }
+    fun rollupWords(row: ProjectRow): String = rollupWords(rollup(row))
 
-    /** True while this project is still a going concern. */
-    fun live(project: Project): Boolean = project.endedAt == null
+    fun rollupWords(members: List<ProjectMemberState>): String = rollupWords(rollup(members))
+
+    /** The lead's own line, when there is one. Null when no lead has registered. */
+    fun leadWords(row: ProjectRow): String? =
+        row.lead?.claudeName?.takeIf { it.isNotBlank() }?.let { "led by $it" }
+
+    /**
+     * True while this project is still a going concern.
+     *
+     * `archived` is the one terminal status, and it is reached two ways — the
+     * owner filed it, or the lead process disappeared and the daemon filed it
+     * with an [ProjectRow.endedReason]. Both produce the same row for a reader.
+     */
+    fun live(row: ProjectRow): Boolean = statusWord(row.status) != "archived"
+
+    fun live(project: Project): Boolean = statusWord(project.status) != "archived"
 
     /**
      * The projects in list order: live ones first, then by name.
@@ -250,16 +423,23 @@ object ProjectRules {
      * activity moves the row under the finger, and the row you tapped is not the
      * row that is there a second later.
      */
-    fun orderedProjects(projects: List<Project>): List<Project> =
+    fun orderedProjects(projects: List<ProjectRow>): List<ProjectRow> =
         projects.sortedWith(
-            compareBy<Project> { if (live(it)) 0 else 1 }
+            compareBy<ProjectRow> { if (live(it)) 0 else 1 }
                 .thenBy { cleanName(it.name).lowercase() }
                 .thenBy { it.id },
         )
 
-    /** What a project row leads with: its name, falling back to a short id. */
+    /** What a project row leads with: its name, falling back to its slug or a short id. */
+    fun label(row: ProjectRow): String =
+        cleanName(row.name).takeIf { it.isNotEmpty() }
+            ?: row.slug.takeIf { it.isNotBlank() }
+            ?: row.id.take(8)
+
     fun label(project: Project): String =
-        cleanName(project.name).takeIf { it.isNotEmpty() } ?: project.id.take(8)
+        cleanName(project.name).takeIf { it.isNotEmpty() }
+            ?: project.slug.takeIf { it.isNotBlank() }
+            ?: project.id.take(8)
 
     // --------------------------------------------------------- the manifest
 
@@ -269,82 +449,134 @@ object ProjectRules {
     /**
      * The manifest in one line, for a card header or a notification.
      *
-     * Takes the daemon's own [ProjectManifest.summary] when there is one and
-     * falls back to the first non-blank line of the body — never to the whole
-     * body, because the body is a paragraph and this slot is a line.
+     * The daemon already caps its own summary at 90 characters and refuses a
+     * block without one, so this is a clip rather than a rescue — and there is
+     * deliberately no fallback to the scope paragraph, because the slot is a line
+     * and a paragraph in it is a card that ate the rest of the card.
      */
-    fun manifestSummary(manifest: ProjectManifest?): String? {
-        if (manifest == null) return null
-        val summary = manifest.summary?.let { oneLine(it) }?.takeIf { it.isNotEmpty() }
-        if (summary != null) return clip(summary)
-        val first = manifest.text.orEmpty().lineSequence()
-            .map { it.trim() }
-            .firstOrNull { it.isNotEmpty() }
-            ?: return null
-        return clip(oneLine(first))
-    }
+    fun manifestSummary(manifest: ProjectManifest?): String? =
+        manifest?.summary?.let { normalized(it) }?.takeIf { it.isNotEmpty() }?.let { clip(it) }
 
-    private fun oneLine(raw: String): String = normalized(raw)
+    /** The same line off a row, which carries the summary and not the manifest. */
+    fun manifestSummary(row: ProjectRow): String? =
+        row.manifestSummary?.let { normalized(it) }?.takeIf { it.isNotEmpty() }?.let { clip(it) }
 
     private fun clip(s: String): String =
         if (s.length <= SUMMARY_MAX) s else s.take(SUMMARY_MAX - 1).trimEnd() + "…"
 
+    /** What the proposal asks for, in one line: "3 sessions: docs, repo, fw". */
+    fun manifestWords(manifest: ProjectManifest?): String {
+        val sessions = manifest?.sessions.orEmpty()
+        if (sessions.isEmpty()) return "no sessions in this proposal"
+        val roles = sessions.joinToString(", ") { it.role }
+        return if (sessions.size == 1) "1 session: $roles" else "${sessions.size} sessions: $roles"
+    }
+
+    /**
+     * One proposed session's settings, in the order a person reads them.
+     *
+     * ⚠ NULL MEANS "THE HOST'S OWN", NOT "UNKNOWN". The daemon turns a model,
+     * effort or mode word it does not recognise into null rather than losing the
+     * whole proposal over it, so an empty cell here is the default and is said as
+     * one.
+     */
+    fun sessionWords(session: ManifestSession): String {
+        val bits = listOfNotNull(
+            session.model,
+            session.effort?.let { "$it effort" },
+            session.mode?.let { "$it mode" },
+        )
+        return if (bits.isEmpty()) "the host's own defaults" else bits.joinToString(" · ")
+    }
+
+    /** Where a proposed session will run, when it is not the project's own directory. */
+    fun sessionCwd(session: ManifestSession): String? =
+        session.cwd?.trim()?.takeIf { it.isNotEmpty() }
+
     /**
      * What is wrong with this proposal, or null.
      *
-     * ⚠ AN UNTAGGED BLOCK IS THE SILENT FAILURE THIS FEATURE HAS. The lead wrote
-     * what it believes is a proposal, the daemon ignored it because the fence
-     * carried no tag, and to the owner nothing at all happened. Said on the card,
-     * because the fix — ask the lead for a new block — is something only a person
-     * can do.
+     * ⚠ AN UNTAGGED BLOCK IS THE SILENT FAILURE THIS FEATURE HAS, and it is also
+     * the injection signal. The lead wrote what it believes is a proposal and the
+     * daemon ignored it because the fence carried no tag — which is either the
+     * lead forgetting its own contract, or something the lead READ trying to get
+     * twelve sessions spawned with prompts a stranger wrote. Said on the card,
+     * because the fix is something only a person can do.
      */
-    fun manifestCaution(manifest: ProjectManifest?): String? =
-        if (manifest?.untaggedSeen == true) {
+    fun manifestCaution(manifest: ProjectManifest?): String? = untaggedCaution(manifest?.untaggedSeen == true)
+
+    fun manifestCaution(row: ProjectRow): String? = untaggedCaution(row.untaggedSeen)
+
+    private fun untaggedCaution(seen: Boolean): String? =
+        if (seen) {
             "The lead wrote a proposal without its tag, so it was not read. Ask it for a new block."
         } else {
             null
         }
 
-    /** True when there is a proposal worth showing Spawn · Edit · Discard on. */
+    /**
+     * True when there is a proposal worth showing Spawn · Edit · Discard on.
+     *
+     * ⚠ THE STATUS IS THE GATE, NOT THE PRESENCE OF A MANIFEST. A manifest stays
+     * on the record after a Discard so an editor can reopen it, and it stays
+     * after a Spawn as the record of what was made — offering Spawn on either
+     * would be offering to create a cluster that is already running.
+     */
     fun hasProposal(project: Project): Boolean =
-        project.manifest != null && live(project) &&
-            (!project.manifest!!.summary.isNullOrBlank() || !project.manifest!!.text.isNullOrBlank())
+        statusWord(project.status) == "proposed" && project.manifest?.sessions.orEmpty().isNotEmpty()
+
+    fun hasProposal(row: ProjectRow): Boolean =
+        statusWord(row.status) == "proposed" && row.manifestRev > 0
+
+    /**
+     * True when this proposal has already been carried out at this rev — the
+     * daemon stamps `spawnedRev` when it spawns, so a card redrawn from a stale
+     * notification can say so instead of offering Spawn twice.
+     */
+    fun alreadySpawned(manifest: ProjectManifest?): Boolean =
+        manifest != null && manifest.rev > 0 && manifest.spawnedRev >= manifest.rev
 
     // ------------------------------------------------------------ the spawn
 
     /**
      * What a spawn did, in one line.
      *
-     * ⚠ PARTIAL IS THE NORMAL OUTCOME AND MUST READ AS ONE. Spawning is a loop
-     * over tmux; the fourth member failing does not un-spawn the first three, and
-     * a headline that said "failed" would send somebody looking for three
-     * sessions that are sitting there working. The failures are named separately
-     * by [spawnFailures] so each one carries the daemon's own sentence.
+     * ⚠⚠ PARTIAL IS THE NORMAL OUTCOME, IT ARRIVES ON A 200, AND IT MUST READ AS
+     * PARTIAL. Spawning is a loop over tmux; the second of three roles failing
+     * does not un-spawn the first, and a headline that said "failed" would send
+     * somebody looking for sessions that are sitting there working. The failures
+     * are named separately by [spawnFailures] so each one carries the daemon's
+     * own sentence.
      */
     fun spawnWords(result: SpawnResult): String {
-        val all = result.results
-        if (all.isEmpty()) return "nothing came back"
-        val ok = all.count { it.ok }
+        val started = result.spawned.size
+        val failed = result.failed.size
+        val all = started + failed
+        if (all == 0) return "nothing came back"
         return when {
-            ok == all.size && ok == 1 -> "1 member started"
-            ok == all.size -> "$ok members started"
-            ok == 0 && all.size == 1 -> "the member did not start"
-            ok == 0 -> "none of the ${all.size} started"
-            else -> "$ok of ${all.size} started · ${all.size - ok} failed"
+            failed == 0 && started == 1 -> "1 member started"
+            failed == 0 -> "$started members started"
+            started == 0 && all == 1 -> "the member did not start"
+            started == 0 -> "none of the $all started"
+            else -> "$started of $all started · $failed failed"
         }
     }
 
     /**
-     * One line per member that did not start, carrying the DAEMON'S OWN reason.
+     * One line per role that did not start, carrying the DAEMON'S OWN reason.
      *
-     * Verbatim: "a session called lora-stick-docs already exists" and "the
-     * directory is not trusted" are different problems with different fixes, and
-     * a client's summary of either helps nobody.
+     * Verbatim: "duplicate session: half-mid" and "persona could not be written"
+     * are different problems with different fixes, and a client's summary of
+     * either helps nobody.
      */
     fun spawnFailures(result: SpawnResult): List<String> =
-        result.results.filterNot { it.ok }.map { r ->
-            val who = r.name.takeIf { it.isNotBlank() } ?: "a member"
-            val why = r.error?.let { oneLine(it) }?.takeIf { it.isNotEmpty() }
+        result.failed.map { f ->
+            val who = f.role.takeIf { it.isNotBlank() } ?: "a member"
+            val why = normalized(f.reason).takeIf { it.isNotEmpty() }
             if (why == null) who else "$who — $why"
         }
+
+    /** The peer names a spawn actually created, for the line that tells the lead. */
+    fun spawnedNames(result: SpawnResult): List<String> =
+        result.spawned.map { it.claudeName.takeIf { n -> n.isNotBlank() } ?: it.name }
 }

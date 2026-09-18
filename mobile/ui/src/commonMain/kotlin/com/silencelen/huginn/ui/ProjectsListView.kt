@@ -2,7 +2,6 @@ package com.silencelen.huginn.ui
 
 import androidx.compose.animation.animateContentSize
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -21,14 +20,14 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.silencelen.huginn.data.Project
-import com.silencelen.huginn.data.ProjectMember
+import com.silencelen.huginn.data.ProjectLive
+import com.silencelen.huginn.data.ProjectMemberState
+import com.silencelen.huginn.data.ProjectRow
 
 /**
  * The projects, each one folding open to the sessions it is made of.
@@ -37,6 +36,13 @@ import com.silencelen.huginn.data.ProjectMember
  * loose sessions, the phone puts it behind the Sessions tab's Projects icon, and
  * a member row opens the ordinary session detail on either. Nothing about a
  * cluster reads differently under a thumb than under a mouse.
+ *
+ * ⚠ THE LIST ROUTE CARRIES ROWS, NOT MEMBERS. `GET /v1/projects` answers with
+ * summed counts and no membership — the members arrive from `GET
+ * /v1/projects/:id`, which is a per-project call the shell makes when a row is
+ * folded open. So [members] is supplied rather than read off the row: a project
+ * nobody has opened has no entry, and its disclosure says so instead of drawing
+ * an empty cluster.
  *
  * ⚠⚠ THE DISCLOSURE ANIMATES HEIGHT ONLY, AND THIS IS THE ONE THING THIS FILE
  * MUST GET RIGHT. Inside the desktop's list pane the rows live in an inner
@@ -49,13 +55,18 @@ import com.silencelen.huginn.data.ProjectMember
  */
 @Composable
 fun ProjectsListView(
-    projects: List<Project>,
+    projects: List<ProjectRow>,
     nowMs: Long,
     /** Ids of the projects currently folded open. Held by the shell, so it survives navigation. */
     expanded: Set<String>,
+    /**
+     * The live members of the projects the shell has fetched, by project id. A
+     * missing entry is "not loaded yet", which is not the same as "no members".
+     */
+    members: Map<String, List<ProjectLive>>,
     onToggle: (String) -> Unit,
-    onOpenProject: (Project) -> Unit,
-    onOpenMember: (Project, ProjectMember) -> Unit,
+    onOpenProject: (ProjectRow) -> Unit,
+    onOpenMember: (ProjectRow, ProjectLive) -> Unit,
     modifier: Modifier = Modifier,
     header: String? = "PROJECTS",
     /** Null hides the control: a shell with nowhere to put a create sheet offers none. */
@@ -95,10 +106,11 @@ fun ProjectsListView(
             return@Column
         }
         ordered.forEach { project ->
-            ProjectRow(
+            ProjectRowItem(
                 project = project,
                 nowMs = nowMs,
                 expanded = project.id in expanded,
+                members = members[project.id],
                 onToggle = { onToggle(project.id) },
                 onOpen = { onOpenProject(project) },
                 onOpenMember = { onOpenMember(project, it) },
@@ -109,15 +121,16 @@ fun ProjectsListView(
 }
 
 @Composable
-private fun ProjectRow(
-    project: Project,
+private fun ProjectRowItem(
+    project: ProjectRow,
     nowMs: Long,
     expanded: Boolean,
+    members: List<ProjectLive>?,
     onToggle: () -> Unit,
     onOpen: () -> Unit,
-    onOpenMember: (ProjectMember) -> Unit,
+    onOpenMember: (ProjectLive) -> Unit,
 ) {
-    val members = remember(project.members) { ProjectRules.ordered(project.members) }
+    val ordered = remember(members) { ProjectRules.ordered(members.orEmpty()) }
     Column(Modifier.fillMaxWidth()) {
         Row(
             Modifier.fillMaxWidth().clickable(onClick = onOpen)
@@ -150,7 +163,7 @@ private fun ProjectRow(
                     overflow = TextOverflow.Ellipsis,
                 )
             }
-            if (ProjectRules.rollup(project.members).needsYou > 0) {
+            if (project.waiting > 0) {
                 // The one mark on the row, and the house's own vernacular for it:
                 // a small dot, no accent rail, no badge count.
                 MemberDot("attention")
@@ -162,23 +175,23 @@ private fun ProjectRow(
         // KDoc and DisclosureHeightOnlyTest.
         Column(Modifier.fillMaxWidth().animateContentSize()) {
             if (!expanded) return@Column
-            if (members.isEmpty()) {
+            if (ordered.isEmpty()) {
                 Text(
-                    "No members yet — the lead is still sizing this one.",
+                    if (members == null) PROJECT_MEMBERS_LOADING else PROJECT_NO_MEMBERS,
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.padding(start = 34.dp, end = 14.dp, bottom = 10.dp),
                 )
                 return@Column
             }
-            members.forEach { m -> MemberRow(m, onClick = { onOpenMember(m) }) }
+            ordered.forEach { m -> MemberRow(m, onClick = { onOpenMember(m) }) }
             Spacer(Modifier.height(4.dp))
         }
     }
 }
 
 @Composable
-private fun MemberRow(member: ProjectMember, onClick: () -> Unit) {
+private fun MemberRow(member: ProjectLive, onClick: () -> Unit) {
     Row(
         Modifier.fillMaxWidth().clickable(onClick = onClick)
             .padding(start = 34.dp, end = 14.dp, top = 6.dp, bottom = 6.dp),
@@ -187,8 +200,9 @@ private fun MemberRow(member: ProjectMember, onClick: () -> Unit) {
         MemberDot(ProjectRules.stateWord(member))
         Spacer(Modifier.width(8.dp))
         Text(
-            member.role.ifBlank { member.name },
+            memberLabel(member),
             style = MaterialTheme.typography.bodySmall,
+            fontWeight = if (member.lead) FontWeight.Medium else FontWeight.Normal,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
             modifier = Modifier.weight(1f),
@@ -230,19 +244,52 @@ const val PROJECTS_EMPTY: String =
     "No projects yet. A project is a cluster of sessions with roles: a lead sizes " +
         "the work, proposes the members, and you approve them before anything is started."
 
+/** The disclosure of a project whose membership the shell has not fetched yet. */
+const val PROJECT_MEMBERS_LOADING: String = "Reading the cluster…"
+
+/** The disclosure of a project that genuinely has nobody in it yet. */
+const val PROJECT_NO_MEMBERS: String = "No members yet — the lead is still sizing this one."
+
 /**
- * The one line under a project's name: who is working, where, and since when.
+ * What a member row leads with: its role, and the lead said out loud.
+ *
+ * The role rather than either name, because within one cluster the role IS the
+ * identity — `stick-docs` and `stick/docs` are both just "docs" with the
+ * project's own name stuck on the front of it.
+ */
+fun memberLabel(member: ProjectMemberState): String {
+    val role = member.role.trim().takeIf { it.isNotEmpty() }
+        ?: member.claudeName.substringAfterLast('/').takeIf { it.isNotEmpty() }
+        ?: member.name
+    return if (member.lead) "$role (lead)" else role
+}
+
+/**
+ * The one line under a project's name: who is working, where, and what state the
+ * cluster is in.
  *
  * The rollup leads because it is the answer to the only question this row is
  * asked. The directory comes second and only when there is one — an absent fact
  * is absent, not an empty slot between two dots (the device line's rule).
+ *
+ * ⚠ THE COUNTS COME OFF THE ROW, NOT OUT OF A MEMBER LIST. The daemon summed
+ * them across three registries this client cannot read, and a client that
+ * recomputed them from whatever membership it happened to be holding would
+ * disagree with its own tree.
  */
-fun projectSubtitle(project: Project, nowMs: Long): String {
+fun projectSubtitle(project: ProjectRow, nowMs: Long): String {
     val bits = mutableListOf<String>()
-    bits += ProjectRules.rollupWords(project.members)
-    project.cwd?.trim()?.takeIf { it.isNotEmpty() }?.let { bits += it }
+    bits += ProjectRules.rollupWords(project)
+    if (ProjectRules.hasProposal(project)) {
+        ProjectRules.manifestSummary(project)?.let { bits += it }
+    }
+    project.cwd.trim().takeIf { it.isNotEmpty() }?.let { bits += it }
     if (!ProjectRules.live(project)) {
-        agoWords(project.endedAt, nowMs).takeIf { it.isNotBlank() }?.let { bits += "ended $it" }
+        // The daemon's own sentence about why, when it archived this itself —
+        // "the lead session is gone" is the whole story and a client summary of
+        // it is not.
+        bits += project.endedReason?.trim()?.takeIf { it.isNotEmpty() } ?: "archived"
+        agoWords(project.updatedAt, nowMs).takeIf { it.isNotBlank() }?.let { bits += it }
     }
     return bits.joinToString(" · ")
 }
