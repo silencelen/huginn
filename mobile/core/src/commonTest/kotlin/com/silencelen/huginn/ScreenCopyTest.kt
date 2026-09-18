@@ -3,6 +3,7 @@ package com.silencelen.huginn
 import com.silencelen.huginn.data.Screen
 import com.silencelen.huginn.ui.hasCopyableText
 import com.silencelen.huginn.ui.linksOn
+import com.silencelen.huginn.ui.logicalLines
 import com.silencelen.huginn.ui.screenText
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -180,6 +181,36 @@ class ScreenCopyTest {
     fun aHyperlinkWhoseLabelIsItsOwnUrlIsOneOffer() {
         val row = "$E]8;;https://example.com/a$E\\https://example.com/a$E]8;;$E\\"
         assertEquals(listOf("https://example.com/a"), linksOn(screen(80, row)))
+    }
+
+    /**
+     * ⚠ WRAP IS A COLUMN COUNT, NOT A CHARACTER COUNT. `logicalLines` compared
+     * `line.length` — UTF-16 units of the escape-laden row — against the pane
+     * width, and got it wrong in BOTH directions: SGR bytes made a short row read
+     * as wrapped (6 of 25 rows on a live pane) and weld itself to the next one,
+     * while a wide glyph made a genuinely wrapped row read as short so it was
+     * never rejoined.
+     */
+    @Test
+    fun wrapIsMeasuredInColumnsRatherThanInCharacters() {
+        assertEquals(
+            listOf("hi", "there"),
+            logicalLines(listOf("$E[31mhi$E[0m", "there"), 8),
+            "eleven characters, two columns: this row ENDED",
+        )
+        assertEquals(
+            listOf("世界世界ok"),
+            logicalLines(listOf("世界世界", "ok"), 8),
+            "four characters, eight columns: this row was broken by the terminal",
+        )
+    }
+
+    @Test
+    fun aStyledRowDoesNotWeldItselfToTheNextOne() {
+        // The row's visible text is well short of the pane; only its colour codes
+        // make it look full. Joining manufactures a link nobody can use.
+        val s = screen(20, "$E[38;5;246mhttps://a.example$E[39m", "notpartofit")
+        assertEquals(listOf("https://a.example"), linksOn(s))
     }
 
     @Test
