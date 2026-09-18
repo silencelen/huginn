@@ -899,6 +899,19 @@ class H(BaseHTTPRequestHandler):
 HTTPServer(("127.0.0.1", int(sys.argv[1])), H).serve_forever()
 PJ404
 PJ_404_STUB=$!
+# A third stub: HTTP 200 with a body that is not JSON. See the assertion below.
+PJ_JUNK_PORT="${HUGINN_TEST_PROJECTS_JUNK_PORT:-18824}"
+python3 - "$PJ_JUNK_PORT" <<'PJJUNK' >/dev/null 2>&1 &
+import sys
+from http.server import BaseHTTPRequestHandler, HTTPServer
+class H(BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200); self.end_headers()
+        self.wfile.write(b'<html>502 Bad Gateway</html>')
+    def log_message(self, *a): pass
+HTTPServer(("127.0.0.1", int(sys.argv[1])), H).serve_forever()
+PJJUNK
+PJ_JUNK_STUB=$!
 PJ_UP=
 for _ in $(seq 1 40); do
   curl -s -o /dev/null --max-time 1 "http://127.0.0.1:$PJ_PORT/" && { PJ_UP=1; break; }
@@ -981,6 +994,14 @@ PJ_OLD=$(HUGINN_APPD_URL="http://127.0.0.1:$PJ_404_PORT" server/bin/huginn-proje
 [ "$PJ_RC" = 3 ] && grep -qi "huginn-appd" <<<"$PJ_OLD" \
   && ok "projects on a daemon without the feature exits 3 and says which daemon" \
   || bad "projects on a 404 exited $PJ_RC: $PJ_OLD"
+# ⚠ AND A 200 THAT IS NOT JSON MUST NOT DRAW THE EMPTY STATE. A truncated body
+# or a proxy error page arrives as a SUCCESSFUL status with junk in it, and the
+# renderer would otherwise print "No projects." — a sentence somebody acts on,
+# and a lie. Worse than an error, because it looks like an answer.
+PJ_JUNK=$(HUGINN_APPD_URL="http://127.0.0.1:$PJ_JUNK_PORT" server/bin/huginn-projects 2>&1); PJ_RC=$?
+[ "$PJ_RC" != 0 ] && ! grep -q "No projects" <<<"$PJ_JUNK" \
+  && ok "a 200 that is not JSON is an error, not an empty list" \
+  || bad "projects on a non-JSON 200 exited $PJ_RC: $PJ_JUNK"
 PJ_DEAD=$(HUGINN_APPD_URL="http://127.0.0.1:1" server/bin/huginn-projects 2>&1); PJ_RC=$?
 [ "$PJ_RC" = 2 ] \
   && ok "projects exits 2 when nothing is answering (3 = appd is there but too old)" \
@@ -989,7 +1010,7 @@ PJ_DEAD=$(HUGINN_APPD_URL="http://127.0.0.1:1" server/bin/huginn-projects 2>&1);
 # audited for: the bearer is one variable away from every string these paths emit.
 if [ -r /etc/huginn-appd/token ]; then
   PJ_TOK=$(tr -d '[:space:]' < /etc/huginn-appd/token)
-  if [ -n "$PJ_TOK" ] && grep -qF "$PJ_TOK" <<<"${PJ_LIST:-}${PJ_DEAD}${PJ_OLD}${PJ_BAD:-}"; then
+  if [ -n "$PJ_TOK" ] && grep -qF "$PJ_TOK" <<<"${PJ_LIST:-}${PJ_DEAD}${PJ_OLD}${PJ_JUNK}${PJ_BAD:-}"; then
     bad "huginn-projects printed the bearer token on a failure path"
   else
     ok "huginn-projects failure paths print no credential"
@@ -997,7 +1018,7 @@ if [ -r /etc/huginn-appd/token ]; then
 else
   skip "projects token-leak check (no readable /etc/huginn-appd/token here)"
 fi
-kill "$PJ_STUB" "$PJ_404_STUB" 2>/dev/null
+kill "$PJ_STUB" "$PJ_404_STUB" "$PJ_JUNK_STUB" 2>/dev/null
 rm -f "$PJ_REQ"
 
 echo "[uninstall/8] the server first, and only huginn's own files"

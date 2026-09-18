@@ -151,7 +151,17 @@ async function call(method, path, body, probe) {
     die(`huginn-appd is not answering on ${BASE}`, 2, '(systemctl status huginn-appd)');
   }
   const text = await res.text().catch(() => '');
-  if (res.ok) return { text, json: parse(text) };
+  if (res.ok) {
+    const json = parse(text);
+    // ⚠ A 200 THAT IS NOT JSON IS NOT AN EMPTY ANSWER. A truncated body, a proxy's
+    // error page, a daemon half-way through a restart -- all arrive as a
+    // successful status with something unparseable in it, and every renderer
+    // below would then quietly draw the empty state: "No projects." is a
+    // sentence somebody acts on, and it would be a lie. Only GETs are held to
+    // this; a write may legitimately answer with no body at all.
+    if (json === null && method === 'GET') die('appd answered something that is not JSON', 1);
+    return { text, json };
+  }
 
   if (res.status === 404 && probe) {
     die('this huginn-appd has no projects — deploy a newer daemon', 3,
