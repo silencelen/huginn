@@ -19,6 +19,7 @@ import com.silencelen.huginn.desktop.ui.common.chatStateTip
 import com.silencelen.huginn.desktop.ui.common.clickSelection
 import com.silencelen.huginn.desktop.ui.common.connectionTip
 import com.silencelen.huginn.desktop.ui.common.humanDuration
+import com.silencelen.huginn.desktop.ui.common.rowTimeReveal
 import com.silencelen.huginn.desktop.ui.common.labelsOf
 import com.silencelen.huginn.desktop.ui.common.noChatOpenCopy
 import com.silencelen.huginn.desktop.ui.common.noSessionOpenCopy
@@ -30,6 +31,7 @@ import com.silencelen.huginn.desktop.ui.common.sessionStateTip
 import com.silencelen.huginn.desktop.ui.common.timeTip
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import com.silencelen.huginn.ui.TimeWords
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
@@ -421,7 +423,61 @@ class DesktopSurfaceTest {
     fun `an absent timestamp produces no tip at all`() {
         assertEquals("", timeTip("Last activity", 0, 1_000_000))
         assertEquals("Last activity 2m ago", timeTip("Last activity", 999_880, 1_000_000))
+        // The two shapes the daemon actually sends for "never": a null and a
+        // zero. Neither may reach a formatter that would date them to 1970.
+        assertEquals("", timeTip("Last activity", -1, 1_000_000))
     }
+
+    /**
+     * ⚠ THE TOOLTIPS NO LONGER HOLD A VOCABULARY. `timeTip` and the last-activity
+     * clause of `chatStateTip` are wall-clock stamps, so they read from
+     * [TimeWords] like every other row on both clients; what they say here must
+     * be exactly what `TimeWordsTest` pins, or the desktop has quietly grown a
+     * sixth dialect again.
+     */
+    @Test
+    fun `timestamp tips speak the shared vocabulary`() {
+        val now = 1_000_000L
+        assertEquals("Last activity ${TimeWords.ago(999_880, now * 1000)}", timeTip("Last activity", 999_880, now))
+        assertEquals("Last activity 3 days ago", timeTip("Last activity", now - 3 * 86_400, now))
+        assertEquals("Last activity yesterday", timeTip("Last activity", now - 30 * 3600, now))
+        // The duration register is NOT what a stamp uses: "2h 10m ago" was the
+        // old wording and is exactly the drift being removed.
+        assertEquals("Last activity 2h ago", timeTip("Last activity", now - 7_800, now))
+    }
+
+    @Test
+    fun `a chat tip dates its last activity like every other row`() {
+        val now = 1_000_000L
+        assertEquals(
+            "Idle · 2 turns · last activity 3 days ago",
+            chatStateTip(false, 0, 2, now - 3 * 86_400, now),
+        )
+    }
+
+    /**
+     * The transcript's hover reveal. EXACT rather than relative: a reader who
+     * hovers a message is asking when it was sent, and "2h ago" is the answer
+     * they already had from the row. Empty for a missing stamp, which is what
+     * makes [Tip] draw no popup at all.
+     */
+    @Test
+    fun `the row reveal is an exact date, and nothing at all when there is no stamp`() {
+        assertEquals("", rowTimeReveal(null))
+        assertEquals("", rowTimeReveal(0))
+        assertEquals("", rowTimeReveal(-1))
+        val reveal = rowTimeReveal(1_789_655_520)
+        assertFalse(reveal.contains("1970"), reveal)
+        assertTrue(reveal.contains("2026"), reveal)
+        assertTrue(reveal.contains("September"), reveal)
+        // It carries a weekday and a clock time, which is what "exact" means here.
+        assertTrue(reveal.substringBefore(" ") in DAYS, reveal)
+        assertTrue(Regex("\\d{1,2}:\\d{2}").containsMatchIn(reveal), reveal)
+    }
+
+    private val DAYS = listOf(
+        "Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday",
+    )
 
     @Test
     fun `rail counts describe themselves`() {
