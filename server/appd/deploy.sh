@@ -121,11 +121,29 @@ install -m 0644 "$SRC"/lib/*.js "$DEST/lib/"
 install -d "$DEST/hooks"
 install -m 0755 "$SRC"/hooks/* "$DEST/hooks/"
 install -m 0644 "$SRC/install-hooks.js" "$DEST/install-hooks.js"
+# WHICH SENTINEL DIRECTORY the gate must watch, as the SERVICE will see it —
+# `systemctl show`, not this shell's environment, because the knob that moves it
+# lives in a unit drop-in (Environment=HUGINN_APPD_DATA=…) that a deploy shell
+# knows nothing about. Installed without it, the hook keeps its compiled-in
+# /var/lib/huginn-appd/headroom while the daemon arms sentinels somewhere else:
+# the gate releases every spawn at waited=0 and writes its log into the
+# abandoned directory, /v1/headroom reports the sentinel armed, and there is no
+# other symptom. An explicit env var here still wins, for a hand-run deploy.
+unit_env() {
+  systemctl show huginn-appd -p Environment --value 2>/dev/null \
+    | tr ' ' '\n' | sed -n "s/^$1=//p" | tail -1 || true
+}
+HEADROOM_DIR="${HUGINN_HEADROOM_DIR:-$(unit_env HUGINN_HEADROOM_DIR)}"
+if [ -z "$HEADROOM_DIR" ]; then
+  APPD_DATA="${HUGINN_APPD_DATA:-$(unit_env HUGINN_APPD_DATA)}"
+  HEADROOM_DIR="${APPD_DATA:-/var/lib/huginn-appd}/headroom"
+fi
+echo "[deploy] gate sentinels: $HEADROOM_DIR"
 # Idempotent by `command`: a second run keeps what is there and rewrites nothing.
 # It refuses (exit 2, nothing written) on a settings file it cannot parse, and
 # that refusal must stop the deploy — a daemon that arms sentinels nothing reads
 # is a pause button wired to nothing.
-node "$DEST/install-hooks.js" --script "$DEST/hooks/huginn-headroom-gate"
+node "$DEST/install-hooks.js" --script "$DEST/hooks/huginn-headroom-gate" --headroom-dir "$HEADROOM_DIR"
 
 systemctl restart huginn-appd
 sleep 2

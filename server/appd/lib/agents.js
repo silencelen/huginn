@@ -83,18 +83,36 @@ function listAgentFiles(dir, fsImpl = fs) {
   return out;
 }
 
+// The first record is read in chunks until its newline, because a fixed head is
+// a guess about prompt length and a wrong one costs the label silently. 17 of
+// 1050 agent transcripts on this host open with a line over 16 KB (largest 793
+// KB) — the workflow fan-outs, i.e. exactly the long-running agents whose label
+// is worth most. The cap is what keeps a corrupt file (no newline at all) from
+// being read into memory whole.
+const TASK_CHUNK = 65536;
+const TASK_MAX = 1024 * 1024;
+
 /**
  * The task an agent was given: its first user record, read from the file HEAD.
  * readTranscript tails the file, which for the task would mean reading megabytes
- * to find the first line; a 16KB head covers any real prompt's first line.
+ * to find the first line.
  */
 function agentTask(file, fsImpl = fs) {
   let fd = null;
   try {
     fd = fsImpl.openSync(file, 'r');
-    const buf = Buffer.alloc(16384);
-    const n = fsImpl.readSync(fd, buf, 0, buf.length, 0);
-    const firstLine = buf.toString('utf8', 0, n).split('\n')[0];
+    let head = Buffer.alloc(0);
+    let nl = -1;
+    for (;;) {
+      const chunk = Buffer.alloc(TASK_CHUNK);
+      const n = fsImpl.readSync(fd, chunk, 0, TASK_CHUNK, head.length);
+      if (!n || n <= 0) break;
+      const at = chunk.indexOf(0x0a);
+      head = Buffer.concat([head, chunk.subarray(0, n)]);
+      if (at >= 0 && at < n) { nl = head.length - n + at; break; }
+      if (head.length >= TASK_MAX) break;
+    }
+    const firstLine = nl >= 0 ? head.toString('utf8', 0, nl) : head.toString('utf8');
     const rec = JSON.parse(firstLine);
     const c = rec && rec.message && rec.message.content;
     const text = typeof c === 'string'
