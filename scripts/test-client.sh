@@ -20,6 +20,43 @@ ok()   { echo "  ok    $*"; }
 bad()  { echo "  FAIL  $*" >&2; FAIL=1; }
 skip() { echo "  SKIP  $*  <-- not a pass" >&2; }
 
+# ⚠ ONE EXIT TRAP, AND ONE ONLY. `trap ... EXIT` REPLACES the previous handler,
+# so a lane that sets its own silently un-registers everybody else's — which is
+# how this script used to leave its stub daemons running after a Ctrl-C and
+# poison the NEXT run (see the port note below). Lanes register here instead.
+STUB_PIDS=()
+STUB_DIRS=()
+_cleanup() {
+  local p d
+  for p in ${STUB_PIDS[@]+"${STUB_PIDS[@]}"}; do [ -n "$p" ] && kill "$p" 2>/dev/null; done
+  for d in ${STUB_DIRS[@]+"${STUB_DIRS[@]}"}; do [ -n "$d" ] && rm -rf "$d"; done
+  return 0
+}
+trap _cleanup EXIT
+
+# ⚠ EVERY STUB DAEMON BINDS PORT 0, AND READS THE PORT BACK. A stub pinned to a
+# hardcoded port does not fail when something else already holds it: python dies
+# EADDRINUSE into /dev/null and the lane then runs against the SQUATTER. What
+# that costs depends on who is squatting — a token-guarded listener turns the
+# headroom lane into the false `headroom on a 404 said: … (HTTP 401)` and fails
+# the whole gate; a 404-ing listener leaves it GREEN with our own stub never
+# bound, which is worse. And the commonest squatter is this script: an
+# interrupted run used to orphan its own stub (no EXIT trap, above).
+#
+# So the kernel picks the port, the stub writes it to a file, and the lane
+# reads it — a port nobody else can be holding, and a file that PROVES our stub
+# is the thing being talked to. An explicit port may still be requested (the
+# HUGINN_TEST_* overrides below) for anyone debugging against a fixed address.
+STUB_DIR=$(mktemp -d); STUB_DIRS+=("$STUB_DIR")
+stub_port () {    # $1 = the port file a stub was told to write; prints the port
+  local pf="$1" _
+  for _ in $(seq 1 60); do
+    [ -s "$pf" ] && { tr -d '[:space:]' < "$pf"; return 0; }
+    sleep 0.1
+  done
+  return 1
+}
+
 echo "[1/8] syntax"
 bash -n client/huginn.sh && ok "huginn.sh parses" || bad "huginn.sh does not parse"
 if command -v pwsh >/dev/null 2>&1; then
@@ -81,7 +118,7 @@ echo "[4/8] what the PowerShell client actually SENDS"
 if ! command -v pwsh >/dev/null 2>&1; then
   skip "ps1 behaviour (no pwsh)"
 else
-  T=$(mktemp -d); trap 'rm -rf "$T"' EXIT
+  T=$(mktemp -d); STUB_DIRS+=("$T")
   cat > "$T/ssh" <<'STUB'
 #!/usr/bin/env bash
 dec=""
@@ -539,26 +576,27 @@ rm -rf "$HRT"
 # version is missing rather than "not found" — the person reading it is the
 # person who can deploy the daemon. Driven against a stub, so this holds on a
 # host where appd is stopped, and on one already running 3.0.0.
-HR_PORT=18787
-python3 - "$HR_PORT" <<'STUB' >/dev/null 2>&1 &
+HR_PF="$STUB_DIR/headroom.port"
+python3 - "$HR_PF" "${HUGINN_TEST_HEADROOM_PORT:-0}" <<'STUB' >/dev/null 2>&1 &
 import sys
 from http.server import BaseHTTPRequestHandler, HTTPServer
 class H(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(404); self.end_headers(); self.wfile.write(b'{"error":"not found"}')
     def log_message(self, *a): pass
-HTTPServer(("127.0.0.1", int(sys.argv[1])), H).serve_forever()
+srv = HTTPServer(("127.0.0.1", int(sys.argv[2])), H)
+# The port file is the lane's proof that the listener it is about to talk to is
+# OURS. Written after bind, so it never appears for a stub that lost the port.
+with open(sys.argv[1], "w") as fh: fh.write(str(srv.server_port))
+srv.serve_forever()
 STUB
-HR_STUB=$!
-HR_UP=
-for _ in $(seq 1 40); do
-  curl -s -o /dev/null --max-time 1 "http://127.0.0.1:$HR_PORT/" && { HR_UP=1; break; }
-done
-if [ -z "$HR_UP" ]; then
+HR_STUB=$!; STUB_PIDS+=("$HR_STUB")
+HR_PORT=$(stub_port "$HR_PF")
+if [ -z "${HR_PORT:-}" ]; then
   # LOUDLY, never silently: a stub that never bound would make every assertion
   # below read "connection refused" and the 404 check would fail for the wrong
   # reason, which is worse than not running it.
-  skip "headroom daemon-too-old checks (nothing bound 127.0.0.1:$HR_PORT)"
+  skip "headroom daemon-too-old checks (the stub never bound a port)"
 else
   HR_OUT=$(HUGINN_APPD_URL="http://127.0.0.1:$HR_PORT" server/bin/huginn-headroom 2>&1); HR_RC=$?
   grep -q 'needs appd 3.0.0' <<<"$HR_OUT" && [ "$HR_RC" = 1 ] \
@@ -659,8 +697,8 @@ AP_BAD=$(awk "/python3 -c '/{inpy=1; next} /^' /{inpy=0} inpy" server/bin/huginn
 # End to end against a stub daemon, the way the headroom lane does it: this
 # renderer is the ONLY implementation of what an archive looks like, in either
 # client, so a parse check would be most of it untested.
-AR_PORT=18811
-python3 - "$AR_PORT" <<'ARSTUB' &
+AR_PF="$STUB_DIR/archive.port"
+python3 - "$AR_PF" "${HUGINN_TEST_ARCHIVE_PORT:-0}" <<'ARSTUB' &
 import json, sys
 from http.server import BaseHTTPRequestHandler, HTTPServer
 ROWS = {"max": 64, "archives": [
@@ -691,17 +729,16 @@ class H(BaseHTTPRequestHandler):
         else:
             self._send(202, {"ok": True, "id": "x", "archived": False, "pending": True, "queued": True})
     def log_message(self, *a): pass
-HTTPServer(("127.0.0.1", int(sys.argv[1])), H).serve_forever()
+srv = HTTPServer(("127.0.0.1", int(sys.argv[2])), H)
+with open(sys.argv[1], "w") as fh: fh.write(str(srv.server_port))
+srv.serve_forever()
 ARSTUB
-AR_STUB=$!
-AR_UP=
-for _ in $(seq 1 40); do
-  curl -s -o /dev/null --max-time 1 "http://127.0.0.1:$AR_PORT/" && { AR_UP=1; break; }
-done
-if [ -z "$AR_UP" ]; then
+AR_STUB=$!; STUB_PIDS+=("$AR_STUB")
+AR_PORT=$(stub_port "$AR_PF")
+if [ -z "${AR_PORT:-}" ]; then
   # LOUDLY, never silently: a stub that never bound would make every assertion
   # below fail for the wrong reason.
-  skip "archive renderer checks (nothing bound 127.0.0.1:$AR_PORT)"
+  skip "archive renderer checks (the stub never bound a port)"
 else
   AR_LIST=$(HUGINN_APPD_URL="http://127.0.0.1:$AR_PORT" server/bin/huginn-archive 2>&1)
   grep -q "claude --resume 0123abcd" <<<"$AR_LIST" \
@@ -817,16 +854,16 @@ else
 fi
 rm -rf "$PJT"
 
-# End to end against a stub daemon. The port is overridable because these gates
-# run beside a live appd and beside each other -- 18787 and 18811 are already
-# taken by the headroom and archive stubs above.
-PJ_PORT="${HUGINN_TEST_PROJECTS_PORT:-18822}"
-PJ_404_PORT="${HUGINN_TEST_PROJECTS_404_PORT:-18823}"
+# End to end against a stub daemon. Port 0 like every other stub here (see the
+# note by stub_port): these gates run beside a live appd and beside each other,
+# so no fixed number is ever provably free.
+PJ_PF="$STUB_DIR/projects.port"
+PJ_404_PF="$STUB_DIR/projects404.port"
 PJ_REQ=$(mktemp)
-python3 - "$PJ_PORT" "$PJ_REQ" <<'PJSTUB' &
+python3 - "$PJ_PF" "${HUGINN_TEST_PROJECTS_PORT:-0}" "$PJ_REQ" <<'PJSTUB' &
 import json, sys
 from http.server import BaseHTTPRequestHandler, HTTPServer
-LOG = sys.argv[2]
+LOG = sys.argv[3]
 P1 = {"id": "aaaaaaaa-0000-4000-8000-00000000aaaa", "name": "LoRa sensor stick",
       "cwd": "/root/netplan/dev-ledger/lora-stick", "createdAt": 1789459900,
       "lead": {"name": "lora-stick/lead", "state": "busy"},
@@ -886,22 +923,26 @@ class H(BaseHTTPRequestHandler):
         self._log()
         self._send(200, {"ok": True, "ended": ["lora-stick-docs"]})
     def log_message(self, *a): pass
-HTTPServer(("127.0.0.1", int(sys.argv[1])), H).serve_forever()
+srv = HTTPServer(("127.0.0.1", int(sys.argv[2])), H)
+with open(sys.argv[1], "w") as fh: fh.write(str(srv.server_port))
+srv.serve_forever()
 PJSTUB
-PJ_STUB=$!
-python3 - "$PJ_404_PORT" <<'PJ404' >/dev/null 2>&1 &
+PJ_STUB=$!; STUB_PIDS+=("$PJ_STUB")
+python3 - "$PJ_404_PF" "${HUGINN_TEST_PROJECTS_404_PORT:-0}" <<'PJ404' >/dev/null 2>&1 &
 import sys
 from http.server import BaseHTTPRequestHandler, HTTPServer
 class H(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(404); self.end_headers(); self.wfile.write(b'{"error":"not found"}')
     def log_message(self, *a): pass
-HTTPServer(("127.0.0.1", int(sys.argv[1])), H).serve_forever()
+srv = HTTPServer(("127.0.0.1", int(sys.argv[2])), H)
+with open(sys.argv[1], "w") as fh: fh.write(str(srv.server_port))
+srv.serve_forever()
 PJ404
-PJ_404_STUB=$!
+PJ_404_STUB=$!; STUB_PIDS+=("$PJ_404_STUB")
 # A third stub: HTTP 200 with a body that is not JSON. See the assertion below.
-PJ_JUNK_PORT="${HUGINN_TEST_PROJECTS_JUNK_PORT:-18824}"
-python3 - "$PJ_JUNK_PORT" <<'PJJUNK' >/dev/null 2>&1 &
+PJ_JUNK_PF="$STUB_DIR/projectsjunk.port"
+python3 - "$PJ_JUNK_PF" "${HUGINN_TEST_PROJECTS_JUNK_PORT:-0}" <<'PJJUNK' >/dev/null 2>&1 &
 import sys
 from http.server import BaseHTTPRequestHandler, HTTPServer
 class H(BaseHTTPRequestHandler):
@@ -909,17 +950,18 @@ class H(BaseHTTPRequestHandler):
         self.send_response(200); self.end_headers()
         self.wfile.write(b'<html>502 Bad Gateway</html>')
     def log_message(self, *a): pass
-HTTPServer(("127.0.0.1", int(sys.argv[1])), H).serve_forever()
+srv = HTTPServer(("127.0.0.1", int(sys.argv[2])), H)
+with open(sys.argv[1], "w") as fh: fh.write(str(srv.server_port))
+srv.serve_forever()
 PJJUNK
-PJ_JUNK_STUB=$!
-PJ_UP=
-for _ in $(seq 1 40); do
-  curl -s -o /dev/null --max-time 1 "http://127.0.0.1:$PJ_PORT/" && { PJ_UP=1; break; }
-done
-if [ -z "$PJ_UP" ]; then
+PJ_JUNK_STUB=$!; STUB_PIDS+=("$PJ_JUNK_STUB")
+PJ_PORT=$(stub_port "$PJ_PF")
+PJ_404_PORT=$(stub_port "$PJ_404_PF")
+PJ_JUNK_PORT=$(stub_port "$PJ_JUNK_PF")
+if [ -z "${PJ_PORT:-}" ] || [ -z "${PJ_404_PORT:-}" ] || [ -z "${PJ_JUNK_PORT:-}" ]; then
   # LOUDLY, never silently: a stub that never bound would make every assertion
-  # below fail for the wrong reason (set HUGINN_TEST_PROJECTS_PORT to move it).
-  skip "projects renderer checks (nothing bound 127.0.0.1:$PJ_PORT)"
+  # below fail for the wrong reason.
+  skip "projects renderer checks (a stub never bound a port)"
 else
   PJ_LIST=$(HUGINN_APPD_URL="http://127.0.0.1:$PJ_PORT" server/bin/huginn-projects 2>&1)
   grep -q "LoRa sensor stick" <<<"$PJ_LIST" && grep -qE "2 members" <<<"$PJ_LIST" \
