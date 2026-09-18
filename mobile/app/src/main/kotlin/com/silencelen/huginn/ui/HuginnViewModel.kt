@@ -76,6 +76,8 @@ import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 
 // `mergeTranscript` moved to :core in phase 3c — same package, so every call site
 // here is unchanged. The desktop client needs the identical row-identity rule, and
@@ -1000,7 +1002,7 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
                 is RouteResolver.Choice.Stay ->
                     if (!silent) _toast.value = "Still on ${choice.route.name}"
                 is RouteResolver.Choice.Switched -> {
-                    applyBook(_routeBook.value.activate(choice.route.id))
+                    editRoutesNow { it.activate(choice.route.id) }
                     _toast.value = "Switched to ${choice.route.name}"
                 }
             }
@@ -1016,6 +1018,16 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
 
     fun setRouteUrl(id: String, url: String) = editRoutes { it.setUrl(id, url) }
 
+    /**
+     * A name and an address saved together, as ONE book operation.
+     *
+     * The route form's Save changes both fields at once whenever a pin is
+     * re-pointed, and two separate mutations for one gesture is a race whichever
+     * way it is dispatched — see [routeEdits].
+     */
+    fun editRoute(id: String, name: String, url: String) =
+        editRoutes { it.rename(id, name).setUrl(id, url) }
+
     fun moveRoute(id: String, delta: Int) = editRoutes { it.move(id, delta) }
 
     fun removeRoute(id: String) = editRoutes { it.remove(id) }
@@ -1026,19 +1038,34 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     /**
+     * ⚠ ONE EDIT AT A TIME. Every mutation here is read-modify-write across a
+     * SUSPENSION — `settings.setRouteBook` is a DataStore write — and `_routeBook`
+     * is only republished after it. Two edits launched from one gesture (the
+     * route form's Save used to send a rename and an address change as two) both
+     * read the pre-edit book, and whichever wrote last silently discarded the
+     * other: the address landed, the new name did not, in memory and on disk.
+     */
+    private val routeEdits = Mutex()
+
+    /**
      * Every list edit runs through here, so a refusal from [RouteGuard] or the
      * eight-pin cap is REPORTED rather than swallowed — a setting that silently
      * does not take is worse than one that says no.
      */
     private fun editRoutes(edit: (RouteBook) -> RouteBook) {
-        viewModelScope.launch {
+        viewModelScope.launch { editRoutesNow(edit) }
+    }
+
+    /** [editRoutes], awaited — for a caller that must act on the SETTLED book. */
+    private suspend fun editRoutesNow(edit: (RouteBook) -> RouteBook): Boolean =
+        routeEdits.withLock {
             val next = runCatching { edit(_routeBook.value) }
                 .onFailure { _routeNote.value = it.message ?: RouteGuard.REFUSED }
-                .getOrNull() ?: return@launch
+                .getOrNull() ?: return@withLock false
             _routeNote.value = null
             applyBook(next)
+            true
         }
-    }
 
     /**
      * Persists the book and reconnects on the address it derives. ⚠ The store
