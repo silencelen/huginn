@@ -10473,7 +10473,12 @@ const server = http.createServer(async (req, res) => {
       const name = projectsLib.cleanName(body.name);
       const slug = projectsLib.slugFor(name);
       const badSlug = projectsLib.slugProblem(slug, existing.map((x) => x.slug));
-      if (badSlug) return sendErr(res, 409, badSlug);
+      // ⚠ THREE REFUSALS SHARE THIS STATUS AND THEY HAVE THREE DIFFERENT FIXES:
+      // trust the directory in Claude Code, pick another name, or go and end the
+      // tmux session squatting the lead's name. `reason` is the discriminator a
+      // client branches on; the sentence beside it stays the thing a person
+      // reads, because it is also the instruction.
+      if (badSlug) return sendJson(res, 409, { error: badSlug, reason: 'slug-taken' });
       const kind = projectsLib.KINDS.includes(body.kind) ? body.kind : null;
       if (!kind) return sendErr(res, 400, `kind is one of ${projectsLib.KINDS.join(', ')}`);
       const badBrief = projectsLib.briefProblem(body.brief);
@@ -10491,12 +10496,17 @@ const server = http.createServer(async (req, res) => {
       // ~/.claude.json, a 115 KB file every live `claude` rewrites continuously.
       // Refused with the fix instead (decision 50). See [cwdIsTrusted].
       if (!cwdIsTrusted(cwd)) {
-        return sendErr(res, 409, `${cwd} has not been trusted in Claude Code yet — open it once with `
-          + '`claude` there and accept the folder-trust question, then create the project');
+        return sendJson(res, 409, {
+          error: `${cwd} has not been trusted in Claude Code yet — open it once with `
+            + '`claude` there and accept the folder-trust question, then create the project',
+          reason: 'untrusted-cwd',
+        });
       }
 
       const leadTmux = projectsLib.tmuxNameFor(slug, projectsLib.LEAD_ROLE);
-      if (await sessionExists(leadTmux)) return sendErr(res, 409, `a tmux session called '${leadTmux}' already exists`);
+      if (await sessionExists(leadTmux)) {
+        return sendJson(res, 409, { error: `a tmux session called '${leadTmux}' already exists`, reason: 'name-taken' });
+      }
 
       const now = Math.floor(Date.now() / 1000);
       const project = {
