@@ -320,6 +320,11 @@ test('an untrusted cwd is refused, and nothing is written to Claude Code\'s conf
   });
   assert.equal(409, r.status);
   assert.match(r.body.error, /has not been trusted in Claude Code yet/);
+  // ⚠ THREE DIFFERENT REFUSALS SHARE THIS STATUS, and a client that wants to
+  // put the message under the right field — or offer the right fix — cannot
+  // tell them apart from a sentence. `reason` is the discriminator; the sentence
+  // stays the thing a person reads.
+  assert.equal('untrusted-cwd', r.body.reason);
   assert.equal(before, fs.readFileSync(config, 'utf8'), 'READ ONLY: the check never grants trust');
   assert.equal(false, liveNames().includes('elsewhere-lead'), 'and nothing was launched');
 });
@@ -333,7 +338,21 @@ test('the name, the kind, the brief and the slug are all refused before anything
   assert.equal(400, (await bad({ name: 'stick', kind: 'docs', brief: 'x' })).status, 'the name is taken');
   // A DIFFERENT display name that lands on the same slug: the slug is the tmux
   // and peer namespace, so it is checked on its own terms.
-  assert.equal(409, (await bad({ name: 'Stick!', kind: 'docs', brief: 'x' })).status, 'the slug is taken');
+  const slugTaken = await bad({ name: 'Stick!', kind: 'docs', brief: 'x' });
+  assert.equal(409, slugTaken.status, 'the slug is taken');
+  assert.equal('slug-taken', slugTaken.body.reason);
+
+  // And the third 409: a tmux session already wearing the lead's name, which is
+  // a DIFFERENT problem with a different fix — nothing in this daemon's store
+  // knows about it, so an owner who deletes projects all day still cannot create
+  // this one until that session is gone.
+  sh('tmux', ['new-session', '-d', '-s', 'squatter-lead', '-c', tmp, 'cat >/dev/null']);
+  madeSessions.add('squatter-lead');
+  const nameTaken = await bad({ name: 'Squatter', kind: 'docs', brief: 'x' });
+  assert.equal(409, nameTaken.status);
+  assert.equal('name-taken', nameTaken.body.reason);
+  assert.match(nameTaken.body.error, /already exists/);
+
   assert.equal(1, (await api('/v1/projects')).body.projects.length, 'and none of them made a project');
 });
 
