@@ -98,10 +98,11 @@ fun SessionScreen(
     loadingHistory: Boolean = false,
     onLoadEarlier: () -> Unit = {},
     working: Boolean,
-    attachment: HuginnViewModel.Attachment? = null,
-    onAttach: (android.net.Uri) -> Unit = {},
-    onAttachFile: (android.net.Uri) -> Unit = {},
-    onClearAttachment: () -> Unit = {},
+    attachments: List<AttachChipItem> = emptyList(),
+    onAttach: (List<android.net.Uri>) -> Unit = {},
+    onAttachFile: (List<android.net.Uri>) -> Unit = {},
+    onRemoveAttachment: (String) -> Unit = {},
+    onPasteImage: () -> Unit = {},
     /** Empty against a daemon with no scratchpads, which hides the control. */
     pads: List<com.silencelen.huginn.data.Scratchpad> = emptyList(),
     padRefId: String? = null,
@@ -267,10 +268,11 @@ fun SessionScreen(
                     hasEarlier = hasEarlier,
                     loadingHistory = loadingHistory,
                     onLoadEarlier = onLoadEarlier,
-                attachment = attachment,
+                attachments = attachments,
                 onAttach = onAttach,
                 onAttachFile = onAttachFile,
-                onClearAttachment = onClearAttachment,
+                onRemoveAttachment = onRemoveAttachment,
+            onPasteImage = onPasteImage,
                 pads = pads,
                 padRefId = padRefId,
                 onPadRef = onPadRef,
@@ -345,10 +347,11 @@ private fun SessionConversation(
     hasEarlier: Boolean = false,
     loadingHistory: Boolean = false,
     onLoadEarlier: () -> Unit = {},
-    attachment: HuginnViewModel.Attachment? = null,
-    onAttach: (android.net.Uri) -> Unit = {},
-    onAttachFile: (android.net.Uri) -> Unit = {},
-    onClearAttachment: () -> Unit = {},
+    attachments: List<AttachChipItem> = emptyList(),
+    onAttach: (List<android.net.Uri>) -> Unit = {},
+    onAttachFile: (List<android.net.Uri>) -> Unit = {},
+    onRemoveAttachment: (String) -> Unit = {},
+    onPasteImage: () -> Unit = {},
     pads: List<com.silencelen.huginn.data.Scratchpad> = emptyList(),
     padRefId: String? = null,
     onPadRef: (String?) -> Unit = {},
@@ -633,7 +636,11 @@ private fun SessionConversation(
                     modifier = Modifier.padding(start = 8.dp, top = 4.dp),
                 )
             }
-            AttachmentBar(attachment, onClearAttachment)
+            AttachChipRow(
+                attachments,
+                onRemoveAttachment,
+                Modifier.padding(start = 14.dp, end = 8.dp, top = 6.dp),
+            )
             // PERSISTENT, and above the row rather than below it: the input row
             // owns `imePadding()` and `navigationBarsPadding()`, so anything
             // placed after it is laid out under the keyboard or behind the
@@ -664,8 +671,9 @@ private fun SessionConversation(
                 )
                 Spacer(Modifier.width(6.dp))
                 AttachButton(
-                    onPickImage = onAttach,
-                    onPickFile = onAttachFile,
+                    onPickImages = onAttach,
+                    onPickFiles = onAttachFile,
+                    onPasteImage = onPasteImage,
                     pads = pads,
                     padRefId = padRefId,
                     onPadRef = onPadRef,
@@ -688,7 +696,7 @@ private fun SessionConversation(
                 }
                 // A photo alone is a complete message here too; the send path
                 // builds the marker text when the draft is blank.
-                val canSend = draft.isNotBlank() || attachment is HuginnViewModel.Attachment.Ready
+                val canSend = draft.isNotBlank() || attachments.any { it.state != AttachChipState.FAILED }
                 IconButton(
                     onClick = { if (canSend) onSendText(draft, true) },
                     enabled = canSend,

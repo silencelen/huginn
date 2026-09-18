@@ -77,3 +77,100 @@ object AttachmentText {
     fun stripImageMarkers(text: String): String =
         text.replace(MARKER_RE, "").trim()
 }
+
+/**
+ * The outgoing message text: what was typed, then the attachment markers.
+ *
+ * ONE rule, in the lowest module that can hold it. It lived in the desktop module
+ * and the phone hand-rolled `"\n\n"` at its two send sites, which is three copies
+ * of a join whose exact shape the marker regex in [AttachmentText.displayText] has
+ * to match — and the pane variant, where a stray newline is a submit, existed in
+ * only one of the three. A blank draft sends the markers alone, which is the
+ * "here, look at this" case and is deliberately allowed.
+ *
+ * MARKERS ARE SEPARATED BY [separator] FROM EACH OTHER TOO, not only from the
+ * text. That is the load-bearing half for a pane: `AttachTest` asserts a session
+ * line contains no `\n`, and joining N markers with a newline would slip one
+ * through the gap between them while the text-to-marker join still looked right.
+ *
+ * @param separator a blank line for a chat, and [PANE_SEPARATOR] for a tmux pane —
+ *   where the text is TYPED and a newline is the submit key, so a paragraph break
+ *   would send half the message and leave the markers on the next prompt.
+ */
+fun composeMessage(text: String, markers: List<String>, separator: String = "\n\n"): String {
+    val t = text.trim()
+    val real = markers.filter { it.isNotBlank() }
+    if (real.isEmpty()) return t
+    val tail = real.joinToString(separator)
+    return if (t.isEmpty()) tail else "$t$separator$tail"
+}
+
+/** The one-marker shape, kept so a single attachment reads as one at the call site. */
+fun composeMessage(text: String, marker: String?, separator: String = "\n\n"): String =
+    composeMessage(text, listOfNotNull(marker), separator)
+
+/** See [composeMessage]: a pane cannot take a newline that is not a submit. */
+const val PANE_SEPARATOR: String = " "
+
+/**
+ * What a composer got when it consumed its pending attachments.
+ *
+ * Both shells return this from their own `take`, because the rule the composer
+ * then applies — send what landed, name what did not — must not be two rules.
+ *
+ * @param markers every READY item's marker, IN ATTACH ORDER. Order is preserved
+ *   end to end: intake order → chip order → marker order in the message.
+ * @param failed the labels of everything else.
+ */
+data class TakeResult(val markers: List<String>, val failed: List<String> = emptyList())
+
+/**
+ * The rules a batch of attachments obeys on both shells: how many, and what the
+ * composer says when only some of them landed.
+ *
+ * Pure and shared for the same reason the marker is: a cap the phone enforces at
+ * 10 and the desktop at "however many the OS handed over" is not a cap, and a
+ * partial-failure line written twice is a line that gets fixed once.
+ */
+object AttachBatch {
+
+    /**
+     * How many things one message may carry.
+     *
+     * Ten because that is what the photo picker can be told to allow and what a
+     * FlowRow of chips can show without becoming the composer. The number is not
+     * a safety limit — the daemon has its own — it is a limit on how much one
+     * message can plausibly be ABOUT.
+     */
+    const val MAX_ITEMS: Int = 10
+
+    /** How many more this composer can still take. */
+    fun room(pending: Int): Int = (MAX_ITEMS - pending).coerceAtLeast(0)
+
+    /** The prefix of [incoming] that fits, in the order it arrived. */
+    fun <T> accept(pending: Int, incoming: List<T>): List<T> = incoming.take(room(pending))
+
+    /**
+     * What to say when a drop or a pick was trimmed. Null when all of it fit —
+     * silence is right there, and a note for every attach would be noise.
+     */
+    fun refusedNote(pending: Int, offered: Int): String? {
+        val refused = offered - room(pending)
+        if (refused <= 0) return null
+        return "$MAX_ITEMS attachments at a time — $refused left off"
+    }
+
+    /**
+     * The composer's line after a batch where some uploads failed.
+     *
+     * Load-bearing wording: it names WHICH ones, and says the rest went. The
+     * alternative the old single-slot path took — refusing to send at all — costs
+     * the typed message to save an attachment nobody can retry from.
+     */
+    fun failureLine(failed: List<String>, total: Int): String? {
+        if (failed.isEmpty()) return null
+        val them = if (failed.size == 1) "it" else "them"
+        return "${failed.size} of $total attachments did not upload: " +
+            failed.joinToString(", ") + " — sent without $them"
+    }
+}
