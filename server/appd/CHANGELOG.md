@@ -9,6 +9,21 @@ appeared only as a side-note on the app releases it happened to ship with. Three
 undocumented, and the notes-cutting matcher could fuse two sections when an app and an appd
 version number collided. Entries below are reconstructed from the shipping commits.
 
+## 3.3.0 — 2026-09-18
+- **`GET /v1/files/image`** — a host image Claude named by path, served to the client instead of
+  printed as a path. Roots are the uploads dir, the scratchpad render dir, Claude's own scratch dir,
+  and — only with `?session=` — that session's cwd. Containment is checked twice, lexically and then
+  against `realpath` on both sides; a root that cannot be realpath'd is dropped rather than matched
+  as a string. `nosniff`, `private, max-age=300` and an `ETag`/`304` on every response; 403, 404,
+  415 and 413 for outside-root, missing, non-image and oversize. SVG is refused by name:
+  `image/svg+xml` is the correct type for those bytes, which is precisely the problem.
+- **`?session=` widens nothing unless the session is live on tmux.** A state file outlives the
+  session that wrote it, so liveness is asked of tmux and the cwd of the state; an ended session
+  and a killed one both stop widening the roots, and they fail in opposite directions.
+- **`pruneUploads` sweeps at most once a minute.** A ten-file attach was ten full readdir+stat
+  sweeps of the same directory on the event loop streaming those ten uploads to disk. Retention is
+  measured in days; the sweep only has to beat a burst. Images are still never pruned.
+
 ## 3.2.1 — 2026-09-18
 - **A STOP the session window armed now clears when that window resets.** The hook gate's STOP
   sentinel arms at `stopPct` of the 5-hour window and was meant to clear once it dropped under
