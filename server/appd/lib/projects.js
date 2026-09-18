@@ -832,6 +832,10 @@ function projectRow(p, joined = null) {
       }
       : null,
     manifestRev: p.manifest ? p.manifest.rev || 0 : 0,
+    // The rev a spawn was last carried out at, beside the rev being proposed —
+    // `manifestRev > spawnedRev` is "this proposal is still waiting for an
+    // answer", which a list could otherwise only learn by GETting every project.
+    spawnedRev: p.manifest ? p.manifest.spawnedRev || 0 : 0,
     manifestSummary: p.manifest && p.manifest.summary ? p.manifest.summary : null,
     untaggedSeen: !!(p.manifest && p.manifest.untaggedSeen),
     endedReason: p.endedReason ?? null,

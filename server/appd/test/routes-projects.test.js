@@ -505,6 +505,13 @@ test('approving the current rev creates the members and tells the lead their nam
   // Typed, not sent as a peer message: appd must never appear in the peer
   // registry as something with authority over these sessions.
   assert.match(await fileUntil(outFor('stick-lead'), /Spawned/, 25_000), /\[Huginn\] Spawned: stick\/docs/);
+
+  // ⚠ AND THE LIST CAN NOW TELL. `spawnedRev` beside `manifestRev` is what says
+  // this proposal has been carried out — without it a tree has to GET every
+  // project to know which cards are still waiting for an answer.
+  const row = (await api('/v1/projects')).body.projects.find((x) => x.id === stick.id);
+  assert.equal(1, row.manifestRev);
+  assert.equal(row.manifestRev, row.spawnedRev, 'nothing is still on offer here');
 });
 
 test('THE FIRST PROMPT REACHES A COMPOSER, NOT AN EMPTY PTY', async () => {

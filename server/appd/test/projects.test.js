@@ -471,6 +471,14 @@ test('a project row says what the tree draws, with every field present', () => {
   assert.equal(1, row.waiting);
   assert.equal(true, row.lead.present);
   assert.equal(1, row.manifestRev);
+  // ⚠ manifestRev ALONE CANNOT TELL A RUNNING PROPOSAL FROM A WAITING ONE. The
+  // rev that was last carried out is the other half of that sentence, and
+  // without it a list has to GET every project to know which cards are still
+  // asking for an answer.
+  assert.equal(0, row.spawnedRev, 'nothing has been spawned at this rev yet');
+  assert.equal(1, projects.projectRow(project({ manifest: { tag: TAG, rev: 1, spawnedRev: 1, sessions: [] } }), joined).spawnedRev);
+  assert.equal(0, projects.projectRow({ ...project(), manifest: null }, joined).spawnedRev,
+    'a project with no manifest is a row, not a hole');
   for (const k of ['id', 'name', 'slug', 'kind', 'status', 'cwd', 'alive', 'untaggedSeen', 'endedReason']) {
     assert.ok(k in row, `${k} is on the row, so a row that decoded is a row that renders`);
   }
