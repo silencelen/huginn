@@ -84,7 +84,7 @@ class AskActivity : FragmentActivity() {
             )
         }
         val startLocked = AppLock.lockedNow ||
-            AppLock.shouldLock(lockEnabled, AppLock.lastAwayAt, System.currentTimeMillis())
+            AppLock.shouldLock(lockEnabled, AppLock.lastAwayAt, android.os.SystemClock.elapsedRealtime())
 
         setContent {
             HuginnTheme {
