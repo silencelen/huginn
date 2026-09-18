@@ -48,7 +48,10 @@ const LONG_RUN_MS = 5 * 60 * 1000;
  * @param nowSec    epoch seconds
  */
 function carryRunStarts(prevSince, sessions, nowSec) {
-  const out = {};
+  // Prototype-less: this is keyed by session NAME, and a session may legitimately
+  // be called `__proto__` — on a plain literal that key hits the prototype setter
+  // and the row silently disappears (#35, same fix as lib/watch's maps).
+  const out = Object.create(null);
   for (const [name, state] of Object.entries(sessions || {})) {
     if (state !== 'running') continue;
     out[name] = Number((prevSince || {})[name]) || nowSec;
