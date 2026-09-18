@@ -421,11 +421,24 @@ function sentinelPlan(activeWindows, settings = defaults(), current = {}) {
   } else if (allMode === 'red' || allMode === 'exhausted') {
     STOP = true;
     reasons.STOP = `weekly_all ${all === null ? 'exceeded' : `${Math.round(all)}%`}`;
-  } else if ((sess === null || sess < settings.clearBelowPct) && (all === null || all < settings.clearBelowPct)) {
-    STOP = false;
   } else {
+    // Clear low — but only against the window that ARMED it. A session-armed
+    // STOP asked "is the 5-hour window low again?"; requiring the week to be
+    // under clearBelowPct as well held a reset session hostage to a normal
+    // 69 % week (seen live 2026-09-18, every spawn held for hours). A week-armed
+    // STOP keeps the week's own hysteresis: red arms it, low clears it.
+    const armedByWeek = !!(current.STOP && typeof current.STOP.reason === 'string'
+      && current.STOP.reason.startsWith('weekly_all'));
+    const sessLow = sess === null || sess < settings.clearBelowPct;
+    const weekLow = armedByWeek
+      ? (all === null || all < settings.clearBelowPct)
+      : (allMode !== 'red' && allMode !== 'exhausted');
+    if (sessLow && weekLow) {
+      STOP = false;
+    } else {
     STOP = wasStop;
     if (STOP) reasons.STOP = current.STOP && current.STOP.reason ? current.STOP.reason : 'held';
+    }
   }
 
   let STOP_FABLE;
