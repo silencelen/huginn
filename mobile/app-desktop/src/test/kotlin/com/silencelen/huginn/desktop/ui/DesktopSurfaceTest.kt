@@ -5,6 +5,7 @@ import com.silencelen.huginn.data.QuickActions
 import com.silencelen.huginn.data.Session
 import com.silencelen.huginn.ui.QuickActionRules
 import com.silencelen.huginn.ui.SelectionAction
+import com.silencelen.huginn.desktop.Screen
 import com.silencelen.huginn.desktop.Splitter
 import com.silencelen.huginn.desktop.View
 import com.silencelen.huginn.desktop.WindowLayout
@@ -604,6 +605,57 @@ class DesktopSurfaceTest {
         val out = WindowLayout.restore(WindowLayout(0, 0, 40, 20), 1920, 1080)
         assertEquals(WindowLayout.MIN_W, out.w)
         assertEquals(WindowLayout.MIN_H, out.h)
+    }
+
+    @Test
+    fun `a window left on a second monitor comes back to it`() {
+        // The shipped rule judged x against ONE rectangle — on Windows,
+        // Toolkit.screenSize is the PRIMARY monitor, not the virtual desktop —
+        // so every position on a secondary read as "the display it remembers is
+        // gone", and the debounced writer then persisted the centred primary
+        // coordinates. The owner's placement was destroyed on the first launch.
+        val desk = listOf(Screen(0, 0, 1920, 1080), Screen(1920, 0, 2560, 1440))
+        val out = WindowLayout.restore(WindowLayout(x = 2400, y = 60, w = 1400, h = 900), desk)
+        assertTrue(out.placed, "a position on the second monitor must survive")
+        assertEquals(2400, out.x)
+        assertEquals(60, out.y)
+    }
+
+    @Test
+    fun `a monitor to the LEFT has negative coordinates and is still a monitor`() {
+        val desk = listOf(Screen(0, 0, 1920, 1080), Screen(-1920, 0, 1920, 1080))
+        val out = WindowLayout.restore(WindowLayout(x = -1200, y = 100, w = 1280, h = 840), desk)
+        assertTrue(out.placed, "x is signed on a virtual desktop")
+        assertEquals(-1200, out.x)
+    }
+
+    @Test
+    fun `a window is sized against the desk it is on, not the smallest screen`() {
+        // A 2560x1400 window lived on the big secondary; clamping it to the
+        // primary's 1920x1080 shrinks it every launch.
+        val desk = listOf(Screen(0, 0, 1920, 1080), Screen(1920, 0, 2560, 1440))
+        val out = WindowLayout.restore(WindowLayout(x = 2000, y = 20, w = 2560, h = 1400), desk)
+        assertEquals(2560, out.w)
+        assertEquals(1400, out.h)
+    }
+
+    @Test
+    fun `a position on a monitor that has since been unplugged is still dropped`() {
+        // The union is of the screens that are THERE. Undock the 2560 secondary
+        // and the window saved at x=2400 has nowhere to be.
+        val out = WindowLayout.restore(
+            WindowLayout(x = 2400, y = 60, w = 1400, h = 900),
+            listOf(Screen(0, 0, 1920, 1080)),
+        )
+        assertFalse(out.placed)
+        assertEquals(1400, out.w)
+    }
+
+    @Test
+    fun `no enumerable screen keeps the size and drops the position`() {
+        val out = WindowLayout.restore(WindowLayout(300, 300, 1400, 900), emptyList())
+        assertFalse(out.placed)
+        assertEquals(1400, out.w)
     }
 
     @Test
