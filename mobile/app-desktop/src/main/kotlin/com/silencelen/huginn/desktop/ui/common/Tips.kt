@@ -8,6 +8,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.selection.DisableSelection
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -43,7 +44,21 @@ fun Tip(text: String, modifier: Modifier = Modifier, content: @Composable () -> 
         return
     }
     TooltipArea(
-        tooltip = { TipCard(text) },
+        // ⚠⚠ DisableSelection, AND IT IS WHAT STOPS THE CLIENT CRASHING. A
+        // tooltip composes in its own layout root but inherits this one's
+        // composition locals — including the transcript's `LocalSelectionRegistrar`,
+        // because every row this wraps sits inside `SessionView`'s
+        // `SelectionContainer`. A `Text` in here therefore registers as a
+        // SELECTABLE of that selection, and the next press that starts a drag
+        // makes the selection manager sort its selectables by position: one
+        // `localPositionOf` across two roots that share no ancestor, which
+        // throws "layouts are not part of the same hierarchy" and takes the
+        // window with it. Hover a message, then drag — ordinary, and fatal
+        // between 1.4.0 and 1.5.1. See OverlaysDisableSelectionTest.
+        //
+        // Only the TOOLTIP. `content` below is the row being hovered; it is in
+        // the transcript's own hierarchy and must stay selectable.
+        tooltip = { DisableSelection { TipCard(text) } },
         modifier = modifier,
         // 400ms: long enough that sweeping the pointer across a list does not
         // trail popups, short enough to feel like an answer rather than a wait.
