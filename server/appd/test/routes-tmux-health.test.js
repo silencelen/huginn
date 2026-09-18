@@ -275,3 +275,57 @@ test('a gate bound to a different sentinel directory is called out at startup (#
 
   fs.rmSync(scratch, { recursive: true, force: true });
 });
+
+// ------------------------------------- who the daemon thinks is still listening
+
+test('a BUSY watch stream keeps stamping its own client (#32/#41/#44)', async () => {
+  // ⚠ THE EVIDENCE INVERSION. The SSE stream stamped its client at connect and
+  // then only in the KEEPALIVE branch — and a state frame resets the keepalive
+  // clock, so a stream whose digest changes at least once every 25 s never
+  // reaches it. Three ordinary interactive sessions on normal turn cycles are
+  // enough (measured: 51 state frames, 0 keepalives over seven minutes), and
+  // after FRESH_STREAM_MS the most-connected client on the host was recorded as
+  // GONE: /v1/clients says so and `appOnline` goes false, which is what gates
+  // the Telegram fallback and the Round reports when push reached nobody. The
+  // clean victim is Compose Desktop, whose only /v1/watch caller is this stream.
+  const id = `streamer-${process.pid}`;
+  const name = mkSession('watched');
+  writeState(name);
+  const ac = new AbortController();
+  const res = await fetch(`${BASE}/v1/watch?stream=1`, {
+    headers: { authorization: `Bearer ${token}`, 'x-huginn-client': id },
+    signal: ac.signal,
+  });
+  assert.equal(200, res.status);
+  const reader = res.body.getReader();
+  const frames = [];
+  (async () => {
+    try {
+      for (;;) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        frames.push(Buffer.from(value).toString('utf8'));
+      }
+    } catch { /* aborted */ }
+  })();
+
+  const row = async () => (await api('/v1/clients')).body.clients.find((c) => c.id === id);
+  const atConnect = (await row()).checkIns;
+
+  // Churn the digest well inside the keepalive window, the way a session going
+  // running→idle→running does.
+  for (let i = 0; i < 6; i++) {
+    fs.writeFileSync(path.join(stateDir, name), JSON.stringify({
+      state: i % 2 ? 'running' : 'idle', sessionId: `sid-${name}`, transcript: null, cwd: tmp, ts: Date.now(),
+    }));
+    await wait(1600);
+  }
+
+  const after = await row();
+  ac.abort();
+  assert.ok(frames.join('').includes('event: state'),
+    `precondition: the stream sent state frames. Got: ${frames.join('').slice(0, 300)}`);
+  assert.ok(after.checkIns > atConnect,
+    `a streaming client must be stamped by its own frames (${atConnect} -> ${after.checkIns})`);
+  assert.equal(true, after.fresh, 'and must not read as a client that stopped checking in');
+});
