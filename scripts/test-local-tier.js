@@ -197,6 +197,51 @@ test('one elevation, preferring the desktop prompt, and null is a real answer', 
   assert.equal(local.elevator({ platform: 'win32', root: false }), null);
 });
 
+// ⚠ AND THE LIST IS A CHAIN, NOT A PREFERENCE. elevator() picked the first tool
+// that merely EXISTS and no caller ever tried the next one - so on a headless box
+// where polkitd is installed but no agent is registered (the default for any ssh
+// session without a tty agent) pkexec exits non-zero and a WORKING sudo sat
+// unused: `on --system` downgraded to a user unit + linger, `update` hard-aborted
+// "nothing was changed", and `persist` tore the user units down and put them
+// back. CHANGELOG.md, docs/LOCAL-TIER.md and LocalServe.kt all document
+// "pkexec, then sudo" as a chain.
+test('a pkexec that cannot ASK falls through to sudo', () => {
+  shim({
+    sh: (args) => (/pkexec|sudo/.test(args[1]) ? { stdout: '/usr/bin/x\n' } : { status: 1 }),
+    // 127 is pkexec's "the authentication failed / no agent" - nothing could ask.
+    pkexec: { status: 127, stderr: 'No authentication agent found' },
+    sudo: { status: 0 },
+  });
+  const r = local.elevateOnce(['on', '--yes'], () => {}, { platform: 'linux', root: false });
+  assert.equal(r.ok, true, 'sudo was available and would have worked');
+  assert.equal(r.tool, 'sudo');
+  assert.ok(calls.some((c) => c.startsWith('sudo env ')),
+    'sudo was never tried: ' + calls.join(' | '));
+});
+
+test('a DISMISSED pkexec dialog does not re-prompt with sudo', () => {
+  shim({
+    sh: (args) => (/pkexec|sudo/.test(args[1]) ? { stdout: '/usr/bin/x\n' } : { status: 1 }),
+    // 126 is "the user dismissed the authentication dialog". A person said no;
+    // asking again with sudo would break the one rule this shape exists for.
+    pkexec: { status: 126 },
+    sudo: { status: 0 },
+  });
+  const r = local.elevateOnce(['on', '--yes'], () => {}, { platform: 'linux', root: false });
+  assert.equal(r.ok, false);
+  assert.equal(r.declined, true, 'a dismissed dialog is a decision, not a missing agent');
+  assert.ok(!calls.some((c) => c.startsWith('sudo env ')),
+    'ONE elevation prompt: ' + calls.join(' | '));
+});
+
+test('update names the one word that fixes a failed elevation', () => {
+  // The refusal used to end at "nothing was changed" and never mention sudo,
+  // though `sudo huginn local update` works - the block is gated on !isRoot().
+  const msg = local.updateElevationRefusal('exit 127');
+  assert.match(msg, /sudo huginn local update/);
+  assert.match(msg, /nothing was changed/);
+});
+
 test('the elevated argv carries the three variables that decide where it works', () => {
   const [cmd, args] = local.elevationArgv('pkexec', ['on', '--yes'], {
     HOME: '/home/owner', HUGINN_LOCAL_DIR: '/srv/hl', HUGINN_LOCAL_USER: 'owner',

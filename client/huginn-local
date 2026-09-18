@@ -373,14 +373,17 @@ const ELEVATORS = ['pkexec', 'sudo'];
  * told so. Silently installing something weaker than what was asked for is the
  * failure this returns a value to avoid.
  */
-function elevator({ platform = process.platform, root = isRoot() } = {}) {
-  if (platform !== 'linux') return null;
-  if (root) return 'root';
-  for (const e of ELEVATORS) {
+function elevators({ platform = process.platform, root = isRoot() } = {}) {
+  if (platform !== 'linux') return [];
+  if (root) return ['root'];
+  return ELEVATORS.filter((e) => {
     const r = RUN('sh', ['-c', `command -v ${e}`]);
-    if (r && !r.error && r.status === 0 && String(r.stdout || '').trim()) return e;
-  }
-  return null;
+    return !!(r && !r.error && r.status === 0 && String(r.stdout || '').trim());
+  });
+}
+function elevator(opts = {}) {
+  const l = elevators(opts);
+  return l.length ? l[0] : null;
 }
 
 /**
@@ -399,6 +402,57 @@ function elevationArgv(tool, argv, env) {
     .map(([k, v]) => `${k}=${v}`);
   return [tool, ['env', ...pairs, process.execPath, __filename, ...argv]];
 }
+
+/**
+ * ONE elevation, walked down ELEVATORS honestly. Returns
+ * { ok, tool, status, error, declined, reason }.
+ *
+ * ⚠ THE LIST IS A CHAIN AND NOBODY WALKED IT. `elevator()` returned the first
+ * tool that merely EXISTS and all three call sites stopped there, so on a box
+ * where polkitd is installed but no agent is registered - the default for any
+ * ssh session without a tty agent - pkexec exits non-zero and a WORKING sudo sat
+ * unused: `on --system` announced a downgrade to a user unit + linger, `update`
+ * hard-aborted "nothing was changed", and `persist` tore the user units down and
+ * reinstated them. CHANGELOG.md, docs/LOCAL-TIER.md and LocalServe.kt all
+ * document "pkexec, then sudo" as a chain.
+ *
+ * ⚠ AND IT STOPS AT A DISMISSED DIALOG. pkexec exits 126 when the person closed
+ * the prompt, and asking again with sudo would break the one rule this whole
+ * shape exists for - ONE elevation prompt, the way Windows asks for UAC once.
+ * Only a failure meaning NOTHING COULD ASK (exit 127, or a spawn error) moves on
+ * to the next candidate.
+ *
+ * `say` is called with each tool about to prompt, so every site keeps its own
+ * sentence.
+ */
+function elevateOnce(argv, say = () => {}, opts = {}) {
+  const tools = elevators(opts);
+  if (!tools.length) return { ok: false, tool: null, declined: false, reason: 'none' };
+  if (tools[0] === 'root') return { ok: true, tool: 'root', reason: 'root' };
+  let last = { ok: false, tool: null, status: null, error: null };
+  for (const tool of tools) {
+    say(tool);
+    const r = runElevated(tool, argv);
+    if (r.ok) return { ok: true, tool, reason: 'elevated' };
+    last = { ok: false, tool, status: r.status, error: r.error };
+    if (!(r.status === 127 || r.error)) return { ...last, declined: true, reason: 'declined' };
+  }
+  return { ...last, declined: false, reason: 'failed' };
+}
+
+/** How a failed elevation reads, in one place. */
+const elevationDetail = (r) => (r.error || `exit ${r.status}`);
+
+/**
+ * What `huginn local update` says when it could not become root.
+ *
+ * ⚠ IT NAMES THE ONE WORD THAT FIXES IT. The refusal used to end at "nothing was
+ * changed" and never mention sudo, although `sudo huginn local update` works -
+ * the whole block is gated on !isRoot(). An undiscoverable one-word workaround
+ * is, for the person reading it, no workaround.
+ */
+const updateElevationRefusal = (detail) =>
+  `refused: could not elevate (${detail}) — nothing was changed. This install runs as system units, so re-run it as root:  sudo huginn local update`;
 
 function runElevated(tool, argv) {
   const [cmd, args] = elevationArgv(tool, argv, {
@@ -980,14 +1034,13 @@ function narrowClass(det, cls) {
  */
 function resolveSystemInstall(flags, argv = process.argv.slice(2)) {
   if (process.platform !== 'linux' || !flags.system || isRoot()) return 'direct';
-  const tool = elevator();
-  if (tool && tool !== 'root') {
-    console.log(`  elevating once with ${tool} — the services install into /etc/systemd/system`);
-    const r = runElevated(tool, argv);
-    if (r.ok) return 'done';
-    console.log(`  ${tool} did not elevate (${r.error || `exit ${r.status}`}) — falling back to a user unit kept alive by linger`);
-  } else {
+  const r = elevateOnce(argv, (tool) =>
+    console.log(`  elevating once with ${tool} — the services install into /etc/systemd/system`));
+  if (r.ok) return 'done';
+  if (r.reason === 'none') {
     console.log('  no pkexec and no sudo here — falling back to a user unit kept alive by linger');
+  } else {
+    console.log(`  ${r.tool} did not elevate (${elevationDetail(r)}) — falling back to a user unit kept alive by linger`);
   }
   flags.system = false;
   flags.lingerFallback = true;
@@ -1435,15 +1488,14 @@ async function cmdUpdate(flags) {
   // the install took rather than failing at its last step with the new
   // runtime already on disk.
   if (conf.systemUnits && process.platform === 'linux' && !isRoot()) {
-    const tool = elevator();
-    if (tool && tool !== 'root') {
-      console.log(`  elevating once with ${tool} — this install runs as system units`);
-      const r = runElevated(tool, process.argv.slice(2));
-      if (r.ok) return;
-      console.error(`refused: ${tool} did not elevate (${r.error || `exit ${r.status}`}) — nothing was changed`);
-      process.exit(1);
+    const r = elevateOnce(process.argv.slice(2), (tool) =>
+      console.log(`  elevating once with ${tool} — this install runs as system units`));
+    if (r.ok) return;
+    if (r.reason === 'none') {
+      console.error('refused: this install runs as system units and there is no pkexec or sudo here — re-run as root');
+    } else {
+      console.error(updateElevationRefusal(`${r.tool}: ${elevationDetail(r)}`));
     }
-    console.error('refused: this install runs as system units and there is no pkexec or sudo here — re-run as root');
     process.exit(1);
   }
   installShimCopy();
@@ -1642,14 +1694,13 @@ async function cmdPersist(flags) {
   if (!isRoot()) {
     // The half that MUST be unprivileged, before the prompt.
     run(userHalf);
-    const tool = elevator();
-    if (tool && tool !== 'root') {
-      console.log(`  elevating once with ${tool} — the units move into /etc/systemd/system`);
-      const r = runElevated(tool, ['persist', ...(flags.yes ? ['--yes'] : [])]);
-      if (r.ok) return;
-      console.error(`  ${tool} did not elevate (${r.error || `exit ${r.status}`})`);
-    } else {
+    const r = elevateOnce(['persist', ...(flags.yes ? ['--yes'] : [])], (tool) =>
+      console.log(`  elevating once with ${tool} — the units move into /etc/systemd/system`));
+    if (r.ok) return;
+    if (r.reason === 'none') {
       console.error('  no pkexec and no sudo here');
+    } else {
+      console.error(`  ${r.tool} did not elevate (${elevationDetail(r)})`);
     }
     // Declined or unavailable: linger is the honest second-best, and the user
     // units were just taken down — put them back before offering it.
@@ -1788,6 +1839,7 @@ if (require.main === module) {
     // The persistence half, exported so it can be driven on a machine that has
     // neither systemd nor logind — see setRunner.
     setRunner, serviceUser, lingerState, enableLinger, persistence, persistenceLine,
-    persistenceVerdict, elevator, elevationArgv, unitFile, persistSteps, servicePlanLine,
+    persistenceVerdict, elevator, elevators, elevateOnce, updateElevationRefusal,
+    elevationArgv, unitFile, persistSteps, servicePlanLine,
   };
 }
