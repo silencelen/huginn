@@ -67,6 +67,11 @@ install_script "$HERE/bin/huginn-devices"      /usr/local/bin/huginn-devices
 # exists to catch.
 install_script "$HERE/bin/huginn-headroom"     /usr/local/bin/huginn-headroom
 install_script "$HERE/bin/huginn-archive"      /usr/local/bin/huginn-archive
+# `huginn projects` in both clients is only an ssh to THIS file, the same as
+# headroom above, so a host that skips it answers the verb with "command not
+# found" from a shell the operator never asked for. It is node rather than the
+# bash+python of its siblings because it POSTs JSON built out of argv.
+install_script "$HERE/bin/huginn-projects"     /usr/local/bin/huginn-projects
 install_script "$HERE/bin/huginn-claude-title" /usr/local/bin/huginn-claude-title
 
 # tmux config — installed for root by default; for a non-root login user, copy

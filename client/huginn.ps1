@@ -392,6 +392,12 @@ function huginn {
   huginn archive              what has been archived, and how to bring it back
   huginn revive <id|name>     bring an archived session back to life
   huginn headroom             usage left per account, what huginn moved or is holding, and why
+  huginn projects             clusters of sessions with roles, and who is waiting
+  huginn projects show <name> a project's members, one line each
+  huginn projects new <name>  start one (launches its lead session)  [--cwd DIR]
+  huginn projects spawn <project> <member>:<role> [--prompt "<first task>"|-]
+  huginn projects msg <project> <from> <to> <text>
+  huginn projects end <project> [--now]   (--now also ends its sessions)
   huginn -p "question"        one-shot headless query (reasoning + memory, read-only)
   huginn -y "task"            one-shot that may use tools (bash/files/web + memory)
   huginn usage [args]         Claude Code token/cost report (ccusage; default: daily)
@@ -501,6 +507,25 @@ function huginn {
     }
   } elseif ($args[0] -eq 'devices') {
     ssh -T $H huginn-devices
+  } elseif ($args[0] -eq 'projects' -or $args[0] -eq 'project') {
+    # A PROJECT is a cluster of sessions with roles and a lead that sizes the
+    # work. Same host-side renderer the bash client calls (see huginn.sh): one
+    # implementation of the whole grammar - list/show/new/spawn/msg/end - rather
+    # than the same grammar written twice, in two languages, and drifting.
+    #
+    # Single-quote marshalled like the headroom/archive branches: what follows
+    # the host name is parsed by a shell on the far side, so an argument typed
+    # here is remote shell input, and a first prompt is prose full of quotes and
+    # $. Guarded on the count so a bare `huginn projects` sends a BARE renderer
+    # call and not one empty argument. -T, not -tt: this output is piped and
+    # captured, and a tty on the far end would turn its newlines into CRLF.
+    $pjArgs = if ($args.Count -gt 1) { @($args[1..($args.Count - 1)]) } else { @() }
+    if ($pjArgs.Count) {
+      $pjStr = ($pjArgs | ForEach-Object { "'" + ($_ -replace "'", "'\''") + "'" }) -join ' '
+      ssh -T $H "huginn-projects $pjStr"
+    } else {
+      ssh -T $H huginn-projects
+    }
   } elseif ($args[0] -eq 'device') {
     # Plural is the host's list of machines; SINGULAR is the one you are typing
     # on - offering it to Huginn as a place to run work, the way the desktop
@@ -852,7 +877,7 @@ function _Huginn-Sessions {
 }
 Register-ArgumentCompleter -CommandName huginn, rclaude, rcc -ScriptBlock {
   param($word, $ast, $pos)
-  $cmds = 'list', 'status', 'rounds', 'headroom', 'devices', 'device', 'local', 'llm', 'solo', 'rename', 'kill', 'end', 'archive', 'revive', '-p', '-y', 'usage', 'cost', 'desktop', 'update', 'uninstall', 'version', 'help'
+  $cmds = 'list', 'status', 'rounds', 'headroom', 'devices', 'device', 'local', 'llm', 'projects', 'solo', 'rename', 'kill', 'end', 'archive', 'revive', '-p', '-y', 'usage', 'cost', 'desktop', 'update', 'uninstall', 'version', 'help'
   # tokens already typed after the command name, excluding the partial word being completed
   $typed = @($ast.CommandElements | Select-Object -Skip 1 | ForEach-Object { $_.ToString() })
   if ($word -and $typed.Count -ge 1) { $typed = @($typed | Select-Object -SkipLast 1) }

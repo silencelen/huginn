@@ -1,0 +1,584 @@
+#!/usr/bin/env node
+// huginn-projects — the clusters of sessions this host is running, and the four
+// things you do to one: start it, spawn its members, talk to them, end it.
+//
+// HOST-SIDE ON PURPOSE, like huginn-status, huginn-rounds, huginn-devices,
+// huginn-headroom and huginn-archive beside it. Both CLI clients (bash and
+// PowerShell) do nothing but `ssh -T <host> huginn-projects "$@"`, so the
+// rendering and the grammar exist ONCE. A client that formatted the JSON itself
+// would be a second implementation to keep in step, and the two would drift the
+// first time a field was added — which is exactly what already happened to the
+// two clients' version constants.
+//
+// It also means the token never leaves this machine: the clients reach appd by
+// ssh'ing here and reading /etc/huginn-appd/token locally. The token goes into
+// one header and is never echoed, not even on an error path — a renderer that
+// prints the request it failed to make is a renderer that prints the credential.
+//
+// WHY NODE, when rounds/devices are bash wrappers around `python3 -c` and
+// headroom is pure python: this one WRITES. `new`, `spawn`, `msg` and `end` build
+// JSON request bodies out of argv — a project name with an apostrophe in it, a
+// first prompt with newlines and quotes — and building JSON inside a
+// single-quoted `python3 -c` inside bash is the quoting trap huginn-rounds
+// already carries a warning about (one apostrophe ends the program). Node is
+// free here: claude is itself a Node program, so a host that can run a session
+// already has it, and `node --check` is a real syntax gate on this file.
+//
+// Exit codes, because a client or a script may branch on them:
+//   0  did it
+//   1  usage error, no token, no such project, appd answered but refused, or a
+//      spawn that only PARTLY started (see below — HTTP 200 is not "it worked")
+//   2  appd is not answering at all
+//   3  appd is answering but has no /v1/projects — an older daemon
+//
+// The split between 2 and 3 is the whole point of having a renderer at all: "not
+// answering" is a systemctl problem on this box, "too old" is a deploy that has
+// not happened, and printing "404" for the second sends somebody hunting a bug
+// in the client.
+
+'use strict';
+
+const fs = require('fs');
+
+const TOKEN_FILE = '/etc/huginn-appd/token';
+// Overridable for the CLI gate, which stands a stub daemon up on a spare port
+// and drives this renderer against it — the same knob huginn-headroom and
+// huginn-archive carry, and the reason those two have real end-to-end coverage
+// instead of a parse check.
+const BASE = (process.env.HUGINN_APPD_URL || 'http://127.0.0.1:8787').replace(/\/+$/, '');
+
+// ---------------------------------------------------------------- hygiene
+
+// ONE definition, used on every string that reaches the screen.
+//
+// A terminal executes some of what it is handed, and nearly every label below was
+// written by a model or by a person naming a session: a project name, a role, a
+// tmux title. huginn-rounds learned this the hard way — a title holding ESC [ 2K
+// CR erased its own line and reprinted, and the listing showed the wrong status
+// for a round with a DISK FULL headline. The daemon strips these at store time
+// too; both, deliberately, because an older daemon and a hand-edited store are
+// each real and the renderer is the last place that can still be sure.
+function clean(v, n) {
+  if (typeof v !== 'string') return '';
+  let out = '';
+  for (const ch of v) {
+    const c = ch.codePointAt(0);
+    out += (c < 32 || (c >= 127 && c < 160)) ? ' ' : ch;
+  }
+  out = out.trim().replace(/\s+/g, ' ');
+  return n ? out.slice(0, n) : out;
+}
+
+// Epoch SECONDS or MILLISECONDS -> how long ago. Both are accepted on purpose:
+// the project store writes seconds (`createdAt`, `updatedAt`) while most of the
+// daemon's other surfaces write ms, and a renderer that guesses wrong prints
+// either 1970 or "in 55 years" — the huginn-headroom `ago` bug, which made the
+// arbiter read as a daemon that never acted.
+function ago(ts) {
+  if (typeof ts !== 'number' || !(ts > 0)) return '';
+  const ms = ts < 1e11 ? ts * 1000 : ts;
+  const d = (Date.now() - ms) / 1000;
+  if (d < 60) return 'just now';
+  if (d < 3600) return `${Math.floor(d / 60)}m ago`;
+  if (d < 86400) return `${Math.floor(d / 3600)}h ago`;
+  return `${Math.floor(d / 86400)}d ago`;
+}
+
+// ⚠ fs.writeSync, NOT process.stdout.write, on every path that ends in
+// process.exit(). Node's stdout is ASYNCHRONOUS when it is a pipe on POSIX --
+// and a pipe is the normal case here, because both clients run this renderer as
+// `ssh -T <host> huginn-projects ...` and capture or page what comes back. A
+// buffered write followed by process.exit() is discarded, so a long listing or a
+// spawn that refused forty members would arrive truncated at whatever the pipe
+// happened to have taken. Writing the fd synchronously removes the race
+// entirely, and keeps the immediate exit (letting the process end naturally
+// instead would leave undici's keep-alive socket holding the loop).
+//
+// EAGAIN: libuv may have put the fd in non-blocking mode, in which case a short
+// write is normal and the only correct answer is to try the rest again. EPIPE:
+// the reader left (`| head`), and there is nothing left to say.
+function writeAll(fd, s) {
+  const buf = Buffer.from(s, 'utf8');
+  let off = 0;
+  while (off < buf.length) {
+    try {
+      off += fs.writeSync(fd, buf, off, buf.length - off);
+    } catch (e) {
+      if (e && e.code === 'EAGAIN') continue;
+      if (e && e.code === 'EPIPE') return;
+      throw e;
+    }
+  }
+}
+
+const out = (s) => writeAll(1, s);
+const err = (s) => writeAll(2, s);
+
+function die(msg, code, hint) {
+  err(`huginn-projects: ${msg}\n`);
+  if (hint) err(`                 ${hint}\n`);
+  process.exit(code);
+}
+
+// --------------------------------------------------------------- the wire
+
+function token() {
+  let t = '';
+  try { t = fs.readFileSync(TOKEN_FILE, 'utf8').trim(); } catch { t = ''; }
+  if (!t) die(`no appd token at ${TOKEN_FILE}`, 1);
+  return t;
+}
+
+// One caller for every route, so the 2-vs-3-vs-1 decision is made in one place.
+// `probe` marks the call that doubles as the feature probe (/v1/projects): a 404
+// there is an older daemon, while a 404 on a sub-route is a project that is gone.
+async function call(method, path, body, probe) {
+  const init = {
+    method,
+    headers: { Authorization: 'Bearer ' + token(), Accept: 'application/json' },
+    signal: AbortSignal.timeout(method === 'GET' ? 10000 : 30000),
+  };
+  if (body !== undefined) {
+    init.headers['Content-Type'] = 'application/json';
+    init.body = JSON.stringify(body);
+  }
+  let res;
+  try {
+    res = await fetch(BASE + path, init);
+  } catch {
+    // Deliberately not printing the exception: fetch puts the full request URL
+    // in some of them, and the header travels with the request object.
+    die(`huginn-appd is not answering on ${BASE}`, 2, '(systemctl status huginn-appd)');
+  }
+  const text = await res.text().catch(() => '');
+  if (res.ok) {
+    const json = parse(text);
+    // ⚠ A 200 THAT IS NOT JSON IS NOT AN EMPTY ANSWER. A truncated body, a proxy's
+    // error page, a daemon half-way through a restart -- all arrive as a
+    // successful status with something unparseable in it, and every renderer
+    // below would then quietly draw the empty state: "No projects." is a
+    // sentence somebody acts on, and it would be a lie. Only GETs are held to
+    // this; a write may legitimately answer with no body at all.
+    if (json === null && method === 'GET') die('appd answered something that is not JSON', 1);
+    return { text, json };
+  }
+
+  if (res.status === 404 && probe) {
+    die('this huginn-appd has no projects — deploy a newer daemon', 3,
+        '(huginn status shows its version; 3.4.0 is the first with /v1/projects)');
+  }
+  if (res.status === 401 || res.status === 403) {
+    die(`appd refused the host token (HTTP ${res.status})`, 1,
+        `(check ${TOKEN_FILE} against the running daemon)`);
+  }
+  // ⚠ THE DAEMON'S SENTENCE, VERBATIM, whenever it wrote one. The archive lane
+  // exists in this directory precisely because a refusal in prose ("answer the
+  // waiting question first") tells somebody what to do and a client-invented
+  // "spawn failed" tells them to guess. A spawn refused for headroom, a name
+  // already taken, an illegal status transition — all of those are prose.
+  const said = clean((parse(text) || {}).error, 300);
+  die(said || `appd answered HTTP ${res.status} for ${path}`, 1);
+}
+
+function parse(text) {
+  try { return JSON.parse(text); } catch { return null; }
+}
+
+// ------------------------------------------------------------- vocabulary
+
+// The same words the apps use, so a member does not mean one thing on a screen
+// and another in a terminal. `needsYou` wins over every state: a session sitting
+// on a permission dialog is "busy" to the process table and stopped to a person.
+function stateWords(m) {
+  if (!m || typeof m !== 'object') return '';
+  if (m.needsYou === true || m.waitingOnHuman === true) return 'NEEDS YOU';
+  const s = clean(m.state || m.status, 24).toLowerCase();
+  if (s === 'busy' || s === 'running' || s === 'working') return 'working';
+  if (s === 'attention' || s === 'waiting') return 'NEEDS YOU';
+  if (s === 'idle') return 'idle';
+  if (s === 'starting' || s === 'launching') return 'starting';
+  // Unknown words pass THROUGH rather than being flattened to "?": a daemon
+  // newer than this renderer will invent states, and showing the word it sent is
+  // more useful than hiding it. Empty means the daemon said nothing at all.
+  return s;
+}
+
+function needsYou(m) {
+  return !!(m && (m.needsYou === true || m.waitingOnHuman === true ||
+                  ['attention', 'waiting'].includes(clean(m.state || m.status, 24).toLowerCase())));
+}
+
+function membersOf(p) {
+  const rows = Array.isArray(p && p.members) ? p.members : [];
+  // A member that has ended is history, not a body count: a project reading
+  // "4 members" when three of them exited is the number somebody plans around.
+  return rows.filter((m) => m && !m.endedAt);
+}
+
+function memberName(m) {
+  return clean(m && (m.name || m.claudeName || m.tmuxName), 60);
+}
+
+// ⚠ TWO NAMESPACES, AND THE TERMINAL NEEDS THE OTHER ONE. A member's peer name
+// is `<slug>/<role>` — that is what `--name` got, what a lead addresses with
+// SendMessage, and what `msg` takes — but a slash is not a tmux name character,
+// so its tmux session is `<slug>-<role>`. Suggesting `huginn <peer name>` would
+// not attach anything: `huginn` would take the first path segment for a session
+// name and CREATE a new one beside the project. Prefer whatever the daemon
+// reported as the tmux name; the slash rewrite is the documented fallback.
+function attachName(m) {
+  return clean(m && m.tmuxName, 60) || memberName(m).replace(/\//g, '-');
+}
+
+// -------------------------------------------------------------- rendering
+
+function renderList(d) {
+  const rows = Array.isArray(d && d.projects) ? d.projects : [];
+  const out = [];
+  const p = (s) => out.push(s === undefined ? '' : s);
+  p('');
+  if (!rows.length) {
+    p('  No projects. A project is a cluster of sessions with roles and a lead');
+    p('  that sizes the work:  huginn projects new "<name>"');
+    p('');
+    return out.join('\n');
+  }
+  let waitingTotal = 0;
+  for (const r of rows) {
+    const mem = membersOf(r);
+    const waiting = mem.filter(needsYou).length + (needsYou(r.lead) ? 1 : 0);
+    waitingTotal += waiting;
+    const ended = typeof r.endedAt === 'number' && r.endedAt > 0;
+    // The mark answers the only question a list of clusters is asked: is any of
+    // this stopped waiting for me.
+    const mark = ended ? '-' : (waiting ? '!' : ' ');
+    const bits = [];
+    bits.push(mem.length ? `${mem.length} member${mem.length === 1 ? '' : 's'}` : 'no members yet');
+    if (waiting) bits.push(`${waiting} needs you`);
+    if (ended) {
+      bits.push(`ended ${ago(r.endedAt) || ''}`.trim());
+    } else {
+      const lead = stateWords(r.lead);
+      // The lead is not a member, so no member count ever shows it — and a dead
+      // lead is the usual reason a cluster has stopped proposing anything.
+      bits.push(lead ? `lead ${lead}` : 'no lead');
+    }
+    // LABELLED. A bare "2d ago" at the end of a line that already carries a
+    // lead state reads as "last active 2d ago", which is a different fact and
+    // the more alarming one.
+    const created = ago(r.createdAt);
+    if (created && !ended) bits.push(`created ${created}`);
+    p(`  ${mark} ${clean(r.name, 60) || clean(r.id, 8) || '?'}  .  ${bits.join('  .  ')}`);
+  }
+  p('');
+  p(`  ${rows.length} project${rows.length === 1 ? '' : 's'}` +
+    (waitingTotal ? `, ${waitingTotal} needs you` : ''));
+  p('  huginn projects show <name>   for the members');
+  p('');
+  return out.join('\n');
+}
+
+function renderShow(d) {
+  const proj = (d && d.project) || {};
+  // The dashboard's own members list is authoritative (it is the joined one);
+  // the project row's copy is the fallback for a daemon that sends only that.
+  const rows = (Array.isArray(d && d.members) && d.members.length) ? d.members : membersOf(proj);
+  const live = rows.filter((m) => m && !m.endedAt);
+  const out = [];
+  const p = (s) => out.push(s === undefined ? '' : s);
+  p('');
+  p(`  ${clean(proj.name, 60) || clean(proj.id, 8) || '?'}`);
+  const head = [];
+  if (clean(proj.cwd)) head.push(clean(proj.cwd, 120));
+  if (ago(proj.createdAt)) head.push(`created ${ago(proj.createdAt)}`);
+  if (ago(d && d.updatedAt)) head.push(`updated ${ago(d.updatedAt)}`);
+  if (typeof proj.endedAt === 'number' && proj.endedAt > 0) head.push(`ENDED ${ago(proj.endedAt)}`);
+  if (head.length) p(`  ${head.join('  .  ')}`);
+  p('');
+  if (!live.length) {
+    p('  No members yet. The lead proposes them; approve the proposal in the app,');
+    p('  or:  huginn projects spawn <project> <member>:<role> --prompt "<first task>"');
+    p('');
+    return out.join('\n');
+  }
+  const roleW = Math.min(16, Math.max(6, ...live.map((m) => clean(m.role, 16).length)));
+  const nameW = Math.min(34, Math.max(8, ...live.map((m) => memberName(m).length)));
+  let waiting = 0;
+  for (const m of live) {
+    if (needsYou(m)) waiting += 1;
+    const bits = [];
+    const st = stateWords(m);
+    if (st) bits.push(st);
+    if (typeof m.turns === 'number' && m.turns > 0) bits.push(`${m.turns} turn${m.turns === 1 ? '' : 's'}`);
+    if (ago(m.lastActivityTs)) bits.push(ago(m.lastActivityTs));
+    const title = clean(m.title, 48);
+    if (title) bits.push(title);
+    p(`  ${(clean(m.role, 16) || '?').padEnd(roleW)}  ${memberName(m).padEnd(nameW)}  ${bits.join('  .  ')}`);
+  }
+  p('');
+  p(`  ${live.length} member${live.length === 1 ? '' : 's'}` +
+    (waiting ? `, ${waiting} needs you` : ''));
+  // The names in the table are PEER names; the attach name is the same thing
+  // with the slash written as a dash. Said once, here, rather than left to be
+  // discovered by typing one and getting an empty new session.
+  const sample = attachName(live[0]);
+  p(`  huginn ${sample}   to attach one (a member's tmux session is its name with / as -)`);
+  p('');
+  return out.join('\n');
+}
+
+// ------------------------------------------------------------- resolution
+
+// A NAME is resolved HERE, not in the client, which would otherwise mean parsing
+// the list in bash AND in PowerShell — the duplication this whole directory of
+// renderers exists to avoid. Same rule as `huginn-archive revive <name>`.
+async function resolve(what) {
+  const { json } = await call('GET', '/v1/projects', undefined, true);
+  const rows = Array.isArray(json && json.projects) ? json.projects : [];
+  const want = String(what);
+  for (const r of rows) if (r && r.id === want) return r;
+  const lower = want.toLowerCase();
+  const byName = rows.filter((r) => r && clean(r.name).toLowerCase() === lower);
+  if (byName.length === 1) return byName[0];
+  // ⚠ AMBIGUITY IS NOT A COIN FLIP. `spawn` and `end` act on real sessions; two
+  // projects sharing a display name must stop the verb and be named, not have
+  // one of them picked because it sorted first.
+  if (byName.length > 1) {
+    die(`'${clean(want, 60)}' matches ${byName.length} projects — use the id`, 1,
+        byName.map((r) => `  ${clean(r.id, 36)}  ${clean(r.name, 60)}`).join('\n'));
+  }
+  const bySlug = rows.filter((r) => r && clean(r.slug).toLowerCase() === lower);
+  if (bySlug.length === 1) return bySlug[0];
+  die(`no project called '${clean(want, 60)}'`, 1, "(run 'huginn projects' for the list)");
+}
+
+// --------------------------------------------------------------- grammar
+
+// The two grammars the daemon documents, asserted HERE as well as there. A
+// malformed pair must never become a request: `spawn` starts real Claude
+// sessions, and a half-parsed one either spawns the wrong thing or leaves a
+// project half-born — and the caller cannot tell which from the outside.
+const NAME_RE = /^[A-Za-z0-9_][A-Za-z0-9_./-]{0,63}$/;
+const ROLE_RE = /^[a-z0-9][a-z0-9-]{0,15}$/;
+
+function pair(arg) {
+  const s = String(arg);
+  const parts = s.split(':');
+  if (parts.length !== 2 || !parts[0] || !parts[1]) {
+    die(`'${clean(s, 60)}' is not a member:role pair`, 1,
+        '(e.g. docs:docs, or lora-stick/docs:docs)');
+  }
+  const [name, role] = parts;
+  if (!NAME_RE.test(name)) {
+    die(`'${clean(name, 60)}' is not a member name in a member:role pair`, 1,
+        '(letters, digits, _ . - and /, up to 64)');
+  }
+  if (!ROLE_RE.test(role)) {
+    die(`'${clean(role, 60)}' is not a role in a member:role pair`, 1,
+        '(lowercase letters, digits and -, up to 16)');
+  }
+  return { name, role };
+}
+
+// ------------------------------------------------------------------ usage
+
+const USAGE = `
+  huginn-projects                          the projects on this host, one line each
+  huginn-projects list                     the same
+  huginn-projects show <id|name>           the project's members, and who is waiting
+  huginn-projects new <name> [--cwd DIR]   start one: launches its lead session
+  huginn-projects spawn <project> <member>:<role> [...] [--prompt TEXT|-]
+                                           add members and give them their first task
+  huginn-projects msg <project> <from> <to> <text>
+                                           one line from one member to another
+  huginn-projects end <project> [--now]    end the project  (--now also ends its sessions)
+
+  --json   print what the daemon said, unparsed, instead of rendering it
+  --help   this
+
+  A <project> is an id or the project's name; the name is resolved on this host.
+  --prompt - reads the first task from stdin, so a file can be piped in.
+`;
+
+// ------------------------------------------------------------------- main
+
+async function main() {
+  const argv = process.argv.slice(2);
+  if (argv.includes('--help') || argv.includes('-h') || argv.includes('help')) {
+    out(USAGE);
+    return;
+  }
+  // `--json` is positional-free: it may be typed anywhere, and it is pulled out
+  // before the verbs are parsed so no branch has to know about it.
+  const wantJson = argv.includes('--json');
+  const args = argv.filter((a) => a !== '--json');
+  const verb = args[0] && !args[0].startsWith('-') ? args[0] : 'list';
+  const rest = (verb === args[0]) ? args.slice(1) : args;
+
+  // Straight through, unparsed on purpose: a client or a script asking for
+  // --json wants what the daemon said, including fields this renderer is too old
+  // to know about.
+  const emit = (r, render) => {
+    if (wantJson) out(r.text.endsWith('\n') ? r.text : r.text + '\n');
+    else out(render() + '\n');
+  };
+
+  if (verb === 'list') {
+    if (rest.length) die(`unknown argument '${clean(rest[0], 40)}'`, 1, '(huginn-projects --help)');
+    const r = await call('GET', '/v1/projects', undefined, true);
+    emit(r, () => renderList(r.json || {}));
+    return;
+  }
+
+  if (verb === 'show') {
+    if (!rest.length) die('usage: huginn-projects show <id|name>', 1);
+    const proj = await resolve(rest[0]);
+    const r = await call('GET', `/v1/projects/${encodeURIComponent(proj.id)}/dashboard`);
+    emit(r, () => renderShow(r.json || { project: proj }));
+    return;
+  }
+
+  if (verb === 'new') {
+    let name = '';
+    let cwd;
+    for (let i = 0; i < rest.length; i += 1) {
+      if (rest[i] === '--cwd') { cwd = rest[i + 1]; i += 1; if (cwd === undefined) die('--cwd needs a directory', 1); }
+      else if (!name) name = rest[i];
+      else die(`unknown argument '${clean(rest[i], 40)}'`, 1, '(huginn-projects --help)');
+    }
+    if (!name) die('usage: huginn-projects new <name> [--cwd DIR]', 1);
+    // ⚠ NOT VALIDATED HERE BEYOND EMPTINESS. A display name is prose — the
+    // daemon owns `cleanName` and the slug it derives, and a second, stricter
+    // opinion in the renderer would refuse names the app accepts. It goes into a
+    // JSON body, never into a shell.
+    const body = { name };
+    if (cwd !== undefined) body.cwd = cwd;
+    const r = await call('POST', '/v1/projects', body, true);
+    emit(r, () => {
+      const p = (r.json && r.json.project) || r.json || {};
+      const lead = clean((p.lead && (p.lead.name || p.lead.tmuxName)) || '', 60);
+      return `\n  started ${clean(p.name, 60) || name}` +
+             (clean(p.cwd) ? `\n  in ${clean(p.cwd, 120)}` : '') +
+             (lead ? `\n  its lead session is ${lead} — attach it with:  huginn ${attachName(p.lead)}` : '') +
+             '\n  It sizes the work and proposes the members; approve them in the app,' +
+             '\n  or spawn them by hand:  huginn projects spawn ' +
+             `${JSON.stringify(clean(p.name, 60) || name)} <member>:<role> --prompt "..."\n`;
+    });
+    return;
+  }
+
+  if (verb === 'spawn') {
+    if (rest.length < 2) {
+      die('usage: huginn-projects spawn <project> <member>:<role> [...] [--prompt TEXT|-]', 1);
+    }
+    const target = rest[0];
+    const pairs = [];
+    let prompt;
+    for (let i = 1; i < rest.length; i += 1) {
+      if (rest[i] === '--prompt') {
+        const v = rest[i + 1]; i += 1;
+        if (v === undefined) die('--prompt needs text, or - to read stdin', 1);
+        // `-` reads stdin, so a first task written in a file (or by another
+        // program) survives with its newlines and quotes intact — the same
+        // hardening `huginn llm -` uses.
+        prompt = v === '-' ? fs.readFileSync(0, 'utf8') : v;
+      } else if (String(rest[i]).startsWith('--')) {
+        die(`unknown flag '${clean(rest[i], 40)}'`, 1, '(huginn-projects --help)');
+      } else {
+        pairs.push(pair(rest[i]));
+      }
+    }
+    if (!pairs.length) die('spawn needs at least one <member>:<role> pair', 1, '(e.g. docs:docs)');
+    // ⚠ EVERY PAIR IS PARSED BEFORE THE PROJECT IS EVEN LOOKED UP, so a typo in
+    // the third pair cannot spawn the first two. The refusal above has already
+    // exited by the time anything reaches the wire.
+    const proj = await resolve(target);
+    const members = pairs.map((m) => (prompt === undefined ? m : { ...m, prompt }));
+    const r = await call('POST', `/v1/projects/${encodeURIComponent(proj.id)}/spawn`, { members });
+    // ⚠ A PARTIAL SPAWN ANSWERS HTTP 200. The daemon keeps going after a member
+    // that could not start and reports {ok, spawned, failed} — so the status
+    // code says "I processed your request", not "your cluster exists". A caller
+    // that branched on the exit code (a script, a Makefile, `&&`) would take a
+    // half-born project for a finished one, which is the gate-pipe trap in
+    // another costume. The render says which members are missing; the exit code
+    // says that some are.
+    const partial = Array.isArray(r.json && r.json.failed) && r.json.failed.length > 0;
+    emit(r, () => {
+      const d = r.json || {};
+      const spawned = Array.isArray(d.spawned) ? d.spawned : [];
+      const failed = Array.isArray(d.failed) ? d.failed : [];
+      const lines = [''];
+      if (spawned.length) {
+        lines.push(`  spawned in ${clean(proj.name, 60)}:`);
+        for (const s of spawned) {
+          lines.push(`    ${clean(s.role, 16) || '?'}  ${memberName(s) || ''}`.trimEnd());
+        }
+      }
+      // ⚠ A PARTIAL SPAWN IS THE NORMAL FAILURE, not an exception: the daemon
+      // keeps going after a member that could not start, so the ones that did
+      // are real and the ones that did not have to be named. A summary line
+      // saying "spawned" would hide half a cluster.
+      if (failed.length) {
+        lines.push(`  DID NOT START:`);
+        for (const f of failed) {
+          lines.push(`    ${clean(f.role, 16) || '?'}  ${clean(f.reason, 120) || 'no reason given'}`);
+        }
+      }
+      if (!spawned.length && !failed.length) lines.push('  the daemon accepted it but named nothing');
+      lines.push('');
+      return lines.join('\n');
+    });
+    if (partial) process.exit(1);
+    return;
+  }
+
+  if (verb === 'msg') {
+    if (rest.length < 4) die('usage: huginn-projects msg <project> <from> <to> <text>', 1);
+    const [target, from, to] = rest;
+    // The text is everything left, joined: a message typed without quotes still
+    // arrives whole rather than as its first word.
+    const text = rest.slice(3).join(' ');
+    if (!NAME_RE.test(from)) die(`'${clean(from, 60)}' is not a member name`, 1);
+    if (!NAME_RE.test(to)) die(`'${clean(to, 60)}' is not a member name`, 1);
+    if (!text.trim()) die('msg needs something to say', 1);
+    const proj = await resolve(target);
+    const r = await call('POST', `/v1/projects/${encodeURIComponent(proj.id)}/message`,
+                         { from, to, text });
+    emit(r, () => `\n  ${clean(from, 60)} -> ${clean(to, 60)}: delivered` +
+                  '\n  (a peer message starts a turn in the receiver at once)\n');
+    return;
+  }
+
+  if (verb === 'end') {
+    if (!rest.length) die('usage: huginn-projects end <project> [--now]', 1);
+    let now = false;
+    for (const a of rest.slice(1)) {
+      if (a === '--now') now = true;
+      else die(`unknown argument '${clean(a, 40)}'`, 1, '(huginn-projects --help)');
+    }
+    const proj = await resolve(rest[0]);
+    const r = await call('DELETE',
+      `/v1/projects/${encodeURIComponent(proj.id)}${now ? '?end=1' : ''}`);
+    emit(r, () => {
+      const d = r.json || {};
+      const ended = Array.isArray(d.ended) ? d.ended.map((x) => clean(x, 60)).filter(Boolean) : [];
+      let s = `\n  ended ${clean(proj.name, 60)}`;
+      // Whether the SESSIONS went with it is the difference between a tidy-up
+      // and a dozen Claudes still burning tokens in tmux, so it is said out loud
+      // either way rather than inferred from the flag that was typed.
+      if (ended.length) s += `\n  its sessions were ended too: ${ended.join(', ')}`;
+      else s += '\n  its sessions are still running — end them with: huginn projects end <name> --now';
+      return s + '\n';
+    });
+    return;
+  }
+
+  die(`unknown verb '${clean(verb, 40)}'`, 1, '(huginn-projects --help)');
+}
+
+main().catch((e) => {
+  // A bug in this file, not a daemon fault: name it as such rather than blaming
+  // appd, and still never print a caught object that may be carrying a request.
+  err(`huginn-projects: internal error (${clean(e && e.name, 40) || 'error'})\n`);
+  process.exit(1);
+});
