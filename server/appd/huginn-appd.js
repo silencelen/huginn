@@ -1038,9 +1038,81 @@ const softEnds = new Map(); // session name -> pending record (lib/softend)
  * only for text that fits one command line. Anything longer is a 503 rather
  * than a message delivered in visibly mangled pieces.
  */
+/** One plain capture of a pane, as lines, or null when tmux cannot answer. */
+async function capturePaneLines(name) {
+  const cap = await run('tmux', ['capture-pane', '-p', '-t', `=${name}:`]);
+  if (cap.err) return null;
+  return cap.stdout.replace(/\n$/, '').split('\n');
+}
+
+/**
+ * Wait until the pane visibly holds what was just pasted into it.
+ *
+ * ⚠ THE ONE THING THAT MAKES THE ENTER LAND ON THE RIGHT SIDE OF A STARTUP.
+ * Measured against the real `claude` 2.1.258 (lib/typing.js, PASTE SETTLED):
+ * bytes pasted between ~2.0 s and ~0.85 s before the TUI paints sit in the pty,
+ * get rendered into the composer the instant it appears, and lose the `\r` that
+ * rode with them — text in the box, unsent, no transcript record. Waiting for
+ * the text to be ON SCREEN before pressing Enter puts the keystroke after the
+ * paint in every one of those runs, and the whole band submits.
+ *
+ * Bounded, and the bound is not a failure: a pane that does not echo (a shell
+ * with `stty -echo`, a pane tmux stopped answering for) gets its Enter anyway
+ * after PASTE_SETTLE_MS, because a person's message is delivered or it is an
+ * error, never quietly binned. It says so in the journal with the pane's own
+ * bottom rows, which is the only place a reader can see what was there instead.
+ */
+async function waitForPasteToLand(name, text, before) {
+  if (typing.pasteIndistinguishable(before, text)) {
+    return { landed: true, waitedMs: 0, lines: before };
+  }
+  const started = Date.now();
+  let lines = before;
+  for (;;) {
+    const got = await capturePaneLines(name);
+    if (got) {
+      lines = got;
+      if (typing.pasteLanded(got, text)) return { landed: true, waitedMs: Date.now() - started, lines: got };
+    }
+    if (Date.now() - started >= typing.PASTE_SETTLE_MS) {
+      return { landed: false, waitedMs: Date.now() - started, lines };
+    }
+    await sleep(typing.PASTE_SETTLE_POLL_MS);
+  }
+}
+
+/**
+ * After Enter: did the composer let go of the message?
+ *
+ * Only asked when the paste was SEEN to land — a paste nobody could see leaving
+ * a composer nobody could see is not news, and saying so on every shell send
+ * would bury the line that matters. `null` from `composerCleared` means this
+ * pane has no composer to speak about, which is the same non-answer.
+ */
+async function confirmSubmitted(name, text) {
+  const started = Date.now();
+  let lines = null;
+  for (;;) {
+    const got = await capturePaneLines(name);
+    if (got) {
+      lines = got;
+      const cleared = typing.composerCleared(got, text);
+      if (cleared !== false) return { ok: true, waitedMs: Date.now() - started, lines: got };
+    }
+    if (Date.now() - started >= typing.SUBMIT_CONFIRM_MS) {
+      return { ok: false, waitedMs: Date.now() - started, lines };
+    }
+    await sleep(typing.SUBMIT_CONFIRM_POLL_MS);
+  }
+}
+
 async function sendTextToPane(name, text, { submit = true } = {}) {
   const target = `=${name}:`;
   const buf = typing.bufferName();
+  // Read BEFORE the load, not after: the only use of this capture is to tell a
+  // pane that already showed this text from one that has just received it, and
+  // after the paste there is no telling.
+  const before = submit ? await capturePaneLines(name) : null;
   const lb = await runStdin('tmux', ['load-buffer', '-b', buf, '-'], text);
   if (!lb.err) {
     const pb = await run('tmux', ['paste-buffer', '-b', buf, '-p', '-d', '-t', target]);
@@ -1049,10 +1121,18 @@ async function sendTextToPane(name, text, { submit = true } = {}) {
       return { ok: false, code: 503, message: 'could not reach the pane buffer', stderr: pb.stderr };
     }
     if (!submit) return { ok: true, how: 'paste' };
+    const settle = await waitForPasteToLand(name, text, before);
+    if (!settle.landed) log(typing.pasteLostLogLine(name, settle.waitedMs, settle.lines));
     await sleep(PASTE_BEAT_MS);
     const en = await run('tmux', ['send-keys', '-t', target, 'Enter']);
     if (en.err) return { ok: false, code: 500, message: `tmux: ${(en.stderr || '').trim()}`, stderr: en.stderr };
-    return { ok: true, how: 'paste' };
+    let submitted = null;
+    if (settle.landed) {
+      const conf = await confirmSubmitted(name, text);
+      submitted = conf.ok;
+      if (!conf.ok) log(typing.submitStalledLogLine(name, conf.waitedMs, conf.lines));
+    }
+    return { ok: true, how: 'paste', settled: settle.landed, settleMs: settle.waitedMs, submitted };
   }
   log(`typing: load-buffer failed for ${name} (${(lb.stderr || '').trim().slice(0, 120)}); falling back to send-keys`);
   await run('tmux', ['delete-buffer', '-b', buf]);       // best effort: a partial load
