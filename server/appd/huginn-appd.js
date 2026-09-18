@@ -1274,6 +1274,30 @@ async function liveSessionIds() {
   return out;
 }
 
+/**
+ * Is this stderr tmux saying "there is nothing here", as opposed to tmux failing?
+ *
+ * ⚠ THE DISTINCTION #14 IS ABOUT. A failure to OBSERVE is not an observation:
+ * a fork that hit EAGAIN, a 10 s timeout on a loaded host, the server
+ * restarting — none of those mean the session is gone, and every one of them
+ * used to come out of `sessionExists` as `false`. `listSessions` learned this
+ * the hard way one function above (a transient hiccup announced every waiting
+ * question as answered and then re-announced it); this is the same split,
+ * applied to the per-session reads.
+ *
+ * `no such file or directory` is in the list because a host with no tmux server
+ * yet answers with it — leaving it out would turn "nothing is running" into a
+ * permanent 503.
+ */
+const TMUX_ABSENT_RE = /no server running|no such session|can't find session|no such file or directory/i;
+function tmuxSaysAbsent(stderr) { return TMUX_ABSENT_RE.test(String(stderr || '')); }
+
+/**
+ * Does this session exist? TRUE, FALSE, or NULL for "tmux did not answer".
+ *
+ * Null is not a third kind of no. Callers that gate a route turn it into a 503
+ * (`requireSession`); callers doing housekeeping treat it as "leave it alone".
+ */
 async function sessionExists(name) {
   // display-message, not has-session: the same single call answers "does it
   // exist" and "when was it created", and every state read downstream needs the
@@ -1291,12 +1315,38 @@ async function sessionExists(name) {
   //
   // So the returned NAME is the answer: tmux echoing back the session it actually
   // resolved is the only proof the target hit something, and it costs no extra call.
-  const { err, stdout } = await run('tmux',
+  const { err, stdout, stderr } = await run('tmux',
     ['display-message', '-p', '-t', `=${name}:`, '#{session_name}\t#{session_created}']);
+  // A failure tmux did not explain is a failure to observe, not an absence.
+  if (err && !tmuxSaysAbsent(stderr)) return null;
   const [found, created] = (err ? '' : (stdout || '')).trim().split('\t');
   if (found !== name) { sessionBorn.delete(name); return false; }
   rememberBorn(name, created);
   return true;
+}
+
+/**
+ * The session-gated route preamble: 404 when it is really gone, 503 when tmux
+ * would not say. Returns false once it has answered, so the caller returns.
+ */
+async function requireSession(res, name) {
+  const found = await sessionExists(name);
+  if (found === true) return true;
+  if (found === false) { sendErr(res, 404, 'no such session'); return false; }
+  sendErr(res, 503, 'tmux is not answering right now');
+  return false;
+}
+
+/**
+ * A pane read came back empty. Say whether the session is GONE or tmux merely
+ * did not answer — `captureScreen`/`peekHash` cannot tell the difference, and
+ * the screen poll's 404 is the one answer a client acts on irreversibly (both
+ * clients eject the viewer with "Session <name> ended").
+ */
+async function paneReadFailed(res, name) {
+  const found = await sessionExists(name);
+  if (found === false) return sendErr(res, 404, 'no such session');
+  return sendErr(res, 503, 'tmux is not answering right now');
 }
 
 // ---- pane sizing, as an expiring lease -------------------------------------
@@ -2092,7 +2142,10 @@ async function pumpQueue(name) {
     // so `GET /typing` could still report the failure — but nothing ever removed
     // it afterwards, so a long-lived daemon accumulated one row per session that
     // ever failed a delivery. A session tmux no longer has cannot be polled about.
-    else if (!q.lastError || !(await sessionExists(name))) {
+    // ⚠ `=== false`, NOT falsy. A tmux that did not answer says nothing about
+    // whether this session is gone, and dropping the queue on it would throw
+    // away a message that is merely waiting for a busy host (#14).
+    else if (!q.lastError || (await sessionExists(name)) === false) {
       sendQueues.delete(name);
       unmarkedHeld.delete(name);
     }
@@ -2299,7 +2352,14 @@ async function archiveAndEnd(name, opts = {}) {
  */
 async function hardEndSession(name) {
   const { err, stderr } = await run('tmux', ['kill-session', '-t', `=${name}`]);
-  if (err) return { err, stderr };
+  // ⚠ TWO FAILURES, ONE OF WHICH IS NOT A FAILURE (#14). tmux saying "no such
+  // session" means this name is already dead, which is the end state this
+  // function exists to reach — so the bookkeeping below MUST still run. Skipping
+  // it on any error is how a kill whose client was SIGTERM'd left a restore
+  // registry row that resurrected the session at the next reboot. Anything tmux
+  // did not explain is a real failure to act: report it and touch nothing.
+  if (err && !tmuxSaysAbsent(stderr)) return { err, stderr, absent: false };
+  const absent = !!err;
   clearSessionState(name);
   // Off the restore list: a session ended on purpose (a DELETE, or an auto
   // wind-down settling here) must not be resurrected by the next reboot. This is
@@ -2314,7 +2374,7 @@ async function hardEndSession(name) {
   // settled. Whatever just ended it got there first, so the intent is stale —
   // left behind it would archive the NEXT session to take this name.
   archiveIntents.delete(name);
-  return { err: null };
+  return { err: null, absent };
 }
 
 // ---- session registry reconcile + reboot restore ---------------------------
@@ -9105,8 +9165,11 @@ const server = http.createServer(async (req, res) => {
 
     if ((m = p.match(/^\/v1\/sessions\/([A-Za-z0-9_][A-Za-z0-9_.-]{0,49})$/)) && req.method === 'DELETE') {
       const name = m[1];
-      const { err, stderr } = await hardEndSession(name);
-      if (err) return sendErr(res, 404, `tmux: ${stderr.trim() || 'no such session'}`);
+      const { err, absent } = await hardEndSession(name);
+      // The kill was never attempted, or tmux would not say whether it worked:
+      // 404 here told a client the session had gone while it was still running.
+      if (err) return sendErr(res, 503, 'tmux is not answering right now');
+      if (absent) return sendErr(res, 404, 'no such session');
       return sendJson(res, 200, { ok: true });
     }
 
@@ -9127,7 +9190,7 @@ const server = http.createServer(async (req, res) => {
       const waitMs = Math.max(0, Math.min(30_000, Number(q.get('wait')) || 0));
       const deadline = Date.now() + waitMs;
       let scr = await captureScreen(name, opts);
-      if (!scr) return sendErr(res, 404, 'no such session');
+      if (!scr) return paneReadFailed(res, name);
       // While parked, poll with ONE cheap capture-pane rather than a full
       // captureScreen: the geometry cannot change without the content changing,
       // and re-running the resize/geometry calls on every tick cost three tmux
@@ -9141,10 +9204,10 @@ const server = http.createServer(async (req, res) => {
       while (known && scr.hash === known && Date.now() < deadline && !req.destroyed) {
         await sleep(tick++ < 24 ? 130 : 450);
         const peek = await peekHash(name);
-        if (peek === null) return sendErr(res, 404, 'no such session');
+        if (peek === null) return paneReadFailed(res, name);
         if (peek.hash !== known) {
           scr = await captureScreen(name, opts);
-          if (!scr) return sendErr(res, 404, 'no such session');
+          if (!scr) return paneReadFailed(res, name);
           break;
         }
       }
@@ -9173,7 +9236,7 @@ const server = http.createServer(async (req, res) => {
     // the primary way the app shows a session; the pane is for interaction.
     if ((m = p.match(/^\/v1\/sessions\/([A-Za-z0-9_][A-Za-z0-9_.-]{0,49})\/transcript$/)) && req.method === 'GET') {
       const name = m[1];
-      if (!(await sessionExists(name))) return sendErr(res, 404, 'no such session');
+      if (!(await requireSession(res, name))) return;
       const st = readSessionState(name);
       if (!st || !st.transcript) {
         return sendErr(res, 409, 'no transcript recorded for this session yet — the Claude hook fires on the first prompt');
@@ -9216,7 +9279,7 @@ const server = http.createServer(async (req, res) => {
     // --- suggested next messages, generated when a turn has just ended
     if ((m = p.match(/^\/v1\/sessions\/([A-Za-z0-9_][A-Za-z0-9_.-]{0,49})\/suggestions$/)) && req.method === 'GET') {
       const name = m[1];
-      if (!(await sessionExists(name))) return sendErr(res, 404, 'no such session');
+      if (!(await requireSession(res, name))) return;
       const st = readSessionState(name);
       if (!st || st.state === 'running' || !st.transcript) {
         return sendJson(res, 200, { suggestions: [], reason: 'running' });
@@ -9233,7 +9296,7 @@ const server = http.createServer(async (req, res) => {
     // a parked phone for — it is a page somebody opens on purpose.
     if ((m = p.match(/^\/v1\/sessions\/([A-Za-z0-9_][A-Za-z0-9_.-]{0,49})\/overview$/)) && req.method === 'GET') {
       const name = m[1];
-      if (!(await sessionExists(name))) return sendErr(res, 404, 'no such session');
+      if (!(await requireSession(res, name))) return;
       const st = readSessionState(name);
       if (!st || !st.sessionId || !st.transcript) {
         return sendErr(res, 409, 'no transcript recorded for this session yet — the Claude hook fires on the first prompt');
@@ -9250,7 +9313,7 @@ const server = http.createServer(async (req, res) => {
 
     if ((m = p.match(/^\/v1\/sessions\/([A-Za-z0-9_][A-Za-z0-9_.-]{0,49})\/graph$/)) && req.method === 'GET') {
       const name = m[1];
-      if (!(await sessionExists(name))) return sendErr(res, 404, 'no such session');
+      if (!(await requireSession(res, name))) return;
       const st = readSessionState(name);
       if (!st || !st.sessionId || !st.transcript) {
         return sendErr(res, 409, 'no transcript recorded for this session yet — the Claude hook fires on the first prompt');
@@ -9308,7 +9371,7 @@ const server = http.createServer(async (req, res) => {
      */
     if ((m = p.match(/^\/v1\/sessions\/([A-Za-z0-9_][A-Za-z0-9_.-]{0,49})\/headroom\/undo$/)) && req.method === 'POST') {
       const name = m[1];
-      if (!(await sessionExists(name))) return sendErr(res, 404, 'no such session');
+      if (!(await requireSession(res, name))) return;
       const st = readSessionState(name);
       if (!st || !st.sessionId) return sendErr(res, 409, 'this session has no Claude session id yet');
       const state = hstate();
@@ -9388,7 +9451,7 @@ const server = http.createServer(async (req, res) => {
 
     if ((m = p.match(/^\/v1\/sessions\/([A-Za-z0-9_][A-Za-z0-9_.-]{0,49})\/meta$/)) && req.method === 'POST') {
       const name = m[1];
-      if (!(await sessionExists(name))) return sendErr(res, 404, 'no such session');
+      if (!(await requireSession(res, name))) return;
       const st = readSessionState(name);
       // A plain shell, or a session whose first prompt has not landed yet. Said
       // in words rather than by writing the file under the tmux name, which is
@@ -9437,7 +9500,7 @@ const server = http.createServer(async (req, res) => {
     // worse answer to that question.
     if ((m = p.match(/^\/v1\/sessions\/([A-Za-z0-9_][A-Za-z0-9_.-]{0,49})\/agents$/)) && req.method === 'GET') {
       const name = m[1];
-      if (!(await sessionExists(name))) return sendErr(res, 404, 'no such session');
+      if (!(await requireSession(res, name))) return;
       const st = readSessionState(name);
       const dir = st ? agentsDirFor(st.transcript, st.sessionId) : null;
       const all = u.searchParams.get('all') === '1';
@@ -9482,7 +9545,7 @@ const server = http.createServer(async (req, res) => {
       const idm = raw ? /^(?:agent-)?([0-9a-f]{6,32})$/.exec(raw) : null;
       if (!idm) return sendErr(res, 400, 'invalid agent id');
       const agentId = `agent-${idm[1]}`;
-      if (!(await sessionExists(name))) return sendErr(res, 404, 'no such session');
+      if (!(await requireSession(res, name))) return;
       const st = readSessionState(name);
       if (!st || !st.transcript || !st.sessionId) {
         return sendErr(res, 409, 'no transcript recorded for this session yet — the Claude hook fires on the first prompt');
@@ -9595,7 +9658,7 @@ const server = http.createServer(async (req, res) => {
 
     if ((m = p.match(/^\/v1\/sessions\/([A-Za-z0-9_][A-Za-z0-9_.-]{0,49})\/keys$/)) && req.method === 'POST') {
       const name = m[1];
-      if (!(await sessionExists(name))) return sendErr(res, 404, 'no such session');
+      if (!(await requireSession(res, name))) return;
       /**
        * 512 KB, not the 256 KB default.
        *
@@ -9732,14 +9795,14 @@ const server = http.createServer(async (req, res) => {
      */
     if ((m = p.match(/^\/v1\/sessions\/([A-Za-z0-9_][A-Za-z0-9_.-]{0,49})\/typing$/)) && req.method === 'GET') {
       const name = m[1];
-      if (!(await sessionExists(name))) return sendErr(res, 404, 'no such session');
+      if (!(await requireSession(res, name))) return;
       return sendJson(res, 200, typing.typingSnapshot(sendQueues.get(name), Date.now()));
     }
 
     // --- soft end: type a wrap-up phrase, and (when auto) end on settle
     if ((m = p.match(/^\/v1\/sessions\/([A-Za-z0-9_][A-Za-z0-9_.-]{0,49})\/soft-end$/)) && req.method === 'POST') {
       const name = m[1];
-      if (!(await sessionExists(name))) return sendErr(res, 404, 'no such session');
+      if (!(await requireSession(res, name))) return;
       const body = JSON.parse(await readBody(req) || '{}');
       const st = readSessionState(name);
       // A question is already waiting: typing prose into a numbered prompt is
@@ -9775,7 +9838,7 @@ const server = http.createServer(async (req, res) => {
     // turn ends — and reported back as `queued` so the client can say so.
     if ((m = p.match(/^\/v1\/sessions\/([A-Za-z0-9_][A-Za-z0-9_.-]{0,49})\/compact$/)) && req.method === 'POST') {
       const name = m[1];
-      if (!(await sessionExists(name))) return sendErr(res, 404, 'no such session');
+      if (!(await requireSession(res, name))) return;
       const st = readSessionState(name);
       if (!st) {
         return sendErr(res, 409, 'no Claude state recorded for this session — it may be a plain shell');
@@ -9801,7 +9864,7 @@ const server = http.createServer(async (req, res) => {
     // answer, and a mismatch is refused rather than delivered hopefully.
     if ((m = p.match(/^\/v1\/sessions\/([A-Za-z0-9_][A-Za-z0-9_.-]{0,49})\/answer$/)) && req.method === 'POST') {
       const name = m[1];
-      if (!(await sessionExists(name))) return sendErr(res, 404, 'no such session');
+      if (!(await requireSession(res, name))) return;
       const body = JSON.parse(await readBody(req) || '{}');
       const option = Number(body.option);
       const isMulti = Array.isArray(body.options);
@@ -10432,7 +10495,7 @@ const server = http.createServer(async (req, res) => {
     // nothing to wrap up in.
     if ((m = p.match(/^\/v1\/sessions\/([A-Za-z0-9_][A-Za-z0-9_.-]{0,49})\/archive$/)) && req.method === 'POST') {
       const name = m[1];
-      if (!(await sessionExists(name))) return sendErr(res, 404, 'no such session');
+      if (!(await requireSession(res, name))) return;
       const body = JSON.parse(await readBody(req) || '{}');
       // The query string as well as the body: the CLI reaches this through a
       // bodyless `curl -X POST` over ssh (see server/bin/huginn-archive), and a
