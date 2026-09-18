@@ -64,7 +64,7 @@ grep -q 'scp .*\${H}:' client/huginn.ps1 && bad "huginn.ps1 still scps from \$HU
 echo "[3/8] both clients expose the same verbs (parity by verb)"
 # huginn.sh writes cases as alternations (`list|ls)`, `status|st)`), so match the
 # verb as a case ALTERNATIVE, not as a bare `verb)`.
-for v in end kill solo rename list status rounds headroom devices device local desktop usage update uninstall version help; do
+for v in end kill archive revive solo rename list status rounds headroom devices device local desktop usage update uninstall version help; do
   # Match the DISPATCH, not a mention: huginn.ps1 lists every verb in its
   # completion array too, so grepping "'$v'" passes even with the branch deleted
   # (verified by removing the `end` branch: still 2 matches, still green).
@@ -585,6 +585,166 @@ else
 fi
 kill "$HR_STUB" 2>/dev/null
 
+# What the two clients SEND for archive/revive. The verb is one ssh to the host
+# renderer, so a client that sends the wrong command line is the whole feature
+# broken — and a flag eaten on the way (an empty argv element, a lost array, a
+# `--now` swallowed by PowerShell's parameter binder) looks exactly like a
+# working verb from the caller's side.
+ART=$(mktemp -d)
+cat > "$ART/ssh" <<'STUB'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >> "$SSH_LOG"
+exit 0
+STUB
+chmod +x "$ART/ssh"
+ARSH=$( export SSH_LOG="$ART/log"; : > "$SSH_LOG"
+        ( export PATH="$ART:$PATH"
+          . "$PWD/client/huginn.sh" >/dev/null 2>&1
+          huginn archive; huginn archive testsess; huginn archive testsess --now
+          huginn revive testsess ) >/dev/null 2>&1
+        cat "$SSH_LOG" )
+grep -q -- '-T .* huginn-archive$' <<<"$ARSH" \
+  && ok "sh: bare archive ssh -T's the renderer with NO empty argument" \
+  || bad "sh: bare archive sent: $ARSH"
+grep -q -- "huginn-archive testsess" <<<"$ARSH" && grep -q -- "huginn-archive testsess --now" <<<"$ARSH" \
+  && ok "sh: archive carries the session name, and --now survives" || bad "sh: archive sent: $ARSH"
+grep -q -- "huginn-archive revive testsess" <<<"$ARSH" \
+  && ok "sh: revive reaches the renderer" || bad "sh: revive sent: $ARSH"
+# ⚠ A NAME REACHES A REMOTE SHELL. Both verbs refuse anything outside their
+# allow-list BEFORE it is interpolated, and this is the assertion that says so:
+# nothing at all may be sent.
+ARBAD=$( export SSH_LOG="$ART/logbad"; : > "$SSH_LOG"
+         ( export PATH="$ART:$PATH"
+           . "$PWD/client/huginn.sh" >/dev/null 2>&1
+           huginn archive 'a;rm -rf /'; huginn revive 'b$(whoami)' ) >/dev/null 2>&1
+         cat "$SSH_LOG" )
+[ -z "$ARBAD" ] && ok "sh: a shell-shaped name is refused before it is sent anywhere" \
+  || bad "sh: sent a refused name: $ARBAD"
+if command -v pwsh >/dev/null 2>&1; then
+  ARPS=$( export SSH_LOG="$ART/log2"; : > "$SSH_LOG"
+          PATH="$ART:$PATH" pwsh -NoProfile -Command \
+            ". $PWD/client/huginn.ps1; huginn archive; huginn archive testsess; huginn archive testsess --now; huginn revive testsess" >/dev/null 2>&1
+          cat "$SSH_LOG" )
+  grep -q -- '-T .* huginn-archive$' <<<"$ARPS" \
+    && ok "ps1: bare archive sends the same bare renderer call" || bad "ps1: bare archive sent: $ARPS"
+  grep -q -- "huginn-archive 'testsess' '--now'" <<<"$ARPS" \
+    && ok "ps1: --now survives the parameter binder" || bad "ps1: archive --now sent: $ARPS"
+  grep -q -- "huginn-archive revive 'testsess'" <<<"$ARPS" \
+    && ok "ps1: revive reaches the renderer" || bad "ps1: revive sent: $ARPS"
+else
+  skip "ps1 archive send check (no pwsh)"
+fi
+rm -rf "$ART"
+
+# The archive lane. Same rule as headroom — a verb promised in two shells must
+# have a renderer on the host and an install line for it — plus one this verb has
+# that no other does: the daemon REFUSES an archive in prose ("answer the waiting
+# question first, then archive the session"), and the whole reason the call is
+# made host-side is so that sentence survives. A client that printed its own
+# guess instead would look identical from the outside.
+bash -n server/bin/huginn-archive && ok "huginn-archive parses" || bad "huginn-archive does not parse"
+[ -x server/bin/huginn-archive ] && ok "huginn-archive is executable" \
+  || bad "huginn-archive is not executable — ssh would refuse to run it"
+grep -q 'install_script .*bin/huginn-archive' server/setup.sh \
+  && ok "setup.sh installs huginn-archive" \
+  || bad "setup.sh does not install huginn-archive — the verb would 'command not found'"
+# ⚠ ITS PYTHON LIVES INSIDE `python3 -c ' ... '`, so ONE apostrophe anywhere in it
+# closes the program and the shell starts parsing python. Nothing but reading the
+# real file can catch that — extracting the block to a .py to test it cannot.
+AP_BAD=$(awk "/python3 -c '/{inpy=1; next} /^' /{inpy=0} inpy" server/bin/huginn-archive | grep -c "'")
+[ "$AP_BAD" = 0 ] \
+  && ok "huginn-archive's embedded python carries no apostrophe" \
+  || bad "huginn-archive has $AP_BAD apostrophe line(s) inside python3 -c '...' — the program ends there"
+
+# End to end against a stub daemon, the way the headroom lane does it: this
+# renderer is the ONLY implementation of what an archive looks like, in either
+# client, so a parse check would be most of it untested.
+AR_PORT=18811
+python3 - "$AR_PORT" <<'ARSTUB' &
+import json, sys
+from http.server import BaseHTTPRequestHandler, HTTPServer
+ROWS = {"max": 64, "archives": [
+    {"id": "0123abcd-0000-4000-8000-00000000abcd", "tmuxName": "jtyper",
+     "title": "Archive session feature", "cwd": "/root/netplan", "model": "claude-opus-4-5",
+     "resumeCommand": "cd '/root/netplan' && claude --resume 0123abcd-0000-4000-8000-00000000abcd",
+     "archivedAt": 1, "endedAt": 2, "lastMessage": "suite green",
+     "transcriptBytes": 4096, "transcriptTruncated": False,
+     "revivedAt": None, "revivedAs": None, "live": False, "transcriptPresent": True},
+    {"id": "2222abcd-0000-4000-8000-00000000abcd", "tmuxName": "swept",
+     "title": "Old conversation", "cwd": "/root/netplan",
+     "resumeCommand": "cd '/root/netplan' && claude --resume 2222abcd-0000-4000-8000-00000000abcd",
+     "archivedAt": 1, "endedAt": 2, "lastMessage": "",
+     "transcriptBytes": 0, "transcriptTruncated": False,
+     "revivedAt": None, "revivedAs": None, "live": False, "transcriptPresent": False}]}
+class H(BaseHTTPRequestHandler):
+    def _send(self, code, obj):
+        b = json.dumps(obj).encode()
+        self.send_response(code); self.send_header("content-type", "application/json")
+        self.send_header("content-length", str(len(b))); self.end_headers(); self.wfile.write(b)
+    def do_GET(self):
+        self._send(200, ROWS) if self.path == "/v1/archive" else self._send(404, {"error": "no"})
+    def do_POST(self):
+        if self.path.endswith("/revive"):
+            self._send(201, {"ok": True, "name": "jtyper2", "resumed": True, "restoredTranscript": True})
+        elif "attention" in self.path:
+            self._send(409, {"error": "answer the waiting question first, then archive the session"})
+        else:
+            self._send(202, {"ok": True, "id": "x", "archived": False, "pending": True, "queued": True})
+    def log_message(self, *a): pass
+HTTPServer(("127.0.0.1", int(sys.argv[1])), H).serve_forever()
+ARSTUB
+AR_STUB=$!
+AR_UP=
+for _ in $(seq 1 40); do
+  curl -s -o /dev/null --max-time 1 "http://127.0.0.1:$AR_PORT/" && { AR_UP=1; break; }
+done
+if [ -z "$AR_UP" ]; then
+  # LOUDLY, never silently: a stub that never bound would make every assertion
+  # below fail for the wrong reason.
+  skip "archive renderer checks (nothing bound 127.0.0.1:$AR_PORT)"
+else
+  AR_LIST=$(HUGINN_APPD_URL="http://127.0.0.1:$AR_PORT" server/bin/huginn-archive 2>&1)
+  grep -q "claude --resume 0123abcd" <<<"$AR_LIST" \
+    && ok "the list prints the resume command, which is the whole point of the row" \
+    || bad "archive list had no resume command: $AR_LIST"
+  # ⚠ THE ONE THING A ROW MUST NOT BE QUIET ABOUT. Claude Code deletes its own
+  # transcripts after cleanupPeriodDays, and a revive past that comes back with
+  # amnesia — so a row with nothing kept has to say so before somebody tries.
+  grep -q "TRANSCRIPT GONE" <<<"$AR_LIST" \
+    && ok "a row whose transcript is gone says so instead of offering a hollow revive" \
+    || bad "archive list was silent about a missing transcript: $AR_LIST"
+  # THE REFUSAL, VERBATIM. This is why the call is made on the host at all.
+  AR_409=$(HUGINN_APPD_URL="http://127.0.0.1:$AR_PORT" server/bin/huginn-archive attention 2>&1)
+  grep -q "answer the waiting question first" <<<"$AR_409" \
+    && ok "a refused archive repeats the daemon's sentence, not a client guess" \
+    || bad "archive refusal was rewritten client-side: $AR_409"
+  AR_REV=$(HUGINN_APPD_URL="http://127.0.0.1:$AR_PORT" server/bin/huginn-archive revive jtyper 2>&1)
+  grep -q "revived as jtyper2" <<<"$AR_REV" \
+    && ok "revive resolves a NAME to an id host-side and reports the name it got" \
+    || bad "revive by name did not work: $AR_REV"
+  # A name nobody archived must not become a POST at all.
+  AR_MISS=$(HUGINN_APPD_URL="http://127.0.0.1:$AR_PORT" server/bin/huginn-archive revive nosuchname 2>&1)
+  grep -q "nothing archived under" <<<"$AR_MISS" \
+    && ok "reviving a name that was never archived says so" || bad "revive of an unknown name: $AR_MISS"
+fi
+AR_DEAD=$(HUGINN_APPD_URL="http://127.0.0.1:1" server/bin/huginn-archive 2>&1); AR_RC=$?
+[ "$AR_RC" = 2 ] \
+  && ok "archive exits 2 when nothing is answering (1 = appd is there but cannot serve it)" \
+  || bad "archive with no daemon exited $AR_RC: $AR_DEAD"
+# ⚠ AND IT NEVER PRINTS THE TOKEN, the same failure headroom was audited for: the
+# bearer is one variable away from every string these paths emit.
+if [ -r /etc/huginn-appd/token ]; then
+  AR_TOK=$(tr -d '[:space:]' < /etc/huginn-appd/token)
+  if [ -n "$AR_TOK" ] && grep -qF "$AR_TOK" <<<"${AR_LIST:-}${AR_DEAD}${AR_409:-}"; then
+    bad "huginn-archive printed the bearer token on a failure path"
+  else
+    ok "huginn-archive failure paths print no credential"
+  fi
+else
+  skip "archive token-leak check (no readable /etc/huginn-appd/token here)"
+fi
+kill "$AR_STUB" 2>/dev/null
+
 echo "[uninstall/8] the server first, and only huginn's own files"
 # WHY: `huginn uninstall` is the one verb that deletes a person's files, and the
 # two ways it can be wrong are both silent. It can leave the tokens (the whole
@@ -721,6 +881,7 @@ check_deployed server/bin/huginn-rounds  /usr/local/bin/huginn-rounds
 check_deployed server/bin/huginn-llm     /usr/local/bin/huginn-llm
 check_deployed server/bin/huginn-devices /usr/local/bin/huginn-devices
 check_deployed server/bin/huginn-headroom /usr/local/bin/huginn-headroom
+check_deployed server/bin/huginn-archive  /usr/local/bin/huginn-archive
 [ "$DRIFT" -eq 0 ] || echo "       (install the ones above, or devices keep receiving the old file)" >&2
 
 echo

@@ -66,6 +66,7 @@ install_script "$HERE/bin/huginn-devices"      /usr/local/bin/huginn-devices
 # not carry /usr/local/bin), which is the known drift [8/8] in test-client.sh
 # exists to catch.
 install_script "$HERE/bin/huginn-headroom"     /usr/local/bin/huginn-headroom
+install_script "$HERE/bin/huginn-archive"      /usr/local/bin/huginn-archive
 install_script "$HERE/bin/huginn-claude-title" /usr/local/bin/huginn-claude-title
 
 # tmux config — installed for root by default; for a non-root login user, copy
