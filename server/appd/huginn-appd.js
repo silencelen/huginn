@@ -11941,14 +11941,24 @@ const server = http.createServer(async (req, res) => {
             const n = Number(raw);
             return Number.isFinite(n) ? n : null;
           };
+          const until = num('until');
           const t = transcriptFromMessages(meta, {
             offset: num('offset'),
-            until: num('until'),
+            until,
             limit: Math.max(1, Math.min(800, Number(u.searchParams.get('limit')) || 400)),
           });
           return sendJson(res, 200, {
             ...t,
-            events: t.events.concat(queuedEvents(meta, t.events.length)),
+            // ⚠ THE LIVE TAIL ONLY (#33). This concatenated the whole pending
+            // queue onto EVERY page, so a backwards history page — `until=` —
+            // came back carrying the queued bubble as well, and a degenerate
+            // window (`until=-1`) returned a page that was nothing BUT the
+            // queued bubble. No shipped client pages this route yet and the chat
+            // screen has no "load earlier" control, so it is an API-contract bug
+            // rather than a live defect — but `prependTranscriptPage` concatenates
+            // without deduping, so it would duplicate mid-conversation bubbles the
+            // day chat paging is added, as it already exists for sessions and agents.
+            events: until == null ? t.events.concat(queuedEvents(meta, t.events.length)) : t.events,
             modelDisplay: formatModel(t.model),
             running: meta.running,
             mode: meta.mode,
@@ -11980,7 +11990,10 @@ const server = http.createServer(async (req, res) => {
         // the transcript was delivered (it only writes a prompt when it starts a
         // run), and anything genuinely waiting is in meta.pending.
         const delivered = t.events.map((e) => (e.queued ? { ...e, queued: false } : e));
-        const events = delivered.concat(queuedEvents(meta, delivered.length));
+        // Live tail only, same as the remote branch above (#33).
+        const events = untilNum == null
+          ? delivered.concat(queuedEvents(meta, delivered.length))
+          : delivered;
         return sendJson(res, 200, {
           ...t,
           events,
