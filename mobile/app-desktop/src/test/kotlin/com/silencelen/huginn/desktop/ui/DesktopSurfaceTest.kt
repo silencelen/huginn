@@ -5,6 +5,8 @@ import com.silencelen.huginn.data.QuickActions
 import com.silencelen.huginn.data.Session
 import com.silencelen.huginn.ui.QuickActionRules
 import com.silencelen.huginn.ui.SelectionAction
+import androidx.compose.ui.text.TextRange
+import androidx.compose.ui.text.input.TextFieldValue
 import com.silencelen.huginn.desktop.Screen
 import com.silencelen.huginn.desktop.Splitter
 import com.silencelen.huginn.desktop.View
@@ -898,6 +900,36 @@ class DesktopSurfaceTest {
     fun `the width rule is the render site's own number`() {
         assertTrue(padPanelFits(PANEL_MIN_WINDOW_DP.toFloat()))
         assertFalse(padPanelFits(PANEL_MIN_WINDOW_DP - 1f))
+    }
+
+    // ------------------------------------------------------------ composers
+
+    @Test
+    fun `shift-enter replaces the selection whichever way it was made`() {
+        // Compose's legacy TextFieldValue path genuinely emits start > end for
+        // Shift+Left, Shift+Home, Shift+Up and a right-to-left drag, and hands
+        // it to onValueChange UNNORMALISED. Splicing on .start/.end then
+        // overlaps rather than replaces: "hello world" with "world" selected
+        // backwards became "hello world\nworld", and Shift+Home from the end
+        // doubled the whole draft — persisted straight to the drafts book.
+        val forward = TextFieldValue("hello world", TextRange(6, 11))
+        val backward = TextFieldValue("hello world", TextRange(11, 6))
+        assertEquals("hello \n", newlineIn(forward).text)
+        assertEquals("hello \n", newlineIn(backward).text, "a reversed selection is the same selection")
+        assertEquals(TextRange(7), newlineIn(backward).selection)
+    }
+
+    @Test
+    fun `shift-enter with no selection splits at the cursor`() {
+        val out = newlineIn(TextFieldValue("hello world", TextRange(5)))
+        assertEquals("hello\n world", out.text)
+        assertEquals(TextRange(6), out.selection)
+    }
+
+    @Test
+    fun `shift-home from the end does not double the draft`() {
+        val out = newlineIn(TextFieldValue("rebuild the index", TextRange(17, 0)))
+        assertEquals("\n", out.text)
     }
 
     // ------------------------------------------------------- session names
