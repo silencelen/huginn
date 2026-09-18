@@ -400,7 +400,12 @@ test('a dashboard sums what is additive and unions what is not', () => {
   // ⚠ WALL TIME IS NOT SUMMED. Twelve sessions running an hour each took an
   // hour, not twelve.
   assert.equal((NOW + 60 - (NOW - 600)) * 1000, totals.wallMs);
-  assert.equal(4, rate.tokensPer10m, 'the rates add; the member with no overview contributes nothing');
+  // ⚠ PER MINUTE, MEASURED OVER TEN — the member rates are already per-minute,
+  // so adding them keeps the unit. The old spelling (`tokensPer10m`) read as
+  // "per 10 minutes" and was a factor of ten out to whoever believed it.
+  assert.equal(4, rate.tokensPerMin10, 'the rates add; the member with no overview contributes nothing');
+  assert.equal(2, rate.tokensPerMin60);
+  assert.deepEqual(['activeRecently', 'tokensPerMin10', 'tokensPerMin60'], Object.keys(rate).sort());
   assert.equal(true, rate.activeRecently);
 });
 
