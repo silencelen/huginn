@@ -26,8 +26,9 @@ const crypto = require('node:crypto');
 // the files CONCURRENTLY, so ranges must not overlap. The full table lives in
 // routes-typing.test.js; this file's block is the w3 edge-hunt reservation:
 //
-//   routes-session-names 11400 + pid%50  -> 11400-11449   (this file)
-const PORT = 11400 + (process.pid % 50);
+//   routes-session-names 11400 + pid%25  -> 11400-11424   (this file)
+//   routes-tmux-health   11425 + pid%25  -> 11425-11449
+const PORT = 11400 + (process.pid % 25);
 const BASE = `http://127.0.0.1:${PORT}`;
 require('./retry-fetch');
 const PFX = `nam-${process.pid}`;
