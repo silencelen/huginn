@@ -221,6 +221,35 @@ test('a STOP the session armed clears when the session resets, whatever the week
   assert.equal(red.STOP, true);
 });
 
+test('all three windows at once: a session spike arms and its own reset clears', () => {
+  // The shape the host actually reads — session, weekly_all and weekly_fable all
+  // present — walked across a tick sequence with the plan fed back in, because
+  // every clear-side case above passes ONE window and the dead band only exists
+  // when a second one is there to hold the gate down. 2026-09-18: a 5-hour spike
+  // to 82% armed STOP and a perfectly ordinary 67% week kept it armed after the
+  // window reset to 2%, holding every SubagentStart for the rest of the week.
+  const s = S();
+  const week = win(67);              // mid-band: too low to arm anything, high enough to have blocked the clear
+  const fable = win(40);
+  let cur = { STOP: null, 'STOP-FABLE': null };
+  const seen = [];
+  for (const pct of [10, 75, 82, 2, 5, 8]) {
+    const plan = h.sentinelPlan({ session: win(pct), weekly_all: week, weekly_fable: fable }, s, cur);
+    seen.push(plan.STOP);
+    // What the daemon carries forward: arm() is idempotent, so the reason stays
+    // the ARMING one for as long as the sentinel is up.
+    cur = {
+      STOP: plan.STOP
+        ? { since: 1, reason: (cur.STOP && cur.STOP.reason) || plan.reasons.STOP }
+        : null,
+      'STOP-FABLE': plan.STOP_FABLE ? { since: 1, reason: plan.reasons['STOP-FABLE'] } : null,
+    };
+  }
+  assert.deepEqual(seen, [false, true, true, false, false, false],
+    'the window that armed STOP reset; nothing else was ever over an arming threshold');
+  assert.equal(cur.STOP, null);
+});
+
 test('STOP-FABLE has its own threshold and its own hysteresis', () => {
   const s = S();
   assert.equal(h.sentinelPlan({ weekly_fable: win(88) }, s, {}).STOP_FABLE, true);
