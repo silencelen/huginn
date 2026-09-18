@@ -267,7 +267,7 @@ class MainActivity : FragmentActivity() {
 
     override fun onStart() {
         super.onStart()
-        if (AppLock.shouldLock(AppLock.enabledCache, AppLock.lastAwayAt, System.currentTimeMillis())) {
+        if (AppLock.shouldLock(AppLock.enabledCache, AppLock.lastAwayAt, android.os.SystemClock.elapsedRealtime())) {
             AppLock.lockedNow = true
             locked.value = true
         }
@@ -289,7 +289,7 @@ class MainActivity : FragmentActivity() {
         super.onStop()
         // Recorded only while unlocked: a lock screen left in the background must
         // not refresh its own grace period and let the app back in unchallenged.
-        if (!locked.value) AppLock.lastAwayAt = System.currentTimeMillis()
+        if (!locked.value) AppLock.lastAwayAt = android.os.SystemClock.elapsedRealtime()
     }
 }
 
