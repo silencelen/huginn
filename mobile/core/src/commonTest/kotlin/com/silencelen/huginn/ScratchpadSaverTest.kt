@@ -197,6 +197,41 @@ class ScratchpadSaverTest {
         assertEquals(ScratchpadSaver.State.SAVED, saver.state.value, "a conflict is an answer, not a failure")
     }
 
+    /**
+     * ⚠ AND WHEN IT DISCARDS SOMETHING, IT SAYS THAT INSTEAD. Losing a conflict
+     * gives up the unsent tail — that is what losing means, and re-holding the
+     * text to write it on the adopted rev would silently overwrite the other
+     * device's paragraph (invariant 2), which is the worse failure this module
+     * exists to prevent. What was wrong is that it was reported as "Updated on
+     * another device" beside the word "Saved", with no way for the reader to know
+     * that the sentence they had just watched themselves type was gone.
+     */
+    @Test
+    fun `a conflict that throws away newer text says so, and does not say 'Saved'`() = runTest {
+        val wire = Wire()
+        val saver = saver(wire)
+        saver.open(pad(rev = 1))
+        advanceUntilIdle()
+        wire.revs["p1"] = 5
+
+        wire.hold()
+        saver.set("from the phone")
+        advanceTimeBy(ScratchpadSaver.DEBOUNCE_MS + 1)
+        advanceUntilIdle()
+        // Typed while that write was in the air — this is the text that goes.
+        saver.set("from the phone, and this sentence as well")
+        advanceUntilIdle()
+        wire.release()
+        advanceUntilIdle()
+
+        assertEquals("from the desktop", saver.pad.value?.content, "the winner's copy is still what is true")
+        assertEquals(ScratchpadSaver.OTHER_DEVICE_LOST, saver.note.value)
+        assertEquals(
+            ScratchpadSaver.State.IDLE, saver.state.value,
+            "the state line must not read 'Saved' beside text that was thrown away",
+        )
+    }
+
     @Test
     fun `typing after a conflict saves against the adopted rev`() = runTest {
         val wire = Wire()
