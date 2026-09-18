@@ -55,6 +55,33 @@ test('with no endpoint reading it falls back to the clock in the text, and SAYS 
   assert.equal(new Date(s.resetsAt).toISOString(), '2026-08-31T10:10:00.000Z');
 });
 
+test('nextOccurrence rolls the CALENDAR day, so a DST night does not skip one', () => {
+  // The clock in a 429 has no date ("resets 3:10am (America/Los_Angeles)"), so
+  // the only thing it can mean is the next time that clock comes round. Adding
+  // 24 hours to find tomorrow is wrong twice a year, and both directions land on
+  // the one night nobody is awake to notice.
+  const at = (iso) => Date.parse(iso);
+  const of = (clock, now) => new Date(resume.nextOccurrence(clock, 'America/Los_Angeles', at(now))).toISOString();
+
+  // Spring-forward EVE: local 23:30 on 2027-03-13, the reset clock already past
+  // for today. The next 3:10am is tomorrow — but tomorrow is a 23-hour day, so
+  // `now + 24h` lands on the 15th and the stall's resetsAt reads a full day late.
+  assert.equal(of('3:10am', '2027-03-14T07:30:00Z'), '2027-03-14T10:10:00.000Z');
+  assert.equal(of('11:45pm', '2027-03-14T07:30:00Z'), '2027-03-14T07:45:00.000Z',
+    'a clock still ahead of `now` on the same local day is today, and is not rolled');
+
+  // FALL-BACK, the mirror: local 00:30 on 2026-11-01, a 25-hour day. `now + 24h`
+  // reads the SAME calendar date back, so the answer was 20 minutes in the PAST
+  // — breaking the one contract this function has.
+  const back = resume.nextOccurrence('12:10am', 'America/Los_Angeles', at('2026-11-01T07:30:00Z'));
+  assert.ok(back > at('2026-11-01T07:30:00Z'), `strictly in the future, got ${new Date(back).toISOString()}`);
+  assert.equal(new Date(back).toISOString(), '2026-11-02T08:10:00.000Z');
+
+  // An ordinary night still behaves exactly as before.
+  assert.equal(of('3:10am', '2026-08-31T06:02:03Z'), '2026-08-31T10:10:00.000Z');
+  assert.equal(of('3:10am', '2026-08-31T11:00:00Z'), '2026-09-01T10:10:00.000Z');
+});
+
 test('stallOf refuses anything that is not the 429', () => {
   const ok = RECORDS.slice(0, -1);                  // the normal turn, without the stall
   assert.equal(resume.stallOf(ok, {}, { now: STALL_AT }), null);
