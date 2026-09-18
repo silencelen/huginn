@@ -124,6 +124,47 @@ class HuginnClient(
          * has to give up faster than a real call would.
          */
         const val PROBE_TIMEOUT_MS: Long = 3_000
+
+        /**
+         * The daemon stamps its version on EVERY response, the 401 included, so a
+         * client can tell huginn from whatever else is listening on that address
+         * without sending it anything. Preferred over the body shape below when
+         * present; absent from daemons older than the release that added it,
+         * which is why the body rule still exists.
+         */
+        const val APPD_HEADER: String = "X-Huginn-Appd"
+
+        private val probeJson = Json { ignoreUnknownKeys = true }
+
+        /**
+         * Whether a probe reply PROVES the daemon rather than merely a socket.
+         *
+         * ⚠ THE BEARER FOLLOWS THE ROUTE. `probe` used to return true for any
+         * completed HTTP exchange — a NAS's login page, a printer, a captive
+         * portal, a 404 from whoever holds that DHCP lease today — and the
+         * resolver then made that host the active route, after which the very
+         * next call handed it a root-equivalent daemon token in cleartext. A
+         * live path is not the question; a live *huginn* is.
+         *
+         * Two markers, neither of which requires the token:
+         *
+         *  - [APPD_HEADER] on the response, whatever the status.
+         *  - a `401` whose body is the daemon's own JSON error shape. `/v1/ping`
+         *    is token-gated, so this is what an unauthenticated probe gets from
+         *    a real daemon, and the shape is narrow enough that a stranger's
+         *    plain-text or HTML 401 does not pass.
+         *
+         * Neither is unforgeable — an active attacker can copy both — and that is
+         * not what this is for: it closes the case where an ordinary host that
+         * happens to answer is PREFERRED over a live daemon. The durable fix is a
+         * token-proving challenge, which needs a daemon change.
+         */
+        fun provesDaemon(appdHeader: String?, status: Int, body: String): Boolean {
+            if (!appdHeader.isNullOrBlank()) return true
+            if (status != 401) return false
+            val error = runCatching { probeJson.decodeFromString<ApiError>(body).error }.getOrNull()
+            return !error.isNullOrBlank()
+        }
     }
 
     private val json = Json { ignoreUnknownKeys = true; explicitNulls = false }
@@ -232,25 +273,31 @@ class HuginnClient(
         call(path, HttpMethod.Post, tier, body)
 
     /**
-     * Is anything answering at [candidate]? Any HTTP reply counts — a 401 still
-     * proves the daemon is there, and the point is to find a live path, not to
-     * check the token. Unauthenticated for the same reason.
+     * Is HUGINN answering at [candidate]? Not "is anything answering" — see
+     * [provesDaemon] for why that question was the wrong one and what it cost.
+     *
+     * Unauthenticated, and deliberately: a probe that carried the bearer would
+     * disclose it to exactly the stranger this is trying to detect. `GET
+     * /v1/ping` without a token is a 401 from a real daemon, which is the
+     * cheapest thing it can be asked to say.
      *
      * Lives on the client rather than in the UI so route resolution works the
      * same way from the desktop client, and so this module owns every socket the
      * app opens.
      */
     suspend fun probe(candidate: String): Boolean = runCatching {
-        http.request {
-            method = HttpMethod.Head
-            url(withScheme(AppdRoutes.normalize(candidate)) + "/v1/sessions")
+        val resp = http.request {
+            method = HttpMethod.Get
+            url(withScheme(AppdRoutes.normalize(candidate)) + "/v1/ping")
             timeout {
                 connectTimeoutMillis = PROBE_TIMEOUT_MS
                 socketTimeoutMillis = PROBE_TIMEOUT_MS
                 requestTimeoutMillis = PROBE_TIMEOUT_MS
             }
         }
-        true
+        // Bounded by the probe timeouts above: a host that dribbles a body at a
+        // probe fails the same way one that never answers does.
+        provesDaemon(resp.headers[APPD_HEADER], resp.status.value, resp.bodyAsText())
     }.getOrDefault(false)
 
     // ------------------------------------------------------------ status

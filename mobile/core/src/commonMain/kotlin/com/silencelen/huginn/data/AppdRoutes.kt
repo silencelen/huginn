@@ -70,7 +70,14 @@ object AppdRoutes {
         return ALL.firstOrNull { normalize(it.url) == n }
     }
 
-    /** The seed pin for a built-in, with the label as its name and a stable id. */
+    /**
+     * The seed pin for a built-in, with the label as its name and a stable id.
+     *
+     * ⚠ `byHand = false`. Nobody typed these: they are literals compiled into a
+     * PUBLIC app, over plain http, and an install that upgrades gets both of them
+     * whether or not the machine they name is the one it talks to. That is
+     * exactly the shape [RouteResolver] refuses to adopt on its own.
+     */
     fun seed(route: AppdRoute, now: Long, order: Int = 0): PinnedRoute {
         val url = normalize(route.url)
         return PinnedRoute(
@@ -80,6 +87,7 @@ object AppdRoutes {
             kind = RouteGuard.kindOf(url),
             order = order,
             addedAt = now,
+            byHand = false,
         )
     }
 
@@ -165,8 +173,33 @@ object RouteResolver {
         /** The owner pinned this by hand; auto-switching was not consulted. */
         data class Pinned(val route: PinnedRoute) : Choice
 
-        /** The active route is still the right one. */
-        data class Stay(val route: PinnedRoute) : Choice
+        /**
+         * The client is not moving. [route] is where it stays — which is what
+         * every caller has always printed — and the subclass says why.
+         *
+         * ⚠ SEALED RATHER THAN A SECOND TOP-LEVEL CASE, on purpose. [Candidate]
+         * is new, and a brand-new `Choice` branch would break the exhaustive
+         * `when` in both shells; nested under [Stay] the shells keep compiling
+         * and keep doing the SAFE thing (nothing) until they grow a branch for
+         * it. A client that never learns about candidates is a client that never
+         * auto-adopts one, which is the whole point.
+         */
+        sealed class Stay(val route: PinnedRoute) : Choice {
+
+            /** The active route is still the right one. */
+            class Here(route: PinnedRoute) : Stay(route)
+
+            /**
+             * Another route answered, and this client will not take it without a
+             * person saying so: it is a plain-http address nobody added by hand
+             * (see [PinnedRoute.byHand]), and moving there means handing that
+             * host the daemon's bearer in cleartext.
+             *
+             * @param route where the connection stays in the meantime.
+             * @param candidate the route that answered, to be offered.
+             */
+            class Candidate(route: PinnedRoute, val candidate: PinnedRoute) : Stay(route)
+        }
 
         /** A different route answered and the active one did not. */
         data class Switched(val route: PinnedRoute) : Choice
@@ -188,8 +221,9 @@ object RouteResolver {
      *   route answered moments ago, so the dots refresh. It still cannot move
      *   off a healthy active route, which is what makes the answer *"Still on
      *   X"* rather than a surprise reconnect.
-     * @param probe true when anything answered at that URL. Any HTTP reply
-     *   counts, 401 included: it proves a daemon, not a token.
+     * @param probe true when HUGINN answered at that URL — not merely something.
+     *   See `HuginnClient.provesDaemon`: a probe that counts any HTTP responder
+     *   is how a stranger on the LAN gets preferred over a live daemon.
      */
     suspend fun resolve(
         book: RouteBook,
@@ -207,7 +241,7 @@ object RouteResolver {
         val activeWasFresh = active != null && isFresh(health[active.id], now)
         // The cheap half of the hysteresis: a route that answered seconds ago is
         // not re-interrogated on every start, only on a manual ask.
-        if (!force && active != null && activeWasFresh) return Outcome(Choice.Stay(active), health)
+        if (!force && active != null && activeWasFresh) return Outcome(Choice.Stay.Here(active), health)
 
         // ONE budget for the whole list, not one per route. Sequentially probing
         // eight pins at three seconds each is twenty-four seconds of a dead app
@@ -238,13 +272,26 @@ object RouteResolver {
         // A route that has just come back from the dead does NOT — after a real
         // outage the list settles back to the owner's preference.
         if (active != null && activeWasFresh && healthy.any { it.id == active.id }) {
-            return Outcome(Choice.Stay(active), next)
+            return Outcome(Choice.Stay.Here(active), next)
         }
 
         val pick = healthy.first()
-        val choice = if (pick.id == active?.id) Choice.Stay(pick) else Choice.Switched(pick)
-        return Outcome(choice, next)
+        if (pick.id == active?.id) return Outcome(Choice.Stay.Here(pick), next)
+        // ⚠ A MOVE HANDS THE NEXT REQUEST'S BEARER TO THAT HOST. Over https the
+        // host stops mattering (RouteGuard's rule); over plain http it matters
+        // entirely, and a route nobody typed — the built-ins an upgrade seeds,
+        // whose literals are in a public repo — is not evidence of anything. The
+        // connection stays where it is and the answer NAMES the route, for a
+        // person to adopt once.
+        if (!adoptable(pick)) {
+            return Outcome(Choice.Stay.Candidate(route = active ?: pick, candidate = pick), next)
+        }
+        return Outcome(Choice.Switched(pick), next)
     }
+
+    /** Whether this client may move to [route] without being told to. */
+    private fun adoptable(route: PinnedRoute): Boolean =
+        route.byHand || route.url.trim().startsWith("https://", ignoreCase = true)
 
     private fun isFresh(h: RouteHealth?, now: Long): Boolean =
         h != null && h.lastOkAt > 0 && now - h.lastOkAt in 0 until HYSTERESIS_MS

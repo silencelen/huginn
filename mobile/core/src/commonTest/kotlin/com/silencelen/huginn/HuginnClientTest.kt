@@ -238,12 +238,60 @@ class HuginnClientTest {
     fun `a route probe gives up faster than a real call`() = runTest {
         val answered = client { respond("", HttpStatusCode.Unauthorized) }
             .probe("http://192.168.2.117:8787")
-        // Any reply counts: a 401 still proves the daemon is there.
-        assertTrue(answered)
+        // A bare 401 with no body and no version header is NOT the daemon's
+        // refusal — anything can say 401.
+        assertFalse(answered)
         assertEquals(HuginnClient.PROBE_TIMEOUT_MS, timeouts?.connectTimeoutMillis)
         assertEquals(HuginnClient.PROBE_TIMEOUT_MS, timeouts?.socketTimeoutMillis)
-        assertEquals("HEAD", seen.last().method.value)
+        assertEquals("GET", seen.last().method.value)
         assertNull(seen.last().headers[HttpHeaders.Authorization], "probing must not depend on the token being right")
+    }
+
+    /**
+     * ⚠ A SOCKET IS NOT A DAEMON. The probe used to count ANY completed HTTP
+     * exchange as "huginn is here" — a NAS's 404 page, a printer, a captive
+     * portal — and the resolver then made that host the active route and sent it
+     * the root-equivalent bearer on the very next call. The reply has to prove
+     * the daemon: its own JSON refusal, or the version header it stamps on every
+     * response.
+     */
+    @Test
+    fun `a stranger answering HTTP is not a daemon`() = runTest {
+        assertFalse(
+            client { respond("<html>NAS login</html>", HttpStatusCode.OK) }.probe("http://192.168.2.117:8787"),
+            "a 200 of somebody else's web page is not huginn",
+        )
+        assertFalse(
+            client { respondError(HttpStatusCode.NotFound, "<html>404</html>") }.probe("http://192.168.2.117:8787"),
+            "nor is a 404 from whatever holds that address today",
+        )
+        assertFalse(
+            client { respondError(HttpStatusCode.Unauthorized, "Unauthorized") }.probe("http://192.168.2.117:8787"),
+            "nor a 401 in somebody else's words",
+        )
+    }
+
+    @Test
+    fun `the daemon's own refusal is what proves it`() = runTest {
+        val answered = client { respondError(HttpStatusCode.Unauthorized, """{"error":"unauthorized"}""") }
+            .probe("http://192.168.2.117:8787")
+        assertTrue(answered)
+        assertEquals("GET", seen.last().method.value)
+        assertEquals("http://192.168.2.117:8787/v1/ping", seen.last().url.toString())
+        assertNull(seen.last().headers[HttpHeaders.Authorization], "a probe must never carry the bearer")
+    }
+
+    @Test
+    fun `the version header proves the daemon whatever the status is`() = runTest {
+        val head = headersOf("X-Huginn-Appd", "3.3.0")
+        assertTrue(
+            client { respond("", HttpStatusCode.Unauthorized, head) }.probe("http://192.168.2.117:8787"),
+            "the header the daemon stamps on every response, 401 included",
+        )
+        assertTrue(
+            client { respond("""{"ok":true}""", HttpStatusCode.OK, head) }.probe("http://192.168.2.117:8787"),
+            "and an unauthenticated ping that answers 200 still identifies itself",
+        )
     }
 
     @Test
