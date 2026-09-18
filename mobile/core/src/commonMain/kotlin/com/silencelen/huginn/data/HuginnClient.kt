@@ -777,8 +777,21 @@ class HuginnClient(
         call("/v1/archive/$id", HttpMethod.Delete)
     }
 
-    suspend fun renameSession(from: String, to: String) {
-        post("/v1/sessions/$from/rename", body = jsonBody("name" to to))
+    /**
+     * @return the name the daemon ACTUALLY gave the session, which is not always
+     *   the one asked for: tmux silently rewrites '.' to '_' and still exits 0,
+     *   so the daemon reads the name back off tmux and answers with that. A
+     *   caller that assumed its own string won addressed a session that does not
+     *   exist — the desktop closed the pane it had just renamed and took the
+     *   unsent draft in it with it. Falls back to [to] for a daemon too old to
+     *   answer with a name.
+     */
+    suspend fun renameSession(from: String, to: String): String {
+        val body = post("/v1/sessions/$from/rename", body = jsonBody("name" to to))
+        val actual = runCatching {
+            json.decodeFromString<JsonObject>(body)["name"]?.jsonPrimitive?.content
+        }.getOrNull()
+        return actual?.takeIf { it.isNotBlank() } ?: to
     }
 
     /**
