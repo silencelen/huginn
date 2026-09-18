@@ -39,6 +39,11 @@ import com.silencelen.huginn.desktop.notify.NotifyRouter
 import com.silencelen.huginn.desktop.notify.Notifiers
 import com.silencelen.huginn.desktop.notify.SchemeRegistrar
 import com.silencelen.huginn.desktop.notify.SingleInstance
+import com.silencelen.huginn.desktop.setup.Autostart
+import com.silencelen.huginn.desktop.setup.FirstRun
+import com.silencelen.huginn.desktop.setup.SetupController
+import com.silencelen.huginn.desktop.setup.SetupHost
+import com.silencelen.huginn.desktop.ui.setup.DesktopSetupProbes
 import com.silencelen.huginn.desktop.notify.TargetKind
 import com.silencelen.huginn.desktop.tray.RavenMark
 import com.silencelen.huginn.desktop.tray.TrayIcons
@@ -134,6 +139,35 @@ fun main(args: Array<String>) {
     // live (a FallbackNotifier's health can change), so a backend going dark
     // releases the claim and the Telegram fallback resumes.
     store.canDeliver = { notifier.canDeliver() }
+
+    // ------------------------------------------------------------ first run
+    //
+    // BUILT HERE, before `application {}`, for the same reason the notifier and
+    // the single-instance guard are: a probe in flight — an enrolment, a
+    // local-AI install, a shortcut write — must survive the window being hidden
+    // to the tray. `LocalServeSection` learned that the hard way and this flow
+    // has strictly more to lose.
+    //
+    // The installer's answers are CONSUMED here, once: `first-run.json` sits
+    // beside `settings.json` because the NSIS uninstaller already has to find
+    // that directory, and because it is the one channel that survives a second
+    // launch and the silent self-update path. A missing or unreadable file means
+    // no pre-answers, which is exactly what the `.deb` produces — Linux meets
+    // the same flow, it simply arrives with nothing already ticked.
+    val setup = SetupController(settings, DesktopSetupProbes(store) { notifier })
+    SetupHost.install(setup)
+    setup.adopt(FirstRun.consume(configDir))
+    // Makes the disk agree with the flag. The startup entry can go without this
+    // app being told — an upgrade that replaced the launcher, a restored
+    // profile, the desktop's own Startup editor — and the flag is what the owner
+    // actually chose, so the flag wins. Off the launch path: on Windows it can
+    // spawn a PowerShell, and nothing about a shortcut is worth delaying a window.
+    scope.launch { runCatching { Autostart.reconcile(settings) } }
+    // ⚠ EMPTINESS IS THE SIGNAL, not a version number or a sentinel. Desktop
+    // 1.2.0 made a fresh install an empty route book plus `NO_ROUTE` precisely
+    // so a first run is distinguishable from an upgrade; an install that has
+    // finished the flow once is never raised again, however empty its book.
+    setup.open(routeBookEmpty = settings.routeBookNow().routes.isEmpty())
 
     // Window control, held OUTSIDE the composition because the tray, an
     // activation and a second launch all have to reach it — and two of those can
