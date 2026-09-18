@@ -337,6 +337,44 @@ test('an id that tries to escape held/ is stripped, not obeyed', async () => {
   assert.equal((await done).code, 0);
 });
 
+test('the command install-hooks writes carries the sentinel dir to the gate', async () => {
+  // The other half of #28, end to end: the CLI runs a hook's `command` through a
+  // shell with the daemon's environment nowhere in sight, so the ONLY way a
+  // relocated sentinel directory reaches the gate is the command string itself.
+  // Driven here exactly as the CLI would drive it — `sh -c <command>` with no
+  // HUGINN_HEADROOM_DIR in the environment — against a sentinel in the bound dir.
+  const { commandFor } = require('../install-hooks');
+  const dir = scratch();
+  fs.writeFileSync(path.join(dir, 'STOP'), '{"reason":"session 71%","since":1789459000}\n');
+
+  const env = { ...process.env, HUGINN_GATE_TIMEOUT: '60' };
+  delete env.HUGINN_HEADROOM_DIR;
+  const child = spawn('sh', ['-c', commandFor(GATE, dir)], { env, stdio: ['pipe', 'pipe', 'pipe'] });
+  child.stdin.end(JSON.stringify(SUBAGENT_PAYLOAD));
+  const done = new Promise((resolve) => child.on('exit', (code) => resolve(code)));
+
+  assert.ok(await waitFor(() => heldNames(dir).length),
+    'the bare command reads its compiled-in default and releases every spawn at waited=0');
+  fs.unlinkSync(path.join(dir, 'STOP'));
+  assert.equal(await done, 0);
+  assert.deepEqual(events(dir), ['start', 'release']);
+
+  // And the failure this exists to stop, with the mismatch made safe: a command
+  // bound to some OTHER directory ignores the armed sentinel entirely, releases
+  // at waited=0 and writes its log where nobody is looking. That is exactly what
+  // a bare command did under HUGINN_APPD_DATA — it is just that the directory it
+  // read was the compiled-in /var/lib/huginn-appd/headroom, which no test may
+  // touch (see the SAFETY note at the top).
+  fs.writeFileSync(path.join(dir, 'STOP'), '{"reason":"session 71%","since":1789459000}\n');
+  const elsewhere = scratch();
+  const stray = spawn('sh', ['-c', commandFor(GATE, elsewhere)], { env, stdio: ['pipe', 'pipe', 'pipe'] });
+  stray.stdin.end(JSON.stringify(SUBAGENT_PAYLOAD));
+  assert.equal(await new Promise((r) => stray.on('exit', r)), 0);
+  assert.deepEqual(heldNames(elsewhere), []);
+  assert.deepEqual(events(elsewhere), ['start', 'release']);
+  assert.match(logLines(elsewhere).at(-1) || '', / waited=0$/, 'it never waited for the armed sentinel');
+});
+
 test('the deployed copy has to be executable to be a hook at all', () => {
   assert.ok(fs.statSync(GATE).mode & 0o111, 'hooks/huginn-headroom-gate lost its exec bit');
 });
