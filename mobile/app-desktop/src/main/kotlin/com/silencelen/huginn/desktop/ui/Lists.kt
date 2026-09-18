@@ -26,7 +26,10 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -41,6 +44,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.silencelen.huginn.data.Chat
 import com.silencelen.huginn.ui.HostBadge
+import com.silencelen.huginn.data.ArchivedSession
 import com.silencelen.huginn.data.Session
 import com.silencelen.huginn.desktop.ui.common.ChatVerbs
 import com.silencelen.huginn.desktop.ui.common.DeskType
@@ -51,6 +55,7 @@ import com.silencelen.huginn.desktop.ui.common.PaneScrollbar
 import com.silencelen.huginn.desktop.ui.common.RowMenu
 import com.silencelen.huginn.desktop.ui.common.Selection
 import com.silencelen.huginn.desktop.ui.common.SessionVerbs
+import com.silencelen.huginn.ui.ArchivedSessionsSection
 import com.silencelen.huginn.ui.CompactingChip
 import com.silencelen.huginn.ui.ContextBadge
 import com.silencelen.huginn.desktop.ui.common.Space
@@ -221,7 +226,33 @@ fun SessionsList(
     onOpen: (String) -> Unit,
     onNew: () -> Unit,
     verbs: SessionVerbs,
+    /** Sessions ended on purpose, kept with the way back. */
+    archives: List<ArchivedSession> = emptyList(),
+    /** Null until the probe answers; false hides the section entirely. */
+    archiveAvailable: Boolean? = null,
+    onRevive: (ArchivedSession) -> Unit = {},
+    onCopyResume: (ArchivedSession) -> Unit = {},
+    onForgetArchive: (ArchivedSession) -> Unit = {},
 ) {
+    // Collapsed by default, and remembered only as long as the pane is: the
+    // archive is a footnote to this list. A section that came back open would
+    // push the live sessions off a short window every launch.
+    var archivesOpen by remember { mutableStateOf(false) }
+    val nowMs = remember(archives) { System.currentTimeMillis() }
+    val archived: @Composable () -> Unit = {
+        if (archiveAvailable == true) {
+            ArchivedSessionsSection(
+                rows = archives,
+                nowMs = nowMs,
+                expanded = archivesOpen,
+                onToggle = { archivesOpen = !archivesOpen },
+                onRevive = onRevive,
+                onCopyResume = onCopyResume,
+                onDelete = onForgetArchive,
+                onOpenLive = onOpen,
+            )
+        }
+    }
     Column(Modifier.fillMaxSize()) {
         ListHeader("Sessions", sessions.size, selection.size) {
             TextButton(onClick = onNew) { Text("+ New", style = DeskType.rail) }
@@ -233,6 +264,11 @@ fun SessionsList(
                     "New starts one on the host with Claude Code already running in it. " +
                         "Sessions started from a terminal appear here too.",
                 )
+                // ⚠ AND THE ARCHIVE STILL SHOWS. A host whose sessions have all
+                // been archived has an empty session list and is not an empty
+                // host; "No tmux sessions" with no way to reach what was put away
+                // is the one screen this feature could make worse.
+                archived()
             } else {
                 LoadingBlock("sessions")
             }
@@ -256,6 +292,9 @@ fun SessionsList(
                     }
                     if (i < sessions.lastIndex) RowRule()
                 }
+                // Under the live rows, inside the same scroller — the archive is
+                // where this list ENDS, not a second pane competing with it.
+                item { archived() }
             }
             PaneScrollbar(rows)
         }

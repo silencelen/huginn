@@ -1,0 +1,251 @@
+#!/usr/bin/env bash
+# huginn-archive — sessions ended on purpose, and the way back into them.
+#
+#   huginn-archive                    list them
+#   huginn-archive <session> [--now]  archive a live session
+#   huginn-archive revive <id|name>   bring one back
+#
+# HOST-SIDE ON PURPOSE, like huginn-status and huginn-rounds beside it. Both CLI
+# clients just run this over ssh, so the rendering exists ONCE and the bearer
+# token never leaves this machine.
+#
+# And for a third reason the other renderers do not have: the daemon REFUSES an
+# archive in prose ("answer the waiting question first, then archive the
+# session"), and a refusal is the most useful thing this verb ever says. A client
+# calling the route with `curl -sf` would throw that sentence away and print its
+# own guess instead — which is exactly what `huginn end` has to do today. So the
+# call is made here, where the body can be read and repeated verbatim.
+set -u
+
+TOKEN_FILE=/etc/huginn-appd/token
+[ -s "$TOKEN_FILE" ] || { echo "huginn-archive: no appd token at $TOKEN_FILE" >&2; exit 1; }
+TOKEN="$(cat "$TOKEN_FILE")"
+# Overridable for the CLI gate, which stands a stub daemon up on a spare port and
+# drives this renderer against it — the same knob huginn-headroom carries, and
+# the reason that renderer has real end-to-end coverage instead of a parse check.
+API="${HUGINN_APPD_URL:-http://127.0.0.1:8787}"
+
+down() {
+  echo "huginn-archive: huginn-appd is not answering on $API" >&2
+  echo "                (systemctl status huginn-appd)" >&2
+  exit 2
+}
+
+# Status and body, separately — the body of a 4xx is the message worth printing.
+# Written to a temp file rather than mixed into stdout: a JSON body can contain
+# anything, including the digits a trailing status code would be read as.
+BODY_FILE="$(mktemp)"
+trap 'rm -f "$BODY_FILE"' EXIT
+
+call() {  # call METHOD PATH -> prints the status, leaves the body in $BODY_FILE
+  curl -s -m 20 -o "$BODY_FILE" -w '%{http_code}' \
+    -X "$1" -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+    "$API$2" 2>/dev/null
+}
+
+# A 404 on the LIST is not an error, it is an older daemon — the same feature
+# probe both apps use, said in words rather than hidden. Anything else is a fault
+# worth naming.
+old_daemon() {
+  [ "$1" = "200" ] && return 0
+  if [ "$1" = "404" ]; then
+    echo "huginn-archive: this host is running a huginn-appd without the archive feature." >&2
+    echo "                (huginn status shows its version; 3.2.0 is the first with it)" >&2
+  else
+    echo "huginn-archive: the archive list answered $1" >&2
+  fi
+  exit 1
+}
+
+# The one field-picker, so a message is never printed through a `grep` that would
+# also match it inside a transcript preview. JSON in argv, not on stdin: this
+# script may itself be run from a pipe.
+field() { python3 -c '
+import json, sys
+try:
+    d = json.loads(sys.argv[1])
+except Exception:
+    print("")
+    sys.exit(0)
+v = d.get(sys.argv[2])
+print("" if v is None else str(v))
+' "$(cat "$BODY_FILE")" "$1"; }
+
+# --------------------------------------------------------------- revive
+
+if [ "${1:-}" = "revive" ]; then
+  WHAT="${2:-}"
+  [ -n "$WHAT" ] || { echo "usage: huginn-archive revive <id|name>" >&2; exit 1; }
+  case "$WHAT" in
+    *[!A-Za-z0-9_.-]*) echo "huginn-archive: '$WHAT' is not an archive id or a session name" >&2; exit 1 ;;
+  esac
+  # A NAME is resolved here rather than in the client, which would mean parsing
+  # the list in bash AND in PowerShell. Newest first, so a name that was archived
+  # more than once brings back the most recent of them — the one somebody means.
+  ST="$(call GET /v1/archive)" || down
+  old_daemon "$ST"
+  ID="$(python3 -c '
+import json, sys
+want = sys.argv[2]
+rows = json.loads(sys.argv[1]).get("archives", [])
+for r in rows:
+    if r.get("id") == want:
+        print(want); sys.exit(0)
+# Newest first is the order the daemon sends, so the first match is the latest.
+for r in rows:
+    if r.get("tmuxName") == want or (r.get("revivedAs") == want):
+        print(r.get("id")); sys.exit(0)
+print("")
+' "$(cat "$BODY_FILE")" "$WHAT")"
+  [ -n "$ID" ] || { echo "huginn-archive: nothing archived under '$WHAT' — run 'huginn archive' for the list" >&2; exit 1; }
+
+  ST="$(call POST "/v1/archive/$ID/revive")" || down
+  if [ "$ST" != "201" ]; then
+    MSG="$(field error)"
+    echo "huginn-archive: ${MSG:-could not revive that session (HTTP $ST)}" >&2
+    exit 1
+  fi
+  NAME="$(field name)"
+  RESUMED="$(field resumed)"
+  RESTORED="$(field restoredTranscript)"
+  printf '\n  revived as %s\n' "$NAME"
+  if [ "$RESUMED" = "True" ]; then
+    printf '  the conversation came back'
+    [ "$RESTORED" = "True" ] && printf ' (its transcript was restored from the archive)'
+    printf '\n'
+  else
+    # The failure this whole feature exists to prevent, said out loud rather than
+    # left to be discovered at the prompt.
+    printf '  WITHOUT its conversation — nothing resumable was left on disk, so this\n'
+    printf '  is a fresh Claude in the right directory.\n'
+  fi
+  printf '\n  attach it with:  huginn %s\n\n' "$NAME"
+  exit 0
+fi
+
+# -------------------------------------------------------------- archive one
+
+if [ -n "${1:-}" ]; then
+  NAME="$1"; shift
+  MODE=graceful
+  for a in "$@"; do
+    case "$a" in
+      --now) MODE=now ;;
+      *) echo "usage: huginn-archive [<session> [--now]] | revive <id|name>" >&2; exit 1 ;;
+    esac
+  done
+  case "$NAME" in
+    *[!A-Za-z0-9_.-]*) echo "huginn-archive: '$NAME' is not a session name" >&2; exit 1 ;;
+  esac
+  # mode in the QUERY STRING, not a body: both clients reach this over ssh and
+  # neither should have to build JSON to say one word.
+  ST="$(call POST "/v1/sessions/$NAME/archive?mode=$MODE")" || down
+  if [ "$ST" != "202" ]; then
+    MSG="$(field error)"
+    # ⚠ THE DAEMON'S SENTENCE, VERBATIM. "answer the waiting question first, then
+    # archive the session" tells somebody exactly what to do; a client-invented
+    # "archive failed" tells them to guess.
+    echo "huginn-archive: ${MSG:-could not archive '$NAME' (HTTP $ST)}" >&2
+    exit 1
+  fi
+  if [ "$(field archived)" = "True" ]; then
+    printf '\n  archived %s — it is ended, and on the list with its resume command.\n\n' "$NAME"
+  else
+    printf '\n  %s is winding down: sent the wrap-up phrase' "$NAME"
+    [ "$(field queued)" = "True" ] && printf ' (queued behind the turn it is in)'
+    printf '.\n  It will be archived the moment it settles. A question would cancel that.\n\n'
+  fi
+  exit 0
+fi
+
+# ------------------------------------------------------------------- list
+
+ST="$(call GET /v1/archive)" || down
+old_daemon "$ST"
+
+python3 -c '
+import json, sys, time
+
+d = json.loads(sys.argv[1])
+rows = d.get("archives", [])
+if not rows:
+    print()
+    print("  Nothing archived. Archiving a session ends it for good and keeps the")
+    print("  command that brings the conversation back:  huginn archive <name>")
+    print()
+    sys.exit(0)
+
+# ONE definition, used on every string that reaches the screen.
+#
+# A terminal executes some of what it is handed, and every label below was
+# written by a model: a title, a last message, a branch name read out of a repo.
+# The daemon strips these at store time too -- both, deliberately, because an
+# older daemon and a hand-edited store are each real and the renderer is the last
+# place that can still be sure.
+CTRL = dict.fromkeys(list(range(0, 32)) + list(range(127, 160)), 32)
+
+def clean(v, n=0):
+    if not isinstance(v, str):
+        return ""
+    out = " ".join(v.translate(CTRL).split())
+    return out[:n] if n else out
+
+def ago(sec):
+    if not sec:
+        return ""
+    t = time.time() - sec
+    if t < 60:    return "just now"
+    if t < 3600:  return "%dm ago" % (t // 60)
+    if t < 86400: return "%dh ago" % (t // 3600)
+    return "%dd ago" % (t // 86400)
+
+def size(n):
+    if not isinstance(n, int) or n <= 0:
+        return ""
+    if n < 1024:            return "%d B" % n
+    if n < 1024 * 1024:     return "%.1f KB" % (n / 1024.0)
+    return "%.1f MB" % (n / 1048576.0)
+
+print()
+for r in rows:
+    live = bool(r.get("live"))
+    kept = bool(r.get("transcriptPresent"))
+    # The mark answers the only question this list is asked: can I have it back.
+    mark = ">" if live else ("-" if kept else "!")
+    name = clean(r.get("tmuxName")) or clean(r.get("id"), 8)
+    print("  %-2s %s" % (mark, clean(r.get("title")) or name))
+
+    bits = [ago(r.get("archivedAt")) or "archived"]
+    if clean(r.get("tmuxName")) and clean(r.get("title")):
+        bits.append("was " + clean(r.get("tmuxName")))
+    if clean(r.get("cwd")):
+        bits.append(clean(r.get("cwd")))
+    if clean(r.get("model")):
+        bits.append(clean(r.get("model")))
+    print("       %s" % "  .  ".join(bits))
+
+    if live:
+        # Already back. Offering a revive here would start a SECOND Claude on one
+        # transcript, which is the one thing this list must not invite.
+        print("       running again as %s" % (clean(r.get("revivedAs")) or name))
+    elif not kept:
+        # The 21-day sweep took it and nothing was kept. Saying so is the whole
+        # difference between a revive that disappoints and one nobody attempts.
+        print("       TRANSCRIPT GONE -- a revive would start fresh here")
+    elif r.get("transcriptTruncated"):
+        print("       transcript kept, tail only (%s)" % (size(r.get("transcriptBytes")) or "clipped"))
+
+    last = clean(r.get("lastMessage"), 88)
+    if last:
+        print("       last: %s" % last)
+    cmd = clean(r.get("resumeCommand"), 160)
+    if cmd:
+        print("       %s" % cmd)
+    print()
+
+n = len(rows)
+cap = d.get("max")
+print("  %d archived%s" % (n, ("  (of %d kept; the oldest goes first)" % cap) if isinstance(cap, int) else ""))
+print("  huginn revive <name>   to bring one back")
+print()
+' "$(cat "$BODY_FILE")"
