@@ -212,7 +212,7 @@ class ProjectsViewsTest {
         // that has twelve authors.
         val d = ProjectDashboard(
             project = row(),
-            rate = ProjectRate(activeRecently = true, tokensPer10m = 1800, tokensPer60m = 1400),
+            rate = ProjectRate(activeRecently = true, tokensPerMin10 = 1800, tokensPerMin60 = 1400),
         )
         assertEquals("1800 tokens/min over 10m · 1400 over 60m", dashboardPace(d))
         assertNull(dashboardPace(ProjectDashboard(project = row())), "no rate, no line")
