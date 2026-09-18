@@ -355,6 +355,23 @@ function buildRecord(input = {}, now = Math.floor(Date.now() / 1000)) {
   };
 }
 
+/**
+ * A STORED row's `addedAt`, which is a fact about the row and never about the
+ * read.
+ *
+ * ⚠ ZERO, NOT `now`, WHEN THERE ISN'T ONE. `buildRecord` stamps the clock for a
+ * row being CREATED, which is the one moment that stamp is true; passing a
+ * stored row back through it with no `addedAt` re-stamped it on every read, so
+ * the row said "added 2 seconds ago" forever — and permanently, once the next
+ * write saved whichever value the last read had invented. Zero is the same
+ * sentinel the clients' own route book uses for a migrated pin: "it was already
+ * here". It is stable, and it is not a lie about when.
+ */
+function storedAddedAt(rec) {
+  const n = Number(rec && rec.addedAt);
+  return n > 0 ? n : 0;
+}
+
 /** The never-probed probe state. `up:null` is "no observation", not "down". */
 function noProbe() {
   return { up: null, lastProbeAt: 0, latencyMs: null, httpStatus: null };
@@ -375,7 +392,7 @@ function noProbe() {
 function consoleRow(rec, probe) {
   const p = probe || noProbe();
   return {
-    ...buildRecord(rec, rec && rec.addedAt),
+    ...buildRecord(rec, storedAddedAt(rec)),
     up: p.up === true || p.up === false ? p.up : null,
     lastProbeAt: Number(p.lastProbeAt) || 0,
     latencyMs: Number.isFinite(p.latencyMs) ? p.latencyMs : null,
@@ -701,7 +718,9 @@ function readEnvelope(dir, fs = nodeFs) {
     return {
       schema: Number(raw.schema) || SCHEMA,
       seeded: !!raw.seeded,
-      consoles: Array.isArray(raw.consoles) ? raw.consoles.map((c) => buildRecord(c, c && c.addedAt)) : [],
+      // Same rule on the way out of the file, which is where an invented
+      // timestamp would become permanent — the next write saves what load read.
+      consoles: Array.isArray(raw.consoles) ? raw.consoles.map((c) => buildRecord(c, storedAddedAt(c))) : [],
     };
   } catch {
     return null;
@@ -874,7 +893,7 @@ module.exports = {
   oneLine, cleanName, cleanKind, idFor,
   hostClass, parseConsoleUrl, urlProblem, normalizeUrl,
   nameProblem, notesProblem, idProblem,
-  buildRecord, noProbe, consoleRow, sortConsoles,
+  buildRecord, storedAddedAt, noProbe, consoleRow, sortConsoles,
   findConsole, add, patch, rename, setUrl, remove,
   seedConsoles, approvalCard,
   probeConsole, probeAll, probeChange,
