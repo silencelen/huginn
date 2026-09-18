@@ -429,5 +429,5 @@ object HeadroomNotices {
      * writes so the reconcile that follows a push does not say the same thing a
      * second time.
      */
-    const val PUSHED: String = " pushed"
+    const val PUSHED: String = "\u0000pushed"
 }

@@ -167,6 +167,9 @@ fun SettingsPhoneScreen(
             add = { name, url -> vm.addRoute(name, url) },
             setAutoSwitch = { vm.setAutoSwitch(it) },
             findLive = { vm.resolveRoute(force = true) },
+            // One Save, one book operation, and a refusal that stays on the form (edge #64/#81).
+            editBoth = { id, name, url -> vm.editRoute(id, name, url) },
+            clearNote = { vm.clearRouteNote() },
         )
     }
 
