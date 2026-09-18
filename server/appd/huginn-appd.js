@@ -489,22 +489,32 @@ function readSessionState(name) {
   let raw;
   try { raw = fs.readFileSync(path.join(STATE_DIR, name), 'utf8').trim(); } catch { return null; }
   if (!raw) return null;
-  let mtime = null;
-  try { mtime = Math.floor(fs.statSync(path.join(STATE_DIR, name)).mtimeMs / 1000); } catch { }
+  let mtimeMs = null;
+  try { mtimeMs = fs.statSync(path.join(STATE_DIR, name)).mtimeMs; } catch { }
   if (raw[0] === '{') {
     try {
       const o = JSON.parse(raw);
+      // ⚠ TWO UNITS, ONE FIELD. The hook's `ts` is MILLISECONDS since #7 and was
+      // SECONDS before it, and a file written by the older hook survives a deploy
+      // until that session's next event. `typing.stateStampMs` reads the unit off
+      // the magnitude; `stateSince` stays seconds because that is what the wire
+      // carries and what `ofThisIncarnation` compares against tmux's
+      // `#{session_created}`.
+      const stamp = typing.stateStampMs({ stateSince: o.ts }) ?? mtimeMs;
       return withPendingQuestion(name, ofThisIncarnation(name, {
         state: o.state || null,
         sessionId: o.sessionId || null,
         transcript: o.transcript || null,
         cwd: o.cwd || null,
-        stateSince: o.ts || mtime,
+        stateSince: stamp == null ? null : Math.floor(stamp / 1000),
+        stateSinceMs: stamp == null ? null : stamp,
       }));
     } catch { /* fall through to the bare-word path */ }
   }
   return withPendingQuestion(name, ofThisIncarnation(name,
-    { state: raw, sessionId: null, transcript: null, cwd: null, stateSince: mtime }));
+    { state: raw, sessionId: null, transcript: null, cwd: null,
+      stateSince: mtimeMs == null ? null : Math.floor(mtimeMs / 1000),
+      stateSinceMs: mtimeMs }));
 }
 
 /**
@@ -2472,7 +2482,7 @@ function askPendingSince(name, sessionId) {
 function withPendingQuestion(name, st) {
   if (!st || st.state !== 'running') return st;
   const since = askPendingSince(name, st.sessionId);
-  return since ? { ...st, state: 'attention', stateSince: since } : st;
+  return since ? { ...st, state: 'attention', stateSince: since, stateSinceMs: since * 1000 } : st;
 }
 
 /**

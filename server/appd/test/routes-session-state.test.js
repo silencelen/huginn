@@ -173,6 +173,26 @@ test('precondition: the fixture pane really is a question the daemon can read', 
   assert.equal(body.prompt.question, 'Pick a color?');
 });
 
+test('the hook\'s millisecond `ts` still reports seconds on the wire (#7)', async () => {
+  // The hook stamps `ts` in MILLISECONDS now, so the send queue can tell an idle
+  // written in the same wall-clock second as an enqueue from one written before
+  // it. `stateSince` is what the clients read and what the born-time guard
+  // compares against tmux's `#{session_created}` — both seconds — so the daemon
+  // normalises rather than passing the new unit through.
+  const name = mkAsking('msts');
+  const ms = Date.now();
+  writeState(name, 'idle', { sessionId: 'sid-msts', ts: ms });
+  const r = await row(name);
+  assert.ok(r, 'the session must be listed');
+  assert.equal(r.state, 'idle');
+  assert.equal(r.stateSince, Math.floor(ms / 1000), 'seconds, from a millisecond stamp');
+
+  // …and a state file an OLDER hook wrote, in seconds, is read unchanged.
+  const sec = now();
+  writeState(name, 'idle', { sessionId: 'sid-msts', ts: sec });
+  assert.equal((await row(name)).stateSince, sec);
+});
+
 test('a question on screen is "needs you", even while the state file says running', async () => {
   const name = mkAsking('ask');
   // Exactly what the hook leaves behind on the PreToolUse that RAISES the
