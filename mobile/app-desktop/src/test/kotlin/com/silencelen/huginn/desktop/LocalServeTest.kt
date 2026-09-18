@@ -4,6 +4,7 @@ import kotlinx.serialization.json.Json
 import java.io.File
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
@@ -221,7 +222,53 @@ class LocalServeTest {
         assertTrue("\"C:\\Program Files\\nodejs\\node.exe\"" in text, text)
         assertTrue("\"C:\\Users\\o o\\.huginn\\huginn-local\"" in text, text)
         assertTrue("> \"C:\\ProgramData\\huginn-local\\activate.log\" 2>&1" in text, text)
-        assertTrue(" on --yes --url http://100.64.0.1:8787 " in text, text)
+        assertTrue(" \"on\" \"--yes\" \"--url\" \"http://100.64.0.1:8787\" " in text, text)
         assertTrue(text.endsWith("\r\n"), "cmd files end their line DOS-style")
+    }
+
+    // ------------------------------------------- what a saved address can do
+    //
+    // The Base URL is typed by a person and only lightly shaped by RouteGuard,
+    // which accepts & | ^ % ( ) < > ' , ; over https. It is then interpolated
+    // into a .cmd that runs under a UAC grant, so every one of those characters
+    // is cmd.exe syntax executing as LocalSystem, laundered as the owner's own
+    // click. `&calc`, `|more` and `&reg` were all reproduced running as separate
+    // commands under wine's cmd from the shipped line.
+
+    @Test
+    fun `every argument is quoted, so a poisoned address cannot become a second command`() {
+        val text = LocalServe.elevatedCmdText(
+            "C:\\node.exe",
+            File("C:\\huginn-local"),
+            listOf("on", "--yes", "--url", "https://huginn.example&hostname"),
+            File("C:\\activate.log"),
+        )
+        assertTrue("\"https://huginn.example&hostname\"" in text, text)
+        // Not as its own command: nothing outside quotes may separate a line.
+        assertFalse(" &hostname" in text, text)
+    }
+
+    @Test
+    fun `an argument carrying cmd syntax that quoting cannot contain is refused`() {
+        // %VAR% expands INSIDE double quotes, ^ is cmd's own escape, and a
+        // double quote ends the quoting the fix depends on. None of the three
+        // can be made safe by wrapping, so the step refuses to be staged.
+        listOf(
+            "https://huginn.example%PATH%",
+            "https://huginn.example^",
+            "https://huginn.example\"",
+        ).forEach { poisoned ->
+            assertFalse(LocalServe.cmdArgSafe(poisoned), "must not be staged: $poisoned")
+            assertFailsWith<IllegalArgumentException>("must refuse: $poisoned") {
+                LocalServe.elevatedCmdText(
+                    "C:\\node.exe",
+                    File("C:\\huginn-local"),
+                    listOf("on", "--yes", "--url", poisoned),
+                    File("C:\\activate.log"),
+                )
+            }
+        }
+        assertTrue(LocalServe.cmdArgSafe("https://huginn.example:8787"))
+        assertTrue(LocalServe.cmdArgSafe("https://huginn.example&hostname"))
     }
 }
