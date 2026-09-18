@@ -356,6 +356,50 @@ function refusal(scope, locked, mode) {
 const engineRefusal = (mode, hasEngine) =>
   (mode === 'generate' && !hasEngine) ? POLICY.refusals.engine : null;
 
+/**
+ * Which engine a run is about, in the words a person reads and the config key
+ * they would edit.
+ *
+ * ⚠ BOTH TERMINAL HANDLERS HARDCODED "claude". A generate device's local-engine
+ * failure was therefore reported as a claude failure - naming a program the
+ * machine does not run, and telling somebody to set a config key ("claude")
+ * that this install does not have. The key is `llm`, and `huginn local on` is
+ * what writes it.
+ */
+const engineWords = (mode) => (mode === 'generate'
+  ? { label: 'the local engine', key: 'llm' }
+  : { label: 'claude', key: 'claude' });
+
+/**
+ * The most useful 200 characters of a child's stderr.
+ *
+ * ⚠ THE HEAD, NOT THE TAIL. The realistic failure here is a missing engine
+ * file, which node reports as `Error: Cannot find module '<path>'` followed by
+ * a stack - and `slice(-200)` kept the stack and threw away the one line that
+ * names the file. The first line mentioning an error wins, else the first line.
+ */
+function errWords(err) {
+  const t = String(err || '').trim();
+  if (!t) return '';
+  const lines = t.split('\n');
+  const named = lines.find((l) => /Cannot find module|Error:|error:/.test(l));
+  return String(named || lines[0] || t).trim().slice(0, 200);
+}
+
+/** "claude was not found on box (...)", or the local engine's version of it. */
+const notFoundText = (mode, host) => {
+  const e = engineWords(mode);
+  // ⚠ No config PATH in this string. It lands in a chat that syncs to a phone,
+  // and the private layout of a machine is not something to publish there to
+  // say a sentence that is just as actionable without it.
+  return `${e.label} was not found on ${host} (set "${e.key}" to its full path in this machine's huginn config)`;
+};
+/** "claude exited 1 on box: <the line that explains it>". */
+const exitedText = (mode, host, code, err) => {
+  const w = errWords(err);
+  return `${engineWords(mode).label} exited ${code} on ${host}${w ? `: ${w}` : ''}`;
+};
+
 /** How an engine path becomes a spawn: a .js engine runs through node. */
 const execFor = (engineBin, argv) =>
   String(engineBin).endsWith('.js')
@@ -654,7 +698,7 @@ function runWork(id, work, conf) {
     try {
       child = spawn(bin, fullArgv, { cwd, stdio: ['pipe', 'pipe', 'pipe'] });
     } catch (e) {
-      return finish(`could not start ${work.mode === 'generate' ? 'the local engine' : 'claude'} on ${conf.name}: ${e.message}`);
+      return finish(`could not start ${engineWords(work.mode).label} on ${conf.name}: ${e.message}`);
     }
 
     let pending = [];
@@ -675,7 +719,7 @@ function runWork(id, work, conf) {
       log(`${work.id}: no output in ${Math.round(STARTUP_SILENCE_MS / 1000)}s — stopping a wedged engine`);
       cancelled = true;
       try { child.kill(); } catch { /* already gone */ }
-      finish(`${work.mode === 'generate' ? 'the local engine' : 'claude'} produced no output for ${Math.round(STARTUP_SILENCE_MS / 1000)}s on ${conf.name} and was stopped — it looked wedged on startup (check auth, or a hung update)`);
+      finish(`${engineWords(work.mode).label} produced no output for ${Math.round(STARTUP_SILENCE_MS / 1000)}s on ${conf.name} and was stopped — it looked wedged on startup (check auth, or a hung update)`);
     }, STARTUP_SILENCE_MS);
 
     // So a Stop that arrives on the /beat channel — the one signal that still flows
@@ -719,26 +763,26 @@ function runWork(id, work, conf) {
     readline.createInterface({ input: child.stdout })
       .on('line', (line) => { sawOutput = true; if (line.trim()) pending.push(line); });
 
-    // Claude's stderr is not stream-json and the daemon cannot read it, but it is
-    // where a startup failure explains itself — so it is kept for the ending
-    // rather than discarded into the void.
-    let errTail = '';
-    child.stderr.on('data', (c) => { errTail = (errTail + c).slice(-500); });
+    // The engine's stderr is not stream-json and the daemon cannot read it, but
+    // it is where a startup failure explains itself — so it is kept for the
+    // ending rather than discarded into the void.
+    //
+    // ⚠ THE HEAD, NOT THE TAIL: see errWords. A missing engine file says so in
+    // its FIRST line and spends the rest on a stack, and the old `.slice(-500)`
+    // plus `.slice(-200)` kept exactly the half that names nothing.
+    let errHead = '';
+    child.stderr.on('data', (c) => { if (errHead.length < 2000) errHead += c; });
 
     child.on('error', (e) => finish(
       e.code === 'ENOENT'
         // The cwd was checked above, so ENOENT here really is the executable.
-        //
-        // ⚠ No config PATH in this string. It lands in a chat that syncs to a
-        // phone, and the private layout of a machine is not something to publish
-        // there to say a sentence that is just as actionable without it.
-        ? `claude was not found on ${conf.name} (set "claude" to its full path in this machine's huginn config)`
-        : `could not start claude on ${conf.name}: ${e.message}`));
+        ? notFoundText(work.mode, conf.name)
+        : `could not start ${engineWords(work.mode).label} on ${conf.name}: ${e.message}`));
 
     child.on('close', (code) => finish(
       cancelled ? `cancelled on ${conf.name}`
         : code === 0 ? null
-          : `claude exited ${code} on ${conf.name}${errTail ? `: ${errTail.trim().slice(-200)}` : ''}`,
+          : exitedText(work.mode, conf.name, code, errHead),
       code));
 
     // A spawn that failed leaves a stream whose 'error' would be unhandled, and an
@@ -1139,6 +1183,6 @@ if (require.main === module) {
   module.exports = {
     VERSION, MAX_LINE_BYTES, MAX_BATCH_BYTES,
     shrinkLine, batchLines, parseFlags, tokenOrWhy, cwdFor, effectiveScope, allows, argvFor,
-    engineRefusal, execFor,
+    engineRefusal, execFor, engineWords, errWords, notFoundText, exitedText, urlRefusal,
   };
 }

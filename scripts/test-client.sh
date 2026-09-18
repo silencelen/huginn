@@ -764,7 +764,11 @@ rm -rf "$TD2"
 # and reserved for the runs with the most to say.
 node -e '
 const assert = require("assert");
-const r = require("/opt/huginn/client/huginn-device");
+// ⚠ THE TREE'S runner, not /opt/huginn's. This line named the live clone by
+// absolute path, so a worktree or a branch ran its gate against whatever the
+// deployment happened to hold - a green that says nothing about the code in
+// front of you, which is the same lesson [8/8] exists for.
+const r = require(process.cwd() + "/client/huginn-device");
 const big = JSON.stringify({ type: "user", message: { content: [{ type: "tool_result", content: "x".repeat(400000) }] } });
 const small = r.shrinkLine(big);
 assert.ok(Buffer.byteLength(small) <= r.MAX_LINE_BYTES, "an oversized line was not shrunk");
@@ -780,6 +784,32 @@ assert.deepEqual(order, [...Array(12).keys()], "batching reordered the output");
 assert.deepEqual(r.batchLines([]), [], "an empty tail should post nothing");
 ' && ok "output is batched, shrunk in place, and kept in order" \
    || bad "the size rules do not hold — a large answer can still be lost"
+
+# ⚠ WHICH ENGINE FAILED. Both terminal handlers hardcoded "claude", so a
+# generate device's local-engine failure was reported as a claude failure -
+# naming a program the machine does not run, and telling somebody to set a
+# config key ("claude") this install does not have. The key is `llm`. And the
+# stderr kept was the TAIL, which on the realistic failure (a missing shim) is
+# node's stack, with the "Cannot find module '<path>'" headline thrown away.
+node -e '
+const assert = require("assert");
+const r = require(process.cwd() + "/client/huginn-device");
+const stack = "Error: Cannot find module \x27/srv/hl/bin/huginn-llm-shim.js\x27\n"
+  + "    at Module._resolveFilename (node:internal/modules/cjs/loader:1234:15)\n"
+  + "    at Module._load (node:internal/modules/cjs/loader:1056:27)\n"
+  + "    at wrapModuleLoad (node:internal/modules/cjs/loader:220:24)";
+const nf = r.notFoundText("generate", "kratos");
+assert.ok(/local engine/.test(nf), "a generate failure must not be about claude: " + nf);
+assert.ok(/"llm"/.test(nf), "it must name the config key this install has: " + nf);
+assert.ok(!/claude/.test(nf), "claude is not on this machine: " + nf);
+assert.ok(/claude/.test(r.notFoundText("ask", "kratos")), "an ask failure IS about claude");
+const ex = r.exitedText("generate", "kratos", 1, stack);
+assert.ok(!/claude/.test(ex), "a generate exit must not be about claude: " + ex);
+assert.ok(/Cannot find module/.test(ex) && /huginn-llm-shim/.test(ex),
+  "the HEAD of stderr names the file; the tail is stack: " + ex);
+assert.ok(/claude exited 1/.test(r.exitedText("ask", "kratos", 1, "")), "ask keeps its wording");
+' && ok "a local-engine failure is reported as a local-engine failure" \
+   || bad "the runner still blames claude for the local engine, or keeps the wrong end of stderr"
 
 echo "[local/8] the local tier: manager, shim, manifest, units"
 node --check client/huginn-local && ok "huginn-local parses" || bad "huginn-local does not parse"
