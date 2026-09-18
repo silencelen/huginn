@@ -942,6 +942,15 @@ else
   grep -q "docs" <<<"$PJ_SHOW" && grep -q "repo" <<<"$PJ_SHOW" && grep -q "NEEDS YOU" <<<"$PJ_SHOW" \
     && ok "show renders the member table with the waiting member marked" \
     || bad "projects show: $PJ_SHOW"
+  # ⚠ THE ATTACH NAME IS NOT THE PEER NAME. A member is `<slug>/<role>` to its
+  # peers and `<slug>-<role>` to tmux, because a slash is not a tmux name
+  # character. A hint that printed the peer name would not attach anything --
+  # `huginn lora-stick/repo` takes the first path segment for a session name and
+  # CREATES a new session beside the project, which is the worst possible answer
+  # to "how do I look at this one".
+  grep -q "huginn lora-stick-lead" <<<"$PJ_SHOW" && ! grep -q "huginn lora-stick/" <<<"$PJ_SHOW" \
+    && ok "show suggests the tmux session name, not the peer name, for attaching" \
+    || bad "show's attach hint: $(grep -F 'to attach' <<<"$PJ_SHOW")"
   # A NAME is resolved host-side, exactly like `huginn-archive revive <name>`,
   # so neither client has to parse the list in bash AND in PowerShell.
   PJ_MISS2=$(HUGINN_APPD_URL="http://127.0.0.1:$PJ_PORT" server/bin/huginn-projects show nosuchproject 2>&1)
