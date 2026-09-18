@@ -8,8 +8,10 @@ import com.silencelen.huginn.data.Headroom
 import com.silencelen.huginn.data.Plan
 import com.silencelen.huginn.data.Project
 import com.silencelen.huginn.data.ProjectDashboard
-import com.silencelen.huginn.data.ProjectDetailExtras
+import com.silencelen.huginn.data.ProjectDetail
 import com.silencelen.huginn.data.ProjectList
+import com.silencelen.huginn.data.ProjectManifest
+import com.silencelen.huginn.data.ProjectRefusal
 import com.silencelen.huginn.data.RoundList
 import com.silencelen.huginn.data.SavedAccounts
 import com.silencelen.huginn.data.Screen
@@ -25,6 +27,9 @@ import com.silencelen.huginn.ui.PlanFormat
 import com.silencelen.huginn.ui.ProjectRules
 import com.silencelen.huginn.ui.StreamPicker
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
@@ -34,6 +39,7 @@ import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import java.io.File
 
 /**
  * Decodes real huginn-appd 2.0.0 responses.
@@ -564,9 +570,23 @@ class ApiContractTest {
         val rows = json.parseToJsonElement(fixture("projects.json"))
             .jsonObject["projects"]!!.jsonArray.map { it.jsonObject }
         listOf("id", "name", "slug", "kind", "status", "cwd", "memberCount", "alive", "busy", "waiting",
-            "lead", "manifestRev", "manifestSummary", "untaggedSeen", "endedReason",
+            "lead", "manifestRev", "spawnedRev", "manifestSummary", "untaggedSeen", "endedReason",
             "createdAt", "updatedAt", "rev")
             .forEach { key -> rows.forEach { assertTrue("every project row carries $key", key in it) } }
+
+        // ⚠ THE REV THAT WAS CARRIED OUT, BESIDE THE ONE BEING PROPOSED.
+        // `manifestRev > spawnedRev` is "this proposal is still waiting for an
+        // answer", which a list could otherwise only learn by GETting every
+        // project — and without it a row redrawn from a stale notification offers
+        // Spawn on a cluster that is already running.
+        val proposal = list.projects.first { it.slug == "lora-stick" }
+        assertEquals(2, proposal.manifestRev)
+        assertEquals(0, proposal.spawnedRev)
+        assertFalse("rev 2 has never been spawned", ProjectRules.alreadySpawned(proposal))
+        val running = list.projects.first { it.slug == "statusflap" }
+        assertEquals(1, running.manifestRev)
+        assertEquals(1, running.spawnedRev)
+        assertTrue("rev 1 is already running", ProjectRules.alreadySpawned(running))
 
         // Seconds, not millis. Both directions: too small for a millisecond clock,
         // too large to be anything but an epoch.
@@ -578,9 +598,18 @@ class ApiContractTest {
     @Test
     fun `one project decodes as the record, the row and the live join together`() {
         val text = fixture("project-detail.json")
-        val p = json.decodeFromString<Project>(text)
-        val extras = json.decodeFromString<ProjectDetailExtras>(text)
+        // ⚠ AN ENVELOPE, NOT A SPREAD RECORD, AND IT IS ONE DECODE. The route used
+        // to spread the project into the top level; the day a project grew a field
+        // called `row` or `live` that spread would have overwritten the daemon's
+        // own with nothing to see in the diff.
+        val detail = json.decodeFromString<ProjectDetail>(text)
+        val p = detail.project
 
+        assertEquals(
+            "three keys, and nothing of the record beside them",
+            setOf("project", "row", "live"),
+            json.parseToJsonElement(text).jsonObject.keys,
+        )
         assertEquals("Status page flap", p.name)
         assertEquals("statusflap", p.slug)
         assertEquals("active", p.status)
@@ -608,28 +637,31 @@ class ApiContractTest {
         assertEquals("the host's own defaults", ProjectRules.sessionWords(m.sessions[1]))
         assertTrue("this rev is already running", ProjectRules.alreadySpawned(m))
 
-        // ⚠⚠ THE TAG IS ON THE WIRE AND IS DELIBERATELY NOT MODELLED. It is the
-        // lead's anti-injection secret; a field for it is a field something
-        // eventually renders, and `ignoreUnknownKeys` drops it here.
-        assertTrue(
-            "the daemon does send it",
-            "tag" in json.parseToJsonElement(text).jsonObject["manifest"]!!.jsonObject,
+        // ⚠⚠ THE TAG IS NOT ON THE WIRE AT ALL ANY MORE. It is the lead's
+        // anti-injection secret, stripped by [publicProject] at every send site;
+        // a body that carried it would publish it to every client on this port,
+        // after which a planted `huginn-project` block spawns twelve sessions
+        // with prompts a stranger wrote. Swept across every fixture below.
+        assertFalse(
+            "the daemon strips it",
+            "tag" in json.parseToJsonElement(text).jsonObject["project"]!!
+                .jsonObject["manifest"]!!.jsonObject,
         )
 
-        assertEquals("the row rides along, already summed", 3, extras.row!!.alive)
-        assertEquals("the lead and its four members", 5, extras.live.size)
+        assertEquals("the row rides along, already summed", 3, detail.row!!.alive)
+        assertEquals("the lead and its four members", 5, detail.live.size)
 
         // ⚠ THE LIVE JOIN IS BY SESSION ID. `sid-db`'s native row carries a `tmux`
         // label pointing at a DIFFERENT session and a stranger's row claims
         // `statusflap-db` — a join by that field reports the stranger's state on a
         // dashboard that looks entirely plausible.
-        val liveDb = extras.live.first { it.role == "db" }
+        val liveDb = detail.live.first { it.role == "db" }
         assertEquals("busy", liveDb.status)
         assertEquals("statusflap/db", liveDb.nativeName)
         assertEquals("running", ProjectRules.stateWord(liveDb))
 
         // `waiting` + waitingFor is the needs-you, and it says what for.
-        val liveWeb = extras.live.first { it.role == "web" }
+        val liveWeb = detail.live.first { it.role == "web" }
         assertEquals("waiting", liveWeb.status)
         assertEquals("input needed", liveWeb.waitingFor)
         assertTrue(liveWeb.needsYou)
@@ -637,13 +669,13 @@ class ApiContractTest {
 
         // ⚠ AN UNKNOWN NATIVE WORD IS NULL, NOT A GUESS — and the title hook's
         // own `idle` is what is left to draw the row with.
-        val liveProbe = extras.live.first { it.role == "probe" }
+        val liveProbe = detail.live.first { it.role == "probe" }
         assertNull("a word this daemon has never seen is not mapped onto busy", liveProbe.status)
         assertEquals("idle", ProjectRules.stateWord(liveProbe))
 
         // ⚠ A `claude -p` THAT REGISTERED FOR FOUR SECONDS IS NEVER A MEMBER: the
         // ended docs row joins to nothing, so it is neither alive nor marked.
-        val liveDocs = extras.live.first { it.role == "docs" }
+        val liveDocs = detail.live.first { it.role == "docs" }
         assertFalse("entrypoint sdk-cli is never joined", liveDocs.alive)
         assertNotNull(liveDocs.endedAt)
         assertNull("an ended member keeps its row and loses its mark", ProjectRules.stateWord(liveDocs))
@@ -653,7 +685,7 @@ class ApiContractTest {
         // exist; role breaks every tie so the rows hold still between polls.
         assertEquals(
             listOf("web", "lead", "db", "probe", "docs"),
-            ProjectRules.ordered(extras.live).map { it.role },
+            ProjectRules.ordered(detail.live).map { it.role },
         )
 
         val liveRows = json.parseToJsonElement(text).jsonObject["live"]!!.jsonArray.map { it.jsonObject }
@@ -698,15 +730,17 @@ class ApiContractTest {
         // each took two hours, not ten.
         assertEquals(7_200_000L, d.totals!!.wallMs)
 
-        // ⚠ THE PACE IS NOT `GraphRate`. A session says `tokensPerMin10`; the
-        // project aggregate says `tokensPer10m`, because it is the members' rates
-        // added. Decoding one into the other is a screen full of zeroes.
-        assertEquals(1800L, d.rate!!.tokensPer10m)
-        assertEquals(1400L, d.rate!!.tokensPer60m)
+        // ⚠ TOKENS PER MINUTE, OVER A 10- OR 60-MINUTE WINDOW — the members'
+        // per-minute rates added, which is still per minute. The aggregate briefly
+        // spelled these `tokensPer10m`, which reads as "tokens per 10 minutes" and
+        // is wrong by a factor of ten against the very line that renders it
+        // ("N tokens/min over 10m").
+        assertEquals(1800L, d.rate!!.tokensPerMin10)
+        assertEquals(1400L, d.rate!!.tokensPerMin60)
         assertTrue(d.rate!!.activeRecently)
         val rawRate = json.parseToJsonElement(fixture("project-dashboard.json")).jsonObject["rate"]!!.jsonObject
-        assertTrue("the aggregate's own spelling", "tokensPer10m" in rawRate)
-        assertFalse("never a session's spelling", "tokensPerMin10" in rawRate)
+        assertTrue("the per-minute spelling", "tokensPerMin10" in rawRate)
+        assertFalse("never the per-window lie", "tokensPer10m" in rawRate)
 
         // The rollup on the dashboard is the SAME sentence the list row carries,
         // and it comes off the daemon's own row rather than being recounted here.
@@ -748,6 +782,88 @@ class ApiContractTest {
         // tmux session to name, which is exactly why it failed.
         val failed = raw["failed"]!!.jsonArray.single().jsonObject
         assertTrue("role" in failed && "reason" in failed)
+    }
+
+    /**
+     * ⚠ THREE REFUSALS SHARE ONE STATUS AND THEY HAVE THREE DIFFERENT FIXES.
+     *
+     * `POST /v1/projects` answers 409 for a working directory Claude Code has not
+     * been trusted in, for a slug another project already holds, and for a tmux
+     * session already wearing the lead's name — trust the directory, pick another
+     * name, or go and end that session. A client cannot tell them apart from a
+     * sentence, so the daemon sends `reason` as the discriminator beside the
+     * sentence a person reads, and a sheet marks the field the fix belongs under.
+     *
+     * ⚠ NULLABLE, BECAUSE AN OLDER DAEMON SENDS NO REASON AT ALL. The sentence is
+     * still the whole fix, so an unknown refusal must stay showable rather than
+     * decode into a guess.
+     */
+    @Test
+    fun `a create refusal carries the reason beside the sentence`() {
+        val untrusted = json.decodeFromString<ProjectRefusal>(
+            """{"error":"/srv/x has not been trusted in Claude Code yet - open it once with """ +
+                """`claude` there and accept the folder-trust question, then create the project",""" +
+                """"reason":"untrusted-cwd"}""",
+        )
+        assertEquals("untrusted-cwd", untrusted.reason)
+        assertTrue("the sentence is the fix and must survive", untrusted.error!!.contains("folder-trust"))
+
+        val slugTaken = json.decodeFromString<ProjectRefusal>(
+            """{"error":"there is already a project with that slug","reason":"slug-taken"}""",
+        )
+        assertEquals("slug-taken", slugTaken.reason)
+
+        val nameTaken = json.decodeFromString<ProjectRefusal>(
+            """{"error":"a tmux session called 'stick-lead' already exists","reason":"name-taken"}""",
+        )
+        assertEquals("name-taken", nameTaken.reason)
+
+        // A daemon older than the discriminator: the sentence, and no branch.
+        val older = json.decodeFromString<ProjectRefusal>("""{"error":"that slug is taken"}""")
+        assertNull("an unknown refusal is not guessed at", older.reason)
+    }
+
+    /**
+     * ⚠⚠ THE MANIFEST TAG IS NOT ON THIS PORT, ON ANY ROUTE.
+     *
+     * It is minted per project, lives in exactly two places — the lead's system
+     * prompt and the daemon's store — and is the ENTIRE control that keeps a
+     * `huginn-project` block found in a log, a page or a file the lead happened to
+     * READ from being acted on as the lead's own proposal. Seven send sites hand
+     * back a project record, and the daemon strips it at every one of them
+     * ([publicProject]); a body that carried it would publish it to every client
+     * on this port and, through them, to anything that can read one, after which a
+     * planted block spawns twelve sessions with attacker-written first prompts.
+     *
+     * Swept over EVERY fixture rather than the ones that obviously carry a
+     * project, because the leak this guards against is a route nobody thought of
+     * as a project route. And asserted on the MODEL too: a field for it is a field
+     * something eventually renders.
+     */
+    @Test
+    fun `no fixture body carries the manifest tag, and no model has a field for it`() {
+        val dir = File(javaClass.classLoader!!.getResource("projects.json")!!.toURI()).parentFile!!
+        val fixtures = dir.listFiles()!!.filter { it.name.endsWith(".json") }.sortedBy { it.name }
+        assertTrue("the fixtures must be enumerable, or this sweeps nothing", fixtures.size >= 20)
+        fixtures.forEach { f ->
+            val found = mutableListOf<String>()
+            fun walk(el: JsonElement, path: String) {
+                when (el) {
+                    is JsonObject -> el.forEach { (k, v) ->
+                        if (k == "tag") found += "$path.$k"
+                        walk(v, "$path.$k")
+                    }
+                    is JsonArray -> el.forEachIndexed { i, v -> walk(v, "$path[$i]") }
+                    else -> Unit
+                }
+            }
+            walk(json.parseToJsonElement(f.readText()), f.name)
+            assertEquals("a body publishes the lead's anti-injection secret", emptyList<String>(), found)
+        }
+        val fields = ProjectManifest.serializer().descriptor.let { d ->
+            (0 until d.elementsCount).map { d.getElementName(it) }
+        }
+        assertFalse("nowhere to put it if one ever arrived", "tag" in fields)
     }
 
     @Test

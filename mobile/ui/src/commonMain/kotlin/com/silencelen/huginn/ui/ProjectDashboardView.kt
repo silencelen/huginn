@@ -39,8 +39,9 @@ import com.silencelen.huginn.data.ProjectDashboardMember
  *
  * ⚠ THE PACE CARD IS NOT HERE, and its absence is a decision. `ProjectionsCard`
  * takes a single session's `GraphRate`; the dashboard's rate is the members'
- * rates ADDED (`tokensPer10m`, not `tokensPerMin10`), and projecting one
- * session's burn off twelve sessions' sum would be a number that means nothing.
+ * rates ADDED — the same per-minute unit and the same spelling, summed across
+ * twelve authors — and projecting one session's burn off that sum would be a
+ * number that means nothing.
  * The sum is shown as a rate, in words, and not extrapolated.
  *
  * ⚠ NEEDS-YOU ROWS COME FIRST, and that is the screen's reason to exist. Twelve
@@ -219,10 +220,10 @@ fun dashboardCaption(dashboard: ProjectDashboard, nowMs: Long): String {
  */
 fun dashboardPace(dashboard: ProjectDashboard): String? {
     val rate = dashboard.rate ?: return null
-    if (rate.tokensPer10m <= 0 && rate.tokensPer60m <= 0) {
+    if (rate.tokensPerMin10 <= 0 && rate.tokensPerMin60 <= 0) {
         return if (rate.activeRecently) "active, too little to measure a rate" else null
     }
-    val bits = mutableListOf("${rate.tokensPer10m} tokens/min over 10m", "${rate.tokensPer60m} over 60m")
+    val bits = mutableListOf("${rate.tokensPerMin10} tokens/min over 10m", "${rate.tokensPerMin60} over 60m")
     if (!rate.activeRecently) bits += "nothing recent"
     return bits.joinToString(" · ")
 }

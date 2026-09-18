@@ -19,6 +19,7 @@
         "present": true
       },
       "manifestRev": 2,
+      "spawnedRev": 0,
       "manifestSummary": "two sessions: docs writes the README, fw brings up the radio",
       "untaggedSeen": false,
       "endedReason": null,
@@ -45,6 +46,7 @@
         "present": true
       },
       "manifestRev": 1,
+      "spawnedRev": 1,
       "manifestSummary": "four sessions: db, web, probe and docs",
       "untaggedSeen": true,
       "endedReason": null,
@@ -71,6 +73,7 @@
         "present": false
       },
       "manifestRev": 0,
+      "spawnedRev": 0,
       "manifestSummary": null,
       "untaggedSeen": false,
       "endedReason": "the lead session is gone",
