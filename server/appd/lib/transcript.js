@@ -428,8 +428,16 @@ function readTranscript(path, { offset = null, limit = 400, until = null, peerId
   if (lastNl === -1) {
     if (offset != null) return emptyResult(start, truncated);
   } else if (lastNl !== text.length - 1) {
-    const keep = Buffer.byteLength(text.slice(0, lastNl + 1), 'utf8');
-    consumed = keep;
+    // In BYTES, off the buffer — never `Buffer.byteLength` of the decoded text.
+    // A tail window is a byte count and lands where it lands, including inside a
+    // multi-byte character, and `toString('utf8')` turns each stray continuation
+    // byte into U+FFFD: three bytes where the file has one. Measuring the
+    // decoded string therefore overshot by two bytes per stray byte, `nextOffset`
+    // landed INSIDE the next record, and that record's line failed JSON.parse and
+    // vanished from the live view until a cold reload — always the newest record,
+    // which is the one the reader opened the session to watch. Same byte-wise
+    // pattern `copyTranscriptForArchive` already uses.
+    consumed = buf.lastIndexOf(0x0a) + 1;
     text = text.slice(0, lastNl + 1);
   }
   let lines = text.split('\n').filter((l) => l.length > 0);
@@ -443,7 +451,13 @@ function readTranscript(path, { offset = null, limit = 400, until = null, peerId
   // the view. Ask the file instead of assuming: the byte before the window is a
   // newline exactly when the window starts at a boundary.
   if (truncated && lines.length && offset == null && !startsAtBoundary(path, start)) {
-    windowStart = start + Buffer.byteLength(lines[0], 'utf8') + 1;
+    // Where the fragment ends, in bytes — decoded length lies here for exactly
+    // the reason it lies above, and this number is what a reader pages BACKWARDS
+    // with, so a wrong one leaves a gap or an overlap between two pages.
+    let at = 0;
+    while (at < buf.length && buf[at] === 0x0a) at += 1;
+    const nl = buf.indexOf(0x0a, at);
+    windowStart = nl === -1 ? start + consumed : start + nl + 1;
     lines = lines.slice(1);
   }
 
