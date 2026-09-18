@@ -51,6 +51,8 @@ import com.silencelen.huginn.desktop.tray.TrayModel
 import com.silencelen.huginn.desktop.ui.Shell
 import com.silencelen.huginn.ui.HeadroomRules
 import com.silencelen.huginn.ui.LocalAttachmentImages
+import com.silencelen.huginn.desktop.ui.common.DesktopRowTime
+import com.silencelen.huginn.ui.LocalRowTime
 import com.silencelen.huginn.ui.LocalTranscriptMetrics
 import com.silencelen.huginn.ui.TranscriptMetrics
 import com.silencelen.huginn.ui.theme.HuginnTheme
@@ -699,6 +701,9 @@ fun main(args: Array<String>) {
                     // Photo attachments render as real thumbnails; without this
                     // (or against an old daemon) the rows fall back to the pill.
                     LocalAttachmentImages provides store.attachmentImages,
+                    // Hover a message, see when it was written. The phone leaves
+                    // this at its no-op default and reveals times on long-press.
+                    LocalRowTime provides DesktopRowTime,
                 ) {
                     Shell(store)
 
