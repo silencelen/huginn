@@ -1619,7 +1619,10 @@ ver_of () {
 }
 check_deployed () {   # $1 = repo path, $2 = installed path
   if [ ! -f "$2" ]; then skip "not installed here: $2"; return; fi
-  if cmp -s "$1" "$2"; then ok "deployed matches tree: $2"; return; fi
+  # Compared with line endings stripped: `.gitattributes` keeps `*.ps1` CRLF in
+  # the tree while `huginn-sync` lands LF on the host, so a byte compare called
+  # huginn.ps1 stale on every gate run with zero content difference (cli 1.3.0).
+  if cmp -s <(tr -d '\r' < "$1") <(tr -d '\r' < "$2"); then ok "deployed matches tree: $2"; return; fi
   # ⚠ THE TWO WAYS THESE DIFFER ARE NOT THE SAME BUG. The 2026-08-25 one was same
   # VERSION, different CONTENT: a file that lies about what it holds, and nothing
   # but this comparison can catch it. A tree that is simply AHEAD of the deployed
