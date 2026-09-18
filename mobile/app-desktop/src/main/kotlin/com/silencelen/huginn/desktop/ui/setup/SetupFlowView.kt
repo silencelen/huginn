@@ -130,6 +130,9 @@ private fun ColumnScope.StepBody(store: AppStore, step: SetupStep) {
                         add = { name, url -> store.addRoute(name, url) },
                         setAutoSwitch = { store.setAutoSwitch(it) },
                         findLive = { store.findLiveRoute() },
+                        // One Save, one book operation, and a refusal that stays on the form (edge #64/#81).
+                        editBoth = { id, name, url -> store.editRoute(id, name, url) },
+                        clearNote = { store.clearRouteNote() },
                     )
                 },
                 health = health,
