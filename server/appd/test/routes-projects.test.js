@@ -584,6 +584,10 @@ test('the dashboard rolls the members up and says who needs a person', async () 
   const docs = body.members.find((m) => m.role === 'docs');
   assert.equal(true, docs.present, 'a live member reads as present');
   assert.ok('needsYou' in docs && 'headroom' in docs && 'pendingSends' in docs);
+  // ⚠ THE RATE IS PER MINUTE AND SAYS SO. It is the members' per-minute rates
+  // added, not a per-10-minute total, and the name is the only thing a client
+  // has to go on.
+  assert.deepEqual(['activeRecently', 'tokensPerMin10', 'tokensPerMin60'], Object.keys(body.rate).sort());
 });
 
 // -------------------------------------------------------- the partial spawn

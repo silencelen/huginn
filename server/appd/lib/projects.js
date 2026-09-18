@@ -625,6 +625,15 @@ function zeroTokens() { return { input: 0, output: 0, cacheRead: 0, cacheCreatio
  * latest activity. `estCost` is null only when NOTHING carried usage; a cluster
  * running entirely on unpriced models still gets an object with the tokens
  * nobody could price, for the reason buildWire gives.
+ *
+ * ⚠ THE RATE KEEPS GraphRate's NAMES — `tokensPerMin10`, not `tokensPer10m`.
+ * The members' rates are added, but each one is already TOKENS PER MINUTE
+ * measured over a 10- (or 60-) minute window, so a sum of them is still per
+ * minute. `tokensPer10m` read as "tokens per 10 minutes" and was wrong by a
+ * factor of ten to anyone who believed it — and the client's own dashboard
+ * renders the number as "N tokens/min over 10m", which is the tell. Two types
+ * remain (this one has no `all` pair and no `lastActivityTs`); only the lie in
+ * the spelling is gone.
  */
 function aggregateDashboard(rows) {
   const totals = {
@@ -647,7 +656,7 @@ function aggregateDashboard(rows) {
   };
   let usd = 0; let unpriced = 0; let priced = false;
   const models = new Set(); const efforts = new Set();
-  let tokensPer10m = 0; let tokensPer60m = 0; let activeRecently = false;
+  let tokensPerMin10 = 0; let tokensPerMin60 = 0; let activeRecently = false;
 
   for (const r of rows || []) {
     const o = r && r.overview;
@@ -672,8 +681,8 @@ function aggregateDashboard(rows) {
         ? t.lastActivityTs : Math.max(totals.lastActivityTs, t.lastActivityTs);
     }
     if (o.rate) {
-      tokensPer10m += o.rate.tokensPerMin10 || 0;
-      tokensPer60m += o.rate.tokensPerMin60 || 0;
+      tokensPerMin10 += o.rate.tokensPerMin10 || 0;
+      tokensPerMin60 += o.rate.tokensPerMin60 || 0;
       activeRecently = activeRecently || !!o.rate.activeRecently;
     }
   }
@@ -683,7 +692,7 @@ function aggregateDashboard(rows) {
   if (totals.startedAt && totals.lastActivityTs) {
     totals.wallMs = Math.max(0, (totals.lastActivityTs - totals.startedAt) * 1000);
   }
-  return { totals, rate: { activeRecently, tokensPer10m, tokensPer60m } };
+  return { totals, rate: { activeRecently, tokensPerMin10, tokensPerMin60 } };
 }
 
 /**
