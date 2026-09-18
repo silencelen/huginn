@@ -28,29 +28,39 @@ HUGINN_UPDATE_HOST_DEFAULT='huginn'
 _huginn_device_runner() { printf '%s' "$HOME/.huginn/huginn-device"; }
 
 _huginn_device_fetch() {
-  local dest tmp got= uh
+  local dest tmp got= uh why=
   dest="$(_huginn_device_runner)"
   [ "${1:-}" = force ] || [ ! -s "$dest" ] || return 0
   mkdir -p "$HOME/.huginn"; tmp="$dest.tmp.js"
+  # ⚠ EACH SOURCE IS VALIDATED INSIDE ITS OWN BRANCH, so a bad answer from one
+  # really does fall through to the other. This side always checked gh's EXIT
+  # status (the ps1 twin did not, which is the whole of #112 there); what
+  # neither checked is whether a 200 is the FILE - a proxy error page is a
+  # perfectly successful fetch of something that is not JavaScript, and the
+  # syntax check sat AFTER the scp block, so it cleared `got` with the mirror
+  # already skipped and told the caller to fix a download it never made.
   if command -v gh >/dev/null 2>&1; then
-    gh api "repos/$HUGINN_REPO/contents/client/huginn-device" \
-      -H "Accept: application/vnd.github.raw" >"$tmp" 2>/dev/null && [ -s "$tmp" ] && got=1
+    if gh api "repos/$HUGINN_REPO/contents/client/huginn-device" \
+         -H "Accept: application/vnd.github.raw" >"$tmp" 2>/dev/null \
+       && [ -s "$tmp" ] && node --check "$tmp" 2>/dev/null; then got=1
+    else why="gh did not return a usable runner"; fi
+  else
+    why="gh is not installed"
   fi
   if [ -z "$got" ]; then
     # PINNED, exactly like `huginn update` and for the same reason: this
     # downloads code that a systemd unit will then run in a loop, so the host it
     # comes from is a trust root and not a convenience. Never $HUGINN_HOST.
     uh="${HUGINN_UPDATE_HOST:-$HUGINN_UPDATE_HOST_DEFAULT}"
-    scp -o BatchMode=yes "$uh:/usr/local/share/huginn-cli/huginn-device" "$tmp" >/dev/null 2>&1 && got=1
+    if scp -o BatchMode=yes "$uh:/usr/local/share/huginn-cli/huginn-device" "$tmp" >/dev/null 2>&1 \
+       && [ -s "$tmp" ] && node --check "$tmp" 2>/dev/null; then got=1
+    else why="$why; the $uh mirror did not either"; fi
   fi
-  [ -n "$got" ] || {
-    echo "huginn device: could not fetch the runner (gh and the mirror both failed)" >&2
-    rm -f "$tmp"; return 1; }
-  # Validate BEFORE installing, same as the client's own update. A truncated
+  # Validated BEFORE installing, same as the client's own update. A truncated
   # download that systemd then restarts every ten seconds is worse than none.
-  if ! node --check "$tmp" 2>/dev/null; then
-    echo "huginn device: the downloaded runner failed its syntax check - keeping what is here" >&2
-    rm -f "$tmp"; return 1; fi
+  [ -n "$got" ] || {
+    echo "huginn device: could not fetch the runner ($why)" >&2
+    rm -f "$tmp"; return 1; }
   mv -f "$tmp" "$dest"; chmod 0755 "$dest"
 }
 
@@ -107,31 +117,35 @@ _huginn_device() {
 _huginn_local_manager() { printf '%s' "$HOME/.huginn/huginn-local"; }
 
 _huginn_local_fetch() {
-  local f dest tmp got uh
+  local f dest tmp got uh why
   # huginn-device rides along: managed mode installs a runner SERVICE, and a
   # machine that never enrolled as a claude device has no runner otherwise
   # (found wiring the desktop door - enrolment died on a bare spawn error).
   for f in huginn-local huginn-llm-shim huginn-device; do
-    dest="$HOME/.huginn/$f"; got=
+    dest="$HOME/.huginn/$f"; got=; why=
     [ "${1:-}" = force ] || [ ! -s "$dest" ] || continue
     mkdir -p "$HOME/.huginn"; tmp="$dest.tmp.js"
+    # Each source validated inside its own branch - see _huginn_device_fetch.
     if command -v gh >/dev/null 2>&1; then
-      gh api "repos/$HUGINN_REPO/contents/client/$f" \
-        -H "Accept: application/vnd.github.raw" >"$tmp" 2>/dev/null && [ -s "$tmp" ] && got=1
+      if gh api "repos/$HUGINN_REPO/contents/client/$f" \
+           -H "Accept: application/vnd.github.raw" >"$tmp" 2>/dev/null \
+         && [ -s "$tmp" ] && node --check "$tmp" 2>/dev/null; then got=1
+      else why="gh did not return a usable $f"; fi
+    else
+      why="gh is not installed"
     fi
     if [ -z "$got" ]; then
       # PINNED, like the device runner and `huginn update`: this downloads code
       # a service will run in a loop, so the source is a trust root. Never
       # $HUGINN_HOST.
       uh="${HUGINN_UPDATE_HOST:-$HUGINN_UPDATE_HOST_DEFAULT}"
-      scp -o BatchMode=yes "$uh:/usr/local/share/huginn-cli/$f" "$tmp" >/dev/null 2>&1 && got=1
+      if scp -o BatchMode=yes "$uh:/usr/local/share/huginn-cli/$f" "$tmp" >/dev/null 2>&1 \
+         && [ -s "$tmp" ] && node --check "$tmp" 2>/dev/null; then got=1
+      else why="$why; the $uh mirror did not either"; fi
     fi
     [ -n "$got" ] || {
-      echo "huginn local: could not fetch $f (gh and the mirror both failed)" >&2
+      echo "huginn local: could not fetch $f ($why)" >&2
       rm -f "$tmp"; return 1; }
-    if ! node --check "$tmp" 2>/dev/null; then
-      echo "huginn local: the downloaded $f failed its syntax check - keeping what is here" >&2
-      rm -f "$tmp"; return 1; fi
     mv -f "$tmp" "$dest"; chmod 0755 "$dest"
   done
 }
