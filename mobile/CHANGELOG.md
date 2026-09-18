@@ -2,6 +2,10 @@
 
 ## 3.3.0 — 2026-09-17
 
+- **Archived sessions.** A section at the bottom of Sessions lists what was put away, when and
+  where it ran, with Revive and Copy resume command on each row. A row whose transcript is gone
+  says so before you press anything; one already running offers to open it instead. "Archive…"
+  joins the session menu between Wind down and End. Hidden on a host without the feature.
 - **The Status page says whether a 5-hour window is running and when it resets**, and, when the
   host's keep-awake is on, how many times huginn has kept one open today. Three new rows under
   Usage & headroom switch it on, choose its model, and set quiet hours. Off until you turn it on.

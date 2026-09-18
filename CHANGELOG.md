@@ -10,6 +10,17 @@ Format loosely follows [Keep a Changelog](https://keepachangelog.com/); versions
 
 ## [Unreleased]
 
+## [1.2.0] - 2026-09-17
+
+Archive and revive.
+
+### Added
+- `huginn archive` lists what has been archived and how to bring each one back;
+  `huginn archive <name> [--now]` ends a session for good and keeps that card;
+  `huginn revive <id|name>` brings it back under its old name. Rendered and called on the host
+  (`huginn-archive`), so the daemon's own refusal — "answer the waiting question first" — reaches
+  you word for word.
+
 ## [1.1.0] - 2026-09-15
 
 Local AI that keeps serving after you log out.
