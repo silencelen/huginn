@@ -8532,7 +8532,8 @@ async function alertTickInner(st) {
   // ten-second attach early in a two-hour run silences the finish entirely, a
   // missed notification. The non-sticky failure is the benign one: detach in
   // the final seconds and the buzz is merely redundant.
-  const sessionsAttached = {};
+  // Name-keyed, so prototype-less for the same reason as lib/watch's digest (#35).
+  const sessionsAttached = Object.create(null);
   for (const s of sessions) if (s.attachedClients > 0) sessionsAttached[s.name] = true;
   const observation = { sessions: d.sessions, sessionsSince, sessionsAttached, chats: d.chats };
 

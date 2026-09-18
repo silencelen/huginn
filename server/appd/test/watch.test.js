@@ -6,6 +6,7 @@
 const { test } = require('node:test');
 const assert = require('node:assert');
 const { digest } = require('../lib/watch');
+const w = require('../lib/watch');
 
 const sessions = [
   { name: 'andrev', state: 'running', activityAt: 100, cols: 80, preview: ['x'] },
@@ -65,7 +66,9 @@ test('the hash does not depend on listing order', () => {
 
 test('the digest carries the states an alert needs', () => {
   const d = digest(sessions, chats);
-  assert.deepStrictEqual(d.sessions, { andrev: 'running', uusage: null });
+  // Spread: `digest` builds its name-keyed maps prototype-less, so a session
+  // called `__proto__` is DATA rather than a setter call (#35).
+  assert.deepStrictEqual({ ...d.sessions }, { andrev: 'running', uusage: null });
   assert.strictEqual(d.chats.c1.running, false);
   assert.strictEqual(d.chats.c1.title, 'Something');
 });
@@ -193,4 +196,34 @@ test('the stall and ladder MAPS are in the hash, values and all', () => {
     digest([], [], { ...idle, stalls: { dev: null } }).hash,
     digest([], [], idle).hash,
   );
+});
+
+test('a session named __proto__ is in the digest like any other (#35)', () => {
+  // ⚠ A PLAIN OBJECT LITERAL IS NOT A MAP. `s[x.name] = x.state` on `{}` with
+  // the key `__proto__` hits the prototype SETTER: a string value is silently
+  // discarded and a null replaces the prototype, and either way the row never
+  // appears. tmux accepts the name and canonName always did, so the session was
+  // listed by GET /v1/sessions and then absent from the watch digest AND from
+  // its hash — it could never wake a parked phone, never fire
+  // session_attention/finished, and a headroom stall on it lost its reset time.
+  const rows = [{ name: '__proto__', state: 'attention' }, { name: 'ordinary', state: 'idle' }];
+  const d = w.digest(rows, [], null);
+  assert.equal('attention', d.sessions.__proto__,
+    `the row must be a VALUE, not the prototype: ${JSON.stringify(d.sessions)}`);
+  assert.equal('idle', d.sessions.ordinary);
+  assert.deepEqual(['__proto__', 'ordinary'], Object.keys(d.sessions).sort());
+
+  // …and the hash must MOVE when it changes state, or nothing downstream ever
+  // notices the transition.
+  const before = w.digest(rows, [], null).hash;
+  const after = w.digest([{ name: '__proto__', state: 'idle' }, rows[1]], [], null).hash;
+  assert.notEqual(before, after);
+});
+
+test('mapOf keeps a __proto__ key as data (#35)', () => {
+  // ⚠ COMPUTED, because `{ __proto__: x }` in a literal sets the PROTOTYPE
+  // rather than a key — the very trap this is about, one level up.
+  const m = w.mapOf({ ['__proto__']: '2026-01-01T00:00:00Z', normal: 'x' });
+  assert.deepEqual(['__proto__', 'normal'], Object.keys(m).sort());
+  assert.equal('2026-01-01T00:00:00Z', m.__proto__);
 });

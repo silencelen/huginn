@@ -502,23 +502,35 @@ test('a NEW question after a resolution alerts immediately', () => {
 
 const { carryRunStarts } = require('../lib/alerts');
 
+// The ledger is keyed by session NAME and built prototype-less (#35), so the
+// comparisons here spread it: a session may legitimately be called `__proto__`,
+// and on a plain literal that key hits the prototype setter instead of being
+// stored — the row then vanishes from every alert that reads this map.
+const ledger = (...args) => ({ ...carryRunStarts(...args) });
+
 test('a newly running session is stamped now', () => {
-  assert.deepStrictEqual(carryRunStarts({}, { a: 'running' }, 1000), { a: 1000 });
+  assert.deepStrictEqual(ledger({}, { a: 'running' }, 1000), { a: 1000 });
 });
 
 test('a still-running session keeps its ORIGINAL start across observations', () => {
   const first = carryRunStarts({}, { a: 'running' }, 1000);
   const later = carryRunStarts(first, { a: 'running' }, 5000);
-  assert.deepStrictEqual(later, { a: 1000 });
+  assert.deepStrictEqual({ ...later }, { a: 1000 });
 });
 
 test('a session no longer running drops out of the ledger', () => {
-  assert.deepStrictEqual(carryRunStarts({ a: 900 }, { a: 'idle' }, 1000), {});
-  assert.deepStrictEqual(carryRunStarts({ a: 900 }, {}, 1000), {});
+  assert.deepStrictEqual(ledger({ a: 900 }, { a: 'idle' }, 1000), {});
+  assert.deepStrictEqual(ledger({ a: 900 }, {}, 1000), {});
 });
 
 test('idle and attention sessions never enter the ledger', () => {
-  assert.deepStrictEqual(carryRunStarts({}, { a: 'idle', b: 'attention' }, 1000), {});
+  assert.deepStrictEqual(ledger({}, { a: 'idle', b: 'attention' }, 1000), {});
+});
+
+test('a session named __proto__ keeps its place in the run ledger (#35)', () => {
+  const l = carryRunStarts({}, { ['__proto__']: 'running', b: 'running' }, 1000);
+  assert.deepEqual(['__proto__', 'b'], Object.keys(l).sort());
+  assert.equal(1000, l.__proto__);
 });
 
 test('the ledger feeds the finish gate end to end', () => {
