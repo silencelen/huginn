@@ -37,6 +37,7 @@ import com.silencelen.huginn.desktop.DesktopSettings
 import com.silencelen.huginn.desktop.View
 import com.silencelen.huginn.desktop.diag.AppLog
 import com.silencelen.huginn.desktop.ui.Muted
+import com.silencelen.huginn.desktop.ui.common.openInBrowser
 import com.silencelen.huginn.desktop.update.UpdateState
 import com.silencelen.huginn.desktop.update.installThenQuit
 import com.silencelen.huginn.ui.HeadroomSettingsSection
@@ -58,8 +59,6 @@ import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
-import java.awt.Desktop
-import java.net.URI
 
 /**
  * One page per category — the nine drawers of the redesigned Settings, each
@@ -188,19 +187,6 @@ private class DesktopAccountsIo(private val store: AppStore) : AccountsIo {
     override suspend fun startLogin(email: String?): LoginSession = store.client.startLogin(email)
     override suspend fun submitLoginCode(code: String): LoginState = store.client.submitLoginCode(code)
 }
-
-/**
- * Opens [url] in the user's browser. False when this JVM has no desktop
- * integration — headless, a bare WM, or a sandbox — which is not an error so much
- * as a reason to show the link instead of pretending it opened.
- */
-private fun openInBrowser(url: String): Boolean = runCatching {
-    if (!Desktop.isDesktopSupported()) return false
-    val desktop = Desktop.getDesktop()
-    if (!desktop.isSupported(Desktop.Action.BROWSE)) return false
-    desktop.browse(URI(url))
-    true
-}.getOrDefault(false)
 
 // --------------------------------------------------------- usage & headroom
 
