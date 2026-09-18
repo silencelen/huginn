@@ -9,6 +9,15 @@ appeared only as a side-note on the app releases it happened to ship with. Three
 undocumented, and the notes-cutting matcher could fuse two sections when an app and an appd
 version number collided. Entries below are reconstructed from the shipping commits.
 
+## 3.2.1 — 2026-09-18
+- **A STOP the session window armed now clears when that window resets.** The hook gate's STOP
+  sentinel arms at `stopPct` of the 5-hour window and was meant to clear once it dropped under
+  `clearBelowPct` — but the clear also required the WEEK to be under that number, so a sentinel
+  armed at "session 71%" stayed up after the window reset to 4% because the week read a perfectly
+  normal 69%, and every spawn on the host was held for hours. The clear now asks only the window
+  that armed it; a week-armed STOP keeps the week's own hysteresis (red arms it, low clears it),
+  and a red week still arms regardless.
+
 ## 3.2.0 — 2026-09-17
 - **Archive a session: fully ended, with the way back kept.** `POST /v1/sessions/:name/archive`
   ends a session gracefully by default (the wind-down phrase, a 409 while a question is waiting,
