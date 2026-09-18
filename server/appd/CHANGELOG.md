@@ -9,6 +9,35 @@ appeared only as a side-note on the app releases it happened to ship with. Three
 undocumented, and the notes-cutting matcher could fuse two sections when an app and an appd
 version number collided. Entries below are reconstructed from the shipping commits.
 
+## 3.2.0 — 2026-09-17
+- **Keep-awake (off by default).** Optionally send one tiny request when no 5-hour usage window is
+  running, so a work session never starts on a cold window. Between windows the usage endpoint
+  reports the session row with no reset time; that one field is the trigger. Haiku 4.5 pinned by
+  dated id, at most once per window, persisted before the spawn so a restart cannot double it,
+  optional local quiet hours. Vetoed by a red or exhausted window, an armed STOP/STOP-FABLE, an
+  account switch in flight or cooling down, an unreadable usage endpoint, and by having already
+  fired inside the current window. `/v1/status` reports whether a window is running, when it ends,
+  and why keep-awake last did or did not fire. Nothing activates on upgrade: Settings → Usage &
+  headroom → "Keep a window rotating".
+- **A first message the pane swallowed is now sent, not merely logged.** Bytes pasted in the last
+  second before Claude Code paints are discarded before the TUI attaches, so waiting for them could
+  only time out — and the Enter that followed went into a composer that was by then up and empty.
+  On a timeout the daemon looks once more: a composer drawn and holding nothing gets the message
+  re-pasted once, then Enter; a composer holding anything else is left strictly alone (a bare Enter
+  there submitted somebody's half-written line — it did); a pane with no composer keeps the old
+  behaviour. Six sends made ~800 ms before the paint against the real binary: six delivered, each
+  exactly once.
+- **The startup hold covers the sessions `cc` makes, which is most of them.** The gate was keyed on
+  a mark only the create route set. A session with no mark is now held when tmux says its window
+  was born seconds ago, the pane has no composer and no shell prompt, and the pane was started with
+  a command that runs `claude`. A plain shell is never held, nor an empty pane running something
+  else. `HUGINN_APPD_STARTUP_GRACE_MS` widens the 20 s ceiling.
+- **Renaming a session no longer strands the messages queued for it.** The rename moved everything
+  but the send queue and the startup mark; both move now, the queue's timer with them, and a rename
+  to the name it already has stops erasing the row it was meant to move.
+- **A held send says what it is waiting for.** `POST /v1/sessions/:name/keys` answers `blockedBy`
+  beside the queue position, in the words `GET /typing` uses.
+
 ## 3.1.1 — 2026-09-17
 - **A skill Claude loads is a card, not a message from you.** Claude Code writes a skill's whole
   instruction body into the transcript as a `user` record with nothing in the text to mark it, so
