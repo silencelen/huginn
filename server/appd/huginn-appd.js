@@ -10473,7 +10473,12 @@ const server = http.createServer(async (req, res) => {
       const name = projectsLib.cleanName(body.name);
       const slug = projectsLib.slugFor(name);
       const badSlug = projectsLib.slugProblem(slug, existing.map((x) => x.slug));
-      if (badSlug) return sendErr(res, 409, badSlug);
+      // ⚠ THREE REFUSALS SHARE THIS STATUS AND THEY HAVE THREE DIFFERENT FIXES:
+      // trust the directory in Claude Code, pick another name, or go and end the
+      // tmux session squatting the lead's name. `reason` is the discriminator a
+      // client branches on; the sentence beside it stays the thing a person
+      // reads, because it is also the instruction.
+      if (badSlug) return sendJson(res, 409, { error: badSlug, reason: 'slug-taken' });
       const kind = projectsLib.KINDS.includes(body.kind) ? body.kind : null;
       if (!kind) return sendErr(res, 400, `kind is one of ${projectsLib.KINDS.join(', ')}`);
       const badBrief = projectsLib.briefProblem(body.brief);
@@ -10491,12 +10496,17 @@ const server = http.createServer(async (req, res) => {
       // ~/.claude.json, a 115 KB file every live `claude` rewrites continuously.
       // Refused with the fix instead (decision 50). See [cwdIsTrusted].
       if (!cwdIsTrusted(cwd)) {
-        return sendErr(res, 409, `${cwd} has not been trusted in Claude Code yet — open it once with `
-          + '`claude` there and accept the folder-trust question, then create the project');
+        return sendJson(res, 409, {
+          error: `${cwd} has not been trusted in Claude Code yet — open it once with `
+            + '`claude` there and accept the folder-trust question, then create the project',
+          reason: 'untrusted-cwd',
+        });
       }
 
       const leadTmux = projectsLib.tmuxNameFor(slug, projectsLib.LEAD_ROLE);
-      if (await sessionExists(leadTmux)) return sendErr(res, 409, `a tmux session called '${leadTmux}' already exists`);
+      if (await sessionExists(leadTmux)) {
+        return sendJson(res, 409, { error: `a tmux session called '${leadTmux}' already exists`, reason: 'name-taken' });
+      }
 
       const now = Math.floor(Date.now() / 1000);
       const project = {
@@ -10551,7 +10561,10 @@ const server = http.createServer(async (req, res) => {
         automated: true, origin: 'project', kind: 'brief',
       }).catch((e) => log(`project ${slug}: brief failed: ${e.message}`));
       log(`project ${slug}: created (${project.id}), lead ${launched.name} in ${cwd}`);
-      return sendJson(res, 201, project);
+      // ⚠ EVERY BODY THAT CARRIES A PROJECT GOES THROUGH [publicProject]. The
+      // manifest tag is the anti-injection control and belongs in the lead's
+      // system prompt and in the store — never on this port.
+      return sendJson(res, 201, projectsLib.publicProject(project));
     }
 
     if ((m = p.match(/^\/v1\/projects\/([0-9a-f-]{36})(\/[a-z]+)?$/))) {
@@ -10560,11 +10573,27 @@ const server = http.createServer(async (req, res) => {
       const stored = loadProject(projectId);
       if (!stored) return sendErr(res, 404, 'no such project');
 
+      /**
+       * The record, the row the tree draws, and every member's live state.
+       *
+       * ⚠ AN ENVELOPE, NOT A SPREAD RECORD. This used to answer
+       * `{...project, row, live}`, which reserves two words in the project's own
+       * namespace without saying so: the day a project gains a field called
+       * `row` or `live` — neither is a strange name for one — the spread
+       * overwrites the daemon's own and the tree draws a project out of whatever
+       * the record happened to hold, with nothing to see in the diff. Three
+       * named keys cannot collide, and the client decodes one body once instead
+       * of twice.
+       */
       if (req.method === 'GET' && sub === '') {
         const project = detectManifest(stored);
         const sessions = await listSessions();
         const joined = projectsLib.joinMembers(project, sessions || [], readNativeRegistry());
-        return sendJson(res, 200, { ...project, row: projectsLib.projectRow(project, joined), live: joined });
+        return sendJson(res, 200, {
+          project: projectsLib.publicProject(project),
+          row: projectsLib.projectRow(project, joined),
+          live: joined,
+        });
       }
 
       if (req.method === 'GET' && sub === '/dashboard') {
@@ -10585,7 +10614,7 @@ const server = http.createServer(async (req, res) => {
         if (!current) return sendErr(res, 404, 'no such project');
         const rev = Number(body.rev);
         if (!Number.isInteger(rev)) return sendErr(res, 400, 'rev is required — it is what makes a save safe');
-        if (rev !== (Number(current.rev) || 0)) return sendJson(res, 409, current);
+        if (rev !== (Number(current.rev) || 0)) return sendJson(res, 409, projectsLib.publicProject(current));
 
         let name = null;
         if (typeof body.name === 'string') {
@@ -10632,7 +10661,7 @@ const server = http.createServer(async (req, res) => {
           }
         });
         if (!saved) return sendErr(res, 404, 'no such project');
-        return sendJson(res, 200, saved);
+        return sendJson(res, 200, projectsLib.publicProject(saved));
       }
 
       /**
@@ -10651,7 +10680,10 @@ const server = http.createServer(async (req, res) => {
         const wantRev = Number(body.manifestRev);
         if (!Number.isInteger(wantRev)) return sendErr(res, 400, 'manifestRev is required');
         if (wantRev !== (Number(project.manifest.rev) || 0)) {
-          return sendJson(res, 409, { error: 'the proposal has changed since that card was drawn', project });
+          return sendJson(res, 409, {
+            error: 'the proposal has changed since that card was drawn',
+            project: projectsLib.publicProject(project),
+          });
         }
         if (!(project.manifest.sessions || []).length) return sendErr(res, 409, 'this proposal has no sessions in it');
         // ⚠ NOT INTO A RED WINDOW. Twelve fresh sessions on an account the
@@ -10666,7 +10698,7 @@ const server = http.createServer(async (req, res) => {
             + '— spawn when the window resets');
         }
         const out = await spawnProject(project);
-        return sendJson(res, 200, out);
+        return sendJson(res, 200, { ...out, project: projectsLib.publicProject(out.project) });
       }
 
       if (req.method === 'POST' && sub === '/discard') {
@@ -10682,7 +10714,7 @@ const server = http.createServer(async (req, res) => {
             '[Huginn] The proposal was discarded; the owner may send a revised brief.',
             { automated: true, origin: 'project', kind: 'discard' }).catch(() => { });
         }
-        return sendJson(res, 200, saved);
+        return sendJson(res, 200, projectsLib.publicProject(saved));
       }
 
       /**
