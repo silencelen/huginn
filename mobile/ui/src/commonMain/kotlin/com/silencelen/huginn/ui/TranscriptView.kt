@@ -100,11 +100,51 @@ val LocalTranscriptMetrics = staticCompositionLocalOf { TranscriptMetrics() }
  * shell has its own answer", not "this feature is broken here".
  */
 fun interface TranscriptSelectionHost {
-    /** The whole row's text, as selected by a long press. */
-    fun onLongPress(text: String)
+    /**
+     * The whole row's text, as selected by a long press, and WHEN the row was
+     * written — epoch seconds off the wire, null when the daemon had no
+     * timestamp for it.
+     *
+     * THE STAMP TRAVELS RAW, unformatted. The bar the phone raises is where the
+     * time is shown (its first line), and formatting it needs a clock, which
+     * `:ui` deliberately does not have: every "3 minutes ago" on the phone is
+     * drawn from the shell's ticking `screenClock`, not from a fresh read at
+     * composition time. So the shell formats, through [TimeWords], with the
+     * clock it already owns.
+     */
+    fun onLongPress(text: String, atSec: Long?)
 }
 
 val LocalTranscriptSelection = staticCompositionLocalOf<TranscriptSelectionHost?> { null }
+
+/**
+ * The desktop's hover reveal for a row's timestamp — and the seam that keeps it
+ * out of `:ui`.
+ *
+ * `TooltipArea` is `androidx.compose.foundation` DESKTOP, not common, so this
+ * module cannot call it. It also cannot format the tip: see
+ * [TranscriptSelectionHost.onLongPress] — the clock lives in the shell. Both
+ * problems have one answer: hand the shell the raw stamp and let it decide what
+ * to wrap the row in.
+ *
+ * THE DEFAULT IS A NO-OP, which is the phone's answer given by not giving one.
+ * A phone has no pointer, so there is nothing to hover; its reveal is the
+ * long-press bar, which costs no layout either. That matters more than it
+ * sounds: the transcript auto-follows, and a row that grows when the pointer
+ * crosses it moves the thing being read.
+ */
+interface RowTimeTooltip {
+    @Composable
+    fun Wrap(atSec: Long?, content: @Composable () -> Unit)
+}
+
+/** Draws the row and nothing else. See [RowTimeTooltip]. */
+object NoRowTimeTooltip : RowTimeTooltip {
+    @Composable
+    override fun Wrap(atSec: Long?, content: @Composable () -> Unit) = content()
+}
+
+val LocalRowTime = staticCompositionLocalOf<RowTimeTooltip> { NoRowTimeTooltip }
 
 /**
  * The text a long-press on this row selects — the WHOLE row, not a word.
@@ -150,7 +190,7 @@ fun TranscriptEventItem(
     // word-drag selection is still there for anyone who wants a phrase; this is
     // the coarser, faster answer for "this message", and it raises the action bar
     // the toolkit has no room to offer. No ripple and no onClick: the rows below
-    // own their own taps (a tool card expands, a bubble reveals its stamp) and a
+    // own their own taps (a tool card expands) and a
     // clickable parent would take the indication for gestures it never handles.
     val host = LocalTranscriptSelection.current
     val selectable = remember(ev.seq, ev.text, ev.result) {
@@ -160,16 +200,23 @@ fun TranscriptEventItem(
         interactionSource = remember { MutableInteractionSource() },
         indication = null,
         onLongClickLabel = "Select this message",
-        onLongClick = { host.onLongPress(selectable) },
+        onLongClick = { host.onLongPress(selectable, ev.ts) },
         onClick = {},
     )
+    // WHICH ROWS CARRY A TIME, decided here rather than row by row: the two that
+    // are somebody SAYING something. A tool card, a thinking block, an ask card
+    // and a system note are plumbing inside a turn — "when did that tool run" is
+    // not a question anyone has, and their taps are already taken by the expand.
+    val reveal = LocalRowTime.current
     Box(Modifier.padding(start = indent).then(press)) {
         when (ev.kind) {
-            "user" -> UserBubble(ev.text.orEmpty(), ev.queued)
+            "user" -> reveal.Wrap(ev.ts) { UserBubble(ev.text.orEmpty(), ev.queued) }
             // A usage limit arrives AS an assistant record — Claude Code writes its
             // own error into the transcript the same way it writes an answer — so
             // the kind cannot separate them and the flag has to. See [isLimitNotice].
-            "assistant" -> if (isLimitNotice(ev)) LimitNotice(ev) else AssistantBlock(ev, onCopy)
+            "assistant" -> reveal.Wrap(ev.ts) {
+                if (isLimitNotice(ev)) LimitNotice(ev) else AssistantBlock(ev, onCopy)
+            }
             "thinking" -> ThinkingBlock(ev.text.orEmpty())
             "tool" -> if (ev.ask != null) AskCard(ev) else ToolCard(ev)
             "tool_result" -> ToolResultOrphan(ev)

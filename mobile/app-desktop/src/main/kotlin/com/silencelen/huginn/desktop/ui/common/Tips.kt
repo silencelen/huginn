@@ -15,6 +15,9 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.DpOffset
 import androidx.compose.ui.unit.dp
+import com.silencelen.huginn.data.localTimeFormat
+import com.silencelen.huginn.ui.RowTimeTooltip
+import com.silencelen.huginn.ui.TimeWords
 
 /**
  * Hover text, and the one desktop affordance with no phone equivalent at all: a
@@ -75,7 +78,19 @@ private fun TipCard(text: String) {
 // than no sentence — it is read as an explanation of a mark the reader could not
 // otherwise decode, so it gets asserted like a parser.
 
-/** Seconds as a person says them: "just now", "4m", "2h 10m", "3d". */
+/**
+ * Seconds as a person says them: "just now", "4m", "2h 10m", "3d".
+ *
+ * ⚠ THIS IS A DURATION, AND IT STAYS. [TimeWords] absorbed every wall-clock
+ * formatter on both clients, and this one looks like one from the outside — but
+ * it measures an ELAPSED SPAN ("Working · for 2h 10m"), not an instant, and its
+ * two-unit precision is exactly what makes "waiting on you · for 3d 2h" worth
+ * reading. A timestamp never wants that shape and a span always does. Folding it
+ * in would be finishing a job that was not started.
+ *
+ * Its one remaining caller is [sessionStateTip], which asks how long a state has
+ * HELD. Everything here that asks WHEN instead goes through [TimeWords].
+ */
 fun humanDuration(sec: Long): String = when {
     sec < 45 -> "just now"
     sec < 3600 -> "${sec / 60}m"
@@ -128,7 +143,10 @@ fun chatStateTip(running: Boolean, pending: Int, turns: Int, updatedAt: Long, no
     }
     val parts = mutableListOf(head)
     if (turns > 0) parts += "$turns turn${plural(turns)}"
-    if (updatedAt > 0) parts += "last activity ${humanDuration((nowSec - updatedAt).coerceAtLeast(0))} ago"
+    // WHEN, not for how long — so the shared vocabulary, the same words the row
+    // itself and the phone's chats list draw.
+    TimeWords.ago(updatedAt, nowSec * 1000L).takeIf { it.isNotBlank() }
+        ?.let { parts += "last activity $it" }
     return parts.joinToString(" · ")
 }
 
@@ -176,10 +194,46 @@ fun connectionTip(
     }
 }
 
-/** A relative timestamp, spelled out. "3d" on a row, the whole sentence on hover. */
+/**
+ * A relative timestamp, spelled out. "3d" on the row, the sentence on hover —
+ * the same bands in two registers, which is precisely what [TimeWords] is for.
+ * Empty for a missing stamp, so [Tip] draws no popup rather than an empty one.
+ */
 fun timeTip(label: String, epochSec: Long, nowSec: Long): String {
-    if (epochSec <= 0) return ""
-    return "$label ${humanDuration((nowSec - epochSec).coerceAtLeast(0))} ago"
+    val words = TimeWords.ago(epochSec, nowSec * 1000L)
+    return if (words.isBlank()) "" else "$label $words"
+}
+
+/**
+ * The transcript's hover reveal: the exact date and time a message was written,
+ * or nothing at all.
+ *
+ * EXACT RATHER THAN RELATIVE, and the two clients differ here on purpose. A
+ * reader who hovers a message is asking the one question the row cannot already
+ * answer — "2h ago" is what they could see without hovering. A tooltip has room
+ * for the whole sentence, and an absolute one cannot go stale between being
+ * composed and being read. The phone's long-press bar is one tight line above
+ * the composer, so it gets [TimeWords.stamp] instead.
+ *
+ * The zone is read AT THE STAMP'S OWN INSTANT: a message sent in July, read in
+ * December, had July's clock time.
+ */
+fun rowTimeReveal(atSec: Long?): String =
+    TimeWords.full(atSec, localTimeFormat((atSec ?: 0L) * 1000L))
+
+/**
+ * The desktop's answer to [RowTimeTooltip]: hover a message, get its time.
+ *
+ * Installed once, at the window root in `Main.kt`, so every surface that draws
+ * transcript rows — chat, session, the subagent card's innards — reveals times
+ * the same way. `Tip` already declines to draw for blank text, which is how a
+ * row with no stamp costs nothing at all.
+ */
+val DesktopRowTime: RowTimeTooltip = object : RowTimeTooltip {
+    @Composable
+    override fun Wrap(atSec: Long?, content: @Composable () -> Unit) {
+        Tip(rowTimeReveal(atSec)) { content() }
+    }
 }
 
 /** What the counts in the nav rail mean, spelled out rather than badged. */

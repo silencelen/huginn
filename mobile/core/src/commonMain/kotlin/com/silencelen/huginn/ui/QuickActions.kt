@@ -159,19 +159,26 @@ object QuickActionRules {
  * selection worth offering anything for — is the same one, and answering it
  * inside a gesture lambda is answering it where nothing can assert it.
  */
-data class SelectionMode(val active: Boolean = false, val text: String = "") {
+data class SelectionMode(val active: Boolean = false, val text: String = "", val at: String = "") {
 
     fun actions(quickActions: QuickActions?): List<SelectionAction> =
         if (!active) emptyList() else QuickActionRules.offered(text, quickActions)
 
-    /** The handles moved: same session, new text. */
-    fun select(text: String): SelectionMode = SelectionMode(active = true, text = text)
+    /** The handles moved: same session, new text, same row and so the same time. */
+    fun select(text: String): SelectionMode = copy(active = true, text = text)
 
     fun dismiss(): SelectionMode = NONE
 
     companion object {
         val NONE: SelectionMode = SelectionMode()
 
-        fun begin(text: String): SelectionMode = SelectionMode(active = true, text = text)
+        /**
+         * @param at when the selected row was written, ALREADY IN WORDS — the
+         *   shell formats it, because formatting needs a clock and this module
+         *   deliberately has none. Empty when the row carried no timestamp, which
+         *   is what makes the bar draw no time line at all.
+         */
+        fun begin(text: String, at: String = ""): SelectionMode =
+            SelectionMode(active = true, text = text, at = at)
     }
 }

@@ -1,5 +1,6 @@
 package com.silencelen.huginn.data
 
+import com.silencelen.huginn.ui.TimeFormat
 import io.ktor.client.engine.HttpClientEngine
 import kotlinx.coroutines.CoroutineDispatcher
 
@@ -29,3 +30,24 @@ expect fun huginnHttpEngine(): HttpClientEngine
  * expect/actual at all.
  */
 expect val huginnIoDispatcher: CoroutineDispatcher
+
+/**
+ * The local wall-clock rules: the UTC offset in force at [atMs], and whether
+ * this locale writes a 24-hour clock.
+ *
+ * The third expect/actual in this file, and the last one it should ever need.
+ * `commonMain` has no zone database and no locale, and [TimeWords] is
+ * deliberately pure — it takes the offset rather than reading one, so a DST edge
+ * is a test case instead of a Tuesday-in-March bug report. This is the single
+ * seam where the machine gets to answer.
+ *
+ * ⚠ TAKE THE OFFSET AT THE INSTANT BEING RENDERED, not at "now". A message sent
+ * in July drawn in December is drawn with July's offset, which is what its clock
+ * time actually was; passing `System.currentTimeMillis()` for a historic stamp
+ * moves it by an hour twice a year.
+ *
+ * There is no settings row behind this and there should not be one (decision 43):
+ * the operating system already knows both answers and the reader has already
+ * given them to it once.
+ */
+expect fun localTimeFormat(atMs: Long): TimeFormat
