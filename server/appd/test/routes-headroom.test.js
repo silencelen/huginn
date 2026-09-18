@@ -604,6 +604,36 @@ test('a new login relabels the bars in the same breath as the numbers', async ()
 
 // ----------------------------------------------------------------- sentinels
 
+test('a hand-armed STOP survives the tick and shows on /v1/status (#12)', async () => {
+  // ⚠ THE OPERATOR'S ONLY PAUSE BUTTON. No route arms a sentinel — `arm` is
+  // called from `writeSentinels` and nowhere else — so `touch $HEADROOM_DIR/STOP`
+  // is the documented and unit-tested way to hold every subagent spawn. The
+  // tick's else-branch then deleted it, because the plan did not call for STOP:
+  // measured at 299 s with no interaction and 23 ms after a settings PATCH, with
+  // a journal line ("headroom: cleared STOP") indistinguishable from
+  // housekeeping, while a gate that WAS holding released with `waited=0`.
+  setUsage({ session: 3, weekly_all: 4, weekly_fable: 5 });     // the plan wants no STOP
+  await tick({});
+  fs.mkdirSync(headroomDir, { recursive: true });
+  fs.writeFileSync(path.join(headroomDir, 'STOP'), '');
+  // While it is armed, the one-line status must say so — it read the in-memory
+  // sentinels, which a hand-armed file never populates, so /v1/status reported
+  // sentinels:[] about a fleet-wide pause that /v1/headroom could see.
+  const status = (await api('/v1/status')).body.headroom;
+  assert.ok(status.sentinels.includes('STOP'), JSON.stringify(status.sentinels));
+
+  await tick({});
+  await tick({});
+  assert.equal(true, fs.existsSync(path.join(headroomDir, 'STOP')),
+    'the tick must not reap a sentinel it did not arm');
+  // …and it is HEARTBEATED, or the gate ages it out after HUGINN_GATE_STALE_S
+  // and every held spawn goes through anyway.
+  const age = Date.now() - fs.statSync(path.join(headroomDir, 'STOP')).mtimeMs;
+  assert.ok(age < 20_000, `the tick must touch it too (age ${age}ms)`);
+
+  fs.rmSync(path.join(headroomDir, 'STOP'), { force: true });
+});
+
 test('the sentinels arm on the stubbed numbers, and fable-sessions is written', async () => {
   const { name } = fableSession('sent');
   setUsage({ session: 12, weekly_all: 10, weekly_fable: 95 });
