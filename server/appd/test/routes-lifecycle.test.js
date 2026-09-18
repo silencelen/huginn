@@ -340,7 +340,7 @@ test('compact refuses a pane with no Claude state', async () => {
 test('a fresh compacting marker reads as compacting; a stale one does not', async () => {
   const name = mkSession('cmpk');
   writeState(name, 'idle');
-  const dir = path.join(stateDir, 'compacting');
+  const dir = path.join(stateDir, '.compacting');
   fs.mkdirSync(dir, { recursive: true });
   const marker = path.join(dir, name);
 
@@ -470,8 +470,8 @@ test('a present but WRONG bearer is rejected (auth compares the token, not just 
 // --- ask-sidecar fusion at the route layer ---------------------------------
 
 function writeAskSidecar(name, questions) {
-  fs.mkdirSync(path.join(stateDir, 'ask'), { recursive: true });
-  fs.writeFileSync(path.join(stateDir, 'ask', name),
+  fs.mkdirSync(path.join(stateDir, '.ask'), { recursive: true });
+  fs.writeFileSync(path.join(stateDir, '.ask', name),
     JSON.stringify({ v: 1, tool: 'AskUserQuestion', sessionId: 's', ts: Math.floor(Date.now() / 1000),
       input: { questions } }));
 }

@@ -116,7 +116,7 @@ function writeState(name, state, { sessionId, transcript = null, cwd = tmp, ts =
 
 /** What it writes on the PreToolUse that RAISES an AskUserQuestion. */
 function writeAskSidecar(name, sessionId) {
-  const dir = path.join(stateDir, 'ask');
+  const dir = path.join(stateDir, '.ask');
   fs.mkdirSync(dir, { recursive: true });
   fs.writeFileSync(path.join(dir, name), JSON.stringify({
     v: 1, tool: 'AskUserQuestion', sessionId, ts: now(), input: ASK_INPUT,
