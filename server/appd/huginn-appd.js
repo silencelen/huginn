@@ -6720,7 +6720,14 @@ function readSessionModel(name) {
  * file is worse than a wrong model.
  */
 function repairDefaultModel(expected) {
-  const file = path.join(CLAUDE_DIR, 'settings.json');
+  // ⚠ RESOLVE THE LINK FIRST (#29). This wrote `<file>.tmp` and renameSync'd it
+  // over ~/.claude/settings.json — so a settings.json symlinked into a dotfiles
+  // repo was REPLACED by a regular file, and later edits in the repo stopped
+  // reaching the CLI: silent, permanent, and the exact case install-hooks.js
+  // resolves on purpose. `realpathSync` on the symlink's own path, not on the
+  // directory, because the link may point anywhere.
+  let file = path.join(CLAUDE_DIR, 'settings.json');
+  try { file = fs.realpathSync(file); } catch { /* not a link, or not there yet */ }
   let raw;
   try { raw = fs.readFileSync(file, 'utf8'); } catch { return { ok: false, error: 'no settings.json to repair' }; }
   let o;
@@ -6731,12 +6738,24 @@ function repairDefaultModel(expected) {
   if (o.model === expected) return { ok: true, changed: false };
   const was = o.model ?? null;
   o.model = expected;
+  const tmpFile = `${file}.tmp`;
   try {
+    // ⚠ AND CARRY THE FILE'S OWN MODE. The tmp was hardcoded 0600 and the rename
+    // takes the tmp's permissions with it, so every host — symlink or not —
+    // silently had its settings.json narrowed from whatever the owner set.
+    let mode = 0o600;
+    try { mode = fs.statSync(file).mode & 0o777; } catch { /* keep the safe default */ }
     // 2-space JSON, and the trailing newline the file had (or did not have).
     const body = `${JSON.stringify(o, null, 2)}${raw.endsWith('\n') ? '\n' : ''}`;
-    fs.writeFileSync(`${file}.tmp`, body, { mode: 0o600 });
-    fs.renameSync(`${file}.tmp`, file);
-  } catch (e) { return { ok: false, error: e.message }; }
+    fs.writeFileSync(tmpFile, body, { mode });
+    fs.chmodSync(tmpFile, mode);     // writeFileSync's mode is a CREATE mode only
+    fs.renameSync(tmpFile, file);
+  } catch (e) {
+    // Leaving a `.tmp` beside the owner's settings file is litter at best and a
+    // confusing half-written copy at worst — install-hooks.js unlinks its own.
+    try { fs.unlinkSync(tmpFile); } catch { /* never existed */ }
+    return { ok: false, error: e.message };
+  }
   log(`headroom: restored the host default model to ${expected} (was ${was})`);
   return { ok: true, changed: true, was };
 }

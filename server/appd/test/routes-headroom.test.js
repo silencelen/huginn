@@ -684,6 +684,53 @@ test('a heads-up is typed once, at a turn boundary, at the heads-up threshold', 
   assert.equal(after.split('[huginn headroom]').length - 1, 1, 'exactly one heads-up per window');
 });
 
+test('repairing the host default keeps a SYMLINKED settings.json a symlink (#29)', async () => {
+  // ⚠ THE FILE THE OWNER KEEPS IN A DOTFILES REPO. `repairDefaultModel` wrote
+  // `<file>.tmp` and renameSync'd it over ~/.claude/settings.json without
+  // resolving the link, so the symlink was REPLACED by a regular file: later
+  // edits in the repo stopped reaching the CLI, silently and permanently. The
+  // mode went with it — the tmp is hardcoded 0600, so every host lost whatever
+  // permissions the file had, symlink or not. install-hooks.js resolves exactly
+  // this case on purpose (realpath + carry the mode); this one did not.
+  const settingsFile = path.join(claudeDir, 'settings.json');
+  const original = fs.readFileSync(settingsFile);
+  const dots = path.join(tmp, 'dotfiles');
+  fs.mkdirSync(dots, { recursive: true });
+  const real = path.join(dots, 'settings.json');
+  fs.writeFileSync(real, `${JSON.stringify({ model: 'claude-opus-5', effortLevel: 'xhigh' }, null, 2)}\n`);
+  fs.chmodSync(real, 0o644);
+  fs.rmSync(settingsFile, { force: true });
+  fs.symlinkSync(real, settingsFile);
+
+  // The native Fable consent dialog, answered in a way that made the CLI persist
+  // a new host default. That record is the only thing that arms the repair.
+  const { name } = fableSession('symlink');
+  const transcript = path.join(tmp, `${name}.jsonl`);
+  fs.appendFileSync(transcript, `${JSON.stringify({
+    type: 'system', subtype: 'model_consent_fallback',
+    choice: 'yes_default', toModel: 'claude-opus-5', persisted_as_default: true,
+  })}\n`);
+  writeState(name, { sessionId: `sid-${name}`, transcript });
+
+  setUsage({ session: 5, weekly_all: 10, weekly_fable: 20 });
+  await tick({ cooldownMs: 0 });
+  const deadline = Date.now() + 20_000;
+  while (Date.now() < deadline) {
+    if (JSON.parse(fs.readFileSync(real, 'utf8')).model === 'claude-fable-5-1') break;
+    await wait(400);
+    await api('/v1/headroom/settings', { method: 'PATCH', body: '{}' });
+  }
+
+  assert.equal(true, fs.lstatSync(settingsFile).isSymbolicLink(),
+    'the dotfiles link must survive the repair');
+  assert.equal('claude-fable-5-1', JSON.parse(fs.readFileSync(real, 'utf8')).model,
+    'and the repair must land in the file the link points at');
+  assert.equal(0o644, fs.statSync(real).mode & 0o777, 'with the mode it had');
+
+  fs.rmSync(settingsFile, { force: true });
+  fs.writeFileSync(settingsFile, original);
+});
+
 test('the SECOND Fable window gets its own heads-up (#17)', async () => {
   // ⚠ ONCE EVER, NOT ONCE PER WEEK. `rec.headsUpAt` was written in one place and
   // cleared in none, so the apply guard `if (!rec || rec.headsUpAt) return`
