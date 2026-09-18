@@ -4,6 +4,7 @@ import com.silencelen.huginn.data.HuginnSettings
 import com.silencelen.huginn.data.RouteBook
 import java.io.File
 import java.nio.file.Files
+import java.nio.file.attribute.PosixFilePermission
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 import kotlin.test.AfterTest
@@ -110,6 +111,28 @@ class DesktopSettingsTest {
         val salvage = File(file.parentFile, file.name + ".corrupt")
         assertTrue(salvage.exists(), "a corrupt settings file should be preserved")
         assertTrue(salvage.readText().contains("the-only-copy"))
+    }
+
+    @Test
+    fun `the salvaged copy is as private as the file it was salvaged from`() = runBlocking {
+        // It carries the plaintext root-equivalent daemon bearer, the original
+        // is deliberately 0600, and nothing in the app ever removes or
+        // re-restricts the copy. `File.copyTo` is delete + stream copy, so it
+        // lands at the process umask — 0644 at the usual 022, in a 0755 config
+        // dir, beside a 0600 original.
+        if (System.getProperty("os.name").orEmpty().startsWith("Windows", ignoreCase = true)) return@runBlocking
+        val file = freshFile()
+        file.parentFile.mkdirs()
+        file.writeText("""{"token":"the-only-copy" NOT JSON""")
+        DesktopSettings(file).setToken("replacement")
+        val salvage = File(file.parentFile, file.name + ".corrupt")
+
+        val perms = Files.getPosixFilePermissions(salvage.toPath())
+        assertEquals(
+            setOf(PosixFilePermission.OWNER_READ, PosixFilePermission.OWNER_WRITE),
+            perms,
+            "the salvage still holds the token: $perms",
+        )
     }
 
     // ------------------------------------------------------------- landing
