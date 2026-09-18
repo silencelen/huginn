@@ -288,6 +288,11 @@ object PlanFormat {
      * Hinnant's era arithmetic: shift the year to start in March so the leap day
      * lands last and the month lengths become a linear sequence, then count whole
      * 400-year eras, whose day count is fixed. No loops, no table, no library.
+     *
+     * ⚠ ONE HALF OF A PAIR. `TimeWords.civilFromDays` is the inverse — an instant
+     * back to a local calendar date — and the two are named in each other's docs
+     * so that neither module grows a third copy of this arithmetic. If a bug is
+     * ever found in one of them, the other has it too.
      */
     private fun daysFromCivil(year: Int, month: Int, day: Int): Long {
         val y = if (month <= 2) year - 1 else year

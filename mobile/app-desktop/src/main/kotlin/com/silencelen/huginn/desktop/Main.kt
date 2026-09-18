@@ -55,6 +55,8 @@ import com.silencelen.huginn.ui.LocalLinkPeek
 import com.silencelen.huginn.desktop.ui.common.DesktopLinkPeek
 import com.silencelen.huginn.desktop.ui.common.rememberLinkUriHandler
 import androidx.compose.ui.platform.LocalUriHandler
+import com.silencelen.huginn.desktop.ui.common.DesktopRowTime
+import com.silencelen.huginn.ui.LocalRowTime
 import com.silencelen.huginn.ui.LocalTranscriptMetrics
 import com.silencelen.huginn.ui.TranscriptMetrics
 import com.silencelen.huginn.ui.theme.HuginnTheme
@@ -716,6 +718,9 @@ fun main(args: Array<String>) {
                     // Where a link goes, on hover, in a tooltip — a pointer can ask
                     // a question of a thing without doing anything to it.
                     LocalLinkPeek provides DesktopLinkPeek,
+                    // Hover a message, see when it was written. The phone leaves
+                    // this at its no-op default and reveals times on long-press.
+                    LocalRowTime provides DesktopRowTime,
                 ) {
                     Shell(store)
 

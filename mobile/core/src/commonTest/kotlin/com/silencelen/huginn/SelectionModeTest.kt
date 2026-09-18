@@ -69,4 +69,21 @@ class SelectionModeTest {
         assertEquals(SelectionMode.NONE, widened.dismiss())
         assertEquals(emptyList(), widened.dismiss().actions(hostActions))
     }
+
+    /**
+     * The phone's timestamp reveal rides here, in words rather than as a number:
+     * formatting one needs a clock and a zone, and `:core` deliberately has
+     * neither. The bar draws the line only when this is non-blank, which is how a
+     * row the daemon sent no `ts` for gets no line at all instead of an empty one.
+     */
+    @Test
+    fun `the selection carries when the row was written, and survives the handles moving`() {
+        assertEquals("", SelectionMode.begin("ls").at, "no stamp offered, no line drawn")
+        assertEquals("", SelectionMode.NONE.at)
+        val stamped = SelectionMode.begin("ls -la", "Yesterday 21:40")
+        assertEquals("Yesterday 21:40", stamped.at)
+        // Widening the selection is the same row at the same time.
+        assertEquals("Yesterday 21:40", stamped.select("ls -la /tmp").at)
+        assertEquals("", stamped.dismiss().at)
+    }
 }
