@@ -757,6 +757,90 @@ test('resuming a tail does not duplicate a queued message delivered in a later w
   }
 });
 
+test('resuming a tail does not duplicate a queued message the DRAIN delivered', () => {
+  // The dequeue twin of the split `remove` above, and the commoner shape of the
+  // two on a live session: a message typed mid-turn is written as `enqueue`, the
+  // drain at turn end as `dequeue`, and Claude Code then writes the drained text
+  // as an ordinary `user` record a second or two later. When the turn outlasts a
+  // 2.5 s poll the enqueue is in page N and the dequeue + user record in page
+  // N+1, where the `queued` map is empty — so nothing was drained, nothing was
+  // reported, the page-N bubble kept its badge for the life of the view and the
+  // `user` record rendered as a second identical bubble. Replayed on the owner's
+  // own transcripts: 23 human-typed drains split a window, 22 of them wrong.
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'tr-drain-'));
+  const p = path.join(dir, 'session.jsonl');
+  const L = (o) => JSON.stringify(o) + '\n';
+  try {
+    fs.writeFileSync(p,
+      L({ type: 'user', message: { content: 'first question' } }) +
+      L({ type: 'assistant', message: { content: [{ type: 'text', text: 'working' }] } }) +
+      L({ type: 'queue-operation', operation: 'enqueue', content: 'do the restart asap' }));
+    const page1 = readTranscript(p);
+    const badged = page1.events.filter((e) => e.kind === 'user' && e.text === 'do the restart asap');
+    assert.strictEqual(badged.length, 1);
+    assert.strictEqual(badged[0].queued, true);
+
+    fs.appendFileSync(p,
+      L({ type: 'assistant', message: { content: [{ type: 'text', text: 'answer' }] } }) +
+      L({ type: 'queue-operation', operation: 'dequeue' }) +
+      L({ type: 'user', message: { content: 'do the restart asap' } }) +
+      L({ type: 'assistant', message: { content: [{ type: 'text', text: 'restarting' }] } }));
+    const page2 = readTranscript(p, { offset: page1.nextOffset });
+
+    const merged = page1.events.concat(page2.events);
+    const copies = merged.filter((e) => e.kind === 'user' && e.text === 'do the restart asap');
+    assert.strictEqual(copies.length, 1, 'the reader already had this message; it must not arrive twice');
+    assert.deepStrictEqual(page2.deliveredQueued, ['do the restart asap'],
+      'the delivery is reported instead, so the badge can be cleared');
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('a message typed AFTER the drain, past the next answer, is still a message', () => {
+  // The bound on the suppression above. Swallowing every later `user` record
+  // because a drain happened somewhere above would silently eat the next thing
+  // the owner types, which is the worst failure this file can have. The drain
+  // covers the records that follow it up to the next assistant record — the turn
+  // it fed — and nothing after that.
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'tr-drain-bound-'));
+  const p = path.join(dir, 'session.jsonl');
+  const L = (o) => JSON.stringify(o) + '\n';
+  try {
+    fs.writeFileSync(p, L({ type: 'queue-operation', operation: 'enqueue', content: 'one' }));
+    const page1 = readTranscript(p);
+    fs.appendFileSync(p,
+      L({ type: 'queue-operation', operation: 'dequeue' }) +
+      L({ type: 'user', message: { content: 'one' } }) +
+      L({ type: 'assistant', message: { content: [{ type: 'text', text: 'done' }] } }) +
+      L({ type: 'user', message: { content: 'two' } }));
+    const page2 = readTranscript(p, { offset: page1.nextOffset });
+    assert.deepStrictEqual(page2.events.map((e) => e.text), ['done', 'two']);
+    assert.deepStrictEqual(page2.deliveredQueued, ['one']);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('a cold open still emits a message the drain delivered', () => {
+  // The mirror of the cold-open case below: with no earlier page holding the
+  // badged bubble, the `user` record after an orphaned dequeue is the only copy
+  // the reader will ever get.
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'tr-drain-cold-'));
+  const p = path.join(dir, 'session.jsonl');
+  const L = (o) => JSON.stringify(o) + '\n';
+  try {
+    fs.writeFileSync(p,
+      L({ type: 'queue-operation', operation: 'dequeue' }) +
+      L({ type: 'user', message: { content: 'the follow up' } }));
+    const t = readTranscript(p);
+    assert.deepStrictEqual(t.events.map((e) => e.text), ['the follow up']);
+    assert.deepStrictEqual(t.deliveredQueued, [], 'nothing to reconcile on a cold open');
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('a cold open still emits a queued message whose enqueue scrolled off', () => {
   // The mirror case, and why the re-emit cannot simply be deleted: with no
   // earlier page to hold it, this is the only copy the reader will ever get.
@@ -785,6 +869,70 @@ test('a cold open still emits a queued message whose enqueue scrolled off', () =
 // time; the contract that makes it work is that a window's `windowStart` is a
 // record boundary, so consecutive pages ABUT: nothing is returned twice and, more
 // importantly, nothing falls in a gap between them.
+
+// ------------------------------------------------ a tail that opens mid-CHARACTER
+//
+// The tail window is a byte count, so it lands wherever it lands — including in
+// the middle of a multi-byte character, which `toString('utf8')` turns into one
+// U+FFFD per stray byte. Measuring the window in DECODED length then counts
+// three bytes where the file has one, and `nextOffset` walks off the end of the
+// record it was supposed to stop at.
+
+/**
+ * A transcript bigger than the tail window whose window opens on a UTF-8
+ * continuation byte, and whose last line is torn off mid-record the way a
+ * writer mid-flush leaves it.
+ * @returns {{path, tornAt, boundary}} tornAt = the byte the torn record starts at.
+ */
+function midCharTailFixture(pad) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'tr-midchar-'));
+  const p = path.join(dir, 'session.jsonl');
+  const L = (o) => JSON.stringify(o) + '\n';
+  // One long record of 3-byte characters, so the 256 KB boundary can be moved
+  // one byte at a time (by `pad`) until it falls INSIDE one of them.
+  const head = L({ type: 'user', message: { content: '…'.repeat(120000) + 'x'.repeat(pad) } });
+  let body = '';
+  for (let i = 0; i < 14; i++) {
+    body += L({ type: 'assistant', message: { content: [{ type: 'text', text: `answer ${i} — ${'…'.repeat(20)}` }] } });
+  }
+  const torn = JSON.stringify({ type: 'assistant', message: { content: [{ type: 'text', text: 'the newest answer' }] } });
+  const whole = Buffer.from(head + body, 'utf8');
+  fs.writeFileSync(p, Buffer.concat([whole, Buffer.from(torn.slice(0, 20), 'utf8')]));
+  const size = fs.statSync(p).size;
+  const boundary = Math.max(0, size - 256 * 1024);
+  const at = fs.readFileSync(p)[boundary];
+  return { path: p, dir, tornAt: whole.length, opensMidChar: (at & 0xC0) === 0x80, torn };
+}
+
+test('a tail opening mid-character does not lose the newest record', () => {
+  // (a) from the report: the stray bytes decode to U+FFFD, `consumed` is measured
+  // on the decoded string and so overshoots by two bytes per stray byte, and the
+  // next poll's window starts INSIDE the record after the torn one — which then
+  // fails JSON.parse and is silently skipped. The lost record is always the
+  // newest one: the assistant block or tool_result the reader opened to watch.
+  let f = null;
+  for (let pad = 0; pad < 3 && !(f && f.opensMidChar); pad++) {
+    if (f) fs.rmSync(f.dir, { recursive: true, force: true });
+    f = midCharTailFixture(pad);
+  }
+  try {
+    assert.ok(f.opensMidChar, 'fixture must open the tail window on a continuation byte');
+    const p1 = readTranscript(f.path);
+    assert.strictEqual(p1.nextOffset, f.tornAt,
+      'the window stops at the start of the half-written record, measured in BYTES');
+    const buf = fs.readFileSync(f.path);
+    assert.strictEqual(buf[p1.windowStart - 1], 0x0a, 'windowStart is a record boundary');
+
+    // The writer finishes the record and writes one more.
+    fs.appendFileSync(f.path, f.torn.slice(20) + '\n'
+      + JSON.stringify({ type: 'assistant', message: { content: [{ type: 'text', text: 'and the next one' }] } }) + '\n');
+    const p2 = readTranscript(f.path, { offset: p1.nextOffset });
+    assert.deepStrictEqual(p2.events.map((e) => e.text), ['the newest answer', 'and the next one'],
+      'nothing between the two polls may fall in a gap');
+  } finally {
+    fs.rmSync(f.dir, { recursive: true, force: true });
+  }
+});
 
 test('paging backwards with until reaches the start and loses nothing', () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'tr-back-'));

@@ -154,10 +154,17 @@ function nextOccurrence(resetsClock, tz, nowMs) {
   // tomorrow's, and returning the past one would make the stall look resolvable
   // immediately — the one failure mode that resumes into a still-empty window
   // and burns an attempt.
-  if (at <= nowMs) {
-    const t = new Date(nowMs + 24 * 60 * 60 * 1000);
-    const q = partsIn(tz, t.getTime());
-    at = epochForWallClock(tz, q.y, q.mo, q.d, h, mi);
+  //
+  // Roll the CALENDAR day, never the instant. `nowMs + 24h` is a different local
+  // date on a DST night in both directions, and both land on a night nobody is
+  // watching: on a spring-forward eve the 23-hour day put "tomorrow" two days out
+  // and the stall's resetsAt read a full day late, and on a fall-back night the
+  // 25-hour day read the SAME date back and returned a time in the PAST. This is
+  // the walk `rounds.js nextFireAt` already uses, and the loop re-checks each
+  // candidate so the past-time variant cannot survive either.
+  for (let i = 1; at <= nowMs && i <= 3; i += 1) {
+    const day = new Date(Date.UTC(p.y, p.mo - 1, p.d + i));
+    at = epochForWallClock(tz, day.getUTCFullYear(), day.getUTCMonth() + 1, day.getUTCDate(), h, mi);
   }
   return at;
 }
