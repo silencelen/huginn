@@ -235,7 +235,15 @@ object RouteResolver {
         if (book.routes.isEmpty()) return Outcome(Choice.Empty, health)
         val active = book.active
         if (!book.autoSwitch) {
-            return Outcome(active?.let { Choice.Pinned(it) } ?: Choice.Empty, health)
+            val pinned = active ?: return Outcome(Choice.Empty, health)
+            // ⚠ REFUSING TO MOVE IS NOT REFUSING TO LOOK. A pinned book used to
+            // return here before `force` was read, so "Find live route" probed
+            // NOTHING: the dots and the "last reached" line froze for the life of
+            // the pin — "never tried" for a hand-made pin, a stale green for a
+            // route that has since died. A manual ask sweeps and reports; the pin
+            // is still the answer.
+            if (!force) return Outcome(Choice.Pinned(pinned), health)
+            return Outcome(Choice.Pinned(pinned), sweep(book, health, now, probe).first)
         }
 
         val activeWasFresh = active != null && isFresh(health[active.id], now)
@@ -243,28 +251,8 @@ object RouteResolver {
         // not re-interrogated on every start, only on a manual ask.
         if (!force && active != null && activeWasFresh) return Outcome(Choice.Stay.Here(active), health)
 
-        // ONE budget for the whole list, not one per route. Sequentially probing
-        // eight pins at three seconds each is twenty-four seconds of a dead app
-        // before it tries the address that works.
-        val results = coroutineScope {
-            val started = book.routes.map { route ->
-                async {
-                    val began = kotlin.time.TimeSource.Monotonic.markNow()
-                    val ok = probe(route)
-                    route.id to (ok to began.elapsedNow().inWholeMilliseconds)
-                }
-            }
-            started.map { it.await() }
-        }.toMap()
-
-        val next = health.toMutableMap()
-        for ((id, r) in results) {
-            val (ok, rtt) = r
-            val was = next[id] ?: RouteHealth()
-            next[id] = if (ok) was.copy(lastOkAt = now, lastRttMs = rtt) else was.copy(lastFailAt = now)
-        }
-
-        val healthy = book.routes.filter { results[it.id]?.first == true }
+        val (next, answered) = sweep(book, health, now, probe)
+        val healthy = book.routes.filter { it.id in answered }
         if (healthy.isEmpty()) return Outcome(Choice.NoRoute, next)
 
         // The expensive half of the hysteresis: a route that has been working
@@ -287,6 +275,41 @@ object RouteResolver {
             return Outcome(Choice.Stay.Candidate(route = active ?: pick, candidate = pick), next)
         }
         return Outcome(Choice.Switched(pick), next)
+    }
+
+    /**
+     * Probes every pin and folds the answers into the health map.
+     *
+     * ONE budget for the whole list, not one per route. Sequentially probing
+     * eight pins at three seconds each is twenty-four seconds of a dead app
+     * before it tries the address that works.
+     *
+     * @return the updated health map and the ids that answered.
+     */
+    private suspend fun sweep(
+        book: RouteBook,
+        health: Map<String, RouteHealth>,
+        now: Long,
+        probe: suspend (PinnedRoute) -> Boolean,
+    ): Pair<Map<String, RouteHealth>, Set<String>> {
+        val results = coroutineScope {
+            val started = book.routes.map { route ->
+                async {
+                    val began = kotlin.time.TimeSource.Monotonic.markNow()
+                    val ok = probe(route)
+                    route.id to (ok to began.elapsedNow().inWholeMilliseconds)
+                }
+            }
+            started.map { it.await() }
+        }.toMap()
+
+        val next = health.toMutableMap()
+        for ((id, r) in results) {
+            val (ok, rtt) = r
+            val was = next[id] ?: RouteHealth()
+            next[id] = if (ok) was.copy(lastOkAt = now, lastRttMs = rtt) else was.copy(lastFailAt = now)
+        }
+        return next to results.filterValues { it.first }.keys
     }
 
     /** Whether this client may move to [route] without being told to. */
