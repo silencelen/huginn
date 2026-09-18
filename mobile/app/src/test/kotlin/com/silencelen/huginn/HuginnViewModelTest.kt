@@ -10,6 +10,15 @@ import com.silencelen.huginn.data.TranscriptEvent
 import com.silencelen.huginn.data.TranscriptPage
 import com.silencelen.huginn.data.AgentRun
 import com.silencelen.huginn.ui.AgentStream
+import com.silencelen.huginn.ui.AttachBatch
+import com.silencelen.huginn.ui.AttachChipState
+import com.silencelen.huginn.ui.AttachmentSlots
+import com.silencelen.huginn.ui.AttachmentText
+import com.silencelen.huginn.ui.ClipboardImage
+import com.silencelen.huginn.ui.PasteOutcome
+import com.silencelen.huginn.ui.chipsFor
+import com.silencelen.huginn.ui.composeMessage
+import com.silencelen.huginn.ui.pastePlan
 import com.silencelen.huginn.ui.HuginnViewModel
 import com.silencelen.huginn.ui.SelectionAction
 import com.silencelen.huginn.ui.SelectionMode
@@ -29,7 +38,10 @@ import io.ktor.http.HttpStatusCode
 import io.ktor.http.headersOf
 import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.json.Json
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.test.runCurrent
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
@@ -462,4 +474,166 @@ class HuginnViewModelTest {
         assertNull("a delivered send never showed one", SendQueue.seed(SendKeysResult(ok = true, delivered = true)))
     }
 
+}
+
+/**
+ * The phone's attachment slots.
+ *
+ * These had ZERO coverage before multi-attach — `takeAttachment`,
+ * `whenAttachmentSettled` and the owner guard all lived as private methods on an
+ * `AndroidViewModel`, which on a host with no device and no `/dev/kvm` cannot be
+ * constructed at all. [AttachmentSlots] is a plain class for exactly that reason,
+ * and every rule the view model used to hold is asserted here.
+ */
+class AttachmentSlotsTest {
+
+    private val CHAT = "chat:1"
+    private val SESS = "sess:jtyper"
+
+    private fun AttachmentSlots.stageReady(owner: String, label: String, path: String): String {
+        val id = stage(owner, label, image = true)!!
+        ready(id, path, name = null, image = true, readable = true, bytes = 100)
+        return id
+    }
+
+    @Test
+    fun `markers come back in attach order, and the composed message is core's`() {
+        val slots = AttachmentSlots()
+        slots.stageReady(CHAT, "one", "/up/one.jpg")
+        slots.stageReady(CHAT, "two", "/up/two.jpg")
+        slots.stageReady(CHAT, "three", "/up/three.jpg")
+
+        val taken = slots.take(CHAT)
+        assertEquals("three files, three markers", 3, taken.markers.size)
+
+        // The EXACT expression both phone send sites now use. It used to be
+        // `text + "\n\n" + markerFor(att)`, written out twice, for one marker.
+        val sent = composeMessage("look at these", taken.markers)
+        assertEquals(
+            listOf("/up/one.jpg", "/up/two.jpg", "/up/three.jpg"),
+            AttachmentText.imagePaths(sent),
+        )
+        assertTrue("the old hand-rolled join is byte-identical for one", sent.startsWith("look at these\n\n"))
+    }
+
+    @Test
+    fun `what failed is named, and what landed still sends`() {
+        val slots = AttachmentSlots()
+        slots.stageReady(CHAT, "ok1.png", "/up/ok1.jpg")
+        val bad = slots.stage(CHAT, "big.zip", image = false)!!
+        slots.fail(bad, "that type is not allowed")
+        slots.stageReady(CHAT, "ok2.png", "/up/ok2.jpg")
+
+        val taken = slots.take(CHAT)
+        assertEquals(2, taken.markers.size)
+        assertEquals(listOf("big.zip"), taken.failed)
+        assertEquals(
+            "1 of 3 attachments did not upload: big.zip — sent without it",
+            AttachBatch.failureLine(taken.failed, 3),
+        )
+        // The slot version left a FAILED attachment staged, so it rode the NEXT
+        // message instead of this one.
+        assertTrue("taking clears them all", slots.items.value.isEmpty())
+    }
+
+    @Test
+    fun `the cap is ten per composer`() {
+        val slots = AttachmentSlots()
+        repeat(10) { assertNotNull(slots.stage(CHAT, "f$it", image = true)) }
+        assertNull("the eleventh is refused", slots.stage(CHAT, "f11", image = true))
+        assertEquals(10, slots.countFor(CHAT))
+        // Per composer, not globally: a full chat must not lock the session pane.
+        assertNotNull(slots.stage(SESS, "s1", image = true))
+        assertEquals(10L, AttachBatch.MAX_ITEMS.toLong())
+    }
+
+    @Test
+    fun `one composer cannot take another's`() {
+        // Stage in chat A, hop to the session before A's dispose runs, send —
+        // the session's message used to carry A's photo.
+        val slots = AttachmentSlots()
+        slots.stageReady(CHAT, "one", "/up/one.jpg")
+        assertTrue(slots.take(SESS).markers.isEmpty())
+        assertEquals("and it is still staged where it belongs", 1, slots.countFor(CHAT))
+    }
+
+    @Test
+    fun `settle waits for the WHOLE batch, not the first one to land`() = runTest {
+        val slots = AttachmentSlots()
+        val a = slots.stage(CHAT, "a", image = true)!!
+        val b = slots.stage(CHAT, "b", image = true)!!
+        val c = slots.stage(CHAT, "c", image = true)!!
+
+        var settled = false
+        val waiter = launch { slots.settle(CHAT); settled = true }
+        runCurrent()
+        assertFalse("nothing has landed yet", settled)
+
+        slots.ready(a, "/up/a.jpg", null, image = true, readable = true, bytes = 1)
+        runCurrent()
+        assertFalse("one of three is not the batch", settled)
+
+        slots.fail(b, "nope")
+        runCurrent()
+        assertFalse("a failure is settled, but c is still in flight", settled)
+
+        slots.ready(c, "/up/c.jpg", null, image = true, readable = true, bytes = 1)
+        runCurrent()
+        assertTrue("the send goes once nothing is still uploading", settled)
+        waiter.join()
+    }
+
+    @Test
+    fun `chips are this composer's, in order, with the state the row draws`() {
+        val slots = AttachmentSlots()
+        slots.stageReady(CHAT, "one", "/up/one.jpg")
+        val mid = slots.stage(CHAT, "two", image = false)!!
+        slots.fail(mid, "refused")
+        slots.stage(SESS, "elsewhere", image = true)
+
+        val chips = chipsFor(slots.items.value, CHAT)
+        assertEquals(listOf("one", "two"), chips.map { it.label })
+        assertEquals(AttachChipState.READY, chips[0].state)
+        assertEquals(AttachChipState.FAILED, chips[1].state)
+
+        // Removing by id, not by index: uploads settle out of order.
+        slots.remove(chips[0].id)
+        assertEquals(listOf("two"), chipsFor(slots.items.value, CHAT).map { it.label })
+    }
+}
+
+/**
+ * The clipboard paste rule.
+ *
+ * `ClipboardManager` is one of the framework classes the unit-test android.jar
+ * throws from on first call, so the READING sits behind `ImageClipboard` and only
+ * the DECISION is asserted here — which is the half people report: "I copied a
+ * picture and nothing happened" is either an empty clipboard or a full composer,
+ * and a paste that says neither is indistinguishable from a broken button.
+ */
+class PastePlanTest {
+
+    private val image = ClipboardImage("pasted.jpg", ByteArray(8))
+
+    @Test
+    fun `an empty clipboard is refused in words`() {
+        val out = pastePlan(null, pending = 0)
+        assertTrue(out is PasteOutcome.Refused)
+        assertEquals("No image on the clipboard", (out as PasteOutcome.Refused).why)
+    }
+
+    @Test
+    fun `a full composer is refused with the cap`() {
+        val out = pastePlan(image, pending = AttachBatch.MAX_ITEMS)
+        assertTrue(out is PasteOutcome.Refused)
+        assertTrue((out as PasteOutcome.Refused).why.contains("10 attachments at a time"))
+    }
+
+    @Test
+    fun `otherwise it goes, under its own name`() {
+        val out = pastePlan(image, pending = 3)
+        assertTrue(out is PasteOutcome.Attach)
+        assertEquals("pasted.jpg", (out as PasteOutcome.Attach).name)
+        assertEquals(8, out.jpeg.size)
+    }
 }

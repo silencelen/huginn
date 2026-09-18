@@ -4,14 +4,11 @@ import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.Box
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.outlined.AttachFile
+import androidx.compose.material.icons.outlined.ContentPaste
 import androidx.compose.material.icons.outlined.Description
 import androidx.compose.material.icons.outlined.Image
 import androidx.compose.material.icons.outlined.PhotoCamera
@@ -19,17 +16,14 @@ import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.core.content.FileProvider
 import java.io.File
@@ -38,44 +32,10 @@ import java.io.File
 // composer. One implementation on purpose: the two composers already drifted once
 // (paste settle, send-enable rules), and "photo works in chats but not sessions"
 // is precisely the kind of split this file exists to prevent.
-
-/**
- * The staged photo, visible and killable. State chips rather than silence: an
- * upload that fails while the user types must say so BEFORE they send a message
- * that would then arrive without the thing it talks about.
- */
-@Composable
-fun AttachmentBar(attachment: HuginnViewModel.Attachment?, onClear: () -> Unit) {
-    val (label, isError) = when (attachment) {
-        is HuginnViewModel.Attachment.Uploading -> "Uploading…" to false
-        is HuginnViewModel.Attachment.Ready ->
-            (if (attachment.image) "Photo attached"
-             else "Attached: ${attachment.name ?: "file"}") to false
-        is HuginnViewModel.Attachment.Failed -> "Attachment failed: ${attachment.why}" to true
-        null -> return
-    }
-    Row(
-        Modifier.fillMaxWidth().padding(start = 14.dp, end = 8.dp, top = 6.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Text(
-            label,
-            style = MaterialTheme.typography.labelMedium,
-            color = if (isError) MaterialTheme.colorScheme.error
-                else MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.weight(1f),
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-        )
-        IconButton(onClick = onClear, modifier = Modifier.size(28.dp)) {
-            Icon(
-                Icons.Filled.Close,
-                contentDescription = "Remove attachment",
-                tint = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-        }
-    }
-}
+//
+// The CHIPS are no longer here: they are `:ui`'s AttachChipRow, which the desktop
+// draws too. What was here was a one-line Row that could say "Uploading…" and
+// nothing about WHICH of several files that was.
 
 /**
  * The attach menu: camera, photo library, any file — and, when the daemon has
@@ -95,8 +55,10 @@ fun AttachmentBar(attachment: HuginnViewModel.Attachment?, onClear: () -> Unit) 
  */
 @Composable
 fun AttachButton(
-    onPickImage: (Uri) -> Unit,
-    onPickFile: (Uri) -> Unit,
+    onPickImages: (List<Uri>) -> Unit,
+    onPickFiles: (List<Uri>) -> Unit,
+    /** The clipboard row; the view model owns the reading and the refusals. */
+    onPasteImage: () -> Unit = {},
     pads: List<com.silencelen.huginn.data.Scratchpad> = emptyList(),
     padRefId: String? = null,
     onPadRef: (String?) -> Unit = {},
@@ -108,17 +70,22 @@ fun AttachButton(
     // the URI it wrote into has to survive the app being backgrounded meanwhile.
     var captureUri by rememberSaveable { mutableStateOf<Uri?>(null) }
 
-    val pickImage = rememberLauncherForActivityResult(
-        ActivityResultContracts.PickVisualMedia()
-    ) { uri -> if (uri != null) onPickImage(uri) }
+    // MULTIPLE, capped where the contract caps it. The picker enforces the count
+    // itself, so a person cannot select eleven and then be told about it after the
+    // fact — which is the only place on this screen the cap can be stated before
+    // it bites.
+    val pickImages = rememberLauncherForActivityResult(
+        ActivityResultContracts.PickMultipleVisualMedia(AttachBatch.MAX_ITEMS)
+    ) { uris -> if (uris.isNotEmpty()) onPickImages(uris) }
 
+    // One camera, one photo: TakePicture stays single.
     val takePicture = rememberLauncherForActivityResult(
         ActivityResultContracts.TakePicture()
-    ) { ok -> captureUri?.takeIf { ok }?.let(onPickImage) }
+    ) { ok -> captureUri?.takeIf { ok }?.let { onPickImages(listOf(it)) } }
 
-    val pickFile = rememberLauncherForActivityResult(
-        ActivityResultContracts.OpenDocument()
-    ) { uri -> if (uri != null) onPickFile(uri) }
+    val pickFiles = rememberLauncherForActivityResult(
+        ActivityResultContracts.OpenMultipleDocuments()
+    ) { uris -> if (uris.isNotEmpty()) onPickFiles(uris) }
 
     val rows = AttachChooser.rows(
         own = listOf(
@@ -140,15 +107,20 @@ fun AttachButton(
                 runCatching { takePicture.launch(uri) }
             },
             AttachRow("photo-library", "Photo library", Icons.Outlined.Image) {
-                pickImage.launch(
+                pickImages.launch(
                     PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
                 )
             },
             AttachRow("local-file", "Local file", Icons.Outlined.Description) {
                 // The server allowlists what Read can genuinely open (images,
                 // pdf, text); anything else fails fast with its words.
-                pickFile.launch(arrayOf("*/*"))
+                pickFiles.launch(arrayOf("*/*"))
             },
+            // A ROW HERE, not a fourth icon button. The composer line already
+            // carries attach, mic, voice and send on a phone; the question
+            // "where does this image come from" is the one this menu already
+            // answers, and the clipboard is one more answer to it.
+            AttachRow("paste-image", "Paste image", Icons.Outlined.ContentPaste, onPasteImage),
         ),
         padsAvailable = pads.isNotEmpty(),
         onNotesPage = { pagePicker = true },

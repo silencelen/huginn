@@ -688,8 +688,9 @@ fun HuginnApp(
     }
     val agents by vm.agents.collectAsState()
     val suggestions by vm.suggestions.collectAsState()
-    val attachment by vm.attachment.collectAsState()
-    val attachmentOwner by vm.attachmentOwner.collectAsState()
+    // ONE list for every composer; each item names its owner, and `chipsFor`
+    // is the filter — the single slot used to need a separate owner flow here.
+    val attachments by vm.attachments.collectAsState()
 
     pendingShare?.let { share ->
         SendTargetSheet(
@@ -1120,10 +1121,11 @@ fun HuginnApp(
                 onSend = { vm.send(id, it) },
                 onCancel = { vm.cancel(id) },
                 onCopy = { vm.copy(it) },
-                attachment = if (attachmentOwner == HuginnViewModel.chatDraftKey(id)) attachment else null,
-                onAttach = { vm.attachImage(it, HuginnViewModel.chatDraftKey(id)) },
-                onAttachFile = { vm.attachFile(it, HuginnViewModel.chatDraftKey(id)) },
-                onClearAttachment = { vm.clearAttachment(HuginnViewModel.chatDraftKey(id)) },
+                attachments = com.silencelen.huginn.ui.chipsFor(attachments, HuginnViewModel.chatDraftKey(id)),
+                onAttach = { vm.attachImages(it, HuginnViewModel.chatDraftKey(id)) },
+                onAttachFile = { vm.attachFiles(it, HuginnViewModel.chatDraftKey(id)) },
+                onRemoveAttachment = { vm.removeAttachment(it) },
+                onPasteImage = { vm.pasteImage(HuginnViewModel.chatDraftKey(id)) },
                 pads = if (padsAvailable == true) pads else emptyList(),
                 padRefId = padRefs[com.silencelen.huginn.ui.ScratchpadRules.chatRefKey(id)],
                 onPadRef = { vm.setPadRef(com.silencelen.huginn.ui.ScratchpadRules.chatRefKey(id), it) },
@@ -1290,10 +1292,11 @@ fun HuginnApp(
                 onForceResize = { vm.forceFit() },
                 onInterrupt = { vm.interruptSession(name) },
                 working = sessionWorking,
-                attachment = if (attachmentOwner == HuginnViewModel.sessionDraftKey(name)) attachment else null,
-                onAttach = { vm.attachImage(it, HuginnViewModel.sessionDraftKey(name)) },
-                onAttachFile = { vm.attachFile(it, HuginnViewModel.sessionDraftKey(name)) },
-                onClearAttachment = { vm.clearAttachment(HuginnViewModel.sessionDraftKey(name)) },
+                attachments = com.silencelen.huginn.ui.chipsFor(attachments, HuginnViewModel.sessionDraftKey(name)),
+                onAttach = { vm.attachImages(it, HuginnViewModel.sessionDraftKey(name)) },
+                onAttachFile = { vm.attachFiles(it, HuginnViewModel.sessionDraftKey(name)) },
+                onRemoveAttachment = { vm.removeAttachment(it) },
+                onPasteImage = { vm.pasteImage(HuginnViewModel.sessionDraftKey(name)) },
                 onCopy = { vm.copy(it) },
                 hasEarlier = hasEarlier,
                 loadingHistory = loadingHistory,
