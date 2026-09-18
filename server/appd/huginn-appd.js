@@ -625,8 +625,28 @@ function ofThisIncarnation(name, st) {
 /**
  * The per-session sidecar directories the title hook keeps under STATE_DIR,
  * named in ONE place so a reader cannot update three of the four call sites.
+ *
+ * ⚠ THE LEADING DOT IS THE FIX FOR #2/#3. These used to be `ask`, `plan` and
+ * `compacting`, sharing a namespace with the flat per-session state files — and
+ * a session may legitimately be called `plan`. Whichever existed first decided
+ * which half broke, silently, at exit 0: with the directory there the hook's
+ * `mv` moved that session's state JSON INTO it (no state word, no
+ * claudeSessionId, no transcript, no conversation tab, forever); with the file
+ * there every sidecar write on the host died on ENOTDIR, so NO session got a
+ * prompt sidecar and the 3.1.0 fix that stops a message being typed into a live
+ * dialog was disabled host-wide. A leading dot is outside NAME_RE, so no session
+ * can address one. The names are reserved too (lib/session-registry RESERVED).
  */
-const SIDECAR_DIRS = ['ask', 'plan', 'compacting'];
+const SIDECAR_DIRS = ['.ask', '.plan', '.compacting'];
+
+/**
+ * The pre-3.3 spelling. Still READ and still CLEARED, because /run survives a
+ * deploy: a session whose last hook event ran under the old hook has its sidecar
+ * in the undotted directory until its next event, and a name that changes hands
+ * must not inherit a stale question from either spelling.
+ */
+const LEGACY_SIDECAR_DIRS = ['ask', 'plan', 'compacting'];
+const ALL_SIDECAR_DIRS = [...SIDECAR_DIRS, ...LEGACY_SIDECAR_DIRS];
 
 /**
  * Every per-name file the hook may have left behind. Used both when ending a
@@ -637,7 +657,7 @@ const SIDECAR_DIRS = ['ask', 'plan', 'compacting'];
 function clearSessionState(name) {
   for (const f of [
     path.join(STATE_DIR, name),
-    ...SIDECAR_DIRS.map((d) => path.join(STATE_DIR, d, name)),
+    ...ALL_SIDECAR_DIRS.map((d) => path.join(STATE_DIR, d, name)),
   ]) {
     try { fs.unlinkSync(f); } catch { /* already gone */ }
   }
@@ -2478,16 +2498,22 @@ async function peekHash(name) {
 }
 
 // A prompt sidecar the hook wrote (exact AskUserQuestion/ExitPlanMode input),
-// under STATE_DIR/{ask,plan}/<name>. Absent, unreadable, or malformed -> null,
+// under STATE_DIR/{.ask,.plan}/<name>. Absent, unreadable, or malformed -> null,
 // which just drops to the pane-only path.
 function readSidecar(kind, name) {
-  try { return JSON.parse(fs.readFileSync(path.join(STATE_DIR, kind, name), 'utf8')); }
-  catch { return null; }
+  // The dotted directory first, then the pre-3.3 spelling: a hook event that ran
+  // before the daemon was upgraded left its sidecar in the old one, and /run is
+  // only emptied by a reboot.
+  for (const dir of [`.${kind}`, kind]) {
+    try { return JSON.parse(fs.readFileSync(path.join(STATE_DIR, dir, name), 'utf8')); }
+    catch { /* try the other spelling */ }
+  }
+  return null;
 }
 
 /**
  * Is the session compacting? huginn-claude-title touches
- * STATE_DIR/compacting/<name> on PreCompact and removes it on PostCompact/Stop —
+ * STATE_DIR/.compacting/<name> on PreCompact and removes it on PostCompact/Stop —
  * a reliable, poll-independent signal (the pane spinner only shows it while a
  * screen is being captured).
  *
@@ -2499,10 +2525,13 @@ function readSidecar(kind, name) {
  */
 const COMPACTING_TTL_MS = 5 * 60 * 1000;
 function isCompacting(name) {
-  try {
-    const st = fs.statSync(path.join(STATE_DIR, 'compacting', name));
-    return (Date.now() - st.mtimeMs) < COMPACTING_TTL_MS;
-  } catch { return false; }
+  for (const dir of ['.compacting', 'compacting']) {
+    try {
+      const st = fs.statSync(path.join(STATE_DIR, dir, name));
+      return (Date.now() - st.mtimeMs) < COMPACTING_TTL_MS;
+    } catch { /* try the pre-3.3 spelling */ }
+  }
+  return false;
 }
 
 const SIDECAR_TTL_MS = 24 * 60 * 60 * 1000;
@@ -9521,7 +9550,7 @@ const server = http.createServer(async (req, res) => {
       // Move the prompt sidecars + the compacting marker too, or a fused prompt
       // silently degrades to pane-only after a rename until the next question
       // rewrites them.
-      for (const kind of SIDECAR_DIRS) {
+      for (const kind of ALL_SIDECAR_DIRS) {
         try { fs.renameSync(path.join(STATE_DIR, kind, from), path.join(STATE_DIR, kind, actual)); } catch { }
       }
       // ⚠ EVERY MOVE BELOW IS `set(new) THEN delete(old)`, WHICH ERASES THE ROW
