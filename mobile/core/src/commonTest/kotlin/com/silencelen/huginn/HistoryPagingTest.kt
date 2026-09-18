@@ -37,6 +37,33 @@ class HistoryPagingTest {
             "a duplicate key throws in LazyColumn and takes the whole view with it")
     }
 
+    /**
+     * ⚠ `seq` IS THE PRODUCT'S ONLY ROW IDENTITY. `TranscriptGroups.keyOf` feeds
+     * it to `items(key = …)` in all four shells and ToolCard's expansion is
+     * `rememberSaveable(ev.seq)`, so renumbering the combined list from 0 handed
+     * every saved per-row state to a DIFFERENT event: the tool card the reader had
+     * open collapsed, and whichever older event inherited that seq opened instead
+     * — the exact symptom the renumbering was introduced to stop, caused by the
+     * one control whose whole job is to add content without disturbing the reader.
+     */
+    @Test
+    fun `rows already on screen keep the seq their state is keyed on`() {
+        val current = page("third", "fourth", windowStart = 900)
+        val older = page("first", "second", windowStart = 400)
+
+        val merged = prependTranscriptPage(current, older)
+
+        assertEquals(listOf(-2, -1, 0, 1), merged.events.map { it.seq },
+            "the older page is numbered BELOW the window; nothing sends a seq to the daemon")
+        assertEquals(listOf("third", "fourth"), merged.events.filter { it.seq >= 0 }.map { it.text })
+
+        // And again: a second page goes below the first.
+        val older2 = page("zeroth", windowStart = 100)
+        val twice = prependTranscriptPage(merged, older2)
+        assertEquals(listOf(-3, -2, -1, 0, 1), twice.events.map { it.seq })
+        assertEquals(twice.events.size, twice.events.map { it.seq }.toSet().size)
+    }
+
     @Test
     fun `the handle moves to the older page, so the next read goes further back`() {
         val merged = prependTranscriptPage(page("b", windowStart = 900), page("a", windowStart = 400))

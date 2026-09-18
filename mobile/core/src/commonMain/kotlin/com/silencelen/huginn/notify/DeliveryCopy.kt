@@ -57,6 +57,15 @@ object DeliveryCopy {
      */
     private val ADDRESSY = listOf(
         Regex("""\b[a-zA-Z][a-zA-Z0-9+.-]*://\S+"""),
+        // ⚠ IPv6, BRACKETED FORM FIRST — and before [scrub] strips brackets, which
+        // it does AFTER this list runs. RouteGuard allows plain http to fc00::/7
+        // and MESH is a first-class route kind, so an address like
+        // `[fd7a:115c:a1e0::c65a]:8787` is an ordinary configuration here.
+        Regex("""\[[0-9A-Fa-f:.]{2,45}\](?::\d+)?"""),
+        // …and bare, compressed or written out in full, with or without a zone
+        // id. Java prints InetAddress UNCOMPRESSED, so both shapes occur; the
+        // two-colon minimum is what keeps this off ordinary `host:port` text.
+        Regex("""[0-9A-Fa-f]{0,4}(?::[0-9A-Fa-f]{0,4}){2,}(?:%[A-Za-z0-9._-]{1,16})?"""),
         Regex("""\b\d{1,3}(?:\.\d{1,3}){3}(?::\d+)?\b"""),
         Regex("""\b[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+(?::\d+)?\b"""),
         Regex("""\b[A-Za-z0-9-]+:\d{2,5}\b"""),
@@ -90,7 +99,12 @@ object DeliveryCopy {
         fun has(vararg needles: String) = needles.any { it in t }
         return when {
             raw.isBlank() -> ""
-            has("connect timeout", "connecttimeout") ->
+            // ⚠ THE PHRASES ANDROID ACTUALLY PRODUCES. Ktor's own "Connect timeout
+            // has expired" is only one of them: libcore raises ETIMEDOUT
+            // ("Connection timed out"), the JDK says "Connect timed out", and each
+            // of those used to fall through to the fallback, whose only remaining
+            // material is the address.
+            has("connect timeout", "connecttimeout", "etimedout", "connection timed out", "connect timed out") ->
                 "huginn did not answer in time — usually this phone being off the tailnet."
             has("socket timeout", "sockettimeout", "request timeout", "read timed out") ->
                 "huginn started answering and then stopped."
@@ -109,6 +123,13 @@ object DeliveryCopy {
             has("403", "forbidden") -> "huginn refused this phone."
             has("no address associated", "airplane", "no network") ->
                 "this phone had no network at all."
+            // ⚠ LAST, AND HONEST. OkHttp replaces libcore's message with
+            // `Failed to connect to <InetSocketAddress>`, which says WHERE and not
+            // WHY — so it must not claim a cause, and it must not fall through to
+            // a fallback whose only material is the address it just replaced.
+            // Everything above matches first when the reason survived.
+            has("failed to connect", "unable to connect") ->
+                "this phone could not reach huginn — the connection did not get through."
             else -> {
                 val rest = scrub(raw.substringBefore('[').substringBefore('(')).take(60).trim()
                 if (rest.isEmpty()) "this phone could not reach huginn."

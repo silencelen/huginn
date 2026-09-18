@@ -27,6 +27,7 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.buffer
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.flowOn
+import kotlinx.serialization.SerializationException
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonNull
@@ -70,6 +71,24 @@ class HuginnClient(
     class HuginnException(val code: Int, override val message: String) : Exception(message)
 
     /**
+     * Something answered at this address, and it was not huginn.
+     *
+     * ⚠ DELIBERATELY NOT A [HuginnException]. Both shells classify a failure as
+     * network-vs-server with `it !is HuginnException`, and the whole point of
+     * this case is that the address is wrong — a captive portal, a proxy
+     * interstitial, a stranger's web page, a stale RFC1918 pin on a foreign LAN.
+     * Wrapping it as a server error would stop the client re-resolving away from
+     * exactly the host it should be leaving.
+     *
+     * And the message is a SENTENCE, not the body. kotlinx appends the input it
+     * choked on to its own exception unconditionally, and nothing in `mobile/`
+     * caught it, so `errorTextFor`'s fallback printed
+     * `Unexpected JSON token at offset 0: … JSON input: <the page>` onto the
+     * Status screen, untruncated.
+     */
+    class NotHuginnException(override val message: String = NOT_HUGINN) : Exception(message)
+
+    /**
      * FOUR TIMEOUT TIERS, and they are a contract rather than a detail — each one
      * is a production failure that went unnoticed until it had a number. Change
      * one only against the behaviour described beside it.
@@ -77,6 +96,9 @@ class HuginnClient(
     companion object {
         /** What a call says when nothing is pinned yet. A first run, not a fault. */
         const val NO_ROUTE: String = "No route yet — add the address huginn answers on in Settings"
+
+        /** What a call says when the address answered and the answer was not huginn's. */
+        const val NOT_HUGINN: String = "that address answered, but not like huginn does"
 
         /** Establishing the connection. Short: a route that does not answer must fail fast enough for the resolver to try the next one. */
         const val CONNECT_TIMEOUT_MS: Long = 8_000
@@ -124,6 +146,47 @@ class HuginnClient(
          * has to give up faster than a real call would.
          */
         const val PROBE_TIMEOUT_MS: Long = 3_000
+
+        /**
+         * The daemon stamps its version on EVERY response, the 401 included, so a
+         * client can tell huginn from whatever else is listening on that address
+         * without sending it anything. Preferred over the body shape below when
+         * present; absent from daemons older than the release that added it,
+         * which is why the body rule still exists.
+         */
+        const val APPD_HEADER: String = "X-Huginn-Appd"
+
+        private val probeJson = Json { ignoreUnknownKeys = true }
+
+        /**
+         * Whether a probe reply PROVES the daemon rather than merely a socket.
+         *
+         * ⚠ THE BEARER FOLLOWS THE ROUTE. `probe` used to return true for any
+         * completed HTTP exchange — a NAS's login page, a printer, a captive
+         * portal, a 404 from whoever holds that DHCP lease today — and the
+         * resolver then made that host the active route, after which the very
+         * next call handed it a root-equivalent daemon token in cleartext. A
+         * live path is not the question; a live *huginn* is.
+         *
+         * Two markers, neither of which requires the token:
+         *
+         *  - [APPD_HEADER] on the response, whatever the status.
+         *  - a `401` whose body is the daemon's own JSON error shape. `/v1/ping`
+         *    is token-gated, so this is what an unauthenticated probe gets from
+         *    a real daemon, and the shape is narrow enough that a stranger's
+         *    plain-text or HTML 401 does not pass.
+         *
+         * Neither is unforgeable — an active attacker can copy both — and that is
+         * not what this is for: it closes the case where an ordinary host that
+         * happens to answer is PREFERRED over a live daemon. The durable fix is a
+         * token-proving challenge, which needs a daemon change.
+         */
+        fun provesDaemon(appdHeader: String?, status: Int, body: String): Boolean {
+            if (!appdHeader.isNullOrBlank()) return true
+            if (status != 401) return false
+            val error = runCatching { probeJson.decodeFromString<ApiError>(body).error }.getOrNull()
+            return !error.isNullOrBlank()
+        }
     }
 
     private val json = Json { ignoreUnknownKeys = true; explicitNulls = false }
@@ -170,9 +233,15 @@ class HuginnClient(
         return withScheme(base) + path
     }
 
+    /**
+     * ⚠ CASE-INSENSITIVELY. A scheme is a scheme however it is spelled, and 2.x's
+     * setter only trimmed — so `HTTP://192.168.2.117:8787` was storable, and this
+     * helper used to build `http://HTTP//192.168.2.117:8787/v1/ping` out of it.
+     */
     private fun withScheme(base: String): String {
         val b = base.trim().trimEnd('/')
-        return if (b.startsWith("http://") || b.startsWith("https://")) b else "http://$b"
+        val schemed = b.startsWith("http://", ignoreCase = true) || b.startsWith("https://", ignoreCase = true)
+        return if (schemed) b else "http://$b"
     }
 
     private enum class Tier { NORMAL, POLL, STREAM, WATCH }
@@ -209,7 +278,16 @@ class HuginnClient(
         }
     }
 
-    private inline fun <reified T> decode(body: String): T = json.decodeFromString(body)
+    /**
+     * A 2xx body into a model — or [NotHuginnException] if it is not one. The
+     * raw text is never carried into the message; see that type for why.
+     */
+    private inline fun <reified T> decode(body: String): T =
+        try {
+            json.decodeFromString(body)
+        } catch (e: SerializationException) {
+            throw NotHuginnException()
+        }
 
     private fun errorFrom(code: Int, body: String): HuginnException {
         val msg = runCatching { json.decodeFromString<ApiError>(body).error }.getOrNull()
@@ -232,25 +310,31 @@ class HuginnClient(
         call(path, HttpMethod.Post, tier, body)
 
     /**
-     * Is anything answering at [candidate]? Any HTTP reply counts — a 401 still
-     * proves the daemon is there, and the point is to find a live path, not to
-     * check the token. Unauthenticated for the same reason.
+     * Is HUGINN answering at [candidate]? Not "is anything answering" — see
+     * [provesDaemon] for why that question was the wrong one and what it cost.
+     *
+     * Unauthenticated, and deliberately: a probe that carried the bearer would
+     * disclose it to exactly the stranger this is trying to detect. `GET
+     * /v1/ping` without a token is a 401 from a real daemon, which is the
+     * cheapest thing it can be asked to say.
      *
      * Lives on the client rather than in the UI so route resolution works the
      * same way from the desktop client, and so this module owns every socket the
      * app opens.
      */
     suspend fun probe(candidate: String): Boolean = runCatching {
-        http.request {
-            method = HttpMethod.Head
-            url(withScheme(AppdRoutes.normalize(candidate)) + "/v1/sessions")
+        val resp = http.request {
+            method = HttpMethod.Get
+            url(withScheme(AppdRoutes.normalize(candidate)) + "/v1/ping")
             timeout {
                 connectTimeoutMillis = PROBE_TIMEOUT_MS
                 socketTimeoutMillis = PROBE_TIMEOUT_MS
                 requestTimeoutMillis = PROBE_TIMEOUT_MS
             }
         }
-        true
+        // Bounded by the probe timeouts above: a host that dribbles a body at a
+        // probe fails the same way one that never answers does.
+        provesDaemon(resp.headers[APPD_HEADER], resp.status.value, resp.bodyAsText())
     }.getOrDefault(false)
 
     // ------------------------------------------------------------ status
@@ -693,8 +777,21 @@ class HuginnClient(
         call("/v1/archive/$id", HttpMethod.Delete)
     }
 
-    suspend fun renameSession(from: String, to: String) {
-        post("/v1/sessions/$from/rename", body = jsonBody("name" to to))
+    /**
+     * @return the name the daemon ACTUALLY gave the session, which is not always
+     *   the one asked for: tmux silently rewrites '.' to '_' and still exits 0,
+     *   so the daemon reads the name back off tmux and answers with that. A
+     *   caller that assumed its own string won addressed a session that does not
+     *   exist — the desktop closed the pane it had just renamed and took the
+     *   unsent draft in it with it. Falls back to [to] for a daemon too old to
+     *   answer with a name.
+     */
+    suspend fun renameSession(from: String, to: String): String {
+        val body = post("/v1/sessions/$from/rename", body = jsonBody("name" to to))
+        val actual = runCatching {
+            json.decodeFromString<JsonObject>(body)["name"]?.jsonPrimitive?.content
+        }.getOrNull()
+        return actual?.takeIf { it.isNotBlank() } ?: to
     }
 
     /**

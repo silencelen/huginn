@@ -59,13 +59,72 @@ class LiveInputTest {
         assertTrue(t.enter)
     }
 
+    /**
+     * ⚠ THE NEWLINES STAY IN THE TEXT. This used to `replace("\n", "")` the whole
+     * tail and set one trailing Enter, so pasting three commands into live-typing
+     * mode delivered `git statusgit log --onelinels -la` AND SUBMITTED IT — a
+     * command the person never wrote, run in whatever shell the pane holds. The
+     * daemon delivers text by bracketed paste, so interior newlines land in a
+     * composer (or a shell line) without submitting anything, which is what the
+     * collapse was trying to achieve.
+     */
     @Test
-    fun `a multi-line paste keeps its text and presses enter`() {
-        // The pane receives the text; the newline count collapses to one Enter,
-        // because sending intermediate Enters would submit a half-pasted command.
+    fun `a multi-line paste keeps its lines`() {
+        val t = LiveInput.diff(S + "git status\ngit log --oneline\nls -la\n")
+        assertEquals("git status\ngit log --oneline\nls -la", t.insert)
+        assertTrue(t.enter, "the tail ENDED with a newline, so one Enter follows the text")
+        assertFalse(t.enterFirst)
+    }
+
+    @Test
+    fun `an interior newline is not an Enter`() {
         val t = LiveInput.diff(S + "line one\nline two")
-        assertEquals("line oneline two", t.insert)
+        assertEquals("line one\nline two", t.insert)
+        assertFalse(t.enter, "nothing here says submit")
+    }
+
+    /**
+     * `replace("\n","")` never touched `\r`, so a CRLF clipboard put literal
+     * carriage returns inside `tmux send-keys -l` text — delivering the mid-text
+     * Return the collapse existed to prevent.
+     */
+    @Test
+    fun `a CRLF paste carries no carriage returns into the pane`() {
+        val t = LiveInput.diff(S + "line one\r\nline two")
+        assertEquals("line one\nline two", t.insert)
+        assertFalse(t.insert.contains('\r'))
+        assertFalse(t.enter)
+
+        val old = LiveInput.diff(S + "old mac\rline")
+        assertEquals("old mac\nline", old.insert)
+    }
+
+    /**
+     * ⚠ AND AN EDIT THAT STARTS WITH A NEWLINE PRESSES ENTER FIRST. "\nls" used to
+     * mean "type ls, then Return", which submits whatever draft the pane already
+     * holds WITH `ls` appended — the opposite of what the keyboard did and the
+     * opposite of this function's own kdoc.
+     */
+    @Test
+    fun `a leading newline is an Enter before the text`() {
+        val t = LiveInput.diff(S + "\nls")
+        assertEquals("ls", t.insert)
         assertTrue(t.enter)
+        assertTrue(t.enterFirst)
+        assertEquals(
+            listOf(LiveInput.Op.Key(listOf("Enter")), LiveInput.Op.Text("ls")),
+            t.ops(),
+            "the order is the contract; `enter` alone cannot express it",
+        )
+    }
+
+    @Test
+    fun `the ops of an ordinary edit are backspaces, text, then enter`() {
+        assertEquals(
+            listOf(LiveInput.Op.Key(listOf("BSpace")), LiveInput.Op.Text("make"), LiveInput.Op.Key(listOf("Enter"))),
+            LiveInput.diff("make\n").ops(),
+        )
+        assertEquals(emptyList(), LiveInput.diff(S).ops())
     }
 
     @Test

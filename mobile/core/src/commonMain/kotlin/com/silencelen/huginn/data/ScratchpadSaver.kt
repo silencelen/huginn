@@ -426,15 +426,27 @@ class ScratchpadSaver(
                 // The other device saved first, and their copy is what is true
                 // now. The unsent tail goes with it — that is what losing a
                 // conflict means — but never quietly: the line says so.
+                //
+                // ⚠ AND IT SAYS WHICH KIND OF LOSS IT WAS. Text typed AFTER this
+                // write left is held here, unsent, and is discarded: keeping it
+                // and writing it on the adopted rev would silently overwrite the
+                // other device's paragraph (invariant 2), which is the worse
+                // failure — so the discard stays and the NOTE changes. "Updated
+                // on another device" beside the word "Saved" is not a report that
+                // the sentence somebody just watched themselves type is gone.
+                val lost = page.held != null || page.heldName != null || page.mark > w.gen
+                val note = if (lost) OTHER_DEVICE_LOST else OTHER_DEVICE
                 page.held = null
                 page.terminal = false
-                page.note = OTHER_DEVICE
-                page.line = State.SAVED
+                page.note = note
+                // IDLE, not SAVED, when something was thrown away: nothing of
+                // this reader's is waiting, and nothing of theirs was kept.
+                page.line = if (lost) State.IDLE else State.SAVED
                 page.broke = tick()
                 page.mark = page.broke
                 if (showing(w.id)) {
                     _pad.value = r.pad
-                    _note.value = OTHER_DEVICE
+                    _note.value = note
                 }
             } else {
                 page.note = null
@@ -490,6 +502,14 @@ class ScratchpadSaver(
          * a normal thing to have happened, and the text on screen is now theirs.
          */
         const val OTHER_DEVICE: String = "Updated on another device"
+
+        /**
+         * The same, for a conflict that discarded text this reader had typed
+         * since the losing write left. Not quiet, because it is not a normal
+         * thing to have happened to the person watching the screen.
+         */
+        const val OTHER_DEVICE_LOST: String =
+            "Updated on another device — the text you typed after your last save was not kept"
 
         /**
          * What a 413 means in words. Actionable, because the only way out is the

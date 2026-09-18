@@ -239,9 +239,23 @@ object PlanFormat {
      */
     fun compactTokens(n: Long): String = when {
         n >= 1_000_000_000L -> decimals(n / 1_000_000_000.0, 2) + "B tokens"
+        // ⚠ THE UNIT IS CHOSEN AFTER THE ROUNDING. Picking the magnitude from the
+        // raw count and rounding the mantissa afterwards printed "1,000.0k tokens"
+        // for everything in [999_950, 999_999] — a grouped comma inside the very
+        // unit that exists so there would not be one — and did it for fifty
+        // thousand values in the band below 1e9.
+        promotes(n, 1_000_000.0, 1) -> decimals(n / 1_000_000_000.0, 2) + "B tokens"
         n >= 1_000_000L -> decimals(n / 1_000_000.0, 1) + "M tokens"
+        promotes(n, 1_000.0, 1) -> decimals(n / 1_000_000.0, 1) + "M tokens"
         n >= 1_000L -> decimals(n / 1_000.0, 1) + "k tokens"
         else -> "$n tokens"
+    }
+
+    /** True when [n] in this unit would round up to a whole unit above it. */
+    private fun promotes(n: Long, unit: Double, places: Int): Boolean {
+        var scale = 1L
+        repeat(places) { scale *= 10L }
+        return (n / unit * scale).roundToLong() >= 1_000L * scale
     }
 
     /** A whole-percent share, e.g. cache reads out of all tokens. */

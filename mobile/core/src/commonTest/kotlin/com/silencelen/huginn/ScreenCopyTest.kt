@@ -3,6 +3,7 @@ package com.silencelen.huginn
 import com.silencelen.huginn.data.Screen
 import com.silencelen.huginn.ui.hasCopyableText
 import com.silencelen.huginn.ui.linksOn
+import com.silencelen.huginn.ui.logicalLines
 import com.silencelen.huginn.ui.screenText
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -108,6 +109,113 @@ class ScreenCopyTest {
         assertTrue(hasCopyableText(screen(20, "x")))
         assertEquals("", screenText(null))
         assertTrue(linksOn(null).isEmpty())
+    }
+
+    // -------------------------------------------------- escapes on the wire
+
+    /** One ESC byte, spelled out so no test fixture here carries a raw control character. */
+    private val E = "\u001B"
+
+    /**
+     * ⚠ THE PANE ARRIVES AS `capture-pane -e`. Every row of a Claude Code pane
+     * carries SGR bytes and some carry OSC 8 hyperlinks, and :core lost its strip
+     * when TerminalGrid replaced the v1 ANSI renderer — `lib/pane.js` still
+     * documents its own `stripAnsi` as "Mirrors the client's Ansi.strip", which
+     * has not existed for two versions. So "Copied" put escape bytes on the
+     * clipboard: a live pane measured 3462 characters, 36 of them raw ESC, and a
+     * plain search for a run of text that was ON SCREEN did not match it.
+     */
+    @Test
+    fun copyingAStyledPaneDoesNotPutEscapeBytesOnTheClipboard() {
+        val s = screen(
+            80,
+            "$E[38;5;246m╭─ huginn ─╮$E[39m",
+            "$E[1mbuild$E[0m ok",
+        )
+        assertEquals("╭─ huginn ─╮\nbuild ok", screenText(s))
+        assertFalse(screenText(s).contains(E), "no escape byte survives the copy")
+    }
+
+    /**
+     * A REAL capture: the trust dialog's "Security guide" row, byte for byte from
+     * `server/appd/test/fixtures/prompts/trust-dialog-80.txt`. An OSC 8 hyperlink
+     * is `ESC ] 8 ; id ; <uri> ST <label> ESC ] 8 ; ; ST`, and the terminator here
+     * is ST (ESC backslash), not BEL.
+     */
+    @Test
+    fun anOsc8HyperlinkCopiesAsItsLabel() {
+        val row = " $E[38;5;246m$E]8;id=zaxmda;https://code.claude.com/docs/en/security$E\\" +
+            "Security guide$E[39m$E]8;;$E\\"
+        // The leading space is the fixture's own indent: only trailing space goes.
+        assertEquals(" Security guide", screenText(screen(80, row)))
+    }
+
+    /**
+     * ⚠ AND THE LINK COPY WAS THE WORST OF THE THREE. `URL_RE` excludes
+     * whitespace and `<>"'` and backtick — but not ESC — and `TRAILING` trims no
+     * part of an SGR tail, so a coloured URL came back with the escape bytes
+     * attached and often with the next label welded on. On the real
+     * `trust-dialog-80.txt` row it produced
+     * `https://code.claude.com/docs/en/security<ESC>\\Security`; for the 450-char
+     * sign-in URL wrapped in OSC 8 it produced a 909-character double.
+     */
+    @Test
+    fun aStyledUrlIsCopiedWithoutItsColours() {
+        val s = screen(80, "see $E[4mhttps://example.com/x$E[24m for more")
+        assertEquals(listOf("https://example.com/x"), linksOn(s))
+    }
+
+    /**
+     * An OSC 8 hyperlink's TARGET is not on the screen at all — the visible text
+     * is a label. Copy link has to offer the target, which is the only thing a
+     * person could not have read off the pane themselves.
+     */
+    @Test
+    fun anOsc8HyperlinkOffersItsTargetRatherThanItsLabel() {
+        val row = " $E[38;5;246m$E]8;id=zaxmda;https://code.claude.com/docs/en/security$E\\" +
+            "Security guide$E[39m$E]8;;$E\\"
+        assertEquals(listOf("https://code.claude.com/docs/en/security"), linksOn(screen(80, row)))
+    }
+
+    @Test
+    fun aHyperlinkWhoseLabelIsItsOwnUrlIsOneOffer() {
+        val row = "$E]8;;https://example.com/a$E\\https://example.com/a$E]8;;$E\\"
+        assertEquals(listOf("https://example.com/a"), linksOn(screen(80, row)))
+    }
+
+    /**
+     * ⚠ WRAP IS A COLUMN COUNT, NOT A CHARACTER COUNT. `logicalLines` compared
+     * `line.length` — UTF-16 units of the escape-laden row — against the pane
+     * width, and got it wrong in BOTH directions: SGR bytes made a short row read
+     * as wrapped (6 of 25 rows on a live pane) and weld itself to the next one,
+     * while a wide glyph made a genuinely wrapped row read as short so it was
+     * never rejoined.
+     */
+    @Test
+    fun wrapIsMeasuredInColumnsRatherThanInCharacters() {
+        assertEquals(
+            listOf("hi", "there"),
+            logicalLines(listOf("$E[31mhi$E[0m", "there"), 8),
+            "eleven characters, two columns: this row ENDED",
+        )
+        assertEquals(
+            listOf("世界世界ok"),
+            logicalLines(listOf("世界世界", "ok"), 8),
+            "four characters, eight columns: this row was broken by the terminal",
+        )
+    }
+
+    @Test
+    fun aStyledRowDoesNotWeldItselfToTheNextOne() {
+        // The row's visible text is well short of the pane; only its colour codes
+        // make it look full. Joining manufactures a link nobody can use.
+        val s = screen(20, "$E[38;5;246mhttps://a.example$E[39m", "notpartofit")
+        assertEquals(listOf("https://a.example"), linksOn(s))
+    }
+
+    @Test
+    fun aScreenOfNothingButStylingHasNothingToCopy() {
+        assertFalse(hasCopyableText(screen(20, "$E[39m", "$E[0m  ")))
     }
 
     @Test

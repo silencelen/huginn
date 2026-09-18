@@ -174,6 +174,17 @@ class PlanFormatTest {
         assertEquals("1.23B tokens", PlanFormat.compactTokens(1_234_567_890L))
         assertEquals("0 tokens", PlanFormat.compactTokens(0L))
         assertEquals("1.0k tokens", PlanFormat.compactTokens(1_000L), "the boundary belongs to the bigger unit")
+
+        // ⚠ AND THE UNIT IS CHOSEN AFTER THE ROUNDING, NOT BEFORE IT. The magnitude
+        // was picked from the raw count and the mantissa rounded afterwards, so
+        // every value in [999_950, 999_999] rendered as "1,000.0k tokens" — a
+        // grouped comma inside a unit that exists so there would not be one — and
+        // the band below 1e9 did it for fifty thousand values.
+        assertEquals("1.0M tokens", PlanFormat.compactTokens(999_950L))
+        assertEquals("999.9k tokens", PlanFormat.compactTokens(999_949L), "and only where it really rounds over")
+        assertEquals("1.00B tokens", PlanFormat.compactTokens(999_950_000L))
+        assertEquals("999.9M tokens", PlanFormat.compactTokens(999_949_999L))
+        assertEquals("1.0M tokens", PlanFormat.compactTokens(999_999L))
     }
 
     @Test

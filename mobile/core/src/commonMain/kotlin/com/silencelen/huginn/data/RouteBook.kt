@@ -1,6 +1,7 @@
 package com.silencelen.huginn.data
 
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.json.Json
 import kotlin.random.Random
 
 /**
@@ -46,6 +47,14 @@ enum class RouteKind {
  * @param kind the badge, recomputed whenever [url] changes.
  * @param order the position, mirrored from the list index on every mutation so
  *   a store that loses list order still restores the owner's preference.
+ * @param byHand whether a PERSON put this address here. ⚠ NOT COSMETIC: a plain
+ *   http route carries the bearer in cleartext, and the two addresses the
+ *   migration seeds are hard-coded literals in a public repo — whoever holds one
+ *   of them on the network the phone is on today would be handed the token by an
+ *   automatic switch. [RouteResolver] will not adopt a plain-http route with
+ *   this false without a person saying so. Defaults TRUE so every route that
+ *   arrives through [RouteBook.add] — which is the only path a person has — is
+ *   trusted the way it always was, and only [AppdRoutes.seed] says otherwise.
  */
 @Serializable
 data class PinnedRoute(
@@ -55,6 +64,7 @@ data class PinnedRoute(
     val kind: RouteKind = RouteKind.CUSTOM,
     val order: Int = 0,
     val addedAt: Long = 0,
+    val byHand: Boolean = true,
 )
 
 /**
@@ -78,6 +88,19 @@ data class RouteBook(
     val routes: List<PinnedRoute> = emptyList(),
     val activeId: String? = null,
     val autoSwitch: Boolean = true,
+    /**
+     * An address that was in this book (or in the settings it was migrated from)
+     * and is NOT in it now, because [RouteGuard] refuses it.
+     *
+     * ⚠ A NOTICE, NOT A STATE. Dropping used to be silent on the theory that only
+     * a hand-edited store could produce a refused URL — and the phone's pre-3.x
+     * "Base URL" was a free-text field with no validation at all, so an upgrade
+     * quietly deleted whatever hostname the owner had been using for a year and
+     * pointed the app at a hard-coded built-in instead. Carried here so both
+     * settings screens can say which address went, and so [normalized] can leave
+     * the book with no active route rather than adopting an address nobody chose.
+     */
+    val droppedUrl: String? = null,
 ) {
 
     val active: PinnedRoute? get() = routes.firstOrNull { it.id == activeId }
@@ -99,21 +122,48 @@ data class RouteBook(
      * break, and is called on every read AND every write by both stores.
      *
      * - `order` mirrors the list index.
+     * - every address is re-canonicalised through [RouteGuard.normalize] and the
+     *   list de-duplicated on the result, because a 2.x store could hold the same
+     *   daemon spelled two ways.
      * - `activeId` names a route that exists. An id pointing at nothing falls
      *   back to the first pin rather than to null, because a book with pins and
      *   no active route cannot address the daemon at all.
-     * - ⚠ **AN ADDRESS THE GUARD REFUSES IS DROPPED.** [add] and [setUrl] throw,
-     *   so the only way such a URL reaches a book is somebody editing the store
-     *   file by hand — and the old desktop allowlist had exactly this hole: it
-     *   checked the setter and read `baseUrl` back raw. Dropping is silent on
-     *   purpose; the route it removes is one this client would refuse to dial
-     *   anyway, and there is no reader to apologise to at load time.
+     * - ⚠ **AN ADDRESS THE GUARD REFUSES IS DROPPED — AND NAMED.** [add] and
+     *   [setUrl] throw, so a refused URL reaches a book only from a store: a
+     *   hand-edited file, or the pre-3.x free-text "Base URL" the migration
+     *   reads. Dropping it is right (this client would refuse to dial it) and
+     *   dropping it SILENTLY was not: the address goes to [droppedUrl] so a
+     *   screen can say what happened.
+     * - ⚠ **AND A BOOK THAT LOST ITS PIN IS NOT RE-POINTED AT A BUILT-IN.** When
+     *   [activeId] is null and something was dropped, this leaves it null. A
+     *   client with no address says so; a client silently talking to an address
+     *   nobody chose is the failure this whole field exists for.
      */
     fun normalized(): RouteBook {
-        val kept = routes.filter { RouteGuard.isAllowed(it.url) }
+        val dropped = routes.firstOrNull { !RouteGuard.isAllowed(it.url) }?.url ?: droppedUrl
+        // Canonical FIRST, then de-duplicated on the canonical form: `10.0.0.5:8787`
+        // and `http://10.0.0.5:8787/` are one daemon spelled two ways, and a book
+        // that keeps both probes it twice, shows two rows that both answer, and
+        // refuses the edit that would have repaired it as a duplicate.
+        val canonical = routes.filter { RouteGuard.isAllowed(it.url) }.map { r ->
+            val clean = RouteGuard.normalize(r.url)
+            if (clean == r.url) r else r.copy(url = clean, kind = RouteGuard.kindOf(clean))
+        }
+        val kept = mutableListOf<PinnedRoute>()
+        // id of a discarded duplicate -> id of the copy that survived, so an
+        // activeId naming the loser follows the connection rather than resetting it.
+        val alias = mutableMapOf<String, String>()
+        for (r in canonical) {
+            val keeper = kept.firstOrNull { it.url == r.url }
+            if (keeper == null) kept += r else alias[r.id] = keeper.id
+        }
         val ordered = kept.mapIndexed { i, r -> if (r.order == i) r else r.copy(order = i) }
-        val id = activeId?.takeIf { id -> ordered.any { it.id == id } } ?: ordered.firstOrNull()?.id
-        return if (ordered == routes && id == activeId) this else copy(routes = ordered, activeId = id)
+        val unaddressedOnPurpose = activeId == null && dropped != null
+        val wanted = activeId?.let { alias[it] ?: it }
+        val id = wanted?.takeIf { id -> ordered.any { it.id == id } }
+            ?: if (unaddressedOnPurpose) null else ordered.firstOrNull()?.id
+        return if (ordered == routes && id == activeId && dropped == droppedUrl) this
+        else copy(routes = ordered, activeId = id, droppedUrl = dropped)
     }
 
     /**
@@ -181,6 +231,12 @@ data class RouteBook(
 
     fun withAutoSwitch(on: Boolean): RouteBook = copy(autoSwitch = on)
 
+    /**
+     * Forgets the dropped-address notice. For a screen that has shown it — the
+     * notice is a one-time apology for an upgrade, not a setting.
+     */
+    fun clearDropped(): RouteBook = if (droppedUrl == null) this else copy(droppedUrl = null)
+
     private fun mapRoute(id: String, f: (PinnedRoute) -> PinnedRoute): RouteBook {
         if (routes.none { it.id == id }) return this
         return copy(routes = routes.map { if (it.id == id) f(it) else it })
@@ -219,6 +275,7 @@ data class RouteBook(
  * makes a client flap between two equally-reachable paths; the order is the
  * owner's, and this record is for the reader.
  */
+@Serializable
 data class RouteHealth(
     val lastOkAt: Long = 0,
     val lastFailAt: Long = 0,
@@ -230,6 +287,43 @@ data class RouteHealth(
             lastOkAt == 0L && lastFailAt == 0L -> null
             else -> lastOkAt >= lastFailAt
         }
+}
+
+/**
+ * The health map as text, so a shell can put it in its own store.
+ *
+ * ⚠ THE CACHE BEING IN MEMORY ONLY IS A SECURITY PROPERTY IN REVERSE. With an
+ * empty map every cold start skips the hysteresis, probes everything, and takes
+ * the first route that answers in the owner's order — which is how a stranger
+ * occupying a route pinned above the real daemon wins on every app start even
+ * while huginn is up. Persisting what the last resolution learned is what makes
+ * "the route that has been working keeps the connection" survive a restart.
+ *
+ * Kept here rather than in either store because both shells need the same bytes,
+ * and a second hand-rolled encoding is a second thing to get wrong. The shells
+ * wire it into their stores separately; nothing in `:core` persists anything.
+ */
+@Serializable
+data class RouteHealthSnapshot(
+    val health: Map<String, RouteHealth> = emptyMap(),
+    /** When it was written. For a reader that wants to age the whole snapshot out. */
+    val savedAt: Long = 0,
+) {
+    companion object {
+        private val json = Json { ignoreUnknownKeys = true }
+
+        fun encode(health: Map<String, RouteHealth>, now: Long = 0): String =
+            json.encodeToString(serializer(), RouteHealthSnapshot(health, now))
+
+        /**
+         * Whatever was stored, or an empty map. Never throws: a half-written or
+         * hand-edited store must cost the dots, not the launch.
+         */
+        fun decode(text: String?): Map<String, RouteHealth> {
+            if (text.isNullOrBlank()) return emptyMap()
+            return runCatching { json.decodeFromString(serializer(), text).health }.getOrDefault(emptyMap())
+        }
+    }
 }
 
 /**
