@@ -910,6 +910,42 @@ class DesktopSurfaceTest {
         assertFalse(padPanelFits(PANEL_MIN_WINDOW_DP - 1f))
     }
 
+    // ------------------------------------------------- rows that cannot open
+
+    @Test
+    fun `a session name the daemon cannot route to is not openable`() {
+        // GET /v1/sessions deliberately publishes every tmux session, including
+        // the ones whose names fall outside the daemon's NAME_RE — while every
+        // per-session route 404s on them. No client filtered, badged or
+        // explained the row, so on the desktop the pane opened and shut
+        // instantly with no message, repeatably (and this module has no toast
+        // surface to have said anything in).
+        assertFalse(sessionAddressable("my project"), "a space is not routable")
+        assertFalse(sessionAddressable("sess!"), "nor is punctuation")
+        assertFalse(sessionAddressable("-lead"))
+        assertFalse(sessionAddressable(""))
+        assertFalse(sessionAddressable("a".repeat(51)))
+        // tmux rewrites a dot, so a listed name never has one — but if the
+        // daemon ever hands one over, it is not addressable either.
+        assertFalse(sessionAddressable("api.v2"))
+    }
+
+    @Test
+    fun `an ordinary name, in any case, opens`() {
+        assertTrue(sessionAddressable("jtyper"))
+        assertTrue(sessionAddressable("api-v2"))
+        assertTrue(sessionAddressable("_scratch_1"))
+        // The route regexes are case-permissive, so an uppercase name routes
+        // fine and must not be marked broken.
+        assertTrue(sessionAddressable("JTyper"))
+    }
+
+    @Test
+    fun `the row says what to do about it, in tmux's own terms`() {
+        assertTrue(UNADDRESSABLE_NOTE.isNotBlank(), "a row that will not open must say why")
+        assertTrue("tmux" in UNADDRESSABLE_NOTE, "the fix is in tmux: $UNADDRESSABLE_NOTE")
+    }
+
     // ------------------------------------------------------- the pane clock
 
     @Test
