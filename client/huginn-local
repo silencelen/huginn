@@ -815,10 +815,41 @@ function sysctl(args, { user = false } = {}) {
 }
 
 /** Where a unit file for [name] lives, in each of the two scopes. */
+// Where system units live. Overridable ONLY so that `off --purge` - which
+// DELETES unit files - can be proved by a test without writing into a real /etc;
+// nothing else reads the variable, and unset it is the real path.
+const SYSTEMD_SYSTEM_DIR = process.env.HUGINN_SYSTEMD_SYSTEM_DIR || '/etc/systemd/system';
 function unitFile(name, { system, home = os.homedir() } = {}) {
   return system
-    ? `/etc/systemd/system/${name}.service`
+    ? path.join(SYSTEMD_SYSTEM_DIR, `${name}.service`)
     : path.join(home, '.config', 'systemd', 'user', `${name}.service`);
+}
+
+/**
+ * What this machine's install looks like, read off the DISK rather than the
+ * config - for the one command that runs with no config left to read.
+ *
+ * ⚠ WHY THIS EXISTS. `off` deletes local.json (the credentials are the point of
+ * the verb) and its own closing line - "off, not gone: N model file(s) remain
+ * ... (or --purge for everything)" - invites a second run. That run arrived with
+ * `conf = stored || {}` and had lost the install's SCOPE and MODE: on a
+ * --system install every systemd call flipped to user scope, so the purge
+ * deleted $HOME/.config/systemd/user/huginn-local-{llm,runner}.service - files
+ * this install never owned - never looked in /etc/systemd/system, and still
+ * printed "ok remove the systemd unit files" and "Off." at exit 0.
+ *
+ * The unit files themselves still say which install this was: a system install
+ * put them in /etc, and an ADAPTER install only ever wrote the RUNNER unit (it
+ * adopts somebody else's engine, which is also why its api-key is not ours to
+ * delete).
+ */
+function probeInstall({ home = os.homedir() } = {}) {
+  const at = (n, system) => fs.existsSync(unitFile(n, { system, home }));
+  const llm = { system: at(LLM_SERVICE, true), user: at(LLM_SERVICE, false) };
+  const run = { system: at(RUNNER_SERVICE, true), user: at(RUNNER_SERVICE, false) };
+  const out = { probed: true, systemUnits: llm.system || run.system };
+  if ((run.system || run.user) && !(llm.system || llm.user)) out.mode = 'adapter';
+  return out;
 }
 
 /**
@@ -1329,7 +1360,9 @@ async function cmdOff(flags) {
   if (!stored && !(purging && fs.existsSync(localDir()))) {
     console.error('not set up — nothing to turn off'); process.exit(1);
   }
-  const conf = stored || {};
+  // No config left (this is the second run - see probeInstall): read the scope
+  // and the mode off the unit files instead of defaulting to the user scope.
+  const conf = stored || probeInstall();
   refuseUnelevated('turning off');
   let failed = 0;
   const step = (name, fn) => {
@@ -1402,11 +1435,20 @@ async function cmdOff(flags) {
     }
     if (process.platform !== 'win32') {
       step('remove the systemd unit files', () => {
+        // ⚠ ONLY FILES THAT ARE THERE, IN WHICHEVER SCOPE THEY ARE THERE. A
+        // single guessed scope is how a purge deleted user units it never
+        // installed while the real system units survived `disable`d in /etc -
+        // root-owned residue that a later user-scope re-install collides with.
+        const scopes = new Set();
         for (const which of ours) {
           const name = which === 'runner' ? RUNNER_SERVICE : LLM_SERVICE;
-          fs.rmSync(unitFile(name, { system: !!conf.systemUnits }), { force: true });
+          for (const system of [true, false]) {
+            const f = unitFile(name, { system });
+            if (fs.existsSync(f)) { fs.rmSync(f, { force: true }); scopes.add(system); }
+          }
         }
-        sysctl(['daemon-reload'], { user: !conf.systemUnits });
+        if (!scopes.size) scopes.add(!!conf.systemUnits);
+        for (const system of scopes) sysctl(['daemon-reload'], { user: !system });
       });
     }
     step(`remove ${localDir()}`, () => purgeDir());
@@ -1839,7 +1881,7 @@ if (require.main === module) {
     // The persistence half, exported so it can be driven on a machine that has
     // neither systemd nor logind — see setRunner.
     setRunner, serviceUser, lingerState, enableLinger, persistence, persistenceLine,
-    persistenceVerdict, elevator, elevators, elevateOnce, updateElevationRefusal,
+    persistenceVerdict, probeInstall, elevator, elevators, elevateOnce, updateElevationRefusal,
     elevationArgv, unitFile, persistSteps, servicePlanLine,
   };
 }
