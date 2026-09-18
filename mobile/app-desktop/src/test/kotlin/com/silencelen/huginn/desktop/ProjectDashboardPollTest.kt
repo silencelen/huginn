@@ -57,7 +57,7 @@ class ProjectDashboardPollTest {
     private fun dashboard(id: String = "p1", at: Long, per10m: Long = 0) = ProjectDashboard(
         project = ProjectRow(id = id, name = id, slug = id, kind = "software", status = "active"),
         generatedAt = at,
-        rate = ProjectRate(activeRecently = true, tokensPer10m = per10m),
+        rate = ProjectRate(activeRecently = true, tokensPerMin10 = per10m),
     )
 
     @Test
@@ -112,7 +112,7 @@ class ProjectDashboardPollTest {
         val moved = dashboard(at = 505, per10m = 2_000)
         assertTrue(s.adoptDashboard(moved))
         assertSame(moved, s.projectDashboard.value)
-        assertEquals(2_000L, s.projectDashboard.value?.rate?.tokensPer10m)
+        assertEquals(2_000L, s.projectDashboard.value?.rate?.tokensPerMin10)
     }
 
     @Test
