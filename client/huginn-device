@@ -171,6 +171,29 @@ function saveConf(c) {
 }
 
 /**
+ * Why this url cannot be dialled, or null.
+ *
+ * ⚠ CHECKED BEFORE IT IS WRITTEN DOWN. `new URL` throws a bare "Invalid URL"
+ * naming nothing, and the one realistic way to reach it is a wrapper that built
+ * `http://<bare IPv6>:8787` out of $SSH_CONNECTION - so the message a headless
+ * machine printed could not be acted on, AND the address had already been
+ * persisted by saveConf(), which meant a later flagless `on` repeated it and
+ * `serve` retried it every 15 seconds for the life of the machine.
+ */
+function urlRefusal(u) {
+  let parsed;
+  try { parsed = new URL(u); } catch {
+    return /^[^[]*:[^/]*:/.test(String(u).replace(/^[a-z]+:\/\//i, ''))
+      ? `"${u}" is not a url this runner can dial — an IPv6 address must be bracketed, e.g. http://[fd00::1]:8787`
+      : `"${u}" is not a url this runner can dial`;
+  }
+  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+    return `"${u}" is not an http(s) url`;
+  }
+  return null;
+}
+
+/**
  * Both files this runner owns, gone. Returns the ones that were actually there,
  * so the caller reports what it did rather than what it attempted.
  *
@@ -333,6 +356,50 @@ function refusal(scope, locked, mode) {
 const engineRefusal = (mode, hasEngine) =>
   (mode === 'generate' && !hasEngine) ? POLICY.refusals.engine : null;
 
+/**
+ * Which engine a run is about, in the words a person reads and the config key
+ * they would edit.
+ *
+ * ⚠ BOTH TERMINAL HANDLERS HARDCODED "claude". A generate device's local-engine
+ * failure was therefore reported as a claude failure - naming a program the
+ * machine does not run, and telling somebody to set a config key ("claude")
+ * that this install does not have. The key is `llm`, and `huginn local on` is
+ * what writes it.
+ */
+const engineWords = (mode) => (mode === 'generate'
+  ? { label: 'the local engine', key: 'llm' }
+  : { label: 'claude', key: 'claude' });
+
+/**
+ * The most useful 200 characters of a child's stderr.
+ *
+ * ⚠ THE HEAD, NOT THE TAIL. The realistic failure here is a missing engine
+ * file, which node reports as `Error: Cannot find module '<path>'` followed by
+ * a stack - and `slice(-200)` kept the stack and threw away the one line that
+ * names the file. The first line mentioning an error wins, else the first line.
+ */
+function errWords(err) {
+  const t = String(err || '').trim();
+  if (!t) return '';
+  const lines = t.split('\n');
+  const named = lines.find((l) => /Cannot find module|Error:|error:/.test(l));
+  return String(named || lines[0] || t).trim().slice(0, 200);
+}
+
+/** "claude was not found on box (...)", or the local engine's version of it. */
+const notFoundText = (mode, host) => {
+  const e = engineWords(mode);
+  // ⚠ No config PATH in this string. It lands in a chat that syncs to a phone,
+  // and the private layout of a machine is not something to publish there to
+  // say a sentence that is just as actionable without it.
+  return `${e.label} was not found on ${host} (set "${e.key}" to its full path in this machine's huginn config)`;
+};
+/** "claude exited 1 on box: <the line that explains it>". */
+const exitedText = (mode, host, code, err) => {
+  const w = errWords(err);
+  return `${engineWords(mode).label} exited ${code} on ${host}${w ? `: ${w}` : ''}`;
+};
+
 /** How an engine path becomes a spawn: a .js engine runs through node. */
 const execFor = (engineBin, argv) =>
   String(engineBin).endsWith('.js')
@@ -410,7 +477,7 @@ function api(method, p, body, { timeoutMs = 20000 } = {}) {
     // every 15 seconds forever on a machine with nobody at it, so the difference
     // between "there is no file" and "the file is there and holds a newline" is
     // the difference between a fix and an afternoon.
-    return Promise.reject(new Error(`no appd token — ${tokenOrWhy().why || 'reason unknown'}`));
+    return Promise.reject(noTokenError(tokenOrWhy().why || 'reason unknown'));
   }
 
   return new Promise((resolve, reject) => {
@@ -564,8 +631,36 @@ function batchLines(lines) {
   return out;
 }
 
+/**
+ * The pre-flight rejection when this machine has no token at all.
+ *
+ * FLAGGED, not worded: the delivery loop has to recognise it, and matching the
+ * prose of an error message is how a reworded sentence silently turns a handled
+ * case back into an unhandled one.
+ */
+const noTokenError = (why) => Object.assign(new Error(`no appd token — ${why}`), { noToken: true });
+
 /** True when the daemon will never accept this again, however many times we try. */
 const permanent = (e) => / → (40[034]|413) /.test(String(e && e.message));
+
+/**
+ * True when DELIVERY is not authorised: a 401, or no token to send.
+ *
+ * ⚠ DELIBERATELY NOT FOLDED INTO permanent(). That branch sets cancelled and
+ * kills the child, and a token rotated mid-run would then stop a claude that
+ * may be mid-edit. Delivery is dead here; the work is not. `authorized()` on
+ * the daemon compares against the token it read at START, so retrying cannot
+ * succeed either - and the old code retried it every 500 ms for the life of the
+ * run (measured: 52 POSTs in 24.6 s), with `pending` growing the whole time.
+ */
+const authFailed = (e) => !!(e && (e.noToken === true || / → 401 /.test(String(e.message))));
+
+/**
+ * How long to wait before retrying a delivery blip. Exponential from half a
+ * second, capped at 30 s: the flush interval is 500 ms, so an outage used to be
+ * two requests a second until the child exited.
+ */
+const retryDelayMs = (blips) => Math.min(30000, 500 * (2 ** Math.max(0, Math.min(blips, 6))));
 
 // How long a just-spawned engine may produce NO output before it is treated as
 // wedged at startup. Generous — a working engine emits its init frame near-instantly,
@@ -631,7 +726,7 @@ function runWork(id, work, conf) {
     try {
       child = spawn(bin, fullArgv, { cwd, stdio: ['pipe', 'pipe', 'pipe'] });
     } catch (e) {
-      return finish(`could not start ${work.mode === 'generate' ? 'the local engine' : 'claude'} on ${conf.name}: ${e.message}`);
+      return finish(`could not start ${engineWords(work.mode).label} on ${conf.name}: ${e.message}`);
     }
 
     let pending = [];
@@ -652,7 +747,7 @@ function runWork(id, work, conf) {
       log(`${work.id}: no output in ${Math.round(STARTUP_SILENCE_MS / 1000)}s — stopping a wedged engine`);
       cancelled = true;
       try { child.kill(); } catch { /* already gone */ }
-      finish(`${work.mode === 'generate' ? 'the local engine' : 'claude'} produced no output for ${Math.round(STARTUP_SILENCE_MS / 1000)}s on ${conf.name} and was stopped — it looked wedged on startup (check auth, or a hung update)`);
+      finish(`${engineWords(work.mode).label} produced no output for ${Math.round(STARTUP_SILENCE_MS / 1000)}s on ${conf.name} and was stopped — it looked wedged on startup (check auth, or a hung update)`);
     }, STARTUP_SILENCE_MS);
 
     // So a Stop that arrives on the /beat channel — the one signal that still flows
@@ -664,8 +759,13 @@ function runWork(id, work, conf) {
     };
 
     let flushing = false;
+    let deliveryDead = false;   // a 401 / no token: stop delivering, keep the child
+    let blips = 0;
+    let backoffUntil = 0;
     const flush = setInterval(async () => {
-      if (!pending.length || done || flushing) return;
+      if (done || flushing) return;
+      if (deliveryDead) { pending = []; return; }
+      if (!pending.length || Date.now() < backoffUntil) return;
       flushing = true;
       const batch = pending; pending = [];
       try {
@@ -674,6 +774,7 @@ function runWork(id, work, conf) {
             { lines: chunk, locked: lock });
           if (ack && ack.cancel && !cancelled) { cancelled = true; child.kill(); }
         }
+        blips = 0; backoffUntil = 0;
       } catch (e) {
         if (permanent(e)) {
           // ⚠ NOT RETRYABLE, and retrying was its own bug: after a daemon
@@ -683,10 +784,20 @@ function runWork(id, work, conf) {
           log(`giving up on ${work.id}: ${e.message}`);
           cancelled = true;
           try { child.kill(); } catch { /* already gone */ }
+        } else if (authFailed(e)) {
+          // ⚠ TERMINAL FOR DELIVERY, NOT FOR THE CHILD. See authFailed: this is
+          // the token being rotated or deleted under a live run, and killing the
+          // child there could stop a claude mid-edit. Said ONCE, and the buffer
+          // is dropped rather than grown - nothing can accept it now.
+          deliveryDead = true;
+          log(`delivery for ${work.id} is not authorised (${e.message}) — dropped ${batch.length + pending.length} line(s); the child keeps running`);
+          pending = [];
         } else {
           // Put them back: a blip mid-run must not silently eat the answer.
           pending = batch.concat(pending);
-          log(`batch failed (will retry): ${e.message}`);
+          blips += 1;
+          backoffUntil = Date.now() + retryDelayMs(blips);
+          log(`batch failed (retrying in ${Math.round(retryDelayMs(blips) / 1000)}s): ${e.message}`);
         }
       } finally {
         flushing = false;
@@ -696,26 +807,26 @@ function runWork(id, work, conf) {
     readline.createInterface({ input: child.stdout })
       .on('line', (line) => { sawOutput = true; if (line.trim()) pending.push(line); });
 
-    // Claude's stderr is not stream-json and the daemon cannot read it, but it is
-    // where a startup failure explains itself — so it is kept for the ending
-    // rather than discarded into the void.
-    let errTail = '';
-    child.stderr.on('data', (c) => { errTail = (errTail + c).slice(-500); });
+    // The engine's stderr is not stream-json and the daemon cannot read it, but
+    // it is where a startup failure explains itself — so it is kept for the
+    // ending rather than discarded into the void.
+    //
+    // ⚠ THE HEAD, NOT THE TAIL: see errWords. A missing engine file says so in
+    // its FIRST line and spends the rest on a stack, and the old `.slice(-500)`
+    // plus `.slice(-200)` kept exactly the half that names nothing.
+    let errHead = '';
+    child.stderr.on('data', (c) => { if (errHead.length < 2000) errHead += c; });
 
     child.on('error', (e) => finish(
       e.code === 'ENOENT'
         // The cwd was checked above, so ENOENT here really is the executable.
-        //
-        // ⚠ No config PATH in this string. It lands in a chat that syncs to a
-        // phone, and the private layout of a machine is not something to publish
-        // there to say a sentence that is just as actionable without it.
-        ? `claude was not found on ${conf.name} (set "claude" to its full path in this machine's huginn config)`
-        : `could not start claude on ${conf.name}: ${e.message}`));
+        ? notFoundText(work.mode, conf.name)
+        : `could not start ${engineWords(work.mode).label} on ${conf.name}: ${e.message}`));
 
     child.on('close', (code) => finish(
       cancelled ? `cancelled on ${conf.name}`
         : code === 0 ? null
-          : `claude exited ${code} on ${conf.name}${errTail ? `: ${errTail.trim().slice(-200)}` : ''}`,
+          : exitedText(work.mode, conf.name, code, errHead),
       code));
 
     // A spawn that failed leaves a stream whose 'error' would be unhandled, and an
@@ -729,7 +840,7 @@ function runWork(id, work, conf) {
       clearTimeout(startupTimer);
       activeRun = null;
       clearInterval(flush);
-      const tail = pending; pending = [];
+      const tail = deliveryDead ? [] : pending; pending = [];
       // ⚠ THE TAIL FIRST, THEN THE ENDING ALONE. These used to go in one POST,
       // so an oversized tail took the terminal frame down with it — and its retry
       // was identically 413, meaning the ending could NEVER be delivered. The
@@ -901,6 +1012,11 @@ async function main() {
       }
       if (f.root !== undefined) conf.root = f.root;
       if (f.url !== undefined) conf.url = f.url;
+      // Before saveConf, never after: see urlRefusal.
+      {
+        const why = urlRefusal(conf.url);
+        if (why) { console.error(`huginn-device on: ${why}`); process.exit(2); }
+      }
       if (f.name !== undefined) conf.name = f.name.slice(0, 40);
       if (f.claude !== undefined) conf.claude = f.claude;
       // ⚠ SAID OUT LOUD, because the two ends disagreed silently. `root` is the
@@ -1111,6 +1227,7 @@ if (require.main === module) {
   module.exports = {
     VERSION, MAX_LINE_BYTES, MAX_BATCH_BYTES,
     shrinkLine, batchLines, parseFlags, tokenOrWhy, cwdFor, effectiveScope, allows, argvFor,
-    engineRefusal, execFor,
+    engineRefusal, execFor, engineWords, errWords, notFoundText, exitedText, urlRefusal,
+    permanent, authFailed, noTokenError, retryDelayMs,
   };
 }

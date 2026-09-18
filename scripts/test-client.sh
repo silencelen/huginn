@@ -20,6 +20,43 @@ ok()   { echo "  ok    $*"; }
 bad()  { echo "  FAIL  $*" >&2; FAIL=1; }
 skip() { echo "  SKIP  $*  <-- not a pass" >&2; }
 
+# ⚠ ONE EXIT TRAP, AND ONE ONLY. `trap ... EXIT` REPLACES the previous handler,
+# so a lane that sets its own silently un-registers everybody else's — which is
+# how this script used to leave its stub daemons running after a Ctrl-C and
+# poison the NEXT run (see the port note below). Lanes register here instead.
+STUB_PIDS=()
+STUB_DIRS=()
+_cleanup() {
+  local p d
+  for p in ${STUB_PIDS[@]+"${STUB_PIDS[@]}"}; do [ -n "$p" ] && kill "$p" 2>/dev/null; done
+  for d in ${STUB_DIRS[@]+"${STUB_DIRS[@]}"}; do [ -n "$d" ] && rm -rf "$d"; done
+  return 0
+}
+trap _cleanup EXIT
+
+# ⚠ EVERY STUB DAEMON BINDS PORT 0, AND READS THE PORT BACK. A stub pinned to a
+# hardcoded port does not fail when something else already holds it: python dies
+# EADDRINUSE into /dev/null and the lane then runs against the SQUATTER. What
+# that costs depends on who is squatting — a token-guarded listener turns the
+# headroom lane into the false `headroom on a 404 said: … (HTTP 401)` and fails
+# the whole gate; a 404-ing listener leaves it GREEN with our own stub never
+# bound, which is worse. And the commonest squatter is this script: an
+# interrupted run used to orphan its own stub (no EXIT trap, above).
+#
+# So the kernel picks the port, the stub writes it to a file, and the lane
+# reads it — a port nobody else can be holding, and a file that PROVES our stub
+# is the thing being talked to. An explicit port may still be requested (the
+# HUGINN_TEST_* overrides below) for anyone debugging against a fixed address.
+STUB_DIR=$(mktemp -d); STUB_DIRS+=("$STUB_DIR")
+stub_port () {    # $1 = the port file a stub was told to write; prints the port
+  local pf="$1" _
+  for _ in $(seq 1 60); do
+    [ -s "$pf" ] && { tr -d '[:space:]' < "$pf"; return 0; }
+    sleep 0.1
+  done
+  return 1
+}
+
 echo "[1/8] syntax"
 bash -n client/huginn.sh && ok "huginn.sh parses" || bad "huginn.sh does not parse"
 if command -v pwsh >/dev/null 2>&1; then
@@ -81,7 +118,7 @@ echo "[4/8] what the PowerShell client actually SENDS"
 if ! command -v pwsh >/dev/null 2>&1; then
   skip "ps1 behaviour (no pwsh)"
 else
-  T=$(mktemp -d); trap 'rm -rf "$T"' EXIT
+  T=$(mktemp -d); STUB_DIRS+=("$T")
   cat > "$T/ssh" <<'STUB'
 #!/usr/bin/env bash
 dec=""
@@ -128,9 +165,18 @@ STUB
   grep -q "DELETE .*/v1/sessions/testsess" <<<"$K" \
     && ok "kill prefers the daemon's DELETE" || bad "kill sent: $K"
 
-  B=$(pwsh -NoProfile -Command ". $PWD/client/huginn.ps1; huginn end 'bad-name'" 2>&1)
+  # ⚠ THE INVALID EXAMPLE IS A DOT, NOT A DASH. A dash is legal everywhere in
+  # the product (contract 1, and see [5b/8]); it was this gate pinning
+  # 'bad-name' as the invalid example that kept the narrow rule alive.
+  B=$(pwsh -NoProfile -Command ". $PWD/client/huginn.ps1; huginn end 'bad.name'" 2>&1)
   grep -q "invalid session name" <<<"$B" \
-    && ok "end rejects a non-conforming name" || bad "end accepted 'bad-name'"
+    && ok "ps1: end rejects a dotted name" || bad "ps1: end accepted 'bad.name'"
+  D=$(emit 'huginn end build-box')
+  grep -q "/v1/sessions/build-box/soft-end" <<<"$D" \
+    && ok "ps1: a dashed name reaches the daemon" || bad "ps1: 'build-box' sent: $D"
+  DU=$(emit 'huginn end Build_Box')
+  grep -q "/v1/sessions/build_box/soft-end" <<<"$DU" \
+    && ok "ps1: and it is still case-folded on the way" || bad "ps1: 'Build_Box' sent: $DU"
 fi
 
 echo "[5/8] what the POSIX client actually SENDS"
@@ -166,6 +212,372 @@ SE=$(semit 'huginn end testsess')
 grep -q "soft-end" <<<"$SE" && ok "sh: end reaches the soft-end route" || bad "sh: end sent nothing matching soft-end"
 SK=$(semit 'huginn kill testsess')
 grep -q "DELETE" <<<"$SK" && ok "sh: kill prefers the daemon DELETE" || bad "sh: kill did not use DELETE"
+
+echo "[5b/8] ONE session-name rule, in all three enforcers"
+# ⚠ WHY: the product enforced FOUR different rules, and two of them could mint a
+# name this client can never address. The daemon accepts a dash and honours it
+# end to end; the desktop dialogs offer one; keyboard-made sessions routinely
+# carry one (dev-phonefarm). The CLI and `cc` allowed `^[A-Za-z0-9_]+$`, so
+# `huginn build-box` — and solo/kill/end/archive/rename — refused LOCALLY, before
+# any network, for a session `huginn ls` had just listed and tab-completion had
+# just offered. `huginn revive build-box` was accepted while `huginn archive
+# build-box` was not.
+#
+# The one rule, contract 1 of the edge-hunt: ^[a-z0-9_][a-z0-9_-]{0,49}$,
+# case-folded, dots banned everywhere (tmux silently rewrites '.' to '_', so a
+# dotted name is a name that comes back different).
+SN_OK=$(semit 'huginn end build-box')
+grep -q "/v1/sessions/build-box/soft-end" <<<"$SN_OK" \
+  && ok "sh: a dashed name reaches the daemon" || bad "sh: 'build-box' sent: $SN_OK"
+SN_UP=$(semit 'huginn end Build_Box')
+grep -q "/v1/sessions/build_box/soft-end" <<<"$SN_UP" \
+  && ok "sh: and it is still case-folded on the way" || bad "sh: 'Build_Box' sent: $SN_UP"
+SN_DOT=$(semit 'huginn end build.box')
+[ -z "$SN_DOT" ] && grep -q "invalid session name" "$T2/out" \
+  && ok "sh: a dotted name is refused before it is sent anywhere" \
+  || bad "sh: 'build.box' sent: $SN_DOT / said: $(cat "$T2/out")"
+SN_FLAG=$(semit 'huginn --hlp')
+[ -z "$SN_FLAG" ] && ok "sh: a typo'd flag still cannot spawn a junk session" \
+  || bad "sh: '--hlp' sent: $SN_FLAG"
+# ⚠ AND THE REFUSAL TELLS THE TWO CAUSES APART. A typo is one thing; a session
+# that EXISTS on the host and this client cannot address is another, and saying
+# "invalid session name" about a row `huginn ls` just printed sends somebody
+# looking for their own mistake. The completion cache is already the live
+# `tmux ls` output, so this costs no round trip.
+semit '_HUGINN_SESS_CACHE="my box"; huginn end "my box"' >/dev/null
+grep -q "exists on the host but this client cannot address it" "$T2/out" \
+  && ok "sh: a live-but-unaddressable name says so, not 'invalid'" \
+  || bad "sh: an uncompletable live name said: $(cat "$T2/out")"
+
+# `cc` is the server-side backstop and the one the ssh path actually runs.
+# Driven with a stub tmux so the check is exercised without creating a session.
+CCT=$(mktemp -d); STUB_DIRS+=("$CCT")
+printf '#!/usr/bin/env bash\nprintf "%%s\\n" "$*" >> "$CCT_LOG"\nexit 0\n' > "$CCT/tmux"
+chmod +x "$CCT/tmux"
+cc_try () { CCT_LOG="$CCT/log" PATH="$CCT:$PATH" server/bin/cc "$1" 2>&1; }
+: > "$CCT/log"
+CC_OK=$(cc_try build-box); CC_RC=$?
+[ "$CC_RC" != 2 ] && grep -q 'new-session -A -s build-box' "$CCT/log" \
+  && ok "cc: a dashed name is created, not refused with exit 2" \
+  || bad "cc: 'build-box' exited $CC_RC, tmux saw: $(cat "$CCT/log")"
+: > "$CCT/log"
+CC_UP=$(cc_try Build_Box)
+grep -q 'new-session -A -s build_box' "$CCT/log" \
+  && ok "cc: and it still folds case before tmux sees it" || bad "cc: tmux saw: $(cat "$CCT/log")"
+: > "$CCT/log"
+cc_try build.box >/dev/null 2>&1; CC_RC=$?
+[ "$CC_RC" = 2 ] && [ ! -s "$CCT/log" ] \
+  && ok "cc: a dotted name is refused with exit 2 and never reaches tmux" \
+  || bad "cc: 'build.box' exited $CC_RC, tmux saw: $(cat "$CCT/log")"
+
+echo "[5c/8] the daemon's own refusal survives the trip home"
+# ⚠ WHY: `curl -sf` discards the response body on every HTTP >= 400 and exits 22,
+# so four different refusals arrived as ONE exit code and `huginn end` answered
+# all of them with "is huginn-appd running? is the session a live Claude pane?" -
+# two causes that are both fine when the daemon is saying "answer the waiting
+# question first". `huginn kill` was worse: DELETE has no 409 guard, so the
+# realistic case is a GLOBAL 401 (rotated or unreadable token) with the daemon
+# up, where the bare tmux fallback skipped clearSessionState/registryRemove and
+# the killed session came back on the next reboot restore.
+#
+# Driven against a REAL curl: the stub ssh runs the command the client actually
+# composed, with the daemon address and the token PATH rewritten to this lane's
+# own stub and a throwaway token file. So this asserts the composed request and
+# the reply handling together, not a re-implementation of either.
+APT=$(mktemp -d); STUB_DIRS+=("$APT")
+printf 'gate-token\n' > "$APT/token"
+AP_PF="$APT/appd.port"
+python3 - "$AP_PF" "${HUGINN_TEST_APPD_PORT:-0}" <<'APSTUB' >/dev/null 2>&1 &
+import json, sys
+from http.server import BaseHTTPRequestHandler, HTTPServer
+class H(BaseHTTPRequestHandler):
+    def _send(self, code, obj):
+        # Compact, exactly like the daemon's JSON.stringify: the sh client reads
+        # `phrase` with sed, and a stub that pretty-printed would test a shape
+        # appd never sends.
+        b = json.dumps(obj, separators=(",", ":")).encode()
+        self.send_response(code); self.send_header("content-type", "application/json")
+        self.send_header("content-length", str(len(b))); self.end_headers(); self.wfile.write(b)
+    def do_POST(self):
+        n = int(self.headers.get("content-length") or 0)
+        body = json.loads(self.rfile.read(n) or b"{}") if n else {}
+        if self.path.startswith("/v1/sessions/attention/"):
+            self._send(409, {"error": "answer the waiting question first, then end the session"})
+        elif self.path.startswith("/v1/sessions/shell/"):
+            if body.get("force"):
+                self._send(200, {"ok": True, "phrase": "WRAPUP", "auto": True})
+            else:
+                self._send(409, {"error": "no Claude state recorded for this session - it may be a plain shell; pass force to send anyway"})
+        else:
+            self._send(200, {"ok": True, "phrase": "WRAPUP", "auto": True})
+    def do_DELETE(self):
+        if self.path.startswith("/v1/sessions/locked"):
+            self._send(401, {"error": "unauthorized"})
+        else:
+            self._send(200, {"ok": True})
+    def log_message(self, *a): pass
+srv = HTTPServer(("127.0.0.1", int(sys.argv[2])), H)
+with open(sys.argv[1], "w") as fh: fh.write(str(srv.server_port))
+srv.serve_forever()
+APSTUB
+AP_STUB=$!; STUB_PIDS+=("$AP_STUB")
+AP_PORT=$(stub_port "$AP_PF")
+if [ -z "${AP_PORT:-}" ]; then
+  skip "daemon-refusal checks (the stub never bound a port)"
+else
+  cat > "$APT/ssh" <<'APSSH'
+#!/usr/bin/env bash
+# What ssh would run on the host: the LAST argument. A base64 payload (the ps1
+# client marshals that way) is decoded first.
+cmd="${!#}"
+case "$cmd" in
+  *"base64 -d"*) cmd="$(sed -E 's/^echo ([A-Za-z0-9+/=]+).*/\1/' <<<"$cmd" | base64 -d)" ;;
+esac
+cmd="${cmd//127.0.0.1:8787/127.0.0.1:$APPD_PORT}"
+cmd="${cmd//\/etc\/huginn-appd\/token/$APPD_TOKEN}"
+printf '%s\n' "$cmd" >> "$SSH_LOG"
+eval "$cmd"
+APSSH
+  chmod +x "$APT/ssh"
+  # `kill` may legitimately fall back to raw tmux, and eval would then run the
+  # REAL one. Stubbed, and its invocation is itself an assertion below.
+  printf '#!/usr/bin/env bash\nprintf "tmux %%s\\n" "$*" >> "$SSH_LOG"\nexit 0\n' > "$APT/tmux"
+  chmod +x "$APT/tmux"
+  aemit () {   # $1 = the huginn command; $2 = the daemon port to aim ssh at
+    export SSH_LOG="$APT/log" APPD_TOKEN="$APT/token" APPD_PORT="${2:-$AP_PORT}"
+    : > "$SSH_LOG"
+    ( export PATH="$APT:$PATH"
+      . "$PWD/client/huginn.sh" >/dev/null 2>&1
+      eval "$1" ) >"$APT/out" 2>&1
+    cat "$APT/out"
+  }
+  AE=$(aemit 'huginn end attention')
+  grep -q "answer the waiting question first" <<<"$AE" \
+    && ok "sh: end repeats the daemon's 409, not a guess about the daemon being down" \
+    || bad "sh: end on a 409 said: $AE"
+  grep -q "is huginn-appd running" <<<"$AE" \
+    && bad "sh: end still blames the daemon for a refusal it issued itself" \
+    || ok "sh: and it no longer names two causes that are both fine"
+  AF=$(aemit 'huginn end shell')
+  grep -q "plain shell" <<<"$AF" && grep -q -- "--force" <<<"$AF" \
+    && ok "sh: the 'pass force' refusal names the flag that answers it" \
+    || bad "sh: end on the no-state 409 said: $AF"
+  AG=$(aemit 'huginn end shell --force')
+  grep -q "WRAPUP" <<<"$AG" \
+    && ok "sh: end --force is reachable and carries force to the daemon" \
+    || bad "sh: end --force said: $AG"
+  AK=$(aemit 'huginn kill locked')
+  grep -q "unauthorized" <<<"$AK" \
+    && ok "sh: kill on a 401 says what the daemon said" || bad "sh: kill on a 401 said: $AK"
+  grep -q '^tmux kill-session' "$APT/log" \
+    && bad "sh: kill fell back to raw tmux on an HTTP status - the session returns at reboot" \
+    || ok "sh: and it does NOT silently fall back to raw tmux"
+  AD=$(aemit 'huginn kill stranded' 1)
+  grep -q '^tmux kill-session' "$APT/log" \
+    && ok "sh: kill DOES fall back to tmux when nothing answered at all" \
+    || bad "sh: kill with no daemon sent: $(cat "$APT/log") / said: $AD"
+  if command -v pwsh >/dev/null 2>&1; then
+    pemit () { export SSH_LOG="$APT/log" APPD_TOKEN="$APT/token" APPD_PORT="${2:-$AP_PORT}"
+               : > "$SSH_LOG"
+               PATH="$APT:$PATH" pwsh -NoProfile -Command ". $PWD/client/huginn.ps1; $1" 2>&1 | tr -d '\r'; }
+    PE=$(pemit 'huginn end attention')
+    grep -q "answer the waiting question first" <<<"$PE" \
+      && ok "ps1: end repeats the daemon's 409 too" || bad "ps1: end on a 409 said: $PE"
+    PK=$(pemit 'huginn kill locked')
+    grep -q "unauthorized" <<<"$PK" && ! grep -q '^tmux kill-session' "$APT/log" \
+      && ok "ps1: kill on a 401 says so and keeps its hands off tmux" \
+      || bad "ps1: kill on a 401 said: $PK / tmux saw: $(cat "$APT/log")"
+  else
+    skip "ps1 daemon-refusal checks (no pwsh)"
+  fi
+fi
+
+echo "[5d/8] the runner fetch really tries the mirror"
+# ⚠ WHY: both runner fetches gated on `Length -gt 0` alone - never on
+# $LASTEXITCODE, never on validity - BEFORE the `if (-not $got) { scp ... }`
+# mirror block. `gh api` prints its error JSON to STDOUT (401 with a bad token =
+# 112 bytes, 404 for a renamed path = 127 bytes, both exit 1), so a FAILED fetch
+# still set $got, the mirror was SKIPPED, the later `node --check` cleared $got,
+# and the user was told "gh and the mirror both failed" about a mirror that was
+# never contacted. On stock Windows PowerShell 5.1 the second half compounds it:
+# `>` is Out-File, default -Encoding unicode, i.e. UTF-16LE + BOM, which node
+# cannot parse - so `huginn device on` and `huginn local on|update|plan` failed
+# 100% of the time on a 5.1 box with gh installed and authenticated.
+#
+# The 5.1 encoding half is settled by Microsoft's documentation plus the
+# mechanism (a UTF-16LE+BOM file passes a length gate and fails `node --check`,
+# verified). What is driven here is the ORDERING half, which is platform
+# independent, plus the source property that no fetch uses `>` any more.
+FT=$(mktemp -d); STUB_DIRS+=("$FT")
+cat > "$FT/gh" <<'GHSTUB'
+#!/usr/bin/env bash
+printf 'gh %s\n' "$*" >> "$FETCH_LOG"
+case "${GH_MODE:-errbody}" in
+  # What the real gh does on a bad token / renamed path: the error JSON goes to
+  # STDOUT and the exit code is 1.
+  errbody) echo '{"message":"Bad credentials","documentation_url":"https://docs.github.com/rest"}'; exit 1 ;;
+  # HTTP 200 carrying something that is not the file (a proxy page, a truncation).
+  junk)    echo 'this is ) not javascript'; exit 0 ;;
+  ok)      echo 'if (process.argv[2] === "version") console.log("1.0.0-gh");'; exit 0 ;;
+esac
+GHSTUB
+cat > "$FT/scp" <<'SCPSTUB'
+#!/usr/bin/env bash
+printf 'scp %s\n' "$*" >> "$FETCH_LOG"
+[ "${SCP_MODE:-ok}" = fail ] && exit 1
+dest="${!#}"
+printf 'if (process.argv[2] === "version") console.log("9.9.9-scp");\n' > "$dest"
+exit 0
+SCPSTUB
+chmod +x "$FT/gh" "$FT/scp"
+# Set out here, not inside the runners: they execute in a command substitution,
+# whose exports never reach this shell - and the assertions read the log.
+export FETCH_LOG="$FT/log"
+
+# The POSIX twin already gated on gh's EXIT status, so it never skipped the
+# mirror for an error body. What it also never checked was whether a 200 is the
+# FILE: a proxy error page is a successful fetch of something that is not
+# JavaScript, and that skipped the mirror on both sides.
+sh_fetch_run () {   # $1 = huginn command, $2 = GH_MODE, $3 = SCP_MODE
+  rm -rf "$FT/shhome"; mkdir -p "$FT/shhome"
+  : > "$FETCH_LOG"
+  ( export PATH="$FT:$PATH" HOME="$FT/shhome" GH_MODE="$2" SCP_MODE="${3:-ok}"
+    . "$PWD/client/huginn.sh" >/dev/null 2>&1
+    eval "$1" ) 2>&1
+}
+SHJ=$(sh_fetch_run 'huginn device update' junk ok)
+grep -q '^scp ' "$FETCH_LOG" && grep -q '9.9.9-scp' <<<"$SHJ" \
+  && ok "sh: a 200 that is not JavaScript falls through to the mirror" \
+  || bad "sh: device update on a junk body said: $SHJ / log: $(cat "$FETCH_LOG")"
+SHB=$(sh_fetch_run 'huginn device update' errbody fail)
+grep -q 'gh' <<<"$SHB" && grep -q 'mirror' <<<"$SHB" \
+  && ok "sh: when both fail, the message names which source failed" \
+  || bad "sh: both-failed message was: $SHB"
+
+if ! command -v pwsh >/dev/null 2>&1; then
+  skip "ps1 runner-fetch checks (no pwsh)"
+else
+  fetch_run () {   # $1 = huginn command, $2 = GH_MODE, $3 = SCP_MODE
+    rm -rf "$FT/home"; mkdir -p "$FT/home"
+    : > "$FETCH_LOG"
+    HOME="$FT/home" GH_MODE="$2" SCP_MODE="${3:-ok}" PATH="$FT:$PATH" \
+      pwsh -NoProfile -Command ". $PWD/client/huginn.ps1; $1" 2>&1 | tr -d '\r'
+  }
+  FR=$(fetch_run 'huginn device update' errbody ok)
+  grep -q '^scp ' "$FETCH_LOG" \
+    && ok "ps1: a gh error BODY does not count as a fetch - the mirror is contacted" \
+    || bad "ps1: device update with a failing gh never ran scp; log: $(cat "$FETCH_LOG") / said: $FR"
+  grep -q '9.9.9-scp' <<<"$FR" \
+    && ok "ps1: and the runner installed is the mirror's" || bad "ps1: device update said: $FR"
+  FJ=$(fetch_run 'huginn device update' junk ok)
+  grep -q '^scp ' "$FETCH_LOG" && grep -q '9.9.9-scp' <<<"$FJ" \
+    && ok "ps1: a 200 that is not JavaScript also falls through to the mirror" \
+    || bad "ps1: device update on a junk body said: $FJ / log: $(cat "$FETCH_LOG")"
+  FB=$(fetch_run 'huginn device update' errbody fail)
+  grep -q 'gh exited 1' <<<"$FB" && grep -qE 'scp from [^ ]+ exited' <<<"$FB" \
+    && ok "ps1: when both fail, the message names which source failed and how" \
+    || bad "ps1: both-failed message was: $FB"
+  FL=$(fetch_run 'huginn local plan' errbody ok)
+  grep -q '^scp ' "$FETCH_LOG" \
+    && ok "ps1: the local-tier fetch has the same ordering" \
+    || bad "ps1: local plan never ran scp; log: $(cat "$FETCH_LOG") / said: $FL"
+  # ⚠ AND THE SOURCE PROPERTY, because the encoding half of this cannot be run
+  # from Linux: `>` into the temp file is Out-File, and its PS 5.1 default is
+  # UTF-16LE + BOM. Nothing may redirect into a fetch temp again.
+  grep -qE 'gh api [^|]*> *\$tmp' client/huginn.ps1 \
+    && bad "ps1: a fetch still redirects with '>' - PS 5.1 writes UTF-16 there" \
+    || ok "ps1: no fetch redirects into its temp file with '>'"
+fi
+
+echo "[5e/8] the address a device is told to dial is a URL"
+# ⚠ WHY: $SSH_CONNECTION's third field is a BARE address, and all four wrapper
+# call sites built `--url "http://$srv:8787"` from it. On a machine whose ssh to
+# the host landed on IPv6 that is `http://fd00::1:8787` - not a URL - and
+# `huginn device on` / `huginn local on` died with the bare "huginn-device:
+# Invalid URL" after saveConf() had already PERSISTED it, so a later flagless
+# `on` repeated it and `serve` logged "not reaching huginn: Invalid URL -
+# retrying in 15s" forever. `huginn local on` reached it only after installing
+# the whole model tier.
+#
+# Bracketing alone is not the fix: appd's resolveBind() takes `tailscale ip -4`
+# and this deployment overrides it with 0.0.0.0, so nothing listens on v6 and a
+# bracketed URL would only turn a cryptic error into a persisted ECONNREFUSED.
+# An IPv4 the host actually holds is preferred, and the bracketed v6 is the last
+# answer - correct syntax, honest failure.
+UT=$(mktemp -d); STUB_DIRS+=("$UT")
+cat > "$UT/ssh" <<'USSH'
+#!/usr/bin/env bash
+cmd="${!#}"
+case "$cmd" in
+  *'/etc/huginn-appd/token'*) echo 'gate-token' ;;
+  *SSH_CONNECTION*)           echo "$SSHCONN" ;;
+  *'ip -4'*)                  [ -n "${HOSTV4:-}" ] && echo "$HOSTV4" ;;
+esac
+exit 0
+USSH
+chmod +x "$UT/ssh"
+url_home () {   # a home whose ~/.huginn already holds runners that print argv
+  rm -rf "$UT/home"; mkdir -p "$UT/home/.huginn"
+  local f
+  for f in huginn-device huginn-local huginn-llm-shim; do
+    printf 'console.log(process.argv.slice(2).join(" "));\n' > "$UT/home/.huginn/$f"
+  done
+}
+url_sh () {   # $1 = the huginn command, $2 = SSH_CONNECTION, $3 = the host's IPv4
+  url_home
+  ( export PATH="$UT:$PATH" HOME="$UT/home" SSHCONN="$2" HOSTV4="${3:-}"
+    export HUGINN_LOCAL_DIR="$UT/home/localdir"
+    . "$PWD/client/huginn.sh" >/dev/null 2>&1
+    eval "$1" ) 2>&1
+}
+U6=$(url_sh 'huginn device on' 'fd00::2 5000 fd00::1 22' '10.0.0.5')
+grep -q -- '--url http://10.0.0.5:8787' <<<"$U6" \
+  && ok "sh: an IPv6 ssh path dials an IPv4 the host actually holds" \
+  || bad "sh: device on over IPv6 passed: $U6"
+U6B=$(url_sh 'huginn device on' 'fd00::2 5000 fd00::1 22' '')
+grep -q -- '--url http://\[fd00::1\]:8787' <<<"$U6B" \
+  && ok "sh: and with no IPv4 to be had, the v6 literal is BRACKETED" \
+  || bad "sh: device on over IPv6 with no v4 passed: $U6B"
+U4=$(url_sh 'huginn device on' '192.168.2.50 5000 192.168.2.117 22' '10.0.0.5')
+grep -q -- '--url http://192.168.2.117:8787' <<<"$U4" \
+  && ok "sh: an IPv4 ssh path is untouched" || bad "sh: device on over IPv4 passed: $U4"
+UL=$(url_sh 'huginn local on' 'fd00::2 5000 fd00::1 22' '10.0.0.5')
+grep -q -- '--url http://10.0.0.5:8787' <<<"$UL" \
+  && ok "sh: and huginn local on builds the same url" || bad "sh: local on passed: $UL"
+if command -v pwsh >/dev/null 2>&1; then
+  url_ps () {
+    url_home
+    HOME="$UT/home" SSHCONN="$2" HOSTV4="${3:-}" HUGINN_LOCAL_DIR="$UT/home/localdir" \
+      PATH="$UT:$PATH" pwsh -NoProfile -Command ". $PWD/client/huginn.ps1; $1" 2>&1 | tr -d '\r'
+  }
+  P6=$(url_ps 'huginn device on' 'fd00::2 5000 fd00::1 22' '10.0.0.5')
+  grep -q -- '--url http://10.0.0.5:8787' <<<"$P6" \
+    && ok "ps1: an IPv6 ssh path dials an IPv4 the host actually holds" \
+    || bad "ps1: device on over IPv6 passed: $P6"
+  P6B=$(url_ps 'huginn device on' 'fd00::2 5000 fd00::1 22' '')
+  grep -q -- '--url http://\[fd00::1\]:8787' <<<"$P6B" \
+    && ok "ps1: and with no IPv4 to be had, the v6 literal is BRACKETED" \
+    || bad "ps1: device on over IPv6 with no v4 passed: $P6B"
+  P4=$(url_ps 'huginn device on' '192.168.2.50 5000 192.168.2.117 22' '')
+  grep -q -- '--url http://192.168.2.117:8787' <<<"$P4" \
+    && ok "ps1: an IPv4 ssh path is untouched" || bad "ps1: device on over IPv4 passed: $P4"
+  PL=$(url_ps 'huginn local on' 'fd00::2 5000 fd00::1 22' '10.0.0.5')
+  grep -q -- '--url http://10.0.0.5:8787' <<<"$PL" \
+    && ok "ps1: and huginn local on builds the same url" || bad "ps1: local on passed: $PL"
+else
+  skip "ps1 device-url checks (no pwsh)"
+fi
+# ⚠ AND THE RUNNER NAMES THE ADDRESS. A bare "Invalid URL" on a machine with
+# nobody at it is a message that cannot be acted on - and this one is reached
+# AFTER the url has been written to disk.
+UD=$(mktemp -d); STUB_DIRS+=("$UD")
+UE=$(HUGINN_DEVICE_DIR="$UD" node client/huginn-device on --url 'http://fd00::1:8787' 2>&1)
+grep -q 'fd00::1' <<<"$UE" && grep -qi 'bracket' <<<"$UE" \
+  && ok "huginn-device names the address it cannot dial, and how to spell it" \
+  || bad "huginn-device on a bad url said: $UE"
+[ ! -e "$UD/device.json" ] \
+  && ok "and it does not persist a url it has just refused" \
+  || bad "huginn-device saved an unusable url: $(cat "$UD/device.json")"
 
 echo "[6/8] desktop links come from GitHub, and reach it WITHOUT the host"
 # The whole point of the verb is that it works on a machine that cannot ssh here
@@ -352,7 +764,11 @@ rm -rf "$TD2"
 # and reserved for the runs with the most to say.
 node -e '
 const assert = require("assert");
-const r = require("/opt/huginn/client/huginn-device");
+// ⚠ THE TREE'S runner, not /opt/huginn's. This line named the live clone by
+// absolute path, so a worktree or a branch ran its gate against whatever the
+// deployment happened to hold - a green that says nothing about the code in
+// front of you, which is the same lesson [8/8] exists for.
+const r = require(process.cwd() + "/client/huginn-device");
 const big = JSON.stringify({ type: "user", message: { content: [{ type: "tool_result", content: "x".repeat(400000) }] } });
 const small = r.shrinkLine(big);
 assert.ok(Buffer.byteLength(small) <= r.MAX_LINE_BYTES, "an oversized line was not shrunk");
@@ -368,6 +784,59 @@ assert.deepEqual(order, [...Array(12).keys()], "batching reordered the output");
 assert.deepEqual(r.batchLines([]), [], "an empty tail should post nothing");
 ' && ok "output is batched, shrunk in place, and kept in order" \
    || bad "the size rules do not hold — a large answer can still be lost"
+
+# ⚠ WHICH ENGINE FAILED. Both terminal handlers hardcoded "claude", so a
+# generate device's local-engine failure was reported as a claude failure -
+# naming a program the machine does not run, and telling somebody to set a
+# config key ("claude") this install does not have. The key is `llm`. And the
+# stderr kept was the TAIL, which on the realistic failure (a missing shim) is
+# node's stack, with the "Cannot find module '<path>'" headline thrown away.
+node -e '
+const assert = require("assert");
+const r = require(process.cwd() + "/client/huginn-device");
+const stack = "Error: Cannot find module \x27/srv/hl/bin/huginn-llm-shim.js\x27\n"
+  + "    at Module._resolveFilename (node:internal/modules/cjs/loader:1234:15)\n"
+  + "    at Module._load (node:internal/modules/cjs/loader:1056:27)\n"
+  + "    at wrapModuleLoad (node:internal/modules/cjs/loader:220:24)";
+const nf = r.notFoundText("generate", "kratos");
+assert.ok(/local engine/.test(nf), "a generate failure must not be about claude: " + nf);
+assert.ok(/"llm"/.test(nf), "it must name the config key this install has: " + nf);
+assert.ok(!/claude/.test(nf), "claude is not on this machine: " + nf);
+assert.ok(/claude/.test(r.notFoundText("ask", "kratos")), "an ask failure IS about claude");
+const ex = r.exitedText("generate", "kratos", 1, stack);
+assert.ok(!/claude/.test(ex), "a generate exit must not be about claude: " + ex);
+assert.ok(/Cannot find module/.test(ex) && /huginn-llm-shim/.test(ex),
+  "the HEAD of stderr names the file; the tail is stack: " + ex);
+assert.ok(/claude exited 1/.test(r.exitedText("ask", "kratos", 1, "")), "ask keeps its wording");
+' && ok "a local-engine failure is reported as a local-engine failure" \
+   || bad "the runner still blames claude for the local engine, or keeps the wrong end of stderr"
+
+# ⚠ A 401 IS NOT A BLIP, AND IT IS NOT A REASON TO KILL THE CHILD. permanent()
+# matched only 400/403/404/413, so a token rotated or deleted mid-run fell into
+# the retry branch and was re-POSTed every 500 ms for the life of the run
+# (measured: 52 POSTs in 24.6 s, both finish() frames failing, `pending` growing
+# the whole time) - and after `huginn device off --force` or `huginn uninstall`
+# the child could no longer be cancelled either, because cancel rides on a
+# successful POST. Widening permanent() to 401 is the WRONG fix: that branch
+# kills the child, possibly mid-edit.
+node -e '
+const assert = require("assert");
+const r = require(process.cwd() + "/client/huginn-device");
+const four01 = new Error("POST /v1/devices/x/work/y/events → 401 unauthorized");
+assert.equal(r.permanent(four01), false,
+  "a 401 must not reach the branch that kills a live child");
+assert.equal(r.authFailed(four01), true, "a 401 is a delivery failure");
+assert.equal(r.authFailed(r.noTokenError("the token file is empty")), true,
+  "the pre-flight no-token rejection is a delivery failure too");
+assert.equal(r.authFailed(new Error("no appd token — the token file is empty")), false,
+  "recognised by the FLAG on the Error, never by matching its prose");
+assert.equal(r.authFailed(new Error("POST /x → 502 bad gateway")), false, "a 502 is a blip");
+assert.equal(r.permanent(new Error("POST /x → 404 gone")), true, "404 still tears down");
+assert.ok(r.retryDelayMs(1) >= 1000 && r.retryDelayMs(1) <= 2000, "the first retry backs off");
+assert.ok(r.retryDelayMs(3) > r.retryDelayMs(1), "and it grows");
+assert.equal(r.retryDelayMs(99), 30000, "capped, so a long outage is not a busy loop");
+' && ok "a 401 stops delivery without stopping the child, and blips back off" \
+   || bad "a 401 is still retried twice a second, or kills the run"
 
 echo "[local/8] the local tier: manager, shim, manifest, units"
 node --check client/huginn-local && ok "huginn-local parses" || bad "huginn-local does not parse"
@@ -472,7 +941,13 @@ rm -rf "$PLAN_DIR"
 [ "$(grep -c 'tmp="\$dest\.tmp\.js"' client/huginn.sh)" = 2 ] \
   && ok "sh fetches syntax-check under a .js temp name" \
   || bad "sh fetch temp name regressed — .tmp is unparseable on modern node"
-[ "$(grep -Fc '.tmp.js"' client/huginn.ps1)" -ge 2 ] \
+# The ps1 side now has ONE fetch helper (see [5d/8]) instead of two inline
+# copies, so this is asserted as a property rather than counted: every
+# `node --check` in the file targets the helper's temp, and that temp is .js.
+PS_CHK=$(grep -c '^[[:space:]]*node --check' client/huginn.ps1)
+PS_JS=$(grep -c '^[[:space:]]*node --check \$tmp ' client/huginn.ps1)
+[ "$PS_CHK" -gt 0 ] && [ "$PS_CHK" = "$PS_JS" ] \
+  && grep -q '\$tmp = "\$Dest\.tmp\.js"' client/huginn.ps1 \
   && ok "ps1 fetches syntax-check under a .js temp name" \
   || bad "ps1 fetch temp name regressed — .tmp is unparseable on modern node"
 
@@ -539,26 +1014,27 @@ rm -rf "$HRT"
 # version is missing rather than "not found" — the person reading it is the
 # person who can deploy the daemon. Driven against a stub, so this holds on a
 # host where appd is stopped, and on one already running 3.0.0.
-HR_PORT=18787
-python3 - "$HR_PORT" <<'STUB' >/dev/null 2>&1 &
+HR_PF="$STUB_DIR/headroom.port"
+python3 - "$HR_PF" "${HUGINN_TEST_HEADROOM_PORT:-0}" <<'STUB' >/dev/null 2>&1 &
 import sys
 from http.server import BaseHTTPRequestHandler, HTTPServer
 class H(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(404); self.end_headers(); self.wfile.write(b'{"error":"not found"}')
     def log_message(self, *a): pass
-HTTPServer(("127.0.0.1", int(sys.argv[1])), H).serve_forever()
+srv = HTTPServer(("127.0.0.1", int(sys.argv[2])), H)
+# The port file is the lane's proof that the listener it is about to talk to is
+# OURS. Written after bind, so it never appears for a stub that lost the port.
+with open(sys.argv[1], "w") as fh: fh.write(str(srv.server_port))
+srv.serve_forever()
 STUB
-HR_STUB=$!
-HR_UP=
-for _ in $(seq 1 40); do
-  curl -s -o /dev/null --max-time 1 "http://127.0.0.1:$HR_PORT/" && { HR_UP=1; break; }
-done
-if [ -z "$HR_UP" ]; then
+HR_STUB=$!; STUB_PIDS+=("$HR_STUB")
+HR_PORT=$(stub_port "$HR_PF")
+if [ -z "${HR_PORT:-}" ]; then
   # LOUDLY, never silently: a stub that never bound would make every assertion
   # below read "connection refused" and the 404 check would fail for the wrong
   # reason, which is worse than not running it.
-  skip "headroom daemon-too-old checks (nothing bound 127.0.0.1:$HR_PORT)"
+  skip "headroom daemon-too-old checks (the stub never bound a port)"
 else
   HR_OUT=$(HUGINN_APPD_URL="http://127.0.0.1:$HR_PORT" server/bin/huginn-headroom 2>&1); HR_RC=$?
   grep -q 'needs appd 3.0.0' <<<"$HR_OUT" && [ "$HR_RC" = 1 ] \
@@ -659,8 +1135,8 @@ AP_BAD=$(awk "/python3 -c '/{inpy=1; next} /^' /{inpy=0} inpy" server/bin/huginn
 # End to end against a stub daemon, the way the headroom lane does it: this
 # renderer is the ONLY implementation of what an archive looks like, in either
 # client, so a parse check would be most of it untested.
-AR_PORT=18811
-python3 - "$AR_PORT" <<'ARSTUB' &
+AR_PF="$STUB_DIR/archive.port"
+python3 - "$AR_PF" "${HUGINN_TEST_ARCHIVE_PORT:-0}" <<'ARSTUB' &
 import json, sys
 from http.server import BaseHTTPRequestHandler, HTTPServer
 ROWS = {"max": 64, "archives": [
@@ -691,17 +1167,16 @@ class H(BaseHTTPRequestHandler):
         else:
             self._send(202, {"ok": True, "id": "x", "archived": False, "pending": True, "queued": True})
     def log_message(self, *a): pass
-HTTPServer(("127.0.0.1", int(sys.argv[1])), H).serve_forever()
+srv = HTTPServer(("127.0.0.1", int(sys.argv[2])), H)
+with open(sys.argv[1], "w") as fh: fh.write(str(srv.server_port))
+srv.serve_forever()
 ARSTUB
-AR_STUB=$!
-AR_UP=
-for _ in $(seq 1 40); do
-  curl -s -o /dev/null --max-time 1 "http://127.0.0.1:$AR_PORT/" && { AR_UP=1; break; }
-done
-if [ -z "$AR_UP" ]; then
+AR_STUB=$!; STUB_PIDS+=("$AR_STUB")
+AR_PORT=$(stub_port "$AR_PF")
+if [ -z "${AR_PORT:-}" ]; then
   # LOUDLY, never silently: a stub that never bound would make every assertion
   # below fail for the wrong reason.
-  skip "archive renderer checks (nothing bound 127.0.0.1:$AR_PORT)"
+  skip "archive renderer checks (the stub never bound a port)"
 else
   AR_LIST=$(HUGINN_APPD_URL="http://127.0.0.1:$AR_PORT" server/bin/huginn-archive 2>&1)
   grep -q "claude --resume 0123abcd" <<<"$AR_LIST" \
@@ -817,16 +1292,16 @@ else
 fi
 rm -rf "$PJT"
 
-# End to end against a stub daemon. The port is overridable because these gates
-# run beside a live appd and beside each other -- 18787 and 18811 are already
-# taken by the headroom and archive stubs above.
-PJ_PORT="${HUGINN_TEST_PROJECTS_PORT:-18822}"
-PJ_404_PORT="${HUGINN_TEST_PROJECTS_404_PORT:-18823}"
+# End to end against a stub daemon. Port 0 like every other stub here (see the
+# note by stub_port): these gates run beside a live appd and beside each other,
+# so no fixed number is ever provably free.
+PJ_PF="$STUB_DIR/projects.port"
+PJ_404_PF="$STUB_DIR/projects404.port"
 PJ_REQ=$(mktemp)
-python3 - "$PJ_PORT" "$PJ_REQ" <<'PJSTUB' &
+python3 - "$PJ_PF" "${HUGINN_TEST_PROJECTS_PORT:-0}" "$PJ_REQ" <<'PJSTUB' &
 import json, sys
 from http.server import BaseHTTPRequestHandler, HTTPServer
-LOG = sys.argv[2]
+LOG = sys.argv[3]
 P1 = {"id": "aaaaaaaa-0000-4000-8000-00000000aaaa", "name": "LoRa sensor stick",
       "cwd": "/root/netplan/dev-ledger/lora-stick", "createdAt": 1789459900,
       "lead": {"name": "lora-stick/lead", "state": "busy"},
@@ -886,22 +1361,26 @@ class H(BaseHTTPRequestHandler):
         self._log()
         self._send(200, {"ok": True, "ended": ["lora-stick-docs"]})
     def log_message(self, *a): pass
-HTTPServer(("127.0.0.1", int(sys.argv[1])), H).serve_forever()
+srv = HTTPServer(("127.0.0.1", int(sys.argv[2])), H)
+with open(sys.argv[1], "w") as fh: fh.write(str(srv.server_port))
+srv.serve_forever()
 PJSTUB
-PJ_STUB=$!
-python3 - "$PJ_404_PORT" <<'PJ404' >/dev/null 2>&1 &
+PJ_STUB=$!; STUB_PIDS+=("$PJ_STUB")
+python3 - "$PJ_404_PF" "${HUGINN_TEST_PROJECTS_404_PORT:-0}" <<'PJ404' >/dev/null 2>&1 &
 import sys
 from http.server import BaseHTTPRequestHandler, HTTPServer
 class H(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(404); self.end_headers(); self.wfile.write(b'{"error":"not found"}')
     def log_message(self, *a): pass
-HTTPServer(("127.0.0.1", int(sys.argv[1])), H).serve_forever()
+srv = HTTPServer(("127.0.0.1", int(sys.argv[2])), H)
+with open(sys.argv[1], "w") as fh: fh.write(str(srv.server_port))
+srv.serve_forever()
 PJ404
-PJ_404_STUB=$!
+PJ_404_STUB=$!; STUB_PIDS+=("$PJ_404_STUB")
 # A third stub: HTTP 200 with a body that is not JSON. See the assertion below.
-PJ_JUNK_PORT="${HUGINN_TEST_PROJECTS_JUNK_PORT:-18824}"
-python3 - "$PJ_JUNK_PORT" <<'PJJUNK' >/dev/null 2>&1 &
+PJ_JUNK_PF="$STUB_DIR/projectsjunk.port"
+python3 - "$PJ_JUNK_PF" "${HUGINN_TEST_PROJECTS_JUNK_PORT:-0}" <<'PJJUNK' >/dev/null 2>&1 &
 import sys
 from http.server import BaseHTTPRequestHandler, HTTPServer
 class H(BaseHTTPRequestHandler):
@@ -909,17 +1388,18 @@ class H(BaseHTTPRequestHandler):
         self.send_response(200); self.end_headers()
         self.wfile.write(b'<html>502 Bad Gateway</html>')
     def log_message(self, *a): pass
-HTTPServer(("127.0.0.1", int(sys.argv[1])), H).serve_forever()
+srv = HTTPServer(("127.0.0.1", int(sys.argv[2])), H)
+with open(sys.argv[1], "w") as fh: fh.write(str(srv.server_port))
+srv.serve_forever()
 PJJUNK
-PJ_JUNK_STUB=$!
-PJ_UP=
-for _ in $(seq 1 40); do
-  curl -s -o /dev/null --max-time 1 "http://127.0.0.1:$PJ_PORT/" && { PJ_UP=1; break; }
-done
-if [ -z "$PJ_UP" ]; then
+PJ_JUNK_STUB=$!; STUB_PIDS+=("$PJ_JUNK_STUB")
+PJ_PORT=$(stub_port "$PJ_PF")
+PJ_404_PORT=$(stub_port "$PJ_404_PF")
+PJ_JUNK_PORT=$(stub_port "$PJ_JUNK_PF")
+if [ -z "${PJ_PORT:-}" ] || [ -z "${PJ_404_PORT:-}" ] || [ -z "${PJ_JUNK_PORT:-}" ]; then
   # LOUDLY, never silently: a stub that never bound would make every assertion
-  # below fail for the wrong reason (set HUGINN_TEST_PROJECTS_PORT to move it).
-  skip "projects renderer checks (nothing bound 127.0.0.1:$PJ_PORT)"
+  # below fail for the wrong reason.
+  skip "projects renderer checks (a stub never bound a port)"
 else
   PJ_LIST=$(HUGINN_APPD_URL="http://127.0.0.1:$PJ_PORT" server/bin/huginn-projects 2>&1)
   grep -q "LoRa sensor stick" <<<"$PJ_LIST" && grep -qE "2 members" <<<"$PJ_LIST" \
