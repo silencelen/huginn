@@ -10,6 +10,16 @@ undocumented, and the notes-cutting matcher could fuse two sections when an app 
 version number collided. Entries below are reconstructed from the shipping commits.
 
 ## 3.2.0 — 2026-09-17
+- **Archive a session: fully ended, with the way back kept.** `POST /v1/sessions/:name/archive`
+  ends a session gracefully by default (the wind-down phrase, a 409 while a question is waiting,
+  the kill once it settles; `mode:"now"` is the escape hatch) and keeps a card: title, folder,
+  model, last message, the exact `cd '<cwd>' && claude --resume <uuid>`, and a COPY of the
+  transcript — Claude Code clears its own after `cleanupPeriodDays`, so without the copy a stored
+  resume command would silently expire. `POST /v1/archive/:id/revive` recreates the session under
+  its old name (`<name>2` when taken), restoring the kept transcript first when Claude Code no
+  longer has one, and marks it launching so the startup hold covers its first message. Archived
+  conversations never appear in `/v1/sessions`, so the picker, the palette and the widget inherit
+  nothing. 64 rows, oldest evicted first; rows never time-expire; `DELETE` is the only remover.
 - **Keep-awake (off by default).** Optionally send one tiny request when no 5-hour usage window is
   running, so a work session never starts on a cold window. Between windows the usage endpoint
   reports the session row with no reset time; that one field is the trigger. Haiku 4.5 pinned by

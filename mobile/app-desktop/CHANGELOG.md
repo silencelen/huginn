@@ -1,5 +1,11 @@
 # Huginn Desktop changelog
 
+## 1.3.1
+
+- **Archived sessions.** The same Archived section under the session rows in the list pane, and
+  "Archive…" in the right-click menu between "Wind down…" and "End session" — not red, because it
+  keeps everything it ends. Hidden on a host without the feature.
+
 ## 1.3.0
 
 - **A first-run setup flow.** Seven steps, each checked against the real thing rather than saved
