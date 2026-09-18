@@ -203,6 +203,24 @@ test('the sentinels arm high and clear low, and hold in between', () => {
   assert.equal(cleared.STOP, false);
 });
 
+test('a STOP the session armed clears when the session resets, whatever the week reads', () => {
+  // Seen live 2026-09-18: STOP armed at "session 71%", the 5-hour window reset to
+  // 4%, and the sentinel stayed up for hours because the clear branch also wanted
+  // weekly_all under clearBelowPct — a perfectly normal 69% week held every spawn.
+  const s = S();
+  const stale = h.sentinelPlan({ session: win(4), weekly_all: win(69) }, s, { STOP: { since: 1, reason: 'session 71%' } });
+  assert.equal(stale.STOP, false, 'the window that armed it has reset; a normal week is no reason to hold');
+  // The week's own arm keeps its own hysteresis: armed red, it holds until the
+  // week is genuinely low again, not merely no longer red.
+  const weekHeld = h.sentinelPlan({ session: win(4), weekly_all: win(69) }, s, { STOP: { since: 1, reason: 'weekly_all 96%' } });
+  assert.equal(weekHeld.STOP, true, 'a week-armed STOP holds through the middle band');
+  const weekCleared = h.sentinelPlan({ session: win(4), weekly_all: win(12) }, s, { STOP: { since: 1, reason: 'weekly_all 96%' } });
+  assert.equal(weekCleared.STOP, false);
+  // A red week still arms regardless of what armed it before.
+  const red = h.sentinelPlan({ session: win(4), weekly_all: win(96, { severity: 'critical' }) }, S({ headsUpPct: 85, ladderPct: 92 }), { STOP: { since: 1, reason: 'session 71%' } });
+  assert.equal(red.STOP, true);
+});
+
 test('STOP-FABLE has its own threshold and its own hysteresis', () => {
   const s = S();
   assert.equal(h.sentinelPlan({ weekly_fable: win(88) }, s, {}).STOP_FABLE, true);
