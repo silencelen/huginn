@@ -1742,11 +1742,15 @@ async function checkGates(name) {
   const cap = await run('tmux', ['capture-pane', '-p', '-t', `=${name}:`]);
   const lines = cap.err ? null : cap.stdout.replace(/\n$/, '').split('\n');
   const paneWhy = lines ? typing.paneReadyForInput(lines).why : null;
+  // The corroborating witness for the hook's `attention`: a composer drawn and
+  // holding nothing is proof no selector is up, whatever the state file says.
+  // `null` — no composer at all — is NOT that proof (see humanAttentionHold).
+  const composerEmpty = lines ? typing.composerEmpty(lines) : null;
   // A capture that FAILED says nothing about startup — the session is probably
   // gone, and holding a send on a pane we cannot read would be a wait with no
   // end. Fall through to the old behaviour and let delivery report the failure.
   const starting = lines ? await startupGate(name, lines) : false;
-  return { idle, lastKind, paneWhy, starting, sessionState: readSessionState(name) };
+  return { idle, lastKind, paneWhy, starting, composerEmpty, sessionState: readSessionState(name) };
 }
 
 /**
@@ -1887,9 +1891,22 @@ async function pumpQueue(name) {
       // session whose transcript never gets a turn marker ever has; `attention`
       // is the opposite verdict and holds, because a numbered prompt is on
       // screen and prose typed into one is lost or misread.
+      const stateSays = typing.stateVerdict(gate.sessionState, entry.at);
+      // 3.3.x (#13): the hook's `attention` now reaches a PERSON's message too.
+      // It is the only authoritative "a numbered prompt is on screen" the
+      // daemon has, and the pane — which is a picture, and missed a dialog
+      // taller than its own window for three releases — was the only thing
+      // holding a human send. Pane-BACKED, so a state file nobody will refresh
+      // cannot hold it forever; see typing.humanAttentionHold.
       const d = typing.releaseDecision(humanText
-        ? { ...gate, idle: true }
-        : { ...gate, state: typing.stateVerdict(gate.sessionState, entry.at) });
+        ? {
+          ...gate,
+          idle: true,
+          state: typing.humanAttentionHold({
+            state: stateSays, composerEmpty: gate.composerEmpty, waitedMs: now - entry.at,
+          }) ? 'hold' : null,
+        }
+        : { ...gate, state: stateSays });
       if (!d.release) {
         q.blockedBy = d.blockedBy;
         armQueueTimer(name);

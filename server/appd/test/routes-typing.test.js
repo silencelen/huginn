@@ -385,6 +385,52 @@ test('a human send is never left waiting on a transcript that stays busy', async
   assert.equal(fs.readFileSync(out, 'utf8'), 'released\n');
 });
 
+/** A pane drawing nothing but an EMPTY composer — the shape that contradicts a
+ *  stale `attention` in the state file. */
+function mkComposer(suffix) {
+  const name = `${PFX}-${suffix}`;
+  sh('tmux', ['new-session', '-d', '-s', name, '-c', tmp, '-x', '100', '-y', '30',
+    'sh -c \'printf "────────────\\n\u276f \\n"; sleep 600\'']);
+  madeSessions.add(name);
+  return name;
+}
+
+test('the hook\'s `attention` holds a PERSON\'s message too (#13)', async () => {
+  // ⚠ THE HALF THE PANE CANNOT DO. The modal gate reads the pane, and a pane is
+  // a picture: a dialog whose options do not fit, a frame captured mid-redraw,
+  // a selector the detector has never seen. The title hook's Notification event
+  // is authoritative and says `attention` — and until now `state` was passed to
+  // releaseDecision on the AUTOMATED lane only, so the one authoritative source
+  // of "a question is waiting" never reached a person's message.
+  const name = mkSession('attn');
+  writeState(name, { state: 'attention', transcript: writeTranscript(name, [TURN]) });
+  const { status, body } = await api(`/v1/sessions/${name}/keys`, {
+    method: 'POST', body: JSON.stringify({ text: 'this would answer the question', keys: ['Enter'] }),
+  });
+  assert.equal(status, 200, JSON.stringify(body));
+  assert.equal(body.delivered, false, 'a question is waiting');
+  const st = await typingOf(name);
+  assert.equal(st.blockedBy, 'attention');
+  assert.equal(st.queued, 1);
+});
+
+test('a STALE attention expires against the pane, not against the state file (#13)', async () => {
+  // The state file is sticky — it is rewritten by an event, and no event fires
+  // when a question is answered from the keyboard. So the hold is pane-backed:
+  // an empty composer on screen is proof there is no question in the way, and a
+  // person's message goes. Holding it on a state file nobody will refresh is
+  // the #1 failure wearing the other hat.
+  const name = mkComposer('attnstale');
+  writeState(name, { state: 'attention', transcript: writeTranscript(name, [TURN]) });
+  for (let i = 0; i < 40 && !/\u276f/.test(capture(name)); i++) await wait(100);
+  assert.match(capture(name), /\u276f/, 'precondition: the composer is drawn and empty');
+  const { body } = await api(`/v1/sessions/${name}/keys`, {
+    method: 'POST', body: JSON.stringify({ text: 'nothing is in the way', keys: ['Enter'] }),
+  });
+  assert.equal(body.delivered, true, 'the pane contradicts the state file');
+  assert.equal((await typingOf(name)).queued, 0);
+});
+
 test('a dialog on screen queues a text send and names the modal', async () => {
   const name = mkModal('modaltext');
   writeState(name, { transcript: writeTranscript(name, [TURN]) });
