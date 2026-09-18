@@ -46,6 +46,19 @@ import kotlinx.serialization.json.jsonPrimitive
  * from it. The one thing that is not common is the HTTP engine — see
  * [huginnHttpEngine].
  */
+/**
+ * What an unauthenticated `GET /v1/ping` said about the host at [address].
+ *
+ * A boolean was enough for route RESOLUTION — pick the first address that is
+ * huginn — and not enough for the first-run flow, which has to tell the reader
+ * what answered. See [HuginnClient.probeDaemon].
+ *
+ * @param version the daemon's own, from the header it stamps on every response
+ *   including the 401. Null on a daemon too old to stamp it, which still proves
+ *   itself by the shape of its refusal.
+ */
+data class DaemonProbe(val proven: Boolean, val version: String?, val address: String)
+
 class HuginnClient(
     private val baseUrlProvider: () -> String,
     private val tokenProvider: () -> String,
@@ -187,6 +200,23 @@ class HuginnClient(
             val error = runCatching { probeJson.decodeFromString<ApiError>(body).error }.getOrNull()
             return !error.isNullOrBlank()
         }
+
+        /**
+         * What an unauthenticated probe PROVED, in the words a reader gets.
+         *
+         * The version is the daemon's own, off [APPD_HEADER]; a daemon older than
+         * the release that added the header proves itself by its JSON refusal and
+         * has no version to give, so the sentence shortens rather than inventing
+         * one. Pure, because this is the line the first-run flow prints and a
+         * sentence nobody can assert is a sentence that quietly says the wrong
+         * thing at 11sp under a green dot.
+         */
+        fun probeWords(probe: DaemonProbe): String {
+            if (probe.address.isBlank()) return NO_ROUTE
+            val where = probe.address.removePrefix("https://").removePrefix("http://").trimEnd('/')
+            val what = probe.version?.takeIf { it.isNotBlank() }?.let { "appd $it" } ?: "huginn"
+            return "$what answered at $where"
+        }
     }
 
     private val json = Json { ignoreUnknownKeys = true; explicitNulls = false }
@@ -322,20 +352,46 @@ class HuginnClient(
      * same way from the desktop client, and so this module owns every socket the
      * app opens.
      */
-    suspend fun probe(candidate: String): Boolean = runCatching {
-        val resp = http.request {
-            method = HttpMethod.Get
-            url(withScheme(AppdRoutes.normalize(candidate)) + "/v1/ping")
-            timeout {
-                connectTimeoutMillis = PROBE_TIMEOUT_MS
-                socketTimeoutMillis = PROBE_TIMEOUT_MS
-                requestTimeoutMillis = PROBE_TIMEOUT_MS
+    suspend fun probe(candidate: String): Boolean = probeDaemon(candidate).proven
+
+    /**
+     * The same probe, ANSWERING RATHER THAN NODDING.
+     *
+     * ⚠⚠ THE FIRST-RUN FLOW'S ADDRESS STEP CANNOT USE `ping()`. `/v1/ping` is
+     * token-gated — the daemon authorizes before the handler — so the step that
+     * exists to separate "nothing answers at that address" from "something
+     * answers and does not like your bearer" failed with the word *unauthorized*
+     * against a correct address on every fresh install, pointing the reader at a
+     * token the flow had not asked for yet. The 401 IS the proof, and the version
+     * header rides on it, so everything the step wanted to print was already
+     * there — [probe]'s boolean simply could not carry it.
+     *
+     * Unauthenticated, like [probe] and for the same reason: a probe that carried
+     * the bearer would disclose it to exactly the stranger this is detecting.
+     */
+    suspend fun probeDaemon(candidate: String): DaemonProbe {
+        val address = AppdRoutes.normalize(candidate)
+        if (address.isBlank()) return DaemonProbe(proven = false, version = null, address = "")
+        return runCatching {
+            val resp = http.request {
+                method = HttpMethod.Get
+                url(withScheme(address) + "/v1/ping")
+                timeout {
+                    connectTimeoutMillis = PROBE_TIMEOUT_MS
+                    socketTimeoutMillis = PROBE_TIMEOUT_MS
+                    requestTimeoutMillis = PROBE_TIMEOUT_MS
+                }
             }
-        }
-        // Bounded by the probe timeouts above: a host that dribbles a body at a
-        // probe fails the same way one that never answers does.
-        provesDaemon(resp.headers[APPD_HEADER], resp.status.value, resp.bodyAsText())
-    }.getOrDefault(false)
+            val version = resp.headers[APPD_HEADER]?.trim()?.takeIf { it.isNotEmpty() }
+            DaemonProbe(
+                // Bounded by the probe timeouts above: a host that dribbles a body
+                // at a probe fails the same way one that never answers does.
+                proven = provesDaemon(version, resp.status.value, resp.bodyAsText()),
+                version = version,
+                address = address,
+            )
+        }.getOrElse { DaemonProbe(proven = false, version = null, address = address) }
+    }
 
     // ------------------------------------------------------------ status
 

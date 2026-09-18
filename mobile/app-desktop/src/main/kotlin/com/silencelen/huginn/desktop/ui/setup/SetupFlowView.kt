@@ -204,14 +204,18 @@ class DesktopSetupProbes(
     override suspend fun route(): Result<String> = runCatching {
         val url = store.settings.baseUrlNow()
         check(url.isNotBlank()) { HuginnClient.NO_ROUTE }
-        // `/v1/ping` needs no token, which is exactly what makes it the right
-        // probe for THIS step: it separates "nothing answers at that address"
-        // from "something answers and does not like your bearer", and those two
-        // have completely different fixes.
-        val ping = store.client.ping()
-        val where = ping.via?.addr?.let { addr -> ping.via?.port?.let { "$addr:$it" } ?: addr } ?: url
-        val version = ping.version?.takeIf { it.isNotBlank() }?.let { "appd $it" } ?: "huginn"
-        "$version answered at $where"
+        // ⚠⚠ THE PROBE, NOT `ping()`. This step exists to separate "nothing
+        // answers at that address" from "something answers and does not like your
+        // bearer" — and it used to ask a TOKEN-GATED route, so on every fresh
+        // install a correct address failed with the word "unauthorized" and sent
+        // the reader after a token the flow had not offered yet. The 401 plus the
+        // `X-Huginn-Appd` header IS the proof of a daemon (`provesDaemon`), and
+        // the header carries the version, so nothing is lost by asking without a
+        // bearer — and a bearer is exactly what must not be sent to an address
+        // that has not been proven to be huginn yet.
+        val probe = store.client.probeDaemon(url)
+        check(probe.proven) { "nothing at that address answered as huginn" }
+        HuginnClient.probeWords(probe)
     }
 
     override suspend fun token(): Result<String> = runCatching {
