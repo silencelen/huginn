@@ -88,6 +88,19 @@ data class RouteBook(
     val routes: List<PinnedRoute> = emptyList(),
     val activeId: String? = null,
     val autoSwitch: Boolean = true,
+    /**
+     * An address that was in this book (or in the settings it was migrated from)
+     * and is NOT in it now, because [RouteGuard] refuses it.
+     *
+     * ⚠ A NOTICE, NOT A STATE. Dropping used to be silent on the theory that only
+     * a hand-edited store could produce a refused URL — and the phone's pre-3.x
+     * "Base URL" was a free-text field with no validation at all, so an upgrade
+     * quietly deleted whatever hostname the owner had been using for a year and
+     * pointed the app at a hard-coded built-in instead. Carried here so both
+     * settings screens can say which address went, and so [normalized] can leave
+     * the book with no active route rather than adopting an address nobody chose.
+     */
+    val droppedUrl: String? = null,
 ) {
 
     val active: PinnedRoute? get() = routes.firstOrNull { it.id == activeId }
@@ -112,18 +125,26 @@ data class RouteBook(
      * - `activeId` names a route that exists. An id pointing at nothing falls
      *   back to the first pin rather than to null, because a book with pins and
      *   no active route cannot address the daemon at all.
-     * - ⚠ **AN ADDRESS THE GUARD REFUSES IS DROPPED.** [add] and [setUrl] throw,
-     *   so the only way such a URL reaches a book is somebody editing the store
-     *   file by hand — and the old desktop allowlist had exactly this hole: it
-     *   checked the setter and read `baseUrl` back raw. Dropping is silent on
-     *   purpose; the route it removes is one this client would refuse to dial
-     *   anyway, and there is no reader to apologise to at load time.
+     * - ⚠ **AN ADDRESS THE GUARD REFUSES IS DROPPED — AND NAMED.** [add] and
+     *   [setUrl] throw, so a refused URL reaches a book only from a store: a
+     *   hand-edited file, or the pre-3.x free-text "Base URL" the migration
+     *   reads. Dropping it is right (this client would refuse to dial it) and
+     *   dropping it SILENTLY was not: the address goes to [droppedUrl] so a
+     *   screen can say what happened.
+     * - ⚠ **AND A BOOK THAT LOST ITS PIN IS NOT RE-POINTED AT A BUILT-IN.** When
+     *   [activeId] is null and something was dropped, this leaves it null. A
+     *   client with no address says so; a client silently talking to an address
+     *   nobody chose is the failure this whole field exists for.
      */
     fun normalized(): RouteBook {
         val kept = routes.filter { RouteGuard.isAllowed(it.url) }
+        val dropped = routes.firstOrNull { !RouteGuard.isAllowed(it.url) }?.url ?: droppedUrl
         val ordered = kept.mapIndexed { i, r -> if (r.order == i) r else r.copy(order = i) }
-        val id = activeId?.takeIf { id -> ordered.any { it.id == id } } ?: ordered.firstOrNull()?.id
-        return if (ordered == routes && id == activeId) this else copy(routes = ordered, activeId = id)
+        val unaddressedOnPurpose = activeId == null && dropped != null
+        val id = activeId?.takeIf { id -> ordered.any { it.id == id } }
+            ?: if (unaddressedOnPurpose) null else ordered.firstOrNull()?.id
+        return if (ordered == routes && id == activeId && dropped == droppedUrl) this
+        else copy(routes = ordered, activeId = id, droppedUrl = dropped)
     }
 
     /**
@@ -190,6 +211,12 @@ data class RouteBook(
         if (routes.none { it.id == id }) this else copy(activeId = id)
 
     fun withAutoSwitch(on: Boolean): RouteBook = copy(autoSwitch = on)
+
+    /**
+     * Forgets the dropped-address notice. For a screen that has shown it — the
+     * notice is a one-time apology for an upgrade, not a setting.
+     */
+    fun clearDropped(): RouteBook = if (droppedUrl == null) this else copy(droppedUrl = null)
 
     private fun mapRoute(id: String, f: (PinnedRoute) -> PinnedRoute): RouteBook {
         if (routes.none { it.id == id }) return this

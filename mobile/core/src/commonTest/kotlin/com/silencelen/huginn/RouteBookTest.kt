@@ -159,6 +159,18 @@ class RouteBookTest {
         assertEquals(listOf("real"), smuggled.routes.map { it.id })
         assertEquals("real", smuggled.activeId, "and the connection falls back to one that is allowed")
         assertEquals(lan, smuggled.activeUrl)
+        assertEquals("http://attacker.example", smuggled.droppedUrl,
+            "dropped, but no longer WITHOUT A WORD — a screen can now say which address went and why")
+    }
+
+    /**
+     * A book that has nothing to say about a dropped address says nothing. The
+     * field is a notice, not a state; it must not appear out of an ordinary read.
+     */
+    @Test
+    fun `an ordinary book reports no dropped address`() {
+        assertNull(book(tailnet, lan).normalized().droppedUrl)
+        assertNull(RouteBook().normalized().droppedUrl)
     }
 
     @Test
