@@ -464,6 +464,28 @@ class HuginnClientTest {
     }
 
     @Test
+    fun `a held send decodes the reason it is being held`() = runTest {
+        // The daemon's answer to a send it could not deliver carries the same word
+        // `/typing` reports (appd 3.1.2), and a field this class does not have is a
+        // field the composer line cannot say — which is how every client spent the
+        // first two seconds of a new session describing a turn that had not begun.
+        val r = ok("""{"ok":true,"queued":1,"position":1,"delivered":false,"blockedBy":"starting"}""")
+            .sendKeys("jtyper", text = "the first thing I typed", keys = listOf("Enter"))
+        assertEquals(1, r.queued)
+        assertFalse(r.landed)
+        assertEquals("starting", r.blockedBy)
+    }
+
+    @Test
+    fun `a send from a daemon that does not say why decodes to no reason at all`() = runTest {
+        // Not "turn" and not an exception: a pre-3.1.2 daemon simply has nothing to
+        // say, and the client must render the sentence it always did.
+        val r = ok("""{"ok":true,"queued":2}""").sendKeys("jtyper", text = "hello")
+        assertEquals(2, r.queued)
+        assertNull(r.blockedBy)
+    }
+
+    @Test
     fun `a save carries the rev it was based on`() = runTest {
         val r = ok("""{"id":"pad-9","name":"Main","content":"two","rev":8}""")
             .saveScratchpad("pad-9", rev = 7, content = "two")

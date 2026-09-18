@@ -84,6 +84,49 @@ class SendQueueTest {
     }
 
     @Test
+    fun `the seed carries the REASON the send is waiting, not just the count`() {
+        // ⚠ THE TWO SECONDS NOBODY WAS POLLING FOR. The seed is what the composer
+        // line is drawn from until the first `/typing` poll lands, and it knew a
+        // number and nothing else — so `note` fell through to its default sentence,
+        // "will send when Claude finishes its turn", for a session whose Claude has
+        // not started a turn at all. Then it silently corrected itself. The daemon
+        // has said `blockedBy` on the send's own answer since appd 3.1.2.
+        val held = SendKeysResult(ok = true, queued = 1, position = 1, delivered = false, blockedBy = "starting")
+        val seeded = SendQueue.seed(held)
+        assertNotNull(seeded)
+        assertEquals("starting", seeded!!.blockedBy, "the reason must survive the seed")
+        assertEquals(
+            "Queued · waiting for Claude to start (1 waiting)",
+            SendQueue.note(seeded),
+            "and the first sentence must be the right one, not a correction two seconds later",
+        )
+    }
+
+    @Test
+    fun `a seed from an older daemon still says something, just not why`() {
+        // A daemon before 3.1.2 answers with no `blockedBy` at all, which decodes to
+        // null — and the line must stay exactly what it was rather than becoming
+        // nothing. Additive on the wire means additive on the screen too.
+        val seeded = SendQueue.seed(SendKeysResult(ok = true, queued = 1, position = 1))
+        assertNotNull(seeded)
+        assertNull(seeded!!.blockedBy)
+        assertEquals("Queued · will send when Claude finishes its turn (1 waiting)", SendQueue.note(seeded))
+    }
+
+    @Test
+    fun `a modal seeded from the send says dialog, not turn`() {
+        // The same fix for the other reason a send can be held the instant it is
+        // made: a send into a pane with a dialog on it is queued, and "finishes its
+        // turn" tells the reader to wait for the one thing that will not happen.
+        val note = SendQueue.note(SendQueue.seed(
+            SendKeysResult(ok = true, queued = 1, position = 1, blockedBy = "modal"),
+        ))
+        assertNotNull(note)
+        assertTrue(note!!.contains("dialog"), note)
+        assertTrue(!note.contains("finishes its turn"), note)
+    }
+
+    @Test
     fun `the list row says only that there is a wait`() {
         assertEquals("3 queued", SendQueue.rowMark(3))
         assertNull(SendQueue.rowMark(0), "an empty queue is not a fact about a row")

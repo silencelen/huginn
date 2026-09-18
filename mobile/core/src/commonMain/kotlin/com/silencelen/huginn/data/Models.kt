@@ -1156,6 +1156,18 @@ data class SendKeysResult(
     val position: Int = 0,
     /** Both gates were open: the text is already on the pane. */
     val delivered: Boolean = false,
+    /**
+     * WHY the send is waiting, when it is — `turn` | `modal` | `starting` | null,
+     * the same word `/typing` reports (appd 3.1.2).
+     *
+     * Without it the "queued" line was seeded from a COUNT and nothing else, so
+     * for the first poll interval every client fell back to "will send when Claude
+     * finishes its turn" — which for a session still starting is a turn that has
+     * not begun. Two seconds of the wrong sentence, on the one wait a reader is
+     * most likely to see, and then a silent correction. Null against an older
+     * daemon, which is the old behaviour exactly.
+     */
+    val blockedBy: String? = null,
 ) {
     /** Nothing is waiting on this send — it landed, or there is no queue to wait in. */
     val landed: Boolean get() = delivered || queued <= 0

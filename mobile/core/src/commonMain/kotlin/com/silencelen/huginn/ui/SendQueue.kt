@@ -50,9 +50,19 @@ object SendQueue {
      * Seeded from the send rather than waited for from the first poll: two seconds
      * of a composer that emptied with no explanation is the whole complaint, and
      * the answer to the send already carries the number.
+     *
+     * ⚠ AND THE REASON, NOT JUST THE NUMBER. The seed used to carry a count alone,
+     * so [note] fell through to its default sentence — "will send when Claude
+     * finishes its turn" — until the first `/typing` poll landed. On a session
+     * that has only just been created that describes a turn which has not begun,
+     * which is the one wait a reader is most likely to meet: the line was wrong
+     * for about two seconds and then quietly corrected itself. appd 3.1.2 puts
+     * `blockedBy` on the send's own answer, using the same words `/typing` reports,
+     * so the first sentence is the right one. Null from an older daemon, which is
+     * the old sentence exactly.
      */
     fun seed(result: SendKeysResult): TypingState? =
-        if (result.landed) null else TypingState(queued = result.queued)
+        if (result.landed) null else TypingState(queued = result.queued, blockedBy = result.blockedBy)
 
     /**
      * The mark on a session's list row, or null when nothing is waiting.
