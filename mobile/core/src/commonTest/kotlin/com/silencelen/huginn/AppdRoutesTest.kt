@@ -97,6 +97,37 @@ class AppdRoutesTest {
         assertEquals("tailscale", book.activeId)
     }
 
+    /**
+     * ⚠ SPELLING IS NOT IDENTITY. The old setter only trimmed, and `HuginnClient`
+     * prepends `http://` to a bare address, so `192.168.2.117:8787` (and even
+     * `HTTP://…`) were storable and worked. `migrate` matched them with a trim-
+     * and-slash normalize, missed, and kept the address AGAIN beside the built-in
+     * it already names: three pins, two of them one daemon — probed twice, two
+     * rows in the health strip that both answer, and an edit to repair it refused
+     * as a duplicate.
+     */
+    @Test
+    fun `a stored address spelled differently is still the built-in it names`() {
+        for (stored in listOf(
+            "192.168.2.117:8787",
+            "HTTP://192.168.2.117:8787",
+            "http://192.168.2.117:8787/",
+            " http://192.168.2.117:8787 ",
+        )) {
+            val book = AppdRoutes.migrate(stored, routePinned = false)
+            assertEquals(2, book.routes.size, "stored='$stored' -> ${book.routes.map { it.url }}")
+            assertEquals("yggdrasil", book.activeId, "stored='$stored'")
+            assertEquals(AppdRoutes.YGGDRASIL.url, book.activeUrl, "stored='$stored'")
+        }
+    }
+
+    @Test
+    fun `a migrated address is stored canonically, not verbatim`() {
+        val book = AppdRoutes.migrate("10.0.0.9:8787/", routePinned = false)
+        assertEquals("http://10.0.0.9:8787", book.activeUrl, "the scheme is spelled out and the slash is gone")
+        assertEquals(RouteKind.LAN, book.routes.first().kind)
+    }
+
     @Test
     fun `a pinned route becomes autoSwitch off, which is the same refusal to move`() {
         val pinned = AppdRoutes.migrate(AppdRoutes.YGGDRASIL.url, routePinned = true)

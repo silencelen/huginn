@@ -173,6 +173,35 @@ class RouteBookTest {
         assertNull(RouteBook().normalized().droppedUrl)
     }
 
+    /**
+     * Two pins on one daemon are one path wearing two names: both answer, the
+     * health strip shows two green rows, the fan-out probes the same host twice,
+     * and editing either one to repair it is refused as "already pinned".
+     */
+    @Test
+    fun `a book holding one daemon twice keeps one row`() {
+        val b = RouteBook(
+            routes = listOf(
+                PinnedRoute("first", "One", "http://10.0.0.5:8787", RouteKind.LAN, 0, 0),
+                PinnedRoute("second", "Two", "10.0.0.5:8787/", RouteKind.CUSTOM, 1, 0),
+            ),
+            activeId = "second",
+        ).normalized()
+        assertEquals(listOf("first"), b.routes.map { it.id })
+        assertEquals("first", b.activeId, "the active pin follows the copy that survived")
+        assertEquals("http://10.0.0.5:8787", b.activeUrl)
+    }
+
+    @Test
+    fun `a stored address is re-canonicalised on the way in`() {
+        val b = RouteBook(
+            routes = listOf(PinnedRoute("r0", "Home", "HTTP://10.0.0.5:8787/", RouteKind.CUSTOM, 0, 0)),
+            activeId = "r0",
+        ).normalized()
+        assertEquals("http://10.0.0.5:8787", b.activeUrl)
+        assertEquals(RouteKind.LAN, b.routes.single().kind, "and the badge follows the address it really is")
+    }
+
     @Test
     fun `an active id naming nothing falls back to the first pin rather than to nowhere`() {
         val b = RouteBook(routes = book(tailnet, lan).routes, activeId = "gone").normalized()

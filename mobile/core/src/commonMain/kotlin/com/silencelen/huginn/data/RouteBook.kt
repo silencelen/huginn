@@ -122,6 +122,9 @@ data class RouteBook(
      * break, and is called on every read AND every write by both stores.
      *
      * - `order` mirrors the list index.
+     * - every address is re-canonicalised through [RouteGuard.normalize] and the
+     *   list de-duplicated on the result, because a 2.x store could hold the same
+     *   daemon spelled two ways.
      * - `activeId` names a route that exists. An id pointing at nothing falls
      *   back to the first pin rather than to null, because a book with pins and
      *   no active route cannot address the daemon at all.
@@ -137,11 +140,27 @@ data class RouteBook(
      *   nobody chose is the failure this whole field exists for.
      */
     fun normalized(): RouteBook {
-        val kept = routes.filter { RouteGuard.isAllowed(it.url) }
         val dropped = routes.firstOrNull { !RouteGuard.isAllowed(it.url) }?.url ?: droppedUrl
+        // Canonical FIRST, then de-duplicated on the canonical form: `10.0.0.5:8787`
+        // and `http://10.0.0.5:8787/` are one daemon spelled two ways, and a book
+        // that keeps both probes it twice, shows two rows that both answer, and
+        // refuses the edit that would have repaired it as a duplicate.
+        val canonical = routes.filter { RouteGuard.isAllowed(it.url) }.map { r ->
+            val clean = RouteGuard.normalize(r.url)
+            if (clean == r.url) r else r.copy(url = clean, kind = RouteGuard.kindOf(clean))
+        }
+        val kept = mutableListOf<PinnedRoute>()
+        // id of a discarded duplicate -> id of the copy that survived, so an
+        // activeId naming the loser follows the connection rather than resetting it.
+        val alias = mutableMapOf<String, String>()
+        for (r in canonical) {
+            val keeper = kept.firstOrNull { it.url == r.url }
+            if (keeper == null) kept += r else alias[r.id] = keeper.id
+        }
         val ordered = kept.mapIndexed { i, r -> if (r.order == i) r else r.copy(order = i) }
         val unaddressedOnPurpose = activeId == null && dropped != null
-        val id = activeId?.takeIf { id -> ordered.any { it.id == id } }
+        val wanted = activeId?.let { alias[it] ?: it }
+        val id = wanted?.takeIf { id -> ordered.any { it.id == id } }
             ?: if (unaddressedOnPurpose) null else ordered.firstOrNull()?.id
         return if (ordered == routes && id == activeId && dropped == droppedUrl) this
         else copy(routes = ordered, activeId = id, droppedUrl = dropped)

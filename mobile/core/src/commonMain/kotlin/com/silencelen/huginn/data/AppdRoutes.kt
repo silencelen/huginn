@@ -113,7 +113,12 @@ object AppdRoutes {
      * this way.
      */
     fun migrate(storedBaseUrl: String?, routePinned: Boolean, now: Long = MIGRATED_AT): RouteBook {
-        val stored = storedBaseUrl?.let { normalize(it) }?.takeIf { it.isNotBlank() }
+        // ⚠ THE GUARD'S normalize, NOT THIS FILE'S. A trim-and-slash normalize
+        // misses every other way 2.x could spell an address it still connected
+        // with — `192.168.2.117:8787` (HuginnClient prepends the scheme),
+        // `HTTP://…` — so `match()` failed and the filter kept the built-in as
+        // well: three pins, two of them the same daemon.
+        val stored = storedBaseUrl?.let { RouteGuard.normalize(it) }?.takeIf { it.isNotBlank() }
             ?: return RouteBook(autoSwitch = !routePinned)
 
         // ⚠ THE ONE ROW THAT IS NOT BEHAVIOUR-IDENTICAL, AND CANNOT BE. The phone's

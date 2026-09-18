@@ -75,6 +75,13 @@ class HuginnClientTest {
         assertFalse(RouteGuard.isAllowed("example.com:8787"), "a bare public name never gets the free upgrade")
     }
 
+    /** A scheme is a scheme however it is spelled; `HTTP://` was stored by 2.x. */
+    @Test
+    fun `an upper-case scheme is not prepended to`() = runTest {
+        client(base = "HTTP://192.168.2.117:8787") { respond("""{"ok":true}""") }.ping()
+        assertEquals("http://192.168.2.117:8787/v1/ping", seen.single().url.toString())
+    }
+
     /**
      * ⚠ A FRESH INSTALL PINS NOTHING, so this is what EVERY call makes on first
      * launch. `withScheme("")` builds `http:///v1/status`, and the parse failure
