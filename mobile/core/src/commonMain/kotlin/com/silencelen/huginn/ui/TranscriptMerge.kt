@@ -202,8 +202,17 @@ fun prependTranscriptPage(
     older: TranscriptPage,
 ): TranscriptPage {
     if (current == null) return older
-    var next = 0
-    val renumbered = (older.events + current.events).map { it.copy(seq = next++) }
+    // ⚠ THE ROWS ON SCREEN KEEP THEIR seq. `seq` is the product's only row
+    // identity — `TranscriptGroups.keyOf` feeds it to `items(key = …)` in all four
+    // shells and ToolCard's expansion is `rememberSaveable(ev.seq)` — so
+    // renumbering the combined list from 0 handed every saved per-row state to a
+    // different event: the open tool card collapsed and some older row inherited
+    // its `open = true`. The older page is numbered BELOW the window instead.
+    // Negative seqs are inert; nothing client-side reads seq as the server's
+    // numbering and nothing sends one back.
+    val base = current.events.firstOrNull()?.seq ?: 0
+    var next = base - older.events.size
+    val renumbered = older.events.map { it.copy(seq = next++) } + current.events
     return current.copy(
         events = renumbered,
         windowStart = older.windowStart,
