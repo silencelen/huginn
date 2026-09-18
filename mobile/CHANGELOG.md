@@ -1,5 +1,16 @@
 # Huginn changelog
 
+## 3.3.0 — 2026-09-17
+
+- **The Status page says whether a 5-hour window is running and when it resets**, and, when the
+  host's keep-awake is on, how many times huginn has kept one open today. Three new rows under
+  Usage & headroom switch it on, choose its model, and set quiet hours. Off until you turn it on.
+- **The "Queued" line under the composer says the right thing from the first frame.** It was
+  seeded from the send's answer, which carried a number and no reason, so for about two seconds
+  every held message read "will send when Claude finishes its turn" — including a session so new
+  that Claude has not started — and then quietly corrected itself. The daemon (3.2.0) now says why
+  on the send itself and the app carries it through; an older host renders the line it always did.
+
 ## 3.2.0 — 2026-09-16
 
 Connectivity becomes a list you keep, and the pages stop floating.
