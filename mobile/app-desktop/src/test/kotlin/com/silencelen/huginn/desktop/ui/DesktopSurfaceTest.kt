@@ -848,6 +848,33 @@ class DesktopSurfaceTest {
         assertFalse(padPanelFits(PANEL_MIN_WINDOW_DP - 1f))
     }
 
+    // ------------------------------------------------------- session names
+
+    @Test
+    fun `a name tmux would silently rewrite is refused while it is typed`() {
+        // tmux rewrites '.' to '_' and exits 0, so a session created or renamed
+        // with a dot answers to a name nobody typed: the pane opens on the
+        // requested name, every route 404s, and the draft that was just moved
+        // there is deleted as the pane closes. '-' is untouched and stays legal.
+        assertFalse(SESSION_NAME.matches("api.v2"), "a dotted name must not reach tmux")
+        assertFalse(SESSION_NAME.matches("my.session"))
+        assertFalse(SESSION_NAME.matches("notes.old"))
+        assertTrue(SESSION_NAME.matches("api-v2"), "'-' survives tmux untouched")
+        assertTrue(SESSION_NAME.matches("jtyper"))
+        assertTrue(SESSION_NAME.matches("_scratch_1"))
+        assertFalse(SESSION_NAME.matches("-lead"), "must start with a letter or digit")
+        assertFalse(SESSION_NAME.matches(""))
+        assertFalse(SESSION_NAME.matches("a".repeat(51)))
+    }
+
+    @Test
+    fun `the name help does not advertise the one character tmux eats`() {
+        // The sentence ends in a full stop, so the character is looked for the
+        // way the sentence LISTS one: " . " between the other two it offers.
+        assertFalse(" . " in SESSION_NAME_HELP, "help still offers a dot: $SESSION_NAME_HELP")
+        assertTrue(" - " in SESSION_NAME_HELP, "a dash is legal and the help should say so")
+    }
+
     // ------------------------------------------------------------- fixtures
 
     private fun noChatVerbs() = ChatVerbs(
