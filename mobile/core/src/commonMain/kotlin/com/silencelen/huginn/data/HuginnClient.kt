@@ -1370,6 +1370,184 @@ class HuginnClient(
         }
     }
 
+
+    // ---- projects: a cluster of sessions with roles, and the pages this host serves
+    //
+    // ⚠ TWO ROUTES HERE ANSWER A 404 WITH NULL RATHER THAN A THROW, and that is
+    // the feature probe. Both branches shipped after a lot of daemons were
+    // already installed, and a client that greeted every one of them with a red
+    // error would be reporting the absence of something nobody asked for. Null
+    // means "this daemon has never heard of projects"; an EMPTY LIST means the
+    // feature is there and you have none. The shells hide every control on the
+    // first and draw an empty state on the second — the same shape as
+    // [scratchpads]'s silent 404, made explicit because there are two of them
+    // now and "it threw" is a poor way to carry a fact this load-bearing.
+
+    /** A GET whose 404 is an answer: null, not an exception. */
+    private suspend fun probeGet(path: String): String? {
+        val resp = http.request { build(path, HttpMethod.Get, Tier.NORMAL, null) }
+        val text = resp.bodyAsText()
+        if (resp.status.value == 404) return null
+        if (!resp.status.isSuccess()) throw errorFrom(resp.status.value, text)
+        return text
+    }
+
+    /**
+     * Every project, or NULL when this daemon has no projects feature at all.
+     *
+     * ⚠ NULL AND EMPTY ARE DIFFERENT ANSWERS. See the block comment above.
+     */
+    suspend fun projects(): List<Project>? =
+        probeGet("/v1/projects")?.let { decode<ProjectList>(it).projects }
+
+    suspend fun project(id: String): Project = decode(call("/v1/projects/$id"))
+
+    /** The members' overviews, summed. Polled while the dashboard is on screen. */
+    suspend fun projectDashboard(id: String): ProjectDashboard =
+        decode(call("/v1/projects/$id/dashboard"))
+
+    /**
+     * Start a project: the daemon launches its lead session.
+     *
+     * ⚠ THE 409 IS AN ANSWER, NOT A THROW. The commonest refusal is a working
+     * directory Claude Code has not been trusted in, and the daemon's sentence
+     * about it IS the fix — so it comes back as [ProjectCreated.refusal] for the
+     * sheet to show under the field, with the name the person typed still in it.
+     * Every other status still throws, because a 400 about a name is a refusal of
+     * the request rather than a state of the house.
+     */
+    suspend fun createProject(name: String, cwd: String? = null): ProjectCreated {
+        val body = buildJsonObject {
+            put("name", JsonPrimitive(name))
+            cwd?.takeIf { it.isNotBlank() }?.let { put("cwd", JsonPrimitive(it)) }
+        }
+        val resp = http.request { build("/v1/projects", HttpMethod.Post, Tier.NORMAL, body) }
+        val text = resp.bodyAsText()
+        if (resp.status.value == 409) {
+            val why = runCatching { decode<ApiError>(text).error }.getOrNull()
+            return ProjectCreated(null, why ?: "that project could not be created")
+        }
+        if (!resp.status.isSuccess()) throw errorFrom(resp.status.value, text)
+        return ProjectCreated(decode<Project>(text), null)
+    }
+
+    /**
+     * Spawn the approved members. Answers PER MEMBER.
+     *
+     * ⚠ AND A 409 IS AN ANSWER TOO, for a different reason: the daemon refuses
+     * to spawn while the headroom arbiter's STOP sentinel is armed. Spawning
+     * twelve sessions into a red usage window is how a cluster dies half-born,
+     * so that refusal is a state of the house and belongs on the card as a line,
+     * not on the failure path as an error.
+     */
+    suspend fun spawnMembers(id: String, members: List<SpawnRequest>): SpawnOutcome {
+        val body = buildJsonObject {
+            put(
+                "members",
+                JsonArray(
+                    members.map {
+                        buildJsonObject {
+                            put("name", JsonPrimitive(it.name))
+                            put("role", JsonPrimitive(it.role))
+                            put("prompt", JsonPrimitive(it.prompt))
+                        }
+                    },
+                ),
+            )
+        }
+        val resp = http.request { build("/v1/projects/$id/spawn", HttpMethod.Post, Tier.NORMAL, body) }
+        val text = resp.bodyAsText()
+        if (resp.status.value == 409) {
+            val why = runCatching { decode<ApiError>(text).error }.getOrNull()
+            return SpawnOutcome(emptyList(), why ?: "the host is not spawning sessions right now")
+        }
+        if (!resp.status.isSuccess()) throw errorFrom(resp.status.value, text)
+        return SpawnOutcome(decode<SpawnResult>(text).results, null)
+    }
+
+    /**
+     * Type a line into one member, from another.
+     *
+     * ⚠ THIS IS NOT PEER MESSAGING. A `SendMessage` between two Claude sessions
+     * travels their own socket and triggers a turn with no keypress; the daemon
+     * routes none of it. This route is the daemon TYPING into a pane, so it rides
+     * the send queue and its gates — which is why the answer carries [queued] and
+     * [blockedBy] exactly as an ordinary send does.
+     */
+    suspend fun messageProject(id: String, from: String, to: String, text: String): ProjectMessageResult =
+        decode(
+            post(
+                "/v1/projects/$id/message",
+                body = buildJsonObject {
+                    put("from", JsonPrimitive(from))
+                    put("to", JsonPrimitive(to))
+                    put("text", JsonPrimitive(text))
+                },
+            ),
+        )
+
+    /** Forget the project. The member sessions are the daemon's business, not ours. */
+    suspend fun deleteProject(id: String) {
+        call("/v1/projects/$id", HttpMethod.Delete)
+    }
+
+    // ---- consoles: the internal pages this host serves
+
+    /**
+     * The registry, its caps and the approval — or NULL when this daemon has no
+     * consoles feature.
+     *
+     * The same probe contract as [projects]: null means absent, an empty
+     * `consoles` list means present and empty.
+     */
+    suspend fun consoles(): ConsoleList? = probeGet("/v1/consoles")?.let { decode<ConsoleList>(it) }
+
+    /**
+     * Edit one console. [version] is the copy this edit was made against.
+     *
+     * ⚠ THE 409 IS AN ANSWER, carrying the row as the daemon now holds it — the
+     * [saveScratchpad] shape, for the same reason: the other client having saved
+     * first is the ordinary outcome of two devices on one registry, and it
+     * arrives with everything needed to adopt it. A 400 about a bad address IS a
+     * refusal of the request and still throws.
+     */
+    suspend fun saveConsole(
+        id: String,
+        version: Int,
+        name: String? = null,
+        url: String? = null,
+        kind: String? = null,
+        notes: String? = null,
+    ): ConsoleSave {
+        val body = buildJsonObject {
+            put("version", JsonPrimitive(version))
+            name?.let { put("name", JsonPrimitive(it)) }
+            url?.let { put("url", JsonPrimitive(it)) }
+            kind?.let { put("kind", JsonPrimitive(it)) }
+            notes?.let { put("notes", JsonPrimitive(it)) }
+        }
+        val resp = http.request { build("/v1/consoles/$id", HttpMethod.Patch, Tier.NORMAL, body) }
+        val text = resp.bodyAsText()
+        if (resp.status.value == 409) {
+            // The body is `{error, console}`: the refusal AND the current row. The
+            // row is what the editor adopts; the sentence is the daemon's, kept
+            // so a caller that wants to say why can.
+            val c = runCatching { decode<ConsoleConflict>(text) }.getOrNull()
+            return ConsoleSave(c?.console ?: Console(id = id), conflict = true, refusal = c?.error)
+        }
+        if (!resp.status.isSuccess()) throw errorFrom(resp.status.value, text)
+        return ConsoleSave(decode(text), conflict = false, refusal = null)
+    }
+
+    /**
+     * Probe one console now, from the host, and answer with the refreshed row.
+     *
+     * The daemon awaits the probe (bounded at 2 s) rather than answering
+     * optimistically, so the row this returns is the verdict rather than a
+     * promise of one.
+     */
+    suspend fun probeConsole(id: String): Console = decode(post("/v1/consoles/$id/probe"))
+
     /**
      * A request body that is written, not held.
      *
