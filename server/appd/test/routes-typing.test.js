@@ -431,6 +431,58 @@ test('a STALE attention expires against the pane, not against the state file (#1
   assert.equal((await typingOf(name)).queued, 0);
 });
 
+/** A pane that shows a dialog for `holdMs`, then scrolls it away and draws an
+ *  empty composer — a gate that OPENS, which is the moment #10 is about. */
+function mkClearingModal(suffix, holdMs = 3) {
+  const name = `${PFX}-${suffix}`;
+  const dialog = 'Switch model?\\n\\n \u276f 1. Yes, switch to Opus 5\\n   2. No, go back\\n\\n Enter to confirm\\n';
+  const blank = '\\n'.repeat(40);
+  sh('tmux', ['new-session', '-d', '-s', name, '-c', tmp, '-x', '100', '-y', '30',
+    `sh -c 'printf "${dialog}"; sleep ${holdMs}; printf "${blank}────────────\\n\u276f \\n"; cat >/dev/null'`]);
+  madeSessions.add(name);
+  return name;
+}
+
+test('two messages QUEUED behind a dialog do not flush into each other (#10)', async () => {
+  // ⚠ WHAT MAKES THESE TWO DIFFERENT FROM AN INTERJECTION. 3.0.3's contract is
+  // that a person's message never waits for CLAUDE — a message typed while a
+  // turn runs is pasted at once, and Claude Code's own queue shows it. But two
+  // messages a person QUEUED as separate prompts are not that: when the gate
+  // opened, the drain loop released both in one pass, the second landing ~100 ms
+  // into the turn the first had just started, where the TUI splices it in
+  // (`absorbed_mid_turn`) and the FIRST instruction is never carried out. So
+  // the head goes and the rest wait for a real boundary, like the automated lane.
+  const name = mkClearingModal('pair');
+  const file = writeTranscript(name, [USER]);          // mid-turn: no boundary
+  writeState(name, { state: 'running', transcript: file });
+  const a = await api(`/v1/sessions/${name}/keys`, {
+    method: 'POST', body: JSON.stringify({ text: 'first, do the migration', keys: ['Enter'] }),
+  });
+  const b = await api(`/v1/sessions/${name}/keys`, {
+    method: 'POST', body: JSON.stringify({ text: 'second, write it up', keys: ['Enter'] }),
+  });
+  assert.equal(a.body.delivered, false, 'precondition: the dialog holds both');
+  assert.equal(b.body.delivered, false);
+  assert.equal((await typingOf(name)).blockedBy, 'modal');
+
+  // The dialog goes. Exactly one message may be released by that.
+  let st;
+  for (let i = 0; i < 80; i++) {
+    st = await typingOf(name);
+    if (st.blockedBy !== 'modal') break;
+    await wait(150);
+  }
+  await wait(2000);                                     // let the pass finish
+  st = await typingOf(name);
+  assert.equal(st.queued, 1, 'one released, one still waiting — not both in one pass');
+  assert.equal(st.blockedBy, 'turn', 'the second waits for a real boundary now');
+
+  // …and that boundary is the only thing that frees it.
+  appendTranscript(file, TURN);
+  st = await drains(name);
+  assert.equal(st.queued, 0, 'the turn ended, so the second message goes');
+});
+
 test('a dialog on screen queues a text send and names the modal', async () => {
   const name = mkModal('modaltext');
   writeState(name, { transcript: writeTranscript(name, [TURN]) });
