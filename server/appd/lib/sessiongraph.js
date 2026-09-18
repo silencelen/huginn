@@ -49,8 +49,20 @@ const { priceTokens, bucketKey } = require('./pricing');
 /** Bytes read per pass. Bounded so a 32MB transcript never lands in RAM whole. */
 const CHUNK = 4 * 1024 * 1024;
 
-/** Sessions kept warm. A phone and a desktop watching two sessions each, plus slack. */
-const CACHE_MAX = 8;
+/**
+ * Sessions kept warm.
+ *
+ * Was 8 — a phone and a desktop watching two sessions each, plus slack. A
+ * PROJECT is up to twelve sessions summed on a five-second poll, and against an
+ * eight-entry LRU that evicted every member on every tick AND the two sessions
+ * the desktop was watching alongside them: each miss is a walk from byte zero of
+ * a file that can be tens of megabytes. Twenty-four holds a full cluster plus
+ * the clients' own sessions. Each entry is a parsed spine, tens of KB.
+ *
+ * The size is half the fix; the other half is that a project dashboard does not
+ * ASK for a member whose transcript has not grown (`rollupMembers`).
+ */
+const CACHE_MAX = 24;
 
 /** Longest label that travels; the client ellipsizes, it does not need the rest. */
 const LABEL_MAX = 80;
