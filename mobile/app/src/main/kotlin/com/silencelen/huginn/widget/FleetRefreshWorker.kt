@@ -6,7 +6,6 @@ import androidx.work.CoroutineWorker
 import androidx.work.ExistingWorkPolicy
 import androidx.work.NetworkType
 import androidx.work.OneTimeWorkRequestBuilder
-import androidx.work.OutOfQuotaPolicy
 import androidx.work.WorkManager
 import androidx.work.WorkerParameters
 import com.silencelen.huginn.data.HuginnClient
@@ -65,10 +64,22 @@ class FleetRefreshWorker(
     companion object {
         private const val WORK = "fleet-refresh"
 
-        /** KEEP, so a burst of taps costs one fetch rather than a queue of them. */
+        /**
+         * KEEP, so a burst of taps costs one fetch rather than a queue of them.
+         *
+         * ⚠ NOT EXPEDITED. Below API 31 WorkManager runs expedited work through
+         * the foreground-service path, and CoroutineWorker's default
+         * getForegroundInfo throws IllegalStateException("Not implemented") — so
+         * on API 29/30 (this app's declared floor is 29) the work FAILED before
+         * doWork ever ran, terminally, with no retry: the widget's refresh arrow
+         * and its "No data yet — tap to check" both ran the one worker that could
+         * never succeed. RUN_AS_NON_EXPEDITED_WORK_REQUEST does not save it —
+         * SystemJobInfoConverter guards setExpedited behind SDK >= 31, so the
+         * policy is inert exactly where the failure is. A widget refresh carries
+         * NetworkType.CONNECTED and KEEP; it was never urgent.
+         */
         fun enqueue(context: Context) {
             val req = OneTimeWorkRequestBuilder<FleetRefreshWorker>()
-                .setExpedited(OutOfQuotaPolicy.RUN_AS_NON_EXPEDITED_WORK_REQUEST)
                 .setConstraints(
                     Constraints.Builder()
                         .setRequiredNetworkType(NetworkType.CONNECTED)
