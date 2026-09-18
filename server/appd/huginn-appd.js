@@ -312,6 +312,29 @@ function readBody(req, limit = 256 * 1024) {
   return readBodyRaw(req, limit).then((b) => b.toString('utf8'));
 }
 
+/**
+ * The body as JSON, or a 400.
+ *
+ * ⚠ #31: every route did `await readJsonBody(req)` inline, so
+ * malformed-but-complete JSON reached the router's catch and came back as a 500
+ * carrying the raw V8 parser message — and the same catch echoed ANY thrown
+ * message verbatim, so an fs failure in a save path answered with the absolute
+ * host path. A body that is not JSON is the CALLER's mistake, which is a 400,
+ * and it is worth saying so in one place rather than at 35 call sites.
+ *
+ * The empty body stays an empty object: half the routes here take an optional
+ * body and `{}` is what they expect to see.
+ */
+async function readJsonBody(req, limit = 256 * 1024) {
+  const raw = await readBody(req, limit);
+  if (!raw || !raw.trim()) return {};
+  try { return JSON.parse(raw); } catch {
+    const e = new Error('body must be JSON');
+    e.badJson = true;
+    throw e;
+  }
+}
+
 /** The same, kept as bytes — an image round-tripped through utf8 is destroyed. */
 function readBodyRaw(req, limit = 256 * 1024) {
   return new Promise((resolve, reject) => {
@@ -464,13 +487,77 @@ function effortDecision(v) {
  * slashes, and the first character must be alphanumeric or an underscore, which
  * makes `.` and `..` unnameable. Every character allowed here is also legal
  * unencoded in a URL path segment, so no caller has to remember to escape it.
+ *
+ * ⚠ NO DOTS, AND THAT IS NOT A STYLE CHOICE. tmux silently rewrites '.' to '_'
+ * in a session name and still exits 0, so a name carrying one is a name no live
+ * session can ever have: it used to be accepted at the door and then handed back
+ * in the 201 while tmux held the rewritten spelling, and every per-session route
+ * on the reported name 404'd (#103/#105/#106). The four clients had four
+ * different opinions about the rule; this is the one they all now share.
  */
-const NAME_RE = /^[A-Za-z0-9_][A-Za-z0-9_.-]{0,49}$/;
+const NAME_RE = /^[A-Za-z0-9_][A-Za-z0-9_-]{0,49}$/;
+
+/**
+ * Why a name can be refused, as a sentence, or null if it is fine.
+ *
+ * Separate from `canonName` so the routes can say WHICH rule was broken. "invalid
+ * session name (letters, digits, underscore)" was the only answer for every
+ * shape, and it did not mention the dash it allows or the dot it does not.
+ */
+function nameProblem(raw) {
+  if (typeof raw !== 'string' || !raw.trim()) return 'a session needs a name';
+  const s = raw.trim().toLowerCase();
+  if (sessreg.isReserved(s)) {
+    return `'${s}' is reserved — huginn keeps its own state under that name`;
+  }
+  if (s.includes('.')) {
+    return 'a session name cannot contain a "." — tmux rewrites it to "_", '
+      + 'so the name you asked for would not be the name you got';
+  }
+  if (!NAME_RE.test(s)) {
+    return 'invalid session name: letters, digits, underscore and dash, '
+      + 'starting with a letter, digit or underscore, up to 50 characters';
+  }
+  return null;
+}
 
 function canonName(raw) {
   if (typeof raw !== 'string') return null;
-  const s = raw.toLowerCase();
-  return NAME_RE.test(s) ? s : null;
+  const s = raw.trim().toLowerCase();
+  return nameProblem(s) ? null : s;
+}
+
+/**
+ * What tmux ACTUALLY called a session it has just created or renamed.
+ *
+ * ⚠ THE TRAP THIS REPLACED, twice over. Both readbacks asked tmux about the
+ * name the ROUTE wanted: the create route with a trailing colon (`-t '=a.b:'`),
+ * which cannot resolve a rewritten name and answers with an empty string at exit
+ * 0, so `|| name` echoed the phantom back; the rename route without one
+ * (`-t '=a.b'`), which tmux resolves by applying the SAME rewrite — so it
+ * happily returned a DIFFERENT live session whose name matched the pre-dot
+ * prefix, and the route migrated the renamed session's state file, sidecars,
+ * pane lease, send queue and registry row onto that bystander.
+ *
+ * `printed` is `new-session -P -F '#S'` output where there is one — the only
+ * form that cannot be wrong, because tmux prints what it did. Everything else
+ * here is the fallback for the rename path: probe the name tmux would have
+ * REWRITTEN to, then, failing that, look for it in the live list. Returns null
+ * rather than the requested name, because a caller that cannot learn the real
+ * name must fail loudly instead of publishing a phantom.
+ */
+async function tmuxNameReadback(requested, printed = '') {
+  const direct = String(printed || '').trim();
+  if (direct) return direct;
+  const want = String(requested || '');
+  const rewritten = want.replace(/[.:]/g, '_');
+  const q = await run('tmux', ['display-message', '-p', '-t', `=${rewritten}:`, '#S']);
+  const found = (q.err ? '' : (q.stdout || '')).trim();
+  if (found) return found;
+  const ls = await run('tmux', ['list-sessions', '-F', '#S']);
+  if (ls.err) return null;
+  const names = (ls.stdout || '').split('\n').map((x) => x.trim()).filter(Boolean);
+  return names.find((n) => n === want) || names.find((n) => n === rewritten) || null;
 }
 
 // ------------------------------------------------------------ tmux sessions
@@ -489,22 +576,32 @@ function readSessionState(name) {
   let raw;
   try { raw = fs.readFileSync(path.join(STATE_DIR, name), 'utf8').trim(); } catch { return null; }
   if (!raw) return null;
-  let mtime = null;
-  try { mtime = Math.floor(fs.statSync(path.join(STATE_DIR, name)).mtimeMs / 1000); } catch { }
+  let mtimeMs = null;
+  try { mtimeMs = fs.statSync(path.join(STATE_DIR, name)).mtimeMs; } catch { }
   if (raw[0] === '{') {
     try {
       const o = JSON.parse(raw);
+      // ⚠ TWO UNITS, ONE FIELD. The hook's `ts` is MILLISECONDS since #7 and was
+      // SECONDS before it, and a file written by the older hook survives a deploy
+      // until that session's next event. `typing.stateStampMs` reads the unit off
+      // the magnitude; `stateSince` stays seconds because that is what the wire
+      // carries and what `ofThisIncarnation` compares against tmux's
+      // `#{session_created}`.
+      const stamp = typing.stateStampMs({ stateSince: o.ts }) ?? mtimeMs;
       return withPendingQuestion(name, ofThisIncarnation(name, {
         state: o.state || null,
         sessionId: o.sessionId || null,
         transcript: o.transcript || null,
         cwd: o.cwd || null,
-        stateSince: o.ts || mtime,
+        stateSince: stamp == null ? null : Math.floor(stamp / 1000),
+        stateSinceMs: stamp == null ? null : stamp,
       }));
     } catch { /* fall through to the bare-word path */ }
   }
   return withPendingQuestion(name, ofThisIncarnation(name,
-    { state: raw, sessionId: null, transcript: null, cwd: null, stateSince: mtime }));
+    { state: raw, sessionId: null, transcript: null, cwd: null,
+      stateSince: mtimeMs == null ? null : Math.floor(mtimeMs / 1000),
+      stateSinceMs: mtimeMs }));
 }
 
 /**
@@ -549,6 +646,32 @@ function ofThisIncarnation(name, st) {
 }
 
 /**
+ * The per-session sidecar directories the title hook keeps under STATE_DIR,
+ * named in ONE place so a reader cannot update three of the four call sites.
+ *
+ * ⚠ THE LEADING DOT IS THE FIX FOR #2/#3. These used to be `ask`, `plan` and
+ * `compacting`, sharing a namespace with the flat per-session state files — and
+ * a session may legitimately be called `plan`. Whichever existed first decided
+ * which half broke, silently, at exit 0: with the directory there the hook's
+ * `mv` moved that session's state JSON INTO it (no state word, no
+ * claudeSessionId, no transcript, no conversation tab, forever); with the file
+ * there every sidecar write on the host died on ENOTDIR, so NO session got a
+ * prompt sidecar and the 3.1.0 fix that stops a message being typed into a live
+ * dialog was disabled host-wide. A leading dot is outside NAME_RE, so no session
+ * can address one. The names are reserved too (lib/session-registry RESERVED).
+ */
+const SIDECAR_DIRS = ['.ask', '.plan', '.compacting'];
+
+/**
+ * The pre-3.3 spelling. Still READ and still CLEARED, because /run survives a
+ * deploy: a session whose last hook event ran under the old hook has its sidecar
+ * in the undotted directory until its next event, and a name that changes hands
+ * must not inherit a stale question from either spelling.
+ */
+const LEGACY_SIDECAR_DIRS = ['ask', 'plan', 'compacting'];
+const ALL_SIDECAR_DIRS = [...SIDECAR_DIRS, ...LEGACY_SIDECAR_DIRS];
+
+/**
  * Every per-name file the hook may have left behind. Used both when ending a
  * session and when creating one, because those are the two moments a name changes
  * hands — and the create side is what closes the window between a new session
@@ -557,9 +680,7 @@ function ofThisIncarnation(name, st) {
 function clearSessionState(name) {
   for (const f of [
     path.join(STATE_DIR, name),
-    path.join(STATE_DIR, 'ask', name),
-    path.join(STATE_DIR, 'plan', name),
-    path.join(STATE_DIR, 'compacting', name),
+    ...ALL_SIDECAR_DIRS.map((d) => path.join(STATE_DIR, d, name)),
   ]) {
     try { fs.unlinkSync(f); } catch { /* already gone */ }
   }
@@ -972,10 +1093,17 @@ async function listSessions({ preview = false } = {}) {
     // from the list is worse than one that cannot open it, because the reader
     // concludes it is gone. Logged once per listing so an unopenable row has an
     // explanation on the host instead of being a mystery on the phone.
-    if (!NAME_RE.test(name)) log(`sessions: "${name}" cannot be addressed by the app (name shape)`);
+    const addressable = NAME_RE.test(name);
+    if (!addressable) log(`sessions: "${name}" cannot be addressed by the app (name shape)`);
     const st = readSessionState(name) || {};
     rows.push({
       name,
+      // ⚠ LISTED BUT NOT OPENABLE. A session tmux made outside the daemon's name
+      // rule is still a real session and hiding it would be worse — the reader
+      // would conclude it had gone — but every per-session route will 404 on it.
+      // The row says so, so a client can grey it out instead of letting somebody
+      // find out by tapping it.
+      addressable,
       createdAt: Number(created),
       activityAt: Number(activity),
       // Kept for reference; it tracks client interaction, not output.
@@ -1169,6 +1297,30 @@ async function liveSessionIds() {
   return out;
 }
 
+/**
+ * Is this stderr tmux saying "there is nothing here", as opposed to tmux failing?
+ *
+ * ⚠ THE DISTINCTION #14 IS ABOUT. A failure to OBSERVE is not an observation:
+ * a fork that hit EAGAIN, a 10 s timeout on a loaded host, the server
+ * restarting — none of those mean the session is gone, and every one of them
+ * used to come out of `sessionExists` as `false`. `listSessions` learned this
+ * the hard way one function above (a transient hiccup announced every waiting
+ * question as answered and then re-announced it); this is the same split,
+ * applied to the per-session reads.
+ *
+ * `no such file or directory` is in the list because a host with no tmux server
+ * yet answers with it — leaving it out would turn "nothing is running" into a
+ * permanent 503.
+ */
+const TMUX_ABSENT_RE = /no server running|no such session|can't find session|no such file or directory/i;
+function tmuxSaysAbsent(stderr) { return TMUX_ABSENT_RE.test(String(stderr || '')); }
+
+/**
+ * Does this session exist? TRUE, FALSE, or NULL for "tmux did not answer".
+ *
+ * Null is not a third kind of no. Callers that gate a route turn it into a 503
+ * (`requireSession`); callers doing housekeeping treat it as "leave it alone".
+ */
 async function sessionExists(name) {
   // display-message, not has-session: the same single call answers "does it
   // exist" and "when was it created", and every state read downstream needs the
@@ -1186,12 +1338,115 @@ async function sessionExists(name) {
   //
   // So the returned NAME is the answer: tmux echoing back the session it actually
   // resolved is the only proof the target hit something, and it costs no extra call.
-  const { err, stdout } = await run('tmux',
+  const { err, stdout, stderr } = await run('tmux',
     ['display-message', '-p', '-t', `=${name}:`, '#{session_name}\t#{session_created}']);
+  // A failure tmux did not explain is a failure to observe, not an absence.
+  if (err && !tmuxSaysAbsent(stderr)) return null;
   const [found, created] = (err ? '' : (stdout || '')).trim().split('\t');
   if (found !== name) { sessionBorn.delete(name); return false; }
   rememberBorn(name, created);
   return true;
+}
+
+/**
+ * The session-gated route preamble: 404 when it is really gone, 503 when tmux
+ * would not say. Returns false once it has answered, so the caller returns.
+ */
+async function requireSession(res, name) {
+  const found = await sessionExists(name);
+  if (found === true) return true;
+  if (found === false) { sendErr(res, 404, 'no such session'); return false; }
+  sendErr(res, 503, 'tmux is not answering right now');
+  return false;
+}
+
+/**
+ * The pane gate the send queue has, for the two routes that do not use it.
+ *
+ * ⚠ #9. `/soft-end` and `/compact` were guarded only by `st.state ===
+ * 'attention'`, read off the flat state file — and `running` is the NORMAL
+ * reading while a dialog is up: a plain tool-permission dialog gets no sidecar
+ * at all, and a background agent's PreToolUse rewrites that file to `running`
+ * while the main thread sits on the question. So both pasted their fixed phrase
+ * into a live selector while the send queue, on the same pane in the same
+ * second, correctly held a person's message with blockedBy:"modal".
+ *
+ * Returns the 409 sentence, or null when the pane is fine. A pane that cannot be
+ * READ is not refused — these are deliberate interventions and a capture that
+ * failed says nothing about what is on screen.
+ */
+async function dialogRefusal(name) {
+  const lines = await capturePaneLines(name);
+  if (!lines) return null;
+  const why = typing.paneReadyForInput(lines).why;
+  if (!typing.paneBlocks(why)) return null;
+  return why === 'trust'
+    ? 'this session is waiting on the folder-trust dialog — answer that first'
+    : 'a question is on screen in this session — answer it first';
+}
+
+/**
+ * ONE check-and-act at a time, per session.
+ *
+ * ⚠ THE RACE (#11). `/answer` captures the pane, validates the fingerprint and
+ * then types the digit, with four awaits in between and nothing holding the
+ * session — so two answers for the SAME question both passed the guard before
+ * either typed, and both got {ok:true}. Measured window: one tmux round trip,
+ * 10-15 ms idle, ~90 ms once the pane's repaint lag is modelled. Against a real
+ * TUI the first digit answers the dialog and the second lands in the composer,
+ * where its Enter submits a bare digit as a new prompt into a working
+ * conversation — the exact harm this route's own comment exists to prevent, and
+ * the harm `consentWatch`'s re-read guard exists to prevent on the other side.
+ * Reachable today from one push answered on two devices, or the desktop's toast
+ * activation firing twice (`Main.kt answerFromActivation` bypasses
+ * SessionController's in-flight guard).
+ *
+ * A promise chain, the same shape the send queue's `pumping` flag has. The
+ * loser runs after the winner and re-reads the pane, so the ordinary guards do
+ * the refusing; `answeredRecently` below covers the case where the pane has not
+ * repainted yet — a fixture pane never does.
+ */
+const answerLocks = new Map();      // session name -> tail of the chain
+function withAnswerLock(name, fn) {
+  const prev = answerLocks.get(name) || Promise.resolve();
+  const run = prev.then(() => fn(), () => fn());
+  const tail = run.then(() => { }, () => { });
+  answerLocks.set(name, tail);
+  tail.then(() => { if (answerLocks.get(name) === tail) answerLocks.delete(name); });
+  return run;
+}
+
+/**
+ * The last question answered on each session, so the SAME answer arriving twice
+ * is refused rather than typed twice at a pane that has not caught up.
+ *
+ * Short-lived on purpose: it is a de-duplicator for a double tap or a retried
+ * delivery, not a record. A genuinely new question has a different fingerprint,
+ * and the same question legitimately re-asked after the TTL is a new question as
+ * far as anyone tapping a notification is concerned.
+ */
+const ANSWER_MEMO_TTL_MS = 60_000;
+const answeredMemo = new Map();     // session name -> { fingerprint, at }
+function answeredRecently(name, fingerprint, now = Date.now()) {
+  const memo = answeredMemo.get(name);
+  if (!memo) return false;
+  if (now - memo.at >= ANSWER_MEMO_TTL_MS) { answeredMemo.delete(name); return false; }
+  return memo.fingerprint === fingerprint;
+}
+function rememberAnswered(name, fingerprint, now = Date.now()) {
+  answeredMemo.set(name, { fingerprint, at: now });
+}
+
+/**
+ * A pane read came back empty. Say whether the session is GONE or tmux merely
+ * did not answer — `captureScreen`/`peekHash` cannot tell the difference, and
+ * the screen poll's 404 is the one answer a client acts on irreversibly (both
+ * clients eject the viewer with "Session <name> ended").
+ */
+async function paneReadFailed(res, name) {
+  const found = await sessionExists(name);
+  if (found === false) return sendErr(res, 404, 'no such session');
+  return sendErr(res, 503, 'tmux is not answering right now');
 }
 
 // ---- pane sizing, as an expiring lease -------------------------------------
@@ -1727,26 +1982,61 @@ function transcriptSize(file) {
  * — a caret anywhere in the bottom region means Claude has painted its box —
  * and applies only to the sessions appd started `claude` in itself.
  */
+/**
+ * How far the turn gate will widen its window looking for a boundary.
+ *
+ * ⚠ #5: the fixed 64 KB tail made an IDLE session read as permanently mid-turn
+ * whenever a large non-conversational record (measured: a 94 KB `attachment`)
+ * was appended after the turn ended — 66 of 716 of this host's own transcripts,
+ * all demonstrably idle. `lib/transcript.js` already doubles its window for
+ * exactly this reason. The cap is generous because the read only happens when
+ * the first window came back blind, and stingy enough that a pathological
+ * multi-megabyte record cannot make the gate read the whole file on every poll.
+ */
+const TAIL_WIDEN_CAP_BYTES = 4 * 1024 * 1024;
+
 async function checkGates(name) {
   const file = transcriptPath(name);
   let idle = true;
   let lastKind = null;
   if (file) {
-    const tail = transcriptTail(file);
-    if (tail) {
+    let bytes = 64 * 1024;
+    for (;;) {
+      const tail = transcriptTail(file, null, bytes);
+      if (!tail) break;
       const b = typing.boundaryFromTail(tail.text);
+      // Widen only on "I could not SEE a boundary", never on "there isn't one":
+      // a window holding a conversational record has answered the question.
+      if (b.unknown && bytes < TAIL_WIDEN_CAP_BYTES && bytes < tail.size) {
+        bytes = Math.min(bytes * 2, TAIL_WIDEN_CAP_BYTES);
+        continue;
+      }
       idle = b.idle;
       lastKind = b.lastKind;
+      if (b.unknown) {
+        log(`typing: ${name}: no conversational record in the last `
+          + `${Math.round(bytes / 1024)}KB of the transcript; treating the turn as unfinished`);
+      }
+      break;
     }
   }
   const cap = await run('tmux', ['capture-pane', '-p', '-t', `=${name}:`]);
   const lines = cap.err ? null : cap.stdout.replace(/\n$/, '').split('\n');
   const paneWhy = lines ? typing.paneReadyForInput(lines).why : null;
+  // The corroborating witness for the hook's `attention`: a composer drawn and
+  // holding nothing is proof no selector is up, whatever the state file says.
+  // `null` — no composer at all — is NOT that proof (see humanAttentionHold).
+  const composerEmpty = lines ? typing.composerEmpty(lines) : null;
+  // And the two facts the SUBMIT refusal turns on (#15): is Claude up at all,
+  // and is what is down there a shell prompt waiting to run whatever it is given.
+  const composer = lines ? typing.composerDrawn(lines) : false;
+  const shell = lines ? typing.shellPrompt(lines) : false;
   // A capture that FAILED says nothing about startup — the session is probably
   // gone, and holding a send on a pane we cannot read would be a wait with no
   // end. Fall through to the old behaviour and let delivery report the failure.
   const starting = lines ? await startupGate(name, lines) : false;
-  return { idle, lastKind, paneWhy, starting, sessionState: readSessionState(name) };
+  return { idle, lastKind, paneWhy, starting, composerEmpty, composer, shell,
+    sessionState: readSessionState(name) };
 }
 
 /**
@@ -1848,6 +2138,11 @@ async function pumpQueue(name) {
   try {
     while (q.entries.length) {
       const entry = q.entries[0];
+      // What the LAST pass decided about this queue's head, read before the
+      // gate is re-read: a non-null value means this queue was HELD, and that
+      // is what makes the entries behind the head queued prompts rather than
+      // interjections (#10).
+      const heldBefore = q.blockedBy;
       const gate = await checkGates(name);
       const now = Date.now();
       const reason = typing.dropReason(entry, {
@@ -1887,13 +2182,51 @@ async function pumpQueue(name) {
       // session whose transcript never gets a turn marker ever has; `attention`
       // is the opposite verdict and holds, because a numbered prompt is on
       // screen and prose typed into one is lost or misread.
+      const stateSays = typing.stateVerdict(gate.sessionState, entry.at);
+      // 3.3.x (#13): the hook's `attention` now reaches a PERSON's message too.
+      // It is the only authoritative "a numbered prompt is on screen" the
+      // daemon has, and the pane — which is a picture, and missed a dialog
+      // taller than its own window for three releases — was the only thing
+      // holding a human send. Pane-BACKED, so a state file nobody will refresh
+      // cannot hold it forever; see typing.humanAttentionHold.
+      const holdForQuestion = humanText && typing.humanAttentionHold({
+        state: stateSays, composerEmpty: gate.composerEmpty, waitedMs: now - entry.at,
+      });
+      // #10: an entry marked below waits for a REAL boundary. The 10-minute
+      // backstop is the same ceiling the automated lane drops at — except this
+      // one RELEASES, because a person's message is never thrown away.
+      const overdue = humanText && entry.at && now - entry.at >= typing.QUEUE_MAX_WAIT_MS;
+      if (overdue && entry.queuedBehindHuman && !entry.overdueLogged) {
+        entry.overdueLogged = true;
+        log(`typing: ${name}: a queued message has waited ${Math.round((now - entry.at) / 1000)}s `
+          + 'for a turn boundary that never came; sending it now');
+      }
       const d = typing.releaseDecision(humanText
-        ? { ...gate, idle: true }
-        : { ...gate, state: typing.stateVerdict(gate.sessionState, entry.at) });
+        ? {
+          ...gate,
+          // A person's message never waits for CLAUDE (3.0.3) — but one they
+          // QUEUED behind a gate is not an interjection, and flushing it into
+          // the turn the previous message just started is how the first
+          // instruction gets absorbed and never carried out.
+          idle: entry.queuedBehindHuman ? (gate.idle || overdue) : true,
+          state: holdForQuestion ? 'hold' : (entry.queuedBehindHuman ? stateSays : null),
+        }
+        : { ...gate, state: stateSays });
       if (!d.release) {
         q.blockedBy = d.blockedBy;
         armQueueTimer(name);
         return;
+      }
+      // ⚠ THE GATE JUST OPENED ON A QUEUE THAT WAS HELD (#10). Everything a
+      // person queued behind it is a separate PROMPT, not a comment on the
+      // turn the head is about to start: release the head, and make the rest
+      // wait for a boundary the way the automated lane does. An interjection
+      // typed into a running turn never comes through here — that queue was
+      // not blocked — so 3.0.3's immediate paste is untouched.
+      if (heldBefore && humanText) {
+        for (const e of q.entries) {
+          if (e !== entry && !e.automated && typeof e.run !== 'function') e.queuedBehindHuman = true;
+        }
       }
       q.entries.shift();
       q.blockedBy = null;
@@ -1906,7 +2239,15 @@ async function pumpQueue(name) {
         // a modal that swallows the next message whole (spike E1), and a ladder
         // job that finds the family already changed must be binned, not run.
         // One queue, two payload shapes; nothing else differs.
-        if (typeof entry.run === 'function') r = await entry.run();
+        const refusal = typeof entry.run === 'function' ? null
+          : typing.submitRefusal({ submit: entry.submit, composer: gate.composer, shell: gate.shell });
+        if (refusal) {
+          // ⚠ NOT DELIVERED, AND SAID SO. The pane is a root shell and the Enter
+          // would make bash run the owner's message (#15). 409 rather than 500:
+          // the request was fine, the pane is not what the sender thinks it is.
+          log(`typing: ${name}: refusing to submit into a shell prompt — claude is not running here`);
+          r = { ok: false, code: 409, message: refusal };
+        } else if (typeof entry.run === 'function') r = await entry.run();
         else r = await sendTextToPane(name, entry.text, { submit: entry.submit });
       } catch (e) {
         r = { ok: false, message: (e && e.message) || String(e) };
@@ -1927,7 +2268,10 @@ async function pumpQueue(name) {
     // so `GET /typing` could still report the failure — but nothing ever removed
     // it afterwards, so a long-lived daemon accumulated one row per session that
     // ever failed a delivery. A session tmux no longer has cannot be polled about.
-    else if (!q.lastError || !(await sessionExists(name))) {
+    // ⚠ `=== false`, NOT falsy. A tmux that did not answer says nothing about
+    // whether this session is gone, and dropping the queue on it would throw
+    // away a message that is merely waiting for a busy host (#14).
+    else if (!q.lastError || (await sessionExists(name)) === false) {
       sendQueues.delete(name);
       unmarkedHeld.delete(name);
     }
@@ -2134,7 +2478,14 @@ async function archiveAndEnd(name, opts = {}) {
  */
 async function hardEndSession(name) {
   const { err, stderr } = await run('tmux', ['kill-session', '-t', `=${name}`]);
-  if (err) return { err, stderr };
+  // ⚠ TWO FAILURES, ONE OF WHICH IS NOT A FAILURE (#14). tmux saying "no such
+  // session" means this name is already dead, which is the end state this
+  // function exists to reach — so the bookkeeping below MUST still run. Skipping
+  // it on any error is how a kill whose client was SIGTERM'd left a restore
+  // registry row that resurrected the session at the next reboot. Anything tmux
+  // did not explain is a real failure to act: report it and touch nothing.
+  if (err && !tmuxSaysAbsent(stderr)) return { err, stderr, absent: false };
+  const absent = !!err;
   clearSessionState(name);
   // Off the restore list: a session ended on purpose (a DELETE, or an auto
   // wind-down settling here) must not be resurrected by the next reboot. This is
@@ -2149,7 +2500,7 @@ async function hardEndSession(name) {
   // settled. Whatever just ended it got there first, so the intent is stale —
   // left behind it would archive the NEXT session to take this name.
   archiveIntents.delete(name);
-  return { err: null };
+  return { err: null, absent };
 }
 
 // ---- session registry reconcile + reboot restore ---------------------------
@@ -2333,16 +2684,22 @@ async function peekHash(name) {
 }
 
 // A prompt sidecar the hook wrote (exact AskUserQuestion/ExitPlanMode input),
-// under STATE_DIR/{ask,plan}/<name>. Absent, unreadable, or malformed -> null,
+// under STATE_DIR/{.ask,.plan}/<name>. Absent, unreadable, or malformed -> null,
 // which just drops to the pane-only path.
 function readSidecar(kind, name) {
-  try { return JSON.parse(fs.readFileSync(path.join(STATE_DIR, kind, name), 'utf8')); }
-  catch { return null; }
+  // The dotted directory first, then the pre-3.3 spelling: a hook event that ran
+  // before the daemon was upgraded left its sidecar in the old one, and /run is
+  // only emptied by a reboot.
+  for (const dir of [`.${kind}`, kind]) {
+    try { return JSON.parse(fs.readFileSync(path.join(STATE_DIR, dir, name), 'utf8')); }
+    catch { /* try the other spelling */ }
+  }
+  return null;
 }
 
 /**
  * Is the session compacting? huginn-claude-title touches
- * STATE_DIR/compacting/<name> on PreCompact and removes it on PostCompact/Stop —
+ * STATE_DIR/.compacting/<name> on PreCompact and removes it on PostCompact/Stop —
  * a reliable, poll-independent signal (the pane spinner only shows it while a
  * screen is being captured).
  *
@@ -2354,10 +2711,13 @@ function readSidecar(kind, name) {
  */
 const COMPACTING_TTL_MS = 5 * 60 * 1000;
 function isCompacting(name) {
-  try {
-    const st = fs.statSync(path.join(STATE_DIR, 'compacting', name));
-    return (Date.now() - st.mtimeMs) < COMPACTING_TTL_MS;
-  } catch { return false; }
+  for (const dir of ['.compacting', 'compacting']) {
+    try {
+      const st = fs.statSync(path.join(STATE_DIR, dir, name));
+      return (Date.now() - st.mtimeMs) < COMPACTING_TTL_MS;
+    } catch { /* try the pre-3.3 spelling */ }
+  }
+  return false;
 }
 
 const SIDECAR_TTL_MS = 24 * 60 * 60 * 1000;
@@ -2412,7 +2772,7 @@ function askPendingSince(name, sessionId) {
 function withPendingQuestion(name, st) {
   if (!st || st.state !== 'running') return st;
   const since = askPendingSince(name, st.sessionId);
-  return since ? { ...st, state: 'attention', stateSince: since } : st;
+  return since ? { ...st, state: 'attention', stateSince: since, stateSinceMs: since * 1000 } : st;
 }
 
 /**
@@ -2703,6 +3063,24 @@ function chatStates() {
   return out;
 }
 
+
+/**
+ * What to tell a person about a run that ended without a result.
+ *
+ * ⚠ NEVER A NEGATIVE OR NULL CODE (#43). Node reports a spawn failure as a
+ * 'close' with a negative code (-2 ENOENT, -13 EACCES, -24 EMFILE) — no 'exit'
+ * event at all, so a fix hooked there would miss it — and a SIGKILL from
+ * RUN_HARD_CAP_MS closes with `null`. "claude exited -2" and "claude exited
+ * null" both reached the chat-list subtitle, the chat_finished push and its
+ * Telegram body, and a Round's verdict.
+ */
+function exitFailureText(code, errBuf = '') {
+  const tail = errBuf ? `: ${String(errBuf).slice(-500)}` : '';
+  if (code === null || code === undefined) return `claude was stopped before it answered${tail}`;
+  if (Number(code) < 0) return `claude never started${tail}`;
+  return `claude exited ${code}${tail}`;
+}
+
 /**
  * The name of the machine a chat runs on, or null for this host.
  *
@@ -2951,6 +3329,14 @@ function startRun(meta, userText) {
     run_.emit('error', { text });
     updateMeta(chatId, (m) => { m.updatedAt = ts; m.lastSnippet = text.slice(0, 120); });
     log(`chat ${chatId} spawn failed: ${err.code || err.message}`);
+    // ⚠ AND REMEMBER IT FOR 'close' (#43). Node emits ONLY 'close' when a spawn
+    // fails — never 'exit' — with a NEGATIVE code (-2 for ENOENT, -13 for
+    // EACCES, -24 for EMFILE), and the close handler rendered that as
+    // "claude exited -2". That string reaches the chat-list subtitle, the
+    // chat_finished push and its Telegram body, and for a ROUND it becomes the
+    // Round's whole verdict — the one surface where the number is all the owner
+    // sees. The actionable sentence was sitting one line above it the whole time.
+    run_.spawnFailure = text;
   });
   proc.stdin.on('error', () => { /* EPIPE when the child never started */ });
   proc.stdin.end(userText);
@@ -2992,7 +3378,7 @@ function startRun(meta, userText) {
     try {
       settleRun(run_, {
         exitCode: code,
-        failureText: `claude exited ${code}${errBuf ? `: ${errBuf.slice(-500)}` : ''}`,
+        failureText: run_.spawnFailure || exitFailureText(code, errBuf),
       });
     } catch (e) {
       log(`chat ${chatId} could not settle cleanly: ${e.message}`);
@@ -3249,22 +3635,14 @@ function settleRun(run_, { exitCode = null, failureText = null } = {}) {
       // them, and a chat that reopens is a chat where the owner's next question
       // gets filed as the Round's official report — verbatim the failure
       // reconcileInterruptedRuns' comment says was already fixed.
-      const sealed = loadMeta(chatId) || fresh;
-      // And then it is OVER. Draining a queue into a sealed run would reopen the
-      // very thing that just ended, so anything waiting is dropped here instead.
-      const waiting = drainPending(sealed);
-      if (waiting.length) {
-        saveMeta(sealed);
-        // ⚠ SAID IN THE CHAT, not only in a log nobody reads. The sender got a
-        // 202 {queued:true, position:1}; the message then never appeared in the
-        // transcript, nothing said it had been dropped, and the retry hit a 409
-        // off the sealed run — so it was simply gone. The chat route already
-        // fixed exactly this for the cancel window and wrote down why it was
-        // unacceptable: "worse than being told to wait". Round runs then did the
-        // same thing.
-        appendMsg(chatId, { type: 'system', text: droppedNote(waiting, 'this round finished'), ts });
-        log(`round run ${chatId} dropped ${waiting.length} queued message(s): the run is closed`);
-      }
+      // ⚠ THE DRAIN MOVED INTO `finishRoundRun` (#38). It used to be here, which
+      // meant it ran only on the paths that come through settleRun — and the
+      // restart path (`reconcileInterruptedRound`) does not, so a message queued
+      // into a run that a deploy interrupted was sealed in with no note. It is
+      // the same drop, with the same sentence, one call deeper. Draining a queue
+      // into a sealed run would reopen the very thing that just ended; the
+      // message is dropped and SAID IN THE CHAT, because the sender got a 202
+      // {queued:true, position:1} and a retry hits a 409 off the sealed run.
       return;
     }
     if (run_.cancelled) {
@@ -3276,6 +3654,16 @@ function settleRun(run_, { exitCode = null, failureText = null } = {}) {
         appendMsg(chatId, { type: 'system', text: droppedNote(dropped, 'the run was cancelled'), ts });
         log(`chat ${chatId} dropped ${dropped.length} queued message(s) on cancel`);
       }
+    } else if (stalled) {
+      // ⚠ NOT INTO A WINDOW WE JUST PROVED IS EMPTY (#39). This branch honoured
+      // `stalled` only for a Round; a plain chat fell through to the drain and
+      // spawned the queued message against the SAME exhausted window, where it
+      // died on the limit too — and that second failure's `noteRunStall`
+      // replaced `meta.stall` wholesale, so the stall then carried the SECOND
+      // message's text and the re-run after the reset answered only that one.
+      // Message A was never run again, and the chat held two limit apologies.
+      // The queue stays on disk and drains when the re-run finishes.
+      log(`chat ${chatId} is waiting for a reset; its queue stays put`);
     } else {
       const next = takePending(fresh);
       if (next) {
@@ -3907,6 +4295,27 @@ function fireRound(round, { manual = false } = {}) {
  * they were never told was missing.
  */
 function finishRoundRun(meta, failure, { status: statusOverride = null } = {}) {
+  // ⚠ THE QUEUE GOES FIRST, AND BEFORE THE DELETED-ROUND RETURN (#38). A message
+  // queued into a Round's run in flight (202 `{queued:true}`) was drained by
+  // `settleRun` — and `reconcileInterruptedRound` does not go through settleRun,
+  // so a huginn-appd RESTART (which `deploy.sh` does routinely) sealed the chat
+  // and left `meta.pending` on disk forever: never delivered, never dropped, no
+  // note, and POST /messages 409s "this run has finished". `deliverOrphanedQueues`
+  // and `chatStates` both skip round chats, so no path could ever surface it.
+  // Draining here covers every way a Round's run ends, including the one that
+  // returns immediately below.
+  try {
+    const waiting = drainPending(meta);
+    if (waiting.length) {
+      saveMeta(meta);
+      appendMsg(meta.id, {
+        type: 'system',
+        text: droppedNote(waiting, 'this round finished'),
+        ts: Math.floor(Date.now() / 1000),
+      });
+      log(`round run ${meta.id} dropped ${waiting.length} queued message(s): the run is closed`);
+    }
+  } catch (e) { log(`round run ${meta.id}: could not drain the queue: ${e.message}`); }
   const round = loadRound(meta.roundId);
   if (!round) return;                    // the Round was deleted mid-run; the chat stands alone
 
@@ -6409,7 +6818,14 @@ function readSessionModel(name) {
  * file is worse than a wrong model.
  */
 function repairDefaultModel(expected) {
-  const file = path.join(CLAUDE_DIR, 'settings.json');
+  // ⚠ RESOLVE THE LINK FIRST (#29). This wrote `<file>.tmp` and renameSync'd it
+  // over ~/.claude/settings.json — so a settings.json symlinked into a dotfiles
+  // repo was REPLACED by a regular file, and later edits in the repo stopped
+  // reaching the CLI: silent, permanent, and the exact case install-hooks.js
+  // resolves on purpose. `realpathSync` on the symlink's own path, not on the
+  // directory, because the link may point anywhere.
+  let file = path.join(CLAUDE_DIR, 'settings.json');
+  try { file = fs.realpathSync(file); } catch { /* not a link, or not there yet */ }
   let raw;
   try { raw = fs.readFileSync(file, 'utf8'); } catch { return { ok: false, error: 'no settings.json to repair' }; }
   let o;
@@ -6420,12 +6836,24 @@ function repairDefaultModel(expected) {
   if (o.model === expected) return { ok: true, changed: false };
   const was = o.model ?? null;
   o.model = expected;
+  const tmpFile = `${file}.tmp`;
   try {
+    // ⚠ AND CARRY THE FILE'S OWN MODE. The tmp was hardcoded 0600 and the rename
+    // takes the tmp's permissions with it, so every host — symlink or not —
+    // silently had its settings.json narrowed from whatever the owner set.
+    let mode = 0o600;
+    try { mode = fs.statSync(file).mode & 0o777; } catch { /* keep the safe default */ }
     // 2-space JSON, and the trailing newline the file had (or did not have).
     const body = `${JSON.stringify(o, null, 2)}${raw.endsWith('\n') ? '\n' : ''}`;
-    fs.writeFileSync(`${file}.tmp`, body, { mode: 0o600 });
-    fs.renameSync(`${file}.tmp`, file);
-  } catch (e) { return { ok: false, error: e.message }; }
+    fs.writeFileSync(tmpFile, body, { mode });
+    fs.chmodSync(tmpFile, mode);     // writeFileSync's mode is a CREATE mode only
+    fs.renameSync(tmpFile, file);
+  } catch (e) {
+    // Leaving a `.tmp` beside the owner's settings file is litter at best and a
+    // confusing half-written copy at worst — install-hooks.js unlinks its own.
+    try { fs.unlinkSync(tmpFile); } catch { /* never existed */ }
+    return { ok: false, error: e.message };
+  }
   log(`headroom: restored the host default model to ${expected} (was ${was})`);
   return { ok: true, changed: true, was };
 }
@@ -6540,6 +6968,67 @@ async function applyLadder(name, to) {
     await sleep(200);
   }
   return fail('no "for this session only" confirmation appeared');
+}
+
+
+/**
+ * Is the installed SubagentStart gate watching the directory this daemon arms
+ * sentinels in?
+ *
+ * ⚠ #28, the daemon's half. `HUGINN_APPD_DATA` is a documented knob and it moves
+ * HEADROOM_DIR to <dataDir>/headroom, while the bash gate has its own
+ * compiled-in `/var/lib/huginn-appd/headroom`. install-hooks binds the two
+ * together now (`env HUGINN_HEADROOM_DIR=… <script>`, written by deploy.sh with
+ * the dir the SERVICE will use) — but a hook installed by an older deploy, or a
+ * drop-in added after the last deploy, leaves them pointing at different
+ * directories with NO symptom: the gate releases every spawn at waited=0, writes
+ * no held row, drops its log into the abandoned directory, and /v1/headroom
+ * cheerfully reports the sentinel armed. One line at startup is the whole fix
+ * available on this side; the repair is a re-run of deploy.sh.
+ *
+ * Read-only and best-effort: this must never keep the daemon from starting.
+ */
+const GATE_SCRIPT_NAME = 'huginn-headroom-gate';
+const GATE_COMPILED_DIR = '/var/lib/huginn-appd/headroom';
+function gateBoundDir(command) {
+  let s = String(command || '').trim();
+  let dir = null;
+  if (/^env\s/.test(s)) {
+    s = s.replace(/^env\s+/, '');
+    for (;;) {
+      const m = /^([A-Za-z_][A-Za-z0-9_]*)=(?:'([^']*)'|"([^"]*)"|(\S*))\s+/.exec(s);
+      if (!m) break;
+      if (m[1] === 'HUGINN_HEADROOM_DIR') dir = m[2] ?? m[3] ?? m[4] ?? '';
+      s = s.slice(m[0].length);
+    }
+  }
+  const script = /^(?:'([^']*)'|"([^"]*)"|(\S+))/.exec(s);
+  const scriptPath = script ? (script[1] ?? script[2] ?? script[3]) : s;
+  if (path.basename(scriptPath || '') !== GATE_SCRIPT_NAME) return null;
+  return dir || GATE_COMPILED_DIR;
+}
+
+function warnIfGateDetached() {
+  try {
+    const file = process.env.HUGINN_CLAUDE_SETTINGS || path.join(CLAUDE_DIR, 'settings.json');
+    const settings = JSON.parse(fs.readFileSync(file, 'utf8'));
+    const hooks = (settings && settings.hooks) || {};
+    const bound = new Set();
+    for (const rules of Object.values(hooks)) {
+      for (const rule of Array.isArray(rules) ? rules : []) {
+        for (const h of (rule && Array.isArray(rule.hooks) ? rule.hooks : [])) {
+          const dir = gateBoundDir(h && h.command);
+          if (dir) bound.add(path.resolve(dir));
+        }
+      }
+    }
+    if (!bound.size) return;                       // no gate installed: not this line's business
+    const mine = path.resolve(HEADROOM_DIR);
+    if (bound.has(mine)) return;
+    log(`headroom: ⚠ the installed spawn gate watches ${[...bound].join(', ')} but this daemon `
+      + `arms sentinels in ${mine} — the pause button is wired to nothing; re-run deploy.sh `
+      + '(install-hooks.js --headroom-dir) to bind them');
+  } catch { /* no settings file, unparseable, unreadable: nothing to say */ }
 }
 
 // ---- the tick --------------------------------------------------------------
@@ -6767,7 +7256,9 @@ async function headroomTickInner() {
 
   for (const action of verdict.actions) {
     try {
-      await applyHeadroomAction(action, { state, settings, now, activeWindows, activeSlug, activeEmail });
+      await applyHeadroomAction(action, {
+        state, settings, now, activeWindows, activeSlug, activeEmail, lastFableResetAt,
+      });
     } catch (e) {
       log(`headroom: applying ${action.type} failed: ${e.message}`);
     }
@@ -6922,7 +7413,18 @@ async function applyHeadroomAction(action, ctx) {
     }
     case 'heads_up': {
       const rec = state.sessions[action.claudeSessionId];
-      if (!rec || rec.headsUpAt) return;
+      if (!rec) return;
+      // ⚠ ONCE PER FABLE WINDOW, NOT ONCE EVER (#17). `headsUpAt` is written here
+      // and cleared nowhere, so this guard used to be `if (rec.headsUpAt) return`
+      // — and a session record that outlives a weekly_fable rollover never got
+      // another warning, for the rest of its life. `decide()` kept emitting the
+      // action (lib/headroom.js applies the staleness rule below), the drop
+      // returned before `lastAction` and before the log line so it left no trace,
+      // and `state.arbiter.why` — set from the verdict BEFORE the actions are
+      // applied — went on claiming a heads-up had been handed over on every tick.
+      // Same rule in both places, spelled the same way, deliberately.
+      const resetAt = Number(ctx.lastFableResetAt) || 0;
+      if (rec.headsUpAt && !(resetAt > rec.headsUpAt)) return;
       const text = settings.headsUpText
         .replace(/\{pct\}/g, String(action.pct))
         .replace(/\{next\}/g, action.next)
@@ -7096,27 +7598,51 @@ function resolvePendingLadder(state, action, v) {
  */
 function writeSentinels(plan, state, settings) {
   try {
-    if (plan.STOP) {
-      const a = sentinelsLib.arm(HEADROOM_DIR, 'STOP', plan.reasons.STOP || plan.reason);
-      state.sentinels.STOP = { since: a.since, reason: a.reason };
-      if (a.created) log(`headroom: armed STOP (${a.reason})`);
-      // The HEARTBEAT. An armed sentinel with no expiry wedges every spawn for
-      // half an hour if this process dies while it is up; the gate ages it out
-      // against this mtime, so re-asserting the plan must also say "still me".
-      sentinelsLib.touch(HEADROOM_DIR, 'STOP');
-    } else if (state.sentinels.STOP || sentinelsLib.state(HEADROOM_DIR).STOP) {
-      if (sentinelsLib.clear(HEADROOM_DIR, 'STOP')) log('headroom: cleared STOP');
-      state.sentinels.STOP = null;
-    }
-    if (plan.STOP_FABLE) {
-      const a = sentinelsLib.arm(HEADROOM_DIR, 'STOP-FABLE', plan.reasons['STOP-FABLE'] || plan.reason);
-      state.sentinels['STOP-FABLE'] = { since: a.since, reason: a.reason };
-      if (a.created) log(`headroom: armed STOP-FABLE (${a.reason})`);
-      sentinelsLib.touch(HEADROOM_DIR, 'STOP-FABLE');
-    } else if (state.sentinels['STOP-FABLE'] || sentinelsLib.state(HEADROOM_DIR)['STOP-FABLE']) {
-      if (sentinelsLib.clear(HEADROOM_DIR, 'STOP-FABLE')) log('headroom: cleared STOP-FABLE');
-      state.sentinels['STOP-FABLE'] = null;
-    }
+    const onDisk = sentinelsLib.state(HEADROOM_DIR);
+    /**
+     * Assert one sentinel against the plan.
+     *
+     * ⚠ THE OPERATOR'S PAUSE BUTTON USED TO EVAPORATE HERE (#12). No route arms
+     * a sentinel, so `touch $HEADROOM_DIR/STOP` — documented in lib/sentinels
+     * and unit-tested — is the ONLY way a person can hold every subagent spawn.
+     * This branch deleted it on the next pass, because the plan's hysteresis
+     * reads `state.sentinels`, which a hand-armed file never populates:
+     * measured at 299 s idle and 23 ms after a settings PATCH, with a gate that
+     * was holding releasing at `waited=0` and a journal line
+     * ("headroom: cleared STOP") indistinguishable from housekeeping.
+     *
+     * Reclaiming a CRASHED daemon's leftovers is still the job, so the split is
+     * authorship: reap only what this daemon wrote (`by === 'appd'`), and
+     * HEARTBEAT whatever is armed regardless of who armed it — without the
+     * touch, the gate would age a hand-armed hold out after
+     * HUGINN_GATE_STALE_S and every held spawn would go through anyway.
+     */
+    const assertSentinel = (name, wanted, key) => {
+      if (wanted) {
+        const a = sentinelsLib.arm(HEADROOM_DIR, name, plan.reasons[name] || plan.reason);
+        state.sentinels[key] = { since: a.since, reason: a.reason };
+        if (a.created) log(`headroom: armed ${name} (${a.reason})`);
+        // The HEARTBEAT. An armed sentinel with no expiry wedges every spawn for
+        // half an hour if this process dies while it is up; the gate ages it out
+        // against this mtime, so re-asserting the plan must also say "still me".
+        sentinelsLib.touch(HEADROOM_DIR, name);
+        return;
+      }
+      const found = onDisk[name];
+      if (found && found.by !== 'appd') {
+        // Somebody else's hold. Keep it alive and say so once per transition.
+        if (state.sentinels[key]) log(`headroom: ${name} is armed by hand; leaving it alone`);
+        state.sentinels[key] = null;
+        sentinelsLib.touch(HEADROOM_DIR, name);
+        return;
+      }
+      if (state.sentinels[key] || found) {
+        if (sentinelsLib.clear(HEADROOM_DIR, name)) log(`headroom: cleared ${name}`);
+        state.sentinels[key] = null;
+      }
+    };
+    assertSentinel('STOP', plan.STOP, 'STOP');
+    assertSentinel('STOP-FABLE', plan.STOP_FABLE, 'STOP-FABLE');
     const fable = Object.entries(state.sessions)
       .filter(([, r]) => r && r.family === 'fable')
       .map(([id]) => id);
@@ -7511,6 +8037,20 @@ function giveUpOnStalledRun(chatId, why) {
   try {
     appendMsg(chatId, { type: 'system', text: `the usage-limit re-run was abandoned: ${why}`, ts });
   } catch (e) { log(`chat ${chatId}: could not note the give-up: ${e.message}`); }
+  // ⚠ AND ANYTHING STILL QUEUED (#39). The stall's queue is left on disk for the
+  // re-run; when there is no re-run, nothing else will ever look at it — the
+  // sender got a 202 {queued:true} and their message would sit as a permanently
+  // 'queued' bubble that is never delivered, never dropped, and never explained.
+  // Same drop-or-say-so rule as the cancel and sealed-Round paths.
+  try {
+    const fresh = loadMeta(chatId) || meta;
+    const waiting = drainPending(fresh);
+    if (waiting.length) {
+      saveMeta(fresh);
+      appendMsg(chatId, { type: 'system', text: droppedNote(waiting, `the re-run was abandoned: ${why}`), ts });
+      log(`chat ${chatId} dropped ${waiting.length} queued message(s) with the abandoned re-run`);
+    }
+  } catch (e) { log(`chat ${chatId}: could not drain the queue on give-up: ${e.message}`); }
   if (!meta.roundId) return;
   try { finishRoundRun(loadMeta(chatId) || meta, `did not finish: ${why}`, { status: 'attention' }); }
   catch (e) { log(`round run ${chatId} could not be recorded: ${e.message}`); }
@@ -7590,6 +8130,16 @@ function noteRunStall(chatId, failureText) {
   }
   if (!userText) return false;
   const prior = loadMeta(chatId);
+  // ⚠ AN UNRESUMED STALL IS NOT OVERWRITTEN (#39). This wrote `meta.stall`
+  // wholesale, so a SECOND failure — the queue drained into the same dry window,
+  // or a follow-up a person sent into an already-stalled chat — replaced the
+  // stall's `userText` with the later turn, and `resumeStalledChats` then re-ran
+  // only that one. The turn that actually stalled was never run again and its
+  // text stayed in messages.jsonl with nothing waiting to say it.
+  if (prior && prior.stall && prior.stall.at && !prior.stall.resumedAt && !prior.stall.gaveUpAt) {
+    log(`chat ${chatId} is already waiting for a reset; keeping the turn that stalled first`);
+    return true;
+  }
   const attempts = (prior && prior.stall && Number(prior.stall.attempts)) || 0;
   if (attempts >= resumeLib.MAX_ATTEMPTS) return false;
   updateMeta(chatId, (m) => {
@@ -7702,9 +8252,23 @@ async function consentWatch(state, settings, sessions, now) {
       consentSeen.delete(s.name);
       continue;
     }
-    const typed = await run('tmux', ['send-keys', '-t', `=${s.name}:`, '-l', '--', String(prompt.recommended)]);
-    if (typed.err) { log(`headroom: consent answer failed on ${s.name}: ${typed.stderr.trim()}`); continue; }
-    await run('tmux', ['send-keys', '-t', `=${s.name}:`, 'Enter']);
+    // ⚠ UNDER /answer's LOCK (#11). This types a digit at the same pane the
+    // /answer route does, and the two can meet: a person taps the notification
+    // in the same second the grace expires here, and both digits land. The lock
+    // is per session and the memo is checked inside it, so whichever gets there
+    // second types nothing.
+    const pressed = await withAnswerLock(s.name, async () => {
+      if (answeredRecently(s.name, fresh.fingerprint, now)) {
+        log(`headroom: the consent dialog on ${s.name} was answered elsewhere — nothing typed`);
+        return false;
+      }
+      const t = await run('tmux', ['send-keys', '-t', `=${s.name}:`, '-l', '--', String(prompt.recommended)]);
+      if (t.err) { log(`headroom: consent answer failed on ${s.name}: ${t.stderr.trim()}`); return false; }
+      await run('tmux', ['send-keys', '-t', `=${s.name}:`, 'Enter']);
+      rememberAnswered(s.name, fresh.fingerprint, now);
+      return true;
+    });
+    if (!pressed) { consentSeen.delete(s.name); continue; }
     consentSeen.delete(s.name);
     const rec = s.claudeSessionId ? sessionRecord(state, s.claudeSessionId, s.name) : null;
     const to = headroomLib.familyOf(row ? row.label : null) || (row ? row.label : null);
@@ -7894,7 +8458,14 @@ function headroomStatus() {
     worstLabel: worst ? worst.label : null,
     nextResetAt: worst ? worst.resetsAt : null,
     mode: st.mode || 'ok',
-    sentinels: Object.entries(st.sentinels || {}).filter(([, v]) => !!v).map(([k]) => k),
+    // ⚠ FROM DISK, NOT FROM MEMORY (#12). `st.sentinels` is what the last tick
+    // armed, so a sentinel the operator armed by hand — the only pause button
+    // there is — showed on /v1/headroom (a disk read) and NOT here, which is the
+    // one-line status both clients render. A fleet-wide hold that the status
+    // line says is not happening is worse than no status line.
+    sentinels: sentinelsLib.NAMES.filter((n) => {
+      try { return !!sentinelsLib.state(HEADROOM_DIR)[n]; } catch { return false; }
+    }),
     paused: held.length,
     windowRunning: windowResetsAt != null,
     windowResetsAt,
@@ -8057,7 +8628,8 @@ async function alertTickInner(st) {
   // ten-second attach early in a two-hour run silences the finish entirely, a
   // missed notification. The non-sticky failure is the benign one: detach in
   // the final seconds and the buzz is merely redundant.
-  const sessionsAttached = {};
+  // Name-keyed, so prototype-less for the same reason as lib/watch's digest (#35).
+  const sessionsAttached = Object.create(null);
   for (const s of sessions) if (s.attachedClients > 0) sessionsAttached[s.name] = true;
   const observation = { sessions: d.sessions, sessionsSince, sessionsAttached, chats: d.chats };
 
@@ -8289,6 +8861,18 @@ const server = http.createServer(async (req, res) => {
   const p = u.pathname.replace(/\/+$/, '') || '/';
   res.on('finish', () => log(`${req.method} ${p} ${res.statusCode} ${Date.now() - t0}ms`));
 
+  // ⚠ ON EVERY RESPONSE, INCLUDING THE 401 (cross-batch contract 2). The
+  // clients' route probe has to be able to tell huginn-appd from ANY OTHER
+  // HTTP responder on a LAN address before it hands over a root-equivalent
+  // bearer token: `probe()` used to accept "something answered", so a printer
+  // or a router on 192.168.2.117:8787 was called a daemon and auto-switch
+  // leaked the token to it (kcore #59/#78). The probe becomes an
+  // unauthenticated GET that must come back 401 with the daemon's error shape;
+  // this header is the stronger marker the client prefers when it is present.
+  // `setHeader`, not writeHead: it then rides on every path out of this
+  // function, streamed artifacts and the auth refusal included.
+  res.setHeader('X-Huginn-Appd', VERSION);
+
   if (!authorized(req)) return sendErr(res, 401, 'unauthorized');
 
   try {
@@ -8314,7 +8898,7 @@ const server = http.createServer(async (req, res) => {
     //     No GET: the current values already ride the status poll every client
     //     runs, and a second way to read them is a second thing to keep in step.
     if (req.method === 'PATCH' && p === '/v1/quick-actions') {
-      const body = JSON.parse(await readBody(req) || '{}');
+      const body = await readJsonBody(req);
       // One call decides everything — the stale-revision check, the per-field
       // rules and the new record — so there is no order in which the route can
       // write a half-validated file.
@@ -8347,7 +8931,7 @@ const server = http.createServer(async (req, res) => {
 
     // --- FCM: the app hands over the token Google will deliver to
     if (req.method === 'POST' && p === '/v1/push/register') {
-      const body = JSON.parse(await readBody(req) || '{}');
+      const body = await readJsonBody(req);
       const installId = String(body.installId || '').trim().slice(0, 64);
       const token = String(body.token || '').trim();
       if (!installId || !token) return sendErr(res, 400, 'installId and token are required');
@@ -8389,7 +8973,7 @@ const server = http.createServer(async (req, res) => {
       return sendJson(res, 200, headroomPayload());
     }
     if (req.method === 'PATCH' && p === '/v1/headroom/settings') {
-      const body = JSON.parse(await readBody(req) || '{}');
+      const body = await readJsonBody(req);
       // Validated BEFORE anything is written, and the rule that failed is the
       // message: "invalid settings" makes a slider that silently will not move.
       const v = headroomLib.validateSettings(body, loadHeadroomSettings());
@@ -8409,7 +8993,7 @@ const server = http.createServer(async (req, res) => {
       return sendJson(res, 200, autoswitchAliasView());
     }
     if (req.method === 'POST' && p === '/v1/autoswitch') {
-      const body = JSON.parse(await readBody(req) || '{}');
+      const body = await readJsonBody(req);
       const patch = {};
       if (typeof body.enabled === 'boolean') patch.enabled = body.enabled;
       // The default fires at 95%, on the reasoning that a limit resetting in
@@ -8448,7 +9032,7 @@ const server = http.createServer(async (req, res) => {
     }
 
     if (req.method === 'POST' && p === '/v1/alerts') {
-      const body = JSON.parse(await readBody(req) || '{}');
+      const body = await readJsonBody(req);
       const st = loadAlertState();
       if (typeof body.enabled === 'boolean') {
         st.enabled = body.enabled;
@@ -8515,6 +9099,18 @@ const server = http.createServer(async (req, res) => {
               pushEpoch: streamInstall ? pushLib.epochOf(pushSt, streamInstall) : null,
             })}\n\n`);
             nextKeepalive = Date.now() + KEEPALIVE_MS;
+            // ⚠ AND STAMP THE CLIENT (#32/#41/#44). A state frame resets the
+            // keepalive clock, so a stream whose digest changes at least once
+            // every 25 s never reaches the keepalive branch — the ONLY place
+            // that said "this client is alive". Three ordinary interactive
+            // sessions on normal turn cycles are enough (measured: 51 state
+            // frames, 0 keepalives over 7 minutes), and after FRESH_STREAM_MS
+            // the most-connected client on the host was recorded as stale:
+            // /v1/clients reports it gone and `appOnline` goes false, which is
+            // what gates the Telegram fallback and the Round reports when push
+            // delivered to nobody. The exposed client is Compose Desktop, whose
+            // only /v1/watch caller is this stream.
+            noteClient(req, 'stream');
           } else if (Date.now() >= nextKeepalive) {
             // A comment frame: valid SSE, ignored by any parser, and enough to
             // prove the path is still open in both directions.
@@ -8711,7 +9307,7 @@ const server = http.createServer(async (req, res) => {
     }
 
     if (req.method === 'POST' && p === '/v1/account/login') {
-      const loginBody = JSON.parse(await readBody(req) || '{}');
+      const loginBody = await readJsonBody(req);
       // An email is optional but strongly worth having: the authorize page uses
       // whatever claude.ai session the browser already has, which is how signing
       // in "as a second account" can silently re-authorize the first one.
@@ -8766,7 +9362,7 @@ const server = http.createServer(async (req, res) => {
 
     // The pasted code, handed to the waiting prompt.
     if (req.method === 'POST' && p === '/v1/account/login/code') {
-      const body = JSON.parse(await readBody(req) || '{}');
+      const body = await readJsonBody(req);
       const code = typeof body.code === 'string' ? body.code.trim() : '';
       // Codes are opaque; accept a generous shape but nothing that could be a
       // second command, since this is typed into a live terminal.
@@ -8838,7 +9434,7 @@ const server = http.createServer(async (req, res) => {
       // Signing out breaks every running session AND every cron on this host
       // (briefings, escalation, status-page investigation) until someone signs
       // back in, so it takes an explicit confirmation rather than a stray tap.
-      const body = JSON.parse(await readBody(req) || '{}');
+      const body = await readJsonBody(req);
       if (body.confirm !== 'logout') return sendErr(res, 400, 'confirmation required');
       const r = await run('claude', ['auth', 'logout'], { timeout: 30_000 });
       if (r.err) return sendErr(res, 500, (r.stderr || r.err.message).slice(0, 200));
@@ -8890,9 +9486,10 @@ const server = http.createServer(async (req, res) => {
     }
 
     if (req.method === 'POST' && p === '/v1/sessions') {
-      const body = JSON.parse(await readBody(req) || '{}');
+      const body = await readJsonBody(req);
+      const bad = nameProblem(body.name);
+      if (bad) return sendErr(res, 400, bad);
       const name = canonName(body.name);
-      if (!name) return sendErr(res, 400, 'invalid session name (letters, digits, underscore)');
       if (await sessionExists(name)) return sendErr(res, 409, `session '${name}' already exists`);
       // Whatever the last holder of this name left behind goes now, before the new
       // session can be observed. The born-time guard would reject it anyway, but
@@ -8902,14 +9499,18 @@ const server = http.createServer(async (req, res) => {
       // whoever starts it, and that is a one-time choice per server lifetime.
       await ensureTmuxServerScope();
       // Same shape as cc: open in WORKDIR, claude first, fall through to a shell.
-      const { err, stderr } = await run('tmux',
-        ['new-session', '-d', '-s', name, '-c', WORKDIR, 'claude; exec "$SHELL" -l']);
+      // ⚠ `-P -F '#S'` — tmux PRINTS the name it gave the session, in the same
+      // call that makes it. The old shape asked afterwards with
+      // `display-message -t '=<name>:'`, which cannot resolve a name tmux
+      // rewrote and answers empty at exit 0; the `|| name` fallback then echoed
+      // the phantom back in the 201 (#103/#106).
+      const { err, stderr, stdout } = await run('tmux',
+        ['new-session', '-d', '-P', '-F', '#S', '-s', name, '-c', WORKDIR, 'claude; exec "$SHELL" -l']);
       if (err) return sendErr(res, 500, `tmux: ${stderr.trim() || err.message}`);
-      // What tmux called it, not what we asked for — same reason as the rename
-      // route below: a '.' is rewritten to '_' with a zero exit, and a client
-      // told the wrong name gets a 404 on everything it does next.
-      const q = await run('tmux', ['display-message', '-p', '-t', `=${name}:`, '#S']);
-      const created = (q.stdout || '').trim() || name;
+      const created = await tmuxNameReadback(name, stdout);
+      if (!created) {
+        return sendErr(res, 500, 'tmux made the session but will not say what it called it');
+      }
       // On the restore list from birth. The claudeSessionId is not known yet — the
       // title hook writes it once Claude boots — so the reconcile timer fills it in;
       // until then a reboot would bring this session back as a fresh `claude`, which
@@ -8926,8 +9527,11 @@ const server = http.createServer(async (req, res) => {
 
     if ((m = p.match(/^\/v1\/sessions\/([A-Za-z0-9_][A-Za-z0-9_.-]{0,49})$/)) && req.method === 'DELETE') {
       const name = m[1];
-      const { err, stderr } = await hardEndSession(name);
-      if (err) return sendErr(res, 404, `tmux: ${stderr.trim() || 'no such session'}`);
+      const { err, absent } = await hardEndSession(name);
+      // The kill was never attempted, or tmux would not say whether it worked:
+      // 404 here told a client the session had gone while it was still running.
+      if (err) return sendErr(res, 503, 'tmux is not answering right now');
+      if (absent) return sendErr(res, 404, 'no such session');
       return sendJson(res, 200, { ok: true });
     }
 
@@ -8948,7 +9552,7 @@ const server = http.createServer(async (req, res) => {
       const waitMs = Math.max(0, Math.min(30_000, Number(q.get('wait')) || 0));
       const deadline = Date.now() + waitMs;
       let scr = await captureScreen(name, opts);
-      if (!scr) return sendErr(res, 404, 'no such session');
+      if (!scr) return paneReadFailed(res, name);
       // While parked, poll with ONE cheap capture-pane rather than a full
       // captureScreen: the geometry cannot change without the content changing,
       // and re-running the resize/geometry calls on every tick cost three tmux
@@ -8962,10 +9566,10 @@ const server = http.createServer(async (req, res) => {
       while (known && scr.hash === known && Date.now() < deadline && !req.destroyed) {
         await sleep(tick++ < 24 ? 130 : 450);
         const peek = await peekHash(name);
-        if (peek === null) return sendErr(res, 404, 'no such session');
+        if (peek === null) return paneReadFailed(res, name);
         if (peek.hash !== known) {
           scr = await captureScreen(name, opts);
-          if (!scr) return sendErr(res, 404, 'no such session');
+          if (!scr) return paneReadFailed(res, name);
           break;
         }
       }
@@ -8994,7 +9598,7 @@ const server = http.createServer(async (req, res) => {
     // the primary way the app shows a session; the pane is for interaction.
     if ((m = p.match(/^\/v1\/sessions\/([A-Za-z0-9_][A-Za-z0-9_.-]{0,49})\/transcript$/)) && req.method === 'GET') {
       const name = m[1];
-      if (!(await sessionExists(name))) return sendErr(res, 404, 'no such session');
+      if (!(await requireSession(res, name))) return;
       const st = readSessionState(name);
       if (!st || !st.transcript) {
         return sendErr(res, 409, 'no transcript recorded for this session yet — the Claude hook fires on the first prompt');
@@ -9037,7 +9641,7 @@ const server = http.createServer(async (req, res) => {
     // --- suggested next messages, generated when a turn has just ended
     if ((m = p.match(/^\/v1\/sessions\/([A-Za-z0-9_][A-Za-z0-9_.-]{0,49})\/suggestions$/)) && req.method === 'GET') {
       const name = m[1];
-      if (!(await sessionExists(name))) return sendErr(res, 404, 'no such session');
+      if (!(await requireSession(res, name))) return;
       const st = readSessionState(name);
       if (!st || st.state === 'running' || !st.transcript) {
         return sendJson(res, 200, { suggestions: [], reason: 'running' });
@@ -9054,7 +9658,7 @@ const server = http.createServer(async (req, res) => {
     // a parked phone for — it is a page somebody opens on purpose.
     if ((m = p.match(/^\/v1\/sessions\/([A-Za-z0-9_][A-Za-z0-9_.-]{0,49})\/overview$/)) && req.method === 'GET') {
       const name = m[1];
-      if (!(await sessionExists(name))) return sendErr(res, 404, 'no such session');
+      if (!(await requireSession(res, name))) return;
       const st = readSessionState(name);
       if (!st || !st.sessionId || !st.transcript) {
         return sendErr(res, 409, 'no transcript recorded for this session yet — the Claude hook fires on the first prompt');
@@ -9071,7 +9675,7 @@ const server = http.createServer(async (req, res) => {
 
     if ((m = p.match(/^\/v1\/sessions\/([A-Za-z0-9_][A-Za-z0-9_.-]{0,49})\/graph$/)) && req.method === 'GET') {
       const name = m[1];
-      if (!(await sessionExists(name))) return sendErr(res, 404, 'no such session');
+      if (!(await requireSession(res, name))) return;
       const st = readSessionState(name);
       if (!st || !st.sessionId || !st.transcript) {
         return sendErr(res, 409, 'no transcript recorded for this session yet — the Claude hook fires on the first prompt');
@@ -9129,7 +9733,7 @@ const server = http.createServer(async (req, res) => {
      */
     if ((m = p.match(/^\/v1\/sessions\/([A-Za-z0-9_][A-Za-z0-9_.-]{0,49})\/headroom\/undo$/)) && req.method === 'POST') {
       const name = m[1];
-      if (!(await sessionExists(name))) return sendErr(res, 404, 'no such session');
+      if (!(await requireSession(res, name))) return;
       const st = readSessionState(name);
       if (!st || !st.sessionId) return sendErr(res, 409, 'this session has no Claude session id yet');
       const state = hstate();
@@ -9209,7 +9813,7 @@ const server = http.createServer(async (req, res) => {
 
     if ((m = p.match(/^\/v1\/sessions\/([A-Za-z0-9_][A-Za-z0-9_.-]{0,49})\/meta$/)) && req.method === 'POST') {
       const name = m[1];
-      if (!(await sessionExists(name))) return sendErr(res, 404, 'no such session');
+      if (!(await requireSession(res, name))) return;
       const st = readSessionState(name);
       // A plain shell, or a session whose first prompt has not landed yet. Said
       // in words rather than by writing the file under the tmux name, which is
@@ -9217,7 +9821,7 @@ const server = http.createServer(async (req, res) => {
       if (!st || !st.sessionId) {
         return sendErr(res, 409, 'this session has no Claude session id yet — notes are kept against the run, not the window name');
       }
-      const body = JSON.parse(await readBody(req) || '{}');
+      const body = await readJsonBody(req);
       if (body.goals !== undefined && typeof body.goals !== 'string') return sendErr(res, 400, 'goals must be text');
       if (body.notes !== undefined && typeof body.notes !== 'string') return sendErr(res, 400, 'notes must be text');
       if (typeof body.goals === 'string' && body.goals.length > MAX_GOALS) {
@@ -9258,7 +9862,7 @@ const server = http.createServer(async (req, res) => {
     // worse answer to that question.
     if ((m = p.match(/^\/v1\/sessions\/([A-Za-z0-9_][A-Za-z0-9_.-]{0,49})\/agents$/)) && req.method === 'GET') {
       const name = m[1];
-      if (!(await sessionExists(name))) return sendErr(res, 404, 'no such session');
+      if (!(await requireSession(res, name))) return;
       const st = readSessionState(name);
       const dir = st ? agentsDirFor(st.transcript, st.sessionId) : null;
       const all = u.searchParams.get('all') === '1';
@@ -9303,7 +9907,7 @@ const server = http.createServer(async (req, res) => {
       const idm = raw ? /^(?:agent-)?([0-9a-f]{6,32})$/.exec(raw) : null;
       if (!idm) return sendErr(res, 400, 'invalid agent id');
       const agentId = `agent-${idm[1]}`;
-      if (!(await sessionExists(name))) return sendErr(res, 404, 'no such session');
+      if (!(await requireSession(res, name))) return;
       const st = readSessionState(name);
       if (!st || !st.transcript || !st.sessionId) {
         return sendErr(res, 409, 'no transcript recorded for this session yet — the Claude hook fires on the first prompt');
@@ -9333,32 +9937,45 @@ const server = http.createServer(async (req, res) => {
 
     if ((m = p.match(/^\/v1\/sessions\/([A-Za-z0-9_][A-Za-z0-9_.-]{0,49})\/rename$/)) && req.method === 'POST') {
       const from = m[1];
-      const body = JSON.parse(await readBody(req) || '{}');
+      const body = await readJsonBody(req);
+      const badName = nameProblem(body.name);
+      if (badName) return sendErr(res, 400, badName);
       const to = canonName(body.name);
-      if (!to) return sendErr(res, 400, 'invalid session name (letters, digits, underscore)');
       if (to !== from && await sessionExists(to)) return sendErr(res, 409, `session '${to}' already exists`);
       const r = await run('tmux', ['rename-session', '-t', `=${from}`, to]);
       if (r.err) return sendErr(res, 404, `tmux: ${r.stderr.trim() || 'no such session'}`);
-      // Ask tmux what it ACTUALLY called the session rather than assuming it
-      // took the name we asked for. tmux silently rewrites '.' to '_' and still
-      // exits 0, so a rename to "my.session" left a live session named
-      // "my_session" while this route moved the state file to "my.session" and
-      // handed the client a name that 404s on every subsequent request. The
-      // orphaned state file is the worse half: it is the session -> transcript
-      // mapping, so the Conversation view — the app's primary surface — had
-      // nothing to read until the title hook happened to rewrite it, which for
-      // an idle session is never.
+      // ⚠ THE READBACK THAT RENAMED A BYSTANDER'S STATE. This asked tmux about
+      // `-t '=<to>'` WITHOUT the trailing colon, and tmux resolves a colon-less
+      // target by applying the same '.'-to-'_' rewrite it applies to a name — so
+      // renaming X to `notes.old` while a live session called `notes` existed
+      // read back `notes`, and every move below then migrated X's state file,
+      // sidecars, pane lease, soft-end, startup mark, send queue and registry
+      // row ONTO that unrelated session: its transcript mapping destroyed, and
+      // X's queued text pumped into its live Claude pane (#105). The `|| to`
+      // fallback was the other half — a readback that learned nothing published
+      // the requested name anyway, which is the create route's phantom (#103).
       //
-      // Reading the name back rather than rejecting '.' keeps this correct for
-      // whatever character tmux decides to rewrite next.
-      const q = await run('tmux', ['display-message', '-p', '-t', `=${to}`, '#S']);
-      const actual = (q.stdout || '').trim() || to;
+      // `tmuxNameReadback` probes the name tmux would have REWRITTEN to and then
+      // the live list, and returns null rather than guessing.
+      const actual = await tmuxNameReadback(to);
+      if (!actual) {
+        return sendErr(res, 500, 'tmux renamed the session but will not say what it is called now');
+      }
       // The state file is keyed by name; move it so state/transcript survive.
-      try { fs.renameSync(path.join(STATE_DIR, from), path.join(STATE_DIR, actual)); } catch { }
+      // ⚠ ONLY IF IT IS A FILE. `from` comes raw off the URL, and before the
+      // sidecar directories were dot-prefixed a session could legitimately be
+      // called `ask`: this line then renamed the whole SHARED sidecar DIRECTORY,
+      // taking every other session's pending question with it (#3). The prefix
+      // makes that unreachable; the guard is what keeps it unreachable.
+      try {
+        if (fs.lstatSync(path.join(STATE_DIR, from)).isFile()) {
+          fs.renameSync(path.join(STATE_DIR, from), path.join(STATE_DIR, actual));
+        }
+      } catch { }
       // Move the prompt sidecars + the compacting marker too, or a fused prompt
       // silently degrades to pane-only after a rename until the next question
       // rewrites them.
-      for (const kind of ['ask', 'plan', 'compacting']) {
+      for (const kind of ALL_SIDECAR_DIRS) {
         try { fs.renameSync(path.join(STATE_DIR, kind, from), path.join(STATE_DIR, kind, actual)); } catch { }
       }
       // ⚠ EVERY MOVE BELOW IS `set(new) THEN delete(old)`, WHICH ERASES THE ROW
@@ -9403,7 +10020,7 @@ const server = http.createServer(async (req, res) => {
 
     if ((m = p.match(/^\/v1\/sessions\/([A-Za-z0-9_][A-Za-z0-9_.-]{0,49})\/keys$/)) && req.method === 'POST') {
       const name = m[1];
-      if (!(await sessionExists(name))) return sendErr(res, 404, 'no such session');
+      if (!(await requireSession(res, name))) return;
       /**
        * 512 KB, not the 256 KB default.
        *
@@ -9413,7 +10030,7 @@ const server = http.createServer(async (req, res) => {
        * malformed body — the sender was told their JSON was broken, for a
        * message the route was about to accept.
        */
-      const body = JSON.parse(await readBody(req, 512 * 1024) || '{}');
+      const body = await readJsonBody(req, 512 * 1024);
       let typedKeys = typeof body.text === 'string' ? body.text : '';
       if (typedKeys.length > typing.SESSION_TEXT_MAX) return sendErr(res, 400, 'text too long');
       // Validate the key names BEFORE anything is typed. They used to be checked
@@ -9540,15 +10157,15 @@ const server = http.createServer(async (req, res) => {
      */
     if ((m = p.match(/^\/v1\/sessions\/([A-Za-z0-9_][A-Za-z0-9_.-]{0,49})\/typing$/)) && req.method === 'GET') {
       const name = m[1];
-      if (!(await sessionExists(name))) return sendErr(res, 404, 'no such session');
+      if (!(await requireSession(res, name))) return;
       return sendJson(res, 200, typing.typingSnapshot(sendQueues.get(name), Date.now()));
     }
 
     // --- soft end: type a wrap-up phrase, and (when auto) end on settle
     if ((m = p.match(/^\/v1\/sessions\/([A-Za-z0-9_][A-Za-z0-9_.-]{0,49})\/soft-end$/)) && req.method === 'POST') {
       const name = m[1];
-      if (!(await sessionExists(name))) return sendErr(res, 404, 'no such session');
-      const body = JSON.parse(await readBody(req) || '{}');
+      if (!(await requireSession(res, name))) return;
+      const body = await readJsonBody(req);
       const st = readSessionState(name);
       // A question is already waiting: typing prose into a numbered prompt is
       // lost or misread. Answer it first (same reasoning as /answer's guard).
@@ -9561,15 +10178,49 @@ const server = http.createServer(async (req, res) => {
       if (!st && !body.force) {
         return sendErr(res, 409, 'no Claude state recorded for this session — it may be a plain shell; pass force to send anyway');
       }
+      // The state file cannot see a dialog; the pane can (#9).
+      const blocked = await dialogRefusal(name);
+      if (blocked) return sendErr(res, 409, blocked);
       const phrase = (typeof body.phrase === 'string' && body.phrase.trim())
         ? body.phrase.slice(0, 8000) : SOFT_END_PHRASE;
       const auto = typeof body.auto === 'boolean' ? body.auto : SOFT_END_AUTO;
       const queued = !!(st && st.state === 'running'); // mid-turn text queues in the composer
-      const r = await sendLineToPane(name, phrase);
-      if (r.err) return sendErr(res, 500, `tmux: ${(r.stderr || '').trim()}`);
-      if (auto) softEnds.set(name, createPending(Date.now()));
-      else softEnds.delete(name);
-      return sendJson(res, 200, { ok: true, phrase, auto, queued });
+      // ⚠ THROUGH THE QUEUE, AND THE AUTO-END ARMS FROM THE SETTLE (#9). This
+      // used to paste straight at the pane and arm on the 200 — so a phrase that
+      // went nowhere still armed a kill, defeating the expire branch written for
+      // exactly that case. `automated:false` because a person asked for it: the
+      // modal gate holds it, the turn gate does not.
+      if (!auto) softEnds.delete(name);
+      const out = await enqueueSend(name, phrase, {
+        origin: 'soft-end',
+        submit: true,
+        onSettle: (v) => {
+          if (!auto) return;
+          const r = v.result || {};
+          // ⚠ `submitted !== false`, NOT `settled === true`. The state that must
+          // never arm a kill is the one where the phrase is demonstrably still
+          // sitting in a composer — `recoveryDecision` returning 'leave', which
+          // skips the Enter, and a confirmSubmitted that timed out with the text
+          // still there. Both report `submitted: false`. A pane with no composer
+          // at all (a plain shell, an inert pane) reports `null`, and refusing to
+          // arm there would break the auto-end for every non-Claude pane.
+          if (v.delivered && r.ok && r.submitted !== false) {
+            softEnds.set(name, createPending(Date.now()));
+            return;
+          }
+          log(`soft-end: ${name}: the wrap-up phrase did not land `
+            + `(${v.dropped || (r.message || 'not submitted')}); not arming the auto-end`);
+        },
+      });
+      if (out.result && !out.result.ok) {
+        return sendErr(res, out.result.code || 500, out.result.message);
+      }
+      return sendJson(res, 200, {
+        ok: true, phrase, auto,
+        queued: queued || !out.delivered,
+        delivered: out.delivered,
+        blockedBy: out.blockedBy || null,
+      });
     }
 
     // --- manual context compaction (the "context manager" action)
@@ -9583,7 +10234,7 @@ const server = http.createServer(async (req, res) => {
     // turn ends — and reported back as `queued` so the client can say so.
     if ((m = p.match(/^\/v1\/sessions\/([A-Za-z0-9_][A-Za-z0-9_.-]{0,49})\/compact$/)) && req.method === 'POST') {
       const name = m[1];
-      if (!(await sessionExists(name))) return sendErr(res, 404, 'no such session');
+      if (!(await requireSession(res, name))) return;
       const st = readSessionState(name);
       if (!st) {
         return sendErr(res, 409, 'no Claude state recorded for this session — it may be a plain shell');
@@ -9591,10 +10242,21 @@ const server = http.createServer(async (req, res) => {
       if (st.state === 'attention') {
         return sendErr(res, 409, 'answer the waiting question first, then compact');
       }
+      const blocked = await dialogRefusal(name);
+      if (blocked) return sendErr(res, 409, blocked);
       const queued = st.state === 'running';
-      const r = await sendLineToPane(name, '/compact');
-      if (r.err) return sendErr(res, 500, `tmux: ${(r.stderr || '').trim()}`);
-      return sendJson(res, 200, { ok: true, sent: '/compact', queued });
+      // Through the queue for the same reason as /soft-end: a slash command
+      // typed into a selector is swallowed, and this route reported it as sent.
+      const out = await enqueueSend(name, '/compact', { origin: 'compact', submit: true });
+      if (out.result && !out.result.ok) {
+        return sendErr(res, out.result.code || 500, out.result.message);
+      }
+      return sendJson(res, 200, {
+        ok: true, sent: '/compact',
+        queued: queued || !out.delivered,
+        delivered: out.delivered,
+        blockedBy: out.blockedBy || null,
+      });
     }
 
     // --- answering a question from a notification, without opening the app
@@ -9609,8 +10271,8 @@ const server = http.createServer(async (req, res) => {
     // answer, and a mismatch is refused rather than delivered hopefully.
     if ((m = p.match(/^\/v1\/sessions\/([A-Za-z0-9_][A-Za-z0-9_.-]{0,49})\/answer$/)) && req.method === 'POST') {
       const name = m[1];
-      if (!(await sessionExists(name))) return sendErr(res, 404, 'no such session');
-      const body = JSON.parse(await readBody(req) || '{}');
+      if (!(await requireSession(res, name))) return;
+      const body = await readJsonBody(req);
       const option = Number(body.option);
       const isMulti = Array.isArray(body.options);
       if (!isMulti && (!Number.isInteger(option) || option < 1 || option > 20)) {
@@ -9621,104 +10283,119 @@ const server = http.createServer(async (req, res) => {
         return sendErr(res, 400, 'options must be small positive integers');
       }
 
-      const screen = await captureScreen(name);
-      const pf = screen ? promptFor(name, screen.lines) : { prompt: null, ask: null };
-      const prompt = pf.prompt;
-      if (!prompt) {
-        // The hook may still say a question is waiting (a wrap/preview the pane
-        // scrape cannot read). Distinguish that from "gone" so the client can
-        // deep-link to the Screen tab instead of reporting the question vanished.
-        if (pf.ask) {
+      // ⚠ SERIALISED PER SESSION (#11). Everything from here on is check-and-act
+      // against a live pane: two answers that pass the guard concurrently both
+      // type, and the second digit lands wherever the first one's Enter left the
+      // TUI. The loser runs after the winner, re-reads, and is refused by the
+      // ordinary guards — or by the memo, when the pane has not repainted yet.
+      return withAnswerLock(name, async () => {
+        if (answeredRecently(name, body.fingerprint)) {
           return sendJson(res, 409, {
-            ok: false, reason: 'undetected',
-            error: 'the question is on screen but not answerable from here — use the Screen tab',
+            ok: false, reason: 'gone',
+            error: 'that question has already been answered',
           });
         }
-        return sendJson(res, 409, {
-          ok: false, reason: 'gone',
-          error: 'that question is no longer on screen',
-        });
-      }
-      const live = prompt.fingerprint;
-      // REQUIRED, not merely honoured when offered. This used to read
-      // `if (body.fingerprint && body.fingerprint !== live)`, which made the
-      // whole check-and-act guard opt-in: a caller that omitted the field — or
-      // sent an empty string, which is equally falsy — got its digit typed into
-      // whatever question happened to be on the pane. Both were reachable from
-      // the shipping clients (HuginnClient omits the key for a null,
-      // AnswerReceiver turns a blank notification extra into null, and
-      // lib/fcm.js puts `String(fingerprint ?? '')` on the wire), so the
-      // guarantee this route's comment above describes did not exist.
-      //
-      // The empty-string case is called out separately in the tests because it
-      // is a JavaScript truthiness trap: `if (!body.fingerprint)` reads as a
-      // presence check and silently also accepts ''. The Electron client (since
-      // deleted) rejected both in its own notification path; the host did not.
-      if (typeof body.fingerprint !== 'string' || body.fingerprint === '') {
-        return sendErr(res, 400, 'fingerprint required');
-      }
-      if (body.fingerprint !== live) {
-        return sendJson(res, 409, {
-          ok: false, reason: 'changed',
-          error: 'the session is asking something else now',
-          prompt, fingerprint: live,
-        });
-      }
-      // A SET of options: the multi-select dialog. Digits toggle, Right opens
-      // the review tab, Enter submits — the whole sequence verified live before
-      // this was written. The digits are a DIFF against the current checkbox
-      // state, because the owner may have half-answered in tmux already and
-      // blindly pressing every desired digit would un-check those.
-      if (Array.isArray(body.options)) {
-        if (!prompt.multiSelect) {
+        const screen = await captureScreen(name);
+        const pf = screen ? promptFor(name, screen.lines) : { prompt: null, ask: null };
+        const prompt = pf.prompt;
+        if (!prompt) {
+          // The hook may still say a question is waiting (a wrap/preview the pane
+          // scrape cannot read). Distinguish that from "gone" so the client can
+          // deep-link to the Screen tab instead of reporting the question vanished.
+          if (pf.ask) {
+            return sendJson(res, 409, {
+              ok: false, reason: 'undetected',
+              error: 'the question is on screen but not answerable from here — use the Screen tab',
+            });
+          }
           return sendJson(res, 409, {
-            ok: false, reason: 'changed',
-            error: 'this question takes a single answer', prompt, fingerprint: live,
+            ok: false, reason: 'gone',
+            error: 'that question is no longer on screen',
           });
         }
-        const desired = body.options.map(Number);
-        const valid = new Set(prompt.options
-          .filter((o) => typeof o.checked === 'boolean').map((o) => o.number));
-        if (!desired.every((n) => Number.isInteger(n) && valid.has(n))) {
+        const live = prompt.fingerprint;
+        // REQUIRED, not merely honoured when offered. This used to read
+        // `if (body.fingerprint && body.fingerprint !== live)`, which made the
+        // whole check-and-act guard opt-in: a caller that omitted the field — or
+        // sent an empty string, which is equally falsy — got its digit typed into
+        // whatever question happened to be on the pane. Both were reachable from
+        // the shipping clients (HuginnClient omits the key for a null,
+        // AnswerReceiver turns a blank notification extra into null, and
+        // lib/fcm.js puts `String(fingerprint ?? '')` on the wire), so the
+        // guarantee this route's comment above describes did not exist.
+        //
+        // The empty-string case is called out separately in the tests because it
+        // is a JavaScript truthiness trap: `if (!body.fingerprint)` reads as a
+        // presence check and silently also accepts ''. The Electron client (since
+        // deleted) rejected both in its own notification path; the host did not.
+        if (typeof body.fingerprint !== 'string' || body.fingerprint === '') {
+          return sendErr(res, 400, 'fingerprint required');
+        }
+        if (body.fingerprint !== live) {
           return sendJson(res, 409, {
             ok: false, reason: 'changed',
-            error: 'an option is not offered any more', prompt, fingerprint: live,
+            error: 'the session is asking something else now',
+            prompt, fingerprint: live,
           });
         }
-        const digits = multiToggleDigits(prompt.options, desired);
-        for (const d of digits) {
-          const t = await run('tmux', ['send-keys', '-t', `=${name}:`, '-l', '--', d]);
-          if (t.err) return sendErr(res, 500, `tmux: ${t.stderr.trim()}`);
-          await sleep(120);                        // let the TUI apply each toggle
+        // A SET of options: the multi-select dialog. Digits toggle, Right opens
+        // the review tab, Enter submits — the whole sequence verified live before
+        // this was written. The digits are a DIFF against the current checkbox
+        // state, because the owner may have half-answered in tmux already and
+        // blindly pressing every desired digit would un-check those.
+        if (Array.isArray(body.options)) {
+          if (!prompt.multiSelect) {
+            return sendJson(res, 409, {
+              ok: false, reason: 'changed',
+              error: 'this question takes a single answer', prompt, fingerprint: live,
+            });
+          }
+          const desired = body.options.map(Number);
+          const valid = new Set(prompt.options
+            .filter((o) => typeof o.checked === 'boolean').map((o) => o.number));
+          if (!desired.every((n) => Number.isInteger(n) && valid.has(n))) {
+            return sendJson(res, 409, {
+              ok: false, reason: 'changed',
+              error: 'an option is not offered any more', prompt, fingerprint: live,
+            });
+          }
+          const digits = multiToggleDigits(prompt.options, desired);
+          for (const d of digits) {
+            const t = await run('tmux', ['send-keys', '-t', `=${name}:`, '-l', '--', d]);
+            if (t.err) return sendErr(res, 500, `tmux: ${t.stderr.trim()}`);
+            await sleep(120);                        // let the TUI apply each toggle
+          }
+          const right = await run('tmux', ['send-keys', '-t', `=${name}:`, 'Right']);
+          if (right.err) return sendErr(res, 500, `tmux: ${right.stderr.trim()}`);
+          await sleep(250);                          // the review tab needs a beat
+          const enter2 = await run('tmux', ['send-keys', '-t', `=${name}:`, 'Enter']);
+          if (enter2.err) return sendErr(res, 500, `tmux: ${enter2.stderr.trim()}`);
+          const labels = prompt.options
+            .filter((o) => desired.includes(o.number)).map((o) => o.label);
+          rememberAnswered(name, live);
+          log(`answer: ${name} <- multi [${desired.join(',')}] (${labels.join(', ').slice(0, 80)})`);
+          return sendJson(res, 200, { ok: true, options: desired, labels });
         }
-        const right = await run('tmux', ['send-keys', '-t', `=${name}:`, 'Right']);
-        if (right.err) return sendErr(res, 500, `tmux: ${right.stderr.trim()}`);
-        await sleep(250);                          // the review tab needs a beat
-        const enter2 = await run('tmux', ['send-keys', '-t', `=${name}:`, 'Enter']);
-        if (enter2.err) return sendErr(res, 500, `tmux: ${enter2.stderr.trim()}`);
-        const labels = prompt.options
-          .filter((o) => desired.includes(o.number)).map((o) => o.label);
-        log(`answer: ${name} <- multi [${desired.join(',')}] (${labels.join(', ').slice(0, 80)})`);
-        return sendJson(res, 200, { ok: true, options: desired, labels });
-      }
 
-      const chosen = prompt.options.find((o) => o.number === option);
-      if (!chosen) {
-        return sendJson(res, 409, {
-          ok: false, reason: 'changed',
-          error: `option ${option} is not offered any more`,
-          prompt, fingerprint: live,
-        });
-      }
+        const chosen = prompt.options.find((o) => o.number === option);
+        if (!chosen) {
+          return sendJson(res, 409, {
+            ok: false, reason: 'changed',
+            error: `option ${option} is not offered any more`,
+            prompt, fingerprint: live,
+          });
+        }
 
-      // The digit and Enter separately, literal digit first, so a multi-digit option
-      // cannot be split across a submit.
-      const typed = await run('tmux', ['send-keys', '-t', `=${name}:`, '-l', '--', String(option)]);
-      if (typed.err) return sendErr(res, 500, `tmux: ${typed.stderr.trim()}`);
-      const enter = await run('tmux', ['send-keys', '-t', `=${name}:`, 'Enter']);
-      if (enter.err) return sendErr(res, 500, `tmux: ${enter.stderr.trim()}`);
-      log(`answer: ${name} <- ${option} (${chosen.label.slice(0, 60)})`);
-      return sendJson(res, 200, { ok: true, option, label: chosen.label });
+        // The digit and Enter separately, literal digit first, so a multi-digit option
+        // cannot be split across a submit.
+        const typed = await run('tmux', ['send-keys', '-t', `=${name}:`, '-l', '--', String(option)]);
+        if (typed.err) return sendErr(res, 500, `tmux: ${typed.stderr.trim()}`);
+        const enter = await run('tmux', ['send-keys', '-t', `=${name}:`, 'Enter']);
+        if (enter.err) return sendErr(res, 500, `tmux: ${enter.stderr.trim()}`);
+        rememberAnswered(name, live);
+        log(`answer: ${name} <- ${option} (${chosen.label.slice(0, 60)})`);
+        return sendJson(res, 200, { ok: true, option, label: chosen.label });
+      });
     }
 
     // --- chats
@@ -9874,10 +10551,31 @@ const server = http.createServer(async (req, res) => {
       try {
         await new Promise((resolve, reject) => {
           const out = fs.createWriteStream(file, { mode: 0o600 });
-          const stop = (err) => { failed = err; try { req.destroy(); } catch { } out.destroy(); reject(err); };
+          /**
+           * ⚠ `cut` DECIDES WHETHER THE CALLER EVER HEARS THE ANSWER (#42).
+           * `req.destroy()` resets the connection, so a response written after
+           * it never arrives — which is right for the size cap (the point is to
+           * stop a 100 MB body early, and a small over-cap body is buffered
+           * before we get here, so its 413 still lands) and WRONG for a store
+           * that cannot be written: the caller would get a network error
+           * instead of the errno that says what to fix. So a store failure
+           * DRAINS the rest of the body instead, exactly as readBodyRaw does
+           * when it refuses an over-sized one.
+           */
+          const stop = (err, { cut = false } = {}) => {
+            failed = err;
+            if (cut) { try { req.destroy(); } catch { } }
+            else { try { req.resume(); } catch { } }
+            out.destroy();
+            reject(err);
+          };
           req.on('data', (chunk) => {
             bytes += chunk.length;
-            if (bytes > UPLOAD_MAX_BYTES) return stop(new Error('too large'));
+            if (bytes > UPLOAD_MAX_BYTES) {
+              const tooBig = new Error('too large');
+              tooBig.tooBig = true;
+              return stop(tooBig, { cut: true });
+            }
             if (!out.write(chunk)) req.pause();
           });
           out.on('drain', () => req.resume());
@@ -9886,11 +10584,30 @@ const server = http.createServer(async (req, res) => {
           req.on('end', () => out.end());
           out.on('close', () => (failed ? undefined : resolve()));
         });
-      } catch {
+      } catch (e) {
         try { fs.unlinkSync(file); } catch { }
-        const mb = Math.floor(UPLOAD_MAX_BYTES / 1024 / 1024);
-        log(`uploads: ${name || 'unnamed'} aborted after ${bytes} bytes`);
-        return sendErr(res, 413, `that file is too large (max ${mb}MB)`);
+        // ⚠ THREE FAILURES WORE ONE ANSWER (#42). `stop()` is shared by the size
+        // cap, the write stream's error (ENOSPC / EROFS / EACCES) and the
+        // request's, and the catch assumed the cap — so a 26-byte note onto a
+        // full or read-only store came back as "that file is too large (max
+        // 128MB)", which the phone renders verbatim and which names a remedy
+        // that can never work. The log said only "aborted after N bytes", never
+        // the errno, and that log line is the ONLY surface for the mid-stream
+        // case (the connection is reset before any response can be written).
+        const code = (failed && failed.code) || (e && e.code) || null;
+        const tooBig = !!((failed && failed.tooBig) || (e && e.tooBig));
+        log(`uploads: ${name || 'unnamed'} aborted after ${bytes} bytes`
+          + `${tooBig ? ' (over the size cap)' : ''}${code ? ` (${code})` : ''}`);
+        if (tooBig) {
+          const mb = Math.floor(UPLOAD_MAX_BYTES / 1024 / 1024);
+          return sendErr(res, 413, `that file is too large (max ${mb}MB)`);
+        }
+        // ENOSPC/EDQUOT is the store being full; everything else is the host
+        // refusing to write. 507 rather than 500 for the full case because it is
+        // the one a person can act on, and the errno travels either way.
+        const full = code === 'ENOSPC' || code === 'EDQUOT';
+        return sendErr(res, full ? 507 : 500,
+          `huginn could not save the file${code ? ` (${code})` : ''}`);
       }
       if (!bytes) {
         try { fs.unlinkSync(file); } catch { }
@@ -9923,7 +10640,7 @@ const server = http.createServer(async (req, res) => {
     }
 
     if (req.method === 'POST' && p === '/v1/devices') {
-      const body = JSON.parse(await readBody(req) || '{}');
+      const body = await readJsonBody(req);
       const now = Date.now();
       const built = devicesLib.validateRegistration(body, now);
       if (!built.ok) return sendErr(res, 400, built.error);
@@ -9980,7 +10697,7 @@ const server = http.createServer(async (req, res) => {
 
       // The device saying it is still there, and what it is willing to do now.
       if (req.method === 'POST' && dsub === '/beat') {
-        const body = JSON.parse(await readBody(req) || '{}');
+        const body = await readJsonBody(req);
         devicesLib.noteSeen(deviceState, devId, now, body);
         saveDevices();
         // A beat is liveness for the device's in-flight run, not only for the row.
@@ -10064,9 +10781,37 @@ const server = http.createServer(async (req, res) => {
         // whole tool_result; the runner keeps itself well under this, but an
         // OLDER runner does not know to, and rejecting its batch loses the whole
         // answer rather than the oversized part of it.
-        const body = JSON.parse(await readBody(req, 1024 * 1024) || '{}');
+        const body = await readJsonBody(req, 1024 * 1024);
         entry.lastHeard = Date.now();
         devicesLib.noteSeen(deviceState, devId, entry.lastHeard, body);
+
+        /**
+         * ⚠ A REPLAYED BATCH IS APPLIED TWICE (#40). The runner re-queues a whole
+         * batch when any chunk of it fails — a batch that split at MAX_BATCH_BYTES
+         * and failed on a later part replays the accepted ones — and more
+         * generally ANY batch whose response is lost (a timeout, a socket reset,
+         * a 5xx after the daemon already applied it) comes back, because the
+         * runner's `permanent()` treats only 400/403/404/413 as final. The route
+         * had no idempotency at all, so the chat showed the answer, the tool
+         * records and the result twice, and meta.turns double-counted.
+         *
+         * A ring of recent chunk hashes on the run, daemon-side by design: it
+         * closes both paths without a protocol change, so `client/huginn-device`
+         * needs no update and an older runner is covered too. Bounded because a
+         * long run streams thousands of chunks, and generous enough to cover a
+         * retry storm.
+         */
+        const stamp = crypto.createHash('sha256').update(JSON.stringify({
+          lines: body.lines ?? null, done: body.done ?? null,
+          exitCode: body.exitCode ?? null, error: body.error ?? null,
+        })).digest('hex');
+        if (!entry.seenChunks) entry.seenChunks = [];
+        if (entry.seenChunks.includes(stamp)) {
+          log(`device ${devId} replayed a batch for ${workId}; ignoring it`);
+          return sendJson(res, 200, { ok: true, duplicate: true, cancel: !!entry.run_.cancelled });
+        }
+        entry.seenChunks.push(stamp);
+        if (entry.seenChunks.length > 64) entry.seenChunks.shift();
 
         const meta = loadMeta(entry.chatId);
         if (meta) {
@@ -10099,7 +10844,7 @@ const server = http.createServer(async (req, res) => {
       return sendJson(res, 200, { rounds: listRounds().map(roundView) });
     }
     if (req.method === 'POST' && p === '/v1/rounds') {
-      const body = JSON.parse(await readBody(req) || '{}');
+      const body = await readJsonBody(req);
       const built = buildRound(body);
       if (built.error) return sendErr(res, 400, built.error);
       return sendJson(res, 201, roundView(saveRound(built.round)));
@@ -10119,7 +10864,7 @@ const server = http.createServer(async (req, res) => {
      * person accepts or discards it — AI drafts, human accepts.
      */
     if (req.method === 'POST' && p === '/v1/rounds/polish') {
-      const body = JSON.parse(await readBody(req) || '{}');
+      const body = await readJsonBody(req);
       const field = typeof body.field === 'string' ? body.field.trim() : '';
       if (!POLISH_FIELDS.includes(field)) {
         return sendErr(res, 400, `field must be one of ${POLISH_FIELDS.join(', ')}`);
@@ -10151,7 +10896,7 @@ const server = http.createServer(async (req, res) => {
       if (req.method === 'GET' && rsub === '') return sendJson(res, 200, roundView(round));
 
       if (req.method === 'PATCH' && rsub === '') {
-        const body = JSON.parse(await readBody(req) || '{}');
+        const body = await readJsonBody(req);
         // ⚠ RE-READ AFTER THE AWAIT. `round` above was loaded before the body
         // arrived, and a phone sends the whole prompt on save, so the window is
         // every PATCH. A run finishing inside it had its record erased — runs
@@ -10202,7 +10947,7 @@ const server = http.createServer(async (req, res) => {
        * never edits what it said.
        */
       if (req.method === 'POST' && rsub === '/ack') {
-        const body = JSON.parse(await readBody(req) || '{}');
+        const body = await readJsonBody(req);
         const ack = body.acknowledged !== false;
         // ⚠ Re-read AFTER the await. `round` was loaded before the body was
         // read, and a run can finish in that window — writing the stale snapshot
@@ -10240,8 +10985,8 @@ const server = http.createServer(async (req, res) => {
     // nothing to wrap up in.
     if ((m = p.match(/^\/v1\/sessions\/([A-Za-z0-9_][A-Za-z0-9_.-]{0,49})\/archive$/)) && req.method === 'POST') {
       const name = m[1];
-      if (!(await sessionExists(name))) return sendErr(res, 404, 'no such session');
-      const body = JSON.parse(await readBody(req) || '{}');
+      if (!(await requireSession(res, name))) return;
+      const body = await readJsonBody(req);
       // The query string as well as the body: the CLI reaches this through a
       // bodyless `curl -X POST` over ssh (see server/bin/huginn-archive), and a
       // verb whose only option needs a JSON body would mean teaching a laptop to
@@ -10265,12 +11010,30 @@ const server = http.createServer(async (req, res) => {
         if (st.state === 'attention') {
           return sendErr(res, 409, 'answer the waiting question first, then archive the session');
         }
+        // ⚠ AND THE PANE, WHICH THE STATE FILE CANNOT SEE (#9, extended). This
+        // route is /soft-end with the destructive half turned all the way up: a
+        // dialog on screen while the flat state file reads `running` — the normal
+        // reading for a plain permission dialog, and for any session whose
+        // background agent rewrote it — meant the phrase went into the selector
+        // and the auto-end armed anyway, and at the next stable idle the session
+        // was killed AND archived with no wrap-up turn.
+        const blockedHere = await dialogRefusal(name);
+        if (blockedHere) return sendErr(res, 409, blockedHere);
         // Mid-turn is fine and is not a wait the caller has to sit through: the
         // phrase queues in the composer, and the settle timer will not end
         // anything until idle has held. The 202 says so.
         const queued = st.state === 'running';
-        const r = await sendLineToPane(name, SOFT_END_PHRASE);
-        if (r.err) return sendErr(res, 500, `tmux: ${(r.stderr || '').trim()}`);
+        const r = await sendTextToPane(name, SOFT_END_PHRASE);
+        if (!r.ok) return sendErr(res, r.code || 500, r.message);
+        // …and only when the phrase demonstrably landed. `submitted === false` is
+        // the pane telling us it is still sitting in a composer, and ending a
+        // session whose wrap-up never ran is the one outcome this must not
+        // produce. Same rule as /soft-end's onSettle.
+        if (r.submitted === false) {
+          log(`archive: ${name}: the wrap-up phrase did not submit; not arming the end`);
+          return sendErr(res, 409,
+            'the wrap-up phrase did not go in — the pane is holding something else. Try again, or archive with mode "now"');
+        }
         // Armed regardless of the host's softEndAuto. That setting decides
         // whether a WIND-DOWN ends the session; an archive was asked for by name
         // and has to end it, or the row would describe a session still running.
@@ -10353,7 +11116,7 @@ const server = http.createServer(async (req, res) => {
       const id = m[1];
       const rec = loadArchive(id);
       if (!rec) return sendErr(res, 404, 'no such archived session');
-      const body = JSON.parse(await readBody(req) || '{}');
+      const body = await readJsonBody(req);
 
       const liveIds = await liveSessionIds();
       if (liveIds === null) return sendErr(res, 503, 'tmux is not answering right now');
@@ -10386,12 +11149,19 @@ const server = http.createServer(async (req, res) => {
       // observed through a corpse's state file.
       clearSessionState(want);
       await ensureTmuxServerScope();
-      const r = await run('tmux', ['new-session', '-d', '-s', want, '-c', cwd, command]);
+      // ⚠ `-P -F '#S'`, for the same reason as the create route: tmux PRINTS the
+      // name it gave the session. `want` can still carry a '.' here even though
+      // the name rule bans them — it comes off an archive card an older daemon
+      // wrote — and the old `display-message -t '=<want>:'` readback answers
+      // empty at exit 0 for exactly that case, so `|| want` persisted a phantom
+      // as `revivedAs` and every route on the reported name 404'd (#103).
+      const r = await run('tmux',
+        ['new-session', '-d', '-P', '-F', '#S', '-s', want, '-c', cwd, command]);
       if (r.err) return sendErr(res, 500, `tmux: ${(r.stderr || r.err.message || '').trim() || 'could not recreate the session'}`);
-      // What tmux CALLED it. A '.' becomes '_' with a zero exit, and a client told
-      // the wrong name gets a 404 on everything it does next.
-      const q = await run('tmux', ['display-message', '-p', '-t', `=${want}:`, '#S']);
-      const created = (q.stdout || '').trim() || want;
+      const created = await tmuxNameReadback(want, r.stdout);
+      if (!created) {
+        return sendErr(res, 500, 'tmux revived the session but will not say what it called it');
+      }
 
       // On the restore list again, with the id already known this time — and
       // marked `restoredAt`, which means "the CLI's in-process usage-limit wait
@@ -10463,7 +11233,7 @@ const server = http.createServer(async (req, res) => {
     }
 
     if (req.method === 'POST' && p === '/v1/projects') {
-      const body = JSON.parse(await readBody(req) || '{}');
+      const body = await readJsonBody(req);
       const existing = listProjects();
       if (existing.length >= projectsLib.MAX_PROJECTS) {
         return sendErr(res, 400, `that is the ${projectsLib.MAX_PROJECTS}-project limit — archive one first`);
@@ -10609,7 +11379,7 @@ const server = http.createServer(async (req, res) => {
        * the shipped scratchpad contract, which both clients already know.
        */
       if (req.method === 'PATCH' && sub === '') {
-        const body = JSON.parse(await readBody(req) || '{}');
+        const body = await readJsonBody(req);
         const current = loadProject(projectId);
         if (!current) return sendErr(res, 404, 'no such project');
         const rev = Number(body.rev);
@@ -10672,7 +11442,7 @@ const server = http.createServer(async (req, res) => {
        * spawn the revision the owner never saw.
        */
       if (req.method === 'POST' && sub === '/spawn') {
-        const body = JSON.parse(await readBody(req) || '{}');
+        const body = await readJsonBody(req);
         const project = loadProject(projectId);
         if (!project) return sendErr(res, 404, 'no such project');
         if (body.approve !== true) return sendErr(res, 400, 'approve must be true — spawning is the owner\'s decision');
@@ -10729,7 +11499,7 @@ const server = http.createServer(async (req, res) => {
        * protection, which is exactly why this one keeps it.
        */
       if (req.method === 'POST' && sub === '/message') {
-        const body = JSON.parse(await readBody(req) || '{}');
+        const body = await readJsonBody(req);
         const project = loadProject(projectId);
         if (!project) return sendErr(res, 404, 'no such project');
         const from = projectMemberNamed(project, body.from);
@@ -10751,7 +11521,7 @@ const server = http.createServer(async (req, res) => {
       }
 
       if (req.method === 'DELETE' && sub === '') {
-        const body = JSON.parse(await readBody(req) || '{}');
+        const body = await readJsonBody(req);
         const project = loadProject(projectId);
         if (!project) return sendErr(res, 404, 'no such project');
         // `?end=1` is the contract's spelling and means the gentle one; the body
@@ -10830,7 +11600,7 @@ const server = http.createServer(async (req, res) => {
       }
 
       if (req.method === 'POST' && p === '/v1/consoles') {
-        const body = JSON.parse(await readBody(req, 16 * 1024) || '{}');
+        const body = await readJsonBody(req, 16 * 1024);
         const r = consoles.add(body);
         if (!r.ok) return sendErr(res, r.status || 400, r.error);
         log(`consoles: added ${r.console.id} (${r.console.url})`);
@@ -10851,7 +11621,7 @@ const server = http.createServer(async (req, res) => {
       if (idMatch) {
         const id = idMatch[1];
         if (req.method === 'PATCH') {
-          const body = JSON.parse(await readBody(req, 16 * 1024) || '{}');
+          const body = await readJsonBody(req, 16 * 1024);
           const r = consoles.patch(id, body);
           // 409 CARRIES THE CURRENT ROW, not just a sentence: the editor that
           // collided needs to show what it collided WITH, which is the contract
@@ -10887,7 +11657,7 @@ const server = http.createServer(async (req, res) => {
       });
     }
     if (req.method === 'POST' && p === '/v1/scratchpads') {
-      const body = JSON.parse(await readBody(req, SCRATCHPAD_BODY_MAX) || '{}');
+      const body = await readJsonBody(req, SCRATCHPAD_BODY_MAX);
       // ⚠ ensureMain BEFORE THE UNIQUENESS CHECK, the same one line the GET does
       // and for a sharper reason. Main is minted lazily by the first LIST, so on
       // an install where a client created a page before ever listing one, "Main"
@@ -10933,7 +11703,7 @@ const server = http.createServer(async (req, res) => {
        * that it lost.
        */
       if (req.method === 'PATCH') {
-        const body = JSON.parse(await readBody(req, SCRATCHPAD_BODY_MAX) || '{}');
+        const body = await readJsonBody(req, SCRATCHPAD_BODY_MAX);
         const current = loadPad(padId);
         if (!current) return sendErr(res, 404, 'no such scratchpad');
         const rev = Number(body.rev);
@@ -10977,7 +11747,7 @@ const server = http.createServer(async (req, res) => {
     if (req.method === 'GET' && p === '/v1/chats') return sendJson(res, 200, { chats: listChats() });
 
     if (req.method === 'POST' && p === '/v1/chats') {
-      const body = JSON.parse(await readBody(req) || '{}');
+      const body = await readJsonBody(req);
       // A LOCAL-family model first: picking the row IS the host choice, so the
       // daemon resolves the machine itself, forces ask-mode, and refuses at the
       // button when the machine cannot serve — never a silent fall-through.
@@ -11081,7 +11851,7 @@ const server = http.createServer(async (req, res) => {
         if (meta.sealed) {
           return sendErr(res, 409, 'this run has finished and is kept for review — start a new chat to continue');
         }
-        const body = JSON.parse(await readBody(req) || '{}');
+        const body = await readJsonBody(req);
         const typed = typeof body.text === 'string' ? body.text.trim() : '';
         if (!typed) return sendErr(res, 400, 'text required');
         if (typed.length > 100_000) return sendErr(res, 400, 'text too long');
@@ -11202,14 +11972,24 @@ const server = http.createServer(async (req, res) => {
             const n = Number(raw);
             return Number.isFinite(n) ? n : null;
           };
+          const until = num('until');
           const t = transcriptFromMessages(meta, {
             offset: num('offset'),
-            until: num('until'),
+            until,
             limit: Math.max(1, Math.min(800, Number(u.searchParams.get('limit')) || 400)),
           });
           return sendJson(res, 200, {
             ...t,
-            events: t.events.concat(queuedEvents(meta, t.events.length)),
+            // ⚠ THE LIVE TAIL ONLY (#33). This concatenated the whole pending
+            // queue onto EVERY page, so a backwards history page — `until=` —
+            // came back carrying the queued bubble as well, and a degenerate
+            // window (`until=-1`) returned a page that was nothing BUT the
+            // queued bubble. No shipped client pages this route yet and the chat
+            // screen has no "load earlier" control, so it is an API-contract bug
+            // rather than a live defect — but `prependTranscriptPage` concatenates
+            // without deduping, so it would duplicate mid-conversation bubbles the
+            // day chat paging is added, as it already exists for sessions and agents.
+            events: until == null ? t.events.concat(queuedEvents(meta, t.events.length)) : t.events,
             modelDisplay: formatModel(t.model),
             running: meta.running,
             mode: meta.mode,
@@ -11241,7 +12021,10 @@ const server = http.createServer(async (req, res) => {
         // the transcript was delivered (it only writes a prompt when it starts a
         // run), and anything genuinely waiting is in meta.pending.
         const delivered = t.events.map((e) => (e.queued ? { ...e, queued: false } : e));
-        const events = delivered.concat(queuedEvents(meta, delivered.length));
+        // Live tail only, same as the remote branch above (#33).
+        const events = untilNum == null
+          ? delivered.concat(queuedEvents(meta, delivered.length))
+          : delivered;
         return sendJson(res, 200, {
           ...t,
           events,
@@ -11296,7 +12079,7 @@ const server = http.createServer(async (req, res) => {
         return sendJson(res, 200, { ok: true });
       }
       if (req.method === 'PATCH' && sub === '') {
-        const body = JSON.parse(await readBody(req) || '{}');
+        const body = await readJsonBody(req);
         // Validated BEFORE the mutator runs: a 400 PATCH must not half-apply the
         // rest of the body, and the updateMeta callback cannot return an error.
         let mv = null;
@@ -11395,8 +12178,17 @@ const server = http.createServer(async (req, res) => {
     log('ERROR', req.method, p, e.message);
     // A body over the cap is the client's mistake, not ours, and it now reaches
     // them as a status instead of a reset socket.
+    if (!res.headersSent && e.badJson) return sendErr(res, 400, e.message);
     if (!res.headersSent && e.tooLarge) return sendErr(res, 413, 'request body too large');
-    if (!res.headersSent) return sendErr(res, 500, e.message);
+    // ⚠ NOT `e.message` (#31). This echoed whatever was thrown straight back to
+    // the caller: a V8 parser message for a bad body, and an absolute host path
+    // for an fs failure in an unguarded `writeFileSync`. The reader who needs the
+    // detail is on the host, so it goes to the journal and the caller gets a
+    // sentence. Routes that mean a specific 500 still say it with `sendErr`.
+    if (!res.headersSent) {
+      log(`route ${req.method} ${p} failed: ${e && e.stack ? e.stack.split('\n')[0] : e}`);
+      return sendErr(res, 500, 'something went wrong on the host — see the daemon journal');
+    }
     try { res.end(); } catch { }
   }
 });
@@ -11507,6 +12299,7 @@ resolveBind().then(async (bind) => {
   // model and the migrated account-switch preference rather than on the
   // contract defaults for one pass.
   try { seedHeadroomDefaults(); } catch (e) { log('headroom: could not seed settings', e.message); }
+  warnIfGateDetached();
   server.listen(PORT, bind, () => log(`huginn-appd ${VERSION} listening on ${bind}:${PORT}`));
 }).catch((e) => { console.error('FATAL:', e.message); process.exit(1); });
 

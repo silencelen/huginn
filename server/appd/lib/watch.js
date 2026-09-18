@@ -18,7 +18,15 @@ const { createHash } = require('node:crypto');
  */
 function mapOf(v) {
   if (!v || typeof v !== 'object' || Array.isArray(v)) return {};
-  const out = {};
+  // ⚠ `Object.create(null)`, NOT `{}` (#35). A plain literal carries
+  // Object.prototype, so the key `__proto__` hits its SETTER instead of being
+  // stored: a string value is silently discarded, a null replaces the prototype,
+  // and either way the entry vanishes. tmux accepts a session called `__proto__`
+  // and so does canonName, so that session was LISTED by /v1/sessions and then
+  // absent from the digest and from its hash — it could never wake a parked
+  // phone, never fire session_attention/finished, and a stall on it lost its
+  // reset time. Nothing here needs prototype methods.
+  const out = Object.create(null);
   for (const k of Object.keys(v).sort()) {
     const x = v[k];
     out[String(k)] = x == null ? null : String(x);
@@ -36,9 +44,11 @@ function mapOf(v) {
  *        gets the same hash it always did for an idle headroom.
  */
 function digest(sessions, chats, headroom) {
-  const s = {};
+  // Prototype-less for the same reason as `mapOf` above: these are name-keyed
+  // MAPS, and a session may legitimately be called `__proto__`.
+  const s = Object.create(null);
   for (const x of sessions || []) s[x.name] = x.state ?? null;
-  const c = {};
+  const c = Object.create(null);
   for (const x of chats || []) {
     c[x.id] = {
       running: !!x.running,
@@ -111,4 +121,4 @@ function digest(sessions, chats, headroom) {
   };
 }
 
-module.exports = { digest };
+module.exports = { digest, mapOf };
