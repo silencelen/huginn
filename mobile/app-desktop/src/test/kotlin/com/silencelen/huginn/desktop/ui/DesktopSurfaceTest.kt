@@ -910,6 +910,23 @@ class DesktopSurfaceTest {
         assertFalse(padPanelFits(PANEL_MIN_WINDOW_DP - 1f))
     }
 
+    // ------------------------------------------------------- the pane clock
+
+    @Test
+    fun `a pane's relative-time clock does not start at the epoch`() {
+        // RoundsPane seeded its ticking clock at 0 and only wrote a real time
+        // from a LaunchedEffect — and compose flushes effects BEFORE the
+        // composition that reads them, so the FIRST painted frame of the Rounds
+        // list, on every entry to the destination and every return from the
+        // editor, drew every relative time against 1970: a round due tomorrow
+        // read "in 20715 days", a run from days ago read "just now" (agoMs
+        // clamps a negative delta rather than branching on it).
+        assertTrue(
+            paneClockSeed() > 1_600_000_000_000L,
+            "a clock a frame is drawn against must be a real time, not 0",
+        )
+    }
+
     // ------------------------------------------------------------ composers
 
     @Test
