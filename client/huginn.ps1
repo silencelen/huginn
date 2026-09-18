@@ -156,6 +156,33 @@ function _Huginn-FetchFile {
   return $false
 }
 
+# The daemon URL this machine should be enrolled with, worked out from the ssh
+# link it has ALREADY been trusted on. $SSH_CONNECTION's third field is the
+# address THIS machine just reached the host at, which is better than choosing
+# on the device's behalf between a LAN address, a tailnet name and whatever
+# `hostname` happens to say.
+#
+# ⚠ IT IS A BARE ADDRESS, AND A BARE IPv6 LITERAL IS NOT A URL.
+# `http://fd00::1:8787` has no valid port, so `huginn device on` / `huginn local
+# on` from a machine whose ssh landed on IPv6 died with nothing but
+# "huginn-device: Invalid URL" - after the url had already been PERSISTED, so a
+# later flagless `on` repeated it and `serve` retried it every 15 seconds
+# forever.
+#
+# ⚠ AND BRACKETING ALONE WOULD ONLY CHANGE THE ERROR. appd binds an IPv4 address,
+# so a bracketed v6 url is a persisted ECONNREFUSED. On a v6 ssh path the host is
+# asked for an IPv4 it actually holds, and the bracketed literal is kept only as
+# the last answer - correct syntax, and an honest failure.
+function _Huginn-SrvUrl {
+  param([string]$H)
+  $a = (((ssh -T $H 'echo $SSH_CONNECTION') -join ' ') -split '\s+' | Where-Object { $_ })[2]
+  if (-not $a) { return $null }
+  if ($a -notmatch ':') { return "http://${a}:8787" }
+  $v4 = ((ssh -T $H "ip -4 -o addr show scope global 2>/dev/null | awk '{print `$4}' | cut -d/ -f1 | head -1") -join '').Trim()
+  if ($v4 -match '^\d+\.\d+\.\d+\.\d+$') { return "http://${v4}:8787" }
+  return "http://[$a]:8787"
+}
+
 # --- desktop download links ---
 # The Compose desktop client ships as a PUBLIC GitHub release (tag desktop-v<ver>),
 # and that is also where the installed app's own self-updater fetches from - so the
@@ -674,10 +701,10 @@ function huginn {
           if ($tok.Trim()) { Set-Content -NoNewline -Path $tokfile -Value $tok.Trim() }
           else { Write-Host "huginn device: could not read the appd token from $H" }
         }
-        # $SSH_CONNECTION's third field is the address THIS machine just reached
-        # the host on, which is exactly the one its daemon should be dialled at.
-        $srv = ((ssh -T $H 'echo $SSH_CONNECTION') -split '\s+')[2]
-        if ($srv) { node $runner on --url "http://${srv}:8787" @rest }
+        # See _Huginn-SrvUrl: the address this machine just reached the host at,
+        # bracketed when it is an IPv6 literal.
+        $srv = _Huginn-SrvUrl $H
+        if ($srv) { node $runner on --url $srv @rest }
         else { Write-Host "huginn device: could not work out how to reach $H's daemon" }
       }
     } elseif (Test-Path $runner) {
@@ -745,10 +772,10 @@ function huginn {
           else { Write-Host "huginn local: could not read the appd token from $H"; return }
         }
       }
-      $srv = ((ssh -T $H 'echo $SSH_CONNECTION') -split '\s+')[2]
+      $srv = _Huginn-SrvUrl $H
       if (-not $srv) { Write-Host "huginn local: could not work out how to reach $H's daemon"; return }
       $env:HUGINN_LOCAL_DIR = $dir
-      node $mgr on --url "http://${srv}:8787" @rest
+      node $mgr on --url $srv @rest
     } elseif (Test-Path $mgr) {
       node $mgr $sub @rest
     } else {

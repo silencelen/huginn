@@ -171,6 +171,29 @@ function saveConf(c) {
 }
 
 /**
+ * Why this url cannot be dialled, or null.
+ *
+ * ⚠ CHECKED BEFORE IT IS WRITTEN DOWN. `new URL` throws a bare "Invalid URL"
+ * naming nothing, and the one realistic way to reach it is a wrapper that built
+ * `http://<bare IPv6>:8787` out of $SSH_CONNECTION - so the message a headless
+ * machine printed could not be acted on, AND the address had already been
+ * persisted by saveConf(), which meant a later flagless `on` repeated it and
+ * `serve` retried it every 15 seconds for the life of the machine.
+ */
+function urlRefusal(u) {
+  let parsed;
+  try { parsed = new URL(u); } catch {
+    return /^[^[]*:[^/]*:/.test(String(u).replace(/^[a-z]+:\/\//i, ''))
+      ? `"${u}" is not a url this runner can dial — an IPv6 address must be bracketed, e.g. http://[fd00::1]:8787`
+      : `"${u}" is not a url this runner can dial`;
+  }
+  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+    return `"${u}" is not an http(s) url`;
+  }
+  return null;
+}
+
+/**
  * Both files this runner owns, gone. Returns the ones that were actually there,
  * so the caller reports what it did rather than what it attempted.
  *
@@ -901,6 +924,11 @@ async function main() {
       }
       if (f.root !== undefined) conf.root = f.root;
       if (f.url !== undefined) conf.url = f.url;
+      // Before saveConf, never after: see urlRefusal.
+      {
+        const why = urlRefusal(conf.url);
+        if (why) { console.error(`huginn-device on: ${why}`); process.exit(2); }
+      }
       if (f.name !== undefined) conf.name = f.name.slice(0, 40);
       if (f.claude !== undefined) conf.claude = f.claude;
       // ⚠ SAID OUT LOUD, because the two ends disagreed silently. `root` is the
