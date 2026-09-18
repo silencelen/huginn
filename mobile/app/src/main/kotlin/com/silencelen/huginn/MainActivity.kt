@@ -80,6 +80,7 @@ import androidx.lifecycle.compose.LifecycleStartEffect
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.silencelen.huginn.data.SettingsStore
+import com.silencelen.huginn.data.lockEnabledOrLocked
 import com.silencelen.huginn.notify.AppLock
 import com.silencelen.huginn.notify.Foreground
 import com.silencelen.huginn.notify.SessionWatchWorker
@@ -195,7 +196,10 @@ class MainActivity : FragmentActivity() {
         // read is a few milliseconds on the app's first frame, which is the one
         // moment it is acceptable — and the one moment it is needed.
         AppLock.enabledCache = runBlocking {
-            SettingsStore(applicationContext).appLock.first()
+            // ⚠ FAILS CLOSED. An unreadable settings store used to throw straight
+            // out of here on every launch — an app that could only be recovered
+            // by clearing its data, which re-pairs the phone.
+            lockEnabledOrLocked { SettingsStore(applicationContext).appLock.first() }
         }
         // With the lock ON, the window is SECURE — which is what actually keeps the
         // conversation out of the Recents thumbnail. Set here so a cold start is
@@ -267,7 +271,7 @@ class MainActivity : FragmentActivity() {
 
     override fun onStart() {
         super.onStart()
-        if (AppLock.shouldLock(AppLock.enabledCache, AppLock.lastAwayAt, System.currentTimeMillis())) {
+        if (AppLock.shouldLock(AppLock.enabledCache, AppLock.lastAwayAt, android.os.SystemClock.elapsedRealtime())) {
             AppLock.lockedNow = true
             locked.value = true
         }
@@ -289,7 +293,7 @@ class MainActivity : FragmentActivity() {
         super.onStop()
         // Recorded only while unlocked: a lock screen left in the background must
         // not refresh its own grace period and let the app back in unchallenged.
-        if (!locked.value) AppLock.lastAwayAt = System.currentTimeMillis()
+        if (!locked.value) AppLock.lastAwayAt = android.os.SystemClock.elapsedRealtime()
     }
 }
 
@@ -1146,7 +1150,7 @@ fun HuginnApp(
             val stillHere = rememberStillHere()
             DisposableEffect(id) {
                 onDispose {
-                    vm.detachStream(); vm.clearSuggestions()
+                    vm.detachStream(id); vm.clearSuggestions()
                     // A photo staged for THIS chat must not silently ride the next
                     // screen — but only this chat's own claim is cleared, so a share
                     // staged for the DESTINATION while navigating there survives

@@ -42,6 +42,7 @@ import androidx.fragment.app.FragmentActivity
 import com.silencelen.huginn.MainActivity
 import com.silencelen.huginn.data.HuginnClient
 import com.silencelen.huginn.data.SettingsStore
+import com.silencelen.huginn.data.lockEnabledOrLocked
 import com.silencelen.huginn.notify.AppLock
 import com.silencelen.huginn.notify.SessionWatchWorker
 import com.silencelen.huginn.ui.theme.HuginnTheme
@@ -76,7 +77,9 @@ class AskActivity : FragmentActivity() {
         super.onCreate(savedInstanceState)
         // The same blocking read MainActivity makes at creation, for the same
         // reason: the lock decision cannot wait on DataStore.
-        val lockEnabled = runBlocking { SettingsStore(applicationContext).appLock.first() }
+        val lockEnabled = runBlocking {
+            lockEnabledOrLocked { SettingsStore(applicationContext).appLock.first() }
+        }
         if (lockEnabled) {
             window.setFlags(
                 WindowManager.LayoutParams.FLAG_SECURE,
@@ -84,7 +87,7 @@ class AskActivity : FragmentActivity() {
             )
         }
         val startLocked = AppLock.lockedNow ||
-            AppLock.shouldLock(lockEnabled, AppLock.lastAwayAt, System.currentTimeMillis())
+            AppLock.shouldLock(lockEnabled, AppLock.lastAwayAt, android.os.SystemClock.elapsedRealtime())
 
         setContent {
             HuginnTheme {
@@ -124,6 +127,20 @@ class AskActivity : FragmentActivity() {
         }
     }
 
+    /**
+     * The chat this sheet has already created, kept across retries.
+     *
+     * ⚠ ONE QUESTION, ONE CHAT. createChat and queueMessage ran under one 25 s
+     * budget with no idempotency key and no cleanup, so any failure strictly
+     * BETWEEN them left a chat on the host while the sheet showed an error and
+     * kept the text — and every retry minted another. The orphans render as
+     * "Untitled" rows, survive restarts and are never swept. A daemon restart, a
+     * tunnel flap, the budget expiring after createChat returned, or a refusal of
+     * the message all do it; 429 "too many concurrent runs (3)" does it
+     * deterministically.
+     */
+    private val attempt = AskAttempt()
+
     /** Creates the chat and hands it the question. Returns the chat to open. */
     private suspend fun submit(mode: String, text: String): String {
         val settings = SettingsStore(applicationContext)
@@ -132,9 +149,11 @@ class AskActivity : FragmentActivity() {
         val base = settings.baseUrl.first()
         val client = HuginnClient({ base }, { bearer })
         return withTimeout(25_000) {
-            val chat = client.createChat(mode)
-            client.queueMessage(chat.id, text)
-            chat.id
+            attempt.submit(
+                create = { client.createChat(mode).id },
+                queue = { id -> client.queueMessage(id, text) },
+                discard = { id -> client.deleteChat(id) },
+            )
         }
     }
 }
@@ -265,4 +284,48 @@ private fun AskSheet(
         }
     }
     LaunchedEffect(Unit) { focus.requestFocus() }
+}
+
+/**
+ * One question from the ask sheet, across however many presses it takes.
+ *
+ * ⚠ THE CHAT IS REMEMBERED. A retry re-runs only the send, so three failed
+ * presses leave one chat on the host rather than three.
+ *
+ * ⚠ AND A FRESH ONE IS TAKEN BACK. When the send fails on the TRANSPORT — no
+ * answer at all — the chat this attempt just minted is deleted best-effort and
+ * forgotten, so a retry starts clean. A refusal from the daemon (a
+ * HuginnException: 429 "too many concurrent runs", a validation error) is the
+ * opposite case: the host has the chat and said no to the message, so the chat
+ * is kept and the retry re-sends into it.
+ *
+ * Residual, and it needs a daemon-side idempotency key to close properly: a
+ * send that LANDED and whose answer was lost still looks like a failure here,
+ * and the retry then queues a second turn into the same chat rather than
+ * starting a second run on a second one — which is the better of the two.
+ */
+internal class AskAttempt {
+
+    /** The chat created for this question, if one has been. */
+    var chatId: String? = null
+        private set
+
+    suspend fun submit(
+        create: suspend () -> String,
+        queue: suspend (String) -> Unit,
+        discard: suspend (String) -> Unit,
+    ): String {
+        val fresh = chatId == null
+        val id = chatId ?: create().also { chatId = it }
+        try {
+            queue(id)
+        } catch (e: Throwable) {
+            if (fresh && e !is HuginnClient.HuginnException) {
+                runCatching { discard(id) }
+                chatId = null
+            }
+            throw e
+        }
+        return id
+    }
 }

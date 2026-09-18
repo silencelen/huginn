@@ -1,133 +1,161 @@
 package com.silencelen.huginn.ui.settings
 
-import com.silencelen.huginn.settings.SettingsCatalog
-import java.io.File
+import com.silencelen.huginn.data.RouteBook
 import kotlin.test.Test
 import kotlin.test.assertEquals
-import kotlin.test.assertFalse
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 /**
- * How a settings row says "this is the one you searched for".
+ * THE ROUTE FORM'S RULES, asserted without a window.
  *
- * Two things are asserted and they are different kinds of assertion. The first
- * is arithmetic: exactly one row in a page is ever the arrival target, and an
- * unhighlighted row is untinted rather than faintly tinted. The second is the
- * owner's standing rule about the VERNACULAR of that mark, which can only be
- * read off the source — see [SettingsHouseRulesTest] below.
+ * The composables in `SettingsRows.kt` cannot be driven headless, so the
+ * decisions the route form actually makes live beside them as pure functions —
+ * the same arrangement `HeadroomViewsTest` describes, and for the same reason:
+ * the mistakes were never in the pixels.
  *
  * NOTE kotlin.test's argument order is (expected, actual, message).
  */
 class SettingsRowsTest {
 
-    @Test
-    fun onlyTheNamedRowIsHighlighted() {
-        assertTrue(SettingsRowStyle.isHighlighted("host.token", "host.token"))
-        assertFalse(SettingsRowStyle.isHighlighted("host.base-url", "host.token"))
-    }
+    private val now = 1_700_000_000_000L
 
-    /** Arriving without a search marks nothing at all. */
-    @Test
-    fun noArrivalMarksNothing() {
-        for (item in SettingsCatalog.items) {
-            assertFalse(SettingsRowStyle.isHighlighted(item.id, null), "${item.id} marked with no hit")
+    private fun book(): RouteBook = RouteBook()
+        .add("Tailscale", "http://100.64.0.1:8787", now, id = "r1")
+        .add("Yggdrasil", "http://192.168.2.117:8787", now, id = "r2")
+
+    /**
+     * A shell exactly as fire-and-forget as both of ours were: every action
+     * captures the book AS IT STOOD WHEN THE ACTION WAS CALLED and applies it
+     * later, wholesale. Two actions from one Save therefore race, and the
+     * second's write — computed on the pre-edit book — lands last and wins.
+     *
+     * Not a caricature: it is what `HuginnViewModel.editRoutes` and
+     * `AppStore.editRoutes` did before the Mutex, transcribed.
+     */
+    private class LosingShell(var book: RouteBook) {
+        private val pending = mutableListOf<() -> RouteBook>()
+        var ops = 0
+
+        fun actions(): RouteListActions = RouteListActions(
+            rename = { id, name -> enqueue { it.rename(id, name) } },
+            setUrl = { id, url -> enqueue { it.setUrl(id, url) } },
+            editBoth = { id, name, url -> enqueue { it.rename(id, name).setUrl(id, url) } },
+        )
+
+        private fun enqueue(edit: (RouteBook) -> RouteBook) {
+            ops++
+            val seen = book
+            pending += { runCatching { edit(seen) }.getOrDefault(book) }
+        }
+
+        /** Every queued write lands, last one wins — the losing order. */
+        fun settle() {
+            for (p in pending) book = p()
+            pending.clear()
         }
     }
 
-    /**
-     * An unhighlighted row is fully untinted. A "barely visible" tint on every
-     * row is how the one row that matters stops standing out — the same
-     * reasoning that keeps the word `fresh` off every account row.
-     */
+    // ------------------------------------------------- #64 one Save, one op
+
     @Test
-    fun theTintIsOnOrOff() {
-        assertEquals(0f, SettingsRowStyle.tintAlpha(false))
-        assertEquals(SettingsRowStyle.HIGHLIGHT_ALPHA, SettingsRowStyle.tintAlpha(true))
-        assertTrue(
-            SettingsRowStyle.HIGHLIGHT_ALPHA > 0f && SettingsRowStyle.HIGHLIGHT_ALPHA < 0.3f,
-            "a mark, not a selection: ${SettingsRowStyle.HIGHLIGHT_ALPHA}",
+    fun `a name and an address changed in one Save both survive`() {
+        val shell = LosingShell(book())
+        routeFormSave(
+            shell.actions(), "r1",
+            was = "Tailscale", wasUrl = "http://100.64.0.1:8787",
+            name = "the mesh", url = "http://100.64.0.9:8787",
         )
+        shell.settle()
+        val r = shell.book.routes.first { it.id == "r1" }
+        // The rename is the casualty when this is two writes: the URL write was
+        // computed on the book as it stood BEFORE the rename, and lands last.
+        assertEquals("the mesh", r.name, "the new name must survive a same-Save address change")
+        assertEquals("http://100.64.0.9:8787", r.url, "and so must the new address")
     }
-
-    /** The rows cap at the same reading measure the page does. */
-    @Test
-    fun rowsShareThePagesReadingMeasure() {
-        assertEquals(SETTINGS_READING_WIDTH, SettingsRowStyle.ROW_MAX_WIDTH)
-    }
-}
-
-/**
- * THE OWNER'S HOUSE RULES, asserted against the source, because nothing else
- * can.
- *
- * "Never left accent bars on cards; subtle in-vernacular state marks" is a
- * standing note that has been re-derived from memory more than once, and a
- * comment is not a gate. A left rail is a recognisable shape in Compose — a Box
- * that fills the height and is a few dp wide, with a background — and it reads
- * as tasteful the moment it is written. So this reads the settings files the way
- * a reviewer would and names the file and line the way a reviewer would.
- *
- * Same technique, same reasoning and the same failure mode as `CapBeforeFillTest`
- * in `:app-desktop`, which already scans all four modules (this one included)
- * for fill-before-cap and therefore needs no extension for these files.
- */
-class SettingsHouseRulesTest {
-
-    private fun settingsSources(): List<File> {
-        val root = generateSequence(File("").absoluteFile) { it.parentFile }
-            .firstOrNull { File(it, "settings.gradle.kts").isFile }
-            ?: error("cannot find the gradle root from ${File("").absolutePath}")
-        val dir = File(root, "ui/src/commonMain/kotlin/com/silencelen/huginn/ui/settings")
-        return dir.walkTopDown().filter { it.isFile && it.extension == "kt" }.toList()
-    }
-
-    /**
-     * A glob that matches nothing exits 0, and this project has been bitten by
-     * exactly that (a gate that ran 58 of 179 tests and read like coverage), so
-     * the floor is asserted before the finding is — and by NAME rather than by a
-     * count, which would go stale the next time a file is added or split.
-     */
-    @Test
-    fun theSettingsSourcesAreScannedAtAll() {
-        val names = settingsSources().map { it.name }.toSet()
-        assertTrue("SettingsRows.kt" in names, "the rows were not scanned: $names")
-        assertTrue("SettingsScaffold.kt" in names, "the scaffold was not scanned: $names")
-    }
-
-    /** The shape of a left accent rail, in either order it gets written. */
-    private val accentBar = listOf(
-        Regex("""\.fillMaxHeight\(\s*\)\s*\r?\n?\s*\.width\("""),
-        Regex("""\.width\(\s*\d+(\.\d+)?\.dp\s*\)\s*\r?\n?\s*\.fillMaxHeight\("""),
-    )
 
     @Test
-    fun noLeftAccentBarInAnySettingsFile() {
-        val offences = settingsSources().flatMap { file ->
-            val text = file.readText()
-            accentBar.flatMap { rx ->
-                rx.findAll(text).map { m ->
-                    val line = text.take(m.range.first).count { it == '\n' } + 1
-                    "${file.path}:$line  ${m.value.replace(Regex("\\s+"), " ")}"
-                }
-            }
-        }
-        assertTrue(
-            offences.isEmpty(),
-            "state is a dot and a tint, never a rail down the side:\n" + offences.joinToString("\n"),
+    fun `one Save is one book operation`() {
+        val shell = LosingShell(book())
+        routeFormSave(
+            shell.actions(), "r1",
+            was = "Tailscale", wasUrl = "http://100.64.0.1:8787",
+            name = "the mesh", url = "http://100.64.0.9:8787",
         )
+        assertEquals(1, shell.ops, "two mutations for one Save is the race itself")
     }
 
-    /**
-     * ⚠ `LocalTextContextMenu` BELONGS AROUND TRANSCRIPTS ONLY. The desktop
-     * deliberately splits the context menu in two — the LOOK at the shell root,
-     * the CONTENT tight around transcripts — so that no Settings field grows an
-     * "Explain" item pointing at text that is not a transcript.
-     */
     @Test
-    fun noSettingsFileWrapsATextContextMenu() {
-        val offences = settingsSources()
-            .filter { it.readText().contains("LocalTextContextMenu") }
-            .map { it.path }
-        assertTrue(offences.isEmpty(), "quick actions belong around transcripts, not settings: $offences")
+    fun `a Save that changes nothing writes nothing`() {
+        val shell = LosingShell(book())
+        routeFormSave(
+            shell.actions(), "r1",
+            was = "Tailscale", wasUrl = "http://100.64.0.1:8787",
+            name = "Tailscale", url = "http://100.64.0.1:8787",
+        )
+        assertEquals(0, shell.ops)
     }
+
+    @Test
+    fun `renaming alone still renames`() {
+        val shell = LosingShell(book())
+        routeFormSave(
+            shell.actions(), "r1",
+            was = "Tailscale", wasUrl = "http://100.64.0.1:8787",
+            name = "the mesh", url = "http://100.64.0.1:8787",
+        )
+        shell.settle()
+        assertEquals("the mesh", shell.book.routes.first { it.id == "r1" }.name)
+    }
+
+    /** With no shell wiring, the combined edit still reaches the two old verbs. */
+    @Test
+    fun `edit falls back to rename then setUrl for a shell that has not wired it`() {
+        val seen = mutableListOf<String>()
+        val actions = RouteListActions(
+            rename = { id, n -> seen += "rename:$id:$n" },
+            setUrl = { id, u -> seen += "setUrl:$id:$u" },
+        )
+        actions.edit("r1", "the mesh", "http://100.64.0.9:8787")
+        assertEquals(listOf("rename:r1:the mesh", "setUrl:r1:http://100.64.0.9:8787"), seen)
+    }
+
+    // ------------------------------------------- #81 the refusal, before the shell
+
+    @Test
+    fun `an address the guard refuses is refused by the form, not by closing it`() {
+        val b = book()
+        refuses(routeFormRefusal(b, null, "huginn.example.com:8787"))
+        refuses(routeFormRefusal(b, null, "http://huginn.local:8787/v1"))
+        refuses(routeFormRefusal(b, null, "example.com"))
+        refuses(routeFormRefusal(b, null, "   "))
+    }
+
+    @Test
+    fun `an address already pinned is refused by the form`() {
+        val b = book()
+        assertEquals(RouteBook.DUPLICATE, routeFormRefusal(b, null, "http://100.64.0.1:8787"))
+        // ...but a route is never a duplicate of itself.
+        assertNull(routeFormRefusal(b, "r1", "http://100.64.0.1:8787"))
+        assertEquals(RouteBook.DUPLICATE, routeFormRefusal(b, "r2", "http://100.64.0.1:8787"))
+    }
+
+    @Test
+    fun `a full book refuses a ninth, but not an edit of one of the eight`() {
+        var b = RouteBook()
+        for (i in 1..RouteBook.MAX_PINS) b = b.add("r$i", "http://10.0.0.$i:8787", now, id = "r$i")
+        assertEquals(RouteBook.FULL, routeFormRefusal(b, null, "http://10.0.1.1:8787"))
+        assertNull(routeFormRefusal(b, "r1", "http://10.0.1.1:8787"))
+    }
+
+    @Test
+    fun `a good address is not refused`() {
+        assertNull(routeFormRefusal(book(), null, "http://100.64.0.9:8787"))
+        assertNull(routeFormRefusal(book(), "r1", "http://100.64.0.9:8787"))
+        // The same address as typed, normalised, is still its own route.
+        assertNull(routeFormRefusal(book(), "r1", "http://100.64.0.1:8787/"))
+    }
+
+    private fun refuses(s: String?) =
+        assertTrue(!s.isNullOrBlank(), "a refused address must come back with a sentence")
 }

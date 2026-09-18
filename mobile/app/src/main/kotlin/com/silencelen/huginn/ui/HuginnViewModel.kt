@@ -17,6 +17,7 @@ import com.silencelen.huginn.data.ConsoleApproval
 import com.silencelen.huginn.data.ChatDetail
 import com.silencelen.huginn.data.ChatEvent
 import com.silencelen.huginn.data.HuginnClient
+import com.silencelen.huginn.notify.DeliveryCopy
 import com.silencelen.huginn.data.ModelChoice
 import com.silencelen.huginn.data.PolishResult
 import com.silencelen.huginn.data.Project
@@ -76,6 +77,8 @@ import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 
 // `mergeTranscript` moved to :core in phase 3c — same package, so every call site
 // here is unchanged. The desktop client needs the identical row-identity rule, and
@@ -105,6 +108,88 @@ internal fun reattachPlan(meta: ChatDetail?): Reattach? {
 }
 
 /**
+ * ⚠ WHAT A SESSION NAME IS, on this client. One rule, shared by create and
+ * rename, matching the daemon's own and the other three clients' (contract 1 of
+ * the 2026-09-17 edge hunt).
+ *
+ * DOTS ARE BANNED. tmux silently rewrites `.` to `_` in a session name and
+ * reports the rewritten one nowhere the old readbacks looked, so a session
+ * created or renamed with a dot existed under a name nothing could route to:
+ * every subsequent call 404ed. Dashes survive tmux untouched and are ordinary
+ * in names typed at a keyboard, so they are allowed — the phone used to refuse
+ * them on create and accept dots on rename, which was exactly backwards.
+ */
+internal val SESSION_NAME = Regex("^[a-z0-9_][a-z0-9_-]{0,49}$")
+
+internal const val SESSION_NAME_HELP: String =
+    "Start with a letter, digit or _; letters, digits, _ and - after that"
+
+/**
+ * What to say when the pane poll 404s.
+ *
+ * ⚠ A NAME STILL IN THE SESSION LIST DID NOT END. The daemon lists it and then
+ * cannot address it — the dotted-name case above, from before the rule was
+ * enforced — and "Session x ended" about a session the reader can still see in
+ * the list is a lie that sends them looking for the wrong problem. (The Android
+ * half of the desktop's #85.)
+ */
+internal fun sessionGoneWords(name: String, known: List<String>): String =
+    if (known.contains(name)) "huginn cannot address a session named \"$name\" — rename it in tmux"
+    else "Session $name ended"
+
+/**
+ * Whether a chat screen's teardown is still tearing down the CURRENT chat.
+ *
+ * Pure for the same reason [pageStillWanted] is: the check was simply absent.
+ * A null [disposingChat] is an unconditional detach — leaving the chat surface
+ * rather than hopping between two of them.
+ */
+internal fun detachWanted(disposingChat: String?, openNow: String?): Boolean =
+    disposingChat == null || disposingChat == openNow
+
+/**
+ * Whether a history page that has just arrived still belongs on the screen.
+ *
+ * Pure and top-level beside [reattachPlan] and [applyAutoSwitch], because the
+ * thing it decides is an identity check that was simply absent: "load earlier"
+ * launched an untracked coroutine, the view model outlives the session screen,
+ * and `TranscriptPage` carries no session of its own — so a page fetched for
+ * session A landed in whichever session was open when it came back, welded
+ * permanently above B's tail with none of the restart guards firing (the merge
+ * keeps the CURRENT page's claudeSessionId, so `isTranscriptRestart` stays
+ * false from then on). The request can be in flight for tens of seconds.
+ *
+ * Null [openNow] — the reader left the session list entirely — wants nothing.
+ */
+internal fun pageStillWanted(requestedFor: String, openNow: String?): Boolean =
+    openNow != null && openNow == requestedFor
+
+/**
+ * Turning "switch automatically" on is TWO steps, and their ORDER is the whole
+ * rule: persist first, then probe.
+ *
+ * Pure and top-level for the same reason [reattachPlan] is — the mistake it
+ * prevents is arithmetic on sequencing, which no screen shows. Both steps used
+ * to be launched independently: the persist suspends inside DataStore before
+ * `_routeBook` is republished, so the probe read the OLD book with autoSwitch
+ * still false, `RouteResolver.resolve` short-circuited, and the reader who had
+ * just enabled auto-switching was told "Route is pinned — unpin to switch
+ * automatically" while nothing was probed at all.
+ *
+ * ⚠ AND `force`. Once the book is right, an unforced resolve on a fresh health
+ * map answers Stay and still probes nothing; the desktop already passed force
+ * on this path and the phone did not.
+ */
+internal suspend fun applyAutoSwitch(
+    on: Boolean,
+    persist: suspend (Boolean) -> Unit,
+    resolve: suspend (force: Boolean) -> Unit,
+) {
+    persist(on)
+    if (on) resolve(true)
+}
+
+/**
  * What the reader is told when a request fails.
  *
  * A top-level function rather than a method so the rule can be tested without an
@@ -115,11 +200,26 @@ internal fun reattachPlan(meta: ChatDetail?): Reattach? {
  * login expired on <date> — sign in again", which is the entire answer to the
  * question the reader pressed the button to ask. The desktop replaced that with
  * "could not switch" and threw it away; this client must never learn to.
+ *
+ * ⚠ ANYTHING THAT IS NOT THE DAEMON goes through [DeliveryCopy.trouble]. A
+ * transport exception is not huginn speaking — it is Ktor/OkHttp, and its
+ * message carries the daemon's address ("Connect timeout has expired
+ * [url=http://<host>:<port>/v1/status…]", "Failed to connect to /<host>:<port>",
+ * the hostname on a DNS failure). That went verbatim to the Status tab's red
+ * banner and to every toast. `trouble` is the household sentence for the same
+ * failure, with the address scrubbed; it was written for exactly this and was
+ * wired into one settings page only. Sentence-cased here because a banner is a
+ * sentence, not a clause.
  */
 internal fun errorTextFor(e: Throwable): String = when (e) {
     is HuginnClient.HuginnException ->
         if (e.code == 401) "Rejected by huginn: check the token in Settings" else e.message
-    else -> e.message ?: e::class.java.simpleName
+    else -> {
+        val raw = e.message ?: e::class.java.simpleName
+        DeliveryCopy.trouble(raw)
+            .replaceFirstChar { it.uppercaseChar() }
+            .ifBlank { "This phone could not reach huginn." }
+    }
 }
 
 /**
@@ -1000,12 +1100,20 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
                 is RouteResolver.Choice.Stay ->
                     if (!silent) _toast.value = "Still on ${choice.route.name}"
                 is RouteResolver.Choice.Switched -> {
-                    applyBook(_routeBook.value.activate(choice.route.id))
+                    editRoutesNow { it.activate(choice.route.id) }
                     _toast.value = "Switched to ${choice.route.name}"
                 }
             }
         }
     }
+
+    /**
+     * Forgets the note under the route list. Opening or cancelling a route form
+     * is the moment it stops being true, and on this client nothing else ever
+     * cleared it — a refusal from ten minutes ago sat under the list for the
+     * life of the screen.
+     */
+    fun clearRouteNote() { _routeNote.value = null }
 
     /** Manual pin from the list: this route, and stay on it until unpinned. */
     fun activateRoute(id: String) = editRoutes { it.activate(id).withAutoSwitch(false) }
@@ -1016,14 +1124,39 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
 
     fun setRouteUrl(id: String, url: String) = editRoutes { it.setUrl(id, url) }
 
+    /**
+     * A name and an address saved together, as ONE book operation.
+     *
+     * The route form's Save changes both fields at once whenever a pin is
+     * re-pointed, and two separate mutations for one gesture is a race whichever
+     * way it is dispatched — see [routeEdits].
+     */
+    fun editRoute(id: String, name: String, url: String) =
+        editRoutes { it.rename(id, name).setUrl(id, url) }
+
     fun moveRoute(id: String, delta: Int) = editRoutes { it.move(id, delta) }
 
     fun removeRoute(id: String) = editRoutes { it.remove(id) }
 
     fun setAutoSwitch(on: Boolean) {
-        editRoutes { it.withAutoSwitch(on) }
-        if (on) resolveRoute()
+        viewModelScope.launch {
+            applyAutoSwitch(
+                on = on,
+                persist = { editRoutesNow { b -> b.withAutoSwitch(it) } },
+                resolve = { force -> resolveRoute(force = force) },
+            )
+        }
     }
+
+    /**
+     * ⚠ ONE EDIT AT A TIME. Every mutation here is read-modify-write across a
+     * SUSPENSION — `settings.setRouteBook` is a DataStore write — and `_routeBook`
+     * is only republished after it. Two edits launched from one gesture (the
+     * route form's Save used to send a rename and an address change as two) both
+     * read the pre-edit book, and whichever wrote last silently discarded the
+     * other: the address landed, the new name did not, in memory and on disk.
+     */
+    private val routeEdits = Mutex()
 
     /**
      * Every list edit runs through here, so a refusal from [RouteGuard] or the
@@ -1031,14 +1164,19 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
      * does not take is worse than one that says no.
      */
     private fun editRoutes(edit: (RouteBook) -> RouteBook) {
-        viewModelScope.launch {
+        viewModelScope.launch { editRoutesNow(edit) }
+    }
+
+    /** [editRoutes], awaited — for a caller that must act on the SETTLED book. */
+    private suspend fun editRoutesNow(edit: (RouteBook) -> RouteBook): Boolean =
+        routeEdits.withLock {
             val next = runCatching { edit(_routeBook.value) }
                 .onFailure { _routeNote.value = it.message ?: RouteGuard.REFUSED }
-                .getOrNull() ?: return@launch
+                .getOrNull() ?: return@withLock false
             _routeNote.value = null
             applyBook(next)
+            true
         }
-    }
 
     /**
      * Persists the book and reconnects on the address it derives. ⚠ The store
@@ -2571,8 +2709,8 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
 
     fun createSession(name: String, onCreated: (String) -> Unit) {
         val canon = name.trim().lowercase()
-        if (!canon.matches(Regex("^[a-z0-9_]{1,50}$"))) {
-            _toast.value = "Name can use letters, digits and underscore only"
+        if (!canon.matches(SESSION_NAME)) {
+            _toast.value = SESSION_NAME_HELP
             return
         }
         viewModelScope.launch {
@@ -2704,11 +2842,8 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
 
     fun renameSession(from: String, to: String) {
         val canon = to.trim().lowercase()
-        // Matches what the daemon will route to (NAME_RE): a leading alphanumeric
-        // or underscore keeps the name usable as a filename under /run, and dashes
-        // and dots are ordinary in sessions made at the keyboard.
-        if (!canon.matches(Regex("^[a-z0-9_][a-z0-9_.-]{0,49}$"))) {
-            _toast.value = "Start with a letter or digit; letters, digits, _ . - after that"
+        if (!canon.matches(SESSION_NAME)) {
+            _toast.value = SESSION_NAME_HELP
             return
         }
         viewModelScope.launch {
@@ -2830,10 +2965,11 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
                     }
                 }.onFailure { e ->
                     if (e is HuginnClient.HuginnException && e.code == 404) {
-                        // The session died under the viewer. Saying so in a toast
-                        // while leaving them staring at a dead screen is not
-                        // enough — the UI collects this and navigates back.
-                        _toast.value = "Session $name ended"
+                        // The session died under the viewer — or the daemon cannot
+                        // ADDRESS it, which is a different sentence and must not be
+                        // reported as an ending. The UI collects this and navigates
+                        // back either way; a screen it cannot fetch is no screen.
+                        _toast.value = sessionGoneWords(name, _sessions.value.map { it.name })
                         _sessionGone.value = name
                         return@launch
                     }
@@ -2862,6 +2998,13 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
         _screen.value = null
         _transcript.value = null
         _transcriptError.value = null
+        // The history handles belong to the session being left. Kept, they made
+        // the NEXT session's first "load earlier" ask for a byte offset into a
+        // file it never wrote — and a spinner left true here can never be
+        // cleared, since only the in-flight request clears it and that request
+        // is now for somebody else.
+        historyStart = null
+        _loadingHistory.value = false
         // Hand the pane size back so an attached laptop re-fits immediately
         // instead of waiting out the server-side lease.
         if (name != null) {
@@ -2896,15 +3039,27 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
         if (until <= 0L || _loadingHistory.value) return
         _loadingHistory.value = true
         viewModelScope.launch {
-            runCatching { client.sessionTranscript(name, until = until) }
-                .onSuccess { older ->
-                    historyStart = older.windowStart
-                    _transcript.value = prependTranscriptPage(_transcript.value, older)
-                }
-                .onFailure { _toast.value = errText(it) }
-            _loadingHistory.value = false
+            val page = runCatching { client.sessionTranscript(name, until = until) }
+                .onFailure { if (stillReading(name)) _toast.value = errText(it) }
+                .getOrNull()
+            // ⚠ THE ANSWER IS ONLY FOR THE SESSION THAT ASKED. This launch is
+            // tracked by no field and the view model outlives the screen, so a
+            // page that arrives after the reader has opened another session used
+            // to be welded on top of THAT session's transcript — another
+            // conversation, permanently, with no restart guard to undo it
+            // (prependTranscriptPage keeps the current page's claudeSessionId).
+            // The request can be in flight for tens of seconds: the daemon reads
+            // backwards with a doubling window and this call has no timeout.
+            if (page != null && stillReading(name)) {
+                historyStart = page.windowStart
+                _transcript.value = prependTranscriptPage(_transcript.value, page)
+            }
+            if (stillReading(name)) _loadingHistory.value = false
         }
     }
+
+    /** Whether [name] is still the session on screen — see [loadEarlierTranscript]. */
+    private fun stillReading(name: String): Boolean = pageStillWanted(name, currentSession)
 
     /** Tails the session's Claude transcript: the structured conversation view. */
     fun startTranscriptPolling(name: String) {
@@ -3087,10 +3242,17 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
         if (until <= 0L || _loadingAgentHistory.value) return
         _loadingAgentHistory.value = true
         viewModelScope.launch {
-            runCatching { client.agentTranscript(name, picked, until = until) }
-                .onSuccess { stream.prepend(it); publishStream() }
-                .onFailure { _toast.value = errText(it) }
-            _loadingAgentHistory.value = false
+            val page = runCatching { client.agentTranscript(name, picked, until = until) }
+                .onFailure { if (stillReading(name)) _toast.value = errText(it) }
+                .getOrNull()
+            // The identical untracked-launch shape as [loadEarlierTranscript],
+            // and the same rule: this page belongs to the session AND the agent
+            // that asked for it.
+            if (page != null && stillReading(name) && stream.selected == picked) {
+                stream.prepend(page)
+                publishStream()
+            }
+            if (stillReading(name)) _loadingAgentHistory.value = false
         }
     }
 
@@ -3489,7 +3651,16 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
     private var streamJob: Job? = null
     private var chatPollJob: Job? = null
 
+    /**
+     * The chat this view model is addressing. Set SYNCHRONOUSLY at the top of
+     * [openChat], before its first suspension, so a teardown arriving from the
+     * outgoing screen's recomposition can tell whether it is still the one on
+     * screen — see [detachStream].
+     */
+    private var openChatId: String? = null
+
     fun openChat(id: String) {
+        openChatId = id
         _chatPage.value = null
         _streamingText.value = null
         _activeTool.value = null
@@ -3524,6 +3695,11 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
             runCatching { client.chatTranscript(id) }
                 .onSuccess { _chatPage.value = it; _chatError.value = null }
                 .onFailure { e ->
+                    // A cancellation is this job being replaced or the screen
+                    // going away, not a chat that would not load. Drawn as one,
+                    // it opened a perfectly good chat under "Could not load this
+                    // conversation / StandaloneCoroutine was cancelled".
+                    if (e is CancellationException) return@onFailure
                     // 409 is the only failure that MEANS "nothing here yet" — the
                     // chat exists but has never run. Anything else is a failure to
                     // read history that exists, and must not be drawn as its absence.
@@ -3719,8 +3895,23 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    /** Detaches the stream WITHOUT cancelling the server-side run. */
-    fun detachStream() {
+    /**
+     * Detaches the stream WITHOUT cancelling the server-side run.
+     *
+     * ⚠ PASS THE CHAT BEING TORN DOWN. Every chat-to-chat hop calls openChat(new)
+     * and then moves the destination in one callback, while the recomposition
+     * that disposes the OUTGOING DisposableEffect(id) waits for the next vsync —
+     * 8-16 ms, and a warm daemon GET measures 1-2 ms. So the new chat had already
+     * loaded when the old screen's onDispose fired and wiped _chatPage, _sending
+     * and _streamingText, leaving an indefinite spinner with no "Try again"; if
+     * the target was mid-run its reattach went too. A teardown keyed to no chat
+     * cannot tell that it is tearing down someone else's.
+     *
+     * Null [chat] means "no chat at all" — leaving the chat surface entirely.
+     */
+    fun detachStream(chat: String? = null) {
+        if (!detachWanted(chat, openChatId)) return
+        openChatId = null
         streamJob?.cancel()
         streamJob = null
         chatPollJob?.cancel()

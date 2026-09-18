@@ -35,6 +35,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.silencelen.huginn.data.PinnedRoute
 import com.silencelen.huginn.data.RouteBook
+import com.silencelen.huginn.data.RouteGuard
 import com.silencelen.huginn.data.RouteHealth
 
 /**
@@ -316,7 +317,84 @@ class RouteListActions(
     val add: (name: String, url: String) -> Unit = { _, _ -> },
     val setAutoSwitch: (Boolean) -> Unit = {},
     val findLive: () -> Unit = {},
-)
+    /**
+     * ONE SAVE, ONE BOOK OPERATION — see [edit], which is what the form calls.
+     *
+     * Null for a shell that has not wired it, which then gets [rename] followed
+     * by [setUrl]. That fallback is only correct because both shells serialise
+     * their book edits: two fire-and-forget mutations from one Save, each
+     * computed on the book as it stood before the other, silently dropped the
+     * rename.
+     */
+    private val editBoth: ((id: String, name: String, url: String) -> Unit)? = null,
+    /**
+     * The route note (a refusal, or the outcome of a probe) is no longer true
+     * once a form is opened or cancelled, and on the phone nothing else ever
+     * clears it.
+     */
+    val clearNote: () -> Unit = {},
+) {
+    /** A name and an address saved together, as ONE edit wherever it is wired. */
+    fun edit(id: String, name: String, url: String) {
+        val both = editBoth
+        if (both != null) {
+            both(id, name, url)
+        } else {
+            rename(id, name)
+            setUrl(id, url)
+        }
+    }
+}
+
+/**
+ * Why this address cannot be saved, or null when it can.
+ *
+ * ⚠ THE SAME RULES, NOT A SECOND COPY OF THEM: [RouteGuard.require] is the guard
+ * that decides whether the bearer may travel over this address, and the cap and
+ * the duplicate test are read off the [RouteBook] itself. The form asks BEFORE
+ * it closes because the shells' route actions are fire-and-forget — every
+ * refusal used to arrive after the form had already gone, taking what was typed
+ * with it and leaving a note under a list the reader was no longer looking at.
+ *
+ * @param editingId the route being edited, so an address is never a duplicate of
+ *   itself and editing one of eight pins is not adding a ninth.
+ */
+internal fun routeFormRefusal(book: RouteBook, editingId: String?, url: String): String? {
+    if (editingId == null && book.isFull) return RouteBook.FULL
+    val clean = runCatching { RouteGuard.require(url) }
+        .getOrElse { return it.message ?: RouteGuard.REFUSED }
+    if (book.routes.any { it.id != editingId && it.url == clean }) return RouteBook.DUPLICATE
+    return null
+}
+
+/**
+ * What one Save on a route's form does to the book.
+ *
+ * Extracted from the row so it can be asserted: the defect it exists to prevent
+ * is arithmetic on the ORDER of writes, which no screenshot shows and no
+ * composable test can reach.
+ *
+ * ⚠ AT MOST ONE OPERATION. Sending a rename and an address change as two
+ * mutations means each is computed on the book the other has not landed in yet,
+ * and the loser is silent — the route ends up with its new address under its old
+ * name, persisted, surviving a force-stop.
+ */
+internal fun routeFormSave(
+    actions: RouteListActions,
+    id: String,
+    was: String,
+    wasUrl: String,
+    name: String,
+    url: String,
+) {
+    val renamed = name != was
+    val readdressed = url != wasUrl
+    when {
+        renamed && readdressed -> actions.edit(id, name, url)
+        renamed -> actions.rename(id, name)
+        readdressed -> actions.setUrl(id, url)
+    }
+}
 
 /**
  * THE ROUTE LIST — one composable, both shells.
@@ -409,6 +487,7 @@ fun SettingsRouteListRow(
 
         for ((index, route) in book.routes.withIndex()) {
             RouteRow(
+                book = book,
                 route = route,
                 active = route.id == book.activeId,
                 first = index == 0,
@@ -416,7 +495,10 @@ fun SettingsRouteListRow(
                 health = health[route.id],
                 nowMs = nowMs,
                 editing = editing == route.id,
-                onEdit = { editing = if (editing == route.id) null else route.id },
+                onEdit = {
+                    editing = if (editing == route.id) null else route.id
+                    actions.clearNote()
+                },
                 actions = actions,
             )
         }
@@ -427,7 +509,9 @@ fun SettingsRouteListRow(
             horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
             if (!book.isFull) {
-                TextButton(onClick = { adding = !adding }) { Text(if (adding) "Cancel" else "Add a route") }
+                TextButton(onClick = { adding = !adding; actions.clearNote() }) {
+                    Text(if (adding) "Cancel" else "Add a route")
+                }
             } else {
                 Text(
                     "Eight routes is the limit.",
@@ -447,8 +531,9 @@ fun SettingsRouteListRow(
                 initialName = "",
                 initialUrl = suggestedUrl,
                 confirmLabel = "Add",
+                refusal = { routeFormRefusal(book, null, it) },
                 onConfirm = { name, url -> actions.add(name, url); adding = false },
-                onCancel = { adding = false },
+                onCancel = { adding = false; actions.clearNote() },
             )
         }
 
@@ -484,6 +569,7 @@ private val TIGHT = androidx.compose.foundation.layout.PaddingValues(horizontal 
 /** One pinned route: the name, the badge, the state, the address, the handles. */
 @Composable
 private fun RouteRow(
+    book: RouteBook,
     route: PinnedRoute,
     active: Boolean,
     first: Boolean,
@@ -547,9 +633,9 @@ private fun RouteRow(
                 initialName = route.name,
                 initialUrl = route.url,
                 confirmLabel = "Save",
+                refusal = { routeFormRefusal(book, route.id, it) },
                 onConfirm = { name, url ->
-                    if (name != route.name) actions.rename(route.id, name)
-                    if (url != route.url) actions.setUrl(route.id, url)
+                    routeFormSave(actions, route.id, route.name, route.url, name, url)
                     onEdit()
                 },
                 onCancel = onEdit,
@@ -565,12 +651,21 @@ private fun RouteForm(
     initialName: String,
     initialUrl: String,
     confirmLabel: String,
+    /** Why this address cannot be saved — asked BEFORE the form closes. */
+    refusal: (String) -> String?,
     onConfirm: (String, String) -> Unit,
     onCancel: () -> Unit,
     onRemove: (() -> Unit)? = null,
 ) {
     var name by remember(initialName) { mutableStateOf(initialName) }
     var url by remember(initialUrl) { mutableStateOf(initialUrl) }
+    // ⚠ THE FORM ASKS, THEN CLOSES — never the other way round. Confirm used to
+    // run two unconditional statements, and since every route action returns
+    // Unit into a fire-and-forget coroutine the form was gone before the outcome
+    // existed: a refused address closed it, dropped the text (`remember` inside
+    // the `if (adding)` subtree), and left a note under a list the reader had
+    // stopped looking at. Reopening then offered the default address again.
+    var refused by remember { mutableStateOf<String?>(null) }
     Column(Modifier.padding(start = 20.dp, top = 6.dp, bottom = 4.dp)) {
         OutlinedTextField(
             value = name,
@@ -581,9 +676,11 @@ private fun RouteForm(
         )
         OutlinedTextField(
             value = url,
-            onValueChange = { url = it },
+            onValueChange = { url = it; refused = null },
             singleLine = true,
             label = { Text("Address") },
+            isError = refused != null,
+            supportingText = refused?.let { { Text(it, color = MaterialTheme.colorScheme.error) } },
             modifier = Modifier.padding(top = 6.dp).widthIn(max = 420.dp).fillMaxWidth(),
         )
         Row(
@@ -591,7 +688,14 @@ private fun RouteForm(
             horizontalArrangement = Arrangement.spacedBy(8.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            Button(onClick = { onConfirm(name, url) }, enabled = url.isNotBlank()) { Text(confirmLabel) }
+            Button(
+                onClick = {
+                    val no = refusal(url)
+                    refused = no
+                    if (no == null) onConfirm(name, url)
+                },
+                enabled = url.isNotBlank(),
+            ) { Text(confirmLabel) }
             TextButton(onClick = onCancel) { Text("Cancel") }
             if (onRemove != null) {
                 TextButton(onClick = onRemove) {

@@ -43,6 +43,8 @@ import androidx.glance.text.Text
 import androidx.glance.text.TextStyle
 import androidx.glance.unit.ColorProvider
 import com.silencelen.huginn.MainActivity
+import com.silencelen.huginn.ui.TimeFormat
+import com.silencelen.huginn.ui.TimeWords
 import com.silencelen.huginn.R
 import com.silencelen.huginn.data.SettingsStore
 import com.silencelen.huginn.notify.Fleet
@@ -50,8 +52,6 @@ import com.silencelen.huginn.notify.FleetSnapshot
 import com.silencelen.huginn.notify.SessionWatchWorker
 import com.silencelen.huginn.ui.stateLabel
 import kotlinx.coroutines.flow.first
-import java.text.DateFormat
-import java.util.Date
 
 /**
  * The fleet on the launcher: which sessions need you, which are working, and a
@@ -188,10 +188,15 @@ private fun Header(snapshot: FleetSnapshot?) {
         )
         Spacer(GlanceModifier.defaultWeight())
         if (snapshot != null) {
-            // Absolute, not "Nm ago": the widget redraws on observations, not on a
-            // clock, so a relative age would sit there growing stale-wrong.
+            // ⚠ DAY-QUALIFIED. A bare short time-of-day with no date made a
+            // snapshot 26 hours (or seven days) old render a string identical to
+            // a two-hour-old one — while CountsLine went on asserting its stale
+            // "N need you", because FleetRefreshWorker redraws WITHOUT updating
+            // the snapshot when the watch call fails. TimeWords.stampMs is this
+            // product's stamp: relative only inside the last six hours, the
+            // calendar past that, "" for a stamp that is not one.
             Text(
-                "as of " + DateFormat.getTimeInstance(DateFormat.SHORT).format(Date(snapshot.asOf)),
+                TimeWords.stampMs(snapshot.asOf, System.currentTimeMillis(), widgetTimeFormat(context)),
                 style = TextStyle(color = GlanceTheme.colors.onSurfaceVariant, fontSize = 11.sp),
             )
         }
@@ -200,12 +205,16 @@ private fun Header(snapshot: FleetSnapshot?) {
 
 @Composable
 private fun CountsLine(snapshot: FleetSnapshot) {
+    // A snapshot old enough to be about yesterday is not news any more. The
+    // counts stay — they are the last truth this widget saw — but they stop
+    // being said in the colours that mean "right now".
+    val stale = fleetIsStale(snapshot.asOf, System.currentTimeMillis())
     Row(GlanceModifier.padding(top = 6.dp), verticalAlignment = Alignment.CenterVertically) {
         if (snapshot.attention > 0) {
             Text(
                 "${snapshot.attention} need you",
                 style = TextStyle(
-                    color = GlanceTheme.colors.error,
+                    color = if (stale) GlanceTheme.colors.onSurfaceVariant else GlanceTheme.colors.error,
                     fontSize = 12.sp,
                     fontWeight = FontWeight.Medium,
                 ),
@@ -215,7 +224,7 @@ private fun CountsLine(snapshot: FleetSnapshot) {
         Text(
             "${snapshot.running} working",
             style = TextStyle(
-                color = if (snapshot.running > 0) GlanceTheme.colors.primary
+                color = if (snapshot.running > 0 && !stale) GlanceTheme.colors.primary
                 else GlanceTheme.colors.onSurfaceVariant,
                 fontSize = 12.sp,
             ),
@@ -229,7 +238,10 @@ private fun CountsLine(snapshot: FleetSnapshot) {
             Dot(sepColor())
             Text(
                 "${snapshot.chatsRunning} chat" + (if (snapshot.chatsRunning == 1) "" else "s"),
-                style = TextStyle(color = GlanceTheme.colors.primary, fontSize = 12.sp),
+                style = TextStyle(
+                    color = if (stale) GlanceTheme.colors.onSurfaceVariant else GlanceTheme.colors.primary,
+                    fontSize = 12.sp,
+                ),
             )
         }
     }
@@ -353,3 +365,22 @@ private fun ActionsRow(enabled: Boolean) {
         )
     }
 }
+
+/**
+ * Past this, the widget's counts stop being coloured as if they were current.
+ *
+ * Half a day is deliberately generous: this widget is fed by four observation
+ * paths and a 30-minute tick, so anything this old means none of them have run
+ * — off the tailnet, the phone asleep, or the daemon down — and the counts on
+ * screen are a memory rather than a report.
+ */
+internal const val FLEET_STALE_MS: Long = 12 * 60 * 60 * 1000L
+
+internal fun fleetIsStale(asOfMs: Long, nowMs: Long): Boolean =
+    asOfMs > 0L && nowMs - asOfMs >= FLEET_STALE_MS
+
+/** The viewer's own clock convention, for [TimeWords]. */
+internal fun widgetTimeFormat(context: Context): TimeFormat = TimeFormat(
+    tzOffsetSec = java.util.TimeZone.getDefault().getOffset(System.currentTimeMillis()) / 1000,
+    hour24 = android.text.format.DateFormat.is24HourFormat(context),
+)
