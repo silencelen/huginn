@@ -10,6 +10,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.text.LocalTextContextMenu
 import androidx.compose.foundation.text.TextContextMenu
 import androidx.compose.foundation.text.TextContextMenuArea
+import androidx.compose.foundation.text.selection.DisableSelection
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.hoverable
@@ -107,36 +108,44 @@ private class HuginnMenuLook(
             onDismissRequest = ::close,
             properties = PopupProperties(focusable = true),
         ) {
-            Surface(
-                color = background,
-                shape = RoundedCornerShape(6.dp),
-                tonalElevation = 8.dp,
-                modifier = Modifier
-                    .widthIn(min = 168.dp, max = 320.dp)
-                    .border(1.dp, outline, RoundedCornerShape(6.dp))
-                    // Escape closes. The Popup is focusable so the key lands here
-                    // rather than in the shell behind it, which would otherwise
-                    // navigate the app out from under an open menu.
-                    .onPreviewKeyEvent { e ->
-                        if (e.type == KeyEventType.KeyDown && e.key == Key.Escape) {
-                            close(); true
-                        } else {
-                            false
-                        }
-                    },
-            ) {
-                // IntrinsicSize.Max, and it is what stops a four-item menu from
-                // opening 320dp wide. The rows `fillMaxWidth` so the hover
-                // highlight spans the menu; inside a Surface whose only other
-                // constraint is a `widthIn` MAX, that fill resolves to the max and
-                // the menu is as wide as it is allowed to be rather than as wide
-                // as its longest label. Measuring the column first makes the fill
-                // relative to the content again.
-                Column(
-                    Modifier.width(IntrinsicSize.Max).padding(vertical = Space.tight),
+            // ⚠ A MENU ROW IS NOT SELECTABLE TEXT. This popup is the
+            // representation for every context menu in the app, and one of them
+            // opens over the transcript's own selection — inside its
+            // `SelectionContainer`, whose registrar this content would otherwise
+            // inherit across a layout-root boundary. See
+            // OverlaysDisableSelectionTest for what that costs.
+            DisableSelection {
+                Surface(
+                    color = background,
+                    shape = RoundedCornerShape(6.dp),
+                    tonalElevation = 8.dp,
+                    modifier = Modifier
+                        .widthIn(min = 168.dp, max = 320.dp)
+                        .border(1.dp, outline, RoundedCornerShape(6.dp))
+                        // Escape closes. The Popup is focusable so the key lands
+                        // here rather than in the shell behind it, which would
+                        // otherwise navigate the app out from under an open menu.
+                        .onPreviewKeyEvent { e ->
+                            if (e.type == KeyEventType.KeyDown && e.key == Key.Escape) {
+                                close(); true
+                            } else {
+                                false
+                            }
+                        },
                 ) {
-                    items().forEach { item ->
-                        MenuRow(item, ::close)
+                    // IntrinsicSize.Max, and it is what stops a four-item menu from
+                    // opening 320dp wide. The rows `fillMaxWidth` so the hover
+                    // highlight spans the menu; inside a Surface whose only other
+                    // constraint is a `widthIn` MAX, that fill resolves to the max and
+                    // the menu is as wide as it is allowed to be rather than as wide
+                    // as its longest label. Measuring the column first makes the fill
+                    // relative to the content again.
+                    Column(
+                        Modifier.width(IntrinsicSize.Max).padding(vertical = Space.tight),
+                    ) {
+                        items().forEach { item ->
+                            MenuRow(item, ::close)
+                        }
                     }
                 }
             }
