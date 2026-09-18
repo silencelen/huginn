@@ -92,8 +92,13 @@ private fun TipCard(text: String) {
  * HELD. Everything here that asks WHEN instead goes through [TimeWords].
  */
 fun humanDuration(sec: Long): String = when {
-    sec < 45 -> "just now"
-    sec < 3600 -> "${sec / 60}m"
+    // ⚠ NO "just now" BAND, AND NEVER "0m". The band cut over at 45 seconds —
+    // a lone outlier, every sibling formatter cuts over at 60 — and the 15
+    // seconds past it fell through to "${sec / 60}m", drawing "Working · for 0m"
+    // on the state tooltip. The band's own side was a wart too: a SPAN read
+    // back as "Waiting on you · for just now". A span that has been held at all
+    // has been held for a minute as far as a person reading a tooltip cares.
+    sec < 3600 -> "${maxOf(1L, sec / 60)}m"
     sec < 86_400 -> {
         val h = sec / 3600
         val m = (sec % 3600) / 60
