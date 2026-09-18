@@ -731,6 +731,44 @@ test('repairing the host default keeps a SYMLINKED settings.json a symlink (#29)
   fs.writeFileSync(settingsFile, original);
 });
 
+test('a huge record after the turn does not read as permanently mid-turn (#5)', async () => {
+  // ⚠ 9.2% OF THIS HOST'S OWN TRANSCRIPTS. The turn gate read a fixed 64 KB tail,
+  // and a large NON-conversational record appended after the boundary (measured:
+  // a 94 KB `attachment`) pushes the boundary out of that window: the
+  // bookkeeping inside it parses but is not conversational, the fragment of the
+  // big record does not parse, and `boundaryFromTail` reported plain "not idle".
+  // Every AUTOMATED entry then blocked on 'turn' and was dropped as a timeout
+  // ten minutes later — and for a heads-up that is permanent, because
+  // `headsUpAt` is stamped on acceptance, so the warning for that week is gone.
+  // A human message queued behind the stuck entry waits with it.
+  const { name, sink } = fableSession('bigtail');
+  const transcript = path.join(tmp, `${name}.jsonl`);
+  fs.appendFileSync(transcript, `${JSON.stringify({
+    type: 'attachment', content: 'A'.repeat(100 * 1024),
+  })}\n`);
+
+  setUsage({ session: 5, weekly_all: 10, weekly_fable: 86 });
+  await tick({ cooldownMs: 0 });
+  const deadline = Date.now() + 25_000;
+  while (Date.now() < deadline) {
+    const got = fs.existsSync(sink) ? fs.readFileSync(sink, 'utf8') : '';
+    if (got.includes('[huginn headroom]')) break;
+    await wait(400);
+    await api('/v1/headroom/settings', { method: 'PATCH', body: '{}' });
+  }
+  assert.match(fs.readFileSync(sink, 'utf8'), /\[huginn headroom\]/,
+    'the turn gate has to widen its window until it can see the boundary');
+
+  // ⚠ CLEAN UP THIS ONE. Every other session in this file is small; a live
+  // session carrying a 100 KB transcript stays in `listSessions` and is re-read
+  // by every later tick, which pushes the NEXT test's 12-second `until` over its
+  // budget on a loaded host.
+  try { sh('tmux', ['kill-session', '-t', `=${name}`]); } catch { /* already gone */ }
+  madeSessions.delete(name);
+  fs.rmSync(path.join(stateDir, name), { force: true });
+  fs.rmSync(transcript, { force: true });
+});
+
 test('the SECOND Fable window gets its own heads-up (#17)', async () => {
   // ⚠ ONCE EVER, NOT ONCE PER WEEK. `rec.headsUpAt` was written in one place and
   // cleared in none, so the apply guard `if (!rec || rec.headsUpAt) return`

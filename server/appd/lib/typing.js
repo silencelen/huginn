@@ -189,9 +189,18 @@ function boundaryFromTail(jsonlTail) {
     if (!rec || typeof rec !== 'object') continue;
     // 3.0.2's inline test, lifted into a named rule with the census behind it.
     if (!isConversationalRecord(rec)) continue;
-    return { idle: isBoundaryRecord(rec), lastKind: kindOf(rec) };
+    return { idle: isBoundaryRecord(rec), lastKind: kindOf(rec), unknown: false };
   }
-  return { idle: false, lastKind: null };
+  // ⚠ `unknown` IS NOT "NOT IDLE" (#5). A window with no conversational record
+  // in it at all means the reader could not SEE the boundary, not that there
+  // isn't one — measured on 66 of 716 of this host's own transcripts (9.2%), all
+  // demonstrably idle, and in none of them because the last MESSAGE was huge: a
+  // large non-conversational record (a 94 KB `attachment`) had been appended
+  // after the turn ended, so the post-boundary bookkeeping inside the 64 KB
+  // window parsed fine while the fragment of the big record did not. Reported as
+  // plain `idle:false` it blocked every automated send on 'turn' until the
+  // ten-minute drop. The caller widens the window on this flag.
+  return { idle: false, lastKind: null, unknown: true };
 }
 
 /**

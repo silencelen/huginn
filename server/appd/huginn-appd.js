@@ -1959,16 +1959,42 @@ function transcriptSize(file) {
  * — a caret anywhere in the bottom region means Claude has painted its box —
  * and applies only to the sessions appd started `claude` in itself.
  */
+/**
+ * How far the turn gate will widen its window looking for a boundary.
+ *
+ * ⚠ #5: the fixed 64 KB tail made an IDLE session read as permanently mid-turn
+ * whenever a large non-conversational record (measured: a 94 KB `attachment`)
+ * was appended after the turn ended — 66 of 716 of this host's own transcripts,
+ * all demonstrably idle. `lib/transcript.js` already doubles its window for
+ * exactly this reason. The cap is generous because the read only happens when
+ * the first window came back blind, and stingy enough that a pathological
+ * multi-megabyte record cannot make the gate read the whole file on every poll.
+ */
+const TAIL_WIDEN_CAP_BYTES = 4 * 1024 * 1024;
+
 async function checkGates(name) {
   const file = transcriptPath(name);
   let idle = true;
   let lastKind = null;
   if (file) {
-    const tail = transcriptTail(file);
-    if (tail) {
+    let bytes = 64 * 1024;
+    for (;;) {
+      const tail = transcriptTail(file, null, bytes);
+      if (!tail) break;
       const b = typing.boundaryFromTail(tail.text);
+      // Widen only on "I could not SEE a boundary", never on "there isn't one":
+      // a window holding a conversational record has answered the question.
+      if (b.unknown && bytes < TAIL_WIDEN_CAP_BYTES && bytes < tail.size) {
+        bytes = Math.min(bytes * 2, TAIL_WIDEN_CAP_BYTES);
+        continue;
+      }
       idle = b.idle;
       lastKind = b.lastKind;
+      if (b.unknown) {
+        log(`typing: ${name}: no conversational record in the last `
+          + `${Math.round(bytes / 1024)}KB of the transcript; treating the turn as unfinished`);
+      }
+      break;
     }
   }
   const cap = await run('tmux', ['capture-pane', '-p', '-t', `=${name}:`]);
