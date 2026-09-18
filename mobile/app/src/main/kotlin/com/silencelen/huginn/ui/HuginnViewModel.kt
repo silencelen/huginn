@@ -10,6 +10,7 @@ import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import com.silencelen.huginn.appVersion
 import com.silencelen.huginn.data.Account
+import com.silencelen.huginn.data.ArchivedSession
 import com.silencelen.huginn.data.Chat
 import com.silencelen.huginn.data.ChatDetail
 import com.silencelen.huginn.data.ChatEvent
@@ -413,6 +414,20 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
 
     private val _chats = MutableStateFlow<List<Chat>>(emptyList())
     val chats: StateFlow<List<Chat>> = _chats.asStateFlow()
+
+    /** Sessions ended on purpose, kept with the command that brings them back. */
+    private val _archives = MutableStateFlow<List<ArchivedSession>>(emptyList())
+    val archives: StateFlow<List<ArchivedSession>> = _archives.asStateFlow()
+
+    /**
+     * Whether this daemon HAS archive. Null until the first probe answers.
+     *
+     * FEATURE DETECTION, not version parsing — the scratchpads precedent. False
+     * hides the Archived section AND the row action, because a control whose only
+     * outcome is a 404 is worse than no control.
+     */
+    private val _archiveAvailable = MutableStateFlow<Boolean?>(null)
+    val archiveAvailable: StateFlow<Boolean?> = _archiveAvailable.asStateFlow()
 
     /**
      * The host's scheduled work. Refreshed alongside chats rather than on its own
@@ -1574,6 +1589,12 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
             runCatching { client.scratchpads() }
                 .onSuccess { landPads(it) }
                 .onFailure { if (it is HuginnClient.HuginnException && it.code == 404) _scratchpadsAvailable.value = false }
+            // The archive probe rides the same once-per-connection refresh, which
+            // is exactly the cadence feature detection wants. Silent on every
+            // other failure, like rounds and pages beside it: a status bar that
+            // permanently reports a missing feature as a fault is a status bar
+            // people stop reading.
+            landArchives()
             _loading.value = false
         }
     }
@@ -1588,8 +1609,18 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
             // a cold start is before credentials have loaded — its first tick was
             // the one remaining 401.
             awaitReady()
+            var tick = 0
             while (isActive) {
                 runCatching { client.sessions(preview = true) }.onSuccess { _sessions.value = it }
+                // ⚠ THE TWO LISTS MOVE TOGETHER AND MUST BE REFRESHED TOGETHER. A
+                // graceful archive leaves the session on screen for as long as its
+                // turn runs and then moves it — so a Sessions poll that did not
+                // also fetch the archive would show the row vanish with nothing
+                // appearing anywhere. Every fourth tick, not every one: an
+                // archive changes when somebody presses something, and this list
+                // is 64 rows of JSON rather than two.
+                if (tick % 4 == 0) landArchives()
+                tick++
                 delay(5000)
             }
         }
@@ -2181,6 +2212,78 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
                 }
                 .onFailure { _toast.value = errText(it) }
         }
+    }
+
+    /**
+     * Archive: end the session for good and keep the way back into it.
+     *
+     * GRACEFUL, like the wind-down it is built on — Claude is asked to wrap up
+     * and the host ends the session once it settles, so the row appears a little
+     * later rather than at once. Drafts are cleared like a kill and unlike a
+     * wind-down: this session is going, and the text typed at it is not.
+     *
+     * ⚠ THE 409 IS SHOWN VERBATIM. "answer the waiting question first, then
+     * archive the session" tells somebody exactly what to do, and errText already
+     * carries the daemon's own sentence through — replacing it with "Could not
+     * archive" is how a refusal becomes a mystery.
+     */
+    fun archiveSession(name: String, now: Boolean = false) {
+        viewModelScope.launch {
+            runCatching { client.archiveSession(name, now = now) }
+                .onSuccess { r ->
+                    clearDraft(sessionDraftKey(name))
+                    clearAttachment(sessionDraftKey(name))
+                    _toast.value = when {
+                        r.archived -> "Archived $name"
+                        r.queued -> "$name will be archived after this turn"
+                        else -> "$name is winding down — it will be archived when it settles"
+                    }
+                    refreshSessions()
+                    landArchives()
+                }
+                .onFailure { _toast.value = errText(it) }
+        }
+    }
+
+    /**
+     * Bring an archived session back and open it.
+     *
+     * The name is the HOST's answer, not the row's: the old name is taken when
+     * free and numbered when not, so navigating to `row.tmuxName` would open a
+     * session that does not exist (or, worse, a stranger's that reused the name).
+     */
+    fun reviveArchive(row: ArchivedSession, onOpened: (String) -> Unit) {
+        viewModelScope.launch {
+            runCatching { client.reviveArchive(row.id) }
+                .onSuccess { r ->
+                    // Said out loud when the conversation did NOT come back. That
+                    // is the failure this feature exists to prevent, and it is
+                    // invisible from the session that opens.
+                    _toast.value = if (r.resumed) "Revived as ${r.name}"
+                    else "Started ${r.name} fresh — nothing was left to resume"
+                    refreshSessions()
+                    landArchives()
+                    onOpened(r.name)
+                }
+                .onFailure { _toast.value = errText(it) }
+        }
+    }
+
+    fun deleteArchive(row: ArchivedSession) {
+        viewModelScope.launch {
+            runCatching { client.deleteArchive(row.id) }
+                .onSuccess { _toast.value = "Forgotten"; landArchives() }
+                .onFailure { _toast.value = errText(it) }
+        }
+    }
+
+    /** The one place the list and its feature flag are written. */
+    private suspend fun landArchives() {
+        runCatching { client.archives() }
+            .onSuccess { _archives.value = ArchiveRules.ordered(it); _archiveAvailable.value = true }
+            .onFailure {
+                if (it is HuginnClient.HuginnException && it.code == 404) _archiveAvailable.value = false
+            }
     }
 
     /**
