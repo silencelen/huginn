@@ -108,7 +108,9 @@ async function projectUntil(id, ok, ms = 15_000) {
   const until = Date.now() + ms;
   for (;;) {
     const r = await api(`/v1/projects/${id}`);
-    if (r.status === 200 && ok(r.body)) return r.body;
+    // The detail route is an envelope; what the callers here are waiting on is
+    // the record inside it.
+    if (r.status === 200 && r.body && ok(r.body.project)) return r.body.project;
     if (Date.now() > until) throw new Error(`project ${id} never reached the wanted state: ${JSON.stringify(r.body && r.body.status)}`);
     await wait(200);
   }
@@ -133,6 +135,9 @@ async function fileUntil(file, re = /./, ms = 25_000) {
 }
 
 async function typingOf(name) { return (await api(`/v1/sessions/${name}/typing`)).body; }
+
+/** The record out of the detail envelope. */
+async function getProject(id) { return (await api(`/v1/projects/${id}`)).body.project; }
 
 /**
  * The project's manifest tag, read from the ONE place it is allowed to be.
@@ -348,6 +353,29 @@ test('a tagged block in the lead\'s turn becomes a proposal the owner can act on
   assert.deepEqual(['docs', 'shellish', 'modal'], p.manifest.sessions.map((s) => s.role));
   assert.equal(false, p.manifest.untaggedSeen);
   stick = p;
+});
+
+/**
+ * ⚠ THE DETAIL ROUTE IS AN ENVELOPE, AND THAT IS A COLLISION THIS SHAPE CANNOT
+ * HAVE.
+ *
+ * It used to SPREAD the project record into the top level and hang `row` and
+ * `live` beside it. The day a project gains a field called `row` or `live` —
+ * neither is a strange name for one — the spread would overwrite the daemon's
+ * own, silently, and the tree would draw a project out of whatever the record
+ * happened to hold. Three named keys cannot do that, and they also cost the
+ * client one decode instead of two of the same body.
+ */
+test('the detail route answers {project, row, live}, not a spread record', async () => {
+  const { status, body } = await api(`/v1/projects/${stick.id}`);
+  assert.equal(200, status);
+  assert.deepEqual(['project', 'row', 'live'], Object.keys(body), 'three keys, and nothing beside them');
+  assert.equal(stick.id, body.project.id);
+  assert.equal('stick', body.project.slug, 'the whole record is in there');
+  assert.equal(stick.id, body.row.id, 'the row the tree draws');
+  assert.ok(Array.isArray(body.live), 'and every member\'s live state');
+  assert.equal(undefined, body.id, 'nothing of the record is spread into the top level any more');
+  assert.equal(undefined, body.slug);
 });
 
 /**
@@ -643,7 +671,7 @@ test('A SPAWN THAT PARTLY FAILS CREATES THE REST AND SAYS WHICH ONE DID NOT', as
   }
   // Every member that DID come up is on the record, so nothing owns a live tmux
   // session that the project file has never heard of.
-  const after_ = (await api(`/v1/projects/${half.id}`)).body;
+  const after_ = await getProject(half.id);
   assert.deepEqual(['one', 'two'], after_.members.map((m) => m.role));
   assert.equal('active', after_.status);
 });
@@ -651,7 +679,7 @@ test('A SPAWN THAT PARTLY FAILS CREATES THE REST AND SAYS WHICH ONE DID NOT', as
 // ------------------------------------------------------- editing and ending
 
 test('a stale save is answered with the current project, not a silent overwrite', async () => {
-  const current = (await api(`/v1/projects/${half.id}`)).body;
+  const current = await getProject(half.id);
   const stale = await api(`/v1/projects/${half.id}`, {
     method: 'PATCH', body: JSON.stringify({ rev: current.rev - 1, name: 'Halfway' }),
   });
@@ -672,7 +700,7 @@ test('a stale save is answered with the current project, not a silent overwrite'
 });
 
 test('an edited manifest is re-validated with the parser\'s own rules', async () => {
-  const p = (await api(`/v1/projects/${stick.id}`)).body;
+  const p = await getProject(stick.id);
   const bad = await api(`/v1/projects/${stick.id}`, {
     method: 'PATCH',
     body: JSON.stringify({
@@ -684,7 +712,7 @@ test('an edited manifest is re-validated with the parser\'s own rules', async ()
 });
 
 test('deleting a project ends its sessions and leaves no readable persona behind', async () => {
-  const before = (await api(`/v1/projects/${stick.id}`)).body;
+  const before = await getProject(stick.id);
   const names = [before.lead.name, ...before.members.map((m) => m.name)];
   const r = await api(`/v1/projects/${stick.id}`, { method: 'DELETE', body: JSON.stringify({ end: 'now' }) });
   assert.equal(200, r.status);
@@ -699,7 +727,7 @@ test('deleting a project ends its sessions and leaves no readable persona behind
 });
 
 test('a delete that was not asked to end anything leaves the sessions alone', async () => {
-  const before = (await api(`/v1/projects/${half.id}`)).body;
+  const before = await getProject(half.id);
   const r = await api(`/v1/projects/${half.id}`, { method: 'DELETE', body: JSON.stringify({}) });
   assert.equal(200, r.status);
   assert.deepEqual([], r.body.ended, 'a delete that silently killed live sessions is not a delete anybody meant');

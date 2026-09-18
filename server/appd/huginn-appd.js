@@ -10563,12 +10563,24 @@ const server = http.createServer(async (req, res) => {
       const stored = loadProject(projectId);
       if (!stored) return sendErr(res, 404, 'no such project');
 
+      /**
+       * The record, the row the tree draws, and every member's live state.
+       *
+       * ⚠ AN ENVELOPE, NOT A SPREAD RECORD. This used to answer
+       * `{...project, row, live}`, which reserves two words in the project's own
+       * namespace without saying so: the day a project gains a field called
+       * `row` or `live` — neither is a strange name for one — the spread
+       * overwrites the daemon's own and the tree draws a project out of whatever
+       * the record happened to hold, with nothing to see in the diff. Three
+       * named keys cannot collide, and the client decodes one body once instead
+       * of twice.
+       */
       if (req.method === 'GET' && sub === '') {
         const project = detectManifest(stored);
         const sessions = await listSessions();
         const joined = projectsLib.joinMembers(project, sessions || [], readNativeRegistry());
         return sendJson(res, 200, {
-          ...projectsLib.publicProject(project),
+          project: projectsLib.publicProject(project),
           row: projectsLib.projectRow(project, joined),
           live: joined,
         });
