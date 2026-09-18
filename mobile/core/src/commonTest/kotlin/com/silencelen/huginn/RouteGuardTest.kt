@@ -131,12 +131,45 @@ class RouteGuardTest {
      */
     @Test
     fun `the refusal says what it says`() {
+        // ⚠ AND IT NAMES THE RULE. "huginn only talks to its own daemon" is true
+        // and tells the reader nothing about what to type instead: the address
+        // they just had taken off them by an upgrade (#45) is refused by this
+        // exact sentence, with no way to learn why.
         assertEquals(
-            "refusing that server address — huginn only talks to its own daemon",
+            "refusing that server address — over plain http huginn only talks to a private address, " +
+                "localhost or a *.ts.net name; anything else needs https, and the address must be " +
+                "a bare host and port",
             RouteGuard.REFUSED,
         )
         val e = assertFailsWith<IllegalArgumentException> { RouteGuard.require("http://example.com") }
         assertEquals(RouteGuard.REFUSED, e.message)
+    }
+
+    /**
+     * ⚠ THE HOST GOES INTO A SHELL. The desktop interpolates the base URL into an
+     * elevated `.cmd` unquoted, so a host carrying `&`, `|`, `"` or a space is a
+     * command injection with a settings field for a front door. The shape rule
+     * already refuses most of it by accident; this makes it a rule.
+     */
+    @Test
+    fun `a host is letters, digits, dots and dashes — or a bracketed IPv6 literal`() {
+        // https, deliberately: over plain http these are refused already for being
+        // CUSTOM, which hides the hole. TLS makes the host stop mattering to the
+        // BEARER — it does not make it safe to paste into a shell.
+        for (bad in listOf(
+            "https://huginn.example.com&calc",
+            "https://huginn.example.com|whoami",
+            "https://huginn.\"example.com",
+            "https://huginn.example.com\\evil",
+            "https://huginn.example.com;rm",
+            "https://huginn.example.com\u0060id\u0060",
+            "https://huginn.example.com%0a",
+            "https://huginn.example.com$(id)",
+        )) {
+            assertFalse(RouteGuard.isAllowed(bad), "should be refused: '$bad'")
+        }
+        assertTrue(RouteGuard.isAllowed("http://[fd7a:115c:a1e0::1]:8787"), "a bracketed ULA is still a route")
+        assertTrue(RouteGuard.isAllowed("https://huginn-lab.example.ts.net"), "dashes are ordinary in a hostname")
     }
 
     @Test

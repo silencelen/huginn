@@ -6,6 +6,7 @@ import com.silencelen.huginn.ui.MAX_TRANSCRIPT_EVENTS
 import com.silencelen.huginn.ui.mergeTranscript
 import com.silencelen.huginn.ui.isTranscriptRestart
 import com.silencelen.huginn.ui.mergeTranscriptPage
+import com.silencelen.huginn.ui.mergeTranscriptTail
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -191,14 +192,52 @@ class TranscriptMergeTest {
             "the loaded-earlier prefix must survive an empty tail poll",
         )
 
-        // A tail WITH new events still appends them; the extended head is not thrown
-        // away wholesale (it slides forward by the incoming growth, never collapses
-        // to the bare cap).
+        // ⚠ AND A TAIL **WITH** NEW EVENTS MUST NOT TRIM EITHER. The old guard
+        // (`effectiveCap = max(cap, current.size)`) let the window slide: five
+        // loaded events plus one new one is six, `takeLast(5)` drops "e0", and
+        // `historyStart` still points before it — a hole of N records with no gap
+        // marker, silently, on every poll that carries anything. `size >= before`
+        // held the whole time, which is why this test passed over the defect.
         val withNew = TranscriptPage(events = listOf(ev(0, "new")), claudeSessionId = "s")
         val merged2 = mergeTranscriptPage(extended, withNew, cap = 3)
-        assertTrue(merged2.events.size >= extended.events.size,
-            "a tail with new events must not shrink the window below its loaded size")
+        assertEquals("e0", merged2.events.first().text, "the front of a reader-extended window stays put")
+        assertEquals(6, merged2.events.size)
         assertEquals("new", merged2.events.last().text)
+    }
+
+    /**
+     * The window cannot grow for ever, so there IS a ceiling — four times the
+     * cap — and when it bites the caller is TOLD how many events went, because
+     * only the caller can move its own `historyStart` past them.
+     */
+    @Test
+    fun aReaderExtendedWindowStillHasACeiling() {
+        val big = TranscriptPage(events = (0 until 12).map { ev(it, "e$it") }, claudeSessionId = "s")
+        val tail = TranscriptPage(events = (0 until 5).map { ev(it, "n$it") }, claudeSessionId = "s")
+        val merged = mergeTranscriptTail(big, tail, cap = 3)
+        assertEquals(12, merged.page.events.size, "4x the cap is the ceiling")
+        assertEquals(5, merged.droppedEarlier, "and the five that went are counted")
+        assertEquals("e5", merged.page.events.first().text)
+
+        val under = mergeTranscriptTail(big, TranscriptPage(claudeSessionId = "s"), cap = 3)
+        assertEquals(0, under.droppedEarlier, "nothing dropped, nothing to report")
+    }
+
+    /**
+     * ⚠ `windowStart` IS THE HANDLE FOR READING FURTHER BACK, and the daemon's
+     * empty tail result reports it as the CURRENT offset. Taking it fresh reverted
+     * a reader who had paged all the way to byte 0 back to a nonzero start: the
+     * "Load earlier" affordance reappeared and was dead, because `historyStart`
+     * was 0 and the load bailed.
+     */
+    @Test
+    fun aTailPollDoesNotRewindTheHistoryHandle() {
+        val paged = TranscriptPage(events = listOf(ev(0, "old")), claudeSessionId = "s", windowStart = 0)
+        val tail = TranscriptPage(events = emptyList(), claudeSessionId = "s", windowStart = 5_000)
+        assertEquals(0L, mergeTranscriptPage(paged, tail).windowStart)
+
+        val partway = TranscriptPage(events = listOf(ev(0, "old")), claudeSessionId = "s", windowStart = 100)
+        assertEquals(100L, mergeTranscriptPage(partway, tail).windowStart)
     }
 
     @Test
