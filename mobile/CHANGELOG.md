@@ -1,5 +1,37 @@
 # Huginn changelog
 
+## 3.5.0 — 2026-09-18
+
+Wave 3: Projects and Consoles, and the phone half of a 99-finding edge-case hunt.
+
+- **Projects live inside Sessions.** Member sessions group under their project's heading; the
+  project tree and each project's dashboard open from there or from a Settings row; a lead's
+  proposal arrives as a card with Spawn · Edit · Discard, and a proposal notification carries
+  Spawn and Discard only. A message from another session now says who sent it instead of reading
+  as your own. Shown only on a host that has Projects (appd 3.4.0).
+- **Consoles.** The host's internal pages on Status with their reachability *from the host*, and a
+  full list with the exact rebind commands to copy. Huginn never runs them.
+- **Routes.** An address only counts as huginn once it proves it is huginn, so the token is never
+  offered to a stranger that happens to answer HTTP; a plain-http route you did not add by hand is
+  offered, not adopted. Editing a route's name and address in one Save keeps both; an address
+  huginn refuses now says so on the form instead of closing it; turning "Switch automatically" on
+  looks for a live route instead of answering that the route is pinned.
+- **Settings.** Percentage boxes accept any value in their range again (typing 92 no longer lands
+  on 50 or 100); the monthly Round's dates field no longer eats separators while you edit it.
+- **Robustness.** A damaged settings file no longer makes the app impossible to open — it is set
+  aside and the app starts locked; the app lock can no longer be skipped by setting the clock back;
+  a blank reply from the notification shade puts the notification back instead of leaving it stuck;
+  a failed question from the home-screen ask bar no longer leaves an empty chat behind; the
+  continuous watcher revives itself if its loop ends; the widget says when what it shows was true
+  and works on Android 10 and 11 again; two observations arriving at once can no longer replace a
+  question and its buttons with "Waiting for your answer".
+- **Transcripts.** A slow "load earlier" can no longer drop one session's history into another's;
+  hopping straight from one chat to another no longer leaves the new one spinning; a screen copy
+  drops terminal colour codes and keeps its links; typed newlines survive as newlines.
+- **Words.** Connection failures are said in plain words without printing huginn's address, IPv6
+  included; session names follow one rule everywhere (dots refused, dashes allowed), and a session
+  huginn cannot address no longer claims to have ended; 999,950 rounds to "1.0M", not "1000.0K".
+
 ## 3.4.0 — 2026-09-18
 
 The rest of the Wave 2 surface: links, pictures, times, and more than one attachment.
