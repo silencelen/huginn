@@ -24,6 +24,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.silencelen.huginn.data.Plan
 import com.silencelen.huginn.data.PlanLimit
+import com.silencelen.huginn.data.StatusHeadroom
 import com.silencelen.huginn.data.Usage
 
 /**
@@ -75,6 +76,31 @@ fun PlanSection(plan: Plan?, nowMs: Long, modifier: Modifier = Modifier) {
             if (extra != null) ExtraUsageCard(extra)
         }
     }
+}
+
+/**
+ * Whether a 5-hour window is running, and what keep-awake has spent keeping one
+ * open. One line, one rendering, both clients.
+ *
+ * It sits with [PlanSection] rather than in either shell because it is the same
+ * kind of fact as the bars above it and has to read as part of them — and
+ * because a feature that spends quota must be visible where the quota is, not
+ * only in a settings drawer nobody opens. The words are [HeadroomRules]'s; this
+ * is only how it looks.
+ *
+ * Draws NOTHING against a daemon that does not report the window, which is the
+ * right answer for a host that was never asked rather than a confident "no
+ * window running".
+ */
+@Composable
+fun KeepAwakeLine(headroom: StatusHeadroom?, nowMs: Long, modifier: Modifier = Modifier) {
+    val line = HeadroomRules.keepAwakeLine(headroom, nowMs) ?: return
+    Text(
+        line,
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+        modifier = modifier,
+    )
 }
 
 /**

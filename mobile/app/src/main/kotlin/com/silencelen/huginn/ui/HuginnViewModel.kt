@@ -138,6 +138,16 @@ internal fun headroomPatch(s: com.silencelen.huginn.data.HeadroomSettings): kotl
             put("threshold", kotlinx.serialization.json.JsonPrimitive(s.accountSwitch.threshold))
             put("margin", kotlinx.serialization.json.JsonPrimitive(s.accountSwitch.margin))
         })
+        put("keepAwake", kotlinx.serialization.json.JsonPrimitive(s.keepAwake))
+        put("keepAwakeModel", kotlinx.serialization.json.JsonPrimitive(s.keepAwakeModel))
+        // null, not omitted: "no quiet hours" is a value the form has to be able
+        // to SEND, and a key left out of a PATCH means "leave it alone" — so
+        // clearing the field would silently keep the old span.
+        put(
+            "keepAwakeQuietHours",
+            s.keepAwakeQuietHours?.let { kotlinx.serialization.json.JsonPrimitive(it) }
+                ?: kotlinx.serialization.json.JsonNull,
+        )
     }
 
 /**
