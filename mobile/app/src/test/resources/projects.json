@@ -1,0 +1,81 @@
+{
+  "projects": [
+    {
+      "id": "6f0d2c41-0000-4000-8000-0000000000a1",
+      "name": "LoRa sensor stick",
+      "cwd": "/root/netplan/dev-ledger/lora-stick",
+      "createdAt": 1789459900,
+      "endedAt": null,
+      "lead": {
+        "name": "lora-stick/lead",
+        "sessionId": "0123abcd-0000-4000-8000-00000000abcd"
+      },
+      "members": [],
+      "manifest": {
+        "rev": 2,
+        "receivedAt": 1789460050,
+        "summary": "Two sessions: docs writes the README, repo runs the fab checks.",
+        "text": "scope: finish the sensor stick package\nsessions:\n  docs — writes README.md and the BOM notes\n  repo — runs the DRC and files the fab package",
+        "untaggedSeen": false
+      }
+    },
+    {
+      "id": "6f0d2c41-0000-4000-8000-0000000000b2",
+      "name": "Status page flap",
+      "cwd": "/root/netplan/status-page",
+      "createdAt": 1789450000,
+      "endedAt": null,
+      "lead": {
+        "name": "statusflap/lead",
+        "sessionId": null
+      },
+      "members": [
+        {
+          "name": "statusflap/db",
+          "role": "db",
+          "sessionId": "0123abcd-0000-4000-8000-00000000d001",
+          "spawnedAt": 1789452000,
+          "state": "running",
+          "needsYou": false,
+          "pendingSends": 0,
+          "lastActivityTs": 1789459400,
+          "endedAt": null
+        },
+        {
+          "name": "statusflap/web",
+          "role": "web",
+          "sessionId": "0123abcd-0000-4000-8000-00000000d002",
+          "spawnedAt": 1789452100,
+          "state": "attention",
+          "needsYou": true,
+          "pendingSends": 2,
+          "lastActivityTs": 1789459400,
+          "endedAt": null
+        },
+        {
+          "name": "statusflap/probe",
+          "role": "probe",
+          "sessionId": "0123abcd-0000-4000-8000-00000000d003",
+          "spawnedAt": 1789452200,
+          "state": "teleporting",
+          "needsYou": null,
+          "pendingSends": null,
+          "lastActivityTs": null,
+          "endedAt": null
+        },
+        {
+          "name": "statusflap/docs",
+          "role": "docs",
+          "sessionId": null,
+          "spawnedAt": 1789452300,
+          "state": "idle",
+          "needsYou": false,
+          "pendingSends": 0,
+          "lastActivityTs": 1789455000,
+          "endedAt": 1789455200
+        }
+      ],
+      "manifest": null
+    }
+  ]
+}

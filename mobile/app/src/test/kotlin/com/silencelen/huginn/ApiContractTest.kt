@@ -2,19 +2,25 @@ package com.silencelen.huginn
 
 import com.silencelen.huginn.data.AgentsInfo
 import com.silencelen.huginn.data.ChatList
+import com.silencelen.huginn.data.ConsoleList
 import com.silencelen.huginn.data.DeviceList
 import com.silencelen.huginn.data.Headroom
 import com.silencelen.huginn.data.Plan
+import com.silencelen.huginn.data.ProjectDashboard
+import com.silencelen.huginn.data.ProjectList
 import com.silencelen.huginn.data.RoundList
 import com.silencelen.huginn.data.SavedAccounts
 import com.silencelen.huginn.data.Screen
 import com.silencelen.huginn.data.SendKeysResult
 import com.silencelen.huginn.data.SessionList
+import com.silencelen.huginn.data.SpawnResult
 import com.silencelen.huginn.data.Status
 import com.silencelen.huginn.data.TranscriptPage
 import com.silencelen.huginn.data.Watch
+import com.silencelen.huginn.ui.ConsoleRules
 import com.silencelen.huginn.ui.HeadroomRules
 import com.silencelen.huginn.ui.PlanFormat
+import com.silencelen.huginn.ui.ProjectRules
 import com.silencelen.huginn.ui.StreamPicker
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.jsonArray
@@ -473,5 +479,236 @@ class ApiContractTest {
         val old = json.decodeFromString<SendKeysResult>("""{"ok":true}""")
         assertTrue(old.ok)
         assertTrue("no queue means it landed outright", old.landed)
+    }
+
+    // --------------------------------------------- projects + consoles (Wave 3)
+    //
+    // ⚠ ALIGNED TO THE CONTRACT, NOT CAPTURED. `/v1/projects` and `/v1/consoles`
+    // both 404 on the live daemon: these routes are being built on two other
+    // branches right now. So these fixtures are the WIRE CONTRACT WRITTEN DOWN —
+    // the grammar this client will decode, pinned as literal JSON so that the
+    // moment the daemon lands and disagrees, the disagreement is a red test here
+    // instead of an empty screen on a phone. RE-CAPTURE LIVE AFTER DEPLOY.
+    //
+    // ⚠⚠ EVERY CLOCK ON THESE TWO ROUTES IS EPOCH SECONDS, and it is asserted
+    // from both directions. The headroom routes are milliseconds, the session
+    // routes are seconds, and there is no field-name tell between them — which is
+    // exactly how a fixture once carried seconds beside the daemon's millis and
+    // the contract test agreed with itself and with nothing else.
+
+    @Test
+    fun `projects decode with the tree and the manifest fields`() {
+        val list = json.decodeFromString<ProjectList>(fixture("projects.json"))
+        assertEquals(2, list.projects.size)
+
+        val proposed = list.projects.first()
+        assertEquals("LoRa sensor stick", proposed.name)
+        assertEquals("/root/netplan/dev-ledger/lora-stick", proposed.cwd)
+        // The peer name is the `--name <slug>/<role>` form; it is what SendMessage
+        // addresses and what a peer message is labelled with.
+        assertEquals("lora-stick/lead", proposed.lead?.name)
+        assertNotNull("the lead's Claude session id", proposed.lead?.sessionId)
+        assertTrue("a proposal with no members yet", proposed.members.isEmpty())
+        assertEquals(2, proposed.manifest?.rev)
+        assertTrue("the card leads with this", !proposed.manifest?.summary.isNullOrBlank())
+        assertTrue("and renders this as text", proposed.manifest!!.text!!.contains("sessions:"))
+        assertTrue(ProjectRules.hasProposal(proposed))
+
+        val active = list.projects[1]
+        assertEquals(4, active.members.size)
+        val web = active.members.first { it.role == "web" }
+        assertEquals("statusflap/web", web.name)
+        assertEquals("attention", web.state)
+        assertEquals(java.lang.Boolean.TRUE, web.needsYou)
+        assertEquals(java.lang.Integer.valueOf(2), web.pendingSends)
+
+        // ⚠ THE UNKNOWN WORD, DECODED AND THEN DROPPED. A newer daemon inventing a
+        // fifth state must not fail this list, and must not be drawn as idle.
+        val probe = active.members.first { it.role == "probe" }
+        assertEquals("teleporting", probe.state)
+        assertNull("an unknown state is no state", ProjectRules.stateWord(probe))
+        assertNull("and it does not invent a needsYou", probe.needsYou)
+        assertNull("nor a queue depth", probe.pendingSends)
+
+        val docs = active.members.first { it.role == "docs" }
+        assertNotNull("an ended member keeps its row", docs.endedAt)
+        assertNull("but loses its mark", ProjectRules.stateWord(docs))
+
+        assertEquals("1 of 3 working · 1 needs you · 1 ended", ProjectRules.rollupWords(active.members))
+
+        // ⚠ ON THE RAW JSON, because a model default cannot tell an absent key
+        // from a null one, and the drift is about presence: every member row
+        // carries all seven, even when three of them are null.
+        val rows = json.parseToJsonElement(fixture("projects.json"))
+            .jsonObject["projects"]!!.jsonArray[1].jsonObject["members"]!!.jsonArray.map { it.jsonObject }
+        listOf("name", "role", "sessionId", "spawnedAt", "state", "needsYou", "pendingSends", "lastActivityTs")
+            .forEach { key -> rows.forEach { assertTrue("every member carries $key", key in it) } }
+
+        // Seconds, not millis. Both directions: too small for a millisecond clock,
+        // too large to be anything but an epoch.
+        list.projects.forEach {
+            assertTrue("createdAt is epoch SECONDS", it.createdAt in 1_000_000_000..9_999_999_999)
+        }
+    }
+
+    @Test
+    fun `a dashboard decodes its totals and its members`() {
+        val d = json.decodeFromString<ProjectDashboard>(fixture("project-dashboard.json"))
+        assertEquals("Status page flap", d.project?.name)
+        assertEquals(3, d.members.size)
+        assertTrue("updatedAt is epoch SECONDS", d.updatedAt in 1_000_000_000..9_999_999_999)
+
+        val db = d.members.first { it.role == "db" }
+        // The headroom cell is the one number a twelve-session cluster needs.
+        assertEquals("fable", db.headroom?.family)
+        assertEquals("opus", db.headroom?.ladder)
+        assertEquals(2, db.streams.size)
+        assertEquals("one agent still writing", 1, db.streams.count { it.active })
+        // ⚠ THE BARE HEX, as `/agents` emits it — a prefixed id here would be a
+        // fixture agreeing with a client that 400s on every chip.
+        assertTrue("agent ids are bare", db.streams.none { it.id.startsWith("agent-") })
+        assertEquals(14, db.totals?.turns)
+        assertEquals(92, db.totals?.toolCalls)
+
+        val web = d.members.first { it.role == "web" }
+        assertTrue("a stalled member must decode", web.headroom!!.stalled)
+        assertFalse("auto-resume off must survive", web.headroom!!.autoResume)
+        assertNull("a member the daemon has not walked has no totals", web.totals)
+
+        // The project-wide sums, which is what makes the shared StatsHeader usable.
+        assertEquals(31, d.totals?.turns)
+        assertEquals(4.18, d.totals!!.estCost!!.usd, 0.001)
+        assertEquals(listOf("claude-fable-5-1", "claude-opus-5"), d.totals!!.models)
+        assertTrue("the pace card needs this", d.rate!!.activeRecently)
+
+        // The rollup on the dashboard is the SAME sentence the list row carries.
+        assertEquals(
+            "1 of 3 working · 1 needs you",
+            ProjectRules.rollupWords(d.members.map { it.asMember() }),
+        )
+    }
+
+    @Test
+    fun `a spawn result decodes as partial rather than as a failure`() {
+        val r = json.decodeFromString<SpawnResult>(fixture("spawn-result.json"))
+        assertEquals(3, r.results.size)
+        assertEquals(2, r.results.count { it.ok })
+        val failed = r.results.first { !it.ok }
+        assertEquals("statusflap/docs", failed.name)
+        // ⚠ THE DAEMON'S OWN SENTENCE. "a session called statusflap-docs already
+        // exists" tells somebody what to do; a client's summary of it does not.
+        assertEquals("a session called statusflap-docs already exists", failed.error)
+        assertEquals("2 of 3 started · 1 failed", ProjectRules.spawnWords(r))
+    }
+
+    @Test
+    fun `consoles decode with the registry, the approval and the row with no verdict`() {
+        val list = json.decodeFromString<ConsoleList>(fixture("consoles.json"))
+        assertEquals(4, list.consoles.size)
+        val nowMs = 1_789_460_000_000L
+
+        // The registry's own facts, which an editor needs and a row does not.
+        assertEquals(32, list.max)
+        assertEquals("host", list.reachableFrom)
+        assertEquals(300_000L, list.probeIntervalMs)
+        // ⚠ THE CLIENT'S COPY OF THE VOCABULARY IS THE ONE THAT DECIDES what a
+        // chip says, so it must BE the daemon's list rather than resemble it.
+        assertEquals(listOf("dashboard", "tool", "docs", "lab", "other"), list.kinds)
+        assertEquals("the client mirrors the daemon's kinds", ConsoleRules.KINDS, list.kinds)
+
+        val armap = list.consoles.first { it.id == "armap" }
+        assertEquals("http://huginn:8088/", armap.url)
+        assertEquals("host", armap.reachableFrom)
+        assertEquals(3, armap.version)
+        assertEquals(
+            "up from the host · checked 1m ago",
+            ConsoleRules.reachabilityWords(armap.up, armap.lastProbeAt, nowMs),
+        )
+        assertEquals("12 ms · HTTP 200", ConsoleRules.probeDetail(armap))
+        assertNull("the seeded rows are legal addresses", ConsoleRules.urlProblem(armap.url))
+
+        // A 403 page is UP: something answered.
+        val jtyper = list.consoles.first { it.id == "jtyper" }
+        assertEquals(java.lang.Integer.valueOf(403), jtyper.httpStatus)
+        assertEquals(ConsoleRules.Reach.UP, ConsoleRules.reach(jtyper))
+
+        // A kind outside the daemon's five lands in `other`, not in a blank chip.
+        val board = list.consoles.first { it.id == "board" }
+        assertEquals(ConsoleRules.Reach.DOWN, ConsoleRules.reach(board))
+        assertEquals("hardware", board.kind)
+        assertEquals("other", ConsoleRules.kindWords(board.kind))
+
+        // ⚠⚠ THE THIRD STATE, AND THE WHOLE POINT OF THE FIXTURE CARRYING IT. The
+        // daemon keeps probe state in memory, so after every restart EVERY row
+        // looks like this. It is not a row that is down.
+        val btc = list.consoles.first { it.id == "btc15m" }
+        assertNull("no verdict yet", btc.up)
+        assertEquals("never probed is 0, not null and never 1970", 0L, btc.lastProbeAt)
+        assertEquals("not checked yet", ConsoleRules.reachabilityWords(btc.up, btc.lastProbeAt, nowMs))
+        assertFalse(
+            "an unchecked console must never be accused",
+            ConsoleRules.reachabilityWords(btc.up, btc.lastProbeAt, nowMs).contains("not answering"),
+        )
+
+        // ⚠ THE APPROVAL IS LIST-LEVEL: one job covering every row, one card.
+        val approval = list.approval
+        assertNotNull("the registry carries its own approval", approval)
+        assertFalse("not applied on this host yet", approval!!.applied)
+        assertEquals("owner", approval.runBy)
+        assertNotNull("the marker file is what `applied` is read from", approval.markerPath)
+        assertEquals(2, ConsoleRules.approvalSteps(approval).size)
+        assertEquals("every command across both steps", 7, ConsoleRules.approvalCommands(approval).size)
+        assertTrue(
+            "the firewall step names heimdall's own file",
+            ConsoleRules.approvalSteps(approval).any { it.file == "/etc/pve/firewall/117.fw" },
+        )
+        assertTrue(
+            "and says it runs somewhere else",
+            ConsoleRules.approvalSteps(approval).any { it.where == "heimdall" },
+        )
+
+        // ⚠ RAW-JSON PRESENCE, for the reason the member rows have it: a model
+        // default cannot tell an absent key from a null one, and `up` is always a
+        // key — a renamed one would read as an unchecked console forever.
+        val rows = json.parseToJsonElement(fixture("consoles.json"))
+            .jsonObject["consoles"]!!.jsonArray.map { it.jsonObject }
+        listOf("id", "name", "url", "kind", "notes", "addedAt", "version", "up", "lastProbeAt",
+            "latencyMs", "httpStatus", "reachableFrom")
+            .forEach { key -> rows.forEach { assertTrue("every console carries $key", key in it) } }
+        list.consoles.forEach {
+            assertTrue("addedAt is epoch SECONDS", it.addedAt in 1_000_000_000..9_999_999_999)
+        }
+    }
+
+    /**
+     * ⚠ A PEER MESSAGE IS A SYSTEM NOTE, NOT A USER BUBBLE (decision 50).
+     *
+     * Today's transcript reader knows nothing about `<cross-session-message`, so a
+     * teammate session's message renders as though the OWNER had typed it — the
+     * D-G failure, on a surface where the sessions talk constantly. The chosen
+     * shape degrades safely: an older client that has never heard of `peer` still
+     * draws a system note, because the `kind` alone already says what it is.
+     */
+    @Test
+    fun `a peer message decodes as a system note that knows who sent it`() {
+        val p = json.decodeFromString<TranscriptPage>(
+            """{"events":[{"seq":7,"kind":"system","ts":1789459400,
+               "text":"lora-stick/docs: README.md is written.",
+               "peer":{"name":"lora-stick/docs","sessionId":"0123abcd-0000-4000-8000-00000000d004"}}],
+               "nextOffset":812}""",
+        )
+        val e = p.events.single()
+        assertEquals("system", e.kind)
+        // ⚠ LABEL FROM origin.name, NOT FROM THE RENDERED PREVIEW: the @handle
+        // form slugifies the slash (`lora-stick/docs` → `@lora-stick-docs`), so
+        // the text cannot be trusted to carry the addressable name.
+        assertEquals("lora-stick/docs", e.peer?.name)
+        assertNotNull("the sessionId is what a tap would open", e.peer?.sessionId)
+
+        // And an ordinary system event still has none, rather than an empty one.
+        val plain = json.decodeFromString<TranscriptPage>(
+            """{"events":[{"seq":8,"kind":"system","text":"Compacted."}],"nextOffset":900}""",
+        )
+        assertNull("no peer block means no peer", plain.events.single().peer)
     }
 }
