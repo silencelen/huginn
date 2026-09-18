@@ -99,6 +99,8 @@ import com.silencelen.huginn.ui.ScratchpadEditorView
 import com.silencelen.huginn.ui.ScratchpadListView
 import com.silencelen.huginn.ui.HuginnViewModel
 import com.silencelen.huginn.ui.LocalAttachmentImages
+import androidx.compose.ui.platform.UriHandler
+import androidx.compose.ui.platform.LocalUriHandler
 import com.silencelen.huginn.ui.OverviewDensity
 import com.silencelen.huginn.ui.SessionOverviewView
 import com.silencelen.huginn.ui.SessionScreen
@@ -224,7 +226,29 @@ class MainActivity : FragmentActivity() {
                     // Photo attachments render as real thumbnails in chat history;
                     // without this (or against an old daemon) rows fall back to the
                     // "photo attached" pill.
-                    CompositionLocalProvider(LocalAttachmentImages provides vm.attachmentImages) {
+                    // A link in an answer hands off to the browser — http(s)
+                    // ONLY. `huginn://` is this app's own deep link and `file:`
+                    // reads the phone's storage; neither is something a model's
+                    // output gets to reach by being tapped. What will not open is
+                    // copied, so the reader still has it.
+                    val linkHandler = remember(vm) {
+                        object : UriHandler {
+                            override fun openUri(uri: String) {
+                                val scheme = runCatching { Uri.parse(uri).scheme }.getOrNull()?.lowercase()
+                                if (scheme != "http" && scheme != "https") return
+                                runCatching {
+                                    startActivity(
+                                        Intent(Intent.ACTION_VIEW, Uri.parse(uri))
+                                            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                                    )
+                                }.onFailure { vm.copy(uri, "link") }
+                            }
+                        }
+                    }
+                    CompositionLocalProvider(
+                        LocalAttachmentImages provides vm.attachmentImages,
+                        LocalUriHandler provides linkHandler,
+                    ) {
                         HuginnApp(
                             target = openTarget.value,
                             onLockNow = { lockError.value = null; AppLock.lockedNow = true; locked.value = true },

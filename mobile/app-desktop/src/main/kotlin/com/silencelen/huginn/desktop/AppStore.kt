@@ -162,11 +162,20 @@ class AppStore(
     val sentHistory = SentHistory(settings, scope)
 
     /**
-     * Thumbnails for photo attachments in chat history. App level so decoded
-     * bitmaps survive scrolling and view switches; provided to the shared
-     * transcript renderer via [com.silencelen.huginn.ui.LocalAttachmentImages].
+     * Thumbnails for photo attachments in chat history, AND for image files an
+     * answer names. App level so decoded bitmaps survive scrolling and view
+     * switches; provided to the shared transcript renderer via
+     * [com.silencelen.huginn.ui.LocalAttachmentImages].
+     *
+     * Two fetchers because they are two routes with two different keys — see
+     * `AttachmentImageLoader.loadPath`. Against a daemon with no
+     * `/v1/files/image` the second one simply 404s into the negative cache.
      */
-    val attachmentImages = AttachmentImageLoader({ client.uploadBytes(it) }, SkiaImageBytesDecoder())
+    val attachmentImages = AttachmentImageLoader(
+        fetch = { client.uploadBytes(it) },
+        decoder = SkiaImageBytesDecoder(),
+        fetchPath = { path, session -> client.imageBytes(path, session) },
+    )
 
     init {
         current = this

@@ -777,6 +777,32 @@ class HuginnClient(
         return resp.bodyAsBytes()
     }
 
+    /**
+     * Reads an image file the assistant NAMED — a rendered chart, a screenshot —
+     * so the transcript can draw it instead of printing a path nobody can open
+     * from here. Distinct from [uploadBytes], which reads back a file this client
+     * itself uploaded and addresses it by the server-minted basename.
+     *
+     * ⚠ CONTAINMENT IS THE DAEMON'S, NOT THIS CLIENT'S. `GET /v1/files/image`
+     * resolves the path against its own allowlisted roots (uploads, the
+     * scratchpad render dir, the session's cwd when [session] is given) and
+     * answers 403 for everything else, plus 415 for a non-image type and 413 for
+     * an oversized one. This side must never grow its own copy of that rule: two
+     * opinions about what is readable is how one of them gets it wrong. Passing
+     * [session] asks the daemon to consider that session's working directory —
+     * it does not widen anything here.
+     *
+     * Throws like every other call on a non-2xx; the thumbnail loader turns that
+     * into a remembered miss and a placeholder.
+     */
+    suspend fun imageBytes(path: String, session: String? = null): ByteArray {
+        val q = StringBuilder("/v1/files/image?path=").append(path.encodeURLParameter())
+        session?.takeIf { it.isNotBlank() }?.let { q.append("&session=").append(it.encodeURLParameter()) }
+        val resp = http.request { build(q.toString(), HttpMethod.Get, Tier.NORMAL, null) }
+        if (!resp.status.isSuccess()) throw errorFrom(resp.status.value, resp.bodyAsText())
+        return resp.bodyAsBytes()
+    }
+
     private fun uploadQuery(name: String?) = name?.let { "?name=" + it.encodeURLParameter() } ?: ""
 
     /** Renames a chat; the title is the only field this touches. */

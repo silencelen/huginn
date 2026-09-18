@@ -1,7 +1,28 @@
 package com.silencelen.huginn.ui
 
+import androidx.compose.foundation.Image
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Surface
+import androidx.compose.material3.Text
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import androidx.compose.runtime.staticCompositionLocalOf
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.window.Dialog
 import com.silencelen.huginn.data.huginnIoDispatcher
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.sync.Mutex
@@ -44,6 +65,7 @@ class AttachmentImageLoader(
     private val fetch: suspend (name: String) -> ByteArray,
     private val decoder: ImageBytesDecoder,
     private val budgetBytes: Long = DEFAULT_BUDGET_BYTES,
+    private val fetchPath: (suspend (path: String, session: String?) -> ByteArray)? = null,
 ) {
 
     private class Entry(val bitmap: ImageBitmap?) {
@@ -62,40 +84,64 @@ class AttachmentImageLoader(
      */
     suspend fun load(path: String): ImageBitmap? {
         val name = AttachmentText.uploadName(path) ?: return null
+        return cached(name) { fetch(name) }
+    }
+
+    /**
+     * The bitmap for a file path the ASSISTANT named, through the daemon's
+     * `/v1/files/image` route, or null (no such route, refused, missing,
+     * undecodable — draw the placeholder).
+     *
+     * ⚠ KEYED ON THE FULL PATH, unlike [load]. An uploads basename is unique by
+     * construction because the server minted it; an assistant's is not — every
+     * session writes `screenshot.png` into its own directory, and a basename key
+     * would serve the first one to all of them. The wrong picture, cached, with
+     * nothing in the logs.
+     *
+     * @param session asks the daemon to also consider that session's working
+     * directory. It widens the DAEMON's search, never this client's.
+     */
+    suspend fun loadPath(path: String, session: String? = null): ImageBitmap? {
+        val fetcher = fetchPath ?: return null
+        if (path.isBlank()) return null
+        return cached(PATH_KEY + path) { fetcher(path, session) }
+    }
+
+    private suspend fun cached(key: String, fetchBytes: suspend () -> ByteArray): ImageBitmap? {
         // Fast path + in-flight join decided under the lock; awaiting a peer's
         // fetch and doing our own both happen OUTSIDE it.
         var join: CompletableDeferred<ImageBitmap?>? = null
         var waitFor: CompletableDeferred<ImageBitmap?>? = null
         lock.withLock {
-            cache[name]?.let { hit ->
+            cache[key]?.let { hit ->
                 // Touch: re-insert so eviction order tracks use.
-                cache.remove(name); cache[name] = hit
+                cache.remove(key); cache[key] = hit
                 return hit.bitmap
             }
-            val existing = inFlight[name]
+            val existing = inFlight[key]
             if (existing != null) join = existing
             else {
                 waitFor = CompletableDeferred()
-                inFlight[name] = waitFor
+                inFlight[key] = waitFor
             }
         }
         join?.let { return it.await() }
         val bitmap = withContext(huginnIoDispatcher) {
-            val bytes = runCatching { fetch(name) }.getOrNull()
+            val bytes = runCatching { fetchBytes() }.getOrNull()
             if (bytes == null || bytes.isEmpty()) null
             else runCatching { decoder.decode(bytes) }.getOrNull()
         }
         lock.withLock {
             val e = Entry(bitmap)
-            cache[name] = e
+            cache[key] = e
             spent += e.cost
-            inFlight.remove(name)
+            inFlight.remove(key)
             // Evict oldest-touched until back under budget; never evict what was
             // just inserted (a single oversized decode still renders once).
             val it = cache.entries.iterator()
             while (spent > budgetBytes && it.hasNext()) {
                 val oldest = it.next()
-                if (oldest.key == name) continue
+                if (oldest.key == key) continue
                 spent -= oldest.value.cost
                 it.remove()
             }
@@ -108,6 +154,14 @@ class AttachmentImageLoader(
         const val DEFAULT_BUDGET_BYTES: Long = 48L * 1024 * 1024
         /** What a remembered miss "costs" — nominal, so misses never starve real entries. */
         private const val NEGATIVE_COST: Long = 1024
+
+        /**
+         * Namespaces the full-path keys away from [load]'s basename keys. The two
+         * share one LRU (one budget, one eviction order) but must never collide:
+         * an upload called `a.png` and a host path `/tmp/a.png` are two different
+         * fetches from two different routes.
+         */
+        private const val PATH_KEY = "path\u0000"
     }
 }
 
@@ -117,3 +171,77 @@ class AttachmentImageLoader(
  * against an old daemon with no uploads GET.
  */
 val LocalAttachmentImages = staticCompositionLocalOf<AttachmentImageLoader?> { null }
+
+/**
+ * Which image, if any, is open at full size.
+ *
+ * A hoisted holder rather than a `remember` inside the composable, so the rules —
+ * what opens it, what closes it, and what must NOT open it — are asserted in a
+ * test instead of by looking at a screenshot.
+ */
+class ImageViewerState {
+
+    private var shown by mutableStateOf<Pair<String, ImageBitmap>?>(null)
+
+    val path: String? get() = shown?.first
+    val bitmap: ImageBitmap? get() = shown?.second
+    val isOpen: Boolean get() = shown != null
+
+    /**
+     * Opens [path] at full size. A null [bitmap] is a no-op: a thumbnail that
+     * never decoded has nothing to show, and an empty viewer someone has to
+     * dismiss is worse than a tap that did nothing.
+     */
+    fun open(path: String, bitmap: ImageBitmap?) {
+        if (bitmap != null) shown = path to bitmap
+    }
+
+    /** Closes it, and lets go of the bitmap rather than pinning it in RAM. */
+    fun close() { shown = null }
+}
+
+/**
+ * The full-size view of a thumbnail that was tapped. A dismissable overlay with
+ * the picture and its path — no zoom, no pan, no gallery: the question this
+ * answers is "what does that actually say", and the next tap is always away.
+ */
+@Composable
+fun FullImageViewer(state: ImageViewerState) {
+    val bitmap = state.bitmap ?: return
+    Dialog(onDismissRequest = state::close) {
+        Surface(
+            color = MaterialTheme.colorScheme.surface,
+            shape = RoundedCornerShape(12.dp),
+            tonalElevation = 3.dp,
+        ) {
+            Column(
+                Modifier
+                    .padding(10.dp)
+                    .clickable(onClick = state::close),
+                horizontalAlignment = Alignment.CenterHorizontally,
+            ) {
+                Image(
+                    bitmap = bitmap,
+                    contentDescription = state.path,
+                    contentScale = ContentScale.Fit,
+                    modifier = Modifier.heightIn(max = 720.dp).widthIn(max = 960.dp),
+                )
+                state.path?.let {
+                    Spacer(Modifier.height(6.dp))
+                    Text(
+                        it,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
+        }
+    }
+}
+
+/**
+ * The session whose working directory the daemon may also look in when resolving
+ * an image path. Null — the default — means the daemon's own roots only, which
+ * is the right answer for a chat that has no session behind it.
+ */
+val LocalImageSession = staticCompositionLocalOf<String?> { null }
