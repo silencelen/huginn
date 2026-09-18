@@ -42,6 +42,9 @@ const { isLimitStall, parseLimitError, lastNonAttachmentRecord } = require('./li
 // and its anti-flap guards were tested against real accounts and there is no
 // version of "rewrite them here" that is not a regression waiting to happen.
 const { decideSwitch, worstLimit, explain: explainSwitch } = require('./autoswitch');
+// One-way: keepawake.js requires nothing from here, so the settings that
+// configure it can live beside every other setting without a cycle.
+const keepawake = require('./keepawake');
 
 const FAMILIES = ['fable', 'opus', 'sonnet', 'haiku'];
 const WINDOWS = ['session', 'weekly_all', 'weekly_fable'];
@@ -72,6 +75,16 @@ function defaults() {
     resumePhrase: 'Your usage limit has reset. Continue the task you were working on when the limit was reached; do not repeat work that is already complete.',
     headsUpText: '[huginn headroom] You are at {pct}% of this account\'s Fable weekly limit. Write a short handoff note now (what is done, what is next, which files matter), then continue. huginn will move this session to {next} at {ladderPct}%.',
     accountSwitch: { enabled: false, threshold: 95, margin: 20 },
+
+    // ---- keep-awake (lib/keepawake.js). OFF, and it must STAY off through an
+    // upgrade: this is the first setting that spends the owner's quota with
+    // nobody asking, so arriving switched on because a daemon was updated would
+    // be indefensible. `false` is the default here AND the answer a settings
+    // file written before this feature existed normalises to.
+    keepAwake: false,
+    keepAwakeModel: keepawake.DEFAULT_MODEL,
+    /** `"HH:MM-HH:MM"` local, or null for none. Empty by default — see the decision row. */
+    keepAwakeQuietHours: null,
   };
 }
 
@@ -196,6 +209,42 @@ function validateSettings(patch, base = defaults(), { knownModels = null } = {})
         return { ok: false, error: 'accountSwitch.margin must be a whole percentage between 0 and 100' };
       }
       s.accountSwitch.margin = a.margin;
+    }
+  }
+
+  if ('keepAwake' in patch) {
+    if (typeof patch.keepAwake !== 'boolean') return { ok: false, error: 'keepAwake must be true or false' };
+    s.keepAwake = patch.keepAwake;
+  }
+  if ('keepAwakeModel' in patch) {
+    const v = patch.keepAwakeModel;
+    if (typeof v !== 'string' || !v.trim()) {
+      return { ok: false, error: 'keepAwakeModel must be a model id or family alias' };
+    }
+    const id = v.trim();
+    // The same shape rule `defaultModel` gets, and for the same reason: this
+    // string reaches an argv. A family alias is allowed but the DATED id is the
+    // default — see keepawake.js on why the alias is the weaker choice for a
+    // call whose whole justification is that it is cheap.
+    const known = Array.isArray(knownModels) && knownModels.length
+      ? knownModels.some((m) => (typeof m === 'string' ? m : m && m.id) === id)
+      : false;
+    if (!known && !FAMILIES.includes(id) && !parseModelId(id)) {
+      return { ok: false, error: 'keepAwakeModel must be a model id or family alias' };
+    }
+    s.keepAwakeModel = id;
+  }
+  if ('keepAwakeQuietHours' in patch) {
+    const v = patch.keepAwakeQuietHours;
+    if (v === null || (typeof v === 'string' && !v.trim())) {
+      // Empty IS the default. A form that clears the field must be able to say
+      // so, and "" and null have to mean the same thing or the phone and the
+      // desktop will each pick one.
+      s.keepAwakeQuietHours = null;
+    } else if (typeof v !== 'string' || !keepawake.parseQuietHours(v)) {
+      return { ok: false, error: 'keepAwakeQuietHours must be two local clock times, as HH:MM-HH:MM' };
+    } else {
+      s.keepAwakeQuietHours = stripC0(v).trim();
     }
   }
 

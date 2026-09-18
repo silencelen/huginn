@@ -65,6 +65,12 @@ const typing = require('./lib/typing');
 // actions out. Pure, so every judgment call it makes is asserted in
 // test/headroom.test.js rather than discovered on a live account.
 const headroomLib = require('./lib/headroom');
+// Keep-awake: whether to spend one tiny request on starting a 5-hour window
+// nobody is using yet. Pure — the vetoes, the quiet-hours arithmetic and the
+// argv are all asserted in test/keepawake.test.js, which matters more here than
+// anywhere else in the daemon because this is the one lane that costs money
+// unprompted.
+const keepAwakeLib = require('./lib/keepawake');
 // The sentinel files the hook gate watches, and the held/ directory it writes.
 const sentinelsLib = require('./lib/sentinels');
 // Auto-resume: reading a 429 stall off a transcript, deciding whether Claude
@@ -5393,6 +5399,13 @@ function normalizeHeadroomState(o) {
       switches: 0, lastIdleWarnAt: 0, lastResumeAt: 0,
       ...(src.arbiter && typeof src.arbiter === 'object' ? src.arbiter : {}),
     },
+    // ⚠ NORMALISED, NOT SPREAD. A headroom.json written by a daemon that
+    // predates keep-awake has no such key, and the whole once-per-window guard
+    // is `now - lastAt`: an absent or half-written number that reached the
+    // comparison as undefined would make every tick a fresh ping. normalize()
+    // coerces each field to a real number, so a missing file reads as "never
+    // pinged" rather than as "no idea".
+    keepAwake: keepAwakeLib.normalize(src.keepAwake),
   };
 }
 
@@ -5870,8 +5883,94 @@ async function headroomTickInner() {
     }
   }
 
+  // ---- 6. keep-awake -------------------------------------------------------
+  // LAST, deliberately. Everything above may change the picture this decides on
+  // — the arbiter can move the active account, a resume can start a window on
+  // its own — and a ping that went out first would be spending a window on the
+  // login we were about to leave.
+  await maybeKeepAwake({ state, settings, activeWindows, worst, verdict, now });
+
   saveHeadroomState(state);
   return headroomCadence(live);
+}
+
+/** One ping at a time, within this process. The disk `lastAt` covers the rest. */
+let keepAwakeBusy = false;
+
+/**
+ * Keep one 5-hour window rotating: send a tiny request when none is running.
+ *
+ * The decision is [keepAwakeLib.decide]'s and every veto in it is asserted; this
+ * function is the I/O half — read the sentinels, spawn the CLI, write the
+ * counters — and the ORDER inside it is the load-bearing part:
+ *
+ *   1. stamp `lastAt` and SAVE IT, then
+ *   2. spawn.
+ *
+ * Never the other way round. A daemon that dies between the two must come back
+ * believing the window has been dealt with; the cost of a missed ping is that
+ * the window starts when the owner does, which is exactly today's behaviour,
+ * while the cost of a double ping is real money and a wrong number on the
+ * Status page.
+ */
+async function maybeKeepAwake({ state, settings, activeWindows, worst, verdict, now }) {
+  if (keepAwakeBusy) return;
+
+  let sentinels = state.sentinels;
+  try { sentinels = sentinelsLib.state(HEADROOM_DIR); } catch { /* no dir yet: nothing armed */ }
+
+  const d = keepAwakeLib.decide({
+    settings,
+    windows: activeWindows,
+    worst,
+    sentinels,
+    keepAwake: state.keepAwake,
+    actions: (verdict && verdict.actions) || [],
+    arbiter: state.arbiter,
+    planError: planCache.error,
+    haveReading: !!planCache.data,
+    now,
+    minutes: keepAwakeLib.minutesOfDay(now),
+  });
+  // Recorded either way. A feature that is switched on and doing nothing has a
+  // dozen legitimate reasons for it, and this is the only one of them the owner
+  // can read without a shell on the host. It also makes the wire testable: "did
+  // not ping" and "never even looked" are the same picture without it, which is
+  // exactly how the first version of the red-week test passed with its veto
+  // deleted.
+  state.keepAwake = keepAwakeLib.noteDecision(state.keepAwake, d, now);
+  if (!d.fire) return;
+
+  keepAwakeBusy = true;
+  const before = keepAwakeLib.normalize(state.keepAwake);
+  state.keepAwake = keepAwakeLib.noteFired(before, now);
+  saveHeadroomState(state);
+
+  const model = settings.keepAwakeModel || keepAwakeLib.DEFAULT_MODEL;
+  const argv = keepAwakeLib.argvFor(model);
+  const started = Date.now();
+  try {
+    const r = await run('claude', argv, { timeout: keepAwakeLib.TIMEOUT_MS, cwd: DATA_DIR });
+    const outcome = keepAwakeLib.classifyOutcome(r);
+    state.keepAwake = keepAwakeLib.afterSpawn(state.keepAwake, outcome, now);
+    const ms = Date.now() - started;
+    if (outcome === 'ok') {
+      log(`headroom: kept the 5-hour window awake (${model}, ${ms}ms, `
+        + `${state.keepAwake.keptAwakeToday}x today)`);
+    } else {
+      // The reason, not just the verdict: "hold" and "retry" are the difference
+      // between a window lost for five hours and one retried in a minute, and
+      // the journal is the only place that distinction is ever visible.
+      const why = ((r.stderr || r.err.message || '').trim() || 'no output').slice(0, 160);
+      log(`headroom: keep-awake ping failed after ${ms}ms (${outcome}): ${why}`);
+    }
+  } catch (e) {
+    state.keepAwake = keepAwakeLib.afterSpawn(state.keepAwake, 'hold', now);
+    log(`headroom: keep-awake ping threw: ${e.message}`);
+  } finally {
+    keepAwakeBusy = false;
+    saveHeadroomState(state);
+  }
 }
 
 /** One action from the arbiter, with its preconditions re-checked at apply time. */
@@ -6864,8 +6963,15 @@ function headroomStatus() {
   const settings = loadHeadroomSettings();
   const active = Object.values(st.accounts || {}).find((a) => a && a.live) || null;
   const worst = active ? headroomLib.worstWindow(active.windows, settings) : null;
+  const now = Date.now();
   let held = [];
-  try { held = sentinelsLib.listHeld(HEADROOM_DIR, Date.now()); } catch { /* no dir yet */ }
+  try { held = sentinelsLib.listHeld(HEADROOM_DIR, now); } catch { /* no dir yet */ }
+  // Is a 5-hour window running at all? ONE field on the wire decides it: while
+  // no window is running the endpoint reports the session row with
+  // `resets_at: null`, and `agedLimits` copies that through verbatim rather than
+  // inventing it. Everything the keep-awake line says rests on this tell.
+  const session = (active && active.windows && active.windows.session) || null;
+  const windowResetsAt = (session && session.resetsAt) || null;
   return {
     worstPercent: worst ? worst.percent : null,
     worstLabel: worst ? worst.label : null,
@@ -6873,6 +6979,9 @@ function headroomStatus() {
     mode: st.mode || 'ok',
     sentinels: Object.entries(st.sentinels || {}).filter(([, v]) => !!v).map(([k]) => k),
     paused: held.length,
+    windowRunning: windowResetsAt != null,
+    windowResetsAt,
+    keepAwake: keepAwakeLib.view(st.keepAwake, settings, now),
   };
 }
 
@@ -6925,6 +7034,16 @@ function headroomPayload() {
     held,
     resets: (st.resets || []).slice(-20),
     arbiter: st.arbiter,
+    // Beside the arbiter because it is the same KIND of fact: bookkeeping about
+    // what the daemon did on its own. `nextEligibleAt` is derived rather than
+    // stored — it is `lastAt` plus a window, and storing it would be a second
+    // copy of the guard to get out of step with the first.
+    keepAwake: {
+      ...keepAwakeLib.view(st.keepAwake, settings, now),
+      nextEligibleAt: (st.keepAwake && st.keepAwake.lastAt)
+        ? st.keepAwake.lastAt + keepAwakeLib.FIVE_HOURS_MS
+        : 0,
+    },
     settings,
     // ⚠ MILLISECONDS. It used to be the one seconds field in a payload whose
     // `ladder.at`, `headsUpAt`, `accounts[].readAt` and `arbiter.last*At` are
