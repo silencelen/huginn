@@ -10,7 +10,7 @@
 // against Claude Code v2.1.258 on a 200x50 pane.
 
 const { randomBytes } = require('node:crypto');
-const { stripAnsi } = require('./pane');
+const { stripAnsi, detectPrompt } = require('./pane');
 
 /**
  * The `/keys` text cap, raised from 8,000 to match the chat body cap.
@@ -252,11 +252,60 @@ const CARET_TYPED_RE = /^\s*❯\s+\S/;
 // (a shell, a page of notes, Claude's own prose) must not read as a dialog, or
 // every send into it would block forever on a modal that is not there.
 const SELECTOR_ROW_RE = /^\s*[❯>]\s*\d{1,2}[.)]\s+\S/;
+// ANY numbered option row, cursored or not — the second row that turns a lone
+// numbered line into a RUN. See the ≥2 rule in `dialogWhy`.
+const OPTION_ROW_RE = /^\s*(?:[❯>]\s*)?\d{1,2}[.)]\s+\S/;
+// The selector's own help line, drawn under the options while it is live and
+// nowhere else. It is the only thing left to go on when the pane is too short
+// to have captured the cursored row at all (#13's 24-row case).
+const DIALOG_FOOTER_RE = /enter to (?:select|confirm|set|choose)|esc to cancel|(?:↑\/↓|tab\/arrow(?:s| keys)?|arrow keys) to navigate/i;
 // The trust dialog, which is the one modal whose DESTRUCTIVE option is
 // pre-selected ("No, exit"): a blind Enter here kills the session.
 const TRUST_RE = /Yes,\s+I\s+trust\s+this\s+folder|trust\s+the\s+files\s+in\s+this\s+folder|Is\s+this\s+a\s+project\s+you\s+created\s+or\s+one\s+you\s+trust/i;
 // How far up from the bottom a dialog's own furniture may reach.
 const DIALOG_LOOKBACK = 20;
+
+/**
+ * Is a selector dialog up? Three nets, in order of how much they know.
+ *
+ * ⚠ THE TWO HOLES THIS REPLACED, one at each end of the pane:
+ *
+ *   #1  ONE numbered line is a person typing, not a dialog. The owner's own
+ *       "1. rebuild the index" sitting unsent in the composer read as a modal
+ *       and held every send into that session forever, while the client said
+ *       "a dialog is open on the screen" about an idle pane. `pane.js
+ *       detectPrompt` has always refused to call a single cursored numbered
+ *       row a dialog; this one did not, so the daemon's two detectors
+ *       contradicted each other on the same capture.
+ *   #13 A dialog TALLER than the 20-row lookback was not seen at all — the
+ *       cursored row of `ask-tall-desc-64.txt` is line 19 of 44 — and a
+ *       person's message was pasted and submitted into a live question, lost
+ *       with no transcript trace and the highlighted option answered for them.
+ *       `lib/pane.js` dropped its own fixed lookback for exactly this capture
+ *       in 2.59.1 (commit 384abc3); this module was left behind.
+ *
+ * So: ask the structural detector first (it reads the WHOLE pane and knows that
+ * ordinary chrome drawn below a numbered run means the run is history), then
+ * the footer marker for the clipped case, then the old cursored-row rule with
+ * the missing ≥2-rows requirement as belt and braces for a dialog shaped in a
+ * way `detectPrompt` is too strict to admit.
+ */
+function dialogWhy(arr, plain, last) {
+  const region = plain.slice(Math.max(0, last - DIALOG_LOOKBACK), last + 1);
+  // Trust first: it is a modal too, but it is the one with a destructive
+  // default, and a caller that logs `why` should be able to say so. Scanned
+  // over the whole pane for the same reason as everything else here.
+  if (plain.slice(0, last + 1).some((l) => TRUST_RE.test(l))) return 'trust';
+  // 1 — the sibling detector, whole pane, structural.
+  if (detectPrompt(arr)) return 'modal';
+  // 2 — a live selector's footer near the bottom, with a numbered row above it.
+  const footer = region.findIndex((l) => DIALOG_FOOTER_RE.test(l));
+  if (footer >= 0 && plain.slice(0, last + 1).some((l) => OPTION_ROW_RE.test(l))) return 'modal';
+  // 3 — a cursored row backed by a second option row, in the bottom region.
+  if (region.some((l) => SELECTOR_ROW_RE.test(l))
+    && region.filter((l) => OPTION_ROW_RE.test(l)).length >= 2) return 'modal';
+  return null;
+}
 
 /**
  * Is this pane willing to accept a typed message right now?
@@ -283,12 +332,8 @@ function paneReadyForInput(lines) {
   for (let i = plain.length - 1; i >= 0; i--) { if (plain[i].trim()) { last = i; break; } }
   if (last < 0) return { ready: false, why: 'busy' };
 
-  const from = Math.max(0, last - DIALOG_LOOKBACK);
-  const region = plain.slice(from, last + 1);
-  // Trust first: it is a modal too, but it is the one with a destructive
-  // default, and a caller that logs `why` should be able to say so.
-  if (region.some((l) => TRUST_RE.test(l))) return { ready: false, why: 'trust' };
-  if (region.some((l) => SELECTOR_ROW_RE.test(l))) return { ready: false, why: 'modal' };
+  const dialog = dialogWhy(arr, plain, last);
+  if (dialog) return { ready: false, why: dialog };
 
   const tail = plain[last];
   if (CARET_EMPTY_RE.test(tail) || CARET_TYPED_RE.test(tail)) return { ready: true, why: null };
