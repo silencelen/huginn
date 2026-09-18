@@ -1,0 +1,97 @@
+{
+  "consoles": [
+    {
+      "id": "armap",
+      "name": "Architecture map",
+      "url": "http://huginn:8088/",
+      "kind": "dashboard",
+      "notes": "Static armap dashboard (docs/current/armap).",
+      "addedAt": 1789000000,
+      "version": 3,
+      "up": true,
+      "lastProbeAt": 1789459940,
+      "latencyMs": 12,
+      "httpStatus": 200,
+      "reachableFrom": "host"
+    },
+    {
+      "id": "jtyper",
+      "name": "jtyper trainer",
+      "url": "http://huginn:8091/",
+      "kind": "lab",
+      "notes": "Blind test, chat and hole-fill flywheel.",
+      "addedAt": 1789000100,
+      "version": 1,
+      "up": true,
+      "lastProbeAt": 1789459940,
+      "latencyMs": 48,
+      "httpStatus": 403,
+      "reachableFrom": "host"
+    },
+    {
+      "id": "board",
+      "name": "PCB board view",
+      "url": "http://huginn:8092/",
+      "kind": "hardware",
+      "notes": "Live KiCad board review (brokkr renders).",
+      "addedAt": 1789000200,
+      "version": 1,
+      "up": false,
+      "lastProbeAt": 1789459940,
+      "latencyMs": null,
+      "httpStatus": null,
+      "reachableFrom": "host"
+    },
+    {
+      "id": "btc15m",
+      "name": "BTC 15m simulator",
+      "url": "http://huginn:8093/",
+      "kind": null,
+      "notes": null,
+      "addedAt": 1789459990,
+      "version": 1,
+      "up": null,
+      "lastProbeAt": 0,
+      "latencyMs": null,
+      "httpStatus": null,
+      "reachableFrom": "host"
+    }
+  ],
+  "max": 32,
+  "kinds": ["dashboard", "tool", "docs", "lab", "other"],
+  "reachableFrom": "host",
+  "probeIntervalMs": 300000,
+  "approval": {
+    "applied": false,
+    "runBy": "owner",
+    "markerPath": "/var/lib/huginn-appd/consoles-rebind.applied",
+    "title": "Reach these consoles from outside the host",
+    "why": "Every page below is bound to this host's own address, so the probe can see them and a phone cannot. These steps rebind them and open the four ports on the hypervisor's firewall.",
+    "steps": [
+      {
+        "id": "rebind",
+        "where": "huginn",
+        "summary": "Bind the four services to 0.0.0.0 instead of the tailnet address",
+        "file": null,
+        "commands": [
+          "systemctl edit armap jtyper-trainer boardserver",
+          "systemctl restart armap jtyper-trainer boardserver",
+          "ss -ltnp | grep -E '8088|8091|8092|8093'"
+        ]
+      },
+      {
+        "id": "firewall",
+        "where": "heimdall",
+        "summary": "Allow the four ports from the LAN gateway",
+        "file": "/etc/pve/firewall/117.fw",
+        "commands": [
+          "IN ACCEPT -source 192.168.2.131 -p tcp -dport 8088 -log nolog",
+          "IN ACCEPT -source 192.168.2.131 -p tcp -dport 8091 -log nolog",
+          "IN ACCEPT -source 192.168.2.131 -p tcp -dport 8092 -log nolog",
+          "IN ACCEPT -source 192.168.2.131 -p tcp -dport 8093 -log nolog"
+        ]
+      }
+    ],
+    "note": "Run these in a netplan session; the second step is on the hypervisor, not on huginn."
+  }
+}
