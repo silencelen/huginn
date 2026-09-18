@@ -8,12 +8,80 @@ import androidx.datastore.preferences.core.longPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.core.stringSetPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
+import androidx.datastore.core.handlers.ReplaceFileCorruptionHandler
+import androidx.datastore.preferences.core.Preferences
+import androidx.datastore.preferences.core.emptyPreferences
+import androidx.datastore.preferences.preferencesDataStoreFile
+import kotlinx.coroutines.flow.catch
+import java.io.File
+import java.io.IOException
 import com.silencelen.huginn.notify.PushTally
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 
-private val Context.dataStore by preferencesDataStore(name = "huginn_settings")
+private const val STORE_NAME = "huginn_settings"
+
+/**
+ * The context to salvage a corrupt store from — see [salvageAndEmpty].
+ *
+ * A top-level property delegate has no receiver inside its corruption handler,
+ * and this file is the only one that touches `dataStore`, so [SettingsStore]'s
+ * constructor puts the application context here on the way past.
+ */
+private val salvageFrom = java.util.concurrent.atomic.AtomicReference<Context?>(null)
+
+/**
+ * ⚠ A STORE THAT CANNOT BE READ MUST NOT MEAN AN APP THAT CANNOT BE OPENED.
+ *
+ * Declared with no corruption handler, an unparseable `.preferences_pb` threw
+ * CorruptionException out of the three unguarded startup readers — MainActivity's
+ * blocking lock read, AskActivity's, and the view model's init — on EVERY launch,
+ * with no in-app recovery and "clear app data" (re-pairing the phone) as the only
+ * remedy. The desktop twin already salvages a corrupt file to `.corrupt` and
+ * launches, with a comment saying refusing to launch is not an option; Android
+ * had no equivalent.
+ *
+ * ⚠ THE HANDLER IS HALF OF IT. ReplaceFileCorruptionHandler catches ONLY
+ * CorruptionException — an unreadable path throws FileNotFoundException with or
+ * without it — so the load-bearing half is the `catch` in [prefs], and this
+ * repairs the file so writes work again afterwards.
+ */
+private val Context.dataStore by preferencesDataStore(
+    name = STORE_NAME,
+    corruptionHandler = ReplaceFileCorruptionHandler { salvageAndEmpty() },
+)
+
+/** Keeps the unreadable bytes beside the store before they are replaced. */
+private fun salvageAndEmpty(): Preferences {
+    salvageFrom.get()?.let { ctx ->
+        runCatching {
+            val f = ctx.preferencesDataStoreFile(STORE_NAME)
+            if (f.exists()) f.copyTo(File(f.parentFile, f.name + ".corrupt"), overwrite = true)
+        }
+    }
+    return emptyPreferences()
+}
+
+/**
+ * A read that survives a store this device cannot read.
+ *
+ * CorruptionException extends IOException, so this covers both the unparseable
+ * file the handler repairs and the unreadable path it cannot. Anything else is
+ * a programming error and still throws.
+ */
+internal fun <T> Flow<T>.orEmptyOnIoFailure(empty: T): Flow<T> =
+    catch { if (it is IOException) emit(empty) else throw it }
+
+/**
+ * A startup read of the app-lock setting that FAILS CLOSED.
+ *
+ * The two blocking reads on the first frame cannot wait on DataStore and must
+ * not crash on it either; a lock that does not apply because the settings file
+ * is unreadable is a lock that opens for whoever makes it unreadable.
+ */
+internal suspend fun lockEnabledOrLocked(read: suspend () -> Boolean): Boolean =
+    runCatching { read() }.getOrDefault(true)
 
 /**
  * Server URL + bearer token. Both are user-supplied: the token is minted on the
@@ -29,6 +97,14 @@ private val Context.dataStore by preferencesDataStore(name = "huginn_settings")
  * with no payoff until that client exists.
  */
 class SettingsStore(private val context: Context) : HuginnSettings {
+
+    init {
+        salvageFrom.compareAndSet(null, context.applicationContext)
+    }
+
+    /** ⚠ EVERY READ IN THIS FILE GOES THROUGH HERE. See [orEmptyOnIoFailure]. */
+    private val prefs: Flow<Preferences> = context.dataStore.data.orEmptyOnIoFailure(emptyPreferences())
+
     companion object {
         // Kept as an alias: this name is read from the settings screen's slider
         // bounds. One definition, in :core.
@@ -81,7 +157,7 @@ class SettingsStore(private val context: Context) : HuginnSettings {
      * host unreachable, and it should draw the last truth it saw — dated — not
      * an error.
      */
-    val fleetSnapshot: Flow<String> = context.dataStore.data.map { it[FLEET] ?: "" }
+    val fleetSnapshot: Flow<String> = prefs.map { it[FLEET] ?: "" }
 
     suspend fun setFleetSnapshot(encoded: String) {
         context.dataStore.edit { it[FLEET] = encoded }
@@ -94,7 +170,7 @@ class SettingsStore(private val context: Context) : HuginnSettings {
      * tomorrow as it is today.
      */
     override suspend fun clientId(): String {
-        val existing = context.dataStore.data.map { it[CLIENT_ID] }.first()
+        val existing = prefs.map { it[CLIENT_ID] }.first()
         if (!existing.isNullOrBlank()) return existing
         val minted = java.util.UUID.randomUUID().toString()
         context.dataStore.edit { it[CLIENT_ID] = minted }
@@ -111,7 +187,7 @@ class SettingsStore(private val context: Context) : HuginnSettings {
      * was asleep, which is the case this is all for. Persisting the fact of having
      * looked lets a restart COMPARE instead of forget.
      */
-    override val watchSeeded: Flow<Boolean> = context.dataStore.data.map { it[SEEDED] ?: false }
+    override val watchSeeded: Flow<Boolean> = prefs.map { it[SEEDED] ?: false }
 
     override suspend fun setWatchSeeded(value: Boolean) {
         context.dataStore.edit { it[SEEDED] = value }
@@ -126,7 +202,7 @@ class SettingsStore(private val context: Context) : HuginnSettings {
      * check that is an ordinary occurrence rather than a corner case.
      */
     override val chatRuns: Flow<Map<String, Long>> =
-        context.dataStore.data.map { SettingsCodec.decodeChatRuns(it[CHAT_RUNS]) }
+        prefs.map { SettingsCodec.decodeChatRuns(it[CHAT_RUNS]) }
 
     override suspend fun setChatRuns(value: Map<String, Long>) {
         val encoded = SettingsCodec.encodeChatRuns(value)
@@ -142,7 +218,7 @@ class SettingsStore(private val context: Context) : HuginnSettings {
      * The alarm then rediscovers the truth and the shade catches up.
      */
     val stalledSessions: Flow<Set<String>> =
-        context.dataStore.data.map { it[HEADROOM_STALLED] ?: emptySet() }
+        prefs.map { it[HEADROOM_STALLED] ?: emptySet() }
 
     suspend fun setStalledSessions(value: Set<String>) {
         context.dataStore.edit { it[HEADROOM_STALLED] = value }
@@ -157,7 +233,7 @@ class SettingsStore(private val context: Context) : HuginnSettings {
      * Encoded with the drafts codec — the shape is the same string-to-string map.
      */
     val ladderedSessions: Flow<Map<String, String>> =
-        context.dataStore.data.map { SettingsCodec.decodeDrafts(it[HEADROOM_LADDERED]) }
+        prefs.map { SettingsCodec.decodeDrafts(it[HEADROOM_LADDERED]) }
 
     suspend fun setLadderedSessions(value: Map<String, String>) {
         val encoded = SettingsCodec.encodeDrafts(value)
@@ -171,22 +247,22 @@ class SettingsStore(private val context: Context) : HuginnSettings {
      * registered — "push is configured on the host" and "this phone can be reached"
      * are different claims, and only the second one matters to you.
      */
-    val pushToken: Flow<String> = context.dataStore.data.map { it[PUSH_TOKEN] ?: "" }
-    val pushTokenAt: Flow<Long> = context.dataStore.data.map { it[PUSH_TOKEN_AT] ?: 0L }
+    val pushToken: Flow<String> = prefs.map { it[PUSH_TOKEN] ?: "" }
+    val pushTokenAt: Flow<Long> = prefs.map { it[PUSH_TOKEN_AT] ?: 0L }
 
     /**
      * When a push last actually ARRIVED — not when one was sent. This is the
      * evidence the heartbeat uses to decide it can stay out of the way.
      */
-    val lastPushAt: Flow<Long> = context.dataStore.data.map { it[LAST_PUSH_AT] ?: 0L }
+    val lastPushAt: Flow<Long> = prefs.map { it[LAST_PUSH_AT] ?: 0L }
 
     /**
      * How many pushes have actually ARRIVED here, against how many the host says it
      * sent. Counted rather than timed on purpose: the two numbers are compared
      * across a network boundary, and counts cannot disagree about what time it is.
      */
-    val pushesReceived: Flow<Long> = context.dataStore.data.map { it[PUSHES_RECEIVED] ?: 0L }
-    val pushesSent: Flow<Long> = context.dataStore.data.map { it[PUSHES_SENT] ?: 0L }
+    val pushesReceived: Flow<Long> = prefs.map { it[PUSHES_RECEIVED] ?: 0L }
+    val pushesSent: Flow<Long> = prefs.map { it[PUSHES_SENT] ?: 0L }
 
     /**
      * Which of the host's counter epochs [pushesReceived] belongs to.
@@ -194,10 +270,10 @@ class SettingsStore(private val context: Context) : HuginnSettings {
      * Empty means "no epoch seen yet", which is the state against a daemon older
      * than 3.0.5. See [com.silencelen.huginn.notify.PushTally].
      */
-    val pushEpoch: Flow<String> = context.dataStore.data.map { it[PUSH_EPOCH] ?: "" }
+    val pushEpoch: Flow<String> = prefs.map { it[PUSH_EPOCH] ?: "" }
 
     /** The phone has re-based its tally at least once, so the page can say so. */
-    val pushRebaselined: Flow<Boolean> = context.dataStore.data.map { it[PUSH_REBASELINED] ?: false }
+    val pushRebaselined: Flow<Boolean> = prefs.map { it[PUSH_REBASELINED] ?: false }
 
     suspend fun notePushArrived(atMs: Long) {
         context.dataStore.edit {
@@ -236,17 +312,17 @@ class SettingsStore(private val context: Context) : HuginnSettings {
     }
 
     /** Require the device credential to open the app. */
-    val appLock: Flow<Boolean> = context.dataStore.data.map { it[APP_LOCK] ?: false }
+    val appLock: Flow<Boolean> = prefs.map { it[APP_LOCK] ?: false }
 
     suspend fun setAppLock(value: Boolean) {
         context.dataStore.edit { it[APP_LOCK] = value }
     }
 
     /** Delivery health, so "is this working?" is answerable without guessing. */
-    override val lastContactAt: Flow<Long> = context.dataStore.data.map { it[LAST_CONTACT] ?: 0L }
-    override val lastAlarmAt: Flow<Long> = context.dataStore.data.map { it[LAST_ALARM] ?: 0L }
-    override val lastWatchError: Flow<String> = context.dataStore.data.map { it[LAST_ERROR] ?: "" }
-    override val lastWatchErrorAt: Flow<Long> = context.dataStore.data.map { it[LAST_ERROR_AT] ?: 0L }
+    override val lastContactAt: Flow<Long> = prefs.map { it[LAST_CONTACT] ?: 0L }
+    override val lastAlarmAt: Flow<Long> = prefs.map { it[LAST_ALARM] ?: 0L }
+    override val lastWatchError: Flow<String> = prefs.map { it[LAST_ERROR] ?: "" }
+    override val lastWatchErrorAt: Flow<Long> = prefs.map { it[LAST_ERROR_AT] ?: 0L }
 
     override suspend fun noteContact(atMs: Long) {
         context.dataStore.edit { it[LAST_CONTACT] = atMs }
@@ -264,16 +340,16 @@ class SettingsStore(private val context: Context) : HuginnSettings {
      * The active route's address. Read off the book rather than off [BASE_URL]
      * so the two can never disagree — the key is the mirror, this is the truth.
      */
-    override val baseUrl: Flow<String> = context.dataStore.data.map { bookFrom(it).activeUrl }
-    override val token: Flow<String> = context.dataStore.data.map { it[TOKEN] ?: "" }
+    override val baseUrl: Flow<String> = prefs.map { bookFrom(it).activeUrl }
+    override val token: Flow<String> = prefs.map { it[TOKEN] ?: "" }
 
     /** Terminal text size in sp. Drives the column count reported to the server. */
-    override val fontScale: Flow<Float> = context.dataStore.data.map { it[FONT_SCALE] ?: DEFAULT_FONT_SCALE }
+    override val fontScale: Flow<Float> = prefs.map { it[FONT_SCALE] ?: DEFAULT_FONT_SCALE }
 
-    override val notifyEnabled: Flow<Boolean> = context.dataStore.data.map { it[NOTIFY] ?: true }
+    override val notifyEnabled: Flow<Boolean> = prefs.map { it[NOTIFY] ?: true }
 
     /** Continuous watching via the foreground service, rather than a 15-minute poll. */
-    override val watchEnabled: Flow<Boolean> = context.dataStore.data.map { it[WATCH] ?: false }
+    override val watchEnabled: Flow<Boolean> = prefs.map { it[WATCH] ?: false }
 
     override suspend fun setWatchEnabled(value: Boolean) {
         context.dataStore.edit { it[WATCH] = value }
@@ -283,7 +359,7 @@ class SettingsStore(private val context: Context) : HuginnSettings {
      * Sessions already notified about, so the background poll fires on the
      * transition into needing-you rather than every 15 minutes forever.
      */
-    override val notifiedSessions: Flow<Set<String>> = context.dataStore.data.map { it[NOTIFIED] ?: emptySet() }
+    override val notifiedSessions: Flow<Set<String>> = prefs.map { it[NOTIFIED] ?: emptySet() }
 
     /**
      * The pinned routes, the active one and the auto-switch flag.
@@ -294,7 +370,7 @@ class SettingsStore(private val context: Context) : HuginnSettings {
      * pure, so every reader — foreground or worker, before or after the first
      * write — computes the same book from the same stored bytes.
      */
-    override val routeBook: Flow<RouteBook> = context.dataStore.data.map { bookFrom(it) }
+    override val routeBook: Flow<RouteBook> = prefs.map { bookFrom(it) }
 
     private fun bookFrom(p: androidx.datastore.preferences.core.Preferences): RouteBook {
         val stored = SettingsCodec.decodeRoutes(p[PINNED_ROUTES])
@@ -345,7 +421,7 @@ class SettingsStore(private val context: Context) : HuginnSettings {
      * is has finished — which is the only way to notice completion without a push
      * channel, and it needs the previous observation to compare against.
      */
-    override val runningChats: Flow<Set<String>> = context.dataStore.data.map { it[RUNNING_CHATS] ?: emptySet() }
+    override val runningChats: Flow<Set<String>> = prefs.map { it[RUNNING_CHATS] ?: emptySet() }
 
     override suspend fun setRunningChats(value: Set<String>) {
         context.dataStore.edit { it[RUNNING_CHATS] = value }
@@ -359,7 +435,7 @@ class SettingsStore(private val context: Context) : HuginnSettings {
      * phone is in your pocket, which is exactly when it happens.
      */
     override val drafts: Flow<Map<String, String>> =
-        context.dataStore.data.map { SettingsCodec.decodeDrafts(it[DRAFTS]) }
+        prefs.map { SettingsCodec.decodeDrafts(it[DRAFTS]) }
 
     override suspend fun setDrafts(value: Map<String, String>) {
         val encoded = SettingsCodec.encodeDrafts(value)

@@ -38,7 +38,13 @@ object AppLock {
      */
     const val GRACE_MS = 60_000L
 
-    /** Process-wide, surviving activity recreation; reset by process death. */
+    /**
+     * Process-wide, surviving activity recreation; reset by process death.
+     *
+     * ⚠ AN `elapsedRealtime()` READING, not a wall-clock one — see [shouldLock].
+     * Both writers (MainActivity.onStop, and whatever stamps before an Ask sheet)
+     * must use the same clock, or the comparison is meaningless.
+     */
     @Volatile var lastAwayAt: Long = 0L
 
     /** Cached so the ON_START decision never waits on DataStore. */
@@ -64,10 +70,20 @@ object AppLock {
      * any memory of a recent unlock, and guessing in the user's favour here would
      * mean the lock quietly not applying exactly when the phone was out of their
      * hands long enough for the process to die.
+     *
+     * ⚠ BOTH STAMPS ARE `SystemClock.elapsedRealtime()`, never the wall clock,
+     * and a reading EARLIER than the stamp LOCKS. On the wall clock a backward
+     * jump larger than the real time away made `now - awayAt` negative and
+     * skipped the lock at both gates — three hours backgrounded with the date set
+     * back one day drew the whole app with no prompt, and a frozen clock never
+     * locked at all. Whoever holds the unlocked phone can set the date; they must
+     * not be able to open this with it. (`Dictation` already used the monotonic
+     * clock for the same reason.)
      */
     fun shouldLock(enabled: Boolean, awayAt: Long, now: Long, graceMs: Long = GRACE_MS): Boolean {
         if (!enabled) return false
         if (awayAt == 0L) return true
+        if (now < awayAt) return true
         return now - awayAt >= graceMs
     }
 

@@ -23,6 +23,12 @@ import com.silencelen.huginn.ui.HuginnViewModel
 import com.silencelen.huginn.ui.SelectionAction
 import com.silencelen.huginn.ui.SelectionMode
 import com.silencelen.huginn.ui.SelectionStaging
+import com.silencelen.huginn.ui.applyAutoSwitch
+import com.silencelen.huginn.ui.pageStillWanted
+import com.silencelen.huginn.ui.SESSION_NAME
+import com.silencelen.huginn.ui.detachWanted
+import com.silencelen.huginn.ui.sessionGoneWords
+import com.silencelen.huginn.widget.AskAttempt
 import com.silencelen.huginn.ui.SendQueue
 import com.silencelen.huginn.ui.StreamPicker
 import com.silencelen.huginn.ui.fetchStreamAgents
@@ -208,6 +214,101 @@ class HuginnViewModelTest {
             errorTextFor(HuginnClient.HuginnException(401, "Unauthorized")),
         )
     }
+
+    // --------------------------------------- #73 a teardown tears down its own chat
+
+    @Test
+    fun `the outgoing chat's teardown does not blank the chat just opened`() {
+        // openChat(B) runs, then the outgoing DisposableEffect(A) disposes on the
+        // next vsync — 8-16 ms later, while a warm daemon GET is 1-2 ms. A
+        // teardown keyed to no chat wiped B's page, its send flag and its live
+        // stream, leaving an indefinite spinner.
+        assertFalse(detachWanted("chat-A", "chat-B"))
+        assertTrue(detachWanted("chat-B", "chat-B"))
+        // Leaving the chat surface entirely is unconditional.
+        assertTrue(detachWanted(null, "chat-B"))
+        assertTrue(detachWanted(null, null))
+    }
+
+    // --------------------------- contract 1 + #85 what a session name is, and is not
+
+    @Test
+    fun `a session name may not contain a dot, and may contain a dash`() {
+        // tmux silently rewrites '.' to '_', so a dotted name existed under a
+        // name nothing could route to and every later call 404ed. The phone had
+        // it exactly backwards: rename accepted dots, create refused dashes.
+        assertFalse("tmux would rewrite this", SESSION_NAME.matches("web.api"))
+        assertFalse(SESSION_NAME.matches("a.b.c"))
+        assertTrue("dashes survive tmux untouched", SESSION_NAME.matches("web-api"))
+        assertTrue(SESSION_NAME.matches("pctrooubleshoot"))
+        assertTrue(SESSION_NAME.matches("_scratch"))
+        assertTrue(SESSION_NAME.matches("j7"))
+
+        assertFalse("a leading dash is not a filename", SESSION_NAME.matches("-lead"))
+        assertFalse(SESSION_NAME.matches(""))
+        assertFalse("upper case is folded before this is asked", SESSION_NAME.matches("Web"))
+        assertTrue(SESSION_NAME.matches("a".repeat(50)))
+        assertFalse(SESSION_NAME.matches("a".repeat(51)))
+    }
+
+    @Test
+    fun `a 404 for a session still in the list is not a session that ended`() {
+        val listed = listOf("pctrooubleshoot", "web.api")
+        assertEquals("Session gone-one ended", sessionGoneWords("gone-one", listed))
+        // Listed, and unreachable: saying it "ended" about a row the reader can
+        // still see sends them looking for the wrong problem.
+        assertTrue(sessionGoneWords("web.api", listed).contains("cannot address"))
+        assertFalse(sessionGoneWords("web.api", listed).contains("ended"))
+    }
+
+    // ---------------------------------------- #72 a late page belongs to its session
+
+    @Test
+    fun `a history page arriving late belongs only to the session that asked`() {
+        assertTrue(pageStillWanted("pctrooubleshoot", "pctrooubleshoot"))
+        // The failure: A's "load earlier" comes back after the reader opened B,
+        // and there is nothing in a TranscriptPage to say it is not B's. It was
+        // welded above B's tail for the life of the view, and B's next "load
+        // earlier" then asked for a byte offset into A's file.
+        assertFalse(pageStillWanted("pctrooubleshoot", "opensession"))
+        // Left the session screen altogether — backgrounding clears it too, and
+        // coming back reloads the tail from scratch.
+        assertFalse(pageStillWanted("pctrooubleshoot", null))
+    }
+
+    // ------------------------------------------ #80 transport failures in words
+
+    @Test
+    fun `a transport failure is told in household words, with no address in it`() {
+        // Ktor 3.5.2 + OkHttp with HttpTimeout(connect = 8000) words it exactly
+        // like this, and it flowed unscrubbed to the red banner on the Status tab
+        // and to 62 toast call sites.
+        val timeout = errorTextFor(
+            RuntimeException(
+                "Connect timeout has expired [url=http://192.168.2.117:8787/v1/status, " +
+                    "connect_timeout=8000 ms]"
+            )
+        )
+        assertFalse("the daemon's host must not reach the screen", timeout.contains("192.168.2.117"))
+        assertFalse(timeout.contains("8787"))
+        assertTrue("sentence case for a banner", timeout.first().isUpperCase())
+        assertTrue(timeout.startsWith("Huginn did not answer in time"))
+
+        // OkHttp does not word a refusal as "connection refused"; whatever
+        // DeliveryCopy makes of it, the address must be gone.
+        val refused = errorTextFor(RuntimeException("Failed to connect to /192.168.2.117:8787"))
+        assertFalse(refused.contains("192.168.2.117"))
+        assertFalse(refused.contains("8787"))
+
+        val dns = errorTextFor(RuntimeException("Unable to resolve host \"huginn.tail1234.ts.net\""))
+        assertFalse(dns.contains("huginn.tail1234.ts.net"))
+    }
+
+    @Test
+    fun `an exception with no message still says something`() {
+        assertTrue(errorTextFor(RuntimeException()).isNotBlank())
+    }
+
     // ----------------------------------------------------------- the strip
 
     private companion object {
@@ -474,6 +575,34 @@ class HuginnViewModelTest {
         assertNull("a delivered send never showed one", SendQueue.seed(SendKeysResult(ok = true, delivered = true)))
     }
 
+
+    // ------------------------------------------------ #71 auto-switch ordering
+
+    @Test
+    fun `turning auto-switch on probes only after the new book is persisted`() = runTest {
+        val order = mutableListOf<String>()
+        var forced: Boolean? = null
+        applyAutoSwitch(
+            on = true,
+            // Suspends exactly where the real one does: inside the DataStore
+            // write, before _routeBook is republished.
+            persist = { kotlinx.coroutines.yield(); order += "persist"; },
+            resolve = { force -> order += "resolve"; forced = force },
+        )
+        assertEquals(listOf("persist", "resolve"), order)
+        assertTrue("an unforced resolve on a fresh health map probes nothing", forced == true)
+    }
+
+    @Test
+    fun `turning auto-switch off persists and probes nothing`() = runTest {
+        val order = mutableListOf<String>()
+        applyAutoSwitch(
+            on = false,
+            persist = { order += "persist" },
+            resolve = { order += "resolve" },
+        )
+        assertEquals(listOf("persist"), order)
+    }
 }
 
 /**
@@ -635,5 +764,106 @@ class PastePlanTest {
         assertTrue(out is PasteOutcome.Attach)
         assertEquals("pasted.jpg", (out as PasteOutcome.Attach).name)
         assertEquals(8, out.jpeg.size)
+    }
+
+}
+
+/**
+ * THE ASK SHEET'S RETRY, which used to leave a chat behind on every press.
+ *
+ * The activity is Android; what one question does to the host across several
+ * presses is not.
+ */
+class AskAttemptTest {
+
+    private class Host {
+        var created = 0
+        var deleted = mutableListOf<String>()
+        val queued = mutableListOf<Pair<String, String>>()
+        fun create(): String { created++; return "chat-$created" }
+    }
+
+    @Test
+    fun `three failed presses leave one chat on the host, not three`() = runTest {
+        // The deterministic repro: 429 "too many concurrent runs (3)". The chat
+        // exists and the daemon refused the MESSAGE, so the chat is kept and the
+        // retry sends into it.
+        val host = Host()
+        val attempt = AskAttempt()
+        var refuse = true
+        suspend fun press(): Result<String> = runCatching {
+            attempt.submit(
+                create = { host.create() },
+                queue = { id ->
+                    if (refuse) throw HuginnClient.HuginnException(429, "too many concurrent runs (3)")
+                    host.queued += id to "what is the fleet doing?"
+                },
+                discard = { id -> host.deleted += id },
+            )
+        }
+
+        assertTrue(press().isFailure)
+        assertTrue(press().isFailure)
+        assertTrue(press().isFailure)
+        assertEquals("one question, one chat", 1, host.created)
+
+        refuse = false
+        assertEquals("chat-1", press().getOrNull())
+        assertEquals(1, host.queued.size)
+        assertEquals("chat-1", host.queued.single().first)
+        assertEquals(emptyList<String>(), host.deleted)
+    }
+
+    @Test
+    fun `a send that never reached the host takes its fresh chat back`() = runTest {
+        val host = Host()
+        val attempt = AskAttempt()
+        val first = runCatching {
+            attempt.submit(
+                create = { host.create() },
+                queue = { throw java.io.IOException("unexpected end of stream") },
+                discard = { id -> host.deleted += id },
+            )
+        }
+        assertTrue(first.isFailure)
+        assertEquals(listOf("chat-1"), host.deleted)
+
+        // ...and the retry starts clean rather than sending into a chat that was
+        // just deleted.
+        val second = attempt.submit(
+            create = { host.create() },
+            queue = { id -> host.queued += id to "q" },
+            discard = { id -> host.deleted += id },
+        )
+        assertEquals("chat-2", second)
+        assertEquals(2, host.created)
+    }
+
+    @Test
+    fun `a chat the host could not even create leaves nothing behind`() = runTest {
+        val host = Host()
+        val attempt = AskAttempt()
+        val r = runCatching {
+            attempt.submit(
+                create = { throw java.io.IOException("no route to host") },
+                queue = { },
+                discard = { id -> host.deleted += id },
+            )
+        }
+        assertTrue(r.isFailure)
+        assertEquals(0, host.created)
+        assertEquals(emptyList<String>(), host.deleted)
+    }
+
+    @Test
+    fun `an ordinary send creates one chat and queues into it`() = runTest {
+        val host = Host()
+        val id = AskAttempt().submit(
+            create = { host.create() },
+            queue = { i -> host.queued += i to "q" },
+            discard = { },
+        )
+        assertEquals("chat-1", id)
+        assertEquals(1, host.queued.size)
     }
 }
