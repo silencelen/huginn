@@ -7078,7 +7078,9 @@ async function headroomTickInner() {
 
   for (const action of verdict.actions) {
     try {
-      await applyHeadroomAction(action, { state, settings, now, activeWindows, activeSlug, activeEmail });
+      await applyHeadroomAction(action, {
+        state, settings, now, activeWindows, activeSlug, activeEmail, lastFableResetAt,
+      });
     } catch (e) {
       log(`headroom: applying ${action.type} failed: ${e.message}`);
     }
@@ -7233,7 +7235,18 @@ async function applyHeadroomAction(action, ctx) {
     }
     case 'heads_up': {
       const rec = state.sessions[action.claudeSessionId];
-      if (!rec || rec.headsUpAt) return;
+      if (!rec) return;
+      // ⚠ ONCE PER FABLE WINDOW, NOT ONCE EVER (#17). `headsUpAt` is written here
+      // and cleared nowhere, so this guard used to be `if (rec.headsUpAt) return`
+      // — and a session record that outlives a weekly_fable rollover never got
+      // another warning, for the rest of its life. `decide()` kept emitting the
+      // action (lib/headroom.js applies the staleness rule below), the drop
+      // returned before `lastAction` and before the log line so it left no trace,
+      // and `state.arbiter.why` — set from the verdict BEFORE the actions are
+      // applied — went on claiming a heads-up had been handed over on every tick.
+      // Same rule in both places, spelled the same way, deliberately.
+      const resetAt = Number(ctx.lastFableResetAt) || 0;
+      if (rec.headsUpAt && !(resetAt > rec.headsUpAt)) return;
       const text = settings.headsUpText
         .replace(/\{pct\}/g, String(action.pct))
         .replace(/\{next\}/g, action.next)
