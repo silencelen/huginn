@@ -75,6 +75,13 @@ class HuginnClientTest {
         assertFalse(RouteGuard.isAllowed("example.com:8787"), "a bare public name never gets the free upgrade")
     }
 
+    /** A scheme is a scheme however it is spelled; `HTTP://` was stored by 2.x. */
+    @Test
+    fun `an upper-case scheme is not prepended to`() = runTest {
+        client(base = "HTTP://192.168.2.117:8787") { respond("""{"ok":true}""") }.ping()
+        assertEquals("http://192.168.2.117:8787/v1/ping", seen.single().url.toString())
+    }
+
     /**
      * ⚠ A FRESH INSTALL PINS NOTHING, so this is what EVERY call makes on first
      * launch. `withScheme("")` builds `http:///v1/status`, and the parse failure
@@ -238,12 +245,60 @@ class HuginnClientTest {
     fun `a route probe gives up faster than a real call`() = runTest {
         val answered = client { respond("", HttpStatusCode.Unauthorized) }
             .probe("http://192.168.2.117:8787")
-        // Any reply counts: a 401 still proves the daemon is there.
-        assertTrue(answered)
+        // A bare 401 with no body and no version header is NOT the daemon's
+        // refusal — anything can say 401.
+        assertFalse(answered)
         assertEquals(HuginnClient.PROBE_TIMEOUT_MS, timeouts?.connectTimeoutMillis)
         assertEquals(HuginnClient.PROBE_TIMEOUT_MS, timeouts?.socketTimeoutMillis)
-        assertEquals("HEAD", seen.last().method.value)
+        assertEquals("GET", seen.last().method.value)
         assertNull(seen.last().headers[HttpHeaders.Authorization], "probing must not depend on the token being right")
+    }
+
+    /**
+     * ⚠ A SOCKET IS NOT A DAEMON. The probe used to count ANY completed HTTP
+     * exchange as "huginn is here" — a NAS's 404 page, a printer, a captive
+     * portal — and the resolver then made that host the active route and sent it
+     * the root-equivalent bearer on the very next call. The reply has to prove
+     * the daemon: its own JSON refusal, or the version header it stamps on every
+     * response.
+     */
+    @Test
+    fun `a stranger answering HTTP is not a daemon`() = runTest {
+        assertFalse(
+            client { respond("<html>NAS login</html>", HttpStatusCode.OK) }.probe("http://192.168.2.117:8787"),
+            "a 200 of somebody else's web page is not huginn",
+        )
+        assertFalse(
+            client { respondError(HttpStatusCode.NotFound, "<html>404</html>") }.probe("http://192.168.2.117:8787"),
+            "nor is a 404 from whatever holds that address today",
+        )
+        assertFalse(
+            client { respondError(HttpStatusCode.Unauthorized, "Unauthorized") }.probe("http://192.168.2.117:8787"),
+            "nor a 401 in somebody else's words",
+        )
+    }
+
+    @Test
+    fun `the daemon's own refusal is what proves it`() = runTest {
+        val answered = client { respondError(HttpStatusCode.Unauthorized, """{"error":"unauthorized"}""") }
+            .probe("http://192.168.2.117:8787")
+        assertTrue(answered)
+        assertEquals("GET", seen.last().method.value)
+        assertEquals("http://192.168.2.117:8787/v1/ping", seen.last().url.toString())
+        assertNull(seen.last().headers[HttpHeaders.Authorization], "a probe must never carry the bearer")
+    }
+
+    @Test
+    fun `the version header proves the daemon whatever the status is`() = runTest {
+        val head = headersOf("X-Huginn-Appd", "3.3.0")
+        assertTrue(
+            client { respond("", HttpStatusCode.Unauthorized, head) }.probe("http://192.168.2.117:8787"),
+            "the header the daemon stamps on every response, 401 included",
+        )
+        assertTrue(
+            client { respond("""{"ok":true}""", HttpStatusCode.OK, head) }.probe("http://192.168.2.117:8787"),
+            "and an unauthenticated ping that answers 200 still identifies itself",
+        )
     }
 
     @Test
@@ -254,6 +309,47 @@ class HuginnClientTest {
     }
 
     // ------------------------------------------------------- failures
+
+    /**
+     * ⚠ tmux DOES NOT ALWAYS TAKE THE NAME IT IS GIVEN. It silently rewrites '.'
+     * to '_' and still exits 0, so the daemon asks tmux what it actually called
+     * the session and answers with that. A caller that assumed its own string
+     * won closed the pane it had just renamed and ate the draft in it (desktop
+     * #83); it can only stop assuming if the name comes back.
+     */
+    @Test
+    fun `a rename answers with the name the daemon actually used`() = runTest {
+        val name = ok("""{"ok":true,"name":"my_session"}""").renameSession("old", "my.session")
+        assertEquals("my_session", name)
+        assertEquals("http://appd.test/v1/sessions/old/rename", seen.single().url.toString())
+    }
+
+    @Test
+    fun `a daemon too old to answer with a name is not an error`() = runTest {
+        assertEquals("newname", ok("""{"ok":true}""").renameSession("old", "newname"))
+    }
+
+    /**
+     * ⚠ AND IT MUST NOT READ AS A SERVER ERROR. `errorTextFor` prints
+     * `e.message` verbatim for anything that is not a [HuginnClient.HuginnException],
+     * so a captive portal's or a stranger's 200 used to put
+     * `Unexpected JSON token at offset 0: … JSON input: <the page>` on the Status
+     * screen. The new type deliberately does NOT extend HuginnException, because
+     * both shells use `it !is HuginnException` as their network-vs-server test and
+     * wrapping it would stop the client re-resolving away from the portal.
+     */
+    @Test
+    fun `a 2xx that is not huginn's JSON is not a serializer exception`() = runTest {
+        val body = "<html><body>Sign in to continue &mdash; guest wifi</body></html>"
+        val e = assertFailsWith<HuginnClient.NotHuginnException> {
+            client { respond(body, HttpStatusCode.OK) }.status()
+        }
+        assertEquals(HuginnClient.NOT_HUGINN, e.message)
+        val thrown: Throwable = e
+        assertTrue(thrown !is HuginnClient.HuginnException,
+            "the route-health classifiers key on this, and a portal is a network failure")
+        assertFalse("html" in e.message, "and the page itself never reaches the screen")
+    }
 
     @Test
     fun `a non-2xx carries the servers own words`() = runTest {

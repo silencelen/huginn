@@ -39,12 +39,19 @@ package com.silencelen.huginn.data
 object RouteGuard {
 
     /**
-     * The one refusal sentence, verbatim from the desktop store it replaces.
-     * Shown to the reader rather than logged: a setting that silently does not
-     * take is worse than one that says no.
+     * The one refusal sentence, shown to the reader rather than logged: a setting
+     * that silently does not take is worse than one that says no.
+     *
+     * ⚠ AND IT NAMES THE RULE. The desktop's original wording ("huginn only talks
+     * to its own daemon") is true and useless: it is also what an upgrading phone
+     * is told when it tries to re-add the plain-http hostname the migration just
+     * took off it (#45), and from that sentence there is no way to learn that
+     * `https://` or the machine's IP would have been accepted.
      */
     const val REFUSED: String =
-        "refusing that server address — huginn only talks to its own daemon"
+        "refusing that server address — over plain http huginn only talks to a private address, " +
+            "localhost or a *.ts.net name; anything else needs https, and the address must be " +
+            "a bare host and port"
 
     /** The address as it is stored: trimmed, no trailing slash, scheme explicit. */
     fun normalize(raw: String): String {
@@ -85,6 +92,13 @@ object RouteGuard {
     fun authorityOf(raw: String): String = parse(raw)?.authority ?: ""
 
     // ------------------------------------------------------------- parsing
+
+    /** Everything a DNS name or an IPv4 literal is made of, and nothing else. */
+    private val HOST_CHARS: Set<Char> =
+        (('a'..'z') + ('A'..'Z') + ('0'..'9')).toSet() + setOf('.', '-')
+
+    /** The same, plus what lives inside the brackets of an IPv6 literal. */
+    private val HOST6_CHARS: Set<Char> = HOST_CHARS + setOf(':')
 
     private data class Parts(
         val scheme: String,
@@ -150,6 +164,13 @@ object RouteGuard {
         }
 
         if (host.isEmpty()) return null
+        // ⚠ THE HOST ENDS UP IN A SHELL. The desktop interpolates the base URL
+        // into an elevated `.cmd` unquoted, so anything outside this charset is a
+        // command-injection vector with a settings field for a front door — and
+        // over https the shape rule alone would have let it through, because TLS
+        // makes the host stop mattering to the BEARER and not to `cmd.exe`.
+        val legal = if (authority.startsWith("[")) HOST6_CHARS else HOST_CHARS
+        if (host.any { it !in legal }) return null
         val port = portText?.let { text ->
             val n = text.toIntOrNull() ?: return null
             if (n !in 1..65535) return null

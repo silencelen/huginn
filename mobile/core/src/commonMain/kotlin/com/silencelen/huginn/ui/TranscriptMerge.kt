@@ -84,21 +84,64 @@ fun mergeTranscriptPage(
     current: TranscriptPage?,
     page: TranscriptPage,
     cap: Int = MAX_TRANSCRIPT_EVENTS,
-): TranscriptPage {
-    if (current == null) return page
+): TranscriptPage = mergeTranscriptTail(current, page, cap).page
+
+/**
+ * How far past [MAX_TRANSCRIPT_EVENTS] a window the reader has extended by hand
+ * may grow before the front is trimmed after all. Four "Load earlier" pages'
+ * worth: enough that the trim is never reached by ordinary reading, small enough
+ * that a session left open on a busy day still has a bound.
+ */
+const val MAX_EXTENDED_FACTOR: Int = 4
+
+/**
+ * A tail merge and what it COST.
+ *
+ * @param droppedEarlier how many of the oldest events were trimmed to stay under
+ *   the ceiling. ⚠ The caller must advance its own `historyStart` by this many
+ *   records, because [TranscriptPage.windowStart] cannot say it: the trim happens
+ *   client-side and the byte offset of the events that went is not knowable here.
+ *   Zero on every ordinary poll.
+ */
+data class MergedTail(val page: TranscriptPage, val droppedEarlier: Int)
+
+/** [mergeTranscriptPage], with the trim reported. See [MergedTail.droppedEarlier]. */
+fun mergeTranscriptTail(
+    current: TranscriptPage?,
+    page: TranscriptPage,
+    cap: Int = MAX_TRANSCRIPT_EVENTS,
+): MergedTail {
+    if (current == null) return MergedTail(page, 0)
     // A different Claude session under the same tmux name is a different
     // conversation, not more of this one. Appending would weld them together.
-    if (isTranscriptRestart(current, page)) return page.copy(events = emptyList(), truncated = false)
+    if (isTranscriptRestart(current, page)) {
+        return MergedTail(page.copy(events = emptyList(), truncated = false), 0)
+    }
     // A "Load earlier" prepend legitimately grows the window past [cap] (that path
-    // must NEVER trim — see prependTranscriptPage). A tail poll fires within 2.5s,
-    // usually carrying ZERO new events, and would then `takeLast(cap)` the extended
-    // window back down — silently discarding the older events the reader just asked
-    // to load, and (worse) opening a gap between the VM's earliest-loaded byte and
-    // the new first event. So a tail merge NEVER shrinks a reader-extended window:
-    // the effective cap is at least the size already on screen.
-    val effectiveCap = maxOf(cap, current.events.size)
-    return page.copy(
-        events = mergeTranscript(clearDelivered(current.events, page.deliveredQueued), page.events, effectiveCap),
+    // must NEVER trim — see prependTranscriptPage). A tail poll fires within 2.5s
+    // and would then `takeLast(cap)` the extended window back down, discarding
+    // exactly the history the reader just asked for.
+    //
+    // ⚠ AND "AT LEAST WHAT IS ON SCREEN" IS NOT ENOUGH. A cap of `current.size`
+    // still trims the N oldest events whenever the tail carries N new ones — the
+    // window SLIDES, `historyStart` still points before the events that went, and
+    // the next "Load earlier" prepends the page before them: a hole of N records
+    // with no gap marker. The window therefore grows with the incoming events, up
+    // to a hard ceiling, and what the ceiling costs is reported rather than lost.
+    val room = current.events.size + page.events.size
+    val ceiling = cap * MAX_EXTENDED_FACTOR
+    val effectiveCap = maxOf(cap, minOf(room, ceiling))
+    val events = mergeTranscript(
+        clearDelivered(current.events, page.deliveredQueued), page.events, effectiveCap,
+    )
+    val merged = page.copy(
+        events = events,
+        // ⚠ CARRIED FORWARD, NOT TAKEN FRESH. The daemon's empty tail result
+        // reports `windowStart` as the current offset, so taking it fresh reverted
+        // a reader who had paged back to byte 0 to a nonzero start — the "Load
+        // earlier" affordance reappeared and was dead, since `historyStart` was 0
+        // and the load bailed.
+        windowStart = minOf(page.windowStart, current.windowStart),
         title = page.title ?: current.title,
         model = page.model ?: current.model,
         modelDisplay = page.modelDisplay ?: current.modelDisplay,
@@ -112,6 +155,7 @@ fun mergeTranscriptPage(
         lastActivityTs = page.lastActivityTs ?: current.lastActivityTs,
         truncated = current.truncated,
     )
+    return MergedTail(merged, maxOf(0, room - events.size))
 }
 
 /**
@@ -158,8 +202,17 @@ fun prependTranscriptPage(
     older: TranscriptPage,
 ): TranscriptPage {
     if (current == null) return older
-    var next = 0
-    val renumbered = (older.events + current.events).map { it.copy(seq = next++) }
+    // ⚠ THE ROWS ON SCREEN KEEP THEIR seq. `seq` is the product's only row
+    // identity — `TranscriptGroups.keyOf` feeds it to `items(key = …)` in all four
+    // shells and ToolCard's expansion is `rememberSaveable(ev.seq)` — so
+    // renumbering the combined list from 0 handed every saved per-row state to a
+    // different event: the open tool card collapsed and some older row inherited
+    // its `open = true`. The older page is numbered BELOW the window instead.
+    // Negative seqs are inert; nothing client-side reads seq as the server's
+    // numbering and nothing sends one back.
+    val base = current.events.firstOrNull()?.seq ?: 0
+    var next = base - older.events.size
+    val renumbered = older.events.map { it.copy(seq = next++) } + current.events
     return current.copy(
         events = renumbered,
         windowStart = older.windowStart,
