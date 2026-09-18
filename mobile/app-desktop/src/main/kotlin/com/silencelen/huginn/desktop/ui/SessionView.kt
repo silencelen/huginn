@@ -86,17 +86,17 @@ import com.silencelen.huginn.desktop.SessionController
 import com.silencelen.huginn.desktop.SessionTab
 import com.silencelen.huginn.desktop.face
 import com.silencelen.huginn.desktop.attach.AttachButton
-import com.silencelen.huginn.desktop.attach.AttachChip
 import com.silencelen.huginn.desktop.attach.AttachFilePicker
 import com.silencelen.huginn.desktop.attach.AttachStatus
 import com.silencelen.huginn.desktop.attach.AwtTransfer
-import com.silencelen.huginn.desktop.attach.PANE_SEPARATOR
+import com.silencelen.huginn.desktop.attach.chip
 import com.silencelen.huginn.desktop.attach.appendDropped
 import com.silencelen.huginn.desktop.attach.attachmentDropTarget
-import com.silencelen.huginn.desktop.attach.composeMessage
 import com.silencelen.huginn.desktop.attach.rememberAttachmentController
+import com.silencelen.huginn.ui.AttachChipRow
+import com.silencelen.huginn.ui.PANE_SEPARATOR
+import com.silencelen.huginn.ui.composeMessage
 import com.silencelen.huginn.desktop.ui.common.ComposerAction
-import com.silencelen.huginn.desktop.ui.common.ComposerChips
 import com.silencelen.huginn.desktop.ui.common.ComposerFrame
 import com.silencelen.huginn.desktop.ui.common.DeskType
 import com.silencelen.huginn.desktop.ui.common.PaneScrollbar
@@ -1232,13 +1232,13 @@ private fun Composer(
     onPadRefRestore: (String) -> Unit = {},
 ) {
     val attachments = rememberAttachmentController(client, scope, controller.name)
-    val attachment by attachments.current.collectAsState()
+    val pending by attachments.items.collectAsState()
     val failure by attachments.failure.collectAsState()
     var picking by remember { mutableStateOf(false) }
     var dragOver by remember { mutableStateOf(false) }
 
-    val pending = attachment
-    val canSend = draft.isNotBlank() || (pending != null && pending.status != AttachStatus.FAILED)
+    // Per item: four uploads and one refusal still have three things to say.
+    val canSend = draft.isNotBlank() || pending.any { it.status != AttachStatus.FAILED }
 
     // Sent-history recall. Suppressed while the Screen tab has live keyboard on:
     // there every keystroke, arrows included, belongs to the pane. The composer
@@ -1261,8 +1261,11 @@ private fun Composer(
             var posted = false
             scope.launch {
                 try {
-                    val marker = attachments.take()
-                    val full = composeMessage(body, marker, PANE_SEPARATOR)
+                    val taken = attachments.take()
+                    // PANE_SEPARATOR between the markers TOO, not only between the
+                    // text and the first one: this line is typed into a pane where
+                    // a newline is the submit key.
+                    val full = composeMessage(body, taken.markers, PANE_SEPARATOR)
                     // Cancellation is cooperative, so a scope killed while take()
                     // was returning would otherwise reach a sendLine that never
                     // runs and still count as sent.
@@ -1291,9 +1294,9 @@ private fun Composer(
         }
     }
 
-    AttachFilePicker(picking) { file ->
+    AttachFilePicker(picking) { files ->
         picking = false
-        if (file != null) attachments.attachFile(file)
+        if (files.isNotEmpty()) attachments.attachFiles(files)
     }
 
     HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
@@ -1315,12 +1318,14 @@ private fun Composer(
         // out with this message — beside the file chip on ONE wrapping line, so
         // two attachments cost one band rather than two.
         val chosenPad = pads.firstOrNull { it.id == padRefId }
-        if (chosenPad != null || pending != null) {
-            ComposerChips {
-                chosenPad?.let { ScratchpadRefBadge(pad = it, pads = pads, onSelect = onPadRef) }
-                pending?.let { AttachChip(it) { attachments.clear() } }
-            }
-        }
+        AttachChipRow(
+            pending.map { it.chip() },
+            attachments::remove,
+            Modifier.fillMaxWidth().padding(bottom = 6.dp),
+            leading = chosenPad?.let { pad ->
+                { ScratchpadRefBadge(pad = pad, pads = pads, onSelect = onPadRef) }
+            },
+        )
         failure?.let {
             Row(Modifier.fillMaxWidth().padding(bottom = 6.dp)) {
                 Text(

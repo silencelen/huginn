@@ -638,81 +638,30 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
      * it survives the process being killed.
      */
     /**
-     * The one photo staged for the open chat's next message.
+     * What is staged for the open composer's next message.
      *
-     * A single slot, not a list, and deliberately so: the message marker carries
-     * one path, the composer shows one chip, and "which of my three photos did it
-     * answer about" is not a question this UI should ever pose. Cleared on send
-     * and on leaving the chat.
-     */
-    sealed interface Attachment {
-        data object Uploading : Attachment
-        data class Ready(
-            val path: String,
-            /** Original filename, for the chip and the marker; null for photos. */
-            val name: String? = null,
-            val image: Boolean = true,
-            /** Host's verdict on whether Read can open it; drives the marker. */
-            val readable: Boolean = true,
-        ) : Attachment
-        data class Failed(val why: String) : Attachment
-    }
-
-    private val _attachment = MutableStateFlow<Attachment?>(null)
-    val attachment: StateFlow<Attachment?> = _attachment.asStateFlow()
-
-    /**
-     * WHOSE photo the slot holds — a chat's draft key or a session's. The slot is
-     * a single global, and before it had an owner a photo staged on one screen
-     * could ride a send from another: stage in chat A, hop to chat B before A's
-     * dispose ran, send — B's message carried A's photo. Every read of the slot
-     * now names the surface asking, and a mismatch reads as empty.
-     */
-    private val _attachmentOwner = MutableStateFlow<String?>(null)
-    val attachmentOwner: StateFlow<String?> = _attachmentOwner.asStateFlow()
-
-    /** Clears the slot — everyone's, or only if [owner] still holds it. */
-    fun clearAttachment(owner: String? = null) {
-        if (owner == null || _attachmentOwner.value == owner) {
-            _attachment.value = null
-            _attachmentOwner.value = null
-        }
-    }
-
-    /** The Ready attachment for [owner], consumed atomically; null if not theirs. */
-    private fun takeAttachment(owner: String): Attachment.Ready? {
-        val att = _attachment.value
-        if (att !is Attachment.Ready || _attachmentOwner.value != owner) return null
-        _attachment.value = null
-        _attachmentOwner.value = null
-        return att
-    }
-
-    /**
-     * Runs [go] once [owner]'s attachment is no longer mid-upload.
+     * A LIST, not a slot. It was a slot, and the comment here defended that:
+     * "the message marker carries one path, the composer shows one chip, and
+     * 'which of my three photos did it answer about' is not a question this UI
+     * should ever pose." The first half was simply wrong — `humanizeUserText`
+     * has replaced markers globally since the daemon was written — and the
+     * second is answered by order: markers ride in attach order, which is chip
+     * order, which is the order they were picked in.
      *
-     * Sending while the chip still said "Uploading…" used to drop the photo
-     * silently — takeAttachment only accepts a Ready slot — and because the slot
-     * was left staged, the photo then rode the NEXT message instead. Attaching
-     * something is a statement of intent about THIS message, so the send waits
-     * for it. Bounded, because a stuck upload must not strand the message: past
-     * the timeout it sends as text, which is at least visible and recoverable.
+     * The rules live in [AttachmentSlots], outside the view model, because this
+     * is an `AndroidViewModel` and nothing that needs an `Application` can be
+     * tested on this host.
      */
-    private fun whenAttachmentSettled(owner: String, go: () -> Unit) {
-        val mine = _attachmentOwner.value == owner
-        if (!mine || _attachment.value !is Attachment.Uploading) { go(); return }
-        viewModelScope.launch {
-            kotlinx.coroutines.withTimeoutOrNull(20_000) {
-                attachment.first { it !is Attachment.Uploading || _attachmentOwner.value != owner }
-            }
-            go()
-        }
-    }
+    private val slots = AttachmentSlots()
 
-    /** The marker line an attachment contributes to an outgoing message. */
-    private fun markerFor(att: Attachment.Ready): String =
-        if (att.image) Attachments.marker(att.path)
-        else Attachments.fileMarker(att.path, att.name, att.readable)
+    /** Everything staged, for every composer; each item names its own owner. */
+    val attachments: StateFlow<List<PendingAttachment>> = slots.items
+
+    /** Clears a composer's staged attachments — everyone's when [owner] is null. */
+    fun clearAttachment(owner: String? = null) = slots.clear(owner)
+
+    /** Drops one chip, by the id the chip row hands back. */
+    fun removeAttachment(id: String) = slots.remove(id)
 
     /**
      * A non-image document from the file picker. Images that arrive this way are
@@ -722,54 +671,106 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
      * shrugging at unreadable bytes.
      */
     fun attachFile(uri: android.net.Uri, owner: String) {
-        _attachmentOwner.value = owner
-        _attachment.value = Attachment.Uploading
+        // Staged on the CALLING thread so a batch keeps its order and the chip
+        // appears at once — with a provisional label, because the real display
+        // name is a content-provider query and every one of those (getType,
+        // query, openAssetFileDescriptor) is a binder call that can block on a
+        // cloud-backed DocumentsProvider. They belong on IO, which is where the
+        // single-slot version ran them and where they stay.
+        val provisional = uri.lastPathSegment?.substringAfterLast('/')?.takeIf { it.isNotBlank() } ?: "file"
+        val id = slots.stage(owner, provisional, image = false)
+            ?: run { _toast.value = AttachBatch.refusedNote(slots.countFor(owner), 1); return }
         viewModelScope.launch(kotlinx.coroutines.Dispatchers.IO) {
             // The WHOLE body is caught: an uncaught throw in viewModelScope kills
             // the process, and a picker that sometimes crashes the app is worse
             // than one that says why it failed. Anything thrown becomes a chip.
-            val result = runCatching {
+            runCatching {
                 val cr = getApplication<Application>().contentResolver
                 val mime = runCatching { cr.getType(uri) }.getOrNull() ?: "application/octet-stream"
-                if (mime.startsWith("image/")) { attachImage(uri, owner); return@launch }
+                if (mime.startsWith("image/")) {
+                    // Images go through the photo pipeline (transcode, EXIF)
+                    // wherever they came from; this chip hands over to that one.
+                    slots.remove(id)
+                    attachImage(uri, owner)
+                    return@launch
+                }
                 val name = runCatching {
                     cr.query(uri, arrayOf(android.provider.OpenableColumns.DISPLAY_NAME), null, null, null)?.use {
                         if (it.moveToFirst()) it.getString(0) else null
                     }
                 }.getOrNull()
-                // Size read from the provider rather than by loading the file:
-                // a backup is tens of megabytes and reading it into a ByteArray
-                // to hand to the uploader would hold it twice on a phone.
+                // Size read from the provider rather than by loading the file: a
+                // backup is tens of megabytes and reading it into a ByteArray to
+                // hand to the uploader would hold it twice on a phone. It is also
+                // what the chip shows.
                 val size = runCatching {
                     cr.openAssetFileDescriptor(uri, "r")?.use { it.length }
                 }.getOrNull() ?: -1L
-                runCatching {
-                    client.uploadStream(mime, name, UriByteStream(cr, uri, size))
-                }.fold(
-                    // The HOST owns the size limit now, and says so in its own
-                    // words — one place to change it, and no stale number here
-                    // quietly refusing what the daemon would have accepted.
-                    { Attachment.Ready(it.path, name = name, image = false, readable = it.readable) },
-                    { Attachment.Failed(errText(it)) },
-                )
-            }.getOrElse { Attachment.Failed(it.message ?: "Could not attach that file") }
-            if (_attachmentOwner.value == owner) _attachment.value = result
+                slots.describe(id, name ?: provisional, size.takeIf { it >= 0 })
+                // The HOST owns the size limit now, and says so in its own words —
+                // one place to change it, and no stale number here quietly
+                // refusing what the daemon would have accepted.
+                val out = client.uploadStream(mime, name, UriByteStream(cr, uri, size))
+                slots.ready(id, out.path, name = name, image = false, readable = out.readable, bytes = out.bytes)
+            }.onFailure { slots.fail(id, errText(it)) }
         }
     }
 
+    /** Several documents from one pick, in the order the picker handed them over. */
+    fun attachFiles(uris: List<android.net.Uri>, owner: String) =
+        acceptBatch(uris, owner) { attachFile(it, owner) }
+
     /** Transcodes to JPEG off the main thread, uploads, and stages the path. */
     fun attachImage(uri: android.net.Uri, owner: String) {
-        _attachmentOwner.value = owner
-        _attachment.value = Attachment.Uploading
+        val id = slots.stage(owner, "Photo", image = true)
+            ?: run { _toast.value = AttachBatch.refusedNote(slots.countFor(owner), 1); return }
         viewModelScope.launch(kotlinx.coroutines.Dispatchers.IO) {
             val bytes = Attachments.toJpeg(getApplication(), uri)
-            val result = if (bytes == null) Attachment.Failed("Could not read that image")
-                else runCatching { client.upload(bytes, Attachments.MIME) }
-                    .fold({ Attachment.Ready(it.path) }, { Attachment.Failed(errText(it)) })
-            // The slot may have been re-staged for someone else while this
-            // uploaded; a stale upload must not overwrite the newer claim.
-            if (_attachmentOwner.value == owner) _attachment.value = result
+            if (bytes == null) { slots.fail(id, "Could not read that image"); return@launch }
+            runCatching { client.upload(bytes, Attachments.MIME) }
+                .onSuccess { slots.ready(id, it.path, name = null, image = true, readable = true, bytes = it.bytes) }
+                .onFailure { slots.fail(id, errText(it)) }
         }
+    }
+
+    /** Several photos from one pick, in pick order. */
+    fun attachImages(uris: List<android.net.Uri>, owner: String) =
+        acceptBatch(uris, owner) { attachImage(it, owner) }
+
+    /**
+     * An image off the system clipboard — the "paste a screenshot" path.
+     *
+     * Behind [ImageClipboard] so the rule (nothing there / no room / go) is a
+     * pure function this project can assert, and so the Android half is one
+     * class that can be swapped in a test. It lands in the SAME
+     * [Attachments.toJpeg] pipeline as the picker and the camera, which is what
+     * makes HEIC safe: this phone shoots HEIC by default, Read cannot open it,
+     * and the transcode is the only reason an attached photo works at all.
+     */
+    fun pasteImage(owner: String) {
+        viewModelScope.launch(kotlinx.coroutines.Dispatchers.IO) {
+            val clip = runCatching { clipboardImages.takeImage() }.getOrNull()
+            when (val plan = pastePlan(clip, slots.countFor(owner))) {
+                is PasteOutcome.Refused -> _toast.value = plan.why
+                is PasteOutcome.Attach -> {
+                    val id = slots.stage(owner, plan.name, image = true, bytes = plan.jpeg.size.toLong())
+                        ?: return@launch
+                    runCatching { client.upload(plan.jpeg, Attachments.MIME, plan.name) }
+                        .onSuccess { slots.ready(id, it.path, name = null, image = true, readable = true, bytes = it.bytes) }
+                        .onFailure { slots.fail(id, errText(it)) }
+                }
+            }
+        }
+    }
+
+    /** The system clipboard, read lazily — constructing it needs a Context. */
+    private val clipboardImages: ImageClipboard by lazy { AndroidImageClipboard(getApplication()) }
+
+    /** Takes what fits and says so when it had to leave some behind. */
+    private fun acceptBatch(uris: List<android.net.Uri>, owner: String, one: (android.net.Uri) -> Unit) {
+        val pending = slots.countFor(owner)
+        AttachBatch.refusedNote(pending, uris.size)?.let { _toast.value = it }
+        AttachBatch.accept(pending, uris).forEach(one)
     }
 
     /**
@@ -2695,18 +2696,26 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun sendText(name: String, text: String, thenEnter: Boolean) {
-        whenAttachmentSettled(sessionDraftKey(name)) { sendTextNow(name, text, thenEnter) }
+        viewModelScope.launch {
+            slots.settle(sessionDraftKey(name))
+            sendTextNow(name, text, thenEnter)
+        }
     }
 
     private fun sendTextNow(name: String, text: String, thenEnter: Boolean) {
-        // The staged photo rides this message, same contract as a chat send:
-        // consumed here (and only if staged for THIS session) so it cannot ride
-        // twice or cross surfaces. Claude in the pane reads the path like any file.
-        val att = takeAttachment(sessionDraftKey(name))
-        @Suppress("NAME_SHADOWING") var text = text
-        if (att != null) {
-            text = if (text.isBlank()) markerFor(att) else text + "\n\n" + markerFor(att)
-        }
+        // The staged attachments ride this message, same contract as a chat send:
+        // consumed here (and only if staged for THIS session) so they cannot ride
+        // twice or cross surfaces. Claude in the pane reads the paths like any file.
+        //
+        // composeMessage is :core's — the same join the desktop makes. It used to
+        // be a hand-rolled "\n\n" here and again in sendNow, which is how the
+        // marker join came to have three implementations and one separator rule.
+        val taken = slots.take(sessionDraftKey(name))
+        @Suppress("NAME_SHADOWING") val text = composeMessage(text, taken.markers)
+        // Sent WITHOUT the ones that failed, and they are named: refusing to send
+        // because one upload of five failed costs the typed message too.
+        AttachBatch.failureLine(taken.failed, taken.markers.size + taken.failed.size)
+            ?.let { _toast.value = it }
         if (text.isBlank()) return
         // The attached page, taken here so it rides ONE message. The daemon
         // composes the reference itself — the pane gets a path, not the page.
@@ -3242,18 +3251,21 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
      * used to when a chat was busy.
      */
     fun send(id: String, text: String) {
-        whenAttachmentSettled(chatDraftKey(id)) { sendNow(id, text) }
+        viewModelScope.launch {
+            slots.settle(chatDraftKey(id))
+            sendNow(id, text)
+        }
     }
 
     private fun sendNow(id: String, text: String) {
-        // The staged photo rides this message — but only if it was staged for
-        // THIS chat. Consumed here, whichever path the send takes (stream or
-        // queue), so it cannot ride two messages.
-        val att = takeAttachment(chatDraftKey(id))
-        @Suppress("NAME_SHADOWING") var text = text
-        if (att != null) {
-            text = if (text.isBlank()) markerFor(att) else text + "\n\n" + markerFor(att)
-        }
+        // The staged attachments ride this message — but only if they were staged
+        // for THIS chat. Consumed here, whichever path the send takes (stream or
+        // queue), so they cannot ride two messages. The join is :core's, shared
+        // with the desktop.
+        val taken = slots.take(chatDraftKey(id))
+        @Suppress("NAME_SHADOWING") val text = composeMessage(text, taken.markers)
+        AttachBatch.failureLine(taken.failed, taken.markers.size + taken.failed.size)
+            ?.let { _toast.value = it }
         if (text.isBlank()) return
         // The attached page. Named, never pasted: the daemon composes the frame so
         // a queued message is a snapshot of what the page said when Send was
@@ -3468,5 +3480,165 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
                 return HuginnViewModel(app) as T
             }
         }
+    }
+}
+
+// --------------------------------------------------------------- attachments
+
+/**
+ * One thing staged for a composer's next message.
+ *
+ * @param owner WHOSE it is — a chat's draft key or a session's. The slots are one
+ *   global list, and before ownership existed a photo staged on one screen could
+ *   ride a send from another: stage in chat A, hop to chat B before A's dispose
+ *   ran, send — B's message carried A's photo. Every read names the surface
+ *   asking, and a mismatch reads as absent.
+ * @param path where the daemon put it; non-null only once it is [AttachChipState.READY],
+ *   because a marker for bytes that did not land is worse than no attachment.
+ */
+data class PendingAttachment(
+    val id: String,
+    val owner: String,
+    val label: String,
+    val image: Boolean,
+    val state: AttachChipState,
+    val bytes: Long? = null,
+    val path: String? = null,
+    /** Original filename, for the chip and the marker; null for photos. */
+    val name: String? = null,
+    /** Host's verdict on whether Read can open it; drives the marker. */
+    val readable: Boolean = true,
+    val detail: String? = null,
+)
+
+/** The marker line this attachment contributes, or null while it has no path. */
+fun PendingAttachment.marker(): String? = path?.let {
+    if (image) AttachmentText.marker(it) else AttachmentText.fileMarker(it, name, readable)
+}
+
+/** What one composer draws, in attach order. */
+fun chipsFor(items: List<PendingAttachment>, owner: String): List<AttachChipItem> =
+    items.filter { it.owner == owner }.map {
+        AttachChipItem(it.id, it.label, it.image, it.state, it.bytes, it.detail)
+    }
+
+/**
+ * The phone's staged attachments: ordered, owned, capped — and testable.
+ *
+ * Deliberately a plain class rather than view-model methods. `HuginnViewModel` is
+ * an `AndroidViewModel` and this host has no device and no `/dev/kvm`, so
+ * anything that needs an `Application` cannot be asserted at all; the slot logic
+ * that shipped before this (`takeAttachment`, `whenAttachmentSettled`, the owner
+ * guard) had ZERO tests for exactly that reason.
+ */
+class AttachmentSlots {
+
+    private val _items = MutableStateFlow<List<PendingAttachment>>(emptyList())
+    val items: StateFlow<List<PendingAttachment>> = _items.asStateFlow()
+
+    /**
+     * Every mutation here is read-modify-write on one list, and the writers are
+     * a composer on the main thread and N uploads finishing on IO. Without this
+     * two uploads settling at once can each publish a copy of the list taken
+     * before the other's edit, and one chip silently reverts to UPLOADING.
+     */
+    private val lock = Any()
+
+    fun countFor(owner: String): Int = _items.value.count { it.owner == owner }
+
+    /**
+     * Stages a new item and returns its id — or null when this composer is full.
+     * The cap is [AttachBatch.MAX_ITEMS], the same number on both shells.
+     */
+    fun stage(owner: String, label: String, image: Boolean, bytes: Long? = null): String? = synchronized(lock) {
+        if (AttachBatch.room(countFor(owner)) <= 0) return null
+        val id = "a-" + (nextId++).toString(16)
+        _items.value = _items.value + PendingAttachment(
+            id = id, owner = owner, label = label, image = image,
+            state = AttachChipState.UPLOADING, bytes = bytes,
+        )
+        return id
+    }
+
+    /** The real name and size, once a provider query has answered for them. */
+    fun describe(id: String, label: String, bytes: Long?) = update(id) {
+        it.copy(label = label, bytes = bytes ?: it.bytes)
+    }
+
+    fun ready(id: String, path: String, name: String?, image: Boolean, readable: Boolean, bytes: Long?) =
+        update(id) {
+            it.copy(
+                state = AttachChipState.READY,
+                path = path,
+                name = name ?: it.name,
+                image = image,
+                readable = readable,
+                bytes = bytes?.takeIf { b -> b > 0 } ?: it.bytes,
+                detail = if (readable) null else "binary — Claude will need act mode to inspect it",
+            )
+        }
+
+    fun fail(id: String, why: String) = update(id) {
+        it.copy(state = AttachChipState.FAILED, detail = why)
+    }
+
+    fun remove(id: String) = synchronized(lock) {
+        _items.value = _items.value.filterNot { it.id == id }
+    }
+
+    /** Clears one composer's, or everyone's when [owner] is null. */
+    fun clear(owner: String?) = synchronized(lock) {
+        _items.value = if (owner == null) emptyList() else _items.value.filterNot { it.owner == owner }
+    }
+
+    /**
+     * Everything [owner] staged, consumed atomically.
+     *
+     * READY markers come back IN ATTACH ORDER and everything else comes back as a
+     * label, so the composer can send what landed and name what did not. The slot
+     * version could only return the one Ready item and left a failed one staged,
+     * which is how a failed photo used to ride the NEXT message.
+     */
+    fun take(owner: String): TakeResult = synchronized(lock) {
+        val mine = _items.value.filter { it.owner == owner }
+        _items.value = _items.value.filterNot { it.owner == owner }
+        return TakeResult(
+            markers = mine.filter { it.state == AttachChipState.READY }.mapNotNull { it.marker() },
+            failed = mine.filter { it.state != AttachChipState.READY }.map { it.label },
+        )
+    }
+
+    /**
+     * Suspends until nothing of [owner]'s is still in flight.
+     *
+     * Sending while a chip still said "Uploading…" used to drop the photo
+     * silently. Attaching something is a statement of intent about THIS message,
+     * so the send waits for it — under ONE budget for the whole batch, not
+     * [budgetMs] per item: ten files settled one at a time could hold the composer
+     * for three minutes, which is the wedged-socket case the timeout exists to
+     * prevent. Past it the message goes as text, which is at least visible and
+     * recoverable.
+     */
+    suspend fun settle(owner: String, budgetMs: Long = SETTLE_TIMEOUT_MS) {
+        if (!inFlight(owner)) return
+        kotlinx.coroutines.withTimeoutOrNull(budgetMs) {
+            items.first { !inFlight(owner) }
+        }
+    }
+
+    private fun inFlight(owner: String): Boolean = _items.value.any {
+        it.owner == owner &&
+            (it.state == AttachChipState.UPLOADING || it.state == AttachChipState.QUEUED)
+    }
+
+    private fun update(id: String, edit: (PendingAttachment) -> PendingAttachment) = synchronized(lock) {
+        _items.value = _items.value.map { if (it.id == id) edit(it) else it }
+    }
+
+    private var nextId: Long = 1
+
+    companion object {
+        /** The whole-batch wait a send will do for uploads still in flight. */
+        const val SETTLE_TIMEOUT_MS: Long = 20_000
     }
 }

@@ -104,3 +104,76 @@ object Attachments {
     fun fileMarker(path: String, name: String?, readable: Boolean = true): String =
         AttachmentText.fileMarker(path, name, readable)
 }
+
+// ------------------------------------------------------- the clipboard path
+
+/**
+ * An image taken off the clipboard, already through [Attachments.toJpeg] and
+ * ready for the ordinary upload path.
+ */
+class ClipboardImage(val name: String, val jpeg: ByteArray)
+
+/**
+ * Reading an image off the system clipboard.
+ *
+ * An interface with one method so the RULE around it ([pastePlan]) can be
+ * asserted on a host with no Android framework — `ClipboardManager` is one of the
+ * classes the unit-test android.jar throws from on first call, so the only
+ * testable shape is one where the framework sits behind a seam.
+ */
+fun interface ImageClipboard {
+    /** The first image on the clipboard, transcoded; null when there is none. */
+    fun takeImage(): ClipboardImage?
+}
+
+/** The real one. Uses the same transcode as the picker, the camera and a share. */
+class AndroidImageClipboard(private val context: Context) : ImageClipboard {
+    override fun takeImage(): ClipboardImage? {
+        val cm = context.getSystemService(Context.CLIPBOARD_SERVICE) as? android.content.ClipboardManager
+            ?: return null
+        val clip = cm.primaryClip ?: return null
+        val cr = context.contentResolver
+        for (i in 0 until clip.itemCount) {
+            // A URI, because that is the only way an image reaches an Android
+            // clipboard: ClipData carries text, intents and URIs — never a
+            // Bitmap. A screenshot pasted from another app arrives as a
+            // content:// URI its provider will open for us.
+            val uri = runCatching { clip.getItemAt(i).uri }.getOrNull() ?: continue
+            val type = runCatching { cr.getType(uri) }.getOrNull()
+            if (type != null && !type.startsWith("image/")) continue
+            val jpeg = Attachments.toJpeg(context, uri) ?: continue
+            val base = uri.lastPathSegment?.substringAfterLast('/')?.takeIf { it.isNotBlank() }
+            return ClipboardImage(name = jpegName(base ?: "pasted"), jpeg = jpeg)
+        }
+        return null
+    }
+
+    /** The transcoded name says jpg, because the bytes are JPEG whatever came in. */
+    private fun jpegName(raw: String): String {
+        val stem = raw.substringAfterLast('/').substringBeforeLast('.').ifBlank { "pasted" }
+        return "$stem.jpg"
+    }
+}
+
+/** What a paste should do. */
+sealed interface PasteOutcome {
+    /** Go: these bytes, under this name. */
+    data class Attach(val name: String, val jpeg: ByteArray) : PasteOutcome
+    /** Stop, and say this — every refusal here is one a person can act on. */
+    data class Refused(val why: String) : PasteOutcome
+}
+
+/**
+ * The paste rule: what the clipboard offered, against how full the composer is.
+ *
+ * Pure, and separate from the reading, because the two failures it distinguishes
+ * are the ones people report — "I copied a picture and nothing happened" is
+ * either an empty clipboard or a full composer, and a paste that silently does
+ * neither is indistinguishable from a broken button.
+ */
+fun pastePlan(clip: ClipboardImage?, pending: Int): PasteOutcome = when {
+    clip == null -> PasteOutcome.Refused("No image on the clipboard")
+    AttachBatch.room(pending) <= 0 ->
+        PasteOutcome.Refused(AttachBatch.refusedNote(pending, 1) ?: "That is enough attachments")
+    else -> PasteOutcome.Attach(clip.name, clip.jpeg)
+}
