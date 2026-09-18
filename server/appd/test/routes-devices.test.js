@@ -368,6 +368,39 @@ test("a remote chat's conversation is readable, though its transcript is on the 
   assert.deepEqual(again.body.events, [], 'a tail read past the end returns nothing');
 });
 
+test('a backwards history page carries no queued bubble (#33)', async () => {
+  // ⚠ THE PENDING QUEUE WAS CONCATENATED ONTO EVERY PAGE. `until=` reads
+  // BACKWARDS — it is how a reader walks into history — and the whole queue came
+  // back stapled to each page, so a degenerate window returned a page that was
+  // nothing but the queued bubble. No shipped client pages this route yet and the
+  // chat screen has no "load earlier" control, which is the only reason this is
+  // an API-contract bug rather than a live one; `prependTranscriptPage`
+  // concatenates without deduping, so the day chat paging lands it would
+  // duplicate mid-conversation bubbles, exactly as sessions and agents already do.
+  const d = await enrol({ name: 'pager' });
+  const chat = await chatOn(d.id, 'ask');
+  await send(chat.body.id, 'first question');
+  const work = (await poll(d.id)).body.work;
+  await postEvents(d.id, work.id, [assistant('first answer')]);
+  // A second message QUEUED behind the run in flight — the bubble at issue.
+  const queued = await send(chat.body.id, 'second question, please wait');
+  assert.equal(202, queued.status, JSON.stringify(queued.body));
+
+  const live = await api(`/v1/chats/${chat.body.id}/transcript`);
+  assert.equal(200, live.status);
+  assert.ok(live.body.events.some((e) => e.queued && /second question/.test(e.text || '')),
+    'the LIVE tail is where a waiting message belongs');
+
+  const back = await api(`/v1/chats/${chat.body.id}/transcript?until=1`);
+  assert.equal(200, back.status);
+  assert.equal(false, back.body.events.some((e) => e.queued),
+    `a history page is history: ${JSON.stringify(back.body.events).slice(0, 300)}`);
+  const degenerate = await api(`/v1/chats/${chat.body.id}/transcript?until=-1`);
+  assert.deepEqual([], degenerate.body.events, 'and an empty window is empty');
+
+  await postEvents(d.id, work.id, [{ type: 'result', is_error: false }], { done: true, exitCode: 0 });
+});
+
 test('a device failure is READABLE in the conversation, not just in the list', async () => {
   // Errors are recorded as type `error`, and the readers know six kinds — error
   // is not one of them — so emitting it as-is would render as nothing at all.
