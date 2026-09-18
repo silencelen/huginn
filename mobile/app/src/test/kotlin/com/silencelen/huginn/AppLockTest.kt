@@ -43,6 +43,36 @@ class AppLockTest {
         assertFalse(AppLock.shouldLock(enabled = true, awayAt = NOW - AppLock.GRACE_MS + 1, now = NOW))
     }
 
+    // ------------------------------------------------- #68 a clock that went back
+
+    @Test
+    fun `a reading EARLIER than the stamp locks`() {
+        // The grace used to be `now - awayAt >= GRACE_MS` on the WALL clock, so a
+        // backward jump larger than the real time away made the difference
+        // negative and skipped the lock entirely — three hours backgrounded with
+        // the date set back a day drew the whole app with no credential prompt,
+        // at both gates. The stamps are SystemClock.elapsedRealtime() now, which
+        // cannot go backwards; a reading that does is a fault, and a lock that
+        // fails open on a fault is not a lock.
+        assertTrue(AppLock.shouldLock(enabled = true, awayAt = NOW, now = NOW - 86_400_000L))
+        assertTrue(AppLock.shouldLock(enabled = true, awayAt = NOW, now = NOW - 1L))
+        assertTrue(AppLock.shouldLock(enabled = true, awayAt = NOW, now = 0L))
+    }
+
+    @Test
+    fun `a clock that does not move still locks once the grace is up`() {
+        // A frozen reading was the other half: `now` never advancing meant the
+        // difference never reached the grace. A monotonic source cannot freeze,
+        // and the boundary is unchanged.
+        assertFalse(AppLock.shouldLock(enabled = true, awayAt = NOW, now = NOW))
+        assertTrue(AppLock.shouldLock(enabled = true, awayAt = NOW, now = NOW + AppLock.GRACE_MS))
+    }
+
+    @Test
+    fun `a backward reading with the lock OFF is still not a lock`() {
+        assertFalse(AppLock.shouldLock(enabled = false, awayAt = NOW, now = NOW - 86_400_000L))
+    }
+
     // ------------------------------------------------------------- dictation
 
     @Test
