@@ -15,6 +15,16 @@ package com.silencelen.huginn.desktop
  * apart from the composition and asserted, because every one of those failures is
  * indistinguishable from a crash to the person it happens to.
  */
+/**
+ * One display's rectangle in the virtual desktop's coordinates.
+ *
+ * Position is signed and is NOT relative to the display: a second monitor to the
+ * right of a 1920-wide primary starts at x=1920 and one to the left at x=-1920,
+ * which is exactly why a window's saved x cannot be judged against a single
+ * width.
+ */
+data class Screen(val x: Int, val y: Int, val w: Int, val h: Int)
+
 data class WindowLayout(
     val x: Int = UNPLACED,
     val y: Int = UNPLACED,
@@ -73,24 +83,50 @@ data class WindowLayout(
          *   POSITION is dropped, because a size that is too big is merely ugly
          *   while a position that is off-screen is fatal.
          */
-        fun restore(saved: WindowLayout, screenW: Int, screenH: Int): WindowLayout {
+        fun restore(saved: WindowLayout, screenW: Int, screenH: Int): WindowLayout =
+            restore(saved, if (screenW <= 0 || screenH <= 0) emptyList() else listOf(Screen(0, 0, screenW, screenH)))
+
+        /**
+         * The same decision over EVERY display this desk has.
+         *
+         * @param screens each display's bounds in the virtual desktop's own
+         *   coordinates — a monitor to the right of the primary starts at
+         *   x=1920, one to the left at x=-1920. Empty means "unknown" (headless,
+         *   or a JDK that could not enumerate), and then the saved size is
+         *   trusted and only the POSITION is dropped.
+         */
+        fun restore(saved: WindowLayout, screens: List<Screen>): WindowLayout {
             val w = saved.w.coerceAtLeast(MIN_W)
             val h = saved.h.coerceAtLeast(MIN_H)
-            if (screenW <= 0 || screenH <= 0) {
-                return WindowLayout(UNPLACED, UNPLACED, w, h, saved.maximized)
-            }
-            // Never larger than the screen it is opening on.
-            val fitW = w.coerceAtMost(screenW)
-            val fitH = h.coerceAtMost(screenH)
+            val usable = screens.filter { it.w > 0 && it.h > 0 }
+            if (usable.isEmpty()) return WindowLayout(UNPLACED, UNPLACED, w, h, saved.maximized)
+
+            // ⚠ THE UNION, NOT THE FIRST ONE. Judging against a single rectangle
+            // is what discarded a remembered position on every launch of a
+            // multi-head desk: on Windows the one rectangle available was the
+            // PRIMARY monitor, so any x past its width, or any negative x from a
+            // monitor to the left, read as "the display it remembers is gone" —
+            // and because the debounced writer then persisted the CENTRED
+            // coordinates, the placement was not merely ignored, it was
+            // destroyed. The size was lost the same way: a 2560-wide window on a
+            // bigger secondary was shrunk to the primary's width.
+            val spanW = usable.maxOf { it.x + it.w } - usable.minOf { it.x }
+            val spanH = usable.maxOf { it.y + it.h } - usable.minOf { it.y }
+            val fitW = w.coerceAtMost(spanW)
+            val fitH = h.coerceAtMost(spanH)
             if (!saved.placed) return WindowLayout(UNPLACED, UNPLACED, fitW, fitH, saved.maximized)
 
-            val onScreen = saved.x + VISIBLE_MARGIN in 0..screenW &&
-                saved.y in 0..(screenH - VISIBLE_MARGIN / 2)
+            // Draggable on ANY of them: the title-bar strip has to land on a
+            // screen, and which screen that is does not matter.
+            val onScreen = usable.any { s ->
+                saved.x + VISIBLE_MARGIN in s.x..(s.x + s.w) &&
+                    saved.y in s.y..(s.y + s.h - VISIBLE_MARGIN / 2)
+            }
             return if (onScreen) {
                 WindowLayout(saved.x, saved.y, fitW, fitH, saved.maximized)
             } else {
-                // The display it remembers is gone. Centring is better than
-                // clamping to an edge: clamped windows pile up in one corner.
+                // Every display it could have been on is gone. Centring is better
+                // than clamping to an edge: clamped windows pile up in one corner.
                 WindowLayout(UNPLACED, UNPLACED, fitW, fitH, saved.maximized)
             }
         }
