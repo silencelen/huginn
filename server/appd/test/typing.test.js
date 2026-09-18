@@ -8,6 +8,8 @@
 
 const { test } = require('node:test');
 const assert = require('node:assert');
+const fs = require('node:fs');
+const path = require('node:path');
 const t = require('../lib/typing');
 
 // ------------------------------------------------------------------ the caps
@@ -329,6 +331,77 @@ test('a numbered LIST in the pane is not a dialog — only a cursored row is', (
   // it blocks forever on a dialog that is not there.
   const pane = ['Three things to do:', '1. commit', '2. push', '3. sleep', '────', '❯ '];
   assert.deepEqual(t.paneReadyForInput(pane), { ready: true, why: null });
+});
+
+// ⚠ #1 + #13, the two holes the 3.x modal gate had at opposite ends of the
+// pane. One numbered line at the bottom is a PERSON TYPING; a dialog taller
+// than the old 20-row lookback is a question this gate could not see at all.
+// Both are asserted against the committed captures rather than hand-written
+// panes, because both were argued from hand-written panes and both were wrong.
+
+const FIXTURE_DIR = path.join(__dirname, 'fixtures', 'prompts');
+function fixturePane(file, rows = null) {
+  const lines = fs.readFileSync(path.join(FIXTURE_DIR, file), 'utf8').replace(/\n$/, '').split('\n');
+  return rows == null ? lines : lines.slice(-rows);
+}
+
+test('composer text that STARTS with a number is not a dialog (#1)', () => {
+  // The owner typed "1. rebuild the index" and has not pressed Enter. The old
+  // rule read that composer line as a selector row and held every send into the
+  // session forever, with the client saying "a dialog is open on the screen"
+  // about an idle pane. A dialog is never one numbered line.
+  const pane = ['❯ 1. rebuild the index', '────', '  [dev] Fable 5.1 · ctx 43%'];
+  assert.notEqual(t.paneReadyForInput(pane).why, 'modal');
+  assert.equal(t.paneBlocks(t.paneReadyForInput(pane).why), false, 'nothing is in the way');
+  for (const line of ['❯ 2) ship it', '❯ 12. the twelfth thing', '> 1. a quoted list item']) {
+    assert.equal(t.paneBlocks(t.paneReadyForInput([line, '────', '  [dev] Fable 5.1']).why), false, line);
+  }
+});
+
+test('a tall dialog is still a modal at any pane height (#13)', () => {
+  // ask-tall-desc-64: the cursored row is line 19 of 44, so at DIALOG_LOOKBACK=20
+  // it fell outside the scan and a person's message was pasted + Enter into a
+  // live AskUserQuestion. At 24 rows the cursored row is not even captured —
+  // the selector's own footer is the only thing left to go on.
+  for (const rows of [null, 60, 44, 30, 24]) {
+    const v = t.paneReadyForInput(fixturePane('ask-tall-desc-64.txt', rows));
+    assert.equal(v.why, 'modal', `rows=${rows}`);
+  }
+});
+
+test('every committed dialog capture still reads as a dialog', () => {
+  // The whole point of widening the scan is that nothing NARROWS: sweep the
+  // fixture dir so a future tightening cannot quietly open one of these back up.
+  const expect = {
+    'ask-2q-tab1-80.txt': 'modal', 'ask-multi-80.txt': 'modal',
+    'ask-multi-review-80.txt': 'modal', 'ask-multi-toggled-80.txt': 'modal',
+    'ask-review-80.txt': 'modal', 'ask-simple-80.txt': 'modal',
+    'ask-tall-desc-64.txt': 'modal', 'ask-wrapped-desc-46.txt': 'modal',
+    'ask-wrapped-desc-80.txt': 'modal', 'fable-consent-80.txt': 'modal',
+    'model-picker-80.txt': 'modal', 'plan-approval-80.txt': 'modal',
+    'plan-approval-with-task-80.txt': 'modal', 'trust-dialog-80.txt': 'trust',
+  };
+  for (const [file, why] of Object.entries(expect)) {
+    assert.equal(t.paneReadyForInput(fixturePane(file)).why, why, file);
+  }
+  // …and the two captures that are NOT a question stay unblocked.
+  for (const file of ['statusline-manual-80.txt', 'statusline-plan-hint.txt']) {
+    assert.equal(t.paneBlocks(t.paneReadyForInput(fixturePane(file)).why), false, file);
+  }
+});
+
+test('a real composer capture holding a numbered line is not a dialog (#1)', () => {
+  // statusline-manual-80 is a live composer pane, caret + NBSP, captured off
+  // this host. Typing into it is what a person does; it must not arm the gate.
+  const pane = fixturePane('statusline-manual-80.txt');
+  // The LAST caret is the live composer; the ones above it are this pane's own
+  // history, where Claude Code echoes each submitted message with the same glyph.
+  let caret = -1;
+  for (let i = pane.length - 1; i >= 0; i--) { if (/\u276F/.test(pane[i])) { caret = i; break; } }
+  assert.ok(caret >= 0, 'the fixture has a composer caret');
+  pane[caret] = pane[caret].replace(/\u276F(\s*)$/, '\u276F$11. rebuild the index');
+  assert.match(pane[caret], /1\. rebuild/, 'the composer now holds a numbered line');
+  assert.equal(t.paneBlocks(t.paneReadyForInput(pane).why), false);
 });
 
 test('only a dialog BLOCKS a send: busy is not a liveness verdict', () => {
