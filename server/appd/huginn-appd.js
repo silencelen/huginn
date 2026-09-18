@@ -312,6 +312,29 @@ function readBody(req, limit = 256 * 1024) {
   return readBodyRaw(req, limit).then((b) => b.toString('utf8'));
 }
 
+/**
+ * The body as JSON, or a 400.
+ *
+ * ⚠ #31: every route did `await readJsonBody(req)` inline, so
+ * malformed-but-complete JSON reached the router's catch and came back as a 500
+ * carrying the raw V8 parser message — and the same catch echoed ANY thrown
+ * message verbatim, so an fs failure in a save path answered with the absolute
+ * host path. A body that is not JSON is the CALLER's mistake, which is a 400,
+ * and it is worth saying so in one place rather than at 35 call sites.
+ *
+ * The empty body stays an empty object: half the routes here take an optional
+ * body and `{}` is what they expect to see.
+ */
+async function readJsonBody(req, limit = 256 * 1024) {
+  const raw = await readBody(req, limit);
+  if (!raw || !raw.trim()) return {};
+  try { return JSON.parse(raw); } catch {
+    const e = new Error('body must be JSON');
+    e.badJson = true;
+    throw e;
+  }
+}
+
 /** The same, kept as bytes — an image round-tripped through utf8 is destroyed. */
 function readBodyRaw(req, limit = 256 * 1024) {
   return new Promise((resolve, reject) => {
@@ -8802,7 +8825,7 @@ const server = http.createServer(async (req, res) => {
     //     No GET: the current values already ride the status poll every client
     //     runs, and a second way to read them is a second thing to keep in step.
     if (req.method === 'PATCH' && p === '/v1/quick-actions') {
-      const body = JSON.parse(await readBody(req) || '{}');
+      const body = await readJsonBody(req);
       // One call decides everything — the stale-revision check, the per-field
       // rules and the new record — so there is no order in which the route can
       // write a half-validated file.
@@ -8835,7 +8858,7 @@ const server = http.createServer(async (req, res) => {
 
     // --- FCM: the app hands over the token Google will deliver to
     if (req.method === 'POST' && p === '/v1/push/register') {
-      const body = JSON.parse(await readBody(req) || '{}');
+      const body = await readJsonBody(req);
       const installId = String(body.installId || '').trim().slice(0, 64);
       const token = String(body.token || '').trim();
       if (!installId || !token) return sendErr(res, 400, 'installId and token are required');
@@ -8877,7 +8900,7 @@ const server = http.createServer(async (req, res) => {
       return sendJson(res, 200, headroomPayload());
     }
     if (req.method === 'PATCH' && p === '/v1/headroom/settings') {
-      const body = JSON.parse(await readBody(req) || '{}');
+      const body = await readJsonBody(req);
       // Validated BEFORE anything is written, and the rule that failed is the
       // message: "invalid settings" makes a slider that silently will not move.
       const v = headroomLib.validateSettings(body, loadHeadroomSettings());
@@ -8897,7 +8920,7 @@ const server = http.createServer(async (req, res) => {
       return sendJson(res, 200, autoswitchAliasView());
     }
     if (req.method === 'POST' && p === '/v1/autoswitch') {
-      const body = JSON.parse(await readBody(req) || '{}');
+      const body = await readJsonBody(req);
       const patch = {};
       if (typeof body.enabled === 'boolean') patch.enabled = body.enabled;
       // The default fires at 95%, on the reasoning that a limit resetting in
@@ -8936,7 +8959,7 @@ const server = http.createServer(async (req, res) => {
     }
 
     if (req.method === 'POST' && p === '/v1/alerts') {
-      const body = JSON.parse(await readBody(req) || '{}');
+      const body = await readJsonBody(req);
       const st = loadAlertState();
       if (typeof body.enabled === 'boolean') {
         st.enabled = body.enabled;
@@ -9211,7 +9234,7 @@ const server = http.createServer(async (req, res) => {
     }
 
     if (req.method === 'POST' && p === '/v1/account/login') {
-      const loginBody = JSON.parse(await readBody(req) || '{}');
+      const loginBody = await readJsonBody(req);
       // An email is optional but strongly worth having: the authorize page uses
       // whatever claude.ai session the browser already has, which is how signing
       // in "as a second account" can silently re-authorize the first one.
@@ -9266,7 +9289,7 @@ const server = http.createServer(async (req, res) => {
 
     // The pasted code, handed to the waiting prompt.
     if (req.method === 'POST' && p === '/v1/account/login/code') {
-      const body = JSON.parse(await readBody(req) || '{}');
+      const body = await readJsonBody(req);
       const code = typeof body.code === 'string' ? body.code.trim() : '';
       // Codes are opaque; accept a generous shape but nothing that could be a
       // second command, since this is typed into a live terminal.
@@ -9338,7 +9361,7 @@ const server = http.createServer(async (req, res) => {
       // Signing out breaks every running session AND every cron on this host
       // (briefings, escalation, status-page investigation) until someone signs
       // back in, so it takes an explicit confirmation rather than a stray tap.
-      const body = JSON.parse(await readBody(req) || '{}');
+      const body = await readJsonBody(req);
       if (body.confirm !== 'logout') return sendErr(res, 400, 'confirmation required');
       const r = await run('claude', ['auth', 'logout'], { timeout: 30_000 });
       if (r.err) return sendErr(res, 500, (r.stderr || r.err.message).slice(0, 200));
@@ -9390,7 +9413,7 @@ const server = http.createServer(async (req, res) => {
     }
 
     if (req.method === 'POST' && p === '/v1/sessions') {
-      const body = JSON.parse(await readBody(req) || '{}');
+      const body = await readJsonBody(req);
       const bad = nameProblem(body.name);
       if (bad) return sendErr(res, 400, bad);
       const name = canonName(body.name);
@@ -9725,7 +9748,7 @@ const server = http.createServer(async (req, res) => {
       if (!st || !st.sessionId) {
         return sendErr(res, 409, 'this session has no Claude session id yet — notes are kept against the run, not the window name');
       }
-      const body = JSON.parse(await readBody(req) || '{}');
+      const body = await readJsonBody(req);
       if (body.goals !== undefined && typeof body.goals !== 'string') return sendErr(res, 400, 'goals must be text');
       if (body.notes !== undefined && typeof body.notes !== 'string') return sendErr(res, 400, 'notes must be text');
       if (typeof body.goals === 'string' && body.goals.length > MAX_GOALS) {
@@ -9841,7 +9864,7 @@ const server = http.createServer(async (req, res) => {
 
     if ((m = p.match(/^\/v1\/sessions\/([A-Za-z0-9_][A-Za-z0-9_.-]{0,49})\/rename$/)) && req.method === 'POST') {
       const from = m[1];
-      const body = JSON.parse(await readBody(req) || '{}');
+      const body = await readJsonBody(req);
       const badName = nameProblem(body.name);
       if (badName) return sendErr(res, 400, badName);
       const to = canonName(body.name);
@@ -9934,7 +9957,7 @@ const server = http.createServer(async (req, res) => {
        * malformed body — the sender was told their JSON was broken, for a
        * message the route was about to accept.
        */
-      const body = JSON.parse(await readBody(req, 512 * 1024) || '{}');
+      const body = await readJsonBody(req, 512 * 1024);
       let typedKeys = typeof body.text === 'string' ? body.text : '';
       if (typedKeys.length > typing.SESSION_TEXT_MAX) return sendErr(res, 400, 'text too long');
       // Validate the key names BEFORE anything is typed. They used to be checked
@@ -10069,7 +10092,7 @@ const server = http.createServer(async (req, res) => {
     if ((m = p.match(/^\/v1\/sessions\/([A-Za-z0-9_][A-Za-z0-9_.-]{0,49})\/soft-end$/)) && req.method === 'POST') {
       const name = m[1];
       if (!(await requireSession(res, name))) return;
-      const body = JSON.parse(await readBody(req) || '{}');
+      const body = await readJsonBody(req);
       const st = readSessionState(name);
       // A question is already waiting: typing prose into a numbered prompt is
       // lost or misread. Answer it first (same reasoning as /answer's guard).
@@ -10176,7 +10199,7 @@ const server = http.createServer(async (req, res) => {
     if ((m = p.match(/^\/v1\/sessions\/([A-Za-z0-9_][A-Za-z0-9_.-]{0,49})\/answer$/)) && req.method === 'POST') {
       const name = m[1];
       if (!(await requireSession(res, name))) return;
-      const body = JSON.parse(await readBody(req) || '{}');
+      const body = await readJsonBody(req);
       const option = Number(body.option);
       const isMulti = Array.isArray(body.options);
       if (!isMulti && (!Number.isInteger(option) || option < 1 || option > 20)) {
@@ -10504,7 +10527,7 @@ const server = http.createServer(async (req, res) => {
     }
 
     if (req.method === 'POST' && p === '/v1/devices') {
-      const body = JSON.parse(await readBody(req) || '{}');
+      const body = await readJsonBody(req);
       const now = Date.now();
       const built = devicesLib.validateRegistration(body, now);
       if (!built.ok) return sendErr(res, 400, built.error);
@@ -10561,7 +10584,7 @@ const server = http.createServer(async (req, res) => {
 
       // The device saying it is still there, and what it is willing to do now.
       if (req.method === 'POST' && dsub === '/beat') {
-        const body = JSON.parse(await readBody(req) || '{}');
+        const body = await readJsonBody(req);
         devicesLib.noteSeen(deviceState, devId, now, body);
         saveDevices();
         // A beat is liveness for the device's in-flight run, not only for the row.
@@ -10645,7 +10668,7 @@ const server = http.createServer(async (req, res) => {
         // whole tool_result; the runner keeps itself well under this, but an
         // OLDER runner does not know to, and rejecting its batch loses the whole
         // answer rather than the oversized part of it.
-        const body = JSON.parse(await readBody(req, 1024 * 1024) || '{}');
+        const body = await readJsonBody(req, 1024 * 1024);
         entry.lastHeard = Date.now();
         devicesLib.noteSeen(deviceState, devId, entry.lastHeard, body);
 
@@ -10680,7 +10703,7 @@ const server = http.createServer(async (req, res) => {
       return sendJson(res, 200, { rounds: listRounds().map(roundView) });
     }
     if (req.method === 'POST' && p === '/v1/rounds') {
-      const body = JSON.parse(await readBody(req) || '{}');
+      const body = await readJsonBody(req);
       const built = buildRound(body);
       if (built.error) return sendErr(res, 400, built.error);
       return sendJson(res, 201, roundView(saveRound(built.round)));
@@ -10700,7 +10723,7 @@ const server = http.createServer(async (req, res) => {
      * person accepts or discards it — AI drafts, human accepts.
      */
     if (req.method === 'POST' && p === '/v1/rounds/polish') {
-      const body = JSON.parse(await readBody(req) || '{}');
+      const body = await readJsonBody(req);
       const field = typeof body.field === 'string' ? body.field.trim() : '';
       if (!POLISH_FIELDS.includes(field)) {
         return sendErr(res, 400, `field must be one of ${POLISH_FIELDS.join(', ')}`);
@@ -10732,7 +10755,7 @@ const server = http.createServer(async (req, res) => {
       if (req.method === 'GET' && rsub === '') return sendJson(res, 200, roundView(round));
 
       if (req.method === 'PATCH' && rsub === '') {
-        const body = JSON.parse(await readBody(req) || '{}');
+        const body = await readJsonBody(req);
         // ⚠ RE-READ AFTER THE AWAIT. `round` above was loaded before the body
         // arrived, and a phone sends the whole prompt on save, so the window is
         // every PATCH. A run finishing inside it had its record erased — runs
@@ -10783,7 +10806,7 @@ const server = http.createServer(async (req, res) => {
        * never edits what it said.
        */
       if (req.method === 'POST' && rsub === '/ack') {
-        const body = JSON.parse(await readBody(req) || '{}');
+        const body = await readJsonBody(req);
         const ack = body.acknowledged !== false;
         // ⚠ Re-read AFTER the await. `round` was loaded before the body was
         // read, and a run can finish in that window — writing the stale snapshot
@@ -10822,7 +10845,7 @@ const server = http.createServer(async (req, res) => {
     if ((m = p.match(/^\/v1\/sessions\/([A-Za-z0-9_][A-Za-z0-9_.-]{0,49})\/archive$/)) && req.method === 'POST') {
       const name = m[1];
       if (!(await requireSession(res, name))) return;
-      const body = JSON.parse(await readBody(req) || '{}');
+      const body = await readJsonBody(req);
       // The query string as well as the body: the CLI reaches this through a
       // bodyless `curl -X POST` over ssh (see server/bin/huginn-archive), and a
       // verb whose only option needs a JSON body would mean teaching a laptop to
@@ -10934,7 +10957,7 @@ const server = http.createServer(async (req, res) => {
       const id = m[1];
       const rec = loadArchive(id);
       if (!rec) return sendErr(res, 404, 'no such archived session');
-      const body = JSON.parse(await readBody(req) || '{}');
+      const body = await readJsonBody(req);
 
       const liveIds = await liveSessionIds();
       if (liveIds === null) return sendErr(res, 503, 'tmux is not answering right now');
@@ -11051,7 +11074,7 @@ const server = http.createServer(async (req, res) => {
     }
 
     if (req.method === 'POST' && p === '/v1/projects') {
-      const body = JSON.parse(await readBody(req) || '{}');
+      const body = await readJsonBody(req);
       const existing = listProjects();
       if (existing.length >= projectsLib.MAX_PROJECTS) {
         return sendErr(res, 400, `that is the ${projectsLib.MAX_PROJECTS}-project limit — archive one first`);
@@ -11197,7 +11220,7 @@ const server = http.createServer(async (req, res) => {
        * the shipped scratchpad contract, which both clients already know.
        */
       if (req.method === 'PATCH' && sub === '') {
-        const body = JSON.parse(await readBody(req) || '{}');
+        const body = await readJsonBody(req);
         const current = loadProject(projectId);
         if (!current) return sendErr(res, 404, 'no such project');
         const rev = Number(body.rev);
@@ -11260,7 +11283,7 @@ const server = http.createServer(async (req, res) => {
        * spawn the revision the owner never saw.
        */
       if (req.method === 'POST' && sub === '/spawn') {
-        const body = JSON.parse(await readBody(req) || '{}');
+        const body = await readJsonBody(req);
         const project = loadProject(projectId);
         if (!project) return sendErr(res, 404, 'no such project');
         if (body.approve !== true) return sendErr(res, 400, 'approve must be true — spawning is the owner\'s decision');
@@ -11317,7 +11340,7 @@ const server = http.createServer(async (req, res) => {
        * protection, which is exactly why this one keeps it.
        */
       if (req.method === 'POST' && sub === '/message') {
-        const body = JSON.parse(await readBody(req) || '{}');
+        const body = await readJsonBody(req);
         const project = loadProject(projectId);
         if (!project) return sendErr(res, 404, 'no such project');
         const from = projectMemberNamed(project, body.from);
@@ -11339,7 +11362,7 @@ const server = http.createServer(async (req, res) => {
       }
 
       if (req.method === 'DELETE' && sub === '') {
-        const body = JSON.parse(await readBody(req) || '{}');
+        const body = await readJsonBody(req);
         const project = loadProject(projectId);
         if (!project) return sendErr(res, 404, 'no such project');
         // `?end=1` is the contract's spelling and means the gentle one; the body
@@ -11418,7 +11441,7 @@ const server = http.createServer(async (req, res) => {
       }
 
       if (req.method === 'POST' && p === '/v1/consoles') {
-        const body = JSON.parse(await readBody(req, 16 * 1024) || '{}');
+        const body = await readJsonBody(req, 16 * 1024);
         const r = consoles.add(body);
         if (!r.ok) return sendErr(res, r.status || 400, r.error);
         log(`consoles: added ${r.console.id} (${r.console.url})`);
@@ -11439,7 +11462,7 @@ const server = http.createServer(async (req, res) => {
       if (idMatch) {
         const id = idMatch[1];
         if (req.method === 'PATCH') {
-          const body = JSON.parse(await readBody(req, 16 * 1024) || '{}');
+          const body = await readJsonBody(req, 16 * 1024);
           const r = consoles.patch(id, body);
           // 409 CARRIES THE CURRENT ROW, not just a sentence: the editor that
           // collided needs to show what it collided WITH, which is the contract
@@ -11475,7 +11498,7 @@ const server = http.createServer(async (req, res) => {
       });
     }
     if (req.method === 'POST' && p === '/v1/scratchpads') {
-      const body = JSON.parse(await readBody(req, SCRATCHPAD_BODY_MAX) || '{}');
+      const body = await readJsonBody(req, SCRATCHPAD_BODY_MAX);
       // ⚠ ensureMain BEFORE THE UNIQUENESS CHECK, the same one line the GET does
       // and for a sharper reason. Main is minted lazily by the first LIST, so on
       // an install where a client created a page before ever listing one, "Main"
@@ -11521,7 +11544,7 @@ const server = http.createServer(async (req, res) => {
        * that it lost.
        */
       if (req.method === 'PATCH') {
-        const body = JSON.parse(await readBody(req, SCRATCHPAD_BODY_MAX) || '{}');
+        const body = await readJsonBody(req, SCRATCHPAD_BODY_MAX);
         const current = loadPad(padId);
         if (!current) return sendErr(res, 404, 'no such scratchpad');
         const rev = Number(body.rev);
@@ -11565,7 +11588,7 @@ const server = http.createServer(async (req, res) => {
     if (req.method === 'GET' && p === '/v1/chats') return sendJson(res, 200, { chats: listChats() });
 
     if (req.method === 'POST' && p === '/v1/chats') {
-      const body = JSON.parse(await readBody(req) || '{}');
+      const body = await readJsonBody(req);
       // A LOCAL-family model first: picking the row IS the host choice, so the
       // daemon resolves the machine itself, forces ask-mode, and refuses at the
       // button when the machine cannot serve — never a silent fall-through.
@@ -11669,7 +11692,7 @@ const server = http.createServer(async (req, res) => {
         if (meta.sealed) {
           return sendErr(res, 409, 'this run has finished and is kept for review — start a new chat to continue');
         }
-        const body = JSON.parse(await readBody(req) || '{}');
+        const body = await readJsonBody(req);
         const typed = typeof body.text === 'string' ? body.text.trim() : '';
         if (!typed) return sendErr(res, 400, 'text required');
         if (typed.length > 100_000) return sendErr(res, 400, 'text too long');
@@ -11884,7 +11907,7 @@ const server = http.createServer(async (req, res) => {
         return sendJson(res, 200, { ok: true });
       }
       if (req.method === 'PATCH' && sub === '') {
-        const body = JSON.parse(await readBody(req) || '{}');
+        const body = await readJsonBody(req);
         // Validated BEFORE the mutator runs: a 400 PATCH must not half-apply the
         // rest of the body, and the updateMeta callback cannot return an error.
         let mv = null;
@@ -11983,8 +12006,17 @@ const server = http.createServer(async (req, res) => {
     log('ERROR', req.method, p, e.message);
     // A body over the cap is the client's mistake, not ours, and it now reaches
     // them as a status instead of a reset socket.
+    if (!res.headersSent && e.badJson) return sendErr(res, 400, e.message);
     if (!res.headersSent && e.tooLarge) return sendErr(res, 413, 'request body too large');
-    if (!res.headersSent) return sendErr(res, 500, e.message);
+    // ⚠ NOT `e.message` (#31). This echoed whatever was thrown straight back to
+    // the caller: a V8 parser message for a bad body, and an absolute host path
+    // for an fs failure in an unguarded `writeFileSync`. The reader who needs the
+    // detail is on the host, so it goes to the journal and the caller gets a
+    // sentence. Routes that mean a specific 500 still say it with `sendErr`.
+    if (!res.headersSent) {
+      log(`route ${req.method} ${p} failed: ${e && e.stack ? e.stack.split('\n')[0] : e}`);
+      return sendErr(res, 500, 'something went wrong on the host — see the daemon journal');
+    }
     try { res.end(); } catch { }
   }
 });

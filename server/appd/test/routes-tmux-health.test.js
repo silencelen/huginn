@@ -358,3 +358,22 @@ test('every response carries X-Huginn-Appd, the 401 included (contract 2)', asyn
   assert.equal(200, authed.status);
   assert.ok(authed.headers.get('x-huginn-appd'));
 });
+
+test('a malformed JSON body is a 400, not a 500 quoting the parser (#31)', async () => {
+  // ⚠ 35 CALL SITES, ONE CATCH. Every route parsed the body inline, so
+  // complete-but-invalid JSON reached the router's catch and came back as a 500
+  // carrying the raw V8 message — and that same catch echoed ANY thrown message
+  // verbatim, so an fs failure in a save path answered with the absolute host
+  // path. Neither shipped client can emit invalid JSON, which is why this sat
+  // unnoticed; a hand-rolled script or a client bug is all it takes.
+  for (const p of ['/v1/quick-actions', '/v1/headroom/settings']) {
+    const r = await api(p, { method: 'PATCH', body: '{"stopPct": 70,}' });
+    assert.equal(400, r.status, `${p}: ${JSON.stringify(r.body)}`);
+    assert.equal('body must be JSON', r.body.error, p);
+    assert.doesNotMatch(r.body.error, /JSON\.parse|position|token/i,
+      'and it must not quote the parser at the caller');
+  }
+  // An EMPTY body is still the empty object every optional-body route expects.
+  const empty = await api('/v1/headroom/settings', { method: 'PATCH', body: '' });
+  assert.equal(200, empty.status, JSON.stringify(empty.body));
+});
