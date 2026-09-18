@@ -33,7 +33,13 @@ import java.util.concurrent.TimeUnit
  *    and reported itself healthy. `packaging/huginn-desktop-kt.nsi` stamps it
  *    now, and `scripts/release-desktop.sh` refuses to publish an installer whose
  *    stamped identity is not this exact string.
- * 2. **The `huginn` scheme registered**, or the buttons do nothing when clicked.
+ * 2. **The `huginn` scheme registered**, or the buttons do not merely do
+ *    nothing — Windows answers the click with "don't know how to open the
+ *    link huginn". Field-reported. The installer writes
+ *    `HKCU\Software\Classes\huginn\shell\open\command` and
+ *    [SchemeRegistrar] rewrites it at every launch; for six weeks only the
+ *    second existed and it was silently failing. Same shape as the AUMID
+ *    above, same lesson, and now the same release gate.
  * 3. **A packaged install.** Running from Gradle there is no shortcut and no
  *    identity, so [createOrNull] refuses rather than posting into a void.
  *
@@ -119,51 +125,6 @@ class WindowsToastNotifier private constructor(private val script: File) : Notif
         }
     }.getOrDefault(false)
 
-    // ------------------------------------------------------------------- XML
-
-    private fun attentionXml(request: NotifyRequest): String {
-        // Up to three buttons, matching the phone's lock-screen split. The
-        // fingerprint rides on every one; with none, there are no buttons at all
-        // rather than buttons that answer whatever is on the pane.
-        val fp = request.fingerprint
-        val actions = if (fp.isNullOrEmpty()) "" else request.options.take(3).joinToString("") { o ->
-            val url = Activations.answerUrl(sessionOf(request), o.number, fp)
-            """<action content="${esc("${o.number}. ${o.label}".take(40))}" activationType="protocol" arguments="${esc(url)}"/>"""
-        }
-        return buildString {
-            append("""<toast activationType="protocol" launch="${esc(Activations.openUrl(request.target))}" scenario="reminder">""")
-            append("""<visual><binding template="ToastGeneric">""")
-            append("<text>${esc(request.title.take(100))}</text>")
-            append("<text>${esc(request.body.take(200))}</text>")
-            append("</binding></visual>")
-            append("<actions>$actions</actions>")
-            append("""<audio src="ms-winsoundevent:Notification.Default"/>""")
-            append("</toast>")
-        }
-    }
-
-    private fun finishedXml(request: NotifyRequest): String = buildString {
-        append("""<toast activationType="protocol" launch="${esc(Activations.openUrl(request.target))}">""")
-        append("""<visual><binding template="ToastGeneric">""")
-        append("<text>${esc(request.title.take(100))}</text>")
-        append("<text>${esc(request.body.take(200))}</text>")
-        append("</binding></visual>")
-        // Actions, when the router gave any. These carry a finished URL rather
-        // than a pane option, so unlike the answer buttons they need no
-        // fingerprint — see [Activation.Undo].
-        append("<actions>${actionsXml(request)}</actions>")
-        append("""<audio silent="true"/>""")
-        append("</toast>")
-    }
-
-    /** Up to two non-answer buttons, the same cap the bounded-choice rule implies. */
-    private fun actionsXml(request: NotifyRequest): String =
-        request.actions.take(2).joinToString("") { a ->
-            """<action content="${esc(a.label.take(40))}" activationType="protocol" arguments="${esc(a.url)}"/>"""
-        }
-
-    private fun sessionOf(request: NotifyRequest): String = request.target.id
-
     companion object {
         private const val POWERSHELL = "powershell.exe"
         private const val TIMEOUT_MS = 10_000L
@@ -207,6 +168,51 @@ class WindowsToastNotifier private constructor(private val script: File) : Notif
             val ok = notifier.run(listOf("-Action", "probe", "-Aumid", AUMID))
             return if (ok) notifier else null
         }
+
+        // --------------------------------------------------------------- XML
+
+        internal fun attentionXml(request: NotifyRequest): String {
+            // Up to three buttons, matching the phone's lock-screen split. The
+            // fingerprint rides on every one; with none, there are no buttons at all
+            // rather than buttons that answer whatever is on the pane.
+            val fp = request.fingerprint
+            val actions = if (fp.isNullOrEmpty()) "" else request.options.take(3).joinToString("") { o ->
+                val url = Activations.answerUrl(sessionOf(request), o.number, fp)
+                """<action content="${esc("${o.number}. ${o.label}".take(40))}" activationType="protocol" arguments="${esc(url)}"/>"""
+            }
+            return buildString {
+                append("""<toast activationType="protocol" launch="${esc(Activations.openUrl(request.target))}" scenario="reminder">""")
+                append("""<visual><binding template="ToastGeneric">""")
+                append("<text>${esc(request.title.take(100))}</text>")
+                append("<text>${esc(request.body.take(200))}</text>")
+                append("</binding></visual>")
+                append("<actions>$actions</actions>")
+                append("""<audio src="ms-winsoundevent:Notification.Default"/>""")
+                append("</toast>")
+            }
+        }
+
+        internal fun finishedXml(request: NotifyRequest): String = buildString {
+            append("""<toast activationType="protocol" launch="${esc(Activations.openUrl(request.target))}">""")
+            append("""<visual><binding template="ToastGeneric">""")
+            append("<text>${esc(request.title.take(100))}</text>")
+            append("<text>${esc(request.body.take(200))}</text>")
+            append("</binding></visual>")
+            // Actions, when the router gave any. These carry a finished URL rather
+            // than a pane option, so unlike the answer buttons they need no
+            // fingerprint — see [Activation.Undo].
+            append("<actions>${actionsXml(request)}</actions>")
+            append("""<audio silent="true"/>""")
+            append("</toast>")
+        }
+
+        /** Up to two non-answer buttons, the same cap the bounded-choice rule implies. */
+        private fun actionsXml(request: NotifyRequest): String =
+            request.actions.take(2).joinToString("") { a ->
+                """<action content="${esc(a.label.take(40))}" activationType="protocol" arguments="${esc(a.url)}"/>"""
+            }
+
+        private fun sessionOf(request: NotifyRequest): String = request.target.id
 
         /**
          * C0 controls and lone surrogates are ILLEGAL in XML. One raw byte out of
