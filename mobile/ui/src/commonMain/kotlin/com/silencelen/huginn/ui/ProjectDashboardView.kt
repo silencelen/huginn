@@ -25,7 +25,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import com.silencelen.huginn.data.Plan
 import com.silencelen.huginn.data.ProjectDashboard
 import com.silencelen.huginn.data.ProjectDashboardMember
 
@@ -34,14 +33,20 @@ import com.silencelen.huginn.data.ProjectDashboardMember
  * for an answer.
  *
  * Built from the same numbers a single session's overview is built from —
- * [StatsHeader] and [ProjectionsCard] are reused rather than re-drawn, which is
- * why they stopped being `private` in `SessionOverviewView.kt`. A cluster's
- * header that looked different from a session's header would be two vocabularies
- * for one set of facts.
+ * [StatsHeader] is reused rather than re-drawn, which is why it stopped being
+ * `private` in `SessionOverviewView.kt`. A cluster's header that looked different
+ * from a session's header would be two vocabularies for one set of facts.
+ *
+ * ⚠ THE PACE CARD IS NOT HERE, and its absence is a decision. `ProjectionsCard`
+ * takes a single session's `GraphRate`; the dashboard's rate is the members'
+ * rates ADDED (`tokensPer10m`, not `tokensPerMin10`), and projecting one
+ * session's burn off twelve sessions' sum would be a number that means nothing.
+ * The sum is shown as a rate, in words, and not extrapolated.
  *
  * ⚠ NEEDS-YOU ROWS COME FIRST, and that is the screen's reason to exist. Twelve
  * rows in role order put the one session sitting on a permission dialog wherever
- * the alphabet leaves it; [ProjectRules.ordered] puts it at the top.
+ * the alphabet leaves it; [ProjectRules.ordered] puts it at the top, with the
+ * lead directly under it.
  *
  * ⚠⚠ THE PER-MEMBER DISCLOSURE ANIMATES HEIGHT ONLY — same trap, same gate, as
  * [ProjectsListView]. In the desktop's detail pane a width-changing expansion
@@ -55,8 +60,6 @@ fun ProjectDashboardView(
     modifier: Modifier = Modifier,
     /** Drawn under the header when the lead has proposed a cluster. */
     manifest: (@Composable () -> Unit)? = null,
-    /** For the pace card, exactly as a session overview uses it. Null hides it. */
-    plan: Plan? = null,
 ) {
     if (dashboard == null) {
         Text(
@@ -67,10 +70,7 @@ fun ProjectDashboardView(
         )
         return
     }
-    val members = remember(dashboard.members) {
-        ProjectRules.ordered(dashboard.members.map { it.asMember() })
-            .mapNotNull { row -> dashboard.members.firstOrNull { it.name == row.name && it.role == row.role } }
-    }
+    val members = remember(dashboard.members) { ProjectRules.ordered(dashboard.members) }
     Column(modifier.fillMaxWidth().verticalScroll(rememberScrollState())) {
         Text(
             dashboardCaption(dashboard, nowMs),
@@ -88,11 +88,18 @@ fun ProjectDashboardView(
                 modifier = Modifier.padding(start = 14.dp, end = 14.dp, top = 2.dp),
             )
         }
+        dashboardPace(dashboard)?.let {
+            Text(
+                it,
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(start = 14.dp, end = 14.dp, top = 2.dp),
+            )
+        }
         // Only when the daemon actually walked the transcripts. A header of zeroes
         // is worse than no header: it reads as a cluster that has done nothing.
         dashboard.totals?.let {
-            StatsHeader(it, dashboard.rate, nowMs)
-            ProjectionsCard(dashboard.rate, plan, nowMs)
+            StatsHeader(it, null, nowMs)
             Spacer(Modifier.height(10.dp))
         }
         manifest?.let {
@@ -108,7 +115,7 @@ fun ProjectDashboardView(
         )
         if (members.isEmpty()) {
             Text(
-                "No members yet — the lead is still sizing this one.",
+                PROJECT_NO_MEMBERS,
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.padding(start = 14.dp, end = 14.dp, bottom = 14.dp),
@@ -131,18 +138,17 @@ private fun DashboardMemberRow(
     onOpen: () -> Unit,
 ) {
     var open by remember(member.name) { mutableStateOf(false) }
-    val row = remember(member) { member.asMember() }
     Column(Modifier.fillMaxWidth()) {
         Row(
             Modifier.fillMaxWidth().clickable(onClick = onOpen)
                 .padding(start = 14.dp, end = 10.dp, top = 10.dp, bottom = 10.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            MemberDot(ProjectRules.stateWord(row))
+            MemberDot(ProjectRules.stateWord(member))
             Spacer(Modifier.width(9.dp))
             Column(Modifier.weight(1f)) {
                 Text(
-                    member.role.ifBlank { member.name },
+                    memberLabel(member),
                     style = MaterialTheme.typography.bodyMedium,
                     fontWeight = FontWeight.Medium,
                     maxLines = 1,
@@ -187,23 +193,44 @@ private fun DashboardMemberRow(
  * The dashboard's one-line heading: the project's name and the rollup.
  *
  * The rollup is the same sentence the list row carries, deliberately: a person
- * arriving here from that row should recognise the line they tapped.
+ * arriving here from that row should recognise the line they tapped. It is taken
+ * off the dashboard's own [ProjectDashboard.project] row, which is the DAEMON'S
+ * count — never recomputed from the member list beside it.
+ *
+ * ⚠ THE CLOCK IS `generatedAt`. It is when this poll was answered, which is the
+ * only honest thing to say about a rollup of twelve transcripts.
  */
 fun dashboardCaption(dashboard: ProjectDashboard, nowMs: Long): String {
-    val name = dashboard.project?.let { ProjectRules.label(it) }?.takeIf { it.isNotEmpty() }
-    val rollup = ProjectRules.rollupWords(dashboard.members.map { it.asMember() })
+    val row = dashboard.project
     val bits = mutableListOf<String>()
-    if (name != null) bits += name
-    bits += rollup
-    agoWords(dashboard.updatedAt, nowMs).takeIf { it.isNotBlank() }?.let { bits += "as of $it" }
+    row?.let { ProjectRules.label(it) }?.takeIf { it.isNotEmpty() }?.let { bits += it }
+    bits += if (row != null) ProjectRules.rollupWords(row) else ProjectRules.rollupWords(dashboard.members)
+    agoWords(dashboard.generatedAt, nowMs).takeIf { it.isNotBlank() }?.let { bits += "as of $it" }
+    return bits.joinToString(" · ")
+}
+
+/**
+ * The cluster's pace in words, or null when nothing is moving.
+ *
+ * ⚠ REPORTED, NOT PROJECTED. These are the members' rates added together, so
+ * they answer "how fast is this cluster burning right now" and nothing else.
+ * Running a single session's projection off them would put a confident
+ * time-to-limit on a number that has twelve authors.
+ */
+fun dashboardPace(dashboard: ProjectDashboard): String? {
+    val rate = dashboard.rate ?: return null
+    if (rate.tokensPer10m <= 0 && rate.tokensPer60m <= 0) {
+        return if (rate.activeRecently) "active, too little to measure a rate" else null
+    }
+    val bits = mutableListOf("${rate.tokensPer10m} tokens/min over 10m", "${rate.tokensPer60m} over 60m")
+    if (!rate.activeRecently) bits += "nothing recent"
     return bits.joinToString(" · ")
 }
 
 /** The line under a member's role: what it is doing and when it last did anything. */
 fun memberSubtitle(member: ProjectDashboardMember, nowMs: Long): String {
-    val row = member.asMember()
-    val bits = mutableListOf(ProjectRules.memberWords(row))
-    member.pendingSends?.takeIf { it > 0 }?.let {
+    val bits = mutableListOf(ProjectRules.memberWords(member))
+    member.pendingSends.takeIf { it > 0 }?.let {
         bits += if (it == 1) "1 send waiting" else "$it sends waiting"
     }
     agoWords(member.lastActivityTs, nowMs).takeIf { it.isNotBlank() }?.let { bits += it }
@@ -211,16 +238,22 @@ fun memberSubtitle(member: ProjectDashboardMember, nowMs: Long): String {
 }
 
 /**
- * What the disclosure reveals: the model cell, the agents, the peer name.
+ * What the disclosure reveals: the peer name, the model cell, the agents, the
+ * work and what it cost.
  *
- * ⚠ THE AGENT COUNT, NOT THE AGENT IDS. An agent id is scoped to the session that
- * spawned it, so a project-wide list of them would be a list of handles that
- * address nothing from here — the delta calls this out explicitly. The count is
- * a fact; a link would be a broken promise.
+ * ⚠ THE AGENT COUNT, NOT THE AGENT IDS — and the daemon does not send ids at
+ * all. An agent id is scoped to the session that spawned it, so a project-wide
+ * list of them would be a list of handles that address nothing from here. The
+ * count is a fact; a link would be a broken promise.
+ *
+ * ⚠ AND THE PEER NAME IS `claudeName`, NEVER `name`. The tmux name is how the
+ * rest of this app addresses the session; `<slug>/<role>` is what a peer's
+ * SendMessage takes, and it is the one somebody reading this line would type.
  */
 fun memberDetailLines(member: ProjectDashboardMember): List<String> {
     val lines = mutableListOf<String>()
-    member.name.takeIf { it.isNotBlank() }?.let { lines += "peer name  $it" }
+    member.claudeName.takeIf { it.isNotBlank() }?.let { lines += "peer name  $it" }
+    member.name.takeIf { it.isNotBlank() && it != member.claudeName }?.let { lines += "tmux  $it" }
     member.headroom?.let { h ->
         val cell = mutableListOf<String>()
         h.family?.let { cell += it }
@@ -229,13 +262,14 @@ fun memberDetailLines(member: ProjectDashboardMember): List<String> {
         if (!h.autoResume) cell += "auto-resume off"
         if (cell.isNotEmpty()) lines += "model  " + cell.joinToString(" · ")
     }
-    val live = member.streams.count { it.active }
-    if (member.streams.isNotEmpty()) {
-        lines += "agents  " + if (live > 0) "${member.streams.size} · $live live" else "${member.streams.size}"
+    if (member.agentCount > 0) {
+        lines += "agents  ${member.agentCount}"
     }
-    member.totals?.let { t ->
-        lines += "work  ${t.turns} turns · ${t.toolCalls} tools" +
-            if (t.errors > 0) " · ${t.errors} tool errors" else ""
+    if (member.turns > 0 || member.tokens.input > 0 || member.tokens.output > 0) {
+        val work = mutableListOf("${member.turns} turns")
+        work += "${member.tokens.input + member.tokens.output} tokens"
+        member.estCostUsd?.let { work += OverviewFormat.usd(it) }
+        lines += "work  " + work.joinToString(" · ")
     }
     return lines
 }

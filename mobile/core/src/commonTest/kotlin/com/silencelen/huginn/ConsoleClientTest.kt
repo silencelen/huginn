@@ -124,4 +124,38 @@ class ConsoleClientTest {
         assertEquals(1789459999L, row.lastProbeAt)
         assertEquals("POST", seen.last().method.value)
     }
+
+    /**
+     * ⚠ A BRAND NEW ROW HAS NEVER BEEN PROBED, WHICH IS NOT THE SAME AS BEING
+     * DOWN. The daemon answers the create immediately and lets the sweep find out
+     * whether anything is there; a client that read `up:null` as `false` would
+     * draw an outage on a console nobody has looked at yet.
+     */
+    @Test
+    fun `a console can be added, and it comes back with no verdict on it`() = runTest {
+        val c = client {
+            respond(
+                """{"id":"board-view","name":"Board view","url":"http://huginn:8092/","kind":"tool",
+                   "notes":"KiCad","addedAt":1789460000,"version":1,"up":null,"lastProbeAt":0,
+                   "latencyMs":null,"httpStatus":null,"reachableFrom":"host"}""",
+                HttpStatusCode.Created,
+            )
+        }
+        val made = c.createConsole("Board view", "http://huginn:8092/", kind = "tool", notes = "KiCad")
+        assertEquals("board-view", made.id, "the id is derived from the name when none is given")
+        assertEquals(1, made.version)
+        assertNull(made.up, "never probed is not down")
+        assertEquals("POST", seen.last().method.value)
+    }
+
+    @Test
+    fun `a console delete is a call, and a second one is a 404 that throws`() = runTest {
+        val c = client { respond("""{"ok":true}""", HttpStatusCode.OK) }
+        c.deleteConsole("board-view")
+        assertEquals("DELETE", seen.last().method.value)
+
+        val gone = client { respond("""{"error":"no such console"}""", HttpStatusCode.NotFound) }
+        val e = assertFailsWith<HuginnClient.HuginnException> { gone.deleteConsole("board-view") }
+        assertEquals(404, e.code, "a second delete is not a second success")
+    }
 }

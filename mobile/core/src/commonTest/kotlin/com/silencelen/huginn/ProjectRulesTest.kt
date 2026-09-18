@@ -1,10 +1,13 @@
 package com.silencelen.huginn
 
+import com.silencelen.huginn.data.ManifestSession
 import com.silencelen.huginn.data.Project
+import com.silencelen.huginn.data.ProjectLead
+import com.silencelen.huginn.data.ProjectLive
 import com.silencelen.huginn.data.ProjectManifest
 import com.silencelen.huginn.data.ProjectMember
-import com.silencelen.huginn.data.ProjectPeer
-import com.silencelen.huginn.data.SpawnMemberResult
+import com.silencelen.huginn.data.ProjectRow
+import com.silencelen.huginn.data.SpawnFailure
 import com.silencelen.huginn.data.SpawnResult
 import com.silencelen.huginn.ui.ProjectRules
 import kotlin.test.Test
@@ -28,23 +31,99 @@ class ProjectRulesTest {
 
     private val nowSec = 1_789_460_000L
 
-    private fun member(
+    /** A live member row, as `joinMembers` produces one. */
+    private fun live(
         role: String,
+        status: String? = "idle",
         state: String? = "idle",
-        needsYou: Boolean? = false,
+        needsYou: Boolean = false,
+        waitingFor: String? = null,
+        alive: Boolean = true,
+        present: Boolean = true,
+        lead: Boolean = false,
         ended: Boolean = false,
-        pending: Int? = 0,
-    ) = ProjectMember(
-        name = "statusflap/$role",
+        pending: Int = 0,
+    ) = ProjectLive(
         role = role,
-        sessionId = "0123abcd-0000-4000-8000-0000000000$role".take(36),
-        spawnedAt = nowSec - 3_600,
-        state = state,
+        name = "statusflap-$role",
+        claudeName = "statusflap/$role",
+        sessionId = "sid-$role",
+        present = present,
+        alive = alive,
+        status = status,
+        waitingFor = waitingFor,
         needsYou = needsYou,
+        state = state,
         pendingSends = pending,
-        lastActivityTs = nowSec - 600,
         endedAt = if (ended) nowSec - 300 else null,
+        spawnedAt = nowSec - 3_600,
+        lead = lead,
+        checkedAt = nowSec,
     )
+
+    private fun row(
+        members: Int = 0,
+        alive: Int = 0,
+        busy: Int = 0,
+        waiting: Int = 0,
+        status: String = "active",
+        name: String = "Status page flap",
+        id: String = "p1",
+        slug: String = "statusflap",
+        manifestRev: Int = 0,
+        manifestSummary: String? = null,
+        untagged: Boolean = false,
+        endedReason: String? = null,
+    ) = ProjectRow(
+        id = id, name = name, slug = slug, kind = "software", status = status,
+        cwd = "/root/netplan/status-page",
+        memberCount = members, alive = alive, busy = busy, waiting = waiting,
+        lead = ProjectLead(name = "$slug-lead", claudeName = "$slug/lead", present = true),
+        manifestRev = manifestRev, manifestSummary = manifestSummary, untaggedSeen = untagged,
+        endedReason = endedReason, createdAt = nowSec - 86_400, updatedAt = nowSec - 100, rev = 3,
+    )
+
+    // ------------------------------------------------------- the vocabularies
+
+    @Test
+    fun `the kinds and statuses are the daemon's closed lists, spelled out`() {
+        assertEquals(
+            listOf("software", "infra", "hardware", "docs", "research", "other"),
+            ProjectRules.KINDS,
+        )
+        assertEquals(
+            listOf("drafting", "proposed", "active", "paused", "archived"),
+            ProjectRules.STATUSES,
+        )
+    }
+
+    @Test
+    fun `a word from a newer daemon is NULL, never coerced into a real one`() {
+        // ⚠ `other` IS A REAL KIND AND MEANS SOMETHING. Folding an unknown word
+        // into it would draw a chip that claims the lead said something it did
+        // not — unlike a console's kind, where `other` IS the daemon's fallback.
+        assertNull(ProjectRules.kindWord("quantum"))
+        assertNull(ProjectRules.kindWord(null))
+        assertEquals("hardware", ProjectRules.kindWord("Hardware"))
+        assertNull(ProjectRules.statusWord("compacting"))
+        assertEquals("proposed", ProjectRules.statusWord("proposed"))
+        assertNull(ProjectRules.statusWords("compacting"))
+        assertEquals("waiting for your answer", ProjectRules.statusWords("proposed"))
+    }
+
+    @Test
+    fun `the transitions are the ones the daemon names, and archived is terminal`() {
+        assertTrue(ProjectRules.canTransition("drafting", "proposed"))
+        assertTrue(ProjectRules.canTransition("proposed", "drafting"), "Discard")
+        assertTrue(ProjectRules.canTransition("proposed", "active"), "Spawn")
+        assertTrue(ProjectRules.canTransition("active", "paused"))
+        assertTrue(ProjectRules.canTransition("paused", "active"))
+        assertFalse(ProjectRules.canTransition("archived", "active"))
+        // ⚠ An ACTIVE project is never re-proposed: the members are already
+        // running, and a lead recapping its plan must not spawn a second cluster.
+        assertFalse(ProjectRules.canTransition("active", "proposed"))
+        assertFalse(ProjectRules.canTransition("active", "nonsense"))
+    }
 
     // ------------------------------------------------------------- the names
 
@@ -86,6 +165,32 @@ class ProjectRulesTest {
             "there is already a project with that name",
             ProjectRules.nameProblem("lora Sensor Stick", listOf("LoRa sensor stick")),
         )
+    }
+
+    @Test
+    fun `a slug survives tmux, and the display name it came from does not have to`() {
+        assertEquals("lora-sensor-stick", ProjectRules.slugFor("LoRa Sensor Stick"))
+        // ⚠ NO DOTS EVER. tmux rewrites '.' to '_' and exits 0, so a name with one
+        // is a name that comes back different from what was asked for.
+        assertEquals("v2-1-board", ProjectRules.slugFor("v2.1 board"))
+        assertEquals("", ProjectRules.slugFor("..."), "a name with nothing usable in it produces no slug")
+        assertTrue(ProjectRules.slugProblem("")!!.contains("usable slug"))
+        assertTrue(ProjectRules.slugProblem("login")!!.contains("reserved"))
+        assertEquals(
+            "there is already a project with that slug",
+            ProjectRules.slugProblem("lora", listOf("LORA")),
+        )
+        assertNull(ProjectRules.slugProblem("lora-stick", listOf("other")))
+        assertEquals(
+            "a slug is lowercase letters, digits and dashes, 1-24 characters",
+            ProjectRules.slugProblem("Not_A_Slug"),
+        )
+    }
+
+    @Test
+    fun `the two namespaces are composed in one place each`() {
+        assertEquals("lora-stick-docs", ProjectRules.tmuxNameFor("lora-stick", "docs"))
+        assertEquals("lora-stick/docs", ProjectRules.claudeNameFor("lora-stick", "docs"))
     }
 
     // -------------------------------------------------------------- the role
@@ -136,131 +241,188 @@ class ProjectRulesTest {
         )
     }
 
+    @Test
+    fun `a brief is required, because it IS the lead's first message`() {
+        // ⚠ THE DAEMON REFUSES A CREATE WITHOUT ONE. A project made with no brief
+        // is a session sitting there with nothing to size.
+        assertEquals(
+            "a project needs a brief — it is the whole first message the lead gets",
+            ProjectRules.briefProblem("   "),
+        )
+        assertNull(ProjectRules.briefProblem("Find out why the status page flaps."))
+        assertEquals(4_000, ProjectRules.MAX_BRIEF)
+        assertEquals("a brief is at most 4000 characters", ProjectRules.briefProblem("x".repeat(4_001)))
+    }
+
+    @Test
+    fun `a kind is required and comes off the closed list`() {
+        assertNull(ProjectRules.kindProblem("infra"))
+        assertEquals(
+            "kind is one of software, infra, hardware, docs, research, other",
+            ProjectRules.kindProblem("quantum"),
+        )
+        assertEquals(
+            "kind is one of software, infra, hardware, docs, research, other",
+            ProjectRules.kindProblem(null),
+        )
+    }
+
     // ------------------------------------------------------------- the marks
 
     @Test
     fun `a member's mark is a SESSION word, so both screens draw the same dot`() {
-        assertEquals("running", ProjectRules.stateWord(member("db", state = "running")))
-        assertEquals("idle", ProjectRules.stateWord(member("docs", state = "idle")))
-        assertEquals("attention", ProjectRules.stateWord(member("web", state = "attention")))
+        assertEquals("running", ProjectRules.stateWord(live("db", status = "busy")))
+        assertEquals("idle", ProjectRules.stateWord(live("docs", status = "idle")))
+        assertEquals("attention", ProjectRules.stateWord(live("web", status = "waiting")))
     }
 
     @Test
-    fun `needsYou beats whatever the state file last recorded`() {
+    fun `the NATIVE status wins over the title hook's state`() {
+        // Two vocabularies meet on a member row. `status` is Claude Code's own
+        // pid-keyed registry; `state` is the hook. When they disagree the registry
+        // is the one that watched the process.
+        val m = live("db", status = "busy", state = "idle")
+        assertEquals("running", ProjectRules.stateWord(m))
+        assertEquals("working", ProjectRules.memberWords(m))
+    }
+
+    @Test
+    fun `needsYou beats whatever either registry last recorded`() {
         // The daemon already promotes a live permission dialog to `attention` on a
-        // session row; a member that says needsYou while its state is stale must
+        // session row; a member that says needsYou while its status is stale must
         // not be drawn as quietly working.
-        val m = member("web", state = "running", needsYou = true)
+        val m = live("web", status = "busy", state = "running", needsYou = true)
         assertEquals("attention", ProjectRules.stateWord(m))
         assertTrue(ProjectRules.needsYou(m))
         assertEquals("needs you", ProjectRules.memberWords(m))
     }
 
     @Test
-    fun `an unknown state word is NULL, never guessed into the else branch`() {
-        // ⚠ A newer daemon inventing a fifth word must leave the row unmarked. An
-        // `else -> idle` would draw a session that is doing something unknown as a
-        // session that is doing nothing, which is the wrong way round.
-        val m = member("probe", state = "teleporting", needsYou = null)
-        assertNull(ProjectRules.stateWord(m))
-        assertEquals("no state yet", ProjectRules.memberWords(m))
-        assertNull(ProjectRules.stateWord(member("probe", state = null, needsYou = null)))
+    fun `waiting says what it is waiting FOR, because that is a different amount of help`() {
+        val m = live("web", status = "waiting", needsYou = true, waitingFor = "input needed")
+        assertEquals("needs you — input needed", ProjectRules.memberWords(m))
     }
 
     @Test
-    fun `waiting is the registry's word for needs-you, and is mapped`() {
-        // The native session registry started emitting `waiting` beside busy/idle,
-        // with `waitingFor: "input needed"`. It means exactly attention.
-        assertEquals("attention", ProjectRules.stateWord(member("web", state = "waiting", needsYou = null)))
-        assertEquals("running", ProjectRules.stateWord(member("db", state = "busy", needsYou = null)))
+    fun `an unknown status word is NULL, and the hook is what is left to draw with`() {
+        // ⚠ A newer daemon inventing a fifth word must not be picked up by an
+        // `else` branch and drawn as idle. Nothing in the native row is usable, so
+        // the title hook's own word is what remains.
+        val m = live("probe", status = "compacting-or-whatever-comes-next", state = "idle")
+        assertEquals("idle", ProjectRules.stateWord(m))
+        val blind = live("probe", status = "compacting-or-whatever-comes-next", state = "teleporting")
+        assertNull(ProjectRules.stateWord(blind))
+        assertEquals("no state yet", ProjectRules.memberWords(blind))
+        assertNull(ProjectRules.stateWord(live("probe", status = null, state = null)))
     }
 
     @Test
-    fun `an ended member has no mark at all`() {
+    fun `an ended member has no mark at all, and neither has one that is simply gone`() {
         // Not idle — gone. A grey dot beside a live grey dot says the wrong thing.
-        val m = member("docs", state = "idle", ended = true)
-        assertTrue(ProjectRules.ended(m))
-        assertNull(ProjectRules.stateWord(m))
-        assertEquals("ended", ProjectRules.memberWords(m))
+        val over = live("docs", status = "idle", ended = true)
+        assertTrue(ProjectRules.ended(over))
+        assertNull(ProjectRules.stateWord(over))
+        assertEquals("ended", ProjectRules.memberWords(over))
+
+        // ⚠ AND `alive:false` WITH NO TMUX SESSION IS NOT `idle`. joinMembers
+        // reports exactly this for a member whose pane has disappeared.
+        val missing = live("api", status = null, state = null, alive = false, present = false)
+        assertTrue(ProjectRules.gone(missing))
+        assertNull(ProjectRules.stateWord(missing))
+        assertEquals("not running", ProjectRules.memberWords(missing))
     }
 
     // ------------------------------------------------------------ the order
 
     @Test
-    fun `the one asking for something is at the top`() {
+    fun `the one asking for something is at the top, and the lead is right under it`() {
         // ⚠ THE WHOLE POINT OF THE SCREEN. Twelve rows in role order put the
-        // session sitting on a permission dialog wherever the alphabet leaves it.
+        // session sitting on a permission dialog wherever the alphabet leaves it —
+        // and bury the lead, which is the session the owner talks to.
         val rows = listOf(
-            member("apply", state = "idle"),
-            member("docs", state = "idle", ended = true),
-            member("build", state = "running"),
-            member("zzz", state = "attention"),
-            member("probe", state = "teleporting", needsYou = null),
+            live("apply", status = "idle"),
+            live("docs", status = "idle", ended = true),
+            live("build", status = "busy"),
+            live("zzz", status = "waiting", needsYou = true),
+            live("probe", status = "teleporting", state = "teleporting"),
+            live("lead", status = "idle", lead = true),
         )
         assertEquals(
-            listOf("zzz", "build", "apply", "probe", "docs"),
+            listOf("zzz", "lead", "build", "apply", "probe", "docs"),
             ProjectRules.ordered(rows).map { it.role },
         )
+    }
+
+    @Test
+    fun `a lead that needs you is still first, because the ask outranks the office`() {
+        val rows = listOf(
+            live("db", status = "busy"),
+            live("lead", status = "waiting", needsYou = true, lead = true),
+        )
+        assertEquals(listOf("lead", "db"), ProjectRules.ordered(rows).map { it.role })
     }
 
     // ----------------------------------------------------------- the rollup
 
     @Test
-    fun `the rollup is the sentence the row is read for`() {
-        val rows = listOf(
-            member("db", state = "running"),
-            member("etl", state = "running"),
-            member("cdn", state = "running"),
-            member("web", state = "attention"),
-            member("api", state = "idle"),
-        )
-        assertEquals("3 of 5 working · 1 needs you", ProjectRules.rollupWords(rows))
+    fun `the rollup renders the DAEMON'S counts and never recomputes them`() {
+        // ⚠ `alive`, `busy` and `waiting` are a join across three registries no
+        // client can perform, and they exclude the lead. Rendering them is the
+        // client's whole job here.
+        assertEquals("3 of 5 working · 1 needs you", ProjectRules.rollupWords(row(members = 5, alive = 5, busy = 3, waiting = 1)))
+        val r = ProjectRules.rollup(row(members = 5, alive = 5, busy = 3, waiting = 1))
+        assertEquals(5, r.members)
+        assertEquals(3, r.busy)
     }
 
     @Test
-    fun `the denominator is the LIVE members, and the ended ones get their own clause`() {
-        // "3 of 12 working" on a cluster where seven finished hours ago reads as a
-        // project in trouble. The ended count is information, at the end.
-        val rows = listOf(
-            member("db", state = "running"),
-            member("web", state = "attention"),
-            member("probe", state = "teleporting", needsYou = null),
-            member("docs", state = "idle", ended = true),
+    fun `the denominator is the LIVE members, and the rest get their own clause`() {
+        // "3 of 12 working" on a cluster where nine have finished reads as a
+        // project in trouble. The ones that are no longer running go at the end.
+        assertEquals(
+            "1 of 3 working · 1 needs you · 1 not running",
+            ProjectRules.rollupWords(row(members = 4, alive = 3, busy = 1, waiting = 1)),
         )
-        assertEquals("1 of 3 working · 1 needs you · 1 ended", ProjectRules.rollupWords(rows))
-        val r = ProjectRules.rollup(rows)
-        assertEquals(3, r.live)
-        assertEquals(1, r.ended)
+        assertEquals("no members yet", ProjectRules.rollupWords(row(members = 0)))
+        // A cluster whose members are all gone says so rather than "0 of 0".
+        assertEquals("none running", ProjectRules.rollupWords(row(members = 3, alive = 0)))
     }
 
     @Test
     fun `two waiting members need you, one needs you`() {
         assertEquals(
             "0 of 2 working · 2 need you",
-            ProjectRules.rollupWords(listOf(member("a", state = "attention"), member("b", state = "attention"))),
+            ProjectRules.rollupWords(row(members = 2, alive = 2, busy = 0, waiting = 2)),
         )
-        assertEquals("no members yet", ProjectRules.rollupWords(emptyList()))
+    }
+
+    @Test
+    fun `the same rollup off a live list drops the lead, so the two paths agree`() {
+        val rows = listOf(
+            live("lead", status = "busy", lead = true),
+            live("db", status = "busy"),
+            live("web", status = "waiting", needsYou = true),
+            live("api", status = "idle"),
+        )
+        // The lead is busy and is NOT counted — three members, one working.
+        assertEquals("1 of 3 working · 1 needs you", ProjectRules.rollupWords(rows))
+        assertEquals(3, ProjectRules.rollup(rows).members)
     }
 
     // --------------------------------------------------------- the manifest
 
     @Test
-    fun `the summary is one line, the daemon's when it has one`() {
+    fun `the summary is one line, clipped, and there is no fallback to the scope`() {
         assertEquals(
             "Two sessions: docs writes the README, repo runs the checks.",
             ProjectRules.manifestSummary(
                 ProjectManifest(summary = " Two sessions: docs writes the README,\n repo runs the checks. "),
             ),
         )
-        // No summary: the first non-blank line of the body, never the whole body.
-        assertEquals(
-            "scope: rebuild the flap detector",
-            ProjectRules.manifestSummary(
-                ProjectManifest(text = "\n\nscope: rebuild the flap detector\nsessions:\n  docs\n  repo"),
-            ),
-        )
+        // ⚠ THE SCOPE IS A PARAGRAPH AND THIS SLOT IS A LINE. A card that put the
+        // scope here would eat the rest of the card.
+        assertNull(ProjectRules.manifestSummary(ProjectManifest(scope = "a long paragraph about the cluster")))
         assertNull(ProjectRules.manifestSummary(null))
-        assertNull(ProjectRules.manifestSummary(ProjectManifest()))
     }
 
     @Test
@@ -272,71 +434,130 @@ class ProjectRulesTest {
     }
 
     @Test
-    fun `an untagged proposal is the silent failure, and it is said`() {
-        // ⚠ The lead believes it proposed something; the daemon ignored the block
-        // because its fence carried no tag; to the owner, nothing happened.
-        val w = ProjectRules.manifestCaution(ProjectManifest(untaggedSeen = true))
-        assertTrue(w != null && w.contains("without its tag"), "said: $w")
-        assertNull(ProjectRules.manifestCaution(ProjectManifest(summary = "fine")))
-        assertNull(ProjectRules.manifestCaution(null))
+    fun `the proposal says how many and which roles`() {
+        val m = ProjectManifest(
+            rev = 1,
+            summary = "three sessions",
+            sessions = listOf(
+                ManifestSession(role = "docs", firstPrompt = "write it"),
+                ManifestSession(role = "repo", firstPrompt = "check it"),
+                ManifestSession(role = "fw", firstPrompt = "flash it"),
+            ),
+        )
+        assertEquals("3 sessions: docs, repo, fw", ProjectRules.manifestWords(m))
+        assertEquals(
+            "1 session: docs",
+            ProjectRules.manifestWords(m.copy(sessions = m.sessions.take(1))),
+        )
+        assertEquals("no sessions in this proposal", ProjectRules.manifestWords(ProjectManifest()))
     }
 
     @Test
-    fun `a proposal is only worth a card when it has something in it`() {
-        val base = Project(id = "p1", name = "Status page flap")
-        assertFalse(ProjectRules.hasProposal(base))
-        assertFalse(ProjectRules.hasProposal(base.copy(manifest = ProjectManifest(rev = 3))))
-        assertTrue(ProjectRules.hasProposal(base.copy(manifest = ProjectManifest(summary = "two sessions"))))
-        // An ended project's proposal is history, not a question.
-        assertFalse(
-            ProjectRules.hasProposal(
-                base.copy(endedAt = nowSec, manifest = ProjectManifest(summary = "two sessions")),
+    fun `a proposed session's settings read in order, and null means the host's own`() {
+        // ⚠ The daemon turns a model, effort or mode word it does not recognise
+        // into null rather than losing the whole proposal over it — so an empty
+        // cell is the DEFAULT and is said as one.
+        assertEquals(
+            "opus · high effort · act mode",
+            ProjectRules.sessionWords(
+                ManifestSession(role = "db", firstPrompt = "go", model = "opus", effort = "high", mode = "act"),
             ),
         )
+        assertEquals(
+            "the host's own defaults",
+            ProjectRules.sessionWords(ManifestSession(role = "web", firstPrompt = "go")),
+        )
+        assertNull(ProjectRules.sessionCwd(ManifestSession(role = "web", firstPrompt = "go")))
+        assertEquals(
+            "/root/netplan/status-page/db",
+            ProjectRules.sessionCwd(
+                ManifestSession(role = "db", firstPrompt = "go", cwd = "/root/netplan/status-page/db"),
+            ),
+        )
+    }
+
+    @Test
+    fun `an untagged proposal is the silent failure, and it is said`() {
+        // ⚠ The lead believes it proposed something; the daemon ignored the block
+        // because its fence carried no tag; to the owner, nothing happened. It is
+        // also the injection signal, which is why it is never swallowed.
+        val w = ProjectRules.manifestCaution(ProjectManifest(untaggedSeen = true))
+        assertTrue(w != null && w.contains("without its tag"), "said: $w")
+        assertNull(ProjectRules.manifestCaution(ProjectManifest(summary = "fine")))
+        assertNull(ProjectRules.manifestCaution(null as ProjectManifest?))
+        // And the row carries the same flag, because the tree sees rows.
+        assertTrue(ProjectRules.manifestCaution(row(untagged = true)) != null)
+        assertNull(ProjectRules.manifestCaution(row()))
+    }
+
+    @Test
+    fun `a card is offered on a PROPOSED project and on nothing else`() {
+        // ⚠ THE STATUS IS THE GATE. The manifest stays on the record after a
+        // Discard so an editor can reopen it, and after a Spawn as the record of
+        // what was made — offering Spawn on either would be offering to create a
+        // cluster that is already running.
+        val m = ProjectManifest(rev = 2, summary = "two sessions", sessions = listOf(ManifestSession("docs", "go")))
+        val base = Project(id = "p1", name = "Status page flap", status = "proposed", manifest = m)
+        assertTrue(ProjectRules.hasProposal(base))
+        assertFalse(ProjectRules.hasProposal(base.copy(status = "active")))
+        assertFalse(ProjectRules.hasProposal(base.copy(status = "drafting")))
+        assertFalse(ProjectRules.hasProposal(base.copy(manifest = ProjectManifest(rev = 3))), "no sessions in it")
+        assertTrue(ProjectRules.hasProposal(row(status = "proposed", manifestRev = 2)))
+        assertFalse(ProjectRules.hasProposal(row(status = "proposed", manifestRev = 0)))
+    }
+
+    @Test
+    fun `a rev that has already been spawned says so before the button is pressed`() {
+        assertTrue(ProjectRules.alreadySpawned(ProjectManifest(rev = 2, spawnedRev = 2)))
+        assertFalse(ProjectRules.alreadySpawned(ProjectManifest(rev = 3, spawnedRev = 2)))
+        assertFalse(ProjectRules.alreadySpawned(ProjectManifest(rev = 0, spawnedRev = 0)))
+        assertFalse(ProjectRules.alreadySpawned(null))
     }
 
     // ------------------------------------------------------------ the spawn
 
     @Test
     fun `a partial spawn reads as partial, not as a failure`() {
-        // ⚠ Spawning is a loop over tmux: the fourth member failing does not
-        // un-spawn the first three, and a headline saying "failed" would send
-        // somebody looking for three sessions that are sitting there working.
+        // ⚠ Spawning is a loop over tmux: the third role failing does not un-spawn
+        // the first two, the answer is still HTTP 200, and a headline saying
+        // "failed" would send somebody looking for sessions that are working.
         val r = SpawnResult(
-            listOf(
-                SpawnMemberResult("statusflap/db", ok = true),
-                SpawnMemberResult("statusflap/web", ok = true),
-                SpawnMemberResult(
-                    "statusflap/docs",
-                    ok = false,
-                    error = "a session called statusflap-docs already exists",
-                ),
+            ok = false,
+            spawned = listOf(
+                ProjectMember(role = "db", name = "statusflap-db", claudeName = "statusflap/db"),
+                ProjectMember(role = "web", name = "statusflap-web", claudeName = "statusflap/web"),
             ),
+            failed = listOf(SpawnFailure(role = "docs", reason = "duplicate session: statusflap-docs")),
         )
         assertEquals("2 of 3 started · 1 failed", ProjectRules.spawnWords(r))
         assertEquals(
-            listOf("statusflap/docs — a session called statusflap-docs already exists"),
+            listOf("docs — duplicate session: statusflap-docs"),
             ProjectRules.spawnFailures(r),
             "the daemon's own sentence, verbatim: the fix is in it",
         )
+        assertEquals(listOf("statusflap/db", "statusflap/web"), ProjectRules.spawnedNames(r))
     }
 
     @Test
     fun `the whole-success and whole-failure headlines say which they are`() {
         assertEquals(
             "1 member started",
-            ProjectRules.spawnWords(SpawnResult(listOf(SpawnMemberResult("a/b", ok = true)))),
+            ProjectRules.spawnWords(SpawnResult(ok = true, spawned = listOf(ProjectMember(role = "a")))),
         )
         assertEquals(
             "2 members started",
             ProjectRules.spawnWords(
-                SpawnResult(listOf(SpawnMemberResult("a/b", ok = true), SpawnMemberResult("a/c", ok = true))),
+                SpawnResult(ok = true, spawned = listOf(ProjectMember(role = "a"), ProjectMember(role = "b"))),
             ),
+        )
+        assertEquals(
+            "the member did not start",
+            ProjectRules.spawnWords(SpawnResult(failed = listOf(SpawnFailure("a", "no")))),
         )
         assertEquals(
             "none of the 2 started",
             ProjectRules.spawnWords(
-                SpawnResult(listOf(SpawnMemberResult("a/b"), SpawnMemberResult("a/c"))),
+                SpawnResult(failed = listOf(SpawnFailure("a", "no"), SpawnFailure("b", "no"))),
             ),
         )
         assertEquals("nothing came back", ProjectRules.spawnWords(SpawnResult()))
@@ -348,25 +569,32 @@ class ProjectRulesTest {
     fun `the list holds still, so the row you tapped is the row that is there`() {
         // The ScratchpadRules decision, not the archive's: this is a PLACE. Live
         // first, then by name, id last so two that read the same never swap.
-        val a = Project(id = "a", name = "Zephyr")
-        val b = Project(id = "b", name = "alpha")
-        val c = Project(id = "c", name = "Midway", endedAt = nowSec)
+        val a = row(id = "a", name = "Zephyr", slug = "zephyr")
+        val b = row(id = "b", name = "alpha", slug = "alpha")
+        val c = row(id = "c", name = "Midway", slug = "midway", status = "archived")
         assertEquals(listOf("b", "a", "c"), ProjectRules.orderedProjects(listOf(a, c, b)).map { it.id })
     }
 
     @Test
-    fun `a project with no name still has to be distinguishable from the one above`() {
-        assertEquals("0123abcd", ProjectRules.label(Project(id = "0123abcd-0000-4000", name = "  ")))
-        assertEquals("Status page flap", ProjectRules.label(Project(id = "x", name = " Status page\tflap ")))
+    fun `an archived project is not live, whatever else is on the row`() {
+        assertFalse(ProjectRules.live(row(status = "archived")))
+        assertTrue(ProjectRules.live(row(status = "paused")))
+        // A status this client has never heard of is not archived either — the one
+        // terminal word is spelled out and nothing else is guessed into it.
+        assertTrue(ProjectRules.live(row(status = "hibernating")))
     }
 
     @Test
-    fun `the lead is named when there is one`() {
-        assertEquals(
-            "led by statusflap/lead",
-            ProjectRules.leadWords(Project(id = "x", lead = ProjectPeer("statusflap/lead"))),
-        )
-        assertNull(ProjectRules.leadWords(Project(id = "x")))
-        assertNull(ProjectRules.leadWords(Project(id = "x", lead = ProjectPeer(""))))
+    fun `a project with no name still has to be distinguishable from the one above`() {
+        assertEquals("statusflap", ProjectRules.label(row(name = "  ")))
+        assertEquals("Status page flap", ProjectRules.label(row(name = " Status page\tflap ")))
+        assertEquals("0123abcd", ProjectRules.label(Project(id = "0123abcd-0000-4000", name = "  ")))
+    }
+
+    @Test
+    fun `the lead is named by its PEER name, which is the one somebody would type`() {
+        assertEquals("led by statusflap/lead", ProjectRules.leadWords(row()))
+        assertNull(ProjectRules.leadWords(row().copy(lead = null)))
+        assertNull(ProjectRules.leadWords(row().copy(lead = ProjectLead())))
     }
 }
