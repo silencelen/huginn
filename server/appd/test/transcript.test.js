@@ -757,6 +757,90 @@ test('resuming a tail does not duplicate a queued message delivered in a later w
   }
 });
 
+test('resuming a tail does not duplicate a queued message the DRAIN delivered', () => {
+  // The dequeue twin of the split `remove` above, and the commoner shape of the
+  // two on a live session: a message typed mid-turn is written as `enqueue`, the
+  // drain at turn end as `dequeue`, and Claude Code then writes the drained text
+  // as an ordinary `user` record a second or two later. When the turn outlasts a
+  // 2.5 s poll the enqueue is in page N and the dequeue + user record in page
+  // N+1, where the `queued` map is empty — so nothing was drained, nothing was
+  // reported, the page-N bubble kept its badge for the life of the view and the
+  // `user` record rendered as a second identical bubble. Replayed on the owner's
+  // own transcripts: 23 human-typed drains split a window, 22 of them wrong.
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'tr-drain-'));
+  const p = path.join(dir, 'session.jsonl');
+  const L = (o) => JSON.stringify(o) + '\n';
+  try {
+    fs.writeFileSync(p,
+      L({ type: 'user', message: { content: 'first question' } }) +
+      L({ type: 'assistant', message: { content: [{ type: 'text', text: 'working' }] } }) +
+      L({ type: 'queue-operation', operation: 'enqueue', content: 'do the restart asap' }));
+    const page1 = readTranscript(p);
+    const badged = page1.events.filter((e) => e.kind === 'user' && e.text === 'do the restart asap');
+    assert.strictEqual(badged.length, 1);
+    assert.strictEqual(badged[0].queued, true);
+
+    fs.appendFileSync(p,
+      L({ type: 'assistant', message: { content: [{ type: 'text', text: 'answer' }] } }) +
+      L({ type: 'queue-operation', operation: 'dequeue' }) +
+      L({ type: 'user', message: { content: 'do the restart asap' } }) +
+      L({ type: 'assistant', message: { content: [{ type: 'text', text: 'restarting' }] } }));
+    const page2 = readTranscript(p, { offset: page1.nextOffset });
+
+    const merged = page1.events.concat(page2.events);
+    const copies = merged.filter((e) => e.kind === 'user' && e.text === 'do the restart asap');
+    assert.strictEqual(copies.length, 1, 'the reader already had this message; it must not arrive twice');
+    assert.deepStrictEqual(page2.deliveredQueued, ['do the restart asap'],
+      'the delivery is reported instead, so the badge can be cleared');
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('a message typed AFTER the drain, past the next answer, is still a message', () => {
+  // The bound on the suppression above. Swallowing every later `user` record
+  // because a drain happened somewhere above would silently eat the next thing
+  // the owner types, which is the worst failure this file can have. The drain
+  // covers the records that follow it up to the next assistant record — the turn
+  // it fed — and nothing after that.
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'tr-drain-bound-'));
+  const p = path.join(dir, 'session.jsonl');
+  const L = (o) => JSON.stringify(o) + '\n';
+  try {
+    fs.writeFileSync(p, L({ type: 'queue-operation', operation: 'enqueue', content: 'one' }));
+    const page1 = readTranscript(p);
+    fs.appendFileSync(p,
+      L({ type: 'queue-operation', operation: 'dequeue' }) +
+      L({ type: 'user', message: { content: 'one' } }) +
+      L({ type: 'assistant', message: { content: [{ type: 'text', text: 'done' }] } }) +
+      L({ type: 'user', message: { content: 'two' } }));
+    const page2 = readTranscript(p, { offset: page1.nextOffset });
+    assert.deepStrictEqual(page2.events.map((e) => e.text), ['done', 'two']);
+    assert.deepStrictEqual(page2.deliveredQueued, ['one']);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('a cold open still emits a message the drain delivered', () => {
+  // The mirror of the cold-open case below: with no earlier page holding the
+  // badged bubble, the `user` record after an orphaned dequeue is the only copy
+  // the reader will ever get.
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'tr-drain-cold-'));
+  const p = path.join(dir, 'session.jsonl');
+  const L = (o) => JSON.stringify(o) + '\n';
+  try {
+    fs.writeFileSync(p,
+      L({ type: 'queue-operation', operation: 'dequeue' }) +
+      L({ type: 'user', message: { content: 'the follow up' } }));
+    const t = readTranscript(p);
+    assert.deepStrictEqual(t.events.map((e) => e.text), ['the follow up']);
+    assert.deepStrictEqual(t.deliveredQueued, [], 'nothing to reconcile on a cold open');
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('a cold open still emits a queued message whose enqueue scrolled off', () => {
   // The mirror case, and why the re-emit cannot simply be deleted: with no
   // earlier page to hold it, this is the only copy the reader will ever get.
