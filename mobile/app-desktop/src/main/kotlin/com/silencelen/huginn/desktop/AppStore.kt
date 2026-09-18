@@ -1124,6 +1124,9 @@ class AppStore(
     /** The name the connection indicator and the diagnostics report say. */
     val routeName: String get() = _routeBook.value.activeName
 
+    /** Forgets the note under the route list — a form opening or being cancelled. */
+    fun clearRouteNote() { _routeNote.value = null }
+
     fun activateRoute(id: String) = editRoutes { it.activate(id).withAutoSwitch(false) }
 
     fun addRoute(name: String, url: String) = editRoutes { it.add(name, url, System.currentTimeMillis()) }
