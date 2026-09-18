@@ -124,7 +124,34 @@ class HuginnMessagingService : FirebaseMessagingService() {
             }
         }
 
-        val redundant = headroom != null || kind == "session_resolved" || when (kind) {
+        // A lead has proposed a cluster. Its two bounded buttons are built here
+        // and NOT from the wire's `options` — see [ProjectNotices] for why a
+        // payload may not name a button that spawns twelve sessions.
+        val proposal = ProjectNotices.fromPush(
+            kind = kind,
+            title = data["title"].orEmpty(),
+            text = text,
+            subject = subject,
+            payload = data["payload"],
+        )
+        if (proposal != null) {
+            val a = ProjectNotices.postArgs(proposal)
+            SessionWatchWorker.post(
+                applicationContext,
+                a.title,
+                a.text,
+                a.session,
+                answers = a.answers,
+                fingerprint = a.fingerprint,
+                replyChat = a.replyChat,
+                isResult = a.isResult,
+                key = a.key,
+                project = a.project,
+                projectActions = a.projectActions,
+            )
+        }
+
+        val redundant = proposal != null || headroom != null || kind == "session_resolved" || when (kind) {
             "chat_finished" -> Foreground.showsChat(subject)
             "session_attention", "session_finished" -> Foreground.showsSession(subject)
             else -> false
