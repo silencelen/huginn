@@ -310,6 +310,28 @@ class HuginnClientTest {
 
     // ------------------------------------------------------- failures
 
+    /**
+     * ⚠ AND IT MUST NOT READ AS A SERVER ERROR. `errorTextFor` prints
+     * `e.message` verbatim for anything that is not a [HuginnClient.HuginnException],
+     * so a captive portal's or a stranger's 200 used to put
+     * `Unexpected JSON token at offset 0: … JSON input: <the page>` on the Status
+     * screen. The new type deliberately does NOT extend HuginnException, because
+     * both shells use `it !is HuginnException` as their network-vs-server test and
+     * wrapping it would stop the client re-resolving away from the portal.
+     */
+    @Test
+    fun `a 2xx that is not huginn's JSON is not a serializer exception`() = runTest {
+        val body = "<html><body>Sign in to continue &mdash; guest wifi</body></html>"
+        val e = assertFailsWith<HuginnClient.NotHuginnException> {
+            client { respond(body, HttpStatusCode.OK) }.status()
+        }
+        assertEquals(HuginnClient.NOT_HUGINN, e.message)
+        val thrown: Throwable = e
+        assertTrue(thrown !is HuginnClient.HuginnException,
+            "the route-health classifiers key on this, and a portal is a network failure")
+        assertFalse("html" in e.message, "and the page itself never reaches the screen")
+    }
+
     @Test
     fun `a non-2xx carries the servers own words`() = runTest {
         val e = assertFailsWith<HuginnClient.HuginnException> {

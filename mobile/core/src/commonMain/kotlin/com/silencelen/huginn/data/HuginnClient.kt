@@ -27,6 +27,7 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.buffer
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.flowOn
+import kotlinx.serialization.SerializationException
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonNull
@@ -70,6 +71,24 @@ class HuginnClient(
     class HuginnException(val code: Int, override val message: String) : Exception(message)
 
     /**
+     * Something answered at this address, and it was not huginn.
+     *
+     * ⚠ DELIBERATELY NOT A [HuginnException]. Both shells classify a failure as
+     * network-vs-server with `it !is HuginnException`, and the whole point of
+     * this case is that the address is wrong — a captive portal, a proxy
+     * interstitial, a stranger's web page, a stale RFC1918 pin on a foreign LAN.
+     * Wrapping it as a server error would stop the client re-resolving away from
+     * exactly the host it should be leaving.
+     *
+     * And the message is a SENTENCE, not the body. kotlinx appends the input it
+     * choked on to its own exception unconditionally, and nothing in `mobile/`
+     * caught it, so `errorTextFor`'s fallback printed
+     * `Unexpected JSON token at offset 0: … JSON input: <the page>` onto the
+     * Status screen, untruncated.
+     */
+    class NotHuginnException(override val message: String = NOT_HUGINN) : Exception(message)
+
+    /**
      * FOUR TIMEOUT TIERS, and they are a contract rather than a detail — each one
      * is a production failure that went unnoticed until it had a number. Change
      * one only against the behaviour described beside it.
@@ -77,6 +96,9 @@ class HuginnClient(
     companion object {
         /** What a call says when nothing is pinned yet. A first run, not a fault. */
         const val NO_ROUTE: String = "No route yet — add the address huginn answers on in Settings"
+
+        /** What a call says when the address answered and the answer was not huginn's. */
+        const val NOT_HUGINN: String = "that address answered, but not like huginn does"
 
         /** Establishing the connection. Short: a route that does not answer must fail fast enough for the resolver to try the next one. */
         const val CONNECT_TIMEOUT_MS: Long = 8_000
@@ -256,7 +278,16 @@ class HuginnClient(
         }
     }
 
-    private inline fun <reified T> decode(body: String): T = json.decodeFromString(body)
+    /**
+     * A 2xx body into a model — or [NotHuginnException] if it is not one. The
+     * raw text is never carried into the message; see that type for why.
+     */
+    private inline fun <reified T> decode(body: String): T =
+        try {
+            json.decodeFromString(body)
+        } catch (e: SerializationException) {
+            throw NotHuginnException()
+        }
 
     private fun errorFrom(code: Int, body: String): HuginnException {
         val msg = runCatching { json.decodeFromString<ApiError>(body).error }.getOrNull()
