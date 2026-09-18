@@ -48,6 +48,26 @@ test('a garbled head yields no task rather than a crash', () => {
   assert.equal(agentTask(f), null);
 });
 
+test('a big fan-out prompt still yields a task label', () => {
+  // The head was a fixed 16 KB, and a workflow fan-out prompt is routinely
+  // larger — on this host 17 of 1050 recent agent transcripts open with a first
+  // line over 16 KB, the largest 793 KB. Every one of them parsed to nothing, so
+  // exactly the longest-running members of a fan-out lost their label on the work
+  // sheet, and /graph re-read the same useless 16 KB on every poll.
+  const dir = fs2.mkdtempSync(path2.join(os2.tmpdir(), 'agents-'));
+  const f = path2.join(dir, 'agent-big.jsonl');
+  const prompt = `Rebuild the index and report${' — context: '}${'x'.repeat(200000)}`;
+  fs2.writeFileSync(f, JSON.stringify({ type: 'user', message: { role: 'user', content: prompt } }) + '\n'
+    + JSON.stringify({ type: 'assistant' }) + '\n');
+  assert.equal(agentTask(f), `Rebuild the index and report — context: ${'x'.repeat(160 - 33)}`.slice(0, 160));
+
+  // The boundary itself: a first line one byte over the old head.
+  const g = path2.join(dir, 'agent-edge.jsonl');
+  const pad = 16385 - (JSON.stringify({ type: 'user', message: { role: 'user', content: '' } }).length);
+  fs2.writeFileSync(g, JSON.stringify({ type: 'user', message: { role: 'user', content: `label ${'y'.repeat(pad)}` } }) + '\n');
+  assert.equal(String(agentTask(g)).startsWith('label '), true);
+});
+
 test('a missing agents dir lists nothing', () => {
   assert.deepEqual(listAgentFiles('/nonexistent-dir-xyz'), []);
 });

@@ -4,7 +4,13 @@
 // take it out again. Run by deploy.sh after the daemon's files are in place.
 //
 //   node install-hooks.js [--settings <path>] [--script <abs path>]
-//                         [--uninstall] [--dry-run]
+//                         [--headroom-dir <path>] [--uninstall] [--dry-run]
+//
+// --headroom-dir binds the daemon's sentinel directory to the hook (`env
+// HUGINN_HEADROOM_DIR=… <script>`). Without it the gate uses its own compiled-in
+// default, which is wrong for any daemon started with HUGINN_APPD_DATA or
+// HUGINN_HEADROOM_DIR set — and wrong there means a pause button wired to
+// nothing, with no symptom. deploy.sh passes the dir the service will really use.
 //
 // The two entries it manages:
 //
@@ -45,19 +51,79 @@ const ENTRIES = [
   ['PreToolUse', 'Agent|Workflow'],
 ];
 
+// PRESENCE, not truthiness. An empty HUGINN_CLAUDE_SETTINGS used to fall back to
+// the live shared file, so a caller that meant to point this tool at a scratch
+// copy and got an unset variable rewrote ~/.claude/settings.json and exited 0 —
+// including every case in test/install-hooks.test.js, whose helper sets the
+// variable to '' on purpose so a forgotten --settings cannot reach it.
 function defaultSettingsPath() {
-  return process.env.HUGINN_CLAUDE_SETTINGS
-    || path.join(os.homedir(), '.claude', 'settings.json');
+  const env = process.env.HUGINN_CLAUDE_SETTINGS;
+  if (env !== undefined) {
+    if (!env.trim()) throw new Error('HUGINN_CLAUDE_SETTINGS is set but empty — name a file or unset it');
+    return env;
+  }
+  return path.join(os.homedir(), '.claude', 'settings.json');
+}
+
+/**
+ * A flag's value, refused when it is missing, empty, or the NEXT FLAG.
+ *
+ * `--settings --dry-run` used to swallow the flag behind it and perform a real
+ * install into a file named `./--dry-run`; `--settings ""` (an unset shell
+ * variable) silently targeted the live settings file. `--script` has always
+ * refused both, and the asymmetry is the whole finding.
+ */
+function valueFor(flag, argv, i) {
+  const v = argv[i];
+  if (!v || v.startsWith('--')) throw new Error(`${flag} needs a path`);
+  return v;
+}
+
+/** Shell-quote, for the one place a path is interpolated into a command line. */
+function shq(v) {
+  const s = String(v);
+  return /^[A-Za-z0-9_@%+=:,./-]+$/.test(s) ? s : `'${s.replace(/'/g, "'\\''")}'`;
+}
+
+/**
+ * The command we install for `script`.
+ *
+ * With a headroom dir it BINDS that dir to the hook: the daemon's sentinel
+ * directory moves with HUGINN_APPD_DATA, the gate has its own compiled-in
+ * default, and nothing reconnected them — so a relocated data root left the
+ * pause button wired to nothing, with no symptom (the gate releases every spawn
+ * at waited=0 and writes its log into the abandoned directory, while
+ * /v1/headroom cheerfully reports the sentinel armed).
+ */
+function commandFor(script, headroomDir = null) {
+  return headroomDir ? `env HUGINN_HEADROOM_DIR=${shq(headroomDir)} ${shq(script)}` : String(script);
+}
+
+/** The script path out of a command that may carry an `env VAR=… ` prefix. */
+function scriptOf(command) {
+  let s = String(command || '').trim();
+  if (/^env\s/.test(s)) {
+    s = s.replace(/^env\s+/, '');
+    for (;;) {
+      const m = /^[A-Za-z_][A-Za-z0-9_]*=(?:'[^']*'|"[^"]*"|\S*)\s+/.exec(s);
+      if (!m) break;
+      s = s.slice(m[0].length);
+    }
+  }
+  const m = /^(?:'([^']*)'|"([^"]*)"|(\S+))/.exec(s);
+  if (!m) return s;
+  return m[1] ?? m[2] ?? m[3];
 }
 
 function parseArgs(argv) {
   const opts = {
-    settings: null, script: DEFAULT_SCRIPT, uninstall: false, dryRun: false,
+    settings: null, script: DEFAULT_SCRIPT, headroomDir: null, uninstall: false, dryRun: false,
   };
   for (let i = 0; i < argv.length; i += 1) {
     const a = argv[i];
-    if (a === '--settings') { opts.settings = argv[++i]; continue; }
-    if (a === '--script') { opts.script = argv[++i]; continue; }
+    if (a === '--settings') { opts.settings = valueFor('--settings', argv, ++i); continue; }
+    if (a === '--script') { opts.script = valueFor('--script', argv, ++i); continue; }
+    if (a === '--headroom-dir') { opts.headroomDir = valueFor('--headroom-dir', argv, ++i); continue; }
     if (a === '--uninstall') { opts.uninstall = true; continue; }
     if (a === '--dry-run') { opts.dryRun = true; continue; }
     if (a === '-h' || a === '--help') { opts.help = true; continue; }
@@ -68,10 +134,10 @@ function parseArgs(argv) {
   return opts;
 }
 
-function ruleFor(matcher, script) {
+function ruleFor(matcher, script, headroomDir = null) {
   return {
     matcher,
-    hooks: [{ type: 'command', command: script, timeout: TIMEOUT_S }],
+    hooks: [{ type: 'command', command: commandFor(script, headroomDir), timeout: TIMEOUT_S }],
   };
 }
 
@@ -86,7 +152,7 @@ function ruleFor(matcher, script) {
  */
 function isOurCommand(h, script) {
   return !!h && typeof h.command === 'string'
-    && path.basename(h.command) === path.basename(script);
+    && path.basename(scriptOf(h.command)) === path.basename(script);
 }
 
 function hasOurCommand(rule, script) {
@@ -100,7 +166,8 @@ function hasOurCommand(rule, script) {
  * on the parts we own — every other key, and every other rule, keeps its
  * identity (and therefore its bytes on the way back out through stringify).
  */
-function mergeHooks(settings, script, { uninstall = false, exists = fs.existsSync } = {}) {
+function mergeHooks(settings, script, { uninstall = false, exists = fs.existsSync, headroomDir = null } = {}) {
+  const want = commandFor(script, headroomDir);
   const changes = [];
   if (uninstall) {
     const hooks = settings.hooks;
@@ -145,9 +212,9 @@ function mergeHooks(settings, script, { uninstall = false, exists = fs.existsSyn
       const hooks = [];
       for (const h of rule.hooks) {
         if (!isOurCommand(h, script)) { hooks.push(h); continue; }
-        if (h.command !== script && !exists(h.command)) { pruned += 1; continue; }
+        if (h.command !== want && !exists(scriptOf(h.command))) { pruned += 1; continue; }
         if (seen > 0) { pruned += 1; continue; }
-        if (h.command !== script) { h.command = script; repointed += 1; }
+        if (h.command !== want) { h.command = want; repointed += 1; }
         seen += 1;
         hooks.push(h);
       }
@@ -162,7 +229,7 @@ function mergeHooks(settings, script, { uninstall = false, exists = fs.existsSyn
     // Appended, never prepended: the title hook on PreToolUse `.*` runs first
     // today and it is async, so it costs nothing to leave it where the operator
     // put it.
-    settings.hooks[event] = [...kept, ruleFor(matcher, script)];
+    settings.hooks[event] = [...kept, ruleFor(matcher, script, headroomDir)];
     changes.push({ event, action: 'added' });
   }
   return { settings, changes };
@@ -178,7 +245,8 @@ function main(argv) {
   }
   if (opts.help) {
     process.stdout.write(
-      'usage: install-hooks.js [--settings <path>] [--script <abs path>] [--uninstall] [--dry-run]\n',
+      'usage: install-hooks.js [--settings <path>] [--script <abs path>]\n'
+      + '                        [--headroom-dir <path>] [--uninstall] [--dry-run]\n',
     );
     return 0;
   }
@@ -228,7 +296,9 @@ function main(argv) {
     }
   }
 
-  const { changes } = mergeHooks(settings, opts.script, { uninstall: opts.uninstall });
+  const { changes } = mergeHooks(settings, opts.script, {
+    uninstall: opts.uninstall, headroomDir: opts.headroomDir,
+  });
   const body = `${JSON.stringify(settings, null, 2)}\n`;
   const touched = changes.some((c) => c.action !== 'kept');
   const summary = changes.length
@@ -271,7 +341,7 @@ function main(argv) {
     process.stderr.write(`[install-hooks] cannot write ${opts.settings}: ${e.message}\n`);
     return 2;
   }
-  process.stdout.write(`[install-hooks] ${opts.settings}: ${summary} (gate: ${opts.script})\n`);
+  process.stdout.write(`[install-hooks] ${opts.settings}: ${summary} (gate: ${commandFor(opts.script, opts.headroomDir)})\n`);
   return 0;
 }
 
@@ -279,4 +349,5 @@ if (require.main === module) process.exit(main(process.argv.slice(2)));
 
 module.exports = {
   DEFAULT_SCRIPT, TIMEOUT_S, ENTRIES, mergeHooks, parseArgs, main, isOurCommand,
+  commandFor, scriptOf,
 };
