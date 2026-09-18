@@ -804,6 +804,44 @@ function bufferName() {
 }
 
 /**
+ * How long a PERSON's message may be held by the hook's `attention` verdict when
+ * the pane shows no dialog at all.
+ *
+ * The state file is written by an EVENT, and no event fires when a question is
+ * answered at the keyboard — so `attention` can outlive the question that set
+ * it. The pane is the corroborating witness (see `humanAttentionHold`); this is
+ * the backstop for the case where the pane cannot answer either. Matched to the
+ * automated lane's ceiling so there is one number to remember, with the crucial
+ * difference that a person's message is RELEASED here, never dropped.
+ */
+const ATTENTION_HOLD_MAX_MS = QUEUE_MAX_WAIT_MS;
+
+/**
+ * Should a PERSON's message be held because a question is waiting?
+ *
+ * ⚠ 3.0.3 made a human send skip the TURN gate, and `state` was then passed to
+ * `releaseDecision` on the automated lane only — so the hook's `attention`, the
+ * one authoritative "a numbered prompt is on screen", never reached a person's
+ * message at all. The pane gate was the only thing in the way, and a pane is a
+ * picture: #13's tall dialog, a frame captured mid-redraw, a selector nobody
+ * has a rule for yet.
+ *
+ * Held, but not on the state file's word alone. `composerEmpty === true` means
+ * the pane has drawn a composer holding nothing — which no live selector does
+ * (every committed dialog capture reads `false` or `null`) — and that is proof
+ * enough that the question is gone whatever the state file still says. Plus a
+ * ceiling, because a hold a person cannot see the end of is the same bug as a
+ * message that vanishes.
+ */
+function humanAttentionHold({ state, composerEmpty = null, waitedMs = 0,
+  maxMs = ATTENTION_HOLD_MAX_MS } = {}) {
+  if (state !== 'hold') return false;
+  if (composerEmpty === true) return false;
+  const waited = Number(waitedMs);
+  return !(Number.isFinite(waited) && waited >= maxMs);
+}
+
+/**
  * Every gate, folded into one verdict.
  *
  * `idle` comes from the transcript (the liveness authority), `paneWhy` from
@@ -923,6 +961,7 @@ module.exports = {
   paneTail, pasteLostLogLine, submitStalledLogLine, pasteResentLogLine, pasteLeftAloneLogLine,
   sendKeysFits, chunks,
   isBoundaryRecord, isConversationalRecord, boundaryFromTail, stateVerdict,
+  humanAttentionHold, ATTENTION_HOLD_MAX_MS,
   hasHumanUserRecord, kindOf,
   paneReadyForInput, paneBlocks, composerDrawn, shellPrompt, startsClaude,
   startingUp, startingUnmarked, bufferName,
