@@ -165,9 +165,18 @@ STUB
   grep -q "DELETE .*/v1/sessions/testsess" <<<"$K" \
     && ok "kill prefers the daemon's DELETE" || bad "kill sent: $K"
 
-  B=$(pwsh -NoProfile -Command ". $PWD/client/huginn.ps1; huginn end 'bad-name'" 2>&1)
+  # ⚠ THE INVALID EXAMPLE IS A DOT, NOT A DASH. A dash is legal everywhere in
+  # the product (contract 1, and see [5b/8]); it was this gate pinning
+  # 'bad-name' as the invalid example that kept the narrow rule alive.
+  B=$(pwsh -NoProfile -Command ". $PWD/client/huginn.ps1; huginn end 'bad.name'" 2>&1)
   grep -q "invalid session name" <<<"$B" \
-    && ok "end rejects a non-conforming name" || bad "end accepted 'bad-name'"
+    && ok "ps1: end rejects a dotted name" || bad "ps1: end accepted 'bad.name'"
+  D=$(emit 'huginn end build-box')
+  grep -q "/v1/sessions/build-box/soft-end" <<<"$D" \
+    && ok "ps1: a dashed name reaches the daemon" || bad "ps1: 'build-box' sent: $D"
+  DU=$(emit 'huginn end Build_Box')
+  grep -q "/v1/sessions/build_box/soft-end" <<<"$DU" \
+    && ok "ps1: and it is still case-folded on the way" || bad "ps1: 'Build_Box' sent: $DU"
 fi
 
 echo "[5/8] what the POSIX client actually SENDS"
@@ -203,6 +212,63 @@ SE=$(semit 'huginn end testsess')
 grep -q "soft-end" <<<"$SE" && ok "sh: end reaches the soft-end route" || bad "sh: end sent nothing matching soft-end"
 SK=$(semit 'huginn kill testsess')
 grep -q "DELETE" <<<"$SK" && ok "sh: kill prefers the daemon DELETE" || bad "sh: kill did not use DELETE"
+
+echo "[5b/8] ONE session-name rule, in all three enforcers"
+# ⚠ WHY: the product enforced FOUR different rules, and two of them could mint a
+# name this client can never address. The daemon accepts a dash and honours it
+# end to end; the desktop dialogs offer one; keyboard-made sessions routinely
+# carry one (dev-phonefarm). The CLI and `cc` allowed `^[A-Za-z0-9_]+$`, so
+# `huginn build-box` — and solo/kill/end/archive/rename — refused LOCALLY, before
+# any network, for a session `huginn ls` had just listed and tab-completion had
+# just offered. `huginn revive build-box` was accepted while `huginn archive
+# build-box` was not.
+#
+# The one rule, contract 1 of the edge-hunt: ^[a-z0-9_][a-z0-9_-]{0,49}$,
+# case-folded, dots banned everywhere (tmux silently rewrites '.' to '_', so a
+# dotted name is a name that comes back different).
+SN_OK=$(semit 'huginn end build-box')
+grep -q "/v1/sessions/build-box/soft-end" <<<"$SN_OK" \
+  && ok "sh: a dashed name reaches the daemon" || bad "sh: 'build-box' sent: $SN_OK"
+SN_UP=$(semit 'huginn end Build_Box')
+grep -q "/v1/sessions/build_box/soft-end" <<<"$SN_UP" \
+  && ok "sh: and it is still case-folded on the way" || bad "sh: 'Build_Box' sent: $SN_UP"
+SN_DOT=$(semit 'huginn end build.box')
+[ -z "$SN_DOT" ] && grep -q "invalid session name" "$T2/out" \
+  && ok "sh: a dotted name is refused before it is sent anywhere" \
+  || bad "sh: 'build.box' sent: $SN_DOT / said: $(cat "$T2/out")"
+SN_FLAG=$(semit 'huginn --hlp')
+[ -z "$SN_FLAG" ] && ok "sh: a typo'd flag still cannot spawn a junk session" \
+  || bad "sh: '--hlp' sent: $SN_FLAG"
+# ⚠ AND THE REFUSAL TELLS THE TWO CAUSES APART. A typo is one thing; a session
+# that EXISTS on the host and this client cannot address is another, and saying
+# "invalid session name" about a row `huginn ls` just printed sends somebody
+# looking for their own mistake. The completion cache is already the live
+# `tmux ls` output, so this costs no round trip.
+semit '_HUGINN_SESS_CACHE="my box"; huginn end "my box"' >/dev/null
+grep -q "exists on the host but this client cannot address it" "$T2/out" \
+  && ok "sh: a live-but-unaddressable name says so, not 'invalid'" \
+  || bad "sh: an uncompletable live name said: $(cat "$T2/out")"
+
+# `cc` is the server-side backstop and the one the ssh path actually runs.
+# Driven with a stub tmux so the check is exercised without creating a session.
+CCT=$(mktemp -d); STUB_DIRS+=("$CCT")
+printf '#!/usr/bin/env bash\nprintf "%%s\\n" "$*" >> "$CCT_LOG"\nexit 0\n' > "$CCT/tmux"
+chmod +x "$CCT/tmux"
+cc_try () { CCT_LOG="$CCT/log" PATH="$CCT:$PATH" server/bin/cc "$1" 2>&1; }
+: > "$CCT/log"
+CC_OK=$(cc_try build-box); CC_RC=$?
+[ "$CC_RC" != 2 ] && grep -q 'new-session -A -s build-box' "$CCT/log" \
+  && ok "cc: a dashed name is created, not refused with exit 2" \
+  || bad "cc: 'build-box' exited $CC_RC, tmux saw: $(cat "$CCT/log")"
+: > "$CCT/log"
+CC_UP=$(cc_try Build_Box)
+grep -q 'new-session -A -s build_box' "$CCT/log" \
+  && ok "cc: and it still folds case before tmux sees it" || bad "cc: tmux saw: $(cat "$CCT/log")"
+: > "$CCT/log"
+cc_try build.box >/dev/null 2>&1; CC_RC=$?
+[ "$CC_RC" = 2 ] && [ ! -s "$CCT/log" ] \
+  && ok "cc: a dotted name is refused with exit 2 and never reaches tmux" \
+  || bad "cc: 'build.box' exited $CC_RC, tmux saw: $(cat "$CCT/log")"
 
 echo "[6/8] desktop links come from GitHub, and reach it WITHOUT the host"
 # The whole point of the verb is that it works on a machine that cannot ssh here
