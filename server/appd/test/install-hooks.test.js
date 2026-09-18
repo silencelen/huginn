@@ -325,3 +325,53 @@ test('--script keeps refusing an empty or dangling value', () => {
   assert.match(run(['--settings', file, '--script', ''], { expect: 2 }).stderr, /--script needs a path/);
   assert.match(run(['--settings', file, '--script', '--dry-run'], { expect: 2 }).stderr, /--script needs a path/);
 });
+
+// ------------------------------------------- binding the gate's sentinel dir
+
+test('--headroom-dir binds the daemon\'s sentinel directory to the hook command', () => {
+  // HUGINN_APPD_DATA moves the daemon's sentinel dir; the gate keeps its own
+  // compiled-in /var/lib/huginn-appd/headroom; nothing reconnected them, so the
+  // pause button was wired to nothing and said nothing about it (gate releases
+  // at waited=0, its log lands in the abandoned dir, /v1/headroom still reports
+  // the sentinel armed).
+  const dir = scratch();
+  const file = copyFixture(dir);
+  const HR = '/srv/huginn/headroom';
+  const want = `env HUGINN_HEADROOM_DIR=${HR} ${SCRIPT}`;
+
+  const { stdout } = run(['--settings', file, '--script', SCRIPT, '--headroom-dir', HR]);
+  assert.match(stdout, /added SubagentStart/);
+  const commands = (hooks, event) => (hooks[event] || []).flatMap((r) => (r.hooks || []).map((h) => h.command));
+  let { hooks } = JSON.parse(fs.readFileSync(file, 'utf8'));
+  assert.deepEqual(commands(hooks, 'SubagentStart'), [want]);
+  assert.equal(commands(hooks, 'PreToolUse').includes(want), true);
+
+  // Idempotent: the same run again must rewrite nothing.
+  const before = fs.readFileSync(file, 'utf8');
+  assert.match(run(['--settings', file, '--script', SCRIPT, '--headroom-dir', HR]).stdout, /already current/);
+  assert.equal(fs.readFileSync(file, 'utf8'), before);
+
+  // And an entry installed WITHOUT the dir is repointed in place, not duplicated
+  // — the identity is the script's basename, which an `env` prefix does not
+  // change.
+  run(['--settings', file, '--script', SCRIPT]);
+  ({ hooks } = JSON.parse(fs.readFileSync(file, 'utf8')));
+  assert.deepEqual(commands(hooks, 'SubagentStart'), [SCRIPT], 'repointed, not a second rule');
+
+  // Uninstall still recognises an env-carrying command as ours.
+  run(['--settings', file, '--script', SCRIPT, '--headroom-dir', HR]);
+  run(['--settings', file, '--script', SCRIPT, '--uninstall']);
+  const after = JSON.parse(fs.readFileSync(file, 'utf8'));
+  assert.equal(JSON.stringify(after).includes('huginn-headroom-gate'), false);
+
+  assert.match(run(['--settings', file, '--script', SCRIPT, '--headroom-dir', ''], { expect: 2 }).stderr,
+    /--headroom-dir needs a path/);
+});
+
+test('a path with spaces survives the env prefix', () => {
+  const { commandFor, scriptOf } = require('../install-hooks');
+  const cmd = commandFor('/opt/my gate/huginn-headroom-gate', '/srv/my data/headroom');
+  assert.equal(cmd, "env HUGINN_HEADROOM_DIR='/srv/my data/headroom' '/opt/my gate/huginn-headroom-gate'");
+  assert.equal(scriptOf(cmd), '/opt/my gate/huginn-headroom-gate');
+  assert.equal(scriptOf('/opt/huginn-appd/hooks/huginn-headroom-gate'), '/opt/huginn-appd/hooks/huginn-headroom-gate');
+});
