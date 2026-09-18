@@ -169,6 +169,113 @@ function typedByHuman(d) {
   return !!(d && d.origin && d.origin.kind === 'human');
 }
 
+// ------------------------------------------------- another Claude session
+//
+// Claude Code 2.1.258 lets one session message another: `SendMessage` travels
+// process-to-process over `/tmp/cc-socks/<pid>.sock`, identity kernel-verified
+// by peer credentials, and AUTO-TRIGGERS A TURN in the recipient with no
+// keypress. On this side it lands as three records in a row — a `queue-operation`
+// enqueue whose content is a `<cross-session-message …>` element, a `dequeue`
+// about 40 ms later, and a `type:"user"` record carrying the same element inside
+// a longer safety preamble, with `isMeta:true`, `promptSource:"system"`,
+// `userType:"external"` and an `origin:{kind:"peer", name, verifiedPeerPid, …}`.
+//
+// ⚠ UNTIL NOW BOTH OF THOSE RENDERED AS THE OWNER'S OWN MESSAGES — two bubbles
+// for one peer message, the second one carrying the whole "this came from
+// another Claude session" paragraph as if the owner had recited it. The same
+// family as the skill-body bug, and worse on a Projects surface, where the
+// sessions talk to each other constantly and nothing else distinguishes a
+// teammate's request from an instruction the person gave.
+//
+// Keyed STRUCTURALLY on `origin.kind === 'peer'` rather than on the text, for
+// the reason `injectedByTool` is keyed on `sourceToolUseID`: the preamble is
+// English that a person could type, and the field is written by the harness.
+// The queue record has no `origin` to key on, so it is matched on the element
+// itself — which is also what pairs the two records, since the enqueue's content
+// is exactly the element the `user` record embeds.
+
+/** The `<cross-session-message …>…</cross-session-message>` element, or null. */
+const CROSS_RE = /<cross-session-message\b[\s\S]*?<\/cross-session-message>/;
+
+/** The peer's own words, with the subagent wrapper (if any) taken off. */
+function peerBody(raw) {
+  const s = String(raw || '');
+  const inner = /<agent-message\b[^>]*>([\s\S]*?)<\/agent-message>/.exec(s);
+  const body = inner ? inner[1] : s.replace(/<\/?cross-session-message\b[^>]*>/g, '');
+  return body.trim();
+}
+
+/**
+ * The harness's own idle notice — the completion signal a lead waits on when it
+ * sends work with `notify_when_idle`.
+ *
+ * It arrives as a `user` record with `isMeta` and `promptSource:"system"` and NO
+ * `origin` at all (it is harness-generated, not a peer message), so it has to be
+ * recognised by its opening, which the CLI writes verbatim. Included here
+ * because on a project surface these are most of the traffic: a lead running
+ * four members gets one per finished task, and drawn as owner bubbles they read
+ * as the person narrating their own cluster back to themselves.
+ */
+const IDLE_NOTICE_RE = /^\s*\[Cross-session idle notice\]\s*"([^"]+)"/;
+const IDLE_DETAIL_RE = /«([^»]*)»/;
+
+/**
+ * The one-line note a peer record becomes, or null if this is not one.
+ *
+ * `peerIds` maps a verified peer PID to that session's Claude session id. The
+ * record cannot say it itself — the address of record is the socket path — and
+ * the only thing that can answer it is the daemon's native-registry reader,
+ * which has no business being called from a pure tail parser. Absent, the id is
+ * null and clients label from the NAME, which is what the spike says to do
+ * anyway (the `@handle` spelling slugifies `/` to `-`, so the rendered preview
+ * is not the identity).
+ */
+function peerNote(d, text, peerIds) {
+  const origin = d && d.origin;
+  if (origin && origin.kind === 'peer') {
+    const name = typeof origin.name === 'string' && origin.name ? origin.name : 'another session';
+    const body = peerBody(origin.body || CROSS_RE.exec(String(text || ''))?.[0] || '');
+    const pid = Number(origin.verifiedPeerPid) || null;
+    return {
+      key: CROSS_RE.exec(String(text || ''))?.[0] || null,
+      text: body ? `Message from ${name}: ${clip(body, 300)}` : `Message from ${name}`,
+      peer: { name, sessionId: (pid && peerIds && peerIds.get(pid)) || null, pid },
+    };
+  }
+  const idle = IDLE_NOTICE_RE.exec(String(text || ''));
+  if (idle) {
+    const detail = IDLE_DETAIL_RE.exec(String(text || ''));
+    return {
+      key: String(text || '').trim(),
+      text: detail && detail[1] ? `${idle[1]} is idle — ${clip(detail[1], 200)}` : `${idle[1]} is idle`,
+      peer: { name: idle[1], sessionId: null, pid: null },
+    };
+  }
+  return null;
+}
+
+/** The same note, from the QUEUE record that lands ~90 ms before the user one. */
+function peerNoteFromQueue(content, peerIds) {
+  const s = String(content || '');
+  const block = CROSS_RE.exec(s);
+  if (block) {
+    const name = /from-name="([^"]*)"/.exec(block[0]);
+    const pid = /from="uds:[^"]*?\/(\d+)\.sock"/.exec(block[0]);
+    const body = peerBody(block[0]);
+    const who = (name && name[1]) || 'another session';
+    return {
+      key: block[0],
+      text: body ? `Message from ${who}: ${clip(body, 300)}` : `Message from ${who}`,
+      peer: {
+        name: who,
+        sessionId: (pid && peerIds && peerIds.get(Number(pid[1]))) || null,
+        pid: pid ? Number(pid[1]) : null,
+      },
+    };
+  }
+  return peerNote({}, s, peerIds);
+}
+
 /**
  * The skill name to put on a chip, from the injected body when the `Skill` call
  * it came from is not in this window. Project skills open with their own
@@ -257,7 +364,7 @@ function startsAtBoundary(path, start) {
   }
 }
 
-function readTranscript(path, { offset = null, limit = 400, until = null, _resuming = null } = {}) {
+function readTranscript(path, { offset = null, limit = 400, until = null, peerIds = null, _resuming = null } = {}) {
   const st = fs.statSync(path);
   // Where this window ENDS. Normally the end of the file; `until` walks backwards
   // into history instead, and is how a reader gets the part of a conversation the
@@ -290,7 +397,7 @@ function readTranscript(path, { offset = null, limit = 400, until = null, _resum
       start = Math.max(0, end - win);
       truncated = start > 0;
       if (start === 0) break;
-      const probe = readTranscript(path, { offset: start, limit, until, _resuming: false });
+      const probe = readTranscript(path, { offset: start, limit, until, peerIds, _resuming: false });
       // A TAIL only has to be worth showing — MIN_TAIL_EVENTS distinguishes "a
       // screenful of conversation" from "half a base64 blob", and reading more
       // than that costs a phone bytes it did not ask for. A HISTORY page is the
@@ -425,6 +532,14 @@ function readTranscript(path, { offset = null, limit = 400, until = null, _resum
   // because the queued-message handling below moves events around — an index
   // would desync, an object identity cannot.
   const recordAt = new WeakMap();
+  /**
+   * The peer messages already drawn from their QUEUE record, so the `user`
+   * record that follows ~90 ms later does not draw a second note for the same
+   * message. Keyed on the `<cross-session-message>` element the two records
+   * share; one-shot per copy, because the same peer saying the same words again
+   * later IS a second message.
+   */
+  const peerSeen = [];
   let lineOffset = windowStart;
 
   for (const line of lines) {
@@ -452,6 +567,17 @@ function readTranscript(path, { offset = null, limit = 400, until = null, _resum
         const content = typeof d.content === 'string' ? d.content : '';
         if (d.operation === 'enqueue') {
           if (!content.trim()) continue;
+          // ANOTHER CLAUDE SESSION, not the owner. A peer message and a harness
+          // idle notice both arrive through this queue, and both used to become
+          // user bubbles. Drawn here rather than waiting for the `user` record
+          // because the tail can begin between the two; whichever of them this
+          // window holds produces exactly one note.
+          const peerQ = peerNoteFromQueue(content, peerIds);
+          if (peerQ) {
+            out.events.push({ seq: ++seq, kind: 'system', ts, sidechain, text: peerQ.text, peer: peerQ.peer });
+            if (peerQ.key) peerSeen.push(peerQ.key);
+            continue;
+          }
           let ev;
           if (machineText(content)) {
             const d2 = describeMachineText(content);
@@ -589,6 +715,18 @@ function readTranscript(path, { offset = null, limit = 400, until = null, _resum
               text: name ? `Skill: ${name}` : 'Skill loaded',
             });
           }
+          continue;
+        }
+        // A message from another Claude session, or the harness's idle notice
+        // about one. Never a user bubble — see [peerNote]. The queue record
+        // above has usually already drawn it, in which case this one is
+        // bookkeeping; when the window began after that record, this is the only
+        // trace and it draws the note itself.
+        const peerU = peerNote(d, t, peerIds);
+        if (peerU) {
+          const at = peerU.key ? peerSeen.indexOf(peerU.key) : -1;
+          if (at >= 0) { peerSeen.splice(at, 1); continue; }
+          out.events.push({ seq: ++seq, kind: 'system', ts, sidechain, text: peerU.text, peer: peerU.peer });
           continue;
         }
         // The record Claude Code writes for a message the queue just DRAINED.
@@ -795,4 +933,5 @@ function liveActivity(events, nowSec) {
 
 module.exports = { readTranscript, digestToolInput, workflowName, textOf, liveActivity, machineText, describeMachineText, humanRemainder, parseAsk, startsAtBoundary,
   injectedByTool, typedByHuman, skillNameFromBody,
+  peerBody, peerNote, peerNoteFromQueue,
 };
