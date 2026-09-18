@@ -17,13 +17,40 @@ object LiveInput {
     /** Zero-width space: present, deletable, and invisible in the field. */
     const val SENTINEL = "​"
 
-    /** What one field change means in keystrokes. */
+    /**
+     * What one field change means in keystrokes.
+     *
+     * @param insert the text to deliver, newlines INCLUDED. The daemon sends text
+     *   by bracketed paste, so an interior newline lands in a Claude composer (or
+     *   a shell line) as a newline and submits nothing — which is what collapsing
+     *   them was trying to achieve and did not.
+     * @param enter whether a Return belongs to this edit. At most one: a tail
+     *   that both begins and ends with a newline still presses Return once, since
+     *   delivering fewer Returns than the input implied cannot fire one at a modal
+     *   and delivering more can.
+     * @param enterFirst whether that Return goes BEFORE the text. An IME that
+     *   commits "\nls" pressed Return and then typed; sending it the other way
+     *   round submits whatever draft the pane was holding with `ls` stuck on the
+     *   end. ⚠ A caller that reads only [enter] gets the old order, which is why
+     *   [ops] exists.
+     */
     data class Typed(
         val backspaces: Int,
         val insert: String,
         val enter: Boolean,
+        val enterFirst: Boolean = false,
     ) {
         val isNothing: Boolean get() = backspaces == 0 && insert.isEmpty() && !enter
+
+        /** This edit as ordered ops — the whole contract, in the order it happened. */
+        fun ops(): List<Op> {
+            val out = mutableListOf<Op>()
+            if (backspaces > 0) out += Op.Key(List(backspaces) { "BSpace" })
+            if (enter && enterFirst) out += Op.Key(listOf("Enter"))
+            if (insert.isNotEmpty()) out += Op.Text(insert)
+            if (enter && !enterFirst) out += Op.Key(listOf("Enter"))
+            return out
+        }
     }
 
     /** One thing to deliver to the pane, in order. */
@@ -63,20 +90,41 @@ object LiveInput {
      *
      * Pure and deliberately paranoid: an IME may rewrite the whole field (paste,
      * autocorrect, voice input), so this never assumes the change was a single
-     * character. A newline anywhere means Enter, sent AFTER the text before it —
-     * the order a terminal expects.
+     * character.
+     *
+     * ⚠ NEWLINES ARE STRUCTURE, NOT A RETURN KEY. This used to delete every
+     * newline in the tail and press Return once at the end, so a three-line
+     * clipboard arrived as `git statusgit log --onelinels -la` and was SUBMITTED:
+     * a command nobody wrote, run in a live shell. Only a newline at the very
+     * start or the very end of the edit is a Return now; the ones in the middle
+     * stay in the text, where bracketed paste delivers them without submitting.
+     * `\r\n` and a bare `\r` are normalised first — the old collapse left carriage
+     * returns in `send-keys -l` text, delivering the mid-text Return it claimed
+     * to prevent.
      */
     fun diff(newValue: String): Typed {
         if (newValue == SENTINEL) return Typed(0, "", false)
         // The sentinel survived as a prefix: everything after it was typed.
-        if (newValue.startsWith(SENTINEL)) {
-            val tail = newValue.removePrefix(SENTINEL)
-            val enter = tail.contains('\n')
-            return Typed(0, tail.replace("\n", ""), enter)
-        }
-        // The sentinel is gone: backspace consumed it, and anything left besides
-        // is text the IME put there in the same edit.
-        val enter = newValue.contains('\n')
-        return Typed(1, newValue.replace("\n", ""), enter)
+        // Otherwise it is gone — backspace consumed it — and anything left is
+        // text the IME put there in the same edit.
+        val survived = newValue.startsWith(SENTINEL)
+        val tail = normalizeNewlines(if (survived) newValue.removePrefix(SENTINEL) else newValue)
+        val backspaces = if (survived) 0 else 1
+
+        val trailing = tail.endsWith("\n")
+        val body = if (trailing) tail.dropLast(1) else tail
+        val leading = body.startsWith("\n")
+        val insert = if (leading) body.drop(1) else body
+        return Typed(
+            backspaces = backspaces,
+            insert = insert,
+            enter = trailing || leading,
+            // Only when there is text for it to come before; a bare newline is
+            // just Return, and saying it came "first" would be noise.
+            enterFirst = leading,
+        )
     }
+
+    private fun normalizeNewlines(s: String): String =
+        if ('\r' !in s) s else s.replace("\r\n", "\n").replace('\r', '\n')
 }

@@ -70,7 +70,14 @@ object AppdRoutes {
         return ALL.firstOrNull { normalize(it.url) == n }
     }
 
-    /** The seed pin for a built-in, with the label as its name and a stable id. */
+    /**
+     * The seed pin for a built-in, with the label as its name and a stable id.
+     *
+     * ⚠ `byHand = false`. Nobody typed these: they are literals compiled into a
+     * PUBLIC app, over plain http, and an install that upgrades gets both of them
+     * whether or not the machine they name is the one it talks to. That is
+     * exactly the shape [RouteResolver] refuses to adopt on its own.
+     */
     fun seed(route: AppdRoute, now: Long, order: Int = 0): PinnedRoute {
         val url = normalize(route.url)
         return PinnedRoute(
@@ -80,6 +87,7 @@ object AppdRoutes {
             kind = RouteGuard.kindOf(url),
             order = order,
             addedAt = now,
+            byHand = false,
         )
     }
 
@@ -93,6 +101,7 @@ object AppdRoutes {
      * |---|---|
      * | `base_url` matching a built-in | that built-in as pin #1, named "Tailscale" / "Yggdrasil" |
      * | `base_url` matching nothing | pin #1 named after its own host — the owner's chosen address stays chosen |
+     * | `base_url` the guard refuses | NOT pinned, NOT replaced: carried back as [RouteBook.droppedUrl] with no active route |
      * | the built-ins not already emitted | appended, in [ALL] order |
      * | `base_url` absent (fresh install) | an EMPTY book; the first address saved becomes pin #1 |
      * | `appd_route_pinned` = true | `autoSwitch = false` — the same refusal to move, under its new name |
@@ -104,18 +113,44 @@ object AppdRoutes {
      * this way.
      */
     fun migrate(storedBaseUrl: String?, routePinned: Boolean, now: Long = MIGRATED_AT): RouteBook {
-        val stored = storedBaseUrl?.let { normalize(it) }?.takeIf { it.isNotBlank() }
+        // ⚠ THE GUARD'S normalize, NOT THIS FILE'S. A trim-and-slash normalize
+        // misses every other way 2.x could spell an address it still connected
+        // with — `192.168.2.117:8787` (HuginnClient prepends the scheme),
+        // `HTTP://…` — so `match()` failed and the filter kept the built-in as
+        // well: three pins, two of them the same daemon.
+        val stored = storedBaseUrl?.let { RouteGuard.normalize(it) }?.takeIf { it.isNotBlank() }
             ?: return RouteBook(autoSwitch = !routePinned)
 
-        val first = match(stored)?.let { seed(it, now) }
-            ?: PinnedRoute(
+        // ⚠ THE ONE ROW THAT IS NOT BEHAVIOUR-IDENTICAL, AND CANNOT BE. The phone's
+        // old "Base URL" was free text with no validation, so a plain-http
+        // HOSTNAME both stored and worked — `huginn.lan`, the short MagicDNS name
+        // `huginn`, a DDNS name, a public literal, an address with a path. The
+        // guard refuses all of those and is right to (a bearer in cleartext to a
+        // name is exactly what it exists to stop), but the old behaviour was to
+        // drop it silently in `normalized()` and let `activeId` fall back to a
+        // hard-coded built-in — an address the owner never chose, reached without
+        // a word, and with `appd_route_pinned` mapping to autoSwitch=false so it
+        // was never even probed. Now: the address is carried back as
+        // `droppedUrl` and the book is left with NO active route.
+        val builtIn = match(stored)?.let { seed(it, now) }
+        val first = builtIn ?: if (RouteGuard.isAllowed(stored)) {
+            PinnedRoute(
                 id = MIGRATED_ID,
                 name = RouteBook.defaultName(stored),
                 url = stored,
                 kind = RouteGuard.kindOf(stored),
                 addedAt = now,
             )
+        } else null
         val rest = ALL.filter { normalize(it.url) != stored }.map { seed(it, now) }
+        if (first == null) {
+            return RouteBook(
+                routes = rest,
+                activeId = null,
+                autoSwitch = !routePinned,
+                droppedUrl = stored,
+            ).normalized()
+        }
         return RouteBook(
             routes = listOf(first) + rest,
             activeId = first.id,
@@ -165,8 +200,33 @@ object RouteResolver {
         /** The owner pinned this by hand; auto-switching was not consulted. */
         data class Pinned(val route: PinnedRoute) : Choice
 
-        /** The active route is still the right one. */
-        data class Stay(val route: PinnedRoute) : Choice
+        /**
+         * The client is not moving. [route] is where it stays — which is what
+         * every caller has always printed — and the subclass says why.
+         *
+         * ⚠ SEALED RATHER THAN A SECOND TOP-LEVEL CASE, on purpose. [Candidate]
+         * is new, and a brand-new `Choice` branch would break the exhaustive
+         * `when` in both shells; nested under [Stay] the shells keep compiling
+         * and keep doing the SAFE thing (nothing) until they grow a branch for
+         * it. A client that never learns about candidates is a client that never
+         * auto-adopts one, which is the whole point.
+         */
+        sealed class Stay(val route: PinnedRoute) : Choice {
+
+            /** The active route is still the right one. */
+            class Here(route: PinnedRoute) : Stay(route)
+
+            /**
+             * Another route answered, and this client will not take it without a
+             * person saying so: it is a plain-http address nobody added by hand
+             * (see [PinnedRoute.byHand]), and moving there means handing that
+             * host the daemon's bearer in cleartext.
+             *
+             * @param route where the connection stays in the meantime.
+             * @param candidate the route that answered, to be offered.
+             */
+            class Candidate(route: PinnedRoute, val candidate: PinnedRoute) : Stay(route)
+        }
 
         /** A different route answered and the active one did not. */
         data class Switched(val route: PinnedRoute) : Choice
@@ -188,8 +248,9 @@ object RouteResolver {
      *   route answered moments ago, so the dots refresh. It still cannot move
      *   off a healthy active route, which is what makes the answer *"Still on
      *   X"* rather than a surprise reconnect.
-     * @param probe true when anything answered at that URL. Any HTTP reply
-     *   counts, 401 included: it proves a daemon, not a token.
+     * @param probe true when HUGINN answered at that URL — not merely something.
+     *   See `HuginnClient.provesDaemon`: a probe that counts any HTTP responder
+     *   is how a stranger on the LAN gets preferred over a live daemon.
      */
     suspend fun resolve(
         book: RouteBook,
@@ -201,17 +262,63 @@ object RouteResolver {
         if (book.routes.isEmpty()) return Outcome(Choice.Empty, health)
         val active = book.active
         if (!book.autoSwitch) {
-            return Outcome(active?.let { Choice.Pinned(it) } ?: Choice.Empty, health)
+            val pinned = active ?: return Outcome(Choice.Empty, health)
+            // ⚠ REFUSING TO MOVE IS NOT REFUSING TO LOOK. A pinned book used to
+            // return here before `force` was read, so "Find live route" probed
+            // NOTHING: the dots and the "last reached" line froze for the life of
+            // the pin — "never tried" for a hand-made pin, a stale green for a
+            // route that has since died. A manual ask sweeps and reports; the pin
+            // is still the answer.
+            if (!force) return Outcome(Choice.Pinned(pinned), health)
+            return Outcome(Choice.Pinned(pinned), sweep(book, health, now, probe).first)
         }
 
         val activeWasFresh = active != null && isFresh(health[active.id], now)
         // The cheap half of the hysteresis: a route that answered seconds ago is
         // not re-interrogated on every start, only on a manual ask.
-        if (!force && active != null && activeWasFresh) return Outcome(Choice.Stay(active), health)
+        if (!force && active != null && activeWasFresh) return Outcome(Choice.Stay.Here(active), health)
 
-        // ONE budget for the whole list, not one per route. Sequentially probing
-        // eight pins at three seconds each is twenty-four seconds of a dead app
-        // before it tries the address that works.
+        val (next, answered) = sweep(book, health, now, probe)
+        val healthy = book.routes.filter { it.id in answered }
+        if (healthy.isEmpty()) return Outcome(Choice.NoRoute, next)
+
+        // The expensive half of the hysteresis: a route that has been working
+        // keeps the connection even when something above it in the list answers.
+        // A route that has just come back from the dead does NOT — after a real
+        // outage the list settles back to the owner's preference.
+        if (active != null && activeWasFresh && healthy.any { it.id == active.id }) {
+            return Outcome(Choice.Stay.Here(active), next)
+        }
+
+        val pick = healthy.first()
+        if (pick.id == active?.id) return Outcome(Choice.Stay.Here(pick), next)
+        // ⚠ A MOVE HANDS THE NEXT REQUEST'S BEARER TO THAT HOST. Over https the
+        // host stops mattering (RouteGuard's rule); over plain http it matters
+        // entirely, and a route nobody typed — the built-ins an upgrade seeds,
+        // whose literals are in a public repo — is not evidence of anything. The
+        // connection stays where it is and the answer NAMES the route, for a
+        // person to adopt once.
+        if (!adoptable(pick)) {
+            return Outcome(Choice.Stay.Candidate(route = active ?: pick, candidate = pick), next)
+        }
+        return Outcome(Choice.Switched(pick), next)
+    }
+
+    /**
+     * Probes every pin and folds the answers into the health map.
+     *
+     * ONE budget for the whole list, not one per route. Sequentially probing
+     * eight pins at three seconds each is twenty-four seconds of a dead app
+     * before it tries the address that works.
+     *
+     * @return the updated health map and the ids that answered.
+     */
+    private suspend fun sweep(
+        book: RouteBook,
+        health: Map<String, RouteHealth>,
+        now: Long,
+        probe: suspend (PinnedRoute) -> Boolean,
+    ): Pair<Map<String, RouteHealth>, Set<String>> {
         val results = coroutineScope {
             val started = book.routes.map { route ->
                 async {
@@ -229,22 +336,12 @@ object RouteResolver {
             val was = next[id] ?: RouteHealth()
             next[id] = if (ok) was.copy(lastOkAt = now, lastRttMs = rtt) else was.copy(lastFailAt = now)
         }
-
-        val healthy = book.routes.filter { results[it.id]?.first == true }
-        if (healthy.isEmpty()) return Outcome(Choice.NoRoute, next)
-
-        // The expensive half of the hysteresis: a route that has been working
-        // keeps the connection even when something above it in the list answers.
-        // A route that has just come back from the dead does NOT — after a real
-        // outage the list settles back to the owner's preference.
-        if (active != null && activeWasFresh && healthy.any { it.id == active.id }) {
-            return Outcome(Choice.Stay(active), next)
-        }
-
-        val pick = healthy.first()
-        val choice = if (pick.id == active?.id) Choice.Stay(pick) else Choice.Switched(pick)
-        return Outcome(choice, next)
+        return next to results.filterValues { it.first }.keys
     }
+
+    /** Whether this client may move to [route] without being told to. */
+    private fun adoptable(route: PinnedRoute): Boolean =
+        route.byHand || route.url.trim().startsWith("https://", ignoreCase = true)
 
     private fun isFresh(h: RouteHealth?, now: Long): Boolean =
         h != null && h.lastOkAt > 0 && now - h.lastOkAt in 0 until HYSTERESIS_MS

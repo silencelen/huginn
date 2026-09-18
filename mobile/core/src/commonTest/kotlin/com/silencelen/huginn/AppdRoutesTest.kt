@@ -97,6 +97,37 @@ class AppdRoutesTest {
         assertEquals("tailscale", book.activeId)
     }
 
+    /**
+     * ⚠ SPELLING IS NOT IDENTITY. The old setter only trimmed, and `HuginnClient`
+     * prepends `http://` to a bare address, so `192.168.2.117:8787` (and even
+     * `HTTP://…`) were storable and worked. `migrate` matched them with a trim-
+     * and-slash normalize, missed, and kept the address AGAIN beside the built-in
+     * it already names: three pins, two of them one daemon — probed twice, two
+     * rows in the health strip that both answer, and an edit to repair it refused
+     * as a duplicate.
+     */
+    @Test
+    fun `a stored address spelled differently is still the built-in it names`() {
+        for (stored in listOf(
+            "192.168.2.117:8787",
+            "HTTP://192.168.2.117:8787",
+            "http://192.168.2.117:8787/",
+            " http://192.168.2.117:8787 ",
+        )) {
+            val book = AppdRoutes.migrate(stored, routePinned = false)
+            assertEquals(2, book.routes.size, "stored='$stored' -> ${book.routes.map { it.url }}")
+            assertEquals("yggdrasil", book.activeId, "stored='$stored'")
+            assertEquals(AppdRoutes.YGGDRASIL.url, book.activeUrl, "stored='$stored'")
+        }
+    }
+
+    @Test
+    fun `a migrated address is stored canonically, not verbatim`() {
+        val book = AppdRoutes.migrate("10.0.0.9:8787/", routePinned = false)
+        assertEquals("http://10.0.0.9:8787", book.activeUrl, "the scheme is spelled out and the slash is gone")
+        assertEquals(RouteKind.LAN, book.routes.first().kind)
+    }
+
     @Test
     fun `a pinned route becomes autoSwitch off, which is the same refusal to move`() {
         val pinned = AppdRoutes.migrate(AppdRoutes.YGGDRASIL.url, routePinned = true)
@@ -120,6 +151,43 @@ class AppdRoutesTest {
             assertNull(book.activeId)
             assertEquals("", book.activeUrl, "and therefore no derived base URL")
         }
+    }
+
+    /**
+     * ⚠ AN UPGRADE MUST NOT DELETE THE OWNER'S ADDRESS WITHOUT SAYING SO. The
+     * phone's old "Base URL" field was free text with no validation at all, so a
+     * plain-http hostname both stored and worked: `huginn.lan`, the short MagicDNS
+     * name `huginn`, a DDNS name, a public literal, anything with a path. The
+     * guard refuses all of those (correctly — plain http to a name is not safe to
+     * send a bearer over), and `normalized()` dropped them in silence, leaving the
+     * install pointed at a hard-coded built-in it was never told about, with
+     * `autoSwitch=false` carried over from `appd_route_pinned` so it never even
+     * probed. The address is now carried back as [RouteBook.droppedUrl] and the
+     * book is left with NO active route, which is the honest state.
+     */
+    @Test
+    fun `a refused legacy address is named, and no built-in is adopted in its place`() {
+        val refused = listOf(
+            "http://huginn.lan:8787",
+            "http://huginn:8787",
+            "http://203.0.113.9:8787",
+            "http://192.168.2.117:8787/api",
+        )
+        for (url in refused) for (pinned in listOf(false, true)) {
+            val book = AppdRoutes.migrate(url, routePinned = pinned)
+            assertEquals(url, book.droppedUrl, "stored=$url pinned=$pinned")
+            assertNull(book.activeId, "no built-in is adopted in its place: $url")
+            assertEquals("", book.activeUrl, "and therefore no derived base URL: $url")
+            assertEquals(listOf("tailscale", "yggdrasil"), book.routes.map { it.id },
+                "the built-ins are still offered, they are just not chosen: $url")
+        }
+    }
+
+    @Test
+    fun `an address the guard allows is not reported as dropped`() {
+        assertNull(AppdRoutes.migrate("http://10.0.0.9:8787", routePinned = false).droppedUrl)
+        assertNull(AppdRoutes.migrate(AppdRoutes.TAILSCALE.url, routePinned = false).droppedUrl)
+        assertNull(AppdRoutes.migrate(null, routePinned = false).droppedUrl)
     }
 
     /** The migrated `addedAt` is zero on purpose — see [AppdRoutes.MIGRATED_AT]. */

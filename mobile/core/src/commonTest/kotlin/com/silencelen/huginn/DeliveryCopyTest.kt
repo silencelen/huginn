@@ -51,6 +51,52 @@ class DeliveryCopyTest {
         }
     }
 
+    /**
+     * ⚠ IPv6 IS A SUPPORTED CONFIGURATION AND THE SCRUBBER HAD NO RULE FOR IT.
+     * RouteGuard allows plain http to `fc00::/7` and `RouteKind.MESH` is
+     * first-class, so a phone reaching huginn over the mesh or the tailnet's IPv6
+     * address hit a transport error `trouble()` does not map and printed the
+     * address material this file exists to keep off the screen — Android's
+     * `failed to connect to /fd7a:115c:a1e0:0:0::c65a (port 8787) after 8000ms:
+     * ETIMEDOUT`, and a Yggdrasil-shaped `200:1b4f:…` the same way. Java prints
+     * InetAddress uncompressed, so both forms have to go.
+     */
+    @Test
+    fun `an IPv6 address never reaches the screen either`() {
+        for (raw in listOf(
+            "failed to connect to /fd7a:115c:a1e0:0:0::c65a (port 8787) after 8000ms: ETIMEDOUT",
+            "failed to connect to /200:1b4f:9c2e:aa01:0:0:0:1 (port 8787)",
+            "Connect timeout has expired [url=http://[fd7a:115c:a1e0::c65a]:8787/v1/watch]",
+            "no route to [200:1b4f:9c2e:aa01::1]:8787",
+            "connect to fd7a:115c:a1e0::c65a failed",
+        )) {
+            val out = DeliveryCopy.trouble(raw)
+            assertFalse("fd7a" in out, "$raw -> $out")
+            assertFalse("1b4f" in out, "$raw -> $out")
+            assertFalse("c65a" in out, "$raw -> $out")
+            assertFalse("aa01" in out, "$raw -> $out")
+            val scrubbed = DeliveryCopy.scrub(raw)
+            assertFalse("fd7a" in scrubbed, "scrub: $raw -> $scrubbed")
+            assertFalse("1b4f" in scrubbed, "scrub: $raw -> $scrubbed")
+        }
+    }
+
+    /**
+     * OkHttp replaces libcore's message with `Failed to connect to
+     * <InetSocketAddress>`, so the useful half ("refused", "timed out") is often
+     * gone by the time this runs — every one of these used to fall through to the
+     * bare fallback with the address as the only thing it had left to say.
+     */
+    @Test
+    fun `the phrases Android actually produces are mapped`() {
+        assertTrue("did not answer in time" in DeliveryCopy.trouble("ETIMEDOUT (Connection timed out)"))
+        assertTrue("did not answer in time" in DeliveryCopy.trouble("java.net.SocketTimeoutException: Connect timed out"))
+        val bare = DeliveryCopy.trouble("Failed to connect to /10.0.0.9:8787")
+        assertFalse("10.0.0.9" in bare, bare)
+        assertTrue("could not reach huginn" in bare, bare)
+        assertFalse(bare.endsWith("()."), "an empty parenthesis is not an explanation: $bare")
+    }
+
     @Test
     fun `an unrecognised failure still says nothing about where huginn lives`() {
         val out = DeliveryCopy.trouble("Something odd at https://10.0.0.9:8787/v1/watch (retry 3)")
