@@ -213,7 +213,7 @@ fun SessionOverviewView(
 
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
-private fun StatsHeader(
+internal fun StatsHeader(
     totals: com.silencelen.huginn.data.GraphTotals,
     rate: com.silencelen.huginn.data.GraphRate?,
     nowMs: Long,
@@ -314,7 +314,7 @@ private fun Stat(label: String, value: String) {
 }
 
 @Composable
-private fun ProjectionsCard(
+internal fun ProjectionsCard(
     rate: com.silencelen.huginn.data.GraphRate?,
     plan: Plan?,
     nowMs: Long,
