@@ -24,11 +24,33 @@
  * bytes arriving before the composer are read and thrown away here too, into a
  * `.lost` sidecar the test can assert on.
  *
+ * ⚠ AND "GONE" IS ONLY ONE OF THE TWO WAYS IT GOES WRONG. Re-swept 2026-09-17
+ * against the same binary, reading the outcome from the transcript rather than
+ * the pane, the pre-composer window has two bands and they behave nothing alike:
+ *
+ *   pasted ~2.0 s to ~0.85 s before the paint   the bytes SURVIVE. The TUI
+ *                                               renders them into the composer
+ *                                               the instant it paints and drops
+ *                                               the `\r` — text in the box,
+ *                                               unsent, no transcript record.
+ *                                               6/6. THE OWNER'S BUG.
+ *   pasted ~0.6 s to ~0.3 s before the paint     the bytes are gone, as above. 4/4.
+ *
+ * `HG_FAKE_CLAUDE_PREBUF` picks which band this stand-in models, because a fix
+ * for one is not a fix for the other and a fixture that can only do 'lost' can
+ * only test the half that was already understood.
+ *
  * Knobs (env): HG_FAKE_CLAUDE_OUT       file to append submitted lines to
  *              HG_FAKE_CLAUDE_BOOT_MS   empty-pane phase
  *              HG_FAKE_CLAUDE_BANNER_MS console-text phase
  *              HG_FAKE_CLAUDE_TRUST     '1' to draw the trust dialog and never
  *                                       accept input, whatever is typed at it
+ *              HG_FAKE_CLAUDE_PREBUF    'lost' (default) — pre-composer bytes are
+ *                                       read and discarded into `<out>.lost`
+ *                                       'stuck' — pre-composer bytes are HELD and
+ *                                       rendered into the composer at paint time
+ *                                       with every newline stripped, i.e. the
+ *                                       message arrives and its Enter does not
  */
 const fs = require('node:fs');
 
@@ -36,6 +58,7 @@ const OUT = process.env.HG_FAKE_CLAUDE_OUT || '/dev/null';
 const BOOT_MS = Number(process.env.HG_FAKE_CLAUDE_BOOT_MS || 1200);
 const BANNER_MS = Number(process.env.HG_FAKE_CLAUDE_BANNER_MS || 600);
 const TRUST = process.env.HG_FAKE_CLAUDE_TRUST === '1';
+const PREBUF = process.env.HG_FAKE_CLAUDE_PREBUF === 'stuck' ? 'stuck' : 'lost';
 
 /** The box, with the status lines UNDER it — the shape that matters. */
 const RULE = '─'.repeat(70);
@@ -56,26 +79,45 @@ function drawTrust() {
 
 let accepting = false;
 let buf = '';
+let held = '';   // 'stuck' mode only: bytes that arrived before the paint
+
+const clean = (s) => String(s).replace(/\[20[01]~/g, '');
+
+/**
+ * ⚠ THE COMPOSER ECHOES WHAT IS IN IT, and it did not before.
+ *
+ * The real TUI redraws the box with the typed text the moment a paste lands —
+ * which is the ONLY thing a "has the paste settled?" check can look at. A
+ * stand-in that showed nothing until Enter made every settle wait run to its
+ * bound, so the fixture would have reported the timing wrong in both directions.
+ */
+function render() { drawComposer(clean(buf)); }
 
 // Raw mode for the same reason the real TUI uses it: no kernel echo, and Enter
 // arrives as the '\r' tmux actually sends rather than a cooked line.
 if (process.stdin.isTTY) process.stdin.setRawMode(true);
 process.stdin.setEncoding('utf8');
 process.stdin.on('data', (d) => {
-  if (!accepting) { fs.appendFileSync(`${OUT}.lost`, d); return; }
+  if (!accepting) {
+    // 'stuck': the pty holds it and the TUI picks it up at paint time, minus the
+    // newline. 'lost': nobody is reading, and the real thing discards it.
+    if (PREBUF === 'stuck') { held += d; fs.appendFileSync(`${OUT}.held`, d); }
+    else fs.appendFileSync(`${OUT}.lost`, d);
+    return;
+  }
   buf += d;
   for (;;) {
     const i = buf.search(/[\r\n]/);
     if (i < 0) break;
-    const line = buf.slice(0, i).replace(/\[20[01]~/g, '');
+    const line = clean(buf.slice(0, i));
     buf = buf.slice(i + 1);
     if (!line.trim()) continue;
     fs.appendFileSync(OUT, `${line}\n`);
     // What a submitted message looks like in the pane: it leaves the composer,
     // is echoed above it, and the box redraws empty underneath.
     process.stdout.write(`\n❯ ${line}\n\n● submitted\n`);
-    drawComposer();
   }
+  render();
 });
 process.stdin.resume();
 
@@ -88,6 +130,11 @@ setTimeout(() => {
   setTimeout(() => {
     if (TRUST) { drawTrust(); return; }   // never accepting: a blind Enter here exits
     accepting = true;
-    drawComposer();
+    // ⚠ THE HELD BYTES ARRIVE, THE ENTER DOES NOT. Measured on the real
+    // binary: a paste that beat the paint by ~1-2 s is rendered into the
+    // composer at paint time with its newline gone, so the message is on
+    // screen and no turn ever starts. That is the band the owner kept hitting.
+    if (held) { buf = held.replace(/[\r\n]/g, ''); held = ''; }
+    render();
   }, BANNER_MS);
 }, BOOT_MS);
