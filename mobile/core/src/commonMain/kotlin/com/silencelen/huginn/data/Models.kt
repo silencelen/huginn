@@ -2192,236 +2192,517 @@ data class SessionGraph(
 // sums what they have done. The daemon owns membership, the names and the
 // personas; Claude Code owns the messaging between them.
 //
-// ⚠ EVERY FIELD HERE IS NULLABLE OR DEFAULTED, INCLUDING THE IDS. These models
-// are written against a daemon that does not exist yet (the two route branches
-// are being built beside this one), so the one thing they must do under drift is
-// decode into something a screen can draw rather than throw and take the whole
-// list with them. A renamed field is caught by the fixtures in ApiContractTest,
-// not by a decode failure on a phone.
+// ⚠⚠ THERE ARE TWO NAMES PER SESSION AND THEY ARE NOT INTERCHANGEABLE.
+// [ProjectMember.name] is the TMUX name (`<slug>-<role>`) — the handle every
+// other route on this daemon addresses a session by. [ProjectMember.claudeName]
+// is the PEER name (`<slug>/<role>`) — what `--name` was given, what a peer's
+// `SendMessage` addresses, and what a peer message is labelled with. A slash is
+// not a tmux name character, which is exactly why the daemon carries both.
+//
+// ⚠ EVERY FIELD HERE IS NULLABLE OR DEFAULTED, INCLUDING THE IDS, so a daemon
+// that has moved on leaves a row that still draws rather than a decode that
+// takes the whole list with it. A renamed field is caught by the fixtures in
+// ApiContractTest — which are generated from the daemon's OWN tests — and never
+// by a decode failure on a phone.
+//
+// ⚠ EVERY CLOCK ON THESE ROUTES IS EPOCH SECONDS. `Math.floor(Date.now()/1000)`
+// is the only stamp lib/projects.js and the routes ever write.
 
 /**
- * A session addressed by its Claude Code peer name — the lead, or the sender of
- * a peer message.
+ * A session addressed by its Claude Code peer name — the sender of a peer
+ * message, or the subject of an idle notice.
  *
- * [name] is the `--name <slug>/<role>` form ("lora-stick/lead"), which is what
- * `SendMessage` addresses and what a transcript labels a peer message with.
- * [sessionId] is Claude Code's own uuid; null before the session has registered.
+ * ⚠ THIS IS THE TRANSCRIPT'S PEER, NOT A PROJECT'S LEAD. It is what
+ * [TranscriptEvent.peer] carries, and the daemon builds it in `lib/transcript.js`
+ * from a record whose only address of record is a unix socket path: [name] is
+ * the `--name <slug>/<role>` form, [pid] the kernel-verified peer pid, and
+ * [sessionId] is null unless the daemon could map that pid to a session.
  */
 @Serializable
 data class ProjectPeer(
     val name: String = "",
     val sessionId: String? = null,
+    /** The verified peer pid. Present on a native peer message, null on an idle notice. */
+    val pid: Int? = null,
 )
 
 /**
- * One member of a project's cluster.
+ * The lead: the session that is briefed, sizes the work, and proposes the rest.
  *
- * [state] is the SESSION vocabulary — `running` | `attention` | `idle` — and is
- * deliberately a String rather than an enum: a newer daemon inventing a fifth
- * word must leave the row drawn without a mark, not fail the decode of every
- * other member beside it. [ProjectRules.stateWord] is where a word becomes a
- * colour, and where an unknown one becomes null.
+ * One type for both shapes the daemon emits, because the second is the first
+ * minus two fields plus one: a [Project]'s own lead carries [spawnedAt] and
+ * [endedAt], a [ProjectRow]'s carries [present] instead. Modelled together so a
+ * caller never has to ask which lead it is holding.
+ */
+@Serializable
+data class ProjectLead(
+    val role: String = "lead",
+    /** The TMUX name: `<slug>-lead`. */
+    val name: String = "",
+    /** The PEER name: `<slug>/lead`. What SendMessage addresses. */
+    val claudeName: String = "",
+    val sessionId: String? = null,
+    val spawnedAt: Long? = null,
+    val endedAt: Long? = null,
+    /** Row-only: whether the lead's tmux session is live. Null on a stored project. */
+    val present: Boolean? = null,
+)
+
+/**
+ * One member of a project's cluster, as the STORED RECORD holds it.
  *
- * [needsYou] is the promotion the daemon already does for session rows (a live
- * permission dialog is `attention`); it is nullable because an older daemon does
- * not compute it and "not known" is not "no".
+ * This is membership, not liveness — it says what was created and how, and it is
+ * what `POST …/spawn` answers with. What a member is DOING is [ProjectLive] and
+ * [ProjectDashboardMember]; a row here with no live row beside it is a member
+ * whose session the daemon has not observed.
  */
 @Serializable
 data class ProjectMember(
-    /** The peer name: `<slug>/<role>`. The thing the lead addresses. */
-    val name: String = "",
     val role: String = "",
+    /** The TMUX name: `<slug>-<role>`. */
+    val name: String = "",
+    /** The PEER name: `<slug>/<role>`. */
+    val claudeName: String = "",
     val sessionId: String? = null,
-    val spawnedAt: Long = 0,
-    /** `running` | `attention` | `idle` | null. Unknown words are not errors. */
-    val state: String? = null,
-    val needsYou: Boolean? = null,
-    /** Sends the daemon is holding for this member. Null on a daemon with no queue. */
-    val pendingSends: Int? = null,
-    val lastActivityTs: Long? = null,
-    /** Set once this member's session has ended; the row stays, greyed. */
+    /** Where this member was launched. Null means the project's own directory. */
+    val cwd: String? = null,
+    val model: String? = null,
+    val effort: String? = null,
+    val mode: String? = null,
+    /** The WHOLE first message this session was given. */
+    val firstPrompt: String? = null,
+    val spawnedAt: Long? = null,
     val endedAt: Long? = null,
 )
 
 /**
- * The lead's proposal, as the card shows it.
+ * What both LIVE shapes carry, so one set of rules serves the list and the
+ * dashboard.
  *
- * ⚠ FREE-FORM ON PURPOSE, AND PARSED AS TEXT. The daemon does the structured
- * parse (a tagged fenced block, the Rounds anti-injection shape) and decides
- * what is legal; a client re-parsing the same block would be a second opinion
- * about something the owner is about to approve. So the card renders [summary]
- * and [text] and nothing here tries to understand them.
+ * ⚠ TWO INDEPENDENT VOCABULARIES MEET HERE AND THEY ARE NOT THE SAME WORDS.
+ * [status] is Claude Code's own native registry — `busy` | `idle` | `waiting` —
+ * and the daemon passes an unrecognised word through as NULL rather than
+ * guessing. [state] is the title hook's session vocabulary — `running` |
+ * `attention` | `idle` — which every session row in this app already draws.
+ * [ProjectRules.stateWord] is the one place either becomes a mark.
+ */
+interface ProjectMemberState {
+    val role: String
+    val name: String
+    val claudeName: String
+    val sessionId: String?
+    /** True for the lead's own row. The daemon's rollup counts exclude it. */
+    val lead: Boolean
+    /** The tmux session exists. */
+    val present: Boolean
+    /** The `claude` process is alive — pid + procStart, never a timestamp. */
+    val alive: Boolean
+    /** `busy` | `idle` | `waiting` | null. An unknown word is null, never a guess. */
+    val status: String?
+    /** What a `waiting` session is waiting for, in the registry's own words. */
+    val waitingFor: String?
+    /** The daemon's own promotion: native `waiting`, or the hook's `attention`. */
+    val needsYou: Boolean
+    /** `running` | `attention` | `idle` | null — the session vocabulary. */
+    val state: String?
+    val pendingSends: Int
+    val headroom: SessionHeadroom?
+    val title: String?
+    val endedAt: Long?
+    val spawnedAt: Long?
+}
+
+/**
+ * One member as `GET /v1/projects/:id` reports it live: the membership row
+ * joined to the tmux session and to Claude Code's own registry.
+ *
+ * ⚠ THE JOIN IS BY SESSION ID AND THE LOOKUP IS BY TMUX NAME — never by the
+ * native row's `tmux` field, which is inherited `$TMUX` and is wrong for a
+ * nested launch and for every `claude -p`. That is the daemon's rule; this is
+ * the shape it produces.
+ */
+@Serializable
+data class ProjectLive(
+    override val role: String = "",
+    override val name: String = "",
+    override val claudeName: String = "",
+    override val sessionId: String? = null,
+    override val present: Boolean = false,
+    override val alive: Boolean = false,
+    override val status: String? = null,
+    override val waitingFor: String? = null,
+    /** The native registry's own bridge id, when this session has one. */
+    val bridgeSessionId: String? = null,
+    /** The name the native registry knows this session by — usually [claudeName]. */
+    val nativeName: String? = null,
+    override val needsYou: Boolean = false,
+    override val state: String? = null,
+    val stateSince: Long? = null,
+    override val pendingSends: Int = 0,
+    override val headroom: SessionHeadroom? = null,
+    override val title: String? = null,
+    override val endedAt: Long? = null,
+    override val spawnedAt: Long? = null,
+    override val lead: Boolean = false,
+    /** When the daemon took this observation. */
+    val checkedAt: Long = 0,
+) : ProjectMemberState
+
+/** One session the lead's manifest asks for. The daemon re-validates every field. */
+@Serializable
+data class ManifestSession(
+    val role: String = "",
+    /** The WHOLE first message this session will receive. */
+    val firstPrompt: String = "",
+    /** Null means the project's own directory; anything else is inside it. */
+    val cwd: String? = null,
+    /** `fable` | `opus` | `sonnet` | `haiku` | null. An unknown word is already null. */
+    val model: String? = null,
+    /** `low` | `medium` | `high` | `xhigh` | `max` | null. */
+    val effort: String? = null,
+    /** `ask` | `act` | `auto` | `plan` | null. */
+    val mode: String? = null,
+)
+
+/**
+ * The lead's proposal, as the card shows it and as Spawn quotes it back.
+ *
+ * ⚠ THE PROPOSAL IS STRUCTURED, AND THE STRUCTURE IS THE DAEMON'S. The lead
+ * writes a tagged fenced block; `lib/projects.js` parses it, refuses anything
+ * that decides what gets created, and emits [sessions]. A client that re-parsed
+ * the block would be a second opinion about the thing the owner is approving —
+ * so this carries the parsed result and nothing here re-reads a fence.
+ *
+ * ⚠ THE TAG IS DELIBERATELY NOT MODELLED. It is the anti-injection secret that
+ * lives in the lead's system prompt; the client has no use for it and a field
+ * for it is a field something eventually renders.
+ *
+ * [rev] is what a Spawn quotes back so a card that has been sitting on a lock
+ * screen cannot approve a plan the owner never saw. [spawnedRev] is the rev that
+ * was last carried out, so "this proposal is already running" is answerable.
  */
 @Serializable
 data class ProjectManifest(
-    /** The revision a Spawn quotes back, so a stale card cannot approve a new plan. */
     val rev: Int = 0,
     val receivedAt: Long? = null,
+    /** The cluster's own label — one of `ProjectRules.KINDS`, or null. Nothing branches on it. */
+    val type: String? = null,
+    /** The paragraph the lead wrote about what this cluster is for. */
+    val scope: String = "",
     /** The one line the card leads with. One line by the daemon's rule, not ours. */
     val summary: String? = null,
-    /** The body of the proposal, verbatim. */
-    val text: String? = null,
+    val sessions: List<ManifestSession> = emptyList(),
     /**
-     * The lead wrote a proposal block WITHOUT its tag, so the daemon ignored it.
-     * Said on the card: an untagged block looks to its author like a proposal
-     * that was made and to the owner like nothing happened.
+     * The lead wrote a proposal block WITHOUT this project's tag, so the daemon
+     * ignored it. Said on the card: an untagged block looks to its author like a
+     * proposal that was made and to the owner like nothing happened.
      */
     val untaggedSeen: Boolean = false,
+    /** The rev a spawn was last carried out at. 0 until one has been. */
+    val spawnedRev: Int = 0,
 )
 
-/** A cluster of sessions with roles, and the proposal that made it. */
+/**
+ * A cluster of sessions with roles, the brief that started it and the proposal
+ * that will fill it.
+ *
+ * [rev] is the record's own revision and is what a PATCH quotes back; it has
+ * nothing to do with [ProjectManifest.rev], which counts proposals.
+ */
 @Serializable
 data class Project(
     val id: String = "",
     val name: String = "",
-    /** The cluster's working directory. Null means the daemon's own WORKDIR. */
-    val cwd: String? = null,
-    val createdAt: Long = 0,
-    /** Set when the project was ended; the row stays until it is deleted. */
-    val endedAt: Long? = null,
-    val lead: ProjectPeer? = null,
+    /** The tmux and peer namespace. Derived from the name once, and it NEVER moves. */
+    val slug: String = "",
+    /** One of `ProjectRules.KINDS`. */
+    val kind: String = "",
+    /** One of `ProjectRules.STATUSES`. */
+    val status: String = "",
+    /** The paragraph the owner typed; the whole first message the lead gets. */
+    val brief: String = "",
+    val cwd: String = "",
+    val lead: ProjectLead? = null,
     val members: List<ProjectMember> = emptyList(),
-    /** Present once the lead has proposed a cluster. */
     val manifest: ProjectManifest? = null,
+    /** Why this project ended, in the daemon's words. Set when it archived itself. */
+    val endedReason: String? = null,
+    val endedAt: Long? = null,
+    val createdAt: Long = 0,
+    val updatedAt: Long = 0,
+    val rev: Int = 0,
 )
 
 /**
- * `GET /v1/projects`.
+ * A project as the TREE draws it: the record's identity plus the live counts,
+ * already rolled up by the daemon.
+ *
+ * ⚠ [alive], [busy] AND [waiting] EXCLUDE THE LEAD. The daemon counts members
+ * only — the lead is always there and counting it would make every project read
+ * as one session busier than it is. [memberCount] is the stored membership, so
+ * `memberCount - alive` is the members whose process is not answering.
+ *
+ * Every field has a definite value: a row that decoded is a row that renders.
+ */
+@Serializable
+data class ProjectRow(
+    val id: String = "",
+    val name: String = "",
+    val slug: String = "",
+    val kind: String = "",
+    val status: String = "",
+    val cwd: String = "",
+    val memberCount: Int = 0,
+    val alive: Int = 0,
+    val busy: Int = 0,
+    val waiting: Int = 0,
+    val lead: ProjectLead? = null,
+    val manifestRev: Int = 0,
+    val manifestSummary: String? = null,
+    val untaggedSeen: Boolean = false,
+    val endedReason: String? = null,
+    val createdAt: Long = 0,
+    val updatedAt: Long = 0,
+    val rev: Int = 0,
+)
+
+/**
+ * `GET /v1/projects` — the rows and the cap.
  *
  * ⚠ ALSO THE FEATURE PROBE — see [HuginnClient.projects], which turns the 404
  * from a daemon that has never heard of projects into a null rather than into an
  * error a screen would have to explain.
+ *
+ * Archived projects are left out unless `?all=1` was asked for.
  */
 @Serializable
-data class ProjectList(val projects: List<Project> = emptyList())
+data class ProjectList(
+    val projects: List<ProjectRow> = emptyList(),
+    /** How many projects one host keeps. On the wire so a client can say what it is. */
+    val max: Int = 0,
+)
+
+/** The two extra fields `GET /v1/projects/:id` hangs off the project record. */
+@Serializable
+data class ProjectDetailExtras(
+    val row: ProjectRow? = null,
+    val live: List<ProjectLive> = emptyList(),
+)
 
 /**
- * A member as the dashboard sees it: the membership row plus what the session
- * itself is doing.
+ * `GET /v1/projects/:id` — the whole record, the row the tree draws, and every
+ * member's live state in one answer.
  *
- * The extra two are both additive and both optional. [headroom] is the same cell
- * the session list already carries — the one number a twelve-session cluster
- * actually needs — and [streams] are the member's own agents.
+ * Assembled by the client rather than decoded whole, because the daemon SPREADS
+ * the project into the top level (`{...project, row, live}`) and a model that
+ * repeated all fifteen of its fields beside `row` would be two places to get the
+ * record wrong.
+ */
+data class ProjectDetail(
+    val project: Project,
+    val row: ProjectRow?,
+    val live: List<ProjectLive>,
+)
+
+/**
+ * One member as the dashboard sees it: the live join plus its share of the spend.
  *
- * ⚠ STREAMS ARE NOT ROLLED UP ACROSS THE PROJECT, and that is a decision rather
- * than an omission: an agent id is scoped to the session that spawned it, so a
- * project-wide list of them would be a list of ids that address nothing.
+ * ⚠ THE AGENT COUNT, NOT THE AGENT RUNS. An agent id is scoped to the session
+ * that spawned it, so a project-wide list of them would be a list of handles
+ * that address nothing from here. The daemon sends [agentCount] and no ids, and
+ * that is a decision rather than an omission.
  */
 @Serializable
 data class ProjectDashboardMember(
-    val name: String = "",
-    val role: String = "",
-    val sessionId: String? = null,
-    val spawnedAt: Long = 0,
-    val state: String? = null,
-    val needsYou: Boolean? = null,
-    val pendingSends: Int? = null,
+    override val role: String = "",
+    override val name: String = "",
+    override val claudeName: String = "",
+    override val sessionId: String? = null,
+    override val lead: Boolean = false,
+    override val present: Boolean = false,
+    override val alive: Boolean = false,
+    override val status: String? = null,
+    override val waitingFor: String? = null,
+    override val needsYou: Boolean = false,
+    override val state: String? = null,
+    val stateSince: Long? = null,
+    override val pendingSends: Int = 0,
+    override val headroom: SessionHeadroom? = null,
+    override val title: String? = null,
+    val turns: Int = 0,
+    val tokens: GraphTokens = GraphTokens(),
+    /** Null when nothing this member ran could be priced. */
+    val estCostUsd: Double? = null,
+    val agentCount: Int = 0,
     val lastActivityTs: Long? = null,
-    val endedAt: Long? = null,
-    /** The model ladder + resume cell, as on a session row. Null on an older daemon. */
-    val headroom: SessionHeadroom? = null,
-    /** This member's own agents. Session-scoped ids: never addressed project-wide. */
-    val streams: List<AgentRun> = emptyList(),
-    /** What this member has done, when the daemon has walked its transcript. */
-    val totals: GraphTotals? = null,
-) {
-    /** The membership row inside it, so one set of rules serves both surfaces. */
-    fun asMember(): ProjectMember = ProjectMember(
-        name = name, role = role, sessionId = sessionId, spawnedAt = spawnedAt,
-        state = state, needsYou = needsYou, pendingSends = pendingSends,
-        lastActivityTs = lastActivityTs, endedAt = endedAt,
-    )
-}
+    override val endedAt: Long? = null,
+    override val spawnedAt: Long? = null,
+) : ProjectMemberState
+
+/**
+ * The cluster's pace, as the dashboard route reports it.
+ *
+ * ⚠ NOT [GraphRate], AND THE FIELD NAMES ARE THE TELL. A single session's rate
+ * says `tokensPerMin10`; the project aggregate says `tokensPer10m`, because it
+ * is the members' rates ADDED rather than one session's own. Two shapes, two
+ * types — a shared one would decode each into the other's zeroes.
+ */
+@Serializable
+data class ProjectRate(
+    val activeRecently: Boolean = false,
+    val tokensPer10m: Long = 0,
+    val tokensPer60m: Long = 0,
+)
 
 /**
  * `GET /v1/projects/:id/dashboard`.
  *
- * [totals] and [rate] are the members' own overviews SUMMED BY THE DAEMON, in
- * exactly the additive `GraphTotals` shape a single session's overview carries —
- * which is why the dashboard can reuse `StatsHeader` and `ProjectionsCard`
- * instead of growing a second vocabulary for one set of facts. Both are nullable
- * because walking twelve transcripts is work the daemon may not have done yet,
- * and a header of zeroes reads as a cluster that has done nothing.
+ * [totals] is the members' own overviews SUMMED BY THE DAEMON, in exactly the
+ * additive `GraphTotals` shape a single session's overview carries — which is
+ * why the dashboard can reuse `StatsHeader` instead of growing a second
+ * vocabulary for one set of facts.
+ *
+ * ⚠ `wallMs` IN THERE IS A SPAN, NOT A SUM. Twelve sessions running for an hour
+ * each took an hour, not twelve, so the daemon reports the distance from the
+ * earliest start to the latest activity.
+ *
+ * ⚠ THE CLOCK IS `generatedAt`, NOT `updatedAt`. It is when this poll was
+ * answered, which is the only honest thing to say about a rollup.
  */
 @Serializable
 data class ProjectDashboard(
-    val project: Project? = null,
-    val members: List<ProjectDashboardMember> = emptyList(),
-    /** Epoch SECONDS, like every clock on this route. */
-    val updatedAt: Long = 0,
+    val project: ProjectRow? = null,
+    val generatedAt: Long = 0,
     val totals: GraphTotals? = null,
-    val rate: GraphRate? = null,
+    val rate: ProjectRate? = null,
+    val members: List<ProjectDashboardMember> = emptyList(),
 )
 
-/** One member a Spawn asks for: `POST /v1/projects/:id/spawn`. */
+/** One role a spawn could not create, with the daemon's own sentence about why. */
 @Serializable
-data class SpawnRequest(
-    val name: String = "",
+data class SpawnFailure(
     val role: String = "",
-    /** The WHOLE first message this session receives. */
-    val prompt: String = "",
+    /**
+     * Shown VERBATIM. "duplicate session: half-mid" and "persona could not be
+     * written" are different problems with different fixes, and a client's
+     * summary of either helps nobody.
+     */
+    val reason: String = "",
 )
 
 /**
- * What became of one requested member.
+ * `POST /v1/projects/:id/spawn` — HTTP 200, whatever happened.
  *
- * [error] is the daemon's own sentence and is shown verbatim — "the directory is
- * not trusted" and "a session called that already exists" are different problems
- * with different fixes, and a client summary of either helps nobody.
+ * ⚠⚠ [ok] IS FALSE ON A 200 AND THAT IS THE NORMAL CASE. Spawning is a loop over
+ * tmux: the second of three roles failing does not un-spawn the first, so the
+ * daemon carries on, creates the rest, and answers with both lists. A client
+ * that read the status code as the verdict would report a working cluster as a
+ * failure — and a card that collapsed this to one boolean would lose which role
+ * to retry.
  */
 @Serializable
-data class SpawnMemberResult(
-    val name: String = "",
+data class SpawnResult(
     val ok: Boolean = false,
-    val error: String? = null,
+    val spawned: List<ProjectMember> = emptyList(),
+    val failed: List<SpawnFailure> = emptyList(),
+    /** The project as it now stands — `active` once anything came up. */
+    val project: Project? = null,
 )
 
 /**
- * `POST /v1/projects/:id/spawn`.
+ * The answer to a Spawn: what happened, or a refusal that stopped the whole
+ * thing before any session was made.
  *
- * ⚠ PARTIAL RESULTS ARE THE NORMAL CASE. Spawning is a loop over tmux, and the
- * fourth member failing does not un-spawn the first three. So this is a list of
- * outcomes rather than an ok/failed pair, and the card reports it as one —
- * anything that collapses it to a single boolean loses which member to retry.
+ * ⚠ THE TWO 409s THAT MATTER, AND THEY ARE BOTH STATES RATHER THAN ERRORS. The
+ * headroom arbiter's STOP sentinel is armed (spawning twelve sessions into a red
+ * usage window is how a cluster dies half-born), or the manifest moved under the
+ * card — which comes back carrying the CURRENT project so the card can redraw
+ * itself around the plan that is actually on offer.
  */
-@Serializable
-data class SpawnResult(val results: List<SpawnMemberResult> = emptyList())
+data class SpawnOutcome(
+    val result: SpawnResult?,
+    val refusal: String?,
+    /** The current project, when the refusal was a stale manifest rev. */
+    val project: Project? = null,
+) {
+    val ok: Boolean get() = refusal == null
+    val spawned: List<ProjectMember> get() = result?.spawned.orEmpty()
+    val failed: List<SpawnFailure> get() = result?.failed.orEmpty()
+}
 
-/** `POST /v1/projects/:id/message` — a line typed into a member, through the queue. */
+/**
+ * `POST /v1/projects/:id/message` — a line typed into one member, addressed from
+ * another, through the send queue.
+ *
+ * ⚠ THIS IS NOT HOW THE SESSIONS TALK. A native `SendMessage` goes process to
+ * process over a unix socket and starts a turn with no keypress; the daemon
+ * neither sees nor routes it. This route is appd TYPING, which is exactly why
+ * the answer carries the queue's own facts.
+ */
 @Serializable
 data class ProjectMessageResult(
+    val ok: Boolean = false,
+    /** The peer names, echoed back: `<slug>/<role>`. */
+    val to: String = "",
+    val from: String = "",
+    val delivered: Boolean = false,
     /** How many sends are waiting for that member, this one included. */
     val queued: Int = 0,
-    val delivered: Boolean = false,
-    /** `turn` | `modal` | null — what the queue is waiting on. */
+    /** `turn` | `modal` | `starting` | null — what the queue is waiting on. */
     val blockedBy: String? = null,
+    /** Set when the queue dropped the message instead of holding it. */
+    val dropped: String? = null,
+)
+
+/**
+ * `DELETE /v1/projects/:id` — the record is always removed; the sessions are
+ * only ended if that was asked for.
+ *
+ * ⚠ [mode] IS `none` BY DEFAULT AND MUST READ THAT WAY. A delete that silently
+ * killed twelve live sessions is not a delete anybody meant, so the daemon ends
+ * nothing unless told to and says which it did.
+ */
+@Serializable
+data class ProjectDeleted(
+    val ok: Boolean = false,
+    /** The tmux names that were actually ended. */
+    val ended: List<String> = emptyList(),
+    /** `graceful` | `now` | `none`. */
+    val mode: String = "none",
 )
 
 /**
  * The answer to `POST /v1/projects`: the project, or the daemon's refusal.
  *
  * ⚠ A 409 IS AN ANSWER HERE, NOT A THROW — the [ScratchpadSave] precedent, for
- * the same reason. The commonest refusal is an untrusted working directory, and
- * the daemon's sentence about it ("open that directory in Claude Code once, then
- * create the project") is the entire fix. Thrown, it would arrive on the failure
- * path as a red line with no project attached; answered, the sheet keeps the
- * name the person typed and shows what to do under the field.
+ * the same reason. The commonest refusal is a working directory Claude Code has
+ * not been trusted in, and the daemon's sentence about it ("open it once with
+ * `claude` there and accept the folder-trust question, then create the project")
+ * is the entire fix. Thrown, it would arrive on the failure path as a red line
+ * with no project attached; answered, the sheet keeps everything the person
+ * typed and shows what to do under the field.
  */
 data class ProjectCreated(val project: Project?, val refusal: String?) {
     val ok: Boolean get() = project != null
 }
 
 /**
- * The answer to a Spawn: the per-member results, or a refusal that stopped the
- * whole thing before any session was made.
+ * The answer to a project edit: what the server now holds, and whether it took
+ * ours.
  *
- * ⚠ THE 409 THAT MATTERS IS THE STOP SENTINEL. Spawning twelve sessions into a
- * red usage window is how a cluster dies half-born, so the daemon refuses while
- * the headroom arbiter's STOP is armed — and that refusal is a state of the
- * house, not an error in the request. It is shown as the card's own line.
+ * ⚠ THE 409 HAS TWO SHAPES AND ONLY ONE OF THEM IS A CONFLICT. A stale `rev`
+ * comes back as the CURRENT PROJECT, bare, for the editor to adopt — the
+ * saveScratchpad contract. An illegal status move ("an active project cannot
+ * become proposed") comes back as an `{error}` with no project in it, and that
+ * is a refusal of the request rather than a race. [conflict] is the one that
+ * says which.
  */
-data class SpawnOutcome(val results: List<SpawnMemberResult>, val refusal: String?) {
-    val ok: Boolean get() = refusal == null
+data class ProjectSave(
+    val project: Project?,
+    val conflict: Boolean,
+    val refusal: String? = null,
+) {
+    val ok: Boolean get() = !conflict && refusal == null
 }
 
 // ----------------------------------------------------------------- consoles
