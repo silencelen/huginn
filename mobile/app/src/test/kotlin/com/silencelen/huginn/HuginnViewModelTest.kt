@@ -26,6 +26,7 @@ import com.silencelen.huginn.ui.SelectionStaging
 import com.silencelen.huginn.ui.applyAutoSwitch
 import com.silencelen.huginn.ui.pageStillWanted
 import com.silencelen.huginn.ui.detachWanted
+import com.silencelen.huginn.widget.AskAttempt
 import com.silencelen.huginn.ui.SendQueue
 import com.silencelen.huginn.ui.StreamPicker
 import com.silencelen.huginn.ui.fetchStreamAgents
@@ -732,4 +733,104 @@ class PastePlanTest {
         assertEquals(8, out.jpeg.size)
     }
 
+}
+
+/**
+ * THE ASK SHEET'S RETRY, which used to leave a chat behind on every press.
+ *
+ * The activity is Android; what one question does to the host across several
+ * presses is not.
+ */
+class AskAttemptTest {
+
+    private class Host {
+        var created = 0
+        var deleted = mutableListOf<String>()
+        val queued = mutableListOf<Pair<String, String>>()
+        fun create(): String { created++; return "chat-$created" }
+    }
+
+    @Test
+    fun `three failed presses leave one chat on the host, not three`() = runTest {
+        // The deterministic repro: 429 "too many concurrent runs (3)". The chat
+        // exists and the daemon refused the MESSAGE, so the chat is kept and the
+        // retry sends into it.
+        val host = Host()
+        val attempt = AskAttempt()
+        var refuse = true
+        suspend fun press(): Result<String> = runCatching {
+            attempt.submit(
+                create = { host.create() },
+                queue = { id ->
+                    if (refuse) throw HuginnClient.HuginnException(429, "too many concurrent runs (3)")
+                    host.queued += id to "what is the fleet doing?"
+                },
+                discard = { id -> host.deleted += id },
+            )
+        }
+
+        assertTrue(press().isFailure)
+        assertTrue(press().isFailure)
+        assertTrue(press().isFailure)
+        assertEquals("one question, one chat", 1, host.created)
+
+        refuse = false
+        assertEquals("chat-1", press().getOrNull())
+        assertEquals(1, host.queued.size)
+        assertEquals("chat-1", host.queued.single().first)
+        assertEquals(emptyList<String>(), host.deleted)
+    }
+
+    @Test
+    fun `a send that never reached the host takes its fresh chat back`() = runTest {
+        val host = Host()
+        val attempt = AskAttempt()
+        val first = runCatching {
+            attempt.submit(
+                create = { host.create() },
+                queue = { throw java.io.IOException("unexpected end of stream") },
+                discard = { id -> host.deleted += id },
+            )
+        }
+        assertTrue(first.isFailure)
+        assertEquals(listOf("chat-1"), host.deleted)
+
+        // ...and the retry starts clean rather than sending into a chat that was
+        // just deleted.
+        val second = attempt.submit(
+            create = { host.create() },
+            queue = { id -> host.queued += id to "q" },
+            discard = { id -> host.deleted += id },
+        )
+        assertEquals("chat-2", second)
+        assertEquals(2, host.created)
+    }
+
+    @Test
+    fun `a chat the host could not even create leaves nothing behind`() = runTest {
+        val host = Host()
+        val attempt = AskAttempt()
+        val r = runCatching {
+            attempt.submit(
+                create = { throw java.io.IOException("no route to host") },
+                queue = { },
+                discard = { id -> host.deleted += id },
+            )
+        }
+        assertTrue(r.isFailure)
+        assertEquals(0, host.created)
+        assertEquals(emptyList<String>(), host.deleted)
+    }
+
+    @Test
+    fun `an ordinary send creates one chat and queues into it`() = runTest {
+        val host = Host()
+        val id = AskAttempt().submit(
+            create = { host.create() },
+            queue = { i -> host.queued += i to "q" },
+            discard = { },
+        )
+        assertEquals("chat-1", id)
+        assertEquals(1, host.queued.size)
+    }
 }
