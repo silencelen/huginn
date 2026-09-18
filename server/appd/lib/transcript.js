@@ -506,6 +506,35 @@ function readTranscript(path, { offset = null, limit = 400, until = null, peerId
    * swallow every later "ok" / "continue" / "yes" as well.
    */
   const drained = new Map();
+  /**
+   * A drain ran in this window whose enqueues were all ABOVE it — so `queued`
+   * was empty, nothing could be moved, and the record carries no content to name
+   * what it drained with. The `user` records that follow ARE those messages,
+   * written by Claude Code a second or two later.
+   *
+   * A reader RESUMING a tail already holds them, badged `queued` from the page
+   * the enqueue landed in, so emitting them again appends a second identical
+   * bubble while the first keeps a badge nothing will ever clear (#34/#37). The
+   * delivery is reported through `deliveredQueued` instead, exactly as an
+   * orphaned `remove` does — the one difference being that a drain can cover
+   * several messages, so this stands until the turn it fed begins.
+   */
+  let drainedAbove = false;
+  /**
+   * The drain's own timestamp, and whether a drain in this window has already
+   * delivered something.
+   *
+   * Both are bounds on the guard above, and both were written from real data
+   * (930 transcripts, replayed — they cost two real messages before they were
+   * added). A dequeue that drains nothing AFTER one that drained everything is
+   * a no-op the CLI writes in pairs, not a drain whose messages are above; and
+   * the records a drain produces land a second or two behind it, so a message
+   * typed long afterwards is a new message even when no assistant record happens
+   * to sit between the two (measured: seven hours, in one real transcript).
+   */
+  let drainedAboveTs = null;
+  let drainedHere = false;
+  const DRAIN_ECHO_S = 120;
   let seq = 0;
   /**
    * A queued message has been delivered: un-badge it and move it to HERE.
@@ -552,6 +581,11 @@ function readTranscript(path, { offset = null, limit = 400, until = null, peerId
     let d;
     try { d = JSON.parse(line); } catch { continue; }
     const ts = d.timestamp ? Math.floor(Date.parse(d.timestamp) / 1000) || null : null;
+    // The same instant in MILLISECONDS, for the one question a second's
+    // resolution cannot answer: whether an assistant record written after a
+    // dequeue belongs to the turn the dequeue started or is a late flush of the
+    // one before it. Real transcripts carry both, 150 ms apart, in that order.
+    const tsMs = d.timestamp ? Date.parse(d.timestamp) || null : null;
     if (ts) out.lastActivityTs = ts;
     if (d.gitBranch) out.gitBranch = d.gitBranch;
     if (d.cwd) out.cwd = d.cwd;
@@ -661,6 +695,14 @@ function readTranscript(path, { offset = null, limit = 400, until = null, peerId
             copies.push(w.ev);
             drained.set(w.content, copies);
           }
+          if (waiting.length) drainedHere = true;
+          // Nothing here to drain, and no earlier drain in this window took
+          // anything either — so whatever this one drained was enqueued above,
+          // where the reader has it badged. See [drainedAbove].
+          else if (resuming && !drainedHere) {
+            drainedAbove = true;
+            drainedAboveTs = tsMs;
+          }
         }
         // A `dequeue` whose enqueues are all above this window drained messages
         // this pass never saw, and the record carries no content to name them
@@ -765,10 +807,27 @@ function readTranscript(path, { offset = null, limit = 400, until = null, peerId
           if (rest) out.events.push({ seq: ++seq, kind: 'user', ts, sidechain, text: rest });
           continue;
         }
+        // The records a drain we could not see delivered — see [drainedAbove].
+        // Reported, not emitted: the reader is resuming and already has them.
+        if (drainedAbove
+          && (drainedAboveTs === null || tsMs === null || Math.abs(tsMs - drainedAboveTs) <= DRAIN_ECHO_S * 1000)) {
+          out.deliveredQueued.push(t);
+          continue;
+        }
         out.events.push({ seq: ++seq, kind: 'user', ts, sidechain, text: t });
         continue;
       }
       case 'assistant': {
+        // The turn the drain fed has begun, so the drained messages are all
+        // behind us: anything typed from here on is a NEW message. Without this
+        // bound the guard would swallow every later thing the owner said.
+        //
+        // By TIMESTAMP, not by position: Claude Code flushes the previous turn's
+        // assistant records AFTER the dequeue record on nearly every real drain
+        // (seen 150 ms out of order in three transcripts), and taking those as
+        // the new turn released the guard before the drained `user` record it
+        // exists for even arrived.
+        if (drainedAboveTs === null || tsMs === null || tsMs >= drainedAboveTs) drainedAbove = false;
         const m = d.message || {};
         if (m.model) out.model = m.model;
         // Claude Code stamps the effort level on each assistant record, so the
