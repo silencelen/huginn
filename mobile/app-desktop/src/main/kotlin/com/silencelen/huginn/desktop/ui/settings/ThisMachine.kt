@@ -52,7 +52,6 @@ internal fun DeviceSection(store: AppStore) {
     val enabled by settings.deviceEnabled.collectAsState()
     val scopeWire by settings.deviceScope.collectAsState()
     val root by settings.deviceRoot.collectAsState()
-    val claudePath by settings.deviceClaudePath.collectAsState()
     val status by store.deviceRunner.status.collectAsState()
 
     FormHeader("Give Huginn access to this PC")
@@ -116,13 +115,7 @@ internal fun DeviceSection(store: AppStore) {
             modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
         )
 
-        OutlinedTextField(
-            value = claudePath,
-            onValueChange = { settings.setDeviceClaudePath(it) },
-            label = { Text("Path to claude (leave blank to use PATH)") },
-            singleLine = true,
-            modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
-        )
+        ClaudePathField(store)
 
         Muted(
             if (LockProbe.supported()) {
@@ -139,6 +132,33 @@ internal fun DeviceSection(store: AppStore) {
             maxLines = 3,
         )
     }
+}
+
+/**
+ * WHICH `claude` THIS MACHINE RUNS — one field, two doors.
+ *
+ * Lifted out of [DeviceSection] unchanged so the first-run flow can host the
+ * SAME control rather than a copy of it: this is `argv[0]` of the child the
+ * device runner spawns, and two fields writing one setting is how a wizard and
+ * a settings page start disagreeing about what is configured.
+ *
+ * ⚠ BLANK IS NOT "UNSET", it is "use PATH", and that distinction is the whole
+ * reason the label says so. A GUI app's PATH is whatever the desktop session had
+ * at login, which is why blank is so often wrong on Windows and why
+ * [com.silencelen.huginn.desktop.setup.ClaudePath] exists to fill this field
+ * with something it has actually run.
+ */
+@Composable
+internal fun ClaudePathField(store: AppStore) {
+    val settings = store.settings
+    val claudePath by settings.deviceClaudePath.collectAsState()
+    OutlinedTextField(
+        value = claudePath,
+        onValueChange = { settings.setDeviceClaudePath(it) },
+        label = { Text("Path to claude (leave blank to use PATH)") },
+        singleLine = true,
+        modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
+    )
 }
 
 private val SCOPE_CHOICES = listOf(

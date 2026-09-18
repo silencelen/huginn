@@ -18,6 +18,8 @@ Unicode true
 !include "FileFunc.nsh"
 ; ${If}/${EndIf} used by EnsureNotRunning below.
 !include "LogicLib.nsh"
+; ${SectionIsSelected}, for the components page below.
+!include "Sections.nsh"
 
 !ifndef APP_VERSION
   !error "APP_VERSION not defined — pass -DAPP_VERSION=x.y.z"
@@ -60,6 +62,10 @@ Unicode true
 ; disagree Windows accepts every toast and shows none of them, with no error
 ; anywhere. release-desktop.sh compares the two files so they cannot drift.
 !define AUMID     "com.silencelen.huginn.desktop-kt"
+; The name of the Startup shortcut the APP writes when "start with your
+; session" is on. Nothing here creates it; the uninstaller removes it. MUST
+; equal Autostart.WINDOWS_LNK — release-desktop.sh compares the two files.
+!define AUTOSTART_LNK "Huginn Desktop"
 
 Name "${APP_NAME} ${APP_VERSION}"
 OutFile "${OUT_FILE}"
@@ -120,6 +126,30 @@ VIAddVersionKey "LegalCopyright" "${PUBLISHER}"
 
 !define MUI_ABORTWARNING
 !insertmacro MUI_PAGE_DIRECTORY
+
+; ------------------------------------------------- optional features, PRE-ANSWERED
+;
+; ⚠ THIS PAGE INSTALLS NOTHING. Every section below it is empty: ticking one
+; writes a line into `first-run.json` beside the app's settings, and the app's
+; own first-run flow then offers that step. That is the owner's rule and it is
+; also the only shape this installer can honestly take — it declares
+; `RequestExecutionLevel user` and lives under %LOCALAPPDATA%, so it cannot
+; install a LocalSystem service, cannot enrol a machine against a daemon it
+; has no token for, and cannot prove a `claude` it has never run. An installer
+; that ticked those boxes and did none of them would be lying at the one
+; moment a person is paying attention.
+;
+; So the page asks the questions and the app does the work, WITH the
+; validation. What the reader gains is that the flow skips what they already
+; said no to rather than marching them through seven screens.
+;
+; ⚠ `/SD` IS NOT RELEVANT HERE AND THAT IS THE POINT: a silent install shows no
+; pages at all, so the sections keep their DEFAULT selection — and the answer
+; file is only written when there is no `settings.json` yet (see the
+; `-first-run` section), which makes the self-updater's silent path write
+; nothing at all. A self-update must never re-answer questions the owner
+; already answered in Settings.
+!insertmacro MUI_PAGE_COMPONENTS
 !insertmacro MUI_PAGE_INSTFILES
 
 ; ------------------------------------------------- the last page starts the app
@@ -255,7 +285,10 @@ FunctionEnd
   ${EndIf}
 !macroend
 
-Section "Install"
+Section "Huginn Desktop" SEC_CORE
+  ; RO: the app itself is not optional, and a components page whose top item
+  ; can be unticked is a page that can produce an install with nothing in it.
+  SectionIn RO
   Call EnsureNotRunning
   SetOutPath "$INSTDIR"
   ; Wipe the previous payload first. An in-place overwrite leaves orphaned jars
@@ -375,6 +408,108 @@ Section "Install"
   ${EndIf}
 SectionEnd
 
+; ---------------------------------------------------- the optional features
+;
+; FOUR EMPTY SECTIONS. They carry a name, a description and a default, and they
+; write nothing themselves — `-first-run` below reads their tick state. Empty
+; on purpose: see the note on the components page.
+;
+; The defaults are the answers a first-time reader would want, with one
+; deliberate exception. Local AI is UNTICKED because saying yes to it means
+; downloading gigabytes of model weights, and an installer default should never
+; be the expensive answer — the app still offers it on first launch through its
+; own card, which now opens the flow at that step rather than dropping the
+; reader at the top of Settings.
+Section "Find Claude Code on this computer" SEC_CLAUDE
+SectionEnd
+
+Section "Let huginn run work on this computer" SEC_DEVICE
+SectionEnd
+
+Section /o "Serve local AI models from this computer" SEC_LOCALAI
+SectionEnd
+
+Section "Start Huginn when you sign in" SEC_AUTOSTART
+SectionEnd
+
+!insertmacro MUI_FUNCTION_DESCRIPTION_BEGIN
+  !insertmacro MUI_DESCRIPTION_TEXT ${SEC_CORE} "The app itself. Required."
+  !insertmacro MUI_DESCRIPTION_TEXT ${SEC_CLAUDE} "Huginn will look for the claude command and prove it runs, so work does not fail the first time it is asked for."
+  !insertmacro MUI_DESCRIPTION_TEXT ${SEC_DEVICE} "Huginn will offer to enrol this computer so it can run work here. Nothing listens on a port, and you choose what it may do."
+  !insertmacro MUI_DESCRIPTION_TEXT ${SEC_LOCALAI} "Huginn will offer to download and serve small AI models here. It shows the exact plan and the download size before anything happens."
+  !insertmacro MUI_DESCRIPTION_TEXT ${SEC_AUTOSTART} "Huginn will offer to add itself to your Startup folder, so it is already watching when you sign in."
+!insertmacro MUI_FUNCTION_DESCRIPTION_END
+
+; ------------------------------------------------------ the answer file
+;
+; A leading "-" makes this section hidden and always-run: it is not a choice,
+; it is how the choices above leave the installer.
+;
+; ⚠ FIRST INSTALL ONLY. A `settings.json` that already exists means this
+; machine has run the app, so its owner has answered these questions for real
+; — in Settings, with the daemon answering — and an upgrade that dropped a
+; fresh answer file beside it would replay install-time ticks over live
+; configuration. The self-updater's silent path takes exactly this branch and
+; writes nothing.
+;
+; ⚠ AND THE PATH IS READ THE WAY THE APP READS IT: %XDG_CONFIG_HOME% first and
+; $PROFILE\.config only as its fallback, because DesktopSettings.defaultFile()
+; has no Windows branch at all and takes the XDG shape on every platform. The
+; uninstaller below already reads it in this exact order, for the same reason.
+Section "-first-run"
+  ReadEnvStr $R3 "XDG_CONFIG_HOME"
+  ${If} $R3 == ""
+    StrCpy $R1 "$PROFILE\.config\${APP_ID}"
+  ${Else}
+    StrCpy $R1 "$R3\${APP_ID}"
+  ${EndIf}
+  ${If} ${FileExists} "$R1\settings.json"
+    Goto first_run_done
+  ${EndIf}
+
+  StrCpy $8 "false"
+  ${If} ${SectionIsSelected} ${SEC_CLAUDE}
+    StrCpy $8 "true"
+  ${EndIf}
+  StrCpy $7 "false"
+  ${If} ${SectionIsSelected} ${SEC_DEVICE}
+    StrCpy $7 "true"
+  ${EndIf}
+  StrCpy $6 "false"
+  ${If} ${SectionIsSelected} ${SEC_LOCALAI}
+    StrCpy $6 "true"
+  ${EndIf}
+  StrCpy $5 "false"
+  ${If} ${SectionIsSelected} ${SEC_AUTOSTART}
+    StrCpy $5 "true"
+  ${EndIf}
+
+  CreateDirectory "$R1"
+  ; ⚠ THE FOUR KEYS ARE A CONTRACT with SetupFlow.parsePreAnswers, which cannot
+  ; refactor this file. release-desktop.sh gates on every one of these names,
+  ; and on this filename matching FirstRun.NAME.
+  ClearErrors
+  FileOpen $9 "$R1\first-run.json" w
+  ${If} ${Errors}
+    ; A profile that cannot be written to still gets an app. It merely gets
+    ; asked the questions again, which is recoverable; refusing the install
+    ; over a hint would not be.
+    Goto first_run_done
+  ${EndIf}
+  FileWrite $9 '{$\r$\n'
+  FileWrite $9 '  "version": 1,$\r$\n'
+  FileWrite $9 '  "source": "windows-installer",$\r$\n'
+  FileWrite $9 '  "features": {$\r$\n'
+  FileWrite $9 '    "claudePath": $8,$\r$\n'
+  FileWrite $9 '    "device": $7,$\r$\n'
+  FileWrite $9 '    "localAi": $6,$\r$\n'
+  FileWrite $9 '    "autostart": $5$\r$\n'
+  FileWrite $9 '  }$\r$\n'
+  FileWrite $9 '}$\r$\n'
+  FileClose $9
+  first_run_done:
+SectionEnd
+
 Section "Uninstall"
   ; Same lock problem, same answer: an uninstall over a running app leaves the
   ; directory behind and the entry in Programs and Features.
@@ -461,6 +596,15 @@ Section "Uninstall"
   Delete "$SMPROGRAMS\${APP_NAME}\${APP_NAME}.lnk"
   Delete "$SMPROGRAMS\${APP_NAME}\Uninstall ${APP_NAME}.lnk"
   RMDir "$SMPROGRAMS\${APP_NAME}"
+  ; THE STARTUP SHORTCUT. Written by the APP rather than by this installer (it
+  ; only ever pre-answered the question), which is exactly why the uninstaller
+  ; has to know about it: an app that is removed while "start with your
+  ; session" is on leaves a Startup entry pointing at an exe that is gone, and
+  ; Windows shows that to its owner as a failing item on every single login.
+  ; ${AUTOSTART_LNK} must equal Autostart.WINDOWS_LNK; release-desktop.sh gates
+  ; on the two agreeing.
+  Delete "$SMSTARTUP\${AUTOSTART_LNK}.lnk"
+
   ; Belt and braces for a machine that upgraded across the rename and never had
   ; the install-time cleanup run.
   Delete "$SMPROGRAMS\${OLD_SM_NAME}\${OLD_SM_NAME}.lnk"

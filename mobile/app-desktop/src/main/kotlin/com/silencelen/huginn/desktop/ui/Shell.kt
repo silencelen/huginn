@@ -90,7 +90,10 @@ import com.silencelen.huginn.desktop.ui.common.SessionVerbs
 import com.silencelen.huginn.desktop.ui.common.Space
 import com.silencelen.huginn.desktop.ui.common.Tints
 import com.silencelen.huginn.desktop.ui.common.Tip
+import com.silencelen.huginn.desktop.setup.SetupHost
 import com.silencelen.huginn.desktop.ui.common.WithHuginnMenus
+import com.silencelen.huginn.desktop.ui.setup.SetupOverlay
+import com.silencelen.huginn.settings.SetupStep
 import com.silencelen.huginn.desktop.ui.common.connectionTip
 import com.silencelen.huginn.desktop.ui.common.railCountTip
 import com.silencelen.huginn.ui.SessionUsageFill
@@ -131,6 +134,26 @@ import java.awt.datatransfer.StringSelection
  */
 @Composable
 fun Shell(store: AppStore) {
+    // ⚠ FIRST RUN TAKES THE WHOLE WINDOW, and returns before the frame is built.
+    //
+    // Not a card and not a dialog. A fresh install is a working window with an
+    // empty address, an empty token and `NO_ROUTE` in the status line — desktop
+    // 1.2.0's own doing, so that a first run is distinguishable from an upgrade
+    // — and a flow floating over that would invite somebody to dismiss the only
+    // thing that can make the list behind it non-empty. The controller decides
+    // WHETHER (empty route book, never finished, or an installer left answers);
+    // this only draws it.
+    //
+    // The flow lives outside the composition, so leaving this branch does not
+    // cancel a probe: coming back resumes where it was rather than restarting.
+    val setupVisible by remember {
+        SetupHost.controller?.visible ?: kotlinx.coroutines.flow.MutableStateFlow(false)
+    }.collectAsState()
+    if (setupVisible) {
+        WithHuginnMenus { SetupOverlay(store) }
+        return
+    }
+
     val view by store.view.collectAsState()
     val chats by store.chats.collectAsState()
     val sessions by store.sessions.collectAsState()
@@ -357,6 +380,14 @@ fun Shell(store: AppStore) {
                                         // door was a Settings section nobody is told
                                         // about. Gone forever on either button, and
                                         // never shown once anything already serves.
+                                        //
+                                        // ⚠ "Set up" NOW DEEP-LINKS INTO THE FLOW at
+                                        // its local-AI step, rather than dropping the
+                                        // reader at the top of Settings and leaving
+                                        // them to find the section — which is what it
+                                        // did, and is why this card was the closest
+                                        // thing to a first-run flow that never became
+                                        // one. Two doors onto one flow, not two paths.
                                         val offerSeen by store.settings.localOfferSeen.collectAsState(initial = true)
                                         if (!offerSeen && devices.none { it.scope == "generate" }) {
                                             Surface(
@@ -378,7 +409,7 @@ fun Shell(store: AppStore) {
                                                     ) {
                                                         TextButton(onClick = {
                                                             act { store.settings.setLocalOfferSeen() }
-                                                            store.openView(View.SETTINGS)
+                                                            SetupHost.ifReady { it.openAt(SetupStep.LOCAL_AI) }
                                                         }) { Text("Set up") }
                                                         TextButton(onClick = {
                                                             act { store.settings.setLocalOfferSeen() }

@@ -78,6 +78,12 @@ DEB="huginn-desktop-kt_${VERSION}-1_amd64.deb"
 NSI=app-desktop/packaging/huginn-desktop-kt.nsi
 PLUGIN_DIR="$PWD/$(dirname "$NSI")/plugins/x86-unicode"
 NOTIFIER=app-desktop/src/main/kotlin/com/silencelen/huginn/desktop/notify/WindowsToastNotifier.kt
+# The two files that have to agree with the installer about the first-run
+# hand-off: the name of the answer file it writes, and the name of the Startup
+# shortcut it has to clean up. Both are strings the compiler cannot check across
+# a language boundary, which is the same reason the AUMID has a gate.
+FIRSTRUN=app-desktop/src/main/kotlin/com/silencelen/huginn/desktop/setup/FirstRun.kt
+AUTOSTART=app-desktop/src/main/kotlin/com/silencelen/huginn/desktop/setup/Autostart.kt
 LOG=${TMPDIR:-/tmp}/huginn-desktop-kt-release.log
 : > "$LOG"
 
@@ -130,6 +136,59 @@ grep -qF 'WriteRegStr HKCU "Software\Classes\huginn" "URL Protocol"' "$NSI" || {
 grep -qF 'DeleteRegKey HKCU "Software\Classes\huginn"' "$NSI" || {
   echo "REFUSING: $NSI registers huginn:// but never removes it" >&2; exit 1; }
 echo "  huginn:// scheme: installer registers and uninstaller removes it"
+
+# ------------------------------------------- the installer's optional features
+#
+# The components page only PRE-ANSWERS: it installs nothing and writes one file
+# beside the app's settings, which the first launch reads once and deletes. Every
+# piece of that is a string on one side of a language boundary and a string on
+# the other, so none of it can be refactored safely and all of it fails SILENTLY
+# — a page that asks four questions and writes a file the app does not read is a
+# page that looks like it worked.
+grep -qF '!insertmacro MUI_PAGE_COMPONENTS' "$NSI" || {
+  echo "REFUSING: $NSI has no components page — the installer cannot ask which optional features to offer" >&2
+  exit 1; }
+
+# The filename, from the app's own constant. A rename on either side means the
+# installer writes a file nothing ever opens.
+KT_FIRSTRUN=$(sed -n 's/^ *const val NAME: String = "\(.*\)"$/\1/p' "$FIRSTRUN")
+[ -n "$KT_FIRSTRUN" ] || { echo "REFUSING: no first-run filename constant in $FIRSTRUN" >&2; exit 1; }
+grep -qF "\\$KT_FIRSTRUN\" w" "$NSI" || {
+  echo "REFUSING: $NSI does not open '$KT_FIRSTRUN' for writing — the app would never see the installer's answers" >&2
+  exit 1; }
+
+# Every feature key, by the name SetupFlow.parsePreAnswers reads. A key the
+# installer spells differently is a component somebody ticked that is silently
+# dropped: the flow simply asks the question again, which reads as the page
+# having done nothing.
+for key in claudePath device localAi autostart; do
+  grep -qF "\"$key\":" "$NSI" || {
+    echo "REFUSING: $NSI never writes the \"$key\" answer — that component's tick would be discarded" >&2
+    exit 1; }
+done
+
+# ⚠ FIRST INSTALL ONLY. Without this branch every silent self-update drops a
+# fresh answer file beside a live settings.json, and install-time ticks would
+# replay over configuration the owner has since changed in Settings.
+grep -q 'FileExists.*settings\.json' "$NSI" || {
+  echo "REFUSING: $NSI writes its answer file unconditionally — a silent self-update would re-answer the owner's settings" >&2
+  exit 1; }
+echo "  components page: pre-answers claudePath/device/localAi/autostart into $KT_FIRSTRUN, first install only"
+
+# The Startup shortcut is written by the APP and removed by the UNINSTALLER,
+# which is the only crossing in this feature where the two ends are different
+# programs. Left behind, it points at an exe that is gone and Windows reports a
+# failing startup item on every login.
+KT_LNK=$(sed -n 's/^ *const val WINDOWS_LNK: String = "\(.*\)"$/\1/p' "$AUTOSTART")
+NSI_LNK=$(sed -n 's/^!define AUTOSTART_LNK  *"\(.*\)"$/\1/p' "$NSI")
+[ -n "$KT_LNK" ] || { echo "REFUSING: no autostart shortcut name in $AUTOSTART" >&2; exit 1; }
+[ "$KT_LNK" = "$NSI_LNK" ] || {
+  echo "REFUSING: autostart shortcut drift — the app writes '$KT_LNK', the uninstaller removes '$NSI_LNK'" >&2
+  exit 1; }
+grep -qF 'Delete "$SMSTARTUP\${AUTOSTART_LNK}.lnk"' "$NSI" || {
+  echo "REFUSING: $NSI never removes the Startup shortcut — an uninstall would leave a login item pointing at a missing exe" >&2
+  exit 1; }
+echo "  autostart: app writes '$KT_LNK' in Startup, uninstaller removes it"
 
 # Never overwrite what is already live, and never publish BACKWARDS. Equality was
 # the original hazard — a client that has downloaded and verified 0.2.0 would
@@ -572,6 +631,13 @@ if [ "$LINUX_ONLY" = 0 ]; then
   if [ "$SKIP_WINE_INSTALL" = 0 ]; then
     echo "  installing under wine and launching the result"
     [ -d "$WINEPREFIX" ] || xvfb-run -a wineboot -u >> "$LOG" 2>&1
+    # WIPED BEFORE THE INSTALL, not after. The installer writes its answer file
+    # only when no settings.json exists (that is what keeps a silent self-update
+    # from re-answering the owner's real configuration), so a prefix left over
+    # from the previous release would make this smoke test prove nothing while
+    # passing.
+    PROBE_HOME="$WINEPREFIX/drive_c/users/$(id -un)/.config/huginn-desktop-kt"
+    rm -rf "$PROBE_HOME"
     xvfb-run -a wine "$WIN/out/$EXE" /S >> "$LOG" 2>&1 || true
     # wine keeps HKCU in memory and writes user.reg only when wineserver shuts
     # down (a few seconds after the last process exits). Reading the file before
@@ -593,11 +659,33 @@ if [ "$LINUX_ONLY" = 0 ]; then
       exit 1; }
     echo "  huginn:// open command registered: $SCHEME_CMD"
 
+    # ---------------------------------------- the installer's own answer file
+    #
+    # READ BEFORE THE APP IS LAUNCHED, because the app CONSUMES it — the whole
+    # point of that file is that it is read once and deleted, so a check after
+    # the launch below would be checking that the deletion worked rather than
+    # that the write did.
+    #
+    # `/S` shows no pages, so what lands here is the SECTION DEFAULTS. That is
+    # exactly the half worth proving from Linux: the page's own ticking can only
+    # be exercised on a Windows desktop, but the defaults, the JSON shape and the
+    # path all come out of the compiled installer.
+    FIRST_RUN_JSON="$PROBE_HOME/first-run.json"
+    [ -f "$FIRST_RUN_JSON" ] || {
+      echo "REFUSING: the installer wrote no $KT_FIRSTRUN — every components-page tick would be discarded" >&2
+      exit 1; }
+    for key in claudePath device localAi autostart; do
+      grep -qE "\"$key\"[[:space:]]*:[[:space:]]*(true|false)" "$FIRST_RUN_JSON" || {
+        cat "$FIRST_RUN_JSON"
+        echo "REFUSING: $KT_FIRSTRUN has no boolean \"$key\" — the app reads that key and would find nothing" >&2
+        exit 1; }
+    done
+    echo "  $KT_FIRSTRUN written by the silent install ($(tr -d ' \n\r' < "$FIRST_RUN_JSON"))"
+
     # A settings file it wrote itself is the proof. "The process is still alive"
     # is not: a JVM that failed to find its main class is alive too. The client
     # generates a clientId on first construction and writes it through, so this
     # file existing means the app's own code ran.
-    PROBE_HOME="$WINEPREFIX/drive_c/users/$(id -un)/.config/huginn-desktop-kt"
     rm -f "$PROBE_HOME/settings.json"
     ( cd "$INSTALLED" && timeout 120 xvfb-run -a -s "-screen 0 1400x900x24" \
         wine ./huginn-desktop-kt.exe >> "$LOG" 2>&1 & )
@@ -615,6 +703,19 @@ if [ "$LINUX_ONLY" = 0 ]; then
     # software. Expected, and not a failure — it does mean the GPU path is never
     # exercised here.
     echo "  installed app launched and initialised (software renderer under wine)"
+
+    # THE OTHER HALF OF THE HAND-OFF: the app reads the answer file once and
+    # deletes it. A file that survives is a file re-parsed on every launch for
+    # the life of the install, which would replay install-time ticks over
+    # settings the owner has changed since.
+    # ⚠ AN `if`, NOT `[ -f x ] && { … }`. This script runs under `set -e`, and a
+    # trailing AND-list whose test is FALSE exits the shell with status 1 — so
+    # the good outcome (the file is gone) would abort the release right here.
+    if [ -f "$FIRST_RUN_JSON" ]; then
+      echo "REFUSING: $KT_FIRSTRUN survived first launch — the installer's answers would replay forever" >&2
+      exit 1
+    fi
+    echo "  $KT_FIRSTRUN consumed by first launch"
   fi
 fi
 
