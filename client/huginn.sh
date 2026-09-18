@@ -415,12 +415,43 @@ _huginn_canon_name() { printf '%s' "${1,,}"; }
 
 # Reach huginn-appd, which listens on the HOST's loopback. The bearer token is
 # root-only on the host, so the call runs THERE (over the ssh alias) and only the
-# result comes back - the token never touches a client device. $1=method $2=path.
-# Prints the raw JSON body; non-zero exit on any HTTP error or an unreachable
-# daemon, which the callers use to fall back.
+# result comes back - the token never touches a client device.
+# $1=method $2=path $3=optional JSON request body.
+#
+# ⚠ NOT `curl -sf`, WHICH THREW THE ANSWER AWAY. -f discards the response BODY on
+# every HTTP >= 400 and exits 22, collapsing four different refusals into one
+# exit code: `huginn end` printed "is huginn-appd running? is the session a live
+# Claude pane?" - naming two causes that are both fine - for the daemon's 409
+# "answer the waiting question first", for the 409 "no Claude state recorded ...
+# pass force", for a 404, and for a 500 "tmux: ...". The Kotlin client sets
+# expectSuccess=false for exactly this reason, and this file's own `archive`
+# comment already named `curl -sf` as the reason archive is rendered host-side.
+#
+# The status rides home on its own LAST line (-w '\n%{http_code}'), so one ssh
+# still answers both questions. Prints the body and sets _HUGINN_APPD_CODE.
+# Exit: 0 = 2xx  ·  1 = an HTTP error, body holds the daemon's own `error`
+#       7 = curl never CONNECTED (code 000) or ssh itself failed - and that is
+#           the ONLY case in which a caller may fall back to raw tmux.
+_HUGINN_APPD_CODE=
 _huginn_appd() {
-  local H="${HUGINN_HOST:-huginn}"
-  ssh -T "$H" "curl -sf -X $1 -H \"Authorization: Bearer \$(cat /etc/huginn-appd/token 2>/dev/null)\" \"http://127.0.0.1:8787$2\"" 2>/dev/null
+  local H="${HUGINN_HOST:-huginn}" raw body data=''
+  _HUGINN_APPD_CODE=
+  [ -z "${3:-}" ] || data=" -H 'Content-Type: application/json' --data '$3'"
+  raw="$(ssh -T "$H" "curl -s -w '\n%{http_code}' -X $1$data -H \"Authorization: Bearer \$(cat /etc/huginn-appd/token 2>/dev/null)\" \"http://127.0.0.1:8787$2\"" 2>/dev/null)" || return 7
+  _HUGINN_APPD_CODE="${raw##*$'\n'}"
+  body="${raw%$'\n'*}"
+  # No newline at all means curl printed nothing but the status line.
+  [ "$body" != "$raw" ] || body=''
+  printf '%s' "$body"
+  case "$_HUGINN_APPD_CODE" in
+    2*)  return 0 ;;
+    000) return 7 ;;
+    *)   return 1 ;;
+  esac
+}
+# The daemon's own sentence out of an error body ({"error":"..."}), or empty.
+_huginn_appd_error() {
+  printf '%s' "$1" | sed -n 's/.*"error"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p'
 }
 
 # --- desktop download links ---
@@ -580,8 +611,9 @@ EOF
   huginn list | ls            list sessions + attach status
   huginn status | st          health: uptime, auth, sessions, disk
   huginn rename <old> <new>   rename a session (alias: mv)
-  huginn end <name>           soft end: ask Claude to wrap up + commit, then
+  huginn end <name> [--force] soft end: ask Claude to wrap up + commit, then
                               (if auto-end is on) end it once it goes idle
+                              (--force: send it into a pane with no Claude state)
   huginn rounds               what this host does on a schedule, and what it found
   huginn headroom             usage left per account, what huginn moved or is holding, and why
   huginn devices              machines that can run a chat in their own context
@@ -826,23 +858,53 @@ EOF
       # (Claude's SessionEnd hook never fires on a kill). Fall back to tmux if the
       # daemon is unreachable - kill must work even when appd is down.
       # '=' anchor on the fallback: without it 'huginn kill andvari' kills 'andvariautofill'.
-      if _huginn_appd DELETE "/v1/sessions/$kn" >/dev/null 2>&1; then
+      #
+      # ⚠ THE FALLBACK IS FOR AN UNREACHABLE DAEMON, NOT AN HTTP STATUS. DELETE has
+      # no 409 guard, so the realistic failure is a GLOBAL 401 - an unreadable or
+      # rotated token - with the daemon perfectly healthy. Falling back there killed
+      # the session with raw tmux, skipping clearSessionState / registryRemove /
+      # releaseSize, so a deliberately killed session came back on the next reboot
+      # restore and nothing ever said why.
+      local kr krc; kr="$(_huginn_appd DELETE "/v1/sessions/$kn")"; krc=$?
+      if [ "$krc" -eq 0 ]; then
         echo "killed: $kn"
-      else
+      elif [ "$krc" -eq 7 ]; then
         ssh -T "$H" "tmux kill-session -t '$(_huginn_tmux_target "$kn")' && echo 'killed: $kn'"
+      else
+        local kmsg; kmsg="$(_huginn_appd_error "$kr")"
+        echo "huginn: could not kill '$kn': ${kmsg:-huginn-appd answered HTTP $_HUGINN_APPD_CODE}" >&2
+        return 1
       fi ;;
     end)
-      [ -n "$2" ] || { echo "usage: huginn end <name>" >&2; return 1; }
+      [ -n "$2" ] || { echo "usage: huginn end <name> [--force]" >&2; return 1; }
       _huginn_valid_name "$2" || { _huginn_bad_name "$2"; return 1; }
-      local en; en="$(_huginn_canon_name "$2")"
+      local en force=; en="$(_huginn_canon_name "$2")"
+      # --force is the answer to one specific refusal, and it used to be
+      # UNREACHABLE: neither client sent a request body and `end` parsed no flags,
+      # so the daemon's "pass force to send anyway" named something nobody could do.
+      case "${3:-}" in
+        --force) force='{"force":true}' ;;
+        '') ;;
+        *) echo "usage: huginn end <name> [--force]" >&2; return 1 ;;
+      esac
       # Soft end: ask Claude to wrap up (finish, commit, prepare to end) and - when
       # auto-end is on for the host - end the session once it settles. This is a
       # DAEMON feature (it types into the pane and watches state), so there is no
       # tmux fallback; the phrase is whatever the host is configured to send.
-      local r; r="$(_huginn_appd POST "/v1/sessions/$en/soft-end")" || {
-        echo "huginn: soft-end failed for '$en' (is huginn-appd running? is the session a live Claude pane?)" >&2; return 1; }
-      local phrase auto; phrase="$(printf '%s' "$r" | sed -n 's/.*"phrase":"\([^"]*\)".*/\1/p')"
-      printf '%s' "$r" | grep -q '"auto":true' && auto=' (auto-ends when it goes idle)' || auto=''
+      local r rc; r="$(_huginn_appd POST "/v1/sessions/$en/soft-end" "$force")"; rc=$?
+      if [ "$rc" -ne 0 ]; then
+        if [ "$rc" -eq 7 ]; then
+          echo "huginn: could not reach huginn-appd on $H - a soft-end is a daemon feature, so there is no tmux fallback" >&2
+        else
+          local msg; msg="$(_huginn_appd_error "$r")"
+          echo "huginn: could not end '$en': ${msg:-huginn-appd answered HTTP $_HUGINN_APPD_CODE}" >&2
+          case "$msg" in *force*) echo "        send it anyway with: huginn end $en --force" >&2 ;; esac
+        fi
+        return 1
+      fi
+      local phrase auto
+      phrase="$(printf '%s' "$r" | sed -n 's/.*"phrase"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')"
+      printf '%s' "$r" | grep -q '"auto"[[:space:]]*:[[:space:]]*true' && auto=' (auto-ends when it goes idle)' || auto=''
       echo "soft-ended '$en': sent \"${phrase:-wrap-up phrase}\"${auto}" ;;
     # Archive: end the session for good AND keep the way back into it — the
     # title, the cwd, the last thing said, a COPY of the transcript, and the
