@@ -56,6 +56,7 @@ const h = require('../lib/headroom');
 //   routes-quick-actions 10600 + pid%50  -> 10600-10649
 //   routes-session-state 10750 + pid%50  -> 10750-10799
 //   routes-session-start 10800 + pid%50  -> 10800-10849
+//   routes-paste-settle 10950 + pid%50   -> 10950-10999
 //
 // This file also binds TWO stub servers on ephemeral ports (port 0), so they
 // cannot collide with anything.
