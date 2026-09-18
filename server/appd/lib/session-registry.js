@@ -20,7 +20,17 @@
 
 // The auth flow's throwaway session (server sign-in). It is never a conversation
 // worth resuming and recreating it would relaunch a login prompt nobody asked for.
-const RESERVED = new Set(['login']);
+// ⚠ AND THE THREE THE STATE DIRECTORY OWNS. The title hook keeps its prompt
+// sidecars in STATE_DIR/.ask, /.plan and /.compacting; before they were
+// dot-prefixed those were `ask`, `plan` and `compacting`, sharing a namespace
+// with the flat per-session state files — so a session called `plan` either
+// never got a state file (its JSON was moved INTO the directory, and the app
+// showed it with no state, no transcript and no conversation, forever) or, in
+// the other create order, stopped EVERY session on the host from getting a
+// sidecar at all. The prefix makes the collision impossible; these stay
+// reserved so nobody can reintroduce it, and because they are confusing names
+// for a session on a host whose state words are exactly those.
+const RESERVED = new Set(['login', 'ask', 'plan', 'compacting']);
 
 // A Claude Code session id is a v4-shaped uuid; findTranscriptFile gates on the
 // same shape. Validating it here is also what makes it safe to drop into the shell
