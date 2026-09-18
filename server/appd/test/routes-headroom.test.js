@@ -604,6 +604,36 @@ test('a new login relabels the bars in the same breath as the numbers', async ()
 
 // ----------------------------------------------------------------- sentinels
 
+test('a hand-armed STOP survives the tick and shows on /v1/status (#12)', async () => {
+  // ⚠ THE OPERATOR'S ONLY PAUSE BUTTON. No route arms a sentinel — `arm` is
+  // called from `writeSentinels` and nowhere else — so `touch $HEADROOM_DIR/STOP`
+  // is the documented and unit-tested way to hold every subagent spawn. The
+  // tick's else-branch then deleted it, because the plan did not call for STOP:
+  // measured at 299 s with no interaction and 23 ms after a settings PATCH, with
+  // a journal line ("headroom: cleared STOP") indistinguishable from
+  // housekeeping, while a gate that WAS holding released with `waited=0`.
+  setUsage({ session: 3, weekly_all: 4, weekly_fable: 5 });     // the plan wants no STOP
+  await tick({});
+  fs.mkdirSync(headroomDir, { recursive: true });
+  fs.writeFileSync(path.join(headroomDir, 'STOP'), '');
+  // While it is armed, the one-line status must say so — it read the in-memory
+  // sentinels, which a hand-armed file never populates, so /v1/status reported
+  // sentinels:[] about a fleet-wide pause that /v1/headroom could see.
+  const status = (await api('/v1/status')).body.headroom;
+  assert.ok(status.sentinels.includes('STOP'), JSON.stringify(status.sentinels));
+
+  await tick({});
+  await tick({});
+  assert.equal(true, fs.existsSync(path.join(headroomDir, 'STOP')),
+    'the tick must not reap a sentinel it did not arm');
+  // …and it is HEARTBEATED, or the gate ages it out after HUGINN_GATE_STALE_S
+  // and every held spawn goes through anyway.
+  const age = Date.now() - fs.statSync(path.join(headroomDir, 'STOP')).mtimeMs;
+  assert.ok(age < 20_000, `the tick must touch it too (age ${age}ms)`);
+
+  fs.rmSync(path.join(headroomDir, 'STOP'), { force: true });
+});
+
 test('the sentinels arm on the stubbed numbers, and fable-sessions is written', async () => {
   const { name } = fableSession('sent');
   setUsage({ session: 12, weekly_all: 10, weekly_fable: 95 });
@@ -652,6 +682,138 @@ test('a heads-up is typed once, at a turn boundary, at the heads-up threshold', 
   await wait(1200);
   const after = fs.readFileSync(sink, 'utf8');
   assert.equal(after.split('[huginn headroom]').length - 1, 1, 'exactly one heads-up per window');
+});
+
+test('repairing the host default keeps a SYMLINKED settings.json a symlink (#29)', async () => {
+  // ⚠ THE FILE THE OWNER KEEPS IN A DOTFILES REPO. `repairDefaultModel` wrote
+  // `<file>.tmp` and renameSync'd it over ~/.claude/settings.json without
+  // resolving the link, so the symlink was REPLACED by a regular file: later
+  // edits in the repo stopped reaching the CLI, silently and permanently. The
+  // mode went with it — the tmp is hardcoded 0600, so every host lost whatever
+  // permissions the file had, symlink or not. install-hooks.js resolves exactly
+  // this case on purpose (realpath + carry the mode); this one did not.
+  const settingsFile = path.join(claudeDir, 'settings.json');
+  const original = fs.readFileSync(settingsFile);
+  const dots = path.join(tmp, 'dotfiles');
+  fs.mkdirSync(dots, { recursive: true });
+  const real = path.join(dots, 'settings.json');
+  fs.writeFileSync(real, `${JSON.stringify({ model: 'claude-opus-5', effortLevel: 'xhigh' }, null, 2)}\n`);
+  fs.chmodSync(real, 0o644);
+  fs.rmSync(settingsFile, { force: true });
+  fs.symlinkSync(real, settingsFile);
+
+  // The native Fable consent dialog, answered in a way that made the CLI persist
+  // a new host default. That record is the only thing that arms the repair.
+  const { name } = fableSession('symlink');
+  const transcript = path.join(tmp, `${name}.jsonl`);
+  fs.appendFileSync(transcript, `${JSON.stringify({
+    type: 'system', subtype: 'model_consent_fallback',
+    choice: 'yes_default', toModel: 'claude-opus-5', persisted_as_default: true,
+  })}\n`);
+  writeState(name, { sessionId: `sid-${name}`, transcript });
+
+  setUsage({ session: 5, weekly_all: 10, weekly_fable: 20 });
+  await tick({ cooldownMs: 0 });
+  const deadline = Date.now() + 20_000;
+  while (Date.now() < deadline) {
+    if (JSON.parse(fs.readFileSync(real, 'utf8')).model === 'claude-fable-5-1') break;
+    await wait(400);
+    await api('/v1/headroom/settings', { method: 'PATCH', body: '{}' });
+  }
+
+  assert.equal(true, fs.lstatSync(settingsFile).isSymbolicLink(),
+    'the dotfiles link must survive the repair');
+  assert.equal('claude-fable-5-1', JSON.parse(fs.readFileSync(real, 'utf8')).model,
+    'and the repair must land in the file the link points at');
+  assert.equal(0o644, fs.statSync(real).mode & 0o777, 'with the mode it had');
+
+  fs.rmSync(settingsFile, { force: true });
+  fs.writeFileSync(settingsFile, original);
+});
+
+test('a huge record after the turn does not read as permanently mid-turn (#5)', async () => {
+  // ⚠ 9.2% OF THIS HOST'S OWN TRANSCRIPTS. The turn gate read a fixed 64 KB tail,
+  // and a large NON-conversational record appended after the boundary (measured:
+  // a 94 KB `attachment`) pushes the boundary out of that window: the
+  // bookkeeping inside it parses but is not conversational, the fragment of the
+  // big record does not parse, and `boundaryFromTail` reported plain "not idle".
+  // Every AUTOMATED entry then blocked on 'turn' and was dropped as a timeout
+  // ten minutes later — and for a heads-up that is permanent, because
+  // `headsUpAt` is stamped on acceptance, so the warning for that week is gone.
+  // A human message queued behind the stuck entry waits with it.
+  const { name, sink } = fableSession('bigtail');
+  const transcript = path.join(tmp, `${name}.jsonl`);
+  fs.appendFileSync(transcript, `${JSON.stringify({
+    type: 'attachment', content: 'A'.repeat(100 * 1024),
+  })}\n`);
+
+  setUsage({ session: 5, weekly_all: 10, weekly_fable: 86 });
+  await tick({ cooldownMs: 0 });
+  const deadline = Date.now() + 25_000;
+  while (Date.now() < deadline) {
+    const got = fs.existsSync(sink) ? fs.readFileSync(sink, 'utf8') : '';
+    if (got.includes('[huginn headroom]')) break;
+    await wait(400);
+    await api('/v1/headroom/settings', { method: 'PATCH', body: '{}' });
+  }
+  assert.match(fs.readFileSync(sink, 'utf8'), /\[huginn headroom\]/,
+    'the turn gate has to widen its window until it can see the boundary');
+
+  // ⚠ CLEAN UP THIS ONE. Every other session in this file is small; a live
+  // session carrying a 100 KB transcript stays in `listSessions` and is re-read
+  // by every later tick, which pushes the NEXT test's 12-second `until` over its
+  // budget on a loaded host.
+  try { sh('tmux', ['kill-session', '-t', `=${name}`]); } catch { /* already gone */ }
+  madeSessions.delete(name);
+  fs.rmSync(path.join(stateDir, name), { force: true });
+  fs.rmSync(transcript, { force: true });
+});
+
+test('the SECOND Fable window gets its own heads-up (#17)', async () => {
+  // ⚠ ONCE EVER, NOT ONCE PER WEEK. `rec.headsUpAt` was written in one place and
+  // cleared in none, so the apply guard `if (!rec || rec.headsUpAt) return`
+  // dropped every heads-up after the first for the life of that session record —
+  // while `decide()` kept EMITTING one, because its own staleness rule
+  // (lib/headroom.js: a weekly_fable reset seen after the mark) said the note was
+  // due. The drop returns before `lastAction` and before the log line, so the
+  // miss left no trace anywhere, and `state.arbiter.why` — set from the verdict
+  // before the actions are applied — went on claiming "handed <session> a
+  // heads-up at 90% of the Fable week" on every tick while nothing was typed.
+  // That sentence is rendered by `huginn headroom` and shipped raw to both
+  // clients.
+  const { name, sink } = fableSession('hu2');
+  const notes = () => (fs.existsSync(sink) ? fs.readFileSync(sink, 'utf8') : '')
+    .split('[huginn headroom]').length - 1;
+  setUsage({ session: 5, weekly_all: 10, weekly_fable: 86 });
+  await tick({ cooldownMs: 0 });
+  await until((b) => b.sessions.some((s) => s.name === name && s.headsUpAt), 12_000, 'the first heads-up');
+  await wait(600);
+  assert.equal(1, notes(), 'week one, once');
+
+  // Red — `classify` calls a window red at ladderPct — so the reset detector has
+  // a red row with a reset time to compare against. (The ladder fires too; it
+  // cannot land on a sink pane, and the session stays on Fable, which is all
+  // this case needs.)
+  const past = new Date(Date.now() - 120_000).toISOString();
+  setUsage({ session: 5, weekly_all: 10, weekly_fable: 93, resetsAt: past });
+  await tick({});
+  await until((b) => Object.values(b.accounts || {}).some((a) => a.red && a.red.weekly_fable),
+    20_000, 'the weekly_fable window to read as red');
+  // The week rolls over: the percentage drops with the reset time behind us.
+  setUsage({ session: 5, weekly_all: 10, weekly_fable: 2, resetsAt: past });
+  await tick({});
+  await until((b) => (b.resets || []).some((r) => r.window === 'weekly_fable'),
+    20_000, 'the weekly_fable reset');
+
+  // …and the new week climbs past the threshold again.
+  setUsage({ session: 5, weekly_all: 10, weekly_fable: 90 });
+  await tick({});
+  const deadline = Date.now() + 20_000;
+  while (notes() < 2 && Date.now() < deadline) {
+    await wait(400);
+    await api('/v1/headroom/settings', { method: 'PATCH', body: '{}' });
+  }
+  assert.equal(2, notes(), 'week two gets its own warning');
 });
 
 test('nothing is typed into a session whose last record is a HUMAN speaking', async () => {

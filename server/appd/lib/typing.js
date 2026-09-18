@@ -10,7 +10,7 @@
 // against Claude Code v2.1.258 on a 200x50 pane.
 
 const { randomBytes } = require('node:crypto');
-const { stripAnsi } = require('./pane');
+const { stripAnsi, detectPrompt } = require('./pane');
 
 /**
  * The `/keys` text cap, raised from 8,000 to match the chat body cap.
@@ -189,9 +189,18 @@ function boundaryFromTail(jsonlTail) {
     if (!rec || typeof rec !== 'object') continue;
     // 3.0.2's inline test, lifted into a named rule with the census behind it.
     if (!isConversationalRecord(rec)) continue;
-    return { idle: isBoundaryRecord(rec), lastKind: kindOf(rec) };
+    return { idle: isBoundaryRecord(rec), lastKind: kindOf(rec), unknown: false };
   }
-  return { idle: false, lastKind: null };
+  // ⚠ `unknown` IS NOT "NOT IDLE" (#5). A window with no conversational record
+  // in it at all means the reader could not SEE the boundary, not that there
+  // isn't one — measured on 66 of 716 of this host's own transcripts (9.2%), all
+  // demonstrably idle, and in none of them because the last MESSAGE was huge: a
+  // large non-conversational record (a 94 KB `attachment`) had been appended
+  // after the turn ended, so the post-boundary bookkeeping inside the 64 KB
+  // window parsed fine while the fragment of the big record did not. Reported as
+  // plain `idle:false` it blocked every automated send on 'turn' until the
+  // ten-minute drop. The caller widens the window on this flag.
+  return { idle: false, lastKind: null, unknown: true };
 }
 
 /**
@@ -212,10 +221,35 @@ function stateVerdict(st, queuedAtMs) {
   if (!st || typeof st.state !== 'string') return null;
   if (st.state === 'attention') return 'hold';
   if (st.state !== 'idle') return null;
-  const sec = Number(st.stateSince);
+  const stamp = stateStampMs(st);
   const at = Number(queuedAtMs);
-  if (!Number.isFinite(sec) || !sec || !Number.isFinite(at) || !at) return null;
-  return sec * 1000 > at ? 'release' : null;
+  if (stamp == null || !Number.isFinite(at) || !at) return null;
+  return stamp > at ? 'release' : null;
+}
+
+/**
+ * The state file's stamp, in milliseconds, whatever unit it was written in.
+ *
+ * ⚠ #7: the hook stamped `ts: now|floor` — SECONDS — and this gate compared
+ * `sec * 1000` against a millisecond `at`, so an `idle` written in the same
+ * wall-clock second as the enqueue could never release that entry. The miss
+ * window was `999 - (at mod 1000)` ms and one-directional (it could hold
+ * wrongly, never release wrongly), and when the transcript gate was blind at
+ * the same moment the automated send was dropped as 'timeout' ten minutes on.
+ *
+ * The hook writes milliseconds now. The unit is read off the MAGNITUDE rather
+ * than from a version field, because a state file written by an older hook
+ * survives a deploy and sits in /run until that session's next event: a stamp
+ * past 1e11 cannot be seconds (that is the year 5138), and one below it cannot
+ * be milliseconds (1973). A seconds stamp keeps the old conservative reading.
+ */
+function stateStampMs(st) {
+  for (const v of [st && st.stateSinceMs, st && st.stateSince]) {
+    const n = Number(v);
+    if (!Number.isFinite(n) || !n) continue;
+    return n > 1e11 ? n : n * 1000;
+  }
+  return null;
 }
 
 /**
@@ -252,11 +286,60 @@ const CARET_TYPED_RE = /^\s*❯\s+\S/;
 // (a shell, a page of notes, Claude's own prose) must not read as a dialog, or
 // every send into it would block forever on a modal that is not there.
 const SELECTOR_ROW_RE = /^\s*[❯>]\s*\d{1,2}[.)]\s+\S/;
+// ANY numbered option row, cursored or not — the second row that turns a lone
+// numbered line into a RUN. See the ≥2 rule in `dialogWhy`.
+const OPTION_ROW_RE = /^\s*(?:[❯>]\s*)?\d{1,2}[.)]\s+\S/;
+// The selector's own help line, drawn under the options while it is live and
+// nowhere else. It is the only thing left to go on when the pane is too short
+// to have captured the cursored row at all (#13's 24-row case).
+const DIALOG_FOOTER_RE = /enter to (?:select|confirm|set|choose)|esc to cancel|(?:↑\/↓|tab\/arrow(?:s| keys)?|arrow keys) to navigate/i;
 // The trust dialog, which is the one modal whose DESTRUCTIVE option is
 // pre-selected ("No, exit"): a blind Enter here kills the session.
 const TRUST_RE = /Yes,\s+I\s+trust\s+this\s+folder|trust\s+the\s+files\s+in\s+this\s+folder|Is\s+this\s+a\s+project\s+you\s+created\s+or\s+one\s+you\s+trust/i;
 // How far up from the bottom a dialog's own furniture may reach.
 const DIALOG_LOOKBACK = 20;
+
+/**
+ * Is a selector dialog up? Three nets, in order of how much they know.
+ *
+ * ⚠ THE TWO HOLES THIS REPLACED, one at each end of the pane:
+ *
+ *   #1  ONE numbered line is a person typing, not a dialog. The owner's own
+ *       "1. rebuild the index" sitting unsent in the composer read as a modal
+ *       and held every send into that session forever, while the client said
+ *       "a dialog is open on the screen" about an idle pane. `pane.js
+ *       detectPrompt` has always refused to call a single cursored numbered
+ *       row a dialog; this one did not, so the daemon's two detectors
+ *       contradicted each other on the same capture.
+ *   #13 A dialog TALLER than the 20-row lookback was not seen at all — the
+ *       cursored row of `ask-tall-desc-64.txt` is line 19 of 44 — and a
+ *       person's message was pasted and submitted into a live question, lost
+ *       with no transcript trace and the highlighted option answered for them.
+ *       `lib/pane.js` dropped its own fixed lookback for exactly this capture
+ *       in 2.59.1 (commit 384abc3); this module was left behind.
+ *
+ * So: ask the structural detector first (it reads the WHOLE pane and knows that
+ * ordinary chrome drawn below a numbered run means the run is history), then
+ * the footer marker for the clipped case, then the old cursored-row rule with
+ * the missing ≥2-rows requirement as belt and braces for a dialog shaped in a
+ * way `detectPrompt` is too strict to admit.
+ */
+function dialogWhy(arr, plain, last) {
+  const region = plain.slice(Math.max(0, last - DIALOG_LOOKBACK), last + 1);
+  // Trust first: it is a modal too, but it is the one with a destructive
+  // default, and a caller that logs `why` should be able to say so. Scanned
+  // over the whole pane for the same reason as everything else here.
+  if (plain.slice(0, last + 1).some((l) => TRUST_RE.test(l))) return 'trust';
+  // 1 — the sibling detector, whole pane, structural.
+  if (detectPrompt(arr)) return 'modal';
+  // 2 — a live selector's footer near the bottom, with a numbered row above it.
+  const footer = region.findIndex((l) => DIALOG_FOOTER_RE.test(l));
+  if (footer >= 0 && plain.slice(0, last + 1).some((l) => OPTION_ROW_RE.test(l))) return 'modal';
+  // 3 — a cursored row backed by a second option row, in the bottom region.
+  if (region.some((l) => SELECTOR_ROW_RE.test(l))
+    && region.filter((l) => OPTION_ROW_RE.test(l)).length >= 2) return 'modal';
+  return null;
+}
 
 /**
  * Is this pane willing to accept a typed message right now?
@@ -283,12 +366,8 @@ function paneReadyForInput(lines) {
   for (let i = plain.length - 1; i >= 0; i--) { if (plain[i].trim()) { last = i; break; } }
   if (last < 0) return { ready: false, why: 'busy' };
 
-  const from = Math.max(0, last - DIALOG_LOOKBACK);
-  const region = plain.slice(from, last + 1);
-  // Trust first: it is a modal too, but it is the one with a destructive
-  // default, and a caller that logs `why` should be able to say so.
-  if (region.some((l) => TRUST_RE.test(l))) return { ready: false, why: 'trust' };
-  if (region.some((l) => SELECTOR_ROW_RE.test(l))) return { ready: false, why: 'modal' };
+  const dialog = dialogWhy(arr, plain, last);
+  if (dialog) return { ready: false, why: dialog };
 
   const tail = plain[last];
   if (CARET_EMPTY_RE.test(tail) || CARET_TYPED_RE.test(tail)) return { ready: true, why: null };
@@ -759,6 +838,75 @@ function bufferName() {
 }
 
 /**
+ * How long a PERSON's message may be held by the hook's `attention` verdict when
+ * the pane shows no dialog at all.
+ *
+ * The state file is written by an EVENT, and no event fires when a question is
+ * answered at the keyboard — so `attention` can outlive the question that set
+ * it. The pane is the corroborating witness (see `humanAttentionHold`); this is
+ * the backstop for the case where the pane cannot answer either. Matched to the
+ * automated lane's ceiling so there is one number to remember, with the crucial
+ * difference that a person's message is RELEASED here, never dropped.
+ */
+const ATTENTION_HOLD_MAX_MS = QUEUE_MAX_WAIT_MS;
+
+/**
+ * Should a PERSON's message be held because a question is waiting?
+ *
+ * ⚠ 3.0.3 made a human send skip the TURN gate, and `state` was then passed to
+ * `releaseDecision` on the automated lane only — so the hook's `attention`, the
+ * one authoritative "a numbered prompt is on screen", never reached a person's
+ * message at all. The pane gate was the only thing in the way, and a pane is a
+ * picture: #13's tall dialog, a frame captured mid-redraw, a selector nobody
+ * has a rule for yet.
+ *
+ * Held, but not on the state file's word alone. `composerEmpty === true` means
+ * the pane has drawn a composer holding nothing — which no live selector does
+ * (every committed dialog capture reads `false` or `null`) — and that is proof
+ * enough that the question is gone whatever the state file still says. Plus a
+ * ceiling, because a hold a person cannot see the end of is the same bug as a
+ * message that vanishes.
+ */
+function humanAttentionHold({ state, composerEmpty = null, waitedMs = 0,
+  maxMs = ATTENTION_HOLD_MAX_MS } = {}) {
+  if (state !== 'hold') return false;
+  if (composerEmpty === true) return false;
+  const waited = Number(waitedMs);
+  return !(Number.isFinite(waited) && waited >= maxMs);
+}
+
+/**
+ * May this queued text be SUBMITTED into the pane as it is now?
+ *
+ * ⚠ THE P1 THIS EXISTS FOR (#15). `claude` exits — a broken install, a node
+ * upgrade, ENOSPC, or the owner's own /exit in a `cc`-style session whose start
+ * command is `claude; exec "$SHELL" -l` — and what is left in the pane is a
+ * ROOT LOGIN SHELL. The chat composer sends text and Enter together, so bash
+ * ran the owner's message as a command: measured, `please rewrite > notes.txt
+ * tomorrow` truncated notes.txt to zero bytes, because bash performs the
+ * redirections before it fails to find the command. The route answered 200,
+ * `/typing` reported no error, and the message was gone as well as executed.
+ *
+ * The discriminator is the PANE, not the state file — a session whose Claude
+ * exited after running still has one — and it is narrow on purpose:
+ *
+ *   composer drawn   Claude is up. Nothing to refuse.
+ *   shell prompt     the pane's last line ends in $ # % >. Refuse the SUBMIT.
+ *   neither          a pane mid-redraw, an empty pane, a TUI that is not
+ *                    Claude: say nothing. Refusing here would break every
+ *                    non-Claude pane the app can open.
+ *
+ * Only the submit is refused. Text without an Enter still goes (the Screen
+ * tab types into whatever is there and sends its Enter as a raw key), and raw
+ * keys have never come through the queue at all.
+ */
+function submitRefusal({ submit = true, composer = false, shell = false } = {}) {
+  if (!submit || composer || !shell) return null;
+  return 'claude is not running in this session — it dropped to a shell, so the message '
+    + 'was not typed. Start claude in the pane, or use the Screen tab to drive the shell.';
+}
+
+/**
  * Every gate, folded into one verdict.
  *
  * `idle` comes from the transcript (the liveness authority), `paneWhy` from
@@ -878,6 +1026,7 @@ module.exports = {
   paneTail, pasteLostLogLine, submitStalledLogLine, pasteResentLogLine, pasteLeftAloneLogLine,
   sendKeysFits, chunks,
   isBoundaryRecord, isConversationalRecord, boundaryFromTail, stateVerdict,
+  humanAttentionHold, ATTENTION_HOLD_MAX_MS, submitRefusal, stateStampMs,
   hasHumanUserRecord, kindOf,
   paneReadyForInput, paneBlocks, composerDrawn, shellPrompt, startsClaude,
   startingUp, startingUnmarked, bufferName,

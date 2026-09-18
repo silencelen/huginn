@@ -87,11 +87,17 @@ if [ -n "$st" ]; then
   # files this run creates; the chmod fixes a directory an earlier run left 0755.
   umask 077
   mkdir -p "$STATE_DIR" 2>/dev/null && chmod 700 "$STATE_DIR" 2>/dev/null
+  # ⚠ `ts` IS MILLISECONDS, and it used to be seconds. The daemon's send queue
+  # compares this stamp against a queued message's `Date.now()`, so a whole-second
+  # stamp could never release an entry queued in the SAME second — up to 999 ms of
+  # a gate that can only ever hold, which (with the transcript gate blind at the
+  # same moment) dropped an automated send ten minutes later. appd reads the unit
+  # off the magnitude, so a file this hook wrote before the change still works.
   if [ -n "$payload" ] && command -v jq >/dev/null 2>&1; then
     printf '%s' "$payload" | jq -c --arg st "$st" \
-      '{state:$st, sessionId:(.session_id // null), transcript:(.transcript_path // null), cwd:(.cwd // null), ts:now|floor}' \
+      '{state:$st, sessionId:(.session_id // null), transcript:(.transcript_path // null), cwd:(.cwd // null), ts:(now*1000|floor)}' \
       > "$STATE_DIR/$sess.tmp" 2>/dev/null \
-      && mv -f "$STATE_DIR/$sess.tmp" "$STATE_DIR/$sess" 2>/dev/null \
+      && mv -fT "$STATE_DIR/$sess.tmp" "$STATE_DIR/$sess" 2>/dev/null \
       || printf '%s\n' "$st" > "$STATE_DIR/$sess" 2>/dev/null
   else
     printf '%s\n' "$st" > "$STATE_DIR/$sess" 2>/dev/null
@@ -105,7 +111,15 @@ fi
 # STATE_DIR/compacting/<sess> to show a "compacting…" indicator reliably (the
 # pane spinner only shows it while a screen is actually being captured). No jq
 # needed — it is presence-only.
-COMPACT_DIR="$STATE_DIR/compacting"
+# ⚠ THE LEADING DOT IS LOAD-BEARING. These directories sit in the SAME namespace
+# as the flat per-session state files written above, and a session may legitimately
+# be called `ask`, `plan` or `compacting` — at which point one half or the other
+# breaks silently at exit 0: either that session's state JSON is moved INTO the
+# directory (no state word, no transcript mapping, no conversation tab, ever) or
+# every sidecar write on the host dies on ENOTDIR and no session gets a prompt
+# sidecar at all. A leading dot is outside appd's name rule, so the collision
+# cannot happen. appd reads the dotted directories and still clears the old ones.
+COMPACT_DIR="$STATE_DIR/.compacting"
 case "$event" in
   PreCompact)
     umask 077
@@ -128,6 +142,7 @@ esac
 # Subdirectories, not "<sess>.ask" suffixes: a session may legitimately be named
 # "x.ask", and appd's fs.watch on STATE_DIR is non-recursive but every event that
 # touches a sidecar also rewrites the flat state file above, so ticks still fire.
+# Dot-prefixed subdirectories, so a session may also legitimately be named "ask".
 #
 # Written on the PreToolUse that RAISES the dialog (which fires just before it
 # renders — appd waits for the pane to catch up). Cleared the moment it can no
@@ -142,15 +157,15 @@ esac
 #
 # JSON only — without jq there is nothing to fuse and the pane path stands alone.
 if command -v jq >/dev/null 2>&1; then
-  ASK_DIR="$STATE_DIR/ask"
-  PLAN_DIR="$STATE_DIR/plan"
+  ASK_DIR="$STATE_DIR/.ask"
+  PLAN_DIR="$STATE_DIR/.plan"
   _write_sidecar() {   # $1 = dir, $2 = tool
     umask 077
     mkdir -p "$1" 2>/dev/null && chmod 700 "$1" 2>/dev/null
     printf '%s' "$payload" | jq -c --arg tool "$2" \
       '{v:1, tool:$tool, sessionId:(.session_id // null), ts:now|floor, input:(.tool_input // null)}' \
       > "$1/$sess.tmp" 2>/dev/null \
-      && mv -f "$1/$sess.tmp" "$1/$sess" 2>/dev/null
+      && mv -fT "$1/$sess.tmp" "$1/$sess" 2>/dev/null
   }
   _clear_sidecars() {
     rm -f "$ASK_DIR/$sess" "$ASK_DIR/$sess.tmp" "$PLAN_DIR/$sess" "$PLAN_DIR/$sess.tmp" 2>/dev/null

@@ -193,6 +193,56 @@ test('/keys delivers literal text into the pane', async () => {
   assert.match(await paneShows(name, /HELLO-FROM-KEYS/), /HELLO-FROM-KEYS/);
 });
 
+/** A pane that has fallen through to a login shell: a prompt drawn, no composer,
+ *  and everything typed into it captured so the test can prove what arrived. */
+function mkShellPane(suffix) {
+  const name = `${PFX}-${suffix}`;
+  const out = path.join(tmp, `${suffix}.txt`);
+  sh('tmux', ['new-session', '-d', '-s', name, '-c', tmp, '-x', '100', '-y', '30',
+    `sh -c 'printf "root@huginn:~/netplan# "; cat > ${out}'`]);
+  madeSessions.add(name);
+  return { name, out };
+}
+
+test('a message is NOT submitted into a pane that has dropped to a shell (#15)', async () => {
+  // ⚠ WHAT THIS PREVENTS. `claude` exits — a broken install, a node upgrade, or
+  // the owner's own /exit in a `cc` session — and the pane underneath is a root
+  // login shell. The chat composer sends text+Enter, so bash RAN the owner's
+  // message: `please rewrite > notes.txt tomorrow` truncated notes.txt to zero
+  // bytes. The route answered 200 and /typing reported no error.
+  const { name, out } = mkShellPane('shellfall');
+  writeState(name, 'idle');
+  await paneShows(name, /netplan#/);
+  const { status, body } = await api(`/v1/sessions/${name}/keys`, {
+    method: 'POST', body: JSON.stringify({ text: 'please rewrite > notes.txt tomorrow', keys: ['Enter'] }),
+  });
+  assert.equal(status, 409, JSON.stringify(body));
+  assert.match(body.error, /shell/i, 'the client can say WHY');
+  await wait(600);
+  const landed = fs.existsSync(out) ? fs.readFileSync(out, 'utf8') : '';
+  assert.equal(landed, '', 'bash was never handed a line to run');
+  assert.doesNotMatch(capture(name), /notes\.txt/, 'nothing was even typed at the prompt');
+});
+
+test('text WITHOUT Enter still reaches a shell pane (#15)', async () => {
+  // The refusal is about the SUBMIT, not about the pane: the Screen tab types
+  // into whatever is there and sends its Enter as a raw key, and a person
+  // driving a shell deliberately must keep working.
+  const { name, out } = mkShellPane('shellnoenter');
+  writeState(name, 'idle');
+  await paneShows(name, /netplan#/);
+  const { status, body } = await api(`/v1/sessions/${name}/keys`, {
+    method: 'POST', body: JSON.stringify({ text: 'ls -la' }),
+  });
+  assert.equal(status, 200, JSON.stringify(body));
+  assert.equal(body.delivered, true);
+  // It is at the prompt, echoed, and NOT run: the tty hands `cat` a line only
+  // when an Enter closes one, so the capture file staying empty is the proof.
+  await paneShows(name, /ls -la/);
+  await wait(300);
+  assert.equal(fs.existsSync(out) ? fs.readFileSync(out, 'utf8') : '', '', 'typed, not submitted');
+});
+
 test('DELETE kills the session AND removes its state file', async () => {
   const name = mkSession('del');
   writeState(name, 'idle');
@@ -290,7 +340,7 @@ test('compact refuses a pane with no Claude state', async () => {
 test('a fresh compacting marker reads as compacting; a stale one does not', async () => {
   const name = mkSession('cmpk');
   writeState(name, 'idle');
-  const dir = path.join(stateDir, 'compacting');
+  const dir = path.join(stateDir, '.compacting');
   fs.mkdirSync(dir, { recursive: true });
   const marker = path.join(dir, name);
 
@@ -420,8 +470,8 @@ test('a present but WRONG bearer is rejected (auth compares the token, not just 
 // --- ask-sidecar fusion at the route layer ---------------------------------
 
 function writeAskSidecar(name, questions) {
-  fs.mkdirSync(path.join(stateDir, 'ask'), { recursive: true });
-  fs.writeFileSync(path.join(stateDir, 'ask', name),
+  fs.mkdirSync(path.join(stateDir, '.ask'), { recursive: true });
+  fs.writeFileSync(path.join(stateDir, '.ask', name),
     JSON.stringify({ v: 1, tool: 'AskUserQuestion', sessionId: 's', ts: Math.floor(Date.now() / 1000),
       input: { questions } }));
 }
@@ -478,6 +528,93 @@ async function screenDecided(name, ms = 20_000) {
     await wait(100);
   }
 }
+
+/** The COLOR_PANE dialog, with every keystroke sent into the pane captured. */
+function mkAnswerable(suffix) {
+  const name = `${PFX}-${suffix}`;
+  const out = path.join(tmp, `${suffix}.keys`);
+  sh('tmux', ['new-session', '-d', '-s', name, '-c', tmp, '-x', '100', '-y', '30',
+    `sh -c 'printf "${COLOR_PANE}\\n"; stty -echo; cat > ${out}'`]);
+  madeSessions.add(name);
+  return { name, out };
+}
+
+test('two answers to the same question type ONE digit (#11)', async () => {
+  // ⚠ CHECK-AND-ACT WITH NOTHING BETWEEN THE CHECK AND THE ACT. The route
+  // captures the pane, validates the fingerprint, then types — four awaits
+  // apart, with no per-session lock — so two answers for the SAME question both
+  // passed the guard before either typed. Measured window 10-15 ms idle, ~90 ms
+  // with a modelled repaint lag. Against a real TUI the first digit answers the
+  // dialog and the second lands in the composer, where its Enter submits a bare
+  // digit as a new prompt into a working conversation. The realistic trigger is
+  // one push answered on two devices, or the desktop's toast activation firing
+  // twice (Main.kt bypasses SessionController's in-flight guard).
+  const { name, out } = mkAnswerable('race');
+  writeAskSidecar(name, COLOR_Q);
+  const { body } = await screenDecided(name);
+  const fingerprint = body.prompt.fingerprint;
+
+  const answer = () => api(`/v1/sessions/${name}/answer`, {
+    method: 'POST', body: JSON.stringify({ option: 1, fingerprint }),
+  });
+  const [a, b] = await Promise.all([answer(), answer()]);
+  const codes = [a.status, b.status].sort();
+  assert.deepEqual([200, 409], codes, `${JSON.stringify(a.body)} / ${JSON.stringify(b.body)}`);
+
+  await wait(500);
+  const typed = fs.existsSync(out) ? fs.readFileSync(out, 'utf8') : '';
+  assert.equal('1\n', typed, 'one digit and one Enter reached the pane, not two');
+});
+
+test('the same answer sent twice is refused the second time (#11)', async () => {
+  // The lock serialises them; this is what the loser then sees. Without the memo
+  // the second request re-reads the SAME dialog — a pane does not repaint
+  // instantly, and a fixture pane never does — validates the same fingerprint
+  // and types the digit again.
+  const { name, out } = mkAnswerable('twice');
+  writeAskSidecar(name, COLOR_Q);
+  const { body } = await screenDecided(name);
+  const send = () => api(`/v1/sessions/${name}/answer`, {
+    method: 'POST', body: JSON.stringify({ option: 1, fingerprint: body.prompt.fingerprint }),
+  });
+  assert.equal(200, (await send()).status);
+  const second = await send();
+  assert.equal(409, second.status, JSON.stringify(second.body));
+  assert.equal(false, second.body.ok);
+  await wait(400);
+  assert.equal('1\n', fs.existsSync(out) ? fs.readFileSync(out, 'utf8') : '');
+});
+
+test('/soft-end and /compact refuse a pane with a dialog on it (#9)', async () => {
+  // ⚠ WHAT THE STATE FILE CANNOT SEE. Both routes were guarded only by
+  // `st.state === 'attention'`, and `running` is the NORMAL reading while a
+  // dialog is up: a plain tool-permission dialog gets no sidecar at all, and a
+  // background agent's PreToolUse rewrites the flat file to `running` while the
+  // main thread sits on the question. So both pasted their text into a live
+  // selector while the send queue, on the same pane in the same second,
+  // correctly held a person's message with blockedBy:"modal".
+  //
+  // The destructive half is the auto-end: /soft-end answered 200
+  // {"auto":true}, the phrase sat unsubmitted inside the dialog, and
+  // `stepSoftEnd` armed on the same `running` — so at the next stable idle the
+  // daemon killed the session with no wrap-up turn and reported success.
+  const { name, out } = mkAnswerable('dialogguard');
+  writeState(name, 'running');
+  await screenDecided(name);
+
+  const soft = await api(`/v1/sessions/${name}/soft-end`, {
+    method: 'POST', body: JSON.stringify({ auto: true }),
+  });
+  assert.equal(409, soft.status, JSON.stringify(soft.body));
+  const comp = await api(`/v1/sessions/${name}/compact`, { method: 'POST' });
+  assert.equal(409, comp.status, JSON.stringify(comp.body));
+
+  await wait(400);
+  assert.equal('', fs.existsSync(out) ? fs.readFileSync(out, 'utf8') : '',
+    'nothing was typed at the question');
+  const row = (await api('/v1/sessions')).body.sessions.find((x) => x.name === name);
+  assert.equal(false, row.softEnding, 'and no auto-end is armed for a phrase that never landed');
+});
 
 test('screen fuses the hook sidecar: hook labels + descriptions, TUI extras flagged', async () => {
   const name = mkSessionWithPane('fuse', COLOR_PANE);

@@ -357,13 +357,24 @@ test('a plain SHELL pane is never held, however new the tmux session is', async 
   assert.match(capture(name), /huginn:~\$/, 'precondition: the prompt really is on screen');
 
   const t0 = Date.now();
-  const { body } = await send(name, 'straight through');
-  assert.equal(body.delivered, true, 'a shell keeps the old behaviour exactly');
-  assert.equal(body.queued, 0);
+  // ⚠ AMENDED BY #15, AND ONLY IN ITS SECOND HALF. What this test is about — the
+  // startup gate never holding a shell — is unchanged and asserted below: the
+  // answer comes back at once rather than after a twenty-second grace the pane
+  // can never leave. What changed is the SUBMIT: an Enter here makes bash run
+  // the owner's chat message as root, so text+Enter is refused with a 409 the
+  // client can show. Text on its own still goes through untouched.
+  const refused = await send(name, 'straight through');
+  assert.equal(refused.status, 409, JSON.stringify(refused.body));
   assert.ok(Date.now() - t0 < 6_000, 'and is not made to wait out a grace it can never leave');
-  for (let i = 0; i < 40 && !fs.existsSync(out); i++) await wait(100);
-  await wait(300);
-  assert.equal(readOr(out), 'straight through\n');
+  assert.equal(readOr(out), '', 'bash was never handed a line to run');
+
+  const typed = await api(`/v1/sessions/${name}/keys`, {
+    method: 'POST', body: JSON.stringify({ text: 'straight through' }),
+  });
+  assert.equal(typed.body.delivered, true, 'typing into a shell still works');
+  assert.equal(typed.body.queued, 0);
+  await wait(500);
+  assert.equal(readOr(out), '', 'still nothing submitted — the Enter is the harm');
 });
 
 // -------------------------------------------- the sessions appd never marked

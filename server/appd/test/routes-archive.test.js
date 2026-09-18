@@ -116,7 +116,7 @@ function writeState(name, state, { sessionId, transcript = null, cwd = tmp, ts =
 
 /** What it writes on the PreToolUse that RAISES an AskUserQuestion. */
 function writeAskSidecar(name, sessionId) {
-  const dir = path.join(stateDir, 'ask');
+  const dir = path.join(stateDir, '.ask');
   fs.mkdirSync(dir, { recursive: true });
   fs.writeFileSync(path.join(dir, name), JSON.stringify({
     v: 1, tool: 'AskUserQuestion', sessionId, ts: now(), input: ASK_INPUT,
@@ -316,6 +316,43 @@ test('a waiting question refuses the archive, in words that say what to do', asy
   assert.ok(liveNames().includes(name), 'and the session is untouched');
 });
 
+/** What a pane currently SHOWS, which is the only thing the daemon reads it by. */
+function capture(name) {
+  try { return sh('tmux', ['capture-pane', '-p', '-t', `=${name}:`]); } catch { return ''; }
+}
+
+/** A session whose pane is showing a selector dialog, with nothing under it. */
+function mkAskingPane(suffix) {
+  const name = `${PFX}${suffix}`;
+  const dialog = 'Allow Bash(rm -rf build)?\\n\\n \u276f 1. Yes\\n   2. Yes, and do not ask again\\n   3. No\\n\\n Enter to select \\u00b7 Esc to cancel\\n';
+  sh('tmux', ['new-session', '-d', '-s', name, '-c', tmp, '-x', '120', '-y', '40',
+    `sh -c 'printf "${dialog}"; cat >/dev/null'`]);
+  madeSessions.add(name);
+  return name;
+}
+
+test('a dialog on screen refuses the archive even when the state file says running (#9)', async () => {
+  // ⚠ /soft-end WITH THE DESTRUCTIVE HALF TURNED ALL THE WAY UP. The `attention`
+  // guard above is the state FILE, and `running` is its normal reading while a
+  // plain tool-permission dialog is up — that kind gets no sidecar at all, and a
+  // background agent's tool call rewrites the file to `running` while the main
+  // thread sits on the question. So the wrap-up phrase went into the selector
+  // and the end armed anyway: at the next stable idle the session was killed AND
+  // archived, with no wrap-up turn and a success reported to the caller.
+  const name = mkAskingPane('dialog');
+  const id = crypto.randomUUID();
+  writeState(name, 'running', { sessionId: id, transcript: writeTranscript(id) });
+  for (let i = 0; i < 60 && !/Allow Bash/.test(capture(name)); i++) await wait(100);
+  assert.match(capture(name), /Allow Bash/, 'precondition: the dialog is on screen');
+
+  const r = await api(`/v1/sessions/${name}/archive`, { method: 'POST' });
+  assert.equal(409, r.status, JSON.stringify(r.body));
+  await wait(400);
+  assert.ok(liveNames().includes(name), 'the session is untouched');
+  assert.equal(undefined, (await archives()).find((a) => a.id === id), 'and nothing was written');
+  assert.doesNotMatch(capture(name), /wind|wrap|commit your work/i, 'and nothing was typed at the question');
+});
+
 test('a running turn is WAITED OUT rather than refused, and archived when it settles', async () => {
   // Mid-turn text queues in the composer, and the settle timer will not end
   // anything until idle has held — so an archive asked for mid-turn is accepted
@@ -439,6 +476,37 @@ test('a revive takes the old name back and resumes the conversation', async () =
   const row = (await archives()).find((a) => a.id === id);
   assert.ok(row.revivedAt > 0);
   assert.equal(name, row.revivedAs);
+  assert.equal(true, row.live);
+});
+
+test('a revive whose archived name carries a dot reports the name tmux made (#103)', async () => {
+  // ⚠ tmux REWRITES '.' TO '_' AND STILL EXITS 0. The readback asked for the
+  // requested name with a trailing colon — `-t '=a.b:'` — which cannot resolve a
+  // rewritten name: tmux answered with an empty string and exit 0, and the
+  // `|| want` fallback echoed the dotted name back. The 201 named a session that
+  // does not exist, `revivedAs` persisted the phantom, and every per-session
+  // route on that name 404s. The create route has the identical readback.
+  //
+  // Dotted names are refused at the door now, but an archive card written by an
+  // older daemon still carries one, and that is what this row is.
+  const { name, id } = mkArchivable('dotrevive');
+  await api(`/v1/sessions/${name}/archive`, { method: 'POST', body: JSON.stringify({ mode: 'now' }) });
+  const file = path.join(dataDir, 'archive', id, 'record.json');
+  const rec = JSON.parse(fs.readFileSync(file, 'utf8'));
+  const dotted = `${PFX}-dot.revive`;
+  rec.tmuxName = dotted;
+  fs.writeFileSync(file, JSON.stringify(rec, null, 2));
+
+  const r = await api(`/v1/archive/${id}/revive`, { method: 'POST' });
+  assert.equal(201, r.status, JSON.stringify(r.body));
+  madeSessions.add(r.body.name);
+  madeSessions.add(dotted.replace('.', '_'));
+  assert.ok(liveNames().includes(r.body.name),
+    `the 201 named ${r.body.name}, and tmux holds ${JSON.stringify(liveNames())}`);
+  assert.equal(false, r.body.name.includes('.'), 'no live session can carry a dot');
+
+  const row = (await archives()).find((a) => a.id === id);
+  assert.equal(r.body.name, row.revivedAs, 'and the phantom is not persisted either');
   assert.equal(true, row.live);
 });
 

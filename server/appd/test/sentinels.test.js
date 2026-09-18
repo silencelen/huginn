@@ -27,7 +27,8 @@ test('arm writes one JSON line, and re-arming keeps the original since', () => {
   assert.equal(first.since, 1_789_459_000_000);
 
   const body = fs.readFileSync(path.join(dir, 'STOP-FABLE'), 'utf8');
-  assert.equal(body, `${JSON.stringify({ reason: 'weekly_fable 89%', since: 1_789_459_000_000 })}\n`);
+  assert.equal(body,
+    `${JSON.stringify({ reason: 'weekly_fable 89%', since: 1_789_459_000_000, by: 'appd' })}\n`);
 
   // Half an hour later the tick re-asserts the same plan. `since` is what the
   // operator reads as "held since", and what hysteresis measures against — a
@@ -44,7 +45,10 @@ test('a sentinel file written by an older daemon still reads as a time', () => {
   const dir = scratch();
   fs.mkdirSync(dir, { recursive: true });
   fs.writeFileSync(path.join(dir, 'STOP'), `${JSON.stringify({ reason: 'old', since: 1_789_459_000 })}\n`);
-  assert.deepEqual(sent.state(dir).STOP, { since: 1_789_459_000_000, reason: 'old' });
+  // …and it carries no `by`, so the tick leaves it alone rather than reaping a
+  // hold it cannot prove it armed. A stale sentinel a human can delete is the
+  // safe side of that ambiguity.
+  assert.deepEqual(sent.state(dir).STOP, { since: 1_789_459_000_000, reason: 'old', by: null });
 });
 
 test('touch heartbeats an armed sentinel WITHOUT moving its since', () => {
@@ -76,8 +80,28 @@ test('state reads both sentinels, and absence is null rather than a shape', () =
 
   sent.arm(dir, 'STOP', 'session 71%', 1_789_459_000_000);
   const st = sent.state(dir);
-  assert.deepEqual(st.STOP, { since: 1_789_459_000_000, reason: 'session 71%' });
+  assert.deepEqual(st.STOP, { since: 1_789_459_000_000, reason: 'session 71%', by: 'appd' });
   assert.equal(st['STOP-FABLE'], null);
+});
+
+test('a sentinel records WHO armed it, and a hand-armed one has no author (#12)', () => {
+  // ⚠ THE TICK REAPED THE OPERATOR'S OWN PAUSE BUTTON. `touch STOP` is the
+  // documented escape hatch — the only way to arm a hold, since no route arms a
+  // sentinel — and `writeSentinels`' else-branch deleted it on the next pass
+  // because the plan did not call for STOP (measured: 299 s idle, 23 ms after a
+  // settings PATCH). The daemon has to keep reclaiming the sentinels a CRASHED
+  // daemon left behind, so the two cases have to be distinguishable, and the
+  // only thing that can distinguish them is the file's own body.
+  const dir = scratch();
+  sent.arm(dir, 'STOP', 'session 71%', 1_789_459_000_000);
+  assert.equal(sent.state(dir).STOP.by, 'appd');
+  const onDisk = JSON.parse(fs.readFileSync(path.join(dir, 'STOP'), 'utf8'));
+  assert.equal(onDisk.by, 'appd', 'written, not inferred');
+
+  fs.writeFileSync(path.join(dir, 'STOP-FABLE'), '');
+  const hand = sent.state(dir)['STOP-FABLE'];
+  assert.ok(hand, 'an empty sentinel is armed');
+  assert.equal(hand.by, null, 'nobody claimed it, so the tick must not reap it');
 });
 
 test('a sentinel touched by hand is still armed, with mtime as its since', () => {
@@ -91,6 +115,7 @@ test('a sentinel touched by hand is still armed, with mtime as its since', () =>
   const st = sent.state(dir).STOP;
   assert.ok(st, 'an empty sentinel is armed');
   assert.equal(st.reason, '');
+  assert.equal(st.by, null, 'and unclaimed, which is what keeps the tick off it');
   assert.ok(Math.abs(st.since - Date.now()) < 5000);
 });
 
