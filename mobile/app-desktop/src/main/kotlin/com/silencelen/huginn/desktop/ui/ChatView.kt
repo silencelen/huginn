@@ -663,10 +663,9 @@ private fun Composer(
                         when {
                             e.type != KeyEventType.KeyDown -> false
                             e.key == Key.Enter && e.isShiftPressed -> {
-                                val at = field.selection.start
-                                val next = field.text.substring(0, at) + "\n" + field.text.substring(field.selection.end)
-                                field = TextFieldValue(next, TextRange(at + 1))
-                                onDraft(next)
+                                val next = newlineIn(field)
+                                field = next
+                                onDraft(next.text)
                                 true
                             }
                             e.key == Key.Enter -> { submit(); true }

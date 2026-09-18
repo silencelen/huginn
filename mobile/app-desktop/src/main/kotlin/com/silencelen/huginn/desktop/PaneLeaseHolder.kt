@@ -9,6 +9,7 @@ import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.withTimeoutOrNull
 
 /**
@@ -56,7 +57,14 @@ class PaneLeaseHolder(
      * windows manual for the width of a round trip, and if the process dies in that
      * window the old one is stranded with no record of it anywhere.
      */
-    suspend fun reconcile(want: PaneLease.Want?) {
+    /**
+     * @param wireBoundMs how long the release call itself may take. Null is the
+     *   ordinary case — a view teardown or a hide has nobody waiting on it.
+     *   [releaseBlocking] passes a real number because its caller is the UI
+     *   thread; see there for why the bound has to arrive HERE rather than be
+     *   applied from outside.
+     */
+    suspend fun reconcile(want: PaneLease.Want?, wireBoundMs: Long? = null) {
         // NON-CANCELLABLE, and this is not belt and braces. Every caller reaches
         // here from inside a `collectLatest` whose whole job is to be cancelled the
         // instant the window is hidden or the view changes — so the release for
@@ -72,7 +80,16 @@ class PaneLeaseHolder(
                     held = null
                     // The daemon sweeps stranded leases anyway, and failing to release
                     // must never break whatever is being torn down.
-                    runCatching { client.releaseSize(name) }
+                    runCatching {
+                        if (wireBoundMs == null) client.releaseSize(name)
+                        // INSIDE the non-cancellable region, and that is the whole
+                        // point: a timeout wrapped around this block from outside
+                        // cannot cancel what declares itself uncancellable, so the
+                        // bound has to be a child of it. `withTimeout` here starts
+                        // its own scope and cancels ITSELF, which NonCancellable
+                        // does not veto.
+                        else withTimeout(wireBoundMs) { client.releaseSize(name) }
+                    }
                 }
                 if (want != null) held = want.session
             }
@@ -80,7 +97,7 @@ class PaneLeaseHolder(
     }
 
     /** Hand back whatever is held. The teardown path for a view or a window. */
-    suspend fun releaseAll() = reconcile(null)
+    suspend fun releaseAll(wireBoundMs: Long? = null) = reconcile(null, wireBoundMs)
 
     /**
      * Fire-and-forget release, launched on the APP scope.
@@ -99,11 +116,21 @@ class PaneLeaseHolder(
      * and a launched coroutine would simply not run; bounded because a daemon that
      * is not answering must delay quitting by two seconds, not forever — a client
      * that will not close is worse than a lease that lapses on its own in ninety.
+     *
+     * ⚠ THE BOUND GOES DOWN, IT IS NOT WRAPPED AROUND. The two seconds were
+     * promised by a `withTimeoutOrNull` outside `reconcile`, which cannot expire
+     * anything: the release runs inside `withContext(NonCancellable)`, so the
+     * timeout could not cancel it and `runBlocking` simply waited out the HTTP
+     * tier instead — 30.5 s measured against a route that accepts and never
+     * answers (connect 8 s, socket read 30 s, no request timeout), with the
+     * window frozen on the ordinary Quit gesture the whole time. The outer
+     * `withTimeoutOrNull` is kept as a backstop for everything else the release
+     * path might one day do off the wire.
      */
     fun releaseBlocking(timeoutMs: Long = RELEASE_TIMEOUT_MS) {
         if (held == null) return
         runCatching {
-            runBlocking { withTimeoutOrNull(timeoutMs) { releaseAll() } }
+            runBlocking { withTimeoutOrNull(timeoutMs) { releaseAll(wireBoundMs = timeoutMs) } }
         }
     }
 

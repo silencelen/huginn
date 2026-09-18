@@ -346,14 +346,7 @@ fun main(args: Array<String>) {
         // prevents is indistinguishable from a crash: a window restored onto a
         // monitor that has since been unplugged simply never appears, and the
         // process is running the whole time.
-        val restored = remember {
-            val screen = runCatching { java.awt.Toolkit.getDefaultToolkit().screenSize }.getOrNull()
-            WindowLayout.restore(
-                settings.windowLayout.value,
-                screen?.width ?: 0,
-                screen?.height ?: 0,
-            )
-        }
+        val restored = remember { WindowLayout.restore(settings.windowLayout.value, screens()) }
         val windowState = rememberWindowState(
             size = DpSize(restored.w.dp, restored.h.dp),
             position = if (restored.placed) {
@@ -827,6 +820,31 @@ fun main(args: Array<String>) {
             }
         }
     }
+}
+
+/**
+ * EVERY display attached to this desk, in the virtual desktop's own coordinates.
+ *
+ * `Toolkit.screenSize` used to answer this, and on Windows it reports the PRIMARY
+ * monitor rather than the virtual desktop — so a window left on a second screen
+ * was judged off-screen at every launch, recentred, and its real position
+ * overwritten by the debounced writer. `GraphicsEnvironment` is the only API that
+ * knows there is more than one, and each device's `defaultConfiguration.bounds`
+ * carries the signed origin the position has to be compared against.
+ *
+ * Empty on a failure or a headless run, which [WindowLayout.restore] reads as
+ * "unknown" and answers by keeping the size and dropping the position.
+ */
+private fun screens(): List<Screen> = runCatching {
+    java.awt.GraphicsEnvironment.getLocalGraphicsEnvironment().screenDevices.map {
+        val b = it.defaultConfiguration.bounds
+        Screen(b.x, b.y, b.width, b.height)
+    }
+}.getOrElse {
+    runCatching {
+        val s = java.awt.Toolkit.getDefaultToolkit().screenSize
+        listOf(Screen(0, 0, s.width, s.height))
+    }.getOrDefault(emptyList())
 }
 
 private fun workingLabel(working: Int, chats: Int): String =

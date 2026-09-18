@@ -287,7 +287,8 @@ fun SessionsList(
                             selected = s.name in selection && selection.size > 1,
                             onClick = { ctrl, shift ->
                                 onSelect(clickSelection(selection, s.name, order, ctrl, shift))
-                                if (opensOnClick(ctrl, shift)) onOpen(s.name)
+                                // Selectable, never openable: see [sessionAddressable].
+                                if (opensOnClick(ctrl, shift) && sessionAddressable(s.name)) onOpen(s.name)
                             },
                         )
                     }
@@ -345,6 +346,13 @@ private fun SessionRow(
             if (session.title != null && session.title != session.name) {
                 Muted(session.name, Modifier.padding(end = Space.unit))
             }
+            // A row that will not open says so where it stands. Anything else is
+            // a click that does nothing, forever, with no way to find out why.
+            if (!sessionAddressable(session.name)) {
+                Tip("Every huginn route for this session answers 404; tmux itself is fine.") {
+                    Muted(UNADDRESSABLE_NOTE, Modifier.padding(end = Space.unit), maxLines = 2)
+                }
+            }
             val work = bgWorkTip(session.bgShells, session.bgAgents, session.bgTask)
             if (work.isNotEmpty()) {
                 Tip(work) {
@@ -386,6 +394,29 @@ private fun SessionRow(
  * invisible before that.
  */
 private val TEXT_INDENT = Frame.dot + Space.tight
+
+/**
+ * Whether huginn can actually address this session, or only list it.
+ *
+ * ⚠ THE DAEMON PUBLISHES SESSIONS IT CANNOT ROUTE TO. `GET /v1/sessions`
+ * deliberately lists every tmux session on the host — the empty state even
+ * advertises the path ("Sessions started from a terminal appear here too") —
+ * while every PER-SESSION route rejects a name outside the daemon's own rule.
+ * Nothing filtered, badged or explained such a row, so clicking one opened the
+ * pane and shut it again instantly with no message, repeatably; this module has
+ * no toast surface to have said anything in either. Made by hand, from a
+ * terminal: `tmux new -s 'my project'`. Every in-product creation path
+ * validates.
+ *
+ * Case-folded, because the route regexes are case-permissive and an uppercase
+ * name really does work.
+ */
+internal fun sessionAddressable(name: String): Boolean =
+    name.lowercase().matches(SESSION_NAME)
+
+/** What a row that will not open says instead. The fix is in tmux, not here. */
+internal const val UNADDRESSABLE_NOTE =
+    "huginn cannot address this name — rename it in tmux"
 
 /** "2 bg", "1 bg · 3 agents" — the shortest true form of what the tip spells out. */
 fun bgLabel(bgShells: Int, bgAgents: Int): String = buildList {

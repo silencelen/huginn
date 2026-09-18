@@ -290,6 +290,16 @@ class DeviceRunner(
         val cwd = DevicePolicy.cwdFor(enrolled, locked, settings.deviceRootNow(),
             System.getProperty("user.home") ?: ".")
 
+        // Refused rather than run somewhere else. See [cwdRefusal].
+        cwdRefusal(hostName, cwd)?.let { why ->
+            _status.value = _status.value.copy(note = "Refused a job: $why", locked = locked)
+            runCatching {
+                client.postWorkEvents(deviceId, work.id, emptyList(), done = true, exitCode = null,
+                    error = why, locked = locked)
+            }
+            return
+        }
+
         _status.value = _status.value.copy(busy = true, locked = locked, note = "Running a job")
         try {
             stream(deviceId, work, argv, cwd)
@@ -421,6 +431,27 @@ class DeviceRunner(
          * is over the daemon's cap (400/413). Anything else — a timeout, a 5xx, a
          * dropped socket — is a transient blip whose batch is restored to the front.
          */
+        /**
+         * Why this job cannot start here, or null when it can.
+         *
+         * ⚠ CHECKED BEFORE THE SPAWN, because ProcessBuilder.directory(null)
+         * means "inherit the JVM's own working directory" rather than "fail".
+         * A `work`-scope device whose configured root no longer resolves — a
+         * typo in the unvalidated Settings field, an unmounted drive, a renamed
+         * folder, a stale drive letter — therefore ran the job in the app's own
+         * install tree and reported SUCCESS: `ask` read and answered about the
+         * wrong tree, `act` (Bash/Edit/Write, empty deny list) would have
+         * written into it, and the Devices row went on printing the declared
+         * root the whole time.
+         *
+         * The sentence is the headless runner's, verbatim
+         * (`client/huginn-device`): the same device answering the same poll
+         * must not explain itself differently depending on which runner picked
+         * it up.
+         */
+        internal fun cwdRefusal(name: String, cwd: String): String? =
+            if (File(cwd).isDirectory) null else "$name cannot start work: $cwd is not a directory"
+
         internal fun isPermanentPostFailure(e: Throwable): Boolean =
             e is HuginnClient.HuginnException && e.code in setOf(400, 401, 403, 404, 413)
 

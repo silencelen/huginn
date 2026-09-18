@@ -5,6 +5,9 @@ import com.silencelen.huginn.data.QuickActions
 import com.silencelen.huginn.data.Session
 import com.silencelen.huginn.ui.QuickActionRules
 import com.silencelen.huginn.ui.SelectionAction
+import androidx.compose.ui.text.TextRange
+import androidx.compose.ui.text.input.TextFieldValue
+import com.silencelen.huginn.desktop.Screen
 import com.silencelen.huginn.desktop.Splitter
 import com.silencelen.huginn.desktop.View
 import com.silencelen.huginn.desktop.WindowLayout
@@ -340,8 +343,14 @@ class DesktopSurfaceTest {
 
     @Test
     fun `durations read the way a person says them`() {
-        assertEquals("just now", humanDuration(0))
-        assertEquals("just now", humanDuration(44))
+        // ⚠ NO "just now" BAND. This measures a SPAN and its one caller reads
+        // "Working · for <this>" — "for just now" is not a sentence, and the
+        // band's other edge was worse: 45..59s fell straight through to
+        // "${sec / 60}m" and drew "Working · for 0m", 15 seconds of every hour.
+        assertEquals("1m", humanDuration(0))
+        assertEquals("1m", humanDuration(44))
+        assertEquals("1m", humanDuration(45), "45s was the start of the 0m band")
+        assertEquals("1m", humanDuration(59), "59s was the end of it")
         assertEquals("1m", humanDuration(60))
         assertEquals("59m", humanDuration(3599))
         assertEquals("1h", humanDuration(3600))
@@ -358,6 +367,8 @@ class DesktopSurfaceTest {
         assertEquals("Waiting on you", sessionStateTip("attention", null, 1_000_000))
         assertEquals("Waiting on you", sessionStateTip("attention", 0, 1_000_000))
         assertEquals("Working · for 5m", sessionStateTip("running", 999_700, 1_000_000))
+        // The tooltip that started this: a state entered 50 seconds ago.
+        assertEquals("Working · for 1m", sessionStateTip("running", 999_950, 1_000_000))
         assertEquals(
             "No state recorded for this session yet",
             sessionStateTip(null, null, 1_000_000),
@@ -607,6 +618,57 @@ class DesktopSurfaceTest {
     }
 
     @Test
+    fun `a window left on a second monitor comes back to it`() {
+        // The shipped rule judged x against ONE rectangle — on Windows,
+        // Toolkit.screenSize is the PRIMARY monitor, not the virtual desktop —
+        // so every position on a secondary read as "the display it remembers is
+        // gone", and the debounced writer then persisted the centred primary
+        // coordinates. The owner's placement was destroyed on the first launch.
+        val desk = listOf(Screen(0, 0, 1920, 1080), Screen(1920, 0, 2560, 1440))
+        val out = WindowLayout.restore(WindowLayout(x = 2400, y = 60, w = 1400, h = 900), desk)
+        assertTrue(out.placed, "a position on the second monitor must survive")
+        assertEquals(2400, out.x)
+        assertEquals(60, out.y)
+    }
+
+    @Test
+    fun `a monitor to the LEFT has negative coordinates and is still a monitor`() {
+        val desk = listOf(Screen(0, 0, 1920, 1080), Screen(-1920, 0, 1920, 1080))
+        val out = WindowLayout.restore(WindowLayout(x = -1200, y = 100, w = 1280, h = 840), desk)
+        assertTrue(out.placed, "x is signed on a virtual desktop")
+        assertEquals(-1200, out.x)
+    }
+
+    @Test
+    fun `a window is sized against the desk it is on, not the smallest screen`() {
+        // A 2560x1400 window lived on the big secondary; clamping it to the
+        // primary's 1920x1080 shrinks it every launch.
+        val desk = listOf(Screen(0, 0, 1920, 1080), Screen(1920, 0, 2560, 1440))
+        val out = WindowLayout.restore(WindowLayout(x = 2000, y = 20, w = 2560, h = 1400), desk)
+        assertEquals(2560, out.w)
+        assertEquals(1400, out.h)
+    }
+
+    @Test
+    fun `a position on a monitor that has since been unplugged is still dropped`() {
+        // The union is of the screens that are THERE. Undock the 2560 secondary
+        // and the window saved at x=2400 has nowhere to be.
+        val out = WindowLayout.restore(
+            WindowLayout(x = 2400, y = 60, w = 1400, h = 900),
+            listOf(Screen(0, 0, 1920, 1080)),
+        )
+        assertFalse(out.placed)
+        assertEquals(1400, out.w)
+    }
+
+    @Test
+    fun `no enumerable screen keeps the size and drops the position`() {
+        val out = WindowLayout.restore(WindowLayout(300, 300, 1400, 900), emptyList())
+        assertFalse(out.placed)
+        assertEquals(1400, out.w)
+    }
+
+    @Test
     fun `maximized survives the round trip`() {
         val out = WindowLayout.restore(WindowLayout(10, 10, 1280, 840, maximized = true), 1920, 1080)
         assertTrue(out.maximized)
@@ -846,6 +908,116 @@ class DesktopSurfaceTest {
     fun `the width rule is the render site's own number`() {
         assertTrue(padPanelFits(PANEL_MIN_WINDOW_DP.toFloat()))
         assertFalse(padPanelFits(PANEL_MIN_WINDOW_DP - 1f))
+    }
+
+    // ------------------------------------------------- rows that cannot open
+
+    @Test
+    fun `a session name the daemon cannot route to is not openable`() {
+        // GET /v1/sessions deliberately publishes every tmux session, including
+        // the ones whose names fall outside the daemon's NAME_RE — while every
+        // per-session route 404s on them. No client filtered, badged or
+        // explained the row, so on the desktop the pane opened and shut
+        // instantly with no message, repeatably (and this module has no toast
+        // surface to have said anything in).
+        assertFalse(sessionAddressable("my project"), "a space is not routable")
+        assertFalse(sessionAddressable("sess!"), "nor is punctuation")
+        assertFalse(sessionAddressable("-lead"))
+        assertFalse(sessionAddressable(""))
+        assertFalse(sessionAddressable("a".repeat(51)))
+        // tmux rewrites a dot, so a listed name never has one — but if the
+        // daemon ever hands one over, it is not addressable either.
+        assertFalse(sessionAddressable("api.v2"))
+    }
+
+    @Test
+    fun `an ordinary name, in any case, opens`() {
+        assertTrue(sessionAddressable("jtyper"))
+        assertTrue(sessionAddressable("api-v2"))
+        assertTrue(sessionAddressable("_scratch_1"))
+        // The route regexes are case-permissive, so an uppercase name routes
+        // fine and must not be marked broken.
+        assertTrue(sessionAddressable("JTyper"))
+    }
+
+    @Test
+    fun `the row says what to do about it, in tmux's own terms`() {
+        assertTrue(UNADDRESSABLE_NOTE.isNotBlank(), "a row that will not open must say why")
+        assertTrue("tmux" in UNADDRESSABLE_NOTE, "the fix is in tmux: $UNADDRESSABLE_NOTE")
+    }
+
+    // ------------------------------------------------------- the pane clock
+
+    @Test
+    fun `a pane's relative-time clock does not start at the epoch`() {
+        // RoundsPane seeded its ticking clock at 0 and only wrote a real time
+        // from a LaunchedEffect — and compose flushes effects BEFORE the
+        // composition that reads them, so the FIRST painted frame of the Rounds
+        // list, on every entry to the destination and every return from the
+        // editor, drew every relative time against 1970: a round due tomorrow
+        // read "in 20715 days", a run from days ago read "just now" (agoMs
+        // clamps a negative delta rather than branching on it).
+        assertTrue(
+            paneClockSeed() > 1_600_000_000_000L,
+            "a clock a frame is drawn against must be a real time, not 0",
+        )
+    }
+
+    // ------------------------------------------------------------ composers
+
+    @Test
+    fun `shift-enter replaces the selection whichever way it was made`() {
+        // Compose's legacy TextFieldValue path genuinely emits start > end for
+        // Shift+Left, Shift+Home, Shift+Up and a right-to-left drag, and hands
+        // it to onValueChange UNNORMALISED. Splicing on .start/.end then
+        // overlaps rather than replaces: "hello world" with "world" selected
+        // backwards became "hello world\nworld", and Shift+Home from the end
+        // doubled the whole draft — persisted straight to the drafts book.
+        val forward = TextFieldValue("hello world", TextRange(6, 11))
+        val backward = TextFieldValue("hello world", TextRange(11, 6))
+        assertEquals("hello \n", newlineIn(forward).text)
+        assertEquals("hello \n", newlineIn(backward).text, "a reversed selection is the same selection")
+        assertEquals(TextRange(7), newlineIn(backward).selection)
+    }
+
+    @Test
+    fun `shift-enter with no selection splits at the cursor`() {
+        val out = newlineIn(TextFieldValue("hello world", TextRange(5)))
+        assertEquals("hello\n world", out.text)
+        assertEquals(TextRange(6), out.selection)
+    }
+
+    @Test
+    fun `shift-home from the end does not double the draft`() {
+        val out = newlineIn(TextFieldValue("rebuild the index", TextRange(17, 0)))
+        assertEquals("\n", out.text)
+    }
+
+    // ------------------------------------------------------- session names
+
+    @Test
+    fun `a name tmux would silently rewrite is refused while it is typed`() {
+        // tmux rewrites '.' to '_' and exits 0, so a session created or renamed
+        // with a dot answers to a name nobody typed: the pane opens on the
+        // requested name, every route 404s, and the draft that was just moved
+        // there is deleted as the pane closes. '-' is untouched and stays legal.
+        assertFalse(SESSION_NAME.matches("api.v2"), "a dotted name must not reach tmux")
+        assertFalse(SESSION_NAME.matches("my.session"))
+        assertFalse(SESSION_NAME.matches("notes.old"))
+        assertTrue(SESSION_NAME.matches("api-v2"), "'-' survives tmux untouched")
+        assertTrue(SESSION_NAME.matches("jtyper"))
+        assertTrue(SESSION_NAME.matches("_scratch_1"))
+        assertFalse(SESSION_NAME.matches("-lead"), "must start with a letter or digit")
+        assertFalse(SESSION_NAME.matches(""))
+        assertFalse(SESSION_NAME.matches("a".repeat(51)))
+    }
+
+    @Test
+    fun `the name help does not advertise the one character tmux eats`() {
+        // The sentence ends in a full stop, so the character is looked for the
+        // way the sentence LISTS one: " . " between the other two it offers.
+        assertFalse(" . " in SESSION_NAME_HELP, "help still offers a dot: $SESSION_NAME_HELP")
+        assertTrue(" - " in SESSION_NAME_HELP, "a dash is legal and the help should say so")
     }
 
     // ------------------------------------------------------------- fixtures
