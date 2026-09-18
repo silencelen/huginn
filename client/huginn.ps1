@@ -386,6 +386,11 @@ function huginn {
   huginn end <name>           soft end: ask Claude to wrap up + commit, then
                               (if auto-end is on) end it once it goes idle
   huginn kill <name>          hard end: stop the session now
+  huginn archive <name>       end it for good and keep the way back: the title,
+                              the cwd, a copy of the transcript and the exact
+                              'claude --resume' command   [--now to skip wrap-up]
+  huginn archive              what has been archived, and how to bring it back
+  huginn revive <id|name>     bring an archived session back to life
   huginn headroom             usage left per account, what huginn moved or is holding, and why
   huginn -p "question"        one-shot headless query (reasoning + memory, read-only)
   huginn -y "task"            one-shot that may use tools (bash/files/web + memory)
@@ -762,6 +767,35 @@ function huginn {
       if ($j.auto)   { $auto = ' (auto-ends when it goes idle)' }
     } catch {}
     Write-Host "soft-ended '$en': sent `"$phrase`"$auto"
+  } elseif ($args[0] -eq 'archive') {
+    # Archive: end the session for good AND keep the way back into it — the
+    # title, the cwd, the last thing said, a COPY of the transcript, and the
+    # exact `claude --resume <uuid>`. Graceful by default like `end`; --now for a
+    # session with nothing left to wrap up. Bare `huginn archive` is the list.
+    #
+    # CALLED on the host, not just rendered there. The daemon refuses an archive
+    # in prose ("answer the waiting question first, then archive the session")
+    # and that sentence is the most useful thing this verb ever says, while
+    # _Huginn-Appd uses curl -sf and throws a 4xx body away.
+    if ($args.Count -lt 2) { ssh -T $H huginn-archive; return }
+    if (-not (_Huginn-ValidName $args[1])) { Write-Host "huginn: invalid session name '$($args[1])' (use letters, digits, underscore; no - or *)" -ForegroundColor Red; return }
+    $an = _Huginn-CanonName $args[1]
+    # Single-quote marshalled like the headroom/llm branches: what follows the
+    # host name is parsed by a shell on the far side, so an argument typed here
+    # is remote shell input.
+    $arArgs = @($an)
+    if ($args.Count -gt 2) { $arArgs += $args[2..($args.Count - 1)] }
+    $arStr = ($arArgs | ForEach-Object { "'" + ($_ -replace "'", "'\''") + "'" }) -join ' '
+    ssh -T $H "huginn-archive $arStr"
+  } elseif ($args[0] -eq 'revive' -or $args[0] -eq 'unarchive') {
+    # Takes the archive id OR the name it had; the name is resolved host-side,
+    # because resolving it here would mean parsing the list in two languages.
+    if ($args.Count -lt 2) { Write-Host "usage: huginn revive <id|name>"; return }
+    # Wider than _Huginn-ValidName deliberately: an archive id is a uuid, and
+    # uuids have dashes. Still a strict allow-list — this reaches a remote shell.
+    if ($args[1] -notmatch '^[A-Za-z0-9_.-]{1,64}$') { Write-Host "huginn: '$($args[1])' is not an archive id or a session name" -ForegroundColor Red; return }
+    $rv = "'" + ($args[1] -replace "'", "'\''") + "'"
+    ssh -T $H "huginn-archive revive $rv"
   } elseif ($args[0] -eq '-p' -or $args[0] -eq '-y') {
     if ($args.Count -lt 2) { Write-Host "usage: huginn $($args[0]) ""your prompt"""; return }
     $q = ($args[1..($args.Count - 1)] -join ' '); $esc = $q -replace "'", "'\''"  # POSIX single-quote escape
@@ -818,14 +852,14 @@ function _Huginn-Sessions {
 }
 Register-ArgumentCompleter -CommandName huginn, rclaude, rcc -ScriptBlock {
   param($word, $ast, $pos)
-  $cmds = 'list', 'status', 'rounds', 'headroom', 'devices', 'device', 'local', 'llm', 'solo', 'rename', 'kill', 'end', '-p', '-y', 'usage', 'cost', 'desktop', 'update', 'uninstall', 'version', 'help'
+  $cmds = 'list', 'status', 'rounds', 'headroom', 'devices', 'device', 'local', 'llm', 'solo', 'rename', 'kill', 'end', 'archive', 'revive', '-p', '-y', 'usage', 'cost', 'desktop', 'update', 'uninstall', 'version', 'help'
   # tokens already typed after the command name, excluding the partial word being completed
   $typed = @($ast.CommandElements | Select-Object -Skip 1 | ForEach-Object { $_.ToString() })
   if ($word -and $typed.Count -ge 1) { $typed = @($typed | Select-Object -SkipLast 1) }
   $prev = if ($typed.Count -ge 1) { $typed[-1] } else { '' }
   if ($typed.Count -eq 0) {
     $candidates = $cmds + @(_Huginn-Sessions)          # first word: subcommands + sessions
-  } elseif ($prev -in 'kill', 'end', 'solo', 'rename', 'mv') {
+  } elseif ($prev -in 'kill', 'end', 'archive', 'solo', 'rename', 'mv') {
     $candidates = @(_Huginn-Sessions)                  # these take an existing session name
   } elseif ($prev -in 'usage', 'cost', 'ccusage') {
     $candidates = 'today', 'yesterday', 'week', 'month', 'daily', 'monthly', 'weekly', 'session', 'blocks', 'statusline'
