@@ -1,6 +1,7 @@
 package com.silencelen.huginn.ui
 
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -34,6 +35,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import com.silencelen.huginn.data.AccountSwitch
 import com.silencelen.huginn.data.HeadroomSettings
@@ -473,16 +475,24 @@ private fun PctRow(
 
         @Composable
         fun Number() {
+            // ⚠ THE BOX HOLDS ITS OWN TEXT. Fully controlled from `value`, every
+            // intermediate parse was clamped into the field's range and written
+            // straight back, so on a 50..100 row nothing between 51 and 99 could
+            // be typed at all: the first digit clamped to 50, the second landed
+            // mid-string and clamped to 100, and the box could never be emptied.
+            // The first keystroke therefore SET the setting — one character into
+            // "Hold new subagents at" disabled the hold gate.
+            var text by remember(value) { mutableStateOf(value.toString()) }
             OutlinedTextField(
-                value = value.toString(),
-                // An empty field is a state the reader passes THROUGH while retyping a
-                // number, so it must not be rejected into the old value on every
-                // keystroke. Anything unparseable simply does not move the setting.
-                // THE SAME RANGE the slider holds. Clamping to a wider one here is
-                // how a typed 20 became a 50 on the next slider touch.
-                onValueChange = { raw -> raw.trim().toIntOrNull()?.let { onChange(it.coerceIn(range)) } },
+                value = text,
+                onValueChange = { raw ->
+                    val edit = pctFieldEdit(raw, range)
+                    text = edit.text
+                    edit.commit?.let(onChange)
+                },
                 singleLine = true,
                 suffix = { Text("%") },
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                 modifier = Modifier.width(PCT_NUMBER),
             )
         }
@@ -505,6 +515,25 @@ private fun PctRow(
             }
         }
     }
+}
+
+/**
+ * What one keystroke in a percentage box does: the text it leaves on screen, and
+ * the value to commit (null for a state the reader is merely passing THROUGH).
+ *
+ * Pure so the arithmetic is assertable — the defect it replaces was invisible in
+ * a screenshot and only reachable a keystroke at a time.
+ *
+ * ⚠ ONLY AN IN-RANGE PARSE COMMITS. Clamping a prefix is what made 51..99
+ * untypable on the four 50..100 rows; an empty box, a lone "9" on such a row, or
+ * anything unparseable simply does not move the setting.
+ */
+internal data class PctEdit(val text: String, val commit: Int?)
+
+internal fun pctFieldEdit(raw: String, range: IntRange): PctEdit {
+    val digits = raw.filter { it.isDigit() }.take(3)
+    val n = digits.toIntOrNull()
+    return PctEdit(digits, if (n != null && n in range) n else null)
 }
 
 /** The row's fixed halves: the setting's name, and the number you can type into. */
