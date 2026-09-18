@@ -106,6 +106,55 @@ object HeadroomRules {
     }
 
     /**
+     * The keep-awake line on the Status page: `window running · resets in 3h 12m
+     * · kept awake 3× today`.
+     *
+     * Two facts in one sentence, and they are separable on purpose. The WINDOW
+     * half is worth showing whether or not keep-awake is switched on — until now
+     * nothing in either client could tell you a 5-hour window was open, which is
+     * the single most useful thing to know before starting a long run. The
+     * KEEP-AWAKE half is only shown when the feature is on, because a line about
+     * spending on a host that spends nothing is noise.
+     *
+     * Null on a daemon that does not report [StatusHeadroom.windowRunning] at
+     * all. Absent is not "no window running": a line stating that with total
+     * confidence, from a host that was never asked, is worse than no line.
+     *
+     * The tail is three-valued rather than two:
+     *
+     * - nothing today → no clause, because "kept awake 0× today" is a statistic
+     *   about an absence.
+     * - exactly one → `kept awake at 14:32`, the more useful fact when there is
+     *   only one of it. ⚠ THE CLOCK IS THE DAEMON'S, passed through verbatim —
+     *   `:core` has no timezone database (header rule 2).
+     * - more than one → `kept awake 3× today`, because by then the count is the
+     *   point and the times are not.
+     */
+    fun keepAwakeLine(status: StatusHeadroom?, nowMs: Long): String? {
+        val running = status?.windowRunning ?: return null
+        val parts = ArrayList<String>(3)
+        if (running) {
+            parts += "window running"
+            // The window's OWN reset, never the worst window's: they are
+            // different instants, and `nextResetAt` is usually the week.
+            shortUntil(status.windowResetsAt, nowMs)?.let { parts += "resets in $it" }
+        } else {
+            parts += "no window running"
+        }
+        val ka = status.keepAwake
+        if (ka != null && ka.enabled) {
+            val today = ka.keptAwakeToday
+            val clock = ka.lastAtClock?.trim()?.takeIf { it.isNotEmpty() }
+            when {
+                today > 1 -> parts += "kept awake ${today}× today"
+                today == 1 && clock != null -> parts += "kept awake at $clock"
+                today == 1 -> parts += "kept awake once today"
+            }
+        }
+        return parts.joinToString(" · ")
+    }
+
+    /**
      * The state mark beside a session's model chip, or null when there is
      * nothing worth saying.
      *

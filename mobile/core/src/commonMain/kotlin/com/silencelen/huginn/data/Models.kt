@@ -1061,6 +1061,61 @@ data class HeadroomSettings(
             "Write a short handoff note now (what is done, what is next, which files " +
             "matter), then continue. huginn will move this session to {next} at {ladderPct}%.",
     val accountSwitch: AccountSwitch = AccountSwitch(),
+
+    /**
+     * Keep one 5-hour window always rotating by sending a tiny request whenever
+     * none is running.
+     *
+     * ⚠ FALSE, AND THE DEFAULT IS LOAD-BEARING. This is the only setting in the
+     * product that spends the owner's quota with nobody asking, and a client
+     * whose default said `true` would draw the toggle ON against a daemon that
+     * has it off — then save that reading back on the next edit and switch it on
+     * for real. The daemon's default is false for the same reason.
+     */
+    val keepAwake: Boolean = false,
+    /** ⚠ COPIED VERBATIM from `lib/keepawake.js` `DEFAULT_MODEL`. */
+    val keepAwakeModel: String = "claude-haiku-4-5-20251001",
+    /** `"HH:MM-HH:MM"` in the HOST's local time, or null for none. */
+    val keepAwakeQuietHours: String? = null,
+)
+
+/**
+ * What keep-awake has been doing, as `/v1/status` and `/v1/headroom` report it.
+ *
+ * Every field nullable-with-default, like the rest of the wire models: a daemon
+ * older than this feature answers nothing here, and the Status line degrades to
+ * its window half rather than to a row of zeroes claiming nothing was spent.
+ */
+@Serializable
+data class KeepAwakeStatus(
+    val enabled: Boolean = false,
+    val model: String? = null,
+    val quietHours: String? = null,
+    /** Epoch MILLISECONDS of the last ping, or 0 for never. */
+    val lastAt: Long = 0,
+    /**
+     * That instant as `HH:MM`, formatted BY THE DAEMON.
+     *
+     * `:core` is commonMain and has no timezone database; the one time a shell
+     * turned an instant into a wall clock by hand it printed UTC as if it were
+     * local. The host knows what time it is where the machine is, so it says so
+     * and this is rendered verbatim — the same rule [HeadroomStall]'s
+     * "resets 10:10pm" already follows.
+     */
+    val lastAtClock: String? = null,
+    val keptAwakeToday: Int = 0,
+    val keptAwakeTotal: Int = 0,
+    /** `ok` | `hold` | `retry` — what the last attempt did. */
+    val lastOutcome: String? = null,
+    /**
+     * Why the daemon did or did not ping on its last pass.
+     *
+     * Not rendered on the one-line Status summary, but it is the answer to "it
+     * is switched on and nothing is happening" — a window already running, a red
+     * week, an armed sentinel, quiet hours — and without it the settings screen
+     * has nothing to say about a feature that is deliberately idle.
+     */
+    val why: String? = null,
 )
 
 /** Everything `/v1/headroom` reports. */
@@ -1095,6 +1150,8 @@ data class Headroom(
     val resets: List<HeadroomReset> = emptyList(),
     /** Arbiter bookkeeping, raw: it is displayed, never branched on. */
     val arbiter: JsonObject? = null,
+    /** Keep-awake's own bookkeeping, beside the arbiter's for the same reason. */
+    val keepAwake: KeepAwakeStatus? = null,
     val settings: HeadroomSettings? = null,
     /** The host clock. Epoch MILLISECONDS, like every other `at` on this route. */
     val serverTime: Long = 0,
@@ -1116,6 +1173,22 @@ data class StatusHeadroom(
     val sentinels: List<String> = emptyList(),
     /** Subagent spawns held by the gate right now. */
     val paused: Int = 0,
+    /**
+     * Is a 5-hour window running at all?
+     *
+     * ⚠ NULLABLE, and the three-valued-ness is the point: `null` is a daemon too
+     * old to have been asked, which is not the same answer as `false`. Read as a
+     * plain Boolean, an older host would report "no window running" forever and
+     * the Status line would say so with total confidence.
+     *
+     * The daemon derives it from ONE field — the session row's `resets_at` comes
+     * back null while no window is running — not from the percentage, which is
+     * also 0 in plenty of situations where a window is very much open.
+     */
+    val windowRunning: Boolean? = null,
+    /** When the running window ends. Null when none is running, or on an old daemon. */
+    val windowResetsAt: String? = null,
+    val keepAwake: KeepAwakeStatus? = null,
 )
 
 /**
