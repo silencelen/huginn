@@ -142,7 +142,13 @@ def local_at(iso):
         if dt.tzinfo is None:
             dt = dt.replace(tzinfo=datetime.timezone.utc)
         loc = dt.astimezone()
-        now = datetime.datetime.now(loc.tzinfo)
+        # `loc.tzinfo` is a FIXED offset, taken at the RESET instant -- rendering
+        # `now` through it lands on a different calendar date than the host is on
+        # whenever a DST transition sits between the two, so "resets today" read
+        # "tomorrow" (and the reverse) for the ~14 hours a year either side of a
+        # change. The local zone is the HOST's, always: ask the clock, not the
+        # reset. The printed HH:MM was never wrong; the word in front of it was.
+        now = datetime.datetime.now().astimezone()
         clock = loc.strftime("%H:%M")
         days = (loc.date() - now.date()).days
         if days == 0:

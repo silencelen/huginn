@@ -49,6 +49,69 @@ function ago(v) {
   return execFileSync('python3', ['-c', prog], { input: JSON.stringify(v), encoding: 'utf8' });
 }
 
+/**
+ * `local_at(iso)` with the wall clock and the zone both pinned.
+ *
+ * The renderer reads `now` inside the function, so the only way to test a DST
+ * boundary is to hand it one: a stand-in `datetime` module whose `now()` answers
+ * a fixed instant, installed in sys.modules AFTER the file is loaded (it does
+ * `import datetime` per call) so not a line of the real source is altered. TZ
+ * pins the host zone the same way a terminal session would.
+ */
+function localAt(iso, { now, tz }) {
+  const prog = [
+    'import importlib.util, importlib.machinery, sys, types, os, datetime as _dt',
+    `spec = importlib.util.spec_from_loader("hh", importlib.machinery.SourceFileLoader("hh", ${JSON.stringify(CLI)}))`,
+    'mod = importlib.util.module_from_spec(spec)',
+    'spec.loader.exec_module(mod)',
+    'FAKE = os.environ["FAKE_NOW"].replace("Z", "+00:00")',
+    'class FakeDT(_dt.datetime):',
+    '    @classmethod',
+    '    def now(cls, tz=None):',
+    '        base = _dt.datetime.fromisoformat(FAKE)',
+    '        return base.astimezone(tz) if tz is not None else base.astimezone()',
+    'fake = types.ModuleType("datetime")',
+    'fake.datetime = FakeDT; fake.timezone = _dt.timezone; fake.timedelta = _dt.timedelta; fake.date = _dt.date',
+    'sys.modules["datetime"] = fake',
+    'sys.stdout.write(mod.local_at(os.environ["ISO"]))',
+  ].join('\n');
+  return execFileSync('python3', ['-c', prog], {
+    encoding: 'utf8',
+    env: { ...process.env, TZ: tz, FAKE_NOW: now, ISO: iso },
+  });
+}
+
+test('local_at compares dates in the HOST zone, not the reset\'s offset', { skip: !HAVE_PY && 'no python3' }, () => {
+  // `dt.astimezone()` yields a FIXED-offset tzinfo for the RESET instant, and
+  // rendering `now` in THAT offset puts it on a different calendar date than the
+  // host is really on — twice a year, in the hour either side of a transition.
+  // The clock time printed is always right; the word in front of it is not.
+
+  // Fall-back: truly 00:30 local on the transition day, reset later the same day
+  // (and on the other side of it). Read through the reset's -08:00 the current
+  // instant falls on the PREVIOUS date, so a reset eight hours away is announced
+  // as "tomorrow".
+  assert.equal(localAt('2026-11-01T18:00:00Z',
+    { now: '2026-11-01T07:30:00Z', tz: 'America/Los_Angeles' }), 'today 10:00');
+
+  // Spring-forward mirror: truly 23:30 on the day BEFORE, reset after the gap.
+  // Read through the reset's -07:00, "now" is dragged forward onto the reset's
+  // own date and tomorrow reads as today.
+  assert.equal(localAt('2027-03-14T17:00:00Z',
+    { now: '2027-03-14T07:30:00Z', tz: 'America/Los_Angeles' }), 'tomorrow 10:00');
+
+  // A zone on the other side of the world, transitioning on its own date.
+  assert.equal(localAt('2026-10-25T08:00:00Z',
+    { now: '2026-10-24T21:30:00Z', tz: 'Europe/Athens' }), 'today 10:00');
+
+  // Ordinary days, which must not move: 09:00 local on Tuesday the 15th.
+  const tue = { now: '2026-09-15T16:00:00Z', tz: 'America/Los_Angeles' };
+  assert.equal(localAt('2026-09-15T20:30:00Z', tue), 'today 13:30');
+  assert.equal(localAt('2026-09-16T20:30:00Z', tue), 'tomorrow 13:30');
+  assert.equal(localAt('2026-09-19T20:30:00Z', tue), 'Sat 13:30');
+  assert.equal(localAt('2026-09-30T20:30:00Z', tue), '2026-09-30 13:30');
+});
+
 const NOW = Date.now();
 const base = {
   mode: 'ok',
