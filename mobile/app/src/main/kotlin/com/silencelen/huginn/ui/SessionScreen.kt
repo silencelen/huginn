@@ -442,8 +442,8 @@ private fun SessionConversation(
                     // The long-press seam. Provided AROUND THE TRANSCRIPT ONLY —
                     // the composer and the controls above are not rows and must
                     // not grow a gesture that selects them.
-                    LocalTranscriptSelection provides TranscriptSelectionHost { text ->
-                        selection = SelectionMode.begin(text)
+                    LocalTranscriptSelection provides TranscriptSelectionHost { text, at ->
+                        selection = SelectionMode.begin(text, rowTimeWords(at))
                     },
                     // ⚠ And the platform's own Copy / Select all popup is held
                     // back while that bar is up — one press raised BOTH, with
