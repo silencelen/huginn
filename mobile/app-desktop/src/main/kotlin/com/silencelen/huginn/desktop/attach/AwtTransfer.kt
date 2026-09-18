@@ -32,14 +32,19 @@ object AwtTransfer {
      */
     fun consume(
         t: Transferable?,
-        controller: AttachmentController,
+        controller: AttachSink,
         textFallback: (String) -> Unit = {},
     ): Boolean {
         if (t == null) return false
         // FILES FIRST. A file manager offers a file list AND a text/uri-list AND a
         // string flavour for the same drop; taking the string would attach the
         // path as prose instead of the file.
-        files(t).firstOrNull()?.let { controller.attachFile(it); return true }
+        //
+        // ALL OF THEM, IN DROP ORDER. This was `files(t).firstOrNull()`, and that
+        // one call is the entire multi-file drop bug: the OS had been handing over
+        // the whole list all along and eight of nine dragged files were discarded
+        // here, silently, with the ninth showing up as the only chip.
+        files(t).takeIf { it.isNotEmpty() }?.let { controller.attachFiles(it); return true }
         image(t)?.let { controller.attachImage(it); return true }
         imageBytes(t)?.let { (bytes, name) -> controller.attachImageBytes(bytes, name); return true }
         text(t)?.takeIf { it.isNotBlank() }?.let { textFallback(it); return true }
@@ -54,7 +59,7 @@ object AwtTransfer {
      * times out inside AWT. False means "let the text field do its own paste",
      * which is the right answer in every one of those cases.
      */
-    fun consumeClipboard(controller: AttachmentController): Boolean {
+    fun consumeClipboard(controller: AttachSink): Boolean {
         val t = runCatching { Toolkit.getDefaultToolkit().systemClipboard?.getContents(null) }
             .onFailure { AppLog.warn("attach", "clipboard unreadable: ${it.message ?: it::class.simpleName}") }
             .getOrNull()
@@ -95,8 +100,10 @@ object AwtTransfer {
         }
     }.getOrDefault(false)
 
-    private fun consumeImageOrFile(t: Transferable, controller: AttachmentController): Boolean {
-        files(t).firstOrNull()?.let { controller.attachFile(it); return true }
+    private fun consumeImageOrFile(t: Transferable, controller: AttachSink): Boolean {
+        // The same whole list as a drop: a file manager's copy puts every selected
+        // file on the clipboard, and Ctrl+V used to take one of them.
+        files(t).takeIf { it.isNotEmpty() }?.let { controller.attachFiles(it); return true }
         image(t)?.let { controller.attachImage(it); return true }
         imageBytes(t)?.let { (bytes, name) -> controller.attachImageBytes(bytes, name); return true }
         return false
