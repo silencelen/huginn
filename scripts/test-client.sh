@@ -392,6 +392,103 @@ APSSH
   fi
 fi
 
+echo "[5d/8] the runner fetch really tries the mirror"
+# ⚠ WHY: both runner fetches gated on `Length -gt 0` alone - never on
+# $LASTEXITCODE, never on validity - BEFORE the `if (-not $got) { scp ... }`
+# mirror block. `gh api` prints its error JSON to STDOUT (401 with a bad token =
+# 112 bytes, 404 for a renamed path = 127 bytes, both exit 1), so a FAILED fetch
+# still set $got, the mirror was SKIPPED, the later `node --check` cleared $got,
+# and the user was told "gh and the mirror both failed" about a mirror that was
+# never contacted. On stock Windows PowerShell 5.1 the second half compounds it:
+# `>` is Out-File, default -Encoding unicode, i.e. UTF-16LE + BOM, which node
+# cannot parse - so `huginn device on` and `huginn local on|update|plan` failed
+# 100% of the time on a 5.1 box with gh installed and authenticated.
+#
+# The 5.1 encoding half is settled by Microsoft's documentation plus the
+# mechanism (a UTF-16LE+BOM file passes a length gate and fails `node --check`,
+# verified). What is driven here is the ORDERING half, which is platform
+# independent, plus the source property that no fetch uses `>` any more.
+FT=$(mktemp -d); STUB_DIRS+=("$FT")
+cat > "$FT/gh" <<'GHSTUB'
+#!/usr/bin/env bash
+printf 'gh %s\n' "$*" >> "$FETCH_LOG"
+case "${GH_MODE:-errbody}" in
+  # What the real gh does on a bad token / renamed path: the error JSON goes to
+  # STDOUT and the exit code is 1.
+  errbody) echo '{"message":"Bad credentials","documentation_url":"https://docs.github.com/rest"}'; exit 1 ;;
+  # HTTP 200 carrying something that is not the file (a proxy page, a truncation).
+  junk)    echo 'this is ) not javascript'; exit 0 ;;
+  ok)      echo 'if (process.argv[2] === "version") console.log("1.0.0-gh");'; exit 0 ;;
+esac
+GHSTUB
+cat > "$FT/scp" <<'SCPSTUB'
+#!/usr/bin/env bash
+printf 'scp %s\n' "$*" >> "$FETCH_LOG"
+[ "${SCP_MODE:-ok}" = fail ] && exit 1
+dest="${!#}"
+printf 'if (process.argv[2] === "version") console.log("9.9.9-scp");\n' > "$dest"
+exit 0
+SCPSTUB
+chmod +x "$FT/gh" "$FT/scp"
+# Set out here, not inside the runners: they execute in a command substitution,
+# whose exports never reach this shell - and the assertions read the log.
+export FETCH_LOG="$FT/log"
+
+# The POSIX twin already gated on gh's EXIT status, so it never skipped the
+# mirror for an error body. What it also never checked was whether a 200 is the
+# FILE: a proxy error page is a successful fetch of something that is not
+# JavaScript, and that skipped the mirror on both sides.
+sh_fetch_run () {   # $1 = huginn command, $2 = GH_MODE, $3 = SCP_MODE
+  rm -rf "$FT/shhome"; mkdir -p "$FT/shhome"
+  : > "$FETCH_LOG"
+  ( export PATH="$FT:$PATH" HOME="$FT/shhome" GH_MODE="$2" SCP_MODE="${3:-ok}"
+    . "$PWD/client/huginn.sh" >/dev/null 2>&1
+    eval "$1" ) 2>&1
+}
+SHJ=$(sh_fetch_run 'huginn device update' junk ok)
+grep -q '^scp ' "$FETCH_LOG" && grep -q '9.9.9-scp' <<<"$SHJ" \
+  && ok "sh: a 200 that is not JavaScript falls through to the mirror" \
+  || bad "sh: device update on a junk body said: $SHJ / log: $(cat "$FETCH_LOG")"
+SHB=$(sh_fetch_run 'huginn device update' errbody fail)
+grep -q 'gh' <<<"$SHB" && grep -q 'mirror' <<<"$SHB" \
+  && ok "sh: when both fail, the message names which source failed" \
+  || bad "sh: both-failed message was: $SHB"
+
+if ! command -v pwsh >/dev/null 2>&1; then
+  skip "ps1 runner-fetch checks (no pwsh)"
+else
+  fetch_run () {   # $1 = huginn command, $2 = GH_MODE, $3 = SCP_MODE
+    rm -rf "$FT/home"; mkdir -p "$FT/home"
+    : > "$FETCH_LOG"
+    HOME="$FT/home" GH_MODE="$2" SCP_MODE="${3:-ok}" PATH="$FT:$PATH" \
+      pwsh -NoProfile -Command ". $PWD/client/huginn.ps1; $1" 2>&1 | tr -d '\r'
+  }
+  FR=$(fetch_run 'huginn device update' errbody ok)
+  grep -q '^scp ' "$FETCH_LOG" \
+    && ok "ps1: a gh error BODY does not count as a fetch - the mirror is contacted" \
+    || bad "ps1: device update with a failing gh never ran scp; log: $(cat "$FETCH_LOG") / said: $FR"
+  grep -q '9.9.9-scp' <<<"$FR" \
+    && ok "ps1: and the runner installed is the mirror's" || bad "ps1: device update said: $FR"
+  FJ=$(fetch_run 'huginn device update' junk ok)
+  grep -q '^scp ' "$FETCH_LOG" && grep -q '9.9.9-scp' <<<"$FJ" \
+    && ok "ps1: a 200 that is not JavaScript also falls through to the mirror" \
+    || bad "ps1: device update on a junk body said: $FJ / log: $(cat "$FETCH_LOG")"
+  FB=$(fetch_run 'huginn device update' errbody fail)
+  grep -q 'gh exited 1' <<<"$FB" && grep -qE 'scp from [^ ]+ exited' <<<"$FB" \
+    && ok "ps1: when both fail, the message names which source failed and how" \
+    || bad "ps1: both-failed message was: $FB"
+  FL=$(fetch_run 'huginn local plan' errbody ok)
+  grep -q '^scp ' "$FETCH_LOG" \
+    && ok "ps1: the local-tier fetch has the same ordering" \
+    || bad "ps1: local plan never ran scp; log: $(cat "$FETCH_LOG") / said: $FL"
+  # ⚠ AND THE SOURCE PROPERTY, because the encoding half of this cannot be run
+  # from Linux: `>` into the temp file is Out-File, and its PS 5.1 default is
+  # UTF-16LE + BOM. Nothing may redirect into a fetch temp again.
+  grep -qE 'gh api [^|]*> *\$tmp' client/huginn.ps1 \
+    && bad "ps1: a fetch still redirects with '>' - PS 5.1 writes UTF-16 there" \
+    || ok "ps1: no fetch redirects into its temp file with '>'"
+fi
+
 echo "[6/8] desktop links come from GitHub, and reach it WITHOUT the host"
 # The whole point of the verb is that it works on a machine that cannot ssh here
 # (that is why it does not use /v1/desktop-kt, whose every route needs the token).
@@ -697,7 +794,13 @@ rm -rf "$PLAN_DIR"
 [ "$(grep -c 'tmp="\$dest\.tmp\.js"' client/huginn.sh)" = 2 ] \
   && ok "sh fetches syntax-check under a .js temp name" \
   || bad "sh fetch temp name regressed — .tmp is unparseable on modern node"
-[ "$(grep -Fc '.tmp.js"' client/huginn.ps1)" -ge 2 ] \
+# The ps1 side now has ONE fetch helper (see [5d/8]) instead of two inline
+# copies, so this is asserted as a property rather than counted: every
+# `node --check` in the file targets the helper's temp, and that temp is .js.
+PS_CHK=$(grep -c '^[[:space:]]*node --check' client/huginn.ps1)
+PS_JS=$(grep -c '^[[:space:]]*node --check \$tmp ' client/huginn.ps1)
+[ "$PS_CHK" -gt 0 ] && [ "$PS_CHK" = "$PS_JS" ] \
+  && grep -q '\$tmp = "\$Dest\.tmp\.js"' client/huginn.ps1 \
   && ok "ps1 fetches syntax-check under a .js temp name" \
   || bad "ps1 fetch temp name regressed — .tmp is unparseable on modern node"
 
