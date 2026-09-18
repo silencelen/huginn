@@ -1510,16 +1510,12 @@ class HuginnClient(
      * One project: the record, the row the tree draws, and every member's live
      * state.
      *
-     * Decoded twice out of one body on purpose — the daemon spreads the project
-     * into the top level and hangs `row` and `live` beside it, and a model that
-     * repeated all fifteen project fields would be a second place to get the
-     * record wrong.
+     * ONE DECODE OF ONE BODY. The route answers the `{project, row, live}`
+     * envelope — it used to spread the record into the top level, which cost two
+     * passes over the same text and would have let a project field called `row`
+     * or `live` overwrite the daemon's own.
      */
-    suspend fun project(id: String): ProjectDetail {
-        val text = call("/v1/projects/$id")
-        val extras = decode<ProjectDetailExtras>(text)
-        return ProjectDetail(decode<Project>(text), extras.row, extras.live)
-    }
+    suspend fun project(id: String): ProjectDetail = decode(call("/v1/projects/$id"))
 
     /** The members' overviews, summed. Polled while the dashboard is on screen. */
     suspend fun projectDashboard(id: String): ProjectDashboard =
@@ -1554,8 +1550,16 @@ class HuginnClient(
         val resp = http.request { build("/v1/projects", HttpMethod.Post, Tier.NORMAL, body) }
         val text = resp.bodyAsText()
         if (resp.status.value == 409) {
-            val why = runCatching { decode<ApiError>(text).error }.getOrNull()
-            return ProjectCreated(null, why ?: "that project could not be created")
+            // ⚠ THREE REFUSALS SHARE THIS STATUS. `reason` is the discriminator —
+            // trust the directory, pick another name, or end the tmux session
+            // squatting the lead's name — and it is nullable because an older
+            // daemon sends the sentence alone, which is still the whole fix.
+            val refusal = runCatching { decode<ProjectRefusal>(text) }.getOrNull()
+            return ProjectCreated(
+                null,
+                refusal?.error ?: "that project could not be created",
+                refusal?.reason,
+            )
         }
         if (!resp.status.isSuccess()) throw errorFrom(resp.status.value, text)
         return ProjectCreated(decode<Project>(text), null)

@@ -536,6 +536,18 @@ object ProjectRules {
     fun alreadySpawned(manifest: ProjectManifest?): Boolean =
         manifest != null && manifest.rev > 0 && manifest.spawnedRev >= manifest.rev
 
+    /**
+     * The same question off a ROW, which is all a list has.
+     *
+     * ⚠ `GET /v1/projects` CARRIES NO MANIFEST. A tree that had to fetch every
+     * project to find out whether a proposal had already been carried out would
+     * make one call per row to draw one list, which is why the daemon puts
+     * `spawnedRev` beside `manifestRev` on the row. Same rule, same order of
+     * tests, so the two overloads cannot answer differently about one project.
+     */
+    fun alreadySpawned(row: ProjectRow): Boolean =
+        row.manifestRev > 0 && row.spawnedRev >= row.manifestRev
+
     // ------------------------------------------------------------ the spawn
 
     /**
