@@ -185,6 +185,21 @@ object SettingsCatalog {
                 availability = { it.savedAccounts > 0 },
                 inventory = listOf(18),
             ),
+            // NO INVENTORY NUMBER, and that is the honest reading: the Part 1
+            // audit numbered the controls that EXISTED, and there was no setup
+            // flow to number. Its absence from 1-61 is the finding, not a gap
+            // in the mapping.
+            SettingsItem(
+                id = "host.run-setup",
+                title = "Run setup again",
+                summary = "Walks the address, the token, claude, this computer, local AI, notifications " +
+                    "and autostart, checking each one against the real thing.",
+                keywords = listOf(
+                    "setup", "set up", "wizard", "first run", "onboarding", "check", "validate",
+                    "test", "connection", "diagnose", "again",
+                ),
+                surface = Surface.DESKTOP,
+            ),
         ),
     )
 
@@ -581,6 +596,20 @@ object SettingsCatalog {
                 title = "Keyboard shortcuts",
                 summary = "Every key this window answers to.",
                 keywords = listOf("keyboard", "shortcuts", "keys", "f1", "hotkey"),
+                surface = Surface.DESKTOP,
+            ),
+            // The single most-expected missing setting for an always-on tray
+            // app, and it was missing everywhere: the recon grep over the whole
+            // desktop source, the packaging and the scripts found no Run key, no
+            // Startup shortcut and no autostart file of any kind.
+            SettingsItem(
+                id = "appearance.autostart",
+                title = "Start with your session",
+                summary = "Whether huginn starts when you sign in, so the window is already watching.",
+                keywords = listOf(
+                    "autostart", "auto start", "startup", "login", "boot", "sign in", "launch",
+                    "run at startup", "shortcut",
+                ),
                 surface = Surface.DESKTOP,
             ),
         ),
