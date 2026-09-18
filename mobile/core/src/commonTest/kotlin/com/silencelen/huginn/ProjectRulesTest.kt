@@ -514,6 +514,23 @@ class ProjectRulesTest {
         assertFalse(ProjectRules.alreadySpawned(null))
     }
 
+    @Test
+    fun `a ROW answers the same question, without fetching the project`() {
+        // ⚠ THE LIST HAS NO MANIFEST ON IT. `GET /v1/projects` carries rows, and a
+        // tree that had to GET every project to find out whether a proposal was
+        // already carried out would make one call per row to draw one list. The
+        // daemon puts `spawnedRev` beside `manifestRev` on the row for exactly
+        // this, and the two overloads must not be able to disagree.
+        assertTrue(ProjectRules.alreadySpawned(ProjectRow(manifestRev = 2, spawnedRev = 2)))
+        assertFalse(ProjectRules.alreadySpawned(ProjectRow(manifestRev = 3, spawnedRev = 2)))
+        // A rev of 0 is "no proposal has ever arrived", which is not a spawn.
+        assertFalse(ProjectRules.alreadySpawned(ProjectRow(manifestRev = 0, spawnedRev = 0)))
+        // A daemon older than this field sends no `spawnedRev` at all; the default
+        // must read as "not spawned" rather than as "already done", because the
+        // wrong way round hides Spawn on a proposal nobody has answered.
+        assertFalse(ProjectRules.alreadySpawned(ProjectRow(manifestRev = 1)))
+    }
+
     // ------------------------------------------------------------ the spawn
 
     @Test
