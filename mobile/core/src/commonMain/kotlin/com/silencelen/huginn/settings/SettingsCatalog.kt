@@ -372,6 +372,17 @@ object SettingsCatalog {
                 // The same `/v1/status` shelf the templates come from.
                 availability = { it.quickActions },
             ),
+            SettingsItem(
+                id = "chats.projects",
+                title = "Projects",
+                summary = "Clusters of sessions with roles: the tree, each project's dashboard, and a lead's proposals.",
+                keywords = listOf("project", "projects", "cluster", "members", "lead", "spawn", "proposal", "manifest"),
+                // Reached from the Sessions screen too; the row exists so search finds it.
+                // Gated like its siblings on the daemon having answered `/v1/status`
+                // (the probe carries no projects fact yet); the shells additionally
+                // hide their own entry when `/v1/projects` is absent.
+                availability = { it.quickActions },
+            ),
         ),
     )
 
