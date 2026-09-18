@@ -34,13 +34,20 @@ class ReplyReceiver : BroadcastReceiver() {
         val chat = intent.getStringExtra(EXTRA_CHAT) ?: return
         val notificationId = intent.getIntExtra(EXTRA_NOTIFICATION_ID, 0)
         val title = intent.getStringExtra(EXTRA_TITLE).orEmpty().ifBlank { "huginn" }
-        val text = RemoteInput.getResultsFromIntent(intent)
-            ?.getCharSequence(KEY_REPLY)?.toString()?.trim().orEmpty()
-        // An empty send is a mis-tap, not an instruction. Restoring the notification
-        // rather than leaving the shade half-collapsed keeps the reply box reachable.
-        if (text.isEmpty()) return
-
         val app = context.applicationContext
+        val raw = RemoteInput.getResultsFromIntent(intent)?.getCharSequence(KEY_REPLY)
+        val text = raw?.toString()?.trim().orEmpty()
+        // An empty send is a mis-tap, not an instruction. Restoring the notification
+        // rather than leaving the shade half-collapsed keeps the reply box reachable
+        // — and it is the ONLY thing that clears SystemUI's spinner, which is
+        // started on the send press and cleared by nothing but an update to this
+        // id. Returning here without re-posting left it spinning for good, with
+        // the shade thread recoverable only by swiping it away.
+        if (replyStep(raw) == ReplyStep.RESTORE) {
+            update(app, notificationId, title, chat)
+            return
+        }
+
         val pending = goAsync()
 
         // Echoed into the thread immediately, before the network is touched. The box
@@ -177,3 +184,17 @@ class ReplyReceiver : BroadcastReceiver() {
         const val EXTRA_TITLE = "title"
     }
 }
+
+/**
+ * What arrived from the shade's reply box: something to send, or nothing —
+ * in which case the notification still has to be PUT BACK.
+ *
+ * SystemUI enables the send button on RAW length, so a reply of spaces, a tab,
+ * or a non-breaking space is submittable and arrives here as blank. Pure and
+ * top-level so the branch can be asserted; the bug was never in the sending
+ * half.
+ */
+internal enum class ReplyStep { SEND, RESTORE }
+
+internal fun replyStep(raw: CharSequence?): ReplyStep =
+    if (raw?.toString()?.trim().isNullOrEmpty()) ReplyStep.RESTORE else ReplyStep.SEND
