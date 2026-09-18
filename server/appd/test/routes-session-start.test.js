@@ -54,7 +54,7 @@ const BOOT_MS = 1200;
 const BANNER_MS = 600;
 const UP_MS = BOOT_MS + BANNER_MS;
 
-let tmp, stateDir, token, daemon, daemonLog;
+let tmp, stateDir, token, daemon, daemonLog, binDir;
 const madeSessions = new Set();
 
 function sh(cmd, args) {
@@ -126,7 +126,7 @@ before(async () => {
   // That route runs the literal command `claude; exec "$SHELL" -l`, so the only
   // way to put a stand-in in its place is a `claude` earlier on the daemon's
   // PATH. Nothing real is ever launched by this file.
-  const binDir = path.join(tmp, 'bin');
+  binDir = path.join(tmp, 'bin');
   fs.mkdirSync(binDir);
   const fake = path.join(__dirname, 'fixtures', 'fake-claude.js');
   fs.writeFileSync(path.join(binDir, 'claude'),
@@ -136,6 +136,16 @@ before(async () => {
     // one PATH entry serves every session the tests make.
     + 'name=$(tmux display-message -p "#S" 2>/dev/null)\n'
     + `export HG_FAKE_CLAUDE_OUT="${tmp}/$name.submitted"\n`
+    // ⚠ A PRE-COMPOSER PHASE THAT LOOKS LIKE A SHELL, for the ONE session that
+    // asks for it by name. The unmarked startup rule (3.1.2) refuses to hold a
+    // pane whose last line is a shell prompt, so a pane in this shape can only
+    // still be held by the MARK — which is how the rename tests below tell the
+    // two apart. Long banner phase for the same reason: the hold has to outlive
+    // the rename by enough polls to be observed.
+    + 'case "$name" in *shellish*)\n'
+    + '  export HG_FAKE_CLAUDE_BANNER_TEXT="huginn:~$"\n'
+    + '  export HG_FAKE_CLAUDE_BANNER_MS=4000\n'
+    + '  ;;\nesac\n'
     + `exec ${process.execPath} ${fake}\n`, { mode: 0o755 });
 
   daemonLog = path.join(tmp, 'daemon.log');
@@ -249,6 +259,40 @@ test('the wait says what it is waiting FOR: blockedBy is "starting", not a turn'
   await drains(name);
 });
 
+test("the SEND's own answer says what it is waiting for, not just how many", async () => {
+  // ⚠ THE TWO SECONDS NOBODY WAS POLLING FOR. Both clients seed their "queued"
+  // line from this response and only then start polling `/typing`, so for the
+  // first poll interval the sentence is drawn from whatever the seed knew — and
+  // the seed knew a number and nothing else. The default sentence is "will send
+  // when Claude finishes its turn", which is about a turn that has not begun: for
+  // the first couple of seconds of every new session, every client said the wrong
+  // thing about the one wait a reader is most likely to see, and then silently
+  // corrected itself. Same word `/typing` reports, so the line does not change
+  // under the reader when the first poll lands.
+  const name = await createSession('seed');
+  const { body } = await send(name, 'what is holding this');
+  assert.equal(body.delivered, false);
+  assert.equal(body.queued, 1);
+  assert.equal(body.blockedBy, 'starting', 'the reason rides with the count');
+  assert.equal(body.blockedBy, (await typingOf(name)).blockedBy, 'and it is the same word');
+  await drains(name);
+});
+
+test('a send that lands says it is blocked by nothing', async () => {
+  // The other half: `blockedBy` on a delivered send must be null, not the last
+  // reason some other send was held for. A client reads it beside `landed`.
+  const name = await createSession('seedok');
+  // ⚠ `drains` ANSWERS AT ONCE ON AN EMPTY QUEUE, which on a session created a
+  // moment ago is a composer that has not drawn yet. Warm it up with a send and
+  // wait for THAT, or this test is the held case wearing the delivered case's name.
+  await send(name, 'first');
+  await drains(name);
+  await wait(300);
+  const { body } = await send(name, 'a perfectly ordinary message');
+  assert.equal(body.delivered, true);
+  assert.equal(body.blockedBy, null);
+});
+
 test('the hold is ONE-SHOT: the next message goes straight through', async () => {
   // A gate that keeps re-arming would put a 400 ms poll under every send for
   // the life of the session. The mark is retired the moment a composer is seen.
@@ -293,21 +337,199 @@ test('a TRUST dialog is never released, however long the startup gate waits', as
   assert.equal(readOr(lostFor(name)), '', 'and not one byte sent at the dialog');
 });
 
-test('a pane appd did not launch claude into is never held', async () => {
-  // The gate is narrow on purpose. A plain shell has no composer and never will,
-  // so a rule keyed on "no caret yet" would hold every non-Claude pane the app
-  // can open until its grace ran out. Only sessions appd started `claude` in
-  // are marked, and this one was made outside the daemon entirely.
+test('a plain SHELL pane is never held, however new the tmux session is', async () => {
+  // The gate is narrow on purpose, and 3.1.2 — which stopped keying it on the
+  // mark — is where that narrowness has to be earned back. A shell has no
+  // composer and never will, so "no caret yet" is a permanent state there: a
+  // rule that read it as a startup would put a twenty-second wait under every
+  // send into every non-Claude pane the app can open, for the first twenty
+  // seconds of that pane's life, which is exactly when somebody is typing into
+  // it. The pane says what it is — its last line is a PROMPT — and that is the
+  // discriminator.
   const name = `${PFX}-shell`;
   madeSessions.add(name);
   const out = path.join(tmp, 'shell.txt');
+  // A prompt, then a reader that does not echo: the prompt is what the rule
+  // reads, and `cat` is how the test sees what was typed.
   sh('tmux', ['new-session', '-d', '-s', name, '-c', tmp, '-x', '100', '-y', '30',
-    `sh -c 'stty -echo; cat > ${out}'`]);
+    `sh -c 'printf "huginn:~$ "; stty -echo; cat > ${out}'`]);
+  for (let i = 0; i < 40 && !/huginn:~\$/.test(capture(name)); i++) await wait(50);
+  assert.match(capture(name), /huginn:~\$/, 'precondition: the prompt really is on screen');
 
+  const t0 = Date.now();
   const { body } = await send(name, 'straight through');
-  assert.equal(body.delivered, true, 'an unmarked session keeps the old behaviour exactly');
+  assert.equal(body.delivered, true, 'a shell keeps the old behaviour exactly');
   assert.equal(body.queued, 0);
+  assert.ok(Date.now() - t0 < 6_000, 'and is not made to wait out a grace it can never leave');
   for (let i = 0; i < 40 && !fs.existsSync(out); i++) await wait(100);
   await wait(300);
   assert.equal(readOr(out), 'straight through\n');
+});
+
+// -------------------------------------------- the sessions appd never marked
+
+/**
+ * Start a fake `claude` the way `cc` does: tmux directly, no daemon involved.
+ *
+ * `server/bin/cc` is `tmux new-session -A -s "$SESSION" -c "$WORKDIR" 'claude;
+ * exec "$SHELL" -l'` — so every session made by `cc`, by `huginn <name>`, or by a
+ * phone/laptop client's open-a-session button reaches the daemon already running
+ * and was never in `launchingAt` at all.
+ */
+function startCcPane(suffix) {
+  const name = `${PFX}-${suffix}`;
+  madeSessions.add(name);
+  // ⚠ THE START COMMAND IS `cc`'s OWN, VERBATIM, and that matters: the rule under
+  // test reads `#{pane_start_command}` as its positive evidence, so a pane that
+  // ran the stand-in by path would prove nothing about the sessions this is for.
+  // The `claude` on that line is the same PATH shim the daemon is given.
+  sh('tmux', ['new-session', '-d', '-s', name, '-c', tmp, '-x', '100', '-y', '30',
+    `PATH=${binDir}:$PATH HG_FAKE_CLAUDE_BOOT_MS=${BOOT_MS} `
+    + `HG_FAKE_CLAUDE_BANNER_MS=${BANNER_MS} claude; exec "$SHELL" -l`]);
+  return name;
+}
+
+test('an empty pane running something ELSE is not a startup, however new it is', async () => {
+  // The other half of the same rule, and the one that keeps it honest. A pane
+  // that neither echoes nor prompts is byte for byte what a booting claude looks
+  // like at t+0.5 s — `cat > file` is the shape half this daemon's own tests use —
+  // so inferring a startup from absence alone puts a twenty-second wait under
+  // every send into every such pane. What the pane was TOLD to run is the fact
+  // that separates them.
+  const name = `${PFX}-notclaude`;
+  madeSessions.add(name);
+  const out = path.join(tmp, 'notclaude.txt');
+  sh('tmux', ['new-session', '-d', '-s', name, '-c', tmp, '-x', '100', '-y', '30',
+    `sh -c 'stty -echo; cat > ${out}'`]);
+
+  const t0 = Date.now();
+  const { body } = await send(name, 'straight through');
+  assert.equal(body.delivered, true, 'nothing told this pane to run claude');
+  assert.equal(body.queued, 0);
+  assert.ok(Date.now() - t0 < 6_000, 'and it is not made to wait out a grace for somebody else');
+  for (let i = 0; i < 40 && !fs.existsSync(out); i++) await wait(100);
+  await wait(300);
+  assert.equal(readOr(out), 'straight through\n');
+});
+
+test('a session `cc` started is held too, though nothing ever marked it', async () => {
+  // ⚠ THE FAIL-FIRST FOR THE GATE'S BLIND SPOT. `startingUp` asks `launching`,
+  // and only the create route and the reboot restore ever set it — so the gate
+  // shipped in 3.0.7 covered the sessions made from the app's create sheet and
+  // no others, while `cc` is how most sessions on this host are actually made.
+  // Against 3.1.1 this send goes straight at a pane with no application in it:
+  // `delivered` comes back true, `.submitted` never appears, and the text is
+  // sitting in `.lost`. tmux's own `#{session_created}` is the launch time the
+  // missing mark would have carried.
+  const name = startCcPane('cc');
+  const text = 'the first thing I typed into cc';
+
+  const { status, body } = await send(name, text);
+  assert.equal(status, 200, JSON.stringify(body));
+  assert.equal(body.delivered, false, 'claude is not up in this pane either');
+  assert.equal(body.queued, 1, 'held, not dropped — the sender is owed this message');
+  assert.equal(body.blockedBy, 'starting', 'and held for the reason a client can say out loud');
+
+  const st = await drains(name);
+  assert.equal(st.queued, 0, 'the hold must END; a message parked forever is the same bug');
+  await wait(400);
+  assert.equal(readOr(outFor(name)), `${text}\n`, 'submitted once the composer existed');
+  assert.equal(readOr(lostFor(name)), '', 'and never thrown at the pane before that');
+});
+
+// ------------------------------------------------- what a rename must carry
+
+/** Rename a session and remember the new name so after() can kill it. */
+async function rename(from, to) {
+  madeSessions.add(to);
+  return api(`/v1/sessions/${from}/rename`, { method: 'POST', body: JSON.stringify({ name: to }) });
+}
+
+test('a rename does not strand the messages already queued for the session', async () => {
+  // ⚠ THE FAIL-FIRST. The rename route moves the state file, the prompt sidecars,
+  // the pane lease, the soft-end and the restore registry — and left `sendQueues`
+  // keyed under the OLD name. The queue is then in a map nothing will ever pump
+  // again: the message is not delivered, not dropped and not reported, and
+  // `GET /typing` under the new name answers "nothing queued" for a send that is
+  // still sitting there. Renaming a just-created session is the ordinary case —
+  // the app names it after the fact — which is also exactly when a message is
+  // being held by the startup gate.
+  const from = await createSession('ren');
+  const to = `${PFX}-renamed`;
+  const text = 'queued before the rename';
+
+  const first = await send(from, text);
+  assert.equal(first.body.delivered, false, 'precondition: the startup gate really is holding it');
+  assert.equal(first.body.queued, 1);
+
+  const r = await rename(from, to);
+  assert.equal(r.status, 200, JSON.stringify(r.body));
+  assert.equal(r.body.name, to);
+
+  const st0 = await typingOf(to);
+  assert.equal(st0.queued, 1, 'the queue moved with the session');
+  const st = await drains(to);
+  assert.equal(st.queued, 0, 'and is still being POLLED under the new name, timer and all');
+  await wait(400);
+  // The stand-in derived its output path from the name tmux had when it launched,
+  // so the delivered message lands under the OLD name's file. That is a fact about
+  // the fixture, not about the daemon.
+  assert.equal(readOr(outFor(from)), `${text}\n`, 'delivered, once, after the rename');
+  assert.equal(readOr(lostFor(from)), '', 'and never thrown at the pane in the meantime');
+});
+
+test('a rename does not drop the startup mark either', async () => {
+  // The second half of the same bug, and it needs its own test because 3.1.2's
+  // unmarked rule would otherwise cover for the loss. This session's pre-composer
+  // phase ENDS IN A SHELL PROMPT — the one shape the unmarked rule refuses to
+  // hold — so after the rename the only thing that can still be holding this send
+  // is `launchingAt`, migrated. Lose it and the message is released into a pane
+  // `claude` has not painted yet, which is the 3.0.7 P1 coming back in through
+  // the rename route.
+  const from = await createSession('shellish');
+  const to = `${PFX}-shellish2`;
+  const text = 'held across a rename';
+
+  for (let i = 0; i < 60 && !/huginn:~\$/.test(capture(from)); i++) await wait(50);
+  assert.match(capture(from), /huginn:~\$/, 'precondition: the pane looks like a shell right now');
+  assert.equal(require('../lib/typing').composerDrawn(capture(from).split('\n')), false,
+    'precondition: and has no composer, which is what makes the two rules disagree');
+
+  const first = await send(from, text);
+  assert.equal(first.body.delivered, false, 'the MARK holds it even though the pane looks like a shell');
+  assert.equal(first.body.blockedBy, 'starting');
+
+  const r = await rename(from, to);
+  assert.equal(r.status, 200, JSON.stringify(r.body));
+
+  // Past at least one more pump pass, so this is the gate re-deciding rather
+  // than a verdict left over from before the rename.
+  await wait(1_200);
+  const st0 = await typingOf(to);
+  assert.equal(st0.queued, 1, 'still held');
+  assert.equal(st0.blockedBy, 'starting', 'and held by the startup gate, which survived the rename');
+
+  const st = await drains(to, 12_000);
+  assert.equal(st.queued, 0);
+  await wait(400);
+  assert.equal(readOr(outFor(from)), `${text}\n`, 'submitted once the composer finally drew');
+  assert.equal(readOr(lostFor(from)), '', 'and not one byte reached the pane before it');
+});
+
+test('a rename to the name it already has keeps everything it had', async () => {
+  // Every migration in that route is `set(new)` then `delete(old)`, which erases
+  // the row when the two names are the same — and a rename field answering with
+  // whatever is already in it is a perfectly ordinary thing for a client to send.
+  const name = await createSession('same');
+  const text = 'queued across a no-op rename';
+  const first = await send(name, text);
+  assert.equal(first.body.delivered, false);
+
+  const r = await rename(name, name);
+  assert.equal(r.status, 200, JSON.stringify(r.body));
+  assert.equal((await typingOf(name)).queued, 1, 'the queue is still there');
+  await drains(name);
+  await wait(400);
+  assert.equal(readOr(outFor(name)), `${text}\n`);
+  assert.equal(readOr(lostFor(name)), '');
 });

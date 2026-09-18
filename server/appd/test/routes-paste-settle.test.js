@@ -95,14 +95,20 @@ function send(name, text) {
  * is a pane the startup gate has no mark for, and creating it here is the only
  * way to be certain the gate is out of the picture rather than merely quick.
  */
-function startPane(suffix, { prebuf = 'lost' } = {}) {
+function startPane(suffix, { prebuf = 'lost', typed = '' } = {}) {
   const name = `${PFX}-${suffix}`;
   madeSessions.add(name);
   sh('tmux', ['new-session', '-d', '-s', name, '-c', tmp, '-x', '100', '-y', '30',
     `env HG_FAKE_CLAUDE_PREBUF=${prebuf} HG_FAKE_CLAUDE_OUT=${outFor(name)} `
+    + `HG_FAKE_CLAUDE_TYPED='${typed}' `
     + `HG_FAKE_CLAUDE_BOOT_MS=${BOOT_MS} HG_FAKE_CLAUDE_BANNER_MS=${BANNER_MS} `
     + `${process.execPath} ${FAKE}`]);
   return name;
+}
+
+/** How many times `text` was submitted to this pane's stand-in. */
+function submitCount(name, text) {
+  return readOr(outFor(name)).split('\n').filter((l) => l === text).length;
 }
 
 /** The composer's own line, read the way lib/typing reads it. */
@@ -140,6 +146,17 @@ before(async () => {
       HUGINN_APPD_STATE_DIR: stateDir,
       HUGINN_APPD_TMUX_SOCKET: TMUX_SOCK,
       HUGINN_APPD_WORKDIR: tmp,
+      // ⚠ THE GRACE IS ZERO HERE, ON PURPOSE. The subject of this file is what the
+      // DELIVERY path does when a send reaches a composer-less pane anyway, and
+      // the startup gate exists to stop that from happening — so the two cannot
+      // both be switched on in one daemon without the gate quietly becoming the
+      // thing under test. Zero is the production shape of the first of the three
+      // ways a send still gets through: the grace expiring on a loaded host
+      // (`no composer 22s after launch`, then the owner's first message 82 ms
+      // later). The panes below would not be held in any case — nothing told them
+      // to run `claude` — but that is a fact about the fixture's filename, and a
+      // fixture's filename is not what this file means to depend on.
+      HUGINN_APPD_STARTUP_GRACE_MS: '0',
       HG_FAKE_CLAUDE_BOOT_MS: String(BOOT_MS),
       HG_FAKE_CLAUDE_BANNER_MS: String(BANNER_MS),
     },
@@ -222,13 +239,18 @@ test('a message that beats the composer is still SENT, not left in the box', asy
   assert.match(capture(name), /● submitted/, 'the pane shows the turn starting');
 });
 
-test('the settle wait is BOUNDED, and a paste it never sees still gets its Enter', async () => {
-  // The other band: bytes that beat the paint by only a few hundred ms are gone
-  // entirely (4/4 on the real binary), and no amount of waiting will make them
-  // appear. A person's message is delivered or it is an error, never quietly
-  // binned — so the Enter goes anyway after the bound, and the one thing that
-  // must not happen is silence: the journal carries the line and the pane's own
-  // bottom rows, which is how a reader can tell this case from a slow one.
+test('a paste the pane SWALLOWED is re-pasted once, and lands exactly once', async () => {
+  // ⚠ THE FAIL-FIRST FOR THE SECOND BAND. Bytes that beat the paint by a few
+  // hundred ms are read and discarded by whatever drains the pty before the TUI
+  // attaches — 4/4 on the real binary, no composer text, no turn, no record. The
+  // settle wait can only ever time out on them, and 3.1.1 then pressed Enter into
+  // a composer that was by now up and EMPTY: it submitted nothing, the message
+  // was gone, and the only trace was one journal line. Detected, not fixed.
+  //
+  // Against 3.1.1 `.submitted` is empty and the count below is 0. With the
+  // recovery the daemon re-pastes into that empty composer and the message goes —
+  // ONCE, which is the other half of the assertion and the thing a retry loop
+  // would get wrong.
   const name = startPane('lost');          // default prebuf: the bytes are discarded
   const text = 'this one is swallowed whole';
 
@@ -237,14 +259,39 @@ test('the settle wait is BOUNDED, and a paste it never sees still gets its Enter
   const took = Date.now() - t0;
   assert.equal(body.delivered, true, 'the send is not refused and not queued forever');
   assert.ok(took >= 2_500, `the settle check must actually wait its bound (took ${took}ms)`);
-  assert.ok(took < 6_000, `and must not wait past it (took ${took}ms)`);
+  assert.ok(took < 8_000, `and must not wait past it, recovery included (took ${took}ms)`);
 
-  await wait(400);
-  assert.equal(readOr(outFor(name)), '', 'nothing arrived: these bytes were never readable');
+  await wait(500);
+  assert.match(readOr(`${outFor(name)}.lost`), /this one is swallowed whole/,
+    'precondition: the FIRST copy really was swallowed, which is what makes this the lost band');
+  assert.equal(submitCount(name, text), 1, 'recovered, and delivered exactly once');
   const jrnl = readOr(daemonLog);
   assert.match(jrnl, new RegExp(`${name}: pasted text never appeared`),
     'a delivery nobody could see must say so on disk');
+  assert.match(jrnl, /re-pasting it once/, 'and say what it did about it');
   assert.match(jrnl, /pane: /, 'with what WAS in the pane, because that is the only evidence');
+});
+
+test('a composer with somebody ELSE\'s words in it is never pasted over', async () => {
+  // The other outcome of the same timeout, and the reason the recovery is not
+  // simply "always re-paste". A person can start typing in the seconds the paste
+  // was being swallowed; pasting into that box turns a lost message into a
+  // mangled one, and a bare second Enter would submit THEIR half-written line.
+  // Nothing is typed, nothing is pressed, and the journal carries the pane.
+  const name = startPane('draft', { typed: 'half a thought I was still having' });
+  const text = 'the message that was swallowed';
+
+  const { body } = await send(name, text);
+  assert.equal(body.delivered, true, 'the send was accepted; what it could not do is said on disk');
+
+  await wait(600);
+  assert.equal(readOr(outFor(name)), '', 'nothing was submitted — not ours, and above all not theirs');
+  assert.equal(composerOf(name), 'half a thought I was still having',
+    'their draft is exactly as they left it');
+  const jrnl = readOr(daemonLog);
+  assert.match(jrnl, new RegExp(`${name}: pasted text never appeared`));
+  assert.match(jrnl, /leaving it alone/, 'and says why it stopped');
+  assert.match(jrnl, /half a thought/, 'carrying what was in the box instead');
 });
 
 // ------------------------------------------------------- what must not regress

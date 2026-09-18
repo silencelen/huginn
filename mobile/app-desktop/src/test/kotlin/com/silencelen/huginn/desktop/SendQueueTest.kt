@@ -170,6 +170,45 @@ class SendQueueTest {
     }
 
     @Test
+    fun `the seed carries the reason, so the first line is not the wrong sentence`() = runTest {
+        // ⚠ THE TWO SECONDS BEFORE THE FIRST POLL. `noteSend` is what the composer
+        // line is drawn from until `/typing` answers, and it recorded a COUNT and
+        // nothing else — so a message held because Claude has not started yet was
+        // announced as "will send when Claude finishes its turn", a turn that has
+        // not begun, and then silently corrected. The daemon says `blockedBy` on the
+        // send's own answer since appd 3.1.2.
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.Unconfined)
+        val c = controller(scope) { """{"queued":1,"blockedBy":"starting"}""" }
+
+        c.noteSend(SendKeysResult(ok = true, queued = 1, position = 1, delivered = false, blockedBy = "starting"))
+        assertEquals("starting", c.sendQueue.value.blockedBy)
+        assertEquals(
+            "Queued · waiting for Claude to start (1 waiting)",
+            SendQueue.line(c.sendQueue.value),
+            "the FIRST sentence has to be right; a correction two seconds later is the bug",
+        )
+
+        scope.cancel()
+    }
+
+    @Test
+    fun `an older daemon that says no reason keeps the sentence it always had`() = runTest {
+        // Additive on the wire means additive on the screen: `blockedBy` absent
+        // decodes to null, and null is the turn sentence, exactly as before.
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.Unconfined)
+        val c = controller(scope) { """{"queued":1}""" }
+
+        c.noteSend(SendKeysResult(ok = true, queued = 1, position = 1, delivered = false))
+        assertNull(c.sendQueue.value.blockedBy)
+        assertEquals(
+            "Queued · will send when Claude finishes its turn (1 waiting)",
+            SendQueue.line(c.sendQueue.value),
+        )
+
+        scope.cancel()
+    }
+
+    @Test
     fun `a failed poll keeps the last known state rather than inventing delivery`() = runTest {
         val scope = CoroutineScope(SupervisorJob() + Dispatchers.Unconfined)
         var typing = """{"queued":1,"blockedBy":"turn"}"""

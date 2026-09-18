@@ -1106,38 +1106,104 @@ async function confirmSubmitted(name, text) {
   }
 }
 
-async function sendTextToPane(name, text, { submit = true } = {}) {
+/** One bracketed paste of `text` into a pane. The half of delivery that repeats. */
+async function pasteOnce(name, text) {
   const target = `=${name}:`;
   const buf = typing.bufferName();
+  const lb = await runStdin('tmux', ['load-buffer', '-b', buf, '-'], text);
+  if (lb.err) {
+    await run('tmux', ['delete-buffer', '-b', buf]);     // best effort: a partial load
+    return { ok: false, fallback: true, stderr: lb.stderr };
+  }
+  const pb = await run('tmux', ['paste-buffer', '-b', buf, '-p', '-d', '-t', target]);
+  if (pb.err) {
+    await run('tmux', ['delete-buffer', '-b', buf]);     // -d never ran
+    return { ok: false, fallback: false, stderr: pb.stderr };
+  }
+  return { ok: true };
+}
+
+/**
+ * The paste never appeared. What may be done about it?
+ *
+ * ⚠ 3.1.1 DETECTED THIS AND DID NOT FIX IT. The lost band — bytes pasted ~0.95 s
+ * to ~0.3 s before the TUI paints — is read and discarded by whatever drains the
+ * pty before Claude attaches: no composer text, no turn, no transcript record.
+ * The settle wait can only time out on it, and the Enter that followed went into
+ * a composer that was by then up and EMPTY, so it submitted nothing. One journal
+ * line, one message gone.
+ *
+ * The one safe recovery is a re-paste into an empty composer, and `recoveryDecision`
+ * is the rule (lib/typing.js, THE LOST BAND). It is a RE-PASTE and never a second
+ * bare Enter: an Enter on its own either submits nothing, or submits whatever
+ * somebody else has typed since.
+ *
+ * ONCE. A second failure is reported, not retried — a loop here is a pane getting
+ * the same message three times the moment its first paste was merely slow.
+ */
+async function recoverLostPaste(name, text, settle) {
+  const fresh = (await capturePaneLines(name)) || settle.lines;
+  const what = typing.recoveryDecision(fresh);
+  if (what === 'blind') {
+    log(typing.pasteLostLogLine(name, settle.waitedMs, fresh));
+    return { landed: false, enter: true, recovered: false };
+  }
+  if (what === 'leave') {
+    log(typing.pasteLeftAloneLogLine(name, settle.waitedMs, fresh));
+    return { landed: false, enter: false, recovered: false };
+  }
+  log(typing.pasteResentLogLine(name, settle.waitedMs, fresh));
+  const again = await pasteOnce(name, text);
+  if (!again.ok) {
+    // The re-paste could not even be loaded. Nothing was typed, so there is
+    // nothing to submit and an Enter would only fire at an empty box.
+    log(`typing: ${name}: the re-paste failed too (${(again.stderr || '').trim().slice(0, 120)})`);
+    return { landed: false, enter: false, recovered: false };
+  }
+  const second = await waitForPasteToLand(name, text, fresh);
+  if (!second.landed) log(typing.pasteLostLogLine(name, second.waitedMs, second.lines));
+  return { landed: second.landed, enter: true, recovered: true };
+}
+
+async function sendTextToPane(name, text, { submit = true } = {}) {
+  const target = `=${name}:`;
   // Read BEFORE the load, not after: the only use of this capture is to tell a
   // pane that already showed this text from one that has just received it, and
   // after the paste there is no telling.
   const before = submit ? await capturePaneLines(name) : null;
-  const lb = await runStdin('tmux', ['load-buffer', '-b', buf, '-'], text);
-  if (!lb.err) {
-    const pb = await run('tmux', ['paste-buffer', '-b', buf, '-p', '-d', '-t', target]);
-    if (pb.err) {
-      await run('tmux', ['delete-buffer', '-b', buf]);   // -d never ran
-      return { ok: false, code: 503, message: 'could not reach the pane buffer', stderr: pb.stderr };
-    }
+  const first = await pasteOnce(name, text);
+  if (!first.ok && !first.fallback) {
+    return { ok: false, code: 503, message: 'could not reach the pane buffer', stderr: first.stderr };
+  }
+  if (first.ok) {
     if (!submit) return { ok: true, how: 'paste' };
     const settle = await waitForPasteToLand(name, text, before);
-    if (!settle.landed) log(typing.pasteLostLogLine(name, settle.waitedMs, settle.lines));
+    let landed = settle.landed;
+    let recovered = false;
+    let press = true;
+    if (!settle.landed) {
+      const r = await recoverLostPaste(name, text, settle);
+      landed = r.landed;
+      recovered = r.recovered;
+      press = r.enter;
+    }
+    if (!press) {
+      return { ok: true, how: 'paste', settled: false, settleMs: settle.waitedMs, submitted: false, recovered };
+    }
     await sleep(PASTE_BEAT_MS);
     const en = await run('tmux', ['send-keys', '-t', target, 'Enter']);
     if (en.err) return { ok: false, code: 500, message: `tmux: ${(en.stderr || '').trim()}`, stderr: en.stderr };
     let submitted = null;
-    if (settle.landed) {
+    if (landed) {
       const conf = await confirmSubmitted(name, text);
       submitted = conf.ok;
       if (!conf.ok) log(typing.submitStalledLogLine(name, conf.waitedMs, conf.lines));
     }
-    return { ok: true, how: 'paste', settled: settle.landed, settleMs: settle.waitedMs, submitted };
+    return { ok: true, how: 'paste', settled: landed, settleMs: settle.waitedMs, submitted, recovered };
   }
-  log(`typing: load-buffer failed for ${name} (${(lb.stderr || '').trim().slice(0, 120)}); falling back to send-keys`);
-  await run('tmux', ['delete-buffer', '-b', buf]);       // best effort: a partial load
+  log(`typing: load-buffer failed for ${name} (${(first.stderr || '').trim().slice(0, 120)}); falling back to send-keys`);
   if (!typing.sendKeysFits(text, target)) {
-    return { ok: false, code: 503, message: 'could not reach the pane buffer', stderr: lb.stderr };
+    return { ok: false, code: 503, message: 'could not reach the pane buffer', stderr: first.stderr };
   }
   for (const chunk of typing.chunks(text, target)) {
     const r = await run('tmux', ['send-keys', '-t', target, '-l', '--', chunk]);
@@ -1205,10 +1271,35 @@ const sendQueues = new Map();   // session name -> { entries, blockedBy, deliver
  */
 const launchingAt = new Map();  // session name -> ms epoch when appd ran `claude` in it
 
+/**
+ * The grace, with an override.
+ *
+ * `HUGINN_APPD_STARTUP_GRACE_MS` exists for two readers. A host slow enough that
+ * `claude` needs longer than twenty seconds to paint wants it BIGGER — the
+ * measured production line `no composer 22s after launch` is exactly that host,
+ * and the send that followed it 82 ms later is exactly the loss. And the delivery
+ * tests want it ZERO, because their whole subject is what happens when a send
+ * reaches a composer-less pane ANYWAY, which is the state a grace of zero puts
+ * every pane in permanently. Nonsense (a negative, a word) falls back rather than
+ * disabling the gate by typo.
+ */
+const STARTUP_GRACE_MS = (() => {
+  const raw = process.env.HUGINN_APPD_STARTUP_GRACE_MS;
+  if (raw == null || raw === '') return typing.STARTUP_GRACE_MS;
+  const n = Number(raw);
+  return Number.isFinite(n) && n >= 0 ? n : typing.STARTUP_GRACE_MS;
+})();
+
+/**
+ * The sessions being held by the UNMARKED rule, so its journal line is written
+ * once per session rather than once per 400 ms poll.
+ */
+const unmarkedHeld = new Set();
+
 function markLaunching(name) {
   const now = Date.now();
   for (const [k, t] of launchingAt) {
-    if (now - t > typing.STARTUP_GRACE_MS) launchingAt.delete(k);
+    if (now - t > STARTUP_GRACE_MS) launchingAt.delete(k);
   }
   launchingAt.set(name, now);
 }
@@ -1217,6 +1308,38 @@ function markLaunching(name) {
 function launchAgeMs(name) {
   const t = launchingAt.get(name);
   return t == null ? null : Date.now() - t;
+}
+
+/**
+ * The two facts the UNMARKED startup rule needs from tmux, in one call.
+ *
+ * `#{session_created}` is when the session was born — the launch time the missing
+ * mark would have carried — and `#{pane_start_command}` is what the pane was told
+ * to run, which is the positive evidence that separates a booting `claude` from
+ * the many other things that draw an empty pane. `server/bin/cc` starts every one
+ * of its sessions with the literal `claude; exec "$SHELL" -l`, so the fact is
+ * there for exactly the sessions this rule is about.
+ *
+ * ⚠ THE TWO display-message TRAPS, BOTH AGAIN. The target needs the TRAILING
+ * COLON or tmux answers every field blank at exit 0, and the exit status cannot
+ * answer existence — so the echoed NAME is the proof the target hit something.
+ *
+ * Only called for a session with no mark and something queued, which is rare and
+ * short-lived; the seconds-resolution birth time is two orders under the twenty
+ * seconds it is compared against.
+ */
+async function paneStartFacts(name) {
+  const { err, stdout } = await run('tmux', ['display-message', '-p', '-t', `=${name}:`,
+    '#{session_name}\t#{session_created}\t#{pane_start_command}']);
+  if (err) return null;
+  const [found, created, ...rest] = (stdout || '').replace(/\n$/, '').split('\t');
+  if (found !== name) return null;
+  rememberBorn(name, created);
+  const born = Number(created);
+  return {
+    ageMs: Number.isFinite(born) && born > 0 ? Math.max(0, Date.now() - born * 1000) : null,
+    startCommand: rest.join('\t'),
+  };
 }
 
 /**
@@ -1316,7 +1439,7 @@ async function checkGates(name) {
   // A capture that FAILED says nothing about startup — the session is probably
   // gone, and holding a send on a pane we cannot read would be a wait with no
   // end. Fall through to the old behaviour and let delivery report the failure.
-  const starting = lines ? startupGate(name, typing.composerDrawn(lines)) : false;
+  const starting = lines ? await startupGate(name, lines) : false;
   return { idle, lastKind, paneWhy, starting, sessionState: readSessionState(name) };
 }
 
@@ -1331,14 +1454,40 @@ async function checkGates(name) {
  * shell — the send still goes (a person's message is delivered or it is an
  * error) and the reader deserves to know which pane it went into.
  */
-function startupGate(name, composer) {
+async function startupGate(name, lines) {
+  const composer = typing.composerDrawn(lines);
   const ageMs = launchAgeMs(name);
-  if (ageMs == null) return false;            // not a session appd launched claude in
-  if (typing.startingUp({ launching: true, composer, ageMs })) return true;
-  launchingAt.delete(name);
-  if (!composer) {
-    log(`typing: ${name}: no composer ${Math.round(ageMs / 1000)}s after launch; `
-      + 'sending into the pane as it is (claude may have exited to the shell)');
+  if (ageMs != null) {
+    if (typing.startingUp({ launching: true, composer, ageMs, graceMs: STARTUP_GRACE_MS })) return true;
+    launchingAt.delete(name);
+    unmarkedHeld.delete(name);
+    if (!composer) {
+      log(`typing: ${name}: no composer ${Math.round(ageMs / 1000)}s after launch; `
+        + 'sending into the pane as it is (claude may have exited to the shell)');
+    }
+    return false;
+  }
+  // ⚠ NO MARK IS NOT NO EVIDENCE. `cc` / `huginn <name>` start tmux themselves
+  // (`server/bin/cc`: `tmux new-session -A -s … 'claude; exec "$SHELL" -l'`), so
+  // the sessions a person makes from a phone or a laptop shell have never been in
+  // `launchingAt` at all — and they race exactly the same way. tmux's own
+  // `#{session_created}` is the launch time the mark would have recorded.
+  const facts = await paneStartFacts(name);
+  const bornMs = facts ? facts.ageMs : null;
+  const starting = typing.startingUnmarked({
+    composer,
+    shell: typing.shellPrompt(lines),
+    claudeStart: typing.startsClaude(facts && facts.startCommand),
+    ageMs: bornMs,
+    graceMs: STARTUP_GRACE_MS,
+  });
+  if (starting) { unmarkedHeld.add(name); return true; }
+  // One line when a hold ENDS without a composer to show for it, and only for a
+  // session this rule actually held — the same promise the marked path makes, and
+  // written once rather than once per 400 ms poll.
+  if (unmarkedHeld.delete(name) && !composer) {
+    log(`typing: ${name}: no composer ${Math.round((bornMs || 0) / 1000)}s after the tmux `
+      + 'session was created; sending into the pane as it is (this session was not started by appd)');
   }
   return false;
 }
@@ -1472,7 +1621,10 @@ async function pumpQueue(name) {
     // so `GET /typing` could still report the failure — but nothing ever removed
     // it afterwards, so a long-lived daemon accumulated one row per session that
     // ever failed a delivery. A session tmux no longer has cannot be polled about.
-    else if (!q.lastError || !(await sessionExists(name))) sendQueues.delete(name);
+    else if (!q.lastError || !(await sessionExists(name))) {
+      sendQueues.delete(name);
+      unmarkedHeld.delete(name);
+    }
   }
 }
 
@@ -1541,11 +1693,20 @@ function enqueueSend(name, text, opts = {}) {
       // Settled during that pass: delivered, dropped, or failed.
       return done.then((v) => ({
         id: entry.id, position: 0, delivered: !!v.delivered, dropped: v.dropped || null,
-        result: v.result || null, queued: q.entries.length,
+        result: v.result || null, queued: q.entries.length, blockedBy: q.entries.length ? (q.blockedBy || null) : null,
       }));
     }
-    return { id: entry.id, position: queued + 1, delivered: false, dropped: null, result: null, queued: q.entries.length };
-  }).catch(() => ({ id: entry.id, position, delivered: false, dropped: null, result: null, queued: q.entries.length }));
+    // `blockedBy` is what the pump just decided about the HEAD of this queue —
+    // the same word `GET /typing` will report — so a caller that seeds its wait
+    // line from this answer says the same sentence the first poll will.
+    return {
+      id: entry.id, position: queued + 1, delivered: false, dropped: null, result: null,
+      queued: q.entries.length, blockedBy: q.blockedBy || null,
+    };
+  }).catch(() => ({
+    id: entry.id, position, delivered: false, dropped: null, result: null,
+    queued: q.entries.length, blockedBy: q.blockedBy || null,
+  }));
 }
 
 /**
@@ -8164,8 +8325,40 @@ const server = http.createServer(async (req, res) => {
       for (const kind of ['ask', 'plan', 'compacting']) {
         try { fs.renameSync(path.join(STATE_DIR, kind, from), path.join(STATE_DIR, kind, actual)); } catch { }
       }
-      if (leases.has(from)) { leases.set(actual, leases.get(from)); leases.delete(from); }
-      if (softEnds.has(from)) { softEnds.set(actual, softEnds.get(from)); softEnds.delete(from); }
+      // ⚠ EVERY MOVE BELOW IS `set(new) THEN delete(old)`, WHICH ERASES THE ROW
+      // WHEN THE TWO NAMES ARE THE SAME. A rename to the name it already has is a
+      // legitimate no-op — the desktop's rename field answers with whatever is in
+      // it, and tmux's own rewrite can land back on `from` — and it used to cost
+      // the session its pane lease and its soft-end.
+      if (actual !== from) {
+        if (leases.has(from)) { leases.set(actual, leases.get(from)); leases.delete(from); }
+        if (softEnds.has(from)) { softEnds.set(actual, softEnds.get(from)); softEnds.delete(from); }
+        // ⚠ AND THE TWO THE RENAME USED TO DROP ON THE FLOOR. Both belong to a
+        // session that was created SECONDS ago, which is exactly when a client
+        // renames one — the app's create sheet names the session after the fact.
+        //
+        //   launchingAt   the startup gate's mark. Dropped, the send queued
+        //                 against the new name has no gate at all and goes
+        //                 straight at a pane `claude` has not painted yet, which
+        //                 is the 3.0.7 P1 coming back through the rename.
+        //   sendQueues    the queue ITSELF. Dropped, every message already held
+        //                 for this session is stranded in a map nothing will ever
+        //                 pump again: not delivered, not dropped, not reported.
+        //                 `GET /typing` under the new name says nothing is queued.
+        if (launchingAt.has(from)) { launchingAt.set(actual, launchingAt.get(from)); launchingAt.delete(from); }
+        if (unmarkedHeld.delete(from)) unmarkedHeld.add(actual);
+        const q = sendQueues.get(from);
+        if (q) {
+          // ⚠ AND ITS TIMER, WHICH IS CLOSED OVER THE OLD NAME. Left running it
+          // pumps a name nothing is queued under any more, sets `q.timer = null`
+          // on the way past, and nothing re-arms — so the queue would be moved
+          // correctly and then never polled again.
+          if (q.timer) { clearTimeout(q.timer); q.timer = null; }
+          sendQueues.set(actual, q);
+          sendQueues.delete(from);
+          armQueueTimer(actual);
+        }
+      }
       // The restore registry is keyed by name too; move it or the live session goes
       // unrecorded under the new name and the old name gets pruned as "ended".
       registryRename(from, actual);
@@ -8254,6 +8447,19 @@ const server = http.createServer(async (req, res) => {
       let queued = 0;
       let position = 0;
       let delivered = false;
+      /**
+       * WHY THE SEND'S OWN ANSWER CARRIES THE REASON, and not just the count.
+       *
+       * Both clients seed their "queued" line from this response and only then
+       * start polling `/typing` — so for the first poll interval the line is drawn
+       * from whatever the seed knew, and the seed knew nothing but a number. The
+       * default sentence is "will send when Claude finishes its turn", which for a
+       * session held by `starting` is about a turn that has not begun: for ~2 s
+       * after creating a session, every client says the wrong thing about the one
+       * wait a reader is most likely to see. Same word as `/typing` reports, so
+       * the sentence does not change under the reader when the first poll lands.
+       */
+      let blockedBy = null;
       if (typedKeys.length > 0) {
         /**
          * Through the QUEUE, not straight at the pane.
@@ -8277,12 +8483,13 @@ const server = http.createServer(async (req, res) => {
         delivered = out.delivered;
         position = out.position;
         queued = out.queued;
+        blockedBy = out.blockedBy;
       }
       for (const k of rawKeys) {
         const r = await run('tmux', ['send-keys', '-t', `=${name}:`, k]);
         if (r.err) return sendErr(res, 500, `tmux: ${r.stderr.trim()}`);
       }
-      return sendJson(res, 200, { ok: true, queued, position, delivered });
+      return sendJson(res, 200, { ok: true, queued, position, delivered, blockedBy });
     }
 
     /**

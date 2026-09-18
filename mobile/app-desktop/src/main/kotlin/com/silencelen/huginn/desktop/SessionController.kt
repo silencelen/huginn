@@ -935,7 +935,18 @@ class SessionController(
      */
     fun noteSend(result: SendKeysResult) {
         if (result.landed) return
-        _sendQueue.value = TypingState(queued = result.queued, delivering = false)
+        // ⚠ AND `blockedBy`, WHICH THIS USED TO THROW AWAY. The composer line is
+        // drawn from this state until the first `/typing` poll answers, and with
+        // only a count in it the line fell through to "will send when Claude
+        // finishes its turn" — a turn that, on a session created a second ago, has
+        // not begun. Two seconds of the wrong sentence on the most common wait
+        // there is, then a silent correction. appd 3.1.2 says the word on the
+        // send's own answer; null from an older daemon keeps the old line.
+        _sendQueue.value = TypingState(
+            queued = result.queued,
+            delivering = false,
+            blockedBy = result.blockedBy,
+        )
         watchQueue()
     }
 

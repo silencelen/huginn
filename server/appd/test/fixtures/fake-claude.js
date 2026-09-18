@@ -46,11 +46,31 @@
  *              HG_FAKE_CLAUDE_TRUST     '1' to draw the trust dialog and never
  *                                       accept input, whatever is typed at it
  *              HG_FAKE_CLAUDE_PREBUF    'lost' (default) — pre-composer bytes are
- *                                       read and discarded into `<out>.lost`
+ *                                       read and discarded into `<out>.lost`, and
+ *                                       the composer then paints EMPTY. This is
+ *                                       the band a settle wait can only time out
+ *                                       on, and the one the re-paste recovery in
+ *                                       `sendTextToPane` exists for: `.lost` holds
+ *                                       the copy nobody could read and `<out>`
+ *                                       must end up holding the message exactly
+ *                                       ONCE, never twice.
  *                                       'stuck' — pre-composer bytes are HELD and
  *                                       rendered into the composer at paint time
  *                                       with every newline stripped, i.e. the
  *                                       message arrives and its Enter does not
+ *              HG_FAKE_CLAUDE_BANNER_TEXT  what the caret-free console phase prints
+ *                                       instead of the default warnings. A pane
+ *                                       whose pre-composer text happens to END in
+ *                                       a shell prompt terminator is the one shape
+ *                                       the unmarked startup rule refuses to hold,
+ *                                       so it is how a test can ask whether the
+ *                                       MARK is doing the holding.
+ *              HG_FAKE_CLAUDE_TYPED     text the composer already holds when it
+ *                                       paints — a person who started typing while
+ *                                       the paste was being swallowed. Recovery
+ *                                       must not re-paste over it, so the daemon's
+ *                                       'leave' branch needs a pane in this state
+ *                                       to be tested against at all.
  */
 const fs = require('node:fs');
 
@@ -59,6 +79,7 @@ const BOOT_MS = Number(process.env.HG_FAKE_CLAUDE_BOOT_MS || 1200);
 const BANNER_MS = Number(process.env.HG_FAKE_CLAUDE_BANNER_MS || 600);
 const TRUST = process.env.HG_FAKE_CLAUDE_TRUST === '1';
 const PREBUF = process.env.HG_FAKE_CLAUDE_PREBUF === 'stuck' ? 'stuck' : 'lost';
+const TYPED = process.env.HG_FAKE_CLAUDE_TYPED || '';
 
 /** The box, with the status lines UNDER it — the shape that matters. */
 const RULE = '─'.repeat(70);
@@ -124,7 +145,9 @@ process.stdin.resume();
 setTimeout(() => {
   // Phase 2: console text. Deliberately caret-free — this is the frame that
   // looks like Claude is up and is not.
-  process.stdout.write('Claude Code v2.1.258\n'
+  process.stdout.write(process.env.HG_FAKE_CLAUDE_BANNER_TEXT
+    ? `${process.env.HG_FAKE_CLAUDE_BANNER_TEXT}\n`
+    : 'Claude Code v2.1.258\n'
     + 'Permission allow rule (settings): a wildcard before the rest of the command\n'
     + 'matches more than it looks like it does.\n');
   setTimeout(() => {
@@ -135,6 +158,10 @@ setTimeout(() => {
     // composer at paint time with its newline gone, so the message is on
     // screen and no turn ever starts. That is the band the owner kept hitting.
     if (held) { buf = held.replace(/[\r\n]/g, ''); held = ''; }
+    // Somebody was typing while the paste went nowhere. Whatever is in the box
+    // at paint time is THEIRS, and a recovery that pastes over it turns a lost
+    // message into a mangled one.
+    else if (TYPED) buf = TYPED;
     render();
   }, BANNER_MS);
 }, BOOT_MS);

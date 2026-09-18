@@ -667,3 +667,113 @@ test('the settle bounds are the measured ones, not a round number someone liked'
   assert.equal(t.PASTE_SETTLE_POLL_MS, 50);
   assert.equal(t.SUBMIT_CONFIRM_MS, 1_000);
 });
+
+// ------------------------------------------------- the lost band, recovered
+
+// A REAL capture of the frame the recovery has to judge: the composer as it
+// paints, still holding the dim hint. Taken from the 2026-09-17 sweep
+// (caps/r2-abs-12/002134.txt, composer+0 ms; by 002630.txt the hint is gone).
+const FRESH_COMPOSER = [
+  '                                                             ◉ xhigh · /effort',
+  '────────────────────────────────────────────────────────────────────────────────',
+  '❯ Try "refactor status-page"',
+  '────────────────────────────────────────────────────────────────────────────────',
+  '  [r2-abs-12] Fable 5.1 · main ~5',
+  '  ⏵⏵ auto mode on (shift+tab to cycle)',
+];
+
+test('composerEmpty tells a composer with nothing in it from no composer at all', () => {
+  // null / true / false, and all three are different instructions: nothing here
+  // can answer, nothing is in the box, somebody's words are in the box.
+  assert.equal(t.composerEmpty(['root@huginn:~/netplan#']), null, 'a shell has no composer');
+  assert.equal(t.composerEmpty([]), null, 'nor has an empty pane');
+  assert.equal(t.composerEmpty(SENT_PANE), true, 'the box let go of the message');
+  assert.equal(t.composerEmpty(STUCK_PANE), false, 'the box is holding one');
+});
+
+test('the composer PLACEHOLDER is an empty composer, not somebody typing', () => {
+  // ⚠ MEASURED, AND IT DECIDES THE WHOLE RECOVERY. For its first ~500 ms the box
+  // holds a dim hint. Read as text, the recovery refuses to re-paste for exactly
+  // the sends that arrived earliest — which are the ones it exists for.
+  assert.equal(t.composerEmpty(FRESH_COMPOSER), true);
+  assert.equal(t.recoveryDecision(FRESH_COMPOSER), 'resend');
+});
+
+test('recoveryDecision re-pastes ONLY into a composer that is drawn and empty', () => {
+  assert.equal(t.recoveryDecision(SENT_PANE), 'resend', 'the lost band: up, and holding nothing');
+  assert.equal(t.recoveryDecision(STUCK_PANE), 'leave',
+    'a person may be mid-sentence; pasting over it turns a lost message into a mangled one');
+  assert.equal(t.recoveryDecision(['root@huginn:~/netplan#']), 'blind',
+    'a shell cannot say whether the bytes arrived, so nothing changes for it');
+  assert.equal(t.recoveryDecision([]), 'blind', 'nor can a pane tmux answered nothing for');
+});
+
+test('the recovery writes its own journal line, carrying the pane', () => {
+  const resent = t.pasteResentLogLine('mcserver', 3000, SENT_PANE);
+  assert.match(resent, /mcserver/);
+  assert.match(resent, /re-pasting it once/);
+  assert.match(resent, /pane: /);
+  const left = t.pasteLeftAloneLogLine('mcserver', 3000, STUCK_PANE);
+  assert.match(left, /leaving it alone/);
+  assert.match(left, /RACEPROBE-abs-0/, 'what was in the box instead is the whole evidence');
+});
+
+// ------------------------------------------- the sessions nobody marked
+
+test('shellPrompt reads the LAST line, and only a prompt terminator counts', () => {
+  assert.equal(t.shellPrompt(['root@huginn:~/netplan#']), true);
+  assert.equal(t.shellPrompt(['jacob@box:~$']), true);
+  assert.equal(t.shellPrompt(['% ']), true, 'zsh, and trailing space is not content');
+  assert.equal(t.shellPrompt(['>>>']), true, 'a REPL is no more a startup than a shell is');
+  assert.equal(t.shellPrompt([]), false, 'an empty pane has drawn nothing, and nothing is not a prompt');
+  assert.equal(t.shellPrompt(LIVE_COMPOSER), false, 'the auto-mode hint is not a prompt');
+  assert.equal(t.shellPrompt([
+    'Claude Code v2.1.258',
+    'Permission allow rule (settings): a wildcard before the rest of the command',
+    'matches more than it looks like it does.',
+  ]), false, 't+0.8s of a real startup: caret-free console text, and NOT a shell');
+});
+
+test('startsClaude reads the pane START COMMAND, which is the positive evidence', () => {
+  // ⚠ AN EMPTY PANE IS NOT EVIDENCE OF A STARTUP. `cat > file`, a `stty -echo`
+  // reader, a picker stub — every one of them is byte for byte what a booting
+  // claude looks like at t+0.5 s, and inferring from absence alone held fourteen
+  // such panes in this suite for the full grace. tmux keeps what the pane was told
+  // to run, and for every session `cc` makes that is `claude; exec "$SHELL" -l`.
+  assert.equal(t.startsClaude('"claude; exec \\"$SHELL\\" -l"'), true, "cc's own spelling, as tmux re-quotes it");
+  assert.equal(t.startsClaude('/usr/bin/claude --resume abc'), true);
+  assert.equal(t.startsClaude('cat >/dev/null'), false);
+  assert.equal(t.startsClaude("sh -c 'stty -echo; cat > /tmp/x'"), false);
+  assert.equal(t.startsClaude('/opt/claude-tools/serve'), false, 'a word edge, not a substring');
+  assert.equal(t.startsClaude('myclaude'), false);
+  assert.equal(t.startsClaude(''), false, 'a pane with no start command says nothing');
+  assert.equal(t.startsClaude(null), false);
+});
+
+test('startingUnmarked holds a fresh composer-less pane that was told to run claude', () => {
+  // ⚠ THE GATE COVERED THE ROUTE AND NOTHING ELSE. `server/bin/cc` starts tmux
+  // itself, so every session made by `cc` / `huginn <name>` — which is most of
+  // them — had no mark and therefore no gate at all.
+  const cc = { composer: false, shell: false, claudeStart: true, ageMs: 500 };
+  assert.equal(t.startingUnmarked(cc), true);
+  assert.equal(t.startingUnmarked({ ...cc, composer: true }), false,
+    'claude is up: this rule must never speak about the pane again');
+  assert.equal(t.startingUnmarked({ ...cc, shell: true }), false,
+    'a shell has no composer and never will — holding it is a 20 s wait for nothing');
+  assert.equal(t.startingUnmarked({ ...cc, claudeStart: false }), false,
+    'an empty pane running something else is not a startup, however empty it looks');
+  assert.equal(t.startingUnmarked({ ...cc, ageMs: t.STARTUP_GRACE_MS }), false,
+    'the grace is a ceiling here too');
+  assert.equal(t.startingUnmarked({}), false, 'no birth time is not a birth time of zero');
+  assert.equal(t.startingUnmarked({ ...cc, ageMs: null }), false);
+});
+
+test('both startup rules take the grace as an argument, so a slow host can widen it', () => {
+  // The knob exists for two readers: a host where `claude` needs longer than 20 s
+  // to paint (measured in production: `no composer 22s after launch`), and the
+  // delivery tests, whose whole subject is a send reaching a composer-less pane
+  // ANYWAY — which a grace of zero is the only way to arrange.
+  assert.equal(t.startingUnmarked({ composer: false, shell: false, claudeStart: true, ageMs: 500, graceMs: 0 }), false);
+  assert.equal(t.startingUp({ launching: true, composer: false, ageMs: 500, graceMs: 0 }), false);
+  assert.equal(t.startingUp({ launching: true, composer: false, ageMs: 500, graceMs: 60_000 }), true);
+});

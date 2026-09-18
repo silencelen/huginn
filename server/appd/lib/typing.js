@@ -524,6 +524,87 @@ function submitStalledLogLine(name, waitedMs, lines) {
 }
 
 /**
+ * ─── THE LOST BAND, RECOVERED ──────────────────────────────────────────────
+ *
+ * ⚠ WHAT THE SETTLE CHECK ALONE STILL LOSES. The 2026-09-17 sweep against the
+ * real 2.1.258 found TWO pre-composer bands, and 3.1.1 only closed one of them:
+ *
+ *   pasted ~2.0 s to ~0.85 s before the paint   the bytes SURVIVE in the pty and
+ *                                               are rendered at paint time minus
+ *                                               their `\r` — the settle wait sees
+ *                                               them, presses Enter after the
+ *                                               paint, and the message goes.
+ *   pasted ~0.95 s to ~0.3 s before the paint   the bytes are READ AND DISCARDED
+ *                                               by whatever is draining the pty
+ *                                               before the TUI attaches. No
+ *                                               composer text, no turn, no
+ *                                               transcript record, nothing.
+ *
+ * For the second band the settle wait can only ever time out. 3.1.1 logged that
+ * ("pasted text never appeared…") and pressed Enter anyway — into a composer
+ * that by then is up and EMPTY, so the Enter submits nothing and the person's
+ * message is gone with a journal line as its only trace. Detected, not fixed.
+ *
+ * The recovery is a re-paste, and it is safe in exactly one state: the composer
+ * is now DRAWN and holds nothing. Then there is no message to double (ours never
+ * arrived, and nothing was submitted because our Enter has not been pressed yet)
+ * and nothing of anybody else's to trample. Any other state is left alone:
+ *
+ *   'blind'   there is no composer at all — a plain shell, a pane that echoes
+ *             nothing (`stty -echo`), a pane tmux stopped answering for. Nothing
+ *             here can say whether the bytes arrived, so the Enter goes as it
+ *             always did and the pane keeps the behaviour it had before any of
+ *             this existed.
+ *   'resend'  a composer, empty. Re-paste ONCE, wait for it the same bounded way,
+ *             then press Enter.
+ *   'leave'   a composer with something in it that is not ours. A person may be
+ *             mid-sentence, and a bare Enter would submit THEIR half-written
+ *             message. Nothing is typed and nothing is pressed; the journal line
+ *             carries the pane's own bottom rows so a reader can see what was
+ *             there instead.
+ *
+ * ⚠ AND "EMPTY" INCLUDES THE PLACEHOLDER. For its first ~500 ms the box holds a
+ * dim hint — `❯ Try "refactor status-page"` — measured in the sweep captures
+ * (r2-abs-12: present at composer+0 ms, gone by composer+500 ms). Reading that as
+ * "somebody is typing" would refuse to recover exactly the sends that arrived
+ * earliest, which are the ones this exists for.
+ */
+const COMPOSER_PLACEHOLDER_RE = /^Try".*"$/i;
+
+/**
+ * Is the composer drawn, and is it holding anything?
+ *
+ *   null   no composer here at all — a different answer from "it is empty", and
+ *          every caller below turns on the difference.
+ *   true   drawn and holding nothing a person would miss (blank, or the hint).
+ *   false  drawn and holding something.
+ */
+function composerEmpty(lines) {
+  const c = composerText(lines);
+  if (c === null) return null;
+  const squashed = squashPane(c);
+  if (!squashed) return true;
+  return COMPOSER_PLACEHOLDER_RE.test(squashed);
+}
+
+/** What a paste that never appeared may do about it: 'blind' | 'resend' | 'leave'. */
+function recoveryDecision(lines) {
+  const empty = composerEmpty(lines);
+  if (empty === null) return 'blind';
+  return empty ? 'resend' : 'leave';
+}
+
+function pasteResentLogLine(name, waitedMs, lines) {
+  return `typing: ${name}: pasted text never appeared in ${waitedMs}ms and the composer is now `
+    + `up and empty; re-pasting it once | pane: ${paneTail(lines)}`;
+}
+function pasteLeftAloneLogLine(name, waitedMs, lines) {
+  return `typing: ${name}: pasted text never appeared in ${waitedMs}ms and the composer holds `
+    + `something else; leaving it alone rather than submitting somebody's draft `
+    + `| pane: ${paneTail(lines)}`;
+}
+
+/**
  * Is this session still coming UP, so that anything pasted into it is lost?
  *
  * ⚠ THE P1 THIS EXISTS FOR (reported 2026-09-15): "a user creates a session and
@@ -553,7 +634,8 @@ function submitStalledLogLine(name, waitedMs, lines) {
  * matters because a plain shell has no composer and never will — holding those
  * would break every non-Claude pane the app can open.
  */
-function startingUp({ launching = false, composer = false, ageMs = null } = {}) {
+function startingUp({ launching = false, composer = false, ageMs = null,
+  graceMs = STARTUP_GRACE_MS } = {}) {
   if (!launching || composer) return false;
   // ⚠ `ageMs == null`, NOT `Number.isFinite(Number(ageMs))`. `Number(null)` is 0
   // and 0 is a perfectly good age, so the coercing spelling reads "I have no
@@ -563,7 +645,100 @@ function startingUp({ launching = false, composer = false, ageMs = null } = {}) 
   if (ageMs == null) return false;
   const age = Number(ageMs);
   if (!Number.isFinite(age)) return false;
-  return age < STARTUP_GRACE_MS;
+  return age < graceMs;
+}
+
+/**
+ * ─── THE SESSIONS NOBODY MARKED ────────────────────────────────────────────
+ *
+ * ⚠ THE GATE COVERED THE ROUTE AND NOTHING ELSE. `startingUp` asks `launching`,
+ * and only two places ever set it: `POST /v1/sessions` and the reboot restore.
+ * But `server/bin/cc` — which is what `cc`, `huginn <name>` and every phone/laptop
+ * client's "open a session" really run — starts tmux ITSELF:
+ *
+ *     exec tmux new-session -A -s "$SESSION" -c "$WORKDIR" 'claude; exec "$SHELL" -l'
+ *
+ * so the daemon learns about that session only when somebody asks it something,
+ * `launchingAt` never has an entry, and the two-second window is wide open for
+ * exactly the send a person makes the moment their session appears. Same shape,
+ * same loss, no gate at all.
+ *
+ * The mark is not the only evidence available. tmux knows when the session was
+ * BORN (`#{session_created}`, which the daemon already reads and caches for the
+ * stale-state rule), and a pane inside the grace with no composer in it is the
+ * very state the mark was standing in for. So: hold it, with no mark.
+ *
+ * ⚠ AND THE ONE THING THAT MUST NOT BE HELD IS A SHELL. A shell has no composer
+ * and never will, so "no composer yet" is a permanent state there and a rule that
+ * read it as a startup would put a 20-second wait under every send into every
+ * non-Claude pane the app can open — for the first 20 seconds of that pane's life,
+ * which is when somebody is most likely to be typing into it. A shell says what
+ * it is: its last line is a PROMPT. That is the discriminator, and it is the
+ * pane-content check the dialog rules already read the same region for.
+ *
+ * Deliberately NOT part of the shell test: whether a Claude banner is on screen.
+ * `cc` runs `claude; exec "$SHELL" -l`, so a `claude` that exits — a bad flag, a
+ * crash, a version check — leaves a pane holding BOTH the banner and a live shell
+ * prompt, and that pane is a shell now. Requiring "no banner" to call it one would
+ * hold every one of those sends for the rest of the grace.
+ *
+ * ⚠ AND "NO COMPOSER AND NOT A SHELL" IS NOT ENOUGH ON ITS OWN. A pane running
+ * anything that neither echoes nor prompts — `cat > file`, a `stty -echo` reader,
+ * a picker stub, any of the dozens of panes the app can be pointed at — is EMPTY,
+ * and an empty pane is byte for byte what a booting `claude` looks like at t+0.5 s.
+ * Inferring from absence alone held fourteen such panes in this daemon's own test
+ * suite, every one of them for the full grace. So the rule wants POSITIVE evidence,
+ * and tmux keeps exactly the right fact: `#{pane_start_command}`, the command the
+ * pane was created with, which for every session `cc` makes is literally
+ * `claude; exec "$SHELL" -l`. A pane that was told to run `claude` and has not
+ * painted a composer yet is starting up. A pane that was told to run `cat` is not,
+ * however empty it looks.
+ *
+ * Erring is cheap in one direction and not the other, and the rule leans that
+ * way on purpose: a pane wrongly called a shell — or wrongly judged not to be
+ * running claude — is simply delivered into the way it always was, and the
+ * settle-and-recover path above is the backstop. A pane wrongly called a startup
+ * is a person waiting with no idea why.
+ */
+// tmux hands the start command back re-quoted (`"claude; exec \"$SHELL\" -l"`),
+// so this reads it as text rather than parsing it: the question is only whether
+// `claude` is the program this pane was told to run. Bounded by word edges so a
+// path like `/opt/claude-tools/serve` does not answer yes.
+const CLAUDE_START_RE = /(?:^|[^A-Za-z0-9_.-])claude(?:[^A-Za-z0-9_-]|$)/;
+function startsClaude(startCommand) {
+  return CLAUDE_START_RE.test(String(startCommand || ''));
+}
+// A shell prompt ends in one of the classic terminators: `$` (sh/bash/zsh user),
+// `#` (root), `%` (zsh/csh), `>` (a continuation, or a REPL). Read off the LAST
+// non-blank line — a prompt is the bottom of the pane by definition, and looking
+// anywhere else would match the `$` at the end of any line of prose.
+const SHELL_PROMPT_RE = /[$#%>]$/;
+function shellPrompt(lines) {
+  const arr = Array.isArray(lines) ? lines : String(lines || '').split('\n');
+  const plain = arr.map((l) => stripAnsi(String(l)).replace(/\s+$/, ''));
+  for (let i = plain.length - 1; i >= 0; i--) {
+    if (!plain[i].trim()) continue;
+    return SHELL_PROMPT_RE.test(plain[i]);
+  }
+  return false;   // an empty pane has drawn nothing, and nothing is not a prompt
+}
+
+/**
+ * Is a session NOBODY marked still coming up?
+ *
+ * `ageMs` is the age of the tmux session itself (`#{session_created}`), not of a
+ * mark — that is the whole point. Same `ageMs == null` rule as `startingUp` and
+ * the same reason: `Number(null)` is 0, and "I have no idea when this was born"
+ * must never read as "it was born this instant".
+ */
+function startingUnmarked({ composer = false, shell = false, claudeStart = false,
+  ageMs = null, graceMs = STARTUP_GRACE_MS } = {}) {
+  if (!claudeStart) return false;   // nothing was told to run claude here
+  if (composer || shell) return false;
+  if (ageMs == null) return false;
+  const age = Number(ageMs);
+  if (!Number.isFinite(age)) return false;
+  return age >= 0 && age < graceMs;
 }
 
 /**
@@ -699,10 +874,12 @@ module.exports = {
   QUEUE_MAX_WAIT_MS, STARTUP_GRACE_MS,
   PASTE_SETTLE_MS, PASTE_SETTLE_POLL_MS, SUBMIT_CONFIRM_MS, SUBMIT_CONFIRM_POLL_MS,
   composerText, pasteProbe, pasteLanded, pasteIndistinguishable, composerCleared,
-  paneTail, pasteLostLogLine, submitStalledLogLine,
+  composerEmpty, recoveryDecision,
+  paneTail, pasteLostLogLine, submitStalledLogLine, pasteResentLogLine, pasteLeftAloneLogLine,
   sendKeysFits, chunks,
   isBoundaryRecord, isConversationalRecord, boundaryFromTail, stateVerdict,
   hasHumanUserRecord, kindOf,
-  paneReadyForInput, paneBlocks, composerDrawn, startingUp, bufferName,
+  paneReadyForInput, paneBlocks, composerDrawn, shellPrompt, startsClaude,
+  startingUp, startingUnmarked, bufferName,
   releaseDecision, dropReason, dropMessage, dropLogLine, typingSnapshot,
 };
