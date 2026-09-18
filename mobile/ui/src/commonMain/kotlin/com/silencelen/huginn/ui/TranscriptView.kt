@@ -222,7 +222,11 @@ fun TranscriptEventItem(
             "tool_result" -> ToolResultOrphan(ev)
             "command" -> CommandNote(ev.text.orEmpty(), isResult = false)
             "command_result" -> CommandNote(ev.text.orEmpty(), isResult = true)
-            "system" -> SystemNote(ev.text.orEmpty())
+            // The peer's own name is passed, never parsed out of the text: the
+            // `@handle` preview slugifies the slash (`lora-stick/docs` →
+            // `@lora-stick-docs`), so the rendered line cannot be read back into
+            // an addressable name. See TranscriptEvent.peer.
+            "system" -> SystemNote(systemNoteText(ev.text.orEmpty(), ev.peer?.name))
             else -> Unit
         }
     }
@@ -779,6 +783,24 @@ private fun SystemNote(text: String) {
         color = MaterialTheme.colorScheme.onSurfaceVariant,
         modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp),
     )
+}
+
+/**
+ * A system note's line, with the sender named when another SESSION sent it.
+ *
+ * ⚠⚠ THE ONE THING THAT STOPS A TEAMMATE READING AS THE OWNER. A `SendMessage`
+ * between two Claude sessions lands in the receiver's transcript as an ordinary
+ * user record; the daemon re-kinds it `system` and hangs the sender on `peer`
+ * (decision 50), and a reader that drew only the text would put a teammate's
+ * instruction on screen as a note from nobody. On a Projects surface, where the
+ * sessions talk constantly, that is the whole screen losing its attribution.
+ *
+ * A blank name adds nothing rather than an empty prefix, so an idle notice — which
+ * carries no peer — is unchanged.
+ */
+fun systemNoteText(text: String, peerName: String?): String {
+    val who = peerName?.trim()?.takeIf { it.isNotEmpty() } ?: return text
+    return if (text.isBlank()) "$who sent a message" else "$who: $text"
 }
 
 /** What a tool's input is written in, for colouring purposes. */

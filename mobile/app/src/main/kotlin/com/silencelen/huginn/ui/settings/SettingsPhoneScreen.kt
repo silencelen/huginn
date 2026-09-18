@@ -64,6 +64,9 @@ fun SettingsPhoneScreen(
     appLockAvailable: Boolean,
     notificationsAllowed: Boolean,
     onOpenFleet: () -> Unit,
+    /** The Projects list. Null when the daemon has no projects route. */
+    onOpenProjects: (() -> Unit)? = null,
+    projectCount: Int = 0,
     onOpenStatus: () -> Unit,
     onLockNow: () -> Unit,
     onRequestNotifications: () -> Unit,
@@ -219,6 +222,8 @@ fun SettingsPhoneScreen(
                         softEndPhrase = status?.softEndPhrase,
                         softEndAuto = status?.softEndAuto == true,
                         highlight = highlight,
+                        onOpenProjects = onOpenProjects,
+                        projectCount = projectCount,
                     )
 
                     "notify" -> NotifyPage(

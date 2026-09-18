@@ -145,6 +145,15 @@
             android:exported="false"
             android:enabled="true" />
 
+        <!-- The Spawn / Discard buttons on a project proposal. Not exported, like
+             the two above: only this app's own notifications trigger it. Bounded
+             choices with fixed labels — Edit is deliberately NOT among them, so
+             no editor and no free text is reachable from a locked screen. -->
+        <receiver
+            android:name=".notify.ProjectActionReceiver"
+            android:exported="false"
+            android:enabled="true" />
+
         <!-- Receives what was typed into a notification's reply box. Not exported
              for the same reason: the PendingIntent that carries the text has to be
              mutable, but only this app can hand it out. -->

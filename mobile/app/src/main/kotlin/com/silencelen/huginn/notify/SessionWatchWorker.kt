@@ -93,6 +93,17 @@ class SessionWatchWorker(
         const val EXTRA_SESSION = "session"
         const val EXTRA_CHAT = "chat"
 
+        /**
+         * The project a notification is about, carried so a tap lands on its
+         * dashboard.
+         *
+         * A THIRD extra rather than a reuse of [EXTRA_SESSION]: a project id is a
+         * uuid and a session is a tmux name, and the read-is-dismissed effect in
+         * MainActivity cancels by session name — handing it a uuid would cancel
+         * nothing and open a session that does not exist.
+         */
+        const val EXTRA_PROJECT = "project"
+
         /** Both channels, created together so either can be posted to at any time. */
         fun ensureChannels(context: Context) {
             val nm = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
@@ -241,6 +252,8 @@ class SessionWatchWorker(
             isResult: Boolean = false,
             actions: List<HeadroomNotices.Action> = emptyList(),
             key: String? = null,
+            project: String? = null,
+            projectActions: List<ProjectNotices.Action> = emptyList(),
         ) {
             if (!canNotify(context)) return
             // By NATURE, not by type. A session waiting on you is blocking — work has
@@ -253,6 +266,7 @@ class SessionWatchWorker(
                 flags = Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
                 if (session != null) putExtra(EXTRA_SESSION, session)
                 if (replyChat != null) putExtra(EXTRA_CHAT, replyChat)
+                if (project != null) putExtra(EXTRA_PROJECT, project)
             }
             val pending = PendingIntent.getActivity(
                 context,
@@ -260,11 +274,11 @@ class SessionWatchWorker(
                 // one shared request code plus FLAG_UPDATE_CURRENT means the newest
                 // notification's extras are handed to every earlier one, so tapping
                 // an older alert opens whatever arrived last.
-                (key ?: session ?: replyChat)?.hashCode() ?: 0,
+                (key ?: session ?: replyChat ?: project)?.hashCode() ?: 0,
                 intent,
                 PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
             )
-            val notificationId = notificationIdFor(key ?: session ?: replyChat?.let { "chat:$it" })
+            val notificationId = notificationIdFor(key ?: session ?: replyChat?.let { "chat:$it" } ?: project)
             val builder = NotificationCompat.Builder(context, channel)
                 .setSmallIcon(R.drawable.ic_stat_huginn)
                 .setContentTitle(title)
@@ -365,6 +379,32 @@ class SessionWatchWorker(
                         // IMMUTABLE, unlike the reply box: nothing is written
                         // into this intent after it is built, because nothing
                         // about it is typed.
+                        PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+                    ),
+                )
+            }
+
+            // A proposal's two bounded buttons. No fingerprint in front of them
+            // for the headroom reason — they answer no pane question — and no
+            // authentication either, because neither carries a keystroke or a
+            // word of free text. What is NOT here is Edit: see [ProjectNotices].
+            for (a in projectActions.take(MAX_ACTIONS)) {
+                val projectIntent = Intent(context, ProjectActionReceiver::class.java).apply {
+                    action = ProjectActionReceiver.ACTION
+                    putExtra(ProjectActionReceiver.EXTRA_PROJECT, a.projectId)
+                    putExtra(ProjectActionReceiver.EXTRA_VERB, a.verb)
+                    putExtra(ProjectActionReceiver.EXTRA_MANIFEST_REV, a.manifestRev)
+                    putExtra(ProjectActionReceiver.EXTRA_NOTIFICATION_ID, notificationId)
+                }
+                builder.addAction(
+                    0,
+                    a.label.take(28),
+                    PendingIntent.getBroadcast(
+                        context,
+                        ProjectActionReceiver.requestCodeFor(a.projectId, a.verb),
+                        projectIntent,
+                        // IMMUTABLE: nothing is written into this intent after it
+                        // is built, because nothing about it is typed.
                         PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
                     ),
                 )

@@ -134,6 +134,13 @@ fun ChatsPage(
     softEndPhrase: String?,
     softEndAuto: Boolean,
     highlight: String?,
+    /**
+     * The second door into Projects (delta §4: the bottom bar stays at four).
+     * Null against a daemon with no projects route — a row whose only outcome is
+     * a 404 is worse than no row.
+     */
+    onOpenProjects: (() -> Unit)? = null,
+    projectCount: Int = 0,
 ) {
     if (quickActions != null) {
         // NO SUMMARY. The editor immediately below carries the one blurb
@@ -162,6 +169,21 @@ fun ChatsPage(
         highlighted = SettingsRowStyle.isHighlighted("chats.soft-end", highlight),
         modifier = Modifier.padding(top = 10.dp),
     )
+    // HERE rather than under Devices: a project is a cluster of SESSIONS, and
+    // this drawer is "Chats & sessions". Devices is about machines, which a
+    // project has nothing to say about.
+    onOpenProjects?.let { open ->
+        SettingsNavRow(
+            id = "chats.projects",
+            title = "Projects",
+            summary = "A cluster of sessions with roles: a lead sizes the work, proposes the " +
+                "members, and you approve them before anything is started.",
+            trailingText = if (projectCount == 0) "none" else "$projectCount",
+            onOpen = open,
+            highlighted = SettingsRowStyle.isHighlighted("chats.projects", highlight),
+            modifier = Modifier.padding(top = 10.dp),
+        )
+    }
 }
 
 // ------------------------------------------------------------------ notify
