@@ -365,11 +365,43 @@ _huginn_uninstall() {
   echo "The 'huginn' command is still loaded in this shell. Open a new one, or: unset -f huginn rclaude rcc"
 }
 
-# A session name is letters, digits, and underscore only - no '-', '*', spaces or
-# other shell-special characters. This keeps a typo'd flag (e.g. 'huginn --hlp')
-# from falling through to the attach path and spawning a junk tmux session, and
-# keeps names safe to pass through the remote shell. Enforced again server-side in cc.
-_huginn_valid_name() { [[ "$1" =~ ^[A-Za-z0-9_]+$ ]]; }
+# ONE session-name rule for the whole product: lowercase letters, digits, '_'
+# and '-', starting with a letter, digit or '_', at most 50 characters. Compared
+# case-folded, because names are case-insensitive here (see _huginn_canon_name).
+# It still keeps a typo'd flag (e.g. 'huginn --hlp') from falling through to the
+# attach path and spawning a junk tmux session - a leading '-' is not a name -
+# and it still keeps names safe to pass through the remote shell. Enforced again
+# server-side in cc.
+#
+# ⚠ '-' IS LEGAL, AND USED TO BE REFUSED HERE. The daemon accepts a dash and
+# honours it end to end, the desktop dialogs offer one, and keyboard-made
+# sessions routinely carry one (dev-phonefarm) - so `huginn build-box`, and
+# solo/kill/end/archive/rename of it, refused LOCALLY, before any network, for a
+# session `huginn ls` had just listed and tab-completion had just offered. The
+# same session was openable from both GUI clients, and `huginn revive build-box`
+# was accepted while `huginn archive build-box` was not.
+#
+# ⚠ '.' IS BANNED, everywhere, on purpose. tmux silently rewrites '.' to '_' in
+# a session name, so a dotted name is a name that comes back different from the
+# one that was asked for - the daemon, the desktop and the phone ban it too.
+_huginn_valid_name() { [[ "${1,,}" =~ ^[a-z0-9_][a-z0-9_-]{0,49}$ ]]; }
+# The refusal has TWO causes and they are not the same message. A typo is the
+# caller's mistake. A name the GUI clients can mint but this one cannot address
+# is a session sitting on the host, and "invalid session name" about a row
+# `huginn ls` has just printed sends somebody looking for an error they did not
+# make. The completion cache is already live `tmux ls` output, so telling them
+# apart costs no round trip and no ssh.
+_huginn_bad_name() {   # $1 = the name, $2 = the noun for the message
+  local H="${HUGINN_HOST:-huginn}"
+  if [ -n "$_HUGINN_SESS_CACHE" ] && grep -qxF -- "$1" <<<"$_HUGINN_SESS_CACHE"; then
+    echo "huginn: '$1' exists on the host but this client cannot address it" >&2
+    echo "        (names here are lowercase letters, digits, _ and -). Rename it from the" >&2
+    echo "        desktop app, or: ssh $H -t \"tmux attach -t '=$1'\"" >&2
+  else
+    echo "huginn: invalid ${2:-session name} '$1' (use lowercase letters, digits, _ and -; no dots, spaces or *)" >&2
+  fi
+  return 1
+}
 # tmux resolves -t targets by EXACT match, then PREFIX, then glob. A unique prefix
 # resolves silently, so 'huginn kill andvari' would destroy a session actually named
 # 'andvariautofill', and 'huginn solo jt' would evict the real client of 'jtyper'.
@@ -776,18 +808,18 @@ EOF
       esac ;;
     solo)
       local s="${2:-main}"
-      _huginn_valid_name "$s" || { echo "huginn: invalid session name '$s' (use letters, digits, underscore; no - or *)" >&2; return 1; }
+      _huginn_valid_name "$s" || { _huginn_bad_name "$s"; return 1; }
       _huginn_attach "$H" "$s" solo ;;
     rename|mv)
       [ -n "$2" ] && [ -n "$3" ] || { echo "usage: huginn rename <old> <new>" >&2; return 1; }
       # Validate BOTH names: the old one is interpolated into a remote root shell.
-      _huginn_valid_name "$2" || { echo "huginn: invalid session name '$2' (use letters, digits, underscore; no - or *)" >&2; return 1; }
-      _huginn_valid_name "$3" || { echo "huginn: invalid new name '$3' (use letters, digits, underscore; no - or *)" >&2; return 1; }
+      _huginn_valid_name "$2" || { _huginn_bad_name "$2"; return 1; }
+      _huginn_valid_name "$3" || { _huginn_bad_name "$3" "new name"; return 1; }
       local ro rn; ro="$(_huginn_canon_name "$2")"; rn="$(_huginn_canon_name "$3")"
       ssh -T "$H" "tmux rename-session -t '$(_huginn_tmux_target "$ro")' '$rn' && echo 'renamed: $ro -> $rn'" ;;
     kill)
       [ -n "$2" ] || { echo "usage: huginn kill <name>" >&2; return 1; }
-      _huginn_valid_name "$2" || { echo "huginn: invalid session name '$2' (use letters, digits, underscore; no - or *)" >&2; return 1; }
+      _huginn_valid_name "$2" || { _huginn_bad_name "$2"; return 1; }
       local kn; kn="$(_huginn_canon_name "$2")"
       # Prefer the daemon's DELETE: it also removes the orphaned /run state file
       # and releases the pane lease, which a bare tmux kill-session leaves behind
@@ -801,7 +833,7 @@ EOF
       fi ;;
     end)
       [ -n "$2" ] || { echo "usage: huginn end <name>" >&2; return 1; }
-      _huginn_valid_name "$2" || { echo "huginn: invalid session name '$2' (use letters, digits, underscore; no - or *)" >&2; return 1; }
+      _huginn_valid_name "$2" || { _huginn_bad_name "$2"; return 1; }
       local en; en="$(_huginn_canon_name "$2")"
       # Soft end: ask Claude to wrap up (finish, commit, prepare to end) and - when
       # auto-end is on for the host - end the session once it settles. This is a
@@ -826,7 +858,7 @@ EOF
     # follows the host name is parsed by a shell on the far side.
     archive)
       if [ -z "${2:-}" ]; then ssh -T "$H" huginn-archive; return; fi
-      _huginn_valid_name "$2" || { echo "huginn: invalid session name '$2' (use letters, digits, underscore; no - or *)" >&2; return 1; }
+      _huginn_valid_name "$2" || { _huginn_bad_name "$2"; return 1; }
       local ar; ar="$(_huginn_canon_name "$2")"
       # Guarded on $#, like the headroom branch: `printf '%q ' ` with no arguments
       # still runs the format once and emits '', which the renderer would rightly
@@ -867,7 +899,8 @@ EOF
       # Persona-aware: if the host carries persona.md, inject it + memory tools; else plain headless query.
       ssh -T "$H" "cd \"\${HUGINN_WORKDIR:-\$HOME}\" 2>/dev/null || cd \"\$HOME\"; P=\"\$(cat /usr/local/share/huginn-cli/persona.md 2>/dev/null)\"; if [ -n \"\$P\" ]; then echo '$q' | claude -p --append-system-prompt \"\$P\" --allowedTools '$tools' $dflag; else echo '$q' | claude -p; fi" ;;
     *)
-      _huginn_valid_name "$1" || { echo "huginn: invalid session name '$1' (use letters, digits, underscore; no - or *). Did you mean a subcommand? Try 'huginn help'." >&2; return 1; }
+      _huginn_valid_name "$1" || { _huginn_bad_name "$1"
+        echo "        Did you mean a subcommand? Try 'huginn help'." >&2; return 1; }
       _huginn_attach "$H" "$1" ;;
   esac
 }
