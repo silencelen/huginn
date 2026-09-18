@@ -403,8 +403,38 @@ object LocalServe {
      * path is the RESOLVED one, quoted — the elevated environment's PATH is
      * yet another PATH, and `C:\Program Files\nodejs` carries a space.
      */
-    fun elevatedCmdText(node: String, mgr: File, args: List<String>, log: File): String =
-        "@echo off\r\n\"$node\" \"${mgr.path}\" ${args.joinToString(" ")} > \"${log.path}\" 2>&1\r\n"
+    /**
+     * Whether an argument can be safely placed inside double quotes in a .cmd.
+     *
+     * ⚠ THE ADDRESS IS AN ARGUMENT, AND IT IS TYPED BY A PERSON. RouteGuard
+     * accepts & | ^ % ( ) < > ' , ; and more in a Base URL, and every one of
+     * those is cmd.exe syntax in the file below — which runs under a UAC grant
+     * as LocalSystem. Quoting contains most of them (`&hostname` inside quotes
+     * is text, not a second command), but three it cannot:
+     *
+     * - `"` ends the quoting the containment depends on;
+     * - `%VAR%` is expanded by cmd INSIDE double quotes, so the line that runs
+     *   is not the line that was staged;
+     * - `^` is cmd's own escape character.
+     *
+     * Those are refused rather than mangled: a Base URL never legitimately
+     * contains one, and there is no elevated step worth guessing about.
+     */
+    fun cmdArgSafe(arg: String): Boolean = arg.none { it == '"' || it == '%' || it == '^' }
+
+    /** The one honest line for an address that cannot be staged. */
+    fun unsafeArgLine(arg: String): String =
+        "cannot run the elevated step: the daemon address contains a character " +
+            "Windows would act on (\", % or ^) — fix it in Settings first"
+
+    fun elevatedCmdText(node: String, mgr: File, args: List<String>, log: File): String {
+        args.forEach { require(cmdArgSafe(it)) { unsafeArgLine(it) } }
+        // EVERY argument quoted, not only the three paths. `&`, `|`, `<` and `>`
+        // are inert inside double quotes, which is what stops a saved address
+        // from becoming a second elevated command.
+        val quoted = args.joinToString(" ") { "\"$it\"" }
+        return "@echo off\r\n\"$node\" \"${mgr.path}\" $quoted > \"${log.path}\" 2>&1\r\n"
+    }
 
     private suspend fun runElevatedWindows(args: List<String>, onLine: (String) -> Unit): Int {
         val mgr = managerFile()
@@ -414,6 +444,11 @@ object LocalServe {
         val dir = localDataDir()
         val log = File(dir, "activate.log")
         val cmd = File(dir, "activate.cmd")
+        // Refused BEFORE anything is written, and said in the section's own
+        // stream: a poisoned address is a settings problem, and staging a file
+        // that is then not run would leave the owner reading a UAC prompt that
+        // never comes.
+        args.firstOrNull { !cmdArgSafe(it) }?.let { onLine(unsafeArgLine(it)); return 2 }
         try {
             dir.mkdirs()
             log.writeText("")
