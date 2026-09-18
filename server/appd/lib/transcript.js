@@ -126,6 +126,63 @@ function describeMachineText(s) {
 }
 
 /**
+ * Whether a `user` record is content a TOOL pushed back into the conversation
+ * rather than anything a person sent.
+ *
+ * A skill — invoked by the `Skill` tool, by a slash command that is backed by
+ * one, or auto-loaded — has its ENTIRE instruction body written into the
+ * transcript as a `user` record, and nothing in the text marks it: it opens
+ * with "Base directory for this skill: …" or straight into the skill's own
+ * prose, so every machine-text heuristic in this file sails past it and it
+ * rendered as a multi-KB message the owner appeared to have typed. That is the
+ * complaint this function answers ("the skill is being printed in the session
+ * chat tab as a message from the user").
+ *
+ * `sourceToolUseID` is the record naming the tool call it came out of, and it
+ * is exact: across all 891 transcripts on this host, every one of the 65
+ * records carrying it is a Skill body, all 65 are `type: 'user'` with
+ * `isMeta: true`, and no other record carries the field at all. Keyed on the
+ * field rather than on `isMeta`, which is far broader — an image caption, a
+ * `/model` caveat and a resumed session's "Continue from where you left off"
+ * are all `isMeta` too, and two of those the reader must keep showing.
+ */
+function injectedByTool(d) {
+  return typeof d.sourceToolUseID === 'string' && d.sourceToolUseID !== '';
+}
+
+/**
+ * Whether a record is one the CLI recorded as actually coming from the person.
+ *
+ * `origin.kind === 'human'` accompanies `promptSource` "typed"/"queued"/
+ * "suggestion_accepted" and appears on nothing the CLI writes for itself: of
+ * the 459 machine-text records on this host (command plumbing, task
+ * notifications, image captions) not one carries it. So it settles the
+ * otherwise-unanswerable case — a person who literally types "<command-name>"
+ * into the chat gets their message, while the CLI's identical-looking
+ * bookkeeping still collapses to a chip.
+ *
+ * Absent from older transcripts, where it reads as false and the content
+ * heuristic decides exactly as it did before. That is the safe direction: with
+ * no evidence of a human, injected wins.
+ */
+function typedByHuman(d) {
+  return !!(d && d.origin && d.origin.kind === 'human');
+}
+
+/**
+ * The skill name to put on a chip, from the injected body when the `Skill` call
+ * it came from is not in this window. Project skills open with their own
+ * directory, whose last segment is the name; bundled ones ("artifact-design")
+ * carry no marker at all and get a generic label rather than a guess.
+ */
+function skillNameFromBody(s) {
+  const m = /^\s*Base directory for this skill:\s*(\S+)/.exec(String(s || ''));
+  if (!m) return '';
+  const seg = m[1].replace(/\/+$/, '').split('/').pop();
+  return seg && seg !== '.' ? seg : '';
+}
+
+/**
  * Whatever the user actually wrote in a record that also carries command
  * plumbing. Dropping a record wholesale because it STARTS with a machine tag
  * would silently swallow a real message if the two were ever concatenated —
@@ -311,6 +368,12 @@ function readTranscript(path, { offset = null, limit = 400, until = null, _resum
   // tool_use id -> the event we appended, so a later tool_result can complete it
   // in place instead of arriving as a separate orphan card.
   const pendingTools = new Map();
+  // The same index, but kept AFTER the result lands: a tool can go on producing
+  // records once it has returned (a skill's body arrives behind its
+  // "Launching skill: …" result), and those need to find the card they belong
+  // to, which `pendingTools` has by then deleted. Bounded by the window, like
+  // every other map here.
+  const toolById = new Map();
   // Queued messages by content, so a later `remove` can mark the same event
   // delivered instead of adding a duplicate.
   // content -> FIFO of still-queued events with that exact text. A plain
@@ -509,6 +572,25 @@ function readTranscript(path, { offset = null, limit = 400, until = null, _resum
         }
         const t = textOf(c);
         if (!t.trim() || queued.has(t)) continue;
+        // A skill's instruction body, pushed in by the tool call that loaded it.
+        // The `Skill` card a couple of records above is ALREADY the one event
+        // this invocation deserves — it carries the skill's name and, opened,
+        // its "Launching skill: …" result — so the body is the same news twice
+        // and belongs to that card, exactly as a tool_result does.
+        //
+        // Only when the call itself fell outside this window (the tail begins
+        // between the two records, or the reader paged to here) does the body
+        // become the only trace a skill loaded, and then it is worth one chip.
+        if (injectedByTool(d)) {
+          if (!toolById.has(d.sourceToolUseID)) {
+            const name = skillNameFromBody(t);
+            out.events.push({
+              seq: ++seq, kind: 'command', ts, sidechain,
+              text: name ? `Skill: ${name}` : 'Skill loaded',
+            });
+          }
+          continue;
+        }
         // The record Claude Code writes for a message the queue just DRAINED.
         // Its bubble is already in this window — moved down to the drain point a
         // few records ago — so this is bookkeeping, not a second message. Shifted
@@ -520,7 +602,11 @@ function readTranscript(path, { offset = null, limit = 400, until = null, _resum
           if (!drainedCopies.length) drained.delete(t);
           continue;
         }
-        if (machineText(t)) {
+        // Recorded as typed: no heuristic gets to overrule that. Without it a
+        // person asking about "<command-name>" had their question collapsed
+        // into a `/…` chip, because the CLI's own command bookkeeping is the
+        // same record type with the same-looking text.
+        if (machineText(t) && !typedByHuman(d)) {
           // Slash-command bookkeeping arrives as ordinary user records.
           const d2 = describeMachineText(t);
           if (d2) {
@@ -596,6 +682,14 @@ function readTranscript(path, { offset = null, limit = 400, until = null, _resum
             } else if (b.name === 'Agent' || b.name === 'Task') {
               const t = b.input && (b.input.description || b.input.subagent_type);
               if (t) ev.detail = clip(t, 80);
+            } else if (b.name === 'Skill') {
+              // This card is the WHOLE of what a skill load shows now, so it has
+              // to say which skill: `digestToolInput` found no field it knows
+              // and fell back to dumping the JSON, which read as
+              // `Skill {"skill":"incident-triage","args":"Kuma monitor-down…`.
+              // Name on the card, the prompt that invoked it behind the tap.
+              if (b.input && typeof b.input.skill === 'string') ev.detail = clip(b.input.skill, 80);
+              ev.input = b.input && typeof b.input.args === 'string' ? clip(b.input.args, 400) : '';
             } else if (b.name === 'AskUserQuestion') {
               // Rendered as a question card, never as raw JSON — which is
               // exactly how it looked: `{"questions":[{"question":"The push…`.
@@ -607,7 +701,7 @@ function readTranscript(path, { offset = null, limit = 400, until = null, _resum
               }
             }
             out.events.push(ev);
-            if (b.id) pendingTools.set(b.id, ev);
+            if (b.id) { pendingTools.set(b.id, ev); toolById.set(b.id, ev); }
           }
         }
         continue;
@@ -700,4 +794,5 @@ function liveActivity(events, nowSec) {
 }
 
 module.exports = { readTranscript, digestToolInput, workflowName, textOf, liveActivity, machineText, describeMachineText, humanRemainder, parseAsk, startsAtBoundary,
+  injectedByTool, typedByHuman, skillNameFromBody,
 };
