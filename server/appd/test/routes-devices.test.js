@@ -294,6 +294,45 @@ test('a run happens on the device and comes back through the same pipeline', asy
   assert.equal(after_.body.finishedRuns, 1, 'and it left the durable finish mark');
 });
 
+test('a replayed events batch is applied once (#40)', async () => {
+  // ⚠ NO IDEMPOTENCY AT ALL, AND THE RUNNER RETRIES WHOLE BATCHES. A batch that
+  // splits at MAX_BATCH_BYTES and fails on a later chunk re-queues the WHOLE
+  // batch, replaying the chunks the daemon already applied; and more generally
+  // any batch whose response is lost — a timeout, a socket reset, a 5xx after
+  // the daemon applied it — comes back, because the runner's `permanent()`
+  // treats only 400/403/404/413 as final. The chat then shows the answer, the
+  // tool records and the result twice, and meta.turns double-counts. Fixed
+  // daemon-side by design: `client/huginn-device` needs no change, and an older
+  // runner is covered too.
+  const d = await enrol({ name: 'replayer' });
+  const chat = await chatOn(d.id, 'act');
+  await send(chat.body.id, 'check the logs');
+  const work = (await poll(d.id)).body.work;
+
+  const batch = [assistant('I checked. Nothing burning.')];
+  const first = await postEvents(d.id, work.id, batch);
+  assert.equal(200, first.status);
+  assert.notEqual(true, first.body.duplicate);
+  const replay = await postEvents(d.id, work.id, batch);
+  assert.equal(200, replay.status, 'a replay is accepted — the runner must not keep retrying');
+  assert.equal(true, replay.body.duplicate, 'but it is recognised as one');
+
+  const open = await api(`/v1/chats/${chat.body.id}`);
+  const answers = (open.body.messages || [])
+    .filter((m) => m.type === 'assistant' && /Nothing burning/.test(m.text || ''));
+  assert.equal(1, answers.length, `one answer, not ${answers.length}`);
+
+  // A DIFFERENT batch still lands, which is the whole point of hashing the
+  // content rather than counting requests.
+  await postEvents(d.id, work.id, [assistant('And the disk is fine.')]);
+  const more = await api(`/v1/chats/${chat.body.id}`);
+  assert.ok((more.body.messages || []).some((m) => /disk is fine/.test(m.text || '')));
+
+  const done = await postEvents(d.id, work.id, [{ type: 'result', is_error: false }],
+    { done: true, exitCode: 0 });
+  assert.equal(200, done.status);
+});
+
 test("a remote chat's conversation is readable, though its transcript is on the other machine", async () => {
   // The bug: a chat's reader renders Claude's own transcript file, found under
   // THIS host's ~/.claude/projects. A run on another machine wrote that file
