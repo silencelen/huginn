@@ -7407,27 +7407,51 @@ function resolvePendingLadder(state, action, v) {
  */
 function writeSentinels(plan, state, settings) {
   try {
-    if (plan.STOP) {
-      const a = sentinelsLib.arm(HEADROOM_DIR, 'STOP', plan.reasons.STOP || plan.reason);
-      state.sentinels.STOP = { since: a.since, reason: a.reason };
-      if (a.created) log(`headroom: armed STOP (${a.reason})`);
-      // The HEARTBEAT. An armed sentinel with no expiry wedges every spawn for
-      // half an hour if this process dies while it is up; the gate ages it out
-      // against this mtime, so re-asserting the plan must also say "still me".
-      sentinelsLib.touch(HEADROOM_DIR, 'STOP');
-    } else if (state.sentinels.STOP || sentinelsLib.state(HEADROOM_DIR).STOP) {
-      if (sentinelsLib.clear(HEADROOM_DIR, 'STOP')) log('headroom: cleared STOP');
-      state.sentinels.STOP = null;
-    }
-    if (plan.STOP_FABLE) {
-      const a = sentinelsLib.arm(HEADROOM_DIR, 'STOP-FABLE', plan.reasons['STOP-FABLE'] || plan.reason);
-      state.sentinels['STOP-FABLE'] = { since: a.since, reason: a.reason };
-      if (a.created) log(`headroom: armed STOP-FABLE (${a.reason})`);
-      sentinelsLib.touch(HEADROOM_DIR, 'STOP-FABLE');
-    } else if (state.sentinels['STOP-FABLE'] || sentinelsLib.state(HEADROOM_DIR)['STOP-FABLE']) {
-      if (sentinelsLib.clear(HEADROOM_DIR, 'STOP-FABLE')) log('headroom: cleared STOP-FABLE');
-      state.sentinels['STOP-FABLE'] = null;
-    }
+    const onDisk = sentinelsLib.state(HEADROOM_DIR);
+    /**
+     * Assert one sentinel against the plan.
+     *
+     * ⚠ THE OPERATOR'S PAUSE BUTTON USED TO EVAPORATE HERE (#12). No route arms
+     * a sentinel, so `touch $HEADROOM_DIR/STOP` — documented in lib/sentinels
+     * and unit-tested — is the ONLY way a person can hold every subagent spawn.
+     * This branch deleted it on the next pass, because the plan's hysteresis
+     * reads `state.sentinels`, which a hand-armed file never populates:
+     * measured at 299 s idle and 23 ms after a settings PATCH, with a gate that
+     * was holding releasing at `waited=0` and a journal line
+     * ("headroom: cleared STOP") indistinguishable from housekeeping.
+     *
+     * Reclaiming a CRASHED daemon's leftovers is still the job, so the split is
+     * authorship: reap only what this daemon wrote (`by === 'appd'`), and
+     * HEARTBEAT whatever is armed regardless of who armed it — without the
+     * touch, the gate would age a hand-armed hold out after
+     * HUGINN_GATE_STALE_S and every held spawn would go through anyway.
+     */
+    const assertSentinel = (name, wanted, key) => {
+      if (wanted) {
+        const a = sentinelsLib.arm(HEADROOM_DIR, name, plan.reasons[name] || plan.reason);
+        state.sentinels[key] = { since: a.since, reason: a.reason };
+        if (a.created) log(`headroom: armed ${name} (${a.reason})`);
+        // The HEARTBEAT. An armed sentinel with no expiry wedges every spawn for
+        // half an hour if this process dies while it is up; the gate ages it out
+        // against this mtime, so re-asserting the plan must also say "still me".
+        sentinelsLib.touch(HEADROOM_DIR, name);
+        return;
+      }
+      const found = onDisk[name];
+      if (found && found.by !== 'appd') {
+        // Somebody else's hold. Keep it alive and say so once per transition.
+        if (state.sentinels[key]) log(`headroom: ${name} is armed by hand; leaving it alone`);
+        state.sentinels[key] = null;
+        sentinelsLib.touch(HEADROOM_DIR, name);
+        return;
+      }
+      if (state.sentinels[key] || found) {
+        if (sentinelsLib.clear(HEADROOM_DIR, name)) log(`headroom: cleared ${name}`);
+        state.sentinels[key] = null;
+      }
+    };
+    assertSentinel('STOP', plan.STOP, 'STOP');
+    assertSentinel('STOP-FABLE', plan.STOP_FABLE, 'STOP-FABLE');
     const fable = Object.entries(state.sessions)
       .filter(([, r]) => r && r.family === 'fable')
       .map(([id]) => id);
@@ -8219,7 +8243,14 @@ function headroomStatus() {
     worstLabel: worst ? worst.label : null,
     nextResetAt: worst ? worst.resetsAt : null,
     mode: st.mode || 'ok',
-    sentinels: Object.entries(st.sentinels || {}).filter(([, v]) => !!v).map(([k]) => k),
+    // ⚠ FROM DISK, NOT FROM MEMORY (#12). `st.sentinels` is what the last tick
+    // armed, so a sentinel the operator armed by hand — the only pause button
+    // there is — showed on /v1/headroom (a disk read) and NOT here, which is the
+    // one-line status both clients render. A fleet-wide hold that the status
+    // line says is not happening is worse than no status line.
+    sentinels: sentinelsLib.NAMES.filter((n) => {
+      try { return !!sentinelsLib.state(HEADROOM_DIR)[n]; } catch { return false; }
+    }),
     paused: held.length,
     windowRunning: windowResetsAt != null,
     windowResetsAt,
