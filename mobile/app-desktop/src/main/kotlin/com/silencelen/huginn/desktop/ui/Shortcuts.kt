@@ -45,7 +45,18 @@ enum class Shortcut {
      */
     VIEW_PROJECTS,
 
-    /** Palette-only — no key. The rail item is the door; this is the search box. */
+    /**
+     * The internal pages. Ctrl+Shift+K — K because it was the one free letter on
+     * the Shift row, and because it sits beside the palette's own Ctrl+K, which
+     * is where somebody hunting for a list of things reaches first.
+     *
+     * ⚠ IT EXISTS BECAUSE THE RAIL ITEM CAN BE MISSING. Consoles was
+     * palette-only, so when the feature probe had not answered there was exactly
+     * one way in and no second thing to try. The chord obeys `railViews` like
+     * [VIEW_PROJECTS] does — it navigates nowhere on a daemon without consoles —
+     * but on a daemon that HAS them it is a door that does not depend on the
+     * probe having finished before the reader looked.
+     */
     VIEW_CONSOLES,
 
     /**
@@ -137,6 +148,7 @@ fun match(
             "N" -> Shortcut.NEW_ACT
             "P" -> Shortcut.TOGGLE_PAD_PANEL
             "J" -> Shortcut.VIEW_PROJECTS
+            "K" -> Shortcut.VIEW_CONSOLES
             else -> null
         }
     }
@@ -242,6 +254,7 @@ val SHORTCUT_HELP: List<Pair<String, String>> = listOf(
     "Ctrl Shift N" to "New Act chat",
     "Ctrl P" to "Pages",
     "Ctrl Shift J" to "Projects (when this host has them)",
+    "Ctrl Shift K" to "Consoles (when this host has them)",
     "Ctrl Shift P" to "Show the open page beside this conversation",
     "Alt ↑ / ↓" to "Previous / next in the list (works while typing)",
     "Ctrl B" to "Hide or show the list pane (or click the notch on the seam)",
