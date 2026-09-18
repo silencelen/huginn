@@ -6,7 +6,9 @@
 
 const { test } = require('node:test');
 const assert = require('node:assert');
-const { uploadExtFor, safeExt, isReadable, isImageUpload, contentTypeForUpload } = require('../lib/uploads');
+const { uploadExtFor, safeExt, isReadable, isImageUpload, contentTypeForUpload,
+  createUploadPruner, PRUNE_MIN_INTERVAL_MS } = require('../lib/uploads');
+const path = require('node:path');
 
 test('isImageUpload recognises the image extensions and nothing else', () => {
   for (const n of ['up-1-ab.jpg', 'img-2-cd.jpeg', 'x.png', 'y.webp', 'z.gif', 'A.PNG']) {
@@ -118,4 +120,79 @@ test('inherited Object properties are not file types', () => {
     assert.strictEqual(uploadExtFor(m, 'x'), 'bin', m);
     assert.strictEqual(uploadExtFor(m, 'notes.txt'), 'txt', `${m} + real name`);
   }
+});
+
+// ------------------------------------------------- the retention sweep, throttled
+//
+// pruneUploads hangs off POST /v1/uploads, which was right while an attach was
+// one file. Multi-attach makes it ten POSTs inside a second and therefore ten
+// full readdir+stat sweeps of the same directory, to delete the same nothing,
+// on the event loop that is simultaneously streaming those ten uploads to disk.
+//
+// The sweep is now rate-limited to one a minute. These three assert the limit,
+// that it expires, and that it did not quietly change WHAT is swept — the fs and
+// the clock are injected precisely so a rate limit can be proven in a
+// millisecond instead of by sleeping through it.
+
+/** A fake fs that counts sweeps and remembers what was unlinked. */
+function spyFs(entries) {
+  const spy = {
+    readdirs: 0,
+    unlinked: [],
+    readdirSync() { spy.readdirs += 1; return Object.keys(entries); },
+    statSync(f) {
+      const n = path.basename(f);
+      if (!(n in entries)) throw new Error('ENOENT');
+      return { mtimeMs: entries[n] };
+    },
+    unlinkSync(f) { spy.unlinked.push(path.basename(f)); },
+  };
+  return spy;
+}
+
+test('ten uploads inside a minute sweep the directory exactly once', () => {
+  const fsSpy = spyFs({});
+  let now = 1_800_000_000_000;
+  const prune = createUploadPruner({ dir: '/uploads', fs: fsSpy, now: () => now, keepMs: 1000 });
+  for (let i = 0; i < 10; i++) { prune(); now += 100; }   // a whole multi-attach, one second
+  assert.equal(fsSpy.readdirs, 1,
+    'a ten-file attach must not read the uploads directory ten times');
+});
+
+test('the sweep runs again once the interval has passed', () => {
+  const fsSpy = spyFs({});
+  let now = 1_800_000_000_000;
+  const prune = createUploadPruner({ dir: '/uploads', fs: fsSpy, now: () => now, keepMs: 1000 });
+  assert.equal(prune(), true, 'the first call after start always sweeps');
+  now += PRUNE_MIN_INTERVAL_MS - 1;
+  assert.equal(prune(), false, 'one millisecond short is still inside the window');
+  assert.equal(fsSpy.readdirs, 1);
+  now += 1;
+  assert.equal(prune(), true, 'exactly at the interval sweeps rather than off-by-one');
+  assert.equal(fsSpy.readdirs, 2);
+  now += PRUNE_MIN_INTERVAL_MS * 10;
+  assert.equal(prune(), true);
+  assert.equal(fsSpy.readdirs, 3);
+});
+
+test('throttled or not, images are never pruned and only the stale non-images go', () => {
+  const now0 = 1_800_000_000_000;
+  const old = now0 - 30 * 24 * 60 * 60 * 1000;    // a month back
+  const fsSpy = spyFs({
+    'up-1-aa.png': old, 'up-2-bb.jpg': old, 'up-3-cc.webp': old, 'up-4-dd.gif': old,
+    'up-5-ee.txt': old, 'up-6-ff.unifi': old, 'up-7-gg.pdf': old,
+    'up-8-hh.txt': now0,                          // fresh, stays
+  });
+  let now = now0;
+  const prune = createUploadPruner({
+    dir: '/uploads', fs: fsSpy, now: () => now, keepMs: 7 * 24 * 60 * 60 * 1000,
+  });
+  prune();
+  assert.deepEqual(fsSpy.unlinked.sort(), ['up-5-ee.txt', 'up-6-ff.unifi', 'up-7-gg.pdf'],
+    'images are kept until manually deleted; a fresh non-image is inside retention');
+  // And the throttle does not smuggle a second sweep past the exemption either.
+  fsSpy.unlinked.length = 0;
+  now += PRUNE_MIN_INTERVAL_MS;
+  prune();
+  assert.equal(fsSpy.unlinked.filter((n) => isImageUpload(n)).length, 0);
 });
