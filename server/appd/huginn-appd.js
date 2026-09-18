@@ -10772,6 +10772,34 @@ const server = http.createServer(async (req, res) => {
         entry.lastHeard = Date.now();
         devicesLib.noteSeen(deviceState, devId, entry.lastHeard, body);
 
+        /**
+         * ⚠ A REPLAYED BATCH IS APPLIED TWICE (#40). The runner re-queues a whole
+         * batch when any chunk of it fails — a batch that split at MAX_BATCH_BYTES
+         * and failed on a later part replays the accepted ones — and more
+         * generally ANY batch whose response is lost (a timeout, a socket reset,
+         * a 5xx after the daemon already applied it) comes back, because the
+         * runner's `permanent()` treats only 400/403/404/413 as final. The route
+         * had no idempotency at all, so the chat showed the answer, the tool
+         * records and the result twice, and meta.turns double-counted.
+         *
+         * A ring of recent chunk hashes on the run, daemon-side by design: it
+         * closes both paths without a protocol change, so `client/huginn-device`
+         * needs no update and an older runner is covered too. Bounded because a
+         * long run streams thousands of chunks, and generous enough to cover a
+         * retry storm.
+         */
+        const stamp = crypto.createHash('sha256').update(JSON.stringify({
+          lines: body.lines ?? null, done: body.done ?? null,
+          exitCode: body.exitCode ?? null, error: body.error ?? null,
+        })).digest('hex');
+        if (!entry.seenChunks) entry.seenChunks = [];
+        if (entry.seenChunks.includes(stamp)) {
+          log(`device ${devId} replayed a batch for ${workId}; ignoring it`);
+          return sendJson(res, 200, { ok: true, duplicate: true, cancel: !!entry.run_.cancelled });
+        }
+        entry.seenChunks.push(stamp);
+        if (entry.seenChunks.length > 64) entry.seenChunks.shift();
+
         const meta = loadMeta(entry.chatId);
         if (meta) {
           for (const line of Array.isArray(body.lines) ? body.lines : []) {
