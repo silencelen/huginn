@@ -318,6 +318,28 @@ object SettingsCatalog {
                 availability = canRotate,
             ),
             SettingsItem(
+                id = "usage.keep-awake",
+                title = "Keep a window rotating",
+                summary = "Spends a fraction of a cent starting a 5-hour window when none is running, "
+                    + "so a session never begins on a cold one.",
+                keywords = listOf("keep awake", "keepawake", "window", "5-hour", "session", "rotating", "ping", "cost", "spend", "idle"),
+                availability = headroomOn,
+            ),
+            SettingsItem(
+                id = "usage.keep-awake-model",
+                title = "Model for that request",
+                summary = "Which model the keep-awake request runs on. The cheapest one that counts.",
+                keywords = listOf("keep awake", "haiku", "model", "cheap", "cost"),
+                availability = headroomOn,
+            ),
+            SettingsItem(
+                id = "usage.keep-awake-quiet",
+                title = "Quiet hours",
+                summary = "A span of the day when huginn spends nothing keeping a window open.",
+                keywords = listOf("keep awake", "quiet", "hours", "night", "overnight", "schedule", "pause"),
+                availability = headroomOn,
+            ),
+            SettingsItem(
                 id = "usage.plan",
                 title = "Plan usage",
                 summary = "Where the live percentages for every saved login are shown.",

@@ -151,4 +151,18 @@ class SettingsSearchTest {
     fun nonsenseFindsNothing() {
         assertTrue(SettingsSearch.hits("qqqzzz", all, Surface.DESKTOP).isEmpty())
     }
+
+    /**
+     * "keep awake" finds it, and so does the word somebody would actually reach
+     * for. A setting that spends money and cannot be found is one that cannot be
+     * switched back off — and the phrase in the owner's own note is two words,
+     * which the title spells as three.
+     */
+    @Test
+    fun keepAwakeIsFindable() {
+        assertTrue("usage.keep-awake" in ids("keep awake"), "found ${ids("keep awake")}")
+        assertTrue("usage.keep-awake" in ids("keepawake"), "found ${ids("keepawake")}")
+        assertTrue("usage.keep-awake" in ids("rotating"), "found ${ids("rotating")}")
+        assertTrue("usage.keep-awake-quiet" in ids("quiet hours"), "found ${ids("quiet hours")}")
+    }
 }

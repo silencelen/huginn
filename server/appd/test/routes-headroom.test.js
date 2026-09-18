@@ -81,6 +81,7 @@ const HUMAN = JSON.stringify({ type: 'user', message: { content: 'actually, wait
 
 let tmp, stateDir, claudeDir, dataDir, headroomDir, token, daemon;
 let usageServer, acctServer, usageFile, shimLog, tmuxFail, pushLog, seededSwitchAt;
+let claudeLog, claudeFail, daemonOpts;
 const madeSessions = new Set();
 // Set by the native-undo test and read by the one after it: the follow-on
 // assertion is about what that undo LEFT BEHIND, so it must be the same session.
@@ -130,9 +131,19 @@ function fableSession(suffix, make = mkSink) {
   writeState(name, { sessionId: `sid-${name}`, transcript });
   return { name, transcript, sink: typeof made === 'string' ? null : made.out };
 }
-/** The percentages the stub endpoint will answer with from now on. */
-function setUsage({ session = 5, weekly_all = 10, weekly_fable = 20, resetsAt = null } = {}) {
-  fs.writeFileSync(usageFile, JSON.stringify({ session, weekly_all, weekly_fable, resetsAt }));
+/**
+ * The percentages the stub endpoint will answer with from now on.
+ *
+ * @param sessionRunning false makes the SESSION row answer `resets_at: null`,
+ *   which is how the live endpoint says "no 5-hour window is running" — the one
+ *   field the whole keep-awake feature triggers on. It is its own parameter
+ *   rather than a value of `resetsAt` because the weeklies keep real reset
+ *   times throughout: it is the session row alone that goes null.
+ */
+function setUsage({
+  session = 5, weekly_all = 10, weekly_fable = 20, resetsAt = null, sessionRunning = true,
+} = {}) {
+  fs.writeFileSync(usageFile, JSON.stringify({ session, weekly_all, weekly_fable, resetsAt, sessionRunning }));
 }
 async function api(pathname, init = {}) {
   const res = await fetch(BASE + pathname, {
@@ -272,7 +283,7 @@ before(async () => {
     res.writeHead(200, { 'content-type': 'application/json' });
     res.end(JSON.stringify({
       limits: [
-        { kind: 'session', percent: u.session, severity: 'normal', resets_at: resets },
+        { kind: 'session', percent: u.session, severity: 'normal', resets_at: u.sessionRunning === false ? null : resets },
         { kind: 'weekly_all', percent: u.weekly_all, severity: 'normal', resets_at: resets },
         {
           kind: 'weekly_scoped', percent: u.weekly_fable, severity: 'normal', resets_at: resets,
@@ -315,6 +326,31 @@ before(async () => {
     + 'fi\n'
     + `exec ${realTmux} "$@"\n`, { mode: 0o755 });
 
+  // ---- a stub `claude`, for the keep-awake ping and NOTHING else.
+  //
+  // ⚠ IT MUST NOT SHADOW THE REAL CLI WHOLESALE. The daemon shells out to
+  // `claude --version` for the status line and `claude auth status` for the
+  // login check, and a stub that answered those would quietly change what the
+  // rest of this file is testing. So it intercepts only a `-p` run — the ping —
+  // and execs the real binary for everything else, exactly as the tmux shim
+  // does. `HG_CLAUDE_FAIL`, when the file exists, makes one `-p` run fail and is
+  // then consumed: the only way to drive a ping that never reaches the API.
+  claudeLog = path.join(tmp, 'claude-argv.log');
+  claudeFail = path.join(tmp, 'claude-fail');
+  let realClaude = '';
+  try { realClaude = execFileSync('/bin/sh', ['-c', 'command -v claude'], { encoding: 'utf8' }).trim(); } catch { /* none installed */ }
+  fs.writeFileSync(path.join(shimDir, 'claude'),
+    '#!/bin/sh\n'
+    + 'if [ "$1" = "-p" ]; then\n'
+    + '  { printf \'%s\\t\' "$@" | tr \'\\n\' \' \'; printf \'\\n\'; } >> "$HG_CLAUDE_LOG"\n'
+    + '  if [ -n "${HG_CLAUDE_FAIL:-}" ] && [ -f "$HG_CLAUDE_FAIL" ]; then\n'
+    + '    rm -f "$HG_CLAUDE_FAIL"; echo "stub claude: forced failure" >&2; exit 1\n'
+    + '  fi\n'
+    + '  echo ok\n'
+    + '  exit 0\n'
+    + 'fi\n'
+    + (realClaude ? `exec ${realClaude} "$@"\n` : 'exit 1\n'), { mode: 0o755 });
+
   // ---- FCM, recorded rather than sent.
   //
   // The only way to see what a notification actually carries: the Telegram
@@ -351,7 +387,11 @@ globalThis.fetch = async (input, init) => {
     token_uri: 'https://oauth2.googleapis.com/token',
   }), { mode: 0o600 });
 
-  daemon = spawn(process.execPath, [path.join(__dirname, '..', 'huginn-appd.js')], {
+  // Hoisted so a test can RESTART the daemon with exactly the same environment.
+  // The keep-awake guard's whole claim is that it survives a restart, and a
+  // second daemon started from a hand-copied env would be proving something
+  // else.
+  daemonOpts = {
     env: {
       ...process.env,
       NODE_OPTIONS: `${process.env.NODE_OPTIONS || ''} --require ${fetchShim}`.trim(),
@@ -359,6 +399,8 @@ globalThis.fetch = async (input, init) => {
       PATH: `${shimDir}:${process.env.PATH}`,
       HG_TMUX_LOG: shimLog,
       HG_TMUX_FAIL: tmuxFail,
+      HG_CLAUDE_LOG: claudeLog,
+      HG_CLAUDE_FAIL: claudeFail,
       HUGINN_APPD_PORT: String(PORT),
       HUGINN_APPD_BIND: '127.0.0.1',
       HUGINN_APPD_DATA: dataDir,
@@ -377,7 +419,8 @@ globalThis.fetch = async (input, init) => {
       HUGINN_APPD_TELEGRAM_SCRIPT: '',
     },
     stdio: 'ignore',
-  });
+  };
+  daemon = spawn(process.execPath, [path.join(__dirname, '..', 'huginn-appd.js')], daemonOpts);
   daemon.on('error', (e) => { throw e; });
   for (let i = 0; i < 300; i++) {
     try { if ((await api('/v1/ping')).status === 200) break; } catch { /* not up */ }
@@ -1074,4 +1117,223 @@ test('the consent auto-answer RE-READS the pane immediately before the digit', a
     madeSessions.delete(name);
     try { fs.unlinkSync(path.join(stateDir, name)); } catch { /* gone */ }
   }
+});
+
+// ----------------------------------------------------------------- keep awake
+//
+// The one lane in the daemon that spends the owner's quota with nobody asking,
+// so these are end to end against a real daemon rather than against the pure
+// decision: the argv that actually reaches a process, the field on the wire
+// that the Status line reads, and the guard that has to hold across a restart.
+// The stub `claude` records every ping and can be made to fail one.
+
+/**
+ * Every keep-awake ping the stub saw, newest last, as argv arrays.
+ *
+ * ⚠ EMPTY ARGUMENTS ARE KEPT, unlike `tmuxCalls` above. The shim writes
+ * `printf '%s\t'` per argument, so the line always ends in one trailing empty
+ * field — and dropping every empty field to get rid of it would also drop the
+ * two that ARE the cage: `--setting-sources ""` and `--tools ""` are values, not
+ * padding, and a test that cannot see them cannot notice them going missing.
+ * Only the trailing artefact comes off.
+ */
+function pings() {
+  let raw = '';
+  try { raw = fs.readFileSync(claudeLog, 'utf8'); } catch { return []; }
+  return raw.split('\n').filter(Boolean).map((l) => {
+    const parts = l.split('\t');
+    parts.pop();
+    return parts;
+  });
+}
+
+/** Wait for the ping count to reach [n], nudging the tick along the way. */
+async function untilPings(n, ms = 20_000) {
+  const deadline = Date.now() + ms;
+  for (;;) {
+    if (pings().length >= n) return pings();
+    if (Date.now() > deadline) {
+      throw new Error(`expected ${n} keep-awake ping(s), saw ${pings().length}`);
+    }
+    await api('/v1/headroom/settings', { method: 'PATCH', body: '{}' });
+    await wait(250);
+  }
+}
+
+test('keep-awake is OFF on a fresh install, and the wire says so', async () => {
+  // It must not arrive switched on by an upgrade: this is the first setting that
+  // costs money without being asked for.
+  const s = (await api('/v1/headroom')).body.settings;
+  assert.equal(s.keepAwake, false);
+  assert.equal(s.keepAwakeModel, 'claude-haiku-4-5-20251001');
+  assert.equal(s.keepAwakeQuietHours, null);
+  assert.equal(pings().length, 0, 'nothing may be spent before it is switched on');
+});
+
+test('/v1/status says whether a 5-hour window is RUNNING, which nothing else reported', async () => {
+  setUsage({ session: 6, weekly_all: 10, weekly_fable: 20, sessionRunning: true });
+  await tick();
+  await until((b) => b.accounts && Object.values(b.accounts).some((a) => a.live), 12_000, 'a live account');
+  const running = (await api('/v1/status')).body.headroom;
+  assert.equal(running.windowRunning, true);
+  assert.ok(running.windowResetsAt, 'a running window carries the instant it ends');
+
+  // The tell: the session row's reset goes NULL while the weeklies keep theirs.
+  setUsage({ session: 0, weekly_all: 10, weekly_fable: 20, sessionRunning: false });
+  await tick();
+  const idle = await (async () => {
+    const deadline = Date.now() + 12_000;
+    for (;;) {
+      const b = (await api('/v1/status')).body.headroom;
+      if (b.windowRunning === false) return b;
+      if (Date.now() > deadline) throw new Error(`windowRunning never went false: ${JSON.stringify(b)}`);
+      await api('/v1/headroom/settings', { method: 'PATCH', body: '{}' });
+      await wait(250);
+    }
+  })();
+  assert.equal(idle.windowRunning, false);
+  assert.equal(idle.windowResetsAt, null);
+  assert.equal(idle.keepAwake.enabled, false);
+  assert.equal(idle.keepAwake.keptAwakeToday, 0);
+});
+
+test('switched on with no window running, ONE ping goes out — caged, on Haiku', async () => {
+  // The argv is asserted off a real process's arguments rather than off the
+  // builder, because the builder being right and the spawn being wired to
+  // something else is a failure neither a unit test nor a log line would show.
+  setUsage({ session: 0, weekly_all: 10, weekly_fable: 20, sessionRunning: false });
+  await tick({ keepAwake: true });
+  const seen = await untilPings(1);
+  const argv = seen[0];
+  assert.deepEqual(argv, [
+    '-p',
+    '--setting-sources', '',
+    '--strict-mcp-config',
+    '--no-session-persistence',
+    '--model', 'claude-haiku-4-5-20251001',
+    '--max-turns', '1',
+    '--tools', '',
+    '--', 'Reply with the single word ok.',
+  ]);
+  assert.equal(argv.includes('--bare'), false, '--bare never reads OAuth, so it would never touch the window');
+
+  const st = (await api('/v1/status')).body.headroom;
+  assert.equal(st.keepAwake.enabled, true);
+  assert.equal(st.keepAwake.keptAwakeToday, 1);
+  assert.ok(st.keepAwake.lastAt > 0);
+  assert.match(String(st.keepAwake.lastAtClock), /^\d{2}:\d{2}$/, 'the HOST formats the clock; :core has no timezone database');
+});
+
+test('and it does NOT ping again while that window is still inside its five hours', async () => {
+  // The whole guard: `lastAt` on disk, written before the spawn. Several more
+  // ticks with the window still reading idle must add nothing.
+  const before = pings().length;
+  for (let i = 0; i < 4; i++) {
+    await api('/v1/headroom/settings', { method: 'PATCH', body: '{}' });
+    await wait(300);
+  }
+  assert.equal(pings().length, before, 'a second ping inside the same window is money spent twice');
+});
+
+test('THE GUARD SURVIVES A RESTART — lastAt is on disk, not in memory', async () => {
+  // This is the case that cannot be reproduced on a live account: a daemon that
+  // dies between the stamp and the spawn, or is simply restarted, must come back
+  // believing the window has been dealt with.
+  const before = pings().length;
+  const onDisk = JSON.parse(fs.readFileSync(path.join(dataDir, 'headroom.json'), 'utf8'));
+  assert.ok(onDisk.keepAwake && onDisk.keepAwake.lastAt > 0, 'lastAt is persisted, not merely remembered');
+  assert.equal(onDisk.keepAwake.keptAwakeToday, 1);
+
+  daemon.kill('SIGTERM');
+  await wait(600);
+  daemon = spawn(process.execPath, [path.join(__dirname, '..', 'huginn-appd.js')], daemonOpts);
+  daemon.on('error', (e) => { throw e; });
+  for (let i = 0; i < 300; i++) {
+    try { if ((await api('/v1/ping')).status === 200) break; } catch { /* not up */ }
+    await wait(100);
+  }
+  for (let i = 0; i < 4; i++) {
+    await api('/v1/headroom/settings', { method: 'PATCH', body: '{}' });
+    await wait(300);
+  }
+  assert.equal(pings().length, before, 'a restart must not buy a second ping for the same window');
+  assert.equal((await api('/v1/status')).body.headroom.keepAwake.keptAwakeToday, 1);
+});
+
+test('a nearly-spent WEEKLY pool stops the ping, with no session window running', async () => {
+  // The two pools run on different clocks: the week can be nearly gone while the
+  // 5-hour window sits idle, and starting a window nobody can spend is the one
+  // way this feature makes things worse.
+  //
+  // ⚠ WHICH guard stops it is not separable here, and pretending otherwise would
+  // be a test that lies. On the default thresholds a window cannot be red
+  // (>= ladderPct 92) without also being past the Fable spawn hold
+  // (stopFablePct 88), so the sentinel arms in the same pass — both vetoes are
+  // live and either alone is enough. The red-window veto is isolated in
+  // test/keepawake.test.js, where the thresholds are the test's to choose. What
+  // this asserts is the OUTCOME at the wire, which is the part a client sees.
+  const before = pings().length;
+  // Clear the once-per-window guard by hand — five hours is not a thing a test
+  // can wait for, and this is the file the daemon reads on the next tick.
+  const state = JSON.parse(fs.readFileSync(path.join(dataDir, 'headroom.json'), 'utf8'));
+  state.keepAwake = { ...state.keepAwake, lastAt: 0, prevAt: 0, retries: 0 };
+  fs.writeFileSync(path.join(dataDir, 'headroom.json'), JSON.stringify(state, null, 2));
+  daemon.kill('SIGTERM');
+  await wait(600);
+  daemon = spawn(process.execPath, [path.join(__dirname, '..', 'huginn-appd.js')], daemonOpts);
+  daemon.on('error', (e) => { throw e; });
+  for (let i = 0; i < 300; i++) {
+    try { if ((await api('/v1/ping')).status === 200) break; } catch { /* not up */ }
+    await wait(100);
+  }
+
+  setUsage({ session: 0, weekly_all: 10, weekly_fable: 96, sessionRunning: false });
+  await tick();
+  // ⚠ WAIT FOR A DECISION TAKEN ON THE RED NUMBERS, not merely for time to
+  // pass. Nudging four times and checking the ping count is vacuous: a red week
+  // arms STOP-FABLE and sets the arbiter typing at panes, so the ticks that
+  // follow are long and few, and the assert lands in a gap where keep-awake was
+  // never evaluated at all. This test PASSED with both of its vetoes deleted
+  // until the published `why` gave it something real to wait for.
+  const held = await until(
+    (b) => b.keepAwake && /red|exhausted|armed/.test(String(b.keepAwake.why)),
+    20_000,
+    'a keep-awake decision taken on the red week',
+  );
+  assert.match(held.keepAwake.why, /red|exhausted|armed/);
+  assert.equal(pings().length, before, 'nothing may be spent while a weekly pool is nearly gone');
+
+  // …and the ping lands the moment the week reads healthy again, which proves
+  // the veto was the reason rather than the cleared guard failing to take.
+  setUsage({ session: 0, weekly_all: 10, weekly_fable: 20, sessionRunning: false });
+  await tick();
+  await untilPings(before + 1);
+});
+
+test('PATCH refuses broken keep-awake settings by NAMING the rule', async () => {
+  const bad = await api('/v1/headroom/settings', {
+    method: 'PATCH', body: JSON.stringify({ keepAwakeQuietHours: '1am to 7am' }),
+  });
+  assert.equal(bad.status, 400);
+  assert.match(bad.body.error, /HH:MM-HH:MM/);
+
+  const badModel = await api('/v1/headroom/settings', {
+    method: 'PATCH', body: JSON.stringify({ keepAwakeModel: 'the cheap one' }),
+  });
+  assert.equal(badModel.status, 400);
+  assert.match(badModel.body.error, /model id or family alias/);
+
+  const ok = await api('/v1/headroom/settings', {
+    method: 'PATCH', body: JSON.stringify({ keepAwakeQuietHours: '01:00-07:00' }),
+  });
+  assert.equal(ok.status, 200);
+  assert.equal(ok.body.keepAwakeQuietHours, '01:00-07:00');
+  // Cleared by an empty string as well as by null — a form must be able to say
+  // "no quiet hours" with the control it already has.
+  const cleared = await api('/v1/headroom/settings', {
+    method: 'PATCH', body: JSON.stringify({ keepAwakeQuietHours: '' }),
+  });
+  assert.equal(cleared.body.keepAwakeQuietHours, null);
+  // And off again, so nothing after this file spends anything.
+  await api('/v1/headroom/settings', { method: 'PATCH', body: JSON.stringify({ keepAwake: false }) });
 });

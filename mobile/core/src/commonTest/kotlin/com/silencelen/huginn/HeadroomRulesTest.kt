@@ -3,6 +3,7 @@ package com.silencelen.huginn
 import com.silencelen.huginn.data.HeadroomSettings
 import com.silencelen.huginn.data.HeadroomStall
 import com.silencelen.huginn.data.HeadroomWorst
+import com.silencelen.huginn.data.KeepAwakeStatus
 import com.silencelen.huginn.data.SessionHeadroom
 import com.silencelen.huginn.data.StatusHeadroom
 import com.silencelen.huginn.data.UndoResult
@@ -37,6 +38,122 @@ class HeadroomRulesTest {
         resetsAt: String? = RESET,
         mode: String = "red",
     ) = StatusHeadroom(worstPercent = percent, worstLabel = label, nextResetAt = resetsAt, mode = mode)
+
+    // -------------------------------------------------------- keepAwakeLine
+
+    private fun ka(
+        running: Boolean? = false,
+        resetsAt: String? = null,
+        enabled: Boolean = false,
+        today: Int = 0,
+        clock: String? = null,
+    ) = StatusHeadroom(
+        mode = "ok",
+        windowRunning = running,
+        windowResetsAt = resetsAt,
+        keepAwake = KeepAwakeStatus(enabled = enabled, keptAwakeToday = today, lastAtClock = clock),
+    )
+
+    /**
+     * ⚠ ABSENT IS NOT "NO WINDOW". A daemon older than the feature reports
+     * nothing here, and a line stating "no window running" with total confidence
+     * on behalf of a host that was never asked is worse than no line at all.
+     */
+    @Test
+    fun `an older daemon draws no line rather than a confident wrong one`() {
+        assertNull(HeadroomRules.keepAwakeLine(null, RESET_MS))
+        assertNull(HeadroomRules.keepAwakeLine(StatusHeadroom(worstPercent = 51.0), RESET_MS))
+    }
+
+    @Test
+    fun `no window running says exactly that`() {
+        assertEquals("no window running", HeadroomRules.keepAwakeLine(ka(running = false), NOW_3H12M))
+    }
+
+    /**
+     * The window's OWN reset, never the worst window's — they are different
+     * instants, and `nextResetAt` is usually the week. Counting down to the wrong
+     * one produces a perfectly renderable number that is hours out.
+     */
+    @Test
+    fun `a running window counts down to its own reset`() {
+        assertEquals(
+            "window running · resets in 3h 12m",
+            HeadroomRules.keepAwakeLine(ka(running = true, resetsAt = RESET), NOW_3H12M),
+        )
+    }
+
+    @Test
+    fun `a running window with no reset on the wire still says it is running`() {
+        assertEquals("window running", HeadroomRules.keepAwakeLine(ka(running = true), NOW_3H12M))
+    }
+
+    /** The epoch guard, here as everywhere: no 1970 countdowns. */
+    @Test
+    fun `an unparseable reset drops the clause rather than faking one`() {
+        assertEquals(
+            "window running",
+            HeadroomRules.keepAwakeLine(ka(running = true, resetsAt = "soon"), NOW_3H12M),
+        )
+    }
+
+    /**
+     * The spend clause only appears when the feature is ON. A line about what
+     * keep-awake spent, on a host that spends nothing, is noise — and the window
+     * half is worth showing either way.
+     */
+    @Test
+    fun `nothing is said about keep-awake while it is switched off`() {
+        assertEquals(
+            "window running · resets in 3h 12m",
+            HeadroomRules.keepAwakeLine(ka(running = true, resetsAt = RESET, enabled = false, today = 4), NOW_3H12M),
+        )
+    }
+
+    @Test
+    fun `switched on and never fired today says nothing about it either`() {
+        // "kept awake 0× today" is a statistic about an absence.
+        assertEquals(
+            "no window running",
+            HeadroomRules.keepAwakeLine(ka(running = false, enabled = true, today = 0), NOW_3H12M),
+        )
+    }
+
+    /**
+     * ⚠ THE CLOCK IS THE DAEMON'S, verbatim. `:core` is commonMain and has no
+     * timezone database; the one time a shell formatted an instant into a wall
+     * clock by hand it printed UTC as if it were local.
+     */
+    @Test
+    fun `one ping today names the time the host gave`() {
+        assertEquals(
+            "window running · resets in 3h 12m · kept awake at 14:32",
+            HeadroomRules.keepAwakeLine(
+                ka(running = true, resetsAt = RESET, enabled = true, today = 1, clock = "14:32"),
+                NOW_3H12M,
+            ),
+        )
+    }
+
+    @Test
+    fun `one ping with no clock on the wire still counts itself`() {
+        assertEquals(
+            "no window running · kept awake once today",
+            HeadroomRules.keepAwakeLine(ka(running = false, enabled = true, today = 1), NOW_3H12M),
+        )
+    }
+
+    /** Past one, the COUNT is the point and the individual times are not. */
+    @Test
+    fun `several pings today are counted rather than listed`() {
+        assertEquals(
+            "window running · resets in 3h 12m · kept awake 3× today",
+            HeadroomRules.keepAwakeLine(
+                ka(running = true, resetsAt = RESET, enabled = true, today = 3, clock = "14:32"),
+                NOW_3H12M,
+            ),
+        )
+    }
 
     // ------------------------------------------------------------- modeOf
 
