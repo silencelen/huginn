@@ -21,6 +21,7 @@ import com.silencelen.huginn.data.Status
 import com.silencelen.huginn.data.Usage
 import com.silencelen.huginn.desktop.ui.common.ReadingPane
 import com.silencelen.huginn.desktop.ui.common.Space
+import com.silencelen.huginn.ui.KeepAwakeLine
 import com.silencelen.huginn.ui.PlanSection
 import com.silencelen.huginn.ui.UsageSection
 import kotlinx.coroutines.delay
@@ -73,6 +74,10 @@ fun StatusView(status: Status?, plan: Plan?, usage: Usage?, route: String, watch
         // the countdown that replaced a hand-sliced timestamp printing UTC.
         Section("Plan")
         PlanSection(plan, nowMs)
+        // Under the bars, because it is a fact ABOUT them: which window is open,
+        // and what huginn has spent keeping one open. Same composable as the
+        // phone's, off the /v1/status this pane already holds.
+        KeepAwakeLine(status?.headroom, nowMs)
 
         Section("Usage")
         UsageSection(usage)

@@ -164,8 +164,42 @@ object HeadroomForm {
         if (sw.threshold !in 1..100) out += Problem("accountSwitch", "the switch threshold must be between 1 and 100")
         if (sw.margin !in 0..100) out += Problem("accountSwitch", "the margin must be between 0 and 100")
 
+        if (s.keepAwakeModel.isBlank()) {
+            out += Problem("keepAwakeModel", "pick a model for the keep-awake request")
+        }
+        val quiet = s.keepAwakeQuietHours
+        if (quiet != null && quiet.isNotBlank() && parseQuietHours(quiet) == null) {
+            out += Problem("keepAwakeQuietHours", "quiet hours read as two clock times, like 01:00-07:00")
+        }
+
         return out
     }
+
+    /**
+     * `"01:00-07:00"` → the two minute counts, or null.
+     *
+     * ⚠ THE DAEMON'S RULE, RE-EXPRESSED. `lib/keepawake.js:parseQuietHours` is
+     * the authority and answers a 400 naming it; this exists so a range that
+     * cannot be saved is refused under the reader's finger rather than after a
+     * round trip. Same three refusals, deliberately: not two clock times, an
+     * hour or minute out of range, and a span that starts and ends on the same
+     * minute — which is either nothing or everything, and no reader agrees on
+     * which. An en dash is accepted because that is what a phone keyboard makes.
+     */
+    fun parseQuietHours(spec: String?): Pair<Int, Int>? {
+        val raw = spec?.trim().orEmpty()
+        if (raw.isEmpty()) return null
+        val m = QUIET.matchEntire(raw) ?: return null
+        val (fromH, fromM, toH, toM) = m.destructured
+        val from = (fromH.toIntOrNull() ?: return null) * 60 + (fromM.toIntOrNull() ?: return null)
+        val to = (toH.toIntOrNull() ?: return null) * 60 + (toM.toIntOrNull() ?: return null)
+        if (from > 23 * 60 + 59 || to > 23 * 60 + 59) return null
+        if (fromM.toInt() > 59 || toM.toInt() > 59) return null
+        if (from == to) return null
+        return from to to
+    }
+
+    private val QUIET = Regex("""^(\d{1,2}):(\d{2})\s*[-–—]\s*(\d{1,2}):(\d{2})$""")
 
     fun valid(s: HeadroomSettings): Boolean = problems(s).isEmpty()
 }
@@ -305,6 +339,52 @@ fun HeadroomSettingsSection(
             PctRow("Only to an account this much freer", sw.margin, HeadroomForm.range("accountSwitch.margin")) {
                 draft = draft.copy(accountSwitch = sw.copy(margin = it))
             }
+        }
+
+        Label("Keep a window rotating")
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Switch(checked = draft.keepAwake, onCheckedChange = { draft = draft.copy(keepAwake = it) })
+            Spacer(Modifier.width(10.dp))
+            // ⚠ THE COPY SAYS WHAT IT COSTS, in both states. This is the only
+            // control in the product that spends the owner's quota with nobody
+            // asking for it, and a toggle labelled "keep a window rotating" tells
+            // a reader what it does without telling them what it is for or what
+            // it takes. The OFF wording says what is given up rather than
+            // nothing, so the two states read as a choice instead of as a feature
+            // and its absence.
+            Text(
+                if (draft.keepAwake) {
+                    "Sends one tiny request when no 5-hour window is running, at most once per " +
+                        "window. It spends a fraction of a cent and a sliver of the weekly pool."
+                } else {
+                    "Nothing is spent. A session that starts after an idle spell begins a fresh " +
+                        "5-hour window and gets all of it."
+                },
+                style = MaterialTheme.typography.bodyMedium,
+            )
+        }
+        if (draft.keepAwake) {
+            ModelPicker(
+                value = draft.keepAwakeModel,
+                models = models,
+                onPick = { draft = draft.copy(keepAwakeModel = it) },
+            )
+            Muted2(
+                "The 5-hour window is account-wide, so the cheapest model opens the same window " +
+                    "every other model then shares.",
+            )
+            OutlinedTextField(
+                // `?: ""` rather than a nullable field: an empty box IS "no quiet
+                // hours", and the daemon reads "" and null identically so that
+                // clearing the field and never setting it mean the same thing.
+                value = draft.keepAwakeQuietHours ?: "",
+                onValueChange = { draft = draft.copy(keepAwakeQuietHours = it.ifBlank { null }) },
+                label = { Text("Quiet hours (optional)") },
+                singleLine = true,
+                isError = problems.any { it.field == "keepAwakeQuietHours" },
+                supportingText = { Text("Local time, as 01:00-07:00. A span crossing midnight is fine. Empty means never quiet.") },
+                modifier = Modifier.fillMaxWidth(),
+            )
         }
 
         // The FIRST problem only. A list of six is a form shouting; the reader

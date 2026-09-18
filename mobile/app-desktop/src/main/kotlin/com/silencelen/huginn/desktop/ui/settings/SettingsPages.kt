@@ -53,6 +53,7 @@ import com.silencelen.huginn.ui.settings.SettingsToggleRow
 import com.silencelen.huginn.ui.settings.SettingsRowStyle
 import kotlinx.coroutines.launch
 import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
@@ -297,6 +298,12 @@ private fun patchOf(s: HeadroomSettings): JsonObject = buildJsonObject {
         put("threshold", JsonPrimitive(s.accountSwitch.threshold))
         put("margin", JsonPrimitive(s.accountSwitch.margin))
     })
+    put("keepAwake", JsonPrimitive(s.keepAwake))
+    put("keepAwakeModel", JsonPrimitive(s.keepAwakeModel))
+    // null, not omitted: "no quiet hours" is a value the form has to be able to
+    // SEND, and a key left out of a PATCH means "leave it alone" — so clearing
+    // the field would silently keep the old span.
+    put("keepAwakeQuietHours", s.keepAwakeQuietHours?.let { JsonPrimitive(it) } ?: JsonNull)
 }
 
 // ----------------------------------------------------------- chats & sessions

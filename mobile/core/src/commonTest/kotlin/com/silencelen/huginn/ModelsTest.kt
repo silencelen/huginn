@@ -365,6 +365,73 @@ class ModelsTest {
         assertTrue(d.headsUpText.startsWith("[huginn headroom] "))
     }
 
+    /**
+     * ⚠ KEEP-AWAKE IS OFF IN THIS FILE'S DEFAULTS TOO, and it is the only default
+     * here that spends money when it is wrong. A client whose default said
+     * `true` would draw the toggle ON against a daemon that has it off — and the
+     * form sends the WHOLE object on every save, so the next unrelated edit would
+     * switch it on for real, with nobody having asked for it.
+     */
+    @Test
+    fun `keep-awake is off by default on the client as well as on the host`() {
+        val d = HeadroomSettings()
+        assertFalse(d.keepAwake, "this must never arrive switched on")
+        assertEquals("claude-haiku-4-5-20251001", d.keepAwakeModel, "the DATED id, never the alias")
+        assertNull(d.keepAwakeQuietHours)
+    }
+
+    @Test
+    fun `the keep-awake settings decode, and an older daemon's answer still does`() {
+        val on = json.decodeFromString<HeadroomSettings>(
+            """{"keepAwake":true,"keepAwakeModel":"claude-haiku-4-5-20251001","keepAwakeQuietHours":"01:00-07:00"}""",
+        )
+        assertTrue(on.keepAwake)
+        assertEquals("01:00-07:00", on.keepAwakeQuietHours)
+
+        // The same object from a daemon that has never heard of the feature.
+        val old = json.decodeFromString<HeadroomSettings>("""{"headsUpPct":85,"ladderPct":92}""")
+        assertFalse(old.keepAwake, "absent must read as off, not as unknown-so-probably-on")
+        assertNull(old.keepAwakeQuietHours)
+    }
+
+    /**
+     * The window half of the Status line, both ways round.
+     *
+     * `windowRunning` is NULLABLE on purpose: `null` is a daemon too old to have
+     * been asked, which is not the same answer as `false`. Read as a plain
+     * Boolean, an older host would report "no window running" forever and the
+     * line would say so with complete confidence.
+     */
+    @Test
+    fun `the status summary carries the window and what keep-awake spent`() {
+        val running = json.decodeFromString<Status>(
+            """
+            {"host":"huginn","uptimeSec":10,"cores":4,"load":[0.1],"sessions":1,"chatsRunning":0,
+             "headroom":{"mode":"ok","windowRunning":true,"windowResetsAt":"2026-09-15T10:30:00Z",
+               "keepAwake":{"enabled":true,"model":"claude-haiku-4-5-20251001","lastAt":1789460000000,
+                 "lastAtClock":"14:32","keptAwakeToday":3,"keptAwakeTotal":11,"lastOutcome":"ok",
+                 "why":"no window is running"}}}
+            """.trimIndent(),
+        )
+        val h = assertNotNull(running.headroom)
+        assertEquals(true, h.windowRunning)
+        assertEquals("2026-09-15T10:30:00Z", h.windowResetsAt)
+        val ka = assertNotNull(h.keepAwake)
+        assertTrue(ka.enabled)
+        assertEquals("14:32", ka.lastAtClock)
+        assertEquals(3, ka.keptAwakeToday)
+        assertEquals(11, ka.keptAwakeTotal)
+        assertEquals("no window is running", ka.why)
+
+        val old = json.decodeFromString<Status>(
+            """{"host":"huginn","uptimeSec":10,"cores":4,"load":[0.1],"sessions":1,"chatsRunning":0,
+                "headroom":{"mode":"ok","worstPercent":51.0}}""",
+        )
+        val oldH = assertNotNull(old.headroom)
+        assertNull(oldH.windowRunning, "an older daemon was never asked; that is not a No")
+        assertNull(oldH.keepAwake)
+    }
+
     @Test
     fun `headroom decodes with defaults for every block it omits`() {
         val idle = json.decodeFromString<Headroom>("""{"mode":"ok","serverTime":1789460000}""")

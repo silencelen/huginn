@@ -165,4 +165,62 @@ class HeadroomFormTest {
         assertTrue("clearBelowPct" in fieldsBrokenBy(good.copy(clearBelowPct = 100)))
         assertTrue("ladderUpBelowPct" in fieldsBrokenBy(good.copy(ladderUpBelowPct = 100)))
     }
+
+    // ------------------------------------------------------------ keep awake
+
+    @Test
+    fun `no quiet hours is the ordinary case, and is never a problem`() {
+        assertTrue(HeadroomForm.valid(good.copy(keepAwake = true, keepAwakeQuietHours = null)))
+        // The text field hands back "" when it is emptied, and blank must mean
+        // the same thing as null or clearing the box would be an error state.
+        assertTrue(HeadroomForm.valid(good.copy(keepAwake = true, keepAwakeQuietHours = "")))
+        assertTrue(HeadroomForm.valid(good.copy(keepAwake = true, keepAwakeQuietHours = "   ")))
+    }
+
+    @Test
+    fun `quiet hours have to be two clock times`() {
+        assertTrue(HeadroomForm.valid(good.copy(keepAwakeQuietHours = "01:00-07:00")))
+        assertTrue(HeadroomForm.valid(good.copy(keepAwakeQuietHours = " 22:30 – 06:15 ")), "an en dash is what a phone keyboard makes")
+        for (bad in listOf("1am to 7am", "01:00", "25:00-07:00", "01:60-07:00", "0100-0700")) {
+            assertTrue("keepAwakeQuietHours" in fieldsBrokenBy(good.copy(keepAwakeQuietHours = bad)), "accepted $bad")
+        }
+    }
+
+    /**
+     * ⚠ A SPAN THAT CROSSES MIDNIGHT IS LEGAL, and it is the shape somebody
+     * actually means by quiet hours. Refusing it here — a natural mistake, since
+     * `from > to` looks backwards — would make the one useful setting unsavable
+     * while the daemon was perfectly happy with it.
+     */
+    @Test
+    fun `a span crossing midnight is accepted, and a zero-width one is not`() {
+        assertTrue(HeadroomForm.valid(good.copy(keepAwakeQuietHours = "22:00-07:00")))
+        assertEquals(1320 to 420, HeadroomForm.parseQuietHours("22:00-07:00"))
+        // Same minute at both ends is either nothing or everything, and no
+        // reader agrees on which — the daemon refuses it, so this does too.
+        assertTrue("keepAwakeQuietHours" in fieldsBrokenBy(good.copy(keepAwakeQuietHours = "01:00-01:00")))
+    }
+
+    @Test
+    fun `the keep-awake model cannot be emptied`() {
+        assertTrue("keepAwakeModel" in fieldsBrokenBy(good.copy(keepAwakeModel = "")))
+        assertTrue("keepAwakeModel" in fieldsBrokenBy(good.copy(keepAwakeModel = "   ")))
+        assertTrue(HeadroomForm.valid(good.copy(keepAwakeModel = "claude-haiku-4-5-20251001")))
+    }
+
+    /**
+     * The toggle itself is never a problem in either position — only the two
+     * fields beside it can be.
+     *
+     * Those two are checked whether or not keep-awake is on, deliberately, and
+     * NOT because the form would rather nag: the daemon validates the whole
+     * PATCH body, the form sends every field on every save, so a value this
+     * refused would be refused there too. Gating the check on the toggle would
+     * only move the 400 from under the reader's finger to after the round trip.
+     */
+    @Test
+    fun `the toggle itself is savable in either position`() {
+        assertTrue(HeadroomForm.valid(good.copy(keepAwake = false)))
+        assertTrue(HeadroomForm.valid(good.copy(keepAwake = true)))
+    }
 }

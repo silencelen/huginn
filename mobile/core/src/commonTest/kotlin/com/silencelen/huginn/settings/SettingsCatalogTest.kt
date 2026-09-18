@@ -179,6 +179,40 @@ class SettingsCatalogTest {
         assertTrue("chats.default-model" !in ids, "the default model lives in usage, once")
     }
 
+    /**
+     * Keep-awake is reachable from Settings at all, on BOTH shells.
+     *
+     * ⚠ A CONTROL WITH NO CATALOG ITEM IS INVISIBLE to search and to the summary
+     * line, which is the exact state the redesign was called in to fix — and it
+     * matters more for this one than for any other row, because this is the
+     * setting that spends the owner's quota. A feature you cannot find is a
+     * feature you cannot switch back off.
+     */
+    @Test
+    fun keepAwakeIsInTheCatalogOnBothShells() {
+        val ids = SettingsCatalog.items.map { it.id }.toSet()
+        for (id in listOf("usage.keep-awake", "usage.keep-awake-model", "usage.keep-awake-quiet")) {
+            assertTrue(id in ids, "$id is drawn by the form but missing from the catalog")
+            val item = SettingsCatalog.items.first { it.id == id }
+            assertEquals(Surface.BOTH, item.surface, "$id is drawn on both shells")
+            assertEquals("usage", SettingsCatalog.categoryOf(id)?.id, "$id belongs with the other usage rows")
+        }
+    }
+
+    /**
+     * The toggle's summary says what it COSTS, which is the one thing a reader
+     * needs before switching it on and the one thing a title cannot carry.
+     */
+    @Test
+    fun theKeepAwakeSummarySaysWhatItSpends() {
+        val item = SettingsCatalog.items.first { it.id == "usage.keep-awake" }
+        val words = item.summary.lowercase()
+        assertTrue(
+            listOf("cent", "spend", "cost").any { it in words },
+            "a setting that spends quota has to say so: ${item.summary}",
+        )
+    }
+
     /** Account switching collapses to ONE rendering: same verb, one control. */
     @Test
     fun accountSwitchingIsNamedOnce() {
