@@ -3063,6 +3063,24 @@ function chatStates() {
   return out;
 }
 
+
+/**
+ * What to tell a person about a run that ended without a result.
+ *
+ * ⚠ NEVER A NEGATIVE OR NULL CODE (#43). Node reports a spawn failure as a
+ * 'close' with a negative code (-2 ENOENT, -13 EACCES, -24 EMFILE) — no 'exit'
+ * event at all, so a fix hooked there would miss it — and a SIGKILL from
+ * RUN_HARD_CAP_MS closes with `null`. "claude exited -2" and "claude exited
+ * null" both reached the chat-list subtitle, the chat_finished push and its
+ * Telegram body, and a Round's verdict.
+ */
+function exitFailureText(code, errBuf = '') {
+  const tail = errBuf ? `: ${String(errBuf).slice(-500)}` : '';
+  if (code === null || code === undefined) return `claude was stopped before it answered${tail}`;
+  if (Number(code) < 0) return `claude never started${tail}`;
+  return `claude exited ${code}${tail}`;
+}
+
 /**
  * The name of the machine a chat runs on, or null for this host.
  *
@@ -3311,6 +3329,14 @@ function startRun(meta, userText) {
     run_.emit('error', { text });
     updateMeta(chatId, (m) => { m.updatedAt = ts; m.lastSnippet = text.slice(0, 120); });
     log(`chat ${chatId} spawn failed: ${err.code || err.message}`);
+    // ⚠ AND REMEMBER IT FOR 'close' (#43). Node emits ONLY 'close' when a spawn
+    // fails — never 'exit' — with a NEGATIVE code (-2 for ENOENT, -13 for
+    // EACCES, -24 for EMFILE), and the close handler rendered that as
+    // "claude exited -2". That string reaches the chat-list subtitle, the
+    // chat_finished push and its Telegram body, and for a ROUND it becomes the
+    // Round's whole verdict — the one surface where the number is all the owner
+    // sees. The actionable sentence was sitting one line above it the whole time.
+    run_.spawnFailure = text;
   });
   proc.stdin.on('error', () => { /* EPIPE when the child never started */ });
   proc.stdin.end(userText);
@@ -3352,7 +3378,7 @@ function startRun(meta, userText) {
     try {
       settleRun(run_, {
         exitCode: code,
-        failureText: `claude exited ${code}${errBuf ? `: ${errBuf.slice(-500)}` : ''}`,
+        failureText: run_.spawnFailure || exitFailureText(code, errBuf),
       });
     } catch (e) {
       log(`chat ${chatId} could not settle cleanly: ${e.message}`);
@@ -3636,6 +3662,16 @@ function settleRun(run_, { exitCode = null, failureText = null } = {}) {
         appendMsg(chatId, { type: 'system', text: droppedNote(dropped, 'the run was cancelled'), ts });
         log(`chat ${chatId} dropped ${dropped.length} queued message(s) on cancel`);
       }
+    } else if (stalled) {
+      // ⚠ NOT INTO A WINDOW WE JUST PROVED IS EMPTY (#39). This branch honoured
+      // `stalled` only for a Round; a plain chat fell through to the drain and
+      // spawned the queued message against the SAME exhausted window, where it
+      // died on the limit too — and that second failure's `noteRunStall`
+      // replaced `meta.stall` wholesale, so the stall then carried the SECOND
+      // message's text and the re-run after the reset answered only that one.
+      // Message A was never run again, and the chat held two limit apologies.
+      // The queue stays on disk and drains when the re-run finishes.
+      log(`chat ${chatId} is waiting for a reset; its queue stays put`);
     } else {
       const next = takePending(fresh);
       if (next) {
@@ -7988,6 +8024,20 @@ function giveUpOnStalledRun(chatId, why) {
   try {
     appendMsg(chatId, { type: 'system', text: `the usage-limit re-run was abandoned: ${why}`, ts });
   } catch (e) { log(`chat ${chatId}: could not note the give-up: ${e.message}`); }
+  // ⚠ AND ANYTHING STILL QUEUED (#39). The stall's queue is left on disk for the
+  // re-run; when there is no re-run, nothing else will ever look at it — the
+  // sender got a 202 {queued:true} and their message would sit as a permanently
+  // 'queued' bubble that is never delivered, never dropped, and never explained.
+  // Same drop-or-say-so rule as the cancel and sealed-Round paths.
+  try {
+    const fresh = loadMeta(chatId) || meta;
+    const waiting = drainPending(fresh);
+    if (waiting.length) {
+      saveMeta(fresh);
+      appendMsg(chatId, { type: 'system', text: droppedNote(waiting, `the re-run was abandoned: ${why}`), ts });
+      log(`chat ${chatId} dropped ${waiting.length} queued message(s) with the abandoned re-run`);
+    }
+  } catch (e) { log(`chat ${chatId}: could not drain the queue on give-up: ${e.message}`); }
   if (!meta.roundId) return;
   try { finishRoundRun(loadMeta(chatId) || meta, `did not finish: ${why}`, { status: 'attention' }); }
   catch (e) { log(`round run ${chatId} could not be recorded: ${e.message}`); }
@@ -8067,6 +8117,16 @@ function noteRunStall(chatId, failureText) {
   }
   if (!userText) return false;
   const prior = loadMeta(chatId);
+  // ⚠ AN UNRESUMED STALL IS NOT OVERWRITTEN (#39). This wrote `meta.stall`
+  // wholesale, so a SECOND failure — the queue drained into the same dry window,
+  // or a follow-up a person sent into an already-stalled chat — replaced the
+  // stall's `userText` with the later turn, and `resumeStalledChats` then re-ran
+  // only that one. The turn that actually stalled was never run again and its
+  // text stayed in messages.jsonl with nothing waiting to say it.
+  if (prior && prior.stall && prior.stall.at && !prior.stall.resumedAt && !prior.stall.gaveUpAt) {
+    log(`chat ${chatId} is already waiting for a reset; keeping the turn that stalled first`);
+    return true;
+  }
   const attempts = (prior && prior.stall && Number(prior.stall.attempts)) || 0;
   if (attempts >= resumeLib.MAX_ATTEMPTS) return false;
   updateMeta(chatId, (m) => {
