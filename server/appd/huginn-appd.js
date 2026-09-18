@@ -8991,6 +8991,18 @@ const server = http.createServer(async (req, res) => {
               pushEpoch: streamInstall ? pushLib.epochOf(pushSt, streamInstall) : null,
             })}\n\n`);
             nextKeepalive = Date.now() + KEEPALIVE_MS;
+            // ⚠ AND STAMP THE CLIENT (#32/#41/#44). A state frame resets the
+            // keepalive clock, so a stream whose digest changes at least once
+            // every 25 s never reaches the keepalive branch — the ONLY place
+            // that said "this client is alive". Three ordinary interactive
+            // sessions on normal turn cycles are enough (measured: 51 state
+            // frames, 0 keepalives over 7 minutes), and after FRESH_STREAM_MS
+            // the most-connected client on the host was recorded as stale:
+            // /v1/clients reports it gone and `appOnline` goes false, which is
+            // what gates the Telegram fallback and the Round reports when push
+            // delivered to nobody. The exposed client is Compose Desktop, whose
+            // only /v1/watch caller is this stream.
+            noteClient(req, 'stream');
           } else if (Date.now() >= nextKeepalive) {
             // A comment frame: valid SSE, ignored by any parser, and enough to
             // prove the path is still open in both directions.
