@@ -842,6 +842,37 @@ function humanAttentionHold({ state, composerEmpty = null, waitedMs = 0,
 }
 
 /**
+ * May this queued text be SUBMITTED into the pane as it is now?
+ *
+ * ⚠ THE P1 THIS EXISTS FOR (#15). `claude` exits — a broken install, a node
+ * upgrade, ENOSPC, or the owner's own /exit in a `cc`-style session whose start
+ * command is `claude; exec "$SHELL" -l` — and what is left in the pane is a
+ * ROOT LOGIN SHELL. The chat composer sends text and Enter together, so bash
+ * ran the owner's message as a command: measured, `please rewrite > notes.txt
+ * tomorrow` truncated notes.txt to zero bytes, because bash performs the
+ * redirections before it fails to find the command. The route answered 200,
+ * `/typing` reported no error, and the message was gone as well as executed.
+ *
+ * The discriminator is the PANE, not the state file — a session whose Claude
+ * exited after running still has one — and it is narrow on purpose:
+ *
+ *   composer drawn   Claude is up. Nothing to refuse.
+ *   shell prompt     the pane's last line ends in $ # % >. Refuse the SUBMIT.
+ *   neither          a pane mid-redraw, an empty pane, a TUI that is not
+ *                    Claude: say nothing. Refusing here would break every
+ *                    non-Claude pane the app can open.
+ *
+ * Only the submit is refused. Text without an Enter still goes (the Screen
+ * tab types into whatever is there and sends its Enter as a raw key), and raw
+ * keys have never come through the queue at all.
+ */
+function submitRefusal({ submit = true, composer = false, shell = false } = {}) {
+  if (!submit || composer || !shell) return null;
+  return 'claude is not running in this session — it dropped to a shell, so the message '
+    + 'was not typed. Start claude in the pane, or use the Screen tab to drive the shell.';
+}
+
+/**
  * Every gate, folded into one verdict.
  *
  * `idle` comes from the transcript (the liveness authority), `paneWhy` from
@@ -961,7 +992,7 @@ module.exports = {
   paneTail, pasteLostLogLine, submitStalledLogLine, pasteResentLogLine, pasteLeftAloneLogLine,
   sendKeysFits, chunks,
   isBoundaryRecord, isConversationalRecord, boundaryFromTail, stateVerdict,
-  humanAttentionHold, ATTENTION_HOLD_MAX_MS,
+  humanAttentionHold, ATTENTION_HOLD_MAX_MS, submitRefusal,
   hasHumanUserRecord, kindOf,
   paneReadyForInput, paneBlocks, composerDrawn, shellPrompt, startsClaude,
   startingUp, startingUnmarked, bufferName,
