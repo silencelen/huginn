@@ -585,6 +585,37 @@ test('the same answer sent twice is refused the second time (#11)', async () => 
   assert.equal('1\n', fs.existsSync(out) ? fs.readFileSync(out, 'utf8') : '');
 });
 
+test('/soft-end and /compact refuse a pane with a dialog on it (#9)', async () => {
+  // ⚠ WHAT THE STATE FILE CANNOT SEE. Both routes were guarded only by
+  // `st.state === 'attention'`, and `running` is the NORMAL reading while a
+  // dialog is up: a plain tool-permission dialog gets no sidecar at all, and a
+  // background agent's PreToolUse rewrites the flat file to `running` while the
+  // main thread sits on the question. So both pasted their text into a live
+  // selector while the send queue, on the same pane in the same second,
+  // correctly held a person's message with blockedBy:"modal".
+  //
+  // The destructive half is the auto-end: /soft-end answered 200
+  // {"auto":true}, the phrase sat unsubmitted inside the dialog, and
+  // `stepSoftEnd` armed on the same `running` — so at the next stable idle the
+  // daemon killed the session with no wrap-up turn and reported success.
+  const { name, out } = mkAnswerable('dialogguard');
+  writeState(name, 'running');
+  await screenDecided(name);
+
+  const soft = await api(`/v1/sessions/${name}/soft-end`, {
+    method: 'POST', body: JSON.stringify({ auto: true }),
+  });
+  assert.equal(409, soft.status, JSON.stringify(soft.body));
+  const comp = await api(`/v1/sessions/${name}/compact`, { method: 'POST' });
+  assert.equal(409, comp.status, JSON.stringify(comp.body));
+
+  await wait(400);
+  assert.equal('', fs.existsSync(out) ? fs.readFileSync(out, 'utf8') : '',
+    'nothing was typed at the question');
+  const row = (await api('/v1/sessions')).body.sessions.find((x) => x.name === name);
+  assert.equal(false, row.softEnding, 'and no auto-end is armed for a phrase that never landed');
+});
+
 test('screen fuses the hook sidecar: hook labels + descriptions, TUI extras flagged', async () => {
   const name = mkSessionWithPane('fuse', COLOR_PANE);
   writeAskSidecar(name, COLOR_Q);
