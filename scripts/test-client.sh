@@ -64,7 +64,7 @@ grep -q 'scp .*\${H}:' client/huginn.ps1 && bad "huginn.ps1 still scps from \$HU
 echo "[3/8] both clients expose the same verbs (parity by verb)"
 # huginn.sh writes cases as alternations (`list|ls)`, `status|st)`), so match the
 # verb as a case ALTERNATIVE, not as a bare `verb)`.
-for v in end kill archive revive solo rename list status rounds headroom devices device local desktop usage update uninstall version help; do
+for v in end kill archive revive solo rename list status rounds headroom devices device local projects desktop usage update uninstall version help; do
   # Match the DISPATCH, not a mention: huginn.ps1 lists every verb in its
   # completion array too, so grepping "'$v'" passes even with the branch deleted
   # (verified by removing the `end` branch: still 2 matches, still green).
@@ -745,6 +745,291 @@ else
 fi
 kill "$AR_STUB" 2>/dev/null
 
+# The projects lane. Same rule as headroom/archive above -- a verb promised in
+# two shells must have a renderer on the host and an install line for it -- plus
+# the one thing that makes this renderer different from all of them: it is the
+# ONLY implementation of what a project looks like in either shell, and it also
+# WRITES (new / spawn / msg / end). A parse check would leave every write path
+# untested, so it is driven end to end against a stub daemon like the archive
+# lane below it.
+#
+# It is node, not bash-around-python3: the bodies it POSTs are JSON objects built
+# from argv, and building JSON in a single-quoted `python3 -c` inside bash is the
+# quoting trap huginn-rounds already carries a warning about. `node --check` is
+# therefore the real syntax gate here.
+node --check server/bin/huginn-projects 2>/dev/null \
+  && ok "huginn-projects parses" || bad "huginn-projects does not parse"
+[ -x server/bin/huginn-projects ] && ok "huginn-projects is executable" \
+  || bad "huginn-projects is not executable — ssh would refuse to run it"
+# The sh side writes its case as an alternation (`projects|project)`), so match
+# the verb as a case ALTERNATIVE the way [3/8] does -- a bare `^    projects)`
+# here would go red for a spelling that is correct.
+grep -qE '^[[:space:]]+([a-z]+\|)*projects(\||\))' client/huginn.sh && grep -q "eq 'projects'" client/huginn.ps1 \
+  && ok "both shells carry: projects" || bad "the projects verb is missing from a shell client"
+grep -q 'install_script .*bin/huginn-projects' server/setup.sh \
+  && ok "setup.sh installs huginn-projects" \
+  || bad "setup.sh does not install huginn-projects — the verb would 'command not found'"
+# `--help` is the one path that must work with no daemon, no token and no
+# network: it is what somebody types when the verb did something they did not
+# expect. It must exit 0 (a help screen is not an error) and name every verb,
+# because the grammar lives nowhere else -- the clients forward argv untouched.
+PJ_HELP=$(server/bin/huginn-projects --help 2>&1); PJ_RC=$?
+PJ_MISS=
+for v in list show new spawn msg end; do
+  grep -qE "^  huginn-projects $v" <<<"$PJ_HELP" || PJ_MISS="$PJ_MISS $v"
+done
+[ "$PJ_RC" = 0 ] && [ -z "$PJ_MISS" ] \
+  && ok "huginn-projects --help exits 0 and documents every verb" \
+  || bad "huginn-projects --help exited $PJ_RC, missing verbs:${PJ_MISS:- none}"
+
+# What the two clients actually SEND. The whole verb is one ssh to the renderer,
+# so a client that drops an argument (an empty argv element from a bare verb, a
+# flag eaten by PowerShell's parameter binder, a lost array) looks exactly like a
+# working verb from the caller's side.
+PJT=$(mktemp -d)
+cat > "$PJT/ssh" <<'STUB'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >> "$SSH_LOG"
+exit 0
+STUB
+chmod +x "$PJT/ssh"
+PJSH=$( export SSH_LOG="$PJT/log"; : > "$SSH_LOG"
+        ( export PATH="$PJT:$PATH"
+          . "$PWD/client/huginn.sh" >/dev/null 2>&1
+          huginn projects; huginn projects show lora; huginn projects --json ) >/dev/null 2>&1
+        cat "$SSH_LOG" )
+grep -q -- '-T .* huginn-projects$' <<<"$PJSH" \
+  && ok "sh: bare projects ssh -T's the renderer with NO empty argument" \
+  || bad "sh: bare projects sent: $PJSH"
+grep -q -- 'huginn-projects show lora' <<<"$PJSH" && grep -q -- 'huginn-projects --json' <<<"$PJSH" \
+  && ok "sh: projects carries its sub-verb and --json" || bad "sh: projects sent: $PJSH"
+if command -v pwsh >/dev/null 2>&1; then
+  PJPS=$( export SSH_LOG="$PJT/log2"; : > "$SSH_LOG"
+          PATH="$PJT:$PATH" pwsh -NoProfile -Command \
+            ". $PWD/client/huginn.ps1; huginn projects; huginn projects show lora; huginn projects --json" >/dev/null 2>&1
+          cat "$SSH_LOG" )
+  grep -q -- '-T .* huginn-projects$' <<<"$PJPS" \
+    && ok "ps1: bare projects sends the same bare renderer call" || bad "ps1: bare projects sent: $PJPS"
+  grep -q -- "huginn-projects 'show' 'lora'" <<<"$PJPS" && grep -q -- "huginn-projects '--json'" <<<"$PJPS" \
+    && ok "ps1: the sub-verb and --json survive the parameter binder" || bad "ps1: projects sent: $PJPS"
+else
+  skip "ps1 projects send check (no pwsh)"
+fi
+rm -rf "$PJT"
+
+# End to end against a stub daemon. The port is overridable because these gates
+# run beside a live appd and beside each other -- 18787 and 18811 are already
+# taken by the headroom and archive stubs above.
+PJ_PORT="${HUGINN_TEST_PROJECTS_PORT:-18822}"
+PJ_404_PORT="${HUGINN_TEST_PROJECTS_404_PORT:-18823}"
+PJ_REQ=$(mktemp)
+python3 - "$PJ_PORT" "$PJ_REQ" <<'PJSTUB' &
+import json, sys
+from http.server import BaseHTTPRequestHandler, HTTPServer
+LOG = sys.argv[2]
+P1 = {"id": "aaaaaaaa-0000-4000-8000-00000000aaaa", "name": "LoRa sensor stick",
+      "cwd": "/root/netplan/dev-ledger/lora-stick", "createdAt": 1789459900,
+      "lead": {"name": "lora-stick/lead", "state": "busy"},
+      "members": [{"name": "lora-stick/docs", "role": "docs", "state": "idle"},
+                  {"name": "lora-stick/repo", "role": "repo", "state": "attention",
+                   "needsYou": True}]}
+P2 = {"id": "bbbbbbbb-0000-4000-8000-00000000bbbb", "name": "status page",
+      "cwd": "/root/netplan/status-page", "createdAt": 1789000000, "endedAt": 1789400000,
+      "lead": {"name": "status-page/lead"}, "members": []}
+DASH = {"project": P1, "updatedAt": 1789460500,
+        "members": [{"name": "lora-stick/lead", "role": "lead", "state": "busy", "turns": 12},
+                    {"name": "lora-stick/docs", "role": "docs", "state": "idle", "turns": 3},
+                    {"name": "lora-stick/repo", "role": "repo", "state": "attention",
+                     "needsYou": True, "turns": 7}]}
+class H(BaseHTTPRequestHandler):
+    def _log(self):
+        with open(LOG, "a") as fh:
+            fh.write("%s %s\n" % (self.command, self.path))
+    def _send(self, code, obj):
+        b = json.dumps(obj).encode()
+        self.send_response(code); self.send_header("content-type", "application/json")
+        self.send_header("content-length", str(len(b))); self.end_headers(); self.wfile.write(b)
+    def do_GET(self):
+        self._log()
+        if self.path == "/v1/projects":
+            self._send(200, {"projects": [P1, P2]})
+        elif self.path.endswith("/dashboard"):
+            self._send(200, DASH)
+        else:
+            self._send(404, {"error": "no"})
+    def do_POST(self):
+        self._log()
+        n = int(self.headers.get("content-length") or 0)
+        sent = self.rfile.read(n) if n else b""
+        if self.path.endswith("/spawn") and b"flood" in sent:
+            # A spawn that refused HUNDREDS of members: >64 KB of rendered output
+            # on a code path that ends in a non-zero exit. See the assertion.
+            self._send(200, {"ok": False, "spawned": [],
+                             "failed": [{"role": "r%03d" % i,
+                                         "reason": "refused because " + ("x" * 100)}
+                                        for i in range(800)] +
+                                       [{"role": "last", "reason": "THE-LAST-LINE"}]})
+            return
+        if self.path.endswith("/spawn"):
+            # A PARTIAL spawn on purpose: HTTP 200 with one member started and
+            # one refused is the daemon's documented normal failure, and the
+            # renderer has to survive it in both directions (say which is
+            # missing, and not report success).
+            self._send(200, {"ok": False, "spawned": [{"role": "docs", "name": "lora-stick/docs"}],
+                             "failed": [{"role": "repo",
+                                         "reason": "a tmux session called lora-stick-repo already exists"}]})
+        elif self.path.endswith("/message"):
+            self._send(202, {"ok": True})
+        else:
+            self._send(201, P1)
+    def do_DELETE(self):
+        self._log()
+        self._send(200, {"ok": True, "ended": ["lora-stick-docs"]})
+    def log_message(self, *a): pass
+HTTPServer(("127.0.0.1", int(sys.argv[1])), H).serve_forever()
+PJSTUB
+PJ_STUB=$!
+python3 - "$PJ_404_PORT" <<'PJ404' >/dev/null 2>&1 &
+import sys
+from http.server import BaseHTTPRequestHandler, HTTPServer
+class H(BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(404); self.end_headers(); self.wfile.write(b'{"error":"not found"}')
+    def log_message(self, *a): pass
+HTTPServer(("127.0.0.1", int(sys.argv[1])), H).serve_forever()
+PJ404
+PJ_404_STUB=$!
+# A third stub: HTTP 200 with a body that is not JSON. See the assertion below.
+PJ_JUNK_PORT="${HUGINN_TEST_PROJECTS_JUNK_PORT:-18824}"
+python3 - "$PJ_JUNK_PORT" <<'PJJUNK' >/dev/null 2>&1 &
+import sys
+from http.server import BaseHTTPRequestHandler, HTTPServer
+class H(BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200); self.end_headers()
+        self.wfile.write(b'<html>502 Bad Gateway</html>')
+    def log_message(self, *a): pass
+HTTPServer(("127.0.0.1", int(sys.argv[1])), H).serve_forever()
+PJJUNK
+PJ_JUNK_STUB=$!
+PJ_UP=
+for _ in $(seq 1 40); do
+  curl -s -o /dev/null --max-time 1 "http://127.0.0.1:$PJ_PORT/" && { PJ_UP=1; break; }
+done
+if [ -z "$PJ_UP" ]; then
+  # LOUDLY, never silently: a stub that never bound would make every assertion
+  # below fail for the wrong reason (set HUGINN_TEST_PROJECTS_PORT to move it).
+  skip "projects renderer checks (nothing bound 127.0.0.1:$PJ_PORT)"
+else
+  PJ_LIST=$(HUGINN_APPD_URL="http://127.0.0.1:$PJ_PORT" server/bin/huginn-projects 2>&1)
+  grep -q "LoRa sensor stick" <<<"$PJ_LIST" && grep -qE "2 members" <<<"$PJ_LIST" \
+    && ok "the list names each project and counts its members" \
+    || bad "projects list did not render the fixture: $PJ_LIST"
+  # ⚠ THE ONE FACT THE LIST EXISTS FOR. A cluster of twelve sessions is unreadable
+  # unless the line says which of them is stopped waiting for a person; a count
+  # that silently drops `needsYou` looks identical to a cluster that is fine.
+  # ON THE PROJECT'S OWN LINE, not just in the footer total: a renderer that
+  # dropped the row's count still printed "1 needs you" at the bottom, and the
+  # assertion passed while the line somebody actually reads had lost it.
+  grep -q "LoRa sensor stick.*1 needs you" <<<"$PJ_LIST" \
+    && ok "a member waiting on a person is counted on the project's line" \
+    || bad "projects list hid a waiting member: $PJ_LIST"
+  # The lead's own state, on the same line: a lead that died is why nothing is
+  # being proposed, and it is not a member so the member counts never show it.
+  grep -qE "lead (busy|working)" <<<"$PJ_LIST" \
+    && ok "the lead's state rides the project line" || bad "no lead state in: $PJ_LIST"
+  PJ_SHOW=$(HUGINN_APPD_URL="http://127.0.0.1:$PJ_PORT" server/bin/huginn-projects show "LoRa sensor stick" 2>&1)
+  grep -q "docs" <<<"$PJ_SHOW" && grep -q "repo" <<<"$PJ_SHOW" && grep -q "NEEDS YOU" <<<"$PJ_SHOW" \
+    && ok "show renders the member table with the waiting member marked" \
+    || bad "projects show: $PJ_SHOW"
+  # ⚠ THE ATTACH NAME IS NOT THE PEER NAME. A member is `<slug>/<role>` to its
+  # peers and `<slug>-<role>` to tmux, because a slash is not a tmux name
+  # character. A hint that printed the peer name would not attach anything --
+  # `huginn lora-stick/repo` takes the first path segment for a session name and
+  # CREATES a new session beside the project, which is the worst possible answer
+  # to "how do I look at this one".
+  grep -q "huginn lora-stick-lead" <<<"$PJ_SHOW" && ! grep -q "huginn lora-stick/" <<<"$PJ_SHOW" \
+    && ok "show suggests the tmux session name, not the peer name, for attaching" \
+    || bad "show's attach hint: $(grep -F 'to attach' <<<"$PJ_SHOW")"
+  # A NAME is resolved host-side, exactly like `huginn-archive revive <name>`,
+  # so neither client has to parse the list in bash AND in PowerShell.
+  PJ_MISS2=$(HUGINN_APPD_URL="http://127.0.0.1:$PJ_PORT" server/bin/huginn-projects show nosuchproject 2>&1)
+  grep -q "no project" <<<"$PJ_MISS2" \
+    && ok "show of an unknown project says so instead of 404-ing" || bad "show unknown: $PJ_MISS2"
+  # ⚠ A MALFORMED member:role MUST NOT BECOME A REQUEST. `spawn` starts real
+  # Claude sessions; a half-parsed pair ("docs" with no role, a role with a
+  # slash in it) that reaches the daemon either spawns the wrong thing or leaves
+  # a project half-born, and the caller cannot tell which. Refused in the
+  # renderer, before anything is sent -- asserted by the request log staying
+  # empty, not just by the exit code.
+  : > "$PJ_REQ"
+  PJ_BAD=$(HUGINN_APPD_URL="http://127.0.0.1:$PJ_PORT" \
+           server/bin/huginn-projects spawn "LoRa sensor stick" 'docs' --prompt 'x' 2>&1); PJ_RC=$?
+  PJ_BAD2=$(HUGINN_APPD_URL="http://127.0.0.1:$PJ_PORT" \
+            server/bin/huginn-projects spawn "LoRa sensor stick" 'docs:a;rm -rf /' --prompt 'x' 2>&1)
+  [ "$PJ_RC" != 0 ] && grep -q "member:role" <<<"$PJ_BAD" && ! grep -q "POST" "$PJ_REQ" \
+    && ok "spawn refuses a malformed member:role and sends nothing at all" \
+    || bad "spawn accepted a malformed pair (exit $PJ_RC): $PJ_BAD / $PJ_BAD2 / $(cat "$PJ_REQ")"
+  PJ_SPAWN=$(HUGINN_APPD_URL="http://127.0.0.1:$PJ_PORT" \
+             server/bin/huginn-projects spawn "LoRa sensor stick" docs:docs repo:repo \
+             --prompt 'write the README' 2>&1); PJ_RC=$?
+  grep -q "docs" <<<"$PJ_SPAWN" && grep -q "POST /v1/projects/aaaaaaaa-0000-4000-8000-00000000aaaa/spawn" "$PJ_REQ" \
+    && ok "a well-formed spawn reaches the resolved project's spawn route" \
+    || bad "spawn sent: $(cat "$PJ_REQ") / printed: $PJ_SPAWN"
+  # ⚠ HTTP 200 IS NOT "IT WORKED". The daemon reports a member that could not
+  # start inside a 200 body; a renderer that passed that through as success
+  # hands a script a half-born cluster and tells it the cluster is up.
+  grep -q "lora-stick-repo already exists" <<<"$PJ_SPAWN" && [ "$PJ_RC" != 0 ] \
+    && ok "a partial spawn names the member that did not start, and exits non-zero" \
+    || bad "partial spawn exited $PJ_RC: $PJ_SPAWN"
+  # ⚠ A NON-ZERO EXIT MUST NOT EAT THE OUTPUT. Node's stdout is ASYNCHRONOUS
+  # when it is a pipe on POSIX -- and a pipe is the normal case here, because both
+  # clients run this renderer as `ssh -T <host> huginn-projects` and capture or
+  # page what comes back -- so a buffered write followed by process.exit() is
+  # DISCARDED. A short reply hides it completely; this drives the exiting path
+  # with >64 KB (a spawn that refused 800 members) through a pipe and asserts the
+  # LAST line survived. Only the tail is kept, so a failure does not dump 90 KB.
+  PJ_FLOOD=$(HUGINN_APPD_URL="http://127.0.0.1:$PJ_PORT" \
+             server/bin/huginn-projects spawn "LoRa sensor stick" flood:flood 2>&1 | cat | tail -3)
+  grep -q "THE-LAST-LINE" <<<"$PJ_FLOOD" \
+    && ok "a long reply on the non-zero-exit path survives the pipe" \
+    || bad "output was truncated by the exit; tail was: $PJ_FLOOD"
+fi
+# ⚠ AN OLDER DAEMON IS NOT A BROKEN ONE. /v1/projects does not exist before the
+# Wave 3 appd, and "404" on its own sends somebody looking for a bug in the
+# renderer. One line, naming the daemon, and its own exit code so a script can
+# branch on it.
+PJ_OLD=$(HUGINN_APPD_URL="http://127.0.0.1:$PJ_404_PORT" server/bin/huginn-projects 2>&1); PJ_RC=$?
+[ "$PJ_RC" = 3 ] && grep -qi "huginn-appd" <<<"$PJ_OLD" \
+  && ok "projects on a daemon without the feature exits 3 and says which daemon" \
+  || bad "projects on a 404 exited $PJ_RC: $PJ_OLD"
+# ⚠ AND A 200 THAT IS NOT JSON MUST NOT DRAW THE EMPTY STATE. A truncated body
+# or a proxy error page arrives as a SUCCESSFUL status with junk in it, and the
+# renderer would otherwise print "No projects." — a sentence somebody acts on,
+# and a lie. Worse than an error, because it looks like an answer.
+PJ_JUNK=$(HUGINN_APPD_URL="http://127.0.0.1:$PJ_JUNK_PORT" server/bin/huginn-projects 2>&1); PJ_RC=$?
+[ "$PJ_RC" != 0 ] && ! grep -q "No projects" <<<"$PJ_JUNK" \
+  && ok "a 200 that is not JSON is an error, not an empty list" \
+  || bad "projects on a non-JSON 200 exited $PJ_RC: $PJ_JUNK"
+PJ_DEAD=$(HUGINN_APPD_URL="http://127.0.0.1:1" server/bin/huginn-projects 2>&1); PJ_RC=$?
+[ "$PJ_RC" = 2 ] \
+  && ok "projects exits 2 when nothing is answering (3 = appd is there but too old)" \
+  || bad "projects with no daemon exited $PJ_RC: $PJ_DEAD"
+# ⚠ AND IT NEVER PRINTS THE TOKEN, the same failure headroom and archive were
+# audited for: the bearer is one variable away from every string these paths emit.
+if [ -r /etc/huginn-appd/token ]; then
+  PJ_TOK=$(tr -d '[:space:]' < /etc/huginn-appd/token)
+  if [ -n "$PJ_TOK" ] && grep -qF "$PJ_TOK" <<<"${PJ_LIST:-}${PJ_DEAD}${PJ_OLD}${PJ_JUNK}${PJ_BAD:-}"; then
+    bad "huginn-projects printed the bearer token on a failure path"
+  else
+    ok "huginn-projects failure paths print no credential"
+  fi
+else
+  skip "projects token-leak check (no readable /etc/huginn-appd/token here)"
+fi
+kill "$PJ_STUB" "$PJ_404_STUB" "$PJ_JUNK_STUB" 2>/dev/null
+rm -f "$PJ_REQ"
+
 echo "[uninstall/8] the server first, and only huginn's own files"
 # WHY: `huginn uninstall` is the one verb that deletes a person's files, and the
 # two ways it can be wrong are both silent. It can leave the tokens (the whole
@@ -882,6 +1167,7 @@ check_deployed server/bin/huginn-llm     /usr/local/bin/huginn-llm
 check_deployed server/bin/huginn-devices /usr/local/bin/huginn-devices
 check_deployed server/bin/huginn-headroom /usr/local/bin/huginn-headroom
 check_deployed server/bin/huginn-archive  /usr/local/bin/huginn-archive
+check_deployed server/bin/huginn-projects /usr/local/bin/huginn-projects
 [ "$DRIFT" -eq 0 ] || echo "       (install the ones above, or devices keep receiving the old file)" >&2
 
 echo
