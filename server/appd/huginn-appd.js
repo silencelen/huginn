@@ -10478,10 +10478,31 @@ const server = http.createServer(async (req, res) => {
       try {
         await new Promise((resolve, reject) => {
           const out = fs.createWriteStream(file, { mode: 0o600 });
-          const stop = (err) => { failed = err; try { req.destroy(); } catch { } out.destroy(); reject(err); };
+          /**
+           * ⚠ `cut` DECIDES WHETHER THE CALLER EVER HEARS THE ANSWER (#42).
+           * `req.destroy()` resets the connection, so a response written after
+           * it never arrives — which is right for the size cap (the point is to
+           * stop a 100 MB body early, and a small over-cap body is buffered
+           * before we get here, so its 413 still lands) and WRONG for a store
+           * that cannot be written: the caller would get a network error
+           * instead of the errno that says what to fix. So a store failure
+           * DRAINS the rest of the body instead, exactly as readBodyRaw does
+           * when it refuses an over-sized one.
+           */
+          const stop = (err, { cut = false } = {}) => {
+            failed = err;
+            if (cut) { try { req.destroy(); } catch { } }
+            else { try { req.resume(); } catch { } }
+            out.destroy();
+            reject(err);
+          };
           req.on('data', (chunk) => {
             bytes += chunk.length;
-            if (bytes > UPLOAD_MAX_BYTES) return stop(new Error('too large'));
+            if (bytes > UPLOAD_MAX_BYTES) {
+              const tooBig = new Error('too large');
+              tooBig.tooBig = true;
+              return stop(tooBig, { cut: true });
+            }
             if (!out.write(chunk)) req.pause();
           });
           out.on('drain', () => req.resume());
@@ -10490,11 +10511,30 @@ const server = http.createServer(async (req, res) => {
           req.on('end', () => out.end());
           out.on('close', () => (failed ? undefined : resolve()));
         });
-      } catch {
+      } catch (e) {
         try { fs.unlinkSync(file); } catch { }
-        const mb = Math.floor(UPLOAD_MAX_BYTES / 1024 / 1024);
-        log(`uploads: ${name || 'unnamed'} aborted after ${bytes} bytes`);
-        return sendErr(res, 413, `that file is too large (max ${mb}MB)`);
+        // ⚠ THREE FAILURES WORE ONE ANSWER (#42). `stop()` is shared by the size
+        // cap, the write stream's error (ENOSPC / EROFS / EACCES) and the
+        // request's, and the catch assumed the cap — so a 26-byte note onto a
+        // full or read-only store came back as "that file is too large (max
+        // 128MB)", which the phone renders verbatim and which names a remedy
+        // that can never work. The log said only "aborted after N bytes", never
+        // the errno, and that log line is the ONLY surface for the mid-stream
+        // case (the connection is reset before any response can be written).
+        const code = (failed && failed.code) || (e && e.code) || null;
+        const tooBig = !!((failed && failed.tooBig) || (e && e.tooBig));
+        log(`uploads: ${name || 'unnamed'} aborted after ${bytes} bytes`
+          + `${tooBig ? ' (over the size cap)' : ''}${code ? ` (${code})` : ''}`);
+        if (tooBig) {
+          const mb = Math.floor(UPLOAD_MAX_BYTES / 1024 / 1024);
+          return sendErr(res, 413, `that file is too large (max ${mb}MB)`);
+        }
+        // ENOSPC/EDQUOT is the store being full; everything else is the host
+        // refusing to write. 507 rather than 500 for the full case because it is
+        // the one a person can act on, and the errno travels either way.
+        const full = code === 'ENOSPC' || code === 'EDQUOT';
+        return sendErr(res, full ? 507 : 500,
+          `huginn could not save the file${code ? ` (${code})` : ''}`);
       }
       if (!bytes) {
         try { fs.unlinkSync(file); } catch { }

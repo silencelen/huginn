@@ -377,3 +377,94 @@ test('a malformed JSON body is a 400, not a 500 quoting the parser (#31)', async
   const empty = await api('/v1/headroom/settings', { method: 'PATCH', body: '' });
   assert.equal(200, empty.status, JSON.stringify(empty.body));
 });
+
+test('an unwritable upload store is not reported as "too large" (#42)', async (t) => {
+  // ⚠ THREE FAILURES WEARING ONE ANSWER. `stop()` is shared by the size cap, the
+  // write stream's error and the request's, and the catch assumed the cap — so a
+  // 26-byte note onto a read-only or full store came back as "that file is too
+  // large (max 128MB)", which the Android client (which has no local size check,
+  // by design) renders verbatim. It names a remedy that cannot work, and the log
+  // line said only "aborted after N bytes" — never the errno, which for the
+  // mid-stream case is the only surface there is, because `stop()` destroys the
+  // request before any response can be written.
+  //
+  // The condition is a REAL read-only filesystem, because that is the shape of
+  // the bug; a host that cannot mount one skips rather than pretending.
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'appd-rostore-'));
+  const mount = (args) => {
+    try { execFileSync('mount', args, { stdio: 'ignore' }); return true; } catch { return false; }
+  };
+  // ⚠ ONLY THE UPLOAD STORE IS READ-ONLY. A read-only DATA ROOT is a different
+  // (and uninteresting) bug: the daemon mkdirs `chats` at load and exits FATAL
+  // before it can answer anything.
+  const store = path.join(dir, 'uploads');
+  fs.mkdirSync(store, { recursive: true });
+  if (!mount(['-t', 'tmpfs', '-o', 'size=1m', 'tmpfs', store])) {
+    fs.rmSync(dir, { recursive: true, force: true });
+    t.skip('this host cannot mount a tmpfs, so the read-only store cannot be built');
+    return;
+  }
+  try {
+    // The FULL form: a bare `-o remount,ro <dir>` is refused here ("mount point
+    // not mounted or bad option") because the util looks the device up in mtab,
+    // which a mount this process made is not in.
+    assert.ok(mount(['-o', 'remount,ro', '-t', 'tmpfs', 'tmpfs', store]),
+      'the store must actually be read-only');
+    assert.throws(() => fs.writeFileSync(path.join(store, 'probe'), 'x'),
+      /EROFS/, 'precondition: writes into the store really do fail');
+
+    const fd = fs.openSync(path.join(tmp, 'ro.log'), 'a');
+    const child = spawn(process.execPath, [path.join(__dirname, '..', 'huginn-appd.js')], {
+      env: {
+        ...process.env,
+        HUGINN_APPD_PORT: String(SPARE_PORT),
+        HUGINN_APPD_BIND: '127.0.0.1',
+        HUGINN_APPD_DATA: dir,
+        HUGINN_APPD_TOKEN_FILE: path.join(tmp, 'token'),
+        HUGINN_APPD_STATE_DIR: path.join(tmp, 'state'),
+        HUGINN_APPD_WORKDIR: tmp,
+        HUGINN_APPD_TMUX_SOCKET: TMUX_SOCK,
+      },
+      stdio: ['ignore', fd, fd],
+    });
+    fs.closeSync(fd);
+    try {
+      const base = `http://127.0.0.1:${SPARE_PORT}`;
+      for (let i = 0; i < 200; i++) {
+        try {
+          const ping = await fetch(`${base}/v1/ping`, { headers: { authorization: `Bearer ${token}` } });
+          if (ping.status === 200) break;
+        } catch { /* not up */ }
+        await wait(100);
+      }
+      const res = await fetch(`${base}/v1/uploads?name=note.txt`, {
+        method: 'POST',
+        headers: { authorization: `Bearer ${token}`, 'content-type': 'text/plain' },
+        body: 'twenty six bytes of note!!',
+      });
+      const body = await res.json().catch(() => ({}));
+      assert.notEqual(413, res.status, `a 26-byte file is not too large: ${JSON.stringify(body)}`);
+      assert.ok(res.status === 507 || res.status === 500, `got ${res.status} ${JSON.stringify(body)}`);
+      assert.match(body.error || '', /could not save the file/);
+      assert.match(body.error || '', /EROFS|EACCES|ENOSPC/, 'the errno travels, so the owner can act on it');
+    } finally {
+      child.kill('SIGKILL');
+      await wait(200);
+    }
+  } finally {
+    try { execFileSync('umount', [store], { stdio: 'ignore' }); } catch { /* never mounted */ }
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('an upload over the cap is still a 413 (#42 control)', async () => {
+  // The answer that WAS right stays right: only the size cap says "too large".
+  const res = await fetch(`${BASE}/v1/uploads?name=big.bin`, {
+    method: 'POST',
+    headers: { authorization: `Bearer ${token}`, 'content-type': 'application/octet-stream' },
+    body: Buffer.alloc(200 * 1024 * 1024),
+  }).catch(() => null);
+  if (!res) return;                       // the socket was cut mid-stream: also correct
+  assert.equal(413, res.status);
+  assert.match((await res.json()).error, /too large/);
+});
