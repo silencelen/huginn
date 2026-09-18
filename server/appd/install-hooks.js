@@ -45,9 +45,32 @@ const ENTRIES = [
   ['PreToolUse', 'Agent|Workflow'],
 ];
 
+// PRESENCE, not truthiness. An empty HUGINN_CLAUDE_SETTINGS used to fall back to
+// the live shared file, so a caller that meant to point this tool at a scratch
+// copy and got an unset variable rewrote ~/.claude/settings.json and exited 0 —
+// including every case in test/install-hooks.test.js, whose helper sets the
+// variable to '' on purpose so a forgotten --settings cannot reach it.
 function defaultSettingsPath() {
-  return process.env.HUGINN_CLAUDE_SETTINGS
-    || path.join(os.homedir(), '.claude', 'settings.json');
+  const env = process.env.HUGINN_CLAUDE_SETTINGS;
+  if (env !== undefined) {
+    if (!env.trim()) throw new Error('HUGINN_CLAUDE_SETTINGS is set but empty — name a file or unset it');
+    return env;
+  }
+  return path.join(os.homedir(), '.claude', 'settings.json');
+}
+
+/**
+ * A flag's value, refused when it is missing, empty, or the NEXT FLAG.
+ *
+ * `--settings --dry-run` used to swallow the flag behind it and perform a real
+ * install into a file named `./--dry-run`; `--settings ""` (an unset shell
+ * variable) silently targeted the live settings file. `--script` has always
+ * refused both, and the asymmetry is the whole finding.
+ */
+function valueFor(flag, argv, i) {
+  const v = argv[i];
+  if (!v || v.startsWith('--')) throw new Error(`${flag} needs a path`);
+  return v;
 }
 
 function parseArgs(argv) {
@@ -56,8 +79,8 @@ function parseArgs(argv) {
   };
   for (let i = 0; i < argv.length; i += 1) {
     const a = argv[i];
-    if (a === '--settings') { opts.settings = argv[++i]; continue; }
-    if (a === '--script') { opts.script = argv[++i]; continue; }
+    if (a === '--settings') { opts.settings = valueFor('--settings', argv, ++i); continue; }
+    if (a === '--script') { opts.script = valueFor('--script', argv, ++i); continue; }
     if (a === '--uninstall') { opts.uninstall = true; continue; }
     if (a === '--dry-run') { opts.dryRun = true; continue; }
     if (a === '-h' || a === '--help') { opts.help = true; continue; }
