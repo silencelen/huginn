@@ -684,6 +684,53 @@ test('a heads-up is typed once, at a turn boundary, at the heads-up threshold', 
   assert.equal(after.split('[huginn headroom]').length - 1, 1, 'exactly one heads-up per window');
 });
 
+test('the SECOND Fable window gets its own heads-up (#17)', async () => {
+  // ⚠ ONCE EVER, NOT ONCE PER WEEK. `rec.headsUpAt` was written in one place and
+  // cleared in none, so the apply guard `if (!rec || rec.headsUpAt) return`
+  // dropped every heads-up after the first for the life of that session record —
+  // while `decide()` kept EMITTING one, because its own staleness rule
+  // (lib/headroom.js: a weekly_fable reset seen after the mark) said the note was
+  // due. The drop returns before `lastAction` and before the log line, so the
+  // miss left no trace anywhere, and `state.arbiter.why` — set from the verdict
+  // before the actions are applied — went on claiming "handed <session> a
+  // heads-up at 90% of the Fable week" on every tick while nothing was typed.
+  // That sentence is rendered by `huginn headroom` and shipped raw to both
+  // clients.
+  const { name, sink } = fableSession('hu2');
+  const notes = () => (fs.existsSync(sink) ? fs.readFileSync(sink, 'utf8') : '')
+    .split('[huginn headroom]').length - 1;
+  setUsage({ session: 5, weekly_all: 10, weekly_fable: 86 });
+  await tick({ cooldownMs: 0 });
+  await until((b) => b.sessions.some((s) => s.name === name && s.headsUpAt), 12_000, 'the first heads-up');
+  await wait(600);
+  assert.equal(1, notes(), 'week one, once');
+
+  // Red — `classify` calls a window red at ladderPct — so the reset detector has
+  // a red row with a reset time to compare against. (The ladder fires too; it
+  // cannot land on a sink pane, and the session stays on Fable, which is all
+  // this case needs.)
+  const past = new Date(Date.now() - 120_000).toISOString();
+  setUsage({ session: 5, weekly_all: 10, weekly_fable: 93, resetsAt: past });
+  await tick({});
+  await until((b) => Object.values(b.accounts || {}).some((a) => a.red && a.red.weekly_fable),
+    20_000, 'the weekly_fable window to read as red');
+  // The week rolls over: the percentage drops with the reset time behind us.
+  setUsage({ session: 5, weekly_all: 10, weekly_fable: 2, resetsAt: past });
+  await tick({});
+  await until((b) => (b.resets || []).some((r) => r.window === 'weekly_fable'),
+    20_000, 'the weekly_fable reset');
+
+  // …and the new week climbs past the threshold again.
+  setUsage({ session: 5, weekly_all: 10, weekly_fable: 90 });
+  await tick({});
+  const deadline = Date.now() + 20_000;
+  while (notes() < 2 && Date.now() < deadline) {
+    await wait(400);
+    await api('/v1/headroom/settings', { method: 'PATCH', body: '{}' });
+  }
+  assert.equal(2, notes(), 'week two gets its own warning');
+});
+
 test('nothing is typed into a session whose last record is a HUMAN speaking', async () => {
   const { name, sink, transcript } = fableSession('hum');
   // Mid-turn, and a person has the floor: the queue holds, then drops.
