@@ -341,6 +341,56 @@ test('`waiting` is a needs-you, and a word this daemon has never seen is null', 
   assert.equal(true, lead.needsYou, 'the title hook\'s promoted attention says it instead');
 });
 
+/**
+ * ⚠ THE FAIL-FIRST CASE, and it is a dashboard that lies for the first few
+ * seconds of a cluster's life. `alive` comes from the NATIVE registry row, which
+ * Claude Code writes when it starts — so between `tmux new-session` returning
+ * and that row appearing, every member of a freshly approved manifest reads dead
+ * and `ProjectRow.alive` says 0 of 4 on the one screen the owner is watching to
+ * see the spawn work.
+ *
+ * The grace needs BOTH halves to be evidence-shaped: tmux says the session
+ * exists, and the record says appd launched it seconds ago. A native row that
+ * says the process is gone still wins — that is an observation, and a guess
+ * never beats one.
+ */
+test('a member spawned seconds ago reads as starting, not as dead', () => {
+  const p = project({
+    members: [{ role: 'docs', name: 'stick-docs', claudeName: 'stick/docs', sessionId: null, spawnedAt: NOW - 5 }],
+  });
+  const live = [{ name: 'stick-docs', claudeSessionId: null }];
+  const docsOf = (rows) => rows.find((r) => r.role === 'docs');
+
+  assert.equal(true, docsOf(projects.joinMembers(p, live, [], NOW)).alive,
+    'inside the grace, with a tmux session and no registry row yet');
+
+  assert.equal(false, docsOf(projects.joinMembers(p, live, [], NOW + projects.MEMBER_STARTUP_GRACE_S)).alive,
+    'past the grace it is the honest answer again — this never becomes a permanent guess');
+
+  assert.equal(false, docsOf(projects.joinMembers(p, [], [], NOW)).alive,
+    'no tmux session is nothing to be starting in');
+
+  // A clock that ran backwards must not open the window forever.
+  const future = project({
+    members: [{ role: 'docs', name: 'stick-docs', claudeName: 'stick/docs', sessionId: null, spawnedAt: NOW + 9_000 }],
+  });
+  assert.equal(false, docsOf(projects.joinMembers(future, live, [], NOW)).alive);
+
+  // ⚠ AND AN OBSERVATION BEATS THE GRACE. A row that says the process is gone is
+  // evidence; "it is young" is not.
+  const known = project({
+    members: [{ role: 'docs', name: 'stick-docs', claudeName: 'stick/docs', sessionId: 'sid-a', spawnedAt: NOW - 5 }],
+  });
+  assert.equal(false, docsOf(projects.joinMembers(known,
+    [{ name: 'stick-docs', claudeSessionId: 'sid-a' }], [nativeRow({ alive: false })], NOW)).alive);
+
+  // An ended member is not starting, whatever its spawn stamp says.
+  const ended = project({
+    members: [{ role: 'docs', name: 'stick-docs', claudeName: 'stick/docs', sessionId: null, spawnedAt: NOW - 5, endedAt: NOW - 1 }],
+  });
+  assert.equal(false, docsOf(projects.joinMembers(ended, live, [], NOW)).alive);
+});
+
 test('a member whose tmux session is gone is present:false, not missing', () => {
   const rows = projects.joinMembers(project(), [], [], NOW);
   assert.equal(2, rows.length, 'the lead and the member both have a row');

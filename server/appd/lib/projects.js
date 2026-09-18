@@ -95,6 +95,22 @@ const TRANSITIONS = {
 /** The words a native registry row is allowed to say about a session's turn. */
 const NATIVE_STATUSES = new Set(['busy', 'idle', 'waiting']);
 
+/**
+ * How long after a spawn a member with no registry row yet is still STARTING
+ * rather than dead. See [joinMembers].
+ *
+ * Its own number rather than the typing module's startup grace, because the two
+ * are about different events: that one is `claude` painting a composer, this one
+ * is `claude` writing its row into ~/.claude/sessions. They happen at roughly
+ * the same moment today and could stop doing so tomorrow, and a shared constant
+ * would make one of them wrong silently. Generous on purpose — the production
+ * line `no composer 22s after launch` is what a slow host looks like, and the
+ * cost of being generous is a member reading alive for a few seconds after it
+ * failed, against the cost of being tight: a dashboard that says 0 of 4 exactly
+ * while the owner is watching the spawn they just approved.
+ */
+const MEMBER_STARTUP_GRACE_S = 45;
+
 // C0/C1 controls plus DEL. A project name reaches a terminal (the persona quotes
 // it), a notification, and a row in two clients — the argument lib/rounds.js and
 // lib/scratchpads.js both make, for the same reason.
@@ -541,6 +557,17 @@ function joinMembers(project, liveSessions, nativeRows, now = Math.floor(Date.no
     const sessionId = (live && live.claudeSessionId) || m.sessionId || null;
     const native = sessionId ? bySessionId.get(sessionId) || null : null;
     const status = nativeStatus(native);
+    // ⚠ A MEMBER IS NOT DEAD BECAUSE IT IS NEW. `alive` comes from the native
+    // registry row, which Claude Code writes when it starts — so between
+    // `tmux new-session` returning and that row landing, every member of a
+    // freshly approved manifest reads dead and the row says 0 of 4 on the one
+    // screen the owner is watching to see the spawn work. This window needs both
+    // halves to be evidence: tmux says the session is there, and the record says
+    // appd launched it within the grace. It is a floor and never a ceiling — a
+    // native row that says the process is gone still wins below, because that is
+    // an observation and this is not.
+    const starting = !native && !!live && m.spawnedAt != null && !m.endedAt
+      && now - m.spawnedAt >= 0 && now - m.spawnedAt < MEMBER_STARTUP_GRACE_S;
     rows.push({
       role: m.role,
       name: m.name,
@@ -549,7 +576,8 @@ function joinMembers(project, liveSessions, nativeRows, now = Math.floor(Date.no
       present: !!live,
       // Liveness is pid + procStart, never `updatedAt`: an idle session's
       // statusUpdatedAt was measured 7 hours stale while the process was fine.
-      alive: native ? native.alive !== false : false,
+      // With no row at all it is `starting` above, which is bounded and decays.
+      alive: native ? native.alive !== false : starting,
       status,
       waitingFor: native && typeof native.waitingFor === 'string' ? native.waitingFor : null,
       bridgeSessionId: (native && native.bridgeSessionId) || null,
@@ -855,7 +883,7 @@ function sortProjects(list) {
 }
 
 module.exports = {
-  MAX_NAME, MAX_BRIEF, MAX_PROMPT, MAX_MEMBERS, MAX_PROJECTS,
+  MAX_NAME, MAX_BRIEF, MAX_PROMPT, MAX_MEMBERS, MAX_PROJECTS, MEMBER_STARTUP_GRACE_S,
   KINDS, STATUSES, TRANSITIONS, LEAD_ROLE, RESERVED_SLUGS,
   MODELS, EFFORTS, MODES, MANIFEST_CONTRACT, CONTRACT_SUMMARY,
   oneLine, cleanName, nameProblem, briefProblem,
