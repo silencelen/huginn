@@ -316,7 +316,63 @@ class RouteListActions(
     val add: (name: String, url: String) -> Unit = { _, _ -> },
     val setAutoSwitch: (Boolean) -> Unit = {},
     val findLive: () -> Unit = {},
-)
+    /**
+     * ONE SAVE, ONE BOOK OPERATION — see [edit], which is what the form calls.
+     *
+     * Null for a shell that has not wired it, which then gets [rename] followed
+     * by [setUrl]. That fallback is only correct because both shells serialise
+     * their book edits: two fire-and-forget mutations from one Save, each
+     * computed on the book as it stood before the other, silently dropped the
+     * rename.
+     */
+    private val editBoth: ((id: String, name: String, url: String) -> Unit)? = null,
+    /**
+     * The route note (a refusal, or the outcome of a probe) is no longer true
+     * once a form is opened or cancelled, and on the phone nothing else ever
+     * clears it.
+     */
+    val clearNote: () -> Unit = {},
+) {
+    /** A name and an address saved together, as ONE edit wherever it is wired. */
+    fun edit(id: String, name: String, url: String) {
+        val both = editBoth
+        if (both != null) {
+            both(id, name, url)
+        } else {
+            rename(id, name)
+            setUrl(id, url)
+        }
+    }
+}
+
+/**
+ * What one Save on a route's form does to the book.
+ *
+ * Extracted from the row so it can be asserted: the defect it exists to prevent
+ * is arithmetic on the ORDER of writes, which no screenshot shows and no
+ * composable test can reach.
+ *
+ * ⚠ AT MOST ONE OPERATION. Sending a rename and an address change as two
+ * mutations means each is computed on the book the other has not landed in yet,
+ * and the loser is silent — the route ends up with its new address under its old
+ * name, persisted, surviving a force-stop.
+ */
+internal fun routeFormSave(
+    actions: RouteListActions,
+    id: String,
+    was: String,
+    wasUrl: String,
+    name: String,
+    url: String,
+) {
+    val renamed = name != was
+    val readdressed = url != wasUrl
+    when {
+        renamed && readdressed -> actions.edit(id, name, url)
+        renamed -> actions.rename(id, name)
+        readdressed -> actions.setUrl(id, url)
+    }
+}
 
 /**
  * THE ROUTE LIST — one composable, both shells.
@@ -548,8 +604,7 @@ private fun RouteRow(
                 initialUrl = route.url,
                 confirmLabel = "Save",
                 onConfirm = { name, url ->
-                    if (name != route.name) actions.rename(route.id, name)
-                    if (url != route.url) actions.setUrl(route.id, url)
+                    routeFormSave(actions, route.id, route.name, route.url, name, url)
                     onEdit()
                 },
                 onCancel = onEdit,
