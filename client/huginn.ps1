@@ -15,11 +15,24 @@ $script:HUGINN_REPO    = 'silencelen/huginn'
 # 0.6.1 -- the PowerShell client kept fetching from $HUGINN_HOST until 0.8.2.)
 $script:HUGINN_UPDATE_HOST_DEFAULT = 'huginn'
 
-# A session name is letters, digits, and underscore only - no '-', '*', spaces or
-# other shell-special characters. This keeps a typo'd flag (e.g. 'huginn --hlp')
-# from falling through to the attach path and spawning a junk tmux session, and
-# keeps names safe to pass through the remote shell. Enforced again server-side in cc.
-function _Huginn-ValidName { param([string]$Name) return ($Name -match '^[A-Za-z0-9_]+$') }
+# ONE session-name rule for the whole product: lowercase letters, digits, '_'
+# and '-', starting with a letter, digit or '_', at most 50 characters. Compared
+# case-folded, because names are case-insensitive here (see _Huginn-CanonName).
+# It still keeps a typo'd flag (e.g. 'huginn --hlp') from falling through to the
+# attach path and spawning a junk tmux session - a leading '-' is not a name -
+# and it still keeps names safe to pass through the remote shell. Enforced again
+# server-side in cc.
+#
+# The dash used to be REFUSED here, and the daemon has always accepted it: a
+# session named build-box was listed by `huginn ls`, openable from both GUI
+# clients, and refused by every verb of this one before any network. The dot is
+# banned everywhere on purpose - tmux silently rewrites '.' to '_', so a dotted
+# name is a name that comes back different from the one that was asked for.
+function _Huginn-ValidName {
+  param([string]$Name)
+  if (-not $Name) { return $false }
+  return ($Name.ToLower() -match '^[a-z0-9_][a-z0-9_-]{0,49}$')
+}
 # Session names are case-INSENSITIVE: lowercase before touching tmux so 'Test' and
 # 'test' resolve to the same session (tmux itself is case-sensitive). Canonicalized
 # here for every tmux-facing path AND again server-side in cc as the backstop.
@@ -753,17 +766,17 @@ function huginn {
     }
   } elseif ($args[0] -eq 'solo') {
     $name = if ($args.Count -gt 1) { $args[1] } else { 'main' }
-    if (-not (_Huginn-ValidName $name)) { Write-Host "huginn: invalid session name '$name' (use letters, digits, underscore; no - or *)" -ForegroundColor Red; return }
+    if (-not (_Huginn-ValidName $name)) { Write-Host "huginn: invalid session name '$name' (use lowercase letters, digits, _ and -; no dots, spaces or *)" -ForegroundColor Red; return }
     _Huginn-Attach -H $H -Session $name -Solo
   } elseif ($args[0] -eq 'rename' -or $args[0] -eq 'mv') {
     if ($args.Count -lt 3) { Write-Host "usage: huginn rename <old> <new>"; return }
-    if (-not (_Huginn-ValidName $args[2])) { Write-Host "huginn: invalid new name '$($args[2])' (use letters, digits, underscore; no - or *)" -ForegroundColor Red; return }
-    if (-not (_Huginn-ValidName $args[1])) { Write-Host "huginn: invalid session name '$($args[1])' (use letters, digits, underscore; no - or *)" -ForegroundColor Red; return }
+    if (-not (_Huginn-ValidName $args[2])) { Write-Host "huginn: invalid new name '$($args[2])' (use lowercase letters, digits, _ and -; no dots, spaces or *)" -ForegroundColor Red; return }
+    if (-not (_Huginn-ValidName $args[1])) { Write-Host "huginn: invalid session name '$($args[1])' (use lowercase letters, digits, _ and -; no dots, spaces or *)" -ForegroundColor Red; return }
     $ro = _Huginn-CanonName $args[1]; $rn = _Huginn-CanonName $args[2]
     ssh -T $H "tmux rename-session -t '$(_Huginn-TmuxTarget $ro)' '$rn' && echo 'renamed: $ro -> $rn'"
   } elseif ($args[0] -eq 'kill') {
     if ($args.Count -lt 2) { Write-Host "usage: huginn kill <name>"; return }
-    if (-not (_Huginn-ValidName $args[1])) { Write-Host "huginn: invalid session name '$($args[1])' (use letters, digits, underscore; no - or *)" -ForegroundColor Red; return }
+    if (-not (_Huginn-ValidName $args[1])) { Write-Host "huginn: invalid session name '$($args[1])' (use lowercase letters, digits, _ and -; no dots, spaces or *)" -ForegroundColor Red; return }
     $kn = _Huginn-CanonName $args[1]
     # Prefer the daemon's DELETE: it also removes the orphaned /run state file and
     # releases the pane lease, which a bare tmux kill-session leaves behind (Claude's
@@ -777,7 +790,7 @@ function huginn {
     }
   } elseif ($args[0] -eq 'end') {
     if ($args.Count -lt 2) { Write-Host "usage: huginn end <name>"; return }
-    if (-not (_Huginn-ValidName $args[1])) { Write-Host "huginn: invalid session name '$($args[1])' (use letters, digits, underscore; no - or *)" -ForegroundColor Red; return }
+    if (-not (_Huginn-ValidName $args[1])) { Write-Host "huginn: invalid session name '$($args[1])' (use lowercase letters, digits, _ and -; no dots, spaces or *)" -ForegroundColor Red; return }
     $en = _Huginn-CanonName $args[1]
     # Soft end: ask Claude to wrap up (finish, commit, prepare to end) and - when
     # auto-end is on for the host - end the session once it settles. This is a DAEMON
@@ -803,7 +816,7 @@ function huginn {
     # and that sentence is the most useful thing this verb ever says, while
     # _Huginn-Appd uses curl -sf and throws a 4xx body away.
     if ($args.Count -lt 2) { ssh -T $H huginn-archive; return }
-    if (-not (_Huginn-ValidName $args[1])) { Write-Host "huginn: invalid session name '$($args[1])' (use letters, digits, underscore; no - or *)" -ForegroundColor Red; return }
+    if (-not (_Huginn-ValidName $args[1])) { Write-Host "huginn: invalid session name '$($args[1])' (use lowercase letters, digits, _ and -; no dots, spaces or *)" -ForegroundColor Red; return }
     $an = _Huginn-CanonName $args[1]
     # Single-quote marshalled like the headroom/llm branches: what follows the
     # host name is parsed by a shell on the far side, so an argument typed here
@@ -855,7 +868,7 @@ fi
     $b64 = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes(($remoteScript -replace "`r`n", "`n")))
     ssh -T $H "echo $b64 | base64 -d | bash -s"
   } else {
-    if (-not (_Huginn-ValidName $args[0])) { Write-Host "huginn: invalid session name '$($args[0])' (use letters, digits, underscore; no - or *). Did you mean a subcommand? Try 'huginn help'." -ForegroundColor Red; return }
+    if (-not (_Huginn-ValidName $args[0])) { Write-Host "huginn: invalid session name '$($args[0])' (use lowercase letters, digits, _ and -; no dots, spaces or *). Did you mean a subcommand? Try 'huginn help'." -ForegroundColor Red; return }
     _Huginn-Attach -H $H -Session $args[0]
   }
 }
