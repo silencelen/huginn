@@ -10551,7 +10551,10 @@ const server = http.createServer(async (req, res) => {
         automated: true, origin: 'project', kind: 'brief',
       }).catch((e) => log(`project ${slug}: brief failed: ${e.message}`));
       log(`project ${slug}: created (${project.id}), lead ${launched.name} in ${cwd}`);
-      return sendJson(res, 201, project);
+      // ⚠ EVERY BODY THAT CARRIES A PROJECT GOES THROUGH [publicProject]. The
+      // manifest tag is the anti-injection control and belongs in the lead's
+      // system prompt and in the store — never on this port.
+      return sendJson(res, 201, projectsLib.publicProject(project));
     }
 
     if ((m = p.match(/^\/v1\/projects\/([0-9a-f-]{36})(\/[a-z]+)?$/))) {
@@ -10564,7 +10567,11 @@ const server = http.createServer(async (req, res) => {
         const project = detectManifest(stored);
         const sessions = await listSessions();
         const joined = projectsLib.joinMembers(project, sessions || [], readNativeRegistry());
-        return sendJson(res, 200, { ...project, row: projectsLib.projectRow(project, joined), live: joined });
+        return sendJson(res, 200, {
+          ...projectsLib.publicProject(project),
+          row: projectsLib.projectRow(project, joined),
+          live: joined,
+        });
       }
 
       if (req.method === 'GET' && sub === '/dashboard') {
@@ -10585,7 +10592,7 @@ const server = http.createServer(async (req, res) => {
         if (!current) return sendErr(res, 404, 'no such project');
         const rev = Number(body.rev);
         if (!Number.isInteger(rev)) return sendErr(res, 400, 'rev is required — it is what makes a save safe');
-        if (rev !== (Number(current.rev) || 0)) return sendJson(res, 409, current);
+        if (rev !== (Number(current.rev) || 0)) return sendJson(res, 409, projectsLib.publicProject(current));
 
         let name = null;
         if (typeof body.name === 'string') {
@@ -10632,7 +10639,7 @@ const server = http.createServer(async (req, res) => {
           }
         });
         if (!saved) return sendErr(res, 404, 'no such project');
-        return sendJson(res, 200, saved);
+        return sendJson(res, 200, projectsLib.publicProject(saved));
       }
 
       /**
@@ -10651,7 +10658,10 @@ const server = http.createServer(async (req, res) => {
         const wantRev = Number(body.manifestRev);
         if (!Number.isInteger(wantRev)) return sendErr(res, 400, 'manifestRev is required');
         if (wantRev !== (Number(project.manifest.rev) || 0)) {
-          return sendJson(res, 409, { error: 'the proposal has changed since that card was drawn', project });
+          return sendJson(res, 409, {
+            error: 'the proposal has changed since that card was drawn',
+            project: projectsLib.publicProject(project),
+          });
         }
         if (!(project.manifest.sessions || []).length) return sendErr(res, 409, 'this proposal has no sessions in it');
         // ⚠ NOT INTO A RED WINDOW. Twelve fresh sessions on an account the
@@ -10666,7 +10676,7 @@ const server = http.createServer(async (req, res) => {
             + '— spawn when the window resets');
         }
         const out = await spawnProject(project);
-        return sendJson(res, 200, out);
+        return sendJson(res, 200, { ...out, project: projectsLib.publicProject(out.project) });
       }
 
       if (req.method === 'POST' && sub === '/discard') {
@@ -10682,7 +10692,7 @@ const server = http.createServer(async (req, res) => {
             '[Huginn] The proposal was discarded; the owner may send a revised brief.',
             { automated: true, origin: 'project', kind: 'discard' }).catch(() => { });
         }
-        return sendJson(res, 200, saved);
+        return sendJson(res, 200, projectsLib.publicProject(saved));
       }
 
       /**

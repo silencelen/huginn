@@ -771,6 +771,31 @@ function memberRow(m) {
 }
 
 /**
+ * The stored project as it is allowed to leave this daemon.
+ *
+ * ⚠⚠ THE TAG IS STRIPPED HERE AND NOWHERE ELSE, and it is the reason this
+ * function exists. `manifest.tag` is minted per project, belongs in exactly two
+ * places — the lead's system prompt and the store — and is the ENTIRE control
+ * that keeps a `huginn-project` block found in a log, a page or a file the lead
+ * happened to READ from being acted on as the lead's own proposal. Five routes
+ * answer with the record (create, get, patch, discard, spawn) and two more hand
+ * it back inside a 409; a body that carried the tag would publish it to every
+ * client on this port and, through them, to anything that can read one — after
+ * which a planted block spawns twelve sessions with attacker-written first
+ * prompts. Member personas are kept free of it for the same reason.
+ *
+ * A PROJECTION, NOT A REDACTION OF THE RECORD: the stored object is left alone,
+ * because the tag is what the lead's next block is checked against.
+ */
+function publicProject(p) {
+  if (!p || typeof p !== 'object') return p;
+  if (!p.manifest || typeof p.manifest !== 'object') return { ...p };
+  const manifest = { ...p.manifest };
+  delete manifest.tag;
+  return { ...p, manifest };
+}
+
+/**
  * A project as the tree draws it. Every field has a definite value — a row that
  * decoded is a row that renders (the archive rule).
  */
@@ -828,5 +853,5 @@ module.exports = {
   briefFrame, firstPromptFrame, spawnedFrame, peerMessageFrame,
   memberList, joinMembers, reconcilePlan,
   aggregateDashboard, rollupMembers, dashboardMemberRow,
-  memberRow, projectRow, sortProjects,
+  memberRow, projectRow, publicProject, sortProjects,
 };

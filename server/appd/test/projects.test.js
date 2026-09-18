@@ -197,11 +197,63 @@ test('an unknown model, effort or mode becomes null rather than losing the propo
   assert.equal('plan', m.sessions[0].mode);
 });
 
+/**
+ * The projection every route answers with.
+ *
+ * ⚠ THE TAG IS THE WHOLE ANTI-INJECTION CONTROL, so it must not be readable
+ * anywhere a session or a client can get at it. It lives in the lead's system
+ * prompt and in the store, and a response body that carried it would hand any
+ * reader of that body — including the member sessions, whose personas are kept
+ * free of it on purpose — the one string needed to write a proposal the daemon
+ * would treat as the lead's own.
+ */
+test('A RESPONSE NEVER CARRIES THE MANIFEST TAG, AND THE STORE STILL DOES', () => {
+  const stored = {
+    id: 'p1', name: 'Stick', slug: 'stick', kind: 'docs', status: 'proposed', cwd: CWD,
+    lead: { role: 'lead', name: 'stick-lead' }, members: [],
+    manifest: { tag: TAG, rev: 2, summary: 'two sessions', sessions: [], untaggedSeen: false, spawnedRev: 0 },
+    rev: 3,
+  };
+  const wire = projects.publicProject(stored);
+  assert.equal(false, 'tag' in wire.manifest, 'the one field that must never be on the wire');
+  assert.equal(false, JSON.stringify(wire).includes(TAG));
+  // Everything else survives: this is a projection, not a redaction of the card.
+  assert.equal(2, wire.manifest.rev);
+  assert.equal('two sessions', wire.manifest.summary);
+  assert.equal(false, wire.manifest.untaggedSeen);
+  assert.equal('stick', wire.slug);
+  assert.equal(3, wire.rev);
+  assert.deepEqual(
+    ['rev', 'summary', 'sessions', 'untaggedSeen', 'spawnedRev'],
+    Object.keys(wire.manifest),
+    'the manifest contract minus the tag, in order',
+  );
+  // ⚠ AND THE STORED RECORD IS UNTOUCHED. The tag is what the next turn's block
+  // is checked against; a projection that mutated the record would disarm the
+  // control it exists to protect.
+  assert.equal(TAG, stored.manifest.tag);
+
+  // A project with no manifest at all is a project, not a crash.
+  assert.equal('p2', projects.publicProject({ id: 'p2' }).id);
+  assert.equal(null, projects.publicProject({ id: 'p3', manifest: null }).manifest);
+});
+
 test('the tag is in the lead\'s contract and nowhere else', () => {
-  const p = { id: 'x', name: 'Stick', slug: 'stick', kind: 'docs', manifest: { tag: TAG } };
+  const p = { id: 'x', name: 'Stick', slug: 'stick', kind: 'docs', brief: 'go', manifest: { tag: TAG } };
   assert.match(projects.leadPersona(p), new RegExp(TAG));
   assert.ok(!projects.memberPersona(p, { role: 'docs' }).includes(TAG),
     'a member that could read the tag could write its own proposal');
+  // And not in anything appd TYPES into a pane. Every one of these lands in a
+  // member's composer and therefore in a transcript, which is a file the member
+  // — and its agents — can read back.
+  for (const text of [
+    projects.briefFrame(p),
+    projects.firstPromptFrame(p, 'docs', 'write the README'),
+    projects.spawnedFrame(p, ['stick/docs']),
+    projects.peerMessageFrame('stick/lead', 'the pinout changed'),
+  ]) {
+    assert.ok(!text.includes(TAG), 'a frame carrying the tag hands it to the session it is typed into');
+  }
   // Both personas carry the escalation rule, because a peer message reaches them
   // through a path this daemon cannot gate.
   for (const text of [projects.leadPersona(p), projects.memberPersona(p, { role: 'docs' })]) {
