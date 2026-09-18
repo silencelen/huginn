@@ -69,6 +69,7 @@ import com.silencelen.huginn.desktop.ui.common.opensOnClick
 import com.silencelen.huginn.desktop.ui.common.sessionMenu
 import com.silencelen.huginn.desktop.ui.common.sessionStateTip
 import com.silencelen.huginn.desktop.ui.common.timeTip
+import com.silencelen.huginn.ui.TimeWords
 import java.awt.Cursor
 
 /**
@@ -198,7 +199,7 @@ private fun ChatRow(
                 }
             }
             Tip(timeTip("Last activity", chat.updatedAt, now)) {
-                Muted(relTime(chat.updatedAt), Modifier.padding(start = Space.unit))
+                Muted(TimeWords.short(chat.updatedAt, now * 1000L), Modifier.padding(start = Space.unit))
             }
         }
         val snippet = chat.lastSnippet
@@ -332,7 +333,7 @@ private fun SessionRow(
             // reads at a glance in the Conversations list.
             if (session.compacting) CompactingChip(Modifier.padding(start = Space.unit))
             Tip(timeTip("Last pane activity", session.activityAt, now)) {
-                Muted(relTime(session.activityAt), Modifier.padding(start = Space.unit))
+                Muted(TimeWords.short(session.activityAt, now * 1000L), Modifier.padding(start = Space.unit))
             }
         }
         Row(
@@ -535,16 +536,4 @@ fun Muted(text: String, modifier: Modifier = Modifier, maxLines: Int = 1) {
         overflow = TextOverflow.Ellipsis,
         modifier = modifier,
     )
-}
-
-/** Epoch SECONDS, as the daemon reports every timestamp on a list row. */
-fun relTime(epochSec: Long): String {
-    if (epochSec <= 0) return ""
-    val s = (System.currentTimeMillis() / 1000 - epochSec).coerceAtLeast(0)
-    return when {
-        s < 60 -> "now"
-        s < 3600 -> "${s / 60}m"
-        s < 86_400 -> "${s / 3600}h"
-        else -> "${s / 86_400}d"
-    }
 }

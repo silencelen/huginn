@@ -58,6 +58,8 @@ fun canAcknowledge(round: Round?): Boolean {
     return roundStatusOf(run.status) != RoundStatus.OK
 }
 
+// The countdown's own bands. [TimeWords] holds the ones that look BACK; these
+// belong to [untilWords], which looks forward and is deliberately coarser.
 private const val MIN = 60_000L
 private const val HOUR = 60 * MIN
 private const val DAY = 24 * HOUR
@@ -87,32 +89,18 @@ fun untilWords(nextRunAt: Long?, nowMs: Long): String {
  * How long ago a run finished. Takes SECONDS, because that is what the daemon
  * stamps its records with — its schedule is in milliseconds and its timestamps
  * are not, and mixing the two silently produces "in 55 years".
- */
-fun agoWords(atSec: Long?, nowMs: Long): String =
-    agoWordsMs(atSec?.takeIf { it > 0L }?.times(1000L), nowMs)
-
-/**
- * The same words, from a MILLISECOND stamp.
  *
- * A second entry point rather than a second implementation, and a second entry
- * point rather than one function with a unit flag: the daemon's wire is not
- * consistent about this — a Round's `lastRun.at` is in seconds while a Device's
- * `lastSeen` is in milliseconds — so both units are real and the mistake worth
- * engineering against is picking the wrong one silently. Two names that each say
- * their unit make that a compile-time question instead of a "3 minutes ago"
- * rendering as "55 years ago" question.
+ * ⚠ THE WORDS ARE NOT HERE ANY MORE. Every band and every string lives in
+ * [TimeWords], which is the single vocabulary both clients now draw from; this
+ * name survives only as the unit-carrying door its nine callers read better
+ * with. Nothing below this line decides what a time SAYS — change
+ * [TimeWords] instead, and the phone, the desktop and the notifications move
+ * together.
  */
-fun agoWordsMs(atMs: Long?, nowMs: Long): String {
-    if (atMs == null || atMs <= 0L) return ""
-    val d = nowMs - atMs
-    return when {
-        d < MIN -> "just now"
-        d < HOUR -> "${d / MIN}m ago"
-        d < DAY -> "${d / HOUR}h ago"
-        d < 2 * DAY -> "yesterday"
-        else -> "${d / DAY} days ago"
-    }
-}
+fun agoWords(atSec: Long?, nowMs: Long): String = TimeWords.ago(atSec, nowMs)
+
+/** The same words, from a MILLISECOND stamp. See [TimeWords.agoMs] for why both. */
+fun agoWordsMs(atMs: Long?, nowMs: Long): String = TimeWords.agoMs(atMs, nowMs)
 
 /**
  * The one line under a Round's name.

@@ -4,6 +4,7 @@ import com.silencelen.huginn.data.Round
 import com.silencelen.huginn.data.RoundItem
 import com.silencelen.huginn.data.RoundRun
 import com.silencelen.huginn.ui.RoundStatus
+import com.silencelen.huginn.ui.TimeWords
 import com.silencelen.huginn.ui.agoWords
 import com.silencelen.huginn.ui.agoWordsMs
 import com.silencelen.huginn.ui.canAcknowledge
@@ -67,6 +68,41 @@ class RoundsTest {
         assertEquals("yesterday", agoWords(now / 1000 - 30 * 3600, now))
         assertEquals("3 days ago", agoWords(now / 1000 - 3 * 24 * 3600, now))
         assertEquals("", agoWords(null, now))
+    }
+
+    /**
+     * ⚠ THESE TWO NAMES NO LONGER OWN THEIR WORDS. Both are one-line doors onto
+     * [TimeWords], which is now the only place on either client where a time band
+     * or a time string is decided. The assertions above stay because the words
+     * they pin are the shipped ones and must not move underneath fifteen call
+     * sites; this one pins the delegation itself, so that a future edit to
+     * `Rounds.kt` cannot quietly re-grow a sixth vocabulary here.
+     */
+    @Test
+    fun theRoundsDoorsAreTimeWordsAndNothingElse() {
+        for (sec in listOf(0L, 5L, 3600L, 30 * 3600L, 3 * 24 * 3600L, 400 * 24 * 3600L)) {
+            val at = now / 1000 - sec
+            assertEquals(TimeWords.ago(at, now), agoWords(at, now), "agoWords(-${sec}s)")
+            assertEquals(TimeWords.agoMs(at * 1000, now), agoWordsMs(at * 1000, now), "agoWordsMs(-${sec}s)")
+        }
+        assertEquals(TimeWords.ago(null, now), agoWords(null, now))
+        assertEquals(TimeWords.agoMs(null, now), agoWordsMs(null, now))
+    }
+
+    /**
+     * [untilWords] is the one time formatter that did NOT fold into [TimeWords],
+     * and this says why in an assertion rather than only in a comment: it looks
+     * FORWARD, and its vocabulary is deliberately coarser because a schedule is
+     * not a stopwatch. "in 30m" and "30m ago" are not the same sentence read in
+     * two directions.
+     */
+    @Test
+    fun theCountdownKeepsItsOwnCoarserVocabulary() {
+        assertEquals("in 30m", untilWords(now + 30 * 60_000, now))
+        assertEquals("due now", untilWords(now - 5_000, now))
+        // The backward-looking vocabulary would have said "just now" for both.
+        assertEquals("just now", TimeWords.agoMs(now - 5_000, now))
+        assertEquals("not scheduled", untilWords(0, now))
     }
 
     /**

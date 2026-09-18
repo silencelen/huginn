@@ -2,6 +2,7 @@ package com.silencelen.huginn.ui
 
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
@@ -33,6 +34,13 @@ import com.silencelen.huginn.data.QuickActions
  * over an empty selection is the version of this feature that gets turned off.
  *
  * Nothing here sends. Every verb stages text in the composer to be edited.
+ *
+ * IT ALSO CARRIES THE TIME. A phone has no pointer and therefore no hover, so
+ * the desktop's answer to "when was this written" is unavailable — and a new
+ * gesture for it would be a second long-press on the same row. The bar the reader
+ * has already raised is the one place the answer can go for free: one muted line
+ * above the verbs, present only when the row carried a timestamp
+ * ([SelectionMode.at], already in words).
  */
 @Composable
 fun SelectionActionBar(
@@ -51,6 +59,19 @@ fun SelectionActionBar(
         tonalElevation = 3.dp,
         modifier = modifier.fillMaxWidth(),
     ) {
+      Column(Modifier.fillMaxWidth()) {
+        // When the row was written, above the verbs rather than among them: it is
+        // the one thing here that is not a thing to DO, and a label in a row of
+        // buttons reads as a disabled button.
+        if (mode.at.isNotBlank()) {
+            Text(
+                mode.at,
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
+                modifier = Modifier.padding(start = 12.dp, top = 6.dp),
+            )
+        }
         // One row, scrolled rather than wrapped, for the same reason the
         // suggestion chips are: four verbs plus Copy plus Done wrap to two lines
         // on a narrow phone and push the composer off the bottom of the screen.
@@ -82,5 +103,6 @@ fun SelectionActionBar(
                 )
             }
         }
+      }
     }
 }

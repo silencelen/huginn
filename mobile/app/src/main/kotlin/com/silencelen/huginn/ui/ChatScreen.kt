@@ -204,8 +204,8 @@ fun ChatScreen(
               androidx.compose.foundation.text.selection.SelectionContainer {
                 androidx.compose.runtime.CompositionLocalProvider(
                     // Around the transcript ONLY: the composer is not a row.
-                    LocalTranscriptSelection provides TranscriptSelectionHost { text ->
-                        selection = SelectionMode.begin(text)
+                    LocalTranscriptSelection provides TranscriptSelectionHost { text, at ->
+                        selection = SelectionMode.begin(text, rowTimeWords(at))
                     },
                     // And the platform's Copy / Select all popup stays down while
                     // the app's bar is up. See GatedTextToolbar.

@@ -36,6 +36,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.LifecycleStartEffect
+import com.silencelen.huginn.data.localTimeFormat
 import kotlinx.coroutines.delay
 
 /**
@@ -235,17 +236,36 @@ fun stateLabel(state: String?): String = when (state) {
     else -> "no claude"
 }
 
-/** "3m", "2h", "4d" — a phone has no room for timestamps nobody reads. */
-fun relTime(epochSec: Long): String {
-    if (epochSec <= 0) return ""
-    val secs = (System.currentTimeMillis() / 1000 - epochSec).coerceAtLeast(0)
-    return when {
-        secs < 60 -> "now"
-        secs < 3600 -> "${secs / 60}m"
-        secs < 86_400 -> "${secs / 3600}h"
-        else -> "${secs / 86_400}d"
-    }
-}
+/**
+ * "3m", "2h", "4d" — a phone has no room for timestamps nobody reads.
+ *
+ * ⚠ THE CLOCK READ, AND NOTHING ELSE. The words are [TimeWords.short]'s, shared
+ * with the desktop's list rows and with every other time on both clients; this
+ * function exists only because its three call sites are list rows that have no
+ * `nowMs` in hand. Do not add a band here — the next reader will believe it.
+ *
+ * It samples the clock per call rather than per composition, which for a list
+ * that recomposes on every daemon tick is the freshest of the cheap options; the
+ * surfaces that must tick on their own (Rounds, the session map) take
+ * [screenClock] instead.
+ */
+fun relTime(epochSec: Long): String = TimeWords.short(epochSec, System.currentTimeMillis())
+
+/**
+ * The phone's timestamp reveal — the first line of the long-press bar.
+ *
+ * [TimeWords.stamp] rather than the desktop's [TimeWords.full]: this is one
+ * muted line squeezed above the composer, not a tooltip with room for a
+ * sentence, and "Yesterday 21:40" answers the question in the space available.
+ * Empty when the row carried no timestamp, which is what makes the bar draw no
+ * line at all rather than an empty one.
+ *
+ * The zone is read at the STAMP's instant, not at now: a message sent in July and
+ * read in December had July's clock time, and reading the current offset moves it
+ * by an hour twice a year.
+ */
+fun rowTimeWords(atSec: Long?): String =
+    TimeWords.stamp(atSec, System.currentTimeMillis(), localTimeFormat((atSec ?: 0L) * 1000L))
 
 fun formatUptime(sec: Long): String {
     val d = sec / 86_400
