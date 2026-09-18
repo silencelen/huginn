@@ -76,16 +76,18 @@ function writeState(name, state, { sessionId = null, ts = now() } = {}) {
     JSON.stringify({ state, sessionId, transcript: null, cwd: tmp, ts }));
 }
 
-/** What it writes on the PreToolUse that RAISES an AskUserQuestion. */
+/** What it writes on the PreToolUse that RAISES an AskUserQuestion.
+ *  ⚠ The directories are DOT-PREFIXED (#2): they share STATE_DIR with the flat
+ *  per-session state files, and a session may legitimately be called `plan`. */
 function writeAskSidecar(name, { sessionId = null, ts = now(), tool = 'AskUserQuestion' } = {}) {
-  const dir = path.join(stateDir, tool === 'ExitPlanMode' ? 'plan' : 'ask');
+  const dir = path.join(stateDir, tool === 'ExitPlanMode' ? '.plan' : '.ask');
   fs.mkdirSync(dir, { recursive: true });
   fs.writeFileSync(path.join(dir, name), JSON.stringify({ v: 1, tool, sessionId, ts, input: ASK_INPUT }));
 }
 
 function clearAskSidecar(name) {
-  fs.rmSync(path.join(stateDir, 'ask', name), { force: true });
-  fs.rmSync(path.join(stateDir, 'plan', name), { force: true });
+  fs.rmSync(path.join(stateDir, '.ask', name), { force: true });
+  fs.rmSync(path.join(stateDir, '.plan', name), { force: true });
 }
 
 async function api(pathname, init = {}) {
@@ -254,6 +256,80 @@ test('a sidecar from a previous Claude run under the same name is not evidence',
   writeAskSidecar(name, { sessionId: 'sid-old' });
   assert.equal((await row(name)).state, 'running',
     'a sidecar belonging to another session id says nothing about this one');
+});
+
+// ------------------------------------ the hook's own namespace under STATE_DIR
+
+/**
+ * The REAL hook, with its STATE_DIR rewritten to the scratch dir.
+ *
+ * ⚠ RUN, NOT IMITATED. #2 is a collision between two things the HOOK writes —
+ * the flat per-session state file and the sidecar directories — and every test
+ * above writes those with `fs`, which is exactly why a namespace collision
+ * could sit in the shipped hook for months. `tmux` is shimmed onto the hook's
+ * PATH so its `display-message` lands on this file's private socket.
+ */
+let hookCopy = null;
+function hookFor(name, event, payload) {
+  if (!hookCopy) {
+    const src = fs.readFileSync(path.join(__dirname, '..', '..', 'bin', 'huginn-claude-title'), 'utf8');
+    hookCopy = path.join(tmp, 'huginn-claude-title');
+    fs.writeFileSync(hookCopy,
+      src.replace('STATE_DIR=/run/huginn-claude-state', `STATE_DIR=${stateDir}`), { mode: 0o755 });
+    const shimDir = path.join(tmp, 'hookbin');
+    fs.mkdirSync(shimDir, { recursive: true });
+    fs.writeFileSync(path.join(shimDir, 'tmux'),
+      `#!/bin/sh\nexec ${execFileSync('/bin/sh', ['-c', 'command -v tmux'], { encoding: 'utf8' }).trim()} -L ${TMUX_SOCK} "$@"\n`,
+      { mode: 0o755 });
+  }
+  const paneId = sh('tmux', ['list-panes', '-t', `=${name}:`, '-F', '#{pane_id}']).trim().split('\n')[0];
+  execFileSync('/bin/bash', [hookCopy, event], {
+    input: JSON.stringify(payload),
+    encoding: 'utf8',
+    env: {
+      ...process.env,
+      PATH: `${path.join(tmp, 'hookbin')}:${process.env.PATH}`,
+      TMUX: 'set-so-the-hook-does-not-no-op',
+      TMUX_PANE: paneId,
+    },
+  });
+}
+
+test('a session named `plan` still gets a state file (#2)', async () => {
+  // ⚠ TWO THINGS SHARED ONE NAMESPACE. The hook put the flat state file at
+  // STATE_DIR/<sess> and its prompt sidecars at STATE_DIR/{ask,plan,compacting}/
+  // <sess>, and nothing reserved those three names. Whichever existed first
+  // decided which half broke: with the directory there, `mv -f <sess>.tmp <sess>`
+  // moved the state JSON INTO it, so that session had no state word, no
+  // claudeSessionId, no transcript and no conversation tab — forever, silently,
+  // at exit 0. (The other order breaks every sidecar on the host instead.)
+  const sibling = mkAsking('sib');
+  const plan = 'plan';
+  sh('tmux', ['new-session', '-d', '-s', plan, '-c', tmp, '-x', '80', '-y', '40', 'cat >/dev/null']);
+  madeSessions.add(plan);
+
+  // The sibling raises a plan approval: this is what creates the directory.
+  hookFor(sibling, 'PreToolUse', {
+    session_id: 'sid-sib', transcript_path: null, cwd: tmp,
+    tool_name: 'ExitPlanMode', tool_input: { plan: 'do the thing' },
+  });
+  // …and the session called `plan` finishes a turn, which is what writes a file
+  // at the very path that directory now occupies.
+  hookFor(plan, 'Stop', { session_id: 'sid-plan-sess', transcript_path: null, cwd: tmp });
+
+  const st = fs.statSync(path.join(stateDir, plan));
+  assert.equal(true, st.isFile(), 'the state file is a FILE, not the sidecar directory');
+  const row0 = await row(plan);
+  assert.ok(row0, 'the session is listed');
+  assert.equal('idle', row0.state, 'and it has a state word at all');
+  assert.equal('sid-plan-sess', row0.claudeSessionId,
+    'which is what maps this session to its transcript');
+
+  // And the sibling's plan approval still promotes — the other half of the same
+  // collision, where NO session on the host gets a sidecar.
+  writeState(sibling, 'running', { sessionId: 'sid-sib' });
+  assert.equal('attention', (await row(sibling)).state,
+    'the sidecar the hook just wrote is where the daemon looks for it');
 });
 
 test('a pending plan approval is "needs you" too', async () => {
