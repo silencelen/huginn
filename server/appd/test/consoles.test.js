@@ -251,6 +251,40 @@ test('a console that has never been probed says so — null, which is not false'
   assert.equal(null, row.httpStatus);
 });
 
+/**
+ * ⚠ THE FAIL-FIRST CASE. `consoleRow` rebuilt the record with `now` standing in
+ * for a missing `addedAt`, so a stored row that never carried one was stamped
+ * with the clock ON EVERY READ: "added 2 seconds ago", then 2 seconds ago again,
+ * forever, and permanently once any later write persisted whichever value the
+ * last read happened to invent. A row's age is a fact about the row, not about
+ * when somebody looked at it.
+ */
+test('A STORED ROW\'S addedAt IS STICKY — a read never re-stamps it', () => {
+  const stored = { id: 'armap', name: 'Armap', url: 'http://huginn:8088/', kind: 'docs', notes: '', version: 1 };
+  const first = consoles.consoleRow(stored, undefined).addedAt;
+  const second = consoles.consoleRow(stored, undefined).addedAt;
+  assert.equal(first, second, 'two reads of one record cannot disagree about when it was added');
+  assert.equal(0, first, 'never recorded reads as zero — "it was already here" — not as now');
+
+  // A row that HAS one keeps it, whatever the clock says.
+  const kept = consoles.consoleRow({ ...stored, addedAt: 1789460000 }, undefined);
+  assert.equal(1789460000, kept.addedAt);
+
+  // And the same on the way out of the file, which is where a bad value would
+  // become permanent: the next write saves what the load returned.
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'consoles-addedat-'));
+  try {
+    consoles.writeEnvelope(dir, { schema: consoles.SCHEMA, seeded: true, consoles: [stored] });
+    assert.equal(0, consoles.readEnvelope(dir).consoles[0].addedAt);
+    assert.equal(0, consoles.readEnvelope(dir).consoles[0].addedAt, 'and it is the same value twice');
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+
+  // A NEW row still gets the clock — that is the one moment the stamp is a fact.
+  assert.equal(1789460000, consoles.buildRecord({ id: 'x', name: 'X', url: 'http://huginn:8088/' }, 1789460000).addedAt);
+});
+
 test('every row says where the probe ran from', () => {
   // The one word that keeps this honest: the daemon reached it FROM HUGINN. The
   // phone reading this list generally cannot reach any of these addresses until

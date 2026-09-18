@@ -95,6 +95,22 @@ const TRANSITIONS = {
 /** The words a native registry row is allowed to say about a session's turn. */
 const NATIVE_STATUSES = new Set(['busy', 'idle', 'waiting']);
 
+/**
+ * How long after a spawn a member with no registry row yet is still STARTING
+ * rather than dead. See [joinMembers].
+ *
+ * Its own number rather than the typing module's startup grace, because the two
+ * are about different events: that one is `claude` painting a composer, this one
+ * is `claude` writing its row into ~/.claude/sessions. They happen at roughly
+ * the same moment today and could stop doing so tomorrow, and a shared constant
+ * would make one of them wrong silently. Generous on purpose — the production
+ * line `no composer 22s after launch` is what a slow host looks like, and the
+ * cost of being generous is a member reading alive for a few seconds after it
+ * failed, against the cost of being tight: a dashboard that says 0 of 4 exactly
+ * while the owner is watching the spawn they just approved.
+ */
+const MEMBER_STARTUP_GRACE_S = 45;
+
 // C0/C1 controls plus DEL. A project name reaches a terminal (the persona quotes
 // it), a notification, and a row in two clients — the argument lib/rounds.js and
 // lib/scratchpads.js both make, for the same reason.
@@ -541,6 +557,17 @@ function joinMembers(project, liveSessions, nativeRows, now = Math.floor(Date.no
     const sessionId = (live && live.claudeSessionId) || m.sessionId || null;
     const native = sessionId ? bySessionId.get(sessionId) || null : null;
     const status = nativeStatus(native);
+    // ⚠ A MEMBER IS NOT DEAD BECAUSE IT IS NEW. `alive` comes from the native
+    // registry row, which Claude Code writes when it starts — so between
+    // `tmux new-session` returning and that row landing, every member of a
+    // freshly approved manifest reads dead and the row says 0 of 4 on the one
+    // screen the owner is watching to see the spawn work. This window needs both
+    // halves to be evidence: tmux says the session is there, and the record says
+    // appd launched it within the grace. It is a floor and never a ceiling — a
+    // native row that says the process is gone still wins below, because that is
+    // an observation and this is not.
+    const starting = !native && !!live && m.spawnedAt != null && !m.endedAt
+      && now - m.spawnedAt >= 0 && now - m.spawnedAt < MEMBER_STARTUP_GRACE_S;
     rows.push({
       role: m.role,
       name: m.name,
@@ -549,7 +576,8 @@ function joinMembers(project, liveSessions, nativeRows, now = Math.floor(Date.no
       present: !!live,
       // Liveness is pid + procStart, never `updatedAt`: an idle session's
       // statusUpdatedAt was measured 7 hours stale while the process was fine.
-      alive: native ? native.alive !== false : false,
+      // With no row at all it is `starting` above, which is bounded and decays.
+      alive: native ? native.alive !== false : starting,
       status,
       waitingFor: native && typeof native.waitingFor === 'string' ? native.waitingFor : null,
       bridgeSessionId: (native && native.bridgeSessionId) || null,
@@ -625,6 +653,15 @@ function zeroTokens() { return { input: 0, output: 0, cacheRead: 0, cacheCreatio
  * latest activity. `estCost` is null only when NOTHING carried usage; a cluster
  * running entirely on unpriced models still gets an object with the tokens
  * nobody could price, for the reason buildWire gives.
+ *
+ * ⚠ THE RATE KEEPS GraphRate's NAMES — `tokensPerMin10`, not `tokensPer10m`.
+ * The members' rates are added, but each one is already TOKENS PER MINUTE
+ * measured over a 10- (or 60-) minute window, so a sum of them is still per
+ * minute. `tokensPer10m` read as "tokens per 10 minutes" and was wrong by a
+ * factor of ten to anyone who believed it — and the client's own dashboard
+ * renders the number as "N tokens/min over 10m", which is the tell. Two types
+ * remain (this one has no `all` pair and no `lastActivityTs`); only the lie in
+ * the spelling is gone.
  */
 function aggregateDashboard(rows) {
   const totals = {
@@ -647,7 +684,7 @@ function aggregateDashboard(rows) {
   };
   let usd = 0; let unpriced = 0; let priced = false;
   const models = new Set(); const efforts = new Set();
-  let tokensPer10m = 0; let tokensPer60m = 0; let activeRecently = false;
+  let tokensPerMin10 = 0; let tokensPerMin60 = 0; let activeRecently = false;
 
   for (const r of rows || []) {
     const o = r && r.overview;
@@ -672,8 +709,8 @@ function aggregateDashboard(rows) {
         ? t.lastActivityTs : Math.max(totals.lastActivityTs, t.lastActivityTs);
     }
     if (o.rate) {
-      tokensPer10m += o.rate.tokensPerMin10 || 0;
-      tokensPer60m += o.rate.tokensPerMin60 || 0;
+      tokensPerMin10 += o.rate.tokensPerMin10 || 0;
+      tokensPerMin60 += o.rate.tokensPerMin60 || 0;
       activeRecently = activeRecently || !!o.rate.activeRecently;
     }
   }
@@ -683,7 +720,7 @@ function aggregateDashboard(rows) {
   if (totals.startedAt && totals.lastActivityTs) {
     totals.wallMs = Math.max(0, (totals.lastActivityTs - totals.startedAt) * 1000);
   }
-  return { totals, rate: { activeRecently, tokensPer10m, tokensPer60m } };
+  return { totals, rate: { activeRecently, tokensPerMin10, tokensPerMin60 } };
 }
 
 /**
@@ -771,6 +808,31 @@ function memberRow(m) {
 }
 
 /**
+ * The stored project as it is allowed to leave this daemon.
+ *
+ * ⚠⚠ THE TAG IS STRIPPED HERE AND NOWHERE ELSE, and it is the reason this
+ * function exists. `manifest.tag` is minted per project, belongs in exactly two
+ * places — the lead's system prompt and the store — and is the ENTIRE control
+ * that keeps a `huginn-project` block found in a log, a page or a file the lead
+ * happened to READ from being acted on as the lead's own proposal. Five routes
+ * answer with the record (create, get, patch, discard, spawn) and two more hand
+ * it back inside a 409; a body that carried the tag would publish it to every
+ * client on this port and, through them, to anything that can read one — after
+ * which a planted block spawns twelve sessions with attacker-written first
+ * prompts. Member personas are kept free of it for the same reason.
+ *
+ * A PROJECTION, NOT A REDACTION OF THE RECORD: the stored object is left alone,
+ * because the tag is what the lead's next block is checked against.
+ */
+function publicProject(p) {
+  if (!p || typeof p !== 'object') return p;
+  if (!p.manifest || typeof p.manifest !== 'object') return { ...p };
+  const manifest = { ...p.manifest };
+  delete manifest.tag;
+  return { ...p, manifest };
+}
+
+/**
  * A project as the tree draws it. Every field has a definite value — a row that
  * decoded is a row that renders (the archive rule).
  */
@@ -798,6 +860,10 @@ function projectRow(p, joined = null) {
       }
       : null,
     manifestRev: p.manifest ? p.manifest.rev || 0 : 0,
+    // The rev a spawn was last carried out at, beside the rev being proposed —
+    // `manifestRev > spawnedRev` is "this proposal is still waiting for an
+    // answer", which a list could otherwise only learn by GETting every project.
+    spawnedRev: p.manifest ? p.manifest.spawnedRev || 0 : 0,
     manifestSummary: p.manifest && p.manifest.summary ? p.manifest.summary : null,
     untaggedSeen: !!(p.manifest && p.manifest.untaggedSeen),
     endedReason: p.endedReason ?? null,
@@ -817,7 +883,7 @@ function sortProjects(list) {
 }
 
 module.exports = {
-  MAX_NAME, MAX_BRIEF, MAX_PROMPT, MAX_MEMBERS, MAX_PROJECTS,
+  MAX_NAME, MAX_BRIEF, MAX_PROMPT, MAX_MEMBERS, MAX_PROJECTS, MEMBER_STARTUP_GRACE_S,
   KINDS, STATUSES, TRANSITIONS, LEAD_ROLE, RESERVED_SLUGS,
   MODELS, EFFORTS, MODES, MANIFEST_CONTRACT, CONTRACT_SUMMARY,
   oneLine, cleanName, nameProblem, briefProblem,
@@ -828,5 +894,5 @@ module.exports = {
   briefFrame, firstPromptFrame, spawnedFrame, peerMessageFrame,
   memberList, joinMembers, reconcilePlan,
   aggregateDashboard, rollupMembers, dashboardMemberRow,
-  memberRow, projectRow, sortProjects,
+  memberRow, projectRow, publicProject, sortProjects,
 };
