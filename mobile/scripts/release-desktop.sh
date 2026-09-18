@@ -573,6 +573,11 @@ if [ "$LINUX_ONLY" = 0 ]; then
     echo "  installing under wine and launching the result"
     [ -d "$WINEPREFIX" ] || xvfb-run -a wineboot -u >> "$LOG" 2>&1
     xvfb-run -a wine "$WIN/out/$EXE" /S >> "$LOG" 2>&1 || true
+    # wine keeps HKCU in memory and writes user.reg only when wineserver shuts
+    # down (a few seconds after the last process exits). Reading the file before
+    # that refused a good installer once (1.2.1: the key landed 8 minutes after
+    # the gate looked). Wait for the flush; -w returns when the server is gone.
+    wineserver -w >> "$LOG" 2>&1 || true
     INSTALLED="$WINEPREFIX/drive_c/users/$(id -un)/AppData/Local/Programs/huginn-desktop-kt"
     [ -f "$INSTALLED/huginn-desktop-kt.exe" ] || {
       echo "REFUSING: the installer did not put a launcher in $INSTALLED" >&2; exit 1; }
