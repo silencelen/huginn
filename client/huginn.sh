@@ -553,6 +553,12 @@ EOF
   huginn rounds               what this host does on a schedule, and what it found
   huginn headroom             usage left per account, what huginn moved or is holding, and why
   huginn devices              machines that can run a chat in their own context
+  huginn projects             clusters of sessions with roles, and who is waiting
+  huginn projects show <name> a project's members, one line each
+  huginn projects new <name>  start one (launches its lead session)  [--cwd DIR]
+  huginn projects spawn <project> <member>:<role> [--prompt "<first task>"|-]
+  huginn projects msg <project> <from> <to> <text>
+  huginn projects end <project> [--now]   (--now also ends its sessions)
   huginn device [status]      what THIS machine offers huginn, and what huginn sees
   huginn device on            offer this machine  [--scope look|work|own] [--root DIR]
   huginn device off           stop offering it
@@ -668,6 +674,24 @@ EOF
       if [ "$#" -gt 1 ]; then ssh -T "$H" "huginn-headroom $(printf '%q ' "${@:2}")"
       else ssh -T "$H" huginn-headroom; fi ;;
     devices) ssh -T "$H" huginn-devices ;;
+    # A PROJECT is a cluster of sessions with roles and a lead that sizes the
+    # work. Host-side for the same three reasons as headroom above -- one
+    # renderer for both clients, the bearer token never leaves huginn, and the
+    # daemon refuses a spawn in prose that a client would otherwise throw away --
+    # plus a fourth this verb alone has: it is the only one here that WRITES,
+    # and the whole grammar (list/show/new/spawn/msg/end) lives in that one file
+    # rather than being spelled out twice, in two languages, and drifting.
+    #
+    # argv goes through printf %q like the headroom and llm branches: what
+    # follows the host name is parsed by a shell on the far side, so an argument
+    # typed here is remote shell input -- and a first prompt is prose full of
+    # quotes, $ and newlines. Guarded on $# because `printf '%q ' ` with NO
+    # arguments still runs the format once and emits '', and a bare
+    # `huginn projects` would send one empty argument the renderer rightly
+    # refuses as an unknown one.
+    projects|project)
+      if [ "$#" -gt 1 ]; then ssh -T "$H" "huginn-projects $(printf '%q ' "${@:2}")"
+      else ssh -T "$H" huginn-projects; fi ;;
     # One question to the LOCAL TIER - answered by a serving machine's model,
     # never Claude. Renders on the host like devices/rounds above: one
     # implementation, and the token never leaves huginn. `huginn llm -` reads
@@ -870,7 +894,7 @@ _huginn_complete() {
   local cur prev cmds
   cur="${COMP_WORDS[COMP_CWORD]}"
   prev="${COMP_WORDS[COMP_CWORD-1]}"
-  cmds="list ls status st rounds headroom devices device local llm solo rename mv kill end archive revive -p -y usage cost desktop update uninstall version help"
+  cmds="list ls status st rounds headroom devices device local llm projects solo rename mv kill end archive revive -p -y usage cost desktop update uninstall version help"
   if [ "$COMP_CWORD" -eq 1 ]; then
     # first word: subcommands + live session names (bare name attaches to it)
     mapfile -t COMPREPLY < <(compgen -W "$cmds $(_huginn_sessions)" -- "$cur")
