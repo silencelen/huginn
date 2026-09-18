@@ -464,13 +464,77 @@ function effortDecision(v) {
  * slashes, and the first character must be alphanumeric or an underscore, which
  * makes `.` and `..` unnameable. Every character allowed here is also legal
  * unencoded in a URL path segment, so no caller has to remember to escape it.
+ *
+ * ⚠ NO DOTS, AND THAT IS NOT A STYLE CHOICE. tmux silently rewrites '.' to '_'
+ * in a session name and still exits 0, so a name carrying one is a name no live
+ * session can ever have: it used to be accepted at the door and then handed back
+ * in the 201 while tmux held the rewritten spelling, and every per-session route
+ * on the reported name 404'd (#103/#105/#106). The four clients had four
+ * different opinions about the rule; this is the one they all now share.
  */
-const NAME_RE = /^[A-Za-z0-9_][A-Za-z0-9_.-]{0,49}$/;
+const NAME_RE = /^[A-Za-z0-9_][A-Za-z0-9_-]{0,49}$/;
+
+/**
+ * Why a name can be refused, as a sentence, or null if it is fine.
+ *
+ * Separate from `canonName` so the routes can say WHICH rule was broken. "invalid
+ * session name (letters, digits, underscore)" was the only answer for every
+ * shape, and it did not mention the dash it allows or the dot it does not.
+ */
+function nameProblem(raw) {
+  if (typeof raw !== 'string' || !raw.trim()) return 'a session needs a name';
+  const s = raw.trim().toLowerCase();
+  if (sessreg.isReserved(s)) {
+    return `'${s}' is reserved — huginn keeps its own state under that name`;
+  }
+  if (s.includes('.')) {
+    return 'a session name cannot contain a "." — tmux rewrites it to "_", '
+      + 'so the name you asked for would not be the name you got';
+  }
+  if (!NAME_RE.test(s)) {
+    return 'invalid session name: letters, digits, underscore and dash, '
+      + 'starting with a letter, digit or underscore, up to 50 characters';
+  }
+  return null;
+}
 
 function canonName(raw) {
   if (typeof raw !== 'string') return null;
-  const s = raw.toLowerCase();
-  return NAME_RE.test(s) ? s : null;
+  const s = raw.trim().toLowerCase();
+  return nameProblem(s) ? null : s;
+}
+
+/**
+ * What tmux ACTUALLY called a session it has just created or renamed.
+ *
+ * ⚠ THE TRAP THIS REPLACED, twice over. Both readbacks asked tmux about the
+ * name the ROUTE wanted: the create route with a trailing colon (`-t '=a.b:'`),
+ * which cannot resolve a rewritten name and answers with an empty string at exit
+ * 0, so `|| name` echoed the phantom back; the rename route without one
+ * (`-t '=a.b'`), which tmux resolves by applying the SAME rewrite — so it
+ * happily returned a DIFFERENT live session whose name matched the pre-dot
+ * prefix, and the route migrated the renamed session's state file, sidecars,
+ * pane lease, send queue and registry row onto that bystander.
+ *
+ * `printed` is `new-session -P -F '#S'` output where there is one — the only
+ * form that cannot be wrong, because tmux prints what it did. Everything else
+ * here is the fallback for the rename path: probe the name tmux would have
+ * REWRITTEN to, then, failing that, look for it in the live list. Returns null
+ * rather than the requested name, because a caller that cannot learn the real
+ * name must fail loudly instead of publishing a phantom.
+ */
+async function tmuxNameReadback(requested, printed = '') {
+  const direct = String(printed || '').trim();
+  if (direct) return direct;
+  const want = String(requested || '');
+  const rewritten = want.replace(/[.:]/g, '_');
+  const q = await run('tmux', ['display-message', '-p', '-t', `=${rewritten}:`, '#S']);
+  const found = (q.err ? '' : (q.stdout || '')).trim();
+  if (found) return found;
+  const ls = await run('tmux', ['list-sessions', '-F', '#S']);
+  if (ls.err) return null;
+  const names = (ls.stdout || '').split('\n').map((x) => x.trim()).filter(Boolean);
+  return names.find((n) => n === want) || names.find((n) => n === rewritten) || null;
 }
 
 // ------------------------------------------------------------ tmux sessions
@@ -559,6 +623,12 @@ function ofThisIncarnation(name, st) {
 }
 
 /**
+ * The per-session sidecar directories the title hook keeps under STATE_DIR,
+ * named in ONE place so a reader cannot update three of the four call sites.
+ */
+const SIDECAR_DIRS = ['ask', 'plan', 'compacting'];
+
+/**
  * Every per-name file the hook may have left behind. Used both when ending a
  * session and when creating one, because those are the two moments a name changes
  * hands — and the create side is what closes the window between a new session
@@ -567,9 +637,7 @@ function ofThisIncarnation(name, st) {
 function clearSessionState(name) {
   for (const f of [
     path.join(STATE_DIR, name),
-    path.join(STATE_DIR, 'ask', name),
-    path.join(STATE_DIR, 'plan', name),
-    path.join(STATE_DIR, 'compacting', name),
+    ...SIDECAR_DIRS.map((d) => path.join(STATE_DIR, d, name)),
   ]) {
     try { fs.unlinkSync(f); } catch { /* already gone */ }
   }
@@ -982,10 +1050,17 @@ async function listSessions({ preview = false } = {}) {
     // from the list is worse than one that cannot open it, because the reader
     // concludes it is gone. Logged once per listing so an unopenable row has an
     // explanation on the host instead of being a mystery on the phone.
-    if (!NAME_RE.test(name)) log(`sessions: "${name}" cannot be addressed by the app (name shape)`);
+    const addressable = NAME_RE.test(name);
+    if (!addressable) log(`sessions: "${name}" cannot be addressed by the app (name shape)`);
     const st = readSessionState(name) || {};
     rows.push({
       name,
+      // ⚠ LISTED BUT NOT OPENABLE. A session tmux made outside the daemon's name
+      // rule is still a real session and hiding it would be worse — the reader
+      // would conclude it had gone — but every per-session route will 404 on it.
+      // The row says so, so a client can grey it out instead of letting somebody
+      // find out by tapping it.
+      addressable,
       createdAt: Number(created),
       activityAt: Number(activity),
       // Kept for reference; it tracks client interaction, not output.
@@ -8961,8 +9036,9 @@ const server = http.createServer(async (req, res) => {
 
     if (req.method === 'POST' && p === '/v1/sessions') {
       const body = JSON.parse(await readBody(req) || '{}');
+      const bad = nameProblem(body.name);
+      if (bad) return sendErr(res, 400, bad);
       const name = canonName(body.name);
-      if (!name) return sendErr(res, 400, 'invalid session name (letters, digits, underscore)');
       if (await sessionExists(name)) return sendErr(res, 409, `session '${name}' already exists`);
       // Whatever the last holder of this name left behind goes now, before the new
       // session can be observed. The born-time guard would reject it anyway, but
@@ -8972,14 +9048,18 @@ const server = http.createServer(async (req, res) => {
       // whoever starts it, and that is a one-time choice per server lifetime.
       await ensureTmuxServerScope();
       // Same shape as cc: open in WORKDIR, claude first, fall through to a shell.
-      const { err, stderr } = await run('tmux',
-        ['new-session', '-d', '-s', name, '-c', WORKDIR, 'claude; exec "$SHELL" -l']);
+      // ⚠ `-P -F '#S'` — tmux PRINTS the name it gave the session, in the same
+      // call that makes it. The old shape asked afterwards with
+      // `display-message -t '=<name>:'`, which cannot resolve a name tmux
+      // rewrote and answers empty at exit 0; the `|| name` fallback then echoed
+      // the phantom back in the 201 (#103/#106).
+      const { err, stderr, stdout } = await run('tmux',
+        ['new-session', '-d', '-P', '-F', '#S', '-s', name, '-c', WORKDIR, 'claude; exec "$SHELL" -l']);
       if (err) return sendErr(res, 500, `tmux: ${stderr.trim() || err.message}`);
-      // What tmux called it, not what we asked for — same reason as the rename
-      // route below: a '.' is rewritten to '_' with a zero exit, and a client
-      // told the wrong name gets a 404 on everything it does next.
-      const q = await run('tmux', ['display-message', '-p', '-t', `=${name}:`, '#S']);
-      const created = (q.stdout || '').trim() || name;
+      const created = await tmuxNameReadback(name, stdout);
+      if (!created) {
+        return sendErr(res, 500, 'tmux made the session but will not say what it called it');
+      }
       // On the restore list from birth. The claudeSessionId is not known yet — the
       // title hook writes it once Claude boots — so the reconcile timer fills it in;
       // until then a reboot would bring this session back as a fresh `claude`, which
@@ -9404,31 +9484,44 @@ const server = http.createServer(async (req, res) => {
     if ((m = p.match(/^\/v1\/sessions\/([A-Za-z0-9_][A-Za-z0-9_.-]{0,49})\/rename$/)) && req.method === 'POST') {
       const from = m[1];
       const body = JSON.parse(await readBody(req) || '{}');
+      const badName = nameProblem(body.name);
+      if (badName) return sendErr(res, 400, badName);
       const to = canonName(body.name);
-      if (!to) return sendErr(res, 400, 'invalid session name (letters, digits, underscore)');
       if (to !== from && await sessionExists(to)) return sendErr(res, 409, `session '${to}' already exists`);
       const r = await run('tmux', ['rename-session', '-t', `=${from}`, to]);
       if (r.err) return sendErr(res, 404, `tmux: ${r.stderr.trim() || 'no such session'}`);
-      // Ask tmux what it ACTUALLY called the session rather than assuming it
-      // took the name we asked for. tmux silently rewrites '.' to '_' and still
-      // exits 0, so a rename to "my.session" left a live session named
-      // "my_session" while this route moved the state file to "my.session" and
-      // handed the client a name that 404s on every subsequent request. The
-      // orphaned state file is the worse half: it is the session -> transcript
-      // mapping, so the Conversation view — the app's primary surface — had
-      // nothing to read until the title hook happened to rewrite it, which for
-      // an idle session is never.
+      // ⚠ THE READBACK THAT RENAMED A BYSTANDER'S STATE. This asked tmux about
+      // `-t '=<to>'` WITHOUT the trailing colon, and tmux resolves a colon-less
+      // target by applying the same '.'-to-'_' rewrite it applies to a name — so
+      // renaming X to `notes.old` while a live session called `notes` existed
+      // read back `notes`, and every move below then migrated X's state file,
+      // sidecars, pane lease, soft-end, startup mark, send queue and registry
+      // row ONTO that unrelated session: its transcript mapping destroyed, and
+      // X's queued text pumped into its live Claude pane (#105). The `|| to`
+      // fallback was the other half — a readback that learned nothing published
+      // the requested name anyway, which is the create route's phantom (#103).
       //
-      // Reading the name back rather than rejecting '.' keeps this correct for
-      // whatever character tmux decides to rewrite next.
-      const q = await run('tmux', ['display-message', '-p', '-t', `=${to}`, '#S']);
-      const actual = (q.stdout || '').trim() || to;
+      // `tmuxNameReadback` probes the name tmux would have REWRITTEN to and then
+      // the live list, and returns null rather than guessing.
+      const actual = await tmuxNameReadback(to);
+      if (!actual) {
+        return sendErr(res, 500, 'tmux renamed the session but will not say what it is called now');
+      }
       // The state file is keyed by name; move it so state/transcript survive.
-      try { fs.renameSync(path.join(STATE_DIR, from), path.join(STATE_DIR, actual)); } catch { }
+      // ⚠ ONLY IF IT IS A FILE. `from` comes raw off the URL, and before the
+      // sidecar directories were dot-prefixed a session could legitimately be
+      // called `ask`: this line then renamed the whole SHARED sidecar DIRECTORY,
+      // taking every other session's pending question with it (#3). The prefix
+      // makes that unreachable; the guard is what keeps it unreachable.
+      try {
+        if (fs.lstatSync(path.join(STATE_DIR, from)).isFile()) {
+          fs.renameSync(path.join(STATE_DIR, from), path.join(STATE_DIR, actual));
+        }
+      } catch { }
       // Move the prompt sidecars + the compacting marker too, or a fused prompt
       // silently degrades to pane-only after a rename until the next question
       // rewrites them.
-      for (const kind of ['ask', 'plan', 'compacting']) {
+      for (const kind of SIDECAR_DIRS) {
         try { fs.renameSync(path.join(STATE_DIR, kind, from), path.join(STATE_DIR, kind, actual)); } catch { }
       }
       // ⚠ EVERY MOVE BELOW IS `set(new) THEN delete(old)`, WHICH ERASES THE ROW
@@ -10456,12 +10549,19 @@ const server = http.createServer(async (req, res) => {
       // observed through a corpse's state file.
       clearSessionState(want);
       await ensureTmuxServerScope();
-      const r = await run('tmux', ['new-session', '-d', '-s', want, '-c', cwd, command]);
+      // ⚠ `-P -F '#S'`, for the same reason as the create route: tmux PRINTS the
+      // name it gave the session. `want` can still carry a '.' here even though
+      // the name rule bans them — it comes off an archive card an older daemon
+      // wrote — and the old `display-message -t '=<want>:'` readback answers
+      // empty at exit 0 for exactly that case, so `|| want` persisted a phantom
+      // as `revivedAs` and every route on the reported name 404'd (#103).
+      const r = await run('tmux',
+        ['new-session', '-d', '-P', '-F', '#S', '-s', want, '-c', cwd, command]);
       if (r.err) return sendErr(res, 500, `tmux: ${(r.stderr || r.err.message || '').trim() || 'could not recreate the session'}`);
-      // What tmux CALLED it. A '.' becomes '_' with a zero exit, and a client told
-      // the wrong name gets a 404 on everything it does next.
-      const q = await run('tmux', ['display-message', '-p', '-t', `=${want}:`, '#S']);
-      const created = (q.stdout || '').trim() || want;
+      const created = await tmuxNameReadback(want, r.stdout);
+      if (!created) {
+        return sendErr(res, 500, 'tmux revived the session but will not say what it called it');
+      }
 
       // On the restore list again, with the id already known this time — and
       // marked `restoredAt`, which means "the CLI's in-process usage-limit wait
