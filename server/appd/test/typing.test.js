@@ -404,6 +404,18 @@ test('a real composer capture holding a numbered line is not a dialog (#1)', () 
   assert.equal(t.paneBlocks(t.paneReadyForInput(pane).why), false);
 });
 
+test('the attention hold on a human send is pane-backed and bounded (#13)', () => {
+  assert.equal(t.humanAttentionHold({ state: 'hold' }), true, 'no pane evidence: the hook wins');
+  assert.equal(t.humanAttentionHold({ state: 'hold', composerEmpty: false }), true,
+    'a composer holding something is what a dialog\'s cursored row looks like');
+  assert.equal(t.humanAttentionHold({ state: 'hold', composerEmpty: true }), false,
+    'an EMPTY composer is proof the question is gone, whatever the state file says');
+  assert.equal(t.humanAttentionHold({ state: 'hold', waitedMs: t.ATTENTION_HOLD_MAX_MS }), false,
+    'a hold with no end is the same bug as a message that vanishes');
+  assert.equal(t.humanAttentionHold({ state: null }), false);
+  assert.equal(t.humanAttentionHold({ state: 'release' }), false);
+});
+
 test('only a dialog BLOCKS a send: busy is not a liveness verdict', () => {
   assert.equal(t.paneBlocks('modal'), true);
   assert.equal(t.paneBlocks('trust'), true);
