@@ -101,6 +101,7 @@ object AppdRoutes {
      * |---|---|
      * | `base_url` matching a built-in | that built-in as pin #1, named "Tailscale" / "Yggdrasil" |
      * | `base_url` matching nothing | pin #1 named after its own host — the owner's chosen address stays chosen |
+     * | `base_url` the guard refuses | NOT pinned, NOT replaced: carried back as [RouteBook.droppedUrl] with no active route |
      * | the built-ins not already emitted | appended, in [ALL] order |
      * | `base_url` absent (fresh install) | an EMPTY book; the first address saved becomes pin #1 |
      * | `appd_route_pinned` = true | `autoSwitch = false` — the same refusal to move, under its new name |
@@ -115,15 +116,36 @@ object AppdRoutes {
         val stored = storedBaseUrl?.let { normalize(it) }?.takeIf { it.isNotBlank() }
             ?: return RouteBook(autoSwitch = !routePinned)
 
-        val first = match(stored)?.let { seed(it, now) }
-            ?: PinnedRoute(
+        // ⚠ THE ONE ROW THAT IS NOT BEHAVIOUR-IDENTICAL, AND CANNOT BE. The phone's
+        // old "Base URL" was free text with no validation, so a plain-http
+        // HOSTNAME both stored and worked — `huginn.lan`, the short MagicDNS name
+        // `huginn`, a DDNS name, a public literal, an address with a path. The
+        // guard refuses all of those and is right to (a bearer in cleartext to a
+        // name is exactly what it exists to stop), but the old behaviour was to
+        // drop it silently in `normalized()` and let `activeId` fall back to a
+        // hard-coded built-in — an address the owner never chose, reached without
+        // a word, and with `appd_route_pinned` mapping to autoSwitch=false so it
+        // was never even probed. Now: the address is carried back as
+        // `droppedUrl` and the book is left with NO active route.
+        val builtIn = match(stored)?.let { seed(it, now) }
+        val first = builtIn ?: if (RouteGuard.isAllowed(stored)) {
+            PinnedRoute(
                 id = MIGRATED_ID,
                 name = RouteBook.defaultName(stored),
                 url = stored,
                 kind = RouteGuard.kindOf(stored),
                 addedAt = now,
             )
+        } else null
         val rest = ALL.filter { normalize(it.url) != stored }.map { seed(it, now) }
+        if (first == null) {
+            return RouteBook(
+                routes = rest,
+                activeId = null,
+                autoSwitch = !routePinned,
+                droppedUrl = stored,
+            ).normalized()
+        }
         return RouteBook(
             routes = listOf(first) + rest,
             activeId = first.id,
