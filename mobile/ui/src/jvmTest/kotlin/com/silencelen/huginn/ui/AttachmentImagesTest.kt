@@ -9,6 +9,7 @@ import org.jetbrains.skia.Image
 import org.jetbrains.skia.ImageInfo
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 import kotlin.test.assertNotNull
@@ -85,5 +86,117 @@ class AttachmentImagesTest {
         val loader = AttachmentImageLoader({ fetches++; ByteArray(0) }, SkiaImageBytesDecoder())
         assertNull(loader.load("/uploads/"))
         assertEquals(0, fetches)
+    }
+
+    // ------------------------------------------ loadPath: assistant image paths
+
+    /**
+     * ⚠ THE WHOLE REASON `loadPath` IS NOT `load`. `load()` keys its cache on the
+     * BASENAME, because an uploads path is `/uploads/<server-minted-name>` and
+     * the name is unique by construction. An assistant's path is not: every
+     * session writes `screenshot.png` into its own directory, and a basename key
+     * would serve the first one to every other one — the wrong picture, cached,
+     * with nothing in the logs.
+     */
+    @Test
+    fun `two different directories sharing a basename are two different images`() = runBlocking {
+        val seen = mutableListOf<String>()
+        val loader = AttachmentImageLoader(
+            fetch = { error("not the uploads route") },
+            decoder = SkiaImageBytesDecoder(),
+            fetchPath = { path, _ -> seen += path; pngBytes(if (path.startsWith("/a/")) 4 else 8, 4) },
+        )
+        val a = loader.loadPath("/a/screenshot.png")
+        val b = loader.loadPath("/b/screenshot.png")
+        assertEquals(listOf("/a/screenshot.png", "/b/screenshot.png"), seen)
+        assertEquals(4, a?.width)
+        assertEquals(8, b?.width, "the second directory got its own image, not the first one's")
+    }
+
+    @Test
+    fun `loadPath still caches, dedupes and remembers a miss, keyed on the full path`() = runBlocking {
+        var fetches = 0
+        val png = pngBytes(4, 4)
+        val loader = AttachmentImageLoader(
+            fetch = { error("not the uploads route") },
+            decoder = SkiaImageBytesDecoder(),
+            fetchPath = { _, _ -> fetches++; png },
+        )
+        val one = async { loader.loadPath("/tmp/a.png") }
+        val two = async { loader.loadPath("/tmp/a.png") }
+        assertNotNull(one.await())
+        assertNotNull(two.await())
+        assertNotNull(loader.loadPath("/tmp/a.png"))
+        assertEquals(1, fetches, "one fetch across a dedupe and a later cache hit")
+
+        var misses = 0
+        val failing = AttachmentImageLoader(
+            fetch = { error("not the uploads route") },
+            decoder = SkiaImageBytesDecoder(),
+            fetchPath = { _, _ -> misses++; throw RuntimeException("403") },
+        )
+        assertNull(failing.loadPath("/etc/nope.png"))
+        assertNull(failing.loadPath("/etc/nope.png"))
+        assertEquals(1, misses, "a 403 is permanent; asking again on every recomposition is not")
+    }
+
+    /**
+     * The graceful story against a daemon with no `/v1/files/image` — which is
+     * every daemon before appd 3.2.0. No fetcher, no fetch, no thumbnail, and
+     * the placeholder renders instead.
+     */
+    @Test
+    fun `without a path fetcher loadPath is a quiet miss, not a crash`() = runBlocking {
+        var fetches = 0
+        val loader = AttachmentImageLoader({ fetches++; ByteArray(0) }, SkiaImageBytesDecoder())
+        assertNull(loader.loadPath("/tmp/a.png"))
+        assertEquals(0, fetches, "and it does not fall back to the uploads route")
+    }
+
+    @Test
+    fun `the uploads path keeps its exact basename behaviour`() = runBlocking {
+        // loadPath must not have changed load(): chat-history thumbnails are the
+        // one caller that IS keyed correctly on a basename.
+        var fetches = 0
+        val png = pngBytes(4, 4)
+        val loader = AttachmentImageLoader(
+            fetch = { fetches++; png },
+            decoder = SkiaImageBytesDecoder(),
+            fetchPath = { _, _ -> error("not the files route") },
+        )
+        assertNotNull(loader.load("/uploads/up-1-ab.png"))
+        assertNotNull(loader.load("/somewhere/else/up-1-ab.png"))
+        assertEquals(1, fetches, "same upload name, one fetch — the behaviour this always had")
+    }
+
+    // ------------------------------------------------------ the full-size viewer
+
+    /**
+     * Tapping a thumbnail opens the picture at full size. The state is a plain
+     * holder rather than a `remember` inside the composable so the rule — what
+     * opens it, what closes it, and what must NOT open it — is asserted here
+     * instead of by looking at a screenshot.
+     */
+    @Test
+    fun `tapping a thumbnail opens the viewer on that image, and dismiss closes it`() = runBlocking {
+        val bmp = SkiaImageBytesDecoder().decode(pngBytes(6, 6))
+        val state = ImageViewerState()
+        assertFalse(state.isOpen, "nothing is open until something is tapped")
+
+        state.open("/tmp/shot.png", bmp)
+        assertTrue(state.isOpen)
+        assertEquals("/tmp/shot.png", state.path)
+        assertTrue(state.bitmap === bmp)
+
+        state.close()
+        assertFalse(state.isOpen)
+        assertNull(state.bitmap, "and it lets go of the bitmap rather than pinning it in RAM")
+    }
+
+    @Test
+    fun `a thumbnail that never decoded cannot open an empty viewer`() {
+        val state = ImageViewerState()
+        state.open("/tmp/broken.png", null)
+        assertFalse(state.isOpen, "there is nothing to show full size")
     }
 }
