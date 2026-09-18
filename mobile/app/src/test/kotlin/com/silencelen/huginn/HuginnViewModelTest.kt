@@ -209,6 +209,40 @@ class HuginnViewModelTest {
             errorTextFor(HuginnClient.HuginnException(401, "Unauthorized")),
         )
     }
+
+    // ------------------------------------------ #80 transport failures in words
+
+    @Test
+    fun `a transport failure is told in household words, with no address in it`() {
+        // Ktor 3.5.2 + OkHttp with HttpTimeout(connect = 8000) words it exactly
+        // like this, and it flowed unscrubbed to the red banner on the Status tab
+        // and to 62 toast call sites.
+        val timeout = errorTextFor(
+            RuntimeException(
+                "Connect timeout has expired [url=http://192.168.2.117:8787/v1/status, " +
+                    "connect_timeout=8000 ms]"
+            )
+        )
+        assertFalse("the daemon's host must not reach the screen", timeout.contains("192.168.2.117"))
+        assertFalse(timeout.contains("8787"))
+        assertTrue("sentence case for a banner", timeout.first().isUpperCase())
+        assertTrue(timeout.startsWith("Huginn did not answer in time"))
+
+        // OkHttp does not word a refusal as "connection refused"; whatever
+        // DeliveryCopy makes of it, the address must be gone.
+        val refused = errorTextFor(RuntimeException("Failed to connect to /192.168.2.117:8787"))
+        assertFalse(refused.contains("192.168.2.117"))
+        assertFalse(refused.contains("8787"))
+
+        val dns = errorTextFor(RuntimeException("Unable to resolve host \"huginn.tail1234.ts.net\""))
+        assertFalse(dns.contains("huginn.tail1234.ts.net"))
+    }
+
+    @Test
+    fun `an exception with no message still says something`() {
+        assertTrue(errorTextFor(RuntimeException()).isNotBlank())
+    }
+
     // ----------------------------------------------------------- the strip
 
     private companion object {

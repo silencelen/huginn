@@ -17,6 +17,7 @@ import com.silencelen.huginn.data.ConsoleApproval
 import com.silencelen.huginn.data.ChatDetail
 import com.silencelen.huginn.data.ChatEvent
 import com.silencelen.huginn.data.HuginnClient
+import com.silencelen.huginn.notify.DeliveryCopy
 import com.silencelen.huginn.data.ModelChoice
 import com.silencelen.huginn.data.PolishResult
 import com.silencelen.huginn.data.Project
@@ -142,11 +143,26 @@ internal suspend fun applyAutoSwitch(
  * login expired on <date> — sign in again", which is the entire answer to the
  * question the reader pressed the button to ask. The desktop replaced that with
  * "could not switch" and threw it away; this client must never learn to.
+ *
+ * ⚠ ANYTHING THAT IS NOT THE DAEMON goes through [DeliveryCopy.trouble]. A
+ * transport exception is not huginn speaking — it is Ktor/OkHttp, and its
+ * message carries the daemon's address ("Connect timeout has expired
+ * [url=http://<host>:<port>/v1/status…]", "Failed to connect to /<host>:<port>",
+ * the hostname on a DNS failure). That went verbatim to the Status tab's red
+ * banner and to every toast. `trouble` is the household sentence for the same
+ * failure, with the address scrubbed; it was written for exactly this and was
+ * wired into one settings page only. Sentence-cased here because a banner is a
+ * sentence, not a clause.
  */
 internal fun errorTextFor(e: Throwable): String = when (e) {
     is HuginnClient.HuginnException ->
         if (e.code == 401) "Rejected by huginn: check the token in Settings" else e.message
-    else -> e.message ?: e::class.java.simpleName
+    else -> {
+        val raw = e.message ?: e::class.java.simpleName
+        DeliveryCopy.trouble(raw)
+            .replaceFirstChar { it.uppercaseChar() }
+            .ifBlank { "This phone could not reach huginn." }
+    }
 }
 
 /**
