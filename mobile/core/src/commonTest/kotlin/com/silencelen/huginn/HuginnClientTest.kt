@@ -311,6 +311,25 @@ class HuginnClientTest {
     // ------------------------------------------------------- failures
 
     /**
+     * ⚠ tmux DOES NOT ALWAYS TAKE THE NAME IT IS GIVEN. It silently rewrites '.'
+     * to '_' and still exits 0, so the daemon asks tmux what it actually called
+     * the session and answers with that. A caller that assumed its own string
+     * won closed the pane it had just renamed and ate the draft in it (desktop
+     * #83); it can only stop assuming if the name comes back.
+     */
+    @Test
+    fun `a rename answers with the name the daemon actually used`() = runTest {
+        val name = ok("""{"ok":true,"name":"my_session"}""").renameSession("old", "my.session")
+        assertEquals("my_session", name)
+        assertEquals("http://appd.test/v1/sessions/old/rename", seen.single().url.toString())
+    }
+
+    @Test
+    fun `a daemon too old to answer with a name is not an error`() = runTest {
+        assertEquals("newname", ok("""{"ok":true}""").renameSession("old", "newname"))
+    }
+
+    /**
      * ⚠ AND IT MUST NOT READ AS A SERVER ERROR. `errorTextFor` prints
      * `e.message` verbatim for anything that is not a [HuginnClient.HuginnException],
      * so a captive portal's or a stranger's 200 used to put
