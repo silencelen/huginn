@@ -117,7 +117,59 @@ function contentTypeForUpload(name) {
   return SERVE_TYPES[ext] || 'application/octet-stream';
 }
 
+/**
+ * At most one directory sweep per minute, however many files arrive.
+ *
+ * The sweep itself is unchanged and still correct: non-image uploads older than
+ * the retention window go, IMAGES NEVER DO (see isImageUpload). What changed is
+ * how often it is allowed to run. It hangs off POST /v1/uploads — a dir that
+ * only grows when the feature is used only needs sweeping then — and that was
+ * fine while an attach was one file. Multi-attach makes it ten POSTs inside a
+ * second, so the same directory was being read ten times to delete the same
+ * nothing, each readdir+stat-per-entry blocking the event loop of a daemon that
+ * is also streaming those very uploads to disk.
+ *
+ * A minute, not a smarter trigger: retention is measured in DAYS, so the sweep
+ * has no deadline at all and the only thing the interval must beat is a burst.
+ * The first call after start always sweeps (lastPrune starts at 0).
+ *
+ * The clock and the fs are injected so the throttle can be asserted with a
+ * readdirSync spy instead of a sleep — a test that proves a rate limit by
+ * waiting for it is a test that takes a minute to run.
+ *
+ * @returns {() => boolean} true when this call actually swept.
+ */
+const PRUNE_MIN_INTERVAL_MS = 60_000;
+function createUploadPruner(opts = {}) {
+  const dir = opts.dir;
+  const fsImpl = opts.fs || require('node:fs');
+  const pathImpl = opts.path || require('node:path');
+  const now = opts.now || Date.now;
+  const minIntervalMs = Number.isFinite(opts.minIntervalMs) ? opts.minIntervalMs : PRUNE_MIN_INTERVAL_MS;
+  const defaultKeepMs = Number.isFinite(opts.keepMs) ? opts.keepMs : 7 * 24 * 60 * 60 * 1000;
+
+  let lastPrune = 0;
+
+  return function prune(maxAgeMs = defaultKeepMs) {
+    const t = now();
+    // `>=` on the interval, so a test that advances the clock by exactly the
+    // interval gets a sweep rather than an off-by-one mystery.
+    if (lastPrune && t - lastPrune < minIntervalMs) return false;
+    lastPrune = t;
+    let names;
+    try { names = fsImpl.readdirSync(dir); } catch { return false; }
+    const cutoff = t - maxAgeMs;
+    for (const n of names) {
+      if (isImageUpload(n)) continue;                 // kept until manually deleted
+      const f = pathImpl.join(dir, n);
+      try { if (fsImpl.statSync(f).mtimeMs < cutoff) fsImpl.unlinkSync(f); } catch { /* raced; fine */ }
+    }
+    return true;
+  };
+}
+
 module.exports = {
   uploadExtFor, safeExt, isReadable, isImageUpload, contentTypeForUpload,
+  createUploadPruner, PRUNE_MIN_INTERVAL_MS,
   MIME_EXTS, READABLE_EXTS, IMAGE_EXTS,
 };

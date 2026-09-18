@@ -88,6 +88,14 @@ const VERSION = '3.2.1';
 const PORT = Number(process.env.HUGINN_APPD_PORT || 8787);
 const DATA_DIR = process.env.HUGINN_APPD_DATA || '/var/lib/huginn-appd';
 const UPLOADS_DIR = path.join(DATA_DIR, 'uploads');
+// Where Claude Code puts its own per-session scratchpad on this host — the
+// directory the assistant writes screenshots and rendered charts into. A ROOT
+// for GET /v1/files/image and nothing else; it is never written to from here.
+// Env-settable so a test can point it at a scratch dir rather than depend on
+// the operator's real one, and harmless when it does not exist: lib/files drops
+// a root it cannot realpath instead of comparing the literal string.
+const CLAUDE_SCRATCH_DIR = process.env.HUGINN_APPD_CLAUDE_SCRATCH || '/tmp/claude-0';
+
 // Generous, because a router or NVR backup is tens of megabytes and the body is
 // streamed straight to disk rather than held in memory.
 const UPLOAD_MAX_BYTES = 128 * 1024 * 1024;
@@ -96,7 +104,20 @@ const UPLOAD_MAX_BYTES = 128 * 1024 * 1024;
 // and .csv files: Android providers report mimes like text/comma-separated-
 // values, or nothing at all, and exact-match punished the user for their file
 // manager's vocabulary.
-const { uploadExtFor, isReadable, contentTypeForUpload, isImageUpload } = require('./lib/uploads');
+const { uploadExtFor, isReadable, contentTypeForUpload, createUploadPruner } = require('./lib/uploads');
+// Serving a HOST file the assistant named by path — the resolver behind
+// GET /v1/files/image. Kept out of here because it is all rules and no HTTP,
+// and because a containment check that cannot be unit-tested is a containment
+// check nobody re-reads. NOT lib/desktop's resolveArtifact: that one defends
+// itself with a filename regex and says in its own comment that it needs no
+// realpath, which is true only because the SERVER names those files.
+const filesLib = require('./lib/files');
+// The cap on an image SERVED back (not on one stored — an upload may be 128 MB).
+// A client is drawing this inline in a transcript; past this it is a screenshot
+// of a mistake, and the 413 says so. Env-settable so a route test can prove the
+// 413 with a small file instead of writing twelve megabytes to prove arithmetic.
+const IMAGE_SERVE_MAX_BYTES = Number(process.env.HUGINN_APPD_IMAGE_SERVE_MAX)
+  || filesLib.IMAGE_SERVE_MAX_BYTES;
 // The desktop update channel — manifest + installers served from disk, stocked
 // by mobile/scripts/release-desktop.sh via local moves.
 //
@@ -120,20 +141,22 @@ const UPLOAD_KEEP_DAYS = Math.max(1, Number(process.env.HUGINN_APPD_UPLOAD_KEEP_
 /**
  * Drops non-image uploads old enough that no conversation is coming back for
  * them. IMAGES ARE NEVER PRUNED — they back the chat-history thumbnails and are
- * small transcoded JPEGs; only manual deletion removes them. Run on each upload
- * rather than a timer: a dir that only grows when the feature is used only needs
- * sweeping then.
+ * small transcoded JPEGs; only manual deletion removes them.
+ *
+ * THROTTLED to one sweep a minute (lib/uploads.createUploadPruner). It still
+ * hangs off POST /v1/uploads rather than a timer — a dir that only grows when
+ * the feature is used only needs sweeping then — but multi-attach turns one
+ * attach into ten POSTs inside a second, and ten full readdir+stat sweeps of the
+ * same directory, to delete the same nothing, on the event loop that is also
+ * streaming those uploads to disk. Retention is measured in days; the sweep has
+ * no deadline and only needs to beat a burst. The rules, and the throttle, live
+ * in the lib so uploads.test.js can assert them with a readdirSync spy.
  */
-function pruneUploads(maxAgeMs = UPLOAD_KEEP_DAYS * 24 * 60 * 60 * 1000) {
-  let names = [];
-  try { names = fs.readdirSync(UPLOADS_DIR); } catch { return; }
-  const cutoff = Date.now() - maxAgeMs;
-  for (const n of names) {
-    if (isImageUpload(n)) continue;                 // kept until manually deleted
-    const f = path.join(UPLOADS_DIR, n);
-    try { if (fs.statSync(f).mtimeMs < cutoff) fs.unlinkSync(f); } catch { /* raced; fine */ }
-  }
-}
+const pruneUploads = createUploadPruner({
+  dir: UPLOADS_DIR,
+  fs, path,
+  keepMs: UPLOAD_KEEP_DAYS * 24 * 60 * 60 * 1000,
+});
 const TOKEN_FILE = process.env.HUGINN_APPD_TOKEN_FILE || '/etc/huginn-appd/token';
 // A test knob only in production (the default is fixed): the route tests point it
 // at a scratch dir so they never write state files into the live daemon's
@@ -9249,6 +9272,69 @@ const server = http.createServer(async (req, res) => {
         'Content-Type': contentTypeForUpload(name),
         'X-Content-Type-Options': 'nosniff',
       });
+    }
+
+    // --- a HOST image the assistant named by path, so a transcript can draw it
+    // instead of printing "/home/me/shot.png" and leaving the reader to go and
+    // look. `?path=` is absolute, or relative to the named session's cwd.
+    //
+    // This is the one route where the CLIENT supplies a path, which is why it
+    // does not reuse serveArtifact: resolveArtifact's containment is a filename
+    // regex with no realpath, correct for names the SERVER chose and worthless
+    // for a path a client sent. lib/files does the resolving (two containment
+    // passes, lexical then canonical), and only the streaming shape is borrowed
+    // from serveArtifact — including its res.on('close') fd-leak fix, which
+    // matters more here: a transcript that scrolls past an image aborts the GET.
+    //
+    // THE ROOTS, and nothing else:
+    //   1. UPLOADS_DIR              — what the phone already sent
+    //   2. SCRATCHPAD_RENDER_DIR    — what a scratchpad rendered
+    //   3. CLAUDE_SCRATCH_DIR       — where Claude Code's own scratchpad lives
+    //   4. the named session's cwd  — ONLY with ?session=<a live session>
+    //
+    // Root 4 is the widening one and it is gated twice: the session must be live
+    // on tmux RIGHT NOW (sessionExists, not just a state file — a name outlives
+    // the session that owned it and the state dir is full of corpses), and the
+    // state must carry a cwd. An unknown or ended name simply contributes no
+    // root, so it can only ever narrow what is servable, never widen it.
+    if (req.method === 'GET' && p === '/v1/files/image') {
+      const roots = [UPLOADS_DIR, SCRATCHPAD_RENDER_DIR, CLAUDE_SCRATCH_DIR];
+      let cwd = null;
+      const sessName = String(u.searchParams.get('session') || '').trim();
+      if (sessName && await sessionExists(sessName)) {
+        const st = readSessionState(sessName);
+        if (st && st.cwd) { cwd = st.cwd; roots.push(st.cwd); }
+      }
+      const found = filesLib.resolveImage({
+        requested: u.searchParams.get('path'),
+        roots, cwd, maxBytes: IMAGE_SERVE_MAX_BYTES, fs,
+      });
+      if (!found.ok) return sendErr(res, found.status, found.error);
+
+      // Private, because the token is the only thing between this and the host's
+      // filesystem and a shared cache keyed on the URL alone would serve it to
+      // the next caller. Five minutes because a transcript re-renders on every
+      // poll and these bytes do not change; the ETag covers the case where they
+      // do.
+      const cacheHeaders = {
+        'Cache-Control': 'private, max-age=300',
+        ETag: found.etag,
+        'X-Content-Type-Options': 'nosniff',
+      };
+      if (filesLib.etagMatches(req.headers['if-none-match'], found.etag)) {
+        res.writeHead(304, cacheHeaders);
+        return res.end();
+      }
+      res.writeHead(200, {
+        'Content-Type': found.contentType,
+        'Content-Length': found.size,
+        ...cacheHeaders,
+      });
+      const stream = fs.createReadStream(found.file);
+      res.on('close', () => stream.destroy());
+      stream.pipe(res);
+      stream.on('error', () => { try { res.destroy(); } catch { } });
+      return undefined;
     }
 
     // --- attachments: a photo from the phone, landed where a chat can Read it
