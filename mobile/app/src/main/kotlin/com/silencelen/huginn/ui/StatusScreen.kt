@@ -54,6 +54,7 @@ fun StatusScreen(
             // even when the host summary has not arrived.
             SectionLabel("Plan")
             PlanSection(plan, nowMs, sectionPadding)
+            KeepAwakeLine(status?.headroom, nowMs, sectionPadding)
             SectionLabel("Tokens")
             UsageSection(usage, sectionPadding)
             Spacer(Modifier.height(24.dp))
@@ -107,6 +108,10 @@ fun StatusScreen(
 
         SectionLabel("Plan")
         PlanSection(plan, nowMs, sectionPadding)
+        // Under the bars, because it is a fact ABOUT them: which window is open,
+        // and what huginn has spent keeping one open. Drawn from `status`, which
+        // this poll already has, rather than from a second request.
+        KeepAwakeLine(status.headroom, nowMs, sectionPadding)
 
         HorizontalDivider(Modifier.padding(top = 12.dp), color = MaterialTheme.colorScheme.outlineVariant)
 
