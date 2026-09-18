@@ -3,6 +3,8 @@ package com.silencelen.huginn.ui.settings
 import com.silencelen.huginn.data.RouteBook
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertNull
+import kotlin.test.assertTrue
 
 /**
  * THE ROUTE FORM'S RULES, asserted without a window.
@@ -117,4 +119,43 @@ class SettingsRowsTest {
         actions.edit("r1", "the mesh", "http://100.64.0.9:8787")
         assertEquals(listOf("rename:r1:the mesh", "setUrl:r1:http://100.64.0.9:8787"), seen)
     }
+
+    // ------------------------------------------- #81 the refusal, before the shell
+
+    @Test
+    fun `an address the guard refuses is refused by the form, not by closing it`() {
+        val b = book()
+        refuses(routeFormRefusal(b, null, "huginn.example.com:8787"))
+        refuses(routeFormRefusal(b, null, "http://huginn.local:8787/v1"))
+        refuses(routeFormRefusal(b, null, "example.com"))
+        refuses(routeFormRefusal(b, null, "   "))
+    }
+
+    @Test
+    fun `an address already pinned is refused by the form`() {
+        val b = book()
+        assertEquals(RouteBook.DUPLICATE, routeFormRefusal(b, null, "http://100.64.0.1:8787"))
+        // ...but a route is never a duplicate of itself.
+        assertNull(routeFormRefusal(b, "r1", "http://100.64.0.1:8787"))
+        assertEquals(RouteBook.DUPLICATE, routeFormRefusal(b, "r2", "http://100.64.0.1:8787"))
+    }
+
+    @Test
+    fun `a full book refuses a ninth, but not an edit of one of the eight`() {
+        var b = RouteBook()
+        for (i in 1..RouteBook.MAX_PINS) b = b.add("r$i", "http://10.0.0.$i:8787", now, id = "r$i")
+        assertEquals(RouteBook.FULL, routeFormRefusal(b, null, "http://10.0.1.1:8787"))
+        assertNull(routeFormRefusal(b, "r1", "http://10.0.1.1:8787"))
+    }
+
+    @Test
+    fun `a good address is not refused`() {
+        assertNull(routeFormRefusal(book(), null, "http://100.64.0.9:8787"))
+        assertNull(routeFormRefusal(book(), "r1", "http://100.64.0.9:8787"))
+        // The same address as typed, normalised, is still its own route.
+        assertNull(routeFormRefusal(book(), "r1", "http://100.64.0.1:8787/"))
+    }
+
+    private fun refuses(s: String?) =
+        assertTrue(!s.isNullOrBlank(), "a refused address must come back with a sentence")
 }

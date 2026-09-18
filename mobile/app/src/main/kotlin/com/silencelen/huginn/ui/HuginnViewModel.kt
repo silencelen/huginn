@@ -1009,6 +1009,14 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
+    /**
+     * Forgets the note under the route list. Opening or cancelling a route form
+     * is the moment it stops being true, and on this client nothing else ever
+     * cleared it — a refusal from ten minutes ago sat under the list for the
+     * life of the screen.
+     */
+    fun clearRouteNote() { _routeNote.value = null }
+
     /** Manual pin from the list: this route, and stay on it until unpinned. */
     fun activateRoute(id: String) = editRoutes { it.activate(id).withAutoSwitch(false) }
 
