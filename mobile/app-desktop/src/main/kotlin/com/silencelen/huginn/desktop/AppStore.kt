@@ -1146,9 +1146,18 @@ class AppStore(
 
     fun removeRoute(id: String) = editRoutes { it.remove(id) }
 
+    /**
+     * ⚠ PERSIST, THEN PROBE. Both halves used to be launched independently, so
+     * the probe read the book with autoSwitch still false, `RouteResolver.resolve`
+     * short-circuited on the pin, and turning the setting ON answered "pinned to
+     * <name> — switch automatically to move". force=true as well: on a fresh
+     * health map an unforced resolve answers Stay and probes nothing.
+     */
     fun setAutoSwitch(on: Boolean) {
-        editRoutes { it.withAutoSwitch(on) }
-        if (on) findLiveRoute()
+        scope.launch {
+            editRoutesNow { it.withAutoSwitch(on) }
+            if (on) resolveRoute(force = true)
+        }
     }
 
     /**

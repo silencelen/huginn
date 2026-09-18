@@ -107,6 +107,31 @@ internal fun reattachPlan(meta: ChatDetail?): Reattach? {
 }
 
 /**
+ * Turning "switch automatically" on is TWO steps, and their ORDER is the whole
+ * rule: persist first, then probe.
+ *
+ * Pure and top-level for the same reason [reattachPlan] is — the mistake it
+ * prevents is arithmetic on sequencing, which no screen shows. Both steps used
+ * to be launched independently: the persist suspends inside DataStore before
+ * `_routeBook` is republished, so the probe read the OLD book with autoSwitch
+ * still false, `RouteResolver.resolve` short-circuited, and the reader who had
+ * just enabled auto-switching was told "Route is pinned — unpin to switch
+ * automatically" while nothing was probed at all.
+ *
+ * ⚠ AND `force`. Once the book is right, an unforced resolve on a fresh health
+ * map answers Stay and still probes nothing; the desktop already passed force
+ * on this path and the phone did not.
+ */
+internal suspend fun applyAutoSwitch(
+    on: Boolean,
+    persist: suspend (Boolean) -> Unit,
+    resolve: suspend (force: Boolean) -> Unit,
+) {
+    persist(on)
+    if (on) resolve(true)
+}
+
+/**
  * What the reader is told when a request fails.
  *
  * A top-level function rather than a method so the rule can be tested without an
@@ -1041,8 +1066,13 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
     fun removeRoute(id: String) = editRoutes { it.remove(id) }
 
     fun setAutoSwitch(on: Boolean) {
-        editRoutes { it.withAutoSwitch(on) }
-        if (on) resolveRoute()
+        viewModelScope.launch {
+            applyAutoSwitch(
+                on = on,
+                persist = { editRoutesNow { b -> b.withAutoSwitch(it) } },
+                resolve = { force -> resolveRoute(force = force) },
+            )
+        }
     }
 
     /**

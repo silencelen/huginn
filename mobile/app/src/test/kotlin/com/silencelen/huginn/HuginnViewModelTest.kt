@@ -23,6 +23,7 @@ import com.silencelen.huginn.ui.HuginnViewModel
 import com.silencelen.huginn.ui.SelectionAction
 import com.silencelen.huginn.ui.SelectionMode
 import com.silencelen.huginn.ui.SelectionStaging
+import com.silencelen.huginn.ui.applyAutoSwitch
 import com.silencelen.huginn.ui.SendQueue
 import com.silencelen.huginn.ui.StreamPicker
 import com.silencelen.huginn.ui.fetchStreamAgents
@@ -474,6 +475,34 @@ class HuginnViewModelTest {
         assertNull("a delivered send never showed one", SendQueue.seed(SendKeysResult(ok = true, delivered = true)))
     }
 
+
+    // ------------------------------------------------ #71 auto-switch ordering
+
+    @Test
+    fun `turning auto-switch on probes only after the new book is persisted`() = runTest {
+        val order = mutableListOf<String>()
+        var forced: Boolean? = null
+        applyAutoSwitch(
+            on = true,
+            // Suspends exactly where the real one does: inside the DataStore
+            // write, before _routeBook is republished.
+            persist = { kotlinx.coroutines.yield(); order += "persist"; },
+            resolve = { force -> order += "resolve"; forced = force },
+        )
+        assertEquals(listOf("persist", "resolve"), order)
+        assertTrue("an unforced resolve on a fresh health map probes nothing", forced == true)
+    }
+
+    @Test
+    fun `turning auto-switch off persists and probes nothing`() = runTest {
+        val order = mutableListOf<String>()
+        applyAutoSwitch(
+            on = false,
+            persist = { order += "persist" },
+            resolve = { order += "resolve" },
+        )
+        assertEquals(listOf("persist"), order)
+    }
 }
 
 /**
@@ -636,4 +665,5 @@ class PastePlanTest {
         assertEquals("pasted.jpg", (out as PasteOutcome.Attach).name)
         assertEquals(8, out.jpeg.size)
     }
+
 }
