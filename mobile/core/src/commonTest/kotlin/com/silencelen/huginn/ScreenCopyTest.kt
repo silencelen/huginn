@@ -110,6 +110,50 @@ class ScreenCopyTest {
         assertTrue(linksOn(null).isEmpty())
     }
 
+    // -------------------------------------------------- escapes on the wire
+
+    /** One ESC byte, spelled out so no test fixture here carries a raw control character. */
+    private val E = "\u001B"
+
+    /**
+     * ⚠ THE PANE ARRIVES AS `capture-pane -e`. Every row of a Claude Code pane
+     * carries SGR bytes and some carry OSC 8 hyperlinks, and :core lost its strip
+     * when TerminalGrid replaced the v1 ANSI renderer — `lib/pane.js` still
+     * documents its own `stripAnsi` as "Mirrors the client's Ansi.strip", which
+     * has not existed for two versions. So "Copied" put escape bytes on the
+     * clipboard: a live pane measured 3462 characters, 36 of them raw ESC, and a
+     * plain search for a run of text that was ON SCREEN did not match it.
+     */
+    @Test
+    fun copyingAStyledPaneDoesNotPutEscapeBytesOnTheClipboard() {
+        val s = screen(
+            80,
+            "$E[38;5;246m╭─ huginn ─╮$E[39m",
+            "$E[1mbuild$E[0m ok",
+        )
+        assertEquals("╭─ huginn ─╮\nbuild ok", screenText(s))
+        assertFalse(screenText(s).contains(E), "no escape byte survives the copy")
+    }
+
+    /**
+     * A REAL capture: the trust dialog's "Security guide" row, byte for byte from
+     * `server/appd/test/fixtures/prompts/trust-dialog-80.txt`. An OSC 8 hyperlink
+     * is `ESC ] 8 ; id ; <uri> ST <label> ESC ] 8 ; ; ST`, and the terminator here
+     * is ST (ESC backslash), not BEL.
+     */
+    @Test
+    fun anOsc8HyperlinkCopiesAsItsLabel() {
+        val row = " $E[38;5;246m$E]8;id=zaxmda;https://code.claude.com/docs/en/security$E\\" +
+            "Security guide$E[39m$E]8;;$E\\"
+        // The leading space is the fixture's own indent: only trailing space goes.
+        assertEquals(" Security guide", screenText(screen(80, row)))
+    }
+
+    @Test
+    fun aScreenOfNothingButStylingHasNothingToCopy() {
+        assertFalse(hasCopyableText(screen(20, "$E[39m", "$E[0m  ")))
+    }
+
     @Test
     fun aPaneWithNoWidthIsCopiedRatherThanRefused() {
         // width 0 should never happen, but a screen that arrived malformed should
