@@ -63,12 +63,26 @@ fun CommandPalette(
     sessions: List<Session>,
     pads: List<com.silencelen.huginn.data.Scratchpad> = emptyList(),
     settings: List<com.silencelen.huginn.settings.SettingsCategory> = emptyList(),
+    projects: List<com.silencelen.huginn.data.ProjectRow> = emptyList(),
+    consoles: List<com.silencelen.huginn.data.Console> = emptyList(),
+    /** What this host offers — `railViews`, so the box and the rail agree. */
+    offered: List<com.silencelen.huginn.desktop.View> = emptyList(),
     onPick: (PaletteItem) -> Unit,
     onDismiss: () -> Unit,
 ) {
     var query by remember { mutableStateOf("") }
     var selected by remember { mutableStateOf(0) }
-    val all = remember(chats, sessions, pads, settings) { paletteItems(chats, sessions, pads, settings) }
+    val all = remember(chats, sessions, pads, settings, projects, consoles, offered) {
+        paletteItems(
+            chats = chats,
+            sessions = sessions,
+            pads = pads,
+            settings = settings,
+            projects = projects,
+            consoles = consoles,
+            offered = offered,
+        )
+    }
     val shown = remember(all, query) { filterPalette(all, query) }
     val focus = remember { FocusRequester() }
     val listState = rememberLazyListState()

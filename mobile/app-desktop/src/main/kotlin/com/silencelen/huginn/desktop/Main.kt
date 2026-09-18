@@ -53,6 +53,7 @@ import com.silencelen.huginn.ui.HeadroomRules
 import com.silencelen.huginn.ui.LocalAttachmentImages
 import com.silencelen.huginn.ui.LocalLinkPeek
 import com.silencelen.huginn.desktop.ui.common.DesktopLinkPeek
+import com.silencelen.huginn.desktop.ui.common.openInBrowser
 import com.silencelen.huginn.desktop.ui.common.rememberLinkUriHandler
 import androidx.compose.ui.platform.LocalUriHandler
 import com.silencelen.huginn.desktop.ui.common.DesktopRowTime
@@ -580,6 +581,15 @@ fun main(args: Array<String>) {
                     shortcut == Shortcut.VIEW_STATUS -> { store.openView(View.STATUS); true }
                     shortcut == Shortcut.VIEW_SETTINGS -> { store.openView(View.SETTINGS); true }
                     shortcut == Shortcut.VIEW_SCRATCHPADS -> { store.openView(View.SCRATCHPADS); true }
+                    // ⚠ GATED ON THE PROBE, exactly as the rail item is. A chord
+                    // that navigated to a pane the rail refuses to offer would be
+                    // the one way in to a screen that can only 404 — and it is
+                    // SWALLOWED either way, because a key that sometimes reaches
+                    // the field behind it is worse than one that does nothing.
+                    shortcut == Shortcut.VIEW_PROJECTS -> {
+                        if (store.projectsAvailable.value == true) store.openView(View.PROJECTS)
+                        true
+                    }
                     // Only where it can actually appear: toggling a panel into a
                     // window with no room for it, or into Settings, is a key that
                     // does nothing and teaches the reader the key is broken.
@@ -744,6 +754,16 @@ fun main(args: Array<String>) {
                                 ),
                                 SettingsSurface.DESKTOP,
                             ),
+                            projects = store.projects.collectAsState().value,
+                            consoles = store.consoles.collectAsState().value,
+                            // The SAME list the rail is drawn from: a palette row
+                            // onto a feature this daemon does not have is the one
+                            // door a reader who cannot find something walks into.
+                            offered = com.silencelen.huginn.desktop.ui.railViews(
+                                store.padsAvailable.collectAsState().value,
+                                store.projectsAvailable.collectAsState().value,
+                                store.consolesAvailable.collectAsState().value,
+                            ),
                             onDismiss = { paletteOpen.value = false },
                             onPick = { item ->
                                 paletteOpen.value = false
@@ -755,6 +775,17 @@ fun main(args: Array<String>) {
                                         store.openView(View.SCRATCHPADS)
                                         scope.launch { store.openPad(item.id) }
                                     }
+                                    is PaletteItem.OpenProject -> store.openProject(item.id)
+                                    // Straight to the browser, not to the pane:
+                                    // the row's whole purpose is the address, and
+                                    // a palette hit that landed on a list the
+                                    // reader then has to search again is a step
+                                    // backwards. A URL that will not open is
+                                    // copied instead of silently doing nothing.
+                                    is PaletteItem.OpenConsole ->
+                                        if (!openInBrowser(item.url)) {
+                                            store.openView(View.CONSOLES)
+                                        }
                                     is PaletteItem.Verb -> when (item.shortcut) {
                                         Shortcut.NEW_ASK -> newChat("ask")
                                         Shortcut.NEW_ACT -> newChat("act")
@@ -765,6 +796,8 @@ fun main(args: Array<String>) {
                                         Shortcut.VIEW_STATUS -> store.openView(View.STATUS)
                                         Shortcut.VIEW_SETTINGS -> store.openView(View.SETTINGS)
                                         Shortcut.VIEW_SCRATCHPADS -> store.openView(View.SCRATCHPADS)
+                                        Shortcut.VIEW_PROJECTS -> store.openView(View.PROJECTS)
+                                        Shortcut.VIEW_CONSOLES -> store.openView(View.CONSOLES)
                                         // Same gate as the chord: the verb is
                                         // offered from everywhere, and it can
                                         // only do anything in a conversation.
