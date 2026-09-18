@@ -8,6 +8,8 @@
 
 const { test } = require('node:test');
 const assert = require('node:assert');
+const fs = require('node:fs');
+const path = require('node:path');
 const t = require('../lib/typing');
 
 // ------------------------------------------------------------------ the caps
@@ -85,8 +87,10 @@ test('isBoundaryRecord accepts system/turn_duration and a turn that died on an a
 test('boundaryFromTail is idle only when the LAST record is the boundary', () => {
   const user = JSON.stringify({ type: 'user', message: { content: 'hi' } });
   const turn = JSON.stringify({ type: 'system', subtype: 'turn_duration', durationMs: 900 });
-  assert.deepEqual(t.boundaryFromTail(`${user}\n${turn}\n`), { idle: true, lastKind: 'system/turn_duration' });
-  assert.deepEqual(t.boundaryFromTail(`${turn}\n${user}\n`), { idle: false, lastKind: 'user' });
+  assert.deepEqual(t.boundaryFromTail(`${user}\n${turn}\n`),
+    { idle: true, lastKind: 'system/turn_duration', unknown: false });
+  assert.deepEqual(t.boundaryFromTail(`${turn}\n${user}\n`),
+    { idle: false, lastKind: 'user', unknown: false });
 });
 
 test('boundaryFromTail ignores attachment records landing after the boundary', () => {
@@ -104,9 +108,10 @@ test('boundaryFromTail tolerates a truncated first line — a tail starts mid-re
 });
 
 test('boundaryFromTail is NOT idle for an empty or unreadable tail', () => {
-  assert.deepEqual(t.boundaryFromTail(''), { idle: false, lastKind: null });
-  assert.deepEqual(t.boundaryFromTail('\n\n  \n'), { idle: false, lastKind: null });
-  assert.deepEqual(t.boundaryFromTail('not json at all\n{oops'), { idle: false, lastKind: null });
+  assert.deepEqual(t.boundaryFromTail(''), { idle: false, lastKind: null, unknown: true });
+  assert.deepEqual(t.boundaryFromTail('\n\n  \n'), { idle: false, lastKind: null, unknown: true });
+  assert.deepEqual(t.boundaryFromTail('not json at all\n{oops'),
+    { idle: false, lastKind: null, unknown: true });
   assert.equal(t.boundaryFromTail(null).idle, false, 'absence is never evidence of idleness');
 });
 
@@ -132,7 +137,8 @@ test('boundaryFromTail reads the last CONVERSATIONAL record, not the last LINE',
   // and were dropped with no word to anyone. Measured live, 2026-09-15.
   const live = [TURN_REC, ...['last-prompt', 'ai-title', 'mode', 'permission-mode', 'atis-latch']
     .map((type) => JSON.stringify({ type }))].join('\n') + '\n';
-  assert.deepEqual(t.boundaryFromTail(live), { idle: true, lastKind: 'system/turn_duration' });
+  assert.deepEqual(t.boundaryFromTail(live),
+    { idle: true, lastKind: 'system/turn_duration', unknown: false });
 });
 
 test('every bookkeeping record type is invisible to the gate, in any order', () => {
@@ -149,7 +155,8 @@ test('a session mid-turn is still NOT idle, whatever bookkeeping lands after it'
   // running turn into an open gate. A mid-turn assistant record is a tool call
   // (`stop_reason: "tool_use"`), and that is what the gate must hold on.
   const working = JSON.stringify({ type: 'assistant', message: { stop_reason: 'tool_use', content: [] } });
-  assert.deepEqual(t.boundaryFromTail(`${TURN_REC}\n${working}\n`), { idle: false, lastKind: 'assistant' });
+  assert.deepEqual(t.boundaryFromTail(`${TURN_REC}\n${working}\n`),
+    { idle: false, lastKind: 'assistant', unknown: false });
   const withTail = [TURN_REC, working, ...BOOKKEEPING].join('\n');
   assert.equal(t.boundaryFromTail(withTail).idle, false, 'bookkeeping cannot open a gate by itself');
   assert.equal(t.boundaryFromTail(withTail).lastKind, 'assistant');
@@ -192,6 +199,34 @@ test('isConversationalRecord is the whole filter, stated once', () => {
   assert.equal(t.isConversationalRecord({}), false);
 });
 
+test('boundaryFromTail says UNKNOWN when the window holds nothing conversational (#5)', () => {
+  // ⚠ A 64 KB WINDOW FULL OF BOOKKEEPING. The 9.2% case measured across this
+  // host's own transcripts is not a huge final MESSAGE — it is a large
+  // NON-conversational record appended after the turn ended (a 94 KB
+  // `attachment` was the one caught in the act): the post-boundary lines inside
+  // the window parse fine but are not conversational, and the fragment of the
+  // big record does not parse at all. "No boundary" and "I could not see the
+  // boundary" then looked identical, and every AUTOMATED send blocked on 'turn'
+  // and was dropped as a timeout ten minutes later.
+  const bookkeeping = JSON.stringify({ type: 'system', subtype: 'ai_title', text: 'x' });
+  const fragment = '{"type":"attachment","content":"AAAA';   // a torn first line
+  const blind = t.boundaryFromTail(`${fragment}\n${bookkeeping}\n`);
+  assert.equal(blind.idle, false);
+  assert.equal(blind.lastKind, null);
+  assert.equal(blind.unknown, true, 'the caller has to be able to widen the window');
+
+  // A window that DOES hold a conversational record is never unknown, whichever
+  // way it decides.
+  const ended = JSON.stringify({ type: 'assistant', message: { stop_reason: 'end_turn', content: [] } });
+  const mid = JSON.stringify({ type: 'user', message: { content: 'go' } });
+  assert.deepEqual(t.boundaryFromTail(`${ended}\n${bookkeeping}\n`),
+    { idle: true, lastKind: 'assistant', unknown: false });
+  assert.deepEqual(t.boundaryFromTail(`${mid}\n`),
+    { idle: false, lastKind: 'user', unknown: false });
+  // An EMPTY tail is unknown too — an absence is not an observation.
+  assert.equal(t.boundaryFromTail('').unknown, true);
+});
+
 // ------------------------------------------ the hook's state file as a gate
 
 test('stateVerdict releases on an idle state stamped AFTER the send was queued', () => {
@@ -206,6 +241,27 @@ test('stateVerdict releases on an idle state stamped AFTER the send was queued',
   assert.equal(t.stateVerdict({ state: 'running', stateSince: sec + 2 }, at), null);
   assert.equal(t.stateVerdict(null, at), null);
   assert.equal(t.stateVerdict({ state: 'idle' }, at), null, 'no timestamp is no evidence');
+});
+
+test('stateVerdict reads a MILLISECOND stamp exactly (#7)', () => {
+  // ⚠ THE 999 ms THAT COULD NOT BE CROSSED. The hook stamped `ts` in seconds and
+  // this compared `sec * 1000 > at` against a millisecond `at`, so an idle
+  // written in the SAME wall-clock second as the enqueue could never release it
+  // — and when the transcript gate was blind at the same time (a final record
+  // larger than the 64 KB window), the automated send was dropped as 'timeout'
+  // ten minutes later. The hook writes milliseconds now; the unit is read off
+  // the magnitude so a state file written by an older hook still works.
+  const at = 1_757_900_000_500;                       // queued mid-second
+  assert.equal(t.stateVerdict({ state: 'idle', stateSinceMs: at + 1 }, at), 'release',
+    'one millisecond after the send was queued is after the send was queued');
+  assert.equal(t.stateVerdict({ state: 'idle', stateSinceMs: at - 1 }, at), null);
+  assert.equal(t.stateVerdict({ state: 'idle', stateSince: at + 1 }, at), 'release',
+    'a millisecond stamp arriving as stateSince is read as milliseconds');
+  // A legacy SECONDS stamp keeps the old, deliberately conservative reading:
+  // it may hold wrongly, it may never release wrongly.
+  const sec = Math.floor(at / 1000);
+  assert.equal(t.stateVerdict({ state: 'idle', stateSince: sec }, at), null);
+  assert.equal(t.stateVerdict({ state: 'idle', stateSince: sec + 1 }, at), 'release');
 });
 
 test('stateVerdict HOLDS while a question is waiting, however long it takes', () => {
@@ -329,6 +385,89 @@ test('a numbered LIST in the pane is not a dialog — only a cursored row is', (
   // it blocks forever on a dialog that is not there.
   const pane = ['Three things to do:', '1. commit', '2. push', '3. sleep', '────', '❯ '];
   assert.deepEqual(t.paneReadyForInput(pane), { ready: true, why: null });
+});
+
+// ⚠ #1 + #13, the two holes the 3.x modal gate had at opposite ends of the
+// pane. One numbered line at the bottom is a PERSON TYPING; a dialog taller
+// than the old 20-row lookback is a question this gate could not see at all.
+// Both are asserted against the committed captures rather than hand-written
+// panes, because both were argued from hand-written panes and both were wrong.
+
+const FIXTURE_DIR = path.join(__dirname, 'fixtures', 'prompts');
+function fixturePane(file, rows = null) {
+  const lines = fs.readFileSync(path.join(FIXTURE_DIR, file), 'utf8').replace(/\n$/, '').split('\n');
+  return rows == null ? lines : lines.slice(-rows);
+}
+
+test('composer text that STARTS with a number is not a dialog (#1)', () => {
+  // The owner typed "1. rebuild the index" and has not pressed Enter. The old
+  // rule read that composer line as a selector row and held every send into the
+  // session forever, with the client saying "a dialog is open on the screen"
+  // about an idle pane. A dialog is never one numbered line.
+  const pane = ['❯ 1. rebuild the index', '────', '  [dev] Fable 5.1 · ctx 43%'];
+  assert.notEqual(t.paneReadyForInput(pane).why, 'modal');
+  assert.equal(t.paneBlocks(t.paneReadyForInput(pane).why), false, 'nothing is in the way');
+  for (const line of ['❯ 2) ship it', '❯ 12. the twelfth thing', '> 1. a quoted list item']) {
+    assert.equal(t.paneBlocks(t.paneReadyForInput([line, '────', '  [dev] Fable 5.1']).why), false, line);
+  }
+});
+
+test('a tall dialog is still a modal at any pane height (#13)', () => {
+  // ask-tall-desc-64: the cursored row is line 19 of 44, so at DIALOG_LOOKBACK=20
+  // it fell outside the scan and a person's message was pasted + Enter into a
+  // live AskUserQuestion. At 24 rows the cursored row is not even captured —
+  // the selector's own footer is the only thing left to go on.
+  for (const rows of [null, 60, 44, 30, 24]) {
+    const v = t.paneReadyForInput(fixturePane('ask-tall-desc-64.txt', rows));
+    assert.equal(v.why, 'modal', `rows=${rows}`);
+  }
+});
+
+test('every committed dialog capture still reads as a dialog', () => {
+  // The whole point of widening the scan is that nothing NARROWS: sweep the
+  // fixture dir so a future tightening cannot quietly open one of these back up.
+  const expect = {
+    'ask-2q-tab1-80.txt': 'modal', 'ask-multi-80.txt': 'modal',
+    'ask-multi-review-80.txt': 'modal', 'ask-multi-toggled-80.txt': 'modal',
+    'ask-review-80.txt': 'modal', 'ask-simple-80.txt': 'modal',
+    'ask-tall-desc-64.txt': 'modal', 'ask-wrapped-desc-46.txt': 'modal',
+    'ask-wrapped-desc-80.txt': 'modal', 'fable-consent-80.txt': 'modal',
+    'model-picker-80.txt': 'modal', 'plan-approval-80.txt': 'modal',
+    'plan-approval-with-task-80.txt': 'modal', 'trust-dialog-80.txt': 'trust',
+  };
+  for (const [file, why] of Object.entries(expect)) {
+    assert.equal(t.paneReadyForInput(fixturePane(file)).why, why, file);
+  }
+  // …and the two captures that are NOT a question stay unblocked.
+  for (const file of ['statusline-manual-80.txt', 'statusline-plan-hint.txt']) {
+    assert.equal(t.paneBlocks(t.paneReadyForInput(fixturePane(file)).why), false, file);
+  }
+});
+
+test('a real composer capture holding a numbered line is not a dialog (#1)', () => {
+  // statusline-manual-80 is a live composer pane, caret + NBSP, captured off
+  // this host. Typing into it is what a person does; it must not arm the gate.
+  const pane = fixturePane('statusline-manual-80.txt');
+  // The LAST caret is the live composer; the ones above it are this pane's own
+  // history, where Claude Code echoes each submitted message with the same glyph.
+  let caret = -1;
+  for (let i = pane.length - 1; i >= 0; i--) { if (/\u276F/.test(pane[i])) { caret = i; break; } }
+  assert.ok(caret >= 0, 'the fixture has a composer caret');
+  pane[caret] = pane[caret].replace(/\u276F(\s*)$/, '\u276F$11. rebuild the index');
+  assert.match(pane[caret], /1\. rebuild/, 'the composer now holds a numbered line');
+  assert.equal(t.paneBlocks(t.paneReadyForInput(pane).why), false);
+});
+
+test('the attention hold on a human send is pane-backed and bounded (#13)', () => {
+  assert.equal(t.humanAttentionHold({ state: 'hold' }), true, 'no pane evidence: the hook wins');
+  assert.equal(t.humanAttentionHold({ state: 'hold', composerEmpty: false }), true,
+    'a composer holding something is what a dialog\'s cursored row looks like');
+  assert.equal(t.humanAttentionHold({ state: 'hold', composerEmpty: true }), false,
+    'an EMPTY composer is proof the question is gone, whatever the state file says');
+  assert.equal(t.humanAttentionHold({ state: 'hold', waitedMs: t.ATTENTION_HOLD_MAX_MS }), false,
+    'a hold with no end is the same bug as a message that vanishes');
+  assert.equal(t.humanAttentionHold({ state: null }), false);
+  assert.equal(t.humanAttentionHold({ state: 'release' }), false);
 });
 
 test('only a dialog BLOCKS a send: busy is not a liveness verdict', () => {
