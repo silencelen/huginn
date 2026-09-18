@@ -84,6 +84,78 @@ function _Huginn-AppdError {
   return ''
 }
 
+# Fetch ONE client file: GitHub via gh, else the pinned mirror via scp, validated
+# before it is installed. $true when $Dest now holds the file.
+#
+# ⚠ THREE THINGS THIS GETS RIGHT THAT THE TWO INLINE COPIES DID NOT.
+#
+# (1) ORDER. `node --check` used to run AFTER the scp block, so a FAILED gh
+#     fetch whose error body happened to be non-empty set $got and SKIPPED the
+#     mirror entirely - `gh api` prints its error JSON to STDOUT (bad token =
+#     112 bytes, renamed path = 127 bytes, both exit 1). The check then cleared
+#     $got and the user was told "gh and the mirror both failed" about a mirror
+#     that was never contacted. Each source is now validated inside its own
+#     branch, so a bad body from one really does fall through to the other.
+#
+# (2) EXIT STATUS. try/catch cannot catch a native command's failure, so gh's
+#     $LASTEXITCODE is what decides. A non-empty ERROR BODY is still non-empty;
+#     length alone was never a gate. `huginn update` already knew this - these
+#     two branches regressed against their own sibling in this file.
+#
+# (3) ENCODING. `>` is Out-File, and its WINDOWS POWERSHELL 5.1 default is
+#     -Encoding unicode: UTF-16LE with a BOM, which node cannot parse. Combined
+#     with (1) that made `huginn device on|enrol|update` and `huginn local
+#     on|update|plan` fail 100% of the time on stock 5.1 with gh installed and
+#     authenticated, mirror never tried. Set-Content writes the bytes instead.
+#     UTF-8 and not -Encoding ascii (which `huginn update` may use, because
+#     huginn.ps1 IS pure ASCII): these runners are not - they carry ⚠ and → in
+#     strings a person reads - so the console is also asked to hand us UTF-8
+#     rather than the OEM code page. Node strips the BOM a 5.1 Set-Content adds.
+function _Huginn-FetchFile {
+  param([string]$RepoPath, [string]$MirrorPath, [string]$Dest, [string]$Label, [string]$UpdateHost)
+  $tmp = "$Dest.tmp.js"      # .js: modern node refuses to PARSE an unknown extension
+  $why = @()
+  $got = $false
+  if (Get-Command gh -ErrorAction SilentlyContinue) {
+    Remove-Item -Force -ErrorAction SilentlyContinue $tmp
+    $enc = $null
+    try { $enc = [Console]::OutputEncoding; [Console]::OutputEncoding = New-Object Text.UTF8Encoding $false } catch {}
+    gh api "repos/$script:HUGINN_REPO/contents/$RepoPath" -H "Accept: application/vnd.github.raw" 2>$null |
+      Set-Content -Path $tmp -Encoding utf8
+    $rc = $LASTEXITCODE
+    if ($enc) { try { [Console]::OutputEncoding = $enc } catch {} }
+    if ($rc -ne 0) { $why += "gh exited $rc" }
+    elseif (-not (Test-Path $tmp) -or (Get-Item $tmp).Length -eq 0) { $why += 'gh returned nothing' }
+    else {
+      node --check $tmp 2>$null | Out-Null
+      if ($LASTEXITCODE -eq 0) { $got = $true } else { $why += 'what gh returned is not valid JavaScript' }
+    }
+  } else { $why += 'gh is not installed' }
+  if (-not $got) {
+    # PINNED, exactly like `huginn update` and for the same reason: this
+    # downloads code a service will then run in a loop, so the host it comes
+    # from is a trust root, never $HUGINN_HOST.
+    Remove-Item -Force -ErrorAction SilentlyContinue $tmp
+    scp -o BatchMode=yes "${UpdateHost}:$MirrorPath" $tmp 2>$null | Out-Null
+    $rc = $LASTEXITCODE
+    if ($rc -ne 0) { $why += "scp from $UpdateHost exited $rc" }
+    elseif (-not (Test-Path $tmp) -or (Get-Item $tmp).Length -eq 0) { $why += "the $UpdateHost mirror returned nothing" }
+    else {
+      node --check $tmp 2>$null | Out-Null
+      if ($LASTEXITCODE -eq 0) { $got = $true } else { $why += "what the $UpdateHost mirror returned is not valid JavaScript" }
+    }
+  }
+  if ($got) {
+    # Validated BEFORE installing: a truncated download that a service then
+    # restarts every ten seconds is worse than no runner at all.
+    Move-Item -Force $tmp $Dest
+    return $true
+  }
+  Remove-Item -Force -ErrorAction SilentlyContinue $tmp
+  Write-Host ("{0}: could not fetch {1} ({2})" -f $Label, (Split-Path -Leaf $RepoPath), ($why -join '; '))
+  return $false
+}
+
 # --- desktop download links ---
 # The Compose desktop client ships as a PUBLIC GitHub release (tag desktop-v<ver>),
 # and that is also where the installed app's own self-updater fetches from - so the
@@ -584,27 +656,10 @@ function huginn {
       New-Item -ItemType Directory -Force -Path (Split-Path $runner) | Out-Null
       New-Item -ItemType Directory -Force -Path $dir | Out-Null
       if ($sub -eq 'update' -or -not (Test-Path $runner)) {
-        # PINNED, exactly like `huginn update` and for the same reason: this
-        # downloads code a service will then run in a loop, so the host it comes
-        # from is a trust root, never $HUGINN_HOST.
         $uh = if ($env:HUGINN_UPDATE_HOST) { $env:HUGINN_UPDATE_HOST } else { $script:HUGINN_UPDATE_HOST_DEFAULT }
-        $tmp = "$runner.tmp.js"
-        $got = $false
-        if (Get-Command gh -ErrorAction SilentlyContinue) {
-          gh api "repos/$script:HUGINN_REPO/contents/client/huginn-device" -H "Accept: application/vnd.github.raw" > $tmp 2>$null
-          if ((Test-Path $tmp) -and (Get-Item $tmp).Length -gt 0) { $got = $true }
-        }
-        if (-not $got) {
-          scp -o BatchMode=yes "${uh}:/usr/local/share/huginn-cli/huginn-device" $tmp 2>$null
-          if ((Test-Path $tmp) -and (Get-Item $tmp).Length -gt 0) { $got = $true }
-        }
-        # Validate BEFORE installing: a truncated download that a service then
-        # restarts every ten seconds is worse than no runner at all.
-        if ($got) { node --check $tmp 2>$null; if ($LASTEXITCODE -ne 0) { $got = $false } }
-        if ($got) { Move-Item -Force $tmp $runner } else {
-          Remove-Item -Force -ErrorAction SilentlyContinue $tmp
-          Write-Host "huginn device: could not fetch the runner (gh and the mirror both failed)"
-        }
+        _Huginn-FetchFile -RepoPath 'client/huginn-device' `
+          -MirrorPath '/usr/local/share/huginn-cli/huginn-device' `
+          -Dest $runner -Label 'huginn device' -UpdateHost $uh | Out-Null
       }
       if ($sub -eq 'update') {
         if (Test-Path $runner) { Write-Host "huginn device: runner is now $(node $runner version)" }
@@ -668,23 +723,10 @@ function huginn {
       foreach ($f in 'huginn-local', 'huginn-llm-shim', 'huginn-device') {
         $dest = Join-Path $HOME ".huginn/$f"
         if ($sub -eq 'update' -or -not (Test-Path $dest)) {
-          # PINNED, like the device runner: this downloads code a service will
-          # run in a loop, so the source is a trust root. Never $HUGINN_HOST.
           $uh = if ($env:HUGINN_UPDATE_HOST) { $env:HUGINN_UPDATE_HOST } else { $script:HUGINN_UPDATE_HOST_DEFAULT }
-          $tmp = "$dest.tmp.js"; $got = $false
-          if (Get-Command gh -ErrorAction SilentlyContinue) {
-            gh api "repos/$script:HUGINN_REPO/contents/client/$f" -H "Accept: application/vnd.github.raw" > $tmp 2>$null
-            if ((Test-Path $tmp) -and (Get-Item $tmp).Length -gt 0) { $got = $true }
-          }
-          if (-not $got) {
-            scp -o BatchMode=yes "${uh}:/usr/local/share/huginn-cli/$f" $tmp 2>$null
-            if ((Test-Path $tmp) -and (Get-Item $tmp).Length -gt 0) { $got = $true }
-          }
-          if ($got) { node --check $tmp 2>$null; if ($LASTEXITCODE -ne 0) { $got = $false } }
-          if ($got) { Move-Item -Force $tmp $dest } else {
-            Remove-Item -Force -ErrorAction SilentlyContinue $tmp
-            Write-Host "huginn local: could not fetch $f (gh and the mirror both failed)"; return
-          }
+          if (-not (_Huginn-FetchFile -RepoPath "client/$f" `
+                      -MirrorPath "/usr/local/share/huginn-cli/$f" `
+                      -Dest $dest -Label 'huginn local' -UpdateHost $uh)) { return }
         }
       }
       if ($sub -eq 'plan') { node $mgr plan @rest; return }
