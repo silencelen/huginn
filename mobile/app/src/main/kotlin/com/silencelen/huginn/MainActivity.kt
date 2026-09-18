@@ -1146,7 +1146,7 @@ fun HuginnApp(
             val stillHere = rememberStillHere()
             DisposableEffect(id) {
                 onDispose {
-                    vm.detachStream(); vm.clearSuggestions()
+                    vm.detachStream(id); vm.clearSuggestions()
                     // A photo staged for THIS chat must not silently ride the next
                     // screen — but only this chat's own claim is cleared, so a share
                     // staged for the DESTINATION while navigating there survives
