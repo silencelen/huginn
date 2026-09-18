@@ -12,11 +12,19 @@ import com.silencelen.huginn.appVersion
 import com.silencelen.huginn.data.Account
 import com.silencelen.huginn.data.ArchivedSession
 import com.silencelen.huginn.data.Chat
+import com.silencelen.huginn.data.Console
+import com.silencelen.huginn.data.ConsoleApproval
 import com.silencelen.huginn.data.ChatDetail
 import com.silencelen.huginn.data.ChatEvent
 import com.silencelen.huginn.data.HuginnClient
 import com.silencelen.huginn.data.ModelChoice
 import com.silencelen.huginn.data.PolishResult
+import com.silencelen.huginn.data.Project
+import com.silencelen.huginn.data.ProjectDashboard
+import com.silencelen.huginn.data.ProjectDetail
+import com.silencelen.huginn.data.ProjectLive
+import com.silencelen.huginn.data.ProjectManifest
+import com.silencelen.huginn.data.ProjectRow
 import com.silencelen.huginn.ui.ModelLabels
 import com.silencelen.huginn.data.Screen
 import com.silencelen.huginn.data.Session
@@ -1600,6 +1608,12 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
             // permanently reports a missing feature as a fault is a status bar
             // people stop reading.
             landArchives()
+            // The projects and consoles probes ride the same once-per-connection
+            // refresh, for the reason the two above do: it is the one place that
+            // runs once per connection, which is exactly the cadence feature
+            // detection wants. A 404 at either turns every way in off.
+            landProjects()
+            landConsoles()
             _loading.value = false
         }
     }
@@ -1966,6 +1980,387 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
     fun stagePadInChat(id: String, text: String) = appendToDraft(chatDraftKey(id), text)
 
     fun stagePadInSession(name: String, text: String) = appendToDraft(sessionDraftKey(name), text)
+
+    // ------------------------------------------------- projects & consoles
+
+    private val _projects = MutableStateFlow<List<ProjectRow>>(emptyList())
+    val projects: StateFlow<List<ProjectRow>> = _projects.asStateFlow()
+
+    /**
+     * Whether this daemon HAS projects. Null until the first probe answers.
+     *
+     * FEATURE DETECTION rather than version parsing — the scratchpads precedent,
+     * and `HuginnClient.projects()` already turns the 404 into a null rather than
+     * a throw. False hides EVERY way in at once: see [projectEntries].
+     */
+    private val _projectsAvailable = MutableStateFlow<Boolean?>(null)
+    val projectsAvailable: StateFlow<Boolean?> = _projectsAvailable.asStateFlow()
+
+    /**
+     * Each project's live members, by project id.
+     *
+     * ⚠ THE LIST ROUTE DOES NOT CARRY MEMBERS, AND THAT IS NOT AN OMISSION. A row
+     * carries the daemon's own rolled-up counts; who those members ARE comes from
+     * the per-project GET, one request each. So this map fills in lazily — when a
+     * disclosure opens, and for whichever project the sessions list is grouping —
+     * and a missing entry means "not fetched", which the tree draws as
+     * `PROJECT_MEMBERS_LOADING` rather than as an empty cluster.
+     */
+    private val _projectMembers = MutableStateFlow<Map<String, List<ProjectLive>>>(emptyMap())
+    val projectMembers: StateFlow<Map<String, List<ProjectLive>>> = _projectMembers.asStateFlow()
+
+    private val _projectDetail = MutableStateFlow<ProjectDetail?>(null)
+    val projectDetail: StateFlow<ProjectDetail?> = _projectDetail.asStateFlow()
+
+    private val _projectDashboard = MutableStateFlow<ProjectDashboard?>(null)
+    val projectDashboard: StateFlow<ProjectDashboard?> = _projectDashboard.asStateFlow()
+
+    /**
+     * The daemon's last refusal about a project, VERBATIM.
+     *
+     * ⚠ NOT A TOAST. The three that matter — a working directory Claude Code has
+     * not been trusted in, a slug already taken, and the headroom arbiter's STOP
+     * sentinel — are each a sentence whose whole value is the fix it names, and a
+     * toast takes it away after four seconds from a person who is mid-form. It
+     * lands under the sheet's fields and on the manifest card instead, with
+     * everything typed still in place.
+     */
+    private val _projectRefusal = MutableStateFlow<String?>(null)
+    val projectRefusal: StateFlow<String?> = _projectRefusal.asStateFlow()
+    fun clearProjectRefusal() { _projectRefusal.value = null }
+
+    /** A create or a spawn is in the air, so the control cannot be pressed twice. */
+    private val _projectBusy = MutableStateFlow(false)
+    val projectBusy: StateFlow<Boolean> = _projectBusy.asStateFlow()
+
+    private val _consoles = MutableStateFlow<List<Console>>(emptyList())
+    val consoles: StateFlow<List<Console>> = _consoles.asStateFlow()
+
+    private val _consoleApproval = MutableStateFlow<ConsoleApproval?>(null)
+    val consoleApproval: StateFlow<ConsoleApproval?> = _consoleApproval.asStateFlow()
+
+    /** Whether this daemon HAS consoles. Same probe contract as projects. */
+    private val _consolesAvailable = MutableStateFlow<Boolean?>(null)
+    val consolesAvailable: StateFlow<Boolean?> = _consolesAvailable.asStateFlow()
+
+    /**
+     * The project list and the consoles registry, fetched once per connection.
+     *
+     * Both are the FEATURE PROBE, which is why they ride the app-wide refresh: it
+     * is the one thing that runs once per connection, which is exactly the cadence
+     * feature detection wants.
+     */
+    private suspend fun landProjects() {
+        runCatching { client.projects() }
+            .onSuccess { list ->
+                if (list == null) { _projectsAvailable.value = false; return@onSuccess }
+                _projectsAvailable.value = true
+                _projects.value = ProjectRules.orderedProjects(list.projects)
+                // Membership for projects that are GONE goes with them: a map that
+                // kept them would group a session under a heading the tree no
+                // longer draws.
+                val live = list.projects.map { it.id }.toSet()
+                _projectMembers.value = _projectMembers.value.filterKeys { it in live }
+            }
+    }
+
+    private suspend fun landConsoles() {
+        runCatching { client.consoles() }
+            .onSuccess { list ->
+                if (list == null) { _consolesAvailable.value = false; return@onSuccess }
+                _consolesAvailable.value = true
+                _consoles.value = list.consoles
+                _consoleApproval.value = list.approval
+            }
+    }
+
+    fun refreshProjects() {
+        viewModelScope.launch { awaitReady(); landProjects() }
+    }
+
+    fun refreshConsoles() {
+        viewModelScope.launch { awaitReady(); landConsoles() }
+    }
+
+    private var projectsPollJob: Job? = null
+
+    /** Live while the Projects list is on screen. Ten seconds: a cluster changes at
+     *  the speed somebody presses something, and the rollups are the daemon's. */
+    fun startProjectsPolling() {
+        projectsPollJob?.cancel()
+        projectsPollJob = viewModelScope.launch {
+            awaitReady()
+            while (isActive) {
+                landProjects()
+                delay(10_000)
+            }
+        }
+    }
+
+    fun stopProjectsPolling() {
+        projectsPollJob?.cancel()
+        projectsPollJob = null
+    }
+
+    /**
+     * One project's record, row and live members.
+     *
+     * Feeds three surfaces from one request: the dashboard's header, the manifest
+     * card, and the `live[]` the sessions list groups by. A second route for the
+     * membership alone would be a second thing to keep in step.
+     */
+    fun openProject(id: String) {
+        viewModelScope.launch {
+            awaitReady()
+            runCatching { client.project(id) }
+                .onSuccess { landDetail(it) }
+                .onFailure { if (it !is HuginnClient.HuginnException || it.code != 404) _toast.value = errText(it) }
+        }
+    }
+
+    private fun landDetail(detail: ProjectDetail) {
+        _projectDetail.value = detail
+        _projectMembers.value = _projectMembers.value + (detail.project.id to detail.live)
+        detail.row?.let { row ->
+            _projects.value = ProjectRules.orderedProjects(
+                _projects.value.map { if (it.id == row.id) row else it }
+                    .let { if (it.none { p -> p.id == row.id }) it + row else it },
+            )
+        }
+    }
+
+    /** The members of one project, without disturbing whichever project is open. */
+    fun fetchProjectMembers(id: String) {
+        viewModelScope.launch {
+            awaitReady()
+            runCatching { client.project(id) }
+                .onSuccess { d ->
+                    _projectMembers.value = _projectMembers.value + (id to d.live)
+                    if (_projectDetail.value?.project?.id == id) _projectDetail.value = d
+                }
+        }
+    }
+
+    private var dashboardJob: Job? = null
+
+    /**
+     * The dashboard, while it is on screen.
+     *
+     * ⚠ THE ANSWER IS ONLY PUBLISHED WHEN IT IS NEW. The daemon sums up to twelve
+     * session overviews per tick and stamps the answer with `generatedAt`; an
+     * answer carrying the stamp already on screen is the same answer, and pushing
+     * it into the flow would redraw a table of twelve rows of identical numbers
+     * every five seconds for as long as anybody reads it. See [DashboardCursor].
+     */
+    fun startDashboardPolling(id: String) {
+        dashboardJob?.cancel()
+        val cursor = DashboardCursor()
+        _projectDashboard.value = null
+        dashboardJob = viewModelScope.launch {
+            awaitReady()
+            while (isActive) {
+                runCatching { client.projectDashboard(id) }
+                    .onSuccess { if (cursor.accept(it)) _projectDashboard.value = it }
+                delay(5_000)
+            }
+        }
+    }
+
+    fun stopDashboardPolling() {
+        dashboardJob?.cancel()
+        dashboardJob = null
+    }
+
+    /**
+     * Starts a project: the daemon launches its lead and types the brief into it.
+     *
+     * ⚠ THE 409 IS AN ANSWER AND IT IS KEPT WHOLE. An untrusted `cwd` comes back
+     * as the daemon's own sentence naming the fix, and it belongs under the field
+     * that caused it — not in a toast and not summarised.
+     */
+    fun createProject(name: String, kind: String, brief: String, cwd: String?, onCreated: (Project) -> Unit = {}) {
+        viewModelScope.launch {
+            awaitReady()
+            _projectBusy.value = true
+            _projectRefusal.value = null
+            runCatching { client.createProject(name, kind, brief, cwd) }
+                .onSuccess { made ->
+                    val p = made.project
+                    if (p == null) { _projectRefusal.value = made.refusal; return@onSuccess }
+                    refreshProjects()
+                    onCreated(p)
+                }
+                .onFailure { _toast.value = errText(it) }
+            _projectBusy.value = false
+        }
+    }
+
+    /**
+     * Creates the members the owner approved.
+     *
+     * ⚠⚠ HTTP 200 IS NOT THE VERDICT. Spawning is a loop over tmux: the second of
+     * three roles failing does not un-spawn the first, so the daemon carries on
+     * and answers with both lists. `ok:false` here is the ORDINARY partial case
+     * and it is reported per role, in the daemon's own words — a client that
+     * collapsed it to "failed" would lose which role to retry.
+     */
+    fun spawnProject(id: String, manifestRev: Int) {
+        viewModelScope.launch {
+            awaitReady()
+            _projectBusy.value = true
+            _projectRefusal.value = null
+            runCatching { client.spawnProject(id, manifestRev) }
+                .onSuccess { outcome ->
+                    if (outcome.refusal != null) {
+                        // The STOP sentinel and the stale rev both arrive here,
+                        // and both are states of the house rather than faults.
+                        _projectRefusal.value = outcome.refusal
+                    } else outcome.result?.let { r ->
+                        _toast.value = (listOf(ProjectRules.spawnWords(r)) + ProjectRules.spawnFailures(r))
+                            .joinToString(" · ")
+                    }
+                    openProject(id)
+                    refreshProjects()
+                }
+                .onFailure { _toast.value = errText(it) }
+            _projectBusy.value = false
+        }
+    }
+
+    fun discardProposal(id: String) {
+        viewModelScope.launch {
+            awaitReady()
+            _projectRefusal.value = null
+            runCatching { client.discardProposal(id) }
+                .onSuccess { openProject(id); refreshProjects() }
+                .onFailure { _toast.value = errText(it) }
+        }
+    }
+
+    /**
+     * Saves an edited proposal.
+     *
+     * Rev-guarded like every other edit on this daemon, and a conflict is ADOPTED
+     * rather than raised: the other client having saved first is the ordinary
+     * outcome of two devices on one host, and it arrives carrying the project as
+     * it now stands.
+     */
+    fun saveProjectManifest(id: String, rev: Int, manifest: ProjectManifest) {
+        viewModelScope.launch {
+            awaitReady()
+            runCatching { client.saveProject(id, rev, manifest = manifest) }
+                .onSuccess { saved ->
+                    if (saved.conflict) _toast.value = "That proposal changed on the host — showing the current one."
+                    saved.refusal?.let { _projectRefusal.value = it }
+                    openProject(id)
+                    refreshProjects()
+                }
+                .onFailure { _toast.value = errText(it) }
+        }
+    }
+
+    /**
+     * Forgets a project, and ends its sessions only when asked.
+     *
+     * [end] is `graceful`, `now`, or null for neither. Null is the default at the
+     * wire too: a delete that silently killed twelve live sessions is not a delete
+     * anybody meant.
+     */
+    fun deleteProject(id: String, end: String? = null) {
+        viewModelScope.launch {
+            awaitReady()
+            runCatching { client.deleteProject(id, end) }
+                .onSuccess { done ->
+                    if (_projectDetail.value?.project?.id == id) _projectDetail.value = null
+                    _projectMembers.value = _projectMembers.value - id
+                    _toast.value = if (done.ended.isEmpty()) "Project removed"
+                    else "Project removed · ended ${done.ended.size}"
+                    refreshProjects()
+                }
+                .onFailure { _toast.value = errText(it) }
+        }
+    }
+
+    /** Types a line into one member, from another. NOT peer messaging — see the client. */
+    fun messageProject(id: String, from: String, to: String, text: String) {
+        viewModelScope.launch {
+            awaitReady()
+            runCatching { client.messageProject(id, from, to, text) }
+                .onSuccess { r ->
+                    _toast.value = when {
+                        r.dropped != null -> "Not delivered: ${r.dropped}"
+                        r.delivered -> "Sent to ${r.to}"
+                        else -> "Queued for ${r.to}"
+                    }
+                }
+                .onFailure { _toast.value = errText(it) }
+        }
+    }
+
+    private var consolesPollJob: Job? = null
+
+    /** Live while a consoles surface is on screen. The probe itself is the host's,
+     *  memoised there, so this is only how often the verdict is collected. */
+    fun startConsolesPolling() {
+        consolesPollJob?.cancel()
+        consolesPollJob = viewModelScope.launch {
+            awaitReady()
+            while (isActive) {
+                landConsoles()
+                delay(15_000)
+            }
+        }
+    }
+
+    fun stopConsolesPolling() {
+        consolesPollJob?.cancel()
+        consolesPollJob = null
+    }
+
+    /** Probes one console now, from the host, and lands the refreshed row. */
+    fun probeConsole(id: String) {
+        viewModelScope.launch {
+            awaitReady()
+            runCatching { client.probeConsole(id) }
+                .onSuccess { row -> _consoles.value = _consoles.value.map { if (it.id == row.id) row else it } }
+                .onFailure { _toast.value = errText(it) }
+        }
+    }
+
+    /**
+     * Adds or edits a console. [id] null is a new one.
+     *
+     * A version conflict is adopted, like every other rev-guarded edit here; a
+     * refused ADDRESS is a refusal of the request and says so.
+     */
+    fun saveConsole(id: String?, version: Int, name: String, url: String, notes: String?) {
+        viewModelScope.launch {
+            awaitReady()
+            if (id == null) {
+                runCatching { client.createConsole(name, url, notes = notes) }
+                    .onSuccess { refreshConsoles() }
+                    .onFailure { _toast.value = errText(it) }
+            } else {
+                runCatching { client.saveConsole(id, version, name = name, url = url, notes = notes) }
+                    .onSuccess { saved ->
+                        if (saved.conflict) {
+                            _toast.value = saved.refusal ?: "That console changed on the host — showing the current one."
+                        }
+                        refreshConsoles()
+                    }
+                    .onFailure { _toast.value = errText(it) }
+            }
+        }
+    }
+
+    fun deleteConsole(id: String) {
+        viewModelScope.launch {
+            awaitReady()
+            runCatching { client.deleteConsole(id) }
+                .onSuccess { _consoles.value = _consoles.value.filterNot { it.id == id }; refreshConsoles() }
+                .onFailure { _toast.value = errText(it) }
+        }
+    }
 
     /** Read once when the new-chat dialog opens, so a machine enrolled since the
      *  last app-wide refresh is actually offerable. */

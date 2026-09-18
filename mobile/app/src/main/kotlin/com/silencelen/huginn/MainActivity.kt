@@ -141,6 +141,7 @@ class MainActivity : FragmentActivity() {
     private fun readTarget(intent: Intent?) {
         val session = intent?.getStringExtra(SessionWatchWorker.EXTRA_SESSION)
         val chat = intent?.getStringExtra(SessionWatchWorker.EXTRA_CHAT)
+        val project = intent?.getStringExtra(SessionWatchWorker.EXTRA_PROJECT)
         val newChat = intent?.getBooleanExtra(FleetWidget.EXTRA_NEW_CHAT, false) == true
         // The system share sheet. Text and images arrive as different extras of
         // the same action, and either one means "start a chat about this".
@@ -163,8 +164,11 @@ class MainActivity : FragmentActivity() {
         // Only when there is something to go to. A plain launcher tap carries
         // none of these, and overwriting the target with nulls would yank the
         // reader out of wherever they already were.
-        if (session != null || chat != null || shareText != null || shareImage != null || newChat) {
-            openTarget.value = OpenTarget(session, chat, ++targetSeq, shareText, shareImage, newChat)
+        if (session != null || chat != null || project != null || shareText != null ||
+            shareImage != null || newChat
+        ) {
+            openTarget.value =
+                OpenTarget(session, chat, ++targetSeq, project, shareText, shareImage, newChat)
             // CONSUMED. getIntent() keeps returning the launching intent forever,
             // so without stripping it every activity recreation — rotate, fold,
             // unlock, theme change — re-read the same extras and navigated again,
@@ -173,6 +177,7 @@ class MainActivity : FragmentActivity() {
             intent?.apply {
                 removeExtra(SessionWatchWorker.EXTRA_SESSION)
                 removeExtra(SessionWatchWorker.EXTRA_CHAT)
+                removeExtra(SessionWatchWorker.EXTRA_PROJECT)
                 removeExtra(FleetWidget.EXTRA_NEW_CHAT)
                 removeExtra(Intent.EXTRA_TEXT)
                 removeExtra(Intent.EXTRA_SUBJECT)
@@ -311,6 +316,16 @@ internal fun backFrom(dest: Dest, tab: Int): Dest? = when (dest) {
     is Dest.SettingsSection -> Dest.Settings
     is Dest.RoundEdit -> Dest.Rounds
     is Dest.Scratchpad -> Dest.Scratchpads
+    // The tree, always — a project is opened from the list, from a heading over
+    // the sessions, or from a notification, and only one of those three is a
+    // place to return to. The list is the honest answer for all of them, the
+    // same trade Pages and Settings already made.
+    is Dest.Project -> Dest.Projects
+    // Sessions rather than the tab the reader came from: Projects lives INSIDE
+    // Sessions, which is the whole placement decision, and a Settings row that
+    // went back to Settings would say it was a setting.
+    is Dest.Projects -> Dest.Sessions
+    is Dest.Consoles -> Dest.Status
     // Pages are reachable from four different places, so "up" cannot mean the
     // place they were opened from without a destination that carries it. The
     // section is the honest answer, and it is the trade Settings already made.
@@ -397,6 +412,8 @@ data class OpenTarget(
     val session: String?,
     val chat: String?,
     val seq: Int,
+    /** A proposal notification's project: the tap lands on its dashboard. */
+    val project: String? = null,
     /** Text handed in through the system share sheet; becomes a new chat's draft. */
     val shareText: String? = null,
     /** An image shared in; staged as the new chat's attachment. */
@@ -422,6 +439,9 @@ internal fun destToKey(d: Dest): String = when (d) {
     is Dest.Sessions -> "sessions"
     is Dest.SessionView -> "session:${d.name}"
     is Dest.Status -> "status"
+    is Dest.Projects -> "projects"
+    is Dest.Project -> "project:${d.id}"
+    is Dest.Consoles -> "consoles"
     is Dest.Settings -> "settings"
     is Dest.SettingsSection -> "settings:${d.id}"
 }
@@ -438,6 +458,12 @@ internal fun keyToDest(v: String): Dest = when {
     v == "sessions" -> Dest.Sessions
     v.startsWith("session:") -> Dest.SessionView(v.removePrefix("session:"))
     v == "status" -> Dest.Status
+    v == "projects" -> Dest.Projects
+    // An empty id is the LIST, for the reason an empty settings id is the home:
+    // a dashboard with no project behind it is a screen about nothing.
+    v.startsWith("project:") -> v.removePrefix("project:")
+        .let { if (it.isEmpty()) Dest.Projects else Dest.Project(it) }
+    v == "consoles" -> Dest.Consoles
     v == "settings" -> Dest.Settings
     // An empty id is the HOME, not an empty drawer: a saved "settings:" from a
     // build that spelled it differently must land on the nine rows rather than
@@ -475,6 +501,26 @@ internal sealed interface Dest {
     data object Sessions : Dest
     data class SessionView(val name: String) : Dest
     data object Status : Dest
+    /**
+     * The projects tree.
+     *
+     * NOT A FIFTH TAB, and that is a decision rather than an oversight (delta §4,
+     * reaffirming the Devices call of 2026-08-24): the bottom bar's four are the
+     * daily loop, and a project IS a set of sessions, so the Sessions tab is its
+     * home. It is reached from the Sessions top bar, from the headings over the
+     * grouped sessions list, and from a Settings row — three doors, none of them
+     * costing one of the four its place.
+     */
+    data object Projects : Dest
+    /** One project: its dashboard, and the proposal waiting on the owner. */
+    data class Project(val id: String) : Dest
+    /**
+     * Every console, full screen.
+     *
+     * Reached from the card on Status (owner decision 48), which is where consoles
+     * live on this shell: a reading surface, not a place you act.
+     */
+    data object Consoles : Dest
     /** The nine drawers, with the search field pinned above them. */
     data object Settings : Dest
     /**
@@ -542,6 +588,14 @@ fun HuginnApp(
         val t = target ?: return@LaunchedEffect
         when {
             t.session != null -> { tab = 1; dest = Dest.SessionView(t.session) }
+            // Where a proposal notification lands, and where EDIT lives: the
+            // shade carries Spawn and Discard only, so the third verb is the
+            // tap on the body — see ProjectNotices.
+            t.project != null -> {
+                tab = 1
+                vm.openProject(t.project)
+                dest = Dest.Project(t.project)
+            }
             t.chat != null -> {
                 tab = 0
                 // The chat screen renders from the view model, which a destination
@@ -594,6 +648,20 @@ fun HuginnApp(
     // what the person was looking at when they decided to send it.
     var pendingPadText by remember { mutableStateOf<String?>(null) }
     val devices by vm.devices.collectAsState()
+    // Null until the probes answer; false hides EVERY way in, which is what
+    // projectEntries and consoleEntries exist to keep in one place.
+    val projects by vm.projects.collectAsState()
+    val projectsAvailable by vm.projectsAvailable.collectAsState()
+    val projectMembers by vm.projectMembers.collectAsState()
+    val projectDetail by vm.projectDetail.collectAsState()
+    val projectDashboard by vm.projectDashboard.collectAsState()
+    val projectRefusal by vm.projectRefusal.collectAsState()
+    val projectBusy by vm.projectBusy.collectAsState()
+    val consoles by vm.consoles.collectAsState()
+    val consoleApproval by vm.consoleApproval.collectAsState()
+    val consolesAvailable by vm.consolesAvailable.collectAsState()
+    val projectDoors = com.silencelen.huginn.ui.projectEntries(projectsAvailable)
+    val consoleDoors = com.silencelen.huginn.ui.consoleEntries(consolesAvailable)
     val chatSealed by vm.chatSealed.collectAsState()
     // ⚠ TICKED, not sampled. This one clock feeds every "in 4h" and "3 minutes
     // ago" the shell draws — Round rows, the pages list, the session map — and it
@@ -848,7 +916,8 @@ fun HuginnApp(
 
     val isChild = dest is Dest.Chat || dest is Dest.SessionView || dest is Dest.Settings ||
         dest is Dest.SettingsSection || dest is Dest.Devices || dest is Dest.RoundEdit ||
-        dest is Dest.Scratchpads || dest is Dest.Scratchpad
+        dest is Dest.Scratchpads || dest is Dest.Scratchpad ||
+        dest is Dest.Projects || dest is Dest.Project || dest is Dest.Consoles
     // The system gesture, going where the arrow goes. Without this the commonest
     // gesture on the phone closed the app from every child screen.
     androidx.activity.compose.BackHandler(enabled = isChild) {
@@ -868,6 +937,14 @@ fun HuginnApp(
         is Dest.Sessions -> "Sessions"
         is Dest.SessionView -> transcript?.title ?: d.name
         is Dest.Status -> "Status"
+        is Dest.Projects -> "Projects"
+        // The project's own name, from whichever list already holds it — the
+        // detail when it has arrived, the tree row until it does, so the bar
+        // never says "Project" for the two seconds a fetch takes.
+        is Dest.Project -> projectDetail?.project?.takeIf { it.id == d.id }?.name
+            ?: projects.firstOrNull { it.id == d.id }?.name
+            ?: "Project"
+        is Dest.Consoles -> "Consoles"
         is Dest.Settings -> "Settings"
         is Dest.SettingsSection ->
             com.silencelen.huginn.settings.SettingsCatalog.category(d.id)?.title ?: "Settings"
@@ -1001,6 +1078,11 @@ fun HuginnApp(
             // last thing still saying it belongs there.
             is Dest.Settings, is Dest.SettingsSection -> 4
             is Dest.Devices -> 6
+            // Sessions, because that is where Projects lives: opening a cluster
+            // from a notification must light the tab a project belongs to.
+            is Dest.Projects, is Dest.Project -> 1
+            // Status, for the same reason — the consoles card is a Status card.
+            is Dest.Consoles -> 2
             // FIVE, which matches no bar item and no rail item — deliberately.
             // Pages are opened from wherever you already are, so highlighting a
             // section would claim you had navigated somewhere you had not.
@@ -1152,8 +1234,26 @@ fun HuginnApp(
             }
             val archives by vm.archives.collectAsState()
             val archiveAvailable by vm.archiveAvailable.collectAsState()
+            // The tree's own poll rides this screen: the headings over the list
+            // are drawn from the same rows the Projects list draws, so they must
+            // not be a snapshot taken whenever the app last started.
+            if (projectDoors.grouping) {
+                LifecycleStartEffect(Unit) {
+                    vm.startProjectsPolling()
+                    onStopOrDispose { vm.stopProjectsPolling() }
+                }
+            }
             SessionsScreen(
                 sessions = sessions,
+                // Empty when the daemon has no projects, which draws the list
+                // exactly as it has always been drawn — see projectEntries.
+                groups = if (projectDoors.grouping)
+                    com.silencelen.huginn.ui.groupSessions(projects, projectMembers, sessions)
+                else emptyList(),
+                onOpenProject = { row -> vm.openProject(row.id); dest = Dest.Project(row.id) },
+                onOpenProjects = if (projectDoors.sessionsIcon) ({
+                    vm.refreshProjects(); dest = Dest.Projects
+                }) else null,
                 selectedName = if (twoPane) (dest as? Dest.SessionView)?.name else null,
                 onOpen = { name -> dest = Dest.SessionView(name) },
                 onCreate = { name -> vm.createSession(name) { dest = Dest.SessionView(it) } },
@@ -1340,6 +1440,15 @@ fun HuginnApp(
                 vm.refreshUsage()
                 onDispose { vm.stopUsagePolling() }
             }
+            // The registry is polled only while a consoles surface is on screen.
+            // The PROBE is the host's and memoised there; this is just how often
+            // its verdict is collected.
+            if (consoleDoors.statusCard) {
+                LifecycleStartEffect(Unit) {
+                    vm.startConsolesPolling()
+                    onStopOrDispose { vm.stopConsolesPolling() }
+                }
+            }
             StatusScreen(
                 status = status,
                 error = statusError,
@@ -1347,6 +1456,81 @@ fun HuginnApp(
                 chatsRunning = chats.count { it.running },
                 plan = plan,
                 usage = usage,
+                // Owner decision 48: consoles are a card on Status, not a tab.
+                consoles = if (consoleDoors.statusCard) consoles else emptyList(),
+                consolesApplied = com.silencelen.huginn.ui.ConsoleRules.approvalApplied(consoleApproval),
+                onOpenConsole = { c -> openConsole(context, c, vm) },
+                onSeeAllConsoles = if (consoleDoors.fullPage) ({ dest = Dest.Consoles }) else null,
+                nowMs = nowMs,
+            )
+        }
+        val projectsPane: @Composable () -> Unit = {
+            LifecycleStartEffect(Unit) {
+                vm.startProjectsPolling()
+                onStopOrDispose { vm.stopProjectsPolling() }
+            }
+            com.silencelen.huginn.ui.ProjectsScreen(
+                projects = projects,
+                members = projectMembers,
+                nowMs = nowMs,
+                onOpenProject = { row -> vm.openProject(row.id); dest = Dest.Project(row.id) },
+                onOpenMember = { live -> dest = Dest.SessionView(live.name) },
+                onExpand = { id -> vm.fetchProjectMembers(id) },
+                creating = projectBusy,
+                refusal = projectRefusal,
+                onDismissSheet = { vm.clearProjectRefusal() },
+                // Left to the host: the daemon's WORKDIR is the default when no
+                // directory is typed, and a client that guessed one would be
+                // proposing a folder it has never seen.
+                defaultCwd = null,
+                onCreate = { name, kind, brief, cwd ->
+                    // Straight into the lead it just launched: creating a project
+                    // and then being left on a list of projects is the moment the
+                    // whole verb reads as not having worked.
+                    vm.createProject(name, kind, brief, cwd) { made ->
+                        dest = Dest.Project(made.id)
+                        vm.openProject(made.id)
+                    }
+                },
+            )
+        }
+        val projectPane: @Composable (String) -> Unit = { id ->
+            LifecycleStartEffect(id) {
+                vm.openProject(id)
+                vm.startDashboardPolling(id)
+                onStopOrDispose { vm.stopDashboardPolling() }
+            }
+            com.silencelen.huginn.ui.ProjectDashboardScreen(
+                detail = projectDetail?.takeIf { it.project.id == id },
+                dashboard = projectDashboard,
+                nowMs = nowMs,
+                busy = projectBusy,
+                refusal = projectRefusal,
+                onOpenMember = { m -> dest = Dest.SessionView(m.name) },
+                onSpawn = { rev -> vm.spawnProject(id, rev) },
+                onDiscard = { vm.discardProposal(id) },
+                onSaveManifest = { m ->
+                    val rev = projectDetail?.project?.takeIf { it.id == id }?.rev ?: 0
+                    vm.saveProjectManifest(id, rev, m)
+                },
+            )
+        }
+        val consolesPane: @Composable () -> Unit = {
+            LifecycleStartEffect(Unit) {
+                vm.startConsolesPolling()
+                onStopOrDispose { vm.stopConsolesPolling() }
+            }
+            com.silencelen.huginn.ui.ConsolesScreen(
+                consoles = consoles,
+                approval = consoleApproval,
+                nowMs = nowMs,
+                onOpen = { c -> openConsole(context, c, vm) },
+                onProbe = { c -> vm.probeConsole(c.id) },
+                // COPY AND NOTHING ELSE. The steps rebind a unit on the host and
+                // add firewall lines on heimdall; this app runs neither, ever.
+                onCopyApproval = { text -> vm.copy(text, "the rebind steps") },
+                onSave = { cid, version, name, url, notes -> vm.saveConsole(cid, version, name, url, notes) },
+                onDelete = { c -> vm.deleteConsole(c.id) },
             )
         }
         val roundEditPane: @Composable (String?) -> Unit = { id ->
@@ -1449,6 +1633,13 @@ fun HuginnApp(
                 appLockAvailable = remember { AppLock.canLock(context) },
                 notificationsAllowed = notificationsAllowed,
                 onOpenFleet = { vm.refreshDevices(); dest = Dest.Devices },
+                // The second door into Projects, and the reason the bottom bar
+                // stays at four. Null against a daemon with no projects route:
+                // a Settings row whose only outcome is a 404 is worse than none.
+                onOpenProjects = if (projectDoors.settingsRow) ({
+                    vm.refreshProjects(); tab = 1; dest = Dest.Projects
+                }) else null,
+                projectCount = projects.size,
                 // Straight to the whole picture, the same place the headroom pill
                 // goes: a number you cannot ask "of what, and until when" is a
                 // worse version of not saying anything.
@@ -1699,6 +1890,9 @@ fun HuginnApp(
                             is Dest.Scratchpads -> scratchpadsPane()
                             is Dest.Scratchpad -> scratchpadPane(d.id)
                             is Dest.Status -> statusPane()
+                            is Dest.Projects -> projectsPane()
+                            is Dest.Project -> projectPane(d.id)
+                            is Dest.Consoles -> consolesPane()
                             // ONE call site for both, deliberately. Two `when`
                             // branches are two composition groups, so opening a
                             // drawer from a search hit would DISCARD the frame's
@@ -1757,6 +1951,25 @@ fun HuginnApp(
                             // modifier, and only this one was reported.
                             is Dest.Status -> Box(Modifier.fillMaxSize(), contentAlignment = androidx.compose.ui.Alignment.TopStart) {
                                 Box(Modifier.widthIn(max = 840.dp)) { statusPane() }
+                            }
+                            // Tree on the left, dashboard on the right — the shape
+                            // Chats, Sessions and Pages already take when the fold
+                            // opens, and the one the design asked for by name.
+                            is Dest.Projects, is Dest.Project -> Row(Modifier.fillMaxSize()) {
+                                Box(Modifier.width(292.dp).fillMaxSize()) { projectsPane() }
+                                VerticalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+                                Box(Modifier.weight(1f).fillMaxSize()) {
+                                    val open = dest as? Dest.Project
+                                    if (open != null) projectPane(open.id)
+                                    else Box(Modifier.fillMaxSize(), contentAlignment = androidx.compose.ui.Alignment.Center) {
+                                        EmptyState("No project open", "Pick one on the left, or start a new one.")
+                                    }
+                                }
+                            }
+                            // A reading surface, capped and left-snapped like
+                            // Status — it is Status's own card, full screen.
+                            is Dest.Consoles -> Box(Modifier.fillMaxSize(), contentAlignment = androidx.compose.ui.Alignment.TopStart) {
+                                Box(Modifier.widthIn(max = 840.dp)) { consolesPane() }
                             }
                             // List and detail side by side, the shape Chats,
                             // Sessions and Pages already take when the fold
@@ -1819,4 +2032,28 @@ private fun StatusIcon(fill: com.silencelen.huginn.ui.UsageFill?) {
             com.silencelen.huginn.ui.UsageFillLine(it, Modifier.width(24.dp))
         }
     }
+}
+
+
+/**
+ * Opens a console in the phone's browser.
+ *
+ * http(s) ONLY, through `ConsoleRules.openable` — the same bar the link handler
+ * sets for anything a model writes. What will not open is copied instead, so the
+ * address is still in the reader's hands.
+ */
+private fun openConsole(
+    context: android.content.Context,
+    console: com.silencelen.huginn.data.Console,
+    vm: HuginnViewModel,
+) {
+    if (!com.silencelen.huginn.ui.ConsoleRules.openable(console)) {
+        vm.copy(console.url, "the address")
+        return
+    }
+    runCatching {
+        context.startActivity(
+            Intent(Intent.ACTION_VIEW, Uri.parse(console.url)).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        )
+    }.onFailure { vm.copy(console.url, "the address") }
 }
