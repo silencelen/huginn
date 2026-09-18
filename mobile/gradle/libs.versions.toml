@@ -7,7 +7,7 @@ biometric = "1.1.0"
 # Forced ABOVE the 1.2.5 that biometric drags in: that FragmentActivity rejects
 # the request codes the modern activity-result launcher generates.
 fragment = "1.8.5"
-kotlin = "2.3.21"
+kotlin = "2.4.10"
 compose-bom = "2024.12.01"
 # Compose Multiplatform, used ONLY by :core so shared code can name
 # androidx.compose.ui types (Color, AnnotatedString) from commonMain. Pinned to
