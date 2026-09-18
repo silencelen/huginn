@@ -343,8 +343,14 @@ class DesktopSurfaceTest {
 
     @Test
     fun `durations read the way a person says them`() {
-        assertEquals("just now", humanDuration(0))
-        assertEquals("just now", humanDuration(44))
+        // ⚠ NO "just now" BAND. This measures a SPAN and its one caller reads
+        // "Working · for <this>" — "for just now" is not a sentence, and the
+        // band's other edge was worse: 45..59s fell straight through to
+        // "${sec / 60}m" and drew "Working · for 0m", 15 seconds of every hour.
+        assertEquals("1m", humanDuration(0))
+        assertEquals("1m", humanDuration(44))
+        assertEquals("1m", humanDuration(45), "45s was the start of the 0m band")
+        assertEquals("1m", humanDuration(59), "59s was the end of it")
         assertEquals("1m", humanDuration(60))
         assertEquals("59m", humanDuration(3599))
         assertEquals("1h", humanDuration(3600))
@@ -361,6 +367,8 @@ class DesktopSurfaceTest {
         assertEquals("Waiting on you", sessionStateTip("attention", null, 1_000_000))
         assertEquals("Waiting on you", sessionStateTip("attention", 0, 1_000_000))
         assertEquals("Working · for 5m", sessionStateTip("running", 999_700, 1_000_000))
+        // The tooltip that started this: a state entered 50 seconds ago.
+        assertEquals("Working · for 1m", sessionStateTip("running", 999_950, 1_000_000))
         assertEquals(
             "No state recorded for this session yet",
             sessionStateTip(null, null, 1_000_000),
