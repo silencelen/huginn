@@ -222,7 +222,10 @@ fun TranscriptEventItem(
             "tool_result" -> ToolResultOrphan(ev)
             "command" -> CommandNote(ev.text.orEmpty(), isResult = false)
             "command_result" -> CommandNote(ev.text.orEmpty(), isResult = true)
-            "system" -> SystemNote(ev.text.orEmpty())
+            // ⚠ A PEER MESSAGE IS A SYSTEM NOTE WITH A SENDER ON IT (decision 50),
+            // and the sender is labelled from `peer.name` — never read back out of
+            // the rendered text, whose @handle form slugifies the slash.
+            "system" -> SystemNote(ev.peer?.name?.takeIf { it.isNotBlank() }?.let { "$it · ${ev.text.orEmpty()}" } ?: ev.text.orEmpty())
             else -> Unit
         }
     }
