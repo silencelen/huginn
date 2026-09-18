@@ -318,6 +318,28 @@ Section "Install"
 
   CreateShortCut "$SMPROGRAMS\${APP_NAME}\Uninstall ${APP_NAME}.lnk" "$INSTDIR\Uninstall.exe"
 
+  ; ---------------------------------------------------- huginn:// protocol handler
+  ;
+  ; The OTHER half of a working toast. The AUMID above decides whether the
+  ; notification is shown at all; this decides whether its BUTTONS do anything.
+  ; Every action on every toast the client raises activates by protocol —
+  ; `huginn://answer?…`, `huginn://open?…` — and a scheme with no
+  ; shell\open\command is not a quiet no-op: Windows answers the click with
+  ; "don't know how to open the link huginn", which is what the owner saw.
+  ;
+  ; HKCU, like everything else here, so a per-user install never elevates. The app
+  ; rewrites these three at startup too (SchemeRegistrar) — that is the backstop
+  ; for an install that predates this block, and the reason it exists is that the
+  ; backstop was the ONLY writer and it was failing. Both write; the uninstaller
+  ; below removes the whole root.
+  ;
+  ; ⚠ The command value MUST keep its interior quotes: an unquoted path with a
+  ; space in it hands the shell a truncated argv, and $INSTDIR is under
+  ; %LOCALAPPDATA%\Programs, which on a profile named "Firstname Lastname" has one.
+  WriteRegStr HKCU "Software\Classes\huginn" "" "URL:Huginn Protocol"
+  WriteRegStr HKCU "Software\Classes\huginn" "URL Protocol" ""
+  WriteRegStr HKCU "Software\Classes\huginn\shell\open\command" "" '"$INSTDIR\${APP_EXE}" "%1"'
+
   ; ------------------------------------------------------------- node runtime
   ;
   ; The optional features — serving local AI models, running work as a device —
