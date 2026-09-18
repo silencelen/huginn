@@ -1,5 +1,17 @@
 # Huginn Desktop changelog
 
+## 1.2.1
+
+- **Windows: toast answer buttons work again.** The `huginn://` scheme was only ever half
+  registered — the installer never wrote it, and the app's startup fallback failed silently on a
+  `reg add` quoting bug (Java splits a value holding both a space and inner quotes into two
+  arguments) — so clicking an option answered "don't know how to open the link huginn". The
+  installer now registers it, the app repairs it at every launch through a `.reg` import and reads
+  the key back, and the outcome lands in Copy diagnostics instead of a console the packaged app
+  does not have.
+- **Release gate:** an installer that does not register (and uninstall) `huginn://` is refused, and
+  the key is read back out of the test install before publishing.
+
 ## 1.2.0
 
 - **Pinned routes.** The same route list as the phone: name your addresses, order them, and the

@@ -9,6 +9,24 @@ appeared only as a side-note on the app releases it happened to ship with. Three
 undocumented, and the notes-cutting matcher could fuse two sections when an app and an appd
 version number collided. Entries below are reconstructed from the shipping commits.
 
+## 3.1.1 — 2026-09-17
+- **A skill Claude loads is a card, not a message from you.** Claude Code writes a skill's whole
+  instruction body into the transcript as a `user` record with nothing in the text to mark it, so
+  the Conversation tab showed it as a multi-kilobyte message you appeared to have typed (16.6 KB
+  of one skill, in one real session). The `Skill` card is now the whole of a skill load and names
+  the skill instead of dumping its input; the body folds into it, or shows as one compact chip when
+  the call itself has scrolled off. The record's `sourceToolUseID` is the tell — `isMeta` alone also
+  marks image captions and a resumed run's "continue" line, which must stay messages. Replayed over
+  891 transcripts: 65 user bubbles reclassified, nothing else moved.
+- **A paste is confirmed on screen before Enter is pressed.** Measured against the real Claude Code:
+  bytes that arrive 0.8–2 s before the composer paints sit in the box unsent, and 3.0.7's 20-second
+  grace could expire and deliberately paste into a pane it had just found empty (it did, on the
+  owner's own session at 23:54:49). Every send now waits — 50 ms polls, 3 s bound — until the
+  composer visibly holds the text or a `[Pasted text]` marker, then presses Enter, then confirms
+  the composer let go within a second; otherwise it writes a grep-able journal line with the pane's
+  bottom rows. The composer is the LAST caret on screen, never the bottom region: a submitted
+  message is echoed above the box with the same `❯`.
+
 ## 3.1.0 — 2026-09-16
 - **A serving device says whether it serves while nobody is logged in.** The generate-scope device
   row carries a `persistent` facet, accepted at enrolment and on the 60-second beat, so Devices
