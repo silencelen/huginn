@@ -25,6 +25,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
@@ -174,20 +175,33 @@ fun RoundEditor(
                 }
             }
             if (draft.kind == "monthly") {
+                // ⚠ THE RAW TEXT IS LOCAL. Re-deriving the field's value from the
+                // parsed Set<Int> on every keystroke discarded anything the parser
+                // does not preserve: separators were eaten (a typed "," or space
+                // reverted the box), an out-of-range intermediate blanked it, and
+                // on an EXISTING multi-date Round an ordinary edit silently
+                // dropped a date while leaving a set valid enough for Save —
+                // changing "1, 15" to the 16th wrote [16]. Seeded once per visit
+                // to this branch and reformatted when the field is left.
+                var datesText by remember { mutableStateOf(monthDatesText(draft.dates)) }
+                var datesFocused by remember { mutableStateOf(false) }
                 OutlinedTextField(
-                    value = draft.dates.sorted().joinToString(", "),
+                    value = datesText,
                     onValueChange = { v ->
-                        val parsed = v.split(',', ' ')
-                            .mapNotNull { it.trim().toIntOrNull() }
-                            .filter { it in 1..31 }
-                            .toSet()
-                        onDraft(draft.copy(dates = parsed))
+                        val edit = monthDatesEdit(v, draft.dates)
+                        datesText = edit.text
+                        if (edit.dates != draft.dates) onDraft(draft.copy(dates = edit.dates))
                     },
                     label = { Text("Day of the month") },
                     placeholder = { Text("1, 15") },
                     singleLine = true,
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                    modifier = Modifier.width(220.dp),
+                    modifier = Modifier
+                        .width(220.dp)
+                        .onFocusChanged { st ->
+                            if (datesFocused && !st.isFocused) datesText = monthDatesText(draft.dates)
+                            datesFocused = st.isFocused
+                        },
                 )
             }
             OutlinedTextField(
@@ -450,3 +464,34 @@ private fun SectionLabel(text: String) {
         color = MaterialTheme.colorScheme.onSurfaceVariant,
     )
 }
+
+/**
+ * The monthly dates field: what one keystroke leaves in the box, and what the
+ * schedule becomes.
+ *
+ * Pure so it can be asserted a character at a time — the failure was never
+ * visible in one frame, only in the sequence.
+ *
+ * ⚠ THE LAST NON-EMPTY PARSE SURVIVES a transient out-of-range value. "115" on
+ * the way to "11, 5" parses to nothing, and clearing the schedule there is what
+ * let an ordinary edit of an existing Round write the wrong dates and still
+ * offer an enabled Save. An EMPTY box does clear it — that state Save refuses
+ * with "Pick at least one date."
+ */
+internal data class DatesEdit(val text: String, val dates: Set<Int>)
+
+internal fun monthDatesEdit(raw: String, previous: Set<Int>): DatesEdit {
+    val text = raw.filter { it.isDigit() || it == ',' || it == ' ' }.take(MONTH_DATES_MAX)
+    val parsed = text.split(',', ' ')
+        .mapNotNull { it.trim().toIntOrNull() }
+        .filter { it in 1..31 }
+        .toSet()
+    val dates = if (parsed.isEmpty() && text.any { it.isDigit() }) previous else parsed
+    return DatesEdit(text, dates)
+}
+
+/** The canonical spelling of a set of dates — what the field is seeded and reset with. */
+internal fun monthDatesText(dates: Set<Int>): String = dates.sorted().joinToString(", ")
+
+/** Thirty-one two-digit days and their separators, with room to fumble. */
+private const val MONTH_DATES_MAX = 64
