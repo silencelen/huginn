@@ -51,7 +51,8 @@ const crypto = require('node:crypto');
 //     (11000-11249 are spoken for by work in flight on sibling branches)
 //
 // Also spoken for, outside this directory: scripts/test-llm-shim.js holds
-// 18790-18799.
+// 18790-18799, and scripts/test-client.sh's stub daemons hold 18787 (headroom)
+// and 18811 (archive).
 //
 // Adding a file? Take the next free block and extend this table, in every file.
 const PORT = 9700 + (process.pid % 100);

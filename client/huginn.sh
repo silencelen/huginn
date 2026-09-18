@@ -563,6 +563,11 @@ EOF
   huginn local off            stop serving  [--purge-models] [--purge]
   huginn device unit          print a systemd unit that keeps the runner up
   huginn kill <name>          hard end: stop the session now
+  huginn archive <name>       end it for good and keep the way back: the title,
+                              the cwd, a copy of the transcript and the exact
+                              'claude --resume' command   [--now to skip wrap-up]
+  huginn archive              what has been archived, and how to bring it back
+  huginn revive <id|name>     bring an archived session back to life
   huginn -p "question"        one-shot headless query (reasoning + memory; does not auto-approve tools)
   huginn -y "task"            one-shot that may use tools (bash/files/web + memory)
   huginn usage [args]         Claude Code token/cost report (ccusage; default: daily)
@@ -783,6 +788,39 @@ EOF
       local phrase auto; phrase="$(printf '%s' "$r" | sed -n 's/.*"phrase":"\([^"]*\)".*/\1/p')"
       printf '%s' "$r" | grep -q '"auto":true' && auto=' (auto-ends when it goes idle)' || auto=''
       echo "soft-ended '$en': sent \"${phrase:-wrap-up phrase}\"${auto}" ;;
+    # Archive: end the session for good AND keep the way back into it — the
+    # title, the cwd, the last thing said, a COPY of the transcript, and the
+    # exact `claude --resume <uuid>`. Graceful by default, exactly like `end`
+    # (the wrap-up phrase first, a waiting question refused); --now for a
+    # session with nothing left to wrap up. Bare `huginn archive` is the list.
+    #
+    # CALLED on the host, not just rendered there, which is the one way this
+    # differs from `end`. The daemon refuses an archive in prose — "answer the
+    # waiting question first, then archive the session" — and that sentence is
+    # the most useful thing this verb ever says, while `_huginn_appd` uses
+    # `curl -sf` and throws a 4xx body away. Flags go through printf %q: what
+    # follows the host name is parsed by a shell on the far side.
+    archive)
+      if [ -z "${2:-}" ]; then ssh -T "$H" huginn-archive; return; fi
+      _huginn_valid_name "$2" || { echo "huginn: invalid session name '$2' (use letters, digits, underscore; no - or *)" >&2; return 1; }
+      local ar; ar="$(_huginn_canon_name "$2")"
+      # Guarded on $#, like the headroom branch: `printf '%q ' ` with no arguments
+      # still runs the format once and emits '', which the renderer would rightly
+      # refuse as an unknown flag.
+      if [ "$#" -gt 2 ]; then ssh -T "$H" "huginn-archive $(printf '%q ' "$ar" "${@:3}")"
+      else ssh -T "$H" "huginn-archive $(printf '%q ' "$ar")"; fi ;;
+    # Bring one back: recreate the session, restore the kept transcript if Claude
+    # Code has swept its own, and resume into it. Takes the archive id OR the
+    # name it had — the name is resolved host-side, because resolving it here
+    # would mean parsing the list in bash AND in PowerShell.
+    revive|unarchive)
+      [ -n "${2:-}" ] || { echo "usage: huginn revive <id|name>" >&2; return 1; }
+      # Wider than _huginn_valid_name deliberately: an archive id is a uuid, and
+      # uuids have dashes. Still a strict allow-list — this reaches a remote shell.
+      case "$2" in
+        *[!A-Za-z0-9_.-]*|'') echo "huginn: '$2' is not an archive id or a session name" >&2; return 1 ;;
+      esac
+      ssh -T "$H" "huginn-archive revive $(printf '%q ' "$2")" ;;
     -p|-y)
       local mode="$1"; shift
       [ "$#" -gt 0 ] || { echo "usage: huginn $mode \"your prompt\"" >&2; return 1; }
@@ -832,13 +870,13 @@ _huginn_complete() {
   local cur prev cmds
   cur="${COMP_WORDS[COMP_CWORD]}"
   prev="${COMP_WORDS[COMP_CWORD-1]}"
-  cmds="list ls status st rounds headroom devices device local llm solo rename mv kill end -p -y usage cost desktop update uninstall version help"
+  cmds="list ls status st rounds headroom devices device local llm solo rename mv kill end archive revive -p -y usage cost desktop update uninstall version help"
   if [ "$COMP_CWORD" -eq 1 ]; then
     # first word: subcommands + live session names (bare name attaches to it)
     mapfile -t COMPREPLY < <(compgen -W "$cmds $(_huginn_sessions)" -- "$cur")
   else
     case "$prev" in
-      kill|end|solo|rename|mv)   # these take an existing session name
+      kill|end|archive|solo|rename|mv)   # these take an existing session name
         mapfile -t COMPREPLY < <(compgen -W "$(_huginn_sessions)" -- "$cur") ;;
       usage|cost|ccusage)    # date shortcuts + raw report names
         mapfile -t COMPREPLY < <(compgen -W "today yesterday week month daily monthly weekly session blocks statusline" -- "$cur") ;;
