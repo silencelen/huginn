@@ -26,11 +26,34 @@ import java.util.concurrent.TimeUnit
  * session with no notification daemon all have to fall through to the next
  * backend rather than swallow every alert.
  */
-class LibnotifyNotifier private constructor(private val canClose: Boolean) : Notifier {
+class LibnotifyNotifier internal constructor(
+    private val canClose: Boolean,
+    /** How a command is actually run. Injected so the failure path is testable. */
+    private val send: (List<String>, Long) -> String? = { cmd, ms -> runQuiet(cmd, ms) },
+) : Notifier {
 
     override val name: String = if (canClose) "libnotify" else "libnotify(no-close)"
 
     override val supportsWithdraw: Boolean get() = canClose
+
+    override val healthy: Boolean get() = !failed
+
+    /**
+     * Set the first time a post fails, exactly as [WindowsToastNotifier] does.
+     *
+     * ⚠ THIS CLASS PROBED THE BINARY AND CALLED IT A ROUTE. `createOrNull`
+     * checks for `notify-send` on PATH and a DISPLAY/WAYLAND_DISPLAY, neither of
+     * which says anything about a notification daemon being on the session bus —
+     * and on a desk where nothing answers it, every post failed silently while
+     * `healthy` (which was never overridden) stayed true forever. AppStore kept
+     * stamping `X-Huginn-Notify: 1`, the daemon counted this desktop as a live
+     * delivery route, and each "needs you" was lost on screen AND held back from
+     * the Telegram fallback. A held alert consumes the transition edge, so that
+     * is one permanent loss per event.
+     */
+    @Volatile
+    var failed: Boolean = false
+        private set
 
     /** key → the daemon's notification id, so a replace or a close can find it. */
     private val live = HashMap<String, Long>()
@@ -63,14 +86,22 @@ class LibnotifyNotifier private constructor(private val canClose: Boolean) : Not
         cmd += request.title.take(120)
         cmd += request.body.take(400)
 
-        val id = runQuiet(cmd, TIMEOUT_MS)?.trim()?.toLongOrNull()
-        if (id != null) synchronized(live) { live[request.key] = id }
+        // null means it could not be run, timed out, or exited non-zero — the
+        // three ways this path is broken. A zero exit whose stdout does not parse
+        // is NOT a failure: --print-id is a convenience, and the notification was
+        // still shown.
+        val out = send(cmd, TIMEOUT_MS)
+        if (out == null) {
+            failed = true
+            return
+        }
+        out.trim().toLongOrNull()?.let { id -> synchronized(live) { live[request.key] = id } }
     }
 
     override fun withdraw(key: String) {
         val id = synchronized(live) { live.remove(key) } ?: return
         if (!canClose) return
-        runQuiet(
+        send(
             listOf(
                 GDBUS, "call", "--session",
                 "--dest", "org.freedesktop.Notifications",
@@ -111,15 +142,31 @@ class LibnotifyNotifier private constructor(private val canClose: Boolean) : Not
          * timed out, or exited non-zero. Everything here is best-effort: a
          * notification that fails must never be able to take the app with it.
          */
-        private fun runQuiet(cmd: List<String>, timeoutMs: Long): String? = runCatching {
+        internal fun runQuiet(cmd: List<String>, timeoutMs: Long): String? = runCatching {
             val p = ProcessBuilder(cmd)
                 .redirectErrorStream(false)
                 .redirectError(ProcessBuilder.Redirect.DISCARD)
                 .start()
             p.outputStream.close()
-            val out = p.inputStream.readBytes().decodeToString()
-            if (!p.waitFor(timeoutMs, TimeUnit.MILLISECONDS)) {
+            // ⚠ THE READ IS PART OF THE DEADLINE. `readBytes()` blocks until the
+            // child's stdout reaches EOF, so it ran BEFORE the bounded `waitFor`
+            // and the timeout could never be reached — a hung notify-send cost 12
+            // seconds per post, measured, on the notification path of a live app.
+            // Reading on a side thread puts the same one deadline over both
+            // halves.
+            val deadline = System.nanoTime() + timeoutMs * 1_000_000
+            val reader = java.util.concurrent.FutureTask { p.inputStream.readBytes().decodeToString() }
+            Thread(reader, "libnotify-read").apply { isDaemon = true }.start()
+            fun leftMs(): Long = ((deadline - System.nanoTime()) / 1_000_000).coerceAtLeast(0)
+            if (!p.waitFor(leftMs(), TimeUnit.MILLISECONDS)) {
                 p.destroyForcibly()
+                reader.cancel(true)
+                return null
+            }
+            val out = runCatching { reader.get(leftMs(), TimeUnit.MILLISECONDS) }.getOrElse {
+                // The process ended but something still holds the pipe open — an
+                // inherited descriptor in a grandchild. Nothing to trust here.
+                reader.cancel(true)
                 return null
             }
             if (p.exitValue() != 0) null else out

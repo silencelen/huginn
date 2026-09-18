@@ -67,7 +67,16 @@ object Notifiers {
         WindowsToastNotifier.createOrNull(configDir, packaged)?.let { toast ->
             return if (awt != null) FallbackNotifier(toast, awt) else toast
         }
-        LibnotifyNotifier.createOrNull()?.let { return it }
+        // WRAPPED, like the toast path. `createOrNull` proves notify-send and a
+        // display, never a notification daemon on the session bus — so the
+        // libnotify path can be chosen and then fail every post. Behind a
+        // FallbackNotifier a proven-dead primary hands the next notification to
+        // the tray instead of dropping it (and, through `healthy`, stops this
+        // desktop claiming to be a delivery route the daemon can hold Telegram
+        // back for).
+        LibnotifyNotifier.createOrNull()?.let { libnotify ->
+            return if (awt != null) FallbackNotifier(libnotify, awt) else libnotify
+        }
         return awt ?: NoNotifier
     }
 
