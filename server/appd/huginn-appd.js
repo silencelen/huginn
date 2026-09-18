@@ -11010,12 +11010,30 @@ const server = http.createServer(async (req, res) => {
         if (st.state === 'attention') {
           return sendErr(res, 409, 'answer the waiting question first, then archive the session');
         }
+        // ⚠ AND THE PANE, WHICH THE STATE FILE CANNOT SEE (#9, extended). This
+        // route is /soft-end with the destructive half turned all the way up: a
+        // dialog on screen while the flat state file reads `running` — the normal
+        // reading for a plain permission dialog, and for any session whose
+        // background agent rewrote it — meant the phrase went into the selector
+        // and the auto-end armed anyway, and at the next stable idle the session
+        // was killed AND archived with no wrap-up turn.
+        const blockedHere = await dialogRefusal(name);
+        if (blockedHere) return sendErr(res, 409, blockedHere);
         // Mid-turn is fine and is not a wait the caller has to sit through: the
         // phrase queues in the composer, and the settle timer will not end
         // anything until idle has held. The 202 says so.
         const queued = st.state === 'running';
-        const r = await sendLineToPane(name, SOFT_END_PHRASE);
-        if (r.err) return sendErr(res, 500, `tmux: ${(r.stderr || '').trim()}`);
+        const r = await sendTextToPane(name, SOFT_END_PHRASE);
+        if (!r.ok) return sendErr(res, r.code || 500, r.message);
+        // …and only when the phrase demonstrably landed. `submitted === false` is
+        // the pane telling us it is still sitting in a composer, and ending a
+        // session whose wrap-up never ran is the one outcome this must not
+        // produce. Same rule as /soft-end's onSettle.
+        if (r.submitted === false) {
+          log(`archive: ${name}: the wrap-up phrase did not submit; not arming the end`);
+          return sendErr(res, 409,
+            'the wrap-up phrase did not go in — the pane is holding something else. Try again, or archive with mode "now"');
+        }
         // Armed regardless of the host's softEndAuto. That setting decides
         // whether a WIND-DOWN ends the session; an archive was asked for by name
         // and has to end it, or the row would describe a session still running.
