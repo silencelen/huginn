@@ -48,6 +48,11 @@ object Landing {
         // inverses, not persistable because a window that opens on somebody's
         // notes answers a question nobody asked first thing.
         View.SCRATCHPADS -> "pages"
+        // Same again for the Wave 3 pair. A project dashboard polls a rollup that
+        // walks transcripts on the host, and a window that opened on one would
+        // start that work before anybody had asked for it.
+        View.PROJECTS -> "projects"
+        View.CONSOLES -> "consoles"
         // Never written — the caller filters on [persistable] — but an encoder that
         // silently produced "chats" for Settings would be a landing bug nobody
         // could read off the file.
@@ -67,6 +72,8 @@ object Landing {
         "rounds" -> View.ROUNDS
         "devices" -> View.DEVICES
         "pages" -> View.SCRATCHPADS
+        "projects" -> View.PROJECTS
+        "consoles" -> View.CONSOLES
         else -> DEFAULT
     }
 }
