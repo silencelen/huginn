@@ -212,10 +212,35 @@ function stateVerdict(st, queuedAtMs) {
   if (!st || typeof st.state !== 'string') return null;
   if (st.state === 'attention') return 'hold';
   if (st.state !== 'idle') return null;
-  const sec = Number(st.stateSince);
+  const stamp = stateStampMs(st);
   const at = Number(queuedAtMs);
-  if (!Number.isFinite(sec) || !sec || !Number.isFinite(at) || !at) return null;
-  return sec * 1000 > at ? 'release' : null;
+  if (stamp == null || !Number.isFinite(at) || !at) return null;
+  return stamp > at ? 'release' : null;
+}
+
+/**
+ * The state file's stamp, in milliseconds, whatever unit it was written in.
+ *
+ * ⚠ #7: the hook stamped `ts: now|floor` — SECONDS — and this gate compared
+ * `sec * 1000` against a millisecond `at`, so an `idle` written in the same
+ * wall-clock second as the enqueue could never release that entry. The miss
+ * window was `999 - (at mod 1000)` ms and one-directional (it could hold
+ * wrongly, never release wrongly), and when the transcript gate was blind at
+ * the same moment the automated send was dropped as 'timeout' ten minutes on.
+ *
+ * The hook writes milliseconds now. The unit is read off the MAGNITUDE rather
+ * than from a version field, because a state file written by an older hook
+ * survives a deploy and sits in /run until that session's next event: a stamp
+ * past 1e11 cannot be seconds (that is the year 5138), and one below it cannot
+ * be milliseconds (1973). A seconds stamp keeps the old conservative reading.
+ */
+function stateStampMs(st) {
+  for (const v of [st && st.stateSinceMs, st && st.stateSince]) {
+    const n = Number(v);
+    if (!Number.isFinite(n) || !n) continue;
+    return n > 1e11 ? n : n * 1000;
+  }
+  return null;
 }
 
 /**
@@ -992,7 +1017,7 @@ module.exports = {
   paneTail, pasteLostLogLine, submitStalledLogLine, pasteResentLogLine, pasteLeftAloneLogLine,
   sendKeysFits, chunks,
   isBoundaryRecord, isConversationalRecord, boundaryFromTail, stateVerdict,
-  humanAttentionHold, ATTENTION_HOLD_MAX_MS, submitRefusal,
+  humanAttentionHold, ATTENTION_HOLD_MAX_MS, submitRefusal, stateStampMs,
   hasHumanUserRecord, kindOf,
   paneReadyForInput, paneBlocks, composerDrawn, shellPrompt, startsClaude,
   startingUp, startingUnmarked, bufferName,
