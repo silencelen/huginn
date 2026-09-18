@@ -246,6 +246,14 @@ class SessionVerbs(
     val compact: (String) -> Unit,
     /** Ask Claude to wrap up (and, host willing, end on settle). Not destructive. */
     val softEnd: (List<String>) -> Unit,
+    /**
+     * End for good AND keep the way back — the cwd, a copy of the conversation
+     * and the exact resume command.
+     *
+     * NULL on a daemon without the feature, which is what keeps the item out of
+     * the menu: a verb whose only outcome is a 404 is worse than no verb.
+     */
+    val archive: ((List<String>) -> Unit)? = null,
     val kill: (List<String>) -> Unit,
 )
 
@@ -253,27 +261,32 @@ fun sessionMenu(session: Session, selection: Set<String>, verbs: SessionVerbs): 
     val multi = selection.size > 1 && session.name in selection
     if (multi) {
         val names = selection.toList()
-        return listOf(
-            HuginnMenuItem("Wind down ${selection.size} sessions") { verbs.softEnd(names) },
-            HuginnMenuItem("End ${selection.size} sessions", destructive = true) { verbs.kill(names) },
-        )
+        return buildList {
+            add(HuginnMenuItem("Wind down ${selection.size} sessions") { verbs.softEnd(names) })
+            verbs.archive?.let { a -> add(HuginnMenuItem("Archive ${selection.size} sessions…") { a(names) }) }
+            add(HuginnMenuItem("End ${selection.size} sessions", destructive = true) { verbs.kill(names) })
+        }
     }
-    return listOf(
-        HuginnMenuItem("Open") { verbs.open(session.name) },
-        HuginnMenuItem("Rename…") { verbs.rename(session) },
+    return buildList {
+        add(HuginnMenuItem("Open") { verbs.open(session.name) })
+        add(HuginnMenuItem("Rename…") { verbs.rename(session) })
         // Esc into the pane. Named for the key so the menu teaches the keyboard
         // rather than competing with it.
-        HuginnMenuItem("Interrupt (Esc)") { verbs.interrupt(session.name) },
-        HuginnMenuItem("Copy session name") { verbs.copyName(session.name) },
+        add(HuginnMenuItem("Interrupt (Esc)") { verbs.interrupt(session.name) })
+        add(HuginnMenuItem("Copy session name") { verbs.copyName(session.name) })
         // The context manager: types "/compact" so the owner can reclaim context
         // without opening the pane. Host guards a plain shell / waiting question.
-        HuginnMenuItem("Compact context") { verbs.compact(session.name) },
+        add(HuginnMenuItem("Compact context") { verbs.compact(session.name) })
         // The graceful sibling of "End session": sends the wrap-up phrase, and the
         // host (auto-end on) ends the session once it settles. Red stays on the
         // kill — this one only sends a message.
-        HuginnMenuItem("Wind down…") { verbs.softEnd(listOf(session.name)) },
-        HuginnMenuItem("End session", destructive = true) { verbs.kill(listOf(session.name)) },
-    )
+        add(HuginnMenuItem("Wind down…") { verbs.softEnd(listOf(session.name)) })
+        // BETWEEN the wind-down and the end, because that is what it is: a wind
+        // down that leaves something behind. Not styled destructive — ending a
+        // session you can bring back is the least destructive of the three.
+        verbs.archive?.let { a -> add(HuginnMenuItem("Archive…") { a(listOf(session.name)) }) }
+        add(HuginnMenuItem("End session", destructive = true) { verbs.kill(listOf(session.name)) })
+    }
 }
 
 /** Labels only — what a test asserts, and what a screenshot should show. */
