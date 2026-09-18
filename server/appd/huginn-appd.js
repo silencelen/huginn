@@ -48,7 +48,13 @@ const archiveLib = require('./lib/archive');
 const devicesLib = require('./lib/devices');
 const { taskDirFor, parsePs, scanTasks, extractBgIds } = require('./lib/tasks');
 const { agentsDirFor, listAgents, listAgentFiles } = require('./lib/agents');
-const { sessionGraph, sessionOverview } = require('./lib/sessiongraph');
+const { sessionGraph, sessionOverview, CACHE_MAX: GRAPH_CACHE_MAX } = require('./lib/sessiongraph');
+// Projects: the name grammars, the manifest contract and its parser, the
+// membership join across three registries, and the dashboard rollup. Pure, so
+// "never join a member by the native row's `tmux` field" and "the LAST tagged
+// block wins" are asserted in test/projects.test.js rather than discovered on a
+// cluster of twelve live sessions.
+const projectsLib = require('./lib/projects');
 const { suggestionContext, buildPrompt, parseSuggestions } = require('./lib/suggest');
 const { FIELDS: POLISH_FIELDS, buildPolishPrompt, parsePolish } = require('./lib/polish');
 // Only `agedLimits` is still called from here: the account-switch DECISION moved
@@ -4809,6 +4815,449 @@ function unlinkRenderFiles(padId) {
   }
 }
 
+// ---- projects -------------------------------------------------------------
+//
+// A cluster of tmux sessions with roles: a LEAD that sizes the work and proposes
+// a manifest, members the owner approves into existence, and a dashboard that
+// sums what they spent. lib/projects.js holds every rule; this is the fs, the
+// tmux and the send queue around them.
+//
+// ⚠ THE DAEMON IS NOT A BUS. Claude Code 2.1.258 routes peer messages itself —
+// process to process over `/tmp/cc-socks/<pid>.sock`, identity kernel-verified
+// by peer credentials, auto-triggering a turn in the recipient with no keypress
+// — so NONE of this daemon's gates apply to a `SendMessage`. appd's contribution
+// is the names (`--name <slug>/<role>`), the personas, the membership table and
+// the view. The only things it types into a member are its own framed
+// `[Huginn] …` lines and the first prompt, and those DO ride the send queue.
+
+const PROJECTS_DIR = path.join(DATA_DIR, 'projects');
+/**
+ * Where a persona is materialised for a session's `claude` to READ.
+ *
+ * 0644 like the scratchpad renders and for the same reason: the project file is
+ * this daemon's record, this is a copy handed to a `claude` that has to be able
+ * to open it. `--append-system-prompt-file` (verified against CLI 2.1.258: it is
+ * accepted, it is absent from `--help`, and passing it turns system-prompt
+ * SNAPSHOTTING off so the persona applies fresh on every launch including a
+ * `--resume`) keeps the persona out of argv and therefore out of `ps`.
+ */
+const PROJECT_RENDER_DIR = path.join(PROJECTS_DIR, 'render');
+fs.mkdirSync(PROJECT_RENDER_DIR, { recursive: true });
+
+function projectPath(id) { return path.join(PROJECTS_DIR, `${id}.json`); }
+
+function loadProject(id) {
+  if (!UUID_RE.test(String(id || ''))) return null;
+  try { return JSON.parse(fs.readFileSync(projectPath(id), 'utf8')); } catch { return null; }
+}
+
+/** tmp+rename, 0600, like every other store here: a reader never sees half one. */
+function saveProject(p) {
+  const file = projectPath(p.id);
+  fs.writeFileSync(`${file}.tmp`, JSON.stringify(p, null, 2), { mode: 0o600 });
+  fs.renameSync(`${file}.tmp`, file);
+  return p;
+}
+
+function listProjects() {
+  let files = [];
+  try { files = fs.readdirSync(PROJECTS_DIR); } catch { return []; }
+  const out = [];
+  for (const f of files) {
+    if (!f.endsWith('.json')) continue;
+    const p = loadProject(f.slice(0, -5));
+    if (p) out.push(p);
+  }
+  return projectsLib.sortProjects(out);
+}
+
+/**
+ * Reload, change, save — the updatePad funnel, and the same hazard sharpened.
+ *
+ * A spawn writes this file once PER MEMBER, with a `tmux new-session` and a
+ * queued send between each write. Mutating a snapshot taken before the loop
+ * started would drop every member recorded since — which is exactly the Rounds
+ * bug, except here the lost record is a live tmux session nothing owns any more.
+ * The rev is bumped here so there is no way to write a project without moving
+ * the number every save is checked against.
+ */
+function updateProject(id, mutate) {
+  const p = loadProject(id);
+  if (!p) return null;
+  mutate(p);
+  p.updatedAt = Math.floor(Date.now() / 1000);
+  p.rev = (Number(p.rev) || 0) + 1;
+  return saveProject(p);
+}
+
+function projectRenderPath(id, role) { return path.join(PROJECT_RENDER_DIR, `${id}.${role}.md`); }
+
+/** The persona a session reads at launch. Rewritten on every launch/restore. */
+function writePersona(id, role, text) {
+  const file = projectRenderPath(id, role);
+  fs.writeFileSync(`${file}.tmp`, text, { mode: 0o644 });
+  fs.renameSync(`${file}.tmp`, file);
+  return file;
+}
+
+/** Every persona of one project goes with it — a readable path to a deleted
+ *  project's instructions is a session taking orders from a ghost. */
+function unlinkPersonas(id) {
+  let names;
+  try { names = fs.readdirSync(PROJECT_RENDER_DIR); } catch { return; }
+  for (const n of names) {
+    if (!n.startsWith(`${id}.`)) continue;
+    try { fs.unlinkSync(path.join(PROJECT_RENDER_DIR, n)); } catch { /* already gone */ }
+  }
+}
+
+/**
+ * Is this directory ALREADY trusted by Claude Code itself?
+ *
+ * ⚠ READ ONLY, AND DELIBERATELY SO. The first design pre-WROTE
+ * `projects[<cwd>].hasTrustDialogAccepted` into `~/.claude.json` so a fresh lead
+ * would never meet the folder-trust dialog (which blocks registration entirely
+ * and preselects "No, exit", so a blind Enter kills the launch). That file is
+ * 115 KB, holds 25 project entries and the OAuth identity block, and is
+ * rewritten by every running `claude` continuously — its mtime moved twice
+ * inside a ten-minute recon. A read-modify-tmp-rename would silently discard
+ * whatever a CLI wrote in that window. So an untrusted cwd is REFUSED with an
+ * instruction the owner can act on (decision 50), and nothing here ever writes
+ * to that file.
+ *
+ * WORKDIR passes without a lookup: it is where `POST /v1/sessions` has always
+ * opened `claude`, so a host on which it is untrusted is already living with
+ * that, and it is a project's default cwd for the same reason.
+ */
+function cwdIsTrusted(dir) {
+  const want = String(dir || '').replace(/\/+$/, '') || '/';
+  if (want === String(WORKDIR).replace(/\/+$/, '')) return true;
+  let cfg;
+  try { cfg = JSON.parse(fs.readFileSync(CLAUDE_CONFIG_PATH, 'utf8')); } catch { return false; }
+  const projects = cfg && cfg.projects;
+  if (!projects || typeof projects !== 'object') return false;
+  const entry = projects[want] || projects[`${want}/`];
+  return !!(entry && entry.hasTrustDialogAccepted === true);
+}
+
+/**
+ * The shell command a project session runs.
+ *
+ * Every piece is grammar-checked before it reaches here — the claude name is two
+ * `[a-z0-9-]` runs joined by a slash, the persona path is DATA_DIR plus a uuid
+ * and a role, and model/effort are enum members — so nothing in this string can
+ * be shell syntax. The tail mirrors the create route exactly, so a project
+ * session that exits drops to a login shell like any other.
+ *
+ * `mode` is NOT passed. It is a label on the manifest: this daemon's ask/act
+ * vocabulary is about `--allowedTools` for headless chats and has no meaning as
+ * a `--permission-mode` for an interactive pane, and inventing a mapping would
+ * mean guessing a flag value on the owner's behalf.
+ */
+function claudeLaunchCommand({ claudeName, persona, model, effort }) {
+  const parts = ['claude', '--name', claudeName];
+  if (model) parts.push('--model', model);
+  if (effort) parts.push('--effort', effort);
+  parts.push('--append-system-prompt-file', persona);
+  return `${parts.join(' ')}; exec "$SHELL" -l`;
+}
+
+/**
+ * One project session, created the way `POST /v1/sessions` creates one.
+ *
+ * ⚠ AND MARKED AS STILL COMING UP, which is the difference between a first
+ * prompt that arrives and one that never existed. `claude` needs about two
+ * seconds to paint a composer, and a paste before that is discarded whole,
+ * Enter included — measured on this host. `markLaunching` is what puts the
+ * session behind the `starting` gate so the queued first prompt waits for the
+ * composer instead of being typed into an empty pty.
+ */
+async function launchProjectSession(tmuxName, cwd, command) {
+  await ensureTmuxServerScope();
+  // Whatever the last holder of this name left behind goes before the new
+  // session can be observed — the create route's own first move.
+  clearSessionState(tmuxName);
+  const r = await run('tmux', ['new-session', '-d', '-s', tmuxName, '-c', cwd, command]);
+  if (r.err) {
+    return { error: (r.stderr || r.err.message || '').trim().slice(0, 160) || 'tmux refused the session' };
+  }
+  // What tmux CALLED it, not what we asked for: a '.' is rewritten to '_' with a
+  // zero exit. The grammar forbids dots so this should never differ — and it is
+  // read back anyway, because "should never" is how the rename route got bitten.
+  const q = await run('tmux', ['display-message', '-p', '-t', `=${tmuxName}:`, '#S']);
+  const created = (q.stdout || '').trim() || tmuxName;
+  registryAdd(created, { cwd });
+  markLaunching(created);
+  return { name: created };
+}
+
+/**
+ * Create the members the owner approved, and report per member.
+ *
+ * ⚠ A FAILURE CONTINUES THE LOOP. A cluster is twelve sessions and the ways one
+ * of them fails are ordinary — a tmux name a previous project left behind, a
+ * member cwd that has been deleted since the lead proposed it. Returning at the
+ * first one would leave the owner with a project that spawned the first two
+ * roles, no answer about the rest, and a card still offering Spawn for a plan
+ * half of which is already live. So every member is attempted, every outcome is
+ * reported, and each spawned member is WRITTEN before the next is attempted —
+ * re-reading the file each time, because there is an await between every write.
+ */
+async function spawnProject(project) {
+  const manifest = project.manifest;
+  const spawned = [];
+  const failed = [];
+  for (const s of (manifest.sessions || []).slice(0, projectsLib.MAX_MEMBERS)) {
+    const tmuxName = projectsLib.tmuxNameFor(project.slug, s.role);
+    const claudeName = projectsLib.claudeNameFor(project.slug, s.role);
+    const cwd = s.cwd || project.cwd;
+    const member = {
+      role: s.role,
+      name: tmuxName,
+      claudeName,
+      sessionId: null,
+      cwd,
+      model: s.model || null,
+      effort: s.effort || null,
+      mode: s.mode || null,
+      firstPrompt: s.firstPrompt,
+      spawnedAt: null,
+      endedAt: null,
+    };
+    let persona;
+    try {
+      persona = writePersona(project.id, s.role, projectsLib.memberPersona(project, member));
+    } catch (e) {
+      failed.push({ role: s.role, reason: `persona could not be written: ${e.message}` });
+      continue;
+    }
+    const launched = await launchProjectSession(tmuxName, cwd, claudeLaunchCommand({
+      claudeName, persona, model: s.model, effort: s.effort,
+    }));
+    if (launched.error) {
+      failed.push({ role: s.role, reason: launched.error });
+      log(`project ${project.slug}: ${s.role} could not be created: ${launched.error}`);
+      continue;
+    }
+    member.name = launched.name;
+    member.spawnedAt = Math.floor(Date.now() / 1000);
+    updateProject(project.id, (p) => {
+      p.members = [...(p.members || []).filter((x) => x.role !== s.role), projectsLib.memberRow(member)];
+    });
+    spawned.push(member);
+    // The first prompt rides the ORDINARY queue, with the startup hold from
+    // markLaunching in front of it: `automated` so the drop rules and the drop
+    // journal treat it as appd's own send rather than as a person's message.
+    enqueueSend(launched.name, projectsLib.firstPromptFrame(project, s.role, s.firstPrompt), {
+      automated: true, origin: 'project', kind: 'firstPrompt',
+    }).catch((e) => log(`project ${project.slug}: ${s.role} first prompt failed: ${e.message}`));
+  }
+
+  const saved = updateProject(project.id, (p) => {
+    // Nothing spawned leaves the card standing: the owner's approval has not
+    // been carried out and the plan is still the plan.
+    if (spawned.length) p.status = 'active';
+    if (p.manifest) p.manifest.spawnedRev = p.manifest.rev || 0;
+  }) || project;
+
+  if (spawned.length && project.lead) {
+    // Typed, not sent as a peer message — appd must never appear in the peer
+    // registry as something with authority over these sessions.
+    enqueueSend(project.lead.name, projectsLib.spawnedFrame(project, spawned.map((m) => m.claudeName)), {
+      automated: true, origin: 'project', kind: 'spawned',
+    }).catch(() => { });
+  }
+  log(`project ${project.slug}: spawned ${spawned.length}, failed ${failed.length}`);
+  return {
+    ok: failed.length === 0 && spawned.length > 0,
+    spawned: spawned.map(projectsLib.memberRow),
+    failed,
+    project: saved,
+  };
+}
+
+/** The proposal, as a notification with the two bounded actions and no others. */
+function notifyProposal(project) {
+  const m = project.manifest || {};
+  const roles = (m.sessions || []).map((s) => s.role).join(', ');
+  deliverPush({
+    kind: 'project_proposed',
+    key: `project:${project.id}`,
+    subject: project.id,
+    title: `${project.name} — proposal ready`,
+    text: `${(m.sessions || []).length} session(s) — ${roles}. ${m.summary || ''}`.trim(),
+    // ⚠ BOUNDED CHOICES ONLY. Edit is not here and must never be: it opens an
+    // editor, and a notification button that cannot complete its own action is
+    // the house rule this list exists to keep.
+    options: ['Spawn', 'Discard'],
+    payload: { projectId: project.id, manifestRev: m.rev || 0 },
+    fingerprint: `${project.id}:${m.rev || 0}`,
+  }).catch((e) => log(`project ${project.slug}: proposal push failed: ${e.message}`));
+}
+
+/**
+ * Read the lead's last turn and adopt a manifest if a new one is there.
+ *
+ * Called from the 60 s reconcile AND from the two project GETs. A side effect in
+ * a GET is deliberate and has precedent — `GET /v1/scratchpads` mints Main and
+ * says why — because the alternative is a proposal card that appears up to a
+ * minute after the lead wrote it, on a surface whose entire job is to show that
+ * the lead is waiting for an answer. It costs one transcript TAIL of 40 events
+ * and it is idempotent: a block already adopted does not move the rev.
+ *
+ * Gated on drafting|proposed. A project whose members are already running is not
+ * re-proposed by a lead that mentions its own plan again — `active -> proposed`
+ * is not a legal move, and spawning a second cluster because the lead recapped
+ * would be the worst possible reading of a recap.
+ */
+function detectManifest(project) {
+  if (!project || !project.lead || !project.manifest || !project.manifest.tag) return project;
+  if (project.status !== 'drafting' && project.status !== 'proposed') return project;
+  const st = readSessionState(project.lead.name);
+  const file = (st && st.transcript)
+    || (project.lead.sessionId ? findTranscriptFile(project.lead.sessionId) : null);
+  if (!file) return project;
+  let text = '';
+  try {
+    const t = readTranscript(file, { limit: 40 });
+    text = (t.events || [])
+      .filter((e) => e.kind === 'assistant' && !e.sidechain && typeof e.text === 'string')
+      .map((e) => e.text).join('\n');
+  } catch { return project; }
+  if (!text) return project;
+
+  const tag = project.manifest.tag;
+  const parsed = projectsLib.parseManifest(text, tag, { cwd: project.cwd });
+  const untagged = projectsLib.untaggedManifest(text, tag);
+  const before = project.manifest;
+  const isNew = parsed && (before.summary !== parsed.summary
+    || JSON.stringify(before.sessions || []) !== JSON.stringify(parsed.sessions));
+
+  if (!isNew && !(untagged && !before.untaggedSeen)) return project;
+
+  const now = Math.floor(Date.now() / 1000);
+  const saved = updateProject(project.id, (p) => {
+    if (isNew) {
+      p.manifest = {
+        ...p.manifest,
+        type: parsed.type,
+        scope: parsed.scope,
+        summary: parsed.summary,
+        sessions: parsed.sessions,
+        rev: (Number(p.manifest.rev) || 0) + 1,
+        receivedAt: now,
+      };
+      p.status = 'proposed';
+      if (p.kind === 'other' && parsed.type !== 'other') p.kind = parsed.type;
+    }
+    if (untagged) p.manifest.untaggedSeen = true;
+  });
+  if (!saved) return project;
+  if (isNew) {
+    log(`project ${saved.slug}: manifest rev ${saved.manifest.rev} (${saved.manifest.sessions.length} session(s))`);
+    notifyProposal(saved);
+  }
+  if (untagged && !before.untaggedSeen) {
+    log(`project ${saved.slug}: the lead wrote an UNTAGGED project block — reported, not acted on`);
+  }
+  return saved;
+}
+
+/**
+ * Keep the project store in step with live tmux, on the registry reconcile's own
+ * timer.
+ *
+ * Skipped whole when the listing fails — `listSessions` answers null for a
+ * failure to OBSERVE, and reading that as "nothing is live" would drop every
+ * member of every project and archive them all in one tick. The same trap
+ * `pruneDead` documents, with a worse blast radius.
+ */
+async function reconcileProjects() {
+  const live = await listSessions();
+  if (live === null) return;
+  const now = Math.floor(Date.now() / 1000);
+  for (const row of listProjects()) {
+    if (row.status === 'archived') continue;
+    let project = loadProject(row.id);
+    if (!project) continue;
+    project = detectManifest(project);
+    const plan = projectsLib.reconcilePlan(project, live);
+    if (!plan.drop.length && !plan.rebind.length && !plan.endProject) continue;
+    updateProject(project.id, (p) => {
+      for (const r of plan.rebind) {
+        // ⚠ RE-BOUND BY TMUX NAME. A reboot restore that falls back to a fresh
+        // `claude` (nothing resumable on disk) mints a NEW Claude session id, so
+        // the stored one stops matching anything in the native registry. The
+        // tmux name is the membership key precisely so this is a rewrite rather
+        // than a lost member.
+        if (r.role === projectsLib.LEAD_ROLE) { if (p.lead) p.lead.sessionId = r.sessionId; continue; }
+        const m = (p.members || []).find((x) => x.role === r.role);
+        if (m) m.sessionId = r.sessionId;
+      }
+      if (plan.drop.length) p.members = (p.members || []).filter((m) => !plan.drop.includes(m.role));
+      if (plan.endProject) {
+        p.status = 'archived';
+        p.endedReason = 'the lead session is gone';
+        p.endedAt = now;
+      }
+    });
+    if (plan.drop.length) log(`project ${project.slug}: dropped ${plan.drop.join(', ')} (session gone)`);
+    if (plan.endProject) log(`project ${project.slug}: archived — the lead session is gone`);
+  }
+}
+
+/**
+ * Per-session overviews already computed, keyed by Claude session id.
+ *
+ * Bounded at the graph cache's own size for the same reason it exists: this map
+ * holds one parsed summary per member and a host with several projects would
+ * otherwise keep every session it ever rendered.
+ */
+const projectOverviewCache = new Map();
+
+function rememberOverview(key, value) {
+  projectOverviewCache.delete(key);
+  projectOverviewCache.set(key, value);
+  while (projectOverviewCache.size > GRAPH_CACHE_MAX) {
+    projectOverviewCache.delete(projectOverviewCache.keys().next().value);
+  }
+}
+
+async function projectDashboard(project) {
+  const sessions = await listSessions();
+  const joined = projectsLib.joinMembers(project, sessions || [], readNativeRegistry());
+  const withFiles = joined.map((r) => {
+    const st = r.name ? readSessionState(r.name) : null;
+    const file = (st && st.transcript) || (r.sessionId ? findTranscriptFile(r.sessionId) : null);
+    return { ...r, transcript: file };
+  });
+  const rows = projectsLib.rollupMembers(withFiles, {
+    cache: { get: (k) => projectOverviewCache.get(k), set: rememberOverview },
+    sizeOf: (f) => { try { return fs.statSync(f).size; } catch { return null; } },
+    overview: (f, id) => { try { return sessionOverview(f, id); } catch { return null; } },
+  });
+  const { totals, rate } = projectsLib.aggregateDashboard(rows);
+  return {
+    project: projectsLib.projectRow(project, joined),
+    generatedAt: Math.floor(Date.now() / 1000),
+    totals,
+    rate,
+    members: rows.map(projectsLib.dashboardMemberRow),
+  };
+}
+
+/** The member (or the lead) a `from`/`to` names: by role, by tmux name, or by
+ *  the `<slug>/<role>` peers use. */
+function projectMemberNamed(project, who) {
+  const want = String(who || '').trim();
+  if (!want) return null;
+  for (const m of projectsLib.memberList(project)) {
+    if (m.role === want || m.name === want || m.claudeName === want) return m;
+  }
+  return null;
+}
+
+
 // ------------------------------------------------------- account + usage
 
 /** `claude auth status` already emits JSON; pass it through, minus nothing secret. */
@@ -5666,32 +6115,92 @@ const CONSENT_GRACE_MS = Number(process.env.HUGINN_APPD_CONSENT_GRACE_MS) || res
 const RESUME_POLL_MS = 10_000;
 
 /**
- * Claude Code's own session registry — `~/.claude/sessions/<pid>.json`, one file
- * per live process (peer-registry spike §0).
+ * Is the process behind a registry row still the one that wrote it?
  *
- * Read for exactly ONE field: `entrypoint`, which is `'cli'` for a real
- * interactive TTY and `'sdk-cli'` for `-p` and SDK runs. That is the only honest
- * discriminator in the file — `kind` says `"interactive"` even for a one-shot
- * `claude -p`, and `tmux` is an inherited-env label that is ambiguous across
- * sockets and simply wrong for a nested launch (three independent confirmations
- * in the spike). Never resolve a session by either.
+ * `/proc/<pid>/stat` field 22 is the process's start time in clock ticks, and
+ * the registry records it as `procStart`. Comparing it defeats pid reuse, which
+ * on a host that launches sessions all day is not theoretical. Field 22 is
+ * counted from after the comm field — which can itself contain spaces and
+ * parentheses — so the split starts past the LAST ')'.
  *
- * Returns null when nothing matches, which is the honest answer for a process
- * that has exited: its entry is removed within seconds.
+ * ⚠ LIVENESS IS THIS, NEVER `updatedAt`. A healthy idle session's
+ * `statusUpdatedAt` was measured SEVEN HOURS stale while its process was fine
+ * and listed; `status` is written per turn, not as a heartbeat.
  */
-function nativeRegistryEntry(claudeSessionId) {
-  if (!claudeSessionId) return null;
+function pidLive(pid, procStart) {
+  const n = Number(pid);
+  if (!Number.isInteger(n) || n <= 0) return false;
+  let stat;
+  try { stat = fs.readFileSync(`/proc/${n}/stat`, 'utf8'); } catch { return false; }
+  const close = stat.lastIndexOf(')');
+  if (close < 0) return false;
+  const fields = stat.slice(close + 2).split(' ');
+  const started = fields[19];
+  if (procStart == null || procStart === '') return true;
+  return String(started) === String(procStart);
+}
+
+/**
+ * Claude Code's own session registry — `~/.claude/sessions/<pid>.json`, one file
+ * per live process (peer-registry spike §0), every row with `alive` computed.
+ *
+ * ⚠ ONE READER, MEMOISED. Projects' dashboard asks about twelve members on a
+ * five-second poll and the resume path asks about one; a per-lookup directory
+ * scan would be twelve readdirs and twelve times N file reads per tick. Two
+ * seconds is short enough that a busy/idle flip is never stale on screen and
+ * long enough that a whole dashboard pass costs one scan.
+ *
+ * The fields worth trusting: `sessionId` (the join key), `pid` + `procStart`
+ * (liveness), `name`/`nameSource` (the verified peer name), `entrypoint` —
+ * `'cli'` for a real interactive TTY, `'sdk-cli'` for `-p` and SDK runs, and the
+ * only honest discriminator in the file, because `kind` says `"interactive"`
+ * even for a one-shot. `status` is per-turn (`busy`/`idle`/`waiting`).
+ *
+ * ⚠ AND `tmux` IS NOT ONE OF THEM. It is inherited `$TMUX`: socket-blind,
+ * duplicated across nested launches, and wrong for a `-p` run, which records the
+ * coordinates of the pane that launched it. Never resolve a session by it.
+ */
+const NATIVE_REGISTRY_MEMO_MS = 2_000;
+let nativeRegistryAt = 0;
+let nativeRegistryRows = [];
+
+function readNativeRegistry(now = Date.now(), { force = false } = {}) {
+  if (!force && now - nativeRegistryAt < NATIVE_REGISTRY_MEMO_MS) return nativeRegistryRows;
   const dir = path.join(CLAUDE_DIR, 'sessions');
+  const rows = [];
   let names = [];
-  try { names = fs.readdirSync(dir); } catch { return null; }
+  try { names = fs.readdirSync(dir); } catch { names = []; }
   for (const n of names) {
     if (!n.endsWith('.json')) continue;
     try {
       const o = JSON.parse(fs.readFileSync(path.join(dir, n), 'utf8'));
-      if (o && o.sessionId === claudeSessionId) return o;
+      if (o && o.sessionId) rows.push({ ...o, alive: pidLive(o.pid, o.procStart) });
     } catch { /* a file being written, or one we have no business reading */ }
   }
-  return null;
+  nativeRegistryRows = rows;
+  nativeRegistryAt = now;
+  return rows;
+}
+
+/**
+ * The row for one Claude session id, or null — which is the honest answer for a
+ * process that has exited: its entry is removed within seconds.
+ */
+function nativeRegistryEntry(claudeSessionId) {
+  if (!claudeSessionId) return null;
+  const hit = readNativeRegistry().find((r) => r.sessionId === claudeSessionId);
+  if (hit) return hit;
+  // ⚠ A MISS RE-READS, AND THAT IS NOT BELT-AND-BRACES. The memo is there so a
+  // twelve-member dashboard costs one directory scan, and a two-second-old row
+  // is harmless when the row is THERE. It is not harmless when it is absent: a
+  // session's registry row appears within a second of launch, and the one moment
+  // this answer is read for a decision that is NEVER REVISITED — is Claude
+  // Code's own usage-limit wait armed for this session? — is the first tick
+  // after a stall is seen. A stale "no row" there makes appd type its
+  // continuation while the CLI is about to send its own, and the task runs
+  // twice. Caught by routes-resume.test.js the day the memo was added.
+  return readNativeRegistry(Date.now(), { force: true })
+    .find((r) => r.sessionId === claudeSessionId) || null;
 }
 
 /**
@@ -9932,6 +10441,319 @@ const server = http.createServer(async (req, res) => {
       return sendErr(res, 404, 'no such archive route');
     }
 
+    // ---- projects: a cluster of sessions with roles, a lead, and a dashboard
+    //
+    // The list is also the FEATURE PROBE both clients use: a daemon without
+    // Projects answers 404 here and the clients hide the tree, the rail item and
+    // the palette rows rather than showing a door that leads to an error (the
+    // scratchpads/refreshRounds precedent).
+    if (req.method === 'GET' && p === '/v1/projects') {
+      const all = u.searchParams.get('all') === '1';
+      const sessions = await listSessions();
+      const rows = [];
+      for (const stored of listProjects()) {
+        // Adopting a manifest on a READ is deliberate; see [detectManifest].
+        const project = detectManifest(stored);
+        if (!all && project.status === 'archived') continue;
+        rows.push(projectsLib.projectRow(project,
+          projectsLib.joinMembers(project, sessions || [], readNativeRegistry())));
+      }
+      return sendJson(res, 200, { projects: rows, max: projectsLib.MAX_PROJECTS });
+    }
+
+    if (req.method === 'POST' && p === '/v1/projects') {
+      const body = JSON.parse(await readBody(req) || '{}');
+      const existing = listProjects();
+      if (existing.length >= projectsLib.MAX_PROJECTS) {
+        return sendErr(res, 400, `that is the ${projectsLib.MAX_PROJECTS}-project limit — archive one first`);
+      }
+      const badName = projectsLib.nameProblem(body.name, existing.map((x) => x.name));
+      if (badName) return sendErr(res, 400, badName);
+      const name = projectsLib.cleanName(body.name);
+      const slug = projectsLib.slugFor(name);
+      const badSlug = projectsLib.slugProblem(slug, existing.map((x) => x.slug));
+      if (badSlug) return sendErr(res, 409, badSlug);
+      const kind = projectsLib.KINDS.includes(body.kind) ? body.kind : null;
+      if (!kind) return sendErr(res, 400, `kind is one of ${projectsLib.KINDS.join(', ')}`);
+      const badBrief = projectsLib.briefProblem(body.brief);
+      if (badBrief) return sendErr(res, 400, badBrief);
+
+      const cwd = typeof body.cwd === 'string' && body.cwd.trim() ? body.cwd.trim().replace(/\/+$/, '') : WORKDIR;
+      if (!cwd.startsWith('/')) return sendErr(res, 400, 'cwd must be an absolute path');
+      try { if (!fs.statSync(cwd).isDirectory()) throw new Error('not a directory'); } catch {
+        return sendErr(res, 400, `${cwd} is not a directory on this host`);
+      }
+      // ⚠ TRUST IS CHECKED, NEVER GRANTED. The folder-trust dialog blocks Claude
+      // Code's session registration entirely and preselects "No, exit", so a lead
+      // launched into an untrusted directory registers no peer name and cannot be
+      // messaged — and answering the dialog for it would mean WRITING into
+      // ~/.claude.json, a 115 KB file every live `claude` rewrites continuously.
+      // Refused with the fix instead (decision 50). See [cwdIsTrusted].
+      if (!cwdIsTrusted(cwd)) {
+        return sendErr(res, 409, `${cwd} has not been trusted in Claude Code yet — open it once with `
+          + '`claude` there and accept the folder-trust question, then create the project');
+      }
+
+      const leadTmux = projectsLib.tmuxNameFor(slug, projectsLib.LEAD_ROLE);
+      if (await sessionExists(leadTmux)) return sendErr(res, 409, `a tmux session called '${leadTmux}' already exists`);
+
+      const now = Math.floor(Date.now() / 1000);
+      const project = {
+        id: crypto.randomUUID(),
+        name,
+        slug,
+        kind,
+        status: 'drafting',
+        brief: String(body.brief).trim().slice(0, projectsLib.MAX_BRIEF),
+        cwd,
+        lead: {
+          role: projectsLib.LEAD_ROLE,
+          name: leadTmux,
+          claudeName: projectsLib.claudeNameFor(slug, projectsLib.LEAD_ROLE),
+          sessionId: null,
+          spawnedAt: now,
+          endedAt: null,
+        },
+        members: [],
+        manifest: {
+          // Minted here, present ONLY in the lead's persona, and the reason a
+          // `huginn-project` block found in anything the lead READS cannot be
+          // mistaken for its own proposal. Same control as a Round's report tag.
+          tag: crypto.randomBytes(5).toString('hex'),
+          rev: 0,
+          receivedAt: null,
+          type: null,
+          scope: '',
+          summary: null,
+          sessions: [],
+          untaggedSeen: false,
+          spawnedRev: 0,
+        },
+        endedReason: null,
+        endedAt: null,
+        createdAt: now,
+        updatedAt: now,
+        rev: 1,
+      };
+      const persona = writePersona(project.id, projectsLib.LEAD_ROLE, projectsLib.leadPersona(project));
+      const launched = await launchProjectSession(leadTmux, cwd,
+        claudeLaunchCommand({ claudeName: project.lead.claudeName, persona }));
+      if (launched.error) {
+        unlinkPersonas(project.id);
+        return sendErr(res, 500, `tmux: ${launched.error}`);
+      }
+      project.lead.name = launched.name;
+      saveProject(project);
+      // The brief rides the ordinary queue behind the startup hold, so it lands
+      // in a composer rather than in a pty nobody is reading yet.
+      enqueueSend(launched.name, projectsLib.briefFrame(project), {
+        automated: true, origin: 'project', kind: 'brief',
+      }).catch((e) => log(`project ${slug}: brief failed: ${e.message}`));
+      log(`project ${slug}: created (${project.id}), lead ${launched.name} in ${cwd}`);
+      return sendJson(res, 201, project);
+    }
+
+    if ((m = p.match(/^\/v1\/projects\/([0-9a-f-]{36})(\/[a-z]+)?$/))) {
+      const projectId = m[1];
+      const sub = m[2] || '';
+      const stored = loadProject(projectId);
+      if (!stored) return sendErr(res, 404, 'no such project');
+
+      if (req.method === 'GET' && sub === '') {
+        const project = detectManifest(stored);
+        const sessions = await listSessions();
+        const joined = projectsLib.joinMembers(project, sessions || [], readNativeRegistry());
+        return sendJson(res, 200, { ...project, row: projectsLib.projectRow(project, joined), live: joined });
+      }
+
+      if (req.method === 'GET' && sub === '/dashboard') {
+        return sendJson(res, 200, await projectDashboard(detectManifest(stored)));
+      }
+
+      /**
+       * Rename, re-brief, pause/resume, archive, and an edited manifest.
+       *
+       * ⚠ RE-READ AFTER THE AWAIT, then compare the rev. Two clients showing the
+       * same project is the ordinary case, and a stale save is answered 409 with
+       * the CURRENT project in the body so the editor can adopt it and say so —
+       * the shipped scratchpad contract, which both clients already know.
+       */
+      if (req.method === 'PATCH' && sub === '') {
+        const body = JSON.parse(await readBody(req) || '{}');
+        const current = loadProject(projectId);
+        if (!current) return sendErr(res, 404, 'no such project');
+        const rev = Number(body.rev);
+        if (!Number.isInteger(rev)) return sendErr(res, 400, 'rev is required — it is what makes a save safe');
+        if (rev !== (Number(current.rev) || 0)) return sendJson(res, 409, current);
+
+        let name = null;
+        if (typeof body.name === 'string') {
+          const taken = listProjects().filter((x) => x.id !== projectId).map((x) => x.name);
+          const bad = projectsLib.nameProblem(body.name, taken);
+          if (bad) return sendErr(res, 400, bad);
+          // The SLUG never moves: it is the tmux and peer namespace every member
+          // is already named in, and renaming it would orphan the cluster.
+          name = projectsLib.cleanName(body.name);
+        }
+        if (typeof body.brief === 'string') {
+          const bad = projectsLib.briefProblem(body.brief);
+          if (bad) return sendErr(res, 400, bad);
+        }
+        if (body.status != null) {
+          const bad = projectsLib.transitionProblem(current.status, String(body.status));
+          if (bad) return sendErr(res, 409, bad);
+        }
+        let manifest = null;
+        if (body.manifest != null) {
+          // An edited manifest is re-validated with the SAME rules the parser
+          // applies to the lead's own block: the client's editor is a
+          // convenience, not an authority, and a role or a cwd that could not
+          // have been proposed must not become spawnable by being typed instead.
+          const edited = projectsLib.parseManifest(
+            `\`\`\`huginn-project edit\n${JSON.stringify(body.manifest)}\n\`\`\``,
+            'edit', { cwd: current.cwd },
+          );
+          if (!edited) return sendErr(res, 400, 'that manifest is not valid — check the roles, the prompts and the directories');
+          manifest = edited;
+        }
+        const saved = updateProject(projectId, (proj) => {
+          if (name !== null) proj.name = name;
+          if (typeof body.brief === 'string') proj.brief = body.brief.trim();
+          if (body.status != null) proj.status = String(body.status);
+          if (manifest) {
+            proj.manifest = {
+              ...proj.manifest,
+              ...manifest,
+              rev: (Number(proj.manifest.rev) || 0) + 1,
+              receivedAt: Math.floor(Date.now() / 1000),
+            };
+            proj.status = 'proposed';
+          }
+        });
+        if (!saved) return sendErr(res, 404, 'no such project');
+        return sendJson(res, 200, saved);
+      }
+
+      /**
+       * Create the members the owner approved.
+       *
+       * The rev check is the whole point of the card: a notification that has
+       * been sitting on a lock screen while the lead revised its plan must not
+       * spawn the revision the owner never saw.
+       */
+      if (req.method === 'POST' && sub === '/spawn') {
+        const body = JSON.parse(await readBody(req) || '{}');
+        const project = loadProject(projectId);
+        if (!project) return sendErr(res, 404, 'no such project');
+        if (body.approve !== true) return sendErr(res, 400, 'approve must be true — spawning is the owner\'s decision');
+        if (project.status !== 'proposed') return sendErr(res, 409, `this project is ${project.status}, not proposed`);
+        const wantRev = Number(body.manifestRev);
+        if (!Number.isInteger(wantRev)) return sendErr(res, 400, 'manifestRev is required');
+        if (wantRev !== (Number(project.manifest.rev) || 0)) {
+          return sendJson(res, 409, { error: 'the proposal has changed since that card was drawn', project });
+        }
+        if (!(project.manifest.sessions || []).length) return sendErr(res, 409, 'this proposal has no sessions in it');
+        // ⚠ NOT INTO A RED WINDOW. Twelve fresh sessions on an account the
+        // headroom arbiter has already stopped is how a cluster dies half-born:
+        // the first few come up, the rest open on a 429, and the lead is left
+        // messaging peers that never registered. Said in the 409 rather than
+        // silently deferred, because the owner is standing at the card.
+        let stop = null;
+        try { stop = sentinelsLib.state(HEADROOM_DIR).STOP; } catch { /* no dir yet: nothing armed */ }
+        if (stop) {
+          return sendErr(res, 409, `there is no room on this account right now (${stop.reason || 'usage stop'}) `
+            + '— spawn when the window resets');
+        }
+        const out = await spawnProject(project);
+        return sendJson(res, 200, out);
+      }
+
+      if (req.method === 'POST' && sub === '/discard') {
+        const project = loadProject(projectId);
+        if (!project) return sendErr(res, 404, 'no such project');
+        if (project.status !== 'proposed') return sendErr(res, 409, `this project is ${project.status}, not proposed`);
+        // The manifest is KEPT at its rev so Edit can still open it; only the
+        // status moves. The lead is told, because otherwise it waits forever for
+        // an approval that is not coming.
+        const saved = updateProject(projectId, (proj) => { proj.status = 'drafting'; });
+        if (project.lead) {
+          enqueueSend(project.lead.name,
+            '[Huginn] The proposal was discarded; the owner may send a revised brief.',
+            { automated: true, origin: 'project', kind: 'discard' }).catch(() => { });
+        }
+        return sendJson(res, 200, saved);
+      }
+
+      /**
+       * A message from one member to another, typed by appd.
+       *
+       * ⚠ THIS IS NOT HOW THE SESSIONS TALK. Lead and members use Claude Code's
+       * own `SendMessage`, which appd neither sees nor routes. This route exists
+       * so the OWNER can put words in one member's pane addressed from another,
+       * and because it is appd doing the typing it rides the SEND QUEUE and every
+       * gate on it — a member sitting on a permission dialog holds the message
+       * instead of having it typed into the dialog. The native path has no such
+       * protection, which is exactly why this one keeps it.
+       */
+      if (req.method === 'POST' && sub === '/message') {
+        const body = JSON.parse(await readBody(req) || '{}');
+        const project = loadProject(projectId);
+        if (!project) return sendErr(res, 404, 'no such project');
+        const from = projectMemberNamed(project, body.from);
+        const to = projectMemberNamed(project, body.to);
+        if (!from) return sendErr(res, 400, 'from must name a role in this project');
+        if (!to) return sendErr(res, 400, 'to must name a role in this project');
+        if (from.role === to.role) return sendErr(res, 400, 'a session cannot be messaged from itself');
+        const text = typeof body.text === 'string' ? body.text.trim() : '';
+        if (!text) return sendErr(res, 400, 'text is required');
+        if (text.length > projectsLib.MAX_PROMPT) return sendErr(res, 400, 'text too long');
+        if (!(await sessionExists(to.name))) return sendErr(res, 409, `${to.claudeName} is not running`);
+        const r = await enqueueSend(to.name, projectsLib.peerMessageFrame(from.claudeName, text), {
+          automated: true, origin: 'project', kind: 'peerMessage',
+        });
+        return sendJson(res, 202, {
+          ok: true, to: to.claudeName, from: from.claudeName,
+          delivered: !!r.delivered, queued: r.queued, blockedBy: r.blockedBy || null, dropped: r.dropped || null,
+        });
+      }
+
+      if (req.method === 'DELETE' && sub === '') {
+        const body = JSON.parse(await readBody(req) || '{}');
+        const project = loadProject(projectId);
+        if (!project) return sendErr(res, 404, 'no such project');
+        // `?end=1` is the contract's spelling and means the gentle one; the body
+        // says which. Anything else ends NOTHING and only deletes the record —
+        // the safe default, because a delete that silently kills twelve live
+        // sessions is not a delete anybody meant.
+        const q = u.searchParams.get('end');
+        const raw = String(body.end || (q === '1' ? 'graceful' : q || ''));
+        const end = raw === 'now' || raw === 'graceful' ? raw : '';
+        const ended = [];
+        if (end === 'now' || end === 'graceful') {
+          for (const member of projectsLib.memberList(project)) {
+            if (!(await sessionExists(member.name))) continue;
+            if (end === 'graceful') {
+              // The existing wind-down: the phrase goes into the composer and the
+              // settle timer ends the session once idle has held. Not a wait the
+              // caller sits through.
+              const r = await sendLineToPane(member.name, SOFT_END_PHRASE);
+              if (!r.err) { softEnds.set(member.name, createPending(Date.now())); ended.push(member.name); }
+            } else {
+              const r = await hardEndSession(member.name);
+              if (!r.err) ended.push(member.name);
+            }
+          }
+        }
+        try { fs.unlinkSync(projectPath(projectId)); } catch { /* already gone */ }
+        unlinkPersonas(projectId);
+        log(`project ${project.slug}: deleted${ended.length ? `, ended ${ended.join(', ')}` : ''}`);
+        return sendJson(res, 200, { ok: true, ended, mode: end || 'none' });
+      }
+
+      return sendErr(res, 404, 'no such project route');
+    }
+
+
     // ---- scratchpads: the user's own pages, and nothing this host writes to
     if (req.method === 'GET' && p === '/v1/scratchpads') {
       // Main is minted HERE and not at startup, so listing is also what creates
@@ -10525,8 +11347,15 @@ resolveBind().then(async (bind) => {
   // Keep the durable registry in step with live tmux: learn ids the hook writes
   // late, pick up sessions started outside the daemon, drop the ones that ended. The
   // early tick catches a just-restored session's fresh id; the interval carries it.
+  // Projects ride the same clock: the same question (what is still live?) asked
+  // of a second store, so a member whose session ended stops being counted and a
+  // project whose lead is gone stops claiming to be running. It also picks up a
+  // manifest the lead wrote while no client was looking — the GETs do it too,
+  // but a proposal has to reach the owner's phone whether or not the app is open.
   setTimeout(() => { reconcileSessionRegistry().catch(() => { }); }, 15_000).unref();
+  setTimeout(() => { reconcileProjects().catch((e) => log(`projects: reconcile failed: ${e.message}`)); }, 15_000).unref();
   setInterval(() => { reconcileSessionRegistry().catch(() => { }); }, 60_000).unref();
+  setInterval(() => { reconcileProjects().catch((e) => log(`projects: reconcile failed: ${e.message}`)); }, 60_000).unref();
   // A restart kills any run that was in flight, and delivery of a chat's queue is
   // triggered by that run closing — so without this, messages queued before a
   // restart would sit on disk unanswered forever.
