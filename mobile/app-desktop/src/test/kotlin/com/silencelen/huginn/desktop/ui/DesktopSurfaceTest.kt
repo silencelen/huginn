@@ -124,6 +124,51 @@ class DesktopSurfaceTest {
     }
 
     @Test
+    fun `archive sits between the wind-down and the end, and only on a daemon that has it`() {
+        // ⚠ THE FEATURE PROBE IS THE MENU. A daemon without archive answers the
+        // route 404, the store's flag goes false, and the verb arrives null —
+        // which must remove the ITEM, not offer one whose only outcome is an
+        // error. This is the assertion that says the null actually does that.
+        assertEquals(
+            listOf("Open", "Rename…", "Interrupt (Esc)", "Copy session name", "Compact context", "Wind down…", "End session"),
+            labelsOf(sessionMenu(session(), emptySet(), noSessionVerbs())),
+            "an older daemon must show no Archive at all",
+        )
+        // With it: between the two verbs it sits between in meaning — a wind-down
+        // that leaves something behind.
+        assertEquals(
+            listOf("Open", "Rename…", "Interrupt (Esc)", "Copy session name", "Compact context", "Wind down…", "Archive…", "End session"),
+            labelsOf(sessionMenu(session(), emptySet(), noSessionVerbs(archive = {}))),
+        )
+        val multi = sessionMenu(session(name = "b"), setOf("a", "b"), noSessionVerbs(archive = {}))
+        assertEquals(
+            listOf("Wind down 2 sessions", "Archive 2 sessions…", "End 2 sessions"),
+            labelsOf(multi),
+            "a multi-selection says how many, like every other verb here",
+        )
+    }
+
+    @Test
+    fun `archiving is not marked destructive — it keeps everything it ends`() {
+        // Red is for the verbs that lose something. An archive ends a session and
+        // keeps its directory, its conversation and the command that brings it
+        // back; colouring it like a kill would teach people to avoid the safest
+        // way to finish with a session.
+        val items = sessionMenu(session(), emptySet(), noSessionVerbs(archive = {}))
+            .filterIsInstance<HuginnMenuItem>()
+        assertEquals(listOf("End session"), items.filter { it.destructive }.map { it.label })
+    }
+
+    @Test
+    fun `the archive verb carries every selected name, not just the clicked one`() {
+        var archived: List<String> = emptyList()
+        val items = sessionMenu(session(name = "b"), setOf("a", "b"), noSessionVerbs(archive = { archived = it }))
+            .filterIsInstance<HuginnMenuItem>()
+        items.first { it.label.startsWith("Archive") }.onClick()
+        assertEquals(setOf("a", "b"), archived.toSet())
+    }
+
+    @Test
     fun `winding down is not marked destructive — only the hard end is`() {
         // Wind down SENDS a message (the session may even stay open, if the
         // wrap-up asks a question); red belongs to the verb that stops things.
@@ -756,7 +801,8 @@ class DesktopSurfaceTest {
     private fun ChatVerbs.copyDelete(delete: (List<String>) -> Unit) =
         ChatVerbs(open, rename, stop, copyId, delete)
 
-    private fun noSessionVerbs() = SessionVerbs(
-        open = {}, rename = {}, interrupt = {}, copyName = {}, compact = {}, softEnd = {}, kill = {},
+    private fun noSessionVerbs(archive: ((List<String>) -> Unit)? = null) = SessionVerbs(
+        open = {}, rename = {}, interrupt = {}, copyName = {}, compact = {},
+        softEnd = {}, archive = archive, kill = {},
     )
 }
