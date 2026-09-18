@@ -198,6 +198,12 @@ object Splitter {
      */
     fun showsList(view: View): Boolean =
         view == View.CHATS || view == View.SESSIONS || view == View.SCRATCHPADS ||
+            // Projects is list-plus-detail for the same reason Pages is: the TREE
+            // is the navigation, and a dashboard with no way to reach the other
+            // clusters is a report rather than a screen. Consoles is deliberately
+            // NOT here — it spans both columns like Devices, because a row already
+            // carries everything there is to say about a URL.
+            view == View.PROJECTS ||
             // Settings joined them in the redesign: nine categories on the left,
             // one page at a time on the right. Through THIS answer rather than a
             // two-pane layout of its own, so the seam, the notch, Ctrl+B and the

@@ -1,6 +1,8 @@
 package com.silencelen.huginn.desktop
 
 import com.silencelen.huginn.data.Chat
+import com.silencelen.huginn.data.Console
+import com.silencelen.huginn.data.ConsoleApproval
 import com.silencelen.huginn.data.Device
 import com.silencelen.huginn.data.Round
 import com.silencelen.huginn.data.ArchivedSession
@@ -10,6 +12,7 @@ import com.silencelen.huginn.data.SessionMetaSaver
 import com.silencelen.huginn.ui.RoundDraft
 import com.silencelen.huginn.ui.ArchiveRules
 import com.silencelen.huginn.ui.ScratchpadRules
+import com.silencelen.huginn.ui.ProjectRules
 import com.silencelen.huginn.ui.toSchedule
 import com.silencelen.huginn.desktop.device.DeviceRunner
 import com.silencelen.huginn.desktop.update.BuildInfo
@@ -20,6 +23,13 @@ import com.silencelen.huginn.ui.SkiaImageBytesDecoder
 import com.silencelen.huginn.data.Headroom
 import com.silencelen.huginn.data.HuginnClient
 import com.silencelen.huginn.data.Plan
+import com.silencelen.huginn.data.Project
+import com.silencelen.huginn.data.ProjectCreated
+import com.silencelen.huginn.data.ProjectDashboard
+import com.silencelen.huginn.data.ProjectLive
+import com.silencelen.huginn.data.ProjectManifest
+import com.silencelen.huginn.data.ProjectRow
+import com.silencelen.huginn.data.SpawnOutcome
 import com.silencelen.huginn.data.PolishResult
 import com.silencelen.huginn.data.RouteBook
 import com.silencelen.huginn.data.RouteFailures
@@ -46,7 +56,53 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 
 /** Which of the destinations the window is showing. */
-enum class View { CHATS, SESSIONS, ROUNDS, DEVICES, SCRATCHPADS, STATUS, SETTINGS }
+enum class View {
+    CHATS,
+    SESSIONS,
+    ROUNDS,
+    DEVICES,
+    SCRATCHPADS,
+
+    /**
+     * Clusters of sessions with roles. Between Sessions and Rounds in the rail's
+     * reading, and HIDDEN OUTRIGHT on a daemon that has never heard of them —
+     * see [AppStore.projectsAvailable] and `railViews`.
+     */
+    PROJECTS,
+
+    /** The internal pages this host serves. Hidden on the same terms. */
+    CONSOLES,
+    STATUS,
+    SETTINGS,
+}
+
+/**
+ * Whether a freshly-fetched project dashboard is worth putting on screen.
+ *
+ * ⚠ THE CLOCK IS `generatedAt`, AND IT IS THE ONLY HONEST ONE. It is when the
+ * daemon answered this poll — not when the project changed — so two answers
+ * carrying the same stamp are the same rollup, re-sent. Adopting one anyway
+ * costs a recomposition of a twelve-row table every five seconds for nothing.
+ *
+ * Three cases are NOT skips and each has cost somebody a frozen screen somewhere:
+ *
+ *  * NOTHING HELD — the first answer always lands, or the pane never fills.
+ *  * A DIFFERENT PROJECT — stamps are per-answer, not per-cluster, so comparing
+ *    them across two projects is comparing nothing. Walking from a cluster
+ *    answered at T to one whose last answer was also T would show the first
+ *    one's numbers under the second one's name.
+ *  * NO STAMP AT ALL (`0`) — a daemon that does not send one cannot be skipped
+ *    on it, and a client that skipped anyway would draw the first answer forever.
+ *
+ * And it never goes BACKWARDS: an answer older than the one on screen is a poll
+ * that overtook its predecessor, not news.
+ */
+fun dashboardMoved(held: ProjectDashboard?, fresh: ProjectDashboard): Boolean {
+    if (held == null) return true
+    if (held.project?.id != fresh.project?.id) return true
+    if (fresh.generatedAt <= 0L || held.generatedAt <= 0L) return true
+    return fresh.generatedAt > held.generatedAt
+}
 
 /**
  * App-level state: navigation, the two lists, the status snapshot, and the watch
@@ -215,6 +271,12 @@ class AppStore(
         // arriving on it would otherwise show an empty screen for up to five
         // seconds — indistinguishable from a daemon that is not answering.
         if (v == View.STATUS) scope.launch { refreshStatus() }
+        // The same argument for the two Wave 3 panes, whose per-project and
+        // per-host calls are deliberately NOT in the list poll: arriving on a
+        // folded-open tree or a console list that fills five seconds later looks
+        // exactly like a feature that is not working.
+        if (v == View.PROJECTS) scope.launch { refreshProjectMembers(); refreshProjectDashboard() }
+        if (v == View.CONSOLES) scope.launch { refreshConsoles() }
     }
     /**
      * Settings' own navigation: which drawer is open, what is typed in its search
@@ -241,6 +303,14 @@ class AppStore(
         when (_view.value) {
             View.CHATS -> if (_chatId.value != null) _chatId.value = null
             View.SESSIONS -> if (_sessionName.value != null) _sessionName.value = null
+            // TWO STEPS OUT, in the order they were taken in: a member's session
+            // first, then the project. Escape from a member landing back on the
+            // tree would skip the dashboard the reader came through.
+            View.PROJECTS -> when {
+                _projectMember.value != null -> _projectMember.value = null
+                _projectId.value != null -> openProject(null)
+                else -> _view.value = View.CHATS
+            }
             else -> _view.value = View.CHATS
         }
     }
@@ -583,6 +653,372 @@ class AppStore(
                 // reason before anybody reads it.
                 note(Faults.ACTION, t)
             }
+    }
+
+    // -------------------------------------------------------------- projects
+    //
+    // A PROJECT is a cluster of tmux sessions with roles — a lead that sizes the
+    // work and members that do it. Three things are held here and they are fetched
+    // on three different clocks, which is the whole of this section's design:
+    //
+    //   * the ROWS (`GET /v1/projects`) are a list poll like chats and sessions;
+    //   * the MEMBERS are a PER-PROJECT call (`GET /v1/projects/:id`) made only for
+    //     the projects the reader has folded open — the list route carries counts
+    //     and no membership, deliberately, so twelve rows cost one request;
+    //   * the DASHBOARD is a rollup that walks every member's transcript on the
+    //     host, so it is polled only while it is on screen and only adopted when
+    //     its `generatedAt` has actually moved.
+
+    private val _projects = MutableStateFlow<List<ProjectRow>>(emptyList())
+
+    /**
+     * The rows, in the daemon's own order.
+     *
+     * NOT ordered here, unlike [pads] — `ProjectsListView` does it with
+     * [ProjectRules.orderedProjects] because the tree is the only surface whose
+     * order is a decision (needs-you first, archived last). Ordering here as well
+     * would be the same rule in two places, and the one that drifts is always the
+     * one the reader is looking at.
+     */
+    val projects: StateFlow<List<ProjectRow>> = _projects.asStateFlow()
+
+    /**
+     * Whether this daemon HAS projects. Null until the first probe answers.
+     *
+     * FEATURE DETECTION, not version parsing — the scratchpads precedent, and the
+     * client hands it over as a null rather than a throw ([HuginnClient.projects]
+     * turns the 404 into one). False hides the rail item, the palette rows and the
+     * Ctrl+Shift+J chord: a door that leads to an error is worse than no door.
+     *
+     * ⚠ NULL HIDES TOO. A rail that drew the item optimistically and took it away
+     * a second later would move every icon under it while somebody was reaching
+     * for one. See `railViews`.
+     */
+    private val _projectsAvailable = MutableStateFlow<Boolean?>(null)
+    val projectsAvailable: StateFlow<Boolean?> = _projectsAvailable.asStateFlow()
+
+    /**
+     * The live members of the projects this window has actually asked for, by
+     * project id.
+     *
+     * ⚠ A MISSING ENTRY IS "NOT LOADED YET", WHICH IS NOT "NO MEMBERS". The tree
+     * draws those two differently, so they must not collapse into one empty list
+     * on the way here.
+     */
+    private val _projectMembers = MutableStateFlow<Map<String, List<ProjectLive>>>(emptyMap())
+    val projectMembers: StateFlow<Map<String, List<ProjectLive>>> = _projectMembers.asStateFlow()
+
+    /** The project rows folded open in the tree. Held here so it survives navigation. */
+    private val _projectsExpanded = MutableStateFlow<Set<String>>(emptySet())
+    val projectsExpanded: StateFlow<Set<String>> = _projectsExpanded.asStateFlow()
+
+    /** The project the detail pane is showing, by id. */
+    private val _projectId = MutableStateFlow<String?>(null)
+    val projectId: StateFlow<String?> = _projectId.asStateFlow()
+
+    /**
+     * The member whose session the detail pane is showing, by TMUX name.
+     *
+     * ⚠ THE TMUX NAME, NEVER THE PEER NAME. `SessionView` and every session route
+     * address a session as `<slug>-<role>`; `<slug>/<role>` is what a peer's
+     * `SendMessage` uses and is not a tmux name at all.
+     */
+    private val _projectMember = MutableStateFlow<String?>(null)
+    val projectMember: StateFlow<String?> = _projectMember.asStateFlow()
+
+    /** The open project's whole record — what the manifest card is drawn from. */
+    private val _project = MutableStateFlow<Project?>(null)
+    val project: StateFlow<Project?> = _project.asStateFlow()
+
+    private val _projectDashboard = MutableStateFlow<ProjectDashboard?>(null)
+    val projectDashboard: StateFlow<ProjectDashboard?> = _projectDashboard.asStateFlow()
+
+    /**
+     * The daemon's last refusal about the open project, shown VERBATIM.
+     *
+     * Its own flow rather than the error bar: the two that matter — an untrusted
+     * working directory and the headroom arbiter's STOP sentinel — are STATES OF
+     * THE HOUSE with a fix in them, and they belong under the control that was
+     * pressed rather than in a line at the foot of the window that ages out.
+     */
+    private val _projectRefusal = MutableStateFlow<String?>(null)
+    val projectRefusal: StateFlow<String?> = _projectRefusal.asStateFlow()
+
+    fun clearProjectRefusal() { _projectRefusal.value = null }
+
+    fun openProjects() = openView(View.PROJECTS)
+
+    /** Open a project's dashboard. Clears any member the pane was showing. */
+    fun openProject(id: String?) {
+        _view.value = View.PROJECTS
+        if (_projectId.value != id) {
+            // The held rollup belongs to the project that is leaving. Kept, it
+            // would draw the previous cluster's numbers under the new one's name
+            // for a whole poll — and `adoptDashboard` would then be comparing
+            // stamps across two different projects.
+            _projectDashboard.value = null
+            _project.value = null
+            _projectRefusal.value = null
+        }
+        _projectId.value = id
+        _projectMember.value = null
+    }
+
+    /** Show one member's ordinary session detail, without leaving Projects. */
+    fun openProjectMember(tmuxName: String?) {
+        _view.value = View.PROJECTS
+        _projectMember.value = tmuxName
+    }
+
+    fun toggleProject(id: String) {
+        val open = _projectsExpanded.value
+        _projectsExpanded.value = if (id in open) open - id else open + id
+    }
+
+    /**
+     * The rows, and the flag that says whether this daemon has them at all.
+     *
+     * Silent on failure and NOT a fault — the refreshRounds shape. The 404 does
+     * not arrive as a failure here: [HuginnClient.projects] answers null for it,
+     * because "this daemon has no projects" is an answer rather than an error.
+     */
+    suspend fun refreshProjects() {
+        runCatching { client.projects() }
+            .onSuccess { list ->
+                if (list == null) {
+                    _projectsAvailable.value = false
+                    return@onSuccess
+                }
+                _projectsAvailable.value = true
+                _projects.value = list.projects
+                // A project that is gone takes its membership with it: a stale
+                // entry would keep a deleted cluster's rows under a disclosure
+                // that can never be refreshed.
+                val alive = list.projects.map { it.id }.toSet()
+                _projectsExpanded.value = _projectsExpanded.value.filterTo(mutableSetOf()) { it in alive }
+                _projectMembers.value = _projectMembers.value.filterKeys { it in alive }
+                if (_projectId.value != null && _projectId.value !in alive) openProject(null)
+            }
+    }
+
+    /**
+     * The members of the projects that are FOLDED OPEN, plus the one the detail
+     * pane is showing.
+     *
+     * One GET per open disclosure, and none at all while Projects is off screen —
+     * which is the argument for the list route carrying counts rather than
+     * membership in the first place. A reader with every row folded open is
+     * asking for exactly the requests they get.
+     */
+    suspend fun refreshProjectMembers() {
+        val wanted = (_projectsExpanded.value + listOfNotNull(_projectId.value)).toList()
+        if (wanted.isEmpty()) return
+        val fetched = mutableMapOf<String, List<ProjectLive>>()
+        for (id in wanted) {
+            runCatching { client.project(id) }
+                .onSuccess { detail ->
+                    fetched[id] = detail.live
+                    if (id == _projectId.value) _project.value = detail.project
+                }
+        }
+        if (fetched.isEmpty()) return
+        // MERGED, not replaced: a project whose fetch failed this pass keeps the
+        // membership it had rather than collapsing to "not loaded yet" and
+        // redrawing the disclosure as empty.
+        _projectMembers.value = _projectMembers.value + fetched
+    }
+
+    /** The rollup for the open project. Adopted only when it has actually moved. */
+    suspend fun refreshProjectDashboard() {
+        val id = _projectId.value ?: return
+        runCatching { client.projectDashboard(id) }.onSuccess { adoptDashboard(it) }
+    }
+
+    /**
+     * Take a freshly-fetched rollup, or keep the one on screen.
+     *
+     * ⚠ THE POINT IS THE SCREEN, NOT THE REQUEST. The fetch has already happened;
+     * what this skips is REPLACING the state — and with it every member row's
+     * disclosure, the scroll position of a twelve-row table and a recomposition
+     * of the header, five seconds apart, for a rollup the daemon has told us is
+     * the same one it sent last time.
+     *
+     * @return whether the screen took it.
+     */
+    internal fun adoptDashboard(fresh: ProjectDashboard): Boolean {
+        if (!dashboardMoved(_projectDashboard.value, fresh)) return false
+        _projectDashboard.value = fresh
+        return true
+    }
+
+    /**
+     * Start a project: the daemon launches its lead and types the brief into it.
+     *
+     * ⚠ THE 409 IS AN ANSWER AND IT LANDS IN [projectRefusal], not on the error
+     * bar. The commonest one is a working directory Claude Code has not been
+     * trusted in, and the daemon's sentence about it IS the fix — so it is shown
+     * under the sheet's own fields with everything the person typed still in them.
+     *
+     * @return whether a project was made, so the sheet knows whether to close.
+     */
+    suspend fun createProject(name: String, kind: String, brief: String, cwd: String?): Boolean {
+        _projectRefusal.value = null
+        val made: ProjectCreated = runCatching { client.createProject(name, kind, brief, cwd) }
+            .getOrElse { note(Faults.ACTION, it); return false }
+        if (!made.ok) {
+            _projectRefusal.value = made.refusal
+            return false
+        }
+        refreshProjects()
+        made.project?.id?.let { openProject(it) }
+        refreshProjectMembers()
+        return true
+    }
+
+    /**
+     * Create the members the owner approved.
+     *
+     * ⚠⚠ A 200 IS NOT A VERDICT. Spawning is a loop over tmux, so the ordinary
+     * partial outcome is `ok:false` with both lists inside a 200 — the answer is
+     * handed back whole for the card to draw per role. The refusal (the STOP
+     * sentinel, or a manifest that moved under the card) goes to [projectRefusal]
+     * verbatim for the same reason a create's does.
+     */
+    suspend fun spawnProject(id: String, manifestRev: Int): SpawnOutcome? {
+        _projectRefusal.value = null
+        val outcome = runCatching { client.spawnProject(id, manifestRev) }
+            .getOrElse { note(Faults.ACTION, it); return null }
+        if (!outcome.ok) _projectRefusal.value = outcome.refusal
+        refreshProjects()
+        refreshProjectMembers()
+        refreshSessions()
+        return outcome
+    }
+
+    /** Turn the proposal down. The manifest is kept at its rev; only the status moves. */
+    suspend fun discardProposal(id: String) {
+        runCatching { client.discardProposal(id) }
+            .onSuccess { _project.value = it; refreshProjects() }
+            .onFailure { note(Faults.ACTION, it) }
+    }
+
+    /**
+     * Rename, pause, resume or archive a project.
+     *
+     * ⚠ THE 409 HAS TWO SHAPES and only one is a conflict. A stale rev comes back
+     * as the CURRENT project to adopt; an illegal status move ("an active project
+     * cannot become proposed") comes back as a refusal. Both are answers, so both
+     * are handled rather than thrown — the adopt is silent, the refusal is shown.
+     */
+    suspend fun saveProject(
+        id: String,
+        rev: Int,
+        name: String? = null,
+        status: String? = null,
+        manifest: ProjectManifest? = null,
+    ) {
+        val saved = runCatching { client.saveProject(id, rev, name = name, status = status, manifest = manifest) }
+            .getOrElse { note(Faults.ACTION, it); return }
+        saved.project?.let { _project.value = it }
+        if (saved.refusal != null) _projectRefusal.value = saved.refusal
+        refreshProjects()
+    }
+
+    /**
+     * Forget a project, and optionally end its sessions.
+     *
+     * @param end null ends NOTHING (the default the daemon takes, and the only
+     *   safe reading of a button labelled Delete), `graceful` winds the sessions
+     *   down, `now` kills them.
+     */
+    suspend fun deleteProject(id: String, end: String? = null) {
+        runCatching { client.deleteProject(id, end) }
+            .onSuccess {
+                if (_projectId.value == id) openProject(null)
+                refreshProjects()
+                refreshSessions()
+            }
+            .onFailure { note(Faults.ACTION, it) }
+    }
+
+    /**
+     * Type a line into one member, from another.
+     *
+     * ⚠ THIS IS NOT HOW THE SESSIONS TALK. A peer `SendMessage` goes process to
+     * process and starts a turn with no keypress; this route is the daemon TYPING
+     * into a pane, so it rides the send queue and its gates.
+     */
+    suspend fun messageProject(id: String, from: String, to: String, text: String) {
+        runCatching { client.messageProject(id, from, to, text) }
+            .onFailure { note(Faults.ACTION, it) }
+    }
+
+    // -------------------------------------------------------------- consoles
+
+    private val _consoles = MutableStateFlow<List<Console>>(emptyList())
+    val consoles: StateFlow<List<Console>> = _consoles.asStateFlow()
+
+    /**
+     * The registry-wide rebind approval, or null when there is nothing to approve.
+     *
+     * ⚠ NOTHING IN THIS APP APPLIES IT AND THERE IS NO ROUTE THAT COULD. The steps
+     * rebind a systemd unit on the huginn host and add firewall lines on heimdall;
+     * the card that draws them has a Copy control and no other (decision 47).
+     */
+    private val _consoleApproval = MutableStateFlow<ConsoleApproval?>(null)
+    val consoleApproval: StateFlow<ConsoleApproval?> = _consoleApproval.asStateFlow()
+
+    /** Whether this daemon HAS consoles. Same probe contract as [projectsAvailable]. */
+    private val _consolesAvailable = MutableStateFlow<Boolean?>(null)
+    val consolesAvailable: StateFlow<Boolean?> = _consolesAvailable.asStateFlow()
+
+    suspend fun refreshConsoles() {
+        runCatching { client.consoles() }
+            .onSuccess { list ->
+                if (list == null) {
+                    _consolesAvailable.value = false
+                    return@onSuccess
+                }
+                _consolesAvailable.value = true
+                _consoles.value = list.consoles
+                _consoleApproval.value = list.approval
+            }
+    }
+
+    /** Probe one console now, from the host, and adopt the refreshed row. */
+    suspend fun probeConsole(id: String) {
+        runCatching { client.probeConsole(id) }
+            .onSuccess { row -> _consoles.value = _consoles.value.map { if (it.id == row.id) row else it } }
+            .onFailure { note(Faults.ACTION, it) }
+    }
+
+    suspend fun createConsole(name: String, url: String, kind: String?, notes: String?) {
+        runCatching { client.createConsole(name, url, kind, notes) }
+            .onSuccess { refreshConsoles() }
+            .onFailure { note(Faults.ACTION, it) }
+    }
+
+    /**
+     * Edit one console.
+     *
+     * ⚠ THE 409 IS AN ANSWER, carrying the row as the host now holds it — the
+     * saveScratchpad shape. The other client having saved first is the ordinary
+     * outcome of two devices on one registry, so the current row is adopted
+     * rather than thrown at the reader.
+     */
+    suspend fun saveConsole(id: String, version: Int, name: String?, url: String?, kind: String?, notes: String?) {
+        runCatching { client.saveConsole(id, version, name = name, url = url, kind = kind, notes = notes) }
+            .onSuccess { saved ->
+                _consoles.value = _consoles.value.map { if (it.id == saved.console.id) saved.console else it }
+                if (saved.conflict) refreshConsoles()
+            }
+            .onFailure { note(Faults.ACTION, it) }
+    }
+
+    suspend fun deleteConsole(id: String) {
+        runCatching { client.deleteConsole(id) }
+            .onSuccess { refreshConsoles() }
+            .onFailure { note(Faults.ACTION, it) }
     }
 
     private val _sessions = MutableStateFlow<List<Session>>(emptyList())
@@ -1310,6 +1746,25 @@ class AppStore(
                 // for the same reason the transcript is not in this loop: a poll
                 // that overwrote what somebody is typing is not a refresh.
                 refreshPads()
+                // The project ROWS only, and they are one request whatever the
+                // cluster size: `GET /v1/projects` carries summed counts and no
+                // membership, which is what makes a twelve-member project cost
+                // the list poll nothing.
+                refreshProjects()
+                // The members and the rollup are the expensive halves, so they
+                // are gated on the pane being the one in front of the reader.
+                // A dashboard walks every member's transcript on the host — see
+                // `dashboardMoved` for what stops it redrawing when it has not
+                // moved — and the members are one GET per folded-open row.
+                if (_view.value == View.PROJECTS) {
+                    refreshProjectMembers()
+                    refreshProjectDashboard()
+                }
+                // ONCE PER RESUME as well as while Consoles is open, and the
+                // first pass is what the rail item's visibility hangs on: a
+                // feature probe that only ran on the pane nobody can reach yet
+                // would hide the door to itself forever.
+                if (tick == 0 || _view.value == View.CONSOLES) refreshConsoles()
                 // ⚠ THE TWO SESSION LISTS MOVE TOGETHER. A graceful archive leaves
                 // the session on screen for as long as its turn runs and then
                 // moves it — so a Sessions poll that did not also fetch the
