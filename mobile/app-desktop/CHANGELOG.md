@@ -1,6 +1,24 @@
 # Huginn Desktop changelog
 
-## 1.2.1
+## 1.3.0
+
+- **A first-run setup flow.** Seven steps, each checked against the real thing rather than saved
+  and hoped for: the address is dialled, the token is used on a real call, `claude` is found and
+  run, this computer's enrolment is confirmed by huginn, local AI reports what it can serve, a test
+  notification is posted and you say whether it arrived, and autostart writes its file and reads it
+  back. Every step is skippable; a skipped step is an answer, not a failure. Shown on first launch
+  when no address is saved; **Run setup again** on Host & sign-in re-checks everything and resets
+  nothing.
+- **The Windows installer asks which optional features you want** — Claude detection, running work
+  here, serving local AI, autostart. It installs none of them: it pre-answers the setup flow, which
+  skips what you said no to. Silent installs and self-updates ask nothing and change nothing.
+- **Start with your session** — new setting on Appearance & behaviour: a Startup shortcut on
+  Windows, `~/.config/autostart` on Linux, removed when you turn it off and by the uninstaller.
+- **The Status page says whether a 5-hour window is running and when it resets**, plus keep-awake's
+  count when the host has it on; three rows under Usage & headroom control it.
+- **The "Queued" line says the right thing from the first frame** — the daemon (3.2.0) now says why
+  a send is held on the send itself, so a brand-new session reads "waiting for Claude to start"
+  instead of "will send when Claude finishes its turn" for its first two seconds.
 
 - **Windows: toast answer buttons work again.** The `huginn://` scheme was only ever half
   registered — the installer never wrote it, and the app's startup fallback failed silently on a
