@@ -1,5 +1,20 @@
 # Huginn Desktop changelog
 
+## 1.4.0
+
+- **Links and pictures.** Same link and image rendering as the phone, from the same renderer: labels
+  without the bracketed URL, `http(s)` only, markdown images and mentioned image paths drawn as
+  thumbnails served by the host (appd 3.3.0), click for full size. Hover a link to see its URL; a
+  link that will not open is copied to the clipboard instead of failing silently.
+- **Hover any message to see exactly when it was written** — "Thursday 17 September 2026, 14:32".
+  Nothing moves on the page, and a message with no timestamp shows no popup. List rows and
+  last-activity tooltips read from the same vocabulary as the phone ("last activity 3 days ago").
+- **Drag several files onto the composer and all of them attach.** The list was always there; only
+  the first was ever read. "Local file" picks several at once, and a paste of several files from the
+  clipboard does the same. Chips, one per attachment, with name, size and state — the same row the
+  phone draws; failed ones are tinted and named in the line under the composer while the rest send.
+  A send waits for the whole batch under one budget, not one per file.
+
 ## 1.3.1
 
 - **Archived sessions.** The same Archived section under the session rows in the list pane, and

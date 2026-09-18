@@ -1,5 +1,28 @@
 # Huginn changelog
 
+## 3.4.0 — 2026-09-18
+
+The rest of the Wave 2 surface: links, pictures, times, and more than one attachment.
+
+- **Links in an answer are clickable** and open in your browser. The URL no longer appears in
+  brackets after the label, in the transcript or in the chats list. `http(s)` only: a `file:`,
+  `javascript:` or `huginn://` link is shown as plain text and does nothing. Long-press a link to see
+  where it goes.
+- **Pictures render.** A `![…](…)` image on its own line draws as a picture, and an image file path
+  an answer mentions (`/tmp/…/plot.png`, `~/shots/a.jpg`) draws as a thumbnail served by the host
+  (appd 3.3.0). Tap for full size. Paths inside code blocks are left alone; a path the host will not
+  serve shows a small placeholder with the path, never a broken image.
+- **Messages carry their time.** Long-press any message and the action bar's first line says when it
+  was written — "Yesterday 21:40", "Tue 14:05", "3 Sep 2025 14:05". No new gesture and no setting:
+  your phone's zone and its 12- or 24-hour clock are followed. Every "3m ago" on every screen now
+  comes from one shared vocabulary, so the phone, the desktop and your notifications cannot disagree
+  about the same moment; a message the host sent no time for shows nothing instead of 1970.
+- **Attach more than one thing.** The photo picker, the file picker and a share all take up to ten;
+  each gets its own chip with name, size and remove. **Paste a screenshot** from the attach menu,
+  through the same transcode as the camera. A message with five attachments and one refusal sends
+  the four that landed and says which one did not, and a failed attachment no longer rides the next
+  message.
+
 ## 3.3.0 — 2026-09-17
 
 - **Archived sessions.** A section at the bottom of Sessions lists what was put away, when and

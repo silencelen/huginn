@@ -442,6 +442,9 @@ private fun SessionConversation(
             else -> Box(Modifier.weight(1f).fillMaxWidth()) {
               androidx.compose.foundation.text.selection.SelectionContainer {
                 androidx.compose.runtime.CompositionLocalProvider(
+                    // Which session's folder the host may search when an answer
+                    // names an image by a relative path (appd 3.3.0 `?session=`).
+                    LocalImageSession provides name,
                     // The long-press seam. Provided AROUND THE TRANSCRIPT ONLY —
                     // the composer and the controls above are not rows and must
                     // not grow a gesture that selects them.

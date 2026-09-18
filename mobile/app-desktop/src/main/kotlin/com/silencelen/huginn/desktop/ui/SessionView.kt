@@ -128,6 +128,8 @@ import com.silencelen.huginn.ui.QuestionLinkBar
 import com.silencelen.huginn.ui.HistoryWalk
 import com.silencelen.huginn.ui.exitRecallIfDiverged
 import com.silencelen.huginn.ui.handleHistoryKey
+import androidx.compose.runtime.CompositionLocalProvider
+import com.silencelen.huginn.ui.LocalImageSession
 import com.silencelen.huginn.ui.LocalTranscriptMetrics
 import com.silencelen.huginn.ui.FollowNewest
 import com.silencelen.huginn.ui.ModelLabels
@@ -255,6 +257,10 @@ fun SessionView(store: AppStore, name: String) {
     val padRefs by store.padRefs.collectAsState()
     val padRefKey = ScratchpadRules.sessionRefKey(name)
 
+    // Which session's folder the host may search when an answer names an image by
+    // a relative path (appd 3.3.0 `?session=`). Around the whole view: the transcript
+    // and the chat partial both draw through MarkdownText.
+    CompositionLocalProvider(LocalImageSession provides name) {
     BoxWithConstraints(Modifier.fillMaxSize()) {
     // A panel that leaves no pane worth reading beside it is not a panel. The
     // Screen tab measures the column it sits in into real tmux rows and columns,
@@ -461,6 +467,7 @@ fun SessionView(store: AppStore, name: String) {
         )
     }
     if (showPanel) ScratchpadSidePanel(store, PadTarget.Session(name))
+    }
     }
     }
 }
