@@ -3635,22 +3635,14 @@ function settleRun(run_, { exitCode = null, failureText = null } = {}) {
       // them, and a chat that reopens is a chat where the owner's next question
       // gets filed as the Round's official report — verbatim the failure
       // reconcileInterruptedRuns' comment says was already fixed.
-      const sealed = loadMeta(chatId) || fresh;
-      // And then it is OVER. Draining a queue into a sealed run would reopen the
-      // very thing that just ended, so anything waiting is dropped here instead.
-      const waiting = drainPending(sealed);
-      if (waiting.length) {
-        saveMeta(sealed);
-        // ⚠ SAID IN THE CHAT, not only in a log nobody reads. The sender got a
-        // 202 {queued:true, position:1}; the message then never appeared in the
-        // transcript, nothing said it had been dropped, and the retry hit a 409
-        // off the sealed run — so it was simply gone. The chat route already
-        // fixed exactly this for the cancel window and wrote down why it was
-        // unacceptable: "worse than being told to wait". Round runs then did the
-        // same thing.
-        appendMsg(chatId, { type: 'system', text: droppedNote(waiting, 'this round finished'), ts });
-        log(`round run ${chatId} dropped ${waiting.length} queued message(s): the run is closed`);
-      }
+      // ⚠ THE DRAIN MOVED INTO `finishRoundRun` (#38). It used to be here, which
+      // meant it ran only on the paths that come through settleRun — and the
+      // restart path (`reconcileInterruptedRound`) does not, so a message queued
+      // into a run that a deploy interrupted was sealed in with no note. It is
+      // the same drop, with the same sentence, one call deeper. Draining a queue
+      // into a sealed run would reopen the very thing that just ended; the
+      // message is dropped and SAID IN THE CHAT, because the sender got a 202
+      // {queued:true, position:1} and a retry hits a 409 off the sealed run.
       return;
     }
     if (run_.cancelled) {
@@ -4303,6 +4295,27 @@ function fireRound(round, { manual = false } = {}) {
  * they were never told was missing.
  */
 function finishRoundRun(meta, failure, { status: statusOverride = null } = {}) {
+  // ⚠ THE QUEUE GOES FIRST, AND BEFORE THE DELETED-ROUND RETURN (#38). A message
+  // queued into a Round's run in flight (202 `{queued:true}`) was drained by
+  // `settleRun` — and `reconcileInterruptedRound` does not go through settleRun,
+  // so a huginn-appd RESTART (which `deploy.sh` does routinely) sealed the chat
+  // and left `meta.pending` on disk forever: never delivered, never dropped, no
+  // note, and POST /messages 409s "this run has finished". `deliverOrphanedQueues`
+  // and `chatStates` both skip round chats, so no path could ever surface it.
+  // Draining here covers every way a Round's run ends, including the one that
+  // returns immediately below.
+  try {
+    const waiting = drainPending(meta);
+    if (waiting.length) {
+      saveMeta(meta);
+      appendMsg(meta.id, {
+        type: 'system',
+        text: droppedNote(waiting, 'this round finished'),
+        ts: Math.floor(Date.now() / 1000),
+      });
+      log(`round run ${meta.id} dropped ${waiting.length} queued message(s): the run is closed`);
+    }
+  } catch (e) { log(`round run ${meta.id}: could not drain the queue: ${e.message}`); }
   const round = loadRound(meta.roundId);
   if (!round) return;                    // the Round was deleted mid-run; the chat stands alone
 
