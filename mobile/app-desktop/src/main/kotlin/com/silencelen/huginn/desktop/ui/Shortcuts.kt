@@ -1,8 +1,13 @@
 package com.silencelen.huginn.desktop.ui
 
 import com.silencelen.huginn.data.Chat
+import com.silencelen.huginn.data.Console
+import com.silencelen.huginn.data.ProjectRow
 import com.silencelen.huginn.data.Scratchpad
 import com.silencelen.huginn.data.Session
+import com.silencelen.huginn.desktop.View
+import com.silencelen.huginn.ui.ConsoleRules
+import com.silencelen.huginn.ui.ProjectRules
 import com.silencelen.huginn.settings.SettingsCatalog
 import com.silencelen.huginn.settings.SettingsCategory
 
@@ -27,6 +32,21 @@ enum class Shortcut {
      * would suggest a rail position this does not have.
      */
     VIEW_SCRATCHPADS,
+
+    /**
+     * The clusters. Ctrl+Shift+J — J because it is free, the digits are spoken
+     * for, and P is already the pages. On Shift rather than bare Ctrl+J because
+     * Ctrl+J is a line feed on every terminal this app has a pane of.
+     *
+     * ⚠ THE CHORD DOES NOTHING ON A DAEMON WITHOUT PROJECTS, and that is the
+     * rail's rule applied to the keyboard: `railViews` decides both, so a key
+     * that navigated to a pane the rail refuses to offer would be the one way in
+     * to a screen that can only 404.
+     */
+    VIEW_PROJECTS,
+
+    /** Palette-only — no key. The rail item is the door; this is the search box. */
+    VIEW_CONSOLES,
 
     /**
      * The page beside the conversation. Ctrl+Shift+P, next to the view it toggles
@@ -116,6 +136,7 @@ fun match(
             "H" -> Shortcut.HIDE_TO_TRAY
             "N" -> Shortcut.NEW_ACT
             "P" -> Shortcut.TOGGLE_PAD_PANEL
+            "J" -> Shortcut.VIEW_PROJECTS
             else -> null
         }
     }
@@ -193,6 +214,7 @@ fun keyName(key: androidx.compose.ui.input.key.Key): String? = when (key) {
     androidx.compose.ui.input.key.Key.K -> "K"
     androidx.compose.ui.input.key.Key.N -> "N"
     androidx.compose.ui.input.key.Key.H -> "H"
+    androidx.compose.ui.input.key.Key.J -> "J"
     androidx.compose.ui.input.key.Key.P -> "P"
     androidx.compose.ui.input.key.Key.One -> "1"
     androidx.compose.ui.input.key.Key.Two -> "2"
@@ -219,6 +241,7 @@ val SHORTCUT_HELP: List<Pair<String, String>> = listOf(
     "Ctrl N" to "New Ask chat",
     "Ctrl Shift N" to "New Act chat",
     "Ctrl P" to "Pages",
+    "Ctrl Shift J" to "Projects (when this host has them)",
     "Ctrl Shift P" to "Show the open page beside this conversation",
     "Alt ↑ / ↓" to "Previous / next in the list (works while typing)",
     "Ctrl B" to "Hide or show the list pane (or click the notch on the seam)",
@@ -249,6 +272,23 @@ sealed interface PaletteItem {
     data class OpenChat(val id: String, override val label: String, override val detail: String) : PaletteItem
     data class OpenSession(val name: String, override val label: String, override val detail: String) : PaletteItem
     data class OpenScratchpad(val id: String, override val label: String, override val detail: String) : PaletteItem
+
+    /** One cluster, by name. Opens its dashboard. */
+    data class OpenProject(val id: String, override val label: String, override val detail: String) : PaletteItem
+
+    /**
+     * One internal page, by name.
+     *
+     * ⚠ CARRIES THE URL, not just an id: opening a console is handing an address
+     * to the host's browser, and a palette row that had to go back to the list to
+     * find it would be reading a row that may have been edited since.
+     */
+    data class OpenConsole(
+        val id: String,
+        val url: String,
+        override val label: String,
+        override val detail: String,
+    ) : PaletteItem
     data class Verb(val shortcut: Shortcut, override val label: String, override val detail: String) : PaletteItem
 
     /**
@@ -265,6 +305,30 @@ sealed interface PaletteItem {
         override val detail: String,
     ) : PaletteItem
 }
+
+/**
+ * The verbs the palette always offers, plus the two that exist only on a host
+ * that has the feature behind them.
+ *
+ * ⚠ THE SAME PROBE THAT HIDES THE RAIL ITEM HIDES THESE. A palette row is a door
+ * exactly as a rail icon is, and the one that is easier to forget is this one —
+ * the Ctrl+K box is where somebody who cannot find a feature looks for it, which
+ * is precisely the reader a row onto a 404 would strand.
+ */
+internal fun verbsFor(hasProjects: Boolean, hasConsoles: Boolean): List<PaletteItem> =
+    VERBS +
+        listOfNotNull(
+            if (hasProjects) {
+                PaletteItem.Verb(Shortcut.VIEW_PROJECTS, "Projects", "clusters of sessions, and who is busy")
+            } else {
+                null
+            },
+            if (hasConsoles) {
+                PaletteItem.Verb(Shortcut.VIEW_CONSOLES, "Consoles", "the internal pages this host serves")
+            } else {
+                null
+            },
+        )
 
 private val VERBS = listOf(
     PaletteItem.Verb(Shortcut.NEW_ASK, "New Ask chat", "reasoning, memory and reads"),
@@ -287,13 +351,47 @@ fun paletteItems(
      * the list does not show is the same lie as a search hit onto a hidden row.
      */
     settings: List<SettingsCategory> = emptyList(),
+    /**
+     * The clusters, or EMPTY on a host without projects — the rail's rule again.
+     * Defaulted so the one call site that does not have them yet still compiles,
+     * never so a caller can forget them.
+     */
+    projects: List<ProjectRow> = emptyList(),
+    consoles: List<Console> = emptyList(),
+    /**
+     * What this host actually offers — [railViews], the SAME list the rail is
+     * drawn from. A palette that decided for itself would be a second probe with
+     * its own opinion, and the two would disagree on exactly the daemon where it
+     * matters.
+     */
+    offered: List<View> = emptyList(),
 ): List<PaletteItem> =
-    VERBS +
+    verbsFor(View.PROJECTS in offered, View.CONSOLES in offered) +
         // Right after the verbs, which is where "Settings" itself already is: the
         // reader who typed a settings word wants the drawer, not a chat that
         // mentions it.
         settings.map {
             PaletteItem.OpenSettings(it.id, "Settings · ${it.title}", it.blurb)
+        } +
+        // The clusters next, for the same reason pages come before chats: there
+        // are a handful and they are looked up by name. Ordered as the tree
+        // orders them, so the palette and the rail agree about which project is
+        // the one you are most likely to want.
+        ProjectRules.orderedProjects(projects).map {
+            PaletteItem.OpenProject(
+                it.id,
+                ProjectRules.label(it),
+                listOfNotNull("project", ProjectRules.statusWords(it.status), ProjectRules.rollupWords(it))
+                    .joinToString(" · "),
+            )
+        } +
+        consoles.map {
+            PaletteItem.OpenConsole(
+                it.id,
+                it.url,
+                ConsoleRules.label(it),
+                listOfNotNull("console", ConsoleRules.kindWords(it.kind), it.url).joinToString(" · "),
+            )
         } +
         // Pages before the conversations: there are a handful of them and hundreds
         // of chats, and a page is looked up BY NAME, which is the one thing the

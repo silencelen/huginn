@@ -45,8 +45,11 @@ import androidx.compose.ui.window.Popup
 import androidx.compose.ui.window.PopupProperties
 import androidx.compose.ui.window.rememberCursorPositionProvider
 import com.silencelen.huginn.data.Chat
+import com.silencelen.huginn.data.ProjectMemberState
+import com.silencelen.huginn.data.ProjectRow
 import com.silencelen.huginn.data.QuickActions
 import com.silencelen.huginn.data.Session
+import com.silencelen.huginn.ui.ProjectRules
 import com.silencelen.huginn.ui.QuickActionRules
 import com.silencelen.huginn.ui.SelectionAction
 
@@ -287,6 +290,92 @@ fun sessionMenu(session: Session, selection: Set<String>, verbs: SessionVerbs): 
         verbs.archive?.let { a -> add(HuginnMenuItem("Archive…") { a(listOf(session.name)) }) }
         add(HuginnMenuItem("End session", destructive = true) { verbs.kill(listOf(session.name)) })
     }
+}
+
+/**
+ * The handlers a project row's menu needs, and the two a MEMBER row's does.
+ *
+ * One class for both because they are one menu with two shapes — the project and
+ * the sessions inside it — and splitting them would let a call site wire the
+ * member's End to the project's Delete without anything noticing.
+ */
+class ProjectVerbs(
+    val open: (ProjectRow) -> Unit,
+    val rename: (ProjectRow) -> Unit,
+    /** Pause, or resume. Which one is decided by the row's status, not by the caller. */
+    val setStatus: (ProjectRow, String) -> Unit,
+    val delete: (ProjectRow) -> Unit,
+    /** Open one member's session detail, without leaving Projects. */
+    val openMember: (ProjectRow, ProjectMemberState) -> Unit,
+    /** Type a line into that member, from the lead. Rides the send queue. */
+    val message: (ProjectRow, ProjectMemberState) -> Unit,
+    /** End that member's tmux session. The project keeps the membership row. */
+    val endMember: (ProjectRow, ProjectMemberState) -> Unit,
+)
+
+/**
+ * What to offer over a PROJECT row.
+ *
+ * Pause and Resume are one slot, and which word it carries is
+ * [ProjectRules.canTransition]'s answer rather than this file's opinion — the
+ * daemon owns the transition table, and a menu that offered "Resume" on a project
+ * that cannot be resumed would be a 409 with a friendly label on it. A project
+ * with neither move available (an archived one) gets neither row.
+ */
+fun projectMenu(project: ProjectRow, verbs: ProjectVerbs): List<ContextMenuItem> = buildList {
+    add(HuginnMenuItem("Open") { verbs.open(project) })
+    // ⚠ THE PROJECT RENAMES, THE SLUG DOES NOT. `slug` is the tmux and peer
+    // namespace every member is named in and it never moves; this changes the
+    // display name and nothing else. That is also why a MEMBER cannot be renamed
+    // at all — see the overload below.
+    add(HuginnMenuItem("Rename…") { verbs.rename(project) })
+    // ⚠ `canTransition` ANSWERS TRUE FOR A MOVE TO WHERE YOU ALREADY ARE, which
+    // is right for a save that changes nothing and wrong for a menu: asked alone
+    // it puts "Resume" on a running project and "Pause" on a paused one. So the
+    // WORD comes from the status this project is in, and the rules say whether
+    // that word is a move the daemon will take.
+    val status = ProjectRules.statusWord(project.status)
+    if (status == "active" && ProjectRules.canTransition(status, "paused")) {
+        add(HuginnMenuItem("Pause") { verbs.setStatus(project, "paused") })
+    }
+    if (status == "paused" && ProjectRules.canTransition(status, "active")) {
+        add(HuginnMenuItem("Resume") { verbs.setStatus(project, "active") })
+    }
+    if (status != "archived" && ProjectRules.canTransition(status, "archived")) {
+        add(HuginnMenuItem("Archive") { verbs.setStatus(project, "archived") })
+    }
+    // Destructive because it forgets the record. Whether it also ENDS the sessions
+    // is the dialog's question and the daemon's default is "nothing" — a delete
+    // that silently killed twelve live sessions is not a delete anybody meant.
+    add(HuginnMenuItem("Delete…", destructive = true) { verbs.delete(project) })
+}
+
+/**
+ * What to offer over a MEMBER row inside a project.
+ *
+ * ⚠⚠ NO RENAME, EVER, AND IT IS NOT A STYLE CHOICE. A member's tmux name is
+ * `<slug>-<role>` and its peer name is `<slug>/<role>`; both are how the daemon,
+ * the lead and every sibling session address it. The rename route REFUSES a
+ * project member with a 409, so the item could only ever produce an error — and
+ * an item that always fails teaches people the whole menu is decoration. It is
+ * absent rather than disabled for the same reason [SessionVerbs.archive] is
+ * absent on a daemon without archive.
+ *
+ * Three verbs, and they are the three things you do to a session you did not
+ * start: look at it, say something to it, and stop it.
+ */
+fun projectMenu(
+    project: ProjectRow,
+    member: ProjectMemberState,
+    verbs: ProjectVerbs,
+): List<ContextMenuItem> = buildList {
+    add(HuginnMenuItem("Open") { verbs.openMember(project, member) })
+    // ⚠ THE DAEMON TYPES THIS; the sessions' own `SendMessage` does not come
+    // through here at all. Named "Message" rather than "Send" because it lands in
+    // a composer through the send queue and its gates, which is a message being
+    // delivered rather than a key being pressed.
+    add(HuginnMenuItem("Message…") { verbs.message(project, member) })
+    add(HuginnMenuItem("End session", destructive = true) { verbs.endMember(project, member) })
 }
 
 /** Labels only — what a test asserts, and what a screenshot should show. */

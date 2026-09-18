@@ -119,7 +119,11 @@ class ShortcutsTest {
         // depends on having focus in a text field. They are listed here anyway,
         // since "how do I send this" is the first thing anyone needs and the last
         // place they would look is a table of window-level shortcuts.
-        assertEquals(16, SHORTCUT_HELP.size)
+        // 17 since Wave 3: Ctrl+Shift+J for Projects, which the row says is
+        // offered only on a host that has them — the rail hides the item on the
+        // same probe, and a cheat sheet that promised the chord unconditionally
+        // would be the one place the app still claimed the feature.
+        assertEquals(17, SHORTCUT_HELP.size)
         assertTrue(SHORTCUT_HELP.all { it.first.isNotBlank() && it.second.isNotBlank() })
         // The pointer half of the model. It is listed beside the keys because the
         // verb surface, the state legend and multi-select all live on the mouse,
