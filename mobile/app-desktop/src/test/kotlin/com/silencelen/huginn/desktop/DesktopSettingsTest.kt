@@ -2,6 +2,7 @@ package com.silencelen.huginn.desktop
 
 import com.silencelen.huginn.data.HuginnSettings
 import com.silencelen.huginn.data.RouteBook
+import com.silencelen.huginn.data.RouteHealth
 import java.io.File
 import java.nio.file.Files
 import java.nio.file.attribute.PosixFilePermission
@@ -370,6 +371,71 @@ class DesktopSettingsTest {
         assertEquals("yggdrasil", book.activeId)
         assertEquals("http://192.168.2.117:8787", book.activeUrl)
         assertFalse(book.autoSwitch, "appd_route_pinned became autoSwitch=false")
+    }
+
+    /**
+     * ⚠ THE NOTICE SURVIVED EXACTLY ONE PROCESS BEFORE. The drop happens during
+     * this very migration — at construction, before any window exists — and it
+     * lived only in the in-memory book, so the one reader it was written for had
+     * already missed it by the time they opened the Host page to find out why
+     * the app had stopped connecting.
+     */
+    @Test
+    fun `a dropped address is still named after a relaunch`() {
+        val file = freshFile()
+        file.parentFile.mkdirs()
+        // A plain-http HOSTNAME: what the old free-text Base URL happily stored
+        // and what RouteGuard refuses. The migration carries it back as a notice
+        // with NO active route rather than silently dialling a built-in.
+        file.writeText("{\"baseUrl\":\"http://huginn.lan:8787\",\"token\":\"t\",\"clientId\":\"desktop-kt-old\"}")
+        val migrated = DesktopSettings(file)
+        assertEquals("http://huginn.lan:8787", migrated.routeBookNow().droppedUrl)
+        assertEquals(null, migrated.routeBookNow().activeId)
+
+        // Writing the book down is what used to lose it: `pinnedRoutes` is
+        // written, so the next launch reads the book instead of migrating, and
+        // the book on disk had nowhere to carry the address.
+        runBlocking { migrated.setRouteBook(migrated.routeBookNow()) }
+        val relaunched = DesktopSettings(file)
+        assertEquals("http://huginn.lan:8787", relaunched.routeBookNow().droppedUrl)
+        assertEquals(null, relaunched.routeBookNow().activeId, "and still unaddressed on purpose")
+    }
+
+    /** Nothing dropped stays nothing dropped — an empty string is not a notice. */
+    @Test
+    fun `a clean book carries no notice`() {
+        val file = freshFile()
+        val settings = DesktopSettings(file)
+        runBlocking { settings.setRouteBook(RouteBook().add("Home", "http://192.168.2.117:8787", now = 1)) }
+        assertEquals(null, DesktopSettings(file).routeBookNow().droppedUrl)
+    }
+
+    /**
+     * ⚠ AN EMPTY HEALTH MAP IS NOT A NEUTRAL START. It is what makes every cold
+     * launch skip [com.silencelen.huginn.data.RouteResolver.HYSTERESIS_MS],
+     * probe the whole book and take the first address that ANSWERS in the
+     * owner's order — so a stranger occupying a route pinned above the real
+     * daemon wins on every start, even while huginn is up.
+     */
+    @Test
+    fun `what the last resolution learned survives a relaunch`() {
+        val file = freshFile()
+        val settings = DesktopSettings(file)
+        val health = mapOf(
+            "tailscale" to RouteHealth(lastOkAt = 1_789_000_000_000, lastRttMs = 37),
+            "yggdrasil" to RouteHealth(lastFailAt = 1_788_000_000_000, lastSeenAt = 1_788_500_000_000),
+        )
+        runBlocking { settings.setRouteHealth(health, atMs = 1_789_000_000_000) }
+        assertEquals(health, runBlocking { settings.routeHealth.first() })
+
+        val relaunched = DesktopSettings(file)
+        assertEquals(health, relaunched.routeHealthNow())
+        assertEquals(health, runBlocking { relaunched.routeHealth.first() })
+    }
+
+    @Test
+    fun `a file that never held health reads an empty map rather than throwing`() {
+        assertEquals(emptyMap(), DesktopSettings(freshFile()).routeHealthNow())
     }
 
     /**

@@ -47,6 +47,8 @@ fun ProjectDashboardScreen(
     busy: Boolean = false,
     /** The daemon's refusal, shown on the card in its own words. */
     refusal: String? = null,
+    /** Adopt and drop. Null draws no membership controls — see [ProjectMemberActions]. */
+    membership: ProjectMemberActions? = null,
 ) {
     var editing by remember { mutableStateOf<ProjectManifest?>(null) }
     val project = detail?.project
@@ -67,6 +69,7 @@ fun ProjectDashboardScreen(
                 onDiscard = onDiscard,
             )
         }) else null,
+        membership = membership,
     )
 
     editing?.let { m ->

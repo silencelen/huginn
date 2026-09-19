@@ -4,6 +4,7 @@ import androidx.compose.animation.animateContentSize
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -12,9 +13,14 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -61,6 +67,12 @@ fun ProjectDashboardView(
     modifier: Modifier = Modifier,
     /** Drawn under the header when the lead has proposed a cluster. */
     manifest: (@Composable () -> Unit)? = null,
+    /**
+     * Adopt and drop, wired. NULL draws no membership controls at all, which is
+     * what both shells did before the routes existed and is still the right
+     * answer against a daemon that has not got them.
+     */
+    membership: ProjectMemberActions? = null,
 ) {
     if (dashboard == null) {
         Text(
@@ -125,18 +137,156 @@ fun ProjectDashboardView(
         }
         members.forEach { m ->
             HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
-            DashboardMemberRow(m, nowMs, onOpen = { onOpenMember(m) })
+            DashboardMemberRow(m, nowMs, onOpen = { onOpenMember(m) }, membership = membership)
         }
         HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+        membership?.let { AdoptMemberRow(it, members) }
         Spacer(Modifier.height(12.dp))
     }
 }
+
+/**
+ * Adopt and drop, as one value rather than four callbacks in a signature — the
+ * [RouteListActions] argument: the vocabulary is what must not be written twice,
+ * and it can only live in one file if that file sees the shells' verbs.
+ *
+ * ⚠ NEITHER VERB TOUCHES A SESSION. Adopt takes a session that is ALREADY
+ * RUNNING into the record; drop takes it out and leaves it running. Spawning and
+ * ending live elsewhere, on purpose — the daemon's own comment calls a membership
+ * verb that quietly did either "the surprise this block exists to avoid".
+ */
+class ProjectMemberActions(
+    /**
+     * Live session names this client can see. ⚠ A session belonging to ANOTHER
+     * project looks exactly like a free one from here; the daemon holds that join
+     * and answers 409 naming the other project, which is a better answer than a
+     * row quietly missing from the picker. See [ProjectRules.adoptable].
+     */
+    val liveSessions: List<String> = emptyList(),
+    val onAdopt: (role: String, name: String) -> Unit = { _, _ -> },
+    val onDrop: (ProjectDashboardMember) -> Unit = {},
+    val busy: Boolean = false,
+    /** The daemon's own sentence for a refusal. Shown verbatim, never summarised. */
+    val refusal: String? = null,
+    val clearRefusal: () -> Unit = {},
+)
+
+/**
+ * "Add member": pick a session that is already running, give it a role.
+ *
+ * ⚠ THE FORM REFUSES BEFORE IT CLOSES, the [routeFormRefusal] discipline. The
+ * shells' project actions are fire-and-forget, so a refusal that arrived after
+ * the form had gone would take the typed role with it and leave a sentence under
+ * a list nobody is looking at any more. The role grammar and the cap are read off
+ * [ProjectRules] — the same rules the daemon applies, not a second copy.
+ */
+@Composable
+private fun AdoptMemberRow(actions: ProjectMemberActions, members: List<ProjectDashboardMember>) {
+    var open by remember { mutableStateOf(false) }
+    var role by remember { mutableStateOf("") }
+    var picked by remember { mutableStateOf<String?>(null) }
+    var picking by remember { mutableStateOf(false) }
+
+    val free = remember(actions.liveSessions, members) {
+        ProjectRules.adoptable(actions.liveSessions, members)
+    }
+    val taken = remember(members) { members.map { it.role } }
+    val refusal = when {
+        !open -> null
+        picked.isNullOrBlank() -> PROJECT_ADOPT_NEEDS_SESSION
+        else -> ProjectRules.roleProblem(role, taken)
+            ?: ProjectRules.capProblem(members.size, 1)
+    }
+
+    Column(Modifier.fillMaxWidth().padding(start = 14.dp, end = 14.dp, top = 6.dp)) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            TextButton(
+                onClick = {
+                    open = !open
+                    if (!open) { role = ""; picked = null }
+                    actions.clearRefusal()
+                },
+                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
+            ) { Text(if (open) "Cancel" else "Add member") }
+        }
+        if (open) {
+            // ⚠ A PICKER, NOT A FREE-TEXT FIELD. The daemon adopts a session BY
+            // NAME and 404s on one that is not there; a typed name is a 404
+            // waiting to happen, and the list of what is running is right here.
+            Box {
+                TextButton(
+                    onClick = { picking = true },
+                    enabled = free.isNotEmpty(),
+                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
+                ) {
+                    Text(picked ?: if (free.isEmpty()) PROJECT_ADOPT_NOTHING_FREE else "Pick a session")
+                }
+                DropdownMenu(expanded = picking, onDismissRequest = { picking = false }) {
+                    free.forEach { name ->
+                        DropdownMenuItem(
+                            text = { Text(name) },
+                            onClick = { picked = name; picking = false },
+                        )
+                    }
+                }
+            }
+            OutlinedTextField(
+                value = role,
+                onValueChange = { role = it },
+                label = { Text("Role") },
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth().padding(top = 4.dp),
+            )
+            Row(Modifier.padding(top = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+                TextButton(
+                    onClick = {
+                        val name = picked ?: return@TextButton
+                        actions.onAdopt(role.trim(), name)
+                        open = false; role = ""; picked = null
+                    },
+                    enabled = refusal == null && !actions.busy,
+                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
+                ) { Text("Add") }
+            }
+            (refusal ?: actions.refusal)?.let {
+                Text(
+                    it,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.error,
+                    modifier = Modifier.padding(top = 2.dp),
+                )
+            }
+        } else {
+            // A refusal the DAEMON gave survives the form closing: the commonest
+            // one names the other project this session already belongs to, which
+            // is the entire fix and is useless if it vanishes with the sheet.
+            actions.refusal?.let {
+                Text(
+                    it,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.error,
+                    modifier = Modifier.padding(top = 2.dp),
+                )
+            }
+        }
+    }
+}
+
+const val PROJECT_ADOPT_NEEDS_SESSION: String = "Pick the session to bring in."
+
+const val PROJECT_ADOPT_NOTHING_FREE: String = "No other session is running"
+
+/** ⚠ SAYS WHAT IT DOES NOT DO. "Drop" and "end" are one keystroke apart. */
+const val PROJECT_DROP_VERB: String = "Drop from project"
+
+const val PROJECT_DROP_NOTE: String = "The session keeps running."
 
 @Composable
 private fun DashboardMemberRow(
     member: ProjectDashboardMember,
     nowMs: Long,
     onOpen: () -> Unit,
+    membership: ProjectMemberActions? = null,
 ) {
     var open by remember(member.name) { mutableStateOf(false) }
     Column(Modifier.fillMaxWidth()) {
@@ -184,6 +334,27 @@ private fun DashboardMemberRow(
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
+                }
+                // ⚠ INSIDE THE DISCLOSURE, and never on the lead. A destructive-
+                // looking verb on a collapsed row is a mis-tap away from a
+                // membership edit nobody meant; a reader who opened the row is
+                // already reading about that member. The lead cannot be dropped
+                // at all — see [ProjectRules.canDrop].
+                if (membership != null && ProjectRules.canDrop(member)) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        TextButton(
+                            onClick = { membership.onDrop(member) },
+                            enabled = !membership.busy,
+                            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
+                        ) {
+                            Text(PROJECT_DROP_VERB, color = MaterialTheme.colorScheme.error)
+                        }
+                        Text(
+                            PROJECT_DROP_NOTE,
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
                 }
             }
         }
