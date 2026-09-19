@@ -78,3 +78,56 @@ IS the user's intent (it collapses to a chip), the skill body is not.
 
 Scrubbed: `sessionId` replaced, the trailing message shortened,
 its `file-history-snapshot` emptied of the tracked-file list it carried.
+
+---
+
+`task-notification-echo.jsonl` — a background-task notification written TWICE,
+which is the shape behind the phone review's "pairs of identical system events"
+(same `ts`, same text, adjacent `seq`). Records 1–4 are
+`~/.claude/projects/-root-netplan/68099091-…jsonl` lines 5784, 5787, 5788 and
+5728 (the echo, lifted from the notification 34 minutes earlier so the pair
+matches); record 5 is a second copy of 5784's shape, giving the notification a
+turn to start; records 6–7 are lines 266–267 of the same file. 2026-09,
+CLI 2.1.258.
+
+The file holds BOTH shapes a notification can take, and the difference between
+them is the whole reason the note is drawn from the queue record:
+
+```json
+{"type":"queue-operation","operation":"enqueue","content":"<task-notification>…"}
+{"type":"queue-operation","operation":"dequeue"}
+{"type":"user","origin":{"kind":"task-notification"},"promptSource":"system",
+ "message":{"role":"user","content":"<task-notification>…"}}      ← the ECHO
+```
+
+```json
+{"type":"queue-operation","operation":"enqueue","content":"<task-notification>…"}
+{"type":"queue-operation","operation":"remove","reason":"absorbed_mid_turn",
+ "content":"<task-notification>…"}                                ← no echo, ever
+```
+
+What is load-bearing, and what a hand-written fixture would miss:
+
+- the echo is an ordinary **`type: "user"`** record carrying the notification
+  element verbatim, 45 ms after the enqueue. Nothing in the CONTENT separates it
+  from the queue copy — they are byte-identical — so the pairing lives entirely
+  in `origin.kind === "task-notification"`. Exact on this host: of 955
+  transcripts, 386 records carry that origin, every one has an identical enqueue
+  above it, and they are exactly the 386 whose text opens `<task-notification`.
+- **only a `dequeue` produces an echo.** A notification that lands while Claude
+  is still working is `remove`d into the running turn with
+  `reason: "absorbed_mid_turn"` and no `user` record is ever written — 645 of
+  the 1031 notification enqueues on this host. A reader that drew the note from
+  the echo instead would therefore lose two notifications in three, which is why
+  the queue record is the copy that draws and the echo is the copy suppressed.
+- the `remove` record repeats the **whole content** verbatim; the `dequeue`
+  carries none at all. The two operations are read apart for that reason.
+- the second notification carries no `<result>`/`<usage>` at all — a background
+  command's notification is four tags, an agent's is eight.
+
+Scrubbed: `sessionId`/`uuid`/`parentUuid`/`promptId`/`requestId`/`slug` replaced,
+task ids and tool-use ids replaced, the `<output-file>` paths shortened, both
+`<result>` bodies cut to one line, and the two assistant records reduced to a
+short sentence each. Every field classification depends on (`type`,
+`operation`, `origin`, `promptSource`, `reason`, the timestamps and the
+notification elements themselves) is verbatim.
