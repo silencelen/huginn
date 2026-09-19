@@ -226,4 +226,47 @@ class DevicePolicyTest {
         assertNull(DevicePolicy.engineRefusal("generate", hasEngine = true))
         assertNull(DevicePolicy.engineRefusal("ask", hasEngine = false))
     }
+
+    // -------------------------------------------- keep act mode while locked
+
+    /**
+     * The owner's standing answer to whether a lock screen withdraws anything on
+     * ONE machine — "Keep act mode while locked", off by default.
+     *
+     * ⚠ IT IS A TRANSFORM IN FRONT OF THE POLICY, NOT A ROW IN IT. The case
+     * matrix still decides (scope, locked, mode) exactly as it did, and both
+     * runners are still held to it; this only decides which `locked` the matrix
+     * is shown. Expressing the setting inside the lattice would have rewritten
+     * the security contract every runner is tested against, to say something
+     * that is not about scopes at all.
+     */
+    @Test
+    fun aLockOnlyWithdrawsWhatTheMachineSaysItMay() {
+        assertTrue(DevicePolicy.lockWithdraws(locked = true, actWhileLocked = false), "today's rule")
+        assertFalse(DevicePolicy.lockWithdraws(locked = true, actWhileLocked = true), "the whole feature")
+        assertFalse(DevicePolicy.lockWithdraws(locked = false, actWhileLocked = false))
+        assertFalse(DevicePolicy.lockWithdraws(locked = false, actWhileLocked = true))
+    }
+
+    @Test
+    fun andItWidensTheLockRatherThanTheScope() {
+        val gate = DevicePolicy.lockWithdraws(locked = true, actWhileLocked = true)
+        // An `own` machine keeps `own` — that is the point.
+        assertEquals(DeviceScope.OWN, DevicePolicy.effective(DeviceScope.OWN, gate))
+        assertNull(DevicePolicy.refusal(DeviceScope.OWN, gate, "act"))
+        // A `look` machine is still a look machine. The setting says nothing
+        // about scope, and a reader who turns it on to "allow more" must not get
+        // more than they were already enrolled for.
+        assertEquals(DeviceScope.LOOK, DevicePolicy.effective(DeviceScope.LOOK, gate))
+        assertEquals(
+            "this machine is set to look, which cannot run act",
+            DevicePolicy.refusal(DeviceScope.LOOK, gate, "act"),
+        )
+        // And with it off, the sentence a person already knows is unchanged.
+        val still = DevicePolicy.lockWithdraws(locked = true, actWhileLocked = false)
+        assertEquals(
+            "this machine is locked, so it is read-only until someone unlocks it",
+            DevicePolicy.refusal(DeviceScope.OWN, still, "act"),
+        )
+    }
 }
