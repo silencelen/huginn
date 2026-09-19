@@ -172,6 +172,23 @@ interface HuginnSettings {
          * with — not what an unconfigured client quietly points at.
          */
         const val DEFAULT_BASE_URL: String = "http://100.97.198.90:8787"
+
+        /**
+         * What the add-a-route field shows when it is EMPTY.
+         *
+         * ⚠ A PLACEHOLDER, NEVER A PRE-FILL, and never a real address. The field
+         * used to open pre-filled with [DEFAULT_BASE_URL] — one household's
+         * tailnet IP, compiled into a public repo — so a fresh install anywhere
+         * else began by asking the reader to delete somebody else's address
+         * before typing their own, and a distracted Add pinned a route to a
+         * machine that is not theirs. `AppdRoutes` documents that these literals
+         * are exactly what `RouteResolver` refuses to adopt on its own; the form
+         * should not adopt one either.
+         *
+         * `.example.` is reserved (RFC 2606) and resolves nowhere, so this cannot
+         * become a live address by accident.
+         */
+        const val ROUTE_URL_PLACEHOLDER: String = "https://huginn.example.ts.net:8787"
         const val DEFAULT_FONT_SCALE: Float = 9f
 
         /** The bounds a font scale is clamped to, wherever it is set from. */
