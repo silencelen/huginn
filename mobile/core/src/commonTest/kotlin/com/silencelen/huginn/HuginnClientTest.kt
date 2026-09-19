@@ -739,6 +739,59 @@ class HuginnClientTest {
         assertEquals(403, e.code)
         assertEquals("outside the allowed roots", e.message)
     }
+
+    // ------------------------------------------------- devices: the wire
+
+    /**
+     * "Keep act mode while locked" has to REACH the daemon, or the pre-check
+     * refuses work the machine would have run — and refuses it a minute earlier,
+     * from the half of the system that does not decide.
+     *
+     * ⚠ AND THE LOCK STATE STAYS HONEST BESIDE IT. Two facts wear the word:
+     * whether a screen is locked (reported, always, and what the fleet list
+     * shows) and whether that withdraws anything here (this). Collapsing them —
+     * sending `locked: false` because the setting is on — would have needed no
+     * new field at all, and would have made every surface describe a locked
+     * machine as one nobody had locked.
+     */
+    @Test
+    fun aDeviceSaysBothWhetherItIsLockedAndWhetherThatMatters() = runTest {
+        val c = ok("""{"id":"d1","name":"RAGNAR","platform":"windows","scope":"own"}""")
+        c.registerDevice(
+            name = "RAGNAR", platform = "windows", scope = "own",
+            locked = true, actWhileLocked = true,
+        )
+        var body = lastBody()
+        assertTrue(""""locked":true""" in body, body)
+        assertTrue(""""actWhileLocked":true""" in body, body)
+
+        // Turning it OFF has to travel too: a narrowing that only the machine
+        // knows about leaves the daemon offering act on a box that revoked it.
+        c.registerDevice(
+            name = "RAGNAR", platform = "windows", scope = "own",
+            locked = true, actWhileLocked = false,
+        )
+        body = lastBody()
+        assertTrue(""""actWhileLocked":false""" in body, body)
+
+        // A caller that does not pass it says nothing — which is what every
+        // client older than the setting does, and what the daemon reads as
+        // "never said" rather than as "said no".
+        c.registerDevice(name = "RAGNAR", platform = "windows", scope = "own", locked = true)
+        assertFalse("actWhileLocked" in lastBody(), lastBody())
+    }
+
+    @Test
+    fun andTheBeatCarriesItToo() = runTest {
+        val c = ok("""{"cancel":false}""")
+        c.deviceBeat("d1", locked = true, scope = "own", version = "1.5.2", actWhileLocked = true)
+        assertTrue(""""actWhileLocked":true""" in lastBody(), lastBody())
+        c.deviceBeat("d1", locked = true, scope = "own", version = "1.5.2", actWhileLocked = false)
+        assertTrue(""""actWhileLocked":false""" in lastBody(), lastBody())
+        c.deviceBeat("d1", locked = true, scope = "own", version = "1.5.2")
+        assertFalse("actWhileLocked" in lastBody(), lastBody())
+    }
+
 }
 
 /**

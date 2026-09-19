@@ -1112,12 +1112,25 @@ class HuginnClient(
         version: String? = null,
         locked: Boolean = false,
         machine: String? = null,
+        /**
+         * Whether a lock withdraws anything on this machine — the "Keep act mode
+         * while locked" setting, so the daemon's pre-check reaches the verdict
+         * the runner would.
+         *
+         * ⚠ NULL IS "DID NOT SAY", NOT "NO". Every client older than the setting
+         * sends nothing, and the daemon keeps what it already knew rather than
+         * labelling those machines as having chosen the default. `false` is a
+         * real answer and has to travel: it is how turning the setting back OFF
+         * reaches the pre-check.
+         */
+        actWhileLocked: Boolean? = null,
     ): Device = decode(
         post("/v1/devices", body = buildJsonObject {
             put("name", JsonPrimitive(name))
             put("platform", JsonPrimitive(platform))
             put("scope", JsonPrimitive(scope))
             put("locked", JsonPrimitive(locked))
+            actWhileLocked?.let { put("actWhileLocked", JsonPrimitive(it)) }
             if (id != null) put("id", JsonPrimitive(id))
             if (root != null) put("root", JsonPrimitive(root))
             if (version != null) put("version", JsonPrimitive(version))
@@ -1133,11 +1146,19 @@ class HuginnClient(
         locked: Boolean? = null,
         scope: String? = null,
         version: String? = null,
+        /**
+         * Rides the beat for the same reason the scope does: both are edited on
+         * the machine, and the only thing that re-registers is a restart. A
+         * narrowing that waited for one would leave the daemon offering act on a
+         * box whose owner revoked it, for as long as the client stayed open.
+         */
+        actWhileLocked: Boolean? = null,
     ): BeatResult = decode(
         post("/v1/devices/$id/beat", body = buildJsonObject {
             locked?.let { put("locked", JsonPrimitive(it)) }
             scope?.let { put("scope", JsonPrimitive(it)) }
             version?.let { put("version", JsonPrimitive(it)) }
+            actWhileLocked?.let { put("actWhileLocked", JsonPrimitive(it)) }
         }),
     )
 

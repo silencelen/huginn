@@ -159,6 +159,18 @@ class DesktopSettings(private val file: File = defaultFile()) : HuginnSettings {
          */
         val deviceUnenrolPending: Boolean = false,
         val deviceScope: String = "look",
+        /**
+         * Whether a lock screen withdraws Act on this machine — "Keep act mode
+         * while locked".
+         *
+         * ⚠ FALSE IS THE DEFAULT AND THE DEFAULT IS THE FEATURE. This decides
+         * whether a remote request may become Bash on a computer with nobody in
+         * front of it, so a settings file that predates the field — and one that
+         * fails to parse — must read as no. It is a standing answer about ONE
+         * machine, which is why it is persisted here rather than asked for, and
+         * why nothing the daemon sends can set it.
+         */
+        val deviceActWhileLocked: Boolean = false,
         /** Where a `work`-scoped run starts. Not a sandbox — see DevicePolicy. */
         val deviceRoot: String = "",
         /**
@@ -279,6 +291,7 @@ class DesktopSettings(private val file: File = defaultFile()) : HuginnSettings {
     private val _deviceEnabled = MutableStateFlow(stored.deviceEnabled)
     private val _deviceUnenrolPending = MutableStateFlow(stored.deviceUnenrolPending)
     private val _deviceScope = MutableStateFlow(stored.deviceScope)
+    private val _deviceActWhileLocked = MutableStateFlow(stored.deviceActWhileLocked)
     private val _deviceRoot = MutableStateFlow(stored.deviceRoot)
     private val _deviceClaudePath = MutableStateFlow(stored.deviceClaudePath)
     private val _windowLayout = MutableStateFlow(
@@ -441,12 +454,14 @@ class DesktopSettings(private val file: File = defaultFile()) : HuginnSettings {
     val deviceEnabled: StateFlow<Boolean> = _deviceEnabled.asStateFlow()
     val deviceUnenrolPending: StateFlow<Boolean> = _deviceUnenrolPending.asStateFlow()
     val deviceScope: StateFlow<String> = _deviceScope.asStateFlow()
+    val deviceActWhileLocked: StateFlow<Boolean> = _deviceActWhileLocked.asStateFlow()
     val deviceRoot: StateFlow<String> = _deviceRoot.asStateFlow()
     val deviceClaudePath: StateFlow<String> = _deviceClaudePath.asStateFlow()
 
     fun deviceEnabledNow(): Boolean = _deviceEnabled.value
     fun deviceUnenrolPendingNow(): Boolean = _deviceUnenrolPending.value
     fun deviceScopeNow(): String = _deviceScope.value
+    fun deviceActWhileLockedNow(): Boolean = _deviceActWhileLocked.value
     fun deviceRootNow(): String = _deviceRoot.value
     fun deviceClaudePathNow(): String = _deviceClaudePath.value
     fun deviceIdNow(): String = synchronized(lock) { stored.deviceId }
@@ -481,6 +496,16 @@ class DesktopSettings(private val file: File = defaultFile()) : HuginnSettings {
     fun setDeviceScope(value: String) {
         _deviceScope.value = value
         mutate { it.copy(deviceScope = value) }
+    }
+
+    /**
+     * ⚠ SET HERE AND NOWHERE ELSE. Widening what a device will do requires
+     * touching the device — there is deliberately no route, no push and no
+     * remote verb that reaches this, for the same reason the scope has none.
+     */
+    fun setDeviceActWhileLocked(value: Boolean) {
+        _deviceActWhileLocked.value = value
+        mutate { it.copy(deviceActWhileLocked = value) }
     }
 
     fun setDeviceRoot(value: String) {
@@ -526,6 +551,10 @@ class DesktopSettings(private val file: File = defaultFile()) : HuginnSettings {
         _drafts.value = emptyMap()
         _deviceEnabled.value = false
         _deviceUnenrolPending.value = false
+        // A standing permission does not survive the machine being handed back.
+        // Leaving it set would mean the next enrolment on this box — possibly by
+        // somebody else — silently began with the lock rule already waived.
+        _deviceActWhileLocked.value = false
         mutate {
             it.copy(
                 token = "",
@@ -533,6 +562,7 @@ class DesktopSettings(private val file: File = defaultFile()) : HuginnSettings {
                 deviceId = "",
                 deviceEnabled = false,
                 deviceUnenrolPending = false,
+                deviceActWhileLocked = false,
             )
         }
     }
