@@ -1,5 +1,6 @@
 package com.silencelen.huginn
 
+import com.silencelen.huginn.data.Chat
 import com.silencelen.huginn.ui.ChatRules
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -15,8 +16,18 @@ import kotlin.test.assertTrue
  * the url to download the latest huginn windows deskto" with clear space to
  * spare beside it. A hard cut with no mark reads as a rendering fault; an
  * ellipsis reads as a title.
+ *
+ * ⚠ AND A CHAT THAT WAS NEVER MESSAGED HAS NO TITLE AT ALL, because the daemon
+ * only titles at the FIRST message. Eighteen of the owner's fifty-three chats
+ * were created and never used, and every one drew as "Untitled" with no preview
+ * and the same timestamp — thirteen identical rows in a row, which reads as a
+ * broken list rather than as an empty one. "Untitled" is also the wrong word:
+ * nothing failed to name them, nothing has been said in them yet.
  */
 class ChatRulesTest {
+
+    private fun chat(title: String? = null, turns: Int = 0, snippet: String? = null) =
+        Chat(id = "c1", title = title, turns = turns, lastSnippet = snippet)
 
     @Test
     fun `a title cut at the daemon's limit gets the mark it is missing`() {
@@ -44,5 +55,26 @@ class ChatRulesTest {
     fun `a title that already ends in an ellipsis is not given a second one`() {
         val already = "a".repeat(ChatRules.DAEMON_TITLE_MAX - 1) + "…"
         assertEquals(already, ChatRules.title(already))
+    }
+
+    @Test
+    fun `a chat nobody has said anything in says so`() {
+        assertEquals(ChatRules.EMPTY, ChatRules.listLabel(chat()))
+        assertEquals(ChatRules.EMPTY, ChatRules.listLabel(chat(turns = 0, snippet = "   ")))
+    }
+
+    @Test
+    fun `a chat with turns but no title is untitled, which is a different fact`() {
+        assertEquals(ChatRules.UNTITLED, ChatRules.listLabel(chat(turns = 3)))
+        assertEquals(ChatRules.UNTITLED, ChatRules.listLabel(chat(snippet = "something was said")))
+    }
+
+    @Test
+    fun `a titled chat is called what it is called`() {
+        assertEquals(
+            "bounce the creative server",
+            ChatRules.listLabel(chat(title = "bounce the creative server", turns = 2)),
+        )
+        assertEquals(ChatRules.EMPTY, ChatRules.listLabel(chat(title = "   ")), "a blank title is not a title")
     }
 }
