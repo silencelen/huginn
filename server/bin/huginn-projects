@@ -527,7 +527,10 @@ async function main() {
     // envelope — {project, row, live} — and the record inside it is what carries
     // the manifest.
     const cur = await call('GET', `/v1/projects/${encodeURIComponent(proj.id)}`);
-    const record = (cur.json && cur.json.project) || {};
+    // The envelope, or the bare record an appd 3.4 answered with before the
+    // three named keys existed — `{...project, row, live}`. Either shape, the
+    // fields read below are the same ones.
+    const record = (cur.json && cur.json.project) || cur.json || {};
     const manifest = (record && record.manifest) || {};
     const rev = Number(manifest.rev);
     const roles = (Array.isArray(manifest.sessions) ? manifest.sessions : [])
@@ -629,7 +632,7 @@ async function main() {
     // …" every single time. A remedy that cannot be run is worse than none, and
     // the only names that still work afterwards are tmux names.
     const detail = await call('GET', `/v1/projects/${encodeURIComponent(proj.id)}`);
-    const record = (detail.json && detail.json.project) || {};
+    const record = (detail.json && detail.json.project) || detail.json || {};
     const live = [record.lead, ...(Array.isArray(record.members) ? record.members : [])]
       .filter((m) => m && !m.endedAt)
       .map((m) => clean(m.name || m.claudeName, 60).replace(/\//g, '-'))
