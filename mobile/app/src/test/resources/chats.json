@@ -4,12 +4,37 @@
    "id": "<id scrubbed, 36 chars>",
    "title": "<title scrubbed, 44 chars>",
    "mode": "ask",
+   "host": "local",
+   "model": null,
+   "effort": null,
    "createdAt": 1785140767,
    "updatedAt": 1785140853,
    "claudeSessionId": "<claudeSessionId scrubbed, 36 chars>",
    "lastSnippet": "<lastSnippet scrubbed, 120 chars>",
    "turns": 1,
-   "running": false
+   "finishedRuns": 1,
+   "finishedAt": 1785140853,
+   "running": false,
+   "hostName": null,
+   "pending": 0
+  },
+  {
+   "id": "<id scrubbed, 36 chars>",
+   "title": "<title scrubbed, 31 chars>",
+   "mode": "ask",
+   "host": "<device id scrubbed, 36 chars>",
+   "model": "local-a-serving-box-llm-qwen3-4b",
+   "effort": null,
+   "createdAt": 1785141002,
+   "updatedAt": 1785141051,
+   "claudeSessionId": "<claudeSessionId scrubbed, 36 chars>",
+   "lastSnippet": "<lastSnippet scrubbed, 44 chars>",
+   "turns": 1,
+   "finishedRuns": 1,
+   "finishedAt": 1785141051,
+   "running": false,
+   "hostName": "A-SERVING-BOX",
+   "pending": 0
   }
  ]
 }

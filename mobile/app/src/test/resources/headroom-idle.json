@@ -32,7 +32,12 @@
     }
    },
    "live": true,
-   "readAt": 1789460000000
+   "readAt": 1789460000000,
+   "red": {
+    "session": null,
+    "weekly_all": null,
+    "weekly_fable": null
+   }
   }
  },
  "sessions": [],
@@ -51,7 +56,19 @@
   "lastIdleWarnAt": 0,
   "lastResumeAt": null
  },
- "serverTime": 1789460000000,
+ "keepAwake": {
+  "enabled": false,
+  "model": "claude-haiku-4-5-20251001",
+  "quietHours": null,
+  "lastAt": 0,
+  "lastAtClock": null,
+  "keptAwakeToday": 0,
+  "keptAwakeTotal": 0,
+  "lastOutcome": null,
+  "why": "keep-awake is off",
+  "evaluatedAt": 1789460000000,
+  "nextEligibleAt": 0
+ },
  "settings": {
   "v": 1,
   "headsUpPct": 85,
@@ -74,6 +91,10 @@
    "enabled": false,
    "threshold": 95,
    "margin": 20
-  }
- }
+  },
+  "keepAwake": false,
+  "keepAwakeModel": "claude-haiku-4-5-20251001",
+  "keepAwakeQuietHours": null
+ },
+ "serverTime": 1789460000000
 }
