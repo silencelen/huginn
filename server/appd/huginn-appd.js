@@ -12175,7 +12175,7 @@ const server = http.createServer(async (req, res) => {
         if (!text) return sendErr(res, 400, 'text is required');
         if (text.length > projectsLib.MAX_PROMPT) return sendErr(res, 400, 'text too long');
         if (!(await sessionExists(to.name))) return sendErr(res, 409, `${to.claudeName} is not running`);
-        const r = await enqueueSend(to.name, projectsLib.peerMessageFrame(from.claudeName, text), {
+        const r = await enqueueSend(to.name, projectsLib.peerMessageFrame(from.claudeName, text, project), {
           automated: true, origin: 'project', kind: 'peerMessage',
         });
         return sendJson(res, 202, {
