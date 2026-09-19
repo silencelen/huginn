@@ -84,6 +84,14 @@ class SendQueueTest {
     }
 
     @Test
+    fun `unsent text in the live view holds a send, and names it`() {
+        assertEquals(
+            "Queued · unsent text in the live view (1 waiting)",
+            SendQueue.line(TypingState(queued = 1, blockedBy = "draft")),
+        )
+    }
+
+    @Test
     fun `an error is shown verbatim and wins over the count`() {
         // The daemon knows why it could not deliver; a paraphrase here would be
         // this client guessing about the other end of a queue it does not own.

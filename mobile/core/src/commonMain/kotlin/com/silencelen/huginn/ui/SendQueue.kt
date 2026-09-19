@@ -43,6 +43,10 @@ object SendQueue {
         // `attention` (appd 3.4.0): a question is waiting on the screen and the daemon
         // holds a human send behind it until somebody answers — same family as a modal.
         if (s.blockedBy == "attention") return "Queued · a question is waiting on the screen $waiting"
+        // `draft` (appd 3.5.0): there is unsent text in the live view and a paste in front
+        // of it would be submitted as one sentence. Cleared by sending or clearing it —
+        // a thing the reader can DO, so it gets its own words.
+        if (s.blockedBy == "draft") return "Queued · unsent text in the live view $waiting"
         if (s.delivering) return "Sending $waiting"
         return "Queued · will send when Claude finishes its turn $waiting"
     }

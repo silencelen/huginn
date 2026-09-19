@@ -1118,6 +1118,8 @@ object SendQueue {
             "starting" -> "Queued · waiting for Claude to start ($waiting)"
             // A question waiting on the screen holds a human send too (appd 3.4.0).
             "attention" -> "Queued · waiting on a question in the pane ($waiting)"
+            // Unsent text in the live view holds a send too (appd 3.5.0): it is the reader's own draft.
+            "draft" -> "Queued · unsent text in the live view ($waiting)"
             else -> "Queued · will send when Claude finishes its turn ($waiting)"
         }
     }
