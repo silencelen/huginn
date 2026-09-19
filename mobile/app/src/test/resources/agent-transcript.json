@@ -43,10 +43,24 @@
  "nextOffset": 184320,
  "windowStart": 0,
  "truncated": false,
+ "title": "<title scrubbed, 29 chars>",
+ "permissionMode": "auto",
  "model": "claude-opus-5",
+ "gitBranch": "main",
+ "cwd": "/root/netplan/pmanage",
+ "effort": "high",
+ "lastActivityTs": 1789459910,
  "modelDisplay": "Opus 5",
+ "state": "running",
  "claudeSessionId": "<claudeSessionId scrubbed, 36 chars>",
- "running": true,
+ "activity": {
+  "tool": "Bash",
+  "detail": "<activity detail scrubbed, 37 chars>",
+  "sinceTs": 1789459940,
+  "subagents": 0
+ },
+ "tasks": [],
+ "bgAgents": 0,
  "agentId": "agent-3f9c1a",
  "workflowId": "wf_01H9ZKQT"
 }

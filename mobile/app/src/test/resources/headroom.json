@@ -32,7 +32,15 @@
     }
    },
    "live": true,
-   "readAt": 1789460000000
+   "readAt": 1789460000000,
+   "red": {
+    "session": null,
+    "weekly_all": null,
+    "weekly_fable": {
+     "since": 1789452000000,
+     "resetsAt": "2026-09-18T07:00:00+00:00"
+    }
+   }
   },
   "spare": {
    "email": "<email scrubbed, 22 chars>",
@@ -47,7 +55,12 @@
     "weekly_fable": null
    },
    "live": false,
-   "readAt": 1789458200000
+   "readAt": 1789458200000,
+   "red": {
+    "session": null,
+    "weekly_all": null,
+    "weekly_fable": null
+   }
   }
  },
  "sessions": [
@@ -65,12 +78,13 @@
    },
    "autoResume": true,
    "stalled": false,
-   "headsUpAt": 1789459900000,
    "stall": null,
+   "headsUpAt": 1789459900000,
    "nativeSwitch": {
     "seenAt": null,
     "to": null
-   }
+   },
+   "humanSetModelAt": null
   },
   {
    "name": "btclab",
@@ -79,7 +93,6 @@
    "ladder": null,
    "autoResume": false,
    "stalled": true,
-   "headsUpAt": null,
    "stall": {
     "at": 1789459200000,
     "window": "weekly_fable",
@@ -93,10 +106,12 @@
     "why": "auto-resume is off for this session",
     "text": "You've hit your usage limit · resets 10:10pm (America/Los_Angeles)"
    },
+   "headsUpAt": null,
    "nativeSwitch": {
     "seenAt": 1789458000000,
     "to": "opus"
-   }
+   },
+   "humanSetModelAt": 1789459000000
   }
  ],
  "sentinels": {
@@ -130,13 +145,32 @@
    "type": "ladder_down",
    "at": 1789460100000,
    "name": "w1kcore",
+   "to": "opus",
+   "toEmail": "<email scrubbed, 24 chars>",
+   "toPercent": 71,
    "from": "fable",
-   "to": "opus"
+   "fromEmail": "<email scrubbed, 24 chars>",
+   "fromPercent": 92,
+   "fromLabel": "Current week (Fable)",
+   "preferredFable": true
   },
   "why": "weekly_fable 92% >= ladderPct 92; one lever per tick",
   "switches": 0,
   "lastIdleWarnAt": 0,
   "lastResumeAt": null
+ },
+ "keepAwake": {
+  "enabled": true,
+  "model": "claude-haiku-4-5-20251001",
+  "quietHours": "23:00-07:00",
+  "lastAt": 1789441000000,
+  "lastAtClock": "09:16pm",
+  "keptAwakeToday": 2,
+  "keptAwakeTotal": 41,
+  "lastOutcome": "ok",
+  "why": "a 5-hour window is already running",
+  "evaluatedAt": 1789459990000,
+  "nextEligibleAt": 1789459000000
  },
  "settings": {
   "v": 1,
@@ -160,7 +194,10 @@
    "enabled": false,
    "threshold": 95,
    "margin": 20
-  }
+  },
+  "keepAwake": true,
+  "keepAwakeModel": "claude-haiku-4-5-20251001",
+  "keepAwakeQuietHours": "23:00-07:00"
  },
  "serverTime": 1789460000000
 }

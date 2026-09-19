@@ -43,16 +43,26 @@ import org.junit.Test
 import java.io.File
 
 /**
- * Decodes real huginn-appd 2.0.0 responses.
+ * Decodes real huginn-appd responses.
  *
- * The fixtures in `src/test/resources` were captured from the live daemon on
- * 2026-07-27 and then scrubbed: every key and every value whose shape matters
- * (numbers, booleans, enum-like strings) is untouched, and free text is replaced
- * with a placeholder, so no session content lives in the repo.
+ * The fixtures in `src/test/resources` are live daemon bodies, scrubbed: every
+ * key and every value whose shape matters (numbers, booleans, enum-like
+ * strings, id formats) is untouched, and free text is replaced with a
+ * placeholder of the same length class, so no session content lives in the repo.
+ *
+ * ⚠ THE PER-ROUTE CAPTURE LOG IS `src/test/resources/README.md` — which route
+ * each file came from, which daemon version, on what date, and which two of them
+ * are generated from the daemon's own modules rather than captured. It is the
+ * only place that says how old any one of these is; this KDoc used to claim a
+ * single date for all of them and was eight weeks stale for half the set.
+ *
+ * Last full refresh: **appd 3.5.1, 2026-09-19**.
  *
  * This is the only automated check that the app and the daemon still agree on
  * the wire format. A renamed server field is otherwise invisible until the app
- * silently shows an empty screen on a phone this host cannot run.
+ * silently shows an empty screen on a phone this host cannot run — and because
+ * the decoder sets `ignoreUnknownKeys`, a field nothing ASSERTS is a field whose
+ * disappearance nothing will notice.
  */
 class ApiContractTest {
 
@@ -1148,5 +1158,388 @@ class ApiContractTest {
             """{"events":[{"seq":8,"kind":"system","text":"Compacted."}],"nextOffset":900}""",
         )
         assertNull("no peer block means no peer", plain.events.single().peer)
+    }
+
+    // ================================================== the 2026-09-19 refresh
+    //
+    // ⚠ CAPTURED FROM THE LIVE DAEMON AT 3.5.1 on 2026-09-19 and scrubbed, for
+    // every fixture above that predated Wave 1–3. The projects/consoles/apps/
+    // spawn fixtures are the daemon modules' own output and were already
+    // current; these are the ones that had been drifting since July, and every
+    // assertion below is a field the daemon sends that the fixture did not
+    // carry. See `src/test/resources/README.md` for the per-route capture log.
+    //
+    // The point of each is `ignoreUnknownKeys`: a field the client never reads
+    // is invisible to a decode, so only an assertion on the NAME turns a
+    // daemon-side rename into a red test instead of a blank screen on a phone.
+
+    @Test
+    fun `session rows carry the addressability, geometry and background work of 3_5`() {
+        val list = json.decodeFromString<SessionList>(fixture("sessions.json"))
+        val rows = json.parseToJsonElement(fixture("sessions.json"))
+            .jsonObject["sessions"]!!.jsonArray.map { it.jsonObject }
+
+        // ⚠ LISTED BUT NOT OPENABLE is a row state, not a reason to hide a row.
+        // Asserted on the RAW JSON because the model defaults it to `true`: a
+        // rename would leave every row reading "addressable" with nothing to see.
+        rows.forEach { assertTrue("every row carries addressable", "addressable" in it) }
+        assertTrue("the capture host's rows are all openable", list.sessions.all { it.addressable })
+
+        // ⚠ TWO ACTIVITY CLOCKS, AND THEY ARE NOT THE SAME NUMBER. `activityAt`
+        // is output; `sessionActivityAt` is tmux's own client-interaction stamp,
+        // which never moves for an unattached session that is working hard. A
+        // list that sorted on the second would bury the busiest session.
+        list.sessions.forEach {
+            assertTrue("sessionActivityAt must decode", it.sessionActivityAt > 0)
+            assertTrue("and it is epoch SECONDS", it.sessionActivityAt in 1_000_000_000..9_999_999_999)
+        }
+        val andrev = list.sessions.first { it.name == "andrev" }
+        assertTrue(
+            "the two clocks are distinct fields, not one field twice",
+            list.sessions.any { it.sessionActivityAt != it.activityAt },
+        )
+        assertNotNull("panePid is what background work is scanned under", andrev.panePid)
+
+        // The preview pass's own fields. Everything here is null or zero on a
+        // list fetched WITHOUT ?preview=1, which is why the fixture is the
+        // preview answer: the cheap list is a strict subset of it.
+        val busy = list.sessions.first { it.name == "huginnapp" }
+        assertTrue("a winding-down session must decode", busy.softEnding)
+        assertTrue("compaction is a row state", busy.compacting)
+        assertEquals(java.lang.Integer.valueOf(71), busy.contextPercent)
+        assertEquals(2, busy.bgShells)
+        assertEquals(1, busy.bgAgents)
+        assertTrue("the longest background command rides the row", !busy.bgTask.isNullOrBlank())
+        assertEquals("Fable 5.1", busy.liveModel)
+        assertEquals("accept edits", busy.liveMode)
+
+        // ⚠ NULL, NOT ZERO. A pane with no statusline has no context reading, and
+        // 0 % would read as "plenty of room" on the one row that cannot say.
+        val noClaude = list.sessions.first { it.claudeSessionId == null }
+        assertNull("a pane with no statusline reports no context", noClaude.contextPercent)
+        rows.forEach { assertTrue("every row carries contextPercent", "contextPercent" in it) }
+    }
+
+    @Test
+    fun `status carries the quick-action templates and the window half of the pill`() {
+        val s = json.decodeFromString<Status>(fixture("status.json"))
+        val qa = s.quickActions
+        assertNotNull("null here hides the selection menu; absent is not four blanks", qa)
+        assertTrue("{selection} is what the daemon validates on", "{selection}" in qa!!.explain)
+        assertTrue("{selection}" in qa.execute)
+        assertTrue("{selection}" in qa.askInNewChat)
+        assertEquals("quote is a LEAD-IN, empty by default", "", qa.quote)
+
+        // ⚠ THE THREE-VALUED WINDOW. `true` and `false` are both answers; a
+        // daemon too old to have been asked sends neither, and reading absence
+        // as false would report "no window running" forever.
+        val hr = s.headroom!!
+        assertEquals(java.lang.Boolean.TRUE, hr.windowRunning)
+        assertTrue("the window's end stays ISO", hr.windowResetsAt!!.startsWith("2026-"))
+        assertNull(
+            "a pre-window daemon says nothing rather than false",
+            json.decodeFromString<Status>(fixture("status-legacy.json")).headroom?.windowRunning,
+        )
+    }
+
+    @Test
+    fun `keep-awake rides both routes, and only one of them derives nextEligibleAt`() {
+        val onStatus = json.decodeFromString<Status>(fixture("status.json")).headroom!!.keepAwake
+        assertNotNull("the Status line's spend half comes from this alone", onStatus)
+        assertTrue(onStatus!!.enabled)
+        assertEquals("claude-haiku-4-5-20251001", onStatus.model)
+        assertEquals("quiet hours are the HOST's local clock, verbatim", "23:00-07:00", onStatus.quietHours)
+        // ⚠ FORMATTED BY THE DAEMON. `:core` is commonMain and has no timezone
+        // database; the one time a client turned an instant into a wall clock by
+        // hand it printed UTC as if it were local.
+        assertEquals("09:16pm", onStatus.lastAtClock)
+        assertTrue("lastAt is millis", onStatus.lastAt > 1_000_000_000_000L)
+        assertEquals(2, onStatus.keptAwakeToday)
+        assertEquals(41, onStatus.keptAwakeTotal)
+        assertEquals("ok", onStatus.lastOutcome)
+        assertTrue("why is the answer to 'it is on and nothing happens'", !onStatus.why.isNullOrBlank())
+        // ⚠ evaluatedAt IS NOT lastAt. Weighed-on-this-pass versus last-pinged:
+        // without the pair, a stale `why` is indistinguishable from a fresh one.
+        assertTrue("evaluatedAt is millis", onStatus.evaluatedAt > 1_000_000_000_000L)
+        assertTrue("and it is not the ping clock", onStatus.evaluatedAt != onStatus.lastAt)
+
+        // ⚠ THE ROUTES DIFFER BY EXACTLY ONE FIELD, and it is the derived one.
+        // `/v1/headroom` computes nextEligibleAt (lastAt + five hours); the
+        // status summary does not, and it reads 0 there rather than being wrong.
+        val statusRaw = json.parseToJsonElement(fixture("status.json"))
+            .jsonObject["headroom"]!!.jsonObject["keepAwake"]!!.jsonObject
+        assertFalse("the status copy derives nothing", "nextEligibleAt" in statusRaw)
+        assertEquals(0L, onStatus.nextEligibleAt)
+
+        val onHeadroom = json.decodeFromString<Headroom>(fixture("headroom.json")).keepAwake
+        assertNotNull("beside the arbiter, because it is the same kind of fact", onHeadroom)
+        assertTrue("the full route derives it", onHeadroom!!.nextEligibleAt > 1_000_000_000_000L)
+
+        // ⚠ THE DEFAULT IS LOAD-BEARING. This is the only setting that spends the
+        // owner's quota with nobody asking; a client defaulting it to `true`
+        // would draw the toggle ON against a daemon that has it off, then save
+        // that reading back. The idle fixture proves the daemon's own `false`.
+        val idle = json.decodeFromString<Headroom>(fixture("headroom-idle.json"))
+        assertNotNull("keep-awake rides every answer, idle or not", idle.keepAwake)
+        assertFalse(idle.keepAwake!!.enabled)
+        assertEquals(0L, idle.keepAwake!!.lastAt)
+        assertFalse("and the settings half agrees", idle.settings!!.keepAwake)
+        assertTrue("an off feature still says why", !idle.keepAwake!!.why.isNullOrBlank())
+        assertTrue("the settings form needs the model name before it opens",
+            idle.settings!!.keepAwakeModel.isNotBlank())
+
+        // Settings carry it too, and the two halves are separate fields: one is
+        // what the owner asked for, the other what the daemon last did about it.
+        val live = json.decodeFromString<Headroom>(fixture("headroom.json"))
+        assertTrue(live.settings!!.keepAwake)
+        assertEquals("23:00-07:00", live.settings!!.keepAwakeQuietHours)
+    }
+
+    @Test
+    fun `headroom carries the hands-off mark and the arbiter's account halves`() {
+        val text = fixture("headroom.json")
+        val h = json.decodeFromString<Headroom>(text)
+
+        // ⚠ THE ARBITER'S HANDS-OFF MARK. A session a PERSON has steered is not
+        // one the ladder may quietly move, and a client that drew a laddered mark
+        // on it would be captioning the owner's own choice as the daemon's.
+        val steered = h.sessions.first { it.humanSetModelAt != null }
+        assertTrue("humanSetModelAt is millis", steered.humanSetModelAt!! > 1_000_000_000_000L)
+        val sessionRows = json.parseToJsonElement(text).jsonObject["sessions"]!!
+            .jsonArray.map { it.jsonObject }
+        sessionRows.forEach {
+            assertTrue("every session row carries humanSetModelAt", "humanSetModelAt" in it)
+        }
+        assertTrue(
+            "and a session nobody has steered says so with null, not with absence",
+            h.sessions.any { it.humanSetModelAt == null },
+        )
+
+        // ⚠ `red` IS ON THE WIRE AND DELIBERATELY NOT DECODED — see
+        // HeadroomAccount's kdoc. Asserted on the raw JSON so the fixture stays
+        // the daemon's WHOLE answer: if the day comes that a client wants the
+        // red clocks, they are already here rather than a re-capture away.
+        val accounts = json.parseToJsonElement(text).jsonObject["accounts"]!!.jsonObject
+        accounts.forEach { (slug, row) ->
+            assertTrue("account $slug carries its red bookkeeping", "red" in row.jsonObject)
+        }
+        assertEquals("but the client reads only the windows", 2, h.accounts.size)
+        assertNotNull(h.accounts.values.first { it.live }.windows.weeklyFable)
+
+        // ⚠ THE ARBITER NAMES BOTH ACCOUNTS NOW, by email and by figure. A switch
+        // record that said only "to" left the notification unable to say what was
+        // wrong with the account it came off.
+        val last = h.arbiter!!["lastAction"]!!.jsonObject
+        listOf("toEmail", "toPercent", "fromEmail", "fromPercent", "fromLabel", "preferredFable")
+            .forEach { assertTrue("the arbiter's lastAction carries $it", it in last) }
+        assertEquals("Current week (Fable)", last["fromLabel"]!!.jsonPrimitive.content)
+    }
+
+    @Test
+    fun `a transcript page carries its effort, model display and background work`() {
+        val p = json.decodeFromString<TranscriptPage>(fixture("transcript.json"))
+        // ⚠ THE PAGE BEFORE THIS ONE. Without windowStart a long session shows
+        // only its tail and there is no way to ask for the rest.
+        assertTrue("windowStart drives history paging", p.windowStart > 0)
+        assertTrue("and it precedes the live end", p.windowStart < p.nextOffset)
+        assertEquals("Opus 5", p.modelDisplay)
+        assertEquals("high", p.effort)
+        assertTrue("deliveredQueued is always a list, empty on a cold open", p.deliveredQueued.isEmpty())
+
+        // Background work rides the page so a session blocked on a long build
+        // does not read as stalled from the conversation.
+        val t = p.tasks.single()
+        assertTrue("a background shell must name itself", t.command.isNotBlank())
+        assertTrue("and say how long it has been going", t.forSeconds > 0)
+        assertEquals(2, p.bgAgents)
+
+        // In-flight work on the agent page, by liveActivity's OWN field names:
+        // `tool`/`detail`/`sinceTs`, never `kind`/`name`/`text`.
+        val a = json.decodeFromString<TranscriptPage>(fixture("agent-transcript.json"))
+        assertEquals("Bash", a.activity!!.tool)
+        assertNotNull(a.activity!!.sinceTs)
+        assertEquals(0, a.activity!!.subagents)
+        assertEquals("running", a.state)
+        assertEquals("main", a.gitBranch)
+        assertTrue("the cwd is what a file link is resolved against", !a.cwd.isNullOrBlank())
+
+        // ⚠⚠ `running` IS A CHAT FIELD AND WAS NEVER A SESSION ONE. Neither
+        // `/v1/sessions/:n/transcript` nor the agent route emits it — only the
+        // remote-chat transcript branch does — and two of these fixtures used to
+        // carry it, which made a chat-only field look like a page-wide one.
+        listOf("transcript.json", "transcript-limit.json", "agent-transcript.json").forEach { f ->
+            assertFalse(
+                "$f must not claim a field the session transcript route never sends",
+                "running" in json.parseToJsonElement(fixture(f)).jsonObject,
+            )
+        }
+    }
+
+    @Test
+    fun `chats name the machine they ran on and count their finished runs`() {
+        val c = json.decodeFromString<ChatList>(fixture("chats.json"))
+        assertEquals(2, c.chats.size)
+
+        // ⚠ THE NAME IS RESOLVED BY THE DAEMON. `host` is a device id; a client
+        // that looked the name up itself would print a bare uuid for a device
+        // since unenrolled, which is exactly when a reader needs the name most.
+        val remote = c.chats.first { it.hostName != null }
+        assertEquals("A-SERVING-BOX", remote.hostName)
+        assertTrue("host is the device id, not the name", remote.host!!.length >= 8)
+        assertTrue("a local-model chat names its composite model id",
+            remote.model!!.startsWith("local-"))
+
+        val local = c.chats.first { it.host == "local" }
+        assertNull("a local chat has no machine to name", local.hostName)
+
+        // ⚠ A COUNTER, NOT AN EDGE. `running` going false can be missed by
+        // anything looking on a schedule; a tally that is higher than last time
+        // cannot be. Same field, same reason, as WatchChat.finishedRuns.
+        c.chats.forEach {
+            assertEquals("a chat that has run once has run once", 1L, it.finishedRuns)
+            assertNotNull("and says when it stopped", it.finishedAt)
+            assertTrue("finishedAt is epoch SECONDS", it.finishedAt!! in 1_000_000_000..9_999_999_999)
+        }
+        val rows = json.parseToJsonElement(fixture("chats.json"))
+            .jsonObject["chats"]!!.jsonArray.map { it.jsonObject }
+        listOf("host", "hostName", "model", "effort", "pending", "finishedRuns")
+            .forEach { k -> rows.forEach { assertTrue("every chat row carries $k", k in it) } }
+    }
+
+    @Test
+    fun `the watch digest's chats carry the clock that says which ones are new`() {
+        val live = json.decodeFromString<Watch>(fixture("watch.json"))
+        val ch = live.chats.values.first()
+        assertTrue("createdAt is epoch SECONDS", ch.createdAt in 1_000_000_000..9_999_999_999)
+        // ⚠ ON THE RAW JSON: a client that inferred "new" from the key first
+        // appearing would announce every chat on a cold start as just-made.
+        val raw = json.parseToJsonElement(fixture("watch.json")).jsonObject["chats"]!!.jsonObject
+        raw.forEach { (id, row) ->
+            assertTrue("digest chat $id carries createdAt", "createdAt" in row.jsonObject)
+        }
+    }
+
+    @Test
+    fun `devices group by machine, and a serving row is a scope of its own`() {
+        val list = json.decodeFromString<DeviceList>(fixture("devices.json"))
+        assertEquals(5, list.devices.size)
+
+        // ⚠ GROUPING AND DISPLAY ONLY — authority stays per-row. Two rows sharing
+        // `machine` are one physical box wearing two credentials, and a fleet
+        // list that drew them as two machines would double the owner's hardware.
+        list.devices.forEach { assertTrue("every row carries a machine key", !it.machine.isNullOrBlank()) }
+        val desktop = list.devices.first { it.name == "A-DESKTOP" }
+        val serving = list.devices.first { it.scope == "generate" }
+        assertEquals("one box, two credentials", desktop.machine, serving.machine)
+        assertTrue("their authority is still separate", desktop.scope != serving.scope)
+
+        // ⚠ `generate` IS A FOURTH SCOPE. The daemon mints `llmSlug` at first
+        // generate-scope registration and routes on it; `models` is DISPLAY ONLY,
+        // and nothing may branch on that list — GET /v1/models is the authority.
+        assertEquals("a-desktop-llm", serving.llmSlug)
+        assertEquals(listOf("qwen3-4b", "nomic-embed"), serving.models.map { it.slug })
+        assertEquals("Qwen3 4B", serving.models.first().display)
+        assertTrue("only a serving row carries a catalog",
+            list.devices.filter { it.scope != "generate" }.all { it.models.isEmpty() })
+
+        // The third tri-state on this row, alongside `locked`/`actWhileLocked`:
+        // omitted, never defaulted, for a runner that never said.
+        assertEquals(java.lang.Boolean.TRUE, serving.persistent)
+        assertNull(
+            "a row that never said must decode as null, never as false",
+            list.devices.first { it.name == "A-LAPTOP" }.persistent,
+        )
+    }
+
+    @Test
+    fun `saved accounts carry the identity the daemon files them under`() {
+        val saved = json.decodeFromString<SavedAccounts>(fixture("accounts.json"))
+
+        // ⚠ THE UUID IS WHY A ROTATION DOES NOT FORK A PROFILE. Keyed on the
+        // tokens alone, Claude Code's few-hourly rewrite produced a new profile
+        // every time — thirteen of them for three logins.
+        val identified = saved.accounts.filter { it.accountUuid != null }
+        assertEquals("two of the three answered from their own token", 2, identified.size)
+        identified.forEach {
+            assertEquals("a uuid is 36 characters of it", 36, it.accountUuid!!.length)
+            assertTrue("and the API's own tagged id rides beside it", it.taggedId!!.startsWith("user_"))
+            assertNotNull("with the scope count the credentials carry", it.scopes)
+            assertNotNull("and when a plan reading was last taken", it.planSeenAt)
+        }
+        saved.accounts.forEach {
+            assertTrue("firstSeen is epoch SECONDS", it.firstSeen!! in 1_000_000_000..9_999_999_999)
+        }
+
+        // ⚠ THE UNIDENTIFIABLE ROW IS THE ONLY ONE THAT CAN BE A DUPLICATE: with
+        // a uuid in hand, one login is one record and cannot appear twice.
+        val anonymous = saved.accounts.single { it.accountUuid == null }
+        assertNull("no uuid means no tagged id either", anonymous.taggedId)
+        assertNull("nor a scope count", anonymous.scopes)
+        assertNull("nor a plan reading to age", anonymous.planSeenAt)
+        assertFalse("but it is still a usable saved login", anonymous.slug.isBlank())
+
+        // ⚠ ONE ROW'S FIGURES ARE LIVE AND THE REST ARE AGED FORWARD. Only the
+        // signed-in profile holds a token fresh enough to answer; drawing the
+        // others' bars as live reports a figure that can be days old, uncaveated.
+        assertEquals("exactly one account is signed in", 1, saved.accounts.count { it.planLive })
+        val livePlan = saved.accounts.single { it.planLive }
+        assertTrue(livePlan.isActive)
+        assertEquals("a live reading has no age", 0L, livePlan.planAgeSec)
+        assertTrue(
+            "and an aged one says how stale, in seconds",
+            saved.accounts.any { !it.planLive && (it.planAgeSec ?: 0) > 60 },
+        )
+        assertNotNull("the figures themselves still decode", livePlan.weeklyPercent)
+    }
+
+    @Test
+    fun `extra usage carries the two blocks the daemon passes through unread`() {
+        val text = fixture("plan.json")
+        // ⚠ THE FIELD NAMES ARE THE CONTRACT; THE SHAPE IS NOT. `lib/plan.js`
+        // passes `daily` and `weekly` through verbatim and unread — both have
+        // been null on every capture, so a pinned shape here would fail the
+        // WHOLE plan decode the first day the API filled them in.
+        val raw = json.parseToJsonElement(text).jsonObject["extraUsage"]!!.jsonObject
+        assertTrue("extraUsage carries daily", "daily" in raw)
+        assertTrue("extraUsage carries weekly", "weekly" in raw)
+
+        val p = json.decodeFromString<Plan>(text)
+        assertNotNull("and the block around them still decodes", p.extraUsage)
+        assertEquals(2, p.extraUsage!!.decimalPlaces)
+
+        // A filled-in one, of a shape nobody has seen, must decode too.
+        val filled = json.decodeFromString<Plan>(
+            """{"limits":[],"extraUsage":{"currency":"USD",
+               "daily":{"used":3,"limit":10},"weekly":[1,2,3]}}""",
+        )
+        assertNotNull("an unforeseen shape is held, not rejected", filled.extraUsage!!.daily)
+        assertNotNull(filled.extraUsage!!.weekly)
+    }
+
+    @Test
+    fun `a screen carries the lease holder and what the pane says right now`() {
+        val s = json.decodeFromString<Screen>(fixture("screen.json"))
+        // ⚠ NULL WITH sizeLeased FALSE IS "NOBODY", and null WITH it true is a
+        // holder that sent no id. The one thing a "leased here" mark must not do
+        // is claim a window that belongs to another live viewer.
+        val raw = json.parseToJsonElement(fixture("screen.json")).jsonObject
+        assertTrue("the lease holder rides every screen", "leaseHeldBy" in raw)
+        assertFalse(s.sizeLeased)
+        assertNull("nobody holds it", s.leaseHeldBy)
+
+        // The moment-to-moment signals, which exist ONLY here: the transcript is
+        // silent until whole blocks complete, which left the conversation looking
+        // dead right after a message was sent.
+        assertTrue("the spinner is the only live status", !s.spinner.isNullOrBlank())
+        assertEquals("the durable progress rows are a list", 1, s.statusLines.size)
+        assertTrue("and the per-tool row is separate, updated in place",
+            !s.transientLine.isNullOrBlank())
+        assertFalse(s.compacting)
+        assertEquals("Opus 5", s.liveModel)
+        assertEquals("accept edits", s.liveMode)
+        assertEquals("main", s.liveBranch)
+        // ⚠ PARSED OUT OF THE STATUSLINE, not swallowed into the branch — which
+        // is what the old regex did, leaving the meter with nothing to draw.
+        assertEquals(java.lang.Integer.valueOf(47), s.contextPercent)
     }
 }
