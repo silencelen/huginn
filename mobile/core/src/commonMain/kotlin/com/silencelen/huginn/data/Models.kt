@@ -2913,8 +2913,40 @@ data class App(
     val httpStatus: Int? = null,
     /** Whether the daemon holds a favicon for this row. See the KDoc. */
     val icon: Boolean = false,
+    /**
+     * When the cached favicon BYTES last CHANGED, in epoch SECONDS (appd 3.5.2).
+     * `0` when there is no icon.
+     *
+     * ⚠ THIS IS THE CACHE KEY, AND [version] WAS THE WRONG ONE. A client caches
+     * the decoded picture per row — it has to; rows are drawn in a list that
+     * recycles — and keyed the cache on `version`, which is the ROW's edit
+     * history and never moves for a refetch. The daemon re-fetches a favicon on
+     * its own schedule (hourly, on probe), so a site that changed its icon
+     * served the old picture for the life of the process, with nothing in the
+     * logs and no way to make it let go short of a reinstall. This moves ONLY
+     * when the picture does — not even on a refetch that came back identical,
+     * which the file's mtime cannot say.
+     *
+     * ⚠ NULLABLE BECAUSE OF THE ALIAS, NOT BECAUSE OF THE VALUE. `/v1/apps` rows
+     * always carry it (POST 201, PATCH 200, probe 200, and inside a 409 body
+     * under `app`); the `/v1/consoles` alias kept for one release answers the
+     * 3.4 shape and OMITS it entirely. Absent and 0 mean the same thing to a
+     * reader — see [iconStamp] — and they should, because a client talking to
+     * the alias is a client whose pictures simply do not refresh.
+     */
+    val iconAt: Long? = null,
     val reachable: AppReachability = AppReachability(),
-)
+) {
+    /**
+     * [iconAt] with the daemon's own "no stamp" answer folded in.
+     *
+     * ⚠ 0, NOT NULL, AND IT IS A CACHE KEY LIKE ANY OTHER. Against a daemon that
+     * does not send the field every row keys on 0 and behaves exactly as an
+     * id-only key did — one fetch per row per process — which is the old
+     * behaviour, not a new bug. What it must never become is a date in 1970.
+     */
+    val iconStamp: Long get() = iconAt ?: 0
+}
 
 /**
  * `GET /v1/apps` — the registry, its caps, and how far the retrofit has got.
