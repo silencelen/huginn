@@ -28,6 +28,15 @@ import kotlinx.coroutines.withTimeoutOrNull
  * leaves the owner's terminal pinned at this window's shape until the lease lapses
  * — and one that keeps polling while hidden pins it indefinitely. The daemon has
  * sweepers for the crash case, but a sweeper is a backstop, not a contract.
+ *
+ * ⚠ WHAT A HOLD NOW COSTS TO TAKE. Since owner decision 52 a lease is claimed by
+ * `?live=1` and nothing else — merely reporting geometry no longer takes one —
+ * and the daemon keeps ONE holder per session: a second live client is answered
+ * with the holder's name instead of taking the window off them. So a `want` that
+ * arrives here means the user is in live view, and the release paths below carry
+ * a new one: leaving live view while staying on the tab. `reconcile` does not
+ * need to know which kind of exit it is; [PaneLease.wanted] has already folded
+ * live view into the answer.
  */
 class PaneLeaseHolder(
     private val client: HuginnClient,
