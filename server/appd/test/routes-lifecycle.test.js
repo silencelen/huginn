@@ -57,6 +57,7 @@ const crypto = require('node:crypto');
 //   routes-apps-reach   11525 + pid%12   -> 11525-11536
 //   routes-draft-guard  11550 + pid%50   -> 11550-11599
 //   routes-queue-boundary 11600 + pid%12 -> 11600-11611  (the w6 block, 11600-11649)
+//   routes-projects-end 11612 + pid%12  -> 11612-11623
 //
 // Also spoken for, outside this directory: scripts/test-llm-shim.js holds
 // 18790-18799, and scripts/test-client.sh's stub daemons hold 18787 (headroom)
