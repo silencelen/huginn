@@ -302,6 +302,26 @@ class MainActivity : FragmentActivity() {
 }
 
 /**
+ * Which face of a session to open on.
+ *
+ * ⚠ THE TAB IS REMEMBERED GLOBALLY, AND FOR A BRAND-NEW SESSION THAT IS WRONG.
+ * Somebody who last looked at Overview created a session from the FAB and landed
+ * on a stats page for a session that has done nothing — no composer, no way to
+ * type, and the first thing a new session is for is saying something to it.
+ * Remembering the tab is right for a session that already exists (you come back
+ * to the face you were using); it is only the FIRST open of a session this app
+ * just made that has an obviously better answer.
+ *
+ * @param remembered the tab the reader last used, [SESSION_TAB_CONVERSATION]-based.
+ * @param brandNew this app created the session moments ago.
+ */
+internal fun sessionTabOnOpen(remembered: Int, brandNew: Boolean): Int =
+    if (brandNew) SESSION_TAB_CONVERSATION else remembered
+
+/** The Conversation face — the one with a composer. See [SessionFace]. */
+internal const val SESSION_TAB_CONVERSATION: Int = 0
+
+/**
  * Where "back" goes from [dest], or null when this screen IS a root.
  *
  * One rule, because there are two ways to ask for it. The top-bar arrow had this
@@ -1322,7 +1342,14 @@ fun HuginnApp(
                 }) else null,
                 selectedName = if (twoPane) (dest as? Dest.SessionView)?.name else null,
                 onOpen = { name -> dest = Dest.SessionView(name) },
-                onCreate = { name -> vm.createSession(name) { dest = Dest.SessionView(it) } },
+                onCreate = { name ->
+                    vm.createSession(name) {
+                        // Brand new: it opens on Conversation whatever face was
+                        // last used elsewhere. See sessionTabOnOpen.
+                        sessionTab = sessionTabOnOpen(sessionTab, brandNew = true)
+                        dest = Dest.SessionView(it)
+                    }
+                },
                 onKill = { vm.killSession(it) },
                 onSoftEnd = { vm.softEndSession(it) },
                 onRename = { from, to -> vm.renameSession(from, to) },

@@ -40,8 +40,6 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.DisposableEffect
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -58,6 +56,7 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.lifecycle.compose.LifecycleStartEffect
 import com.silencelen.huginn.data.Screen
 
 /**
@@ -103,10 +102,21 @@ fun TerminalScreen(
     // keystroke, instead of composing in the bubble and sending. Per-visit rather
     // than persisted: it is a way of leaning in, not a configuration.
     var liveTyping by rememberSaveable(session) { mutableStateOf(false) }
-    // Both directions, and on leaving the composition: the lease must not outlive
-    // the keyboard that justified it.
-    LaunchedEffect(session, liveTyping) { onLiveMode(liveTyping) }
-    DisposableEffect(session) { onDispose { onLiveMode(false) } }
+    // ⚠⚠ ON_START, NOT COMPOSITION. Both directions, and the resume is the half
+    // that was missing: backgrounding the app stops the screen poll, which drops
+    // the live flag and the reported geometry on the view model, but the
+    // composition survives — so a plain LaunchedEffect keyed on the session and
+    // the flag never ran again, and the phone came back still saying every key
+    // goes to the pane while holding no lease at all (`sizeLeased:false`
+    // through four polls over thirty seconds). That is
+    // exactly the state owner decision 52 exists to prevent: the surface sending
+    // keys is no longer the surface holding the window. Lifecycle-gated, the
+    // claim is re-made every time this screen comes back to the foreground, and
+    // handed back the moment it leaves.
+    LifecycleStartEffect(session, liveTyping) {
+        onLiveMode(liveTyping)
+        onStopOrDispose { onLiveMode(false) }
+    }
     // Optimistic echo state for live typing; rules live in LocalEcho (pure).
     var echo by remember(session) { mutableStateOf(LocalEcho.Echo()) }
     var prevCursor by remember(session) { mutableStateOf<Pair<Int, Int>?>(null) }
@@ -172,7 +182,14 @@ fun TerminalScreen(
             val cols = with(density) { (maxWidth.toPx() / painter.cellWidth).toInt() }.coerceIn(20, 300)
             val rows = with(density) { (maxHeight.toPx() / painter.cellHeight).toInt() }.coerceIn(10, 200)
             val promptUp = screen?.prompt != null
-            LaunchedEffect(cols, rows, promptUp) { if (!promptUp) onGeometry(cols, rows) }
+            // Lifecycle-gated for the same reason as the live claim above:
+            // `stopScreenPolling` clears the reported geometry, so a resume that
+            // measured the same cols/rows would never re-report them and the
+            // daemon would keep answering at "smallest".
+            LifecycleStartEffect(cols, rows, promptUp) {
+                if (!promptUp) onGeometry(cols, rows)
+                onStopOrDispose { }
+            }
 
             if (screen == null) {
                 Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
@@ -193,6 +210,20 @@ fun TerminalScreen(
                 // on the live screen and let them scroll up into the history.
                 LaunchedEffect(scrollback.size) {
                     if (scrollback.isNotEmpty()) vScroll.scrollTo(vScroll.maxValue)
+                }
+                // ⚠ LIVE MODE PINS THE BOTTOM OF THE PANE. The soft keyboard and
+                // the live banner take the composer's place, so this viewport
+                // loses about four of its rows — and the pane did not re-scroll,
+                // which left the `❯` prompt and the cursor (pane row 19 of 23)
+                // behind the key row. The one mode whose whole promise is "every
+                // key goes to the pane" was hiding the place the keys land.
+                //
+                // Keyed on maxValue rather than on the frame: geometry changes
+                // (entering live mode, the IME opening, output growing the pane)
+                // re-pin, and a reader who scrolls up to read output is left
+                // alone, because scrolling does not move maxValue.
+                LaunchedEffect(liveTyping, rows, vScroll.maxValue) {
+                    if (liveTyping) vScroll.scrollTo(vScroll.maxValue)
                 }
                 Column(
                     Modifier
