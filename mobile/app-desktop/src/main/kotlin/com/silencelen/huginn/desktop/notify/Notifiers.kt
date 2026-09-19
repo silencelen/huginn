@@ -113,6 +113,28 @@ object Notifiers {
             "Notifications are posted through ${pathWords(name)} while this window is claiming the route."
         }
 
+    /**
+     * Why a test notification must not even be attempted, or null when it can be.
+     *
+     * ⚠⚠ THE STEP ASKED A READER TO CONFIRM SOMETHING THAT NEVER HAPPENED. With
+     * [NoNotifier] chosen, `post` is a no-op — so setup posted nothing and then
+     * printed "A test notification has just been posted. Did it appear on this
+     * screen?" beside a "Yes, I saw it" button. Pressing it records a PASS for a
+     * route that cannot deliver, and the daemon then holds the household's
+     * Telegram fallback back for a window that will never show anything. The app
+     * had already logged "nowhere to post" before the flow opened.
+     *
+     * [Notifier.canDeliver] is the same question the `X-Huginn-Notify` claim asks
+     * — a dead backend and no backend are both "not a route" — so the step and
+     * the claim cannot disagree about whether this computer can be reached.
+     */
+    fun testRefusal(notifier: Notifier): String? =
+        if (notifier.canDeliver()) {
+            null
+        } else {
+            "$NOWHERE_TO_POST. huginn will keep using Telegram for anything that needs you."
+        }
+
     /** One honest line for the log at startup, and for the diagnostics blob. */
     fun describe(notifier: Notifier): String = buildString {
         append("notifications via ").append(notifier.name)

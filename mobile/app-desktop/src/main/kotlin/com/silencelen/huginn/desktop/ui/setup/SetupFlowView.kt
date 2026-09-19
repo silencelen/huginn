@@ -291,6 +291,13 @@ class DesktopSetupProbes(
 
     override suspend fun postTestNotification(): Result<String> = runCatching {
         val n = notifier()
+        // ⚠⚠ ASKED ONLY WHEN THERE IS SOMETHING TO SEE. With no tray and no
+        // libnotify the backend's `post` is a no-op, and the step went straight on
+        // to "did it appear?" with a Yes button — a pass recordable for a route
+        // that cannot deliver. A step that cannot be attempted fails with the
+        // reason instead, and `SetupController` never arms the question on a
+        // failure.
+        Notifiers.testRefusal(n)?.let { error(it) }
         // A real one, through the real backend, rather than a claim about what
         // the backend supports. `Notifiers.describe` was until now reported ONLY
         // to a stdout that a packaged Windows launcher does not have.
