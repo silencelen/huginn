@@ -217,6 +217,25 @@ test('a new Round is armed, described, and read-only by default', async () => {
   const r = await mkRound();
   assert.equal(r.cadence, 'Sundays at 7:00 PM', 'the daemon renders the cadence, not the client');
   assert.ok(r.nextRunAt > Date.now(), 'armed forward');
+  // ⚠ M3 (3.6.0): `nextRunAt` is MILLISECONDS while `createdAt` and `updatedAt`
+  // on the same object are seconds. The Kotlin model carries the note so the
+  // shipped clients are right; nothing on the wire said so. The ms field is
+  // deprecated for one release and `nextRunAtSec` is the one to read.
+  assert.equal(r.nextRunAtSec, Math.floor(r.nextRunAt / 1000), 'the same slot, in seconds');
+  assert.ok(r.nextRunAtSec < 1e11 && r.createdAt < 1e11,
+    'and it now matches the unit of the siblings it sits beside');
+});
+
+test('a disarmed Round carries nextRunAtSec: null, not the epoch', async () => {
+  // `nextRunAt: 0` is "not armed", not midnight in 1970 — and a client rendering
+  // an epoch it was handed is doing the right thing with the wrong number.
+  const r = await mkRound();
+  const off = await api(`/v1/rounds/${r.id}`, { method: 'PATCH', body: JSON.stringify({ enabled: false }) });
+  assert.equal(off.status, 200, JSON.stringify(off.body));
+  const zeroed = await api(`/v1/rounds/${r.id}`, { method: 'PATCH', body: JSON.stringify({ nextRunAt: 0 }) });
+  const row = zeroed.status === 200 ? zeroed.body : off.body;
+  if (!row.nextRunAt) assert.equal(row.nextRunAtSec, null, 'an unarmed slot is null');
+  else assert.equal(row.nextRunAtSec, Math.floor(row.nextRunAt / 1000));
   assert.equal(r.mode, 'ask', 'an unattended run does not get Bash unless asked');
   assert.equal(r.notifyWhen, 'attention');
   assert.equal(r.enabled, true);

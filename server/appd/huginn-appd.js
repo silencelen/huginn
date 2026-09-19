@@ -4425,6 +4425,16 @@ function roundView(r) {
     hostName: (r.host && r.host !== 'local')
       ? (((deviceState.devices || {})[r.host] || {}).name || 'a removed device')
       : null,
+    // ⚠ `nextRunAt` IS MILLISECONDS AND ITS SIBLINGS ARE SECONDS (M3). On the
+    // same object: `createdAt` and `updatedAt` are epoch seconds and `nextRunAt`
+    // is ms, because it comes out of `nextFireAt(schedule, Date.now())`. The
+    // Kotlin model carries the note so the shipped clients are right; nothing on
+    // the wire said so. Kept and DEPRECATED for one release, with the correctly
+    // named seconds field beside it.
+    // A Round that is not armed carries `nextRunAt: 0`, which is not a time —
+    // null here rather than 1970, because a client rendering an epoch it was
+    // handed is doing the right thing with the wrong number.
+    nextRunAtSec: Number(r.nextRunAt) > 0 ? Math.floor(Number(r.nextRunAt) / 1000) : null,
   };
 }
 
@@ -5120,6 +5130,15 @@ function testUrl(name, fallback) {
 // test that locked or rewrote the real ~/.claude would reach straight into the
 // owner's live CLI. Unset — which is every production path — it is ~/.claude.
 const CLAUDE_DIR = process.env.HUGINN_APPD_CLAUDE_DIR || path.join(os.homedir(), '.claude');
+/**
+ * Whether that knob is SET, which is a different question from where it points.
+ *
+ * Every other reader of `CLAUDE_DIR` builds a path from it and is isolated by
+ * construction. `/v1/account` shelled out to `claude auth status`, which resolves
+ * its own home and cannot be redirected — so isolation there has to be a decision
+ * the route makes rather than a path it joins. See `accountStatus` (M4).
+ */
+const CLAUDE_DIR_OVERRIDDEN = !!process.env.HUGINN_APPD_CLAUDE_DIR;
 /**
  * The usage endpoint, in ONE place.
  *
@@ -6101,9 +6120,23 @@ function projectMemberNamed(project, who) {
  * them who they belong to.
  */
 async function accountStatus() {
-  const { err, stdout } = await run('claude', ['auth', 'status'], { timeout: 20_000 });
   let parsed = null;
-  if (!err) { try { parsed = JSON.parse(stdout); } catch { /* handled below */ } }
+  // ⚠ M4 (round-2 review). `claude auth status` reads the REAL `~/.claude.json`
+  // through the inherited HOME, and no env of this daemon's can move it — so a
+  // daemon pointed at a scratch CLAUDE_DIR answered `/v1/plan` with the stub
+  // identity and `/v1/account` with the owner's actual login, in the same second.
+  // The knob's whole stated purpose is that "a test that locked or rewrote the
+  // real ~/.claude would reach straight into the owner's live CLI"; this route
+  // was the hole in it, and it is why `routes-headroom.test.js` has to shim
+  // `claude` on PATH as well.
+  //
+  // When the directory is overridden, the CREDENTIALS are the only identity this
+  // daemon is allowed to have — which is the same source `/v1/plan` reads, so the
+  // two cannot disagree either.
+  if (!CLAUDE_DIR_OVERRIDDEN) {
+    const { err, stdout } = await run('claude', ['auth', 'status'], { timeout: 20_000 });
+    if (!err) { try { parsed = JSON.parse(stdout); } catch { /* handled below */ } }
+  }
 
   if (parsed && parsed.loggedIn && parsed.email) {
     return {
@@ -6134,6 +6167,9 @@ async function accountStatus() {
         identitySource: 'token',
       };
     }
+  }
+  if (CLAUDE_DIR_OVERRIDDEN) {
+    return { loggedIn: false, error: 'no credentials in the configured Claude directory' };
   }
   return { loggedIn: false, error: parsed ? 'not signed in' : 'could not read auth status' };
 }
@@ -8958,6 +8994,13 @@ function headroomPayload() {
     // all ms — and a client treats this as the host clock, so getting it wrong
     // makes every relative time in the payload wrong by a factor of a thousand.
     serverTime: now,
+    // 3.6.0 (M3): the same instant in SECONDS, under a name that says which it
+    // is. `serverTime` means seconds on /v1/clients, /v1/watch and /typing and
+    // MILLISECONDS here, which is exactly the trap — one field name, two units,
+    // and nothing on the wire to tell them apart. The ms spelling stays because
+    // every deployed client reads it; `serverTimeSec` is the one a new caller
+    // should use, on every route that carries either.
+    serverTimeSec: Math.floor(now / 1000),
   };
 }
 
@@ -9497,6 +9540,7 @@ const server = http.createServer(async (req, res) => {
         freshStreamSeconds: Math.floor(clientsLib.FRESH_STREAM_MS / 1000),
         freshBeatSeconds: Math.floor(clientsLib.FRESH_BEAT_MS / 1000),
         serverTime: Math.floor(now / 1000),
+        serverTimeSec: Math.floor(now / 1000),   // 3.6.0 (M3): the unambiguous name
       });
     }
 
@@ -9555,7 +9599,9 @@ const server = http.createServer(async (req, res) => {
             // from a different read of the file.
             const pushSt = streamInstall ? loadPushState() : null;
             res.write(`event: state\ndata: ${JSON.stringify({
-              ...d, changed: true, serverTime: Math.floor(Date.now() / 1000),
+              ...d, changed: true,
+              serverTime: Math.floor(Date.now() / 1000),
+              serverTimeSec: Math.floor(Date.now() / 1000),   // 3.6.0 (M3)
               // Same field the long poll returns. Without it the app decodes the
               // absent value as 0 and overwrites its real tally, which silently
               // disables push-deficit detection: the phone can no longer tell a
@@ -9619,6 +9665,7 @@ const server = http.createServer(async (req, res) => {
         ...d,
         changed: !known || d.hash !== known,
         serverTime: Math.floor(Date.now() / 1000),
+        serverTimeSec: Math.floor(Date.now() / 1000),   // 3.6.0 (M3)
         // What this host thinks it has delivered to the caller. The phone compares
         // it against what it actually received, which is the only way it can tell a
         // quiet night from a broken delivery path — and that distinction is worth a
@@ -10360,6 +10407,7 @@ const server = http.createServer(async (req, res) => {
         agents,
         active: agents.filter((a) => a.active).length,
         serverTime: Math.floor(Date.now() / 1000),
+        serverTimeSec: Math.floor(Date.now() / 1000),   // 3.6.0 (M3)
       });
     }
 
