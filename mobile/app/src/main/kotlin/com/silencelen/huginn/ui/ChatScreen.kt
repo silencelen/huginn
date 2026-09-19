@@ -202,16 +202,21 @@ fun ChatScreen(
             // on the desktop at ChatView.kt:314; inherited here rather than
             // rediscovered.
             Box(Modifier.weight(1f).fillMaxWidth()) {
+              // ⚠⚠ OUTSIDE the SelectionContainer, not among its children:
+              // SelectionContainer reads `LocalTextToolbar.current` in its own
+              // composition scope, so the gate this file provided INSIDE it from
+              // 3.1.1 to 3.5.0 was never the toolbar the selection used. See
+              // GatedTextToolbar, and SessionScreen, which had the same seam.
+              androidx.compose.runtime.CompositionLocalProvider(
+                  androidx.compose.ui.platform.LocalTextToolbar provides
+                      rememberGatedTextToolbar(selection.active),
+              ) {
               androidx.compose.foundation.text.selection.SelectionContainer {
                 androidx.compose.runtime.CompositionLocalProvider(
                     // Around the transcript ONLY: the composer is not a row.
                     LocalTranscriptSelection provides TranscriptSelectionHost { text, at ->
                         selection = SelectionMode.begin(text, rowTimeWords(at))
                     },
-                    // And the platform's Copy / Select all popup stays down while
-                    // the app's bar is up. See GatedTextToolbar.
-                    androidx.compose.ui.platform.LocalTextToolbar provides
-                        rememberGatedTextToolbar(selection.active),
                 ) {
                   LazyColumn(
                       state = listState,
@@ -227,6 +232,7 @@ fun ChatScreen(
                       }
                   }
                 }
+              }
               }
             }
         }

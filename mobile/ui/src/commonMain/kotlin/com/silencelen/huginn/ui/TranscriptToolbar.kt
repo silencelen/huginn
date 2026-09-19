@@ -1,6 +1,7 @@
 package com.silencelen.huginn.ui
 
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.State
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
@@ -70,14 +71,35 @@ class GatedTextToolbar(
     }
 
     override fun hide() = delegate.hide()
+
+    /**
+     * The app's bar has just gone up. Take down anything the platform is already
+     * floating.
+     *
+     * ⚠ THE OTHER HALF OF THE ORDER PROBLEM. [showMenu] can only refuse a popup
+     * it is asked for; it cannot refuse one it was asked for a moment EARLIER,
+     * while the bar was still down — and that is the order a long press produces
+     * whenever the container asks first. Declining the next request never comes,
+     * because there is no next request: the popup simply stays on screen beside
+     * the app's bar, which is the exact pair the walk photographed.
+     */
+    fun appBarRaised() = delegate.hide()
 }
 
 /**
  * The platform's toolbar, gated on whether the app's selection bar is up.
  *
- * Provide it for [LocalTextToolbar] around the transcript ONLY. The composer is a
- * text FIELD: its own long-press toolbar is the only one it has, and gating that
- * would take paste away from the one place on this screen that can use it.
+ * ⚠⚠ PROVIDE IT **AROUND** THE SelectionContainer, NOT AMONG ITS CHILDREN.
+ * `SelectionContainer` reads `LocalTextToolbar.current` in its own composition
+ * scope — `manager.textToolbar = LocalTextToolbar.current`, before it invokes the
+ * content lambda — so a value provided inside that lambda reaches nothing at all.
+ * Both phone screens did exactly that from 3.1.1 to 3.5.0: the gate was present,
+ * correct, tested, and installed where the selection could not see it, which is
+ * why the walk still photographed two toolbars for one press.
+ *
+ * Transcript only, either way. The composer is a text FIELD: its own long-press
+ * toolbar is the only one it has, and gating that would take paste away from the
+ * one place on this screen that can use it.
  */
 @Composable
 fun rememberGatedTextToolbar(appBarShowing: Boolean): TextToolbar {
@@ -86,5 +108,10 @@ fun rememberGatedTextToolbar(appBarShowing: Boolean): TextToolbar {
     // and at a moment this function cannot predict — so it is read through a
     // State that keeps updating rather than captured by value.
     val showing = rememberUpdatedState(appBarShowing)
-    return remember(platform) { GatedTextToolbar(platform, showing) }
+    val gate = remember(platform) { GatedTextToolbar(platform, showing) }
+    // And the order the gate cannot decline its way out of: the container asking
+    // for the menu BEFORE the row's long press has raised the app's bar. Nothing
+    // asks again afterwards, so the bar going up is itself the signal.
+    LaunchedEffect(appBarShowing) { if (appBarShowing) gate.appBarRaised() }
+    return gate
 }
