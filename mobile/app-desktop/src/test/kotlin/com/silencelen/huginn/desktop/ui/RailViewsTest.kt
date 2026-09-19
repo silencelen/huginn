@@ -9,7 +9,7 @@ import kotlin.test.assertTrue
 /**
  * WHAT THE RAIL OFFERS, and the three doors a feature probe has to shut at once.
  *
- * ⚠⚠ A 404 ON `GET /v1/projects` OR `GET /v1/consoles` MEANS THE FEATURE IS NOT
+ * ⚠⚠ A 404 ON `GET /v1/projects` OR ON BOTH APPS NAMES MEANS THE FEATURE IS NOT
  * THERE, not that it is empty. A daemon older than Wave 3 answers exactly that,
  * and a client that drew the rail item anyway would offer a door whose only
  * outcome is an error — with no way for the reader to tell a broken app from an
@@ -28,9 +28,9 @@ class RailViewsTest {
 
     @Test
     fun `a daemon that 404s both probes gets neither rail item`() {
-        val rail = railViews(padsAvailable = true, projectsAvailable = false, consolesAvailable = false)
+        val rail = railViews(padsAvailable = true, projectsAvailable = false, appsAvailable = false)
         assertFalse(View.PROJECTS in rail, "a 404 is the route saying it is not there: $rail")
-        assertFalse(View.CONSOLES in rail, rail.toString())
+        assertFalse(View.APPS in rail, rail.toString())
         // And nothing else moved: the five unconditional views are still there,
         // in order, which is what makes this a hidden item rather than a broken rail.
         assertEquals(
@@ -41,16 +41,16 @@ class RailViewsTest {
 
     @Test
     fun `an unanswered probe hides them exactly as a refusal does`() {
-        val rail = railViews(padsAvailable = null, projectsAvailable = null, consolesAvailable = null)
+        val rail = railViews(padsAvailable = null, projectsAvailable = null, appsAvailable = null)
         assertFalse(View.PROJECTS in rail, "null is 'not answered yet', and a guess here moves icons: $rail")
-        assertFalse(View.CONSOLES in rail, rail.toString())
+        assertFalse(View.APPS in rail, rail.toString())
         assertFalse(View.SCRATCHPADS in rail, "the pages item has always read null the same way: $rail")
     }
 
     @Test
     fun `a host that has them puts them where the reading says`() {
-        val rail = railViews(padsAvailable = true, projectsAvailable = true, consolesAvailable = true)
-        assertTrue(View.PROJECTS in rail && View.CONSOLES in rail, rail.toString())
+        val rail = railViews(padsAvailable = true, projectsAvailable = true, appsAvailable = true)
+        assertTrue(View.PROJECTS in rail && View.APPS in rail, rail.toString())
         // Projects under Sessions, because a project IS a set of sessions; Settings
         // last, because it is the one item that is not a list of anything.
         assertEquals(
@@ -60,7 +60,7 @@ class RailViewsTest {
                 View.PROJECTS,
                 View.ROUNDS,
                 View.DEVICES,
-                View.CONSOLES,
+                View.APPS,
                 View.SCRATCHPADS,
                 View.STATUS,
                 View.SETTINGS,
@@ -71,13 +71,13 @@ class RailViewsTest {
 
     @Test
     fun `the two probes are independent`() {
-        val onlyProjects = railViews(padsAvailable = false, projectsAvailable = true, consolesAvailable = false)
+        val onlyProjects = railViews(padsAvailable = false, projectsAvailable = true, appsAvailable = false)
         assertTrue(View.PROJECTS in onlyProjects, onlyProjects.toString())
-        assertFalse(View.CONSOLES in onlyProjects, onlyProjects.toString())
+        assertFalse(View.APPS in onlyProjects, onlyProjects.toString())
 
-        val onlyConsoles = railViews(padsAvailable = false, projectsAvailable = false, consolesAvailable = true)
-        assertFalse(View.PROJECTS in onlyConsoles, onlyConsoles.toString())
-        assertTrue(View.CONSOLES in onlyConsoles, onlyConsoles.toString())
+        val onlyApps = railViews(padsAvailable = false, projectsAvailable = false, appsAvailable = true)
+        assertFalse(View.PROJECTS in onlyApps, onlyApps.toString())
+        assertTrue(View.APPS in onlyApps, onlyApps.toString())
     }
 
     /**
@@ -87,12 +87,12 @@ class RailViewsTest {
      */
     @Test
     fun `the palette offers the same two verbs the rail does, and no others`() {
-        val none = verbsFor(hasProjects = false, hasConsoles = false).map { it.label }
+        val none = verbsFor(hasProjects = false, hasApps = false).map { it.label }
         assertFalse("Projects" in none, none.toString())
-        assertFalse("Consoles" in none, none.toString())
+        assertFalse("Apps" in none, none.toString())
 
-        val both = verbsFor(hasProjects = true, hasConsoles = true).map { it.label }
-        assertTrue("Projects" in both && "Consoles" in both, both.toString())
+        val both = verbsFor(hasProjects = true, hasApps = true).map { it.label }
+        assertTrue("Projects" in both && "Apps" in both, both.toString())
         assertEquals(none.size + 2, both.size, "exactly two rows appear, and nothing else changes")
     }
 
@@ -106,13 +106,13 @@ class RailViewsTest {
 }
 
 /**
- * WHEN THE CONSOLES PROBE IS ASKED AGAIN, which is the other half of [railViews].
+ * WHEN THE APPS PROBE IS ASKED AGAIN, which is the other half of [railViews].
  *
  * ⚠⚠ A PROBE THAT RAN ONCE, AT TICK 0, HID THE DOOR TO ITSELF FOR A WHOLE
  * SESSION. On a fresh install the first poll fires while the setup flow is still
- * open and no token has been saved, so `GET /v1/consoles` is a 401 rather than a
+ * open and no token has been saved, so `GET /v1/apps` is a 401 rather than a
  * 404 or a list — an answer about the BEARER, not about the feature. The old
- * condition (`tick == 0 || view == CONSOLES`) then never asked again, and the
+ * condition (`tick == 0 || view == APPS`) then never asked again, and the
  * only place that would have asked was the pane the rail had stopped offering.
  * Projects and Pages recovered from the identical 401 for one reason: they are
  * refreshed on every tick.
@@ -120,25 +120,25 @@ class RailViewsTest {
  * So the rule is "until it has ANSWERED", not "once": null means the question is
  * still open, and a question that is still open gets asked again.
  */
-class ConsoleProbeScheduleTest {
+class AppProbeScheduleTest {
 
     @Test
     fun `an unanswered probe is asked again on the next tick`() {
         assertTrue(
-            shouldProbeConsoles(available = null, view = View.SESSIONS),
+            shouldProbeApps(available = null, view = View.SESSIONS),
             "null is 'no answer yet' — a 401 during setup must not end the probing",
         )
     }
 
     @Test
     fun `an answered probe is not asked again from another pane`() {
-        assertFalse(shouldProbeConsoles(available = true, view = View.SESSIONS), "answered: present")
-        assertFalse(shouldProbeConsoles(available = false, view = View.SESSIONS), "answered: absent")
+        assertFalse(shouldProbeApps(available = true, view = View.SESSIONS), "answered: present")
+        assertFalse(shouldProbeApps(available = false, view = View.SESSIONS), "answered: absent")
     }
 
     @Test
-    fun `the consoles pane keeps its own poll whatever the probe said`() {
-        assertTrue(shouldProbeConsoles(available = true, view = View.CONSOLES), "rows move while it is open")
-        assertTrue(shouldProbeConsoles(available = false, view = View.CONSOLES))
+    fun `the apps pane keeps its own poll whatever the probe said`() {
+        assertTrue(shouldProbeApps(available = true, view = View.APPS), "rows move while it is open")
+        assertTrue(shouldProbeApps(available = false, view = View.APPS))
     }
 }
