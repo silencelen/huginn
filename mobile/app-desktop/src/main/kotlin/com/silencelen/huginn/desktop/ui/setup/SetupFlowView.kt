@@ -141,7 +141,7 @@ private fun ColumnScope.StepBody(store: AppStore, step: SetupStep) {
                 summary = "The addresses that reach huginn, tried in this order.",
                 finding = resolving,
                 note = routeNote,
-                suggestedUrl = HuginnSettings.DEFAULT_BASE_URL,
+                suggestedUrl = HuginnSettings.ROUTE_URL_PLACEHOLDER,
             )
         }
 
