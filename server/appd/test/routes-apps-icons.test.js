@@ -48,9 +48,14 @@ const PNG = Buffer.from(
   '89504e470d0a1a0a0000000d49484452000000010000000108060000001f15c4890000000a49444154789c6360000002000100'
   + '05fe02fea7bb4d0b0000000049454e44ae426082', 'hex');
 const ICO = Buffer.from('00000100010010101000010004002802', 'hex');
+// A DIFFERENT one-pixel PNG (the pixel is not the same colour), so "the picture
+// changed" is a byte fact rather than a timing one.
+const PNG2 = Buffer.from(
+  '89504e470d0a1a0a0000000d49484452000000010000000108060000001f15c4890000000d49444154789c6364f8cf000001'
+  + '0101007a1b21c30000000049454e44ae426082', 'hex');
 
 let tmp, dataDir, token, daemon;
-let wellKnown, linked, sneaky, huge;
+let wellKnown, linked, sneaky, huge, prefers;
 const portOf = (s) => s.address().port;
 
 const wait = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -100,8 +105,9 @@ before(async () => {
     if (req.url === '/icon') { res.writeHead(302, { location: '/static/brand.png' }); return res.end(); }
     if (req.url === '/static/brand.png') { res.writeHead(200, { 'content-type': 'image/png' }); return res.end(PNG); }
     res.writeHead(200, { 'content-type': 'text/html' });
-    // ⚠ THE apple-touch-icon COMES FIRST, deliberately: `/\bicon\b/` matches it,
-    // and it is a 180px PNG rather than the favicon.
+    // ⚠ THE apple-touch-icon COMES FIRST IN THE MARKUP, deliberately, and this
+    // server does not serve it: `/huge.png` falls through to the html below, so
+    // the fetcher has to SKIP it and go on to the next-ranked candidate.
     res.end('<html><head><link rel="apple-touch-icon" href="/huge.png">'
       + '<link rel="icon" href="/icon"></head><body>linked</body></html>');
   });
@@ -110,6 +116,18 @@ before(async () => {
   sneaky = http.createServer((req, res) => {
     res.writeHead(200, { 'content-type': 'text/html' });
     res.end('<html><head><title>spa</title></head><body>app</body></html>');
+  });
+
+  // 5. A page that offers BOTH: an `.ico` at the well-known path AND a PNG it
+  //    names in its head. The Android client cannot decode the first one.
+  prefers = http.createServer((req, res) => {
+    if (req.url === '/favicon.ico') { res.writeHead(200, { 'content-type': 'image/x-icon' }); return res.end(ICO); }
+    if (req.url === '/brand.png') {
+      res.writeHead(200, { 'content-type': 'image/png' });
+      return res.end(prefers.swapped ? PNG2 : PNG);
+    }
+    res.writeHead(200, { 'content-type': 'text/html' });
+    res.end('<html><head><link rel="icon" type="image/png" href="/brand.png"></head><body>prefers</body></html>');
   });
 
   // 4. A page whose icon is over the cap, and lies about it by sending no length.
@@ -121,7 +139,7 @@ before(async () => {
     res.writeHead(404); res.end();
   });
 
-  for (const s of [wellKnown, linked, sneaky, huge]) {
+  for (const s of [wellKnown, linked, sneaky, huge, prefers]) {
     await new Promise((r) => s.listen(0, '127.0.0.1', r));
   }
 
@@ -138,6 +156,8 @@ before(async () => {
         url: `http://127.0.0.1:${portOf(sneaky)}/` }, 1789460000),
       appsLib.buildRecord({ id: 'huge', name: 'An icon too big to keep', kind: 'tool',
         url: `http://127.0.0.1:${portOf(huge)}/` }, 1789460000),
+      appsLib.buildRecord({ id: 'prefers', name: 'Serves both an ico and a png', kind: 'tool',
+        url: `http://127.0.0.1:${portOf(prefers)}/` }, 1789460000),
     ],
   }, null, 2), { mode: 0o600 });
 
@@ -169,14 +189,14 @@ before(async () => {
       + `test run — it answers ping but not our token. Find it with: ss -ltnp | grep ${PORT}`);
   }
   // One probe per row, which is where icons are fetched.
-  for (const id of ['wellknown', 'linked', 'spa', 'huge']) {
+  for (const id of ['wellknown', 'linked', 'spa', 'huge', 'prefers']) {
     await api(`/v1/apps/${id}/probe`, { method: 'POST' });
   }
 });
 
 after(() => {
   if (daemon) daemon.kill('SIGTERM');
-  for (const s of [wellKnown, linked, sneaky, huge]) { if (s) s.close(); }
+  for (const s of [wellKnown, linked, sneaky, huge, prefers]) { if (s) s.close(); }
   if (tmp) fs.rmSync(tmp, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 });
 });
 
@@ -194,9 +214,10 @@ test('an app whose /favicon.ico is an icon has it cached and served back', async
 });
 
 test('an app with no /favicon.ico gets the one its page names, through one same-origin redirect', async () => {
-  // ⚠ AND NOT THE apple-touch-icon, which comes first in that page's head and
-  // which `/\bicon\b/` would have matched. Decision 53 names `icon` and
-  // `shortcut icon`; the rel is read as a token list.
+  // The apple-touch-icon is RANKED first here (3.5.2) and this page does not
+  // actually serve it — `/huge.png` answers with html — so the fetcher falls
+  // through to the `<link rel=icon>` and follows its redirect. A fetcher that
+  // stopped at its first choice would cache nothing for a page that has one.
   const { status, headers, bytes } = await raw('/v1/apps/linked/icon');
   assert.equal(200, status);
   assert.equal('image/png', headers.get('content-type'));
@@ -225,6 +246,71 @@ test('the list says which rows have an icon, as a boolean', async () => {
   assert.equal(false, rowOf(body, 'spa').icon);
   assert.equal(false, rowOf(body, 'huge').icon,
     'a client draws an initial-letter tile off this, and must never have to ask twice');
+});
+
+// ------------------------------------------------- the PREFERENCE (3.5.2)
+
+test('a page that serves BOTH an .ico and a PNG it names gets the PNG', async () => {
+  // ⚠ THE FAIL-FIRST FOR THE RE-ORDER. `/favicon.ico` used to be asked first
+  // and answered first, so nearly every row on this host cached an `.ico` —
+  // which ANDROID CANNOT DECODE. The phone drew an initial-letter tile for an
+  // app that had a perfectly good PNG one link away, and nothing anywhere said
+  // why. The well-known path is now the last resort, not the first guess.
+  const { status, headers, bytes } = await raw('/v1/apps/prefers/icon');
+  assert.equal(200, status);
+  assert.equal('image/png', headers.get('content-type'),
+    'the PNG the page named, not the .ico it also serves');
+  assert.deepEqual(PNG, bytes);
+});
+
+// ---------------------------------------------------------- iconAt (3.5.2)
+
+test('iconAt says when the BYTES last changed, and a refetch of the same bytes does not move it', async () => {
+  // ⚠ WHY THE FIELD EXISTS. `version` is the row's edit history and never moves
+  // for a refetch; the cached file's mtime moves on EVERY refetch. A client with
+  // neither had no way to tell "new picture" from "same picture, fetched again",
+  // so the phone kept drawing the old one (client backlog, 3.5.0).
+  const before = rowOf((await api('/v1/apps')).body, 'prefers');
+  assert.equal(true, before.icon);
+  assert.ok(before.iconAt > 0, 'a row WITH an icon carries the stamp');
+  assert.equal(0, rowOf((await api('/v1/apps')).body, 'spa').iconAt, 'and a row without one says 0');
+
+  // Force the hourly throttle open and probe again: the same page, the same
+  // bytes. The file is rewritten (that is what a refetch does); the stamp is not.
+  const metaFile = appsLib.iconMetaFile(dataDir, 'prefers');
+  const meta = JSON.parse(fs.readFileSync(metaFile, 'utf8'));
+  fs.writeFileSync(metaFile, JSON.stringify({ ...meta, fetchedAtMs: 1 }));
+  await api('/v1/apps/prefers/probe', { method: 'POST' });
+
+  const after = rowOf((await api('/v1/apps')).body, 'prefers');
+  assert.equal(before.iconAt, after.iconAt, 'identical bytes must not invalidate every client’s copy');
+  assert.ok(JSON.parse(fs.readFileSync(metaFile, 'utf8')).fetchedAtMs > 1, 'and it really did re-fetch');
+
+  // The ETag is built on iconAt for exactly that reason: a conditional GET
+  // across a refetch still answers 304.
+  const tag = (await raw('/v1/apps/prefers/icon')).headers.get('etag');
+  assert.equal(304, (await raw('/v1/apps/prefers/icon', { 'if-none-match': tag })).status);
+});
+
+test('iconAt MOVES when the picture does', async () => {
+  // The other half: a stamp that never moved would be worse than no stamp.
+  const before = rowOf((await api('/v1/apps')).body, 'prefers');
+  const tag = (await raw('/v1/apps/prefers/icon')).headers.get('etag');
+
+  prefers.swapped = true;   // the page starts serving different bytes
+  const metaFile = appsLib.iconMetaFile(dataDir, 'prefers');
+  fs.writeFileSync(metaFile,
+    JSON.stringify({ ...JSON.parse(fs.readFileSync(metaFile, 'utf8')), fetchedAtMs: 1 }));
+  await wait(1_100);   // the stamp is in SECONDS; it has to land in a later one
+  await api('/v1/apps/prefers/probe', { method: 'POST' });
+
+  const after = rowOf((await api('/v1/apps')).body, 'prefers');
+  assert.ok(after.iconAt > before.iconAt, `the stamp moved (${before.iconAt} -> ${after.iconAt})`);
+  const fresh = await raw('/v1/apps/prefers/icon');
+  assert.equal(200, fresh.status);
+  assert.deepEqual(PNG2, fresh.bytes, 'and the new bytes are what is served');
+  assert.equal(200, (await raw('/v1/apps/prefers/icon', { 'if-none-match': tag })).status,
+    'the old validator no longer matches, so the client fetches the new picture');
 });
 
 // ---------------------------------------------------------------- the serve
