@@ -290,7 +290,17 @@ class StreamPickerTest {
     // -------------------------------------------------------------- ordering
 
     @Test
-    fun `live agents sort newest first`() {
+    fun `live agents keep the order they were first seen in`() {
+        // ⚠⚠ THIS USED TO BE "newest first", AND THE CHIPS MOVED UNDER THE
+        // POINTER. A running agent writes every few seconds, so ordering the live
+        // half by `updatedAt` meant two live chips swapped places on the next
+        // five-second poll while somebody was reaching for one. Recency is the
+        // right order for a list being read top-down and the wrong one for a row
+        // of targets. First-seen never changes; see StreamPickerSheetTest.
+        //
+        // These rows carry no `startedAt`, which is the pre-3.x daemon case: the
+        // last write stands in for it, and the order is then stable for exactly as
+        // long as the list is.
         val items = StreamPicker.items(
             listOf(
                 agent("agent-run1", task = "running, older", updatedAt = NOW - 80),
@@ -300,7 +310,7 @@ class StreamPickerTest {
             NOW,
         )
         assertEquals(
-            listOf("main", "agent:agent-run2", "agent:agent-run3", "agent:agent-run1"),
+            listOf("main", "agent:agent-run1", "agent:agent-run3", "agent:agent-run2"),
             items.map { it.key },
         )
     }
@@ -335,11 +345,15 @@ class StreamPickerTest {
             NOW,
         )
         assertEquals(
-            listOf("main", "workflow:wf_01H9ZKQT", "agent:agent-m2", "agent:agent-m1", "agent:agent-solo"),
+            // First-seen among the units, and among a run's members — the same
+            // rule as the loose chips, for the same reason. What matters here is
+            // that the run's rows stay CONTIGUOUS under their header, which is
+            // what stops a six-agent run interleaving itself through the strip.
+            listOf("main", "agent:agent-solo", "workflow:wf_01H9ZKQT", "agent:agent-m1", "agent:agent-m2"),
             items.map { it.key },
-            "the run sorts by its liveliest member and its members stay contiguous",
+            "the run sorts by its oldest member and its members stay contiguous",
         )
-        val header = items[1]
+        val header = items[2]
         assertTrue(header.header, "the run row labels a group")
         assertNull(header.agentId, "a header is not pickable as a stream")
         assertTrue(header.running, "a run with a live member is live")
