@@ -101,7 +101,7 @@ class ProjectRulesTest {
     fun `a word from a newer daemon is NULL, never coerced into a real one`() {
         // ⚠ `other` IS A REAL KIND AND MEANS SOMETHING. Folding an unknown word
         // into it would draw a chip that claims the lead said something it did
-        // not — unlike a console's kind, where `other` IS the daemon's fallback.
+        // not — unlike an app's kind, where `other` IS the daemon's fallback.
         assertNull(ProjectRules.kindWord("quantum"))
         assertNull(ProjectRules.kindWord(null))
         assertEquals("hardware", ProjectRules.kindWord("Hardware"))

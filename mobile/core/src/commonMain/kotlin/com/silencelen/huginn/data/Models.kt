@@ -1,5 +1,6 @@
 package com.silencelen.huginn.data
 
+import com.silencelen.huginn.ui.AppRules
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.JsonElement
@@ -2778,37 +2779,112 @@ data class ProjectSave(
     val ok: Boolean get() = !conflict && refusal == null
 }
 
-// ----------------------------------------------------------------- consoles
+// --------------------------------------------------------------------- apps
 //
-// A CONSOLE is a URL on the huginn host — armap, the jtyper trainer, the board
-// view, the BTC sim — with a name, a note, and a liveness probe that runs ON
-// THAT HOST. It is not a Device: a device is another machine that enrols and
-// decides for itself what it will do. There is no shared key, no shared
+// An APP is something huginn makes and hosts itself — armap, the jtyper
+// trainer, the board view, the BTC sim — with a name, an icon, a note and a
+// liveness probe. It is not a Device: a device is another machine that enrols
+// and decides for itself what it will do. There is no shared key, no shared
 // lifecycle and no shared security story, so there is no shared model either.
+//
+// ⚠ THIS WAS CALLED "CONSOLES" UNTIL THE 3.6 TRAIN (owner decision 53). The
+// wire moved to `/v1/apps*` and `/v1/consoles*` stays as an alias for ONE
+// release (decision 56); [HuginnClient.apps] asks for the new name first and
+// falls back to the old one, so a client can be ahead of its daemon exactly
+// once. Nothing here is named Console any more — a type alias would have kept
+// the old word alive in the palette, the store and every stack trace, which is
+// the opposite of a rename.
 
 /**
- * One internal page this host serves.
+ * One address among the ones huginn itself answers on, and whether the app
+ * answered there too.
+ *
+ * ⚠ THE ADDRESS IS THE CLIENT'S, NOT THE APP'S. These are the addresses DEVICES
+ * ARRIVE ON — the `via` local addresses seen on live connections, plus the
+ * tailnet one. The rule the owner set (decision 54) is that if a device can
+ * reach huginn to read the Apps page, it must be able to reach the app, and
+ * this is the per-address evidence for that.
+ */
+@Serializable
+data class AppAddress(
+    val addr: String = "",
+    val ok: Boolean = false,
+    /** Why it did not answer. Absent on one that did. */
+    val error: String? = null,
+)
+
+/**
+ * Whether the app answers where a phone or a laptop would ask for it — and, when
+ * it does not, the exact lines that would fix it.
+ *
+ * ⚠⚠ [ok] IS A TRI-STATE, LIKE [App.up] AND FOR THE SAME REASON. `false` means
+ * the check ran and at least one address did not answer; `null` means no check
+ * has produced a verdict, which after a daemon restart is every row. "Needs
+ * retrofit" about a row nobody has checked is an accusation.
+ *
+ * ⚠ [fix] IS PER ROW NOW (decision 55). It used to be one list-level approval
+ * card covering the whole registry; it is the failing row's own disclosure,
+ * because the rebind is per unit and a card showing four units' commands made
+ * the reader work out which two were theirs.
+ */
+@Serializable
+data class AppReachability(
+    /** true reachable · false needs retrofit · NULL not checked yet. */
+    val ok: Boolean? = null,
+    /** Epoch SECONDS; 0 when nothing has been checked. */
+    val checkedAt: Long = 0,
+    val addresses: List<AppAddress> = emptyList(),
+    /** Shown VERBATIM, in this order. Never re-derived, never reformatted. */
+    val fix: List<String> = emptyList(),
+    /**
+     * What the daemon has to say about the check itself, or `""`.
+     *
+     * ⚠ THIS IS WHY [ok] IS NULL, WHEN IT IS. A null verdict on this daemon means
+     * the PROBE SET WAS EMPTY — no usable bind address and no tailnet address to
+     * try — and "not checked yet" on its own leaves the reader waiting for a
+     * check that is never going to run. The daemon's own sentence ("no address to
+     * probe yet") is the only thing that says so.
+     */
+    val note: String = "",
+)
+
+/**
+ * One app this host serves.
  *
  * ⚠⚠ [up] IS A TRI-STATE AND THE THIRD ONE IS LOAD-BEARING. `false` means the
  * probe ran and nothing answered; `null` means no probe has produced a verdict —
  * and the daemon keeps probe state IN MEMORY ONLY, so every restart puts every
  * row back to null. Folding that to `false` would draw four outages on a host
- * where nothing is wrong. See [ConsoleRules.reachabilityWords], which refuses to
- * say "not answering" about it.
+ * where nothing is wrong. See [AppRules.reachabilityWords], which refuses to say
+ * "not answering" about it.
  *
  * ⚠ [lastProbeAt] IS 0, NOT NULL, WHEN NOTHING HAS BEEN PROBED — the daemon's
  * own default. `0` is the same "no stamp" every time-word helper here already
- * renders as nothing, so it needs no second case; what it must never become is a
- * date in 1970.
+ * renders as nothing; what it must never become is a date in 1970.
+ *
+ * ⚠ [icon] IS A CLAIM, NOT A URL. The favicon is fetched and cached by the
+ * DAEMON on probe and served back through `GET /v1/apps/:id/icon` under the
+ * bearer, so a client cannot point an image at it — it fetches the bytes the way
+ * the transcript fetches a thumbnail. False means there is none and the route
+ * would 404, which is the row's cue to draw its initial-letter tile without
+ * spending a request to find that out.
  */
 @Serializable
-data class Console(
+data class App(
     val id: String = "",
     val name: String = "",
     val url: String = "",
-    /** One of `ConsoleRules.KINDS`. An unknown word becomes `other`, never null. */
+    /** One of `AppRules.KINDS`. An unknown word becomes `other`, never null. */
     val kind: String? = null,
     val notes: String? = null,
+    /**
+     * The systemd unit behind it, named by the fix lines.
+     *
+     * ⚠ THE DAEMON ALWAYS SENDS A STRING and uses `""` for "none" — so every
+     * reader here has to treat blank as absent rather than only null. Nullable
+     * anyway, because the pre-rename body omits the key entirely.
+     */
+    val unit: String? = null,
     /** Epoch SECONDS. */
     val addedAt: Long = 0,
     /** The revision a PATCH quotes back, so two clients cannot silently overwrite. */
@@ -2820,93 +2896,126 @@ data class Console(
     val latencyMs: Int? = null,
     /** The status the probe saw. A 401 or 403 page is UP: something answered. */
     val httpStatus: Int? = null,
-    /** Where the probe ran. `host` in this version — said out loud in the row's words. */
-    val reachableFrom: String? = "host",
+    /** Whether the daemon holds a favicon for this row. See the KDoc. */
+    val icon: Boolean = false,
+    val reachable: AppReachability = AppReachability(),
 )
 
 /**
- * One step of the work that would make these pages reachable from beyond the
- * host: where it runs, what it does, and the exact commands.
+ * `GET /v1/apps` — the registry, its caps, and how far the retrofit has got.
  *
- * [file] is the file a step edits, when it edits one — `/etc/pve/firewall/117.fw`
- * lives on heimdall, not here, and naming it is half of what makes the step
- * followable.
- */
-@Serializable
-data class ConsoleApprovalStep(
-    val id: String = "",
-    /** The machine it runs on. Often not this one. */
-    val where: String = "",
-    val summary: String = "",
-    val file: String? = null,
-    /** Shown VERBATIM, in this order. Never re-derived, never reformatted. */
-    val commands: List<String> = emptyList(),
-)
-
-/**
- * The whole rebind job, and whether it has been done.
- *
- * ⚠⚠ NOTHING IN THIS PRODUCT APPLIES IT, AND THERE IS NO ROUTE THAT COULD. The
- * steps rebind a systemd unit on this host and add firewall lines on a different
- * machine; the daemon has no business doing either and a client has less. The
- * card that draws this has a Copy control and no other — see
- * [ConsoleRules.APPROVAL_NEVER_RUN], which is the sentence that keeps a
- * button-less card from reading as an unfinished one.
- *
- * [applied] is read from a marker file on the host ([markerPath]); it is the one
- * field that changes what a console row SAYS, because "up from the host" stops
- * being the necessary caveat once the rebind is in.
- */
-@Serializable
-data class ConsoleApproval(
-    val applied: Boolean = false,
-    /** `owner`. The card never implies anyone else runs these. */
-    val runBy: String = "owner",
-    val markerPath: String? = null,
-    val title: String? = null,
-    val why: String? = null,
-    val steps: List<ConsoleApprovalStep> = emptyList(),
-    val note: String? = null,
-)
-
-/**
- * `GET /v1/consoles` — the registry, its caps, and the approval that governs the
- * whole list.
- *
- * ⚠ ALSO THE FEATURE PROBE. A daemon older than consoles answers 404 here and
- * [HuginnClient.consoles] returns null for it — `consolesAvailable = false`, the
+ * ⚠ ALSO THE FEATURE PROBE. A daemon older than apps answers 404 at BOTH names
+ * and [HuginnClient.apps] returns null for it — `appsAvailable = false`, the
  * `padsAvailable` pattern — rather than throwing at a screen that would then
  * have to explain the absence of something nobody asked for.
  *
- * ⚠ THE APPROVAL IS LIST-LEVEL, NOT PER ROW. The rebind and the four firewall
- * lines are one job covering every console, so one card covers them; a copy on
- * each row would be the same four commands drawn four times.
+ * ⚠ THERE IS NO APPROVAL CARD ANY MORE. [retrofitApplied] is the marker file's
+ * one remaining fact, kept for the transition so the page can say in one line
+ * that the job is outstanding; the commands themselves live on the rows that
+ * need them.
  */
 @Serializable
-data class ConsoleList(
-    val consoles: List<Console> = emptyList(),
+data class AppList(
+    val apps: List<App> = emptyList(),
     val max: Int = 0,
     /** The daemon's closed vocabulary for `kind`, so an editor can offer it. */
     val kinds: List<String> = emptyList(),
-    val reachableFrom: String? = null,
-    val probeIntervalMs: Long = 0,
-    val approval: ConsoleApproval? = null,
+    val retrofitApplied: Boolean = false,
+    /** The addresses this host's clients arrive on — what a row is probed against. */
+    val clientAddresses: List<String> = emptyList(),
 )
 
 /**
- * The answer to a console edit: what the server now holds, and whether it took
- * ours.
+ * The answer to an add.
+ *
+ * ⚠⚠ A 422 IS AN ANSWER, NOT A FAILURE, and it is the shape the whole add flow
+ * turns on. The daemon refused because the app does not answer where this
+ * person's devices arrive (decision 54) — they are going to run [reachable]'s
+ * fix lines and press Add again, so the form stays open with what they typed
+ * still in it. An exception would have taken the address with it.
+ *
+ * A 400 (not an address this registry may hold) and a 409 (that name is taken)
+ * ARE refusals of the request and still throw: neither is a state of the world
+ * the form can wait out.
+ */
+data class AppCreate(
+    val app: App? = null,
+    val refusal: String? = null,
+    val reachable: AppReachability? = null,
+    /**
+     * The row already holding this id, on a 409.
+     *
+     * Carried rather than dropped so a caller that wants to say "that is this
+     * one" can; the form only needs [refusal].
+     */
+    val existing: App? = null,
+) {
+    val ok: Boolean get() = app != null && refusal == null
+}
+
+/** The 422 body of an add: the refusal, and the prerequisite that failed. */
+@Serializable
+data class AppRefusal(
+    val error: String? = null,
+    val reachable: AppReachability? = null,
+)
+
+/**
+ * The answer to an app edit: what the server now holds, and whether it took ours.
  *
  * A conflict is NOT an exception — the [ScratchpadSave] shape, for its reason.
  * It is the expected outcome of the other client having saved first, it arrives
  * carrying the current row and its version, and that is everything the editor
  * needs to adopt it.
  */
-data class ConsoleSave(val console: Console, val conflict: Boolean, val refusal: String? = null)
+data class AppSave(val app: App, val conflict: Boolean, val refusal: String? = null)
 
-/** The 409 body of a console edit: the refusal, and the row as the host holds it. */
+/** The 409 body of an app edit: the refusal, and the row as the host holds it. */
 @Serializable
-data class ConsoleConflict(
+data class AppConflict(
     val error: String? = null,
-    val console: Console? = null,
+    val app: App? = null,
 )
+
+/**
+ * What has been typed into the add form, and what the daemon said about it.
+ *
+ * ⚠⚠ A PLAIN VALUE, HELD BY THE DIALOG, SO "A REFUSAL KEEPS WHAT YOU TYPED" IS A
+ * RULE WITH A TEST rather than a property of how somebody happened to write a
+ * `remember`. Both shells draw their own fields — an `AlertDialog` on the phone,
+ * a `DialogField` column on the desktop — and both feed this one holder, so the
+ * 422 behaviour cannot drift between them.
+ */
+data class AppForm(
+    val name: String = "",
+    val url: String = "",
+    val kind: String? = null,
+    val notes: String = "",
+    val unit: String = "",
+    /** The daemon's sentence, when it refused. */
+    val refusal: String? = null,
+    /** Its fix lines, verbatim. */
+    val fix: List<String> = emptyList(),
+    val addresses: List<AppAddress> = emptyList(),
+    /** What the daemon said about the check itself, or `""`. */
+    val note: String = "",
+) {
+    /** Enough typed to be worth sending. The daemon re-checks all of it. */
+    val sendable: Boolean
+        get() = name.isNotBlank() && url.isNotBlank() && AppRules.urlProblem(url) == null
+
+    /** Adopts a refusal WITHOUT touching a single typed field. */
+    fun refused(answer: AppCreate): AppForm = copy(
+        refusal = answer.refusal,
+        fix = answer.reachable?.fix.orEmpty(),
+        addresses = answer.reachable?.addresses.orEmpty(),
+        note = answer.reachable?.note.orEmpty(),
+    )
+
+    /**
+     * Drops the refusal, for the next keystroke. An error about text that has
+     * since been changed is an error about nothing.
+     */
+    fun cleared(): AppForm =
+        copy(refusal = null, fix = emptyList(), addresses = emptyList(), note = "")
+}

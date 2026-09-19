@@ -27,6 +27,7 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.buffer
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.flowOn
+import kotlinx.serialization.Serializable
 import kotlinx.serialization.SerializationException
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
@@ -1784,46 +1785,113 @@ class HuginnClient(
             ),
         )
 
-    // ---- consoles: the internal pages this host serves
+    // ---- apps: the things huginn makes and hosts itself
 
     /**
-     * The registry, its caps and the approval — or NULL when this daemon has no
-     * consoles feature.
+     * The registry, its caps, the retrofit marker and the addresses clients
+     * arrive on — or NULL when this daemon has no apps feature at all.
      *
-     * The same probe contract as [projects]: null means absent, an empty
-     * `consoles` list means present and empty.
+     * ⚠⚠ BOTH NAMES HAVE TO 404 BEFORE THE FEATURE IS ABSENT. `/v1/consoles` is
+     * kept as an alias for ONE release (decision 56), and a daemon older than the
+     * rename still only serves that one — hiding the page against one of those
+     * would take four working rows off the screen. So the new name is asked for
+     * first, the old one only when it 404s, and null means neither answered.
+     *
+     * The same probe contract as [projects] otherwise: null means absent, an
+     * empty `apps` list means present and empty.
      */
-    suspend fun consoles(): ConsoleList? = probeGet("/v1/consoles")?.let { decode<ConsoleList>(it) }
+    suspend fun apps(): AppList? {
+        probeGet("/v1/apps")?.let { return decode<AppList>(it) }
+        val legacy = probeGet("/v1/consoles") ?: return null
+        return decode<LegacyAppList>(legacy).asAppList()
+    }
 
     /**
-     * Add a console. The row comes back with no observation on it — a brand new
-     * console has never been probed, which is not the same as being down.
+     * The body the pre-rename daemon serves.
      *
-     * A refusal here IS a refusal of the request (the address is not on this
-     * host, the LAN, the tailnet or the mesh; the scheme is not http) and still
-     * throws — [ConsoleRules.urlProblem] mirrors the rule so the field can answer
-     * before the round trip.
+     * Decoded EXPLICITLY rather than through a `@JsonNames` alias on [AppList]:
+     * an alias would make the two shapes one type and leave nothing to delete
+     * when the fallback comes out next release. This is a separate, visibly
+     * temporary translation — the rows themselves need none, because every field
+     * the old daemon omits is one [App] already defaults.
      */
-    suspend fun createConsole(
+    @Serializable
+    private data class LegacyAppList(
+        val consoles: List<App> = emptyList(),
+        val max: Int = 0,
+        val kinds: List<String> = emptyList(),
+        val approval: LegacyApproval? = null,
+    ) {
+        fun asAppList(): AppList = AppList(
+            apps = consoles,
+            max = max,
+            kinds = kinds,
+            // The marker file's one surviving fact, under its new name.
+            retrofitApplied = approval?.applied == true,
+        )
+    }
+
+    @Serializable
+    private data class LegacyApproval(val applied: Boolean = false)
+
+    /**
+     * Add an app.
+     *
+     * ⚠⚠ A 422 IS AN ANSWER, NOT A FAILURE (decision 54). The daemon probes the
+     * address on every address huginn itself answers on and REFUSES the add until
+     * the app answers on all of them — and the body carries the fix lines that
+     * would make it. Letting that throw would drop the form and the typed address
+     * with it, and flatten the lines into one exception message.
+     *
+     * ⚠ AND SO IS THE 409 — an app with that id already exists, and it arrives
+     * carrying the row that has it. The form keeps what was typed for that one
+     * too: renaming is one keystroke, and emptying the box to say "that name is
+     * taken" makes the person type the address again as well.
+     *
+     * A 400 IS a refusal of the request and still throws: an address this
+     * registry may not hold is not a state of the world the form can wait out.
+     * [AppRules.urlProblem] mirrors that rule so the field can answer it before
+     * the round trip.
+     */
+    suspend fun createApp(
         name: String,
         url: String,
         kind: String? = null,
         notes: String? = null,
-    ): Console =
-        decode(
-            post(
-                "/v1/consoles",
-                body = buildJsonObject {
-                    put("name", JsonPrimitive(name))
-                    put("url", JsonPrimitive(url))
-                    kind?.let { put("kind", JsonPrimitive(it)) }
-                    notes?.let { put("notes", JsonPrimitive(it)) }
-                },
-            ),
-        )
+        unit: String? = null,
+    ): AppCreate {
+        val body = buildJsonObject {
+            put("name", JsonPrimitive(name))
+            put("url", JsonPrimitive(url))
+            kind?.let { put("kind", JsonPrimitive(it)) }
+            notes?.let { put("notes", JsonPrimitive(it)) }
+            unit?.let { put("unit", JsonPrimitive(it)) }
+        }
+        val resp = http.request { build("/v1/apps", HttpMethod.Post, Tier.NORMAL, body) }
+        val text = resp.bodyAsText()
+        if (resp.status.value == 422) {
+            val r = runCatching { decode<AppRefusal>(text) }.getOrNull()
+            return AppCreate(
+                app = null,
+                refusal = r?.error ?: "that app is not reachable from your devices yet",
+                reachable = r?.reachable,
+            )
+        }
+        if (resp.status.value == 409) {
+            // `{error, app}`: the refusal AND the row that already holds the id.
+            val c = runCatching { decode<AppConflict>(text) }.getOrNull()
+            return AppCreate(
+                app = null,
+                refusal = c?.error ?: "an app with that name is already listed",
+                existing = c?.app,
+            )
+        }
+        if (!resp.status.isSuccess()) throw errorFrom(resp.status.value, text)
+        return AppCreate(app = decode<App>(text))
+    }
 
     /**
-     * Edit one console. [version] is the copy this edit was made against.
+     * Edit one app. [version] is the copy this edit was made against.
      *
      * ⚠ THE 409 IS AN ANSWER, carrying the row as the daemon now holds it — the
      * [saveScratchpad] shape, for the same reason: the other client having saved
@@ -1831,47 +1899,68 @@ class HuginnClient(
      * arrives with everything needed to adopt it. A 400 about a bad address IS a
      * refusal of the request and still throws.
      */
-    suspend fun saveConsole(
+    suspend fun saveApp(
         id: String,
         version: Int,
         name: String? = null,
         url: String? = null,
         kind: String? = null,
         notes: String? = null,
-    ): ConsoleSave {
+        unit: String? = null,
+    ): AppSave {
         val body = buildJsonObject {
             put("version", JsonPrimitive(version))
             name?.let { put("name", JsonPrimitive(it)) }
             url?.let { put("url", JsonPrimitive(it)) }
             kind?.let { put("kind", JsonPrimitive(it)) }
             notes?.let { put("notes", JsonPrimitive(it)) }
+            unit?.let { put("unit", JsonPrimitive(it)) }
         }
-        val resp = http.request { build("/v1/consoles/$id", HttpMethod.Patch, Tier.NORMAL, body) }
+        val resp = http.request { build("/v1/apps/$id", HttpMethod.Patch, Tier.NORMAL, body) }
         val text = resp.bodyAsText()
         if (resp.status.value == 409) {
-            // The body is `{error, console}`: the refusal AND the current row. The
-            // row is what the editor adopts; the sentence is the daemon's, kept
-            // so a caller that wants to say why can.
-            val c = runCatching { decode<ConsoleConflict>(text) }.getOrNull()
-            return ConsoleSave(c?.console ?: Console(id = id), conflict = true, refusal = c?.error)
+            // The body is `{error, app}`: the refusal AND the current row. The row
+            // is what the editor adopts; the sentence is the daemon's, kept so a
+            // caller that wants to say why can.
+            val c = runCatching { decode<AppConflict>(text) }.getOrNull()
+            return AppSave(c?.app ?: App(id = id), conflict = true, refusal = c?.error)
         }
         if (!resp.status.isSuccess()) throw errorFrom(resp.status.value, text)
-        return ConsoleSave(decode(text), conflict = false, refusal = null)
+        return AppSave(decode(text), conflict = false, refusal = null)
     }
 
-    /** Remove a console from the registry. A second delete is a 404, not a second success. */
-    suspend fun deleteConsole(id: String) {
-        call("/v1/consoles/$id", HttpMethod.Delete)
+    /** Remove an app from the registry. A second delete is a 404, not a second success. */
+    suspend fun deleteApp(id: String) {
+        call("/v1/apps/$id", HttpMethod.Delete)
     }
 
     /**
-     * Probe one console now, from the host, and answer with the refreshed row.
+     * Probe one app now and answer with the refreshed row.
      *
      * The daemon awaits the probe (bounded at 2 s) rather than answering
      * optimistically, so the row this returns is the verdict rather than a
      * promise of one.
      */
-    suspend fun probeConsole(id: String): Console = decode(post("/v1/consoles/$id/probe"))
+    suspend fun probeApp(id: String): App = decode(post("/v1/apps/$id/probe"))
+
+    /**
+     * The app's favicon, as the daemon cached it on probe.
+     *
+     * ⚠ IT RIDES THE BEARER, like `/v1/files/image`. This is not a public URL a
+     * browser could be pointed at, so a row cannot draw it by handing an address
+     * to an image loader — it fetches the bytes the way the transcript fetches a
+     * thumbnail, through the same cache. A row whose `icon` is false has none and
+     * this would 404; the tile is drawn instead, without spending the request to
+     * find that out.
+     *
+     * Throws like every other call on a non-2xx; the loader turns that into a
+     * remembered miss and the initial-letter tile.
+     */
+    suspend fun appIconBytes(id: String): ByteArray {
+        val resp = http.request { build("/v1/apps/$id/icon", HttpMethod.Get, Tier.NORMAL, null) }
+        if (!resp.status.isSuccess()) throw errorFrom(resp.status.value, resp.bodyAsText())
+        return resp.bodyAsBytes()
+    }
 
     /**
      * A request body that is written, not held.

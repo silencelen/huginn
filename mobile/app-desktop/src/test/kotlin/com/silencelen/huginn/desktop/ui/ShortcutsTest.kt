@@ -119,7 +119,7 @@ class ShortcutsTest {
         // depends on having focus in a text field. They are listed here anyway,
         // since "how do I send this" is the first thing anyone needs and the last
         // place they would look is a table of window-level shortcuts.
-        // 18: Ctrl+Shift+J for Projects and Ctrl+Shift+K for Consoles, each row
+        // 18: Ctrl+Shift+J for Projects and Ctrl+Shift+K for Apps, each row
         // saying it is offered only on a host that has them — the rail hides both
         // items on the same probe, and a cheat sheet that promised the chords
         // unconditionally would be the one place the app still claimed a feature
@@ -309,20 +309,21 @@ class ShortcutsTest {
 }
 
 /**
- * THE CONSOLES CHORD, added because the pane had no keyboard door at all.
+ * THE APPS CHORD, added because the pane had no keyboard door at all — and kept
+ * through the rename, because the letter never stood for the word.
  *
- * Projects has Ctrl+Shift+J and Consoles had nothing — so when the rail item was
- * missing (see `ConsoleProbeScheduleTest`) the palette was the only way in, and a
+ * Projects has Ctrl+Shift+J and this page had nothing — so when the rail item was
+ * missing (see `AppProbeScheduleTest`) the palette was the only way in, and a
  * reader who could not find the feature had no second thing to try. Ctrl+Shift+K
  * because K was the one free letter on that row and it sits beside the palette's
  * own Ctrl+K, which is where somebody looking for a list of things goes first.
  */
-class ConsolesChordTest {
+class AppsChordTest {
 
     @Test
-    fun `ctrl shift K opens consoles`() {
+    fun `ctrl shift K opens apps`() {
         assertEquals(
-            Shortcut.VIEW_CONSOLES,
+            Shortcut.VIEW_APPS,
             match(ctrl = true, shift = true, alt = false, key = "K"),
         )
     }

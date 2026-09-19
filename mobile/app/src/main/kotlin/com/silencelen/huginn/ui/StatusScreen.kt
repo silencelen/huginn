@@ -18,7 +18,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import com.silencelen.huginn.appVersion
-import com.silencelen.huginn.data.Console
+import com.silencelen.huginn.data.App
 import com.silencelen.huginn.data.Plan
 import com.silencelen.huginn.data.Status
 import com.silencelen.huginn.data.Usage
@@ -33,16 +33,16 @@ fun StatusScreen(
     plan: Plan?,
     usage: Usage?,
     /**
-     * The host's internal pages (owner decision 48: a card on Status, not a
-     * fifth tab). Empty draws nothing at all — a daemon with no consoles route
-     * must not leave a heading over a hole.
+     * What huginn hosts itself (owner decision 48: a card on Status, not a
+     * fifth tab). Empty draws nothing at all — a daemon with no apps route must
+     * not leave a heading over a hole.
      */
-    consoles: List<Console> = emptyList(),
-    /** Whether the rebind has been applied, so the rows can drop the caveat. */
-    consolesApplied: Boolean = false,
-    onOpenConsole: (Console) -> Unit = {},
-    /** The full list. Null hides the control — see consoleEntries. */
-    onSeeAllConsoles: (() -> Unit)? = null,
+    apps: List<App> = emptyList(),
+    /** Whether the retrofit has been applied, so the rows can drop the caveat. */
+    retrofitApplied: Boolean = false,
+    onOpenApp: (App) -> Unit = {},
+    /** The full list. Null hides the control — see appEntries. */
+    onSeeAllApps: (() -> Unit)? = null,
     nowMs: Long = 0L,
 ) {
     val ctx = LocalContext.current
@@ -72,7 +72,7 @@ fun StatusScreen(
             UsageSection(usage, sectionPadding)
             // Its own route, so it is drawn even when the host summary has not
             // arrived — the same reason Plan and Tokens are above it.
-            ConsolesBlock(consoles, consolesApplied, nowMs, onOpenConsole, onSeeAllConsoles)
+            AppsBlock(apps, retrofitApplied, nowMs, onOpenApp, onSeeAllApps)
             Spacer(Modifier.height(24.dp))
             return@Column
         }
@@ -140,7 +140,7 @@ fun StatusScreen(
         KeyValueRow("tmux sessions", sessions.toString())
         KeyValueRow("Chats running", chatsRunning.toString())
 
-        ConsolesBlock(consoles, consolesApplied, nowMs, onOpenConsole, onSeeAllConsoles)
+        AppsBlock(apps, retrofitApplied, nowMs, onOpenApp, onSeeAllApps)
 
         Spacer(Modifier.height(24.dp))
     }
@@ -173,32 +173,32 @@ private val sectionPadding = Modifier.padding(horizontal = 16.dp)
 
 
 /**
- * The consoles card, with the divider that belongs to it.
+ * The apps card, with the divider that belongs to it.
  *
  * A function rather than two copies, because this screen returns early when the
  * host summary has not arrived and the card must be in both arms — the drift a
  * shared composable exists to stop.
  *
  * Draws NOTHING on an empty list. The card is absent on a daemon that has no
- * consoles route, and absent on one that has the route and no rows: `CONSOLES_EMPTY`
- * is the full page's sentence, and a Status screen is not where anybody goes to
+ * apps route, and absent on one that has the route and no rows: `APPS_EMPTY` is
+ * the full page's sentence, and a Status screen is not where anybody goes to
  * find out that a registry they have not filled in is empty.
  */
 @Composable
-private fun ConsolesBlock(
-    consoles: List<Console>,
-    applied: Boolean,
+private fun AppsBlock(
+    apps: List<App>,
+    retrofitApplied: Boolean,
     nowMs: Long,
-    onOpen: (Console) -> Unit,
+    onOpen: (App) -> Unit,
     onSeeAll: (() -> Unit)?,
 ) {
-    if (consoles.isEmpty()) return
+    if (apps.isEmpty()) return
     HorizontalDivider(Modifier.padding(top = 12.dp), color = MaterialTheme.colorScheme.outlineVariant)
-    ConsolesStatusCard(
-        consoles = consoles,
+    AppsStatusCard(
+        apps = apps,
         nowMs = nowMs,
         onOpen = onOpen,
-        applied = applied,
+        retrofitApplied = retrofitApplied,
         onSeeAll = onSeeAll,
         modifier = sectionPadding,
     )

@@ -15,7 +15,7 @@ import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 /**
- * The non-2xx answers the projects and consoles routes treat as ANSWERS, the one
+ * The non-2xx answers the projects and apps routes treat as ANSWERS, the one
  * they still treat as a failure, and the two bodies a client has to get exactly
  * right on the way out.
  *
@@ -56,7 +56,7 @@ class ProjectClientTest {
     fun `an older daemon's 404 is a null, not an error`() = runTest {
         val c = client { respond("""{"error":"not found"}""", HttpStatusCode.NotFound) }
         assertNull(c.projects(), "a 404 means the feature is absent")
-        assertNull(c.consoles(), "same contract on the consoles route")
+        assertNull(c.apps(), "same contract on the apps route — see AppClientTest for both names")
     }
 
     @Test

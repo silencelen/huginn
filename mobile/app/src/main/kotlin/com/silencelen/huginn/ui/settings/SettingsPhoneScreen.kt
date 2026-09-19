@@ -67,6 +67,9 @@ fun SettingsPhoneScreen(
     /** The Projects list. Null when the daemon has no projects route. */
     onOpenProjects: (() -> Unit)? = null,
     projectCount: Int = 0,
+    /** The Apps page. Null when the daemon has neither apps route. */
+    onOpenApps: (() -> Unit)? = null,
+    appCount: Int = 0,
     onOpenStatus: () -> Unit,
     onLockNow: () -> Unit,
     onRequestNotifications: () -> Unit,
@@ -227,6 +230,8 @@ fun SettingsPhoneScreen(
                         highlight = highlight,
                         onOpenProjects = onOpenProjects,
                         projectCount = projectCount,
+                        onOpenApps = onOpenApps,
+                        appCount = appCount,
                     )
 
                     "notify" -> NotifyPage(
