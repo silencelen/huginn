@@ -5,6 +5,7 @@ import com.silencelen.huginn.data.ProjectRow
 import com.silencelen.huginn.desktop.ui.common.ProjectVerbs
 import com.silencelen.huginn.desktop.ui.common.labelsOf
 import com.silencelen.huginn.desktop.ui.common.projectMenu
+import java.io.File
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -108,6 +109,38 @@ class ProjectMenusTest {
         assertFalse("Pause" in labels || "Resume" in labels, labels.toString())
         // Still deletable: forgetting the record is not a status move.
         assertTrue("Delete…" in labels, labels.toString())
+    }
+
+    // ------------------------------------------------------ a way to find them
+    //
+    // ⚠⚠ EVERY VERB ABOVE WAS UNREACHABLE WITHOUT GUESSING. The only door was a
+    // secondary click on the project's TITLE in the detail header — no chevron,
+    // no ⋮, no hover mark — and the project row in the tree answered neither
+    // button. A menu nobody can open is a feature nobody has: the three-way
+    // delete dialog, the pause, the archive and the rename all sat behind it.
+    //
+    // Source-level, because the affordance is a drawn control in a composable
+    // this module cannot instantiate — and because the failure is something
+    // MISSING, which no assertion about the menu's contents can catch.
+
+    @Test
+    fun `the detail header carries a visible menu for whatever it names`() {
+        val src = File("src/main/kotlin/com/silencelen/huginn/desktop/ui/ProjectsPane.kt").readText()
+        assertTrue(src.length > 10_000, "read as ${src.length} chars — wrong file")
+        val crumb = src.substringAfter("private fun ProjectCrumb(").substringBefore("\n}\n")
+        assertTrue(crumb.length in 1..4_000, "ProjectCrumb was not found (${crumb.length} chars)")
+        assertTrue(
+            "MenuButton({ projectMenu(project, verbs) }" in crumb,
+            "the project half of the crumb needs a pressable menu:\n$crumb",
+        )
+        assertTrue(
+            "MenuButton({ projectMenu(project, member, verbs) }" in crumb,
+            "and so does the member half, beside the name it addresses:\n$crumb",
+        )
+        // ⚠ THE SAME LIST AS THE RIGHT-CLICK. A hand-written copy of the items
+        // inside the button compiles and draws, and drifts the first time a verb
+        // is added to one of them.
+        assertTrue("RowMenu({ projectMenu(project, verbs) }" in crumb, crumb)
     }
 
     @Test
