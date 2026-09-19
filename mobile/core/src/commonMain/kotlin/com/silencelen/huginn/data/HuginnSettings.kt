@@ -146,6 +146,22 @@ interface HuginnSettings {
     suspend fun noteAlarm(atMs: Long)
     suspend fun noteWatchError(message: String, atMs: Long)
 
+    /**
+     * The stream is healthy again, so the last reason it was not stops being a
+     * fact about this client.
+     *
+     * ⚠ NOTHING USED TO CLEAR IT. The reason is persisted on purpose — a report
+     * copied after a restart should still say why the stream dropped — and with
+     * no counterpart a client that had been reconnected for hours reported
+     * `watch stream connected` and `last watch err unauthorized at …` in the
+     * same diagnostics blob. That pair makes a healthy client look broken in a
+     * bug report and sends the reader after a token that is not the problem.
+     *
+     * Defaulted so a store gets it for free: it is the same write [noteWatchError]
+     * already makes, with the empty value.
+     */
+    suspend fun clearWatchError() = noteWatchError("", 0)
+
     companion object {
         /**
          * huginn's tailnet address, which is where the daemon binds.
