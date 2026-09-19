@@ -648,7 +648,7 @@ function submitStalledLogLine(name, waitedMs, lines) {
  * "somebody is typing" would refuse to recover exactly the sends that arrived
  * earliest, which are the ones this exists for.
  */
-const COMPOSER_PLACEHOLDER_RE = /^Try".*"$/i;
+const COMPOSER_PLACEHOLDER_RE = /^(Try".*"|Press up to edit queued messages.*)$/i;
 
 /**
  * Is the composer drawn, and is it holding anything?
@@ -738,7 +738,7 @@ const DRAFT_HOLD_MAX_MS = QUEUE_MAX_WAIT_MS;
  * Five seconds is two orders over the paint and short enough that a person who
  * stopped typing is not kept waiting for a message they can see is queued.
  */
-const LIVE_KEYS_WINDOW_MS = 5_000;
+const LIVE_KEYS_WINDOW_MS = 60_000;
 
 /**
  * Should this send be held because the composer is somebody's, not ours?
@@ -759,15 +759,29 @@ function draftHold({ draft = null, keysAgoMs = null, waitedMs = 0,
   if (draft === null) return false;
   const waited = Number(waitedMs);
   if (Number.isFinite(waited) && waited >= maxMs) return false;
-  if (draft === true) return true;
+  // ⚠ 3.5.1: A CAPTURE ALONE IS NOT ENOUGH. On 3.5.0 the guard held every send
+  // on the owner's session for minutes at a time because Claude Code draws its
+  // OWN queued messages and its "Press up to edit queued messages" hint where
+  // the composer is, and a screen read cannot tell those from a person's
+  // draft. What a capture cannot see, the keystroke stream can: a draft is a
+  // thing somebody TYPED here, and the daemon saw every key of it. So a hold
+  // needs both — text in the box AND a live-view keypress inside the window.
+  // A pane with no composer is never held by this rule (draft === null); a box
+  // that LOOKS empty or full decides nothing on its own — only the keys do.
   // ⚠ `== null` FIRST, because `Number(null)` is 0 and 0 ms ago is the most
   // recent keypress there is. Read as a number, "nobody has ever typed here"
   // became "somebody is typing right now" and held every send on every session
   // for the width of the window.
   if (keysAgoMs == null) return false;
   const ago = Number(keysAgoMs);
-  return Number.isFinite(ago) && ago >= 0 && ago < keysWindowMs;
+  if (!Number.isFinite(ago) || ago < 0) return false;
+  // Text in the box: theirs for the whole window after the last key. A box that
+  // reads empty: theirs only while keys are still in flight (a keypress accepted
+  // by the route but not yet painted), so clearing a draft frees the send in
+  // seconds rather than a minute.
+  return ago < (draft === true ? keysWindowMs : LIVE_KEYS_QUIET_MS);
 }
+const LIVE_KEYS_QUIET_MS = 5_000;
 
 function draftHeldLogLine(name, holds) {
   return `typing: ${name}: holding a send — there is unsent text in the live view `
@@ -829,6 +843,7 @@ function recoveryDecision(lines, opts = {}) {
  * behind a ten-minute dialog can still be deliberately repeated.
  */
 const DUPLICATE_WINDOW_MS = 30 * 1000;
+const DUPLICATE_MIN_CHARS = 20;   // a re-press is a specific message; `yes` twice is two answers
 function duplicatePending(entries, text, nowMs, windowMs = DUPLICATE_WINDOW_MS) {
   if (!Array.isArray(entries) || typeof text !== 'string' || !text) return null;
   const now = Number(nowMs);
@@ -1201,7 +1216,7 @@ module.exports = {
   composerText, pasteProbe, pasteLanded, pasteIndistinguishable, composerCleared,
   composerEmpty, recoveryDecision,
   composerHoldsDraft, draftHold, DRAFT_HOLD_MAX_MS, LIVE_KEYS_WINDOW_MS,
-  duplicatePending, DUPLICATE_WINDOW_MS,
+  duplicatePending, DUPLICATE_WINDOW_MS, DUPLICATE_MIN_CHARS, LIVE_KEYS_QUIET_MS,
   paneTail, pasteLostLogLine, submitStalledLogLine, pasteResentLogLine, pasteLeftAloneLogLine,
   draftHeldLogLine, draftClearedLogLine, draftOverdueLogLine,
   sendKeysFits, chunks,

@@ -443,7 +443,7 @@ function mkClearingModal(suffix, holdMs = 3) {
   return name;
 }
 
-test('two messages QUEUED behind a dialog do not flush into each other (#10)', async () => {
+test('two messages QUEUED behind a dialog both go when it clears (3.0.3 restored over #10)', async () => {
   // ⚠ WHAT MAKES THESE TWO DIFFERENT FROM AN INTERJECTION. 3.0.3's contract is
   // that a person's message never waits for CLAUDE — a message typed while a
   // turn runs is pasted at once, and Claude Code's own queue shows it. But two
@@ -472,15 +472,12 @@ test('two messages QUEUED behind a dialog do not flush into each other (#10)', a
     if (st.blockedBy !== 'modal') break;
     await wait(150);
   }
-  await wait(2000);                                     // let the pass finish
-  st = await typingOf(name);
-  assert.equal(st.queued, 1, 'one released, one still waiting — not both in one pass');
-  assert.equal(st.blockedBy, 'turn', 'the second waits for a real boundary now');
-
-  // …and that boundary is the only thing that frees it.
-  appendTranscript(file, TURN);
+  // 3.5.1: RESTORED to 3.0.3 — a person's messages never wait for Claude. #10's
+  // one-per-boundary rule made a person's follow-ups wait out whole turns (55 deep
+  // on the owner's session behind a turn that ran for minutes). Both go when the
+  // dialog clears, in order; Claude Code queues the second as it always did.
   st = await drains(name);
-  assert.equal(st.queued, 0, 'the turn ended, so the second message goes');
+  assert.equal(st.queued, 0, 'both released once the dialog is gone');
 });
 
 test('a dialog on screen queues a text send and names the modal', async () => {
