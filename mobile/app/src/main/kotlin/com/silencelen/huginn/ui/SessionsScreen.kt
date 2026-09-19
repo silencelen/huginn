@@ -25,6 +25,7 @@ import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExtendedFloatingActionButton
+import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -59,6 +60,16 @@ import com.silencelen.huginn.ui.theme.verbInk
 fun SessionsScreen(
     sessions: List<Session>,
     selectedName: String? = null,
+    /**
+     * The list is one COLUMN of a two-pane layout rather than the whole screen.
+     *
+     * ⚠ AN EXTENDED FAB OVER A 292dp COLUMN IS NOT A CORNER, IT IS A BILLBOARD.
+     * Held sideways, "＋ New session" floated 200dp wide in the middle of a
+     * 2520px screen, over the list it belongs to and over a row of it. The verb
+     * still belongs to this pane — it cannot move to the screen's corner, which
+     * is the conversation's — so it shrinks to the plain 56dp button instead.
+     */
+    twoPane: Boolean = false,
     onOpen: (String) -> Unit,
     onCreate: (String) -> Unit,
     onKill: (String) -> Unit,
@@ -192,12 +203,19 @@ fun SessionsScreen(
             }
         }
 
-        ExtendedFloatingActionButton(
-            onClick = { newName = ""; showNew = true },
-            modifier = Modifier.align(Alignment.BottomEnd).padding(16.dp),
-            icon = { Icon(Icons.Filled.Add, contentDescription = null) },
-            text = { Text("New session") },
-        )
+        if (twoPane) {
+            FloatingActionButton(
+                onClick = { newName = ""; showNew = true },
+                modifier = Modifier.align(Alignment.BottomEnd).padding(FAB_INSET),
+            ) { Icon(Icons.Filled.Add, contentDescription = "New session") }
+        } else {
+            ExtendedFloatingActionButton(
+                onClick = { newName = ""; showNew = true },
+                modifier = Modifier.align(Alignment.BottomEnd).padding(FAB_INSET),
+                icon = { Icon(Icons.Filled.Add, contentDescription = null) },
+                text = { Text("New session") },
+            )
+        }
     }
 
     if (showNew) {

@@ -47,12 +47,17 @@ class ListFabClearanceTest {
      *
      * ⚠ THE INSET HAS EXACTLY ONE OWNER AND IT IS NOT THE SAME ONE ON EVERY
      * SCREEN. Chats, Sessions and Rounds are tabs: the Scaffold's `NavigationBar`
-     * sits under them and consumes the system nav inset itself, so a
-     * `navigationBarsPadding()` there would DOUBLE it (`MainActivity` zeroes
-     * `contentWindowInsets` for exactly that reason). Apps and Projects are
-     * pushed destinations with no bar beneath, so nothing consumes it and their
-     * FAB was drawn straight over the system gesture bar — "Add app" and
-     * "New project" half-buried under the home pill on the owner's Fold.
+     * sits under them and consumes the system nav inset itself, so paying it
+     * again there would DOUBLE it (`MainActivity` zeroes `contentWindowInsets`
+     * for exactly that reason). Apps and Projects are pushed destinations with no
+     * bar beneath, so nothing consumes it and their FAB was drawn straight over
+     * the system gesture bar — "Add app" and "New project" half-buried under the
+     * home pill on the owner's Fold.
+     *
+     * The spelling is now `systemNavPadding()` (ui/Insets.kt) on both sides of
+     * that rule, so there is one call to grep for rather than two; both are
+     * checked here, because a screen that reverts to the raw call is still
+     * wrong on the tab side.
      */
     private val childFabScreens = listOf("AppsScreen.kt", "ProjectsScreen.kt")
 
@@ -100,7 +105,7 @@ class ListFabClearanceTest {
                 "$name lost its FAB — this gate is now scanning the wrong files",
                 text.contains("ExtendedFloatingActionButton("),
             )
-            if (!text.contains("navigationBarsPadding()")) offenders += "$name: no navigationBarsPadding"
+            if (!text.contains("systemNavPadding()")) offenders += "$name: no systemNavPadding"
         }
         assertTrue(offenders.joinToString("; "), offenders.isEmpty())
     }
@@ -113,7 +118,8 @@ class ListFabClearanceTest {
         for (name in fabScreens - childFabScreens.toSet()) {
             val f = File(mobileRoot(), "app/src/main/kotlin/com/silencelen/huginn/ui/$name")
             assertTrue("$name not found at ${f.absolutePath}", f.isFile)
-            if (f.readText().contains("navigationBarsPadding()")) {
+            val text = f.readText()
+            if (text.contains("navigationBarsPadding()") || text.contains("systemNavPadding()")) {
                 offenders += "$name: pads an inset the NavigationBar already consumes"
             }
         }

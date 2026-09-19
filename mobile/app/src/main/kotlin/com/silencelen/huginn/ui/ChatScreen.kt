@@ -13,8 +13,6 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.imePadding
-import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -373,10 +371,10 @@ private fun Composer(
     // rather than at the call site keeps the decision in one place, and the scope
     // of the `return` unambiguous.
     if (sealedRun) {
-        // navigationBarsPadding, like the Surface below it: the Scaffold sets
+        // the navigation inset, like the Surface below it: the Scaffold sets
         // contentWindowInsets to zero precisely because every composer owns its own
         // inset, so a replacement that forgot it would sit under the system bar.
-        SealedNote(Modifier.fillMaxWidth().navigationBarsPadding(), onContinue = onContinueRound)
+        SealedNote(Modifier.fillMaxWidth().systemNavPadding(), onContinue = onContinueRound)
         return
     }
     Surface(color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f)) {
@@ -401,8 +399,7 @@ private fun Composer(
         Row(
             Modifier
                 .fillMaxWidth()
-                .imePadding()
-                .navigationBarsPadding()
+                .imeAndSystemNavPadding()
                 .padding(start = 12.dp, end = 8.dp, top = 6.dp, bottom = 6.dp),
             verticalAlignment = Alignment.Bottom,
         ) {
