@@ -872,6 +872,11 @@ function migrateSeedUnits(list) {
  */
 const FIREWALL_FILE = '/etc/pve/firewall/117.fw';
 
+/** The host an app's address names, or '' — never a throw. */
+function hostnameOf(rawUrl) {
+  try { return new URL(rawUrl).hostname; } catch { return ''; }
+}
+
 /** The port an app's address implies, scheme default included. */
 function portOf(rawUrl) {
   try {
@@ -920,7 +925,7 @@ function fixLines(rec, addresses = []) {
   // The address it DOES answer on, which is the thing the rebind replaces. When
   // nothing answered there is no such address, and the line says that instead of
   // naming one that does not exist.
-  const bound = answering[0] || (rec && rec.url ? new URL(rec.url).hostname : '');
+  const bound = answering[0] || hostnameOf(rec && rec.url);
   const out = [];
 
   out.push(`# on huginn — ${failing.join(', ')} ${failing.length === 1 ? 'does' : 'do'} not reach this app`);
@@ -1861,7 +1866,7 @@ module.exports = {
   findApp, add, patch, rename, setUrl, remove,
   SEED_UNITS, SEED_FALLBACK_HOST, seedableHost, pickHostAddr, seedHost, seedUrl, legacySeedUrl,
   seedApps, migrateSeedUrls, migrateSeedUnits,
-  portOf, fixLines, normalizeAddr, addrAuthority, reachUrl, reachOne, reachabilityProbe, reachRefusal,
+  portOf, hostnameOf, fixLines, normalizeAddr, addrAuthority, reachUrl, reachOne, reachabilityProbe, reachRefusal,
   readBounded, getBounded, iconHrefFromHtml, fetchIcon,
   iconsDir, iconFile, iconMetaFile, readIconMeta, writeIconMeta, writeIconBytes, removeIcon, iconOf, iconDue,
   probeApp, probeAll, probeChange,
