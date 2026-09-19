@@ -26,9 +26,20 @@ skip() { echo "  SKIP  $*  <-- not a pass" >&2; }
 # poison the NEXT run (see the port note below). Lanes register here instead.
 STUB_PIDS=()
 STUB_DIRS=()
+# Private tmux SOCKETS (tmux -L <name>), never the operator's default one: the
+# projects-lifecycle lane stands a real daemon up and it makes real sessions.
+STUB_TMUX=()
 _cleanup() {
-  local p d
+  local p d t
   for p in ${STUB_PIDS[@]+"${STUB_PIDS[@]}"}; do [ -n "$p" ] && kill "$p" 2>/dev/null; done
+  # kill-server, then the socket FILE: an exited server leaves a 0-byte socket
+  # behind, and /tmp/tmux-<uid>/ is already a graveyard of them from every suite
+  # in this repo. A gate that adds one per run is a gate nobody wants to run.
+  for t in ${STUB_TMUX[@]+"${STUB_TMUX[@]}"}; do
+    [ -n "$t" ] || continue
+    tmux -L "$t" kill-server 2>/dev/null
+    rm -f "${TMUX_TMPDIR:-/tmp}/tmux-$(id -u)/$t" 2>/dev/null
+  done
   for d in ${STUB_DIRS[@]+"${STUB_DIRS[@]}"}; do [ -n "$d" ] && rm -rf "$d"; done
   return 0
 }
@@ -1403,24 +1414,45 @@ python3 - "$PJ_PF" "${HUGINN_TEST_PROJECTS_PORT:-0}" "$PJ_REQ" <<'PJSTUB' &
 import json, sys
 from http.server import BaseHTTPRequestHandler, HTTPServer
 LOG = sys.argv[3]
+# ⚠ THE MANIFEST IS PART OF THE FIXTURE NOW, because `spawn` is an APPROVAL:
+# the renderer reads the project, takes the rev the proposal is at, and posts
+# {approve:true, manifestRev}. A fixture with no manifest could only test the
+# refusal path.
 P1 = {"id": "aaaaaaaa-0000-4000-8000-00000000aaaa", "name": "LoRa sensor stick",
       "cwd": "/root/netplan/dev-ledger/lora-stick", "createdAt": 1789459900,
+      "status": "proposed",
+      "manifest": {"rev": 2, "spawnedRev": 0, "summary": "docs and repo",
+                   "sessions": [{"role": "docs", "firstPrompt": "write the README"},
+                                {"role": "repo", "firstPrompt": "tidy the tree"}]},
       "lead": {"name": "lora-stick/lead", "state": "busy"},
       "members": [{"name": "lora-stick/docs", "role": "docs", "state": "idle"},
                   {"name": "lora-stick/repo", "role": "repo", "state": "attention",
                    "needsYou": True}]}
+# Not proposed: the project somebody types `spawn` at before the lead has
+# written a plan, which is the commonest way that verb is reached too early.
 P2 = {"id": "bbbbbbbb-0000-4000-8000-00000000bbbb", "name": "status page",
       "cwd": "/root/netplan/status-page", "createdAt": 1789000000, "endedAt": 1789400000,
+      "status": "drafting", "manifest": {"rev": 0, "sessions": []},
       "lead": {"name": "status-page/lead"}, "members": []}
+# The one whose spawn refuses HUNDREDS of members — see the flood assertion.
+P3 = {"id": "cccccccc-0000-4000-8000-00000000cccc", "name": "flood cluster",
+      "cwd": "/root/netplan", "createdAt": 1789459000, "status": "proposed",
+      "manifest": {"rev": 1, "spawnedRev": 0, "summary": "many",
+                   "sessions": [{"role": "flood", "firstPrompt": "x"}]},
+      "lead": {"name": "flood-cluster/lead"}, "members": []}
+BY_ID = {P1["id"]: P1, P2["id"]: P2, P3["id"]: P3}
 DASH = {"project": P1, "updatedAt": 1789460500,
         "members": [{"name": "lora-stick/lead", "role": "lead", "state": "busy", "turns": 12},
                     {"name": "lora-stick/docs", "role": "docs", "state": "idle", "turns": 3},
                     {"name": "lora-stick/repo", "role": "repo", "state": "attention",
                      "needsYou": True, "turns": 7}]}
 class H(BaseHTTPRequestHandler):
-    def _log(self):
+    def _log(self, body=b""):
+        # The BODY is logged too: what the client SENDS is the whole of H1/H2,
+        # and a request log that only carried the path could not tell a spawn
+        # that approves from one that posts a member list.
         with open(LOG, "a") as fh:
-            fh.write("%s %s\n" % (self.command, self.path))
+            fh.write("%s %s %s\n" % (self.command, self.path, body.decode("utf-8", "replace")))
     def _send(self, code, obj):
         b = json.dumps(obj).encode()
         self.send_response(code); self.send_header("content-type", "application/json")
@@ -1428,16 +1460,22 @@ class H(BaseHTTPRequestHandler):
     def do_GET(self):
         self._log()
         if self.path == "/v1/projects":
-            self._send(200, {"projects": [P1, P2]})
+            self._send(200, {"projects": [P1, P2, P3]})
         elif self.path.endswith("/dashboard"):
             self._send(200, DASH)
+        elif self.path.startswith("/v1/projects/"):
+            # The detail route is an ENVELOPE — {project, row, live} — and the
+            # record inside it is what carries the manifest.
+            rec = BY_ID.get(self.path.rsplit("/", 1)[-1])
+            self._send(200, {"project": rec, "row": rec, "live": []}) if rec \
+                else self._send(404, {"error": "no such project"})
         else:
             self._send(404, {"error": "no"})
     def do_POST(self):
-        self._log()
         n = int(self.headers.get("content-length") or 0)
         sent = self.rfile.read(n) if n else b""
-        if self.path.endswith("/spawn") and b"flood" in sent:
+        self._log(sent)
+        if self.path.startswith("/v1/projects/" + P3["id"]) and self.path.endswith("/spawn"):
             # A spawn that refused HUNDREDS of members: >64 KB of rendered output
             # on a code path that ends in a non-zero exit. See the assertion.
             self._send(200, {"ok": False, "spawned": [],
@@ -1460,7 +1498,11 @@ class H(BaseHTTPRequestHandler):
             self._send(201, P1)
     def do_DELETE(self):
         self._log()
-        self._send(200, {"ok": True, "ended": ["lora-stick-docs"]})
+        # `refused` is what the daemon added for a member whose dialog was in
+        # the way: it is still running, with no project behind it.
+        self._send(200, {"ok": True, "mode": "graceful", "ended": ["lora-stick-lead", "lora-stick-docs"],
+                         "refused": [{"name": "lora-stick-repo", "claudeName": "lora-stick/repo",
+                                      "why": "it is sitting on a permission dialog"}]})
     def log_message(self, *a): pass
 srv = HTTPServer(("127.0.0.1", int(sys.argv[2])), H)
 with open(sys.argv[1], "w") as fh: fh.write(str(srv.server_port))
@@ -1537,26 +1579,67 @@ else
   PJ_MISS2=$(HUGINN_APPD_URL="http://127.0.0.1:$PJ_PORT" server/bin/huginn-projects show nosuchproject 2>&1)
   grep -q "no project" <<<"$PJ_MISS2" \
     && ok "show of an unknown project says so instead of 404-ing" || bad "show unknown: $PJ_MISS2"
-  # ⚠ A MALFORMED member:role MUST NOT BECOME A REQUEST. `spawn` starts real
-  # Claude sessions; a half-parsed pair ("docs" with no role, a role with a
-  # slash in it) that reaches the daemon either spawns the wrong thing or leaves
-  # a project half-born, and the caller cannot tell which. Refused in the
-  # renderer, before anything is sent -- asserted by the request log staying
-  # empty, not just by the exit code.
+  # ⚠⚠ WHAT `new` SENDS IS THE WHOLE VERB. The daemon requires `kind` (one of
+  # projectsLib.KINDS) and a non-empty `brief`, and this renderer sent NEITHER —
+  # so every create from a terminal came back "kind is one of software, infra,
+  # …" and the only way to make a project was a phone or a desktop, while the
+  # gate stayed green because nothing here ever created one.
   : > "$PJ_REQ"
-  PJ_BAD=$(HUGINN_APPD_URL="http://127.0.0.1:$PJ_PORT" \
-           server/bin/huginn-projects spawn "LoRa sensor stick" 'docs' --prompt 'x' 2>&1); PJ_RC=$?
-  PJ_BAD2=$(HUGINN_APPD_URL="http://127.0.0.1:$PJ_PORT" \
-            server/bin/huginn-projects spawn "LoRa sensor stick" 'docs:a;rm -rf /' --prompt 'x' 2>&1)
-  [ "$PJ_RC" != 0 ] && grep -q "member:role" <<<"$PJ_BAD" && ! grep -q "POST" "$PJ_REQ" \
-    && ok "spawn refuses a malformed member:role and sends nothing at all" \
-    || bad "spawn accepted a malformed pair (exit $PJ_RC): $PJ_BAD / $PJ_BAD2 / $(cat "$PJ_REQ")"
+  PJ_NEW=$(HUGINN_APPD_URL="http://127.0.0.1:$PJ_PORT" \
+           server/bin/huginn-projects new "Gate cluster" --brief 'size the gate work' 2>&1); PJ_RC=$?
+  PJ_NEW_BODY=$(grep -F 'POST /v1/projects ' "$PJ_REQ" | head -1)
+  [ "$PJ_RC" = 0 ] && grep -q '"kind":"other"' <<<"$PJ_NEW_BODY" \
+    && grep -q '"brief":"size the gate work"' <<<"$PJ_NEW_BODY" \
+    && ok "new sends the kind (default other) and the brief the daemon requires" \
+    || bad "new sent: ${PJ_NEW_BODY:-nothing} (exit $PJ_RC) / printed: $PJ_NEW"
+  : > "$PJ_REQ"
+  PJ_KIND=$(HUGINN_APPD_URL="http://127.0.0.1:$PJ_PORT" \
+            server/bin/huginn-projects new "Gate cluster" --kind hardware --brief - <<<'from stdin' 2>&1)
+  grep -q '"kind":"hardware"' "$PJ_REQ" && grep -q 'from stdin' "$PJ_REQ" \
+    && ok "--kind travels, and --brief - reads the brief from stdin" \
+    || bad "new --kind/--brief - sent: $(cat "$PJ_REQ") / printed: $PJ_KIND"
+  # ⚠ AND A BRIEF IS NOT OPTIONAL, because it is the whole first message the
+  # lead gets. Refused HERE so the message can name the flag that answers it —
+  # and nothing may reach the wire.
+  : > "$PJ_REQ"
+  PJ_NOBRIEF=$(HUGINN_APPD_URL="http://127.0.0.1:$PJ_PORT" \
+               server/bin/huginn-projects new "No brief" 2>&1); PJ_RC=$?
+  [ "$PJ_RC" != 0 ] && grep -q -- "--brief" <<<"$PJ_NOBRIEF" && ! grep -q "POST" "$PJ_REQ" \
+    && ok "new without a brief is refused before anything is sent" \
+    || bad "new with no brief exited $PJ_RC: $PJ_NOBRIEF / sent: $(cat "$PJ_REQ")"
+  # ⚠⚠ AND SPAWN IS AN APPROVAL. The daemon reads `{approve:true, manifestRev}`
+  # and NOTHING else — the members are the lead's plan, at the rev the owner
+  # saw. This renderer used to post `{members}` with no approval, so the verb
+  # answered "approve must be true — spawning is the owner's decision" 100% of
+  # the time; the old gate asserted the member:role GRAMMAR and never the body.
+  : > "$PJ_REQ"
   PJ_SPAWN=$(HUGINN_APPD_URL="http://127.0.0.1:$PJ_PORT" \
-             server/bin/huginn-projects spawn "LoRa sensor stick" docs:docs repo:repo \
-             --prompt 'write the README' 2>&1); PJ_RC=$?
-  grep -q "docs" <<<"$PJ_SPAWN" && grep -q "POST /v1/projects/aaaaaaaa-0000-4000-8000-00000000aaaa/spawn" "$PJ_REQ" \
-    && ok "a well-formed spawn reaches the resolved project's spawn route" \
-    || bad "spawn sent: $(cat "$PJ_REQ") / printed: $PJ_SPAWN"
+             server/bin/huginn-projects spawn "LoRa sensor stick" 2>&1); PJ_RC=$?
+  PJ_SPAWN_BODY=$(grep -F "POST /v1/projects/aaaaaaaa-0000-4000-8000-00000000aaaa/spawn" "$PJ_REQ" | head -1)
+  grep -q '"approve":true' <<<"$PJ_SPAWN_BODY" && grep -q '"manifestRev":2' <<<"$PJ_SPAWN_BODY" \
+    && ok "spawn approves the proposal at the rev the project is actually on" \
+    || bad "spawn sent: ${PJ_SPAWN_BODY:-nothing} / printed: $PJ_SPAWN"
+  grep -q '"members"' <<<"$PJ_SPAWN_BODY" \
+    && bad "spawn still sends a member list the daemon does not read" \
+    || ok "and it sends no member list of its own"
+  # A member list typed at it is refused in the renderer's own words, because
+  # it was documented for two releases and it is what a finger types.
+  : > "$PJ_REQ"
+  PJ_PAIR=$(HUGINN_APPD_URL="http://127.0.0.1:$PJ_PORT" \
+            server/bin/huginn-projects spawn "LoRa sensor stick" docs:docs --prompt 'x' 2>&1); PJ_RC=$?
+  [ "$PJ_RC" != 0 ] && grep -qi "no members" <<<"$PJ_PAIR" && ! grep -q "POST" "$PJ_REQ" \
+    && ok "the old member:role spelling is refused, and sends nothing at all" \
+    || bad "spawn with a pair exited $PJ_RC: $PJ_PAIR / sent: $(cat "$PJ_REQ")"
+  # ⚠ AND A PROJECT WITH NO PROPOSAL IS NOT A SPAWN. "this project is drafting,
+  # not proposed" is true and has no next step in it; the next step is the lead.
+  : > "$PJ_REQ"
+  PJ_NOTPROP=$(HUGINN_APPD_URL="http://127.0.0.1:$PJ_PORT" \
+               server/bin/huginn-projects spawn "status page" 2>&1); PJ_RC=$?
+  [ "$PJ_RC" != 0 ] && grep -q "no proposal to approve" <<<"$PJ_NOTPROP" && ! grep -q "POST" "$PJ_REQ" \
+    && ok "spawning a project the lead has not proposed yet says so, and posts nothing" \
+    || bad "spawn of a drafting project exited $PJ_RC: $PJ_NOTPROP / sent: $(cat "$PJ_REQ")"
+  PJ_SPAWN=$(HUGINN_APPD_URL="http://127.0.0.1:$PJ_PORT" \
+             server/bin/huginn-projects spawn "LoRa sensor stick" 2>&1); PJ_RC=$?
   # ⚠ HTTP 200 IS NOT "IT WORKED". The daemon reports a member that could not
   # start inside a 200 body; a renderer that passed that through as success
   # hands a script a half-born cluster and tells it the cluster is up.
@@ -1571,10 +1654,44 @@ else
   # with >64 KB (a spawn that refused 800 members) through a pipe and asserts the
   # LAST line survived. Only the tail is kept, so a failure does not dump 90 KB.
   PJ_FLOOD=$(HUGINN_APPD_URL="http://127.0.0.1:$PJ_PORT" \
-             server/bin/huginn-projects spawn "LoRa sensor stick" flood:flood 2>&1 | cat | tail -3)
+             server/bin/huginn-projects spawn "flood cluster" 2>&1 | cat | tail -3)
   grep -q "THE-LAST-LINE" <<<"$PJ_FLOOD" \
     && ok "a long reply on the non-zero-exit path survives the pipe" \
     || bad "output was truncated by the exit; tail was: $PJ_FLOOD"
+  # ⚠⚠ A REMEDY THAT CANNOT BE RUN IS WORSE THAN NONE. `end` used to delete the
+  # record and print "end them with: huginn projects end <name> --now" — and
+  # `resolve()` reads the LIST, which no longer holds the project it has just
+  # deleted, so that command answered "no project called …" every single time,
+  # for the name AND for the id. Meanwhile the lead, a real claude, was left
+  # running with no project behind it. The default now winds the sessions down
+  # through the daemon's own `?end=1`, and anything still running is named with
+  # a command that resolves: a tmux name.
+  : > "$PJ_REQ"
+  PJ_END=$(HUGINN_APPD_URL="http://127.0.0.1:$PJ_PORT" \
+           server/bin/huginn-projects end "LoRa sensor stick" 2>&1); PJ_RC=$?
+  grep -q "DELETE /v1/projects/aaaaaaaa-0000-4000-8000-00000000aaaa?end=1" "$PJ_REQ" \
+    && ok "end winds the sessions down by default (the daemon's ?end=1)" \
+    || bad "end sent: $(cat "$PJ_REQ")"
+  grep -q "huginn projects end" <<<"$PJ_END" \
+    && bad "end still prints a remedy that cannot resolve the project it deleted" \
+    || ok "and it no longer names a command that cannot resolve"
+  grep -q "lora-stick-repo" <<<"$PJ_END" && grep -q "permission dialog" <<<"$PJ_END" \
+    && grep -q "huginn kill lora-stick-repo" <<<"$PJ_END" && [ "$PJ_RC" != 0 ] \
+    && ok "a member that could not be wound down is named, with a command that works, and exits non-zero" \
+    || bad "end (exit $PJ_RC) printed: $PJ_END"
+  : > "$PJ_REQ"
+  PJ_ENDNOW=$(HUGINN_APPD_URL="http://127.0.0.1:$PJ_PORT" \
+              server/bin/huginn-projects end "LoRa sensor stick" --now 2>&1)
+  grep -q "?end=now" "$PJ_REQ" \
+    && ok "--now asks for the outright end, not the graceful one it used to send" \
+    || bad "end --now sent: $(cat "$PJ_REQ") / printed: $PJ_ENDNOW"
+  : > "$PJ_REQ"
+  PJ_KEEP=$(HUGINN_APPD_URL="http://127.0.0.1:$PJ_PORT" \
+            server/bin/huginn-projects end "LoRa sensor stick" --keep-sessions 2>&1)
+  grep -qE "DELETE /v1/projects/[0-9a-f-]+ " "$PJ_REQ" && ! grep -q "end=" "$PJ_REQ" \
+    && grep -q "lora-stick-lead" <<<"$PJ_KEEP" \
+    && ok "--keep-sessions ends nothing and NAMES the sessions it left running" \
+    || bad "end --keep-sessions sent: $(cat "$PJ_REQ") / printed: $PJ_KEEP"
 fi
 # ⚠ AN OLDER DAEMON IS NOT A BROKEN ONE. /v1/projects does not exist before the
 # Wave 3 appd, and "404" on its own sends somebody looking for a bug in the
@@ -1610,6 +1727,165 @@ else
 fi
 kill "$PJ_STUB" "$PJ_404_STUB" "$PJ_JUNK_STUB" 2>/dev/null
 rm -f "$PJ_REQ"
+
+echo "[projects-live/8] create a project, approve a spawn, and end it — against a REAL daemon"
+# ⚠⚠ WHY A REAL DAEMON AND NOT ANOTHER STUB. The two HIGHs of the 2026-09-19
+# review were both "the renderer sends a body the daemon does not accept":
+# `new` sent neither `kind` nor `brief` and `spawn` sent neither `approve` nor
+# `manifestRev`, so BOTH verbs failed 100% of the time — and every check above
+# stayed green, because a stub answers whatever it is written to answer. A stub
+# can only ever assert what this file already believes. So the write half of the
+# grammar is driven end to end against `server/appd/huginn-appd.js` out of THIS
+# TREE, which is the only thing that knows what the routes really require.
+#
+# ⚠ AND THE DAEMON IS BARE. Its own scratch HOME, DATA, STATE_DIR and CLAUDE_DIR
+# (so there is no .credentials.json to read and no account to poll), no telegram
+# script, an FCM key that does not exist, and a PRIVATE tmux socket — never the
+# operator's. `claude` is shadowed by a stand-in, exactly like the appd suite's
+# own project tests, so nothing spawned here costs a token or touches the real
+# ~/.claude. It is killed in the EXIT trap with every other stub.
+PJL=$(mktemp -d); STUB_DIRS+=("$PJL")
+PJL_SOCK="huginn-cligate-$$"
+STUB_TMUX+=("$PJL_SOCK")
+if ! command -v tmux >/dev/null 2>&1 || [ ! -f server/appd/huginn-appd.js ]; then
+  skip "projects lifecycle (no tmux, or no daemon in this tree)"
+elif [ ! -r /etc/huginn-appd/token ]; then
+  # `huginn-projects` reads /etc/huginn-appd/token with no override (by design:
+  # the renderer runs ON the host, which is where the token lives), so a private
+  # daemon has to be given the SAME token to be talked to at all. Unreadable
+  # here means this check cannot run — loudly, never silently.
+  skip "projects lifecycle (no readable /etc/huginn-appd/token to match)"
+else
+  mkdir -p "$PJL/data" "$PJL/state" "$PJL/home" "$PJL/claude" "$PJL/work" "$PJL/bin"
+  cp /etc/huginn-appd/token "$PJL/token"; chmod 600 "$PJL/token"
+  # The stand-in for `claude`. The launcher runs `claude --name … ; exec "$SHELL" -l`,
+  # so a stand-in earlier on the daemon's PATH is the only way to intercept it.
+  # It answers --version (so nothing that probes the binary hangs) and otherwise
+  # just holds the pane open.
+  cat > "$PJL/bin/claude" <<'FAKECLAUDE'
+#!/usr/bin/env bash
+case " $* " in *" --version "*) echo "0.0.0-gate (stand-in)"; exit 0 ;; esac
+exec sleep 600
+FAKECLAUDE
+  chmod +x "$PJL/bin/claude"
+  # The kernel picks the port, the same rule every stub here follows — except
+  # that appd takes a number rather than binding 0, so it is probed and handed
+  # over. A daemon that then fails to bind simply never answers /v1/ping and the
+  # lane SKIPS instead of asserting against somebody else's listener.
+  PJL_PORT=$(python3 -c 'import socket;s=socket.socket();s.bind(("127.0.0.1",0));print(s.getsockname()[1]);s.close()')
+  # ⚠ NOT `env -i`. A tmux with NO ENVIRONMENT sanitises its own format output:
+  # `list-sessions -F '#{session_name}\t…'` comes back with every TAB rewritten
+  # as `_`, so the daemon parses one field, decides every session name is
+  # unaddressable, and then `sessionExists()` is false for sessions that plainly
+  # exist — a project whose end ends nothing, with nothing in the log that says
+  # why. The environment is inherited and overridden instead, exactly as the
+  # daemon's own test suite does it: what makes this daemon BARE is HOME,
+  # CLAUDE_DIR, DATA and STATE_DIR pointing at scratch, not an empty environ.
+  env PATH="$PJL/bin:$PATH" \
+      HOME="$PJL/home" \
+      HUGINN_APPD_PORT="$PJL_PORT" \
+      HUGINN_APPD_BIND=127.0.0.1 \
+      HUGINN_APPD_DATA="$PJL/data" \
+      HUGINN_APPD_TOKEN_FILE="$PJL/token" \
+      HUGINN_APPD_STATE_DIR="$PJL/state" \
+      HUGINN_APPD_CLAUDE_DIR="$PJL/claude" \
+      HUGINN_APPD_TMUX_SOCKET="$PJL_SOCK" \
+      HUGINN_APPD_WORKDIR="$PJL/work" \
+      HUGINN_APPD_TELEGRAM_SCRIPT= \
+      HUGINN_FCM_KEY="$PJL/nonexistent-fcm.json" \
+      node server/appd/huginn-appd.js > "$PJL/daemon.log" 2>&1 &
+  PJL_PID=$!; STUB_PIDS+=("$PJL_PID")
+  PJL_URL="http://127.0.0.1:$PJL_PORT"
+  PJL_UP=
+  # ⚠ PROBED THROUGH THE RENDERER, not with a bare curl: this daemon wants the
+  # bearer on every route including /v1/ping, and a curl carrying it would put
+  # the token on a command line every user on the box can read in /proc. The
+  # renderer reads the file itself, and a `list` that returns 0 also proves the
+  # exact path the rest of this lane uses.
+  for _ in $(seq 1 100); do
+    HUGINN_APPD_URL="$PJL_URL" server/bin/huginn-projects list >/dev/null 2>&1 && { PJL_UP=1; break; }
+    kill -0 "$PJL_PID" 2>/dev/null || break
+    sleep 0.2
+  done
+  if [ -z "$PJL_UP" ]; then
+    skip "projects lifecycle (the daemon did not come up: $(tail -2 "$PJL/daemon.log" | tr '\n' ' '))"
+  else
+    pj () { HUGINN_APPD_URL="$PJL_URL" server/bin/huginn-projects "$@" 2>&1; }
+    PJL_NAME="Gate cluster $$"
+    # ⚠ NO --cwd: the daemon auto-trusts its own WORKDIR, and every other
+    # directory has to have been trusted in Claude Code first (the folder-trust
+    # dialog blocks session registration entirely). Pointing this at a real
+    # project directory would make the check depend on the operator's
+    # ~/.claude.json.
+    PJL_NEW=$(pj new "$PJL_NAME" --kind software --brief 'the gate made this; it will be ended in a moment'); PJL_RC=$?
+    if [ "$PJL_RC" != 0 ]; then
+      bad "creating a project against the real daemon failed (exit $PJL_RC): $PJL_NEW"
+    else
+      ok "new creates a project against the real daemon (kind + brief are accepted)"
+    fi
+    grep -q "its lead session is" <<<"$PJL_NEW" \
+      && ok "and it names the lead session it launched" || bad "new printed: $PJL_NEW"
+    tmux -L "$PJL_SOCK" ls -F '#S' 2>/dev/null | grep -q -- "-lead$" \
+      && ok "the lead is a real tmux session on the private socket" \
+      || bad "no lead session: $(tmux -L "$PJL_SOCK" ls 2>&1 | tr '\n' ' ')"
+    # THE PROPOSAL, staged through the daemon's OWN editor route — the same
+    # PATCH the desktop's manifest editor uses, re-validated by the same parser
+    # the lead's block goes through. That is the setup; the thing under test is
+    # the approval below.
+    PJL_REV=$(HUGINN_TOKEN="$(cat "$PJL/token")" PJL_URL="$PJL_URL" python3 - "$PJL_NAME" <<'PROPOSE'
+import json, os, sys, urllib.request
+base, tok, want = os.environ["PJL_URL"], os.environ["HUGINN_TOKEN"], sys.argv[1]
+def call(path, method="GET", body=None):
+    req = urllib.request.Request(base + path, method=method,
+                                 data=None if body is None else json.dumps(body).encode(),
+                                 headers={"Authorization": "Bearer " + tok, "Content-Type": "application/json"})
+    with urllib.request.urlopen(req, timeout=15) as r:
+        return json.loads(r.read() or b"{}")
+rows = call("/v1/projects")["projects"]
+pid = [r for r in rows if r["name"] == want][0]["id"]
+rec = call("/v1/projects/" + pid)["project"]
+saved = call("/v1/projects/" + pid, "PATCH", {"rev": rec["rev"], "manifest": {
+    "type": "software", "scope": "the gate", "summary": "one session: docs",
+    "sessions": [{"role": "docs", "firstPrompt": "write one line and stop", "cwd": None}]}})
+print("%s %s" % (pid, saved["manifest"]["rev"]))
+PROPOSE
+)
+    PJL_ID=${PJL_REV%% *}; PJL_MREV=${PJL_REV##* }
+    if [ -z "$PJL_ID" ] || [ "$PJL_ID" = "$PJL_REV" ]; then
+      bad "could not stage a proposal on the real daemon: $PJL_REV"
+    else
+      ok "a proposal is on offer (manifest rev $PJL_MREV)"
+      # ⚠⚠ THE CHECK H1/H2 EXISTED TO CATCH. This is the verb failing in the
+      # field: the daemon requires {approve:true, manifestRev} and the renderer
+      # sent {members}, so every spawn from a terminal answered "approve must be
+      # true — spawning is the owner's decision".
+      PJL_SPAWN=$(pj spawn "$PJL_NAME"); PJL_RC=$?
+      [ "$PJL_RC" = 0 ] && grep -q "spawned in" <<<"$PJL_SPAWN" && grep -q "docs" <<<"$PJL_SPAWN" \
+        && ok "spawn approves the proposal and the daemon creates the member" \
+        || bad "spawn against the real daemon exited $PJL_RC: $PJL_SPAWN"
+      tmux -L "$PJL_SOCK" ls -F '#S' 2>/dev/null | grep -q -- "-docs$" \
+        && ok "and the member is a real tmux session too" \
+        || bad "no member session: $(tmux -L "$PJL_SOCK" ls 2>&1 | tr '\n' ' ')"
+    fi
+    # ⚠ AND IT ENDS WHAT IT MADE. `--now` is the outright end; the record goes
+    # and so do the sessions, which is exactly what the old default did NOT do.
+    PJL_END=$(pj end "$PJL_NAME" --now); PJL_RC=$?
+    [ "$PJL_RC" = 0 ] && grep -q "its sessions were ended" <<<"$PJL_END" \
+      && ok "end --now takes the record AND the sessions with it" \
+      || bad "end --now against the real daemon exited $PJL_RC: $PJL_END"
+    PJL_LEFT=$(tmux -L "$PJL_SOCK" ls -F '#S' 2>/dev/null | tr '\n' ' ')
+    [ -z "$PJL_LEFT" ] && ok "nothing of the cluster is left running" \
+      || bad "these sessions outlived the project: $PJL_LEFT"
+    # The bare-daemon claim, asserted rather than assumed: a gate that quietly
+    # read the operator's credentials or spent quota would be a gate nobody
+    # should run.
+    grep -qiE "oauth|credential|ccusage|anthropic\.com" "$PJL/daemon.log" \
+      && bad "the gate's daemon touched credentials or usage: $(grep -iE 'oauth|credential|ccusage|anthropic\.com' "$PJL/daemon.log" | head -2)" \
+      || ok "the gate's daemon stayed bare (no credential, account or usage work in its log)"
+  fi
+  kill "$PJL_PID" 2>/dev/null
+  tmux -L "$PJL_SOCK" kill-server 2>/dev/null
+fi
 
 echo "[uninstall/8] the server first, and only huginn's own files"
 # WHY: `huginn uninstall` is the one verb that deletes a person's files, and the
