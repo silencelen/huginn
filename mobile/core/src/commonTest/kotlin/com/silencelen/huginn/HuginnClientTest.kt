@@ -969,6 +969,55 @@ class HuginnClientTest {
                 .dropMember("p1", "firmware")
         }
     }
+
+    // ------------------------------- the two other membership answers
+
+    /**
+     * ⚠⚠ A GRACEFUL DELETE CAN LEAVE SESSIONS RUNNING WITH NO PROJECT. A member
+     * sitting on a permission or folder-trust dialog cannot be typed at — the
+     * daemon refuses rather than pasting the wrap-up phrase at a selector that
+     * swallows it — and the record is deleted either way. The names come back in
+     * `refused`, always present on a current daemon.
+     */
+    @Test
+    fun `a delete reports what it could not wind down`() = runTest {
+        val body = """{"ok":true,"ended":["lora-pcb"],"mode":"graceful","refused":""" +
+            """[{"name":"lora-firmware","claudeName":"lora/firmware","why":"a dialog is open on the screen"}]}"""
+        val done = client { respond(body, HttpStatusCode.OK) }.deleteProject("p1", "graceful")
+        assertEquals(listOf("lora-pcb"), done.ended)
+        assertEquals(1, done.refused.size)
+        assertEquals("lora-firmware", done.refused.first().name)
+        assertEquals("a dialog is open on the screen", done.refused.first().why)
+    }
+
+    /** An older daemon omits the key, which reads the same as "nothing refused". */
+    @Test
+    fun `a daemon without the key reports nothing refused`() = runTest {
+        val done = client { respond("""{"ok":true,"ended":[],"mode":"none"}""", HttpStatusCode.OK) }
+            .deleteProject("p1")
+        assertEquals(emptyList(), done.refused)
+    }
+
+    /**
+     * ⚠⚠ RENAMING A PROJECT MEMBER ORPHANS IT FROM ITS CLUSTER. The record stores
+     * members by tmux name and the peer registry is joined back through it, so
+     * the daemon refuses with a 409 that NAMES the project and says to drop the
+     * member first. That sentence is the instruction, so it must arrive whole.
+     */
+    @Test
+    fun `renaming a project member refuses with the daemon's own instruction`() = runTest {
+        val why = "'lora-firmware' is the firmware session of the project \\\"LoRa node\\\" — " +
+            "its name is what the project and the peer registry know it by. Drop it from the " +
+            "project first (DELETE /v1/projects/<id>/members/<role>), then rename it"
+        val thrown = assertFailsWith<HuginnClient.HuginnException> {
+            client { respondError(HttpStatusCode.Conflict, """{"error":"$why"}""") }
+                .renameSession("lora-firmware", "firmware-old")
+        }
+        assertEquals(409, thrown.code)
+        // Verbatim: a summary of ours would lose the half that says what to do.
+        assertEquals(why.replace("\\\"", "\""), thrown.message)
+        assertTrue(thrown.message!!.contains("Drop it from the project first"), thrown.message!!)
+    }
 }
 
 /**
