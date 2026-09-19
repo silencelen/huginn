@@ -539,6 +539,24 @@ data class TranscriptPage(
     val agentId: String? = null,
     /** The workflow run the agent belongs to, when it is a run's member. */
     val workflowId: String? = null,
+    /**
+     * This page came from an ARCHIVE's kept copy, not from a live session
+     * (`GET /v1/archive/:id/transcript`).
+     *
+     * ⚠ IT IS NOT A STYLE FLAG. There is no pane behind it, no state to poll and
+     * nothing to send to: a view that offered a composer here would be offering
+     * to type at a session that no longer exists. The daemon says so on every
+     * window rather than leaving it to the caller to remember which route it
+     * asked.
+     */
+    val archived: Boolean = false,
+    /**
+     * The kept copy is a TAIL of an over-cap conversation. Said on every window,
+     * because an archive of a truncated transcript starts mid-conversation and a
+     * reader who scrolled to the top would otherwise conclude that is where it
+     * began.
+     */
+    val transcriptTruncated: Boolean = false,
 )
 
 /** Automatic account rotation state, held by the host. */

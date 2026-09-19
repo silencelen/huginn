@@ -2945,6 +2945,63 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
+    // ------------------------------------------- one archive, read only
+
+    /**
+     * The conversation of ONE archived session, as the read-only view draws it.
+     *
+     * ⚠ A SEPARATE PAGE FROM EVERY OTHER TRANSCRIPT IN THIS CLASS, on purpose.
+     * The live ones are keyed on a tmux NAME, polled, followed, and sent to; this
+     * one is keyed on the Claude session uuid, read once from a copy on disk, and
+     * has nothing behind it to poll or type at.
+     */
+    data class ArchiveRead(
+        val id: String,
+        val title: String?,
+        val page: TranscriptPage? = null,
+        val loading: Boolean = true,
+        /** Why there is nothing to show: the copy is gone, or the read failed. */
+        val note: String? = null,
+    )
+
+    private val _archiveRead = MutableStateFlow<ArchiveRead?>(null)
+    val archiveRead: StateFlow<ArchiveRead?> = _archiveRead.asStateFlow()
+
+    /**
+     * Reads one archive's conversation. Idempotent for the id already shown, so
+     * a recomposition of the destination does not re-fetch.
+     */
+    fun openArchiveTranscript(row: ArchivedSession) {
+        if (_archiveRead.value?.id == row.id && _archiveRead.value?.loading == false) return
+        val label = ArchiveRules.label(row)
+        _archiveRead.value = ArchiveRead(id = row.id, title = label, loading = true)
+        viewModelScope.launch {
+            val outcome = runCatching { client.archiveTranscript(row.id) }
+            val current = _archiveRead.value
+            // The reader may have left while this was in flight; a late answer
+            // must not paint itself over the archive they opened instead.
+            if (current?.id != row.id) return@launch
+            _archiveRead.value = outcome.fold(
+                onSuccess = { page ->
+                    // ⚠ NULL IS THE 404, WHICH IS BOTH "no such archive" AND "this
+                    // daemon has no such route". Either way there is nothing to
+                    // read, and the view says so rather than showing an error.
+                    current.copy(
+                        page = page,
+                        loading = false,
+                        note = if (page == null) ARCHIVE_TRANSCRIPT_GONE else null,
+                    )
+                },
+                // The 409 carries the daemon's own sentence about which copies
+                // went, and it is better than any summary of ours.
+                onFailure = { current.copy(loading = false, note = errText(it)) },
+            )
+        }
+    }
+
+    /** Leaving the view. Keeps nothing: the next open is a fresh read. */
+    fun closeArchiveTranscript() { _archiveRead.value = null }
+
     /** The one place the list and its feature flag are written. */
     private suspend fun landArchives() {
         runCatching { client.archives() }
