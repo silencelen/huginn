@@ -85,6 +85,7 @@ import com.silencelen.huginn.desktop.AppStore
 import com.silencelen.huginn.ui.ArchiveRules
 import com.silencelen.huginn.ui.ArchivedTranscriptView
 import com.silencelen.huginn.ui.ChatListScroll
+import com.silencelen.huginn.ui.ConfirmTitle
 import com.silencelen.huginn.ui.EndVerbs
 import com.silencelen.huginn.desktop.Responsive
 import com.silencelen.huginn.desktop.Splitter
@@ -1612,57 +1613,76 @@ internal fun DialogField(
     )
 }
 
+/**
+ * What a confirm dialog says: a quiet lead, the NAME of the one thing being acted
+ * on (or null when it is several), the explanation and the button.
+ *
+ * ⚠ THE SPLIT IS P-02. A single-line "Kill rv-desktop-1?" puts the verb and the
+ * target in one sentence at one size, which is the shape the eye skims — and the
+ * list re-sorts under the finger, so this dialog is the last thing between a
+ * mis-targeted tap and an ended session. [ConfirmTitle] draws the name as the
+ * largest text on screen; a multi-target dialog has no single name to enlarge and
+ * keeps the plain title.
+ */
+private data class ConfirmWords(val lead: String, val target: String?, val body: String, val verb: String)
+
 @Composable
 private fun ConfirmDialog(target: ConfirmTarget, onDismiss: () -> Unit, onConfirm: () -> Unit) {
-    val (title, body, verb) = when (target) {
+    val words = when (target) {
         is ConfirmTarget.DeleteChats ->
             // The same sentence as ChatTopBar's dialog, deliberately: the audit
             // caught the two confirms CONTRADICTING each other about data loss
             // for one and the same DELETE. This is the true one — huginn's
             // record goes, the Claude session transcript on the host stays.
             if (target.ids.size == 1) {
-                Triple("Delete this chat?", "Removes it from huginn. The underlying transcript file stays on the host.", "Delete")
+                ConfirmWords("Delete this chat?", null, "Removes it from huginn. The underlying transcript file stays on the host.", "Delete")
             } else {
-                Triple(
+                ConfirmWords(
                     "Delete ${target.ids.size} chats?",
+                    null,
                     "Removes them from huginn. The underlying transcript files stay on the host.",
                     "Delete ${target.ids.size}",
                 )
             }
         is ConfirmTarget.KillSessions ->
             if (target.names.size == 1) {
-                Triple(
-                    "Kill ${target.names.first()}?",
+                ConfirmWords(
+                    EndVerbs.HARD,
+                    target.names.first(),
                     "The tmux session and anything running inside it stop.",
                     EndVerbs.hard(1),
                 )
             } else {
-                Triple(
+                ConfirmWords(
                     "Kill ${target.names.size} sessions?",
+                    null,
                     "Each tmux session and anything running inside it stops.",
                     "Kill ${target.names.size}",
                 )
             }
         is ConfirmTarget.ArchiveSessions ->
             if (target.names.size == 1) {
-                Triple(
-                    "Archive ${target.names.first()}?",
+                ConfirmWords(
+                    "Archive",
+                    target.names.first(),
                     "Claude is asked to wrap up, and the session ends once it settles. It moves " +
                         "to Archived with the directory it ran in, a copy of the conversation and " +
                         "the exact resume command, so you can bring it back.",
                     "Archive",
                 )
             } else {
-                Triple(
+                ConfirmWords(
                     "Archive ${target.names.size} sessions?",
+                    null,
                     "Each is asked to wrap up and ends once it settles, keeping its directory, a " +
                         "copy of its conversation and the command that brings it back.",
                     "Archive ${target.names.size}",
                 )
             }
         is ConfirmTarget.ForgetArchive ->
-            Triple(
-                "Forget ${ArchiveRules.label(target.row)}?",
+            ConfirmWords(
+                "Forget",
+                ArchiveRules.label(target.row),
                 // Named for what is actually lost. "Delete" against a row that
                 // looks like a list entry reads as tidying; the kept copy of the
                 // conversation going with it is the part worth a sentence.
@@ -1671,16 +1691,18 @@ private fun ConfirmDialog(target: ConfirmTarget, onDismiss: () -> Unit, onConfir
             )
         is ConfirmTarget.SoftEndSessions ->
             if (target.names.size == 1) {
-                Triple(
-                    "${EndVerbs.SOFT} ${target.names.first()}?",
+                ConfirmWords(
+                    EndVerbs.SOFT,
+                    target.names.first(),
                     "Sends Claude the wrap-up instruction (finish, commit, prepare to end). " +
                         "If auto-end is on for the host, the session ends on its own once it settles; " +
                         "a wrap-up question keeps it open.",
                     "Send wrap-up",
                 )
             } else {
-                Triple(
+                ConfirmWords(
                     "${EndVerbs.SOFT} ${target.names.size} sessions?",
+                    null,
                     "Each gets the wrap-up instruction and, with auto-end on, ends once it settles.",
                     "Send wrap-up",
                 )
@@ -1693,10 +1715,16 @@ private fun ConfirmDialog(target: ConfirmTarget, onDismiss: () -> Unit, onConfir
     val destructive = target !is ConfirmTarget.SoftEndSessions && target !is ConfirmTarget.ArchiveSessions
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text(title, style = MaterialTheme.typography.titleSmall) },
+        title = {
+            // ⚠ P-02: the NAME is the headline when there is one name. See
+            // `ConfirmTitle` and `ConfirmTitleTest`.
+            val one = words.target
+            if (one != null) ConfirmTitle(words.lead, one)
+            else Text(words.lead, style = MaterialTheme.typography.titleSmall)
+        },
         text = {
             Text(
-                body,
+                words.body,
                 style = DeskType.rowMeta,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
@@ -1704,7 +1732,7 @@ private fun ConfirmDialog(target: ConfirmTarget, onDismiss: () -> Unit, onConfir
         confirmButton = {
             TextButton(onClick = onConfirm) {
                 Text(
-                    verb,
+                    words.verb,
                     color = if (destructive) MaterialTheme.colorScheme.error
                     else MaterialTheme.colorScheme.primary,
                 )
