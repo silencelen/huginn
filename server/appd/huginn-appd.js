@@ -12014,7 +12014,12 @@ const server = http.createServer(async (req, res) => {
       if (iconMatch && req.method === 'GET') {
         const found = apps.icon(iconMatch[1]);
         if (!found.ok) return sendErr(res, 404, 'no icon for that app');
-        const etag = filesLib.etagFor(found.size, found.mtimeMs);
+        // ⚠ KEYED ON `iconAt`, NOT ON THE FILE'S mtime. The hourly refresh
+        // rewrites the cache whether or not the bytes differ, so an mtime ETag
+        // invalidated every client's copy of every icon every hour. `iconAt`
+        // moves only when the picture does (lib/apps.js refreshIcon); the mtime
+        // is the fallback for a cache written before this field existed.
+        const etag = filesLib.etagFor(found.size, found.iconAt ? found.iconAt * 1000 : found.mtimeMs);
         // Private and short, like /v1/files/image: the token is the only thing
         // in front of this, and the list is polled while the view is open.
         const cacheHeaders = {
