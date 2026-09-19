@@ -64,6 +64,15 @@ class TranscriptToolbarGateTest {
                 "$name provides the gate INSIDE the SelectionContainer, where it reaches nothing",
                 provider in 1 until container,
             )
+            // And the PROVIDE itself, not just where the gate is remembered: the
+            // value is hoisted into a `val` now (the bar's X calls `cancelled()`
+            // on it — P-06), so the two are separate lines and both have to be
+            // outside.
+            val provides = text.indexOf("LocalTextToolbar provides textToolbarGate")
+            assertTrue(
+                "$name no longer provides the gate around the container",
+                provides in 1 until container,
+            )
         }
     }
 
@@ -74,6 +83,47 @@ class TranscriptToolbarGateTest {
         for (name in transcriptScreens) {
             val calls = Regex("""rememberGatedTextToolbar\s*\(""").findAll(source(name)).count()
             assertTrue("$name provides the gate $calls times; the transcript is the only place for it", calls == 1)
+        }
+    }
+
+    /**
+     * ⚠⚠ P-06. THE X MUST CANCEL EVERYTHING THE PRESS STARTED. It took the app's
+     * bar down and left the word highlighted, both amber handles on screen and
+     * Android's own Copy / Select all popup floating over the conversation; only
+     * tapping empty space cleared it. Two halves: `cancelled()` takes down the
+     * popup, and re-keying the `SelectionContainer` is the only way a caller can
+     * drop a selection Compose keeps in an internal manager.
+     */
+    @Test
+    fun `the bar's X takes down the popup and drops the selection`() {
+        for (name in transcriptScreens) {
+            val text = source(name)
+            assertTrue("$name never dismisses the platform popup", text.contains("textToolbarGate.cancelled()"))
+            assertTrue("$name never drops the platform selection", text.contains("selectionReset.bump()"))
+            assertTrue(
+                "$name does not re-key its SelectionContainer, so the bump reaches nothing",
+                text.contains("key(selectionReset.value)"),
+            )
+        }
+    }
+
+    /**
+     * ⚠ P-07. The verbs act on what is HIGHLIGHTED. A long press lights one word
+     * and the bar was handed the whole row, so `pong-` lit and `> pong-one`
+     * staged.
+     */
+    @Test
+    fun `the verbs read the platform selection before falling back to the row`() {
+        for (name in transcriptScreens) {
+            val text = source(name)
+            assertTrue(
+                "$name stages the whole row even when a narrower selection exists",
+                text.contains("nativeSelection.read(clipRead, clipWrite, keepOnClipboard = false) ?: text"),
+            )
+            assertTrue(
+                "$name copies the whole row even when a narrower selection exists",
+                text.contains("nativeSelection.read(clipRead, clipWrite, keepOnClipboard = true)"),
+            )
         }
     }
 }
