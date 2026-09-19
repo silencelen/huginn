@@ -11648,7 +11648,7 @@ const server = http.createServer(async (req, res) => {
     // console is an address (lib/consoles.js opens with the whole argument).
     //
     // ⚠ NOTHING IN HERE RUNS ANYTHING. The one operational step this feature
-    // needs — binding three units to 0.0.0.0 here, four rules in heimdall's
+    // needs — binding all four units to 0.0.0.0 here, four rules in heimdall's
     // /etc/pve/firewall/117.fw — is the OWNER's to run in a netplan session
     // (decision 47). It travels as text on `approval`, with `applied:false`
     // until the marker file the daemon never creates shows up.
