@@ -242,7 +242,18 @@ private fun TableGrid(b: MdBlock.Table) {
                     Row {
                         row.forEachIndexed { c, cell ->
                             Text(
-                                cell,
+                                // ⚠⚠ D-5. EVERY CELL IS ITS OWN `Text` INSIDE THE
+                                // TRANSCRIPT'S SelectionContainer — which is what
+                                // makes this a grid, and which means the toolkit
+                                // hands a selection across it back as every cell's
+                                // characters run together with nothing between
+                                // them: `PlanetMoonsEarthThe MoonMarsPhobos,
+                                // Deimos`. So the structure is drawn INTO the
+                                // text, invisibly: zero-width marks that change
+                                // nothing on screen and let
+                                // `QuickActionRules.tableRows` put the pipes back
+                                // in Copy and Quote.
+                                cell + AnnotatedString((if (c == row.lastIndex) TableMarks.ROW else TableMarks.CELL).toString()),
                                 style = MaterialTheme.typography.bodySmall,
                                 fontWeight = if (b.header && r == 0) FontWeight.Bold else null,
                                 color = if (b.header && r == 0) MaterialTheme.colorScheme.onSurface

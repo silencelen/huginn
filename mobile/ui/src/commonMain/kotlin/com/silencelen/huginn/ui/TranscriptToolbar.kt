@@ -3,6 +3,9 @@ package com.silencelen.huginn.ui
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.State
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.ui.geometry.Rect
@@ -49,6 +52,11 @@ import androidx.compose.ui.platform.TextToolbarStatus
 class GatedTextToolbar(
     private val delegate: TextToolbar,
     private val suppressed: State<Boolean>,
+    /**
+     * Where the platform's own selection is RECORDED as it changes (P-06/P-07).
+     * Null for callers that only want the gate.
+     */
+    private val native: NativeSelection? = null,
 ) : TextToolbar {
 
     override val status: TextToolbarStatus get() = delegate.status
@@ -60,6 +68,15 @@ class GatedTextToolbar(
         onCutRequested: (() -> Unit)?,
         onSelectAllRequested: (() -> Unit)?,
     ) {
+        // ⚠⚠ P-07 RIDES ON THIS CALL AND NOTHING ELSE. Compose asks for the menu
+        // on every selection change and hands over a copy callback that is
+        // non-null EXACTLY when a non-empty selection exists — which is the only
+        // access an Android client has to the platform's selection at all
+        // (`SelectionRegistrar` is internal, and the desktop's
+        // `TextContextMenu.TextManager.selectedText` has no common twin). So the
+        // callback is what tells the app's bar that its verbs have a narrower
+        // scope than the whole row.
+        native?.offered(onCopyRequested)
         // Hide rather than simply decline: the container asks for the menu on
         // every selection change, and one of those changes is the press that has
         // just raised the app's bar. Whatever is already floating goes away.
@@ -70,7 +87,28 @@ class GatedTextToolbar(
         delegate.showMenu(rect, onCopyRequested, onPasteRequested, onCutRequested, onSelectAllRequested)
     }
 
-    override fun hide() = delegate.hide()
+    override fun hide() {
+        native?.offered(null)
+        delegate.hide()
+    }
+
+    /**
+     * ⚠⚠ THE X DID NOT CANCEL ANYTHING (P-06). Tapping it took the app's bar
+     * down and left the platform selection exactly where it was: the word still
+     * highlighted, both amber drag handles on screen (the left one clipped off
+     * x=0) and Android's own Copy / Select all popup floating over the
+     * conversation. Only tapping empty space cleared it. The bar's whole job is
+     * to be the way out of a gesture, and it was the way out of half of one.
+     *
+     * The popup is this call. The SELECTION itself is not reachable from a
+     * `TextToolbar` — `SelectionContainer`'s manager is internal — so the shells
+     * clear it the one way the public API allows: by re-keying the container, see
+     * `rememberSelectionReset`.
+     */
+    fun cancelled() {
+        native?.offered(null)
+        delegate.hide()
+    }
 
     /**
      * The app's bar has just gone up. Take down anything the platform is already
@@ -102,16 +140,105 @@ class GatedTextToolbar(
  * one place on this screen that can use it.
  */
 @Composable
-fun rememberGatedTextToolbar(appBarShowing: Boolean): TextToolbar {
+fun rememberGatedTextToolbar(appBarShowing: Boolean, native: NativeSelection? = null): GatedTextToolbar {
     val platform = LocalTextToolbar.current
     // The flag is read inside showMenu, which is called from outside composition
     // and at a moment this function cannot predict — so it is read through a
     // State that keeps updating rather than captured by value.
     val showing = rememberUpdatedState(appBarShowing)
-    val gate = remember(platform) { GatedTextToolbar(platform, showing) }
+    val gate = remember(platform, native) { GatedTextToolbar(platform, showing, native) }
     // And the order the gate cannot decline its way out of: the container asking
     // for the menu BEFORE the row's long press has raised the app's bar. Nothing
     // asks again afterwards, so the bar going up is itself the signal.
     LaunchedEffect(appBarShowing) { if (appBarShowing) gate.appBarRaised() }
     return gate
 }
+
+/**
+ * What the platform's selection machinery is currently offering, and the only
+ * handle an Android client has on the selected TEXT (P-07).
+ *
+ * ⚠⚠ THE HIGHLIGHT AND THE VERB DISAGREED. A long press highlights ONE WORD —
+ * `pong-` out of `pong-one` in the walk — while the app's bar was handed the
+ * whole row by `TranscriptSelectionHost`, so Quote staged `> pong-one` with one
+ * partial word lit. On a long paragraph a person sees a word highlighted and gets
+ * the entire block quoted.
+ *
+ * ⚠ AND READING IT COSTS A CLIPBOARD ROUND TRIP, deliberately. Compose on
+ * Android exposes no way to READ a `SelectionContainer`'s text — the registrar and
+ * the manager are both internal — and the one operation the toolbar contract
+ * offers is "put the selection on the clipboard". So [read] invokes exactly that,
+ * reads it back, and puts the previous clipboard contents back. It is ugly and it
+ * is the whole API; the alternative is a bar whose buttons act on text the reader
+ * did not select.
+ */
+class NativeSelection {
+
+    private var copy: (() -> Unit)? by mutableStateOf(null)
+
+    /** Whether the platform is holding a non-empty selection right now. */
+    val present: Boolean get() = copy != null
+
+    /** Called from the gate on every selection change; null when it collapsed. */
+    internal fun offered(onCopyRequested: (() -> Unit)?) { copy = onCopyRequested }
+
+    /**
+     * The selected text, or null when there is no platform selection.
+     *
+     * ⚠ THE SELECTION IS CONSUMED. The toolkit's copy callback releases the
+     * selection as it copies — which is what the reader wants after pressing a
+     * verb, and which is why this is called once, at the press, and never while
+     * merely drawing.
+     *
+     * @param read the clipboard as it is now.
+     * @param write puts text back on the clipboard. Given the ORIGINAL contents
+     *   after a verb (nothing was copied, so nothing should have been), or the
+     *   cleaned selection for Copy itself.
+     */
+    fun read(read: () -> String?, write: (String) -> Unit, keepOnClipboard: Boolean): String? {
+        val take = copy ?: return null
+        val before = read()
+        take()
+        val raw = read()
+        // The marks `TableGrid` draws into its cells (D-5) become markdown rows
+        // here, so a table copied out of a conversation pastes as a table.
+        val text = raw?.let { QuickActionRules.copyText(it) }
+        if (keepOnClipboard) {
+            if (text != null && text != raw) write(text)
+        } else if (before != null) {
+            write(before)
+        }
+        return text?.takeIf { it.isNotBlank() }
+    }
+}
+
+/**
+ * A key that changes when the transcript's selection must be thrown away
+ * (P-06).
+ *
+ * ⚠⚠ THERE IS NO `selectionManager.clear()` TO CALL. `SelectionContainer`'s
+ * public overload takes only a modifier and its content; the overload that
+ * carries the selection and an `onSelectionChange` is `internal`, and so is the
+ * registrar underneath it. The one thing a caller CAN do is stop being the same
+ * container — `key(reset) { SelectionContainer { … } }` disposes the manager and
+ * composes a fresh one, which is a selection that no longer exists.
+ *
+ * Cheap where it is used: the list state is hoisted outside the `key`, so the
+ * scroll position survives, and this only fires on a deliberate dismissal.
+ *
+ * ```
+ * val reset = rememberSelectionReset()
+ * key(reset.value) { SelectionContainer { … } }
+ * // …the bar's X:
+ * gate.cancelled(); reset.bump()
+ * ```
+ */
+class SelectionReset {
+    var value: Int by mutableStateOf(0)
+        private set
+
+    fun bump() { value += 1 }
+}
+
+@Composable
+fun rememberSelectionReset(): SelectionReset = remember { SelectionReset() }
