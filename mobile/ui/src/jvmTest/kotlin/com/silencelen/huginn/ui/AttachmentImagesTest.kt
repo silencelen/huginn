@@ -199,4 +199,81 @@ class AttachmentImagesTest {
         state.open("/tmp/broken.png", null)
         assertFalse(state.isOpen, "there is nothing to show full size")
     }
+
+    // ------------------------------------------------------------ app icons
+
+    /**
+     * ⚠ AN APP ICON IS KEYED ON ID **AND** VERSION. The daemon re-fetches an
+     * app's favicon when the row is edited and bumps `version` with the edit, so
+     * the id alone would serve the old picture forever — and there is nothing in
+     * the logs when a cache serves the right answer to the wrong question.
+     */
+    @Test
+    fun `an app icon is cached per id and refetched when the row is edited`() = runBlocking {
+        val asked = mutableListOf<String>()
+        val png = pngBytes(16, 16)
+        val loader = AttachmentImageLoader(
+            fetch = { error("not the uploads route") },
+            decoder = SkiaImageBytesDecoder(),
+            fetchIcon = { id -> asked += id; png },
+        )
+        val a = loader.loadIcon("armap", version = 3)
+        val b = loader.loadIcon("armap", version = 3)
+        assertNotNull(a)
+        assertTrue(a === b, "the second draw of the same row returns the cached bitmap")
+        assertEquals(listOf("armap"), asked)
+
+        assertNotNull(loader.loadIcon("armap", version = 4))
+        assertEquals(listOf("armap", "armap"), asked, "a new version is a new picture")
+
+        assertNotNull(loader.loadIcon("jtyper", version = 3))
+        assertEquals(listOf("armap", "armap", "jtyper"), asked, "and another row is another key")
+    }
+
+    /**
+     * A 404 is the ordinary answer for a row the daemon has no favicon for, and
+     * it must resolve to null once rather than on every scroll.
+     */
+    @Test
+    fun `a missing icon is a remembered miss, not a request per recomposition`() = runBlocking {
+        var fetches = 0
+        val loader = AttachmentImageLoader(
+            fetch = { error("not the uploads route") },
+            decoder = SkiaImageBytesDecoder(),
+            fetchIcon = { fetches++; throw RuntimeException("404") },
+        )
+        assertNull(loader.loadIcon("btc15m", version = 1))
+        assertNull(loader.loadIcon("btc15m", version = 1))
+        assertEquals(1, fetches, "a 404 on an icon is permanent for that version")
+    }
+
+    /** The graceful story against a daemon with no icon route at all. */
+    @Test
+    fun `without an icon fetcher loadIcon is a quiet miss, not a crash`() = runBlocking {
+        var fetches = 0
+        val loader = AttachmentImageLoader({ fetches++; ByteArray(0) }, SkiaImageBytesDecoder())
+        assertNull(loader.loadIcon("armap", version = 1))
+        assertEquals(0, fetches, "and it does not fall back to the uploads route")
+    }
+
+    /**
+     * ⚠ THE THREE KEY SPACES MUST NOT COLLIDE. An upload called `armap`, a host
+     * path `/armap` and an app id `armap` are three different fetches from three
+     * different routes sharing one LRU.
+     */
+    @Test
+    fun `an upload, a path and an icon with the same name are three different entries`() = runBlocking {
+        val png = pngBytes(4, 4)
+        val hits = mutableListOf<String>()
+        val loader = AttachmentImageLoader(
+            fetch = { hits += "upload:$it"; png },
+            decoder = SkiaImageBytesDecoder(),
+            fetchPath = { path, _ -> hits += "path:$path"; png },
+            fetchIcon = { id -> hits += "icon:$id"; png },
+        )
+        loader.load("/uploads/armap")
+        loader.loadPath("/armap")
+        loader.loadIcon("armap", version = 1)
+        assertEquals(listOf("upload:armap", "path:/armap", "icon:armap"), hits)
+    }
 }
