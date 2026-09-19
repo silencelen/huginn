@@ -313,6 +313,9 @@ class MainActivity : FragmentActivity() {
  */
 internal fun backFrom(dest: Dest, tab: Int): Dest? = when (dest) {
     is Dest.SessionView -> Dest.Sessions
+    // The list the archived section lives at the bottom of — there is only one
+    // door into this, so "up" has only one honest answer.
+    is Dest.ArchiveTranscript -> Dest.Sessions
     is Dest.Chat -> Dest.Chats
     // Back to where it was opened from, not to a tab: the fleet is reached from
     // one row, in one drawer, so that drawer is the only honest answer. (It used
@@ -446,6 +449,7 @@ internal fun destToKey(d: Dest): String = when (d) {
     is Dest.Scratchpad -> "page:${d.id}"
     is Dest.Sessions -> "sessions"
     is Dest.SessionView -> "session:${d.name}"
+    is Dest.ArchiveTranscript -> "archive:${d.id}"
     is Dest.Status -> "status"
     is Dest.Projects -> "projects"
     is Dest.Project -> "project:${d.id}"
@@ -465,6 +469,10 @@ internal fun keyToDest(v: String): Dest = when {
     v.startsWith("page:") -> Dest.Scratchpad(v.removePrefix("page:"))
     v == "sessions" -> Dest.Sessions
     v.startsWith("session:") -> Dest.SessionView(v.removePrefix("session:"))
+    // An empty id is the LIST, for the same reason an empty project id is: a
+    // read-only view of no conversation is a screen about nothing.
+    v.startsWith("archive:") -> v.removePrefix("archive:")
+        .let { if (it.isEmpty()) Dest.Sessions else Dest.ArchiveTranscript(it) }
     v == "status" -> Dest.Status
     v == "projects" -> Dest.Projects
     // An empty id is the LIST, for the reason an empty settings id is the home:
@@ -513,6 +521,15 @@ internal sealed interface Dest {
     data class Scratchpad(val id: String) : Dest
     data object Sessions : Dest
     data class SessionView(val name: String) : Dest
+    /**
+     * One ARCHIVED conversation, read only. A child of Sessions.
+     *
+     * ⚠ [id] IS THE CLAUDE SESSION UUID, never a tmux name — the name is reused
+     * within hours on this host and the session it named is gone anyway. It is
+     * also what `GET /v1/archive/:id/transcript` keys on, which is the whole
+     * reason that route needs no session gate.
+     */
+    data class ArchiveTranscript(val id: String) : Dest
     data object Status : Dest
     /**
      * The projects tree.
@@ -637,6 +654,11 @@ fun HuginnApp(
     }
 
     val chats by vm.chats.collectAsState()
+    // Hoisted here rather than inside the sessions pane: the read-only archive
+    // destination is drawn in the DETAIL half, which on a folded phone composes
+    // without the list beside it.
+    val archiveRows by vm.archives.collectAsState()
+    val archiveRead by vm.archiveRead.collectAsState()
     val rounds by vm.rounds.collectAsState()
     val pads by vm.scratchpads.collectAsState()
     // Null until the probe answers. Every scratchpad control is hidden on false —
@@ -932,7 +954,8 @@ fun HuginnApp(
     val isChild = dest is Dest.Chat || dest is Dest.SessionView || dest is Dest.Settings ||
         dest is Dest.SettingsSection || dest is Dest.Devices || dest is Dest.RoundEdit ||
         dest is Dest.Scratchpads || dest is Dest.Scratchpad ||
-        dest is Dest.Projects || dest is Dest.Project || dest is Dest.Apps
+        dest is Dest.Projects || dest is Dest.Project || dest is Dest.Apps ||
+        dest is Dest.ArchiveTranscript
     // The system gesture, going where the arrow goes. Without this the commonest
     // gesture on the phone closed the app from every child screen.
     androidx.activity.compose.BackHandler(enabled = isChild) {
@@ -951,6 +974,13 @@ fun HuginnApp(
         is Dest.Scratchpad -> pads.firstOrNull { it.id == d.id }?.name ?: "Page"
         is Dest.Sessions -> "Sessions"
         is Dest.SessionView -> transcript?.title ?: d.name
+        // Claude Code's own title for the archived conversation, from whichever
+        // list already holds it — the read when it has landed, the archived row
+        // until it does, so the bar never says "Archived" while a fetch runs.
+        is Dest.ArchiveTranscript -> archiveRead?.takeIf { it.id == d.id }?.title
+            ?: archiveRows.firstOrNull { it.id == d.id }
+                ?.let { com.silencelen.huginn.ui.ArchiveRules.label(it) }
+            ?: "Archived"
         is Dest.Status -> "Status"
         is Dest.Projects -> "Projects"
         // The project's own name, from whichever list already holds it — the
@@ -1082,7 +1112,7 @@ fun HuginnApp(
         // tapped tab, so opening a chat from a notification highlights Chats.
         val section = when (dest) {
             is Dest.Chats, is Dest.Chat -> 0
-            is Dest.Sessions, is Dest.SessionView -> 1
+            is Dest.Sessions, is Dest.SessionView, is Dest.ArchiveTranscript -> 1
             is Dest.Status -> 2
             is Dest.Rounds, is Dest.RoundEdit -> 3
             // Four, not three: Rounds took 3, and Settings has no bar item of its
@@ -1306,6 +1336,9 @@ fun HuginnApp(
                 onRevive = { row -> vm.reviveArchive(row) { name -> dest = Dest.SessionView(name) } },
                 onCopyResume = { row -> row.resumeCommand?.let { vm.copy(it, "claude --resume") } },
                 onDeleteArchive = { vm.deleteArchive(it) },
+                // READ it without bringing it back. A child destination, so the
+                // list is still one Back away — and no decision was made.
+                onViewArchive = { row -> dest = Dest.ArchiveTranscript(row.id) },
             )
         }
         val sessionDetail: @Composable (String) -> Unit = { name ->
@@ -1554,6 +1587,39 @@ fun HuginnApp(
                 },
             )
         }
+        /**
+         * ONE ARCHIVED CONVERSATION, READ ONLY.
+         *
+         * ⚠⚠ NO COMPOSER, AND THE SHELL IS WHERE THAT IS DECIDED. The session
+         * destination next door builds a `SessionScreen` with a composer, a send
+         * queue, a Screen tab and a menu of verbs; all of them address a tmux
+         * session BY NAME, and an archive's session is gone — the name it had is
+         * reused on this host within hours. So this draws
+         * [com.silencelen.huginn.ui.ArchivedTranscriptView] and nothing else.
+         * `ArchivedTranscriptViewTest` greps this branch for exactly that.
+         *
+         * Reviving stays on the archived row, beside the warning about a
+         * transcript Claude Code may have swept — one place, one decision.
+         */
+        val archiveTranscriptPane: @Composable (String) -> Unit = { id ->
+            val row = archiveRows.firstOrNull { it.id == id }
+            LifecycleStartEffect(id) {
+                if (row != null) vm.openArchiveTranscript(row)
+                onStopOrDispose { }
+            }
+            val read = archiveRead?.takeIf { it.id == id }
+            com.silencelen.huginn.ui.ArchivedTranscriptView(
+                events = read?.page?.events.orEmpty(),
+                title = read?.title ?: row?.let { com.silencelen.huginn.ui.ArchiveRules.label(it) },
+                truncated = read?.page?.transcriptTruncated == true,
+                onCopy = { vm.copy(it) },
+                // While the read is in flight there is nothing to say yet — an
+                // empty list under a title reads as "loading" far better than a
+                // sentence that will be replaced a moment later.
+                note = read?.note,
+            )
+        }
+
         val appsPane: @Composable () -> Unit = {
             LifecycleStartEffect(Unit) {
                 vm.startAppsPolling()
@@ -1953,6 +2019,7 @@ fun HuginnApp(
                             is Dest.Chat -> chatDetail(d.id)
                             is Dest.Sessions -> sessionsPane(false)
                             is Dest.SessionView -> sessionDetail(d.name)
+                            is Dest.ArchiveTranscript -> archiveTranscriptPane(d.id)
                             is Dest.Rounds -> roundsPane()
                             is Dest.RoundEdit -> roundEditPane(d.id)
                             is Dest.Devices -> devicesPane()
@@ -1983,12 +2050,18 @@ fun HuginnApp(
                                     }
                                 }
                             }
-                            is Dest.Sessions, is Dest.SessionView -> Row(Modifier.fillMaxSize()) {
+                            is Dest.Sessions, is Dest.SessionView, is Dest.ArchiveTranscript ->
+                                Row(Modifier.fillMaxSize()) {
                                 Box(Modifier.width(292.dp).fillMaxSize()) { sessionsPane(true) }
                                 VerticalDivider(color = MaterialTheme.colorScheme.outlineVariant)
                                 Box(Modifier.weight(1f).fillMaxSize()) {
                                     val open = dest as? Dest.SessionView
+                                    val archive = dest as? Dest.ArchiveTranscript
                                     if (open != null) sessionDetail(open.name)
+                                    // The archived conversation takes the detail
+                                    // half, so the list it was opened from stays
+                                    // beside it — exactly as a live session does.
+                                    else if (archive != null) archiveTranscriptPane(archive.id)
                                     else Box(Modifier.fillMaxSize(), contentAlignment = androidx.compose.ui.Alignment.Center) {
                                         EmptyState("No session open", "Pick one on the left.")
                                     }

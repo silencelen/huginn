@@ -11,7 +11,9 @@ import com.silencelen.huginn.data.ArchivedSession
 import com.silencelen.huginn.data.Scratchpad
 import com.silencelen.huginn.data.ScratchpadSaver
 import com.silencelen.huginn.data.SessionMetaSaver
+import com.silencelen.huginn.data.TranscriptPage
 import com.silencelen.huginn.ui.RoundDraft
+import com.silencelen.huginn.ui.ARCHIVE_TRANSCRIPT_GONE
 import com.silencelen.huginn.ui.ArchiveRules
 import com.silencelen.huginn.ui.ScratchpadRules
 import com.silencelen.huginn.ui.ProjectRules
@@ -305,7 +307,14 @@ class AppStore(
     }
 
     fun openChat(id: String?) { _view.value = View.CHATS; _chatId.value = id }
-    fun openSession(name: String?) { _view.value = View.SESSIONS; _sessionName.value = name }
+    fun openSession(name: String?) {
+        _view.value = View.SESSIONS
+        // ⚠ THE ARCHIVE LETS GO. Both take the same detail half, and a live
+        // session opened while an archive was up would otherwise be drawn
+        // underneath a read-only conversation that is still claiming the pane.
+        _archiveRead.value = null
+        _sessionName.value = name
+    }
 
     /** Escape: close the open item, or fall back to the chats list. */
     fun back() {
@@ -1648,9 +1657,75 @@ class AppStore(
 
     suspend fun deleteArchive(row: ArchivedSession) {
         runCatching { client.deleteArchive(row.id) }
-            .onSuccess { refreshArchives() }
+            .onSuccess {
+                // The pane cannot outlive the row it is reading.
+                if (_archiveRead.value?.id == row.id) _archiveRead.value = null
+                refreshArchives()
+            }
             .onFailure { note(Faults.ACTION, it) }
     }
+
+    // ------------------------------------------ one archive, read only
+
+    /**
+     * The conversation of ONE archived session, as the detail pane draws it.
+     *
+     * ⚠ NOT A SESSION, AND NOT POLLED. Every other detail this store holds is
+     * keyed on a tmux NAME and followed; this is keyed on the Claude session
+     * uuid, read once from a copy on disk, and has nothing behind it to poll or
+     * type at. It shares the detail half with [SessionView], so exactly one of
+     * the two may be set — see [openSession].
+     */
+    data class ArchiveRead(
+        val id: String,
+        val title: String?,
+        val page: TranscriptPage? = null,
+        val loading: Boolean = true,
+        /** Why there is nothing to show: the copy is gone, or the read failed. */
+        val note: String? = null,
+    )
+
+    private val _archiveRead = MutableStateFlow<ArchiveRead?>(null)
+    val archiveRead: StateFlow<ArchiveRead?> = _archiveRead.asStateFlow()
+
+    /** Open one archive in the detail pane, read only. */
+    fun openArchive(row: ArchivedSession) {
+        _view.value = View.SESSIONS
+        // The live session lets go of the pane, for the same reason the archive
+        // does in [openSession]: one detail half, one occupant.
+        _sessionName.value = null
+        if (_archiveRead.value?.id == row.id && _archiveRead.value?.loading == false) return
+        _archiveRead.value = ArchiveRead(id = row.id, title = ArchiveRules.label(row), loading = true)
+        scope.launch {
+            val outcome = runCatching { client.archiveTranscript(row.id) }
+            val current = _archiveRead.value
+            // A late answer must not paint itself over whatever the reader opened
+            // while it was in flight.
+            if (current?.id != row.id) return@launch
+            _archiveRead.value = outcome.fold(
+                onSuccess = { page ->
+                    // ⚠ NULL IS THE 404 — "no such archive" AND "this daemon has
+                    // no such route" at once. Either way there is nothing to read.
+                    current.copy(
+                        page = page,
+                        loading = false,
+                        note = if (page == null) ARCHIVE_TRANSCRIPT_GONE else null,
+                    )
+                },
+                // The 409 carries the daemon's own sentence about which copies
+                // went, which beats any summary of ours.
+                onFailure = { t ->
+                    current.copy(
+                        loading = false,
+                        note = (t as? HuginnClient.HuginnException)?.message
+                            ?: t.message ?: ARCHIVE_TRANSCRIPT_GONE,
+                    )
+                },
+            )
+        }
+    }
+
+    fun closeArchive() { _archiveRead.value = null }
 
     /**
      * One read of `/v1/headroom`.

@@ -78,6 +78,11 @@ fun SessionsScreen(
     onCopyResume: (ArchivedSession) -> Unit = {},
     onDeleteArchive: (ArchivedSession) -> Unit = {},
     /**
+     * READ an archived conversation, without reviving it. Null hides the verb —
+     * the shape every optional row action here already takes.
+     */
+    onViewArchive: ((ArchivedSession) -> Unit)? = null,
+    /**
      * The sessions, grouped by the project that owns them.
      *
      * EMPTY means no grouping at all — either the daemon has no projects route or
@@ -123,6 +128,7 @@ fun SessionsScreen(
                         onCopyResume = onCopyResume,
                         onDelete = { confirmDeleteArchive = it },
                         onOpenLive = onOpen,
+                        onView = onViewArchive,
                     )
                 }
             }
@@ -179,6 +185,7 @@ fun SessionsScreen(
                             onCopyResume = onCopyResume,
                             onDelete = { confirmDeleteArchive = it },
                             onOpenLive = onOpen,
+                            onView = onViewArchive,
                         )
                     }
                 }

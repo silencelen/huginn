@@ -844,6 +844,41 @@ class HuginnClient(
     }
 
     /**
+     * The CONVERSATION of an archived session, read from the kept copy — or NULL
+     * when there is no such thing to read.
+     *
+     * ⚠ NULL IS TWO ANSWERS AT ONCE AND THAT IS DELIBERATE. A daemon older than
+     * this route 404s, and so does an archive the daemon does not have; both mean
+     * "there is nothing here to open", and both must leave a row that simply does
+     * not offer the door rather than one that offers an error. The feature probe
+     * pattern this client already uses twice over — see [projects] and the block
+     * comment above it.
+     *
+     * ⚠ A 409 IS A DIFFERENT ANSWER AND IT THROWS, so its sentence can be shown
+     * verbatim: *"no transcript was kept for this archive, and Claude Code no
+     * longer has one"* is the one state this whole feature exists to be honest
+     * about, and a summary of our own would lose which of the two copies went.
+     *
+     * ⚠ NO SESSION GATE, AND THAT IS THE POINT OF THE ROUTE. Every other
+     * transcript route begins by checking the tmux session is live and reads
+     * state keyed on its NAME; both are gone by the time a session is archived.
+     * The daemon reads the archive's own file instead — so [id] here is the
+     * Claude session uuid, never a tmux name.
+     *
+     * Paged exactly like [sessionTranscript]: [until] reads BACKWARDS, returning
+     * the page that ends where the given one began.
+     */
+    suspend fun archiveTranscript(
+        id: String,
+        offset: Long? = null,
+        limit: Int = 400,
+        until: Long? = null,
+    ): TranscriptPage? = probeGet(
+        "/v1/archive/$id/transcript?limit=$limit" +
+            (offset?.let { "&offset=$it" } ?: "") + (until?.let { "&until=$it" } ?: ""),
+    )?.let { decode<TranscriptPage>(it) }
+
+    /**
      * @return the name the daemon ACTUALLY gave the session, which is not always
      *   the one asked for: tmux silently rewrites '.' to '_' and still exits 0,
      *   so the daemon reads the name back off tmux and answers with that. A
