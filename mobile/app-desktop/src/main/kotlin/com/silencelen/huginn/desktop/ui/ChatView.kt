@@ -49,7 +49,9 @@ import androidx.compose.ui.input.key.isCtrlPressed
 import androidx.compose.ui.input.key.isMetaPressed
 import androidx.compose.ui.input.key.isShiftPressed
 import androidx.compose.ui.input.key.key
+import androidx.compose.ui.focus.FocusDirection
 import androidx.compose.ui.input.key.onPreviewKeyEvent
+import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.input.key.type
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.text.AnnotatedString
@@ -507,6 +509,9 @@ private fun Composer(
     val failure by attachments.failure.collectAsState()
     var picking by remember { mutableStateOf(false) }
     var dragOver by remember { mutableStateOf(false) }
+    // Tab's destination. Read here rather than inside the key handler because a
+    // composition local is not readable from a lambda that is not composable.
+    val focusManager = LocalFocusManager.current
 
     // Hoisted so the enabled rule and the submit path agree: an attachment that
     // FAILED is not something to send a message about, so it does not enable Send
@@ -681,6 +686,24 @@ private fun Composer(
                                 true
                             }
                             e.key == Key.Enter -> { submit(); true }
+                            // ⚠ TAB IS FOCUS, NOT A CHARACTER. See [tabMove]: it
+                            // typed a tab and the ring never left this box, so
+                            // Send, the clip and the chips had no keyboard route
+                            // at all. Ctrl+Tab keeps the literal; Alt/Meta are the
+                            // window manager's and are not ours to swallow.
+                            e.key == Key.Tab -> when (
+                                tabMove(e.isCtrlPressed, e.isShiftPressed, e.isAltPressed, e.isMetaPressed)
+                            ) {
+                                TabMove.LITERAL -> {
+                                    val next = tabIn(field)
+                                    field = next
+                                    onDraft(next.text)
+                                    true
+                                }
+                                TabMove.NEXT -> { focusManager.moveFocus(FocusDirection.Next); true }
+                                TabMove.PREVIOUS -> { focusManager.moveFocus(FocusDirection.Previous); true }
+                                TabMove.NONE -> false
+                            }
                             e.isCtrlPressed && e.key == Key.V -> AwtTransfer.consumeClipboard(attachments)
                             bareArrowOrEsc -> handleHistoryKey(
                                 e.key, field, recall, history, suppressed = false,
