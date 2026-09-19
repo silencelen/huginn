@@ -115,6 +115,42 @@ class SettingsAvailabilityTest {
         assertTrue("devices.local-ai" !in SettingsCatalog.itemsOf("devices", all, Surface.PHONE).map { it.id })
     }
 
+    /**
+     * "Keep act mode while locked" — the row that decides whether a lock screen
+     * withdraws Act on this machine.
+     *
+     * Gated exactly like the scope row beside it, and for the same reason: both
+     * describe what THIS computer will let a remote request do to it, so a shell
+     * that cannot enrol has nothing for either of them to be about. A row that
+     * outlived its siblings would be a switch with no machine behind it.
+     */
+    @Test
+    fun actWhileLockedIsGatedLikeTheScopeRowItBelongsBeside() {
+        for (probe in listOf(all, all.copy(localServe = false), all.copy(enrolable = false))) {
+            val shown = SettingsCatalog.itemsOf("devices", probe, Surface.DESKTOP).map { it.id }
+            assertEquals(
+                "devices.scope" in shown,
+                "devices.act-while-locked" in shown,
+                "it must appear exactly where the scope it modifies does: $shown",
+            )
+        }
+        // A phone is not a device. It never runs work, so it never answers this.
+        assertTrue("devices.act-while-locked" !in SettingsCatalog.itemsOf("devices", all, Surface.PHONE).map { it.id })
+    }
+
+    /**
+     * Findable by the words somebody would actually type — including "rdp",
+     * which is the question that sends them looking: a machine reached over
+     * remote desktop used to read as locked and refuse every Act.
+     */
+    @Test
+    fun actWhileLockedIsSearchableByWhatWentWrong() {
+        for (query in listOf("locked", "act while locked", "unattended", "rdp", "remote desktop")) {
+            val hits = SettingsSearch.hits(query, all, Surface.DESKTOP).map { it.item.id }
+            assertTrue("devices.act-while-locked" in hits, "searching \"$query\" found $hits")
+        }
+    }
+
     @Test
     fun appLockIsOnlyOfferedWhereTheOsCanDoIt() {
         val no = all.copy(appLockAvailable = false)
