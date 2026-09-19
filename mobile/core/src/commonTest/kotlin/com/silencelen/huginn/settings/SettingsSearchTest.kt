@@ -17,7 +17,7 @@ class SettingsSearchTest {
     private val all = SettingsProbe(
         headroom = true, quickActions = true, alerts = true, padsAvailable = true,
         localServe = true, appLockAvailable = true, enrolable = true,
-        savedAccounts = 3, diagnostics = true, selfUpdate = true,
+        savedAccounts = 3, diagnostics = true, selfUpdate = true, keepAwake = true,
     )
 
     private fun ids(query: String, probe: SettingsProbe = all, surface: Surface = Surface.DESKTOP) =
@@ -164,5 +164,25 @@ class SettingsSearchTest {
         assertTrue("usage.keep-awake" in ids("keepawake"), "found ${ids("keepawake")}")
         assertTrue("usage.keep-awake" in ids("rotating"), "found ${ids("rotating")}")
         assertTrue("usage.keep-awake-quiet" in ids("quiet hours"), "found ${ids("quiet hours")}")
+    }
+
+    /**
+     * ⚠ AND IT IS NOT FINDABLE WHILE THE PAGE WOULD NOT DRAW IT. Searching
+     * "quiet hours" against a host with keep-awake OFF used to offer the row and
+     * then open a page with no such control on it — the one failure the
+     * availability rule exists to prevent.
+     */
+    @Test
+    fun keepAwakeDetailsAreNotFindableWhileKeepAwakeIsOff() {
+        val off = all.copy(keepAwake = false)
+        assertTrue("usage.keep-awake" in ids("keep awake", off), "the switch stays findable")
+        assertTrue(
+            "usage.keep-awake-quiet" !in ids("quiet hours", off),
+            "found ${ids("quiet hours", off)}",
+        )
+        assertTrue(
+            "usage.keep-awake-model" !in ids("model for that request", off),
+            "found ${ids("model for that request", off)}",
+        )
     }
 }
