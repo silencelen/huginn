@@ -851,6 +851,124 @@ class HuginnClientTest {
         assertEquals(409, thrown.code)
         assertEquals(why, thrown.message)
     }
+
+    // ---------------------------------------------- membership, by hand
+
+    /**
+     * ADOPT: a session that is already running joins the record.
+     *
+     * ⚠ THE 201 BODY IS `{ok, member, project}` and the PROJECT matters as much
+     * as the member — a tree that redrew from a stale copy would show the session
+     * in two places at once until the next poll.
+     */
+    @Test
+    fun `adopting a session sends the role and the tmux name`() = runTest {
+        val body = """{"ok":true,"member":{"role":"firmware","name":"scratch","claudeName":"lora/firmware"},""" +
+            """"project":{"id":"p1","name":"LoRa","slug":"lora"}}"""
+        val out = client { respond(body, HttpStatusCode.Created) }.adoptMember("p1", "firmware", "scratch")
+        assertEquals("/v1/projects/p1/members", seen.last().url.encodedPath)
+        assertEquals("""{"role":"firmware","name":"scratch"}""", lastBody())
+        assertEquals("firmware", out.member?.role)
+        assertEquals("lora/firmware", out.member?.claudeName, "the peer name is READ, never invented")
+        assertEquals("LoRa", out.project?.name)
+        assertNull(out.refusal)
+    }
+
+    /**
+     * ⚠ OMITTED, NOT SENT EMPTY. An absent `name` means "the name this project
+     * would have given the role", which is what makes re-adopting a member that
+     * was spawned here and then dropped need nothing but the role.
+     */
+    @Test
+    fun `a nameless adopt omits the key rather than sending a blank`() = runTest {
+        client { respond("""{"ok":true}""", HttpStatusCode.Created) }.adoptMember("p1", "firmware")
+        assertEquals("""{"role":"firmware"}""", lastBody())
+        client { respond("""{"ok":true}""", HttpStatusCode.Created) }.adoptMember("p1", "firmware", "   ")
+        assertEquals("""{"role":"firmware"}""", lastBody(), "a blank is not a name")
+    }
+
+    /**
+     * ⚠⚠ A 409 IS AN ANSWER, NOT A FAULT, AND IT NAMES THE OTHER PROJECT. That
+     * name IS the fix: without it "already in another project" leaves somebody
+     * hunting twelve clusters for the one holding their session. Thrown, it would
+     * land on a failure path as a red line with no project attached.
+     */
+    @Test
+    fun `a session already in another project comes back as that sentence`() = runTest {
+        val why = "'scratch' is already the firmware session of the project \\\"Sensor stick\\\""
+        val out = client { respondError(HttpStatusCode.Conflict, """{"error":"$why"}""") }
+            .adoptMember("p1", "firmware", "scratch")
+        assertNull(out.member)
+        assertEquals(why.replace("\\\"", "\""), out.refusal)
+    }
+
+    /** The twelve-member cap arrives the same way, and is equally an answer. */
+    @Test
+    fun `the member cap is an answer too`() = runTest {
+        val out = client { respondError(HttpStatusCode.Conflict, """{"error":"that is the 12-session limit for one project"}""") }
+            .adoptMember("p1", "thirteenth", "scratch")
+        assertEquals("that is the 12-session limit for one project", out.refusal)
+    }
+
+    /**
+     * Everything else throws with the daemon's sentence, which is also the fix:
+     * 400 for a role taken / "lead" / not a name, 404 for no such session, 503
+     * when tmux is not answering.
+     */
+    @Test
+    fun `a role the project already has is refused verbatim`() = runTest {
+        val thrown = assertFailsWith<HuginnClient.HuginnException> {
+            client { respondError(HttpStatusCode.BadRequest, """{"error":"there is already a firmware session in this project"}""") }
+                .adoptMember("p1", "firmware", "scratch")
+        }
+        assertEquals(400, thrown.code)
+        assertEquals("there is already a firmware session in this project", thrown.message)
+    }
+
+    @Test
+    fun `tmux not answering is a 503 with its own words`() = runTest {
+        val thrown = assertFailsWith<HuginnClient.HuginnException> {
+            client { respondError(HttpStatusCode.ServiceUnavailable, """{"error":"tmux is not answering right now"}""") }
+                .adoptMember("p1", "firmware", "scratch")
+        }
+        assertEquals(503, thrown.code)
+    }
+
+    /**
+     * DROP: the record loses the row. ⚠ THE SESSION KEEPS RUNNING, and the daemon
+     * says so in the body rather than leaving a client to assume — "drop" and
+     * "end" are one keystroke apart in every client.
+     */
+    @Test
+    fun `dropping a member leaves the session running`() = runTest {
+        val body = """{"ok":true,"dropped":{"role":"firmware","name":"scratch"},"ended":false,""" +
+            """"project":{"id":"p1","name":"LoRa"}}"""
+        val out = client { respond(body, HttpStatusCode.OK) }.dropMember("p1", "firmware")
+        assertEquals("/v1/projects/p1/members/firmware", seen.last().url.encodedPath)
+        assertEquals("DELETE", seen.last().method.value)
+        assertEquals("scratch", out.member?.name)
+        assertEquals("LoRa", out.project?.name)
+        assertNull(out.refusal)
+    }
+
+    /** The lead cannot be dropped, and the refusal says what to do instead. */
+    @Test
+    fun `dropping the lead is an answer that says delete the project`() = runTest {
+        val why = "the lead is the project — delete the project instead"
+        val out = client { respondError(HttpStatusCode.Conflict, """{"error":"$why"}""") }
+            .dropMember("p1", "lead")
+        assertNull(out.member)
+        assertEquals(why, out.refusal)
+    }
+
+    /** A role this project does not have is a 404, not a quiet success. */
+    @Test
+    fun `dropping a role that is not there throws`() = runTest {
+        assertFailsWith<HuginnClient.HuginnException> {
+            client { respondError(HttpStatusCode.NotFound, """{"error":"this project has no firmware session"}""") }
+                .dropMember("p1", "firmware")
+        }
+    }
 }
 
 /**
