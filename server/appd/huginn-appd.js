@@ -46,7 +46,7 @@ const roundsLib = require('./lib/rounds');
 const scratchpadsLib = require('./lib/scratchpads');
 const archiveLib = require('./lib/archive');
 const devicesLib = require('./lib/devices');
-const consolesLib = require('./lib/consoles');   // next to devices on purpose: it is the registry devices is NOT (lib/consoles.js)
+const appsLib = require('./lib/apps');           // next to devices on purpose: it is the registry devices is NOT (lib/apps.js)
 const { taskDirFor, parsePs, scanTasks, extractBgIds } = require('./lib/tasks');
 const { agentsDirFor, listAgents, listAgentFiles } = require('./lib/agents');
 const { sessionGraph, sessionOverview, CACHE_MAX: GRAPH_CACHE_MAX } = require('./lib/sessiongraph');
@@ -9072,6 +9072,22 @@ const server = http.createServer(async (req, res) => {
 
   if (!authorized(req)) return sendErr(res, 401, 'unauthorized');
 
+  // ⚠ THE APPS PREREQUISITE'S ONLY INPUT (decision 54). `req.socket.localAddress`
+  // is WHICH OF THIS HOST'S ADDRESSES the client dialled — the same value
+  // /v1/ping reports as `via` — and the set of them is what every app must
+  // answer on, because a device that can reach huginn to read the Apps list can
+  // reach the apps it is reading about.
+  //
+  // Here rather than inside the /v1/apps block: a client that polls /v1/status
+  // and never opens the Apps page has still proved that address reaches this
+  // daemon, and an address only learned by visiting the page would let the first
+  // add from a new network pass and every later one fail.
+  //
+  // AFTER the auth check, deliberately: /v1/ping is unauthenticated, and a port
+  // scanner must not be able to teach this daemon a new address that every app
+  // then has to answer on. In memory, flushed lazily — see noteClientAddress.
+  try { appsLib.store(DATA_DIR, { log, hostAddr: SELF_ADDR }).noteClientAddress(req.socket.localAddress); } catch { /* not a reason to fail a request */ }
+
   try {
     let m;   // shared by the path-matching routes below
     // --- ping / status
@@ -11815,29 +11831,49 @@ const server = http.createServer(async (req, res) => {
     }
 
 
-    // ---- consoles: the internal pages this host serves ------------------------
+    // ---- apps: the pages this host makes and serves itself -------------------
     //
-    // A hand-curated registry of URLs with a liveness probe. NOT a second devices
-    // registry — a Device is a machine that enrols under a scope lattice, a
-    // console is an address (lib/consoles.js opens with the whole argument).
+    // A hand-curated registry of URLs with a liveness probe, a reachability
+    // probe, and a favicon. NOT a second devices registry — a Device is a
+    // machine that enrols under a scope lattice, an app is an address
+    // (lib/apps.js opens with the whole argument).
     //
-    // ⚠ NOTHING IN HERE RUNS ANYTHING. The one operational step this feature
-    // needs — binding all four units to 0.0.0.0 here, four rules in heimdall's
-    // /etc/pve/firewall/117.fw — is the OWNER's to run in a netplan session
-    // (decision 47). It travels as text on `approval`, with `applied:false`
-    // until the marker file the daemon never creates shows up.
+    // ⚠⚠ `/v1/consoles*` IS AN ALIAS FOR ONE RELEASE (decision 56) AND IT
+    // ANSWERS THE 3.4 BODY. That is the whole point of keeping it: an
+    // un-updated app 3.5.x or desktop 1.5.x still draws its Consoles page.
+    // Answering the NEW body under the old path would rename `consoles` to
+    // `apps` underneath those clients, and every one of them would decode an
+    // empty list and show a feature that had silently lost its contents — worse
+    // than the 404 the alias exists to avoid, because a 404 at least hides the
+    // surface. One handler, one set of rules, two renderings at the very edge:
+    // [appsLib.legacyConsoleList] and [appsLib.legacyConsoleRow], and the 409
+    // key. Nothing else forks.
     //
-    // One block, one store: consolesLib.store() is memoised per DATA_DIR, so the
-    // probe cache and the five-minute sweep are built once however often this is
-    // called. Everything else about consoles lives in the lib, which is what
-    // keeps this branch's footprint in this file to one require and one block.
-    if (p === '/v1/consoles' || p.startsWith('/v1/consoles/')) {
+    // ⚠ NOTHING IN HERE RUNS ANYTHING. The rebind and the heimdall firewall
+    // lines are the OWNER's to run in a netplan session (decision 47); since
+    // 3.5.0 they ride the FAILING ROW as `reachable.fix` (decision 55) instead of
+    // one card at the top of the list. They are strings all the way down.
+    //
+    // One block, one store: appsLib.store() is memoised per DATA_DIR, so the
+    // probe caches, the client-address set and the five-minute sweep are built
+    // once however often this is called.
+    if (p === '/v1/apps' || p.startsWith('/v1/apps/')
+      || p === '/v1/consoles' || p.startsWith('/v1/consoles/')) {
+      // The alias, folded into one path before anything matches on it — so there
+      // is exactly one handler per route and no way for the two to drift.
+      const alias = p.startsWith('/v1/consoles');
+      const ap = alias ? `/v1/apps${p.slice('/v1/consoles'.length)}` : p;
+      // The two renderings. `row` is what a single-app answer carries; `conflict`
+      // is the key a 409 puts the current row under, which the old client reads
+      // as `console` (ConsoleConflict at desktop-v1.5.1) and the new one as `app`.
+      const wire = (row) => (alias ? appsLib.legacyConsoleRow(row) : row);
+      const conflictKey = alias ? 'console' : 'app';
       // `hostAddr` is [SELF_ADDR] — the address the HOST answers on, resolved
       // once at startup. The seeded rows are written with it because the four
       // units they name bind it and nothing else; a seed pinned to the name
       // `huginn` addressed an interface none of them listen on (D10).
-      const consoles = consolesLib.store(DATA_DIR, { log, hostAddr: SELF_ADDR });
-      const CONSOLE_ID = '([a-z0-9][a-z0-9-]{0,23})';
+      const apps = appsLib.store(DATA_DIR, { log, hostAddr: SELF_ADDR });
+      const APP_ID = '([a-z0-9][a-z0-9-]{0,23})';
 
       // The list, and the FEATURE PROBE both clients use — a 404 from an older
       // daemon hides the whole surface rather than showing a door that leads to
@@ -11847,60 +11883,114 @@ const server = http.createServer(async (req, res) => {
       // last one has aged out and returns immediately; this list is polled while
       // a view is open, and a route that waited for four probes would turn one
       // wedged listener into a slow app. Rows carry the last observation, and
-      // `up:null` where there has never been one.
-      if (req.method === 'GET' && p === '/v1/consoles') {
-        consoles.refreshSoon();
+      // `up:null` / `reachable.ok:null` where there has never been one.
+      if (req.method === 'GET' && ap === '/v1/apps') {
+        apps.refreshSoon();
+        // ⚠ `approval: null`, not a synthesised card. Decision 55 deleted it,
+        // and a daemon that kept inventing one would be handing an old client
+        // four root commands computed from a belief this version no longer holds
+        // (the D11 exemption, the hard-coded source address). The field is
+        // nullable in the client that reads it, so the card simply does not draw.
+        if (alias) return sendJson(res, 200, appsLib.legacyConsoleList(apps.rows()));
         return sendJson(res, 200, {
-          consoles: consoles.rows(),
-          max: consolesLib.MAX_CONSOLES,
-          kinds: consolesLib.KINDS,
-          // Said once at the top as well as on every row: the probe ran HERE.
-          reachableFrom: 'host',
-          probeIntervalMs: consolesLib.PROBE_INTERVAL_MS,
-          approval: consoles.approval(),
+          apps: apps.rows(),
+          max: appsLib.MAX_APPS,
+          kinds: appsLib.KINDS,
+          // The marker file, as one boolean. All that is left of the approval
+          // card (decision 55) — the remedy itself is on the row that needs it.
+          retrofitApplied: apps.retrofitApplied(),
+          // Every address an app has to answer on, so a client can say what the
+          // check was against instead of showing a refusal with no subject.
+          clientAddresses: apps.addresses(),
         });
       }
 
-      if (req.method === 'POST' && p === '/v1/consoles') {
+      // ⚠ THE PREREQUISITE (decision 54). The add is REFUSED — 422, with the
+      // reachability result so the client can show which address failed and the
+      // exact lines that would fix it — rather than stored and marked. 400 is
+      // still "what you typed is not an app", 409 still "that id is taken".
+      if (req.method === 'POST' && ap === '/v1/apps') {
         const body = await readJsonBody(req, 16 * 1024);
-        const r = consoles.add(body);
+        const r = await apps.add(body);
+        // The 422 body is the same on both paths. An old client has no field for
+        // `reachable` and ignores it, but it DOES show the daemon's `error`
+        // string, which is the sentence naming the addresses that failed — so
+        // the refusal still explains itself on a client that predates it.
+        if (!r.ok && r.status === 422) return sendJson(res, 422, { error: r.error, reachable: r.reachable });
+        if (!r.ok && r.status === 409) return sendJson(res, 409, { error: r.error, [conflictKey]: wire(apps.row(r.app.id)) });
         if (!r.ok) return sendErr(res, r.status || 400, r.error);
-        log(`consoles: added ${r.console.id} (${r.console.url})`);
-        return sendJson(res, 201, consolesLib.consoleRow(r.console, consoles.probeOf(r.console.id)));
+        log(`apps: added ${r.app.id} (${r.app.url})`);
+        return sendJson(res, 201, wire(apps.row(r.app.id)));
       }
 
-      const probeMatch = p.match(new RegExp(`^/v1/consoles/${CONSOLE_ID}/probe$`));
+      const probeMatch = ap.match(new RegExp(`^/v1/apps/${APP_ID}/probe$`));
       if (probeMatch && req.method === 'POST') {
         // On demand, awaited, and still bounded by the same 2 s deadline — the
         // person tapping this is looking at a spinner, and an unbounded probe
-        // here is a request that never comes back.
-        const row = await consoles.probeNow(probeMatch[1]);
-        if (!row) return sendErr(res, 404, 'no such console');
-        return sendJson(res, 200, row);
+        // here is a request that never comes back. Both questions are re-asked,
+        // and the favicon is re-fetched if it is due one.
+        const row = await apps.probeNow(probeMatch[1]);
+        if (!row) return sendErr(res, 404, 'no such app');
+        return sendJson(res, 200, wire(row));
       }
 
-      const idMatch = p.match(new RegExp(`^/v1/consoles/${CONSOLE_ID}$`));
+      // The cached favicon (decision 53). Served from DATA_DIR, never proxied:
+      // the bytes were fetched, type-checked and capped at probe time, and a
+      // route that fetched on demand would be a way to make this daemon dial an
+      // address on request.
+      const iconMatch = ap.match(new RegExp(`^/v1/apps/${APP_ID}/icon$`));
+      if (iconMatch && req.method === 'GET') {
+        const found = apps.icon(iconMatch[1]);
+        if (!found.ok) return sendErr(res, 404, 'no icon for that app');
+        const etag = filesLib.etagFor(found.size, found.mtimeMs);
+        // Private and short, like /v1/files/image: the token is the only thing
+        // in front of this, and the list is polled while the view is open.
+        const cacheHeaders = {
+          'Cache-Control': 'private, max-age=300',
+          ETag: etag,
+          // ⚠ These bytes came off another server. The content type was checked
+          // to be image/* when it was cached; nosniff is what stops a browser
+          // from deciding otherwise about the bytes themselves.
+          'X-Content-Type-Options': 'nosniff',
+        };
+        if (filesLib.etagMatches(req.headers['if-none-match'], etag)) {
+          res.writeHead(304, cacheHeaders);
+          return res.end();
+        }
+        res.writeHead(200, { 'Content-Type': found.contentType, 'Content-Length': found.size, ...cacheHeaders });
+        const stream = fs.createReadStream(found.file);
+        res.on('close', () => stream.destroy());
+        stream.pipe(res);
+        stream.on('error', () => { try { res.destroy(); } catch { } });
+        return undefined;
+      }
+
+      const idMatch = ap.match(new RegExp(`^/v1/apps/${APP_ID}$`));
       if (idMatch) {
         const id = idMatch[1];
         if (req.method === 'PATCH') {
           const body = await readJsonBody(req, 16 * 1024);
-          const r = consoles.patch(id, body);
+          const r = apps.patch(id, body);
           // 409 CARRIES THE CURRENT ROW, not just a sentence: the editor that
           // collided needs to show what it collided WITH, which is the contract
           // saveScratchpad already knows how to adopt as an answer.
-          if (!r.ok && r.status === 409) return sendJson(res, 409, { error: r.error, console: r.console });
+          // A FULL ROW, not the bare stored record: the editor that collided has
+          // to render what it collided with, and a row missing its probe fields is
+          // a row that draws as never-observed on a console that is up.
+          if (!r.ok && r.status === 409) return sendJson(res, 409, { error: r.error, [conflictKey]: wire(apps.row(id)) });
           if (!r.ok) return sendErr(res, r.status || 400, r.error);
-          return sendJson(res, 200, consolesLib.consoleRow(r.console, consoles.probeOf(id)));
+          return sendJson(res, 200, wire(apps.row(id)));
         }
         if (req.method === 'DELETE') {
-          const r = consoles.remove(id);
+          const r = apps.remove(id);
           if (!r.ok) return sendErr(res, r.status || 404, r.error);
-          log(`consoles: removed ${id}`);
+          log(`apps: removed ${id}`);
           return sendJson(res, 200, { ok: true });
         }
       }
-      return sendErr(res, 404, 'no such consoles route');
+      return sendErr(res, 404, alias ? 'no such consoles route' : 'no such apps route');
     }
+
 
     // ---- scratchpads: the user's own pages, and nothing this host writes to
     if (req.method === 'GET' && p === '/v1/scratchpads') {
@@ -12468,7 +12558,7 @@ setInterval(() => {
 }, 15_000).unref();
 
 // This host's tailnet address, asked for the way it has always been asked for.
-// Lifted out of resolveBind() because a SECOND caller needs it: the consoles
+// Lifted out of resolveBind() because a SECOND caller needs it: the apps
 // seed has to write an address the host can actually be reached at, and the
 // bind cannot answer that on a daemon started with HUGINN_APPD_BIND=0.0.0.0.
 function tailnetAddr() {
@@ -12488,12 +12578,13 @@ function resolveBind() {
 }
 
 /**
- * The address the HOST itself is reachable at, for the consoles seed (D10).
+ * The address the HOST itself is reachable at, for the apps seed (D10) and
+ * for the reachability prerequisite's address set (decision 54).
  *
  * ⚠ NOT THE BIND. This daemon's unit sets `HUGINN_APPD_BIND=0.0.0.0` so the
  * tailnet, mesh and loopback routes a client pins all reach one listener —
  * `0.0.0.0` is not something a probe or a phone can open. Empty is allowed and
- * not fatal: lib/consoles.js then seeds the host name, which is what it always
+ * not fatal: lib/apps.js then seeds the host name, which is what it always
  * did.
  */
 let SELF_ADDR = '';
@@ -12519,10 +12610,10 @@ if (process.argv.includes('--seed-headroom-defaults')) {
 }
 
 resolveBind().then(async (bind) => {
-  // Where the consoles seed points. The bind first, because a daemon bound to a
+  // Where the apps seed points. The bind first, because a daemon bound to a
   // real address is already answering the question; `tailscale ip -4` only when
   // it is a wildcard, and never fatally.
-  SELF_ADDR = consolesLib.pickHostAddr(bind) || consolesLib.pickHostAddr(await tailnetAddr().catch(() => ''));
+  SELF_ADDR = appsLib.pickHostAddr(bind) || appsLib.pickHostAddr(await tailnetAddr().catch(() => ''));
   // Recover from a previous crash BEFORE serving: a session left at `window-size
   // manual` by a killed daemon would otherwise keep a laptop's window shrunken
   // with nothing left to release it.
