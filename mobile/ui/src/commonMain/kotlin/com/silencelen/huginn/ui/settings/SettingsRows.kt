@@ -348,6 +348,19 @@ class RouteListActions(
      * clears it.
      */
     val clearNote: () -> Unit = {},
+    /**
+     * ADOPT AN OFFERED ROUTE — the person saying so that
+     * [com.silencelen.huginn.data.RouteResolver.Choice.Stay.Candidate] waits for.
+     *
+     * Separate from [activate] because it is a different gesture with a different
+     * consequence: activating is choosing between addresses the owner already
+     * trusts, and this is granting trust to a plain-http address NOBODY TYPED —
+     * one of the built-ins an upgrade seeds, whose literals are in a public repo.
+     * The resolver will not take that step on its own at any point, ever; this
+     * callback is the only way it is ever taken, which is why it has its own name
+     * and why a shell that has not wired it offers nothing.
+     */
+    val useCandidate: (String) -> Unit = {},
 ) {
     /** A name and an address saved together, as ONE edit wherever it is wired. */
     fun edit(id: String, name: String, url: String) {
@@ -465,6 +478,17 @@ fun SettingsRouteListRow(
      * [com.silencelen.huginn.data.HuginnSettings.ROUTE_URL_PLACEHOLDER].
      */
     suggestedUrl: String = "",
+    /**
+     * A route that ANSWERED and will not be adopted without a person saying so —
+     * [com.silencelen.huginn.data.RouteResolver.Choice.Stay.Candidate].
+     *
+     * ⚠ AN OFFER, NOT A STATE. The connection is still on whatever the list says
+     * is active; this line is the only place the candidate is ever mentioned, and
+     * until somebody presses Use nothing about the connection changes. Null on a
+     * shell that has not wired it, which then behaves exactly as it did before
+     * the case existed — nothing is offered and nothing is adopted.
+     */
+    candidate: PinnedRoute? = null,
 ) {
     var editing by remember { mutableStateOf<String?>(null) }
     var adding by remember { mutableStateOf(false) }
@@ -578,6 +602,31 @@ fun SettingsRouteListRow(
             )
         }
 
+        // ⚠ OFFERED, NEVER TAKEN. One line and one verb: the resolver found this
+        // address answering and refused to move to it by itself, because moving
+        // hands that host the daemon's bearer in cleartext and nobody typed it.
+        // The sentence NAMES the route rather than describing the rule — the rule
+        // is why there is a button instead of a switch.
+        if (candidate != null) {
+            Row(
+                Modifier.padding(top = 6.dp, start = 8.dp).testTag("$id.candidate"),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    routeCandidateOffer(candidate),
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.weight(1f, fill = false),
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                TextButton(
+                    onClick = { actions.useCandidate(candidate.id) },
+                    contentPadding = TIGHT,
+                ) { Text("Use") }
+            }
+        }
+
         if (!note.isNullOrBlank()) {
             Text(
                 note,
@@ -588,6 +637,16 @@ fun SettingsRouteListRow(
         }
     }
 }
+
+/**
+ * The offer's words, out here so they can be asserted without a composition.
+ *
+ * It says "answered", not "is faster" or "is better": the only fact the resolver
+ * has about this address is that huginn replied on it, and the reader is being
+ * asked to grant it the bearer, not to accept a recommendation.
+ */
+fun routeCandidateOffer(candidate: PinnedRoute): String =
+    "${candidate.name.ifBlank { candidate.url }} answered — use it?"
 
 /** Just enough room for a glyph or a short verb — see [RouteRow]. */
 private val TIGHT = androidx.compose.foundation.layout.PaddingValues(horizontal = 10.dp, vertical = 0.dp)

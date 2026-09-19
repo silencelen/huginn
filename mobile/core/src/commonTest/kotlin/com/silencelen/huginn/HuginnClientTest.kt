@@ -792,6 +792,232 @@ class HuginnClientTest {
         assertFalse("actWhileLocked" in lastBody(), lastBody())
     }
 
+
+    // ------------------------------------------ an archived conversation
+
+    /**
+     * The archive's conversation comes from its OWN route, keyed on the Claude
+     * session uuid.
+     *
+     * ⚠ NOT A TMUX NAME, AND THAT IS WHY THE ROUTE EXISTS. Every other transcript
+     * route gates on the session being live and reads state keyed on its name;
+     * both are gone once a session is archived, and the name itself is reused on
+     * this host within hours.
+     */
+    @Test
+    fun `an archived transcript is read from the archive route`() = runTest {
+        val id = "9f1c8b52-5d2a-4a21-9f65-1a2b3c4d5e6f"
+        val page = ok("""{"events":[{"kind":"user","text":"hello"}],"archived":true}""")
+            .archiveTranscript(id)
+        assertEquals("/v1/archive/$id/transcript", seen.last().url.encodedPath)
+        assertEquals(listOf("hello"), page?.events?.map { it.text })
+        assertTrue(page?.archived == true, "the daemon says so on every window")
+    }
+
+    /** Paged exactly like a session's: `until` walks backwards into history. */
+    @Test
+    fun `it pages the same way a live transcript does`() = runTest {
+        ok("""{"events":[]}""").archiveTranscript("a", limit = 50, until = 4096)
+        val q = seen.last().url.parameters
+        assertEquals("50", q["limit"])
+        assertEquals("4096", q["until"])
+    }
+
+    /**
+     * ⚠⚠ NULL IS TWO ANSWERS AT ONCE, ON PURPOSE. A daemon older than the route
+     * 404s, and so does an archive this daemon does not have. Both mean "there is
+     * nothing here to open", and both must leave a row that quietly does not
+     * offer the door rather than one that offers an error — the feature-probe
+     * shape `projects` and `scratchpads` already use.
+     */
+    @Test
+    fun `a 404 is an answer, not a failure`() = runTest {
+        val page = client { respondError(HttpStatusCode.NotFound, """{"error":"no such archived session"}""") }
+            .archiveTranscript("a")
+        assertNull(page)
+    }
+
+    /**
+     * ⚠ A 409 IS A DIFFERENT ANSWER AND IT THROWS, so the daemon's own sentence
+     * can be shown verbatim. Which of the two copies went is the one fact this
+     * whole feature exists to be honest about, and a summary of ours would lose it.
+     */
+    @Test
+    fun `a transcript nobody kept arrives as the daemon's own sentence`() = runTest {
+        val why = "no transcript was kept for this archive, and Claude Code no longer has one"
+        val thrown = assertFailsWith<HuginnClient.HuginnException> {
+            client { respondError(HttpStatusCode.Conflict, """{"error":"$why"}""") }.archiveTranscript("a")
+        }
+        assertEquals(409, thrown.code)
+        assertEquals(why, thrown.message)
+    }
+
+    // ---------------------------------------------- membership, by hand
+
+    /**
+     * ADOPT: a session that is already running joins the record.
+     *
+     * ⚠ THE 201 BODY IS `{ok, member, project}` and the PROJECT matters as much
+     * as the member — a tree that redrew from a stale copy would show the session
+     * in two places at once until the next poll.
+     */
+    @Test
+    fun `adopting a session sends the role and the tmux name`() = runTest {
+        val body = """{"ok":true,"member":{"role":"firmware","name":"scratch","claudeName":"lora/firmware"},""" +
+            """"project":{"id":"p1","name":"LoRa","slug":"lora"}}"""
+        val out = client { respond(body, HttpStatusCode.Created) }.adoptMember("p1", "firmware", "scratch")
+        assertEquals("/v1/projects/p1/members", seen.last().url.encodedPath)
+        assertEquals("""{"role":"firmware","name":"scratch"}""", lastBody())
+        assertEquals("firmware", out.member?.role)
+        assertEquals("lora/firmware", out.member?.claudeName, "the peer name is READ, never invented")
+        assertEquals("LoRa", out.project?.name)
+        assertNull(out.refusal)
+    }
+
+    /**
+     * ⚠ OMITTED, NOT SENT EMPTY. An absent `name` means "the name this project
+     * would have given the role", which is what makes re-adopting a member that
+     * was spawned here and then dropped need nothing but the role.
+     */
+    @Test
+    fun `a nameless adopt omits the key rather than sending a blank`() = runTest {
+        client { respond("""{"ok":true}""", HttpStatusCode.Created) }.adoptMember("p1", "firmware")
+        assertEquals("""{"role":"firmware"}""", lastBody())
+        client { respond("""{"ok":true}""", HttpStatusCode.Created) }.adoptMember("p1", "firmware", "   ")
+        assertEquals("""{"role":"firmware"}""", lastBody(), "a blank is not a name")
+    }
+
+    /**
+     * ⚠⚠ A 409 IS AN ANSWER, NOT A FAULT, AND IT NAMES THE OTHER PROJECT. That
+     * name IS the fix: without it "already in another project" leaves somebody
+     * hunting twelve clusters for the one holding their session. Thrown, it would
+     * land on a failure path as a red line with no project attached.
+     */
+    @Test
+    fun `a session already in another project comes back as that sentence`() = runTest {
+        val why = "'scratch' is already the firmware session of the project \\\"Sensor stick\\\""
+        val out = client { respondError(HttpStatusCode.Conflict, """{"error":"$why"}""") }
+            .adoptMember("p1", "firmware", "scratch")
+        assertNull(out.member)
+        assertEquals(why.replace("\\\"", "\""), out.refusal)
+    }
+
+    /** The twelve-member cap arrives the same way, and is equally an answer. */
+    @Test
+    fun `the member cap is an answer too`() = runTest {
+        val out = client { respondError(HttpStatusCode.Conflict, """{"error":"that is the 12-session limit for one project"}""") }
+            .adoptMember("p1", "thirteenth", "scratch")
+        assertEquals("that is the 12-session limit for one project", out.refusal)
+    }
+
+    /**
+     * Everything else throws with the daemon's sentence, which is also the fix:
+     * 400 for a role taken / "lead" / not a name, 404 for no such session, 503
+     * when tmux is not answering.
+     */
+    @Test
+    fun `a role the project already has is refused verbatim`() = runTest {
+        val thrown = assertFailsWith<HuginnClient.HuginnException> {
+            client { respondError(HttpStatusCode.BadRequest, """{"error":"there is already a firmware session in this project"}""") }
+                .adoptMember("p1", "firmware", "scratch")
+        }
+        assertEquals(400, thrown.code)
+        assertEquals("there is already a firmware session in this project", thrown.message)
+    }
+
+    @Test
+    fun `tmux not answering is a 503 with its own words`() = runTest {
+        val thrown = assertFailsWith<HuginnClient.HuginnException> {
+            client { respondError(HttpStatusCode.ServiceUnavailable, """{"error":"tmux is not answering right now"}""") }
+                .adoptMember("p1", "firmware", "scratch")
+        }
+        assertEquals(503, thrown.code)
+    }
+
+    /**
+     * DROP: the record loses the row. ⚠ THE SESSION KEEPS RUNNING, and the daemon
+     * says so in the body rather than leaving a client to assume — "drop" and
+     * "end" are one keystroke apart in every client.
+     */
+    @Test
+    fun `dropping a member leaves the session running`() = runTest {
+        val body = """{"ok":true,"dropped":{"role":"firmware","name":"scratch"},"ended":false,""" +
+            """"project":{"id":"p1","name":"LoRa"}}"""
+        val out = client { respond(body, HttpStatusCode.OK) }.dropMember("p1", "firmware")
+        assertEquals("/v1/projects/p1/members/firmware", seen.last().url.encodedPath)
+        assertEquals("DELETE", seen.last().method.value)
+        assertEquals("scratch", out.member?.name)
+        assertEquals("LoRa", out.project?.name)
+        assertNull(out.refusal)
+    }
+
+    /** The lead cannot be dropped, and the refusal says what to do instead. */
+    @Test
+    fun `dropping the lead is an answer that says delete the project`() = runTest {
+        val why = "the lead is the project — delete the project instead"
+        val out = client { respondError(HttpStatusCode.Conflict, """{"error":"$why"}""") }
+            .dropMember("p1", "lead")
+        assertNull(out.member)
+        assertEquals(why, out.refusal)
+    }
+
+    /** A role this project does not have is a 404, not a quiet success. */
+    @Test
+    fun `dropping a role that is not there throws`() = runTest {
+        assertFailsWith<HuginnClient.HuginnException> {
+            client { respondError(HttpStatusCode.NotFound, """{"error":"this project has no firmware session"}""") }
+                .dropMember("p1", "firmware")
+        }
+    }
+
+    // ------------------------------- the two other membership answers
+
+    /**
+     * ⚠⚠ A GRACEFUL DELETE CAN LEAVE SESSIONS RUNNING WITH NO PROJECT. A member
+     * sitting on a permission or folder-trust dialog cannot be typed at — the
+     * daemon refuses rather than pasting the wrap-up phrase at a selector that
+     * swallows it — and the record is deleted either way. The names come back in
+     * `refused`, always present on a current daemon.
+     */
+    @Test
+    fun `a delete reports what it could not wind down`() = runTest {
+        val body = """{"ok":true,"ended":["lora-pcb"],"mode":"graceful","refused":""" +
+            """[{"name":"lora-firmware","claudeName":"lora/firmware","why":"a dialog is open on the screen"}]}"""
+        val done = client { respond(body, HttpStatusCode.OK) }.deleteProject("p1", "graceful")
+        assertEquals(listOf("lora-pcb"), done.ended)
+        assertEquals(1, done.refused.size)
+        assertEquals("lora-firmware", done.refused.first().name)
+        assertEquals("a dialog is open on the screen", done.refused.first().why)
+    }
+
+    /** An older daemon omits the key, which reads the same as "nothing refused". */
+    @Test
+    fun `a daemon without the key reports nothing refused`() = runTest {
+        val done = client { respond("""{"ok":true,"ended":[],"mode":"none"}""", HttpStatusCode.OK) }
+            .deleteProject("p1")
+        assertEquals(emptyList(), done.refused)
+    }
+
+    /**
+     * ⚠⚠ RENAMING A PROJECT MEMBER ORPHANS IT FROM ITS CLUSTER. The record stores
+     * members by tmux name and the peer registry is joined back through it, so
+     * the daemon refuses with a 409 that NAMES the project and says to drop the
+     * member first. That sentence is the instruction, so it must arrive whole.
+     */
+    @Test
+    fun `renaming a project member refuses with the daemon's own instruction`() = runTest {
+        val why = "'lora-firmware' is the firmware session of the project \\\"LoRa node\\\" — " +
+            "its name is what the project and the peer registry know it by. Drop it from the " +
+            "project first (DELETE /v1/projects/<id>/members/<role>), then rename it"
+        val thrown = assertFailsWith<HuginnClient.HuginnException> {
+            client { respondError(HttpStatusCode.Conflict, """{"error":"$why"}""") }
+                .renameSession("lora-firmware", "firmware-old")
+        }
+        assertEquals(409, thrown.code)
+        // Verbatim: a summary of ours would lose the half that says what to do.
+        assertEquals(why.replace("\\\"", "\""), thrown.message)
+        assertTrue(thrown.message!!.contains("Drop it from the project first"), thrown.message!!)
+    }
 }
 
 /**

@@ -38,7 +38,15 @@ fun handleHistoryKey(
         Key.DirectionUp -> {
             val cur = recall.value
             if (cur == null) {
-                if (!HistoryWalk.canEnter(field.text, field.selection.start, field.selection.end)) return false
+                // ⚠ min/max, NOT start/end — the same rule `newlineIn` states for
+                // the Shift+Enter splice, and this was the other site. A
+                // [TextRange] is DIRECTED: Shift+Left, Shift+Home, Shift+Up and a
+                // right-to-left drag all produce `start > end`, and Compose's
+                // legacy TextFieldValue path hands that straight to
+                // onPreviewKeyEvent unnormalised. Reading the raw pair means
+                // every caret arithmetic downstream is one edit away from running
+                // backwards; ordering it here is what stops that being possible.
+                if (!HistoryWalk.canEnter(field.text, field.selection.min, field.selection.max)) return false
                 val started = HistoryWalk.enter(history, field.text) ?: return false
                 recall.value = started
                 adopt(HistoryWalk.text(started))

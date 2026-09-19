@@ -60,6 +60,16 @@ fun ArchivedSessionsSection(
     onDelete: (ArchivedSession) -> Unit,
     /** Open the live session a revived row is now running as. */
     onOpenLive: (String) -> Unit = {},
+    /**
+     * READ the conversation, without bringing it back.
+     *
+     * ⚠ NOT A SECOND REVIVE, and the distinction is the reason it exists: Revive
+     * starts a Claude on this transcript and can only be done once, so "what was
+     * in it?" used to cost a decision nobody wanted to make yet. Null on a shell
+     * that has not wired it — the row then offers nothing, which is what both
+     * shells did before.
+     */
+    onView: ((ArchivedSession) -> Unit)? = null,
     modifier: Modifier = Modifier,
 ) {
     val ordered = remember(rows) { ArchiveRules.ordered(rows) }
@@ -113,6 +123,7 @@ fun ArchivedSessionsSection(
                 onCopyResume = { onCopyResume(row) },
                 onDelete = { onDelete(row) },
                 onOpenLive = onOpenLive,
+                onView = onView?.let { view -> { view(row) } },
             )
             HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
         }
@@ -127,6 +138,7 @@ private fun ArchivedSessionRow(
     onCopyResume: () -> Unit,
     onDelete: () -> Unit,
     onOpenLive: (String) -> Unit,
+    onView: (() -> Unit)?,
 ) {
     var menu by remember { mutableStateOf(false) }
     val live = ArchiveRules.liveName(row)
@@ -198,6 +210,12 @@ private fun ArchivedSessionRow(
                 } else {
                     RowAction("Revive", onRevive)
                 }
+                // ⚠ OFFERED ONLY WHEN THERE IS SOMETHING TO OPEN. Claude Code
+                // sweeps its own transcripts and huginn's copy can be deleted
+                // with the row, so `transcriptPresent` is the difference between
+                // a control and a trap — the same rule `canRevive` follows, and
+                // the warning above this row already says why it matters.
+                if (onView != null && ArchiveRules.canView(row)) RowAction("View", onView)
                 if (row.resumeCommand != null) RowAction("Copy resume command", onCopyResume)
             }
         }

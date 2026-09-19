@@ -4,6 +4,8 @@ import com.silencelen.huginn.data.AppdRoutes
 import com.silencelen.huginn.data.HuginnSettings
 import com.silencelen.huginn.data.RouteBook
 import com.silencelen.huginn.data.RouteGuard
+import com.silencelen.huginn.data.RouteHealth
+import com.silencelen.huginn.data.RouteHealthSnapshot
 import com.silencelen.huginn.data.SettingsCodec
 import com.silencelen.huginn.desktop.device.Unenrol
 import kotlinx.coroutines.flow.Flow
@@ -80,6 +82,19 @@ class DesktopSettings(private val file: File = defaultFile()) : HuginnSettings {
         val pinnedRoutes: String = "",
         val activeRouteId: String = "",
         val autoSwitch: Boolean = true,
+        /**
+         * The address [com.silencelen.huginn.data.RouteGuard] threw out of the
+         * book, kept so the Host page can still name it after a restart — the
+         * drop happens during the pre-routes migration at construction, which on
+         * this client is before any window exists to read the notice.
+         */
+        val droppedUrl: String = "",
+        /**
+         * `RouteHealthSnapshot`, verbatim — see
+         * [com.silencelen.huginn.data.HuginnSettings.routeHealth] for why an
+         * empty one is not a neutral start.
+         */
+        val routeHealth: String = "",
         /** The first-launch local-AI offer card: shown once, dismissed forever. */
         val localOfferSeen: Boolean = false,
         val clientId: String = "",
@@ -268,10 +283,12 @@ class DesktopSettings(private val file: File = defaultFile()) : HuginnSettings {
                     routes = it,
                     activeId = stored.activeRouteId.takeIf { id -> id.isNotBlank() },
                     autoSwitch = stored.autoSwitch,
+                    droppedUrl = stored.droppedUrl.takeIf { u -> u.isNotBlank() },
                 ).normalized()
             }
             ?: AppdRoutes.migrate(stored.baseUrl, stored.routePinned)
     )
+    private val _routeHealth = MutableStateFlow(RouteHealthSnapshot.decode(stored.routeHealth))
     private val _baseUrl = MutableStateFlow(_routeBook.value.activeUrl)
     private val _token = MutableStateFlow(stored.token)
     private val _notifyEnabled = MutableStateFlow(stored.notifyEnabled)
@@ -352,9 +369,25 @@ class DesktopSettings(private val file: File = defaultFile()) : HuginnSettings {
                 activeRouteId = book.activeId.orEmpty(),
                 autoSwitch = book.autoSwitch,
                 baseUrl = book.activeUrl,
+                droppedUrl = book.droppedUrl.orEmpty(),
             )
         }
     }
+
+    /**
+     * ⚠ NOT WRITTEN BY [setRouteBook]. The book is the owner's preference; this
+     * changes on every probe, and one write for both would mean a background
+     * sweep republishing the book that [AppStore] reconnects on.
+     */
+    override val routeHealth: Flow<Map<String, RouteHealth>> = _routeHealth.asStateFlow()
+
+    override suspend fun setRouteHealth(value: Map<String, RouteHealth>, atMs: Long) {
+        _routeHealth.value = value
+        mutate { it.copy(routeHealth = RouteHealthSnapshot.encode(value, atMs)) }
+    }
+
+    /** The persisted health, synchronously — [AppStore] seeds its cache before it probes. */
+    fun routeHealthNow(): Map<String, RouteHealth> = _routeHealth.value
 
     override suspend fun setToken(value: String) {
         val next = value.trim()
