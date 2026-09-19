@@ -1382,6 +1382,21 @@ data class SendKeysResult(
      * daemon, which is the old behaviour exactly.
      */
     val blockedBy: String? = null,
+    /**
+     * The daemon RECOGNISED this send as one it already has, and did not take it
+     * a second time (appd 3.5.1).
+     *
+     * ⚠ AN ANSWER, NOT A FAILURE. The P1 behind it: three `/keys` POSTs from one
+     * tap put the owner's message on the pane three times. The daemon now drops
+     * an identical human text that is already pending — or that it delivered
+     * within the last 30 seconds — and says so, and a client that read the drop
+     * as nothing having happened would leave the composer looking as though the
+     * message had vanished, which is the exact complaint the send queue exists
+     * for. The text IS going to arrive; this says it is already on its way.
+     *
+     * False from every older daemon, which is the old behaviour exactly.
+     */
+    val duplicate: Boolean = false,
 ) {
     /** Nothing is waiting on this send — it landed, or there is no queue to wait in. */
     val landed: Boolean get() = delivered || queued <= 0
