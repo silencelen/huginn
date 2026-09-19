@@ -25,6 +25,7 @@ import com.silencelen.huginn.desktop.AppStore
 import com.silencelen.huginn.desktop.LocalServe
 import com.silencelen.huginn.desktop.device.LockProbe
 import com.silencelen.huginn.desktop.ui.Muted
+import com.silencelen.huginn.ui.settings.SettingsToggleRow
 import kotlinx.coroutines.launch
 
 /**
@@ -63,22 +64,30 @@ internal fun DeviceSection(store: AppStore) {
         maxLines = 4,
     )
 
-    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(top = 10.dp)) {
-        Switch(
-            checked = enabled,
-            onCheckedChange = { settings.setDeviceEnabled(it); store.syncDeviceRunner() },
-        )
-        Text(
-            if (enabled) "Available to huginn" else "Off",
-            Modifier.padding(start = 12.dp),
-            style = MaterialTheme.typography.bodyMedium,
-        )
-    }
-
-    // The status is the honest bit: "enrolled, waiting for work" and "claude was
-    // not found here" are the two things the owner will actually need to see, and
-    // neither is guessable from the toggle.
-    Muted(status.note, Modifier.padding(top = 6.dp, start = 4.dp), maxLines = 3)
+    // ⚠ THE SAME ROW EVERY OTHER TOGGLE IN THIS PRODUCT IS. It was a bare
+    // `Row { Switch, Text }` — switch on the LEFT — while steps 6 and 7 of the
+    // very same wizard use `SettingsToggleRow`, which puts the label on the left
+    // and the switch far right. Two toggle layouts inside one flow, and a reader
+    // who has learnt where to reach has to relearn it twice.
+    //
+    // ⚠ AND THE STATE IS SAID ONCE. The bold word beside the switch and the muted
+    // status line under it both read "Off" while the runner is off — the same
+    // fact twice, in two type styles, one of which looks like a heading. The
+    // status is the honest half ("enrolled, waiting for work", "claude was not
+    // found here"), so it is what the row's own summary carries; the toggle no
+    // longer repeats it.
+    SettingsToggleRow(
+        id = "devices.this-machine",
+        title = "Available to huginn",
+        checked = enabled,
+        onCheckedChange = { settings.setDeviceEnabled(it); store.syncDeviceRunner() },
+        summary = if (enabled) {
+            status.note.ifBlank { "Enrolling…" }
+        } else {
+            "huginn will not run work on this computer."
+        },
+        modifier = Modifier.padding(top = 10.dp),
+    )
 
     if (enabled) {
         FormHeader("What it may do")
