@@ -11,6 +11,7 @@ import kotlin.test.assertEquals
 import kotlin.test.assertNotEquals
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
+import kotlin.test.assertTrue
 
 /**
  * The plan card's words. NOTE kotlin.test's argument order is
@@ -220,8 +221,33 @@ class PlanFormatTest {
 
     @Test
     fun `on is either working or spent`() {
-        assertEquals("on", PlanFormat.extraUsageState(enabled = true))
+        assertEquals("turned on", PlanFormat.extraUsageState(enabled = true))
         assertEquals("limit reached", PlanFormat.extraUsageState(enabled = true, spendLimitReached = true))
+    }
+
+    /**
+     * The card ends with this line, directly under "$0.00 of $100.00 used" — so a
+     * state that is also a preposition reads as the amount line continuing and
+     * then stopping. The walk photographed exactly that: a lone "on".
+     */
+    @Test
+    fun `no state word can be read as the amount line continuing`() {
+        val states = listOf(
+            PlanFormat.extraUsageState(enabled = true),
+            PlanFormat.extraUsageState(enabled = true, spendLimitReached = true),
+            PlanFormat.extraUsageState(enabled = false, userDisabled = true),
+            PlanFormat.extraUsageState(enabled = false, disabledReason = "org_level_disabled_until"),
+            PlanFormat.extraUsageState(enabled = false, spendLimitReached = true),
+            PlanFormat.extraUsageState(enabled = false, disabledReason = "some_future_reason"),
+            PlanFormat.extraUsageState(enabled = false),
+        )
+        val danglers = setOf("on", "of", "for", "at", "to", "in", "with", "used")
+        val bad = states.filter { it in danglers }
+        assertEquals(emptyList(), bad, "a state line that reads as half a sentence")
+        assertTrue(states.all { it.isNotBlank() }, "every state says something")
+        // The switch, said both ways round, in one vocabulary.
+        assertEquals("turned on", PlanFormat.extraUsageState(enabled = true))
+        assertEquals("turned off", PlanFormat.extraUsageState(enabled = false, userDisabled = true))
     }
 
     // ------------------------------------------------------------- the card
@@ -285,7 +311,7 @@ class PlanFormatTest {
         val card = PlanFormat.extraUsageCard(Plan(spend = Spend(usedMinor = 250L, exponent = 2, currency = "USD", percent = 5.0, enabled = true)))
         assertNotNull(card)
         assertEquals("$2.50 used", card.amountLine, "no cap on the wire means no 'of'")
-        assertEquals("on", card.state)
+        assertEquals("turned on", card.state)
         assertNull(card.severity, "no word from Claude means colour by percent")
     }
 
@@ -323,7 +349,7 @@ class PlanFormatTest {
         assertNotNull(card)
         assertEquals(40.0, card.percent)
         assertNull(card.amountLine)
-        assertEquals("on", card.state)
+        assertEquals("turned on", card.state)
     }
 
     // ------------------------------------------------- whose usage this is

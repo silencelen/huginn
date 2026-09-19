@@ -101,6 +101,34 @@ class GatedTextToolbarTest {
         assertTrue(platform.hidden >= 1)
     }
 
+    /**
+     * ⚠ THE ORDER THE WALK ACTUALLY PRODUCED. The container asks for its menu
+     * BEFORE the row's long press has raised the app's bar, so the gate sees no
+     * bar, allows the popup — correctly — and is then never asked again. Refusing
+     * the next request is no help when there is no next request.
+     */
+    @Test
+    fun `a popup that beat the bar is taken down when the bar arrives`() {
+        val platform = FakeToolbar()
+        val barUp = mutableStateOf(false)
+        val gate = GatedTextToolbar(platform, barUp)
+        gate.showMenu(rect)
+        assertEquals(1, platform.shown, "with no bar up yet, the platform popup is allowed")
+        barUp.value = true
+        gate.appBarRaised()
+        assertEquals(1, platform.hidden, "the popup beside the app's bar is the defect")
+        assertEquals(TextToolbarStatus.Hidden, platform.status)
+    }
+
+    @Test
+    fun `the bar going up never SHOWS anything`() {
+        // appBarRaised is a dismissal and nothing else: a bar that raised a
+        // platform popup would be the same bug wearing the fix's name.
+        val platform = FakeToolbar()
+        GatedTextToolbar(platform, mutableStateOf(true)).appBarRaised()
+        assertEquals(0, platform.shown)
+    }
+
     @Test
     fun `the app's bar is what a long press hands the row's whole text to`() {
         // The other half of the same defect: the container selects one WORD, so

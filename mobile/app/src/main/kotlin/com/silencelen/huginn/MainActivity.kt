@@ -726,6 +726,7 @@ fun HuginnApp(
     val chatModel by vm.chatModel.collectAsState()
     val chatEffort by vm.chatEffort.collectAsState()
     val chatStarted by vm.chatStarted.collectAsState()
+    val chatGone by vm.chatGone.collectAsState()
     val chatWaking by vm.chatWaking.collectAsState()
     val models by vm.models.collectAsState()
     val transcript by vm.transcript.collectAsState()
@@ -1183,6 +1184,7 @@ fun HuginnApp(
                 sealedRun = chatSealed,
                 page = chatPage,
                 error = chatError,
+                messagesGone = chatGone,
                 onRetry = { vm.retryChatTranscript(id) },
                 streamingText = streamingText,
                 activeTool = activeTool,
@@ -1376,6 +1378,9 @@ fun HuginnApp(
                 onSendText = { text, enter -> vm.sendText(name, text, enter) },
                 onSendKeys = { vm.sendKeys(name, it) },
                 onLive = { vm.sendLive(name, it) },
+                // Live typing is what entitles this phone to reshape the owner's
+                // tmux window; leaving it hands the window straight back.
+                onLiveMode = { vm.setLiveView(it) },
                 agents = agents,
                 onAgentsOpen = { vm.startAgentsPolling(name) },
                 onAgentsClose = { vm.stopAgentsPolling() },

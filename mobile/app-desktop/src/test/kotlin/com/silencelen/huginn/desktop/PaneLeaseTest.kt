@@ -98,6 +98,66 @@ class PaneLeaseTest {
         }
     }
 
+    // ------------------------------------------- live view is what leases
+
+    /** A daemon that answers instantly, recording the paths it was asked for. */
+    private fun recorder(into: MutableList<String>) = MockEngine { request ->
+        into += "${request.method.value} ${request.url.encodedPath}"
+        respond("{}", HttpStatusCode.OK)
+    }
+
+    /**
+     * OWNER DECISION 52, at the holder.
+     *
+     * The rule itself is [PaneLease.wanted] and is pinned in `:core`; what belongs
+     * here is that the desktop's holder acts on it — that leaving live view while
+     * STAYING on the Screen tab puts a release on the wire, rather than only
+     * releasing when the tab or the window goes. The observed flap was two clients
+     * with the tab open and neither typing, so a release that waits for a teardown
+     * is a release that never happened.
+     */
+    @Test
+    fun `leaving live view releases, without the view being torn down`() {
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+        val calls = mutableListOf<String>()
+        try {
+            val holder = PaneLeaseHolder(client(recorder(calls)), scope)
+
+            // Same tab, same window, same measurement — only `live` changes.
+            val live = PaneLease.wanted("jtyper", visible = true, wantsGrid = true,
+                live = true, cols = 120, rows = 40)
+            val watching = PaneLease.wanted("jtyper", visible = true, wantsGrid = true,
+                live = false, cols = 120, rows = 40)
+
+            runBlocking { holder.reconcile(live) }
+            assertEquals("jtyper", holder.heldSession)
+
+            runBlocking { holder.reconcile(watching) }
+            assertNull(holder.heldSession, "dropping out of live view must drop the claim")
+            assertEquals(listOf("DELETE /v1/sessions/jtyper/size"), calls,
+                "and the release must reach the daemon, not just the local flag")
+        } finally {
+            scope.cancel()
+        }
+    }
+
+    @Test
+    fun `a watching client never takes the lease in the first place`() {
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+        val calls = mutableListOf<String>()
+        try {
+            val holder = PaneLeaseHolder(client(recorder(calls)), scope)
+            runBlocking {
+                holder.reconcile(PaneLease.wanted("jtyper", visible = true, wantsGrid = true,
+                    live = false, cols = 120, rows = 40))
+            }
+            assertNull(holder.heldSession)
+            assertTrue(calls.isEmpty(), "nothing held, nothing released, nothing on the wire: $calls")
+        } finally {
+            scope.cancel()
+        }
+    }
+
     private companion object {
         /**
          * How long the fake daemon holds a request. Longer than any bound under

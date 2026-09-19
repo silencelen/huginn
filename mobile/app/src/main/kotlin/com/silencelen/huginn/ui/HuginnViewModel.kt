@@ -59,6 +59,7 @@ import com.silencelen.huginn.data.RouteResolver
 import com.silencelen.huginn.data.UriByteStream
 import com.silencelen.huginn.data.Watchers
 import com.silencelen.huginn.notify.SessionWatchWorker
+import com.silencelen.huginn.data.PaneLease
 import com.silencelen.huginn.ui.LiveInput
 import com.silencelen.huginn.notify.AppLock
 import com.silencelen.huginn.notify.Heartbeat
@@ -467,9 +468,16 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
         if (!ready.value) ready.first { it }
     }
 
+    private var clientIdNow = ""
+
     private val client = HuginnClient(
         baseUrlProvider = { baseUrlNow },
         tokenProvider = { tokenNow },
+        // ⚠ THE LEASE IS KEYED ON THIS. One pane-size lease per session now, and
+        // the daemon decides "is this the holder asking?" by the install id on the
+        // request. With none, this phone and every other anonymous client are the
+        // same client as far as the lease is concerned, and the flap comes back.
+        clientIdProvider = { clientIdNow },
     )
 
     /**
@@ -1010,6 +1018,7 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch {
             baseUrlNow = settings.baseUrl.first()
             tokenNow = settings.token.first()
+            clientIdNow = settings.clientId()
             _baseUrl.value = baseUrlNow
             _token.value = tokenNow
             _fontScale.value = settings.fontScale.first()
@@ -2902,6 +2911,32 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
     private var wantRows: Int? = null
     private var forceResize = false
 
+    /**
+     * The Screen tab's LIVE TYPING mode: the soft keyboard is going straight into
+     * the pane, keystroke by keystroke.
+     *
+     * ⚠ THE ONLY THING THAT MAY LEASE THE OWNER'S TMUX WINDOW (owner decision 52).
+     * Reporting `?cols=&rows=` used to take that lease on every poll the Screen
+     * tab made, so a phone with the tab merely on display and a desktop doing the
+     * same thing walked the owner's real pane 152x44 <-> 107x44 three times in
+     * ninety seconds with nobody typing. Watching is not a claim; typing is.
+     */
+    private var liveView = false
+
+    /**
+     * The session whose tmux window this phone has actually CLAIMED, or null.
+     *
+     * ⚠ NOT THE SAME AS "a session is open", and that gap was a real bug: the
+     * phone sent `DELETE /v1/sessions/<name>/size` every time a session view
+     * closed — including the overwhelming majority where the Screen tab was never
+     * opened and this phone had leased nothing. Against the pre-52 daemon that
+     * DELETE released whoever actually held the window, so simply leaving a
+     * conversation could unpin somebody else's live pane. Releases are now driven
+     * by [PaneLease.toRelease] off this field, so the phone hands back exactly
+     * what it took and nothing else.
+     */
+    private var leasedName: String? = null
+
     fun setGeometry(cols: Int, rows: Int) {
         val changed = wantCols != cols || wantRows != rows
         wantCols = cols
@@ -2914,6 +2949,35 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
     fun forceFit() {
         forceResize = true
         restartScreenPolling()
+    }
+
+    /**
+     * Entering or leaving live typing on the Screen tab.
+     *
+     * Leaving RELEASES rather than waiting for the lease to lapse: the reader is
+     * still on the tab, still polling, and a ninety-second wait is ninety seconds
+     * of the owner's terminal held at phone width by somebody who has stopped
+     * typing. The restart is how a parked long poll learns about either.
+     */
+    fun setLiveView(value: Boolean) {
+        if (liveView == value) return
+        liveView = value
+        if (!value) releaseLease()
+        if (screenJob != null) restartScreenPolling()
+    }
+
+    /**
+     * Hand back whatever this phone claimed, if anything.
+     *
+     * The rule is [PaneLease.toRelease] — the same one the desktop's holder runs —
+     * so "release what is held, never what is merely open" is written once.
+     * Cleared BEFORE the call: a release that fails must still count as "we are no
+     * longer asking", or a failed release becomes a permanent belief we hold it.
+     */
+    private fun releaseLease() {
+        val owed = PaneLease.toRelease(leasedName, null) ?: return
+        leasedName = null
+        viewModelScope.launch { runCatching { client.releaseSize(owed) } }
     }
 
     private var currentSession: String? = null
@@ -2936,11 +3000,18 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
             var backoff = 1000L
             while (isActive) {
                 val useForce = forceResize
+                // The geometry travels either way; `live` is the separate claim.
+                val ask = PaneLease.poll(wantCols, wantRows, liveView)
+                // Sending `live=1` IS the claim, so the record of owing a release
+                // is made here rather than on the answer: a request that goes out
+                // and whose reply is lost still moved the owner's window.
+                if (ask.live) leasedName = name
                 val r = runCatching {
                     client.screen(
                         name = name,
-                        cols = wantCols,
-                        rows = wantRows,
+                        cols = ask.cols,
+                        rows = ask.rows,
+                        live = ask.live,
                         knownHash = known,
                         waitMs = if (known == null) 0 else 25_000,
                         force = useForce,
@@ -2987,9 +3058,11 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
         screenJob = null
         transcriptJob?.cancel()
         transcriptJob = null
-        val name = currentSession
         currentSession = null
         forceResize = false
+        // Live typing belongs to the visit, not to the app. A stale `true` here
+        // would make the NEXT session's first poll claim its window unasked.
+        liveView = false
         // Geometry belongs to the Screen tab of ONE session. Leaving it set
         // meant the next session opened was resized to the previous one's
         // grid even if its Screen tab was never opened.
@@ -3006,10 +3079,9 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
         historyStart = null
         _loadingHistory.value = false
         // Hand the pane size back so an attached laptop re-fits immediately
-        // instead of waiting out the server-side lease.
-        if (name != null) {
-            viewModelScope.launch { runCatching { client.releaseSize(name) } }
-        }
+        // instead of waiting out the server-side lease — but ONLY if this phone
+        // took it. Closing a session it merely read must put nothing on the wire.
+        releaseLease()
     }
 
     /**
@@ -3648,6 +3720,16 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
     private val _chatError = MutableStateFlow<String?>(null)
     val chatError: StateFlow<String?> = _chatError.asStateFlow()
 
+    /**
+     * The daemon has no transcript for a chat that HAS run: Claude Code swept it.
+     *
+     * A separate fact from [chatError], because it is not a failure and there is
+     * nothing to retry — and a separate fact from an empty page, because a chat
+     * that never ran is empty too and means the opposite thing. See [chatEmptyCopy].
+     */
+    private val _chatGone = MutableStateFlow(false)
+    val chatGone: StateFlow<Boolean> = _chatGone.asStateFlow()
+
     private var streamJob: Job? = null
     private var chatPollJob: Job? = null
 
@@ -3665,6 +3747,7 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
         _streamingText.value = null
         _activeTool.value = null
         _chatError.value = null
+        _chatGone.value = false
         // The model menu must reflect which machines serve RIGHT NOW.
         refreshModels()
         viewModelScope.launch {
@@ -3700,13 +3783,21 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
                     // it opened a perfectly good chat under "Could not load this
                     // conversation / StandaloneCoroutine was cancelled".
                     if (e is CancellationException) return@onFailure
-                    // 409 is the only failure that MEANS "nothing here yet" — the
-                    // chat exists but has never run. Anything else is a failure to
-                    // read history that exists, and must not be drawn as its absence.
-                    val neverRan = e is HuginnClient.HuginnException && e.code == 409
+                    // 409 is the only failure that means the daemon has nothing to
+                    // GIVE. Anything else is a failure to read history that exists,
+                    // and must not be drawn as its absence.
+                    //
+                    // ⚠ AND 409 IS TWO FACTS. The route answers it both for
+                    // "chat has not run yet" and for "transcript not found for this
+                    // chat" — the second being Claude Code having swept its own
+                    // JSONL, which is what a 53-day-old chat hits. Whether this is
+                    // an absence or a loss is decided by whether the chat ever ran.
+                    val refused = e is HuginnClient.HuginnException && e.code == 409
                     if (_chatPage.value == null) {
-                        if (neverRan) _chatPage.value = TranscriptPage()
-                        else _chatError.value = errText(e)
+                        if (refused) {
+                            _chatPage.value = TranscriptPage()
+                            _chatGone.value = chatMessagesGone(_chatStarted.value, true)
+                        } else _chatError.value = errText(e)
                     }
                 }
         }
@@ -3715,6 +3806,7 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
     /** Retries the transcript load after a failure the user can see. */
     fun retryChatTranscript(id: String) {
         _chatError.value = null
+        _chatGone.value = false
         loadChatTranscript(id)
     }
 
