@@ -10,22 +10,32 @@ import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.selection.DisableSelection
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Surface
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 
 /**
@@ -120,17 +130,37 @@ fun StreamPickerRow(
     // without subagents is in. Nothing to pick between, so nothing to draw.
     if (items.size <= 1 && note == null) return
 
-    val chips: @Composable () -> Unit = {
+    // ⚠ THE STRIP IS ALWAYS A STRIP. Everything up to and including the `…` pill
+    // is the row above the transcript; everything after it is what the pill
+    // stands for, and that goes in an OVERLAY rather than in the flow. See
+    // [StreamOverflowSheet].
+    val pillAt = items.indexOfFirst { it.overflow }
+    val strip = if (pillAt >= 0) items.take(pillAt + 1) else items
+    val sheet = if (pillAt >= 0) items.drop(pillAt + 1) else emptyList()
+
+    Box(modifier) {
         FlowRow(
             Modifier.padding(horizontal = 16.dp, vertical = 6.dp),
             horizontalArrangement = Arrangement.spacedBy(6.dp),
             verticalArrangement = Arrangement.spacedBy(6.dp),
         ) {
-            items.forEach { item ->
+            strip.forEach { item ->
                 if (item.header) {
                     RunHeader(item)
                 } else if (item.overflow) {
-                    OverflowPill(item, expanded, onToggleExpanded)
+                    // The pill is the ANCHOR as well as the control: the sheet
+                    // opens over it, where the reader's pointer or thumb already is.
+                    Box {
+                        OverflowPill(item, expanded, onToggleExpanded)
+                        StreamOverflowSheet(
+                            rows = sheet,
+                            expanded = expanded,
+                            selected = selected,
+                            enabled = enabled,
+                            onDismiss = onToggleExpanded,
+                            onPick = { id -> onToggleExpanded(); onPick(id) },
+                        )
+                    }
                 } else {
                     StreamChip(
                         item = item,
@@ -152,45 +182,173 @@ fun StreamPickerRow(
             }
         }
     }
-
-    // FOLDED: a strip, which is what a strip should cost — one or two rows above
-    // the transcript, no surface of its own.
-    if (!expanded) {
-        Box(modifier) { chips() }
-        return
-    }
-
-    // UNFOLDED: a SURFACE, and this is the fix. Up to forty settled agents at two
-    // chips a row is more than a phone has, and drawn with no ground of its own it
-    // read as loose text floating over the conversation — chip backgrounds at a
-    // quarter alpha let the transcript through between them and nothing said where
-    // the list stopped and the reading started. An opaque, tonally-raised panel
-    // with its own scroll says both: this is a list, it ends here, and the
-    // transcript underneath is not part of it.
-    Surface(
-        color = MaterialTheme.colorScheme.surface,
-        tonalElevation = STREAM_SHEET_ELEVATION,
-        shadowElevation = 2.dp,
-        modifier = modifier.fillMaxWidth(),
-    ) {
-        Column(
-            Modifier
-                .heightIn(max = STREAM_SHEET_MAX_HEIGHT)
-                .verticalScroll(rememberScrollState()),
-        ) { chips() }
-    }
 }
 
 /**
- * How tall the unfolded list is allowed to get before it scrolls inside itself.
+ * EVERYTHING THIS SESSION HAS FINISHED, AS AN OVERLAY WITH A SEARCH BOX.
  *
- * The cap is the point: the fold exists so a session that fanned out forty times
- * does not own the screen, and an unfold with no ceiling gives it away again.
+ * ⚠⚠ IT USED TO UNFOLD IN PLACE, and at the size real sessions reach that was
+ * unusable in three separate ways. A day-long session settles hundreds; the
+ * panel pushed the transcript down the screen to make room; every row read
+ * `[Workflow harnes… · a85dfc1f` because a CHIP is 28 characters wide by layout
+ * necessity, so dozens of rows were identical but for an opaque hex tail; and
+ * there was no way to search 198 of them. The overlay fixes all three — it is
+ * drawn over the conversation instead of shoving it, it has the width to say the
+ * whole title, and the filter is the only honest way through a list that long.
+ *
+ * ⚠ THE CAP ENDS ON A WHOLE ROW. It was a flat 240dp over rows of whatever
+ * height the text happened to make, so the list sliced its top and bottom rows
+ * in half and read as a torn edge with nothing saying it scrolled. The height is
+ * now [STREAM_SHEET_ROWS] × [STREAM_SHEET_ROW_HEIGHT] and every row is pinned to
+ * that height, so a partly-visible row is unrepresentable and the boundary
+ * itself says "there is more".
+ *
+ * ⚠⚠ THE CONTENT IS ONE `DisableSelection` BLOCK. A menu composes in its own
+ * layout root while inheriting this one's composition locals — including the
+ * transcript's `LocalSelectionRegistrar` — so a `Text` in here would register as
+ * a selectable of a selection in another hierarchy, and the next press-drag
+ * throws "layouts are not part of the same hierarchy". Same rule as `Tip` and
+ * the link peek; see `OverlaysDisableSelectionTest`.
  */
-private val STREAM_SHEET_MAX_HEIGHT = 240.dp
+@Composable
+private fun StreamOverflowSheet(
+    rows: List<StreamPicker.Item>,
+    expanded: Boolean,
+    selected: String?,
+    enabled: Boolean,
+    onDismiss: () -> Unit,
+    onPick: (String?) -> Unit,
+) {
+    // Cleared every time the sheet opens: a filter left over from last time is a
+    // list that looks empty for no reason anybody can see.
+    var query by remember(expanded) { mutableStateOf("") }
+    val shown = remember(rows, query) { rows.filter { it.header || StreamPicker.matchesFilter(it, query) } }
 
-/** Enough tonal lift to read as a panel in both themes; not a dialog. */
-private val STREAM_SHEET_ELEVATION = 3.dp
+    DropdownMenu(
+        expanded = expanded,
+        onDismissRequest = onDismiss,
+        modifier = Modifier.widthIn(min = STREAM_SHEET_MIN_WIDTH, max = STREAM_SHEET_MAX_WIDTH),
+    ) {
+        DisableSelection {
+            Column(Modifier.fillMaxWidth()) {
+                OutlinedTextField(
+                    value = query,
+                    onValueChange = { query = it },
+                    singleLine = true,
+                    label = { Text(STREAM_SHEET_FILTER_LABEL) },
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 4.dp),
+                )
+                HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+                if (shown.none { !it.header }) {
+                    Text(
+                        "Nothing matches.",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.height(STREAM_SHEET_ROW_HEIGHT)
+                            .padding(horizontal = 14.dp, vertical = 9.dp),
+                    )
+                    return@Column
+                }
+                Column(
+                    Modifier
+                        .heightIn(max = STREAM_SHEET_MAX_HEIGHT)
+                        .verticalScroll(rememberScrollState()),
+                ) {
+                    shown.forEach { item ->
+                        if (item.header) SheetRunHeader(item) else {
+                            SheetRow(
+                                item = item,
+                                selected = streamChipSelected(item, selected),
+                                enabled = enabled,
+                                onPick = { onPick(item.agentId) },
+                            )
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/** One finished stream, at the width a chip never had. */
+@Composable
+private fun SheetRow(
+    item: StreamPicker.Item,
+    selected: Boolean,
+    enabled: Boolean,
+    onPick: () -> Unit,
+) {
+    val scheme = MaterialTheme.colorScheme
+    Row(
+        Modifier
+            .fillMaxWidth()
+            // PINNED, so the cap above can only ever cut between rows.
+            .height(STREAM_SHEET_ROW_HEIGHT)
+            .background(if (selected) scheme.surfaceContainerHigh else scheme.surface)
+            .clickable(enabled = enabled, onClick = onPick)
+            .padding(horizontal = 14.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(
+            StreamPicker.sheetLabel(item),
+            style = MaterialTheme.typography.labelMedium,
+            fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
+            color = scheme.onSurface.copy(alpha = streamChipTextAlpha(finished = !selected, enabled = enabled)),
+            maxLines = 1,
+            // Ellipsised at the OVERLAY's width rather than at a chip's 28
+            // characters — which is the whole difference between a list you can
+            // read and dozens of rows of the same clipped prefix.
+            overflow = TextOverflow.Ellipsis,
+        )
+    }
+}
+
+/** A run's name inside the sheet. Labels the rows under it; never pickable. */
+@Composable
+private fun SheetRunHeader(item: StreamPicker.Item) {
+    Row(
+        Modifier.fillMaxWidth().height(STREAM_SHEET_ROW_HEIGHT).padding(horizontal = 14.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(
+            item.fullLabel.ifBlank { item.label },
+            style = MaterialTheme.typography.labelSmall,
+            fontWeight = FontWeight.SemiBold,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
+    }
+}
+
+/** The search box's own label, named so a test can hold the sheet to it. */
+const val STREAM_SHEET_FILTER_LABEL: String = "Filter finished streams"
+
+/**
+ * One row of the fold, pinned.
+ *
+ * ⚠ THE CAP HAS TO BE A MULTIPLE OF THIS. A flat ceiling over rows of whatever
+ * height the text made sliced the first and last rows in half, and a torn edge
+ * with no fade and no scrollbar reads as a rendering fault rather than as "there
+ * is more below".
+ */
+val STREAM_SHEET_ROW_HEIGHT = 34.dp
+
+/** How many whole rows the fold shows before it scrolls inside itself. */
+const val STREAM_SHEET_ROWS: Int = 7
+
+/**
+ * How tall the unfolded list is allowed to get before it scrolls.
+ *
+ * The cap is the point: the fold exists so a session that fanned out two hundred
+ * times does not own the screen, and an unfold with no ceiling gives it away
+ * again. Derived rather than typed, so it can only ever end on a whole row.
+ */
+val STREAM_SHEET_MAX_HEIGHT = STREAM_SHEET_ROW_HEIGHT * STREAM_SHEET_ROWS
+
+/** Wide enough for a real title, capped so it does not become the window. */
+private val STREAM_SHEET_MIN_WIDTH = 320.dp
+private val STREAM_SHEET_MAX_WIDTH = 560.dp
 
 /**
  * The `…` pill: everything this session has finished, folded into one row.

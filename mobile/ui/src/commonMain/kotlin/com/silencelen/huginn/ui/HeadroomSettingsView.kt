@@ -437,6 +437,9 @@ private fun Muted2(text: String) {
  * way to set 92 rather than 91 on a track a few hundred pixels wide.
  */
 @Composable
+// SliderDefaults.Track's stop-indicator parameter is still experimental; the
+// annotation is the price of turning the dot off. See the note at the call.
+@OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
 private fun PctRow(
     label: String,
     value: Int,
@@ -458,17 +461,25 @@ private fun PctRow(
 
         @Composable
         fun RowScope.Track() {
+            // THE THEME'S OWN MUTED SURFACE for the unspent part of the track.
+            // Material's default inactive track is secondaryContainer, which in
+            // this palette is a violet that appears nowhere else in the product —
+            // six sliders' worth of a colour the app does not use.
+            val colors = SliderDefaults.colors(
+                inactiveTrackColor = MaterialTheme.colorScheme.surfaceVariant,
+            )
             Slider(
                 value = value.toFloat(),
                 onValueChange = { onChange(it.toInt().coerceIn(range)) },
                 valueRange = range.first.toFloat()..range.last.toFloat(),
-                // THE THEME'S OWN MUTED SURFACE for the unspent part of the track.
-                // Material's default inactive track is secondaryContainer, which
-                // in this palette is a violet that appears nowhere else in the
-                // product — six sliders' worth of a colour the app does not use.
-                colors = SliderDefaults.colors(
-                    inactiveTrackColor = MaterialTheme.colorScheme.surfaceVariant,
-                ),
+                colors = colors,
+                // ⚠ NO STOP INDICATOR. Material 3 draws a small dot near the end
+                // of the inactive track, which on a threshold slider reads as a
+                // second, stuck thumb — six of them down the Usage page, each one
+                // inviting somebody to try to drag it. It means "the end of the
+                // range", which is what the end of the track already means and
+                // what the number in the box beside it says outright.
+                track = { state -> SliderDefaults.Track(sliderState = state, colors = colors, drawStopIndicator = null) },
                 modifier = Modifier.weight(1f),
             )
         }

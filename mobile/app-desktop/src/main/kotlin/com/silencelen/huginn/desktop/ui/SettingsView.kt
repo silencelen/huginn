@@ -9,6 +9,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.window.isTraySupported
 import com.silencelen.huginn.desktop.AppStore
 import com.silencelen.huginn.desktop.ui.common.PaneScrollbar
 import com.silencelen.huginn.desktop.ui.settings.AboutPage
@@ -160,6 +161,7 @@ private fun settingsFacts(store: AppStore, state: SettingsPaneState): SettingsFa
         present = present,
         notifyEnabled = notifyEnabled,
         closeToTray = closeToTray,
+        traySupported = isTraySupported,
         deviceEnabled = deviceEnabled,
         update = update,
         installedVersion = store.updater.installedVersion,

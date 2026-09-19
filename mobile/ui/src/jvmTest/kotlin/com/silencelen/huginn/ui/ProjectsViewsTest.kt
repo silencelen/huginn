@@ -10,6 +10,7 @@ import com.silencelen.huginn.data.ProjectRow
 import com.silencelen.huginn.data.SessionHeadroom
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
@@ -153,10 +154,24 @@ class ProjectsViewsTest {
 
     @Test
     fun `an empty list explains itself rather than showing a blank`() {
-        assertTrue(PROJECTS_EMPTY.contains("a lead sizes"), PROJECTS_EMPTY)
+        // ⚠ ONCE, NOT TWICE. Both panes are on screen together when there are no
+        // projects, and each carried its own paragraph explaining what a project
+        // IS — different wordings of the same three facts, side by side. The
+        // explanation belongs in the pane with the room for it; the list says the
+        // short fact, because the list is 280dp wide.
+        assertTrue(PROJECTS_EMPTY.isNotBlank(), "a blank list must still say something")
         assertTrue(
-            PROJECTS_EMPTY.contains("before anything is started"),
-            "the approval gate is the thing worth saying up front: $PROJECTS_EMPTY",
+            PROJECTS_EMPTY.length < 60,
+            "the list pane gets the short one: $PROJECTS_EMPTY",
+        )
+        assertTrue(PROJECTS_BLURB.contains("a lead sizes"), PROJECTS_BLURB)
+        assertTrue(
+            PROJECTS_BLURB.contains("before anything is started"),
+            "the approval gate is the thing worth saying up front: $PROJECTS_BLURB",
+        )
+        assertFalse(
+            PROJECTS_BLURB.contains(PROJECTS_EMPTY),
+            "the two panes must not repeat each other word for word",
         )
     }
 

@@ -431,3 +431,50 @@ class DesktopSettingsTest {
         assertEquals(recovered, DesktopSettings(file).clientIdNow())
     }
 }
+
+/**
+ * THE WATCH ERROR OUTLIVES WHAT CAUSED IT.
+ *
+ * ⚠ IT IS PERSISTED, and that is the whole bug. `lastWatchError` is written to
+ * `settings.json` so a report copied after a restart can still say why the
+ * stream dropped — good — and NOTHING ever cleared it. A client that had been
+ * reconnected and healthy for hours reported `watch stream connected` and `last
+ * watch err unauthorized at 2026-09-18T23:06:39Z` in the same diagnostics blob,
+ * which is exactly the pair that makes a fine client look broken in a bug report
+ * and sends whoever reads it after a token that is not the problem.
+ *
+ * A successful connect is the event that makes the old reason untrue, so it is
+ * the event that clears it.
+ */
+class WatchErrorClearTest {
+
+    private val dirs = mutableListOf<java.io.File>()
+
+    @kotlin.test.AfterTest
+    fun cleanup() = dirs.forEach { it.deleteRecursively() }
+
+    private fun freshSettings(): DesktopSettings {
+        val dir = java.nio.file.Files.createTempDirectory("huginn-watch-err").toFile()
+        dirs += dir
+        return DesktopSettings(java.io.File(dir, "settings.json"))
+    }
+
+    @Test
+    fun `a connect wipes the reason the last drop gave`() = runBlocking {
+        val settings = freshSettings()
+        settings.noteWatchError("unauthorized", atMs = 1_789_000_000_000)
+        assertEquals("unauthorized", settings.lastWatchError.first())
+
+        settings.clearWatchError()
+        assertEquals("", settings.lastWatchError.first(), "a healthy stream has no last complaint")
+        assertEquals(0L, settings.lastWatchErrorAt.first(), "and no timestamp for one")
+    }
+
+    @Test
+    fun `it is cleared on disk too, not only in memory`() = runBlocking {
+        val settings = freshSettings()
+        settings.noteWatchError("connection reset", atMs = 1_789_000_000_000)
+        settings.clearWatchError()
+        assertEquals("", DesktopSettings(java.io.File(settings.path)).lastWatchError.first())
+    }
+}

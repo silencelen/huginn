@@ -119,11 +119,12 @@ class ShortcutsTest {
         // depends on having focus in a text field. They are listed here anyway,
         // since "how do I send this" is the first thing anyone needs and the last
         // place they would look is a table of window-level shortcuts.
-        // 17 since Wave 3: Ctrl+Shift+J for Projects, which the row says is
-        // offered only on a host that has them — the rail hides the item on the
-        // same probe, and a cheat sheet that promised the chord unconditionally
-        // would be the one place the app still claimed the feature.
-        assertEquals(17, SHORTCUT_HELP.size)
+        // 18: Ctrl+Shift+J for Projects and Ctrl+Shift+K for Consoles, each row
+        // saying it is offered only on a host that has them — the rail hides both
+        // items on the same probe, and a cheat sheet that promised the chords
+        // unconditionally would be the one place the app still claimed a feature
+        // this daemon does not have.
+        assertEquals(18, SHORTCUT_HELP.size)
         assertTrue(SHORTCUT_HELP.all { it.first.isNotBlank() && it.second.isNotBlank() })
         // The pointer half of the model. It is listed beside the keys because the
         // verb surface, the state legend and multi-select all live on the mouse,
@@ -304,5 +305,67 @@ class ShortcutsTest {
         assertEquals(0, stepIndex(-1, 3, 1))
         assertEquals(2, stepIndex(-1, 3, -1))
         assertEquals(-1, stepIndex(0, 0, 1))
+    }
+}
+
+/**
+ * THE CONSOLES CHORD, added because the pane had no keyboard door at all.
+ *
+ * Projects has Ctrl+Shift+J and Consoles had nothing — so when the rail item was
+ * missing (see `ConsoleProbeScheduleTest`) the palette was the only way in, and a
+ * reader who could not find the feature had no second thing to try. Ctrl+Shift+K
+ * because K was the one free letter on that row and it sits beside the palette's
+ * own Ctrl+K, which is where somebody looking for a list of things goes first.
+ */
+class ConsolesChordTest {
+
+    @Test
+    fun `ctrl shift K opens consoles`() {
+        assertEquals(
+            Shortcut.VIEW_CONSOLES,
+            match(ctrl = true, shift = true, alt = false, key = "K"),
+        )
+    }
+
+    @Test
+    fun `plain ctrl K is still the palette`() {
+        assertEquals(Shortcut.PALETTE, match(ctrl = true, shift = false, alt = false, key = "K"))
+    }
+
+    @Test
+    fun `the cheat sheet claims it`() {
+        assertTrue(
+            SHORTCUT_HELP.any { it.first == "Ctrl Shift K" },
+            "a chord nothing advertises is a chord nobody finds: $SHORTCUT_HELP",
+        )
+    }
+}
+
+/**
+ * WHAT THE CHEAT SHEET PROMISES ABOUT THE TRAY.
+ *
+ * ⚠ Ctrl+Shift+H is a no-op on a machine with no system tray — `Main.kt` guards
+ * it with `isTraySupported` and is right to — but F1 advertised "Hide to the
+ * tray" unconditionally, so the one list that exists to tell a reader what the
+ * window answers to was promising a chord that does nothing here.
+ */
+class TrayHelpLineTest {
+
+    @Test
+    fun `a machine with a tray is told it can hide`() {
+        val line = shortcutHelp(traySupported = true).single { it.first == "Ctrl Shift H" }.second
+        assertTrue(line.contains("tray"), line)
+    }
+
+    @Test
+    fun `a machine without one is told closing quits`() {
+        val line = shortcutHelp(traySupported = false).single { it.first == "Ctrl Shift H" }.second
+        assertEquals("Nothing — closing quits (no system tray here)", line)
+    }
+
+    @Test
+    fun `the sheet is the same length either way`() {
+        assertEquals(shortcutHelp(true).size, shortcutHelp(false).size)
+        assertEquals(SHORTCUT_HELP.size, shortcutHelp(true).size)
     }
 }

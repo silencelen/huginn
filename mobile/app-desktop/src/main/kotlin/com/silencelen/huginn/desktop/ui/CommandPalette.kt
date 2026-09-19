@@ -28,6 +28,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.window.isTraySupported
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
@@ -179,6 +180,14 @@ private fun PaletteRow(item: PaletteItem, active: Boolean, onClick: () -> Unit) 
             .padding(horizontal = Space.gutter, vertical = Space.tight),
         verticalAlignment = Alignment.CenterVertically,
     ) {
+        // ⚠ BOTH HALVES ARE WEIGHTED, and that is the fix. The label had the only
+        // weight and the detail had none, so the detail measured at its full
+        // intrinsic width and the label was handed whatever was left — which for
+        // the Settings rows ("Settings · Host & sign-in" against a whole blurb)
+        // was nothing at all: one palette row rendered with an EMPTY label column
+        // and two more were indistinguishable from each other. A weighted
+        // `fill = false` detail takes what it needs up to its share and no more,
+        // so the label always keeps half the row and ellipsises inside it.
         Text(
             item.label,
             style = DeskType.rowTitle,
@@ -187,7 +196,7 @@ private fun PaletteRow(item: PaletteItem, active: Boolean, onClick: () -> Unit) 
             modifier = Modifier.weight(1f),
         )
         Spacer(Modifier.width(Space.wide))
-        Muted(item.detail, maxLines = 1)
+        Muted(item.detail, Modifier.weight(1f, fill = false), maxLines = 1)
     }
 }
 
@@ -223,7 +232,10 @@ fun Cheatsheet(onDismiss: () -> Unit) {
         ) {
             Column(Modifier.padding(Space.section)) {
                 Row(horizontalArrangement = Arrangement.spacedBy(Space.section)) {
-                    HelpColumn("Keyboard", SHORTCUT_HELP, keyWidth = 118.dp)
+                    // Per-machine, because Ctrl+Shift+H is inert without a tray
+                    // and a sheet that promised it anyway would be the one place
+                    // the app still claimed the behaviour.
+                    HelpColumn("Keyboard", shortcutHelp(isTraySupported), keyWidth = 118.dp)
                     HelpColumn("Pointer", POINTER_HELP, keyWidth = 118.dp)
                 }
                 Muted("Esc or F1 closes this.", Modifier.padding(top = Space.gutter))

@@ -1,5 +1,6 @@
 package com.silencelen.huginn.desktop.ui
 
+import com.silencelen.huginn.ui.ChatRules
 import com.silencelen.huginn.data.Chat
 import com.silencelen.huginn.data.Console
 import com.silencelen.huginn.data.ProjectRow
@@ -45,7 +46,18 @@ enum class Shortcut {
      */
     VIEW_PROJECTS,
 
-    /** Palette-only — no key. The rail item is the door; this is the search box. */
+    /**
+     * The internal pages. Ctrl+Shift+K — K because it was the one free letter on
+     * the Shift row, and because it sits beside the palette's own Ctrl+K, which
+     * is where somebody hunting for a list of things reaches first.
+     *
+     * ⚠ IT EXISTS BECAUSE THE RAIL ITEM CAN BE MISSING. Consoles was
+     * palette-only, so when the feature probe had not answered there was exactly
+     * one way in and no second thing to try. The chord obeys `railViews` like
+     * [VIEW_PROJECTS] does — it navigates nowhere on a daemon without consoles —
+     * but on a daemon that HAS them it is a door that does not depend on the
+     * probe having finished before the reader looked.
+     */
     VIEW_CONSOLES,
 
     /**
@@ -137,6 +149,7 @@ fun match(
             "N" -> Shortcut.NEW_ACT
             "P" -> Shortcut.TOGGLE_PAD_PANEL
             "J" -> Shortcut.VIEW_PROJECTS
+            "K" -> Shortcut.VIEW_CONSOLES
             else -> null
         }
     }
@@ -231,6 +244,24 @@ fun keyName(key: androidx.compose.ui.input.key.Key): String? = when (key) {
     else -> null
 }
 
+/**
+ * The cheat sheet, for a machine that may or may not have a system tray.
+ *
+ * ⚠ Ctrl+Shift+H DOES NOTHING WITHOUT A TRAY. `Main.kt` guards it with
+ * `isTraySupported` and is right to — there is nothing to hide into — but F1
+ * advertised "Hide to the tray" unconditionally, so the one list whose whole job
+ * is to say what this window answers to promised a chord that is inert here. The
+ * row stays in place rather than disappearing: a reader who has seen it
+ * elsewhere, or who read it in the docs, is owed the reason and not a gap.
+ */
+fun shortcutHelp(traySupported: Boolean): List<Pair<String, String>> = SHORTCUT_HELP.map { row ->
+    if (row.first == "Ctrl Shift H" && !traySupported) {
+        row.first to "Nothing — closing quits (no system tray here)"
+    } else {
+        row
+    }
+}
+
 /** One row of the cheat sheet, and the single source for what the app claims. */
 val SHORTCUT_HELP: List<Pair<String, String>> = listOf(
     "Enter" to "Send the message you are typing",
@@ -242,6 +273,7 @@ val SHORTCUT_HELP: List<Pair<String, String>> = listOf(
     "Ctrl Shift N" to "New Act chat",
     "Ctrl P" to "Pages",
     "Ctrl Shift J" to "Projects (when this host has them)",
+    "Ctrl Shift K" to "Consoles (when this host has them)",
     "Ctrl Shift P" to "Show the open page beside this conversation",
     "Alt ↑ / ↓" to "Previous / next in the list (works while typing)",
     "Ctrl B" to "Hide or show the list pane (or click the notch on the seam)",
@@ -415,7 +447,7 @@ fun paletteItems(
         chats.map {
             PaletteItem.OpenChat(
                 it.id,
-                it.title ?: "Untitled",
+                ChatRules.listLabel(it),
                 listOfNotNull("chat", it.mode, it.lastSnippet?.take(60)).joinToString(" · "),
             )
         }

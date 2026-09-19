@@ -35,7 +35,9 @@ import com.silencelen.huginn.desktop.AppStore
 import com.silencelen.huginn.desktop.CliSync
 import com.silencelen.huginn.desktop.DesktopSettings
 import com.silencelen.huginn.desktop.View
+import androidx.compose.ui.window.isTraySupported
 import com.silencelen.huginn.desktop.diag.AppLog
+import com.silencelen.huginn.desktop.notify.Notifiers
 import com.silencelen.huginn.desktop.ui.Muted
 import com.silencelen.huginn.desktop.ui.common.openInBrowser
 import com.silencelen.huginn.desktop.update.UpdateState
@@ -135,7 +137,7 @@ fun ColumnScope.HostPage(store: AppStore, mark: String?) {
         highlighted = SettingsRowStyle.isHighlighted("host.route", mark),
         finding = resolving,
         note = routeNote,
-        suggestedUrl = HuginnSettings.DEFAULT_BASE_URL,
+        suggestedUrl = HuginnSettings.ROUTE_URL_PLACEHOLDER,
     )
     SettingsFieldRow(
         id = "host.token",
@@ -387,6 +389,19 @@ fun ColumnScope.NotifyPage(store: AppStore, mark: String?) {
         else "not claiming: window hidden or unattended, so Telegram stays live",
         highlighted = SettingsRowStyle.isHighlighted("notify.claim-route", mark),
     )
+    // ⚠ THE FACT THIS PAGE WAS PROMISED AND DID NOT CARRY. The notification setup
+    // step's failure text says "Notifications in Settings shows which path this
+    // computer is using", and it did not — a machine with no tray and no
+    // libnotify saw the claim toggle above and nothing else, while the startup
+    // log and `Copy diagnostics` both already knew. Read-only because it is not a
+    // choice: nothing in this app installs a notification daemon.
+    SettingsReadOnlyRow(
+        id = Notifiers.PATH_ROW_ID,
+        title = "How notifications reach this computer",
+        value = Notifiers.pathWords(AppLog.notifierName),
+        summary = Notifiers.pathSummary(AppLog.notifierName),
+        highlighted = SettingsRowStyle.isHighlighted(Notifiers.PATH_ROW_ID, mark),
+    )
 }
 
 // ------------------------------------------------------------------ devices
@@ -530,8 +545,17 @@ fun ColumnScope.AppearancePage(store: AppStore, mark: String?) {
         title = "Close to tray",
         checked = closeToTray,
         onCheckedChange = { store.settings.setCloseToTray(it) },
-        summary = if (closeToTray) "Closing the window leaves huginn running in the tray."
-        else "Closing the window quits huginn, and the watch stream stops with it.",
+        // ⚠ THE COPY FOLLOWS THE MACHINE, NOT THE TOGGLE. `Main.kt` quits when
+        // there is no tray whatever this is set to, and the row used to promise
+        // "leaves huginn running in the tray" on a box where closing the window
+        // ends the process — verified, it was gone.
+        summary = when {
+            !isTraySupported ->
+                "There is no system tray on this computer, so closing the window quits huginn " +
+                    "and the watch stream stops with it."
+            closeToTray -> "Closing the window leaves huginn running in the tray."
+            else -> "Closing the window quits huginn, and the watch stream stops with it."
+        },
         highlighted = SettingsRowStyle.isHighlighted("appearance.close-to-tray", mark),
     )
     SettingsNavRow(
@@ -635,12 +659,19 @@ fun ColumnScope.UpdatesPage(store: AppStore, mark: String?) {
         highlighted = SettingsRowStyle.isHighlighted("updates.copy-diagnostics", mark),
         modifier = Modifier.padding(top = 12.dp),
     )
+    // ⚠ A PATH IS IDENTIFIED BY ITS END. This row ellipsised a long log path at
+    // 320dp and offered nothing else — no wrap, no copy, no way to widen it —
+    // while "This install" directly beneath it wrapped in full, so the one line
+    // somebody wants when they are about to go and read the file was the one
+    // line they could not have. Four lines and a Copy.
     SettingsReadOnlyRow(
         id = "updates.log-path",
         title = "Log file",
         value = AppLog.path ?: "memory only",
         summary = if (AppLog.path == null) "The log file could not be opened, so it is kept in memory." else null,
         highlighted = SettingsRowStyle.isHighlighted("updates.log-path", mark),
+        maxLines = 4,
+        onCopy = AppLog.path?.let { path -> { clipboard.setText(AnnotatedString(path)) } },
     )
     SettingsReadOnlyRow(
         id = "updates.install-path",

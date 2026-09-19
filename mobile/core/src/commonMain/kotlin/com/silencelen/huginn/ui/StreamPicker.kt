@@ -67,12 +67,15 @@ object StreamPicker {
     /**
      * The most finished agents the pill will ever unfold.
      *
-     * A day-long session settles hundreds; past a screenful the list stops being
-     * a way back into a transcript and becomes a wall. [Item.count] on the pill
-     * still carries the TRUE total, so the strip never quietly under-reports what
-     * it is holding.
+     * ⚠ 40 UNTIL THE FOLD BECAME SEARCHABLE. The old number's argument — "past a
+     * screenful the list stops being a way back into a transcript and becomes a
+     * wall" — was about a list that unfolded IN PLACE, pushing the transcript
+     * down, with no way to search it. The fold is an overlay with a filter now,
+     * and a filter can only find what it is handed: a cap of 40 over a session
+     * with 198 settled agents hid exactly the old run somebody was searching for.
+     * [Item.count] on the pill still carries the TRUE total.
      */
-    const val FOLDED_MAX: Int = 40
+    const val FOLDED_MAX: Int = 200
 
     /**
      * The longest a chip label may be; past this it is clipped with an ellipsis.
@@ -132,6 +135,25 @@ object StreamPicker {
         val header: Boolean = false,
         /** Epoch SECONDS of the agent's last write; 0 on Main. */
         val updatedAt: Long = 0,
+        /**
+         * Epoch SECONDS of the agent's FIRST write; 0 on Main and on a header.
+         *
+         * ⚠ THIS IS WHAT HOLDS THE STRIP STILL. Ordering live chips by
+         * [updatedAt] meant a running agent — which writes every few seconds —
+         * jumped to the front on the next poll, and two live chips swapped places
+         * while somebody was reaching for one. First-seen never changes.
+         */
+        val startedAt: Long = 0,
+        /**
+         * The label BEFORE [clip], for the fold's overlay.
+         *
+         * A chip is 28 characters wide by layout necessity, which is fine for a
+         * strip and useless for a list of 198: the unfolded rows all read
+         * `[Workflow harnes… · a85dfc1f`, identical but for an opaque hex tail.
+         * The overlay has the width, so it gets the words. Blank on rows that are
+         * not agents.
+         */
+        val fullLabel: String = "",
         val agentType: String? = null,
         val status: String? = null,
     )
@@ -187,10 +209,15 @@ object StreamPicker {
                 key = "agent:$id",
                 agentId = id,
                 label = labelFor(a),
+                fullLabel = fullLabelFor(a),
                 running = alive,
                 finished = !alive,
                 workflowId = a.workflowId?.trim()?.takeIf { it.isNotEmpty() },
                 updatedAt = a.updatedAt,
+                // Falls back to the last write for a daemon that sends no
+                // `startedAt`: a stable-ish order beats none, and a row with no
+                // clock at all still ties on its id.
+                startedAt = a.startedAt.takeIf { it > 0 } ?: a.updatedAt,
                 agentType = a.agentType,
                 status = a.status,
             )
@@ -207,11 +234,14 @@ object StreamPicker {
         // Expanded it is down in the folded list instead, because appearing in
         // both places is a duplicate key, which is a crash and not a style note.
         val held = if (expanded) null else settled.firstOrNull { it.agentId == sel }
-        out += lay(live + listOfNotNull(held), headerSuffix = "", headerNeedsLive = true)
+        // ⚠ STABLE, because these are TARGETS. See [Item.startedAt].
+        out += lay(live + listOfNotNull(held), headerSuffix = "", headerNeedsLive = true, stable = true)
 
         if (settled.isEmpty()) return out
         out += Item(key = OVERFLOW_KEY, label = "…", overflow = true, count = settled.size)
-        if (expanded) out += lay(folded(settled, sel), headerSuffix = ":finished", headerNeedsLive = false)
+        // The fold is a LIST somebody reads top-down rather than a row of targets,
+        // and nothing in it is moving any more: newest first is right here.
+        if (expanded) out += lay(folded(settled, sel), headerSuffix = ":finished", headerNeedsLive = false, stable = false)
         return out
     }
 
@@ -244,7 +274,12 @@ object StreamPicker {
      * @param headerNeedsLive collapsed, a header earns its line only by having
      *   something running under it; a lone held-open member is just a chip.
      */
-    private fun lay(rows: List<Item>, headerSuffix: String, headerNeedsLive: Boolean): List<Item> {
+    private fun lay(
+        rows: List<Item>,
+        headerSuffix: String,
+        headerNeedsLive: Boolean,
+        stable: Boolean,
+    ): List<Item> {
         val groups = LinkedHashMap<String, MutableList<Item>>()
         val direct = ArrayList<Item>()
         for (r in rows) {
@@ -252,30 +287,58 @@ object StreamPicker {
             if (wf == null) direct += r else groups.getOrPut(wf) { ArrayList() } += r
         }
 
-        data class Unit(val running: Boolean, val updatedAt: Long, val rows: List<Item>)
+        data class Unit(
+            val running: Boolean,
+            val updatedAt: Long,
+            val startedAt: Long,
+            val key: String,
+            val rows: List<Item>,
+        )
+
+        // Inside a run, the same question as between them: a strip of targets
+        // orders by when each one appeared, a read-through list by recency.
+        val within = if (stable) {
+            compareByDescending<Item> { it.running }.thenBy { it.startedAt }.thenBy { it.key }
+        } else {
+            compareByDescending<Item> { it.running }.thenByDescending { it.updatedAt }
+        }
 
         val units = ArrayList<Unit>(groups.size + direct.size)
         for ((wf, members) in groups) {
-            val sorted = members.sortedWith(compareByDescending<Item> { it.running }.thenByDescending { it.updatedAt })
+            val sorted = members.sortedWith(within)
             val running = sorted.any { it.running }
             val updatedAt = sorted.maxOf { it.updatedAt }
+            val startedAt = sorted.minOf { it.startedAt }
             if (headerNeedsLive && !running) {
-                for (m in sorted) units += Unit(m.running, m.updatedAt, listOf(m))
+                for (m in sorted) units += Unit(m.running, m.updatedAt, m.startedAt, m.key, listOf(m))
                 continue
             }
             val header = Item(
                 key = "workflow:$wf$headerSuffix",
                 label = clip(runLabel(wf)),
+                fullLabel = runLabel(wf),
                 running = running,
                 workflowId = wf,
                 header = true,
                 updatedAt = updatedAt,
+                startedAt = startedAt,
             )
-            units += Unit(running, updatedAt, listOf(header) + sorted)
+            units += Unit(running, updatedAt, startedAt, header.key, listOf(header) + sorted)
         }
-        for (d in direct) units += Unit(d.running, d.updatedAt, listOf(d))
+        for (d in direct) units += Unit(d.running, d.updatedAt, d.startedAt, d.key, listOf(d))
 
-        units.sortWith(compareByDescending<Unit> { it.running }.thenByDescending { it.updatedAt })
+        // ⚠ FIRST-SEEN FOR THE STRIP. Running still outranks settled — the one
+        // settled chip the strip holds open is the transcript on screen and
+        // belongs at the end, not in the middle of the live ones — but among
+        // equals the order is the one that does not change under a pointer. The
+        // id breaks a tie so the daemon's listing order cannot leak through.
+        units.sortWith(
+            if (stable) {
+                compareByDescending<Unit> { it.running }.thenBy { it.startedAt }.thenBy { it.key }
+            } else {
+                compareByDescending<Unit> { it.running }.thenByDescending { it.updatedAt }
+            },
+        )
         return units.flatMap { it.rows }
     }
 
@@ -380,9 +443,43 @@ object StreamPicker {
         return "Run " + bare.takeLast(8)
     }
 
-    private fun shortId(id: String): String {
+    /** `agent-a85dfc1f22…` → `a85dfc1f`. The tail a person can actually compare. */
+    fun shortId(id: String): String {
         val bare = id.trim().removePrefix("agent-")
         return if (bare.length <= 8) bare else bare.take(8)
+    }
+
+    /** [labelFor] without the chip's width budget, for the fold's overlay. */
+    private fun fullLabelFor(a: AgentRun): String {
+        val summary = firstLine(a.summary)
+        if (summary.isNotEmpty()) return summary
+        val task = firstLine(a.task)
+        if (task.isNotEmpty() && !readsAsPrompt(task)) return task
+        val type = a.agentType?.trim().orEmpty()
+        val short = shortId(a.id)
+        return if (type.isEmpty()) short else "$type · $short"
+    }
+
+    /**
+     * One row of the fold's overlay: the whole title, then the id.
+     *
+     * ⚠ THE CHIP'S 28 CHARACTERS ARE A LAYOUT BUDGET, NOT A LABEL. Unfolded in
+     * place, 198 settled agents read as dozens of rows of the same clipped
+     * twenty-eight characters and one opaque hex tail — a picker that cannot be
+     * picked from. The overlay has the width, so it says the words; the id stays
+     * because two runs of the same workflow legitimately share a title.
+     */
+    fun sheetLabel(item: Item): String {
+        val words = item.fullLabel.ifBlank { item.label }
+        val id = item.agentId?.let { shortId(it) }.orEmpty()
+        return if (id.isEmpty()) words else "$words · $id"
+    }
+
+    /** The overlay's filter, over everything the row shows. Blank matches everything. */
+    fun matchesFilter(item: Item, query: String): Boolean {
+        val q = query.trim().lowercase()
+        if (q.isEmpty()) return true
+        return sheetLabel(item).lowercase().contains(q) || item.agentId.orEmpty().lowercase().contains(q)
     }
 
     /**

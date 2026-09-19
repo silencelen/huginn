@@ -14,7 +14,6 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.unit.DpOffset
 import androidx.compose.ui.unit.dp
 import com.silencelen.huginn.data.localTimeFormat
 import com.silencelen.huginn.ui.RowTimeTooltip
@@ -63,10 +62,17 @@ fun Tip(text: String, modifier: Modifier = Modifier, content: @Composable () -> 
         // 400ms: long enough that sweeping the pointer across a list does not
         // trail popups, short enough to feel like an answer rather than a wait.
         delayMillis = 400,
-        tooltipPlacement = TooltipPlacement.CursorPoint(offset = DpOffset(12.dp, 16.dp)),
+        // ⚠ THE OFFSET IS SHARED WITH THE LINK PEEK'S, and it must differ from
+        // it: both popups are reachable at one cursor — this wraps every
+        // transcript row, the peek wraps a link inside one — and they used to sit
+        // at the same point, so this card covered the URL. See [CursorOverlays].
+        tooltipPlacement = TooltipPlacement.CursorPoint(offset = CursorOverlays.ROW_TIP),
         content = content,
     )
 }
+
+/** As wide as a tooltip may get before it stops being a tooltip. */
+private val TIP_MAX_WIDTH = 320.dp
 
 @Composable
 private fun TipCard(text: String) {
@@ -75,14 +81,23 @@ private fun TipCard(text: String) {
         shape = RoundedCornerShape(6.dp),
         tonalElevation = 8.dp,
         modifier = Modifier
-            .widthIn(max = 320.dp)
+            .widthIn(max = TIP_MAX_WIDTH)
             .border(1.dp, MaterialTheme.colorScheme.outline, RoundedCornerShape(6.dp)),
     ) {
         Text(
             text,
             style = DeskType.rowMeta,
             color = MaterialTheme.colorScheme.onSurface,
-            modifier = Modifier.padding(horizontal = Space.wide, vertical = Space.unit),
+            // ⚠ THE CAP GOES ON THE TEXT, NOT ONLY ON THE CARD. A tooltip composes
+            // in a Popup, which measures its content against the WINDOW rather
+            // than against the anchor — so the `Text` laid out at its full
+            // single-line intrinsic width and the card's `widthIn` then clipped
+            // it. The rail's Pages tip rendered as "…and the one you hand to",
+            // with no ellipsis and no second line: a sentence cut mid-phrase,
+            // which is worse than no tooltip. Capped here it has to WRAP.
+            modifier = Modifier
+                .widthIn(max = TIP_MAX_WIDTH - Space.wide * 2)
+                .padding(horizontal = Space.wide, vertical = Space.unit),
         )
     }
 }

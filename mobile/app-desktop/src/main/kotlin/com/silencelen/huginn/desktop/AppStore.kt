@@ -15,6 +15,7 @@ import com.silencelen.huginn.ui.ScratchpadRules
 import com.silencelen.huginn.ui.ProjectRules
 import com.silencelen.huginn.ui.toSchedule
 import com.silencelen.huginn.desktop.device.DeviceRunner
+import com.silencelen.huginn.desktop.ui.shouldProbeConsoles
 import com.silencelen.huginn.desktop.update.BuildInfo
 import com.silencelen.huginn.data.DraftBook
 import com.silencelen.huginn.data.SentHistory
@@ -985,6 +986,17 @@ class AppStore(
                 _consoles.value = list.consoles
                 _consoleApproval.value = list.approval
             }
+            // ⚠⚠ A THROW IS NOT AN ANSWER, AND TREATING IT AS ONE HID THE FEATURE
+            // FOR A WHOLE SESSION. This had no `onFailure` at all, which reads as
+            // "leave it unknown" and was the right instinct — but the probe only
+            // ran once, so unknown was final. `probeGet` already turns the
+            // feature's own 404 into a null LIST above; everything that lands here
+            // is a 401 during setup, a dead route or a timeout, none of which say
+            // anything about whether this daemon has consoles. So the flag is left
+            // null and `shouldProbeConsoles` asks again next tick.
+            .onFailure {
+                if (it is HuginnClient.HuginnException && it.code == 404) _consolesAvailable.value = false
+            }
     }
 
     /** Probe one console now, from the host, and adopt the refreshed row. */
@@ -1796,11 +1808,13 @@ class AppStore(
                     refreshProjectMembers()
                     refreshProjectDashboard()
                 }
-                // ONCE PER RESUME as well as while Consoles is open, and the
-                // first pass is what the rail item's visibility hangs on: a
-                // feature probe that only ran on the pane nobody can reach yet
-                // would hide the door to itself forever.
-                if (tick == 0 || _view.value == View.CONSOLES) refreshConsoles()
+                // UNTIL IT ANSWERS, as well as while Consoles is open. It used
+                // to be `tick == 0`, and the comment here predicted the failure it
+                // then had — a probe that only ran on the pane nobody can reach
+                // hides the door to itself — while missing the trigger: the 401 a
+                // fresh install's first tick gets while setup is still open is not
+                // an answer about the feature. See `shouldProbeConsoles`.
+                if (shouldProbeConsoles(_consolesAvailable.value, _view.value)) refreshConsoles()
                 // ⚠ THE TWO SESSION LISTS MOVE TOGETHER. A graceful archive leaves
                 // the session on screen for as long as its turn runs and then
                 // moves it — so a Sessions poll that did not also fetch the
@@ -1863,11 +1877,21 @@ class AppStore(
             while (scope.isActive) {
                 var sawAnything = false
                 var rotated = false
+                // ⚠ CLEARED ON A CONNECT, because the reason is PERSISTED and
+                // nothing else ever untrue-d it: a client reconnected hours ago
+                // still reported `last watch err unauthorized at …` beside `watch
+                // stream connected`, which is the pair that makes a healthy
+                // client look broken in a bug report.
+                var cleared = false
+                suspend fun connected() {
+                    _watchConnected.value = true
+                    if (!cleared) { cleared = true; settings.clearWatchError() }
+                }
                 client.watchStream(hash).collect { ev ->
                     when (ev) {
                         is WatchEvent.State -> {
                             sawAnything = true
-                            _watchConnected.value = true
+                            connected()
                             hash = ev.watch.hash
                             _watchTick.value = _watchTick.value + 1
                             // The digest says only THAT something changed; the
@@ -1876,10 +1900,11 @@ class AppStore(
                             refreshSessions()
                             onDigest?.invoke(ev.watch)
                         }
-                        WatchEvent.Alive -> { sawAnything = true; _watchConnected.value = true }
+                        WatchEvent.Alive -> { sawAnything = true; connected() }
                         WatchEvent.Rotated -> { sawAnything = true; rotated = true }
                         is WatchEvent.Failure -> {
                             _watchConnected.value = false
+                            cleared = false
                             settings.noteWatchError(ev.message, System.currentTimeMillis())
                         }
                     }

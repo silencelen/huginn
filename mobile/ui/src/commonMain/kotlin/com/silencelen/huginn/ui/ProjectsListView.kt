@@ -68,7 +68,7 @@ fun ProjectsListView(
     onOpenProject: (ProjectRow) -> Unit,
     onOpenMember: (ProjectRow, ProjectLive) -> Unit,
     modifier: Modifier = Modifier,
-    header: String? = "PROJECTS",
+    header: String? = "Projects",
     /** Null hides the control: a shell with nowhere to put a create sheet offers none. */
     onCreate: (() -> Unit)? = null,
 ) {
@@ -79,17 +79,28 @@ fun ProjectsListView(
                 Modifier.fillMaxWidth().padding(start = 14.dp, end = 6.dp, top = 6.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
+                // ⚠ THE HOUSE HEADER: Title Case, then the count, then "+ New".
+                // Every other list in both clients is drawn that way and this one
+                // was uppercase micro-type with a bare "New" — the one list header
+                // that looked like a different product.
                 Text(
                     header,
-                    style = MaterialTheme.typography.labelSmall,
+                    style = MaterialTheme.typography.labelLarge,
                     fontWeight = FontWeight.Medium,
-                    letterSpacing = 1.2.sp,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.weight(1f),
+                    color = MaterialTheme.colorScheme.onSurface,
                 )
+                if (ordered.isNotEmpty()) {
+                    Text(
+                        "${ordered.size}",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(start = 8.dp),
+                    )
+                }
+                Spacer(Modifier.weight(1f))
                 if (onCreate != null) {
                     TextButton(onClick = onCreate) {
-                        Text("New", style = MaterialTheme.typography.labelMedium, maxLines = 1)
+                        Text("+ New", style = MaterialTheme.typography.labelMedium, maxLines = 1)
                     }
                 }
             }
@@ -240,9 +251,21 @@ internal fun MemberDot(word: String?) {
 }
 
 /** What a section with nothing in it says, so an empty list is not a broken one. */
-const val PROJECTS_EMPTY: String =
-    "No projects yet. A project is a cluster of sessions with roles: a lead sizes " +
-        "the work, proposes the members, and you approve them before anything is started."
+/**
+ * The LIST pane's empty state. One short sentence.
+ *
+ * ⚠ THE EXPLANATION LIVES IN THE OTHER PANE. With no projects both panes are on
+ * screen at once, and each used to carry its own paragraph about what a project
+ * is — two different wordings of the same three facts, side by side. The pane
+ * with the room says it (see [PROJECTS_BLURB]); this one is 280dp wide and says
+ * the fact.
+ */
+const val PROJECTS_EMPTY: String = "No projects yet."
+
+/** What a project IS, said once, in the pane wide enough for it. */
+const val PROJECTS_BLURB: String =
+    "A project is a cluster of sessions with roles: a lead sizes the work, proposes " +
+        "the members, and you approve them before anything is started."
 
 /** The disclosure of a project whose membership the shell has not fetched yet. */
 const val PROJECT_MEMBERS_LOADING: String = "Reading the cluster…"

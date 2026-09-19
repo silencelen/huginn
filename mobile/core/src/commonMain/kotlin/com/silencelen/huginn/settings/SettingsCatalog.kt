@@ -462,6 +462,21 @@ object SettingsCatalog {
                 inventory = listOf(24, 25),
             ),
             SettingsItem(
+                id = "notify.path",
+                title = "How notifications reach this computer",
+                summary = "Which backend a notification is posted through here, or that there is none.",
+                keywords = listOf(
+                    "path", "backend", "libnotify", "tray", "toast", "route", "telegram", "none", "desktop",
+                ),
+                surface = Surface.DESKTOP,
+                // Gated with the claim row rather than always-on: a notification
+                // only ever originates at the daemon, so with no host there is no
+                // delivery to report. Keeping it ungated would also make the whole
+                // Notifications drawer appear against a dead daemon, which is the
+                // one thing the five local drawers are carefully NOT.
+                availability = { it.alerts },
+            ),
+            SettingsItem(
                 id = "notify.claim-route",
                 title = "Claim the notification route",
                 summary = "Sends attention here instead of Telegram while this window is attended.",

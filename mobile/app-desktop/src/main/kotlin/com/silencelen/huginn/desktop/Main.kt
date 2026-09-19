@@ -583,6 +583,10 @@ fun main(args: Array<String>) {
                         if (store.projectsAvailable.value == true) store.openView(View.PROJECTS)
                         true
                     }
+                    shortcut == Shortcut.VIEW_CONSOLES -> {
+                        if (store.consolesAvailable.value == true) store.openView(View.CONSOLES)
+                        true
+                    }
                     // Only where it can actually appear: toggling a panel into a
                     // window with no room for it, or into Settings, is a key that
                     // does nothing and teaches the reader the key is broken.

@@ -27,6 +27,7 @@ import androidx.compose.ui.unit.dp
 import com.silencelen.huginn.data.Console
 import com.silencelen.huginn.desktop.AppStore
 import com.silencelen.huginn.desktop.ui.common.Frame
+import com.silencelen.huginn.desktop.ui.common.DeskType
 import com.silencelen.huginn.desktop.ui.common.ReadingPane
 import com.silencelen.huginn.desktop.ui.common.openInBrowser
 import com.silencelen.huginn.ui.ConsoleRules
@@ -76,7 +77,7 @@ fun ConsolesPane(store: AppStore) {
             Text("No consoles yet", style = MaterialTheme.typography.titleMedium)
             Text(
                 "A console is an internal page this host serves — a dashboard, a tool, a lab. " +
-                    "Huginn lists them, says whether each one answered when it was last probed " +
+                    "huginn lists them, says whether each one answered when it was last probed " +
                     "from the host, and opens them in your browser.",
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -87,7 +88,19 @@ fun ConsolesPane(store: AppStore) {
             TextButton(onClick = { adding = true }) { Text("Add one") }
         }
     } else {
-        ReadingPane(padding = PaddingValues(horizontal = 12.dp, vertical = 12.dp)) {
+        // ⚠ THE HEADER SPANS THE PANE; THE ROWS KEEP THE READING CAP. Consoles
+        // began flush at the window edge with its first row — no title, no count,
+        // no way to add one — while Sessions, Chats, Rounds, Pages and Projects
+        // all open with the same header, and its ONLY "Add a console" sat under
+        // the rebind approval card, off-screen at first paint. The pane spans both
+        // columns (see `WindowLayout`), so the header takes that width the way
+        // every other pane header does, and the rows stay inside `ReadingPane`'s
+        // cap because a 1590px-wide URL row is not more readable than an 800px one.
+        Column(Modifier.fillMaxSize()) {
+            ListHeader("Consoles", consoles.size, selected = 0) {
+                TextButton(onClick = { adding = true }) { Text("+ New", style = DeskType.rail) }
+            }
+            ReadingPane(padding = PaddingValues(horizontal = 12.dp, vertical = 12.dp)) {
             ConsolesView(
                 consoles = consoles,
                 nowMs = System.currentTimeMillis(),
@@ -106,8 +119,7 @@ fun ConsolesPane(store: AppStore) {
                 approval = approval,
                 header = null,
             )
-            Spacer(Modifier.height(6.dp))
-            TextButton(onClick = { adding = true }) { Text("Add a console") }
+            }
         }
     }
 

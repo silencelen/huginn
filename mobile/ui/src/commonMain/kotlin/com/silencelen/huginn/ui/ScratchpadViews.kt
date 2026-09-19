@@ -122,7 +122,15 @@ fun ScratchpadListView(
             title = { Text("Delete \"${pad.name}\"?") },
             text = { Text("The page and everything written on it go. Nothing else is affected.") },
             confirmButton = {
-                TextButton(onClick = { deleting = null; onDelete(pad) }) { Text("Delete") }
+                // ⚠ THE DESTRUCTIVE VERB IS RED. Every other confirm in this
+                // product reddens the verb that loses something (`ConfirmDialog`
+                // in the desktop shell does it for End, Delete and Forget), and
+                // this one drew "Delete" in the same accent as "Cancel" — two
+                // buttons that look alike over an irreversible choice, on the one
+                // dialog where the reader is being asked to be sure.
+                TextButton(onClick = { deleting = null; onDelete(pad) }) {
+                    Text("Delete", color = MaterialTheme.colorScheme.error)
+                }
             },
             dismissButton = { TextButton(onClick = { deleting = null }) { Text("Cancel") } },
         )
