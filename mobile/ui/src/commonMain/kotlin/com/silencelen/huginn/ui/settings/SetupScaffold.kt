@@ -156,6 +156,7 @@ object SetupScaffoldRules {
      * on the last step is "Done" rather than a "Next" pointing at nothing.
      */
     fun primaryLabel(state: SetupState): String {
+        if (state.finished) return "Close"
         val step = state.current
         val last = step == SetupFlow.STEPS.last()
         return when (state.statusOf(step)) {
@@ -164,6 +165,20 @@ object SetupScaffoldRules {
             else -> if (last) "Done" else "Next"
         }
     }
+
+    /**
+     * The finish line's heading.
+     *
+     * ⚠ NOT "SETUP COMPLETE". The flow's whole argument is that a single green
+     * sentence over two failures is the thing this product does not write; the
+     * heading says the flow is over and [SetupFlow.summary] says how it went.
+     */
+    const val FINISHED_TITLE: String = "That is everything"
+
+    /** Under the heading: what to do about whatever did not prove itself. */
+    const val FINISHED_BLURB: String =
+        "Anything that did not prove itself is listed above with the reason. " +
+            "Nothing here is final — Settings can run this again, and a re-run changes nothing that already works."
 
     /**
      * Every step is skippable, and the label says so plainly.
@@ -176,7 +191,8 @@ object SetupScaffoldRules {
         if (step in SetupFlow.GATE) "Skip for now" else "Not now"
 
     /** A step already answered has nothing to decline; the button goes rather than greys. */
-    fun canSkip(state: SetupState): Boolean = state.statusOf(state.current) == StepStatus.Pending
+    fun canSkip(state: SetupState): Boolean =
+        !state.finished && state.statusOf(state.current) == StepStatus.Pending
 
     /**
      * ⚠ THE WAY OUT OF A FAILED STEP, and it had to be its own button.
@@ -193,7 +209,8 @@ object SetupScaffoldRules {
      * the finish summary needs — "1 could not be proven" — and with it the
      * reason. So this moves on and leaves the failure exactly where it is.
      */
-    fun canMoveOn(state: SetupState): Boolean = state.statusOf(state.current) is StepStatus.Failed
+    fun canMoveOn(state: SetupState): Boolean =
+        !state.finished && state.statusOf(state.current) is StepStatus.Failed
 
     /** Said plainly: the step did not work and you are going past it anyway. */
     const val MOVE_ON: String = "Continue anyway"
@@ -274,6 +291,36 @@ fun SetupScaffold(
                 ) {
                     SetupRail(state, onOpenStep)
 
+                    // ⚠ THE LAST ANSWER USED TO CLOSE THE WINDOW. `SetupFlow`
+                    // counts a finish line — "what works, what you chose not to
+                    // do, what is actually broken", three numbers because they
+                    // mean three different things — and it was drawn only in the
+                    // footer, where it updates as you go. So answering the last
+                    // step advanced the flow, the controller hid the window, and
+                    // the reader's final sight of the tally was the one BEFORE
+                    // their own last answer was in it. The rail above still shows
+                    // every step and its reason; this is the count, and the way
+                    // out is the primary button.
+                    if (state.finished) {
+                        Text(
+                            SetupScaffoldRules.FINISHED_TITLE,
+                            style = MaterialTheme.typography.titleSmall,
+                            modifier = Modifier.padding(top = 20.dp),
+                        )
+                        Text(
+                            SetupFlow.summary(state),
+                            style = MaterialTheme.typography.bodyMedium,
+                            modifier = Modifier.padding(top = 6.dp),
+                        )
+                        Text(
+                            SetupScaffoldRules.FINISHED_BLURB,
+                            style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.padding(top = 6.dp),
+                        )
+                        return@Column
+                    }
+
                     val step = state.current
                     val status = state.statusOf(step)
                     Text(
@@ -310,7 +357,7 @@ fun SetupScaffold(
             Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 12.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            if (SetupFlow.canGoBack(state)) {
+            if (!state.finished && SetupFlow.canGoBack(state)) {
                 TextButton(onClick = onBack, enabled = !busy) { Text("Back") }
             }
             Text(
