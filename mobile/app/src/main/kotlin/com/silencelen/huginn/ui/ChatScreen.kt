@@ -32,10 +32,7 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.foundation.horizontalScroll
-import androidx.compose.foundation.rememberScrollState
 import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.SuggestionChip
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -249,28 +246,11 @@ fun ChatScreen(
 
         // Same contract as the session chips: a suggestion FILLS the composer,
         // yields to typing, and clears when a new turn starts.
+        // The shared row — same cap, same contract, one implementation. See
+        // SuggestionChips: a chip inside a horizontal scroll has no width to
+        // ellipsise against unless it is given one.
         if (suggestions.isNotEmpty() && !streaming && !sending && draft.isBlank()) {
-            Row(
-                Modifier
-                    .fillMaxWidth()
-                    .horizontalScroll(rememberScrollState())
-                    .padding(horizontal = 10.dp, vertical = 2.dp),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
-                suggestions.forEach { sug ->
-                    SuggestionChip(
-                        onClick = { onDraft(sug) },
-                        label = {
-                            Text(
-                                sug,
-                                style = MaterialTheme.typography.labelMedium,
-                                maxLines = 1,
-                                overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
-                            )
-                        },
-                    )
-                }
-            }
+            SuggestionChips(suggestions, onPick = onDraft)
         }
 
         // The long-press verbs, ABOVE the composer so the text stays visible while
