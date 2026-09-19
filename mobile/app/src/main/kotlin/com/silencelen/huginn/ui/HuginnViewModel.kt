@@ -3648,6 +3648,16 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
     private val _chatError = MutableStateFlow<String?>(null)
     val chatError: StateFlow<String?> = _chatError.asStateFlow()
 
+    /**
+     * The daemon has no transcript for a chat that HAS run: Claude Code swept it.
+     *
+     * A separate fact from [chatError], because it is not a failure and there is
+     * nothing to retry — and a separate fact from an empty page, because a chat
+     * that never ran is empty too and means the opposite thing. See [chatEmptyCopy].
+     */
+    private val _chatGone = MutableStateFlow(false)
+    val chatGone: StateFlow<Boolean> = _chatGone.asStateFlow()
+
     private var streamJob: Job? = null
     private var chatPollJob: Job? = null
 
@@ -3665,6 +3675,7 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
         _streamingText.value = null
         _activeTool.value = null
         _chatError.value = null
+        _chatGone.value = false
         // The model menu must reflect which machines serve RIGHT NOW.
         refreshModels()
         viewModelScope.launch {
@@ -3700,13 +3711,21 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
                     // it opened a perfectly good chat under "Could not load this
                     // conversation / StandaloneCoroutine was cancelled".
                     if (e is CancellationException) return@onFailure
-                    // 409 is the only failure that MEANS "nothing here yet" — the
-                    // chat exists but has never run. Anything else is a failure to
-                    // read history that exists, and must not be drawn as its absence.
-                    val neverRan = e is HuginnClient.HuginnException && e.code == 409
+                    // 409 is the only failure that means the daemon has nothing to
+                    // GIVE. Anything else is a failure to read history that exists,
+                    // and must not be drawn as its absence.
+                    //
+                    // ⚠ AND 409 IS TWO FACTS. The route answers it both for
+                    // "chat has not run yet" and for "transcript not found for this
+                    // chat" — the second being Claude Code having swept its own
+                    // JSONL, which is what a 53-day-old chat hits. Whether this is
+                    // an absence or a loss is decided by whether the chat ever ran.
+                    val refused = e is HuginnClient.HuginnException && e.code == 409
                     if (_chatPage.value == null) {
-                        if (neverRan) _chatPage.value = TranscriptPage()
-                        else _chatError.value = errText(e)
+                        if (refused) {
+                            _chatPage.value = TranscriptPage()
+                            _chatGone.value = chatMessagesGone(_chatStarted.value, true)
+                        } else _chatError.value = errText(e)
                     }
                 }
         }
@@ -3715,6 +3734,7 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
     /** Retries the transcript load after a failure the user can see. */
     fun retryChatTranscript(id: String) {
         _chatError.value = null
+        _chatGone.value = false
         loadChatTranscript(id)
     }
 
