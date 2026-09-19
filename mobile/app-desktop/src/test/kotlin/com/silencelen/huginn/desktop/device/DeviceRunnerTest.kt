@@ -61,6 +61,75 @@ class DeviceRunnerTest {
         )
     }
 
+    // ------------------------------------------------- the retry note's end
+    //
+    // ⚠ THE SUCCESS BRANCH RESET `failures` AND NOTHING ELSE. The note is only
+    // ever written where a poll FAILS, so one blip — a proxy restarted, a wifi
+    // hiccup — pinned "Retrying: Failed to connect to /127.0.0.1:18820" under
+    // "Available to huginn" for the rest of the app's life. Measured: 45 minutes
+    // of `/work` 200s every 25s and `/beat` 200s every 60s, the daemon reporting
+    // the device `online` with a current lastSeen, and Settings still calling it
+    // failing. Only a restart of the app cleared it.
+    //
+    // Clearing the counter and clearing the sentence are the same event.
+
+    @Test
+    fun `a poll that comes back takes the retrying note off`() {
+        assertEquals(
+            "Enrolled, waiting for work",
+            DeviceRunner.noteAfterPoll(
+                DeviceRunner.RETRYING + "Failed to connect to /127.0.0.1:18820",
+                "Enrolled, waiting for work",
+            ),
+            "the success branch owes the note, not only the failure counter",
+        )
+    }
+
+    @Test
+    fun `it replaces the retry note and nothing else`() {
+        // Everything else this field holds is either still true or belongs to a
+        // different writer: a refusal is the last thing that refusal said and is
+        // not undone by the next poll, and "Running a job" is set either side of
+        // this call by the work path itself.
+        listOf(
+            "Refused a job: orion is read-only while locked",
+            "Running a job",
+            "could not start claude on orion: No such file or directory",
+            "Enrolled, locked — still acting, as this machine is set to",
+        ).forEach {
+            assertEquals(it, DeviceRunner.noteAfterPoll(it, "Enrolled, waiting for work"),
+                "a poll must not overwrite \"$it\"")
+        }
+    }
+
+    /**
+     * And the loop still CALLS it. The rule above is a pure function nobody has to
+     * use: the whole bug was a success branch that reset the counter and left the
+     * sentence alone, which is a call that is missing rather than a call that is
+     * wrong. Source-level, because `serve()` is a private suspend loop around a
+     * 25-second long poll and a real one would be a sleep, not a test.
+     */
+    @Test
+    fun `the successful poll branch clears the note`() {
+        val src = File("src/main/kotlin/com/silencelen/huginn/desktop/device/DeviceRunner.kt").readText()
+        assertTrue(src.length > 5_000, "read as ${src.length} chars — wrong file")
+        val success = src.substringAfter("client.pollWork(").substringBefore("catch (e: CancellationException)")
+        assertTrue(success.length in 1..2_000, "the poll's success branch was not found")
+        assertTrue(
+            "noteAfterPoll(" in success,
+            "a poll that comes back must clear the retry note, not only the counter:\n$success",
+        )
+    }
+
+    @Test
+    fun `the note the failure writes is the note the success recognises`() {
+        // One constant, both ends. Two literals here is exactly how the clearer
+        // stops matching the writer and the note becomes permanent again.
+        val written = DeviceRunner.RETRYING + "connection reset"
+        assertTrue(written.startsWith(DeviceRunner.RETRYING))
+        assertEquals("idle", DeviceRunner.noteAfterPoll(written, "idle"))
+    }
+
     @Test
     fun `a file is not a work root either, and a real directory is`() {
         val dir = Files.createTempDirectory("huginn-device-root").toFile()

@@ -48,6 +48,9 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.ui.focus.FocusDirection
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.foundation.focusable
 import androidx.compose.ui.draw.drawWithContent
@@ -66,6 +69,9 @@ import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
 import androidx.compose.ui.focus.focusProperties
+import androidx.compose.ui.input.pointer.PointerEventPass
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.AnnotatedString
@@ -188,6 +194,10 @@ fun SessionView(store: AppStore, name: String) {
     val screen by controller.screen.collectAsState()
     val gone by controller.gone.collectAsState()
     val sessions by store.sessions.collectAsState()
+    // ⚠ READ BEFORE THE `gone` EFFECT, which needs the title this row carries: by
+    // the time that effect runs the row is on its way out of the list, and the
+    // snapshot the composition already has is the last honest copy of it.
+    val row = sessions.firstOrNull { it.name == name }
 
     // The session ended under the viewer. Nothing here can be true any more, so
     // leave rather than showing a pane that no longer exists. Its draft goes with
@@ -196,11 +206,16 @@ fun SessionView(store: AppStore, name: String) {
     LaunchedEffect(gone) {
         if (gone) {
             store.drafts.clear(draftKey)
-            store.openSession(null)
+            // ⚠ SAID, NOT JUST CLOSED. `openSession(null)` alone dropped the pane
+            // to the generic "No session open" state on top of a transcript
+            // somebody was reading, with nothing to say what had happened — and a
+            // wrapped-up session is not archived, so the conversation was then
+            // unreachable from the UI. The title goes with it because the name is
+            // a tmux handle and the title is what the reader was reading.
+            store.noteSessionEnded(name, page?.title ?: row?.title)
         }
     }
 
-    val row = sessions.firstOrNull { it.name == name }
     val hostHeadroom by store.headroom.collectAsState()
 
     // The state mark counts down to a reset, and this header can sit open all
@@ -1045,6 +1060,26 @@ private fun ScreenTab(controller: SessionController) {
             Modifier.weight(1f).fillMaxWidth().background(bg)
                 .focusRequester(focus)
                 .focusable()
+                // ⚠⚠ A CLICK IN THE PANE IS HOW YOU COME BACK TO IT. `focusable()`
+                // makes this box a focus TARGET; it does not make a press move the
+                // ring, and nothing else here did either. So the first click on the
+                // desktop composer took the keyboard away permanently: every
+                // keystroke after it — including twenty BackSpaces aimed at the
+                // pane's own draft — went into the composer, no `/keys` was posted
+                // at all, and the only way back was toggling Live off and on, which
+                // is a control whose label says nothing about focus.
+                //
+                // On the INITIAL pass and without consuming: the press still starts
+                // a selection, still lands on whatever is under it. Gated on `live`
+                // because with live off this box has no use for the keyboard and
+                // stealing it from the composer would be the same bug pointing the
+                // other way.
+                .pointerInput(live) {
+                    awaitEachGesture {
+                        awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
+                        if (live) focus.requestFocus()
+                    }
+                }
                 // Raw keys go straight to the pane, in order, through the same
                 // ordered queue and the same optimistic echo the phone uses. Only
                 // while LIVE is on: a stray keystroke into a running Claude session
@@ -1255,6 +1290,9 @@ private fun Composer(
     val failure by attachments.failure.collectAsState()
     var picking by remember { mutableStateOf(false) }
     var dragOver by remember { mutableStateOf(false) }
+    // Tab's destination. Read here rather than inside the key handler because a
+    // composition local is not readable from a lambda that is not composable.
+    val focusManager = LocalFocusManager.current
 
     // Per item: four uploads and one refusal still have three things to say.
     val canSend = draft.isNotBlank() || pending.any { it.status != AttachStatus.FAILED }
@@ -1433,6 +1471,24 @@ private fun Composer(
                                 true
                             }
                             e.key == Key.Enter -> { submit(); true }
+                            // ⚠ TAB IS FOCUS, NOT A CHARACTER. See [tabMove]: it
+                            // typed a tab and the ring never left this box, so
+                            // Send, the clip and the chips had no keyboard route
+                            // at all. Ctrl+Tab keeps the literal; Alt/Meta are the
+                            // window manager's and are not ours to swallow.
+                            e.key == Key.Tab -> when (
+                                tabMove(e.isCtrlPressed, e.isShiftPressed, e.isAltPressed, e.isMetaPressed)
+                            ) {
+                                TabMove.LITERAL -> {
+                                    val next = tabIn(field)
+                                    field = next
+                                    onDraft(next.text)
+                                    true
+                                }
+                                TabMove.NEXT -> { focusManager.moveFocus(FocusDirection.Next); true }
+                                TabMove.PREVIOUS -> { focusManager.moveFocus(FocusDirection.Previous); true }
+                                TabMove.NONE -> false
+                            }
                             e.isCtrlPressed && e.key == Key.V -> AwtTransfer.consumeClipboard(attachments)
                             bareArrowOrEsc -> handleHistoryKey(
                                 e.key, field, recall, history, suppressed = historySuppressed,
@@ -1480,24 +1536,4 @@ private fun Composer(
     }
 }
 
-/**
- * Shift+Enter's newline, spliced over whatever is selected.
- *
- * Shared by BOTH composers (this one and the chat's) because the two blocks were
- * byte-identical, and a splice that differs between two boxes in one app is the
- * kind of divergence nobody notices until one of them corrupts a draft.
- *
- * ⚠ min/max, NOT start/end. A [TextRange] is DIRECTED: Shift+Left, Shift+Home,
- * Shift+Up and a right-to-left drag all produce `start > end`, and Compose's
- * legacy TextFieldValue path hands that to onValueChange unnormalised. Splicing
- * `substring(0, start) + "\n" + substring(end)` on a reversed range OVERLAPS
- * instead of replacing — "hello world" with "world" selected backwards became
- * "hello world\nworld", Shift+Home from the end doubled the whole draft, and the
- * result was written straight through onDraft to the drafts book.
- */
-internal fun newlineIn(field: TextFieldValue): TextFieldValue {
-    val lo = field.selection.min
-    val hi = field.selection.max
-    val next = field.text.substring(0, lo) + "\n" + field.text.substring(hi)
-    return TextFieldValue(next, TextRange(lo + 1))
-}
+

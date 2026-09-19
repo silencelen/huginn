@@ -48,6 +48,7 @@ import com.silencelen.huginn.data.Usage
 import com.silencelen.huginn.data.Watch
 import com.silencelen.huginn.data.WatchEvent
 import com.silencelen.huginn.desktop.update.DesktopUpdater
+import io.ktor.client.engine.okhttp.OkHttp
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.delay
@@ -159,6 +160,26 @@ class AppStore(
         tokenProvider = { settings.tokenNow() },
         clientIdProvider = { settings.clientIdNow() },
         canNotifyProvider = { settings.notifyEnabledNow() && presence.present.value && canDeliver() },
+        // ⚠⚠ THE ROUTE WITNESS IS STAMPED HERE, NOT BY THE CALLERS. See
+        // [RouteWitness] for the measurement: every ordinary poll went through
+        // this route and the row still aged, because `noteRouteReached()` was
+        // reachable only from the success branch of `/v1/status`, which nothing
+        // outside the Status pane ever asks for. The OkHttp engine is the one
+        // place every response passes, so the rule is applied once instead of at
+        // each of a dozen call sites — which is the shape that produced the bug.
+        //
+        // An APPLICATION interceptor, not a network one: it must also see the
+        // responses that came from a cached or re-used connection, and it must
+        // see a streamed body's headers the moment they land rather than when the
+        // watch stream finally ends. It reads the response and returns it
+        // untouched.
+        engine = OkHttp.create {
+            addInterceptor { chain ->
+                val response = chain.proceed(chain.request())
+                noteRouteReached(chain.request().url.toString(), response.code)
+                response
+            }
+        },
     )
 
     /**
@@ -266,6 +287,15 @@ class AppStore(
     private val _sessionName = MutableStateFlow<String?>(null)
     val sessionName: StateFlow<String?> = _sessionName.asStateFlow()
 
+    /**
+     * The conversation this pane was showing when it ended, for the card that
+     * says so. Null once the reader has moved on. See [noteSessionEnded].
+     */
+    data class EndedSession(val name: String, val title: String?, val atMs: Long)
+
+    private val _sessionEnded = MutableStateFlow<EndedSession?>(null)
+    val sessionEnded: StateFlow<EndedSession?> = _sessionEnded.asStateFlow()
+
     /** Settings, at a named drawer — the palette's door, and the only one. */
     fun openSettings(categoryId: String) {
         settingsPane.open(categoryId)
@@ -313,8 +343,37 @@ class AppStore(
         // session opened while an archive was up would otherwise be drawn
         // underneath a read-only conversation that is still claiming the pane.
         _archiveRead.value = null
+        // And so does the ended card, which is about the LAST conversation this
+        // pane held. Navigating anywhere is the reader having moved on; only
+        // [noteSessionEnded] puts it back, and it does so after this call.
+        _sessionEnded.value = null
         _sessionName.value = name
     }
+
+    /**
+     * The session the reader was READING has ended.
+     *
+     * ⚠⚠ IT USED TO JUST VANISH. `SessionView` closed itself on `gone` and the
+     * detail pane fell back to the first-run empty state — "No session open /
+     * Every tmux session on the host is on the left…" plus the keyboard hints —
+     * on top of a transcript somebody was in the middle of reading. Nothing said
+     * the session had ended, and a wrapped-up session is not archived (only
+     * `Archive…` writes a row), so the conversation was not reachable from the
+     * UI at all afterwards. A pane that was showing a conversation owes an
+     * account of where it went.
+     *
+     * The moment is stamped because the answer is not final yet: a graceful
+     * archive lands its row a few seconds later, and the card upgrades itself to
+     * carry the transcript and the resume command when it does. See
+     * [com.silencelen.huginn.desktop.ui.common.archiveFor].
+     */
+    fun noteSessionEnded(name: String, title: String?) {
+        openSession(null)
+        _sessionEnded.value = EndedSession(name, title, System.currentTimeMillis())
+    }
+
+    /** The reader has read it. */
+    fun clearSessionEnded() { _sessionEnded.value = null }
 
     /** Escape: close the open item, or fall back to the chats list. */
     fun back() {
@@ -357,7 +416,7 @@ class AppStore(
                     list.size,
                     delta,
                 )
-                list.getOrNull(i)?.let { _sessionName.value = it.name }
+                list.getOrNull(i)?.let { _sessionName.value = it.name; _sessionEnded.value = null }
             }
             else -> Unit
         }
@@ -1238,20 +1297,32 @@ class AppStore(
     val routeCandidate: StateFlow<com.silencelen.huginn.data.PinnedRoute?> = _routeCandidate.asStateFlow()
 
     /**
-     * Marks the active route as having just worked, from REAL traffic — the
-     * phone's `noteRouteReached` twin, so the desktop's route rows say "last
-     * reached" from ordinary polls and not only after "Find live route".
+     * Marks the active route as having just worked, from REAL traffic.
+     *
+     * ⚠ ITS OWN DOC COMMENT USED TO SAY THIS AND IT WAS NOT TRUE. Both callers
+     * were the success branch of `/v1/status`, which is polled only while the
+     * Status pane is open — so the row aged through 42 `/v1/chats`, 42
+     * `/v1/sessions` and an attached watch stream on the very route serving them.
+     * The client's own response path calls this now ([RouteWitness]); the two
+     * status polls still do as well, and are harmless because `touch` is
+     * idempotent within a millisecond.
      *
      * See [RouteResolver.touch]: it writes `lastSeenAt`, never `lastOkAt`, so
      * the three-failures re-probe still sweeps rather than finding the dead
      * route "fresh" seconds after its last success.
      */
-    private fun noteRouteReached() {
-        val next = RouteResolver.touch(
-            _routeHealth.value,
-            _routeBook.value.active?.id,
-            System.currentTimeMillis(),
-        )
+    private fun noteRouteReached(fromUrl: String? = null, status: Int = 200) {
+        val active = _routeBook.value.active ?: return
+        val now = System.currentTimeMillis()
+        // Called with no URL by the two status polls, which already know the call
+        // succeeded on the active route; called with one from the HTTP layer,
+        // where neither is known and both have to be asked. A probe of a CANDIDATE
+        // address goes through the same engine, so "it came back 200" is not on
+        // its own evidence about the route this client is pinned to.
+        if (fromUrl != null && !RouteWitness.stamps(status, fromUrl, active.url, _routeHealth.value[active.id], now)) {
+            return
+        }
+        val next = RouteResolver.touch(_routeHealth.value, active.id, now)
         if (next == _routeHealth.value) return
         saveHealth(next)
     }
@@ -1746,8 +1817,10 @@ class AppStore(
     fun openArchive(row: ArchivedSession) {
         _view.value = View.SESSIONS
         // The live session lets go of the pane, for the same reason the archive
-        // does in [openSession]: one detail half, one occupant.
+        // does in [openSession]: one detail half, one occupant. And so does the
+        // ended card — reading the archive IS the thing it was offering.
         _sessionName.value = null
+        _sessionEnded.value = null
         if (_archiveRead.value?.id == row.id && _archiveRead.value?.loading == false) return
         _archiveRead.value = ArchiveRead(id = row.id, title = ArchiveRules.label(row), loading = true)
         scope.launch {

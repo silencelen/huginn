@@ -23,7 +23,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import com.silencelen.huginn.desktop.AppStore
 import com.silencelen.huginn.desktop.LocalServe
-import com.silencelen.huginn.desktop.device.LockProbe
 import com.silencelen.huginn.desktop.ui.Muted
 import com.silencelen.huginn.ui.settings.SettingsToggleRow
 import kotlinx.coroutines.launch
@@ -151,30 +150,58 @@ internal fun DeviceSection(store: AppStore) {
         )
 
         Muted(
-            when {
-                // Said first, because with the setting on it is the ONLY one of
-                // these three that is still true — and a machine whose owner
-                // waived the lock rule must not be told it is read-only.
-                actWhileLocked ->
-                    "A lock screen changes nothing here. Someone at this machine can turn " +
-                        "that back off; nothing huginn sends can turn it on."
-                !LockProbe.supported() ->
-                    "Lock detection is not available on this platform, so this machine " +
-                        "reports itself as locked and will only ever Look — unless the switch above is on."
-                status.locked ->
-                    "This machine reads as locked, so it is read-only until someone unlocks it."
-                else ->
-                    "While the screen is locked, this machine drops to Look and refuses Act." +
-                        // Said only where it is true. The probe reads a connected
-                        // remote-desktop session as somebody being here, which is
-                        // the difference between a Windows box being usable
-                        // remotely and it refusing Act for as long as it is on.
-                        if (isWindowsHost()) " A connected remote-desktop session counts as someone being here." else ""
-            },
+            lockSentence(actWhileLocked, status.locked, status.lockKnown, isWindowsHost()),
             Modifier.padding(top = 10.dp, start = 4.dp),
-            maxLines = 3,
+            maxLines = 4,
         )
     }
+}
+
+/**
+ * What this machine says about locking, in one sentence.
+ *
+ * ⚠⚠ THE THIRD BRANCH IS DECIDED BY THE PROBE, NEVER BY `os.name`. It used to
+ * ask `LockProbe.supported()`, which answers "is this Windows or Linux" — so a
+ * Linux box where `loginctl` cannot answer at all (no logind session: an LXC, a
+ * container, `startx` without `pam_systemd`, a kiosk) fell through to the
+ * *"reads as locked … until someone unlocks it"* line and stayed there forever.
+ * There is nothing to unlock and nobody who could: the device row sat
+ * `locked: true, effectiveScope: look` for the life of the process and the only
+ * sentence on screen told the reader to go and do the one thing that cannot be
+ * done. `lockKnown` is [com.silencelen.huginn.desktop.device.LockProbe.Reading]
+ * having ANSWERED, which is the question this was always asking.
+ *
+ * ⚠ AND "unlock" APPEARS IN EXACTLY ONE BRANCH — the one where a screen really
+ * is locked and somebody really can. `LockSentenceTest` holds that.
+ *
+ * Pure, and outside the composable, because it is four sentences chosen by three
+ * booleans and the wrong choice draws perfectly.
+ */
+internal fun lockSentence(
+    actWhileLocked: Boolean,
+    locked: Boolean,
+    lockKnown: Boolean,
+    windowsHost: Boolean,
+): String = when {
+    // Said first, because with the setting on it is the ONLY one of these that is
+    // still true — and a machine whose owner waived the lock rule must not be
+    // told it is read-only.
+    actWhileLocked ->
+        "A lock screen changes nothing here. Someone at this machine can turn " +
+            "that back off; nothing huginn sends can turn it on."
+    !lockKnown ->
+        "Nothing on this computer could say whether it is locked, so it reports itself " +
+            "locked and will only ever Look — unless the switch above is on. There is no " +
+            "screen here for anyone to unlock; the switch is the only way to change it."
+    locked ->
+        "This machine reads as locked, so it is read-only until someone unlocks it."
+    else ->
+        "While the screen is locked, this machine drops to Look and refuses Act." +
+            // Said only where it is true. The probe reads a connected
+            // remote-desktop session as somebody being here, which is the
+            // difference between a Windows box being usable remotely and it
+            // refusing Act for as long as it is on.
+            if (windowsHost) " A connected remote-desktop session counts as someone being here." else ""
 }
 
 /** The word the scope radio above shows, for the sentence that quotes it back. */
