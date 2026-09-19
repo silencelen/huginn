@@ -851,6 +851,26 @@ test('an icon is fetched from /favicon.ico first, and from the page’s link whe
   }
 });
 
+test('a page that names an icon on ANOTHER host does not get one', async () => {
+  // ⚠ THE SAME RISK THE REDIRECT GUARD BLOCKS, arriving through the front door:
+  // `<link rel=icon href="https://cdn.example.com/…">` is a page telling a
+  // root-equivalent daemon which public host to fetch from, on a five-minute
+  // timer, forever. The host rule was applied to the address that was STORED.
+  const server = http.createServer((req, res) => {
+    if (req.url === '/favicon.ico') { res.writeHead(404); return res.end(); }
+    res.writeHead(200, { 'content-type': 'text/html' });
+    res.end('<html><head><link rel="icon" href="https://cdn.example.com/brand.png"></head></html>');
+  });
+  await new Promise((r) => server.listen(0, '127.0.0.1', r));
+  try {
+    const r = await within(9000, appsLib.fetchIcon(`http://127.0.0.1:${server.address().port}/`), 'the off-host href');
+    assert.equal(false, r.ok);
+    assert.match(r.why, /another host/);
+  } finally {
+    server.close();
+  }
+});
+
 test('an SPA that answers /favicon.ico with its own index.html does not get html cached as its icon', async () => {
   // ⚠ THE COMMON CASE, and the one that would put 40 KB of markup behind an
   // image content type. The TYPE is the test, not the path and not the status.
