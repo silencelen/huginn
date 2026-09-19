@@ -85,6 +85,8 @@ fun SessionScreen(
     onSendText: (String, Boolean) -> Unit,
     onSendKeys: (List<String>) -> Unit,
     onLive: (LiveInput.Op) -> Unit,
+    /** Live typing turned on or off — see TerminalScreen; the lease rides on it. */
+    onLiveMode: (Boolean) -> Unit = {},
     agents: com.silencelen.huginn.data.AgentsInfo?,
     onAgentsOpen: () -> Unit,
     onAgentsClose: () -> Unit,
@@ -292,6 +294,7 @@ fun SessionScreen(
                     onSendText = onSendText,
                     onSendKeys = onSendKeys,
                     onLive = onLive,
+                    onLiveMode = onLiveMode,
                     micGranted = micGranted,
                     onRequestMic = onRequestMic,
                     onForceResize = onForceResize,
