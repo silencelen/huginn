@@ -9,6 +9,7 @@ import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.core.stringSetPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import androidx.datastore.core.handlers.ReplaceFileCorruptionHandler
+import androidx.datastore.preferences.core.MutablePreferences
 import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.emptyPreferences
 import androidx.datastore.preferences.preferencesDataStoreFile
@@ -118,11 +119,71 @@ class SettingsStore(private val context: Context) : HuginnSettings {
          */
         private val BASE_URL = stringPreferencesKey("base_url")
 
+        /**
+         * The stored bytes → the book, and back. ⚠ EXTRACTED TO BE TESTED: this
+         * source set has no Robolectric, so a [SettingsStore] cannot be built in
+         * a unit test at all — and the two rules worth holding (the migration
+         * trigger, and that everything the book carries survives a write and a
+         * read) are pure. Same reason [orEmptyOnIoFailure] is a function.
+         *
+         * In the companion because the keys are private to it, and taking the
+         * preferences as a parameter rather than as a receiver so the call site
+         * reads the same from inside the class and from a test.
+         */
+        internal fun routeBookFrom(p: Preferences): RouteBook {
+            val stored = SettingsCodec.decodeRoutes(p[PINNED_ROUTES])
+                // ⚠ UNTOUCHED. A never-written key is the pre-3.x store, and the
+                // book is rebuilt from `base_url` + `appd_route_pinned` exactly as
+                // it always was — dropped address included, which is the whole
+                // reason the notice needs somewhere to live.
+                ?: return AppdRoutes.migrate(p[BASE_URL], p[ROUTE_PINNED] ?: false)
+            return RouteBook(
+                routes = stored,
+                activeId = p[ACTIVE_ROUTE_ID]?.takeIf { it.isNotBlank() },
+                autoSwitch = p[AUTO_SWITCH] ?: true,
+                droppedUrl = p[ROUTE_DROPPED]?.takeIf { it.isNotBlank() },
+            ).normalized()
+        }
+
+        /**
+         * ⚠ ONE EDIT, EVERY KEY. DataStore publishes each `edit` as its own
+         * emission, so a worker that woke between two of them would build a
+         * client for a route the list no longer holds — which is also why
+         * `base_url` is written through here rather than derived by a reader.
+         */
+        internal fun putRouteBook(p: MutablePreferences, book: RouteBook) {
+            p[PINNED_ROUTES] = SettingsCodec.encodeRoutes(book.routes)
+            p[ACTIVE_ROUTE_ID] = book.activeId.orEmpty()
+            p[AUTO_SWITCH] = book.autoSwitch
+            p[BASE_URL] = book.activeUrl
+            p[ROUTE_DROPPED] = book.droppedUrl.orEmpty()
+        }
+
+        internal fun routeHealthFrom(p: Preferences): Map<String, RouteHealth> =
+            RouteHealthSnapshot.decode(p[ROUTE_HEALTH])
+
+        internal fun putRouteHealth(p: MutablePreferences, value: Map<String, RouteHealth>, atMs: Long) {
+            p[ROUTE_HEALTH] = RouteHealthSnapshot.encode(value, atMs)
+        }
+
         /** Pre-routes. Read once, to migrate; never written again. */
         private val ROUTE_PINNED = booleanPreferencesKey("appd_route_pinned")
         private val PINNED_ROUTES = stringPreferencesKey("pinned_routes")
         private val ACTIVE_ROUTE_ID = stringPreferencesKey("active_route_id")
         private val AUTO_SWITCH = booleanPreferencesKey("auto_switch")
+        /**
+         * The address [RouteGuard] threw out of the book, kept so the settings
+         * screen can still name it AFTER a restart.
+         *
+         * ⚠ IT SURVIVED EXACTLY ONE PROCESS BEFORE. The drop happens during the
+         * pre-3.x migration — on the very first read, usually before any screen
+         * has been opened — and the notice lived only in the in-memory book, so
+         * the one reader it was written for (somebody opening Settings to find
+         * out why the app stopped connecting) had already missed it.
+         */
+        private val ROUTE_DROPPED = stringPreferencesKey("route_dropped_url")
+        /** [RouteHealthSnapshot], verbatim. See [HuginnSettings.routeHealth]. */
+        private val ROUTE_HEALTH = stringPreferencesKey("route_health")
         private val TOKEN = stringPreferencesKey("token")
         private val FONT_SCALE = floatPreferencesKey("terminal_font_sp")
         private val NOTIFY = booleanPreferencesKey("notify_attention")
@@ -340,7 +401,7 @@ class SettingsStore(private val context: Context) : HuginnSettings {
      * The active route's address. Read off the book rather than off [BASE_URL]
      * so the two can never disagree — the key is the mirror, this is the truth.
      */
-    override val baseUrl: Flow<String> = prefs.map { bookFrom(it).activeUrl }
+    override val baseUrl: Flow<String> = prefs.map { routeBookFrom(it).activeUrl }
     override val token: Flow<String> = prefs.map { it[TOKEN] ?: "" }
 
     /** Terminal text size in sp. Drives the column count reported to the server. */
@@ -366,20 +427,26 @@ class SettingsStore(private val context: Context) : HuginnSettings {
      *
      * ⚠ MIGRATION HAPPENS ON READ, not at construction: DataStore has no "open
      * and upgrade" moment, and a migration run from a coroutine somewhere would
-     * race the first background worker that asks for an address. [bookFrom] is
+     * race the first background worker that asks for an address. [routeBookFrom] is
      * pure, so every reader — foreground or worker, before or after the first
      * write — computes the same book from the same stored bytes.
      */
-    override val routeBook: Flow<RouteBook> = prefs.map { bookFrom(it) }
+    override val routeBook: Flow<RouteBook> = prefs.map { routeBookFrom(it) }
 
-    private fun bookFrom(p: androidx.datastore.preferences.core.Preferences): RouteBook {
-        val stored = SettingsCodec.decodeRoutes(p[PINNED_ROUTES])
-            ?: return AppdRoutes.migrate(p[BASE_URL], p[ROUTE_PINNED] ?: false)
-        return RouteBook(
-            routes = stored,
-            activeId = p[ACTIVE_ROUTE_ID]?.takeIf { it.isNotBlank() },
-            autoSwitch = p[AUTO_SWITCH] ?: true,
-        ).normalized()
+    /**
+     * The per-route health the last resolution learned.
+     *
+     * ⚠ NOT WRITTEN BY [setRouteBook]. The book is the owner's preference and
+     * changes when they edit it; this changes on every probe, and folding the two
+     * into one write would mean a background sweep republishing the book — which
+     * is what `applyBook` reconnects on.
+     */
+    override val routeHealth: Flow<Map<String, RouteHealth>> = prefs.map { routeHealthFrom(it) }
+
+    override suspend fun setRouteHealth(value: Map<String, RouteHealth>, atMs: Long) {
+        val encoded = RouteHealthSnapshot.encode(value, atMs)
+        if (prefs.first()[ROUTE_HEALTH] == encoded) return
+        context.dataStore.edit { putRouteHealth(it, value, atMs) }
     }
 
     /**
@@ -390,12 +457,7 @@ class SettingsStore(private val context: Context) : HuginnSettings {
      */
     override suspend fun setRouteBook(value: RouteBook) {
         val book = value.normalized()
-        context.dataStore.edit {
-            it[PINNED_ROUTES] = SettingsCodec.encodeRoutes(book.routes)
-            it[ACTIVE_ROUTE_ID] = book.activeId.orEmpty()
-            it[AUTO_SWITCH] = book.autoSwitch
-            it[BASE_URL] = book.activeUrl
-        }
+        context.dataStore.edit { putRouteBook(it, book) }
     }
 
     override suspend fun setToken(value: String) {

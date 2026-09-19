@@ -56,6 +56,7 @@ import com.silencelen.huginn.data.LoginState
 import com.silencelen.huginn.data.RouteBook
 import com.silencelen.huginn.data.RouteFailures
 import com.silencelen.huginn.data.RouteGuard
+import com.silencelen.huginn.data.PinnedRoute
 import com.silencelen.huginn.data.RouteHealth
 import com.silencelen.huginn.data.RouteResolver
 import com.silencelen.huginn.data.UriByteStream
@@ -1030,6 +1031,11 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
             _health.value = readHealth()
             _appLock.value = settings.appLock.first()
             _routeBook.value = settings.routeBook.first()
+            // ⚠ BEFORE THE FIRST resolveRoute BELOW. With an empty map every cold
+            // start skips the hysteresis and takes the first address that answers
+            // in the owner's order — which is how a stranger on a route pinned
+            // above the real daemon wins on every launch. See HuginnSettings.routeHealth.
+            _routeHealth.value = settings.routeHealth.first()
             AppLock.enabledCache = _appLock.value
             // Opened even when no token is configured: a caller must unblock and
             // get a real "not configured" failure rather than hang forever.
@@ -1078,6 +1084,14 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
     val routeNote: StateFlow<String?> = _routeNote.asStateFlow()
 
     /**
+     * A route that answered and that this client WILL NOT ADOPT BY ITSELF — see
+     * [RouteResolver.Choice.Stay.Candidate]. Offered under the list; null the
+     * rest of the time, which is almost always.
+     */
+    private val _routeCandidate = MutableStateFlow<PinnedRoute?>(null)
+    val routeCandidate: StateFlow<PinnedRoute?> = _routeCandidate.asStateFlow()
+
+    /**
      * Consecutive network failures on the active route. ⚠ A 401 does not count:
      * an answering daemon that rejects the token proves the ROUTE is fine, and
      * re-resolving on it would go looking for a network problem that is not
@@ -1100,7 +1114,12 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
                 force = force,
             ) { client.probe(it.url) }
             _resolvingRoute.value = false
-            _routeHealth.value = outcome.health
+            saveHealth(outcome.health)
+            // Cleared on EVERY resolution before it is set again: an offer is a
+            // fact about the sweep that just ran, and one left standing from five
+            // minutes ago invites a person to hand the bearer to a host that has
+            // since gone quiet.
+            _routeCandidate.value = (outcome.choice as? RouteResolver.Choice.Stay.Candidate)?.candidate
             when (val choice = outcome.choice) {
                 is RouteResolver.Choice.Empty ->
                     if (!silent) _toast.value = "No routes yet — add the address huginn answers on"
@@ -1119,6 +1138,23 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     /**
+     * Adopt the offered route: the person saying so that [RouteResolver] waits
+     * for. Pinned, exactly as a Use on any other row is — the reader has just
+     * chosen an address, and auto-switching away from it on the next sweep would
+     * make the choice look like it did not take.
+     */
+    fun useRouteCandidate(id: String) {
+        _routeCandidate.value = null
+        activateRoute(id)
+    }
+
+    /** The health cache and its persisted copy, together. */
+    private suspend fun saveHealth(health: Map<String, RouteHealth>) {
+        _routeHealth.value = health
+        runCatching { settings.setRouteHealth(health, System.currentTimeMillis()) }
+    }
+
+    /**
      * Marks the active route as having just worked, from REAL traffic.
      *
      * See [RouteResolver.touch]: it writes `lastSeenAt`, never `lastOkAt`, so the
@@ -1126,11 +1162,17 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
      * "fresh" seconds after its last success.
      */
     private fun noteRouteReached() {
-        _routeHealth.value = RouteResolver.touch(
+        val next = RouteResolver.touch(
             _routeHealth.value,
             _routeBook.value.active?.id,
             System.currentTimeMillis(),
         )
+        if (next == _routeHealth.value) return
+        _routeHealth.value = next
+        // Persisted too, and this is the witness that matters most on a phone:
+        // ordinary traffic proves the route far more often than a probe does, and
+        // a restart that forgot it would sweep the whole book on next launch.
+        viewModelScope.launch { runCatching { settings.setRouteHealth(next, System.currentTimeMillis()) } }
     }
 
     /**
