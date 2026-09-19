@@ -141,6 +141,25 @@ const CLIENT_ADDR_TTL_SEC = 7 * 24 * 60 * 60;
 const MAX_CLIENT_ADDRS = 16;
 
 /**
+ * The cap on REMOTES remembered per arrival address — the clients themselves,
+ * `req.socket.remoteAddress`, as opposed to the listener they dialled.
+ *
+ * ⚠ THE TWO ARE NOT THE SAME ADDRESS AND ONLY ONE OF THEM IS A FIREWALL SOURCE.
+ * An arrival address is one of THIS host's: 192.168.2.117 is huginn's own IP on
+ * the LAN, 127.0.0.1 is its loopback. A PVE rule on CT 117 reading
+ * `IN ACCEPT -source 192.168.2.117` therefore matches nothing that ever dials
+ * it — the container's own address is never the far end of an inbound socket —
+ * and the whole paste was a no-op that looked like a fix (3.5.2). What a rule
+ * needs is who arrived: the Yggdrasil LAN gateway's NAT address for a phone on
+ * the LAN side, a 100.x for a tailnet client.
+ *
+ * Per arrival, because that is the question a failing address asks: "who reaches
+ * huginn HERE?". Sixteen for the same reason the arrival set is sixteen, and
+ * oldest-seen goes first.
+ */
+const MAX_CLIENT_REMOTES = 16;
+
+/**
  * How often the address set is written back to the store.
  *
  * The set lives in MEMORY and is flushed lazily: a NEW address is written at
@@ -988,17 +1007,24 @@ function portOf(rawUrl) {
  *      "bind 0.0.0.0" with no idea what to edit is not an instruction.
  *   2. the FIREWALL, on heimdall — one line per address that failed.
  *
- * ⚠ THE `-source` IS THE ADDRESS THE CLIENT ARRIVED ON, which is huginn's own
- * address on that network and therefore names the NETWORK, not the device. It is
- * what this daemon can honestly know: it sees which of its listeners a client
- * dialled, and the owner narrows the source to the device or subnet they mean.
- * Saying `-source <a device we guessed>` would be an invention; saying nothing
- * would be a rule that opens the port to everything.
+ * ⚠⚠ THE `-source` IS THE CLIENT, NOT THE ADDRESS IT ARRIVED ON. Until 3.5.2
+ * this emitted the ARRIVAL address, which is one of huginn's own (192.168.2.117,
+ * 127.0.0.1) — a rule in CT 117's firewall file sourced from CT 117's own IP
+ * matches no packet that was ever addressed to it, so every line the feature
+ * produced was inert while reading as a fix. `remotes` is the other end of the
+ * socket, learned the same way and kept per arrival: for the LAN side of this
+ * host that is 192.168.2.131, the Yggdrasil gateway NATting the phones.
+ *
+ * ⚠ AND WHEN IT DOES NOT KNOW, IT SAYS SO. An arrival address nobody has ever
+ * been seen on gets a COMMENT naming it, not a guessed source — a wrong rule is
+ * worse than an absent one, because it is the thing that just wasted somebody's
+ * afternoon. Loopback clients are held back by the same argument: `-source
+ * 127.0.0.1` in a bridge firewall is another rule that can never match.
  *
  * ⚠ EVERY RETURNED ELEMENT IS A STRING. There is no verb in this payload, no
  * route that takes one, and a test asserts this file holds no way to run one.
  */
-function fixLines(rec, addresses = []) {
+function fixLines(rec, addresses = [], remotes = {}) {
   const seen = Array.isArray(addresses) ? addresses : [];
   const failing = seen.filter((a) => a && a.ok === false).map((a) => a.addr);
   if (!failing.length) return [];
@@ -1023,8 +1049,118 @@ function fixLines(rec, addresses = []) {
   }
   out.push(`ss -ltn | grep :${port}`);
   out.push(`# on heimdall — ${FIREWALL_FILE}`);
+  // Identical lines are collapsed across arrivals: one client reaching huginn on
+  // two of its addresses is one rule, and a paste block with the same rule twice
+  // in it is a block somebody has to read twice to be sure.
+  const said = new Set();
   for (const addr of failing) {
-    out.push(`IN ACCEPT -source ${addr} -p tcp -dport ${port} -log nolog`);
+    // ⚠ A FAILING LOOPBACK ARRIVAL NEEDS NO RULE, AND SAYING SO IS THE FIX.
+    // Loopback never crosses the veth chain, so nothing in 117.fw has any say
+    // over it: once step 1 binds the unit to 0.0.0.0 it answers on 127.0.0.1 by
+    // itself. Verified on the live retrofit — rebinding jtyper-trainer and
+    // boardserver, with `-source 192.168.2.131` added on heimdall for the LAN,
+    // left all three of 100.97.198.90, 127.0.0.1 and 192.168.2.117 reading ok.
+    // A rule here would be a third inert line pasted into a root shell.
+    if (hostClass(addr) === 'loopback') { out.push(loopbackNeedsNoRule(addr)); continue; }
+    const known = remotesOf(remotes, addr);
+    const sources = firewallSources(known);
+    if (!sources.length) {
+      out.push(known.length ? onlyLoopbackHere(addr) : noClientHere(addr));
+      continue;
+    }
+    for (const src of sources) {
+      const line = `IN ACCEPT -source ${src} -p tcp -dport ${port} -log nolog`;
+      if (said.has(line)) continue;
+      said.add(line);
+      out.push(line);
+    }
+  }
+  return out;
+}
+
+/**
+ * What stands where a loopback arrival's rule would be: nothing to add, and why.
+ *
+ * Step 1 of the two is the whole remedy for this address — see the ⚠ in
+ * [fixLines] — and a reader who has just been handed a firewall file needs to be
+ * told that the address they can see failing is not in it.
+ */
+function loopbackNeedsNoRule(addr) {
+  return `# ${addr} passes on its own once the unit binds 0.0.0.0`;
+}
+
+/** The comment that stands where a source would be when nobody has arrived there. */
+function noClientHere(addr) {
+  return `# no client has reached huginn on ${addr} yet — add its network here`;
+}
+
+/**
+ * The same, for a NON-loopback arrival whose only known clients are loopback.
+ *
+ * A SEPARATE SENTENCE because the first one would be FALSE here: clients have
+ * reached huginn on this address, they are just clients no firewall rule can be
+ * written about. Saying "nobody has" to somebody looking at a daemon they are
+ * talking to over that very address is the kind of small lie that makes a person
+ * stop believing the rest of the block.
+ *
+ * ⚠ THE BACKSTOP, NOT THE COMMON CASE. A loopback ARRIVAL never reaches here —
+ * it is answered above, by the one line that is true of it. This is what keeps
+ * `-source 127.0.0.1` out of the file if a loopback client ever turns up on one
+ * of this host's routable addresses.
+ */
+function onlyLoopbackHere(addr) {
+  return `# only loopback has reached huginn on ${addr} — `
+    + 'a loopback client is not a firewall source, add its network here';
+}
+
+/** The clients known on one arrival address: normalised, de-duplicated, order kept. */
+function remotesOf(remotes, arrival) {
+  const raw = remotes instanceof Map
+    ? remotes.get(arrival)
+    : (remotes && typeof remotes === 'object' && Object.hasOwn(remotes, arrival) ? remotes[arrival] : null);
+  return [...new Set((Array.isArray(raw) ? raw : []).map(normalizeAddr).filter(Boolean))];
+}
+
+/**
+ * `a.b.c.0/24` for a PRIVATE v4 client, or '' for anything that must not be
+ * widened.
+ *
+ * ⚠ TAILNET AND v6 ARE NEVER COLLAPSED. A tailnet address is a /32 tailscale
+ * handed to one device out of a shared 100.64.0.0/10 — the neighbouring octets
+ * belong to other people's machines, and a /24 there would be an assertion about
+ * addresses this host has never seen. A mesh ULA has no /24 to speak of.
+ */
+function slash24(addr) {
+  if (hostClass(addr) !== 'lan') return '';
+  const v4 = ipv4(addr);
+  return v4 ? `${v4[0]}.${v4[1]}.${v4[2]}.0/24` : '';
+}
+
+/**
+ * The sources a firewall rule may honestly name, out of the clients seen on one
+ * arrival address.
+ *
+ * Loopback is dropped (see the ⚠⚠ on [fixLines]), and THREE OR MORE clients in
+ * one /24 become the /24 — a household puts a phone, a laptop and a tablet on
+ * one VLAN, and three rules differing in the last octet are three rules somebody
+ * has to maintain as devices come and go. Two is not a pattern: widening on two
+ * would open a /24 on the strength of a coincidence.
+ */
+function firewallSources(known) {
+  const usable = (known || []).filter((a) => a && hostClass(a) !== 'loopback');
+  const counts = new Map();
+  for (const a of usable) {
+    const net = slash24(a);
+    if (net) counts.set(net, (counts.get(net) || 0) + 1);
+  }
+  const out = [];
+  const said = new Set();
+  for (const a of usable) {
+    const net = slash24(a);
+    const src = net && counts.get(net) >= 3 ? net : a;
+    if (said.has(src)) continue;
+    said.add(src);
+    out.push(src);
   }
   return out;
 }
@@ -1139,7 +1275,12 @@ async function reachabilityProbe(rec, addrs = [], opts = {}) {
   }
   const addresses = await Promise.all(list.map((a) => reachOne(url, a, opts)));
   const ok = addresses.every((a) => a.ok === true);
-  return { ok, checkedAt, addresses, fix: ok ? [] : fixLines(rec, addresses), note: '' };
+  // ⚠ THE PROBE ASKS THE ARRIVAL ADDRESSES; THE FIX NAMES THE CLIENTS. Two
+  // different sets doing two different jobs — probing a client's address would
+  // be asking whether the PHONE serves this app. `opts.remotes` is the map the
+  // store keeps; absent, every failing address falls to the comment branch,
+  // which is the honest answer for a caller that has no client to name.
+  return { ok, checkedAt, addresses, fix: ok ? [] : fixLines(rec, addresses, opts.remotes || {}), note: '' };
 }
 
 /** The sentence a 422 says. Names the addresses, because that is the whole refusal. */
@@ -1537,10 +1678,33 @@ function storePath(dir) { return path.join(dir, STORE_NAME); }
 function markerPath(dir) { return path.join(dir, REBIND_MARKER_NAME); }
 
 /** One `{addr, lastSeenAt}`, cleaned, or null. */
-function addrEntry(raw) {
+function remoteEntry(raw) {
   const addr = normalizeAddr(raw && raw.addr);
   if (!addr) return null;
   return { addr, lastSeenAt: Number(raw.lastSeenAt) > 0 ? Math.floor(Number(raw.lastSeenAt)) : 0 };
+}
+
+/**
+ * One arrival address with the clients seen on it, cleaned, or null.
+ *
+ * `remotes` is ALWAYS AN ARRAY on the way out, empty included: a store written
+ * before 3.5.2 has no such key, and an arrival with nobody behind it is a state
+ * the fix lines have a sentence for. Same rule as the record fields — a thing
+ * that decoded is a thing the rest of this file can read without asking whether
+ * a key was missing.
+ */
+function addrEntry(raw) {
+  const addr = normalizeAddr(raw && raw.addr);
+  if (!addr) return null;
+  const seen = new Set();
+  const remotes = [];
+  for (const r of Array.isArray(raw.remotes) ? raw.remotes : []) {
+    const e = remoteEntry(r);
+    if (!e || seen.has(e.addr)) continue;
+    seen.add(e.addr);
+    remotes.push(e);
+  }
+  return { addr, lastSeenAt: Number(raw.lastSeenAt) > 0 ? Math.floor(Number(raw.lastSeenAt)) : 0, remotes };
 }
 
 function readEnvelope(dir, fs = nodeFs) {
@@ -1609,6 +1773,14 @@ function createStore(opts = {}) {
   const reaches = new Map();
   /** addr -> lastSeenAt (epoch seconds). The prerequisite's authority. */
   const addrs = new Map();
+  /**
+   * arrival addr -> (client addr -> lastSeenAt). WHO arrived on each of this
+   * host's addresses, which is the only thing here a firewall `-source` can
+   * honestly be (see the ⚠⚠ on [fixLines]). Kept beside `addrs` rather than
+   * inside it so the probe's authority — the arrival set — reads exactly as it
+   * did, and so an arrival with no client is still an arrival.
+   */
+  const remotes = new Map();
   let addrsLoaded = false;
   let addrsFlushedAt = 0;
   let lastSweepStartedMs = 0;
@@ -1623,14 +1795,62 @@ function createStore(opts = {}) {
   function pruneAddrs() {
     const cutoff = stamp() - addrTtlSec;
     for (const [addr, seen] of addrs) if (seen < cutoff) addrs.delete(addr);
-    if (addrs.size <= MAX_CLIENT_ADDRS) return;
-    const byAge = [...addrs.entries()].sort((a, b) => a[1] - b[1]);
-    for (const [addr] of byAge.slice(0, addrs.size - MAX_CLIENT_ADDRS)) addrs.delete(addr);
+    if (addrs.size > MAX_CLIENT_ADDRS) {
+      const byAge = [...addrs.entries()].sort((a, b) => a[1] - b[1]);
+      for (const [addr] of byAge.slice(0, addrs.size - MAX_CLIENT_ADDRS)) addrs.delete(addr);
+    }
+    pruneRemotes(cutoff);
+  }
+
+  /**
+   * The clients, on the arrival set's own clock and cap.
+   *
+   * ⚠ A REMOTE OUTLIVES NOTHING. When an arrival address is dropped — expired or
+   * pushed out by the cap — the clients recorded on it go with it: there is no
+   * address left for them to be the clients OF, and a survivor would surface
+   * months later as a firewall source for a network nobody is on any more. Same
+   * seven days for the same reason: a rule is a present-tense claim.
+   */
+  function pruneRemotes(cutoff) {
+    for (const [arrival, seen] of remotes) {
+      if (!addrs.has(arrival)) { remotes.delete(arrival); continue; }
+      for (const [addr, at] of seen) if (at < cutoff) seen.delete(addr);
+      if (seen.size > MAX_CLIENT_REMOTES) {
+        const byAge = [...seen.entries()].sort((a, b) => a[1] - b[1]);
+        for (const [addr] of byAge.slice(0, seen.size - MAX_CLIENT_REMOTES)) seen.delete(addr);
+      }
+    }
+  }
+
+  /** The clients on one arrival, sorted, as `{addr, lastSeenAt}` — the stored shape. */
+  function remoteEntries(arrival) {
+    const seen = remotes.get(arrival);
+    if (!seen) return [];
+    return [...seen.entries()].sort((a, b) => (a[0] < b[0] ? -1 : 1))
+      .map(([addr, lastSeenAt]) => ({ addr, lastSeenAt }));
   }
 
   function addrEntries() {
     pruneAddrs();
-    return [...addrs.entries()].sort((a, b) => (a[0] < b[0] ? -1 : 1)).map(([addr, lastSeenAt]) => ({ addr, lastSeenAt }));
+    return [...addrs.entries()].sort((a, b) => (a[0] < b[0] ? -1 : 1))
+      .map(([addr, lastSeenAt]) => ({ addr, lastSeenAt, remotes: remoteEntries(addr) }));
+  }
+
+  /**
+   * `{ <arrival>: [client, ...] }` — what this daemon knows about who reaches
+   * it, and the input [fixLines] turns into `-source`.
+   *
+   * ⚠ EVERY ARRIVAL IS A KEY, EMPTY LIST INCLUDED. "huginn has learned this
+   * address and has never seen anybody on it" is a different state from "huginn
+   * has never heard of this address", and it is the one the comment branch of
+   * the fix lines exists for. Loopback clients ARE here: this is what the daemon
+   * knows, and withholding them is [fixLines]'s job, not the store's.
+   */
+  function clientRemotes() {
+    if (!addrsLoaded) loadAddrs(readEnvelope(dir, fs));
+    const out = {};
+    for (const e of addrEntries()) out[e.addr] = e.remotes.map((r) => r.addr);
+    return out;
   }
 
   /**
@@ -1647,13 +1867,26 @@ function createStore(opts = {}) {
     addrsLoaded = true;
     for (const e of (env && env.clientAddresses) || []) {
       if (!addrs.has(e.addr) || addrs.get(e.addr) < e.lastSeenAt) addrs.set(e.addr, e.lastSeenAt);
+      if (!(e.remotes || []).length) continue;
+      const seen = remotes.get(e.addr) || new Map();
+      for (const r of e.remotes) if (!seen.has(r.addr) || seen.get(r.addr) < r.lastSeenAt) seen.set(r.addr, r.lastSeenAt);
+      remotes.set(e.addr, seen);
     }
     pruneAddrs();
   }
 
   /**
    * Remember an address a client ARRIVED ON — `req.socket.localAddress`, which
-   * is exactly what /v1/ping reports as `via`.
+   * is exactly what /v1/ping reports as `via` — and WHO ARRIVED THERE, the other
+   * end of the same socket.
+   *
+   * ⚠⚠ TWO ADDRESSES, TWO JOBS, AND 3.5.2 EXISTS BECAUSE ONE WAS DOING BOTH.
+   * The ARRIVAL is what every app has to answer on, and it is what the
+   * reachability probe dials. The REMOTE is what a firewall rule on heimdall can
+   * name as its source — and it has to be, because an arrival address is one of
+   * huginn's own and a `-source` naming CT 117's own IP matches nothing inbound.
+   * Recorded on the same terms as the arrival, in the same set, under the same
+   * clock, so neither can drift out from under the other.
    *
    * ⚠ THIS IS THE ONLY WAY THE SET GROWS, and it grows from traffic rather than
    * from an interface enumeration this process could not do anyway (the unit's
@@ -1665,7 +1898,7 @@ function createStore(opts = {}) {
    * A NEW address is flushed at once, because it changes what an add would
    * refuse. A refreshed stamp waits — see [CLIENT_ADDR_FLUSH_SEC].
    */
-  function noteClientAddress(raw) {
+  function noteClientAddress(raw, rawRemote) {
     const addr = normalizeAddr(raw);
     if (!addr) return false;
     // See the ⚠ on loadAddrs: one file read on the first authorised request of
@@ -1673,8 +1906,24 @@ function createStore(opts = {}) {
     if (!addrsLoaded) loadAddrs(readEnvelope(dir, fs));
     const fresh = !addrs.has(addr);
     addrs.set(addr, stamp());
+
+    // The client. Absent is ordinary — a caller with only one address to hand,
+    // and a socket whose peer this process could not read, both land here — and
+    // the fix lines have a sentence for an arrival with nobody on it.
+    const remote = normalizeAddr(rawRemote);
+    let freshRemote = false;
+    if (remote) {
+      const seen = remotes.get(addr) || new Map();
+      freshRemote = !seen.has(remote);
+      seen.set(remote, stamp());
+      remotes.set(addr, seen);
+    }
+
     if (fresh) log(`apps: a client arrived on ${addr} — every app now has to answer there too`);
-    if (fresh || stamp() - addrsFlushedAt >= CLIENT_ADDR_FLUSH_SEC) flushAddrs();
+    if (freshRemote && !fresh) log(`apps: ${remote} reached huginn on ${addr} — its fix lines can name a source now`);
+    // A NEW client is flushed at once for the same reason a new arrival is: it
+    // changes what the daemon would tell somebody to paste into a root shell.
+    if (fresh || freshRemote || stamp() - addrsFlushedAt >= CLIENT_ADDR_FLUSH_SEC) flushAddrs();
     return fresh;
   }
 
@@ -1827,7 +2076,7 @@ function createStore(opts = {}) {
   async function observe(rec) {
     const [probe, reach] = await Promise.all([
       probeApp(rec, { fetch: doFetch, timeoutMs, nowMs }),
-      reachabilityProbe(rec, addresses(), { fetch: doFetch, timeoutMs, nowMs }),
+      reachabilityProbe(rec, addresses(), { fetch: doFetch, timeoutMs, nowMs, remotes: clientRemotes() }),
     ]);
     if (probe.up === true) await refreshIcon(rec);
     return { probe, reach };
@@ -1932,6 +2181,7 @@ function createStore(opts = {}) {
     markerPath: () => markerPath(dir),
     noteClientAddress,
     addresses,
+    clientRemotes,
     icon(id) { return iconOf(dir, id, fs); },
 
     /**
@@ -1945,7 +2195,8 @@ function createStore(opts = {}) {
     async add(input) {
       const r = add(load().consoles, input, stamp());
       if (!r.ok) return r;
-      const reach = await reachabilityProbe(r.app, addresses(), { fetch: doFetch, timeoutMs, nowMs });
+      const reach = await reachabilityProbe(r.app, addresses(),
+        { fetch: doFetch, timeoutMs, nowMs, remotes: clientRemotes() });
       if (reach.ok === false) return { ok: false, status: 422, error: reachRefusal(reach), reachable: reach };
       save(r.apps);
       reaches.set(r.app.id, reach);
@@ -2008,7 +2259,7 @@ function store(dir, opts = {}) {
 module.exports = {
   MAX_APPS, MAX_NAME, MAX_NOTES, ID_RE, KINDS, DEFAULT_KIND, UNIT_RE,
   PROBE_TIMEOUT_MS, PROBE_CONCURRENCY, PROBE_FRESH_MS, PROBE_INTERVAL_MS,
-  CLIENT_ADDR_TTL_SEC, MAX_CLIENT_ADDRS, CLIENT_ADDR_FLUSH_SEC,
+  CLIENT_ADDR_TTL_SEC, MAX_CLIENT_ADDRS, MAX_CLIENT_REMOTES, CLIENT_ADDR_FLUSH_SEC,
   ICONS_DIR_NAME, ICON_MAX_BYTES, ICON_TIMEOUT_MS, ICON_REFRESH_MS, ICON_MAX_REDIRECTS,
   REBIND_MARKER_NAME, STORE_NAME, SCHEMA, FIREWALL_FILE, UNIT_BIND_NOTES,
   REFUSED_SCHEME, REFUSED_USERINFO, REFUSED_TRAVERSAL, REFUSED_HOST,
@@ -2020,10 +2271,12 @@ module.exports = {
   findApp, add, patch, rename, setUrl, remove,
   SEED_UNITS, SEED_FALLBACK_HOST, seedableHost, pickHostAddr, seedHost, seedUrl, legacySeedUrl,
   seedApps, migrateSeedUrls, migrateSeedUnits,
-  portOf, hostnameOf, fixLines, normalizeAddr, addrAuthority, reachUrl, reachOne, reachabilityProbe, reachRefusal,
+  portOf, hostnameOf, fixLines, remotesOf, firewallSources, slash24,
+  noClientHere, onlyLoopbackHere, loopbackNeedsNoRule,
+  normalizeAddr, addrAuthority, reachUrl, reachOne, reachabilityProbe, reachRefusal,
   readBounded, getBounded, iconCandidatesFromHtml, ICON_CANDIDATE_MAX, fetchIcon,
   iconsDir, iconFile, iconMetaFile, readIconMeta, writeIconMeta, readIconBytes, writeIconBytes,
   removeIcon, iconOf, iconDue,
   probeApp, probeAll, probeChange,
-  storePath, markerPath, readEnvelope, writeEnvelope, createStore, store,
+  storePath, markerPath, addrEntry, remoteEntry, readEnvelope, writeEnvelope, createStore, store,
 };

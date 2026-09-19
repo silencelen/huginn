@@ -117,9 +117,15 @@ before(async () => {
     seeded: true,
     // What a daemon that has been running for a while knows: two addresses
     // clients arrived on, one of them not seen for longer than the TTL.
+    // ⚠ AND WHO ARRIVED ON THEM. 192.168.2.131 is the shape this host actually
+    // has: the Yggdrasil LAN gateway NATs every phone on the LAN side, so that
+    // is the address the daemon sees on the far end of the socket and the only
+    // one a firewall rule on heimdall could ever match.
     clientAddresses: [
-      { addr: '127.0.0.2', lastSeenAt: now - 60 },
-      { addr: '10.9.9.9', lastSeenAt: now - appsLib.CLIENT_ADDR_TTL_SEC - 3600 },
+      { addr: '127.0.0.2', lastSeenAt: now - 60, remotes: [{ addr: '192.168.2.131', lastSeenAt: now - 60 }] },
+      { addr: '10.9.9.9',
+        lastSeenAt: now - appsLib.CLIENT_ADDR_TTL_SEC - 3600,
+        remotes: [{ addr: '192.168.2.44', lastSeenAt: now - 60 }] },
     ],
     consoles: [
       appsLib.buildRecord({ id: 'onebound', name: 'Bound to one address', kind: 'tool',
@@ -174,6 +180,14 @@ test('the daemon checks against the addresses clients arrive on, plus its own', 
   // ⚠ AND THE SET FORGETS. A laptop that was on the LAN once must not make every
   // app on this host unaddable months later; 10.9.9.9 is past the TTL.
   assert.ok(!body.clientAddresses.includes('10.9.9.9'), 'an address nobody has arrived on for a week is gone');
+
+  // ⚠ AND THE CLIENTS GO WITH IT. A remote is remembered FOR an arrival; when
+  // the arrival expires there is no address left for its clients to be clients
+  // of, and a stale one would come back as a firewall source months later.
+  assert.deepEqual(['192.168.2.131'], body.clientRemotes['127.0.0.2'],
+    `who the daemon has seen on 127.0.0.2: ${JSON.stringify(body.clientRemotes)}`);
+  assert.deepEqual(['127.0.0.1'], body.clientRemotes['127.0.0.1'], 'and this suite, on the address it dials');
+  assert.ok(!('10.9.9.9' in body.clientRemotes), 'the expired arrival took 192.168.2.44 with it');
 });
 
 test('an address a client actually arrives on is written down and survives a restart', async () => {
@@ -198,14 +212,21 @@ test('a row bound to one of this host’s addresses is UNREACHABLE, with the lin
   assert.equal(false, byAddr['127.0.0.2'].ok);
   assert.equal('connection refused', byAddr['127.0.0.2'].error, 'and it says why');
 
+  // ⚠⚠ AND THE FIREWALL HALF IS A COMMENT. 127.0.0.2 is LOOPBACK: it never
+  // crosses the veth chain, so 117.fw has no say over it and the rebind above is
+  // the entire remedy. The old code put `-source 127.0.0.2` here — an arrival
+  // address, one of THIS host's own, in a rule that could never match anything —
+  // which is the defect 3.5.2 removes in both its forms.
   assert.deepEqual([
     '# on huginn — 127.0.0.2 does not reach this app',
     'systemctl edit onebound.service   # ExecStart: bind 0.0.0.0 instead of 127.0.0.1',
     'systemctl restart onebound.service',
     `ss -ltn | grep :${onePort}`,
     '# on heimdall — /etc/pve/firewall/117.fw',
-    `IN ACCEPT -source 127.0.0.2 -p tcp -dport ${onePort} -log nolog`,
+    '# 127.0.0.2 passes on its own once the unit binds 0.0.0.0',
   ], r.body.reachable.fix, 'the exact lines, for THIS row, against THIS address');
+  assert.ok(!r.body.reachable.fix.some((l) => l.startsWith('IN ACCEPT')),
+    'an arrival address is never a -source, and a loopback one wants no rule at all');
 });
 
 test('the same app after a rebind answers everywhere and carries no lines at all', async () => {
@@ -237,9 +258,10 @@ test('adding an app that answers on only one of the addresses is 422, and nothin
   assert.equal(422, r.status, JSON.stringify(r.body));
   assert.equal(false, r.body.reachable.ok);
   assert.deepEqual(['127.0.0.2'], r.body.reachable.addresses.filter((a) => !a.ok).map((a) => a.addr));
-  assert.ok(r.body.reachable.fix.includes(
-    `IN ACCEPT -source 127.0.0.2 -p tcp -dport ${onePort} -log nolog`),
-  `the firewall line names the failing address and this app's port: ${JSON.stringify(r.body.reachable.fix)}`);
+  assert.ok(r.body.reachable.fix.includes('# 127.0.0.2 passes on its own once the unit binds 0.0.0.0'),
+    `the refusal travels with the remedy, and for a loopback address that is the rebind alone: ${JSON.stringify(r.body.reachable.fix)}`);
+  assert.ok(r.body.reachable.fix.some((l) => l.startsWith('systemctl edit other.service')),
+    'which is step 1, named for this row');
   assert.equal(null, rowOf(await list(), 'another-one-bound'), 'and NOTHING was stored');
 });
 
