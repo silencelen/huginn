@@ -62,8 +62,10 @@ version number collided. Entries below are reconstructed from the shipping commi
   name the systemd unit behind them; the four this host ships with do.
 - **A message is never pasted into somebody's unsent draft.** The gate reads the composer before
   every paste and holds the send with `blockedBy: "draft"` when what is in the box is not ours,
-  releasing when the person sends or clears it (10-minute bound like the other holds); live-view
-  keystrokes keep the box theirs for five seconds after the last one. The same message pressed
+  releasing when the person sends or clears it; live-view keystrokes keep the box theirs for a
+  minute after the last one, and for five seconds when the box reads empty. (Corrected in 3.6.0:
+  this said "10-minute bound like the other holds", which is the OUTER bound only — the keystroke
+  window always fires first.) The same message pressed
   again while the first copy is still queued no longer queues twice — `/keys` answers
   `duplicate: true` with the first copy's place. Fixes the 2026-09-19 incident where one message
   arrived three times and one arrival was submitted welded to the owner's half-typed draft.

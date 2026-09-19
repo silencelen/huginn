@@ -1981,6 +1981,23 @@ const STARTUP_GRACE_MS = (() => {
 })();
 
 /**
+ * How long after a live-view keypress the composer still belongs to the person,
+ * with the same shape of override for the same kind of reader.
+ *
+ * `HUGINN_APPD_LIVE_KEYS_WINDOW_MS` exists because the ceiling is the SUBJECT of
+ * a test — decision 59 keeps it at 60 s and makes the daemon say when a message
+ * went in on top of somebody anyway, and a suite that had to wait out a real
+ * minute per case would be a suite nobody runs. Nonsense falls back rather than
+ * disabling the guard by typo, exactly like the startup grace above.
+ */
+const LIVE_KEYS_WINDOW_MS = (() => {
+  const raw = process.env.HUGINN_APPD_LIVE_KEYS_WINDOW_MS;
+  if (raw == null || raw === '') return typing.LIVE_KEYS_WINDOW_MS;
+  const n = Number(raw);
+  return Number.isFinite(n) && n >= 0 ? n : typing.LIVE_KEYS_WINDOW_MS;
+})();
+
+/**
  * The sessions being held by the UNMARKED rule, so its journal line is written
  * once per session rather than once per 400 ms poll.
  */
@@ -2008,7 +2025,7 @@ const liveKeysAt = new Map();   // session name -> ms epoch of the last live-vie
 function markLiveKeys(name) {
   const now = Date.now();
   for (const [k, t] of liveKeysAt) {
-    if (now - t > typing.LIVE_KEYS_WINDOW_MS) liveKeysAt.delete(k);
+    if (now - t > LIVE_KEYS_WINDOW_MS) liveKeysAt.delete(k);
   }
   liveKeysAt.set(name, now);
 }
@@ -2025,6 +2042,34 @@ function liveKeysAgoMs(name) {
  * makes, and for the same reason.
  */
 const draftHeld = new Set();
+
+/**
+ * The last message that went into somebody's DRAFT anyway, per session.
+ *
+ * ⚠ DECISION 59. The ceiling stays at 60 s after the last live-view keystroke;
+ * what changes is that the daemon stops keeping the fact to itself. Every client
+ * reads it off `GET /typing` (`intoDraft`) and the sender reads it off the `/keys`
+ * answer when the delivery was immediate.
+ *
+ * ⚠ NOT ON THE QUEUE STRUCT. `sendQueues` is reaped the instant a queue empties
+ * with nothing to report — which is the same instant this notice becomes the only
+ * thing worth reading — so a field there would be gone before the first poll. Its
+ * own map, cleared by the next ordinary delivery to that session.
+ */
+const intoDraftAt = new Map();   // session name -> { at, waitedMs, composer }
+/** Long enough that a parked phone still sees it; short enough to be bounded. */
+const INTO_DRAFT_KEEP_MS = 60 * 60 * 1000;
+
+function noteIntoDraft(name, waitedMs, composer) {
+  const now = Date.now();
+  for (const [k, v] of intoDraftAt) {
+    if (now - v.at > INTO_DRAFT_KEEP_MS) intoDraftAt.delete(k);
+  }
+  intoDraftAt.set(name, { at: now, waitedMs, composer: String(composer || '') });
+}
+/** The next ordinary delivery is the answer to "is it still true?" — it is not. */
+function clearIntoDraft(name) { intoDraftAt.delete(name); }
+function intoDraftFor(name) { return intoDraftAt.get(name) || null; }
 
 function markLaunching(name) {
   const now = Date.now();
@@ -2421,12 +2466,18 @@ async function pumpQueue(name) {
       // keystrokes (`submit:false`) ARE the draft — holding those would take the
       // terminal keyboard away exactly as the modal refusal once did.
       const guarded = textEntry && entry.submit !== false;
+      // Read ONCE and reused three times below — the hold, the journal line that
+      // says how the hold ended, and the `intoDraft` notice. They were three
+      // separate calls against the same capture, which is three chances to
+      // disagree about whose box it is.
+      const draftSeen = guarded
+        ? typing.composerHoldsDraft(gate.composerHolds, entry.text, lastPastedText(name))
+        : null;
       const holdForDraft = typing.draftHold({
-        draft: guarded
-          ? typing.composerHoldsDraft(gate.composerHolds, entry.text, lastPastedText(name))
-          : null,
+        draft: draftSeen,
         keysAgoMs: guarded ? liveKeysAgoMs(name) : null,
         waitedMs: now - entry.at,
+        keysWindowMs: LIVE_KEYS_WINDOW_MS,
       });
       const d = typing.releaseDecision(humanText
         ? {
@@ -2459,8 +2510,7 @@ async function pumpQueue(name) {
         // Which way the hold ended matters: the person sent or cleared their
         // draft (the ordinary case, and quiet), or the ceiling ran out and the
         // message is going into their box anyway. The second one is news.
-        if (holdForDraft === false && guarded
-            && typing.composerHoldsDraft(gate.composerHolds, entry.text, lastPastedText(name)) === true) {
+        if (holdForDraft === false && draftSeen === true) {
           log(typing.draftOverdueLogLine(name, now - entry.at, gate.composerHolds));
         } else {
           log(typing.draftClearedLogLine(name, now - entry.at));
@@ -2511,6 +2561,16 @@ async function pumpQueue(name) {
       // and moving the window for it would hold the entry behind it for a
       // boundary that has nothing to do with anything appd did.
       if (r.ok) q.deliveredAt = Date.now();
+      // ⚠ AND SAY SO WHEN IT WENT IN ON TOP OF SOMEBODY (decision 59). Written
+      // from the SAME verdict the journal line is written from, at the moment of
+      // release rather than afterwards: by the time the paste lands the composer
+      // holds our text too and nothing can tell whose it was. An ordinary
+      // delivery into a free box is the answer to "is it still true?", so it
+      // clears the notice.
+      if (r.ok && guarded) {
+        if (draftSeen === true) noteIntoDraft(name, now - entry.at, gate.composerHolds);
+        else clearIntoDraft(name);
+      }
       if (!r.ok) {
         q.lastError = r.message;
         log(`typing: ${name}: delivery failed: ${r.message}`);
@@ -10492,6 +10552,16 @@ const server = http.createServer(async (req, res) => {
        * the sentence does not change under the reader when the first poll lands.
        */
       let blockedBy = null;
+      /**
+       * ⚠ AND WHETHER THIS MESSAGE WENT INTO SOMEBODY'S DRAFT (decision 59).
+       *
+       * Only for a delivery that happened HERE, synchronously — a queued message
+       * has not been pasted yet and cannot have landed anywhere. A sender whose
+       * message waited reads the same object off `GET /typing`, which carries the
+       * standing notice for the session; this is so the one who pressed Send is
+       * told in the answer to their own request rather than on the next poll.
+       */
+      let intoDraft = null;
       if (typedKeys.length > 0) {
         /**
          * Through the QUEUE, not straight at the pane.
@@ -10539,7 +10609,10 @@ const server = http.createServer(async (req, res) => {
             && Date.now() - recent.at <= typing.DUPLICATE_WINDOW_MS) {
           log(`typing: ${name}: the same message was delivered ${Math.round((Date.now() - recent.at) / 1000)}s ago; `
             + 'not sending it a second time');
-          return sendJson(res, 200, { ok: true, queued: 0, position: 0, delivered: true, blockedBy: null, duplicate: true });
+          return sendJson(res, 200, {
+            ok: true, queued: 0, position: 0, delivered: true, blockedBy: null,
+            intoDraft: null, duplicate: true,
+          });
         }
         if (dup) {
           const q = sendQueues.get(name);
@@ -10548,7 +10621,8 @@ const server = http.createServer(async (req, res) => {
             + 'not queuing it a second time');
           return sendJson(res, 200, {
             ok: true, queued: q ? q.entries.length : 0, position: at < 0 ? 0 : at + 1,
-            delivered: false, blockedBy: (q && q.blockedBy) || null, duplicate: true,
+            delivered: false, blockedBy: (q && q.blockedBy) || null,
+            intoDraft: null, duplicate: true,
           });
         }
         const out = await enqueueSend(name, typedKeys, { origin: 'client', submit: wantsEnter });
@@ -10559,12 +10633,13 @@ const server = http.createServer(async (req, res) => {
         position = out.position;
         queued = out.queued;
         blockedBy = out.blockedBy;
+        if (delivered) intoDraft = typing.intoDraftView(intoDraftFor(name));
       }
       for (const k of rawKeys) {
         const r = await run('tmux', ['send-keys', '-t', `=${name}:`, k]);
         if (r.err) return sendErr(res, 500, `tmux: ${r.stderr.trim()}`);
       }
-      return sendJson(res, 200, { ok: true, queued, position, delivered, blockedBy });
+      return sendJson(res, 200, { ok: true, queued, position, delivered, blockedBy, intoDraft });
     }
 
     /**
@@ -10580,7 +10655,8 @@ const server = http.createServer(async (req, res) => {
     if ((m = p.match(/^\/v1\/sessions\/([A-Za-z0-9_][A-Za-z0-9_.-]{0,49})\/typing$/)) && req.method === 'GET') {
       const name = m[1];
       if (!(await requireSession(res, name))) return;
-      return sendJson(res, 200, typing.typingSnapshot(sendQueues.get(name), Date.now()));
+      return sendJson(res, 200,
+        typing.typingSnapshot(sendQueues.get(name), Date.now(), intoDraftFor(name)));
     }
 
     // --- soft end: type a wrap-up phrase, and (when auto) end on settle
