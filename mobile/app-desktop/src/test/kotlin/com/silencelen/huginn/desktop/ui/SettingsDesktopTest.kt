@@ -211,6 +211,30 @@ class SettingsDesktopTest {
         )
     }
 
+    /**
+     * The desktop half of the same rule: the keep-awake detail rows exist only
+     * while the saved setting is on, because that is the branch the shared form
+     * draws them under.
+     */
+    @Test
+    fun `keep-awake's detail rows follow the saved switch`() {
+        fun ids(on: Boolean) = SettingsCatalog.itemsOf(
+            "usage",
+            desktopProbe(
+                SettingsFacts(
+                    status = Status(appdVersion = "3.1.0"),
+                    headroom = Headroom(settings = HeadroomSettings(keepAwake = on)),
+                ),
+            ),
+            Surface.DESKTOP,
+        ).map { it.id }
+        assertTrue("usage.keep-awake" in ids(false), "the switch itself stays: ${ids(false)}")
+        assertTrue("usage.keep-awake-quiet" !in ids(false), "${ids(false)}")
+        assertTrue("usage.keep-awake-model" !in ids(false), "${ids(false)}")
+        assertTrue("usage.keep-awake-quiet" in ids(true), "${ids(true)}")
+        assertTrue("usage.keep-awake-model" in ids(true), "${ids(true)}")
+    }
+
     @Test
     fun `rotation needs two logins, not one`() {
         val one = SettingsFacts(
