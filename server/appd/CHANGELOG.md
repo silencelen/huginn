@@ -9,6 +9,23 @@ appeared only as a side-note on the app releases it happened to ship with. Three
 undocumented, and the notes-cutting matcher could fuse two sections when an app and an appd
 version number collided. Entries below are reconstructed from the shipping commits.
 
+## 3.5.1 — 2026-09-18
+- **Sends stopped stalling.** 3.5.0's draft guard trusted a screen capture, and Claude Code draws its
+  own queued messages and its "Press up to edit queued messages" hint exactly where a draft would
+  be — so on a busy session every send was held for minutes as "unsent text in the live view", and
+  the queue filled. The guard now keys on what a capture cannot fake: live-view keystrokes the
+  daemon itself relayed. A box holding text is the person's for a minute after their last key; a box
+  reading empty for five seconds; nobody typing means no hold.
+- **A person's messages never wait for a turn again.** The one-per-boundary rule from 3.4.0 made
+  follow-up messages wait out whole turns — fifty-five deep on the owner's session behind a turn
+  that ran for minutes. Restored to the 3.0.3 contract: a person's message is delivered at once and
+  Claude Code queues it, as it always did.
+- **A message pressed again just after it was delivered is still the same press.** The duplicate
+  check now also covers a copy delivered within the last thirty seconds, for messages long enough
+  to be one specific message (twenty characters) — `yes` twice remains two answers.
+- ⚠ Queued sends live in memory: the fifty-five held on the owner's session are dropped by this
+  restart rather than delivered in a burst.
+
 ## 3.5.0 — 2026-09-18
 - **Consoles are now Apps** — the things huginn makes and hosts itself. `/v1/apps`, `/v1/apps/:id`,
   `/v1/apps/:id/probe` and the new `/v1/apps/:id/icon`; `/v1/consoles*` stays for one release and
