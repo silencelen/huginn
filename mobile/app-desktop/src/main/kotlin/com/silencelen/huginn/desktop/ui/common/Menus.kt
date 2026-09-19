@@ -50,9 +50,12 @@ import com.silencelen.huginn.data.ProjectMemberState
 import com.silencelen.huginn.data.ProjectRow
 import com.silencelen.huginn.data.QuickActions
 import com.silencelen.huginn.data.Session
+import com.silencelen.huginn.ui.EndVerbs
 import com.silencelen.huginn.ui.ProjectRules
 import com.silencelen.huginn.ui.QuickActionRules
 import com.silencelen.huginn.ui.SelectionAction
+import com.silencelen.huginn.ui.VerbTone
+import com.silencelen.huginn.ui.theme.verbInk
 
 /**
  * Right-click menus.
@@ -73,12 +76,26 @@ import com.silencelen.huginn.ui.SelectionAction
  *
  * A menu row is [HuginnMenuItem]: it SUBCLASSES the toolkit's `ContextMenuItem`
  * rather than replacing it, so `ContextMenuArea` still accepts it while the look
- * can ask the one extra question the base class cannot answer — does this row
- * destroy something.
+ * can ask the one extra question the base class cannot answer — how hard this
+ * row lands.
+ *
+ * ⚠ THE DESTRUCTIVE-VERB RULE, which used to be a boolean and is now three
+ * tones ([VerbTone]):
+ *
+ *  * [VerbTone.DESTRUCTIVE] — the full `error` red. Work can be lost: the
+ *    deletes, and `Kill session`.
+ *  * [VerbTone.SOFT] — a LIGHTER red (`error` at [SOFT_VERB_ALPHA], one token in
+ *    `:ui`'s theme so the phone's menu and this one cannot drift apart).
+ *    `Wrap up` and nothing else: it ends the session, and it loses nothing,
+ *    and drawing it as an ordinary row left the menu's two ending verbs looking
+ *    like unrelated things.
+ *  * [VerbTone.PLAIN] — everything else, INCLUDING `Archive…`, which ends a
+ *    session and keeps every part of it. Red there would claim a verb does
+ *    something it does not.
  */
 class HuginnMenuItem(
     label: String,
-    val destructive: Boolean = false,
+    val tone: VerbTone = VerbTone.PLAIN,
     onClick: () -> Unit,
 ) : ContextMenuItem(label, onClick)
 
@@ -92,6 +109,7 @@ class HuginnMenuItem(
 private class HuginnMenuLook(
     private val background: androidx.compose.ui.graphics.Color,
     private val ink: androidx.compose.ui.graphics.Color,
+    private val softInk: androidx.compose.ui.graphics.Color,
     private val destructiveInk: androidx.compose.ui.graphics.Color,
     private val hover: androidx.compose.ui.graphics.Color,
     private val outline: androidx.compose.ui.graphics.Color,
@@ -154,7 +172,7 @@ private class HuginnMenuLook(
 
     @Composable
     private fun MenuRow(item: ContextMenuItem, close: () -> Unit) {
-        val destructive = (item as? HuginnMenuItem)?.destructive == true
+        val tone = (item as? HuginnMenuItem)?.tone ?: VerbTone.PLAIN
         // `hoverable` + the interaction source rather than the desktop-only
         // `onPointerEvent`: it is stable API, it is the same source the click
         // already needs, and hover is what a pointer expects a menu to answer.
@@ -172,7 +190,11 @@ private class HuginnMenuLook(
             Text(
                 item.label,
                 style = MaterialTheme.typography.labelMedium,
-                color = if (destructive) destructiveInk else ink,
+                color = when (tone) {
+                    VerbTone.PLAIN -> ink
+                    VerbTone.SOFT -> softInk
+                    VerbTone.DESTRUCTIVE -> destructiveInk
+                },
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
             )
@@ -192,7 +214,8 @@ fun WithHuginnMenus(content: @Composable () -> Unit) {
         HuginnMenuLook(
             background = scheme.surfaceContainerHigh,
             ink = scheme.onSurface,
-            destructiveInk = scheme.error,
+            softInk = verbInk(VerbTone.SOFT, scheme),
+            destructiveInk = verbInk(VerbTone.DESTRUCTIVE, scheme),
             hover = scheme.surfaceContainerHighest,
             outline = scheme.outline,
         )
@@ -233,7 +256,7 @@ fun chatMenu(chat: Chat, selection: Set<String>, verbs: ChatVerbs): List<Context
     if (multi) {
         val ids = selection.toList()
         return listOf(
-            HuginnMenuItem("Delete ${selection.size} chats", destructive = true) { verbs.delete(ids) },
+            HuginnMenuItem("Delete ${selection.size} chats", VerbTone.DESTRUCTIVE) { verbs.delete(ids) },
         )
     }
     val items = mutableListOf<ContextMenuItem>(
@@ -244,7 +267,7 @@ fun chatMenu(chat: Chat, selection: Set<String>, verbs: ChatVerbs): List<Context
     // usually inert teaches people to ignore the menu.
     if (chat.running) items += HuginnMenuItem("Stop this run") { verbs.stop(chat.id) }
     items += HuginnMenuItem("Copy chat id") { verbs.copyId(chat.id) }
-    items += HuginnMenuItem("Delete", destructive = true) { verbs.delete(listOf(chat.id)) }
+    items += HuginnMenuItem("Delete", VerbTone.DESTRUCTIVE) { verbs.delete(listOf(chat.id)) }
     return items
 }
 
@@ -256,7 +279,7 @@ class SessionVerbs(
     val copyName: (String) -> Unit,
     /** Compact the session's context (types "/compact"). Not destructive. */
     val compact: (String) -> Unit,
-    /** Ask Claude to wrap up (and, host willing, end on settle). Not destructive. */
+    /** Ask Claude to wrap up (and, host willing, end on settle). The SOFT end. */
     val softEnd: (List<String>) -> Unit,
     /**
      * End for good AND keep the way back — the cwd, a copy of the conversation
@@ -274,9 +297,9 @@ fun sessionMenu(session: Session, selection: Set<String>, verbs: SessionVerbs): 
     if (multi) {
         val names = selection.toList()
         return buildList {
-            add(HuginnMenuItem("Wind down ${selection.size} sessions") { verbs.softEnd(names) })
+            add(HuginnMenuItem(EndVerbs.soft(selection.size), VerbTone.SOFT) { verbs.softEnd(names) })
             verbs.archive?.let { a -> add(HuginnMenuItem("Archive ${selection.size} sessions…") { a(names) }) }
-            add(HuginnMenuItem("End ${selection.size} sessions", destructive = true) { verbs.kill(names) })
+            add(HuginnMenuItem(EndVerbs.hard(selection.size), VerbTone.DESTRUCTIVE) { verbs.kill(names) })
         }
     }
     return buildList {
@@ -289,15 +312,17 @@ fun sessionMenu(session: Session, selection: Set<String>, verbs: SessionVerbs): 
         // The context manager: types "/compact" so the owner can reclaim context
         // without opening the pane. Host guards a plain shell / waiting question.
         add(HuginnMenuItem("Compact context") { verbs.compact(session.name) })
-        // The graceful sibling of "End session": sends the wrap-up phrase, and the
-        // host (auto-end on) ends the session once it settles. Red stays on the
-        // kill — this one only sends a message.
-        add(HuginnMenuItem("Wind down…") { verbs.softEnd(listOf(session.name)) })
-        // BETWEEN the wind-down and the end, because that is what it is: a wind
-        // down that leaves something behind. Not styled destructive — ending a
-        // session you can bring back is the least destructive of the three.
+        // The graceful sibling of "Kill session": sends the wrap-up phrase, and the
+        // host (auto-end on) ends the session once it settles. A LIGHTER red than
+        // the kill — it ends the session and loses nothing — and the two are a
+        // pair, which is what the old "Wind down" / "End session" pairing failed
+        // to say. Both words are EndVerbs'; the phone draws the same two.
+        add(HuginnMenuItem(EndVerbs.soft(1), VerbTone.SOFT) { verbs.softEnd(listOf(session.name)) })
+        // BETWEEN the wrap-up and the kill, because that is what it is: a wrap-up
+        // that leaves something behind. PLAIN, not either red — ending a session
+        // you can bring back is the least destructive of the three.
         verbs.archive?.let { a -> add(HuginnMenuItem("Archive…") { a(listOf(session.name)) }) }
-        add(HuginnMenuItem("End session", destructive = true) { verbs.kill(listOf(session.name)) })
+        add(HuginnMenuItem(EndVerbs.hard(1), VerbTone.DESTRUCTIVE) { verbs.kill(listOf(session.name)) })
     }
 }
 
@@ -356,7 +381,7 @@ fun projectMenu(project: ProjectRow, verbs: ProjectVerbs): List<ContextMenuItem>
     // Destructive because it forgets the record. Whether it also ENDS the sessions
     // is the dialog's question and the daemon's default is "nothing" — a delete
     // that silently killed twelve live sessions is not a delete anybody meant.
-    add(HuginnMenuItem("Delete…", destructive = true) { verbs.delete(project) })
+    add(HuginnMenuItem("Delete…", VerbTone.DESTRUCTIVE) { verbs.delete(project) })
 }
 
 /**
@@ -384,7 +409,7 @@ fun projectMenu(
     // a composer through the send queue and its gates, which is a message being
     // delivered rather than a key being pressed.
     add(HuginnMenuItem("Message…") { verbs.message(project, member) })
-    add(HuginnMenuItem("End session", destructive = true) { verbs.endMember(project, member) })
+    add(HuginnMenuItem(EndVerbs.hard(1), VerbTone.DESTRUCTIVE) { verbs.endMember(project, member) })
 }
 
 /** Labels only — what a test asserts, and what a screenshot should show. */
