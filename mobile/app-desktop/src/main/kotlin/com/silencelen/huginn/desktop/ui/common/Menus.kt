@@ -36,6 +36,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -232,10 +233,29 @@ fun WithHuginnMenus(content: @Composable () -> Unit) {
     CompositionLocalProvider(LocalContextMenuRepresentation provides look, content = content)
 }
 
-/** Wraps a row so secondary-click opens [items] over it. */
+/**
+ * Wraps a row so secondary-click opens [items] over it.
+ *
+ * ⚠ [onOpenChange] EXISTS BECAUSE THE LIST MOVES (P-02). `SessionsList` sorts by
+ * `activityAt` and re-renders on every poll, so a menu opened on one row can be
+ * pressed against another — the desktop walker wound down the phone walker's
+ * project lead exactly that way. The list freezes its order while any row menu is
+ * open, and the only thing that can tell it one is open is this.
+ *
+ * The state is hoisted rather than observed after the fact: `ContextMenuState`
+ * carries the open/closed status and `ContextMenuArea` accepts one, so this reads
+ * the real thing instead of guessing from clicks.
+ */
 @Composable
-fun RowMenu(items: () -> List<ContextMenuItem>, content: @Composable () -> Unit) {
-    ContextMenuArea(items = items, content = content)
+fun RowMenu(
+    items: () -> List<ContextMenuItem>,
+    onOpenChange: (Boolean) -> Unit = {},
+    content: @Composable () -> Unit,
+) {
+    val state = remember { ContextMenuState() }
+    val open = state.status is ContextMenuState.Status.Open
+    LaunchedEffect(open) { onOpenChange(open) }
+    ContextMenuArea(items = items, state = state, content = content)
 }
 
 /**
