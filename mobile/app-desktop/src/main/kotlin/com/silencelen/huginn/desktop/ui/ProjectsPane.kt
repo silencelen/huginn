@@ -50,6 +50,7 @@ import com.silencelen.huginn.desktop.ui.common.RowMenu
 import com.silencelen.huginn.desktop.ui.common.projectMenu
 import com.silencelen.huginn.ui.CreateProjectSheet
 import com.silencelen.huginn.ui.ManifestCard
+import com.silencelen.huginn.ui.PROJECTS_BLURB
 import com.silencelen.huginn.ui.ProjectDashboardView
 import com.silencelen.huginn.ui.ProjectRules
 import com.silencelen.huginn.ui.ProjectsListView
@@ -194,10 +195,18 @@ fun ProjectsDetail(store: AppStore) {
 
     val row = projects.firstOrNull { it.id == projectId }
     if (row == null) {
+        // ⚠ SAID ONCE, AND SAID BY THE PANE WITH THE ROOM. With no projects both
+        // panes are on screen together, and each used to explain what a project
+        // is — two different wordings of the same three facts, side by side. The
+        // list keeps the short fact; the explanation is here. And "pick one on
+        // the left" is only true when there IS one on the left.
         NothingOpen(
-            "No project open",
-            "A project is a cluster of sessions with roles — a lead that sizes the work and " +
-                "members that do it. Pick one on the left, or make one with New.",
+            if (projects.isEmpty()) "No projects yet" else "No project open",
+            if (projects.isEmpty()) {
+                "$PROJECTS_BLURB Make one with + New."
+            } else {
+                "Pick one on the left to see its dashboard, or make another with + New."
+            },
             emptyList(),
         )
         return
