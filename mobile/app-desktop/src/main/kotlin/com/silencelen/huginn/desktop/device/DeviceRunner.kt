@@ -122,13 +122,21 @@ class DeviceRunner(
     }
 
     private suspend fun serve() {
+        // ⚠ TWO FACTS, ONE WORD. `locked` is what the SCREEN is doing and is
+        // reported honestly on every frame — the fleet list is entitled to know.
+        // `keep` is the owner's standing answer to whether that withdraws
+        // anything here, and [DevicePolicy.lockWithdraws] is where the two meet.
+        // Collapsing them (reporting "not locked" because the setting is on)
+        // would need no new field at all, and would make every surface describe
+        // a locked machine as one nobody had locked.
         val locked = LockProbe.locked()
+        val keep = settings.deviceActWhileLockedNow()
         val scopeWire = DevicePolicy.wire(DevicePolicy.parse(settings.deviceScopeNow()))
-        val id = enrol(scopeWire, locked)
+        val id = enrol(scopeWire, locked, keep)
 
         _status.value = DeviceStatus(
             enabled = true, deviceId = id, enrolled = true, locked = locked,
-            note = if (locked) "Enrolled, read-only while locked" else "Enrolled, waiting for work",
+            note = idleNote(locked, keep),
         )
 
         // The beat is separate from the poll because they answer different
@@ -140,7 +148,13 @@ class DeviceRunner(
                 delay(60_000)
                 runCatching {
                     val l = LockProbe.locked()
-                    val r = client.deviceBeat(id, locked = l, scope = scopeWire, version = appVersion)
+                    // Re-read rather than captured: the setting is a row somebody
+                    // can flip while this loop is running, and the whole reason
+                    // the beat exists is to say "this is what I will do NOW".
+                    val k = settings.deviceActWhileLockedNow()
+                    val r = client.deviceBeat(
+                        id, locked = l, scope = scopeWire, version = appVersion, actWhileLocked = k,
+                    )
                     _status.value = _status.value.copy(locked = l)
                     // A Stop reaches a run sitting in a long QUIET tool HERE: the
                     // beat is the one channel still flowing when there are no event
@@ -239,7 +253,20 @@ class DeviceRunner(
         return true
     }
 
-    private suspend fun enrol(scopeWire: String, locked: Boolean): String {
+    /**
+     * What this machine says about itself while it is sitting there.
+     *
+     * Three states, not two. "Read-only while locked" is wrong on a machine whose
+     * owner has turned that rule off, and it is exactly the line they would read
+     * while wondering why the setting appears to have done nothing.
+     */
+    private fun idleNote(locked: Boolean, actWhileLocked: Boolean): String = when {
+        !locked -> "Enrolled, waiting for work"
+        actWhileLocked -> "Enrolled, locked — still acting, as this machine is set to"
+        else -> "Enrolled, read-only while locked"
+    }
+
+    private suspend fun enrol(scopeWire: String, locked: Boolean, actWhileLocked: Boolean): String {
         val existing = settings.deviceIdNow().takeIf { it.isNotBlank() }
         val dev = client.registerDevice(
             name = hostName,
@@ -250,6 +277,10 @@ class DeviceRunner(
             version = appVersion,
             locked = locked,
             machine = machineKey(hostName),
+            // Always stated, never omitted: this build HAS an answer, and a
+            // daemon that kept the last one it heard would go on offering act to
+            // a machine whose owner had just taken the permission back.
+            actWhileLocked = actWhileLocked,
         )
         if (dev.id != existing) settings.setDeviceId(dev.id)
         return dev.id
@@ -259,13 +290,17 @@ class DeviceRunner(
 
     private suspend fun runWork(deviceId: String, work: DeviceWork) {
         val enrolled = DevicePolicy.parse(settings.deviceScopeNow())
+        // What the screen is doing (reported home on every frame below) and what
+        // the POLICY is shown (the owner's standing answer applied to it).
         val locked = LockProbe.locked()
+        val keep = settings.deviceActWhileLockedNow()
+        val gate = DevicePolicy.lockWithdraws(locked, keep)
 
         // Refused HERE, by the machine, and said out loud. The daemon pre-checks
         // the same rule so a person is told at the point they ask — but this is the
         // check that actually decides, because this is the process holding the
         // file system.
-        DevicePolicy.refusal(enrolled, locked, work.mode)?.let { why ->
+        DevicePolicy.refusal(enrolled, gate, work.mode)?.let { why ->
             _status.value = _status.value.copy(note = "Refused a job: $why", locked = locked)
             runCatching {
                 client.postWorkEvents(deviceId, work.id, emptyList(), done = true, exitCode = null,
@@ -286,8 +321,8 @@ class DeviceRunner(
             return
         }
 
-        val argv = DevicePolicy.argvFor(work, enrolled, locked, settings.deviceRootNow())
-        val cwd = DevicePolicy.cwdFor(enrolled, locked, settings.deviceRootNow(),
+        val argv = DevicePolicy.argvFor(work, enrolled, gate, settings.deviceRootNow())
+        val cwd = DevicePolicy.cwdFor(enrolled, gate, settings.deviceRootNow(),
             System.getProperty("user.home") ?: ".")
 
         // Refused rather than run somewhere else. See [cwdRefusal].
@@ -305,8 +340,10 @@ class DeviceRunner(
             stream(deviceId, work, argv, cwd)
         } finally {
             current = null
-            _status.value = _status.value.copy(busy = false, note =
-                if (locked) "Enrolled, read-only while locked" else "Enrolled, waiting for work")
+            // The same three states serve() names, not two of them: a machine
+            // that had just RUN something while locked would otherwise settle
+            // back onto the line "read-only while locked".
+            _status.value = _status.value.copy(busy = false, note = idleNote(locked, keep))
         }
     }
 
