@@ -1,5 +1,6 @@
 package com.silencelen.huginn.desktop.ui
 
+import com.silencelen.huginn.ui.VerbTone
 import com.silencelen.huginn.data.Chat
 import com.silencelen.huginn.data.QuickActions
 import com.silencelen.huginn.data.Session
@@ -101,7 +102,7 @@ class DesktopSurfaceTest {
         assertEquals(listOf("Delete 3 chats"), labelsOf(items))
 
         val sessions = sessionMenu(session(name = "b"), setOf("a", "b"), noSessionVerbs())
-        assertEquals(listOf("Wind down 2 sessions", "End 2 sessions"), labelsOf(sessions))
+        assertEquals(listOf("Wrap up 2 sessions", "Kill 2 sessions"), labelsOf(sessions))
     }
 
     @Test
@@ -116,52 +117,59 @@ class DesktopSurfaceTest {
     @Test
     fun `destructive rows are marked so the menu can colour them`() {
         val items = chatMenu(chat(running = true), emptySet(), noChatVerbs())
-        val destructive = items.filterIsInstance<HuginnMenuItem>().filter { it.destructive }
+        val destructive = items.filterIsInstance<HuginnMenuItem>().filter { it.tone == VerbTone.DESTRUCTIVE }
         assertEquals(listOf("Delete"), destructive.map { it.label })
+        // And nothing in a chat menu claims the soft red — that tone belongs to
+        // one verb in the whole product.
+        assertEquals(
+            emptyList(),
+            items.filterIsInstance<HuginnMenuItem>().filter { it.tone == VerbTone.SOFT }.map { it.label },
+        )
     }
 
     @Test
     fun `a session menu names the key its interrupt sends`() {
         assertEquals(
-            listOf("Open", "Rename…", "Interrupt (Esc)", "Copy session name", "Compact context", "Wind down…", "End session"),
+            listOf("Open", "Rename…", "Interrupt (Esc)", "Copy session name", "Compact context", "Wrap up", "Kill session"),
             labelsOf(sessionMenu(session(), emptySet(), noSessionVerbs())),
         )
     }
 
     @Test
-    fun `archive sits between the wind-down and the end, and only on a daemon that has it`() {
+    fun `archive sits between the wrap-up and the kill, and only on a daemon that has it`() {
         // ⚠ THE FEATURE PROBE IS THE MENU. A daemon without archive answers the
         // route 404, the store's flag goes false, and the verb arrives null —
         // which must remove the ITEM, not offer one whose only outcome is an
         // error. This is the assertion that says the null actually does that.
         assertEquals(
-            listOf("Open", "Rename…", "Interrupt (Esc)", "Copy session name", "Compact context", "Wind down…", "End session"),
+            listOf("Open", "Rename…", "Interrupt (Esc)", "Copy session name", "Compact context", "Wrap up", "Kill session"),
             labelsOf(sessionMenu(session(), emptySet(), noSessionVerbs())),
             "an older daemon must show no Archive at all",
         )
-        // With it: between the two verbs it sits between in meaning — a wind-down
+        // With it: between the two verbs it sits between in meaning — a wrap-up
         // that leaves something behind.
         assertEquals(
-            listOf("Open", "Rename…", "Interrupt (Esc)", "Copy session name", "Compact context", "Wind down…", "Archive…", "End session"),
+            listOf("Open", "Rename…", "Interrupt (Esc)", "Copy session name", "Compact context", "Wrap up", "Archive…", "Kill session"),
             labelsOf(sessionMenu(session(), emptySet(), noSessionVerbs(archive = {}))),
         )
         val multi = sessionMenu(session(name = "b"), setOf("a", "b"), noSessionVerbs(archive = {}))
         assertEquals(
-            listOf("Wind down 2 sessions", "Archive 2 sessions…", "End 2 sessions"),
+            listOf("Wrap up 2 sessions", "Archive 2 sessions…", "Kill 2 sessions"),
             labelsOf(multi),
             "a multi-selection says how many, like every other verb here",
         )
     }
 
     @Test
-    fun `archiving is not marked destructive — it keeps everything it ends`() {
+    fun `archiving claims NEITHER red — it keeps everything it ends`() {
         // Red is for the verbs that lose something. An archive ends a session and
         // keeps its directory, its conversation and the command that brings it
-        // back; colouring it like a kill would teach people to avoid the safest
-        // way to finish with a session.
+        // back; colouring it like a kill — or even like the wrap-up — would teach
+        // people to avoid the safest way to finish with a session.
         val items = sessionMenu(session(), emptySet(), noSessionVerbs(archive = {}))
             .filterIsInstance<HuginnMenuItem>()
-        assertEquals(listOf("End session"), items.filter { it.destructive }.map { it.label })
+        assertEquals(listOf("Kill session"), items.filter { it.tone == VerbTone.DESTRUCTIVE }.map { it.label })
+        assertEquals(VerbTone.PLAIN, items.first { it.label == "Archive…" }.tone)
     }
 
     @Test
@@ -174,15 +182,27 @@ class DesktopSurfaceTest {
     }
 
     @Test
-    fun `winding down is not marked destructive — only the hard end is`() {
-        // Wind down SENDS a message (the session may even stay open, if the
-        // wrap-up asks a question); red belongs to the verb that stops things.
-        val single = sessionMenu(session(), emptySet(), noSessionVerbs())
+    fun `the two ending verbs take the two reds, and nothing else takes either`() {
+        // THE PAIR, AND THE DIFFERENCE BETWEEN THEM. Wrap up SENDS a message (the
+        // session may even stay open, if the wrap-up asks a question), so it gets
+        // the lighter red; the full red belongs to the verb that stops things and
+        // can lose work. Both are in the destructive palette because they are the
+        // two ways this menu ends a session, and drawing one of them as an
+        // ordinary row is what let people pick the wrong one.
+        val single = sessionMenu(session(), emptySet(), noSessionVerbs(archive = {}))
             .filterIsInstance<HuginnMenuItem>()
-        assertEquals(listOf("End session"), single.filter { it.destructive }.map { it.label })
+        assertEquals(listOf("Wrap up"), single.filter { it.tone == VerbTone.SOFT }.map { it.label })
+        assertEquals(listOf("Kill session"), single.filter { it.tone == VerbTone.DESTRUCTIVE }.map { it.label })
+        // Everything above them stays plain — a menu where half the rows are red
+        // says nothing at all.
+        assertEquals(
+            listOf("Open", "Rename…", "Interrupt (Esc)", "Copy session name", "Compact context", "Archive…"),
+            single.filter { it.tone == VerbTone.PLAIN }.map { it.label },
+        )
         val multi = sessionMenu(session(name = "b"), setOf("a", "b"), noSessionVerbs())
             .filterIsInstance<HuginnMenuItem>()
-        assertEquals(listOf("End 2 sessions"), multi.filter { it.destructive }.map { it.label })
+        assertEquals(listOf("Wrap up 2 sessions"), multi.filter { it.tone == VerbTone.SOFT }.map { it.label })
+        assertEquals(listOf("Kill 2 sessions"), multi.filter { it.tone == VerbTone.DESTRUCTIVE }.map { it.label })
     }
 
     @Test
@@ -253,7 +273,7 @@ class DesktopSurfaceTest {
         // claiming one of them does something that cannot be undone.
         val items = selectionMenu("ls -la", hostActions, noSelectionVerbs())
             .filterIsInstance<HuginnMenuItem>()
-        assertEquals(emptyList(), items.filter { it.destructive }.map { it.label })
+        assertEquals(emptyList(), items.filter { it.tone == VerbTone.DESTRUCTIVE }.map { it.label })
     }
 
     @Test
