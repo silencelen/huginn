@@ -95,7 +95,10 @@ import com.silencelen.huginn.desktop.ui.common.Frame
 import com.silencelen.huginn.desktop.ui.common.NothingOpen
 import com.silencelen.huginn.desktop.ui.common.Selection
 import com.silencelen.huginn.desktop.ui.common.noChatOpenCopy
+import com.silencelen.huginn.desktop.ui.common.SessionEndedCard
+import com.silencelen.huginn.desktop.ui.common.archiveFor
 import com.silencelen.huginn.desktop.ui.common.noSessionOpenCopy
+import com.silencelen.huginn.desktop.ui.common.sessionEndedCopy
 import com.silencelen.huginn.desktop.ui.common.SessionVerbs
 import com.silencelen.huginn.desktop.ui.common.Space
 import com.silencelen.huginn.desktop.ui.common.Tints
@@ -191,6 +194,7 @@ fun Shell(store: AppStore) {
     val sessionName by store.sessionName.collectAsState()
     // The detail half's other occupant: one archived conversation, read only.
     val archiveRead by store.archiveRead.collectAsState()
+    val sessionEnded by store.sessionEnded.collectAsState()
     val watchConnected by store.watchConnected.collectAsState()
     val error by store.error.collectAsState()
     val route by store.route.collectAsState()
@@ -589,6 +593,34 @@ fun Shell(store: AppStore) {
                                         truncated = archive.page?.transcriptTruncated == true,
                                         onCopy = { copy(it) },
                                         note = archive.note,
+                                    )
+                                } else if (sessionEnded != null) {
+                                    // ⚠⚠ THE PANE OWES AN ACCOUNT OF WHERE THE
+                                    // CONVERSATION WENT. A session that wraps up
+                                    // under the reader used to drop straight to the
+                                    // first-run empty state — "No session open /
+                                    // Every tmux session on the host is on the
+                                    // left…" — over a transcript being read a
+                                    // second earlier, and because a wrapped-up
+                                    // session is not archived it was then not
+                                    // reachable from anywhere in the UI.
+                                    //
+                                    // What the card can offer depends on what the
+                                    // host kept, and that answer can still ARRIVE:
+                                    // a graceful archive lands its row seconds
+                                    // later, `archives` is polled, and the card
+                                    // upgrades itself in place. Matched by name AND
+                                    // time, because a tmux name is reused within
+                                    // hours — see [archiveFor].
+                                    val ended = sessionEnded!!
+                                    val row = archiveFor(archives, ended.name, ended.atMs)
+                                    SessionEndedCard(
+                                        copy = sessionEndedCopy(ended.name, ended.title, row),
+                                        onOpenArchive = { id ->
+                                            archives.firstOrNull { it.id == id }?.let { store.openArchive(it) }
+                                        },
+                                        onCopyResume = { copy(it) },
+                                        onDismiss = { store.clearSessionEnded() },
                                     )
                                 } else {
                                     val copy = noSessionOpenCopy(listShut)
