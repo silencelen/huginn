@@ -21,6 +21,7 @@ import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.DriveFileRenameOutline
 import androidx.compose.material.icons.filled.Inventory2
 import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material.icons.filled.TaskAlt
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
@@ -481,6 +482,19 @@ private fun SessionRow(
                 // different product.
                 DropdownMenuItem(
                     text = { Text(EndVerbs.soft(1), color = verbInk(VerbTone.SOFT, MaterialTheme.colorScheme)) },
+                    // ⚠ AN ICON, BECAUSE THE OTHER THREE HAVE ONE. Without it the
+                    // label started in the icon COLUMN (x=754) while Rename,
+                    // Archive and Kill started at x=849, and a menu item that
+                    // hangs off the left of the others reads as a different class
+                    // of thing than it is. Tinted like its label, the way the kill
+                    // below is.
+                    leadingIcon = {
+                        Icon(
+                            Icons.Filled.TaskAlt,
+                            contentDescription = null,
+                            tint = verbInk(VerbTone.SOFT, MaterialTheme.colorScheme),
+                        )
+                    },
                     onClick = { menu = false; onSoftEnd() },
                 )
                 // Between the wrap-up and the kill, where it belongs: it is a

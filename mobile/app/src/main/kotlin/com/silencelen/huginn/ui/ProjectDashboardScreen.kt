@@ -1,5 +1,6 @@
 package com.silencelen.huginn.ui
 
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -20,6 +21,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.silencelen.huginn.data.ManifestSession
 import com.silencelen.huginn.data.ProjectDashboard
@@ -154,6 +156,124 @@ private fun ManifestEditDialog(
         },
         dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
     )
+}
+
+/**
+ * What ending a project may do to the sessions it owns, in THE DAEMON'S OWN
+ * SPELLINGS.
+ *
+ * ⚠⚠ A WRONG SPELLING HERE FAILS SILENTLY AND DANGEROUSLY. The handler reads
+ * `end` and accepts exactly `"now"` and `"graceful"`; **anything else ends
+ * nothing and deletes the record anyway** (`const end = raw === 'now' || raw ===
+ * 'graceful' ? raw : ''`). So "End them now" sent as "hard" or "kill" would look
+ * like it worked, forget the project, and leave twelve sessions running with
+ * nothing pointing at them — which is the exact stranding P-15 is about, arrived
+ * at from the other direction. Typed and tested for that reason.
+ */
+enum class ProjectEnd(val wire: String?) {
+    /** Only the record goes. The daemon's default, and the safe one. */
+    KEEP(null),
+
+    /** Each member gets the wrap-up phrase through the send queue and auto-ends on settle. */
+    GRACEFUL("graceful"),
+
+    /** Hard end, every member. */
+    NOW("now"),
+}
+
+/**
+ * Winding a cluster down from the phone.
+ *
+ * ⚠⚠ THE PHONE HAD NO WAY TO DO THIS AT ALL. The project page offered "Add
+ * member" and nothing else — no overflow menu, no row menu on the list, no
+ * per-member action — so a project started on the phone STRANDED its sessions:
+ * they had to be hunted down one at a time in the Sessions list and killed
+ * there. The desktop keeps this on a row context menu; the phone's equivalent
+ * slot is the top bar's action menu, which is where it is now raised from.
+ *
+ * ⚠ THREE OUTCOMES, NAMED, AND THE SAFE ONE IS NOT THE ONE IN THE CORNER. The
+ * daemon's `DELETE /v1/projects/:id?end=…` defaults to ending NOTHING and only
+ * forgetting the record; `graceful` sends each member the wrap-up phrase through
+ * the ordinary send queue and arms the auto-end on the settle (a member sitting
+ * on a dialog is REFUSED and named, not typed at); `now` is a hard end. A
+ * delete that silently killed twelve live sessions is not a delete anybody
+ * meant, so the wording says what happens to the sessions before it says what
+ * happens to the project.
+ *
+ * A column of choices rather than the desktop's row of three: three verbs beside
+ * a Cancel do not fit a phone dialog's button row, and these are the kind of
+ * choice a person should read down rather than scan across.
+ */
+@Composable
+fun EndProjectDialog(
+    label: String,
+    /** The lead plus its members — what "them" means in the choices below. */
+    sessions: Int,
+    onDismiss: () -> Unit,
+    onEnd: (ProjectEnd) -> Unit,
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("End $label?") },
+        text = {
+            Column {
+                Text(
+                    "huginn forgets the project: its members, the brief and the lead's proposal. " +
+                        "What happens to the $sessions ${if (sessions == 1) "session" else "sessions"} " +
+                        "is up to you.",
+                    style = MaterialTheme.typography.bodyMedium,
+                )
+                Spacer(Modifier.height(10.dp))
+                EndChoice(
+                    "Leave them running",
+                    "Only the project record goes. Every transcript stays exactly where it is, " +
+                        "in the Sessions list.",
+                ) { onEnd(ProjectEnd.KEEP) }
+                EndChoice(
+                    "Wind them down",
+                    "Each session is asked to finish and commit, and ends on its own once it " +
+                        "settles. One sitting on a question is left alone and named.",
+                ) { onEnd(ProjectEnd.GRACEFUL) }
+                EndChoice(
+                    "End them now",
+                    "Every session and whatever is running inside it is terminated. Unsaved work " +
+                        "in them is lost.",
+                    destructive = true,
+                ) { onEnd(ProjectEnd.NOW) }
+            }
+        },
+        // No confirm button: the three above ARE the confirmations, and a fourth
+        // one would have to mean one of them by default.
+        confirmButton = {},
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
+    )
+}
+
+@Composable
+private fun EndChoice(
+    label: String,
+    summary: String,
+    destructive: Boolean = false,
+    onClick: () -> Unit,
+) {
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onClick)
+            .padding(vertical = 8.dp),
+    ) {
+        Text(
+            label,
+            style = MaterialTheme.typography.bodyMedium,
+            fontWeight = FontWeight.Medium,
+            color = if (destructive) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary,
+        )
+        Text(
+            summary,
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+    }
 }
 
 private fun List<ManifestSession>.replaceAt(i: Int, f: (ManifestSession) -> ManifestSession) =

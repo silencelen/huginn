@@ -1,6 +1,7 @@
 package com.silencelen.huginn.ui
 
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
@@ -166,6 +167,19 @@ private fun AppEditDialog(
     onConfirm: () -> Unit,
     onDelete: (() -> Unit)?,
 ) {
+    // ⚠ THE FIX LINES ARE COPYABLE FROM THE CHROME, not only from the bottom of
+    // a panel nobody can see. A 422 refusal is unbounded — the daemon decides how
+    // many addresses it probed and how many lines the fix is — so on first render
+    // the block is cut mid-line at the dialog's bottom edge with the `# on huginn`
+    // comment half a row tall and every actual fix line hidden. The panel scrolls
+    // and carries its own Copy fix, but a control a person has to discover a
+    // scroll to reach is a control that is not there, and these are shell lines
+    // they are expected to run on ANOTHER MACHINE. The button chrome is the
+    // shell's to decide, so the phone puts it where the dialog's other verbs are.
+    //
+    // The clipping itself, and the missing scroll affordance, are `AppFormFields`
+    // in `:ui` and are left to the shared batch.
+    val fixText = AppRules.fixTextOf(form.name, form.unit, form.addresses, form.fix)
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text(title) },
@@ -181,10 +195,15 @@ private fun AppEditDialog(
             TextButton(onClick = onConfirm, enabled = form.sendable) { Text(confirm) }
         },
         dismissButton = {
-            if (onDelete != null) {
-                TextButton(onClick = onDelete) { Text("Remove") }
-            } else {
-                TextButton(onClick = onDismiss) { Text("Cancel") }
+            Row {
+                if (fixText.isNotBlank()) {
+                    TextButton(onClick = { onCopyFix(fixText) }) { Text("Copy fix") }
+                }
+                if (onDelete != null) {
+                    TextButton(onClick = onDelete) { Text("Remove") }
+                } else {
+                    TextButton(onClick = onDismiss) { Text("Cancel") }
+                }
             }
         },
     )
