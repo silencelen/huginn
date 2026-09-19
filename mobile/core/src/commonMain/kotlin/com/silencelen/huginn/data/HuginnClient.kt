@@ -1779,6 +1779,69 @@ class HuginnClient(
     suspend fun discardProposal(id: String): Project = decode(post("/v1/projects/$id/discard"))
 
     /**
+     * ADOPT a session the owner already has open into this project.
+     *
+     * ⚠ IT LAUNCHES NOTHING. This is an edit to a RECORD — [spawnProject] is the
+     * route that creates sessions — so the session named keeps running exactly as
+     * it was and simply joins the cluster: the dashboard, the peer relay, and the
+     * graceful end.
+     *
+     * @param role the project-side name for the job, and the key everything else
+     *   addresses it by. 400 when it is taken, when it is `lead`, or when it is
+     *   not a name.
+     * @param name the TMUX session to adopt. Null means the name this project
+     *   WOULD have given the role — so re-adopting a member that was spawned here
+     *   and then dropped needs nothing but the role.
+     *
+     * ⚠ A 409 IS AN ANSWER (see [MemberOutcome]): the session already belongs to
+     * another project, and the daemon NAMES it — knowing which one is the entire
+     * fix — or the twelve-member cap has been reached. Everything else throws
+     * with the daemon's sentence: 404 for no such project or no such session,
+     * 503 when tmux is not answering.
+     */
+    suspend fun adoptMember(id: String, role: String, name: String? = null): MemberOutcome {
+        val body = buildJsonObject {
+            put("role", JsonPrimitive(role))
+            // ⚠ OMITTED, NOT SENT EMPTY. The daemon reads an absent `name` as
+            // "the name this project would have given the role"; `""` would be
+            // read the same way today, but the difference is the contract and a
+            // client that sends a blank is asserting something it does not mean.
+            name?.takeIf { it.isNotBlank() }?.let { put("name", JsonPrimitive(it)) }
+        }
+        val resp = http.request { build("/v1/projects/$id/members", HttpMethod.Post, Tier.NORMAL, body) }
+        val text = resp.bodyAsText()
+        if (resp.status.value == 409) return MemberOutcome(null, null, refusalOf(text))
+        if (!resp.status.isSuccess()) throw errorFrom(resp.status.value, text)
+        val added = decode<ProjectMemberAdded>(text)
+        return MemberOutcome(added.member, added.project, null)
+    }
+
+    /**
+     * DROP a member from the project. ⚠ THE SESSION KEEPS RUNNING.
+     *
+     * The record loses the row and the member loses its rendered persona — a
+     * readable copy of a project's instructions for a session no longer in it is
+     * the same "orders from a ghost" the delete route unlinks for — and nothing
+     * else happens. `DELETE /v1/projects/:id` is the route that ends sessions.
+     *
+     * ⚠ 409 FOR THE LEAD, and it is an answer rather than a fault: *"the lead is
+     * the project — delete the project instead"* says what to do. 404 for a role
+     * this project does not have.
+     */
+    suspend fun dropMember(id: String, role: String): MemberOutcome {
+        val resp = http.request { build("/v1/projects/$id/members/$role", HttpMethod.Delete, Tier.NORMAL, null) }
+        val text = resp.bodyAsText()
+        if (resp.status.value == 409) return MemberOutcome(null, null, refusalOf(text))
+        if (!resp.status.isSuccess()) throw errorFrom(resp.status.value, text)
+        val body = decode<ProjectMemberDropped>(text)
+        return MemberOutcome(body.dropped, body.project, null)
+    }
+
+    /** The daemon's own sentence out of an error body, or a plain fallback. */
+    private fun refusalOf(text: String, fallback: String = "that change was refused"): String =
+        runCatching { decode<ApiError>(text).error }.getOrNull()?.takeIf { it.isNotBlank() } ?: fallback
+
+    /**
      * Type a line into one member, from another.
      *
      * ⚠ THIS IS NOT PEER MESSAGING. A `SendMessage` between two Claude sessions

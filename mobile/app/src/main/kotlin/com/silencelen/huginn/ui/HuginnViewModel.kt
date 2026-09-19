@@ -2507,6 +2507,55 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
+    // ------------------------------------------ membership, edited by hand
+
+    /**
+     * ADOPT a session that is already running into this project.
+     *
+     * ⚠ IT LAUNCHES NOTHING — the record gains a row and the session carries on
+     * exactly as it was. The 409 is an ANSWER and it is the interesting one: the
+     * session already belongs to another cluster, and the daemon NAMES it.
+     */
+    fun adoptMember(id: String, role: String, name: String) {
+        viewModelScope.launch {
+            awaitReady()
+            _projectBusy.value = true
+            _projectRefusal.value = null
+            runCatching { client.adoptMember(id, role, name) }
+                .onSuccess { outcome ->
+                    if (outcome.refusal != null) _projectRefusal.value = outcome.refusal
+                    else _toast.value = "$name joined as $role"
+                    openProject(id)
+                    refreshProjects()
+                }
+                // 400 (a role that is taken, is "lead", or is not a name), 404
+                // (no such session), 503 (tmux not answering) — every one of
+                // them arrives as the daemon's own sentence, which is also the fix.
+                .onFailure { _projectRefusal.value = errText(it) }
+            _projectBusy.value = false
+        }
+    }
+
+    /** DROP a member. ⚠ THE SESSION KEEPS RUNNING — see the client. */
+    fun dropMember(id: String, role: String) {
+        viewModelScope.launch {
+            awaitReady()
+            _projectBusy.value = true
+            _projectRefusal.value = null
+            runCatching { client.dropMember(id, role) }
+                .onSuccess { outcome ->
+                    if (outcome.refusal != null) _projectRefusal.value = outcome.refusal
+                    // Said out loud, because "drop" and "end" are one keystroke
+                    // apart and the reader has just pressed one of them.
+                    else _toast.value = "Dropped $role — the session is still running"
+                    openProject(id)
+                    refreshProjects()
+                }
+                .onFailure { _projectRefusal.value = errText(it) }
+            _projectBusy.value = false
+        }
+    }
+
     /** Types a line into one member, from another. NOT peer messaging — see the client. */
     fun messageProject(id: String, from: String, to: String, text: String) {
         viewModelScope.launch {

@@ -52,6 +52,7 @@ import com.silencelen.huginn.ui.CreateProjectSheet
 import com.silencelen.huginn.ui.ManifestCard
 import com.silencelen.huginn.ui.PROJECTS_BLURB
 import com.silencelen.huginn.ui.ProjectDashboardView
+import com.silencelen.huginn.ui.ProjectMemberActions
 import com.silencelen.huginn.ui.ProjectRules
 import com.silencelen.huginn.ui.ProjectsListView
 import kotlinx.coroutines.launch
@@ -185,6 +186,11 @@ fun ProjectsDetail(store: AppStore) {
     val dashboard by store.projectDashboard.collectAsState()
     val record by store.project.collectAsState()
     val refusal by store.projectRefusal.collectAsState()
+    // What "Add member" can offer: sessions this client can see running. A
+    // session belonging to ANOTHER project looks free from here — the daemon
+    // holds that join and answers 409 naming it, which is a better answer than a
+    // row quietly missing from the picker.
+    val sessions by store.sessions.collectAsState()
     val scope = rememberCoroutineScope()
 
     var renaming by remember { mutableStateOf<ProjectRow?>(null) }
@@ -268,6 +274,15 @@ fun ProjectsDetail(store: AppStore) {
                     )
                 }
             },
+            // Adopt and drop. Both edit the RECORD only: nothing is launched,
+            // nothing is ended — see ProjectMemberActions.
+            membership = ProjectMemberActions(
+                liveSessions = sessions.map { it.name },
+                onAdopt = { role, name -> scope.launch { store.adoptMember(row.id, role, name) } },
+                onDrop = { m -> scope.launch { store.dropMember(row.id, m.role) } },
+                refusal = refusal,
+                clearRefusal = { store.clearProjectRefusal() },
+            ),
         )
     }
 
