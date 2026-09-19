@@ -69,6 +69,8 @@ const { createPending, stepSoftEnd } = require('./lib/softend');
 // modal readers, and the queue's decisions. Pure, so they are asserted in
 // test/typing.test.js rather than discovered on a live pane.
 const typing = require('./lib/typing');
+// Whose journal this unit's really is — see lib/cgroup.js (M5).
+const cgroupLib = require('./lib/cgroup');
 // The usage model and the arbiter: percentages and settings in, a list of
 // actions out. Pure, so every judgment call it makes is asserted in
 // test/headroom.test.js rather than discovered on a live account.
@@ -299,6 +301,64 @@ function authorized(req) {
   const got = Buffer.from(presented);
   const want = Buffer.from(TOKEN);
   return got.length === want.length && crypto.timingSafeEqual(got, want);
+}
+
+/**
+ * ─── PROVING THIS IS THE DAEMON, WITHOUT HANDING ANYBODY THE TOKEN ─────────
+ *
+ * ⚠ D-1 (round-2 review, 2026-09-19). Auto-switch adopted any route-book address
+ * that answered with a non-blank `X-Huginn-Appd` header and then sent it the real
+ * bearer token — 129 authenticated requests to a fake in about two minutes on the
+ * desktop walker's bench. The header is a fingerprint, and a fingerprint anybody
+ * can print is not proof. `HuginnClient.provesDaemon`'s own comment already named
+ * the fix and said it needed a daemon change; decision 58 is that change.
+ *
+ * The client picks a fresh random nonce, asks for it UNAUTHENTICATED, and adopts
+ * the address only if the answer equals the HMAC it computes itself. An impostor
+ * that does not hold the token cannot produce one, so the token never leaves the
+ * client until the address has proved it already has it.
+ *
+ * ⚠ WHY PUBLISHING HMAC(token, nonce) IS SAFE, since this route will hand one to
+ * anybody who asks:
+ *
+ *   * HMAC-SHA256 is a pseudo-random function of its key. Seeing outputs for
+ *     chosen inputs reveals nothing about the key short of breaking SHA-256 —
+ *     this is the same property that lets every API sign requests this way.
+ *   * The key is the daemon's bearer token: 32 bytes from `openssl rand -hex 32`,
+ *     minted by deploy.sh and refused under 32 characters. 256 bits is not
+ *     guessable, so an offline attack on a proof has nothing to chew on.
+ *   * The nonce is the CLIENT'S, not ours, so a proof recorded from one exchange
+ *     cannot be replayed at a different client's challenge.
+ *   * The token itself is never read into the response and never logged: the
+ *     request line this daemon writes is the PATH only, so the nonce does not
+ *     reach the journal either.
+ *
+ * The rate limit is not about secrecy, it is about CPU: an unauthenticated route
+ * that does a keyed hash per call is a free amplifier otherwise. Twenty a second
+ * per client address is far above any real client (one per route probe) and far
+ * below anything worth having.
+ */
+const CHALLENGE_NONCE_RE = /^[0-9a-fA-F]{16,64}$/;
+const CHALLENGE_PER_SECOND = 20;
+const challengeHits = new Map();       // remote address -> { second, n }
+
+function challengeAllowed(addr) {
+  const key = String(addr || 'unknown');
+  const second = Math.floor(Date.now() / 1000);
+  // Pruned on write, like every other in-memory map here: one entry per client
+  // address that asked in the current second, and nothing older survives a call.
+  for (const [k, v] of challengeHits) {
+    if (v.second !== second) challengeHits.delete(k);
+  }
+  const cur = challengeHits.get(key);
+  if (!cur || cur.second !== second) { challengeHits.set(key, { second, n: 1 }); return true; }
+  cur.n += 1;
+  return cur.n <= CHALLENGE_PER_SECOND;
+}
+
+/** The proof itself: HMAC-SHA256 over the nonce EXACTLY as it was asked for. */
+function challengeProof(nonce) {
+  return crypto.createHmac('sha256', TOKEN).update(String(nonce), 'utf8').digest('hex');
 }
 
 function sendJson(res, code, obj) {
@@ -1246,7 +1306,14 @@ async function ensureTmuxServerScope() {
   // Only "no server running" means there is nothing there. Any other failure is a
   // failure to OBSERVE, and starting a second server on a bad read is worse than
   // doing nothing.
-  if (!probe.err || !/no server running/i.test(probe.stderr || '')) return;
+  if (!probe.err || !/no server running/i.test(probe.stderr || '')) {
+    // A server that is already up is LEFT WHERE IT IS, which is right and is also
+    // why one inherited before this function existed stays in our cgroup for the
+    // life of the host — with every session's syslog filed under this unit and
+    // nothing saying so. See lib/cgroup.js (M5).
+    await noteTmuxServerCgroup();
+    return;
+  }
 
   // An isolated test socket wants a plain private server, NOT the shared
   // huginn-tmux.scope: that unit name is global, so wrapping a per-pid test
@@ -1260,6 +1327,31 @@ async function ensureTmuxServerScope() {
     return;
   }
   log(`tmux: server started in ${TMUX_SCOPE}.scope, independent of this daemon`);
+}
+
+/**
+ * Say ONCE, if it is true, that this unit's journal is not only this daemon's.
+ *
+ * ⚠ M5. Nothing here changes behaviour — a running server cannot be moved
+ * without stranding its panes — but an operator reading `journalctl -u
+ * huginn-appd` and finding thousands of PowerShell ScriptBlock bodies deserves
+ * to be told where they come from and what reads cleanly instead. Once per
+ * process, and silent when the answer is "they are in different cgroups" or
+ * "I could not tell": a diagnostic that fires on a guess is worse than none.
+ */
+let cgroupNoted = false;
+async function noteTmuxServerCgroup() {
+  if (cgroupNoted) return;
+  cgroupNoted = true;
+  const pid = await run('tmux', ['display-message', '-p', '#{pid}']);
+  const theirs = Number(String(pid.stdout || '').trim());
+  if (pid.err || !Number.isInteger(theirs) || theirs <= 0) return;
+  let ours = null;
+  let them = null;
+  try { ours = fs.readFileSync('/proc/self/cgroup', 'utf8'); } catch { return; }
+  try { them = fs.readFileSync(`/proc/${theirs}/cgroup`, 'utf8'); } catch { return; }
+  if (!cgroupLib.sameCgroup(ours, them)) return;
+  log(cgroupLib.foreignJournalLogLine(cgroupLib.unitOf(ours), TMUX_SCOPE));
 }
 
 /**
@@ -1743,13 +1835,29 @@ async function confirmSubmitted(name, text) {
 }
 
 /**
- * The last text appd pasted into a pane, and when.
+ * The last text appd pasted into a pane AS A MESSAGE, and when.
  *
  * ⚠ SO THE DRAFT GUARD CANNOT DEADLOCK ON THE DAEMON'S OWN LEFTOVERS. A pane
  * can keep a piece of what we last pasted — the recovery's 'leave' branch
  * presses no Enter by design, and a frame whose final line carries no newline
  * stays in the box. Without this the guard reads that as somebody mid-sentence
  * and holds every later message to that session for ten minutes each.
+ *
+ * ⚠⚠ AND SUBMITTING DELIVERIES ONLY (H1, round-2 review, 2026-09-19). This used
+ * to record EVERY paste, and the Screen tab's typing rides the same paste path:
+ * `LiveInput.merge()` coalesces a burst of keypresses into ONE `{text}` op with
+ * no Enter, an IME commit arrives as one op of the whole word, and a paste into
+ * the live-view field arrives as one op of the whole clipboard. So the person's
+ * draft was written down here as appd's own, `composerHoldsDraft(…, ours)` read
+ * it as our leftovers (`mine.includes(squashed)`), the 60-second hold collapsed
+ * to the 5-second empty-box quiet, and the next message was pasted in front of
+ * their sentence and submitted with it. Reproduced on 3.5.2 and caught happening
+ * on the live daemon the same day.
+ *
+ * The leftovers this exemption was written for are all `submit:true` — the
+ * 'leave' branch's stranded frame is a MESSAGE that was typed and not sent. A
+ * `submit:false` paste is by definition the person's own keystrokes, and those
+ * bytes are never ours to join.
  *
  * In memory, pruned on write, and it never holds more than the sessions pasted
  * into within the last hold window.
@@ -1770,8 +1878,14 @@ function lastPastedText(name) {
   return v ? v.text : null;
 }
 
-/** One bracketed paste of `text` into a pane. The half of delivery that repeats. */
-async function pasteOnce(name, text) {
+/**
+ * One bracketed paste of `text` into a pane. The half of delivery that repeats.
+ *
+ * `remember` is the draft guard's "these bytes are ours" note and defaults to
+ * FALSE: a paste has to say it is a message before it may claim the box. See
+ * `lastPasted` — the default used to be the other way round and that is H1.
+ */
+async function pasteOnce(name, text, { remember = false } = {}) {
   const target = `=${name}:`;
   const buf = typing.bufferName();
   const lb = await runStdin('tmux', ['load-buffer', '-b', buf, '-'], text);
@@ -1784,7 +1898,7 @@ async function pasteOnce(name, text) {
     await run('tmux', ['delete-buffer', '-b', buf]);     // -d never ran
     return { ok: false, fallback: false, stderr: pb.stderr };
   }
-  rememberPaste(name, text);
+  if (remember) rememberPaste(name, text);
   return { ok: true };
 }
 
@@ -1827,7 +1941,7 @@ async function recoverLostPaste(name, text, settle, before) {
     return { landed: false, enter: false, recovered: false };
   }
   log(typing.pasteResentLogLine(name, settle.waitedMs, fresh));
-  const again = await pasteOnce(name, text);
+  const again = await pasteOnce(name, text, { remember: true });
   if (!again.ok) {
     // The re-paste could not even be loaded. Nothing was typed, so there is
     // nothing to submit and an Enter would only fire at an empty box.
@@ -1845,7 +1959,9 @@ async function sendTextToPane(name, text, { submit = true } = {}) {
   // pane that already showed this text from one that has just received it, and
   // after the paste there is no telling.
   const before = submit ? await capturePaneLines(name) : null;
-  const first = await pasteOnce(name, text);
+  // `remember` rides the SUBMIT flag: a live-view text op is the person typing,
+  // and writing it down as ours is what welded a draft to the next message (H1).
+  const first = await pasteOnce(name, text, { remember: submit });
   if (!first.ok && !first.fallback) {
     return { ok: false, code: 503, message: 'could not reach the pane buffer', stderr: first.stderr };
   }
@@ -1957,6 +2073,23 @@ const STARTUP_GRACE_MS = (() => {
 })();
 
 /**
+ * How long after a live-view keypress the composer still belongs to the person,
+ * with the same shape of override for the same kind of reader.
+ *
+ * `HUGINN_APPD_LIVE_KEYS_WINDOW_MS` exists because the ceiling is the SUBJECT of
+ * a test — decision 59 keeps it at 60 s and makes the daemon say when a message
+ * went in on top of somebody anyway, and a suite that had to wait out a real
+ * minute per case would be a suite nobody runs. Nonsense falls back rather than
+ * disabling the guard by typo, exactly like the startup grace above.
+ */
+const LIVE_KEYS_WINDOW_MS = (() => {
+  const raw = process.env.HUGINN_APPD_LIVE_KEYS_WINDOW_MS;
+  if (raw == null || raw === '') return typing.LIVE_KEYS_WINDOW_MS;
+  const n = Number(raw);
+  return Number.isFinite(n) && n >= 0 ? n : typing.LIVE_KEYS_WINDOW_MS;
+})();
+
+/**
  * The sessions being held by the UNMARKED rule, so its journal line is written
  * once per session rather than once per 400 ms poll.
  */
@@ -1984,7 +2117,7 @@ const liveKeysAt = new Map();   // session name -> ms epoch of the last live-vie
 function markLiveKeys(name) {
   const now = Date.now();
   for (const [k, t] of liveKeysAt) {
-    if (now - t > typing.LIVE_KEYS_WINDOW_MS) liveKeysAt.delete(k);
+    if (now - t > LIVE_KEYS_WINDOW_MS) liveKeysAt.delete(k);
   }
   liveKeysAt.set(name, now);
 }
@@ -2001,6 +2134,34 @@ function liveKeysAgoMs(name) {
  * makes, and for the same reason.
  */
 const draftHeld = new Set();
+
+/**
+ * The last message that went into somebody's DRAFT anyway, per session.
+ *
+ * ⚠ DECISION 59. The ceiling stays at 60 s after the last live-view keystroke;
+ * what changes is that the daemon stops keeping the fact to itself. Every client
+ * reads it off `GET /typing` (`intoDraft`) and the sender reads it off the `/keys`
+ * answer when the delivery was immediate.
+ *
+ * ⚠ NOT ON THE QUEUE STRUCT. `sendQueues` is reaped the instant a queue empties
+ * with nothing to report — which is the same instant this notice becomes the only
+ * thing worth reading — so a field there would be gone before the first poll. Its
+ * own map, cleared by the next ordinary delivery to that session.
+ */
+const intoDraftAt = new Map();   // session name -> { at, waitedMs, composer }
+/** Long enough that a parked phone still sees it; short enough to be bounded. */
+const INTO_DRAFT_KEEP_MS = 60 * 60 * 1000;
+
+function noteIntoDraft(name, waitedMs, composer) {
+  const now = Date.now();
+  for (const [k, v] of intoDraftAt) {
+    if (now - v.at > INTO_DRAFT_KEEP_MS) intoDraftAt.delete(k);
+  }
+  intoDraftAt.set(name, { at: now, waitedMs, composer: String(composer || '') });
+}
+/** The next ordinary delivery is the answer to "is it still true?" — it is not. */
+function clearIntoDraft(name) { intoDraftAt.delete(name); }
+function intoDraftFor(name) { return intoDraftAt.get(name) || null; }
 
 function markLaunching(name) {
   const now = Date.now();
@@ -2178,7 +2339,12 @@ async function checkGates(name) {
       break;
     }
   }
-  const cap = await run('tmux', ['capture-pane', '-p', '-t', `=${name}:`]);
+  // ⚠ `-e`, SO THE DIM RUNS SURVIVE THE CAPTURE (P-14). Every rule below strips
+  // ANSI for itself and reads exactly as it did without it — except the draft
+  // guard, which is the one question whose answer is IN the attributes: Claude
+  // Code's inline suggestion is ordinary text drawn dim in an EMPTY box, and a
+  // plain capture cannot tell it from somebody's half-typed sentence.
+  const cap = await run('tmux', ['capture-pane', '-p', '-e', '-t', `=${name}:`]);
   const lines = cap.err ? null : cap.stdout.replace(/\n$/, '').split('\n');
   const paneWhy = lines ? typing.paneReadyForInput(lines).why : null;
   // The corroborating witness for the hook's `attention`: a composer drawn and
@@ -2187,7 +2353,14 @@ async function checkGates(name) {
   const composerEmpty = lines ? typing.composerEmpty(lines) : null;
   // And the composer's CONTENT, because the draft guard's question is per-entry
   // ("is what is in there ours?") and only the pump knows whose text is next.
-  const composerHolds = lines ? typing.composerText(lines) : null;
+  //
+  // ⚠ `dropGhost` HERE AND NOWHERE ELSE. This is the one read whose verdict is
+  // "somebody is mid-sentence, hold everything", so it is the one read that must
+  // not count Claude Code's own dim suggestion as a sentence. `composerEmpty`
+  // above keeps its plain reading on purpose: it is the corroborating witness for
+  // the ATTENTION hold, and "the box looks empty" releasing a person's message
+  // into a live question is a worse trade than one cautious hold.
+  const composerHolds = lines ? typing.composerText(lines, { dropGhost: true }) : null;
   // And the two facts the SUBMIT refusal turns on (#15): is Claude up at all,
   // and is what is down there a shell prompt waiting to run whatever it is given.
   const composer = lines ? typing.composerDrawn(lines) : false;
@@ -2385,12 +2558,18 @@ async function pumpQueue(name) {
       // keystrokes (`submit:false`) ARE the draft — holding those would take the
       // terminal keyboard away exactly as the modal refusal once did.
       const guarded = textEntry && entry.submit !== false;
+      // Read ONCE and reused three times below — the hold, the journal line that
+      // says how the hold ended, and the `intoDraft` notice. They were three
+      // separate calls against the same capture, which is three chances to
+      // disagree about whose box it is.
+      const draftSeen = guarded
+        ? typing.composerHoldsDraft(gate.composerHolds, entry.text, lastPastedText(name))
+        : null;
       const holdForDraft = typing.draftHold({
-        draft: guarded
-          ? typing.composerHoldsDraft(gate.composerHolds, entry.text, lastPastedText(name))
-          : null,
+        draft: draftSeen,
         keysAgoMs: guarded ? liveKeysAgoMs(name) : null,
         waitedMs: now - entry.at,
+        keysWindowMs: LIVE_KEYS_WINDOW_MS,
       });
       const d = typing.releaseDecision(humanText
         ? {
@@ -2423,8 +2602,7 @@ async function pumpQueue(name) {
         // Which way the hold ended matters: the person sent or cleared their
         // draft (the ordinary case, and quiet), or the ceiling ran out and the
         // message is going into their box anyway. The second one is news.
-        if (holdForDraft === false && guarded
-            && typing.composerHoldsDraft(gate.composerHolds, entry.text, lastPastedText(name)) === true) {
+        if (holdForDraft === false && draftSeen === true) {
           log(typing.draftOverdueLogLine(name, now - entry.at, gate.composerHolds));
         } else {
           log(typing.draftClearedLogLine(name, now - entry.at));
@@ -2475,6 +2653,16 @@ async function pumpQueue(name) {
       // and moving the window for it would hold the entry behind it for a
       // boundary that has nothing to do with anything appd did.
       if (r.ok) q.deliveredAt = Date.now();
+      // ⚠ AND SAY SO WHEN IT WENT IN ON TOP OF SOMEBODY (decision 59). Written
+      // from the SAME verdict the journal line is written from, at the moment of
+      // release rather than afterwards: by the time the paste lands the composer
+      // holds our text too and nothing can tell whose it was. An ordinary
+      // delivery into a free box is the answer to "is it still true?", so it
+      // clears the notice.
+      if (r.ok && guarded) {
+        if (draftSeen === true) noteIntoDraft(name, now - entry.at, gate.composerHolds);
+        else clearIntoDraft(name);
+      }
       if (!r.ok) {
         q.lastError = r.message;
         log(`typing: ${name}: delivery failed: ${r.message}`);
@@ -4271,6 +4459,16 @@ function roundView(r) {
     hostName: (r.host && r.host !== 'local')
       ? (((deviceState.devices || {})[r.host] || {}).name || 'a removed device')
       : null,
+    // ⚠ `nextRunAt` IS MILLISECONDS AND ITS SIBLINGS ARE SECONDS (M3). On the
+    // same object: `createdAt` and `updatedAt` are epoch seconds and `nextRunAt`
+    // is ms, because it comes out of `nextFireAt(schedule, Date.now())`. The
+    // Kotlin model carries the note so the shipped clients are right; nothing on
+    // the wire said so. Kept and DEPRECATED for one release, with the correctly
+    // named seconds field beside it.
+    // A Round that is not armed carries `nextRunAt: 0`, which is not a time —
+    // null here rather than 1970, because a client rendering an epoch it was
+    // handed is doing the right thing with the wrong number.
+    nextRunAtSec: Number(r.nextRunAt) > 0 ? Math.floor(Number(r.nextRunAt) / 1000) : null,
   };
 }
 
@@ -4966,6 +5164,15 @@ function testUrl(name, fallback) {
 // test that locked or rewrote the real ~/.claude would reach straight into the
 // owner's live CLI. Unset — which is every production path — it is ~/.claude.
 const CLAUDE_DIR = process.env.HUGINN_APPD_CLAUDE_DIR || path.join(os.homedir(), '.claude');
+/**
+ * Whether that knob is SET, which is a different question from where it points.
+ *
+ * Every other reader of `CLAUDE_DIR` builds a path from it and is isolated by
+ * construction. `/v1/account` shelled out to `claude auth status`, which resolves
+ * its own home and cannot be redirected — so isolation there has to be a decision
+ * the route makes rather than a path it joins. See `accountStatus` (M4).
+ */
+const CLAUDE_DIR_OVERRIDDEN = !!process.env.HUGINN_APPD_CLAUDE_DIR;
 /**
  * The usage endpoint, in ONE place.
  *
@@ -5947,9 +6154,23 @@ function projectMemberNamed(project, who) {
  * them who they belong to.
  */
 async function accountStatus() {
-  const { err, stdout } = await run('claude', ['auth', 'status'], { timeout: 20_000 });
   let parsed = null;
-  if (!err) { try { parsed = JSON.parse(stdout); } catch { /* handled below */ } }
+  // ⚠ M4 (round-2 review). `claude auth status` reads the REAL `~/.claude.json`
+  // through the inherited HOME, and no env of this daemon's can move it — so a
+  // daemon pointed at a scratch CLAUDE_DIR answered `/v1/plan` with the stub
+  // identity and `/v1/account` with the owner's actual login, in the same second.
+  // The knob's whole stated purpose is that "a test that locked or rewrote the
+  // real ~/.claude would reach straight into the owner's live CLI"; this route
+  // was the hole in it, and it is why `routes-headroom.test.js` has to shim
+  // `claude` on PATH as well.
+  //
+  // When the directory is overridden, the CREDENTIALS are the only identity this
+  // daemon is allowed to have — which is the same source `/v1/plan` reads, so the
+  // two cannot disagree either.
+  if (!CLAUDE_DIR_OVERRIDDEN) {
+    const { err, stdout } = await run('claude', ['auth', 'status'], { timeout: 20_000 });
+    if (!err) { try { parsed = JSON.parse(stdout); } catch { /* handled below */ } }
+  }
 
   if (parsed && parsed.loggedIn && parsed.email) {
     return {
@@ -5980,6 +6201,9 @@ async function accountStatus() {
         identitySource: 'token',
       };
     }
+  }
+  if (CLAUDE_DIR_OVERRIDDEN) {
+    return { loggedIn: false, error: 'no credentials in the configured Claude directory' };
   }
   return { loggedIn: false, error: parsed ? 'not signed in' : 'could not read auth status' };
 }
@@ -8804,6 +9028,13 @@ function headroomPayload() {
     // all ms — and a client treats this as the host clock, so getting it wrong
     // makes every relative time in the payload wrong by a factor of a thousand.
     serverTime: now,
+    // 3.6.0 (M3): the same instant in SECONDS, under a name that says which it
+    // is. `serverTime` means seconds on /v1/clients, /v1/watch and /typing and
+    // MILLISECONDS here, which is exactly the trap — one field name, two units,
+    // and nothing on the wire to tell them apart. The ms spelling stays because
+    // every deployed client reads it; `serverTimeSec` is the one a new caller
+    // should use, on every route that carries either.
+    serverTimeSec: Math.floor(now / 1000),
   };
 }
 
@@ -9119,6 +9350,45 @@ function startAlertWatcher() {
   startStateWatch();
 }
 
+/**
+ * ─── "GONE" MEANS SOMETHING WAS LOST ───────────────────────────────────────
+ *
+ * ⚠ P-04 / D-10 (round-2 review, 2026-09-19). A session created four seconds ago
+ * showed, as its entire conversation, "recorded transcript file is gone". Both
+ * clients render the daemon's 409 string verbatim, and both walkers reported it
+ * independently; on the phone the first frame said the right thing ("no
+ * transcript recorded for this session yet") and then settled on the wrong one a
+ * second later, because the state file ALREADY carries a transcript path that
+ * Claude Code has not written to yet — so `fs.existsSync` loses and the "gone"
+ * branch wins for every brand-new session there is.
+ *
+ * The two cases read identically on disk, so the daemon remembers instead: a
+ * path it has successfully read once has EXISTED, and only that path can be
+ * gone. Everything else has simply not been written yet, which is the sentence a
+ * person opening a new session should see.
+ *
+ * ⚠ AND AFTER A RESTART THE MEMO IS EMPTY, deliberately. A genuinely deleted
+ * transcript then reads as "nothing yet" for one daemon lifetime — the softer
+ * error, on an EMPTY STATE somebody is looking at rather than a diagnostic. The
+ * opposite mistake tells a person something broke when nothing did, which is the
+ * bug being fixed.
+ */
+const seenTranscripts = new Set();
+/** Bounded: one entry per session that has ever been read in this daemon's life. */
+const SEEN_TRANSCRIPTS_MAX = 5_000;
+function rememberTranscript(file) {
+  if (!file) return;
+  if (seenTranscripts.size >= SEEN_TRANSCRIPTS_MAX) seenTranscripts.clear();
+  seenTranscripts.add(file);
+}
+function transcriptEverExisted(file) { return !!file && seenTranscripts.has(file); }
+/** The right sentence for a transcript path that is not on disk. */
+function noTranscriptMessage(file) {
+  return transcriptEverExisted(file)
+    ? 'recorded transcript file is gone'
+    : 'no transcript recorded for this session yet — the Claude hook fires on the first prompt';
+}
+
 // ---------------------------------------------------------------- routing
 
 const server = http.createServer(async (req, res) => {
@@ -9138,6 +9408,27 @@ const server = http.createServer(async (req, res) => {
   // `setHeader`, not writeHead: it then rides on every path out of this
   // function, streamed artifacts and the auth refusal included.
   res.setHeader('X-Huginn-Appd', VERSION);
+
+  /**
+   * ⚠ BEFORE THE AUTH CHECK, AND THAT IS THE WHOLE POINT (decision 58). A client
+   * deciding whether an address is really this daemon has not handed over the
+   * token yet — that decision is what stops it handing the token to a fake. See
+   * `challengeProof` above for why answering this in the clear is safe.
+   *
+   * Before `noteClientAddress` too: a port scanner must not be able to teach this
+   * daemon a new address that every app then has to answer on, and that rule has
+   * nothing to do with whether the caller can prove anything.
+   */
+  if (req.method === 'GET' && p === '/v1/challenge') {
+    if (!challengeAllowed(req.socket.remoteAddress)) {
+      return sendErr(res, 429, 'too many challenges from this address — slow down');
+    }
+    const nonce = u.searchParams.get('nonce');
+    if (!nonce || !CHALLENGE_NONCE_RE.test(nonce)) {
+      return sendErr(res, 400, 'nonce must be 16 to 64 hexadecimal characters');
+    }
+    return sendJson(res, 200, { proof: challengeProof(nonce), version: VERSION });
+  }
 
   if (!authorized(req)) return sendErr(res, 401, 'unauthorized');
 
@@ -9161,9 +9452,14 @@ const server = http.createServer(async (req, res) => {
   // daemon, and an address only learned by visiting the page would let the first
   // add from a new network pass and every later one fail.
   //
-  // AFTER the auth check, deliberately: /v1/ping is unauthenticated, and a port
-  // scanner must not be able to teach this daemon a new address that every app
-  // then has to answer on. In memory, flushed lazily — see noteClientAddress.
+  // AFTER the auth check, deliberately: a port scanner must not be able to teach
+  // this daemon a new address that every app then has to answer on. (⚠ The
+  // comment here used to say "/v1/ping is unauthenticated", which it is not and
+  // never was — `authorized()` runs above with no exemption, and the 401 it
+  // answers, carrying `X-Huginn-Appd`, IS the fingerprint the client probe wants.
+  // The one genuinely unauthenticated route is `/v1/challenge`, and it returns
+  // before this line for exactly the reason this line exists.) In memory,
+  // flushed lazily — see noteClientAddress.
   try {
     appsLib.store(DATA_DIR, { log, hostAddr: SELF_ADDR })
       .noteClientAddress(req.socket.localAddress, req.socket.remoteAddress);
@@ -9322,6 +9618,7 @@ const server = http.createServer(async (req, res) => {
         freshStreamSeconds: Math.floor(clientsLib.FRESH_STREAM_MS / 1000),
         freshBeatSeconds: Math.floor(clientsLib.FRESH_BEAT_MS / 1000),
         serverTime: Math.floor(now / 1000),
+        serverTimeSec: Math.floor(now / 1000),   // 3.6.0 (M3): the unambiguous name
       });
     }
 
@@ -9380,7 +9677,9 @@ const server = http.createServer(async (req, res) => {
             // from a different read of the file.
             const pushSt = streamInstall ? loadPushState() : null;
             res.write(`event: state\ndata: ${JSON.stringify({
-              ...d, changed: true, serverTime: Math.floor(Date.now() / 1000),
+              ...d, changed: true,
+              serverTime: Math.floor(Date.now() / 1000),
+              serverTimeSec: Math.floor(Date.now() / 1000),   // 3.6.0 (M3)
               // Same field the long poll returns. Without it the app decodes the
               // absent value as 0 and overwrites its real tally, which silently
               // disables push-deficit detection: the phone can no longer tell a
@@ -9444,6 +9743,7 @@ const server = http.createServer(async (req, res) => {
         ...d,
         changed: !known || d.hash !== known,
         serverTime: Math.floor(Date.now() / 1000),
+        serverTimeSec: Math.floor(Date.now() / 1000),   // 3.6.0 (M3)
         // What this host thinks it has delivered to the caller. The phone compares
         // it against what it actually received, which is the only way it can tell a
         // quiet night from a broken delivery path — and that distinction is worth a
@@ -9915,7 +10215,8 @@ const server = http.createServer(async (req, res) => {
       if (!st || !st.transcript) {
         return sendErr(res, 409, 'no transcript recorded for this session yet — the Claude hook fires on the first prompt');
       }
-      if (!fs.existsSync(st.transcript)) return sendErr(res, 409, 'recorded transcript file is gone');
+      if (!fs.existsSync(st.transcript)) return sendErr(res, 409, noTranscriptMessage(st.transcript));
+      rememberTranscript(st.transcript);
       const offsetParam = u.searchParams.get('offset');
       const offsetNum = offsetParam == null ? null : Number(offsetParam);
       if (offsetNum !== null && !Number.isFinite(offsetNum)) return sendErr(res, 400, 'offset must be a number');
@@ -9976,7 +10277,8 @@ const server = http.createServer(async (req, res) => {
         return sendErr(res, 409, 'no transcript recorded for this session yet — the Claude hook fires on the first prompt');
       }
       const o = sessionOverview(st.transcript, st.sessionId);
-      if (!o) return sendErr(res, 409, 'recorded transcript file is gone');
+      if (!o) return sendErr(res, 409, noTranscriptMessage(st.transcript));
+      rememberTranscript(st.transcript);
       return sendJson(res, 200, {
         name,
         claudeSessionId: st.sessionId,
@@ -9997,7 +10299,8 @@ const server = http.createServer(async (req, res) => {
       // cursor reports "unchanged" for as long as the fan-out lasts — which is
       // exactly the stretch the map is worth watching.
       const g = sessionGraph(st.transcript, st.sessionId);
-      if (!g) return sendErr(res, 409, 'recorded transcript file is gone');
+      if (!g) return sendErr(res, 409, noTranscriptMessage(st.transcript));
+      rememberTranscript(st.transcript);
       // ⚠ has() BEFORE Number(), because `Number(null)` is 0 and an EMPTY
       // transcript's cursor is also 0 — so a cursor-less first fetch of a
       // session that has not written a byte yet was answered `unchanged`, and
@@ -10185,6 +10488,7 @@ const server = http.createServer(async (req, res) => {
         agents,
         active: agents.filter((a) => a.active).length,
         serverTime: Math.floor(Date.now() / 1000),
+        serverTimeSec: Math.floor(Date.now() / 1000),   // 3.6.0 (M3)
       });
     }
 
@@ -10456,6 +10760,16 @@ const server = http.createServer(async (req, res) => {
        * the sentence does not change under the reader when the first poll lands.
        */
       let blockedBy = null;
+      /**
+       * ⚠ AND WHETHER THIS MESSAGE WENT INTO SOMEBODY'S DRAFT (decision 59).
+       *
+       * Only for a delivery that happened HERE, synchronously — a queued message
+       * has not been pasted yet and cannot have landed anywhere. A sender whose
+       * message waited reads the same object off `GET /typing`, which carries the
+       * standing notice for the session; this is so the one who pressed Send is
+       * told in the answer to their own request rather than on the next poll.
+       */
+      let intoDraft = null;
       if (typedKeys.length > 0) {
         /**
          * Through the QUEUE, not straight at the pane.
@@ -10503,7 +10817,10 @@ const server = http.createServer(async (req, res) => {
             && Date.now() - recent.at <= typing.DUPLICATE_WINDOW_MS) {
           log(`typing: ${name}: the same message was delivered ${Math.round((Date.now() - recent.at) / 1000)}s ago; `
             + 'not sending it a second time');
-          return sendJson(res, 200, { ok: true, queued: 0, position: 0, delivered: true, blockedBy: null, duplicate: true });
+          return sendJson(res, 200, {
+            ok: true, queued: 0, position: 0, delivered: true, blockedBy: null,
+            intoDraft: null, duplicate: true,
+          });
         }
         if (dup) {
           const q = sendQueues.get(name);
@@ -10512,7 +10829,8 @@ const server = http.createServer(async (req, res) => {
             + 'not queuing it a second time');
           return sendJson(res, 200, {
             ok: true, queued: q ? q.entries.length : 0, position: at < 0 ? 0 : at + 1,
-            delivered: false, blockedBy: (q && q.blockedBy) || null, duplicate: true,
+            delivered: false, blockedBy: (q && q.blockedBy) || null,
+            intoDraft: null, duplicate: true,
           });
         }
         const out = await enqueueSend(name, typedKeys, { origin: 'client', submit: wantsEnter });
@@ -10523,12 +10841,13 @@ const server = http.createServer(async (req, res) => {
         position = out.position;
         queued = out.queued;
         blockedBy = out.blockedBy;
+        if (delivered) intoDraft = typing.intoDraftView(intoDraftFor(name));
       }
       for (const k of rawKeys) {
         const r = await run('tmux', ['send-keys', '-t', `=${name}:`, k]);
         if (r.err) return sendErr(res, 500, `tmux: ${r.stderr.trim()}`);
       }
-      return sendJson(res, 200, { ok: true, queued, position, delivered, blockedBy });
+      return sendJson(res, 200, { ok: true, queued, position, delivered, blockedBy, intoDraft });
     }
 
     /**
@@ -10544,7 +10863,8 @@ const server = http.createServer(async (req, res) => {
     if ((m = p.match(/^\/v1\/sessions\/([A-Za-z0-9_][A-Za-z0-9_.-]{0,49})\/typing$/)) && req.method === 'GET') {
       const name = m[1];
       if (!(await requireSession(res, name))) return;
-      return sendJson(res, 200, typing.typingSnapshot(sendQueues.get(name), Date.now()));
+      return sendJson(res, 200,
+        typing.typingSnapshot(sendQueues.get(name), Date.now(), intoDraftFor(name)));
     }
 
     // --- soft end: type a wrap-up phrase, and (when auto) end on settle
@@ -11984,7 +12304,7 @@ const server = http.createServer(async (req, res) => {
         if (!text) return sendErr(res, 400, 'text is required');
         if (text.length > projectsLib.MAX_PROMPT) return sendErr(res, 400, 'text too long');
         if (!(await sessionExists(to.name))) return sendErr(res, 409, `${to.claudeName} is not running`);
-        const r = await enqueueSend(to.name, projectsLib.peerMessageFrame(from.claudeName, text), {
+        const r = await enqueueSend(to.name, projectsLib.peerMessageFrame(from.claudeName, text, project), {
           automated: true, origin: 'project', kind: 'peerMessage',
         });
         return sendJson(res, 202, {

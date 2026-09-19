@@ -236,8 +236,14 @@ before(async () => {
   // ~/.claude and take a network round trip).
   const binDir = path.join(tmp, 'bin');
   fs.mkdirSync(binDir);
+  // ⚠ THE EMAIL IS A TRIPWIRE (M4). `claude auth status` reads the REAL
+  // ~/.claude.json through the inherited HOME and no env of this daemon's can
+  // move it — so anything that shells out to it under HUGINN_APPD_CLAUDE_DIR is
+  // reaching past the isolation. This address exists so a test can say "that
+  // answer came from the CLI" and be believed.
   fs.writeFileSync(path.join(binDir, 'claude'),
-    '#!/bin/sh\necho \'{"loggedIn":true,"email":"stub@example.com"}\'\n', { mode: 0o755 });
+    '#!/bin/sh\necho \'{"loggedIn":true,"email":"the-live-cli@example.invalid","orgName":"Real Org",'
+    + '"subscriptionType":"max","authMethod":"claude.ai","apiProvider":"firstParty"}\'\n', { mode: 0o755 });
 
   // The stub token endpoint. It ROTATES the pair, which is what the real one
   // does and what every in-place-rewrite assertion below depends on.
@@ -632,4 +638,36 @@ test('the arbiter refuses an unrefreshable profile too, and signs nobody out', a
 
   usage = { session: 5, weekly_all: 10, weekly_fable: 20 };
   await api('/v1/headroom/settings', { method: 'PATCH', body: JSON.stringify({ accountSwitch: { enabled: false } }) });
+});
+
+// ----------------------------------------------------- /v1/account isolation
+
+test('/v1/account never reaches past HUGINN_APPD_CLAUDE_DIR to the live CLI (M4)', async () => {
+  // ⚠ THE FAIL-FIRST. Walked on 3.5.2 with a scratch CLAUDE_DIR holding a fake
+  // credentials block: `/v1/plan` answered with the stub identity and, in the
+  // same second, `/v1/account` answered
+  //
+  //   {"loggedIn":true,"email":"<the owner's real address>","subscriptionType":"max",
+  //    "authMethod":"claude.ai","apiProvider":"firstParty","identitySource":"cli"}
+  //
+  // because the route shells out to `claude auth status`, which resolves its own
+  // home. The knob's whole stated purpose is that "a test that locked or rewrote
+  // the real ~/.claude would reach straight into the owner's live CLI"; this was
+  // the hole in it. Against the old code the first assertion below reads
+  // `the-live-cli@example.invalid`.
+  const { status, body } = await api('/v1/account');
+  assert.equal(status, 200, JSON.stringify(body));
+  assert.notEqual(body.email, 'the-live-cli@example.invalid',
+    'the CLI shim on PATH must not be the source of identity when the dir is overridden');
+  assert.notEqual(body.identitySource, 'cli',
+    'and the route must not claim the CLI answered for it');
+
+  // ...and it agrees with /v1/plan, which is the second half of M4: the Settings
+  // header and the usage bars answered from two different sources and could
+  // disagree about who is signed in.
+  const plan = await api('/v1/plan');
+  assert.equal(plan.status, 200);
+  const planEmail = (plan.body.account && plan.body.account.email) || null;
+  assert.equal(body.email ?? null, planEmail,
+    'one daemon, one answer about who is signed in');
 });

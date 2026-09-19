@@ -599,12 +599,15 @@ test('a member sitting on a modal holds its message instead of typing into the d
     const until = Date.now() + 20_000;
     for (;;) {
       const s = await typingOf('stick-modal');
-      if (s && s.blockedBy === 'modal') return s;
+      if (s && s.blockedBy === 'trust') return s;
       if (Date.now() > until) return s;
       await wait(200);
     }
   })();
-  assert.equal('modal', st.blockedBy);
+  // 3.6.0 (M2): the FOLDER-TRUST dialog is named on the wire. This member's pane
+  // is the trust dialog — the role is called `modal` because that is what it is
+  // FOR, not because of the word the queue reports.
+  assert.equal('trust', st.blockedBy);
   assert.ok(st.queued >= 1, 'the first prompt is waiting, not lost');
   assert.equal('', readOr(outFor('stick-modal')), 'and nothing was submitted');
 });
@@ -623,7 +626,7 @@ test('a relayed peer message rides the send queue, and the queue holds it', asyn
   assert.equal('stick/modal', r.body.to);
   assert.equal('stick/docs', r.body.from);
   assert.equal(false, r.body.delivered);
-  assert.equal('modal', r.body.blockedBy);
+  assert.equal('trust', r.body.blockedBy, 'the member is sitting on the folder-trust dialog');
 
   const bad = await api(`/v1/projects/${stick.id}/message`, {
     method: 'POST', body: JSON.stringify({ from: 'docs', to: 'nobody', text: 'x' }),

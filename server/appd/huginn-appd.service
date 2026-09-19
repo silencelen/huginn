@@ -18,6 +18,17 @@ StartLimitIntervalSec=0
 # The live unit was hand-corrected to this; the repo lagged until 2026-08-14.
 WorkingDirectory=/root/netplan
 Environment=NODE_ENV=production
+# ⚠ SO THE DAEMON'S OWN LINES CAN BE READ ON THEIR OWN (M5, 3.6.0). journald
+# files a syslog message under whichever unit owns the SENDER'S cgroup, and a
+# tmux server first started by this daemon daemonises into this daemon's — so
+# every Claude Code session, and everything a session runs, lands in
+# `journalctl -u huginn-appd`. PowerShell on Linux logs to syslog and writes
+# whole script bodies there; on 2026-09-19 that was most of 24 hours of this
+# unit's journal. Tagging our own stdio makes
+#   journalctl -u huginn-appd -t huginn-appd
+# the daemon's own log, while a child's genuine errors stay in the unit's
+# journal under their own identifier. Nothing is filtered away.
+SyslogIdentifier=huginn-appd
 # ccusage (and anything else resolving ~/.claude) needs HOME; systemd does not
 # set it, and without it ccusage exits with 'home directory is not set'.
 Environment=HOME=/root
