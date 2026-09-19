@@ -5897,6 +5897,31 @@ async function projectDashboard(project) {
   };
 }
 
+/**
+ * Which project, if any, a TMUX SESSION belongs to — and as what.
+ *
+ * ⚠ THE NAME IS THE KEY, and that is the whole reason this exists. A project
+ * record stores its members by tmux name (`joinMembers`: "the lookup is by
+ * tmuxName"), the peer names are minted from the slug and the role at launch,
+ * and the native registry rows are matched back through the same pair. Renaming
+ * a member's session therefore orphans it from its project with nothing
+ * anywhere saying so — the record goes on naming a session that no longer
+ * exists, the dashboard row reads "not present" forever, and `/message` answers
+ * 409 for a session sitting right there. So the rename route asks this first.
+ *
+ * Reads the store rather than a memo: adopting, dropping and renaming are all
+ * rare, and a stale answer here is a wrong refusal or a lost membership.
+ */
+function projectOfSession(name) {
+  if (!name) return null;
+  for (const project of listProjects()) {
+    for (const member of projectsLib.memberList(project)) {
+      if (member.name === name) return { project, member };
+    }
+  }
+  return null;
+}
+
 /** The member (or the lead) a `from`/`to` names: by role, by tmux name, or by
  *  the `<slug>/<role>` peers use. */
 function projectMemberNamed(project, who) {
@@ -10217,6 +10242,25 @@ const server = http.createServer(async (req, res) => {
       if (badName) return sendErr(res, 400, badName);
       const to = canonName(body.name);
       if (to !== from && await sessionExists(to)) return sendErr(res, 409, `session '${to}' already exists`);
+      // ⚠ A PROJECT MEMBER'S NAME IS NOT ITS OWN (3.5.2). The project record
+      // stores members by tmux name, its `claudeName` was minted from the slug
+      // and the role when `claude --name` launched it, and the native peer
+      // registry is joined back through that pair — so a rename here orphans the
+      // session from its project silently: the record goes on naming a session
+      // that is gone, the dashboard row reads "not present" forever, and
+      // `/message` answers 409 about a session sitting right there. Refused with
+      // the project NAMED, because "drop it from the project first" is only
+      // actionable if you know which one. A no-op rename (the desktop's rename
+      // field answering with what is already in it) is left alone.
+      if (to !== from) {
+        const owner = projectOfSession(from);
+        if (owner) {
+          return sendErr(res, 409,
+            `'${from}' is the ${owner.member.role} session of the project "${owner.project.name}" — `
+            + 'its name is what the project and the peer registry know it by. Drop it from the '
+            + 'project first (DELETE /v1/projects/<id>/members/<role>), then rename it');
+        }
+      }
       const r = await run('tmux', ['rename-session', '-t', `=${from}`, to]);
       if (r.err) return sendErr(res, 404, `tmux: ${r.stderr.trim() || 'no such session'}`);
       // ⚠ THE READBACK THAT RENAMED A BYSTANDER'S STATE. This asked tmux about
@@ -11649,6 +11693,109 @@ const server = http.createServer(async (req, res) => {
       // manifest tag is the anti-injection control and belongs in the lead's
       // system prompt and in the store — never on this port.
       return sendJson(res, 201, projectsLib.publicProject(project));
+    }
+
+    /**
+     * MEMBERSHIP, for sessions this daemon did NOT spawn.
+     *
+     * The Wave 3 contract's leftover: a cluster is not always born as one. The
+     * ordinary case is a session the owner already has open — a scratch shell
+     * that turned into the firmware work — which belongs in the project beside
+     * the ones that were spawned, on the dashboard, in the peer relay and in the
+     * graceful end.
+     *
+     * ⚠ ADOPT DOES NOT LAUNCH ANYTHING AND DROP DOES NOT END ANYTHING. Both are
+     * edits to a RECORD. `POST /spawn` is the route that creates sessions and
+     * `DELETE /v1/projects/:id?end=…` is the one that ends them; a membership
+     * verb that quietly did either would be the surprise this block exists to
+     * avoid. Dropping a member leaves it running, unadopted, exactly where it
+     * was.
+     *
+     * ⚠ AND AN ADOPTED MEMBER'S PEER NAME IS READ, NOT INVENTED. `claudeName` is
+     * what `claude --name` was given at LAUNCH, and an adopted session was
+     * launched without one of ours — so the native registry is asked for the
+     * name it actually registered, and `<slug>/<role>` is only the label when it
+     * has none. Writing the conventional name over a session that never had it
+     * would put a peer address in the record that nothing can deliver to.
+     */
+    if ((m = p.match(/^\/v1\/projects\/([0-9a-f-]{36})\/members(?:\/([a-z0-9][a-z0-9-]{0,15}))?$/))) {
+      const projectId = m[1];
+      const roleInPath = m[2] || '';
+      const project = loadProject(projectId);
+      if (!project) return sendErr(res, 404, 'no such project');
+
+      if (req.method === 'POST' && !roleInPath) {
+        const body = await readJsonBody(req);
+        const taken = projectsLib.memberList(project).map((x) => x.role);
+        const badRole = projectsLib.roleProblem(body.role, taken);
+        if (badRole) return sendErr(res, 400, badRole);
+        const role = String(body.role).trim();
+        if ((project.members || []).length >= projectsLib.MAX_MEMBERS) {
+          return sendErr(res, 409, `that is the ${projectsLib.MAX_MEMBERS}-session limit for one project`);
+        }
+        // `name` is the TMUX session being adopted. Absent, it is the name this
+        // project would have given the role — so adopting a member that was
+        // spawned here and then dropped needs no arguments.
+        const raw = body.name == null || body.name === ''
+          ? projectsLib.tmuxNameFor(project.slug, role) : body.name;
+        const badName = nameProblem(raw);
+        if (badName) return sendErr(res, 400, badName);
+        const name = canonName(raw);
+        const found = await sessionExists(name);
+        if (found === null) return sendErr(res, 503, 'tmux is not answering right now');
+        if (!found) return sendErr(res, 404, `there is no session called '${name}' to adopt`);
+        const owner = projectOfSession(name);
+        if (owner) {
+          return sendErr(res, 409, `'${name}' is already the ${owner.member.role} session of `
+            + `the project "${owner.project.name}"`);
+        }
+        const st = readSessionState(name);
+        const native = st && st.sessionId ? nativeRegistryEntry(st.sessionId) : null;
+        const member = projectsLib.memberRow({
+          role,
+          name,
+          claudeName: (native && native.name) || projectsLib.claudeNameFor(project.slug, role),
+          sessionId: (st && st.sessionId) || null,
+          cwd: (st && st.cwd) || null,
+          firstPrompt: null,
+          // When it JOINED, which is the only moment this record can honestly
+          // stamp — appd did not launch it and has no idea when it started.
+          spawnedAt: Math.floor(Date.now() / 1000),
+        });
+        const saved = updateProject(projectId, (proj) => {
+          proj.members = [...(proj.members || []).filter((x) => x.role !== role), member];
+        });
+        if (!saved) return sendErr(res, 404, 'no such project');
+        log(`project ${project.slug}: adopted ${name} as ${role}`);
+        return sendJson(res, 201, { ok: true, member, project: projectsLib.publicProject(saved) });
+      }
+
+      if (req.method === 'DELETE' && roleInPath) {
+        if (roleInPath === projectsLib.LEAD_ROLE) {
+          return sendErr(res, 409, 'the lead is the project — delete the project instead');
+        }
+        const member = (project.members || []).find((x) => x.role === roleInPath);
+        if (!member) return sendErr(res, 404, `this project has no ${roleInPath} session`);
+        const saved = updateProject(projectId, (proj) => {
+          proj.members = (proj.members || []).filter((x) => x.role !== roleInPath);
+        });
+        if (!saved) return sendErr(res, 404, 'no such project');
+        // The persona is the member's copy of its instructions; a readable path
+        // to a project's instructions for a session that is no longer in it is
+        // the same "orders from a ghost" the delete route unlinks for.
+        try { fs.unlinkSync(projectRenderPath(projectId, roleInPath)); } catch { /* never was one */ }
+        log(`project ${project.slug}: dropped ${member.name} (${roleInPath}); the session is still running`);
+        return sendJson(res, 200, {
+          ok: true,
+          dropped: member,
+          // Said in the body, because "drop" and "end" are one keystroke apart
+          // in every client and this route does exactly one of them.
+          ended: false,
+          project: projectsLib.publicProject(saved),
+        });
+      }
+
+      return sendErr(res, 404, 'no such project route');
     }
 
     if ((m = p.match(/^\/v1\/projects\/([0-9a-f-]{36})(\/[a-z]+)?$/))) {
