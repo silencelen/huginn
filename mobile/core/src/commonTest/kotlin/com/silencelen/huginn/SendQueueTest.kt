@@ -138,6 +138,16 @@ class SendQueueTest {
     }
 
     @Test
+    fun `unsent text in the live view holds a send, and names it`() {
+        // appd 3.5.0 reports blockedBy "draft" when the composer holds the reader's own
+        // unsent text; a paste in front of it would be submitted as one sentence.
+        val note = SendQueue.note(TypingState(queued = 1, blockedBy = "draft"))
+        assertNotNull(note)
+        assertTrue(note!!.contains("unsent"), note)
+        assertTrue(!note.contains("finishes its turn"), note)
+    }
+
+    @Test
     fun `the list row says only that there is a wait`() {
         assertEquals("3 queued", SendQueue.rowMark(3))
         assertNull(SendQueue.rowMark(0), "an empty queue is not a fact about a row")
