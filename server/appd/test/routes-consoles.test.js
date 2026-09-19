@@ -42,6 +42,14 @@ const consolesLib = require('../lib/consoles');
 // collide with.
 const PORT = 10700 + (process.pid % 50);
 const BASE = `http://127.0.0.1:${PORT}`;
+
+// ⚠ AND ONE FIXED PORT OUTSIDE THE TABLE: 8088, on LOOPBACK. The seed's ports
+// are not negotiable — they are armap, the trainer, the board view and the sim
+// — so proving a re-pointed seed row can actually be probed means listening on
+// one of them at the address the daemon binds. 127.0.0.1:8088 is free on this
+// host for exactly the reason D10 exists: the real armap is on the TAILNET
+// address only.
+const SEED_PORT = 8088;
 require('./retry-fetch');
 
 // Private tmux socket shared with the daemon under test, so nothing it does at
@@ -50,7 +58,7 @@ require('./retry-fetch');
 const TMUX_SOCK = `huginn-test-${process.pid}`;
 
 let tmp, dataDir, token, daemon;
-let okServer, hangServer, okPort, hangPort;
+let okServer, hangServer, seedServer, okPort, hangPort;
 
 const wait = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -100,6 +108,16 @@ before(async () => {
   await new Promise((r) => hangServer.listen(0, '127.0.0.1', r));
   hangPort = hangServer.address().port;
 
+  // A stand-in for armap, on the seed's own port at the address this daemon
+  // binds, so a re-pointed seed row has something real to answer it.
+  seedServer = http.createServer((req, res) => { res.writeHead(200, { 'content-type': 'text/plain' }); res.end('armap'); });
+  await new Promise((resolve, reject) => {
+    seedServer.once('error', (e) => reject(new Error(
+      `could not listen on 127.0.0.1:${SEED_PORT} (${e.code}) — something else holds it; `
+      + `find it with: ss -ltnp | grep ${SEED_PORT}`)));
+    seedServer.listen(SEED_PORT, '127.0.0.1', resolve);
+  });
+
   // The store, written before the daemon reads it. See the SAFETY note above.
   fs.writeFileSync(path.join(dataDir, consolesLib.STORE_NAME), JSON.stringify({
     schema: consolesLib.SCHEMA,
@@ -109,6 +127,17 @@ before(async () => {
         url: `http://127.0.0.1:${okPort}/`, notes: 'fixture' }, 1789460000),
       consolesLib.buildRecord({ id: 'hang', name: 'A page that hangs', kind: 'lab',
         url: `http://127.0.0.1:${hangPort}/`, notes: 'fixture' }, 1789460000),
+      // What a daemon BEFORE D10 left on disk: the seed pinned to a name that
+      // resolves to an interface none of the four units listen on. These are
+      // safe to probe either way — nothing answers on 192.168.2.117 at these
+      // ports — and the daemon must re-point them onto the address it binds.
+      consolesLib.buildRecord({ id: 'armap', name: 'Architecture map', kind: 'docs',
+        url: 'http://huginn:8088/', notes: 'the old seed' }, 1789460000),
+      consolesLib.buildRecord({ id: 'board', name: 'PCB board view', kind: 'tool',
+        url: 'http://huginn:8092/', notes: 'the old seed' }, 1789460000),
+      // And one the OWNER re-pointed, which must come through untouched.
+      consolesLib.buildRecord({ id: 'jtyper', name: 'jtyper trainer', kind: 'lab',
+        url: 'http://huginn:8091/owner-edited', notes: 'their edit' }, 1789460000),
     ],
   }, null, 2), { mode: 0o600 });
 
@@ -145,6 +174,7 @@ after(() => {
   if (daemon) daemon.kill('SIGTERM');
   if (okServer) okServer.close();
   if (hangServer) hangServer.close();
+  if (seedServer) seedServer.close();
   if (tmp) fs.rmSync(tmp, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 });
 });
 
@@ -183,6 +213,31 @@ test('the list answers at the speed of a file read, not at the speed of the netw
   assert.ok(Date.now() - started < 1_500, `the list took ${Date.now() - started}ms`);
 });
 
+// ------------------------------------------------------- the seeded addresses
+
+test('the rows the old seed wrote are re-pointed at the address this daemon binds', async () => {
+  // ⚠ D10 AT THE ROUTE. `http://huginn:8088/` resolves to this host's LAN
+  // address; the four seeded units bind its TAILNET address, so the old seed
+  // named an interface nothing listens on and every row read "not answering
+  // from the host" forever. This daemon binds 127.0.0.1 (HUGINN_APPD_BIND in
+  // `before`), so that is where its seed rows belong.
+  const body = await list();
+  assert.equal(`http://127.0.0.1:${SEED_PORT}/`, rowOf(body, 'armap').url);
+  assert.equal('http://127.0.0.1:8092/', rowOf(body, 'board').url);
+  assert.equal('http://huginn:8091/owner-edited', rowOf(body, 'jtyper').url,
+    'a row the owner re-pointed is never moved, whatever it points at');
+  assert.equal(2, rowOf(body, 'armap').version, 'the address moved, so the version moved with it');
+  assert.equal(1, rowOf(body, 'jtyper').version, 'and a row nothing happened to kept its own');
+});
+
+test('a re-pointed seed row can actually be probed, which is the entire point of moving it', async () => {
+  const r = await api('/v1/consoles/armap/probe', { method: 'POST' });
+  assert.equal(200, r.status, JSON.stringify(r.body));
+  assert.equal(true, r.body.up, 'the stand-in on the seeded address answered — at http://huginn:8088/ nothing ever would');
+  assert.equal(200, r.body.httpStatus);
+  assert.equal(true, rowOf(await list(), 'armap').up, 'and the list carries it');
+});
+
 // ---------------------------------------------------------------- the card
 
 test('the approval card rides the list, unapplied, with the exact commands', async () => {
@@ -201,9 +256,10 @@ test('the approval card rides the list, unapplied, with the exact commands', asy
     'systemctl edit armap.service            # ExecStart: bind 0.0.0.0 instead of the tailnet address',
     'systemctl edit jtyper-trainer.service   # same',
     'systemctl edit boardserver.service      # same',
-    'systemctl restart armap jtyper-trainer boardserver',
-    "ss -ltnp | grep -E '8088|8091|8092'",
-  ], approval.steps[0].commands);
+    'systemctl edit btc15m-sim.service       # same, but its bind is in sim/app.py, not the unit',
+    'systemctl restart armap jtyper-trainer boardserver btc15m-sim',
+    "ss -ltnp | grep -E '8088|8091|8092|8093'",
+  ], approval.steps[0].commands, 'all four units — the firewall step below already opens all four ports');
   assert.deepEqual([
     'IN ACCEPT -source 192.168.2.131 -p tcp -dport 8088 -log nolog',
     'IN ACCEPT -source 192.168.2.131 -p tcp -dport 8091 -log nolog',

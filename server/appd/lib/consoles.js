@@ -12,9 +12,10 @@
 // the stores to touch.
 //
 // ⚠ THE PRODUCT NEVER OPENS A PORT AND NEVER TOUCHES A FIREWALL (decision 47).
-// Three of the four seeded units are bound to this host's tailnet address only,
-// so a phone cannot load them; making them loadable means editing a systemd unit
-// here and four rules in heimdall's /etc/pve/firewall/117.fw. Those are the
+// ALL FOUR seeded units are bound to this host's tailnet address only, so the
+// daemon can probe them and a phone cannot load them; making them loadable means
+// editing four unit binds here and four rules in heimdall's
+// /etc/pve/firewall/117.fw. Those are the
 // OWNER's commands, run in a netplan session. This module's contribution is
 // [approvalCard] — the exact text, marked `applied:false`, which the app shows
 // and NOTHING executes. The daemon learns that the owner did it by finding a
@@ -510,44 +511,174 @@ function remove(list, id) {
 // -------------------------------------------------------------------- the seed
 
 /**
- * The four pages this host serves, from the contract — written once, on the
- * first list against a store that has never existed, so the feature arrives
- * populated instead of arriving as an empty list with a plus button.
+ * The four pages this host serves, from the contract — name, port, kind and the
+ * one line under the name. The ADDRESS is not in here, because it is not a
+ * property of the page (see [seedHost]).
+ */
+const SEED_UNITS = [
+  { id: 'armap', port: 8088, name: 'Architecture map', kind: 'docs',
+    notes: 'Static armap dashboard (docs/current/armap).' },
+  { id: 'jtyper', port: 8091, name: 'jtyper trainer', kind: 'lab',
+    notes: 'Blind test + chat + hole-fill flywheel.' },
+  { id: 'board', port: 8092, name: 'PCB board view', kind: 'tool',
+    notes: 'Live KiCad board review (brokkr renders).' },
+  { id: 'btc15m', port: 8093, name: 'BTC 15m simulator', kind: 'lab',
+    notes: 'Paper-trading sim for the 15-minute lab.' },
+];
+
+/**
+ * The host the seed used to be pinned to, and the fallback for a daemon that
+ * cannot say where it is.
+ *
+ * ⚠ THIS NAME IS THE DEFECT (D10). `huginn` resolves to this host's LAN
+ * interface (192.168.2.117); all four seeded units bind its TAILNET address
+ * (100.97.198.90). So the seeded rows named an interface on which NONE of them
+ * listen — `curl http://huginn:8088/` answers nothing, `curl
+ * http://100.97.198.90:8088/` answers 200 — and every row read "not answering
+ * from the host" forever, in the one deployment that actually has these units.
+ * The probe could not pass, whatever anybody did to the units or the firewall.
+ *
+ * It survives only as the fallback, because a daemon that has not been told an
+ * address should write what it used to write rather than guess.
+ */
+const SEED_FALLBACK_HOST = 'huginn';
+
+/**
+ * `addr` as a URL authority this registry would accept, or '' — the one guard
+ * both [seedHost] and [pickHostAddr] are built on.
+ *
+ * ⚠ THE DAEMON'S OWN ADDRESS IS NOT EXEMPT FROM THE DAEMON'S OWN URL RULE. A
+ * wildcard (`0.0.0.0`, `::`) is a legal way to start this process and a
+ * meaningless thing to put in a URL; a link-local address carries a zone id
+ * that means nothing to another process. Anything urlProblem would refuse on a
+ * hand-typed row is refused here too.
+ */
+function seedableHost(addr) {
+  const s = typeof addr === 'string' ? addr.trim().split('%')[0] : '';
+  if (!s) return '';
+  // A literal v6 address needs its brackets back before it is a URL authority.
+  const host = s.includes(':') && !s.startsWith('[') ? `[${s}]` : s;
+  return urlProblem(`http://${host}:${SEED_UNITS[0].port}/`) ? '' : host;
+}
+
+/**
+ * The first candidate the daemon offered that a seeded row could be written
+ * with, or '' — trimmed, and without a v6 zone id.
+ *
+ * ⚠ THE BIND IS A WILDCARD ON THE HOST THIS SHIPS TO, which is why this takes a
+ * LIST. huginn-appd's unit sets `HUGINN_APPD_BIND=0.0.0.0` so that the tailnet,
+ * mesh and loopback pins a client holds all reach one listener — so "seed with
+ * the address we bound" resolves to `0.0.0.0`, and a fix that only read
+ * server.address() would change nothing on the one host that has this defect.
+ * The daemon therefore offers what it has, in order (its bind, then the
+ * `tailscale ip -4` resolveBind already knows how to ask for), and this takes
+ * the first that stands up.
+ *
+ * ⚠ PASSED IN, NEVER DISCOVERED. This module runs no commands and holds no
+ * process-spawning require — asserted directly against this file's source in
+ * consoles.test.js ("nothing in the card is a verb this daemon could run"). It
+ * cannot enumerate interfaces either: the unit runs under
+ * `RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX`, so the netlink socket
+ * behind getifaddrs is closed to it and os.networkInterfaces() THROWS there.
+ */
+function pickHostAddr(...candidates) {
+  for (const c of candidates) {
+    if (seedableHost(c)) return c.trim().split('%')[0];
+  }
+  return '';
+}
+
+/** The host part of a seeded address: what the daemon handed in, or the old name. */
+function seedHost(addr) {
+  return seedableHost(addr) || SEED_FALLBACK_HOST;
+}
+
+/** One seeded unit's address, for `addr`. */
+function seedUrl(addr, port) { return `http://${seedHost(addr)}:${port}/`; }
+
+/**
+ * What the seed wrote BEFORE D10 — the exact literal [migrateSeedUrls] matches.
+ *
+ * ⚠ A LITERAL, not a pattern. It is the only thing that distinguishes a row the
+ * old seed wrote from a row the owner chose, and a looser rule here overwrites
+ * somebody's edit.
+ */
+function legacySeedUrl(port) { return `http://${SEED_FALLBACK_HOST}:${port}/`; }
+
+/**
+ * The four pages this host serves — written once, on the first list against a
+ * store that has never existed, so the feature arrives populated instead of
+ * arriving as an empty list with a plus button.
  *
  * Seeded ONCE and recorded as such in the envelope: an owner who deletes all
  * four has said something, and a seeder that ran on every empty list would
  * argue with them forever.
  *
- * The addresses are the contract's: the host's own name, not 127.0.0.1, because
- * this string is opened by a PHONE. Loopback would make the probe pass and the
- * tap fail, which is the exact confusion `reachableFrom` exists to prevent.
+ * The address is the host's own, from [seedHost] — not 127.0.0.1, which would
+ * be a different claim about where these pages are, and not a name, which is
+ * what D10 was.
  */
-function seedConsoles(now = Math.floor(Date.now() / 1000)) {
-  return [
-    { id: 'armap', name: 'Architecture map', url: 'http://huginn:8088/', kind: 'docs',
-      notes: 'Static armap dashboard (docs/current/armap).' },
-    { id: 'jtyper', name: 'jtyper trainer', url: 'http://huginn:8091/', kind: 'lab',
-      notes: 'Blind test + chat + hole-fill flywheel.' },
-    { id: 'board', name: 'PCB board view', url: 'http://huginn:8092/', kind: 'tool',
-      notes: 'Live KiCad board review (brokkr renders).' },
-    { id: 'btc15m', name: 'BTC 15m simulator', url: 'http://huginn:8093/', kind: 'lab',
-      notes: 'Paper-trading sim for the 15-minute lab.' },
-  ].map((c) => buildRecord(c, now));
+function seedConsoles(addr = null, now = Math.floor(Date.now() / 1000)) {
+  return SEED_UNITS.map((u) => buildRecord({
+    id: u.id, name: u.name, url: seedUrl(addr, u.port), kind: u.kind, notes: u.notes,
+  }, now));
+}
+
+/**
+ * Re-apply the seed's ADDRESS to the rows that still carry the old one.
+ *
+ * ⚠ THE FIX HAS TO REACH THE STORES THAT ALREADY EXIST. Seeding correctly only
+ * on a host that has never run this daemon would leave every real installation
+ * with four rows that can never answer and no way to notice — the seed runs
+ * once, by design, and never runs again.
+ *
+ * ⚠ AND IT MUST NEVER OVERWRITE AN EDIT. The test is the EXACT previous literal
+ * for THAT row's id: a path, a different port, a host of their own, or an id
+ * that is not one of the four is the owner speaking, and is left alone. The
+ * `version` moves with the address, because a client holding the old number is
+ * holding a row that no longer describes anything.
+ */
+function migrateSeedUrls(list, addr) {
+  const changed = [];
+  const host = seedHost(addr);
+  // Nothing better to move them to: leave the store exactly as it is, and in
+  // particular do not rewrite the file.
+  if (host === SEED_FALLBACK_HOST) return { changed, consoles: list || [] };
+  const consoles = (list || []).map((rec) => {
+    const unit = SEED_UNITS.find((u) => u.id === (rec && rec.id));
+    if (!unit || !rec || rec.url !== legacySeedUrl(unit.port)) return rec;
+    changed.push(rec.id);
+    return { ...rec, url: seedUrl(addr, unit.port), version: (Number(rec.version) || 1) + 1 };
+  });
+  return { changed, consoles };
 }
 
 // ---------------------------------------------------------------- the card
 
 /**
- * The rebind, verbatim: three units on THIS host whose ExecStart binds the
- * tailnet address only. btc15m-sim already falls back to 0.0.0.0, which is why
- * it is named in the note and absent from the commands.
+ * The rebind, verbatim: the four units on THIS host that bind the tailnet
+ * address only.
+ *
+ * ⚠ ALL FOUR, AND NO EXEMPTIONS (D11). This list used to leave btc15m-sim out,
+ * on the strength of a note saying it "already falls back to 0.0.0.0" — while
+ * the firewall step below opened 8093 anyway, so one card disagreed with itself
+ * about one service. `ss -ltn` says `100.97.198.90:8093`: the 0.0.0.0 in
+ * sim/app.py is what it does when the host has NO tailscale address, not what
+ * it does here.
+ *
+ * The deeper reason the exemption had to go is that nothing could check it.
+ * This daemon does not run commands and would not be allowed to run them on
+ * another machine anyway, so a per-unit claim about what is already bound is a
+ * hard-coded belief that silently rots. A list of everything, which the
+ * firewall block already matched, is both simpler and the only honest shape.
  */
 const REBIND_COMMANDS = [
   'systemctl edit armap.service            # ExecStart: bind 0.0.0.0 instead of the tailnet address',
   'systemctl edit jtyper-trainer.service   # same',
   'systemctl edit boardserver.service      # same',
-  'systemctl restart armap jtyper-trainer boardserver',
-  "ss -ltnp | grep -E '8088|8091|8092'",
+  'systemctl edit btc15m-sim.service       # same, but its bind is in sim/app.py, not the unit',
+  'systemctl restart armap jtyper-trainer boardserver btc15m-sim',
+  "ss -ltnp | grep -E '8088|8091|8092|8093'",
 ];
 
 /**
@@ -579,13 +710,21 @@ function approvalCard(applied = false, markerPath = `<DATA_DIR>/${REBIND_MARKER_
     runBy: 'owner',
     markerPath,
     title: 'Open these from your phone or laptop',
-    why: 'Three of these pages are bound to this host only, so the probe below can reach them and '
-      + 'your devices cannot. Applying this changes that. Huginn does not run these commands.',
+    // ⚠ WHAT IS ACTUALLY TRUE, which the old copy was not. It said the probe
+    // "can reach them" while your devices cannot; in fact the seeded addresses
+    // named an interface nothing listened on, so nothing reached them from
+    // anywhere (D10). The durable fact is WHERE the probe runs: on this host,
+    // at this host's own address. `up` therefore never means "your phone can
+    // open this", and this is the only place that says so in words.
+    why: 'All four of these pages are bound to this host alone, and huginn probes them there, '
+      + 'from the host. That is why a row can say it is up while your phone still cannot open it. '
+      + 'Applying this is what makes them openable from your devices. '
+      + 'Huginn does not run these commands.',
     steps: [
       {
         id: 'rebind',
         where: 'huginn (this host)',
-        summary: 'Bind the three units to 0.0.0.0. btc15m-sim already does.',
+        summary: 'Bind all four units to 0.0.0.0 instead of the tailnet address.',
         file: null,
         commands: [...REBIND_COMMANDS],
       },
@@ -749,6 +888,9 @@ function createStore(opts = {}) {
   const dir = opts.dir;
   const fs = opts.fs || nodeFs;
   const log = opts.log || (() => {});
+  // The address the DAEMON binds, handed down rather than discovered here — see
+  // [seedHost]. Empty is honest: the seed then writes what it always wrote.
+  const hostAddr = typeof opts.hostAddr === 'string' ? opts.hostAddr.trim() : '';
   const doFetch = opts.fetch || globalThis.fetch;
   const nowMs = opts.nowMs || (() => Date.now());
   const timeoutMs = Number(opts.timeoutMs) > 0 ? Number(opts.timeoutMs) : PROBE_TIMEOUT_MS;
@@ -762,9 +904,25 @@ function createStore(opts = {}) {
 
   function load() {
     const env = readEnvelope(dir, fs);
-    if (env) return env;
     // First ever list: seed, once, and record that it happened.
-    return writeEnvelope(dir, { schema: SCHEMA, seeded: true, consoles: seedConsoles(stamp()) }, fs);
+    if (!env) {
+      return writeEnvelope(dir, { schema: SCHEMA, seeded: true, consoles: seedConsoles(hostAddr, stamp()) }, fs);
+    }
+    // And every load after that: re-apply the seed's ADDRESS to any row still
+    // carrying the one D10 pinned. Costs a list scan and returns `env` unchanged
+    // on every load but the first that finds one — after the rewrite no row
+    // matches the old literal, so this cannot become a store that rewrites
+    // itself forever.
+    if (!env.seeded) return env;
+    const moved = migrateSeedUrls(env.consoles, hostAddr);
+    if (!moved.changed.length) return env;
+    // The old observation describes the old address. Same reason `patch` drops
+    // one when the url changes: a row wearing the previous address's latency is
+    // a lie with a number on it.
+    for (const id of moved.changed) probes.delete(id);
+    log(`consoles: re-pointed ${moved.changed.join(', ')} at ${seedHost(hostAddr)} `
+      + `(the seeded address named an interface nothing listens on)`);
+    return writeEnvelope(dir, { ...env, schema: SCHEMA, consoles: moved.consoles }, fs);
   }
 
   function stamp() { return Math.floor(nowMs() / 1000); }
@@ -895,7 +1053,8 @@ module.exports = {
   nameProblem, notesProblem, idProblem,
   buildRecord, storedAddedAt, noProbe, consoleRow, sortConsoles,
   findConsole, add, patch, rename, setUrl, remove,
-  seedConsoles, approvalCard,
+  SEED_UNITS, SEED_FALLBACK_HOST, seedableHost, pickHostAddr, seedHost, seedUrl, legacySeedUrl,
+  seedConsoles, migrateSeedUrls, approvalCard,
   probeConsole, probeAll, probeChange,
   storePath, markerPath, readEnvelope, writeEnvelope, createStore, store,
 };
