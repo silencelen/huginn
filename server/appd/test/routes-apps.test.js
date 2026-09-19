@@ -1,19 +1,21 @@
 'use strict';
-// The consoles routes: a hand-curated registry of the pages this host serves,
-// with a liveness probe, and an approval card the daemon shows and never runs.
+// The apps routes: a hand-curated registry of the pages this host makes and
+// serves itself, with a liveness probe, a reachability probe and a favicon —
+// and `/v1/consoles*` alongside as an alias for one release (decision 56).
 //
 // THE PROMISE UNDER TEST: a list you can trust. Every case here is a way it
 // stops being trustworthy while still rendering — a row that says "up" because
-// the probe behind it has not come back yet, an edit that silently loses to
-// another client's, an address that was judged and then stored as something
-// else, and a card of root commands that drifts from the machine it names.
+// the probe behind it has not come back yet, a row that says "up" to a phone
+// that cannot open it, an edit that silently loses to another client's, an
+// address that was judged and then stored as something else, and root commands
+// that drift from the machine they name.
 //
 // SAFETY, and why this suite PRE-WRITES the store file: the seed list is real.
 // `http://huginn:8088/` and its three siblings are live services on this host,
 // so a suite that let the daemon seed itself would have its background sweep
 // GET the operator's actual armap, jtyper, board view and BTC sim. Instead the
 // store is written before the daemon starts, pointing at fixture servers this
-// file owns on ephemeral ports. Seeding itself is covered in consoles.test.js,
+// file owns on ephemeral ports. Seeding itself is covered in apps.test.js,
 // which needs no sockets for it.
 //
 // No tmux sessions are created; the daemon is given a private tmux socket
@@ -28,14 +30,16 @@ const net = require('node:net');
 const http = require('node:http');
 const path = require('node:path');
 const crypto = require('node:crypto');
-const consolesLib = require('../lib/consoles');
+const appsLib = require('../lib/apps');
 
 // PORT ALLOCATION — every file here binds a real socket and `node --test` runs
 // the files CONCURRENTLY, so these ranges must not overlap. See the full table
 // in routes-scratchpads.test.js. Wave 3 owns 10650-10749:
 //
 //   routes-projects     10650 + pid%50   -> 10650-10699
-//   routes-consoles     10700 + pid%50   -> 10700-10749   (this file)
+//   routes-apps         10700 + pid%50   -> 10700-10749   (this file)
+//   routes-apps-icons   11500 + pid%25   -> 11500-11524
+//   routes-apps-reach   11525 + pid%25   -> 11525-11549
 //
 // Only the DAEMON takes a number from the block. The fixture servers below bind
 // port 0 and are told their port by the kernel, which is one fewer range to
@@ -77,17 +81,17 @@ async function api(pathname, init = {}) {
 }
 
 async function list() {
-  const { status, body } = await api('/v1/consoles');
+  const { status, body } = await api('/v1/apps');
   assert.equal(200, status);
   return body;
 }
 
 function rowOf(body, id) {
-  return (body.consoles || []).find((c) => c.id === id) || null;
+  return (body.apps || []).find((c) => c.id === id) || null;
 }
 
 before(async () => {
-  tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'appd-consoles-'));
+  tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'appd-apps-'));
   dataDir = path.join(tmp, 'data');
   fs.mkdirSync(dataDir);
   fs.mkdirSync(path.join(tmp, 'state'));
@@ -119,24 +123,24 @@ before(async () => {
   });
 
   // The store, written before the daemon reads it. See the SAFETY note above.
-  fs.writeFileSync(path.join(dataDir, consolesLib.STORE_NAME), JSON.stringify({
-    schema: consolesLib.SCHEMA,
+  fs.writeFileSync(path.join(dataDir, appsLib.STORE_NAME), JSON.stringify({
+    schema: appsLib.SCHEMA,
     seeded: true,
     consoles: [
-      consolesLib.buildRecord({ id: 'alive', name: 'A page that answers', kind: 'tool',
+      appsLib.buildRecord({ id: 'alive', name: 'A page that answers', kind: 'tool',
         url: `http://127.0.0.1:${okPort}/`, notes: 'fixture' }, 1789460000),
-      consolesLib.buildRecord({ id: 'hang', name: 'A page that hangs', kind: 'lab',
+      appsLib.buildRecord({ id: 'hang', name: 'A page that hangs', kind: 'lab',
         url: `http://127.0.0.1:${hangPort}/`, notes: 'fixture' }, 1789460000),
       // What a daemon BEFORE D10 left on disk: the seed pinned to a name that
       // resolves to an interface none of the four units listen on. These are
       // safe to probe either way — nothing answers on 192.168.2.117 at these
       // ports — and the daemon must re-point them onto the address it binds.
-      consolesLib.buildRecord({ id: 'armap', name: 'Architecture map', kind: 'docs',
+      appsLib.buildRecord({ id: 'armap', name: 'Architecture map', kind: 'docs',
         url: 'http://huginn:8088/', notes: 'the old seed' }, 1789460000),
-      consolesLib.buildRecord({ id: 'board', name: 'PCB board view', kind: 'tool',
+      appsLib.buildRecord({ id: 'board', name: 'PCB board view', kind: 'tool',
         url: 'http://huginn:8092/', notes: 'the old seed' }, 1789460000),
       // And one the OWNER re-pointed, which must come through untouched.
-      consolesLib.buildRecord({ id: 'jtyper', name: 'jtyper trainer', kind: 'lab',
+      appsLib.buildRecord({ id: 'jtyper', name: 'jtyper trainer', kind: 'lab',
         url: 'http://huginn:8091/owner-edited', notes: 'their edit' }, 1789460000),
     ],
   }, null, 2), { mode: 0o600 });
@@ -163,7 +167,7 @@ before(async () => {
   // ⚠ IS THE DAEMON ON THIS PORT ACTUALLY OURS? One leaked by an earlier run
   // answers /v1/ping happily — ping needs no token — and rejects ours, which
   // surfaces as a wall of 401s that reads like a code bug and is not one.
-  const own = await api('/v1/consoles');
+  const own = await api('/v1/apps');
   if (own.status === 401) {
     throw new Error(`port ${PORT} is held by another huginn-appd, probably one leaked by an earlier `
       + `test run — it answers ping but not our token. Find it with: ss -ltnp | grep ${PORT}`);
@@ -185,22 +189,56 @@ test('the list route exists, which is how a client knows the feature is here', a
   // surface on a 404, rather than showing a door that leads to an error (the
   // archive/scratchpads precedent). "200 with a list" is a contract.
   const body = await list();
-  assert.ok(Array.isArray(body.consoles));
-  assert.equal(consolesLib.MAX_CONSOLES, body.max, 'the cap is on the wire, so a client can say what it is');
-  assert.deepEqual(consolesLib.KINDS, body.kinds, 'and the kind vocabulary, so the picker is not a second copy');
-  assert.equal('host', body.reachableFrom, 'said once at the top as well as on every row');
-  assert.equal(consolesLib.PROBE_INTERVAL_MS, body.probeIntervalMs);
+  assert.ok(Array.isArray(body.apps));
+  assert.equal(appsLib.MAX_APPS, body.max, 'the cap is on the wire, so a client can say what it is');
+  assert.deepEqual(appsLib.KINDS, body.kinds, 'and the kind vocabulary, so the picker is not a second copy');
+  // ⚠ THE APPROVAL CARD IS GONE FROM THE LIST BODY (decision 55). What is left
+  // of the marker is one boolean; the remedy itself rides the row that needs it.
+  assert.equal(false, body.retrofitApplied, 'the marker file does not exist, and the daemon never creates it');
+  assert.ok(!('approval' in body), 'the card left the page — fix lines are per row now');
+  assert.ok(!('reachableFrom' in body), 'and the one-word caveat with it');
+  // The addresses every app on this host has to answer on, so a client can say
+  // what a refusal was measured against instead of showing one with no subject.
+  assert.ok(Array.isArray(body.clientAddresses));
+  assert.ok(body.clientAddresses.includes('127.0.0.1'),
+    `this suite reached the daemon on 127.0.0.1, so it is in the set: ${JSON.stringify(body.clientAddresses)}`);
+});
+
+test('the same bodies answer on /v1/consoles, which is an alias for one release', async () => {
+  // ⚠ DECISION 56. An un-updated client must not meet a 404 where a whole
+  // surface used to be — but there is exactly ONE body, not an old shape kept
+  // alive on an old path, because two shapes on two paths is how a rename
+  // becomes permanent.
+  const fresh = await api('/v1/apps');
+  const alias = await api('/v1/consoles');
+  assert.equal(200, alias.status);
+  assert.deepEqual(Object.keys(fresh.body).sort(), Object.keys(alias.body).sort());
+  assert.deepEqual(fresh.body.apps.map((a) => a.id), alias.body.apps.map((a) => a.id));
+  assert.equal(fresh.body.max, alias.body.max);
+  assert.ok(!('consoles' in alias.body), 'the alias is the ROUTE, not the 3.4 body');
+
+  // And every id-bearing route under it, not just the list.
+  const probe = await api('/v1/consoles/armap/probe', { method: 'POST' });
+  assert.equal(200, probe.status, JSON.stringify(probe.body));
+  assert.equal('armap', probe.body.id);
+  assert.equal(404, (await api('/v1/consoles/armap/icon')).status, 'the icon route too — 404 because nothing cached one');
+  assert.equal(404, (await api('/v1/consoles/nope')).status, 'and an unknown route under the alias is still 404');
+  assert.equal(404, (await api('/v1/apps/nope')).status);
 });
 
 test('every row carries the probe fields, with null where there has been no observation', async () => {
   const body = await list();
   const row = rowOf(body, 'alive');
   assert.ok(row, 'the store written before startup is the store the daemon read');
-  for (const field of ['id', 'name', 'url', 'kind', 'notes', 'addedAt', 'version',
-    'up', 'lastProbeAt', 'latencyMs', 'httpStatus', 'reachableFrom']) {
+  for (const field of ['id', 'name', 'url', 'kind', 'notes', 'unit', 'addedAt', 'version',
+    'up', 'lastProbeAt', 'latencyMs', 'httpStatus', 'icon', 'reachable']) {
     assert.ok(field in row, `${field} must be present on every row`);
   }
-  assert.equal('host', row.reachableFrom);
+  assert.ok(!('reachableFrom' in row), 'superseded by reachable.addresses, which says strictly more');
+  assert.equal('boolean', typeof row.icon);
+  for (const field of ['ok', 'checkedAt', 'addresses', 'fix']) {
+    assert.ok(field in row.reachable, `reachable.${field} must be present on every row`);
+  }
   assert.ok(row.up === null || row.up === true, 'never probed, or probed and up — but never a bare false here');
 });
 
@@ -226,94 +264,182 @@ test('the rows the old seed wrote are re-pointed at the address this daemon bind
   assert.equal('http://127.0.0.1:8092/', rowOf(body, 'board').url);
   assert.equal('http://huginn:8091/owner-edited', rowOf(body, 'jtyper').url,
     'a row the owner re-pointed is never moved, whatever it points at');
-  assert.equal(2, rowOf(body, 'armap').version, 'the address moved, so the version moved with it');
-  assert.equal(1, rowOf(body, 'jtyper').version, 'and a row nothing happened to kept its own');
+  // Both seed migrations have run on this store: the address moved on the two
+  // rows still holding the old literal, and all three seed rows learned the
+  // unit that serves them (they were written here without one, as a pre-3.5
+  // daemon would have).
+  assert.equal(3, rowOf(body, 'armap').version, 'the address moved and the unit landed, so the version moved twice');
+  assert.equal(2, rowOf(body, 'jtyper').version,
+    'a row the owner re-pointed still learns its unit — that is a fact about this host, not a choice about an address');
+  assert.equal(1, rowOf(body, 'alive').version, 'and a row that is not one of the four is left entirely alone');
 });
 
 test('a re-pointed seed row can actually be probed, which is the entire point of moving it', async () => {
-  const r = await api('/v1/consoles/armap/probe', { method: 'POST' });
+  const r = await api('/v1/apps/armap/probe', { method: 'POST' });
   assert.equal(200, r.status, JSON.stringify(r.body));
   assert.equal(true, r.body.up, 'the stand-in on the seeded address answered — at http://huginn:8088/ nothing ever would');
   assert.equal(200, r.body.httpStatus);
   assert.equal(true, rowOf(await list(), 'armap').up, 'and the list carries it');
 });
 
-// ---------------------------------------------------------------- the card
+// ------------------------------------ the retrofit marker and the row's own fix
 
-test('the approval card rides the list, unapplied, with the exact commands', async () => {
-  // Decision 47: the app shows these and NOTHING runs them. Asserted at the
-  // route because this is the form the clients actually decode.
-  const { approval } = await list();
-  assert.equal(false, approval.applied, 'the marker file does not exist, and the daemon never creates it');
-  assert.equal('owner', approval.runBy);
-  assert.equal(path.join(dataDir, consolesLib.REBIND_MARKER_NAME), approval.markerPath);
-  assert.deepEqual(['rebind', 'firewall'], approval.steps.map((s) => s.id));
-  // ⚠ LITERALS, not the module's own constants. Comparing the wire to the same
-  // constant the wire was built from asserts that JSON round-trips — a drifted
-  // port would sail through it, and these are four rules somebody pastes into
-  // another machine's firewall to match ports three units were rebound to.
-  assert.deepEqual([
-    'systemctl edit armap.service            # ExecStart: bind 0.0.0.0 instead of the tailnet address',
-    'systemctl edit jtyper-trainer.service   # same',
-    'systemctl edit boardserver.service      # same',
-    'systemctl edit btc15m-sim.service       # same, but its bind is in sim/app.py, not the unit',
-    'systemctl restart armap jtyper-trainer boardserver btc15m-sim',
-    "ss -ltnp | grep -E '8088|8091|8092|8093'",
-  ], approval.steps[0].commands, 'all four units — the firewall step below already opens all four ports');
-  assert.deepEqual([
-    'IN ACCEPT -source 192.168.2.131 -p tcp -dport 8088 -log nolog',
-    'IN ACCEPT -source 192.168.2.131 -p tcp -dport 8091 -log nolog',
-    'IN ACCEPT -source 192.168.2.131 -p tcp -dport 8092 -log nolog',
-    'IN ACCEPT -source 192.168.2.131 -p tcp -dport 8093 -log nolog',
-  ], approval.steps[1].commands);
-  assert.equal('/etc/pve/firewall/117.fw', approval.steps[1].file);
-  assert.equal(false, fs.existsSync(approval.markerPath), 'and listing the consoles did not create it either');
+test('the approval card is GONE and the marker is one boolean on the list', async () => {
+  // Decision 55: the big card of root commands left the page. What replaces it
+  // is per row, computed from what the probe saw, and asserted where the failing
+  // rows are. The marker survives for the transition and nothing else.
+  const body = await list();
+  assert.ok(!('approval' in body), 'no card');
+  assert.equal(false, body.retrofitApplied);
+  assert.equal(false, fs.existsSync(path.join(dataDir, appsLib.REBIND_MARKER_NAME)),
+    'and listing the apps did not create the marker either — it is the owner’s word');
+
+  // The daemon reads it and never writes it, and it flips without a restart.
+  fs.writeFileSync(path.join(dataDir, appsLib.REBIND_MARKER_NAME), '');
+  try {
+    assert.equal(true, (await list()).retrofitApplied);
+  } finally {
+    fs.unlinkSync(path.join(dataDir, appsLib.REBIND_MARKER_NAME));
+  }
+  assert.equal(false, (await list()).retrofitApplied);
 });
+
+test('a row that the sweep finds unreachable is MARKED with its own lines, and never deleted', async () => {
+  // ⚠ DECISION 54 AT THE ROUTE, on rows that were on disk before the gate
+  // existed. `board` points at 127.0.0.1:8092 — the real board view binds the
+  // TAILNET address only, so nothing answers there — and this daemon's one
+  // client address is 127.0.0.1. It has to survive, marked.
+  const before = (await list()).apps.length;
+  const r = await api('/v1/apps/board/probe', { method: 'POST' });
+  assert.equal(200, r.status, JSON.stringify(r.body));
+  assert.equal(false, r.body.reachable.ok, 'nothing answers on 8092 at this address');
+  assert.deepEqual(['127.0.0.1'], r.body.reachable.addresses.map((a) => a.addr));
+  assert.ok(r.body.reachable.addresses[0].error, 'and it says why');
+  assert.ok(r.body.reachable.checkedAt > 0, 'with a time it was checked');
+
+  // ⚠ THE LINES SOMEBODY PASTES INTO A ROOT SHELL ON TWO MACHINES, literally.
+  assert.deepEqual([
+    '# on huginn — 127.0.0.1 does not reach this app',
+    'systemctl edit boardserver.service   # ExecStart: bind 0.0.0.0 instead of 127.0.0.1',
+    'systemctl restart boardserver.service',
+    'ss -ltn | grep :8092',
+    '# on heimdall — /etc/pve/firewall/117.fw',
+    'IN ACCEPT -source 127.0.0.1 -p tcp -dport 8092 -log nolog',
+  ], r.body.reachable.fix);
+
+  assert.equal(before, (await list()).apps.length, 'the row is still there — a failing app is marked, not removed');
+  assert.equal(false, rowOf(await list(), 'board').reachable.ok, 'and the list carries the mark');
+});
+
+test('the seeded rows name the unit that serves each one, so the fix line is exact', async () => {
+  const body = await list();
+  assert.equal('armap.service', rowOf(body, 'armap').unit);
+  assert.equal('boardserver.service', rowOf(body, 'board').unit);
+  assert.equal('', rowOf(body, 'alive').unit, 'and a row nobody named a unit for says so with a definite value');
+});
+
+test('an app that answers at every address huginn answers on is reachable, with no lines to show', async () => {
+  const r = await api('/v1/apps/armap/probe', { method: 'POST' });
+  assert.equal(200, r.status, JSON.stringify(r.body));
+  assert.equal(true, r.body.reachable.ok, 'the stand-in on 127.0.0.1:8088 answers at the one address this daemon knows');
+  assert.deepEqual([], r.body.reachable.fix, 'a row that passes carries no remedy — that was the old card’s whole problem');
+});
+
 
 // ------------------------------------------------------------ writing a row
 
-test('a console can be added, and it is in the list afterwards', async () => {
-  const r = await api('/v1/consoles', {
+test('an app that answers everywhere can be added, and it is in the list afterwards', async () => {
+  const r = await api('/v1/apps', {
     method: 'POST',
-    body: JSON.stringify({ name: 'Board view', url: `http://127.0.0.1:${okPort}/board`, kind: 'tool', notes: 'KiCad' }),
+    body: JSON.stringify({
+      name: 'Board view', url: `http://127.0.0.1:${okPort}/board`, kind: 'tool', notes: 'KiCad', unit: 'boardview.service',
+    }),
   });
   assert.equal(201, r.status, JSON.stringify(r.body));
   assert.equal('board-view', r.body.id, 'the id is derived from the name when none is given');
   assert.equal(1, r.body.version);
+  assert.equal('boardview.service', r.body.unit);
   assert.equal(null, r.body.up, 'a brand new row has no observation, which is not the same as being down');
+  // ⚠ IT PASSED THE PREREQUISITE, which is why it exists at all. `up` is still
+  // null — the liveness probe has not run — and `reachable` is already true,
+  // because the add would have been refused otherwise.
+  assert.equal(true, r.body.reachable.ok);
   assert.ok(rowOf(await list(), 'board-view'));
 });
 
+test('an app that does not answer at every known address is REFUSED with 422 and the lines that would fix it', async () => {
+  // ⚠ DECISION 54. The shape is fine and the world is not: `hangPort` accepts
+  // the connection and says nothing, so the address this daemon's clients
+  // arrive on cannot reach it. A row that would have to be marked "needs
+  // retrofit" the moment it landed is a row nobody should be able to create.
+  const r = await api('/v1/apps', {
+    method: 'POST',
+    timeoutMs: 20_000,
+    body: JSON.stringify({ name: 'Never answers', url: `http://127.0.0.1:${hangPort}/`, unit: 'wedged.service' }),
+  });
+  assert.equal(422, r.status, JSON.stringify(r.body));
+  assert.ok(/does not answer/.test(r.body.error), r.body.error);
+  assert.equal(false, r.body.reachable.ok, 'the refusal carries the measurement, not just a sentence');
+  assert.deepEqual(['127.0.0.1'], r.body.reachable.addresses.map((a) => a.addr));
+  assert.equal('timed out', r.body.reachable.addresses[0].error);
+  assert.ok(r.body.reachable.fix.some((l) => l.startsWith('systemctl edit wedged.service')),
+    `the remedy travels with the refusal: ${JSON.stringify(r.body.reachable.fix)}`);
+  assert.equal(null, rowOf(await list(), 'never-answers'), 'and NOTHING was stored');
+});
+
+test('a unit name that is not a unit name is refused before anything is probed', async () => {
+  const r = await api('/v1/apps', {
+    method: 'POST',
+    body: JSON.stringify({ name: 'Sneaky unit', url: `http://127.0.0.1:${okPort}/`, unit: 'armap.service; rm -rf /' }),
+  });
+  assert.equal(400, r.status, 'a 400, not a 422 — the refusal is about what was typed');
+  assert.equal(null, rowOf(await list(), 'sneaky-unit'));
+});
+
+test('an id that is already taken is a 409 carrying the row it collided with', async () => {
+  const r = await api('/v1/apps', {
+    method: 'POST',
+    body: JSON.stringify({ name: 'Board view', url: `http://127.0.0.1:${okPort}/other` }),
+  });
+  assert.equal(409, r.status, JSON.stringify(r.body));
+  assert.equal('board-view', r.body.app.id, 'the existing row travels with the refusal');
+});
+
+test('there is no icon to serve until a probe has cached one', async () => {
+  assert.equal(404, (await api('/v1/apps/armap/icon')).status);
+  assert.equal(404, (await api('/v1/apps/nosuchapp/icon')).status, 'and an unknown id is the same 404');
+});
+
 test('an address with a username and password in it is refused at the route', async () => {
-  const r = await api('/v1/consoles', {
+  const r = await api('/v1/apps', {
     method: 'POST',
     body: JSON.stringify({ name: 'Sneaky', url: 'http://admin:hunter2@127.0.0.1:9/' }),
   });
   assert.equal(400, r.status);
-  assert.equal(consolesLib.REFUSED_USERINFO, r.body.error);
+  assert.equal(appsLib.REFUSED_USERINFO, r.body.error);
   assert.equal(null, rowOf(await list(), 'sneaky'), 'and nothing was stored');
 });
 
 test('a scheme that is not http or https is refused at the route', async () => {
   for (const url of ['file:///etc/shadow', 'javascript:alert(1)', 'huginn:8088']) {
-    const r = await api('/v1/consoles', { method: 'POST', body: JSON.stringify({ name: 'Bad scheme', url }) });
+    const r = await api('/v1/apps', { method: 'POST', body: JSON.stringify({ name: 'Bad scheme', url }) });
     assert.equal(400, r.status, `${url} must be refused`);
-    assert.equal(consolesLib.REFUSED_SCHEME, r.body.error);
+    assert.equal(appsLib.REFUSED_SCHEME, r.body.error);
   }
 });
 
 test('an address on the public internet is refused, because this daemon is the one that would fetch it', async () => {
-  const r = await api('/v1/consoles', {
+  const r = await api('/v1/apps', {
     method: 'POST',
     body: JSON.stringify({ name: 'Elsewhere', url: 'https://example.com/' }),
   });
   assert.equal(400, r.status);
-  assert.equal(consolesLib.REFUSED_HOST, r.body.error);
+  assert.equal(appsLib.REFUSED_HOST, r.body.error);
 });
 
 test('a rename persists, and takes the version with it', async () => {
   const before = rowOf(await list(), 'alive');
-  const r = await api('/v1/consoles/alive', {
+  const r = await api('/v1/apps/alive', {
     method: 'PATCH',
     body: JSON.stringify({ version: before.version, name: 'The page that answers' }),
   });
@@ -332,44 +458,44 @@ test('an edit against a stale version is 409 and carries the row it collided wit
   // cannot show a person the difference. This is the saveScratchpad contract,
   // which both clients already adopt as an ANSWER rather than a throw.
   const current = rowOf(await list(), 'alive');
-  const r = await api('/v1/consoles/alive', {
+  const r = await api('/v1/apps/alive', {
     method: 'PATCH',
     body: JSON.stringify({ version: current.version - 1, name: 'Stale' }),
   });
   assert.equal(409, r.status);
-  assert.ok(r.body.console, 'the current row travels with the refusal');
-  assert.equal(current.name, r.body.console.name);
-  assert.equal(current.version, r.body.console.version);
+  assert.ok(r.body.app, 'the current row travels with the refusal');
+  assert.equal(current.name, r.body.app.name);
+  assert.equal(current.version, r.body.app.version);
   assert.equal(current.name, rowOf(await list(), 'alive').name, 'and the losing edit changed nothing');
 });
 
 test('a PATCH with no version at all is refused rather than applied blind', async () => {
-  const r = await api('/v1/consoles/alive', { method: 'PATCH', body: JSON.stringify({ name: 'No guard' }) });
+  const r = await api('/v1/apps/alive', { method: 'PATCH', body: JSON.stringify({ name: 'No guard' }) });
   assert.equal(400, r.status);
 });
 
-test('deleting a console removes it, and deleting it again is a 404', async () => {
-  const r = await api('/v1/consoles/board-view', { method: 'DELETE' });
+test('deleting an app removes it, and deleting it again is a 404', async () => {
+  const r = await api('/v1/apps/board-view', { method: 'DELETE' });
   assert.equal(200, r.status);
   assert.equal(true, r.body.ok);
   assert.equal(null, rowOf(await list(), 'board-view'), 'gone from the list');
 
-  const again = await api('/v1/consoles/board-view', { method: 'DELETE' });
+  const again = await api('/v1/apps/board-view', { method: 'DELETE' });
   assert.equal(404, again.status, 'a second delete is not a second success');
 });
 
 test('an id that is not in the grammar cannot even reach a handler', async () => {
   // The id is a path segment in every route here, so the grammar is the route.
-  const r = await api('/v1/consoles/NOT_AN_ID', { method: 'DELETE' });
+  const r = await api('/v1/apps/NOT_AN_ID', { method: 'DELETE' });
   assert.equal(404, r.status);
-  const probe = await api('/v1/consoles/nope/probe', { method: 'POST' });
+  const probe = await api('/v1/apps/nope/probe', { method: 'POST' });
   assert.equal(404, probe.status);
 });
 
 // ------------------------------------------------------------ probing for real
 
 test('an on-demand probe answers with the status and how long it took', async () => {
-  const r = await api('/v1/consoles/alive/probe', { method: 'POST' });
+  const r = await api('/v1/apps/alive/probe', { method: 'POST' });
   assert.equal(200, r.status, JSON.stringify(r.body));
   assert.equal(true, r.body.up);
   assert.equal(200, r.body.httpStatus);
@@ -383,14 +509,14 @@ test('an on-demand probe answers with the status and how long it took', async ()
   assert.equal(200, row.httpStatus);
 });
 
-test('a console that accepts the connection and never answers is DOWN, and the request still comes back', async () => {
+test('an app that accepts the connection and never answers is DOWN, and the request still comes back', async () => {
   // ⚠ THE TEST THIS ROUTE EXISTS FOR. `fetch` has no default timeout. Without
   // the deadline in probeConsole this request never returns, the client's
   // spinner never stops, and one wedged listener holds a daemon connection open
   // for as long as the socket lives. A refused connection would fail fast and
   // prove nothing; this server completes the handshake and then says nothing.
   const started = Date.now();
-  const r = await api('/v1/consoles/hang/probe', { method: 'POST' });
+  const r = await api('/v1/apps/hang/probe', { method: 'POST' });
   const took = Date.now() - started;
   assert.equal(200, r.status);
   assert.equal(false, r.body.up);
@@ -399,13 +525,13 @@ test('a console that accepts the connection and never answers is DOWN, and the r
   assert.equal(false, rowOf(await list(), 'hang').up, 'and the list says so as well');
 });
 
-test('a console re-pointed somewhere else drops the observation it no longer describes', async () => {
+test('an app re-pointed somewhere else drops the observation it no longer describes', async () => {
   // `alive` has a real, successful probe on it by now. Point it at the hanging
   // server and the old "up, 200, 3 ms" must not survive — a row showing the
   // previous address's latency is a lie with a number on it.
   const current = rowOf(await list(), 'alive');
   assert.equal(true, current.up, 'precondition: it has an observation');
-  const r = await api('/v1/consoles/alive', {
+  const r = await api('/v1/apps/alive', {
     method: 'PATCH',
     body: JSON.stringify({ version: current.version, url: `http://127.0.0.1:${hangPort}/` }),
   });
