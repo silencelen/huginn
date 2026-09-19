@@ -24,11 +24,11 @@ import org.junit.Test
 class ProjectNavTest {
 
     @Test
-    fun `the projects and consoles destinations survive a rebuild`() {
+    fun `the projects and apps destinations survive a rebuild`() {
         val cases = listOf(
             Dest.Projects,
             Dest.Project("6f0d2c41-0000-4000-8000-0000000000b2"),
-            Dest.Consoles,
+            Dest.Apps,
         )
         for (d in cases) {
             assertEquals("lost $d across a rebuild", d, keyToDest(destToKey(d)))
@@ -53,7 +53,7 @@ class ProjectNavTest {
      * lives inside Sessions, which IS the placement decision, and going back to
      * Settings from a Settings-opened list would say it was a setting.
      *
-     * Consoles → STATUS, because the full page is the Status card opened out.
+     * Apps → STATUS, because the full page is the Status card opened out.
      */
     @Test
     fun `every new destination has an up`() {
@@ -62,7 +62,7 @@ class ProjectNavTest {
         for (tab in listOf(0, 1, 2, 3)) {
             assertEquals(Dest.Projects, backFrom(Dest.Project("p1"), tab))
             assertEquals(Dest.Sessions, backFrom(Dest.Projects, tab))
-            assertEquals(Dest.Status, backFrom(Dest.Consoles, tab))
+            assertEquals(Dest.Status, backFrom(Dest.Apps, tab))
         }
     }
 
@@ -71,5 +71,17 @@ class ProjectNavTest {
     fun `the four tabs remain roots`() {
         assertNull(backFrom(Dest.Sessions, 1))
         assertNull(backFrom(Dest.Status, 2))
+    }
+
+    /**
+     * ⚠ THE RETIRED KEY STILL LANDS SOMEWHERE REAL. A saved destination written
+     * by app 3.5 says `consoles`; the page it means is this one. Resolving it to
+     * the home screen would be the 3.6 rename costing somebody their place for
+     * no reason at all — the same promise the settings catalog's id aliases make.
+     */
+    @Test
+    fun `a destination saved as consoles still opens Apps`() {
+        assertEquals(Dest.Apps, keyToDest("consoles"))
+        assertEquals("but it is only ever WRITTEN under the new name", "apps", destToKey(Dest.Apps))
     }
 }

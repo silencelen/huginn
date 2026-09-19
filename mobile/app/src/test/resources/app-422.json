@@ -1,0 +1,19 @@
+{
+  "error": "boardserver answers here but not on the addresses your devices arrive from",
+  "reachable": {
+    "ok": false,
+    "checkedAt": 1789460000,
+    "addresses": [
+      { "addr": "127.0.0.1:8092", "ok": true, "error": null },
+      { "addr": "192.168.7.31:8092", "ok": false, "error": "connection refused" },
+      { "addr": "100.97.198.90:8092", "ok": false, "error": "connection refused" }
+    ],
+    "fix": [
+      "# on huginn — bind the unit to 0.0.0.0",
+      "systemctl edit boardserver.service   # ExecStart: bind 0.0.0.0 instead of 127.0.0.1",
+      "systemctl restart boardserver",
+      "ss -ltnp | grep 8092"
+    ],
+    "note": ""
+  }
+}

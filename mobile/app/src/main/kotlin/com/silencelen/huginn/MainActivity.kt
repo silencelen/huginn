@@ -329,7 +329,7 @@ internal fun backFrom(dest: Dest, tab: Int): Dest? = when (dest) {
     // Sessions, which is the whole placement decision, and a Settings row that
     // went back to Settings would say it was a setting.
     is Dest.Projects -> Dest.Sessions
-    is Dest.Consoles -> Dest.Status
+    is Dest.Apps -> Dest.Status
     // Pages are reachable from four different places, so "up" cannot mean the
     // place they were opened from without a destination that carries it. The
     // section is the honest answer, and it is the trade Settings already made.
@@ -445,7 +445,7 @@ internal fun destToKey(d: Dest): String = when (d) {
     is Dest.Status -> "status"
     is Dest.Projects -> "projects"
     is Dest.Project -> "project:${d.id}"
-    is Dest.Consoles -> "consoles"
+    is Dest.Apps -> "apps"
     is Dest.Settings -> "settings"
     is Dest.SettingsSection -> "settings:${d.id}"
 }
@@ -467,7 +467,12 @@ internal fun keyToDest(v: String): Dest = when {
     // a dashboard with no project behind it is a screen about nothing.
     v.startsWith("project:") -> v.removePrefix("project:")
         .let { if (it.isEmpty()) Dest.Projects else Dest.Project(it) }
-    v == "consoles" -> Dest.Consoles
+    v == "apps" -> Dest.Apps
+    // ⚠ THE OLD KEY STILL LANDS SOMEWHERE REAL. A saved destination written by
+    // 3.5 says "consoles"; the page it means is this one, and a restored
+    // instance state that resolved to the home screen would be the rename
+    // costing somebody their place for no reason.
+    v == "consoles" -> Dest.Apps
     v == "settings" -> Dest.Settings
     // An empty id is the HOME, not an empty drawer: a saved "settings:" from a
     // build that spelled it differently must land on the nine rows rather than
@@ -519,12 +524,13 @@ internal sealed interface Dest {
     /** One project: its dashboard, and the proposal waiting on the owner. */
     data class Project(val id: String) : Dest
     /**
-     * Every console, full screen.
+     * Every app, full screen.
      *
-     * Reached from the card on Status (owner decision 48), which is where consoles
-     * live on this shell: a reading surface, not a place you act.
+     * Reached from the card on Status (owner decision 48) and from a Settings
+     * row, which is where apps live on this shell: a reading surface, not a
+     * place you act.
      */
-    data object Consoles : Dest
+    data object Apps : Dest
     /** The nine drawers, with the search field pinned above them. */
     data object Settings : Dest
     /**
@@ -653,7 +659,7 @@ fun HuginnApp(
     var pendingPadText by remember { mutableStateOf<String?>(null) }
     val devices by vm.devices.collectAsState()
     // Null until the probes answer; false hides EVERY way in, which is what
-    // projectEntries and consoleEntries exist to keep in one place.
+    // projectEntries and appEntries exist to keep in one place.
     val projects by vm.projects.collectAsState()
     val projectsAvailable by vm.projectsAvailable.collectAsState()
     val projectMembers by vm.projectMembers.collectAsState()
@@ -661,11 +667,11 @@ fun HuginnApp(
     val projectDashboard by vm.projectDashboard.collectAsState()
     val projectRefusal by vm.projectRefusal.collectAsState()
     val projectBusy by vm.projectBusy.collectAsState()
-    val consoles by vm.consoles.collectAsState()
-    val consoleApproval by vm.consoleApproval.collectAsState()
-    val consolesAvailable by vm.consolesAvailable.collectAsState()
+    val appList by vm.apps.collectAsState()
+    val appsAvailable by vm.appsAvailable.collectAsState()
+    val appAdd by vm.appAdd.collectAsState()
     val projectDoors = com.silencelen.huginn.ui.projectEntries(projectsAvailable)
-    val consoleDoors = com.silencelen.huginn.ui.consoleEntries(consolesAvailable)
+    val appDoors = com.silencelen.huginn.ui.appEntries(appsAvailable)
     val chatSealed by vm.chatSealed.collectAsState()
     // ⚠ TICKED, not sampled. This one clock feeds every "in 4h" and "3 minutes
     // ago" the shell draws — Round rows, the pages list, the session map — and it
@@ -922,7 +928,7 @@ fun HuginnApp(
     val isChild = dest is Dest.Chat || dest is Dest.SessionView || dest is Dest.Settings ||
         dest is Dest.SettingsSection || dest is Dest.Devices || dest is Dest.RoundEdit ||
         dest is Dest.Scratchpads || dest is Dest.Scratchpad ||
-        dest is Dest.Projects || dest is Dest.Project || dest is Dest.Consoles
+        dest is Dest.Projects || dest is Dest.Project || dest is Dest.Apps
     // The system gesture, going where the arrow goes. Without this the commonest
     // gesture on the phone closed the app from every child screen.
     androidx.activity.compose.BackHandler(enabled = isChild) {
@@ -949,7 +955,7 @@ fun HuginnApp(
         is Dest.Project -> projectDetail?.project?.takeIf { it.id == d.id }?.name
             ?: projects.firstOrNull { it.id == d.id }?.name
             ?: "Project"
-        is Dest.Consoles -> "Consoles"
+        is Dest.Apps -> "Apps"
         is Dest.Settings -> "Settings"
         is Dest.SettingsSection ->
             com.silencelen.huginn.settings.SettingsCatalog.category(d.id)?.title ?: "Settings"
@@ -1086,8 +1092,8 @@ fun HuginnApp(
             // Sessions, because that is where Projects lives: opening a cluster
             // from a notification must light the tab a project belongs to.
             is Dest.Projects, is Dest.Project -> 1
-            // Status, for the same reason — the consoles card is a Status card.
-            is Dest.Consoles -> 2
+            // Status, for the same reason — the apps card is a Status card.
+            is Dest.Apps -> 2
             // FIVE, which matches no bar item and no rail item — deliberately.
             // Pages are opened from wherever you already are, so highlighting a
             // section would claim you had navigated somewhere you had not.
@@ -1449,13 +1455,13 @@ fun HuginnApp(
                 vm.refreshUsage()
                 onDispose { vm.stopUsagePolling() }
             }
-            // The registry is polled only while a consoles surface is on screen.
+            // The registry is polled only while an apps surface is on screen.
             // The PROBE is the host's and memoised there; this is just how often
             // its verdict is collected.
-            if (consoleDoors.statusCard) {
+            if (appDoors.statusCard) {
                 LifecycleStartEffect(Unit) {
-                    vm.startConsolesPolling()
-                    onStopOrDispose { vm.stopConsolesPolling() }
+                    vm.startAppsPolling()
+                    onStopOrDispose { vm.stopAppsPolling() }
                 }
             }
             StatusScreen(
@@ -1465,11 +1471,11 @@ fun HuginnApp(
                 chatsRunning = chats.count { it.running },
                 plan = plan,
                 usage = usage,
-                // Owner decision 48: consoles are a card on Status, not a tab.
-                consoles = if (consoleDoors.statusCard) consoles else emptyList(),
-                consolesApplied = com.silencelen.huginn.ui.ConsoleRules.approvalApplied(consoleApproval),
-                onOpenConsole = { c -> openConsole(context, c, vm) },
-                onSeeAllConsoles = if (consoleDoors.fullPage) ({ dest = Dest.Consoles }) else null,
+                // Owner decision 48: apps are a card on Status, not a tab.
+                apps = if (appDoors.statusCard) appList.apps else emptyList(),
+                retrofitApplied = appList.retrofitApplied,
+                onOpenApp = { a -> openApp(context, a, vm) },
+                onSeeAllApps = if (appDoors.fullPage) ({ dest = Dest.Apps }) else null,
                 nowMs = nowMs,
             )
         }
@@ -1524,22 +1530,28 @@ fun HuginnApp(
                 },
             )
         }
-        val consolesPane: @Composable () -> Unit = {
+        val appsPane: @Composable () -> Unit = {
             LifecycleStartEffect(Unit) {
-                vm.startConsolesPolling()
-                onStopOrDispose { vm.stopConsolesPolling() }
+                vm.startAppsPolling()
+                onStopOrDispose { vm.stopAppsPolling() }
             }
-            com.silencelen.huginn.ui.ConsolesScreen(
-                consoles = consoles,
-                approval = consoleApproval,
+            com.silencelen.huginn.ui.AppsScreen(
+                apps = appList.apps,
+                kinds = com.silencelen.huginn.ui.AppRules.kindChoices(appList),
+                retrofitApplied = appList.retrofitApplied,
+                note = com.silencelen.huginn.ui.AppRules.retrofitNote(appList),
                 nowMs = nowMs,
-                onOpen = { c -> openConsole(context, c, vm) },
-                onProbe = { c -> vm.probeConsole(c.id) },
-                // COPY AND NOTHING ELSE. The steps rebind a unit on the host and
-                // add firewall lines on heimdall; this app runs neither, ever.
-                onCopyApproval = { text -> vm.copy(text, "the rebind steps") },
-                onSave = { cid, version, name, url, notes -> vm.saveConsole(cid, version, name, url, notes) },
-                onDelete = { c -> vm.deleteConsole(c.id) },
+                onOpen = { a -> openApp(context, a, vm) },
+                onProbe = { a -> vm.probeApp(a.id) },
+                // COPY AND NOTHING ELSE. The lines rebind a unit on the host and
+                // sometimes add firewall lines on heimdall; this app runs
+                // neither, ever.
+                onCopyFix = { text -> vm.copy(text, "the fix") },
+                addAnswer = appAdd,
+                onAdd = { form -> vm.addApp(form) },
+                onAddSettled = { vm.clearAppAdd() },
+                onSave = { id, version, form -> vm.saveApp(id, version, form) },
+                onDelete = { a -> vm.deleteApp(a.id) },
             )
         }
         val roundEditPane: @Composable (String?) -> Unit = { id ->
@@ -1649,6 +1661,12 @@ fun HuginnApp(
                     vm.refreshProjects(); tab = 1; dest = Dest.Projects
                 }) else null,
                 projectCount = projects.size,
+                // The second door into Apps (the first is the card on Status).
+                // Null against a daemon that answers 404 at BOTH names.
+                onOpenApps = if (appDoors.settingsRow) ({
+                    vm.refreshApps(); tab = 2; dest = Dest.Apps
+                }) else null,
+                appCount = appList.apps.size,
                 // Straight to the whole picture, the same place the headroom pill
                 // goes: a number you cannot ask "of what, and until when" is a
                 // worse version of not saying anything.
@@ -1901,7 +1919,7 @@ fun HuginnApp(
                             is Dest.Status -> statusPane()
                             is Dest.Projects -> projectsPane()
                             is Dest.Project -> projectPane(d.id)
-                            is Dest.Consoles -> consolesPane()
+                            is Dest.Apps -> appsPane()
                             // ONE call site for both, deliberately. Two `when`
                             // branches are two composition groups, so opening a
                             // drawer from a search hit would DISCARD the frame's
@@ -1977,8 +1995,8 @@ fun HuginnApp(
                             }
                             // A reading surface, capped and left-snapped like
                             // Status — it is Status's own card, full screen.
-                            is Dest.Consoles -> Box(Modifier.fillMaxSize(), contentAlignment = androidx.compose.ui.Alignment.TopStart) {
-                                Box(Modifier.widthIn(max = 840.dp)) { consolesPane() }
+                            is Dest.Apps -> Box(Modifier.fillMaxSize(), contentAlignment = androidx.compose.ui.Alignment.TopStart) {
+                                Box(Modifier.widthIn(max = 840.dp)) { appsPane() }
                             }
                             // List and detail side by side, the shape Chats,
                             // Sessions and Pages already take when the fold
@@ -2045,24 +2063,25 @@ private fun StatusIcon(fill: com.silencelen.huginn.ui.UsageFill?) {
 
 
 /**
- * Opens a console in the phone's browser.
+ * Opens an app in the phone's browser.
  *
- * http(s) ONLY, through `ConsoleRules.openable` — the same bar the link handler
- * sets for anything a model writes. What will not open is copied instead, so the
- * address is still in the reader's hands.
+ * http(s) ONLY, through `AppRules.openable` — the same bar the link handler sets
+ * for anything a model writes, and the same one the row's press is gated on.
+ * What will not open is copied instead, so the address is still in the reader's
+ * hands.
  */
-private fun openConsole(
+private fun openApp(
     context: android.content.Context,
-    console: com.silencelen.huginn.data.Console,
+    app: com.silencelen.huginn.data.App,
     vm: HuginnViewModel,
 ) {
-    if (!com.silencelen.huginn.ui.ConsoleRules.openable(console)) {
-        vm.copy(console.url, "the address")
+    if (!com.silencelen.huginn.ui.AppRules.openable(app)) {
+        vm.copy(app.url, "the address")
         return
     }
     runCatching {
         context.startActivity(
-            Intent(Intent.ACTION_VIEW, Uri.parse(console.url)).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            Intent(Intent.ACTION_VIEW, Uri.parse(app.url)).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
         )
-    }.onFailure { vm.copy(console.url, "the address") }
+    }.onFailure { vm.copy(app.url, "the address") }
 }
