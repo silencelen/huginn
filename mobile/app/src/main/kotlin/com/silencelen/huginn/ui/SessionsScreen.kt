@@ -47,6 +47,7 @@ import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import com.silencelen.huginn.data.ArchivedSession
 import com.silencelen.huginn.data.ProjectRow
 import com.silencelen.huginn.data.Session
+import com.silencelen.huginn.ui.theme.verbInk
 
 /**
  * The live tmux sessions. Each row leads with what the session is actually doing
@@ -246,10 +247,10 @@ fun SessionsScreen(
     confirmKill?.let { name ->
         AlertDialog(
             onDismissRequest = { confirmKill = null },
-            title = { Text("End $name?") },
+            title = { Text("Kill $name?") },
             text = { Text("The session and anything running inside it are terminated. Unsaved work in that session is lost.") },
             confirmButton = {
-                TextButton(onClick = { confirmKill = null; onKill(name) }) { Text("End session") }
+                TextButton(onClick = { confirmKill = null; onKill(name) }) { Text(EndVerbs.HARD) }
             },
             dismissButton = { TextButton(onClick = { confirmKill = null }) { Text("Cancel") } },
         )
@@ -291,7 +292,7 @@ fun SessionsScreen(
     confirmSoftEnd?.let { name ->
         AlertDialog(
             onDismissRequest = { confirmSoftEnd = null },
-            title = { Text("Wind down $name?") },
+            title = { Text("${EndVerbs.SOFT} $name?") },
             text = {
                 Text(
                     "Sends Claude the wrap-up instruction (finish, commit, prepare to end). " +
@@ -446,14 +447,21 @@ private fun SessionRow(
                     leadingIcon = { Icon(Icons.Filled.DriveFileRenameOutline, contentDescription = null) },
                     onClick = { menu = false; onRename() },
                 )
+                // THE TWO ENDING VERBS, AND THEY READ AS A PAIR. Both are drawn
+                // in the destructive palette — the kill in the full `error` red,
+                // the wrap-up in the lighter one — from `verbInk`, the single
+                // token in `:ui`'s theme that the desktop's right-click menu also
+                // draws from. Two shells picking their own lighter red is the
+                // drift that makes a phone held up beside the laptop look like a
+                // different product.
                 DropdownMenuItem(
-                    text = { Text("Wind down…") },
+                    text = { Text(EndVerbs.soft(1), color = verbInk(VerbTone.SOFT, MaterialTheme.colorScheme)) },
                     onClick = { menu = false; onSoftEnd() },
                 )
-                // Between the wind-down and the end, where it belongs: it is a
-                // wind-down that leaves something behind. Not styled destructive —
-                // ending a session you can bring back is the least destructive of
-                // the three.
+                // Between the wrap-up and the kill, where it belongs: it is a
+                // wrap-up that leaves something behind. Neither red — ending a
+                // session you can bring back is the least destructive of the
+                // three.
                 if (onArchive != null) {
                     DropdownMenuItem(
                         text = { Text("Archive…") },
@@ -462,8 +470,14 @@ private fun SessionRow(
                     )
                 }
                 DropdownMenuItem(
-                    text = { Text("End session") },
-                    leadingIcon = { Icon(Icons.Filled.Delete, contentDescription = null) },
+                    text = { Text(EndVerbs.hard(1), color = verbInk(VerbTone.DESTRUCTIVE, MaterialTheme.colorScheme)) },
+                    leadingIcon = {
+                        Icon(
+                            Icons.Filled.Delete,
+                            contentDescription = null,
+                            tint = verbInk(VerbTone.DESTRUCTIVE, MaterialTheme.colorScheme),
+                        )
+                    },
                     onClick = { menu = false; onKill() },
                 )
             }
