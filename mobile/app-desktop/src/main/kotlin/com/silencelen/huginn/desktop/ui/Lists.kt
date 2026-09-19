@@ -181,7 +181,7 @@ private fun ChatRow(
                 else Spacer(Modifier.width(TEXT_INDENT))
             }
             Text(
-                ChatRules.title(chat.title) ?: "Untitled",
+                ChatRules.listLabel(chat),
                 style = DeskType.rowTitle,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
