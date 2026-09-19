@@ -24,6 +24,7 @@ import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.unit.dp
+import kotlinx.coroutines.delay
 
 // The Android half of live typing. The RULES — the sentinel diff and the op
 // merge — are in :core (ui/LiveInput.kt), shared with the desktop client; only
@@ -45,24 +46,45 @@ fun LiveKeyboardField(
 ) {
     if (!active) return
     val focus = remember { FocusRequester() }
+    // ⚠⚠ THE BASELINE IS WHAT THE FIELD LAST SAID, NOT THE SENTINEL. See
+    // [LiveKeyboardState]: diffing against the constant duplicated every burst
+    // the IME delivered faster than a snap-back could round-trip.
+    val typing = remember { LiveKeyboardState() }
     var value by remember {
         mutableStateOf(TextFieldValue(LiveInput.SENTINEL, TextRange(LiveInput.SENTINEL.length)))
     }
 
     LaunchedEffect(Unit) { focus.requestFocus() }
 
+    // Housekeeping, not correctness: the buffer is put back to the sentinel once
+    // the keyboard has been QUIET, so a reset can never overlap a burst. Keyed on
+    // the value, so every further change restarts the wait.
+    LaunchedEffect(value) {
+        if (value.text == LiveInput.SENTINEL) return@LaunchedEffect
+        delay(LIVE_SNAPBACK_QUIET_MS)
+        value = TextFieldValue(typing.reset(), TextRange(LiveInput.SENTINEL.length))
+    }
+
     Box(Modifier.size(1.dp)) {
         BasicTextField(
             value = value,
             onValueChange = { new ->
-                val typed = LiveInput.diff(new.text)
-                if (!typed.isNothing) {
-                    if (typed.backspaces > 0) onKeys(List(typed.backspaces) { "BSpace" })
-                    if (typed.insert.isNotEmpty()) onText(typed.insert)
-                    if (typed.enter) onKeys(listOf("Enter"))
+                // ORDERED OPS, not three ifs. An edit that begins with a newline
+                // presses Return BEFORE its text — "\nls" means submit, then type
+                // — and the hand-rolled order could only ever express the other
+                // one, which submits the pane's draft with `ls` stuck on the end.
+                for (op in typing.change(new.text).ops()) {
+                    when (op) {
+                        is LiveInput.Op.Text -> onText(op.text)
+                        is LiveInput.Op.Key -> onKeys(op.keys)
+                    }
                 }
-                // Snap back so the next change is again a diff against the sentinel.
-                value = TextFieldValue(LiveInput.SENTINEL, TextRange(LiveInput.SENTINEL.length))
+                // The sentinel is the only thing that has to go back immediately:
+                // it is what the NEXT backspace deletes, and an empty field
+                // reports nothing at all. Everything else waits for quiet above.
+                value = if (typing.needsRunway) {
+                    TextFieldValue(typing.reset(), TextRange(LiveInput.SENTINEL.length))
+                } else new
             },
             modifier = Modifier
                 .size(1.dp)
