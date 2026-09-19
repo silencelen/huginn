@@ -31,6 +31,16 @@ data class DeviceStatus(
     val enrolled: Boolean = false,
     val busy: Boolean = false,
     val locked: Boolean = false,
+    /**
+     * Whether [locked] is something the probe SAID or the fence's default.
+     *
+     * ⚠ TWO FACTS AGAIN, and the same lesson as `locked`/`keep` below. A machine
+     * with no logind session reports `locked = true` because that is the safe
+     * answer, not because a screen is locked — and Settings used to choose its
+     * sentence by asking `os.name`, so every LXC, container and `startx` box was
+     * told to go and unlock a screen it does not have. See [LockProbe.Reading].
+     */
+    val lockKnown: Boolean = false,
     val note: String = "Off",
 )
 
@@ -129,13 +139,15 @@ class DeviceRunner(
         // Collapsing them (reporting "not locked" because the setting is on)
         // would need no new field at all, and would make every surface describe
         // a locked machine as one nobody had locked.
-        val locked = LockProbe.locked()
+        val reading = LockProbe.read()
+        val locked = reading.locked
         val keep = settings.deviceActWhileLockedNow()
         val scopeWire = DevicePolicy.wire(DevicePolicy.parse(settings.deviceScopeNow()))
         val id = enrol(scopeWire, locked, keep)
 
         _status.value = DeviceStatus(
             enabled = true, deviceId = id, enrolled = true, locked = locked,
+            lockKnown = reading.known,
             note = idleNote(locked, keep),
         )
 
@@ -147,7 +159,8 @@ class DeviceRunner(
             while (isActive) {
                 delay(60_000)
                 runCatching {
-                    val l = LockProbe.locked()
+                    val probe = LockProbe.read()
+                    val l = probe.locked
                     // Re-read rather than captured: the setting is a row somebody
                     // can flip while this loop is running, and the whole reason
                     // the beat exists is to say "this is what I will do NOW".
@@ -155,7 +168,7 @@ class DeviceRunner(
                     val r = client.deviceBeat(
                         id, locked = l, scope = scopeWire, version = appVersion, actWhileLocked = k,
                     )
-                    _status.value = _status.value.copy(locked = l)
+                    _status.value = _status.value.copy(locked = l, lockKnown = probe.known)
                     // A Stop reaches a run sitting in a long QUIET tool HERE: the
                     // beat is the one channel still flowing when there are no event
                     // batches to carry the cancel on their ack. Kill the in-flight
@@ -174,15 +187,31 @@ class DeviceRunner(
                 // one poll is not a reason to re-enrol, and re-enrolling on every
                 // hiccup is what turns a flaky link into a stream of registrations.
                 val work = try {
-                    val w = client.pollWork(id, waitS = 25, locked = LockProbe.locked())
+                    val probe = LockProbe.read()
+                    val w = client.pollWork(id, waitS = 25, locked = probe.locked)
                     failures = 0
+                    // ⚠ CLEARING THE COUNTER IS NOT CLEARING THE SENTENCE, and for
+                    // 45 minutes of a measured run it was mistaken for it. The note
+                    // is only ever WRITTEN on the failure branch below, so the first
+                    // blip in a session was the last word Settings had on this
+                    // machine: "Retrying: Failed to connect to …" sat under
+                    // "Available to huginn" while /work and /beat both returned 200
+                    // continuously, and only a restart of the app took it off.
+                    // A success owes the note, exactly as it owes the counter.
+                    val idle = idleNote(probe.locked, settings.deviceActWhileLockedNow())
+                    val next = noteAfterPoll(_status.value.note, idle)
+                    if (next != _status.value.note || _status.value.locked != probe.locked) {
+                        _status.value = _status.value.copy(
+                            locked = probe.locked, lockKnown = probe.known, note = next,
+                        )
+                    }
                     w
                 } catch (e: CancellationException) {
                     throw e
                 } catch (e: Exception) {
                     failures += 1
                     if (failures >= 5) throw e          // genuinely broken: re-enrol
-                    _status.value = _status.value.copy(note = "Retrying: ${short(e)}")
+                    _status.value = _status.value.copy(note = RETRYING + short(e))
                     delay(3_000)
                     continue
                 }
@@ -292,7 +321,8 @@ class DeviceRunner(
         val enrolled = DevicePolicy.parse(settings.deviceScopeNow())
         // What the screen is doing (reported home on every frame below) and what
         // the POLICY is shown (the owner's standing answer applied to it).
-        val locked = LockProbe.locked()
+        val reading = LockProbe.read()
+        val locked = reading.locked
         val keep = settings.deviceActWhileLockedNow()
         val gate = DevicePolicy.lockWithdraws(locked, keep)
 
@@ -301,7 +331,9 @@ class DeviceRunner(
         // check that actually decides, because this is the process holding the
         // file system.
         DevicePolicy.refusal(enrolled, gate, work.mode)?.let { why ->
-            _status.value = _status.value.copy(note = "Refused a job: $why", locked = locked)
+            _status.value = _status.value.copy(
+                note = "Refused a job: $why", locked = locked, lockKnown = reading.known,
+            )
             runCatching {
                 client.postWorkEvents(deviceId, work.id, emptyList(), done = true, exitCode = null,
                     error = why, locked = locked)
@@ -313,7 +345,9 @@ class DeviceRunner(
         // headless service's job (it must survive logout), so generate work is
         // refused here unconditionally rather than fed to the wrong engine.
         DevicePolicy.engineRefusal(work.mode, hasEngine = false)?.let { why ->
-            _status.value = _status.value.copy(note = "Refused a job: $why", locked = locked)
+            _status.value = _status.value.copy(
+                note = "Refused a job: $why", locked = locked, lockKnown = reading.known,
+            )
             runCatching {
                 client.postWorkEvents(deviceId, work.id, emptyList(), done = true, exitCode = null,
                     error = why, locked = locked)
@@ -327,7 +361,9 @@ class DeviceRunner(
 
         // Refused rather than run somewhere else. See [cwdRefusal].
         cwdRefusal(hostName, cwd)?.let { why ->
-            _status.value = _status.value.copy(note = "Refused a job: $why", locked = locked)
+            _status.value = _status.value.copy(
+                note = "Refused a job: $why", locked = locked, lockKnown = reading.known,
+            )
             runCatching {
                 client.postWorkEvents(deviceId, work.id, emptyList(), done = true, exitCode = null,
                     error = why, locked = locked)
@@ -335,7 +371,9 @@ class DeviceRunner(
             return
         }
 
-        _status.value = _status.value.copy(busy = true, locked = locked, note = "Running a job")
+        _status.value = _status.value.copy(
+            busy = true, locked = locked, lockKnown = reading.known, note = "Running a job",
+        )
         try {
             stream(deviceId, work, argv, cwd)
         } finally {
@@ -462,6 +500,26 @@ class DeviceRunner(
         (e.message ?: e::class.simpleName ?: "unknown").take(120)
 
     companion object {
+
+        /**
+         * What a poll that is failing says about itself, as a PREFIX rather than a
+         * whole sentence: the reason follows it, and [noteAfterPoll] recognises the
+         * note by it. Written once, so the writer and the clearer cannot drift.
+         */
+        const val RETRYING: String = "Retrying: "
+
+        /**
+         * The note after a poll that CAME BACK.
+         *
+         * Only a retry note is replaced. Everything else this field can hold is
+         * either still true or belongs to a different writer — "Running a job" is
+         * set by the work path either side of this call, "Refused a job: …" is the
+         * last thing a refusal said and is not undone by the next poll, and the
+         * idle sentence is already what this would write.
+         */
+        internal fun noteAfterPoll(previous: String, idle: String): String =
+            if (previous.startsWith(RETRYING)) idle else previous
+
         /**
          * HTTP statuses on which a work-events POST is NOT worth retrying: the run
          * is gone (404), the token no longer authorises it (401/403), or the batch
