@@ -297,6 +297,20 @@ data class RouteHealth(
      * because nothing but `RouteResolver.resolve()` ever wrote the other field.
      */
     val lastSeenAt: Long = 0,
+    /**
+     * When something huginn-SHAPED last answered here WITHOUT proving it holds
+     * the token (decision 58) — a daemon older than 3.6.0, or an impostor
+     * printing the header. Indistinguishable from each other, which is the whole
+     * reason this is its own field instead of a success.
+     *
+     * ⚠ IT IS NOT A SUCCESS. `lastFailAt` is stamped alongside it, so selection,
+     * the dot and the hysteresis all treat an unproven address as a route that
+     * did not answer — because for the purpose that matters (may this client send
+     * it the bearer?) it did not. This field exists only so the row can say the
+     * true reason instead of "could not be reached", which would send somebody
+     * to debug a network that is fine.
+     */
+    val lastUnprovenAt: Long = 0,
 ) {
     /** The newest proof this route works, from either witness. */
     val lastWorkedAt: Long get() = maxOf(lastOkAt, lastSeenAt)
@@ -307,6 +321,14 @@ data class RouteHealth(
             lastOkAt == 0L && lastFailAt == 0L && lastSeenAt == 0L -> null
             else -> lastWorkedAt >= lastFailAt
         }
+
+    /**
+     * The last thing learned about this address is that something is there and
+     * cannot prove it is huginn. A sentence for the row, never an input to
+     * selection.
+     */
+    val unproven: Boolean
+        get() = lastUnprovenAt > 0 && lastUnprovenAt >= lastWorkedAt && lastUnprovenAt >= lastFailAt
 }
 
 /**
