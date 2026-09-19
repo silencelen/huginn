@@ -14,6 +14,8 @@ import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.getAndUpdate
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.joinAll
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Semaphore
@@ -97,6 +99,19 @@ class AttachmentController(
     private val scope: CoroutineScope,
 ) : AttachSink {
 
+    /**
+     * EVERY WRITE TO THIS IS A CAS, never `_items.value = _items.value.<edit>`.
+     *
+     * Both composers hand this controller a `rememberCoroutineScope()`, which is
+     * Compose's single UI thread, so today nothing here runs at once — but the
+     * plain read-modify-write it used to do is only correct because of that, and
+     * nothing says so at the call sites. Under a multi-threaded scope (which is
+     * what a test gets for free the moment it uses `Dispatchers.Unconfined`:
+     * every upload resumes on whichever engine thread answered it) two uploads
+     * settling together lose a write, and a lost write is either a chip that
+     * never reaches READY or an item that vanishes from the list — a silently
+     * un-attached file, the exact failure the batch path exists to prevent.
+     */
     private val _items = MutableStateFlow<List<ComposerAttachment>>(emptyList())
     val items: StateFlow<List<ComposerAttachment>> = _items.asStateFlow()
 
@@ -119,7 +134,7 @@ class AttachmentController(
     /** Drops one item and cancels its upload if it is still in flight. */
     fun remove(id: String) {
         jobs.remove(id)?.cancel()
-        _items.value = _items.value.filterNot { it.id == id }
+        _items.update { list -> list.filterNot { it.id == id } }
     }
 
     /** Drops everything and cancels whatever is still in flight. */
@@ -243,9 +258,15 @@ class AttachmentController(
                 withContext(NonCancellable) { running.forEach { it.cancel() } }
             }
         }
-        val all = _items.value
-        _items.value = emptyList()
+        // Read and clear in ONE step: a plain read-then-clear drops an item
+        // attached between the two, which is the send that loses an attachment
+        // and never says so.
+        val all = _items.getAndUpdate { emptyList() }
         jobs.clear()
+        // BOTH lists come off the one ordered list, so both are in ATTACH order —
+        // the failure line reads as "these attachments", and a line whose names
+        // are in whatever order the uploads happened to give up in reads as a
+        // different set of files.
         val markers = all.filter { it.status == AttachStatus.READY }.mapNotNull { it.marker }
         val failed = all.filter { it.status != AttachStatus.READY }.map { it.label }
         withContext(NonCancellable) {
@@ -266,7 +287,7 @@ class AttachmentController(
         // NOT cancelling what is already here. The single-slot version cancelled
         // the previous job unconditionally, which is the entire reason a second
         // attach used to replace the first rather than joining it.
-        _items.value = _items.value + ComposerAttachment(id, label, image, AttachStatus.QUEUED, bytes = bytes)
+        _items.update { it + ComposerAttachment(id, label, image, AttachStatus.QUEUED, bytes = bytes) }
         jobs[id] = scope.launch {
             gate.withPermit {
                 update(id) { it.copy(status = AttachStatus.UPLOADING) }
@@ -299,7 +320,7 @@ class AttachmentController(
     }
 
     private fun update(id: String, edit: (ComposerAttachment) -> ComposerAttachment) {
-        _items.value = _items.value.map { if (it.id == id) edit(it) else it }
+        _items.update { list -> list.map { if (it.id == id) edit(it) else it } }
     }
 
     private fun fail(message: String) {
