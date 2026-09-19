@@ -340,3 +340,32 @@ class ConsolesChordTest {
         )
     }
 }
+
+/**
+ * WHAT THE CHEAT SHEET PROMISES ABOUT THE TRAY.
+ *
+ * ⚠ Ctrl+Shift+H is a no-op on a machine with no system tray — `Main.kt` guards
+ * it with `isTraySupported` and is right to — but F1 advertised "Hide to the
+ * tray" unconditionally, so the one list that exists to tell a reader what the
+ * window answers to was promising a chord that does nothing here.
+ */
+class TrayHelpLineTest {
+
+    @Test
+    fun `a machine with a tray is told it can hide`() {
+        val line = shortcutHelp(traySupported = true).single { it.first == "Ctrl Shift H" }.second
+        assertTrue(line.contains("tray"), line)
+    }
+
+    @Test
+    fun `a machine without one is told closing quits`() {
+        val line = shortcutHelp(traySupported = false).single { it.first == "Ctrl Shift H" }.second
+        assertEquals("Nothing — closing quits (no system tray here)", line)
+    }
+
+    @Test
+    fun `the sheet is the same length either way`() {
+        assertEquals(shortcutHelp(true).size, shortcutHelp(false).size)
+        assertEquals(SHORTCUT_HELP.size, shortcutHelp(true).size)
+    }
+}

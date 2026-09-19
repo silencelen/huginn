@@ -243,6 +243,24 @@ fun keyName(key: androidx.compose.ui.input.key.Key): String? = when (key) {
     else -> null
 }
 
+/**
+ * The cheat sheet, for a machine that may or may not have a system tray.
+ *
+ * ⚠ Ctrl+Shift+H DOES NOTHING WITHOUT A TRAY. `Main.kt` guards it with
+ * `isTraySupported` and is right to — there is nothing to hide into — but F1
+ * advertised "Hide to the tray" unconditionally, so the one list whose whole job
+ * is to say what this window answers to promised a chord that is inert here. The
+ * row stays in place rather than disappearing: a reader who has seen it
+ * elsewhere, or who read it in the docs, is owed the reason and not a gap.
+ */
+fun shortcutHelp(traySupported: Boolean): List<Pair<String, String>> = SHORTCUT_HELP.map { row ->
+    if (row.first == "Ctrl Shift H" && !traySupported) {
+        row.first to "Nothing — closing quits (no system tray here)"
+    } else {
+        row
+    }
+}
+
 /** One row of the cheat sheet, and the single source for what the app claims. */
 val SHORTCUT_HELP: List<Pair<String, String>> = listOf(
     "Enter" to "Send the message you are typing",

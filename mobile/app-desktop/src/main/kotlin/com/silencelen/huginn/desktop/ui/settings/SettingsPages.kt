@@ -35,6 +35,7 @@ import com.silencelen.huginn.desktop.AppStore
 import com.silencelen.huginn.desktop.CliSync
 import com.silencelen.huginn.desktop.DesktopSettings
 import com.silencelen.huginn.desktop.View
+import androidx.compose.ui.window.isTraySupported
 import com.silencelen.huginn.desktop.diag.AppLog
 import com.silencelen.huginn.desktop.notify.Notifiers
 import com.silencelen.huginn.desktop.ui.Muted
@@ -544,8 +545,17 @@ fun ColumnScope.AppearancePage(store: AppStore, mark: String?) {
         title = "Close to tray",
         checked = closeToTray,
         onCheckedChange = { store.settings.setCloseToTray(it) },
-        summary = if (closeToTray) "Closing the window leaves huginn running in the tray."
-        else "Closing the window quits huginn, and the watch stream stops with it.",
+        // ⚠ THE COPY FOLLOWS THE MACHINE, NOT THE TOGGLE. `Main.kt` quits when
+        // there is no tray whatever this is set to, and the row used to promise
+        // "leaves huginn running in the tray" on a box where closing the window
+        // ends the process — verified, it was gone.
+        summary = when {
+            !isTraySupported ->
+                "There is no system tray on this computer, so closing the window quits huginn " +
+                    "and the watch stream stops with it."
+            closeToTray -> "Closing the window leaves huginn running in the tray."
+            else -> "Closing the window quits huginn, and the watch stream stops with it."
+        },
         highlighted = SettingsRowStyle.isHighlighted("appearance.close-to-tray", mark),
     )
     SettingsNavRow(

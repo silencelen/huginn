@@ -41,6 +41,13 @@ data class SettingsFacts(
     val present: Boolean = false,
     val notifyEnabled: Boolean = true,
     val closeToTray: Boolean = true,
+    /**
+     * Whether this machine HAS a system tray. `Main.kt` has always consulted it
+     * (`if (closeToTray && isTraySupported) hide else quit()`); the summary and
+     * the row copy did not, so a box with no tray read "close to tray on" over a
+     * window that quits when you close it.
+     */
+    val traySupported: Boolean = true,
     val deviceEnabled: Boolean = false,
     val update: UpdateState = UpdateState.Idle,
     val installedVersion: String = "",
@@ -158,7 +165,14 @@ object SettingsSummaries {
 
         "privacy" -> if (f.tokenSet) "token saved here" else "no token saved"
 
-        "appearance" -> if (f.closeToTray) "close to tray on" else "closing quits"
+        // ⚠ THE SETTING IS NOT THE BEHAVIOUR. With no tray there is nothing to
+        // close TO, whatever the toggle says, and the app already behaves that way
+        // — only this line and the row beneath it claimed otherwise.
+        "appearance" -> when {
+            !f.traySupported -> "closing quits (no system tray here)"
+            f.closeToTray -> "close to tray on"
+            else -> "closing quits"
+        }
 
         "updates" -> join(f.installedVersion.takeIf { it.isNotBlank() }, updateWords(f.update))
 
