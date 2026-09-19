@@ -57,3 +57,50 @@ class NotifyPathTest {
         assertEquals("notify", SettingsCatalog.categoryOf(Notifiers.PATH_ROW_ID)?.id)
     }
 }
+
+/**
+ * THE TEST NOTIFICATION, AND THE QUESTION IT MUST NOT ASK.
+ *
+ * ⚠⚠ THE STEP ASKED A READER TO CONFIRM SOMETHING THAT NEVER HAPPENED. On a
+ * machine with no tray and no libnotify the chosen backend is [NoNotifier],
+ * whose `post` is a no-op — so setup posted nothing, then printed *"A test
+ * notification has just been posted. Did it appear on this screen?"* with a
+ * "Yes, I saw it" button. Pressing it records a PASS for a route that cannot
+ * deliver, and the daemon then holds Telegram back for a client that will never
+ * show anything. The app knew the whole time: it had already logged "nowhere to
+ * post" at startup.
+ *
+ * A step that cannot be attempted fails with the reason, and the two-choice
+ * question is not asked at all.
+ */
+class NotifyTestRefusalTest {
+
+    private class Anywhere(override val name: String = "libnotify") : Notifier {
+        override fun post(request: NotifyRequest) = Unit
+        override fun withdraw(key: String) = Unit
+    }
+
+    private class Broken(override val name: String = "libnotify") : Notifier {
+        override val healthy: Boolean = false
+        override fun post(request: NotifyRequest) = Unit
+        override fun withdraw(key: String) = Unit
+    }
+
+    @Test
+    fun `nowhere to post is a refusal, not a question`() {
+        val why = Notifiers.testRefusal(NoNotifier)
+        assertTrue(why != null, "a no-op post must not be followed by 'did it appear?'")
+        assertTrue(why.contains("tray") && why.contains("libnotify"), why)
+        assertTrue(why.contains("Telegram"), "and where attention goes instead: $why")
+    }
+
+    @Test
+    fun `a backend that has already proven itself dead is refused too`() {
+        assertTrue(Notifiers.testRefusal(Broken()) != null, "unhealthy means it has failed a real post")
+    }
+
+    @Test
+    fun `a live backend is asked rather than refused`() {
+        assertEquals(null, Notifiers.testRefusal(Anywhere()))
+    }
+}

@@ -195,6 +195,23 @@ class SetupControllerTest {
     }
 
     @Test
+    fun `a machine with nowhere to post is never asked whether it saw anything`() {
+        // ⚠⚠ THE STEP ASKED FOR CONFIRMATION OF SOMETHING THAT NEVER HAPPENED.
+        // With no tray and no libnotify the backend's post is a no-op, and the
+        // flow went on to "did it appear?" beside a "Yes, I saw it" button — a
+        // pass recordable for a route that cannot deliver, which then holds the
+        // household's Telegram fallback back for a window that shows nothing.
+        // `Notifiers.testRefusal` makes it a failure before anything is posted;
+        // this asserts the consequence, which is that no question is armed.
+        val refusal = "nothing on this computer can show a notification"
+        val c = controller(probes = FakeProbes(notifyResult = Result.failure(IllegalStateException(refusal))))
+        c.rerun(at = SetupStep.NOTIFY)
+        c.primary()
+        assertFalse(c.awaitingAnswer.value, "no Yes button over a notification that was never posted")
+        assertEquals(StepStatus.Failed(refusal), c.state.value.statusOf(SetupStep.NOTIFY))
+    }
+
+    @Test
     fun `autostart records the flag only when the file was really written`() {
         val settings = freshSettings()
         val probes = FakeProbes(autostartResult = Result.failure(IllegalStateException(Autostart.NOT_PACKAGED)))
