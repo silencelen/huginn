@@ -10,6 +10,73 @@ Format loosely follows [Keep a Changelog](https://keepachangelog.com/); versions
 
 ## [Unreleased]
 
+## [1.5.0] - 2026-09-19
+
+The round-2 review's CLI findings: both Projects write verbs could never succeed, and a refusal
+from the PowerShell client was indistinguishable from success.
+
+### Fixed
+- `huginn projects new` sends the `kind` and the `brief` the daemon requires — it sent neither, so
+  the verb failed 100% of the time ("kind is one of software, infra, …") and the only way to create
+  a project was a phone or the desktop. New flags: `--brief TEXT|-` (the whole first message the
+  lead gets; `-` reads stdin) and `--kind <software|infra|hardware|docs|research|other>`, default
+  `other`. An unknown kind travels and comes back as the daemon's own sentence, so a newer daemon's
+  kinds work without a client update.
+- `huginn projects spawn` sends `{approve:true, manifestRev}` — the approval and the revision are
+  the whole body the spawn route reads, and it used to post a `{members}` list it does not read
+  with no approval at all, so every spawn answered "approve must be true — spawning is the owner's
+  decision". The rev is read from the project immediately before, so a proposal the lead revised
+  since you looked at it is refused rather than spawned. A 200 with nothing spawned is no longer
+  reported as success.
+- `huginn projects end` no longer orphans the lead or prints a remedy that cannot be run. The
+  default now winds every member down through the daemon's own `?end=1` (the wrap-up phrase, then
+  auto-end when idle) instead of deleting the record and leaving a real `claude` running with no
+  project behind it; `--now` sends `?end=now` (it used to send the graceful one); `--keep-sessions`
+  is the out-loud way to keep them, and names them. A member the daemon could not wind down is
+  named with a `huginn kill <tmux name>` that resolves — the old line, "huginn projects end <name>
+  --now", could never resolve, because the project had just been deleted from the list that verb
+  reads.
+- `huginn end` against an unreachable HOST says so and prints ssh's own sentence, instead of
+  blaming a daemon that was never asked. ssh's failures exit 255; anything else is the remote
+  command's code. Both clients. The `huginn-appd answered HTTP <code>` fallback in `end` and `kill`
+  prints the code now — it read a variable set inside a `$( )` subshell and was always blank.
+- **huginn.ps1: a refusal is a failure.** Every one was a `Write-Host` and a bare `return`, so
+  `huginn kill 'bad name!'` and `huginn end nosuchsession` both left `$?` True and `$LASTEXITCODE`
+  0 while the bash twin returned 1 — any Windows script, CI step or `&&` chain read a failure as a
+  success. Refusals are terminating errors now (catchable with try/catch), set `$LASTEXITCODE`, and
+  land on the ERROR stream where `2>$null` and `$out = …` can reach them. `$LASTEXITCODE` is reset
+  at the start of every verb, so a success no longer leaves the previous refusal's 1 behind.
+- `huginn update` names the mirror it actually pulls from. Both clients said "falling back to the
+  $HUGINN_HOST mirror" — the one host this path deliberately never uses — and then reported pulling
+  from the pinned one.
+- `huginn local plan` / `local on` no longer refuse "not enough disk" on a machine with no
+  `~/.config`: the free-space probe walks up to the first ancestor that exists instead of reading
+  "unknown" as zero. `plan` is aimed squarely at a machine that has installed nothing, and on
+  Windows `%USERPROFILE%\.config` typically does not exist yet.
+
+### Changed
+- `spawn` no longer takes `<member>:<role>` pairs or `--prompt`. The members are the LEAD's plan
+  and spawn is the owner approving it; a client that re-sent the roles would be a second opinion
+  about the plan on screen. The old spelling is refused by name.
+- Help in both clients: session names may contain `-` (true since 1.3.0, and the refusal text
+  already said so), the pinned update mirror is named instead of printing a blank, the Projects
+  block matches the grammar the renderer accepts, and `huginn -p` no longer claims it "does not
+  auto-approve tools" — it auto-approves four and denies four.
+- `docs/USAGE.md`, which the README calls the full reference, gains every verb shipped since 0.12
+  (`end`, `archive`, `revive`, `rounds`, `devices`, `device`, `local`, `llm`, `projects`,
+  `desktop`, `--json`), a Projects section, and the real `-p`/`-y` tool grants as a table. Its
+  environment table gains `HUGINN_UPDATE_HOST`, `HUGINN_DEVICE_DIR`, `HUGINN_DEVICE_REFRESH`,
+  `HUGINN_LOCAL_DIR`, `HUGINN_LOCAL_REFRESH` and the host-side `HUGINN_APPD_URL`.
+- README says out loud that the CLI is an ssh front end that runs host-side against
+  `127.0.0.1:8787`: that is why the token never reaches the client, and why driving a second host
+  means ssh'ing to it rather than configuring an address.
+- `scripts/test-client.sh` creates a project, approves a spawn and ends it against a REAL bare
+  daemon from this tree (its own HOME/DATA/STATE/CLAUDE dirs, a stand-in `claude`, a private tmux
+  socket, no telegram or FCM), and the stub lane asserts the request BODIES. Neither HIGH above
+  could have been green under it. ⚠ `env -i` makes tmux rewrite every TAB in its `-F` output as
+  `_`, which makes the daemon read every session as unaddressable — the environment is inherited
+  and overridden instead.
+
 ## [1.4.0] - 2026-09-18
 
 ### Added
