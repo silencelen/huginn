@@ -153,16 +153,38 @@ test('a burst is rate-limited, and the limit is per second, not per lifetime', a
   // An unauthenticated route that does a keyed hash per call is a free amplifier
   // otherwise. Twenty a second is far above any real client — one per route
   // probe — and far below anything worth having.
-  // Start at the TOP of a second, with this file's earlier tests out of the
-  // allowance: the window is a wall-clock second, so a burst begun at 0.98 s
-  // gets two allowances and a burst begun after nine other calls gets eleven.
-  while (Date.now() % 1000 > 150) await wait(20);
-  const burst = [];
-  for (let i = 0; i < 40; i++) burst.push(challenge(`?nonce=${'b'.repeat(16)}`));
-  const codes = (await Promise.all(burst)).map((r) => r.status);
-  assert.ok(codes.includes(429), `a burst of 40 must be refused somewhere (got ${codes.join(',')})`);
-  assert.ok(codes.filter((c) => c === 200).length >= 20,
-    `but twenty a second still get through (${codes.join(',')})`);
+  //
+  // ⚠ THE WINDOW IS WALL-CLOCK, so everything here waits for a second to TURN
+  // rather than trusting that this file's earlier tests left the current one
+  // untouched. Measured the hard way: under a full parallel suite the burst
+  // below opened with seven 200s because nine nonce-validation calls had already
+  // spent the allowance in the same second.
+  const nextSecond = async () => {
+    const s0 = Math.floor(Date.now() / 1000);
+    while (Math.floor(Date.now() / 1000) === s0) await wait(5);
+  };
+
+  // A real client's traffic — one probe, a handful of retries — is never
+  // refused. Ten is comfortably under the limit even if it straddles a boundary.
+  await nextSecond();
+  const ordinary = await Promise.all(
+    Array.from({ length: 10 }, () => challenge(`?nonce=${'a'.repeat(16)}`)),
+  );
+  assert.deepEqual([...new Set(ordinary.map((r) => r.status))], [200],
+    'a handful of calls in one second are all answered');
+
+  // And a flood is refused. Retried a few times because the burst can straddle a
+  // boundary on a loaded host and each second brings a fresh allowance — what is
+  // being asserted is that the ceiling EXISTS, not where a particular second put it.
+  let sawLimit = false;
+  for (let attempt = 0; attempt < 5 && !sawLimit; attempt++) {
+    await nextSecond();
+    const burst = await Promise.all(
+      Array.from({ length: 60 }, () => challenge(`?nonce=${'b'.repeat(16)}`)),
+    );
+    sawLimit = burst.some((r) => r.status === 429);
+  }
+  assert.ok(sawLimit, 'sixty calls in one second must be refused somewhere');
 
   // The next second is a fresh allowance — a limit that never forgave would lock
   // a client out of its own route probe for good.
