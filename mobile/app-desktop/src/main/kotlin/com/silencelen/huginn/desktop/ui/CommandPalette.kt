@@ -28,6 +28,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.window.isTraySupported
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
@@ -231,7 +232,10 @@ fun Cheatsheet(onDismiss: () -> Unit) {
         ) {
             Column(Modifier.padding(Space.section)) {
                 Row(horizontalArrangement = Arrangement.spacedBy(Space.section)) {
-                    HelpColumn("Keyboard", SHORTCUT_HELP, keyWidth = 118.dp)
+                    // Per-machine, because Ctrl+Shift+H is inert without a tray
+                    // and a sheet that promised it anyway would be the one place
+                    // the app still claimed the behaviour.
+                    HelpColumn("Keyboard", shortcutHelp(isTraySupported), keyWidth = 118.dp)
                     HelpColumn("Pointer", POINTER_HELP, keyWidth = 118.dp)
                 }
                 Muted("Esc or F1 closes this.", Modifier.padding(top = Space.gutter))
