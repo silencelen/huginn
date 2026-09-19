@@ -33,8 +33,28 @@ class ListFabClearanceTest {
             .firstOrNull { File(it, "settings.gradle.kts").isFile }
             ?: error("cannot find the gradle root from ${File("").absolutePath}")
 
-    /** The three screens that place an ExtendedFloatingActionButton over a list. */
-    private val fabScreens = listOf("ChatsScreen.kt", "SessionsScreen.kt", "RoundsScreen.kt")
+    /** Every screen that places an ExtendedFloatingActionButton over a list. */
+    private val fabScreens = listOf(
+        "ChatsScreen.kt",
+        "SessionsScreen.kt",
+        "RoundsScreen.kt",
+        "ConsolesScreen.kt",
+        "ProjectsScreen.kt",
+    )
+
+    /**
+     * The FAB screens that are CHILD destinations — no bottom bar under them.
+     *
+     * ⚠ THE INSET HAS EXACTLY ONE OWNER AND IT IS NOT THE SAME ONE ON EVERY
+     * SCREEN. Chats, Sessions and Rounds are tabs: the Scaffold's `NavigationBar`
+     * sits under them and consumes the system nav inset itself, so a
+     * `navigationBarsPadding()` there would DOUBLE it (`MainActivity` zeroes
+     * `contentWindowInsets` for exactly that reason). Consoles and Projects are
+     * pushed destinations with no bar beneath, so nothing consumes it and their
+     * FAB was drawn straight over the system gesture bar — "Add console" and
+     * "New project" half-buried under the home pill on the owner's Fold.
+     */
+    private val childFabScreens = listOf("ConsolesScreen.kt", "ProjectsScreen.kt")
 
     @Test
     fun `the clearance is the button plus a gap above and below it`() {
@@ -64,6 +84,37 @@ class ListFabClearanceTest {
             // is padding on a row and has nothing to do with the button.
             Regex("""PaddingValues\([^)]*bottom = (\d+)\.dp""").findAll(text).forEach {
                 offenders += "$name: hand-written list bottom = ${it.groupValues[1]}.dp"
+            }
+        }
+        assertTrue(offenders.joinToString("; "), offenders.isEmpty())
+    }
+
+    @Test
+    fun `a FAB screen with no bar under it pads for the system navigation`() {
+        val offenders = mutableListOf<String>()
+        for (name in childFabScreens) {
+            val f = File(mobileRoot(), "app/src/main/kotlin/com/silencelen/huginn/ui/$name")
+            assertTrue("$name not found at ${f.absolutePath}", f.isFile)
+            val text = f.readText()
+            assertTrue(
+                "$name lost its FAB — this gate is now scanning the wrong files",
+                text.contains("ExtendedFloatingActionButton("),
+            )
+            if (!text.contains("navigationBarsPadding()")) offenders += "$name: no navigationBarsPadding"
+        }
+        assertTrue(offenders.joinToString("; "), offenders.isEmpty())
+    }
+
+    @Test
+    fun `a FAB screen that sits on a tab does not pad it twice`() {
+        // The other half of the same rule, and the one that is invisible when it
+        // is wrong: a doubled inset is a band of dead space, not a missing button.
+        val offenders = mutableListOf<String>()
+        for (name in fabScreens - childFabScreens.toSet()) {
+            val f = File(mobileRoot(), "app/src/main/kotlin/com/silencelen/huginn/ui/$name")
+            assertTrue("$name not found at ${f.absolutePath}", f.isFile)
+            if (f.readText().contains("navigationBarsPadding()")) {
+                offenders += "$name: pads an inset the NavigationBar already consumes"
             }
         }
         assertTrue(offenders.joinToString("; "), offenders.isEmpty())
