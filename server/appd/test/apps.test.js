@@ -433,6 +433,82 @@ test('a daemon with no address of its own re-points nothing', () => {
     'and a wildcard bind is not an address either');
 });
 
+// -------------------------------- the 3.4 wire, for the alias (decision 56)
+
+/**
+ * The body a client older than 3.5.0 was built against, captured from the old
+ * contract — the same fixture the Kotlin side decodes in its own tests.
+ *
+ * ⚠ A CAPTURE, NOT A RE-DERIVATION. Nothing in this daemon can run the 3.4 code
+ * any more, so a shape assertion written from this module's constants would only
+ * prove the module agrees with itself. This file is what the clients actually
+ * saw.
+ */
+const CAPTURED_3_4 = JSON.parse(fs.readFileSync(
+  path.join(__dirname, '..', '..', '..', 'mobile', 'app', 'src', 'test', 'resources', 'consoles.json'), 'utf8'));
+
+test('the alias body is the 3.4 body, key for key against a capture of it', () => {
+  // ⚠⚠ THE POINT OF KEEPING `/v1/consoles` FOR ONE RELEASE. Answering the NEW
+  // body under the old path renames `consoles` to `apps` underneath every
+  // un-updated app 3.5.x and desktop 1.5.x, and each one decodes an EMPTY list:
+  // a feature that has silently lost its contents, which is worse than the 404
+  // the alias exists to avoid, because a 404 at least hides the surface.
+  const rows = appsLib.seedApps('100.97.198.90', 1789000000).map((rec, i) => appsLib.appRow(rec, {
+    up: [true, true, false, null][i],
+    lastProbeAt: [1789459940, 1789459940, 1789459940, 0][i],
+    latencyMs: [12, 48, 2000, null][i],
+    httpStatus: [200, 403, null, null][i],
+  }, { icon: true, reachable: { ok: false, checkedAt: 9, addresses: [{ addr: '1.2.3.4', ok: false }], fix: ['x'] } }));
+  const body = appsLib.legacyConsoleList(rows);
+
+  assert.deepEqual(Object.keys(CAPTURED_3_4), Object.keys(body),
+    'the list body, in order — a set comparison would pass a body that had grown a field');
+  assert.deepEqual(Object.keys(CAPTURED_3_4.consoles[0]), Object.keys(body.consoles[0]), 'and every row');
+  assert.equal('host', body.reachableFrom);
+  assert.equal(appsLib.PROBE_INTERVAL_MS, body.probeIntervalMs);
+  assert.deepEqual(appsLib.KINDS, body.kinds);
+  assert.equal(appsLib.MAX_APPS, body.max);
+
+  // ⚠ `approval: null`, not a synthesised card. Decision 55 deleted it, and a
+  // daemon that kept inventing one would hand an old client four root commands
+  // computed from a belief this version no longer holds — the D11 exemption and
+  // the hard-coded source address are both visible in the capture above.
+  assert.equal(null, body.approval);
+  assert.ok('approval' in body, 'the KEY is still there, because its absence and its nullity read differently');
+
+  // ⚠ DROPPED, not merely ignored. The old clients are ignoreUnknownKeys = true
+  // and would tolerate the new fields; "the alias answers the 3.4 body" is only
+  // checkable if it is exactly true.
+  for (const gone of ['unit', 'icon', 'reachable']) {
+    assert.ok(!(gone in body.consoles[0]), `${gone} is not a field the 3.4 contract has`);
+  }
+
+  // The tri-states survive the downgrade — that is most of what the old copy
+  // reads. `up:null` must not become false and `lastProbeAt:0` must not vanish.
+  assert.equal(true, body.consoles[0].up);
+  assert.equal(403, body.consoles[1].httpStatus, 'a 403 page is UP: something answered');
+  assert.equal(false, body.consoles[2].up);
+  assert.equal(null, body.consoles[3].up);
+  assert.equal(0, body.consoles[3].lastProbeAt);
+});
+
+test('a bare record downgraded for the alias still has every field, with definite values', () => {
+  // ⚠ `undefined` DOES NOT SURVIVE JSON.stringify — IT DELETES THE KEY. A row
+  // handed here without its probe fields would reach an old client missing `up`
+  // and `httpStatus` entirely, which are exactly the fields whose absence it
+  // renders as "never checked".
+  const bare = appsLib.buildRecord({ id: 'x', name: 'X', url: 'http://huginn:8088/', unit: 'x.service' }, 5);
+  const row = appsLib.legacyConsoleRow(bare);
+  assert.deepEqual(appsLib.LEGACY_ROW_FIELDS.concat('reachableFrom'), Object.keys(row));
+  assert.equal(JSON.stringify(row), JSON.stringify(JSON.parse(JSON.stringify(row))), 'nothing drops on the way out');
+  assert.equal(null, row.up);
+  assert.equal(0, row.lastProbeAt);
+  assert.equal(null, row.latencyMs);
+  assert.equal(null, row.httpStatus);
+  assert.equal('host', row.reachableFrom);
+  assert.ok(!('unit' in row));
+});
+
 // ------------------------------------------- the fix lines (decisions 54, 55)
 
 test('a failing row carries the exact rebind and firewall lines, and only for the addresses that failed', () => {
