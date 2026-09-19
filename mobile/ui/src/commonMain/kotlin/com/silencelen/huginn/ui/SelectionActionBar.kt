@@ -6,12 +6,18 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -27,7 +33,7 @@ import com.silencelen.huginn.data.QuickActions
  * repeated here so the strip is a complete answer and the reader never has to
  * work out which of two toolbars holds the thing they want.
  *
- * WHAT IS OFFERED is [SelectionMode.actions]'s decision, not this composable's:
+ * WHAT IS OFFERED is [SelectionMode.barItems]'s decision, not this composable's:
  * it draws what it is given, and it draws NOTHING when that is empty (a
  * long-press that caught no words, or a selection past the cap). That rule is
  * pure and asserted in `SelectionModeTest` precisely because a bar that appears
@@ -41,6 +47,12 @@ import com.silencelen.huginn.data.QuickActions
  * has already raised is the one place the answer can go for free: one muted line
  * above the verbs, present only when the row carried a timestamp
  * ([SelectionMode.at], already in words).
+ *
+ * THE WAY OUT IS PINNED, not scrolled. The verbs live in a horizontal scroll and
+ * on a 360dp phone the last of them is already past the right edge — so the
+ * dismiss was the one control in the bar that could not be SEEN without first
+ * scrolling a strip nobody realises scrolls. It is an X outside that scroll now,
+ * always in the same place, and it takes exactly the path Back takes.
  */
 @Composable
 fun SelectionActionBar(
@@ -51,8 +63,8 @@ fun SelectionActionBar(
     onDismiss: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    val offered = mode.actions(actions)
-    if (offered.isEmpty()) return
+    val items = mode.barItems(actions)
+    if (items.isEmpty()) return
 
     Surface(
         color = MaterialTheme.colorScheme.surfaceContainerHigh,
@@ -73,34 +85,49 @@ fun SelectionActionBar(
             )
         }
         // One row, scrolled rather than wrapped, for the same reason the
-        // suggestion chips are: four verbs plus Copy plus Done wrap to two lines
-        // on a narrow phone and push the composer off the bottom of the screen.
+        // suggestion chips are: four verbs plus Copy wrap to two lines on a
+        // narrow phone and push the composer off the bottom of the screen. The
+        // scroll is the INNER row now; the X rides outside it.
         Row(
-            Modifier.fillMaxWidth()
-                .horizontalScroll(rememberScrollState())
-                .padding(horizontal = 4.dp),
-            horizontalArrangement = Arrangement.spacedBy(2.dp),
+            Modifier.fillMaxWidth().padding(horizontal = 4.dp),
+            verticalAlignment = Alignment.CenterVertically,
         ) {
-            offered.forEach { action ->
-                TextButton(onClick = { onAct(action, mode.text) }) {
-                    Text(
-                        action.label,
-                        style = MaterialTheme.typography.labelLarge,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                    )
+            Row(
+                Modifier.weight(1f).horizontalScroll(rememberScrollState()),
+                horizontalArrangement = Arrangement.spacedBy(2.dp),
+            ) {
+                items.forEach { item ->
+                    when (item) {
+                        is SelectionBarItem.Verb ->
+                            TextButton(onClick = { onAct(item.action, mode.text) }) {
+                                Text(
+                                    item.action.label,
+                                    style = MaterialTheme.typography.labelLarge,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                )
+                            }
+                        SelectionBarItem.Copy ->
+                            TextButton(onClick = { onCopy(mode.text) }) {
+                                Text("Copy", style = MaterialTheme.typography.labelLarge, maxLines = 1)
+                            }
+                        // Pinned beside the scroll, below — not in it.
+                        SelectionBarItem.Cancel -> Unit
+                    }
                 }
             }
-            TextButton(onClick = { onCopy(mode.text) }) {
-                Text("Copy", style = MaterialTheme.typography.labelLarge, maxLines = 1)
-            }
-            TextButton(onClick = onDismiss) {
-                Text(
-                    "Done",
-                    style = MaterialTheme.typography.labelLarge,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    maxLines = 1,
-                )
+            if (SelectionBarItem.Cancel in items) {
+                IconButton(onClick = onDismiss, modifier = Modifier.size(40.dp)) {
+                    Icon(
+                        Icons.Filled.Close,
+                        // Not a bare "Close": what it closes is the SELECTION, and
+                        // a reader who cannot see the screen has no way to tell
+                        // which of several things an unqualified close takes away.
+                        contentDescription = "Cancel selection",
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.size(20.dp),
+                    )
+                }
             }
         }
       }

@@ -27,6 +27,26 @@ enum class SelectionAction(val label: String) {
     ASK_IN_NEW_CHAT("Ask in new chat"),
 }
 
+/**
+ * One thing the phone's selection bar puts in front of the reader, in draw order.
+ *
+ * The verbs are the host's and Copy is this client's; [Cancel] is here because a
+ * way out is part of WHAT THE BAR OFFERS rather than a decoration on it. The
+ * verbs scroll sideways — four of them plus Copy do not fit a 360dp phone — and
+ * a dismiss that scrolls off the right edge is a dismiss nobody finds, which is
+ * how a bar raised by accident becomes a bar you escape by pressing Back and
+ * hoping. Modelling it here is what lets a test assert the bar always ends with
+ * a way out, instead of trusting a composable to keep drawing one.
+ */
+sealed interface SelectionBarItem {
+    /** A host verb. Stages text in the composer; never sends. */
+    data class Verb(val action: SelectionAction) : SelectionBarItem
+    /** The clipboard, repeated from the platform's own toolbar. */
+    data object Copy : SelectionBarItem
+    /** Clears the selection and closes the bar — the same path Back takes. */
+    data object Cancel : SelectionBarItem
+}
+
 object QuickActionRules {
 
     /**
@@ -63,6 +83,23 @@ object QuickActionRules {
         selection.length > SELECTION_MAX -> emptyList()
         actions == null -> listOf(SelectionAction.QUOTE)
         else -> SelectionAction.entries.toList()
+    }
+
+    /**
+     * Everything the bar draws, verbs first and the way out last.
+     *
+     * EMPTY WHEN [offered] IS EMPTY, and that is the whole reason this is a
+     * separate rule rather than "offered + two buttons": a long-press that caught
+     * no words draws NO bar at all, so it needs no cancel either — and a lone X
+     * floating over an empty strip is the version of this that gets reported as a
+     * glitch. Once there is one verb there is always a Copy and always a Cancel.
+     */
+    fun barItems(selection: String, actions: QuickActions?): List<SelectionBarItem> {
+        val verbs = offered(selection, actions)
+        if (verbs.isEmpty()) return emptyList()
+        return verbs.map { SelectionBarItem.Verb(it) } +
+            SelectionBarItem.Copy +
+            SelectionBarItem.Cancel
     }
 
     /**
@@ -163,6 +200,10 @@ data class SelectionMode(val active: Boolean = false, val text: String = "", val
 
     fun actions(quickActions: QuickActions?): List<SelectionAction> =
         if (!active) emptyList() else QuickActionRules.offered(text, quickActions)
+
+    /** What the bar draws for this selection — the verbs, Copy, and the way out. */
+    fun barItems(quickActions: QuickActions?): List<SelectionBarItem> =
+        if (!active) emptyList() else QuickActionRules.barItems(text, quickActions)
 
     /** The handles moved: same session, new text, same row and so the same time. */
     fun select(text: String): SelectionMode = copy(active = true, text = text)
