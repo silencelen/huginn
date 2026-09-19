@@ -72,14 +72,27 @@
    "text": "<text scrubbed, 3984 chars>"
   }
  ],
+ "deliveredQueued": [],
  "nextOffset": 1108213,
+ "windowStart": 1047552,
  "truncated": true,
  "title": "<title scrubbed, 58 chars>",
  "permissionMode": "auto",
  "model": "claude-opus-5",
  "gitBranch": "main",
  "cwd": "/root/netplan/pmanage",
+ "effort": "high",
  "lastActivityTs": 1785167393,
+ "modelDisplay": "Opus 5",
  "state": "idle",
- "claudeSessionId": "<claudeSessionId scrubbed, 36 chars>"
+ "claudeSessionId": "<claudeSessionId scrubbed, 36 chars>",
+ "activity": null,
+ "tasks": [
+  {
+   "id": "bash_1",
+   "command": "<bgTask command scrubbed, 34 chars>",
+   "forSeconds": 412
+  }
+ ],
+ "bgAgents": 2
 }

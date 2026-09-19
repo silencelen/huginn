@@ -1,7 +1,7 @@
 {
   "devices": [
     {
-      "id": "6d1c40cb-c731-4413-bf2e-808c24e5cee6",
+      "id": "0a1b2c3d-0000-4000-8000-00000000de01",
       "name": "A-LAPTOP",
       "platform": "linux",
       "scope": "work",
@@ -12,12 +12,13 @@
       "online": true,
       "lastSeen": 1787677374439,
       "registeredAt": 1787618976800,
+      "machine": "a-laptop",
       "running": false,
       "queued": 0,
       "awaitingPoll": false
     },
     {
-      "id": "4d0707b1-48a0-41f1-a8bb-fa65a266c0d2",
+      "id": "0a1b2c3d-0000-4000-8000-00000000de02",
       "name": "a-server",
       "platform": "windows",
       "scope": "look",
@@ -28,12 +29,13 @@
       "online": true,
       "lastSeen": 1787677372058,
       "registeredAt": 1787676281105,
+      "machine": "a-server",
       "running": false,
       "queued": 0,
       "awaitingPoll": false
     },
     {
-      "id": "e7b1ea43-a7f3-4cdd-a9bb-c9f8ae0baf43",
+      "id": "0a1b2c3d-0000-4000-8000-00000000de03",
       "name": "A-DESKTOP",
       "platform": "windows",
       "scope": "own",
@@ -44,23 +46,54 @@
       "online": false,
       "lastSeen": 1787650839760,
       "registeredAt": 1787552247668,
+      "machine": "a-desktop",
       "running": false,
       "queued": 0,
       "awaitingPoll": true
     },
     {
-      "id": "74db0c69-2acd-4b54-85f8-4dfae32e896b",
+      "id": "0a1b2c3d-0000-4000-8000-00000000de04",
       "name": "A-REMOTE-BOX",
       "platform": "windows",
       "scope": "own",
       "effectiveScope": "own",
       "locked": true,
-      "actWhileLocked": true,
       "root": "C:\\claude",
       "version": "1.5.2",
       "online": true,
       "lastSeen": 1787677374439,
       "registeredAt": 1789345978194,
+      "machine": "a-remote-box",
+      "actWhileLocked": true,
+      "running": false,
+      "queued": 0,
+      "awaitingPoll": false
+    },
+    {
+      "id": "0ba55a10-0000-4000-8000-00000000d1ae",
+      "name": "a-desktop-llm",
+      "platform": "windows",
+      "scope": "generate",
+      "effectiveScope": "generate",
+      "locked": false,
+      "root": null,
+      "version": "0.12.5",
+      "online": true,
+      "lastSeen": 1787677374501,
+      "registeredAt": 1787717338146,
+      "machine": "a-desktop",
+      "llmSlug": "a-desktop-llm",
+      "models": [
+        {
+          "slug": "qwen3-4b",
+          "display": "Qwen3 4B"
+        },
+        {
+          "slug": "nomic-embed",
+          "display": "Nomic Embed"
+        }
+      ],
+      "persistent": true,
       "running": false,
       "queued": 0,
       "awaitingPoll": false
