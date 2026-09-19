@@ -86,11 +86,35 @@ object LiveInput {
     }
 
     /**
-     * Diffs the field against the sentinel it was reset to.
+     * A field that is known to have been resting at the sentinel.
+     *
+     * ⚠ ONLY SAFE WHEN NOTHING CAN BE IN FLIGHT — the two-argument [diff] is
+     * the one a live IME talks to, and the reason is written on it. This
+     * overload is the resting case: a first edit, and the tests that describe
+     * one.
+     */
+    fun diff(newValue: String): Typed = diff(SENTINEL, newValue)
+
+    /**
+     * Diffs the field against THE TEXT WE LAST SAW IN IT, not against a constant.
+     *
+     * ⚠⚠ THE SENTINEL IS A RESTING VALUE, NOT A BASELINE, AND CONFUSING THE TWO
+     * DUPLICATED EVERY FAST BURST. The field used to be snapped back to [SENTINEL]
+     * inside `onValueChange` and every change diffed against that constant, so a
+     * second IME change that arrived before the snap-back had round-tripped
+     * through recomposition saw the CUMULATIVE buffer and re-emitted everything
+     * typed so far. Five characters delivered in one burst arrived as fifteen —
+     * 1+2+3+4+5, the triangular number that named the bug — straight into a live
+     * Claude Code prompt. Diffing against the last observed text makes a
+     * mid-burst change mean exactly the characters it added, whatever the field
+     * still holds and whenever the reset lands.
      *
      * Pure and deliberately paranoid: an IME may rewrite the whole field (paste,
      * autocorrect, voice input), so this never assumes the change was a single
-     * character.
+     * character. Anything [previous] had past the shared prefix was deleted, and
+     * it is reported as that many backspaces — including the sentinel itself,
+     * which is how a backspace at the very start of an empty field becomes
+     * visible at all.
      *
      * ⚠ NEWLINES ARE STRUCTURE, NOT A RETURN KEY. This used to delete every
      * newline in the tail and press Return once at the end, so a three-line
@@ -102,14 +126,11 @@ object LiveInput {
      * returns in `send-keys -l` text, delivering the mid-text Return it claimed
      * to prevent.
      */
-    fun diff(newValue: String): Typed {
-        if (newValue == SENTINEL) return Typed(0, "", false)
-        // The sentinel survived as a prefix: everything after it was typed.
-        // Otherwise it is gone — backspace consumed it — and anything left is
-        // text the IME put there in the same edit.
-        val survived = newValue.startsWith(SENTINEL)
-        val tail = normalizeNewlines(if (survived) newValue.removePrefix(SENTINEL) else newValue)
-        val backspaces = if (survived) 0 else 1
+    fun diff(previous: String, current: String): Typed {
+        if (current == previous) return Typed(0, "", false)
+        val shared = sharedPrefix(previous, current)
+        val backspaces = previous.length - shared
+        val tail = normalizeNewlines(current.substring(shared))
 
         val trailing = tail.endsWith("\n")
         val body = if (trailing) tail.dropLast(1) else tail
@@ -123,6 +144,21 @@ object LiveInput {
             // just Return, and saying it came "first" would be noise.
             enterFirst = leading,
         )
+    }
+
+    /**
+     * How much of [a] and [b] is the same run of characters from the start.
+     *
+     * ⚠ NEVER SPLITS A SURROGATE PAIR. Half a code point is not a keystroke, and
+     * an emoji typed into the pane would otherwise be reported as one backspace
+     * and a lone low surrogate.
+     */
+    private fun sharedPrefix(a: String, b: String): Int {
+        val n = minOf(a.length, b.length)
+        var i = 0
+        while (i < n && a[i] == b[i]) i++
+        if (i in 1..(a.length - 1) && a[i - 1].isHighSurrogate()) i--
+        return i
     }
 
     private fun normalizeNewlines(s: String): String =
