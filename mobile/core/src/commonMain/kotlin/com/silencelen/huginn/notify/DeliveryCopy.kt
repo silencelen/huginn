@@ -138,6 +138,62 @@ object DeliveryCopy {
         }
     }
 
+    // ------------------------------------------------------------- push counts
+
+    /**
+     * What the Notifications page prints about push counts: ONE sentence pair.
+     *
+     * ⚠⚠ TWO BARE TOTALS FROM TWO DIFFERENT ERAS, STACKED, WITH NOTHING SAYING
+     * SO. The page read:
+     *
+     *     1476 delivered so far
+     *     1072 of 1072 pushes arrived — nothing dropped, so the backup check…
+     *     host counter restarted — re-baselined
+     *
+     * [lifetime] is huginn's own count across every device it has ever pushed
+     * to; [sent] is the host's counter FOR THIS INSTALL, since the epoch this
+     * phone is comparing against — and [PushTally] exists because that epoch
+     * restarts on a token rotation. Printed as two unlabelled numbers a reader
+     * subtracts them, gets 404, and concludes a perfect delivery path dropped
+     * 404 pushes. The re-baseline note trailing a line BELOW the numbers it
+     * explains was the last of it.
+     *
+     * So: the tally says what arrived and what the alarm will therefore do, and
+     * the second line owns the lifetime and the re-baseline together, because
+     * they are the same fact — where this count came from.
+     *
+     * @return one or two lines, in order. Never empty.
+     */
+    fun pushCounts(
+        arrived: Long,
+        sent: Long,
+        missing: Long,
+        lifetime: Long,
+        rebaselined: Boolean,
+    ): List<String> {
+        val tally = when {
+            arrived <= 0L ->
+                "No push has arrived here yet, so the backup check runs every 10 minutes " +
+                    "until one proves it can."
+            missing > 0L ->
+                "$missing push(es) huginn sent never arrived, so the backup check has " +
+                    "tightened to every 10 minutes."
+            else ->
+                "$arrived of $sent pushes arrived — nothing dropped, so the backup check " +
+                    "only runs hourly."
+        }
+        val provenance = when {
+            lifetime > 0L && rebaselined ->
+                "Counted since huginn's own counter last restarted; it has sent $lifetime " +
+                    "in total, to every device it knows."
+            lifetime > 0L ->
+                "huginn has sent $lifetime in total, to every device it knows."
+            rebaselined -> "Counted since huginn's own counter last restarted."
+            else -> null
+        }
+        return listOfNotNull(tally, provenance)
+    }
+
     // ----------------------------------------------------------------- cadence
 
     /** "every 10 minutes" / "hourly", from the interval the heartbeat is armed at. */

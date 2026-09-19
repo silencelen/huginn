@@ -27,7 +27,6 @@ import com.silencelen.huginn.data.ModelChoice
 import com.silencelen.huginn.data.PushStatus
 import com.silencelen.huginn.data.QuickActions
 import com.silencelen.huginn.notify.DeliveryCopy
-import com.silencelen.huginn.notify.PushTally
 import com.silencelen.huginn.ui.HeadroomSettingsSection
 import com.silencelen.huginn.ui.HuginnViewModel
 import com.silencelen.huginn.ui.agoWordsMs
@@ -364,26 +363,19 @@ fun NotifyPage(
     }
     Column(Modifier.padding(start = 8.dp, top = 4.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
         push?.let { ps ->
-            if (ps.pushed > 0) SettingsNote("${ps.pushed} delivered so far")
-            SettingsNote(
-                when {
-                    // ARRIVED, not received: the stored tally can still be from
-                    // before the host's counter restarted. PushTally clamps it so
-                    // this line cannot read "1274 of 916".
-                    health.pushesArrived == 0L ->
-                        "No push has arrived here yet, so the backup check runs every 10 minutes " +
-                            "until one proves it can."
-                    health.pushesMissing > 0L ->
-                        "${health.pushesMissing} push(es) huginn sent never arrived, so the backup " +
-                            "check has tightened to every 10 minutes."
-                    else ->
-                        "${health.pushesArrived} of ${health.pushesSent} pushes arrived — nothing " +
-                            "dropped, so the backup check only runs hourly."
-                },
-            )
-            // Said once, and only when it happened: otherwise a reader who
-            // remembers a bigger number has no way to learn where it went.
-            if (health.pushRebaselined) SettingsNote(PushTally.REBASELINED_NOTE)
+            // ⚠ ONE SENTENCE PAIR, AND THE WORDS LIVE IN :core. This was three
+            // notes — a bare host lifetime, the tally, and a re-baseline remark
+            // below both — so the two unlabelled totals invited a subtraction
+            // that says a perfect delivery path dropped 404 pushes. See
+            // [DeliveryCopy.pushCounts]. ARRIVED, not received: PushTally clamps
+            // the stored tally so this can never read "1274 of 916".
+            DeliveryCopy.pushCounts(
+                arrived = health.pushesArrived,
+                sent = health.pushesSent,
+                missing = health.pushesMissing,
+                lifetime = ps.pushed.toLong(),
+                rebaselined = health.pushRebaselined,
+            ).forEach { SettingsNote(it) }
         }
         // Two witnesses. The app's own record can only be written while the app is
         // alive, so it cannot testify about the hours that matter; huginn's was
