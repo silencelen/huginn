@@ -297,7 +297,7 @@ function renderShow(d) {
   p('');
   if (!live.length) {
     p('  No members yet. The lead proposes them; approve the proposal in the app,');
-    p('  or:  huginn projects spawn <project> <member>:<role> --prompt "<first task>"');
+    p('  or here:  huginn projects spawn <project>');
     p('');
     return out.join('\n');
   }
@@ -354,31 +354,19 @@ async function resolve(what) {
 
 // --------------------------------------------------------------- grammar
 
-// The two grammars the daemon documents, asserted HERE as well as there. A
-// malformed pair must never become a request: `spawn` starts real Claude
-// sessions, and a half-parsed one either spawns the wrong thing or leaves a
-// project half-born — and the caller cannot tell which from the outside.
+// `msg` addresses members by name, and a name reaches a JSON body that the
+// daemon then matches against real sessions — so it is shaped here as well as
+// there.
 const NAME_RE = /^[A-Za-z0-9_][A-Za-z0-9_./-]{0,63}$/;
-const ROLE_RE = /^[a-z0-9][a-z0-9-]{0,15}$/;
 
-function pair(arg) {
-  const s = String(arg);
-  const parts = s.split(':');
-  if (parts.length !== 2 || !parts[0] || !parts[1]) {
-    die(`'${clean(s, 60)}' is not a member:role pair`, 1,
-        '(e.g. docs:docs, or lora-stick/docs:docs)');
-  }
-  const [name, role] = parts;
-  if (!NAME_RE.test(name)) {
-    die(`'${clean(name, 60)}' is not a member name in a member:role pair`, 1,
-        '(letters, digits, _ . - and /, up to 64)');
-  }
-  if (!ROLE_RE.test(role)) {
-    die(`'${clean(role, 60)}' is not a role in a member:role pair`, 1,
-        '(lowercase letters, digits and -, up to 16)');
-  }
-  return { name, role };
-}
+// ⚠ THE KINDS ARE DOCUMENTED HERE AND JUDGED BY THE DAEMON, which is the same
+// rule `new` already applies to a display name: `projectsLib.KINDS` is the
+// authority, a newer daemon may add one, and a second stricter opinion in this
+// file would refuse a kind the apps accept. So the list below is help text — it
+// is what somebody needs to be told — and an unknown word travels and comes
+// back as the daemon's own sentence ("kind is one of software, infra, …"),
+// which is always current and never ours to invent.
+const KINDS_HELP = 'software, infra, hardware, docs, research, other';
 
 // ------------------------------------------------------------------ usage
 
@@ -386,18 +374,28 @@ const USAGE = `
   huginn-projects                          the projects on this host, one line each
   huginn-projects list                     the same
   huginn-projects show <id|name>           the project's members, and who is waiting
-  huginn-projects new <name> [--cwd DIR]   start one: launches its lead session
-  huginn-projects spawn <project> <member>:<role> [...] [--prompt TEXT|-]
-                                           add members and give them their first task
+  huginn-projects new <name> --brief TEXT|- [--kind KIND] [--cwd DIR]
+                                           start one: launches its lead session
+  huginn-projects spawn <project>          approve the lead's proposal: create its members
   huginn-projects msg <project> <from> <to> <text>
                                            one line from one member to another
-  huginn-projects end <project> [--now]    end the project  (--now also ends its sessions)
+  huginn-projects end <project> [--now|--keep-sessions]
+                                           end the project AND wind its sessions down
+                                           (--now ends them outright; --keep-sessions
+                                           leaves them running and names them)
 
   --json   print what the daemon said, unparsed, instead of rendering it
   --help   this
 
   A <project> is an id or the project's name; the name is resolved on this host.
-  --prompt - reads the first task from stdin, so a file can be piped in.
+  --brief is the WHOLE first message the lead gets, and it is what the lead sizes
+  the project from; '-' reads it from stdin, so a file can be piped in.
+  --kind is one of ${KINDS_HELP} (default: other).
+
+  ⚠ SPAWN TAKES NO MEMBER LIST. The LEAD proposes the members — roles, first
+  prompts, directories — and spawn is the owner approving that plan at the rev
+  it is on. Talk to the lead in its own session to change it; 'show' says where
+  it is up to.
 `;
 
 // ------------------------------------------------------------------- main
@@ -441,17 +439,46 @@ async function main() {
   if (verb === 'new') {
     let name = '';
     let cwd;
+    let brief;
+    // ⚠ THE DEFAULT IS A REAL KIND, NOT AN ABSENT ONE. The daemon requires one
+    // (`kind is one of …`, a 400), and this renderer used to send neither it nor
+    // the brief — so `new` refused 100% of the time and the only way to make a
+    // project was a phone or the desktop. `other` is the honest default for a
+    // cluster somebody has not classified; it labels the project and nothing
+    // branches on it.
+    let kind = 'other';
     for (let i = 0; i < rest.length; i += 1) {
       if (rest[i] === '--cwd') { cwd = rest[i + 1]; i += 1; if (cwd === undefined) die('--cwd needs a directory', 1); }
-      else if (!name) name = rest[i];
+      else if (rest[i] === '--kind') {
+        kind = rest[i + 1]; i += 1;
+        if (kind === undefined) die(`--kind needs one of ${KINDS_HELP}`, 1);
+      } else if (rest[i] === '--brief') {
+        const v = rest[i + 1]; i += 1;
+        if (v === undefined) die('--brief needs text, or - to read stdin', 1);
+        // `-` reads stdin, so a brief written in a file (or by another program)
+        // survives with its newlines and quotes intact — the same hardening
+        // `huginn llm -` uses.
+        brief = v === '-' ? fs.readFileSync(0, 'utf8') : v;
+      } else if (String(rest[i]).startsWith('-')) {
+        die(`unknown flag '${clean(rest[i], 40)}'`, 1, '(huginn-projects --help)');
+      } else if (!name) name = rest[i];
       else die(`unknown argument '${clean(rest[i], 40)}'`, 1, '(huginn-projects --help)');
     }
-    if (!name) die('usage: huginn-projects new <name> [--cwd DIR]', 1);
+    if (!name) die('usage: huginn-projects new <name> --brief TEXT|- [--kind KIND] [--cwd DIR]', 1);
+    // ⚠ REFUSED HERE, AND IN THE DAEMON'S OWN WORDS THERE. The brief is not a
+    // description: it is the whole first message the lead receives and the thing
+    // it sizes the project from, so a project created without one would launch a
+    // lead with nothing to do. Said before the round trip because the sentence
+    // has to name the flag that answers it, and the daemon cannot know it.
+    if (brief === undefined || !String(brief).trim()) {
+      die('a project needs a brief — it is the whole first message the lead gets', 1,
+          '(--brief "size the firmware work", or --brief - to read it from stdin)');
+    }
     // ⚠ NOT VALIDATED HERE BEYOND EMPTINESS. A display name is prose — the
     // daemon owns `cleanName` and the slug it derives, and a second, stricter
-    // opinion in the renderer would refuse names the app accepts. It goes into a
-    // JSON body, never into a shell.
-    const body = { name };
+    // opinion in the renderer would refuse names the app accepts. Same for the
+    // kind (see KINDS_HELP). Both go into a JSON body, never into a shell.
+    const body = { name, kind, brief };
     if (cwd !== undefined) body.cwd = cwd;
     const r = await call('POST', '/v1/projects', body, true);
     emit(r, () => {
@@ -460,41 +487,67 @@ async function main() {
       return `\n  started ${clean(p.name, 60) || name}` +
              (clean(p.cwd) ? `\n  in ${clean(p.cwd, 120)}` : '') +
              (lead ? `\n  its lead session is ${lead} — attach it with:  huginn ${attachName(p.lead)}` : '') +
-             '\n  It sizes the work and proposes the members; approve them in the app,' +
-             '\n  or spawn them by hand:  huginn projects spawn ' +
-             `${JSON.stringify(clean(p.name, 60) || name)} <member>:<role> --prompt "..."\n`;
+             '\n  It sizes the work and proposes the members; when it has,' +
+             '\n  approve them in the app or here:  huginn projects spawn ' +
+             `${JSON.stringify(clean(p.name, 60) || name)}\n`;
     });
     return;
   }
 
   if (verb === 'spawn') {
-    if (rest.length < 2) {
-      die('usage: huginn-projects spawn <project> <member>:<role> [...] [--prompt TEXT|-]', 1);
-    }
+    if (!rest.length) die('usage: huginn-projects spawn <project>', 1);
     const target = rest[0];
-    const pairs = [];
-    let prompt;
-    for (let i = 1; i < rest.length; i += 1) {
-      if (rest[i] === '--prompt') {
-        const v = rest[i + 1]; i += 1;
-        if (v === undefined) die('--prompt needs text, or - to read stdin', 1);
-        // `-` reads stdin, so a first task written in a file (or by another
-        // program) survives with its newlines and quotes intact — the same
-        // hardening `huginn llm -` uses.
-        prompt = v === '-' ? fs.readFileSync(0, 'utf8') : v;
-      } else if (String(rest[i]).startsWith('--')) {
-        die(`unknown flag '${clean(rest[i], 40)}'`, 1, '(huginn-projects --help)');
-      } else {
-        pairs.push(pair(rest[i]));
+    // ⚠⚠ SPAWN IS AN APPROVAL, NOT AN ORDER, and this used to send neither half
+    // of it: a `{members}` body the daemon does not read, and no `approve`, so
+    // every spawn from a terminal came back "approve must be true — spawning is
+    // the owner's decision" and the CLI could not create a member at all.
+    //
+    // The plan is the LEAD's: it sizes the work and writes the roles, the first
+    // prompts and the directories into its manifest, which the daemon parses out
+    // of its turn. A client that re-sent a member list here would be a second
+    // opinion about the plan the owner has just looked at — see the same ⚠ in
+    // the app's HuginnClient.spawnProject — so the member:role/--prompt grammar
+    // is gone rather than made to work. Named in the refusal, because it was
+    // documented for two releases and it is what a finger types.
+    for (const a of rest.slice(1)) {
+      const s = String(a);
+      if (s === '--prompt' || (!s.startsWith('-') && /^[^:]+:[^:]+$/.test(s))) {
+        die('spawn approves the plan the LEAD proposed — it takes no members and no prompts', 1,
+            '(talk to the lead in its own session to change the plan; ' +
+            'huginn projects show <project> for where it is up to)');
       }
+      die(`unknown argument '${clean(s, 40)}'`, 1, '(huginn-projects --help)');
     }
-    if (!pairs.length) die('spawn needs at least one <member>:<role> pair', 1, '(e.g. docs:docs)');
-    // ⚠ EVERY PAIR IS PARSED BEFORE THE PROJECT IS EVEN LOOKED UP, so a typo in
-    // the third pair cannot spawn the first two. The refusal above has already
-    // exited by the time anything reaches the wire.
     const proj = await resolve(target);
-    const members = pairs.map((m) => (prompt === undefined ? m : { ...m, prompt }));
-    const r = await call('POST', `/v1/projects/${encodeURIComponent(proj.id)}/spawn`, { members });
+    // ⚠ THE REV IS READ FROM THE PROJECT, NOW, and it is the whole safety of the
+    // card: an approval carries the revision of the plan it was given, so a
+    // proposal the lead revised between somebody reading it and typing this
+    // comes back 409 ("the proposal has changed since that card was drawn")
+    // instead of spawning sessions nobody has seen. The detail route is an
+    // envelope — {project, row, live} — and the record inside it is what carries
+    // the manifest.
+    const cur = await call('GET', `/v1/projects/${encodeURIComponent(proj.id)}`);
+    // The envelope, or the bare record an appd 3.4 answered with before the
+    // three named keys existed — `{...project, row, live}`. Either shape, the
+    // fields read below are the same ones.
+    const record = (cur.json && cur.json.project) || cur.json || {};
+    const manifest = (record && record.manifest) || {};
+    const rev = Number(manifest.rev);
+    const roles = (Array.isArray(manifest.sessions) ? manifest.sessions : [])
+      .map((s) => clean(s && s.role, 16)).filter(Boolean);
+    // The daemon refuses this too, in its own words. It is pre-empted here only
+    // because "this project is drafting, not proposed" is a true sentence with
+    // no next step in it, and the next step is not something the daemon knows:
+    // the lead has not written a plan yet, and it is the thing to go and talk to.
+    if (record.status !== 'proposed') {
+      die(`${clean(record.name, 60) || clean(target, 60)} is ${clean(record.status, 24) || 'not proposed'}` +
+          ', so there is no proposal to approve', 1,
+          '(the lead proposes the members; huginn projects show <project> for where it is up to)');
+    }
+    if (!Number.isInteger(rev)) die('this daemon did not say which revision the proposal is at', 1);
+    if (!roles.length) die('that proposal has no sessions in it', 1);
+    const r = await call('POST', `/v1/projects/${encodeURIComponent(proj.id)}/spawn`,
+                         { approve: true, manifestRev: rev });
     // ⚠ A PARTIAL SPAWN ANSWERS HTTP 200. The daemon keeps going after a member
     // that could not start and reports {ok, spawned, failed} — so the status
     // code says "I processed your request", not "your cluster exists". A caller
@@ -502,14 +555,23 @@ async function main() {
     // half-born project for a finished one, which is the gate-pipe trap in
     // another costume. The render says which members are missing; the exit code
     // says that some are.
-    const partial = Array.isArray(r.json && r.json.failed) && r.json.failed.length > 0;
+    //
+    // ⚠ AND "NOTHING STARTED" IS ALSO NOT SUCCESS. The daemon's own `ok` is
+    // `failed.length === 0 && spawned.length > 0`, so a body with two empty
+    // lists — a proposal the loop walked past entirely — is a 200 that created
+    // no cluster. Read from `ok` where the daemon sends one, and from the lists
+    // otherwise, so an older daemon still exits honestly.
+    const jd = r.json || {};
+    const failedCount = Array.isArray(jd.failed) ? jd.failed.length : 0;
+    const spawnedCount = Array.isArray(jd.spawned) ? jd.spawned.length : 0;
+    const partial = typeof jd.ok === 'boolean' ? !jd.ok : (failedCount > 0 || spawnedCount === 0);
     emit(r, () => {
       const d = r.json || {};
       const spawned = Array.isArray(d.spawned) ? d.spawned : [];
       const failed = Array.isArray(d.failed) ? d.failed : [];
       const lines = [''];
       if (spawned.length) {
-        lines.push(`  spawned in ${clean(proj.name, 60)}:`);
+        lines.push(`  spawned in ${clean(proj.name, 60)} (proposal rev ${rev}):`);
         for (const s of spawned) {
           lines.push(`    ${clean(s.role, 16) || '?'}  ${memberName(s) || ''}`.trimEnd());
         }
@@ -525,6 +587,9 @@ async function main() {
         }
       }
       if (!spawned.length && !failed.length) lines.push('  the daemon accepted it but named nothing');
+      // The attach name is the tmux one — see [attachName]: a member is
+      // `<slug>/<role>` to its peers and `<slug>-<role>` to tmux.
+      if (spawned.length) lines.push(`  huginn ${attachName(spawned[0])}   to attach one`);
       lines.push('');
       return lines.join('\n');
     });
@@ -550,26 +615,84 @@ async function main() {
   }
 
   if (verb === 'end') {
-    if (!rest.length) die('usage: huginn-projects end <project> [--now]', 1);
+    if (!rest.length) die('usage: huginn-projects end <project> [--now|--keep-sessions]', 1);
     let now = false;
+    let keep = false;
     for (const a of rest.slice(1)) {
       if (a === '--now') now = true;
+      else if (a === '--keep-sessions') keep = true;
       else die(`unknown argument '${clean(a, 40)}'`, 1, '(huginn-projects --help)');
     }
+    if (now && keep) die('--now and --keep-sessions ask for opposite things', 1);
     const proj = await resolve(rest[0]);
-    const r = await call('DELETE',
-      `/v1/projects/${encodeURIComponent(proj.id)}${now ? '?end=1' : ''}`);
+    // ⚠ THE MEMBERS ARE READ BEFORE THE RECORD IS DELETED. After the DELETE the
+    // project is not in the list any more, so nothing can resolve its name or
+    // its id — which is how the old remedy line ("end them with: huginn projects
+    // end <name> --now") came to name a command that answers "no project called
+    // …" every single time. A remedy that cannot be run is worse than none, and
+    // the only names that still work afterwards are tmux names. Only for
+    // --keep-sessions: every other mode learns what happened from the daemon's
+    // own `ended`/`refused`, and a round trip nobody reads is a round trip that
+    // can only add a way to fail.
+    let live = [];
+    if (keep) {
+      const detail = await call('GET', `/v1/projects/${encodeURIComponent(proj.id)}`);
+      // The envelope, or the bare record an older daemon answered with.
+      const record = (detail.json && detail.json.project) || detail.json || {};
+      live = [record.lead, ...(Array.isArray(record.members) ? record.members : [])]
+        .filter((m) => m && !m.endedAt)
+        .map((m) => clean(m.name || m.claudeName, 60).replace(/\//g, '-'))
+        .filter(Boolean);
+    }
+    // ⚠ THE DEFAULT ENDS THE SESSIONS, GENTLY, and `?end=` is the daemon's own
+    // spelling: `1` is the graceful wind-down (the wrap-up phrase into each
+    // composer, auto-end once idle), `now` is outright, and NO query at all ends
+    // NOTHING. That last one used to be the default, so `projects end` deleted
+    // the record and left the lead — a real claude — running with no project
+    // behind it and no project-level way to stop it. `--keep-sessions` is now
+    // the way to ask for that, out loud, with the names printed.
+    const q = keep ? '' : (now ? '?end=now' : '?end=1');
+    const r = await call('DELETE', `/v1/projects/${encodeURIComponent(proj.id)}${q}`);
+    const d = r.json || {};
+    const refused = Array.isArray(d.refused) ? d.refused : [];
     emit(r, () => {
-      const d = r.json || {};
       const ended = Array.isArray(d.ended) ? d.ended.map((x) => clean(x, 60)).filter(Boolean) : [];
-      let s = `\n  ended ${clean(proj.name, 60)}`;
+      const lines = ['', `  ended ${clean(proj.name, 60)}${keep ? ' (the record only)' : ''}`];
       // Whether the SESSIONS went with it is the difference between a tidy-up
       // and a dozen Claudes still burning tokens in tmux, so it is said out loud
       // either way rather than inferred from the flag that was typed.
-      if (ended.length) s += `\n  its sessions were ended too: ${ended.join(', ')}`;
-      else s += '\n  its sessions are still running — end them with: huginn projects end <name> --now';
-      return s + '\n';
+      if (ended.length) {
+        lines.push(now
+          ? `  its sessions were ended: ${ended.join(', ')}`
+          : `  its sessions were asked to wrap up, and end once idle: ${ended.join(', ')}`);
+      }
+      // ⚠ A REFUSED MEMBER IS STILL RUNNING, with no project behind it. The
+      // daemon names them (a pane sitting on a permission or folder-trust dialog
+      // cannot be handed a wrap-up phrase), and this is the only client that
+      // asked for the delete, so it is the only one that can say so.
+      if (refused.length) {
+        lines.push('  DID NOT WIND DOWN, and are still running:');
+        for (const f of refused) {
+          const n = clean(f && (f.name || f.claudeName), 60).replace(/\//g, '-');
+          lines.push(`    ${n || '?'}  ${clean(f && f.why, 120) || 'no reason given'}`);
+        }
+        lines.push(`  end one yourself with: huginn kill ${clean(refused[0] &&
+          (refused[0].name || refused[0].claudeName), 60).replace(/\//g, '-') || '<session>'}`);
+      }
+      if (keep) {
+        if (live.length) {
+          lines.push(`  its sessions are still running: ${live.join(', ')}`);
+          lines.push(`  end one with: huginn end ${live[0]}   (or huginn kill ${live[0]} to stop it now)`);
+        } else {
+          lines.push('  it had no sessions left to keep');
+        }
+      }
+      lines.push('');
+      return lines.join('\n');
     });
+    // Same rule as a partial spawn: the record went, some of the cluster did
+    // not, and a script that branched on the exit code would call that done.
+    if (refused.length) process.exit(1);
     return;
   }
 
