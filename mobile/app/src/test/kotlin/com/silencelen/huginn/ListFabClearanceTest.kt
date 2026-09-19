@@ -38,7 +38,7 @@ class ListFabClearanceTest {
         "ChatsScreen.kt",
         "SessionsScreen.kt",
         "RoundsScreen.kt",
-        "ConsolesScreen.kt",
+        "AppsScreen.kt",
         "ProjectsScreen.kt",
     )
 
@@ -49,12 +49,12 @@ class ListFabClearanceTest {
      * SCREEN. Chats, Sessions and Rounds are tabs: the Scaffold's `NavigationBar`
      * sits under them and consumes the system nav inset itself, so a
      * `navigationBarsPadding()` there would DOUBLE it (`MainActivity` zeroes
-     * `contentWindowInsets` for exactly that reason). Consoles and Projects are
+     * `contentWindowInsets` for exactly that reason). Apps and Projects are
      * pushed destinations with no bar beneath, so nothing consumes it and their
-     * FAB was drawn straight over the system gesture bar — "Add console" and
+     * FAB was drawn straight over the system gesture bar — "Add app" and
      * "New project" half-buried under the home pill on the owner's Fold.
      */
-    private val childFabScreens = listOf("ConsolesScreen.kt", "ProjectsScreen.kt")
+    private val childFabScreens = listOf("AppsScreen.kt", "ProjectsScreen.kt")
 
     @Test
     fun `the clearance is the button plus a gap above and below it`() {

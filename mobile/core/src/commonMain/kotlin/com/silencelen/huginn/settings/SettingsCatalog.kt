@@ -388,6 +388,19 @@ object SettingsCatalog {
                 availability = { it.quickActions },
             ),
             SettingsItem(
+                id = "chats.apps",
+                title = "Apps",
+                summary = "The pages huginn hosts itself, whether each one answers, and whether " +
+                    "your devices can reach it.",
+                keywords = listOf("app", "apps", "console", "consoles", "dashboard", "page", "armap", "link", "retrofit"),
+                // The same `/v1/status` shelf its siblings use — the probe carries
+                // no apps fact — and the shells additionally hide their own entry
+                // when neither `/v1/apps` nor `/v1/consoles` answers. `console`
+                // stays in the keywords: this row is where somebody searching the
+                // old word has to land.
+                availability = { it.quickActions },
+            ),
+            SettingsItem(
                 id = "chats.projects",
                 title = "Projects",
                 summary = "Clusters of sessions with roles: the tree, each project's dashboard, and a lead's proposals.",

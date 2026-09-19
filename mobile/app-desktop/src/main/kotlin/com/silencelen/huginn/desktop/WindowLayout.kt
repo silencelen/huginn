@@ -236,7 +236,7 @@ object Splitter {
         view == View.CHATS || view == View.SESSIONS || view == View.SCRATCHPADS ||
             // Projects is list-plus-detail for the same reason Pages is: the TREE
             // is the navigation, and a dashboard with no way to reach the other
-            // clusters is a report rather than a screen. Consoles is deliberately
+            // clusters is a report rather than a screen. Apps is deliberately
             // NOT here — it spans both columns like Devices, because a row already
             // carries everything there is to say about a URL.
             view == View.PROJECTS ||

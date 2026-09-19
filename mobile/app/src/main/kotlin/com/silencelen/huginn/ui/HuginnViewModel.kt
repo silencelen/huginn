@@ -12,8 +12,10 @@ import com.silencelen.huginn.appVersion
 import com.silencelen.huginn.data.Account
 import com.silencelen.huginn.data.ArchivedSession
 import com.silencelen.huginn.data.Chat
-import com.silencelen.huginn.data.Console
-import com.silencelen.huginn.data.ConsoleApproval
+import com.silencelen.huginn.data.App
+import com.silencelen.huginn.data.AppCreate
+import com.silencelen.huginn.data.AppForm
+import com.silencelen.huginn.data.AppList
 import com.silencelen.huginn.data.ChatDetail
 import com.silencelen.huginn.data.ChatEvent
 import com.silencelen.huginn.data.HuginnClient
@@ -1777,12 +1779,12 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
             // permanently reports a missing feature as a fault is a status bar
             // people stop reading.
             landArchives()
-            // The projects and consoles probes ride the same once-per-connection
+            // The projects and apps probes ride the same once-per-connection
             // refresh, for the reason the two above do: it is the one place that
             // runs once per connection, which is exactly the cadence feature
             // detection wants. A 404 at either turns every way in off.
             landProjects()
-            landConsoles()
+            landApps()
             _loading.value = false
         }
     }
@@ -2150,7 +2152,7 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
 
     fun stagePadInSession(name: String, text: String) = appendToDraft(sessionDraftKey(name), text)
 
-    // ------------------------------------------------- projects & consoles
+    // ----------------------------------------------------- projects & apps
 
     private val _projects = MutableStateFlow<List<ProjectRow>>(emptyList())
     val projects: StateFlow<List<ProjectRow>> = _projects.asStateFlow()
@@ -2202,18 +2204,32 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
     private val _projectBusy = MutableStateFlow(false)
     val projectBusy: StateFlow<Boolean> = _projectBusy.asStateFlow()
 
-    private val _consoles = MutableStateFlow<List<Console>>(emptyList())
-    val consoles: StateFlow<List<Console>> = _consoles.asStateFlow()
-
-    private val _consoleApproval = MutableStateFlow<ConsoleApproval?>(null)
-    val consoleApproval: StateFlow<ConsoleApproval?> = _consoleApproval.asStateFlow()
-
-    /** Whether this daemon HAS consoles. Same probe contract as projects. */
-    private val _consolesAvailable = MutableStateFlow<Boolean?>(null)
-    val consolesAvailable: StateFlow<Boolean?> = _consolesAvailable.asStateFlow()
+    private val _apps = MutableStateFlow(AppList())
+    val apps: StateFlow<AppList> = _apps.asStateFlow()
 
     /**
-     * The project list and the consoles registry, fetched once per connection.
+     * Whether this daemon HAS apps. Same probe contract as projects — and the
+     * client asks BOTH names before answering false, because a daemon older than
+     * the 3.6 rename only serves `/v1/consoles`.
+     */
+    private val _appsAvailable = MutableStateFlow<Boolean?>(null)
+    val appsAvailable: StateFlow<Boolean?> = _appsAvailable.asStateFlow()
+
+    /**
+     * The daemon's answer to the last add, or null.
+     *
+     * ⚠⚠ IT HOLDS A REFUSAL, NOT JUST A SUCCESS (decision 54). A 422 says the app
+     * is not reachable from this phone's addresses yet and carries the lines that
+     * would fix it; the screen keeps its form open on it. A toast would have
+     * dropped both the lines and the typed address.
+     */
+    private val _appAdd = MutableStateFlow<AppCreate?>(null)
+    val appAdd: StateFlow<AppCreate?> = _appAdd.asStateFlow()
+
+    fun clearAppAdd() { _appAdd.value = null }
+
+    /**
+     * The project list and the apps registry, fetched once per connection.
      *
      * Both are the FEATURE PROBE, which is why they ride the app-wide refresh: it
      * is the one thing that runs once per connection, which is exactly the cadence
@@ -2233,13 +2249,12 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
             }
     }
 
-    private suspend fun landConsoles() {
-        runCatching { client.consoles() }
+    private suspend fun landApps() {
+        runCatching { client.apps() }
             .onSuccess { list ->
-                if (list == null) { _consolesAvailable.value = false; return@onSuccess }
-                _consolesAvailable.value = true
-                _consoles.value = list.consoles
-                _consoleApproval.value = list.approval
+                if (list == null) { _appsAvailable.value = false; return@onSuccess }
+                _appsAvailable.value = true
+                _apps.value = list
             }
     }
 
@@ -2247,8 +2262,8 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch { awaitReady(); landProjects() }
     }
 
-    fun refreshConsoles() {
-        viewModelScope.launch { awaitReady(); landConsoles() }
+    fun refreshApps() {
+        viewModelScope.launch { awaitReady(); landApps() }
     }
 
     private var projectsPollJob: Job? = null
@@ -2466,67 +2481,109 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    private var consolesPollJob: Job? = null
+    private var appsPollJob: Job? = null
 
-    /** Live while a consoles surface is on screen. The probe itself is the host's,
+    /** Live while an apps surface is on screen. The probe itself is the host's,
      *  memoised there, so this is only how often the verdict is collected. */
-    fun startConsolesPolling() {
-        consolesPollJob?.cancel()
-        consolesPollJob = viewModelScope.launch {
+    fun startAppsPolling() {
+        appsPollJob?.cancel()
+        appsPollJob = viewModelScope.launch {
             awaitReady()
             while (isActive) {
-                landConsoles()
+                landApps()
                 delay(15_000)
             }
         }
     }
 
-    fun stopConsolesPolling() {
-        consolesPollJob?.cancel()
-        consolesPollJob = null
+    fun stopAppsPolling() {
+        appsPollJob?.cancel()
+        appsPollJob = null
     }
 
-    /** Probes one console now, from the host, and lands the refreshed row. */
-    fun probeConsole(id: String) {
+    /** Probes one app now and lands the refreshed row. */
+    fun probeApp(id: String) {
         viewModelScope.launch {
             awaitReady()
-            runCatching { client.probeConsole(id) }
-                .onSuccess { row -> _consoles.value = _consoles.value.map { if (it.id == row.id) row else it } }
+            runCatching { client.probeApp(id) }
+                .onSuccess { row -> landAppRow(row) }
+                .onFailure { _toast.value = errText(it) }
+        }
+    }
+
+    private fun landAppRow(row: App) {
+        _apps.value = _apps.value.let { list ->
+            list.copy(apps = list.apps.map { if (it.id == row.id) row else it })
+        }
+    }
+
+    /**
+     * Adds an app.
+     *
+     * ⚠⚠ THE 422 IS PUBLISHED, NOT TOASTED (decision 54). The daemon refused
+     * because the app does not answer on the addresses this phone arrives from,
+     * and it sent back the lines that would fix it; the screen keeps its form
+     * open on that answer. Everything else — a bad address, a name already taken
+     * — is a refusal of the request and says so once, in a toast.
+     */
+    fun addApp(form: AppForm) {
+        viewModelScope.launch {
+            awaitReady()
+            runCatching {
+                client.createApp(
+                    name = form.name.trim(),
+                    url = form.url.trim(),
+                    kind = form.kind?.trim()?.ifBlank { null },
+                    notes = form.notes.trim().ifBlank { null },
+                    unit = form.unit.trim().ifBlank { null },
+                )
+            }
+                .onSuccess { answer ->
+                    _appAdd.value = answer
+                    if (answer.ok) refreshApps()
+                }
                 .onFailure { _toast.value = errText(it) }
         }
     }
 
     /**
-     * Adds or edits a console. [id] null is a new one.
+     * Edits one app.
      *
      * A version conflict is adopted, like every other rev-guarded edit here; a
      * refused ADDRESS is a refusal of the request and says so.
      */
-    fun saveConsole(id: String?, version: Int, name: String, url: String, notes: String?) {
+    fun saveApp(id: String, version: Int, form: AppForm) {
         viewModelScope.launch {
             awaitReady()
-            if (id == null) {
-                runCatching { client.createConsole(name, url, notes = notes) }
-                    .onSuccess { refreshConsoles() }
-                    .onFailure { _toast.value = errText(it) }
-            } else {
-                runCatching { client.saveConsole(id, version, name = name, url = url, notes = notes) }
-                    .onSuccess { saved ->
-                        if (saved.conflict) {
-                            _toast.value = saved.refusal ?: "That console changed on the host — showing the current one."
-                        }
-                        refreshConsoles()
-                    }
-                    .onFailure { _toast.value = errText(it) }
+            runCatching {
+                client.saveApp(
+                    id,
+                    version,
+                    name = form.name.trim(),
+                    url = form.url.trim(),
+                    kind = form.kind?.trim()?.ifBlank { null },
+                    notes = form.notes.trim(),
+                    unit = form.unit.trim(),
+                )
             }
+                .onSuccess { saved ->
+                    if (saved.conflict) {
+                        _toast.value = saved.refusal ?: "That app changed on the host — showing the current one."
+                    }
+                    refreshApps()
+                }
+                .onFailure { _toast.value = errText(it) }
         }
     }
 
-    fun deleteConsole(id: String) {
+    fun deleteApp(id: String) {
         viewModelScope.launch {
             awaitReady()
-            runCatching { client.deleteConsole(id) }
-                .onSuccess { _consoles.value = _consoles.value.filterNot { it.id == id }; refreshConsoles() }
+            runCatching { client.deleteApp(id) }
+                .onSuccess {
+                    _apps.value = _apps.value.let { l -> l.copy(apps = l.apps.filterNot { it.id == id }) }
+                    refreshApps()
+                }
                 .onFailure { _toast.value = errText(it) }
         }
     }
