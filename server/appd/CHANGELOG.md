@@ -9,6 +9,25 @@ appeared only as a side-note on the app releases it happened to ship with. Three
 undocumented, and the notes-cutting matcher could fuse two sections when an app and an appd
 version number collided. Entries below are reconstructed from the shipping commits.
 
+## 3.5.2 — 2026-09-19
+- **Two of huginn's own messages waiting on one session no longer arrive as one prompt** — each
+  automated relay waits for its own turn to end (a person's messages still go at once, 3.5.1).
+- **Ending a project leaves a session that is sitting on a question alone**, goes through the send
+  queue like `/soft-end`, and tells you which members it could not wind down (`refused[]`).
+- **Switching accounts keeps a `~/.claude.json` that is a symlink a symlink**, permissions unchanged.
+- **App icons prefer a real PNG over a `.ico`** (a typed `<link rel="icon">`, then `apple-touch-icon`,
+  then `/favicon.ico` last), so rows show the app's own mark on the phone; `iconAt` on the row moves
+  only when the cached bytes change, and the icon route's ETag is keyed on it.
+- **Apps — the fix lines name the client, not the address it arrived on.** A row that could not be
+  reached printed `IN ACCEPT -source <huginn's own address>`, a rule that can never match an inbound
+  packet. huginn now records which clients arrive on each of its addresses and names those instead,
+  collapsing three or more in one /24; a loopback address asks for no rule at all (it passes on its
+  own once the unit binds 0.0.0.0), and an address nobody has arrived on gets a comment rather than
+  a guess. `clientRemotes` is additive on `GET /v1/apps`.
+- **A session you already have open can be added to a project** (`POST /v1/projects/:id/members`)
+  and dropped again without ending it (`DELETE …/members/:role`); renaming a project member answers
+  409 naming the project.
+
 ## 3.5.1 — 2026-09-18
 - **Sends stopped stalling.** 3.5.0's draft guard trusted a screen capture, and Claude Code draws its
   own queued messages and its "Press up to edit queued messages" hint exactly where a draft would
