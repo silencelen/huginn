@@ -447,7 +447,7 @@ fun paletteItems(
         chats.map {
             PaletteItem.OpenChat(
                 it.id,
-                ChatRules.title(it.title) ?: "Untitled",
+                ChatRules.listLabel(it),
                 listOfNotNull("chat", it.mode, it.lastSnippet?.take(60)).joinToString(" · "),
             )
         }
