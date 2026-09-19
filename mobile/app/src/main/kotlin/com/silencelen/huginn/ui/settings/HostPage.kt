@@ -77,7 +77,9 @@ fun HostPage(
         highlighted = SettingsRowStyle.isHighlighted("host.route", highlight),
         finding = resolvingRoute,
         note = routeNote,
-        suggestedUrl = HuginnSettings.DEFAULT_BASE_URL,
+        // A placeholder, never a pre-filled value (D24): the old default was a real
+        // tailnet address compiled into a public repo.
+        suggestedUrl = HuginnSettings.ROUTE_URL_PLACEHOLDER,
     )
 
     SettingsFieldRow(
