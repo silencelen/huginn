@@ -630,13 +630,20 @@ async function main() {
     // its id — which is how the old remedy line ("end them with: huginn projects
     // end <name> --now") came to name a command that answers "no project called
     // …" every single time. A remedy that cannot be run is worse than none, and
-    // the only names that still work afterwards are tmux names.
-    const detail = await call('GET', `/v1/projects/${encodeURIComponent(proj.id)}`);
-    const record = (detail.json && detail.json.project) || detail.json || {};
-    const live = [record.lead, ...(Array.isArray(record.members) ? record.members : [])]
-      .filter((m) => m && !m.endedAt)
-      .map((m) => clean(m.name || m.claudeName, 60).replace(/\//g, '-'))
-      .filter(Boolean);
+    // the only names that still work afterwards are tmux names. Only for
+    // --keep-sessions: every other mode learns what happened from the daemon's
+    // own `ended`/`refused`, and a round trip nobody reads is a round trip that
+    // can only add a way to fail.
+    let live = [];
+    if (keep) {
+      const detail = await call('GET', `/v1/projects/${encodeURIComponent(proj.id)}`);
+      // The envelope, or the bare record an older daemon answered with.
+      const record = (detail.json && detail.json.project) || detail.json || {};
+      live = [record.lead, ...(Array.isArray(record.members) ? record.members : [])]
+        .filter((m) => m && !m.endedAt)
+        .map((m) => clean(m.name || m.claudeName, 60).replace(/\//g, '-'))
+        .filter(Boolean);
+    }
     // ⚠ THE DEFAULT ENDS THE SESSIONS, GENTLY, and `?end=` is the daemon's own
     // spelling: `1` is the graceful wind-down (the wrap-up phrase into each
     // composer, auto-end once idle), `now` is outright, and NO query at all ends
