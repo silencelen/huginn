@@ -457,25 +457,6 @@ const SUBMIT_CONFIRM_MS = 1_000;
 const SUBMIT_CONFIRM_POLL_MS = 100;
 
 /**
- * The composer's own content, as opposed to anything else with a caret on it.
- *
- * ⚠ AND IT IS THE **LAST** CARET, NOT THE FIRST. Claude Code echoes a SUBMITTED
- * message above the box with the same `❯` glyph, so a rule that reads the bottom
- * REGION — which is what `composerDrawn` and the dialog rules correctly do —
- * sees every successful send as text still sitting in the composer. That cost a
- * whole sweep: nine runs came back "submitted AND reappeared in the box" when
- * the box was empty in every one of them. Scanning UP from the bottom finds the
- * composer first, because the echo is above it and the status lines below carry
- * no caret.
- *
- * Wrapped input continues on the rows beneath the caret with no caret of their
- * own, so they are joined in, stopping at the box's closing rule.
- *
- * Returns null when there is no composer at all — a plain shell, a pane still
- * booting — which is a different answer from "the composer is empty" and the
- * callers below rely on the difference.
- */
-/**
  * ─── THE GHOST IS NOT A DRAFT ──────────────────────────────────────────────
  *
  * ⚠ P-14 (2026-09-19). Claude Code draws an inline SUGGESTION in an empty
@@ -537,6 +518,25 @@ function stripGhost(line) {
   return out;
 }
 
+/**
+ * The composer's own content, as opposed to anything else with a caret on it.
+ *
+ * ⚠ AND IT IS THE **LAST** CARET, NOT THE FIRST. Claude Code echoes a SUBMITTED
+ * message above the box with the same `❯` glyph, so a rule that reads the bottom
+ * REGION — which is what `composerDrawn` and the dialog rules correctly do —
+ * sees every successful send as text still sitting in the composer. That cost a
+ * whole sweep: nine runs came back "submitted AND reappeared in the box" when
+ * the box was empty in every one of them. Scanning UP from the bottom finds the
+ * composer first, because the echo is above it and the status lines below carry
+ * no caret.
+ *
+ * Wrapped input continues on the rows beneath the caret with no caret of their
+ * own, so they are joined in, stopping at the box's closing rule.
+ *
+ * Returns null when there is no composer at all — a plain shell, a pane still
+ * booting — which is a different answer from "the composer is empty" and the
+ * callers below rely on the difference.
+ */
 const RULE_RE = /^[─━—–_=-]{3,}$/;
 function composerText(lines, { dropGhost = false } = {}) {
   const arr = Array.isArray(lines) ? lines : String(lines || '').split('\n');
