@@ -101,6 +101,12 @@ class HuginnMessagingService : FirebaseMessagingService() {
                 options = data["options"],
             )
         } else null
+        // ⚠ COLLECTED, NOT POSTED YET. Everything this push would draw is built
+        // here — synchronously, off the payload, with no network — and posted a
+        // few lines down, AFTER the claim and under the same hold of the
+        // observation gate. See [PushAnnounce] for the race that ordering closes.
+        val posts = mutableListOf<() -> Unit>()
+
         if (headroom != null) {
             // The focused-target rule, same as everywhere else: a limit notice
             // about the session on screen says nothing the screen does not. The
@@ -110,7 +116,7 @@ class HuginnMessagingService : FirebaseMessagingService() {
                 Foreground.showsSession(subject)
             if (!hidden) {
                 val a = HeadroomNotices.postArgs(headroom)
-                SessionWatchWorker.post(
+                posts += { SessionWatchWorker.post(
                     applicationContext,
                     a.title,
                     a.text,
@@ -120,7 +126,7 @@ class HuginnMessagingService : FirebaseMessagingService() {
                     actions = a.actions,
                     key = a.key,
                     isResult = a.isResult,
-                )
+                ) }
             }
         }
 
@@ -136,7 +142,7 @@ class HuginnMessagingService : FirebaseMessagingService() {
         )
         if (proposal != null) {
             val a = ProjectNotices.postArgs(proposal)
-            SessionWatchWorker.post(
+            posts += { SessionWatchWorker.post(
                 applicationContext,
                 a.title,
                 a.text,
@@ -148,7 +154,7 @@ class HuginnMessagingService : FirebaseMessagingService() {
                 key = a.key,
                 project = a.project,
                 projectActions = a.projectActions,
-            )
+            ) }
         }
 
         val redundant = proposal != null || headroom != null || kind == "session_resolved" || when (kind) {
@@ -157,10 +163,12 @@ class HuginnMessagingService : FirebaseMessagingService() {
             else -> false
         }
 
-        // Posted from the payload first, and without touching the network: the phone
-        // may have been woken from Doze with a few seconds of grace, and an alert that
-        // depends on a round trip to arrive is an alert that sometimes does not.
-        if (!redundant) SessionWatchWorker.post(
+        // Built from the payload and without touching the network: the phone may
+        // have been woken from Doze with a few seconds of grace, and an alert
+        // that depends on a round trip to arrive is an alert that sometimes does
+        // not. It is posted below, behind the claim and nothing else — the gate
+        // is bounded at [PushAnnounce.GATE_WAIT_MS] for exactly that reason.
+        if (!redundant) posts += { SessionWatchWorker.post(
             applicationContext,
             title,
             text,
@@ -178,19 +186,62 @@ class HuginnMessagingService : FirebaseMessagingService() {
             // a notification may only offer choices huginn itself put on the screen.
             replyChat = if (kind == "chat_finished") subject else null,
             isResult = kind == "session_finished",
-        )
+        ) }
 
         // Then bring the app's own record up to date, so the ten-minute alarm does not
         // later rediscover this same transition and repeat it. Best effort by design —
         // if it fails the worst case is one duplicate, which is much better than a
         // missed alert.
         CoroutineScope(Dispatchers.IO).launch {
+            // ⚠⚠ CLAIM FIRST, POST SECOND, BOTH UNDER ONE HOLD OF THE OBSERVATION
+            // GATE. This used to post synchronously above and claim down here in
+            // a separate coroutine, and in the gap any of the five same-process
+            // callers of WatchNotifier.apply could see the identical transition as
+            // fresh — the `notified` baseline still did not name it — and post its
+            // own notification under the same per-session id. Whichever landed
+            // second won, and a cycle whose prompt fetch comes back empty posts
+            // the generic "Waiting for your answer": the question and its answer
+            // buttons, silently replaced. The daemon reported the session
+            // unclaimed for the width of the gap. See [PushAnnounce].
+            PushAnnounce.announce(
+                claim = {
+                    // Consumes the attention transition, so nothing downstream
+                    // re-announces what the push has already said.
+                    if (kind == "session_attention" && subject != null) {
+                        runCatching {
+                            val settings = SettingsStore(applicationContext)
+                            settings.setNotifiedSessions(settings.notifiedSessions.first() + subject)
+                        }
+                    }
+                    // The same claim for a ladder move, and for the same reason: the
+                    // reconcile below sees `laddered` gain this name and would post
+                    // the identical notice a second time. Left deliberately blank as
+                    // to WHICH family — any value ends the edge, and the digest
+                    // writes the real one on the next pass.
+                    val laddered = headroom?.takeIf { it.kind == HeadroomNotices.Kind.DOWNGRADED }?.session
+                    if (laddered != null) {
+                        runCatching {
+                            val settings = SettingsStore(applicationContext)
+                            val known = settings.ladderedSessions.first()
+                            if (!known.containsKey(laddered)) {
+                                settings.setLadderedSessions(known + (laddered to HeadroomNotices.PUSHED))
+                            }
+                        }
+                    }
+                },
+                post = { posts.forEach { it() } },
+            )
+
             // Proof that push works — and the moment to act on it. Recording the
             // arrival is not enough on its own: the pending alarm was armed with
             // whatever cadence was true when it was set, so without re-arming here
             // a healthy setup still wakes the device on the tight schedule until
             // the next beat happens to notice. Feeding the watchdog on every push
             // means a phone receiving pushes may never wake for the alarm at all.
+            //
+            // ⚠ AFTER THE ANNOUNCEMENT, not before: these are DataStore reads and
+            // writes, and nothing about the heartbeat's cadence is worth a
+            // millisecond of a notification's Doze grace.
             runCatching {
                 val settings = SettingsStore(applicationContext)
                 val now = System.currentTimeMillis()
@@ -202,36 +253,6 @@ class HuginnMessagingService : FirebaseMessagingService() {
                         settings.pushesSent.first(),
                         settings.pushesReceived.first(),
                     ))
-                }
-            }
-            // Claim this session BEFORE reconciling. Otherwise the reconcile's own
-            // WatchNotifier sees the same transition as fresh and posts a SECOND
-            // notification under the same per-session id — and its text is the
-            // generic "Waiting for your answer" whenever its prompt fetch comes
-            // back empty, silently replacing the question and its answer buttons.
-            // Observed on-device: the first attention push rendered as the generic
-            // line, the second as the question. The push already told the user;
-            // nothing downstream should re-announce it.
-            if (kind == "session_attention" && subject != null) {
-                runCatching {
-                    val settings = SettingsStore(applicationContext)
-                    settings.setNotifiedSessions(settings.notifiedSessions.first() + subject)
-                }
-            }
-            // The same claim for a ladder move, and for the same reason: the
-            // reconcile below sees `laddered` gain this name and would post the
-            // identical notice a second time. The push already told the reader;
-            // claiming the name consumes the transition. Left deliberately blank
-            // as to WHICH family — any value ends the edge, and the digest writes
-            // the real one on the next pass.
-            val laddered = headroom?.takeIf { it.kind == HeadroomNotices.Kind.DOWNGRADED }?.session
-            if (laddered != null) {
-                runCatching {
-                    val settings = SettingsStore(applicationContext)
-                    val known = settings.ladderedSessions.first()
-                    if (!known.containsKey(laddered)) {
-                        settings.setLadderedSessions(known + (laddered to HeadroomNotices.PUSHED))
-                    }
                 }
             }
             withTimeoutOrNull(15_000) { reconcile(applicationContext) }
