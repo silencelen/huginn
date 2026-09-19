@@ -241,11 +241,26 @@ class DevicesViewTest {
     }
 
     @Test
-    fun aMachineIsOnlineWhenAnyOfItsFacetsIs() {
-        // The real shape this catches: the desktop app is closed (claude facet
-        // dark) while the serving SERVICE still answers. The box is not offline.
+    fun aMachineIsOnlineWhenItsClaudeFacetIs() {
+        // ⚠ THIS USED TO BE `any facet`, and the reading behind it — "the desktop
+        // app is closed while the serving SERVICE still answers, so the box is not
+        // offline" — is true about the BOX and wrong about the question. The card
+        // under this dot says "not reachable · last seen yesterday", because that
+        // line is drawn per claude row; the rail tooltip counted this flag and
+        // said "4 devices · 4 reachable" over a list showing two that were not.
+        // One machine, one second, two answers. The question a person is asking a
+        // fleet list is "could huginn run something here", and only the claude
+        // facet answers it. See DeviceRulesTest in :core, where the rule now lives.
         val g = groupByMachine(listOf(claudeRow().copy(online = false), servingRow())).single()
-        assertTrue(g.online)
+        assertFalse(g.online, "an always-up -llm row must not contradict the card beneath it")
+        assertTrue(groupByMachine(listOf(claudeRow(), servingRow().copy(online = false))).single().online)
+    }
+
+    @Test
+    fun aServeOnlyMachineIsStillJudgedOnWhatItHas() {
+        // The other half of the rule: a box with no claude row at all is not
+        // permanently offline — its serving row is the only thing there is to ask.
+        assertTrue(groupByMachine(listOf(servingRow(machine = "lonely"))).single().online)
     }
 
     @Test
