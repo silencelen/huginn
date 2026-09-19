@@ -21,10 +21,13 @@ class DevicesViewTest {
         queued: Int = 0,
         version: String? = null,
         lastSeen: Long? = null,
+        locked: Boolean = false,
+        actWhileLocked: Boolean? = null,
     ) = Device(
         id = "d1", name = "PRESTIGE", platform = "windows",
         scope = scope, effectiveScope = effective, online = online,
         running = running, queued = queued, version = version, lastSeen = lastSeen,
+        locked = locked, actWhileLocked = actWhileLocked,
     )
 
     /** A fixed clock; `lastSeen` is epoch MILLIseconds, like the daemon sends it. */
@@ -40,6 +43,34 @@ class DevicesViewTest {
         val line = describeDevice(device(scope = "own", effective = "look"))
         assertTrue(line.contains("own"), line)
         assertTrue(line.contains("look while locked"), line)
+    }
+
+    /**
+     * A machine whose owner turned "Keep act mode while locked" on.
+     *
+     * ⚠ THE SCOPES NOW MATCH, AND THAT IS THE TRAP. `own`/`own` is what an
+     * UNLOCKED machine looks like too, so with nothing added the fleet list would
+     * describe a locked box exactly as it describes one somebody is sitting at —
+     * and the one fact a reader wants here ("is that thing running unattended?")
+     * would be the one fact the line dropped.
+     */
+    @Test
+    fun aMachineThatKeepsActingWhileLockedSaysSo() {
+        val line = describeDevice(device(scope = "own", effective = "own", locked = true, actWhileLocked = true))
+        assertTrue(line.contains("own"), line)
+        assertTrue(line.contains("acting while locked"), line)
+        assertFalse(line.contains("look"), line)   // never the drop it did NOT take
+    }
+
+    @Test
+    fun andSaysNothingExtraWhenNobodyChangedTheRule() {
+        // Locked with the setting off already says "look while locked" above;
+        // unlocked with it ON is an ordinary machine and must read as one.
+        val line = describeDevice(device(scope = "own", effective = "own", locked = false, actWhileLocked = true))
+        assertFalse(line.contains("locked"), line)
+        // And a row from a daemon that never heard of the field says nothing.
+        val old = describeDevice(device(scope = "own", effective = "own", locked = true, actWhileLocked = null))
+        assertFalse(old.contains("acting while locked"), old)
     }
 
     @Test

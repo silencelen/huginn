@@ -536,6 +536,24 @@ object SettingsCatalog {
                 inventory = listOf(49),
             ),
             SettingsItem(
+                id = "devices.act-while-locked",
+                title = "Keep act mode while locked",
+                summary = "Lets huginn change and run things here while the screen is locked. " +
+                    "Off by default: a locked machine is read-only until someone unlocks it.",
+                keywords = listOf(
+                    "act", "lock", "locked", "unlock", "screen", "persistent", "unattended",
+                    // What somebody types when they arrive here from the symptom
+                    // rather than from the feature: a box they reach over remote
+                    // desktop used to read as locked and refuse every Act.
+                    "rdp", "remote desktop", "remote", "headless", "3am", "always",
+                ),
+                surface = Surface.DESKTOP,
+                // The same gate as the scope it modifies, and no narrower: both
+                // describe what this computer will let a remote request do to
+                // it, so they appear and disappear together.
+                availability = { it.enrolable },
+            ),
+            SettingsItem(
                 id = "devices.work-folder",
                 title = "Folder for Work runs",
                 summary = "Where a run starts on this machine.",

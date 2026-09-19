@@ -47,6 +47,23 @@
       "running": false,
       "queued": 0,
       "awaitingPoll": true
+    },
+    {
+      "id": "74db0c69-2acd-4b54-85f8-4dfae32e896b",
+      "name": "A-REMOTE-BOX",
+      "platform": "windows",
+      "scope": "own",
+      "effectiveScope": "own",
+      "locked": true,
+      "actWhileLocked": true,
+      "root": "C:\\claude",
+      "version": "1.5.2",
+      "online": true,
+      "lastSeen": 1787677374439,
+      "registeredAt": 1789345978194,
+      "running": false,
+      "queued": 0,
+      "awaitingPoll": false
     }
   ]
 }

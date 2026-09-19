@@ -118,6 +118,16 @@ const DEFAULTS = {
   scope: 'work',
   root: null,
   claude: 'claude',
+  // Whether a lock screen is allowed to withdraw act here. OFF is today's rule
+  // everywhere: a machine that reports itself locked drops to `look` until
+  // somebody unlocks it. ON says "not on this box" — the scope in the config is
+  // the scope in force whatever the screen is doing.
+  //
+  // It lives in the CONFIG and nowhere else, like the scope beside it: widening
+  // what a device will do requires touching the device. Nothing the daemon sends
+  // can turn it on, and the daemon is told about it only so its pre-check agrees
+  // with the answer this runner would give anyway.
+  actWhileLocked: false,
 };
 
 function loadConf() {
@@ -464,6 +474,34 @@ function cwdFor(scope, locked, root) {
  */
 const locked = () => false;
 
+/**
+ * The lock signal the POLICY is allowed to see.
+ *
+ * Two different questions wear the same word. "Is this machine locked" is a fact
+ * about a screen, and it is what this runner REPORTS — it belongs in the beat and
+ * in the fleet list, honestly. "Does that lock withdraw act" is a decision its
+ * owner makes, once, on the machine, and it is what the policy consumes.
+ *
+ * Keeping them apart is why the case matrix did not have to grow a dimension:
+ * `shared/device-policy.json` still decides (scope, locked, mode) exactly as it
+ * did, and this is the one transform in front of it. A setting that had instead
+ * been wired into the matrix would have rewritten the security contract every
+ * runner is tested against, to express a choice that is not about the lattice at
+ * all.
+ *
+ * ⚠ ONLY A REAL `true` TURNS IT ON. An absent key — every config written before
+ * this existed — is OFF, and so is a string, a 1, or anything else a hand-edited
+ * device.json might hold. The failure mode of guessing here is a machine that
+ * runs Bash unattended because somebody typed `"actWhileLocked": "no"`.
+ *
+ * On THIS runner it is inert today and says so out loud: locked() is always
+ * false here (see above), so there is no lock to keep act through. It exists
+ * because the two runners must mean the same thing by the same setting — the
+ * whole reason the policy is generated rather than written twice — and because
+ * the daemon reads the field off the enrolment either way.
+ */
+const gateLocked = (lock, actWhileLocked) => !!lock && actWhileLocked !== true;
+
 // -------------------------------------------------------------------- http
 
 function api(method, p, body, { timeoutMs = 20000 } = {}) {
@@ -527,6 +565,18 @@ async function enrol(conf) {
     // stay absent all the way to the daemon: `false` is a claim about a box,
     // and defaulting it would label every pre-facet machine wrongly.
     persistent: typeof conf.persistent === 'boolean' ? conf.persistent : undefined,
+    // Whether a lock withdraws act here. Sent so the daemon's PRE-CHECK reaches
+    // the same verdict this runner would — without it a machine set to keep act
+    // while locked would be refused a minute earlier, by the half of the system
+    // that does not decide.
+    //
+    // ⚠ ALWAYS A REAL BOOLEAN, unlike `persistent` above. That one may be absent
+    // because absence there means "an old manager never knew"; here absence
+    // would mean the daemon kept a stale `true` after somebody turned the
+    // setting back OFF. A narrowing that does not travel is not a narrowing.
+    // (Absence still means "never said" at the daemon — that is for the runners
+    // that predate this field, not for this one.)
+    actWhileLocked: conf.actWhileLocked === true,
   });
   // ⚠ THE SCOPE ECHO IS THE FENCE against an old daemon. An appd without the
   // generate rung files an unknown scope as its own floor — which would
@@ -676,9 +726,12 @@ let activeRun = null;
 function runWork(id, work, conf) {
   return new Promise((resolve) => {
     const scope = parseScope(conf.scope);
+    // What this machine REPORTS (rides every frame home) and what the POLICY
+    // sees (the owner's standing answer applied to it) — see gateLocked.
     const lock = locked();
+    const gate = gateLocked(lock, conf.actWhileLocked);
 
-    const why = refusal(scope, lock, work.mode);
+    const why = refusal(scope, gate, work.mode);
     if (why) {
       // Refused HERE, by the machine, and said out loud. The daemon pre-checks the
       // same rule so a person hears it at the moment they ask — but this is the
@@ -703,8 +756,8 @@ function runWork(id, work, conf) {
       return;
     }
 
-    const argv = argvFor(work, scope, lock);
-    const cwd = cwdFor(scope, lock, conf.root);
+    const argv = argvFor(work, scope, gate);
+    const cwd = cwdFor(scope, gate, conf.root);
     log(`running ${work.id} (${work.mode}) in ${cwd}`);
 
     // ⚠ CHECKED BEFORE THE SPAWN, because spawn() raises ENOENT for a missing
@@ -890,6 +943,12 @@ async function serve() {
           // is reflected within a minute, without waiting for a re-enrol that
           // only happens when the runner restarts.
           ...(typeof live.persistent === 'boolean' ? { persistent: live.persistent } : {}),
+          // Rides the beat for the same reason the scope does: the config is
+          // edited on the machine, and a runner that only said so at enrolment
+          // would leave the daemon pre-checking against last week's answer for
+          // as long as the process happened to stay up. Sent as a real boolean
+          // both ways — see enrol() for why turning it OFF has to travel.
+          actWhileLocked: live.actWhileLocked === true,
         }).then((r) => { if (r && r.cancel) activeRun?.cancel(); }).catch(() => {});
       }, 60000);
 
@@ -938,6 +997,12 @@ async function status() {
   console.log(`    work runs in ${cwdFor(conf.scope, false, conf.root)} (not a sandbox)`);
   console.log(`    huginn      ${conf.url}`);
   console.log(`    claude      ${conf.claude}`);
+  // Printed BOTH ways, and with the reason it makes no difference here. A
+  // setting that only appears when it is on is a setting somebody has to know
+  // exists before they can check it — and this is the line that answers "why did
+  // act run at 3am" on a machine whose owner has forgotten they said it could.
+  console.log(`    act while locked  ${conf.actWhileLocked === true ? 'yes' : 'no'}`
+    + '  (no screen here to lock, so this machine never drops either way)');
   console.log(`    config      ${CONF_FILE}`);
   // ⚠ THE REASON HERE TOO. `status` is precisely where somebody looks when the
   // runner will not start, and printing MISSING for a file that is sitting right
@@ -992,9 +1057,24 @@ async function main() {
       // directory had been dropped and every job would land in $HOME. The help,
       // the shell wrapper and the completion all advertise these flags; the
       // equals form is the one people type.
-      const parsed = parseFlags(process.argv.slice(3), ['scope', 'root', 'url', 'name', 'claude']);
+      // ⚠ BOTH SPELLINGS, AND BOTH VALUELESS. A setting that can only be turned
+      // ON by a flag is a setting nobody can turn off again without opening the
+      // json — so the OFF spelling is a first-class flag, not `--flag=false`
+      // (which parseFlags refuses on purpose, and should: a non-empty string is
+      // truthy, so that spelling once turned things on).
+      const parsed = parseFlags(
+        process.argv.slice(3),
+        ['scope', 'root', 'url', 'name', 'claude', 'act-while-locked', 'no-act-while-locked'],
+        ['act-while-locked', 'no-act-while-locked'],
+      );
       if (parsed.error) { console.error(`huginn-device on: ${parsed.error}`); process.exit(2); }
       const f = parsed.flags;
+      if (f['act-while-locked'] && f['no-act-while-locked']) {
+        console.error('huginn-device on: --act-while-locked and --no-act-while-locked are the same setting');
+        process.exit(2);
+      }
+      if (f['act-while-locked']) conf.actWhileLocked = true;
+      if (f['no-act-while-locked']) conf.actWhileLocked = false;
       // Validated, not floored: at enrol time a typo'd scope must be a refusal,
       // not a silent enrolment at the floor — the floor is now generate, and a
       // typo'd claude enrolment landing there would be a dead device row.
@@ -1039,6 +1119,8 @@ async function main() {
         console.log('  This machine has no screen to lock, so it cannot tell when nobody is');
         console.log('  watching — a desktop drops to read-only while locked and this cannot.');
         console.log(`  "${parseScope(conf.scope)}" here means "${parseScope(conf.scope)}", at 3am, unattended.`);
+        console.log('  (That is what "Keep act mode while locked" turns on for a desktop. It is');
+        console.log('  already the case here, whatever this machine\'s copy of the setting says.)');
       }
       console.log('');
       console.log('  Start it, on a machine somebody uses:');
@@ -1201,6 +1283,9 @@ WantedBy=default.target`);
 
   huginn-device on [--scope look|work|own] [--root DIR] [--url URL]
                               enrol this machine and save the settings
+  huginn-device on --act-while-locked | --no-act-while-locked
+                              whether a lock screen withdraws act on this machine
+                              (default: it does — and there is no screen here)
   huginn-device off           stop offering it: remove the row, then the settings
                               and the token here (and stop the service)
   huginn-device off --force   clear this machine even if huginn is unreachable —
@@ -1226,7 +1311,8 @@ if (require.main === module) {
 } else {
   module.exports = {
     VERSION, MAX_LINE_BYTES, MAX_BATCH_BYTES,
-    shrinkLine, batchLines, parseFlags, tokenOrWhy, cwdFor, effectiveScope, allows, argvFor,
+    shrinkLine, batchLines, parseFlags, tokenOrWhy, cwdFor, effectiveScope, allows, argvFor, refusal,
+    locked, gateLocked,
     engineRefusal, execFor, engineWords, errWords, notFoundText, exitedText, urlRefusal,
     permanent, authFailed, noTokenError, retryDelayMs,
   };

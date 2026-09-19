@@ -430,6 +430,41 @@ class DesktopSettingsTest {
         assertTrue(recovered.startsWith("desktop-kt-"))
         assertEquals(recovered, DesktopSettings(file).clientIdNow())
     }
+
+    /**
+     * "Keep act mode while locked" — OFF unless somebody said otherwise, and
+     * persisted, because it is a standing answer about one machine rather than a
+     * mood.
+     *
+     * ⚠ THE DEFAULT IS THE WHOLE POINT. This decides whether a remote request may
+     * become Bash on a computer with nobody in front of it, so a settings file
+     * that predates the field, or one that is unreadable, must read as NO. A
+     * boolean that defaults the other way is the kind of thing nobody notices
+     * until something ran at 3am.
+     */
+    @Test
+    fun `act while locked is off until somebody says otherwise, and then it stays said`() {
+        val file = freshFile()
+        assertFalse(DesktopSettings(file).deviceActWhileLockedNow(), "a fresh install must not allow it")
+
+        val settings = DesktopSettings(file)
+        settings.setDeviceActWhileLocked(true)
+        assertTrue(settings.deviceActWhileLockedNow())
+        assertTrue(DesktopSettings(file).deviceActWhileLockedNow(), "a relaunch must not forget it")
+
+        settings.setDeviceActWhileLocked(false)
+        assertFalse(DesktopSettings(file).deviceActWhileLockedNow(), "and must not forget the retraction either")
+    }
+
+    @Test
+    fun `a settings file written before the setting existed reads as off`() {
+        val file = freshFile()
+        file.writeText("""{"deviceEnabled":true,"deviceScope":"own"}""")
+        val settings = DesktopSettings(file)
+        assertEquals("own", settings.deviceScopeNow(), "the rest of the file must still be read")
+        assertFalse(settings.deviceActWhileLockedNow(), "silence is not consent")
+    }
+
 }
 
 /**

@@ -53,6 +53,7 @@ internal fun DeviceSection(store: AppStore) {
     val enabled by settings.deviceEnabled.collectAsState()
     val scopeWire by settings.deviceScope.collectAsState()
     val root by settings.deviceRoot.collectAsState()
+    val actWhileLocked by settings.deviceActWhileLocked.collectAsState()
     val status by store.deviceRunner.status.collectAsState()
 
     FormHeader("Let huginn run work on this computer")
@@ -126,22 +127,59 @@ internal fun DeviceSection(store: AppStore) {
 
         ClaudePathField(store)
 
-        Muted(
-            if (LockProbe.supported()) {
-                if (status.locked) {
-                    "This machine reads as locked, so it is read-only until someone unlocks it."
-                } else {
-                    "While the screen is locked, this machine drops to Look and refuses Act."
-                }
+        // ⚠ THE SAME SHARED ROW AS EVERY OTHER TOGGLE, drawn from the catalog id
+        // so search can find it and land on something that exists. It sits here,
+        // under the scopes, because it modifies THEM: it is the answer to "and
+        // does that still hold when nobody is at the keyboard", which is a
+        // question about the three radio buttons above it and about nothing else.
+        SettingsToggleRow(
+            id = "devices.act-while-locked",
+            title = "Keep act mode while locked",
+            checked = actWhileLocked,
+            onCheckedChange = { settings.setDeviceActWhileLocked(it) },
+            // ⚠ THE SUMMARY IS THE CONSENT. A switch labelled only "keep act
+            // mode" hides what is being agreed to; this says the thing somebody
+            // would want to have been told — that the scope above stays in force
+            // with nobody watching — in the words the scope row already uses.
+            summary = if (actWhileLocked) {
+                "On: huginn may change and run things here with nobody at the keyboard. " +
+                    "\"${scopeLabel(scopeWire)}\" means \"${scopeLabel(scopeWire)}\", at 3am."
             } else {
-                "Lock detection is not available on this platform, so this machine " +
-                    "reports itself as locked and will only ever Look."
+                "Off: while the screen is locked this machine drops to Look and refuses Act."
+            },
+            modifier = Modifier.padding(top = 10.dp),
+        )
+
+        Muted(
+            when {
+                // Said first, because with the setting on it is the ONLY one of
+                // these three that is still true — and a machine whose owner
+                // waived the lock rule must not be told it is read-only.
+                actWhileLocked ->
+                    "A lock screen changes nothing here. Someone at this machine can turn " +
+                        "that back off; nothing huginn sends can turn it on."
+                !LockProbe.supported() ->
+                    "Lock detection is not available on this platform, so this machine " +
+                        "reports itself as locked and will only ever Look — unless the switch above is on."
+                status.locked ->
+                    "This machine reads as locked, so it is read-only until someone unlocks it."
+                else ->
+                    "While the screen is locked, this machine drops to Look and refuses Act." +
+                        // Said only where it is true. The probe reads a connected
+                        // remote-desktop session as somebody being here, which is
+                        // the difference between a Windows box being usable
+                        // remotely and it refusing Act for as long as it is on.
+                        if (isWindowsHost()) " A connected remote-desktop session counts as someone being here." else ""
             },
             Modifier.padding(top = 10.dp, start = 4.dp),
             maxLines = 3,
         )
     }
 }
+
+/** The word the scope radio above shows, for the sentence that quotes it back. */
+private fun scopeLabel(wire: String): String =
+    SCOPE_CHOICES.firstOrNull { it.first == wire }?.second ?: wire
 
 /**
  * WHICH `claude` THIS MACHINE RUNS — one field, two doors.

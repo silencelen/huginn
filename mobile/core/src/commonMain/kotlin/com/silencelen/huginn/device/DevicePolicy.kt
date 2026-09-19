@@ -67,6 +67,32 @@ object DevicePolicy {
         if (locked && !exclusive(scope)) parse(DevicePolicyTable.LOCK_DROPS_TO) else scope
 
     /**
+     * Whether a lock actually withdraws anything on THIS machine.
+     *
+     * The lock rule exists because nobody is sitting there, and on most machines
+     * that is exactly right. On some it is not: a box whose whole job is to be
+     * available — one reached over remote desktop, one that sits headless in a
+     * rack — has an owner who has decided, once, on the machine, that a lock
+     * screen is not a statement about whether work may run. That decision is the
+     * "Keep act mode while locked" setting, and this is its whole implementation.
+     *
+     * ⚠ A TRANSFORM IN FRONT OF THE POLICY, NOT A ROW IN IT. Everything below
+     * still decides (scope, locked, mode) exactly as it did, and both runners are
+     * still held to one shared case matrix; this only decides which `locked` the
+     * matrix is shown. Writing the setting into the lattice would have rewritten
+     * the security contract every runner is tested against, to express something
+     * that is not about scopes at all — and would have doubled the matrix.
+     *
+     * ⚠ IT WIDENS THE LOCK AND NOTHING ELSE. A `look` machine with this on is
+     * still a `look` machine; the scope is a separate decision and stays one.
+     *
+     * The honest lock state is reported either way — the fleet list still says
+     * whether a screen is locked. This says what that lock MEANS here.
+     */
+    fun lockWithdraws(locked: Boolean, actWhileLocked: Boolean): Boolean =
+        locked && !actWhileLocked
+
+    /**
      * Whether a mode can run at this scope. `act` mutates; `look` does not permit that.
      *
      * ⚠ AN UNKNOWN MODE IS REFUSED, not mapped to a default. A Kotlin Map has no
