@@ -6,7 +6,6 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
@@ -47,7 +46,12 @@ fun StatusScreen(
 ) {
     val ctx = LocalContext.current
     val nowMs = planClock()
-    Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).navigationBarsPadding()) {
+    // ⚠ THE INSET, NOT A GUESS ABOUT WHO IS UNDER IT. Status is a TAB in
+    // portrait — a NavigationBar pays the bottom inset and this added a second
+    // copy of it — and a pushed reading pane in landscape, where nothing else
+    // pays. `systemNavPadding` is the same call either way because the frame
+    // consumes what the bar already ate. See Insets.kt.
+    Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).systemNavPadding()) {
         if (error != null) {
             Surface(
                 color = MaterialTheme.colorScheme.error.copy(alpha = 0.12f),

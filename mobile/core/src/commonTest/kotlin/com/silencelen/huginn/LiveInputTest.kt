@@ -142,6 +142,64 @@ class LiveInputTest {
         assertEquals("héllo → 世界", LiveInput.diff(S + "héllo → 世界").insert)
     }
 
+    // ------------------------------- the baseline the live field actually uses
+
+    /**
+     * ⚠⚠ THE BASELINE IS THE LAST TEXT SEEN, NOT THE SENTINEL, and this is the
+     * test that would have caught the review's highest phone finding. The field
+     * used to snap back to the sentinel inside `onValueChange`; an IME delivering
+     * its next change before that write reached it was still working from the
+     * grown buffer, so the diff read the whole buffer as new. Five characters in
+     * one burst arrived as 1+2+3+4+5 = fifteen, into a live Claude Code prompt.
+     */
+    @Test
+    fun `a change on top of the last one is only what it added`() {
+        assertEquals("2", LiveInput.diff(S + "1", S + "12").insert)
+        assertEquals("345", LiveInput.diff(S + "12", S + "12345").insert)
+        assertEquals(0, LiveInput.diff(S + "1", S + "12").backspaces)
+    }
+
+    @Test
+    fun `an unchanged field is nothing, whatever it holds`() {
+        assertTrue(LiveInput.diff(S + "ls -la", S + "ls -la").isNothing)
+    }
+
+    @Test
+    fun `text deleted since the last change is that many backspaces`() {
+        assertEquals(3, LiveInput.diff(S + "abc", S).backspaces)
+        assertEquals(4, LiveInput.diff(S + "abc", "").backspaces)
+    }
+
+    @Test
+    fun `a replacement is the deletions and the new text together`() {
+        val t = LiveInput.diff(S + "abc", S + "xyz")
+        assertEquals(3, t.backspaces)
+        assertEquals("xyz", t.insert)
+    }
+
+    @Test
+    fun `an Enter added to text already seen carries no text with it`() {
+        val t = LiveInput.diff(S + "make", S + "make\n")
+        assertEquals("", t.insert)
+        assertTrue(t.enter)
+        assertFalse(t.enterFirst)
+    }
+
+    /** Half a code point is not a keystroke. */
+    @Test
+    fun `a surrogate pair is never split by the shared prefix`() {
+        val t = LiveInput.diff(S + "\uD83D\uDE00", S + "\uD83D\uDE00!")
+        assertEquals(0, t.backspaces)
+        assertEquals("!", t.insert)
+    }
+
+    @Test
+    fun `the one-argument diff is the resting case of the two-argument one`() {
+        for (v in listOf(S, S + "a", "", "hello", S + "make\n", S + "\nls")) {
+            assertEquals(LiveInput.diff(S, v), LiveInput.diff(v), "diff($v)")
+        }
+    }
+
     @Test
     fun `the sentinel is a single invisible character`() {
         assertEquals(1, S.length)

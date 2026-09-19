@@ -7,8 +7,6 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.imePadding
-import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -638,7 +636,7 @@ private fun SessionConversation(
                 Modifier.padding(start = 14.dp, end = 8.dp, top = 6.dp),
             )
             // PERSISTENT, and above the row rather than below it: the input row
-            // owns `imePadding()` and `navigationBarsPadding()`, so anything
+            // owns the keyboard AND navigation inset, so anything
             // placed after it is laid out under the keyboard or behind the
             // navigation bar — visible in a preview and gone on the phone.
             queueNote?.let {
@@ -652,8 +650,7 @@ private fun SessionConversation(
             Row(
                 Modifier
                     .fillMaxWidth()
-                    .imePadding()
-                    .navigationBarsPadding()
+                    .imeAndSystemNavPadding()
                     .padding(start = 12.dp, end = 8.dp, top = 6.dp, bottom = 6.dp),
                 verticalAlignment = Alignment.Bottom,
             ) {

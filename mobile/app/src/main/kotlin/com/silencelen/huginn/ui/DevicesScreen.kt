@@ -57,7 +57,10 @@ fun DevicesScreen(
     // single-slot dialog, which silently kept only the last row.
     var forgetTarget by remember { mutableStateOf<MachineGroup?>(null) }
 
-    Box(Modifier.fillMaxSize()) {
+    // ⚠ A PUSHED DESTINATION WITH NOTHING UNDER IT. The list ended on a
+    // hand-written `bottom = 24.dp`, which is not the system navigation bar and
+    // was never going to be: the last machine's row sat under it. See Insets.kt.
+    Box(Modifier.fillMaxSize().systemNavPadding()) {
         if (devices.isEmpty() && !loading) {
             Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.Center) {
                 if (connected == false) {
@@ -81,7 +84,7 @@ fun DevicesScreen(
         } else {
             LazyColumn(
                 Modifier.fillMaxSize(),
-                contentPadding = PaddingValues(top = 6.dp, bottom = 24.dp),
+                contentPadding = PaddingValues(top = 6.dp, bottom = 12.dp),
             ) {
                 item(key = "devices") {
                     DevicesSection(
