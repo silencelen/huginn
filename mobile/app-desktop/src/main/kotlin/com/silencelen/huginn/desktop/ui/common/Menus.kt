@@ -21,16 +21,25 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.input.key.Key
@@ -228,6 +237,69 @@ fun WithHuginnMenus(content: @Composable () -> Unit) {
 fun RowMenu(items: () -> List<ContextMenuItem>, content: @Composable () -> Unit) {
     ContextMenuArea(items = items, content = content)
 }
+
+/**
+ * THE SAME MENU, WITH SOMETHING TO PRESS.
+ *
+ * ⚠⚠ A RIGHT-CLICK IS NOT AN AFFORDANCE. Rename / Pause / Archive / Delete on a
+ * project existed only behind a secondary click on the project's TITLE in the
+ * detail header: no chevron, no ⋮, no hover mark, and a right-click on the
+ * project row in the list offered nothing at all. The verbs themselves are good
+ * — the three-way delete dialog is the best destructive dialog in the product —
+ * and they were unreachable without guessing.
+ *
+ * So the same `List<ContextMenuItem>` gets a visible door. The list is built by
+ * the same pure `…Menu()` function the right-click uses, which is what keeps the
+ * two from offering different verbs about one object: the trap here is a second
+ * hand-written copy of the items, which drifts the first time a verb is added.
+ *
+ * ⚠ IT DRAWS THE TONES. `HuginnMenuItem` carries whether a verb is destructive,
+ * and a `DropdownMenuItem` that ignored it would put Delete in the same ink as
+ * Open — in the one menu whose whole job is to be found by somebody who has not
+ * used it before. Same three tones as the context-menu representation, from the
+ * same `verbInk`.
+ */
+@Composable
+fun MenuButton(
+    items: () -> List<ContextMenuItem>,
+    description: String,
+    modifier: Modifier = Modifier,
+) {
+    var open by remember { mutableStateOf(false) }
+    val scheme = MaterialTheme.colorScheme
+    Box(modifier) {
+        IconButton(onClick = { open = true }, modifier = Modifier.size(MENU_BUTTON_DP)) {
+            Icon(
+                Icons.Filled.MoreVert,
+                contentDescription = description,
+                modifier = Modifier.size(MENU_GLYPH_DP),
+                tint = scheme.onSurfaceVariant,
+            )
+        }
+        DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
+            items().forEach { item ->
+                val tone = (item as? HuginnMenuItem)?.tone ?: VerbTone.PLAIN
+                DropdownMenuItem(
+                    text = {
+                        Text(
+                            item.label,
+                            style = MaterialTheme.typography.labelMedium,
+                            color = verbInk(tone, scheme),
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    },
+                    onClick = { open = false; item.onClick() },
+                )
+            }
+        }
+    }
+}
+
+/** The ⋮ button's square and its glyph — the size every icon in a header bar is. */
+private val MENU_BUTTON_DP = 28.dp
+
+private val MENU_GLYPH_DP = 18.dp
 
 // ------------------------------------------------------------------ content
 //

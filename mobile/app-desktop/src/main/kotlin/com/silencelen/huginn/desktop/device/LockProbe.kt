@@ -31,12 +31,22 @@ import java.util.concurrent.TimeUnit
  * A `Disc` (disconnected) session is nobody: it is what the machine looks like
  * after somebody closes the remote window.
  *
- * ⚠ UNKNOWN COUNTS AS LOCKED. On a platform with no probe (macOS today), or when
- * the probe itself fails, this reports `true` and the machine stays read-only.
- * That makes `act` unavailable rather than quietly unguarded — the opposite
- * default would honour the letter of the setting while dropping the thing it was
- * chosen for, and nobody would find out until something ran at 3am. The UI says
- * so out loud rather than leaving the owner to wonder why Act is refused.
+ * ⚠ UNKNOWN COUNTS AS LOCKED — AND IS STILL SAID TO BE UNKNOWN. On a platform
+ * with no probe (macOS today), or when the probe itself fails, [locked] reports
+ * `true` and the machine stays read-only. That makes `act` unavailable rather
+ * than quietly unguarded — the opposite default would honour the letter of the
+ * setting while dropping the thing it was chosen for, and nobody would find out
+ * until something ran at 3am.
+ *
+ * ⚠⚠ BUT THE FENCE'S DEFAULT IS NOT A READING, AND THE UI MUST NOT PRINT IT AS
+ * ONE. [read] answers [Reading.UNKNOWN] rather than folding it into LOCKED,
+ * because the two produce different sentences: a machine whose screen really is
+ * locked can be unlocked by whoever is sitting at it, and a machine with no
+ * logind session at all — an LXC, a container, `startx` without `pam_systemd`, a
+ * kiosk — cannot, by anybody, ever. Settings used to choose between those two
+ * sentences by asking `os.name`, so every such Linux box was told to go and
+ * unlock a screen that does not exist. Ask the PROBE whether it answered; never
+ * the platform.
  *
  * ⚠ THIS IS A PRESENCE PROBE, NOT A PERMISSION. What a locked machine is allowed
  * to do is [com.silencelen.huginn.device.DevicePolicy]'s answer, and whether a
@@ -46,20 +56,46 @@ import java.util.concurrent.TimeUnit
  */
 object LockProbe {
 
-    /** True = locked or unknowable, false = definitely somebody's there. */
-    suspend fun locked(): Boolean = withContext(Dispatchers.IO) {
-        val os = System.getProperty("os.name")?.lowercase().orEmpty()
-        when {
-            os.contains("win") -> windowsLocked()
-            os.contains("linux") -> linuxLocked()
-            else -> true
-        }
+    /**
+     * What the probe actually found — three answers, not two.
+     *
+     * [UNKNOWN] is the one that had to exist: it is what a box with no session to
+     * ask about returns, and it is NOT the same state as a screen somebody has
+     * locked. [locked] folds it back to "locked" for the fence, which is the
+     * conservative default the policy wants; the UI reads [known] instead and
+     * says the honest sentence.
+     */
+    enum class Reading {
+        LOCKED,
+        UNLOCKED,
+        UNKNOWN,
+        ;
+
+        /** The fence's answer: unknown is locked. */
+        val locked: Boolean get() = this != UNLOCKED
+
+        /** Whether the probe answered at all. The UI's question, never the fence's. */
+        val known: Boolean get() = this != UNKNOWN
     }
 
-    /** Whether this platform can answer at all — for the honest label in Settings. */
-    fun supported(): Boolean {
+    /** True = locked or unknowable, false = definitely somebody's there. */
+    suspend fun locked(): Boolean = read().locked
+
+    /**
+     * The same probe, ANSWERING RATHER THAN NODDING. The caller that has to
+     * explain itself to a person needs the third state, and a boolean cannot
+     * carry it — [locked] is that boolean and is all the policy ever wanted.
+     */
+    suspend fun read(): Reading = withContext(Dispatchers.IO) {
         val os = System.getProperty("os.name")?.lowercase().orEmpty()
-        return os.contains("win") || os.contains("linux")
+        when {
+            os.contains("win") -> windowsReading()
+            os.contains("linux") -> linuxReading()
+            // No probe on this platform (macOS today). Not "locked": nothing here
+            // was ever asked, and telling the owner to unlock a Mac that is wide
+            // open is the bug this enum exists to stop.
+            else -> Reading.UNKNOWN
+        }
     }
 
     // ------------------------------------------------------------- windows
@@ -125,20 +161,25 @@ object LockProbe {
      * @param quser what `quser` printed, or null if it could not be asked.
      * @param logonUiSessions the session ids LogonUI is running in, or null if
      *   THAT could not be asked — in which case nothing can be ruled out and the
-     *   answer is locked, exactly as it was before this file knew about RDP.
+     *   answer is [Reading.UNKNOWN], which the fence still reads as locked,
+     *   exactly as it did before this file knew about RDP.
      */
-    internal fun verdict(quser: String?, logonUiSessions: Set<Int>?): Boolean {
-        if (logonUiSessions == null) return true
+    internal fun reading(quser: String?, logonUiSessions: Set<Int>?): Reading {
+        if (logonUiSessions == null) return Reading.UNKNOWN
         val here = parseQuser(quser).any {
             it.state == "active" && RDP_SESSION.matches(it.session) && it.id !in logonUiSessions
         }
-        if (here) return false
+        if (here) return Reading.UNLOCKED
         // Today's rule, unchanged: a lock screen anywhere means nobody is at the
         // one place this machine could otherwise be being used from.
-        return logonUiSessions.isNotEmpty()
+        return if (logonUiSessions.isNotEmpty()) Reading.LOCKED else Reading.UNLOCKED
     }
 
-    private fun windowsLocked(): Boolean {
+    /** [reading] as the fence sees it. The rule's own tests are written against this. */
+    internal fun verdict(quser: String?, logonUiSessions: Set<Int>?): Boolean =
+        reading(quser, logonUiSessions).locked
+
+    private fun windowsReading(): Reading {
         // ONE child, two answers, so the two halves cannot describe different
         // moments: a second spawn is a second chance for somebody to lock the
         // screen between them, and the comparison is between session IDS.
@@ -156,31 +197,52 @@ object LockProbe {
                     "Write-Output 'QUSER'; " +
                     "\$q = & quser 2>&1; if (\$q) { \$q | Write-Output }",
             ),
-        ) ?: return true
+        ) ?: return Reading.UNKNOWN
         val marker = out.indexOf("logonui ")
-        if (marker < 0) return true            // the shell answered something else entirely
+        if (marker < 0) return Reading.UNKNOWN  // the shell answered something else entirely
         val body = out.substring(marker + "logonui ".length)
         val split = body.indexOf("quser")
-        if (split < 0) return true
+        if (split < 0) return Reading.UNKNOWN
         val ids = body.substring(0, split).trim().split(Regex("\\s+"))
             .mapNotNull { it.toIntOrNull() }.toSet()
-        return verdict(body.substring(split + "quser".length), ids)
+        return reading(body.substring(split + "quser".length), ids)
     }
 
     // --------------------------------------------------------------- linux
 
-    private fun linuxLocked(): Boolean {
+    private fun linuxReading(): Reading {
         val session = System.getenv("XDG_SESSION_ID")
         val args = if (session.isNullOrBlank()) {
             listOf("loginctl", "show-session", "self", "-p", "LockedHint")
         } else {
             listOf("loginctl", "show-session", session, "-p", "LockedHint")
         }
-        val out = run(args) ?: return true
-        // `run` lowercases, so match lowercase: comparing against "LockedHint=no"
-        // here would never match and every Linux machine would read as locked
-        // forever — a fence that looks like it works because it only ever says no.
-        return !out.contains("lockedhint=no")
+        return linuxReading(run(args))
+    }
+
+    /**
+     * `loginctl show-session … -p LockedHint` → a reading. Pure, because the
+     * interesting cases are the ones that are NOT a LockedHint line.
+     *
+     * ⚠ `run` LOWERCASES, so match lowercase: comparing against "LockedHint=no"
+     * here would never match and every Linux machine would read as locked
+     * forever — a fence that looks like it works because it only ever says no.
+     *
+     * ⚠⚠ AND "NOT no" IS NOT "yes". `loginctl` exits non-zero with *"Caller does
+     * not belong to any known session"* on a box with no logind session at all —
+     * a container, an LXC, `startx` without `pam_systemd`, a kiosk — and the
+     * probe folds stderr in, so that sentence arrived here and was read as a
+     * locked screen. The device then sat `locked: true, effectiveScope: look`
+     * for the life of the process while Settings told the owner to go and unlock
+     * a machine that has no screen to unlock. Anything that is not one of the two
+     * hints is [Reading.UNKNOWN], which is still locked to the fence and is a
+     * different sentence to the reader.
+     */
+    internal fun linuxReading(out: String?): Reading = when {
+        out == null -> Reading.UNKNOWN
+        out.contains("lockedhint=no") -> Reading.UNLOCKED
+        out.contains("lockedhint=yes") -> Reading.LOCKED
+        else -> Reading.UNKNOWN
     }
 
     private fun run(args: List<String>): String? = try {

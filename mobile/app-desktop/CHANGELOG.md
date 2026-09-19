@@ -1,5 +1,31 @@
 # Huginn Desktop changelog
 
+## 1.7.0
+
+Round two of the release walk, from the desktop's side.
+
+- **Tab moves between the controls instead of typing a tab.** From the message box, Tab and
+  Shift+Tab now reach Send, the clip and the suggestion chips — there was no keyboard route out of
+  the composer at all. Ctrl+Tab still types a real tab, and Alt+Tab is left to your window manager.
+  Both new bindings are in the `F1` list.
+- **Clicking the live view gives it the keyboard back.** Once you clicked the composer, every
+  keystroke went there for good — backspaces aimed at the pane included — and the only way back was
+  turning Live off and on.
+- **Projects have a visible menu.** Rename, Pause, Archive and Delete were reachable only by
+  right-clicking the project's title and guessing it would answer. The detail header now carries a
+  ⋮ for the project, and a second one for the member when a member is open.
+- **A session that ends while you are reading it says so**, names itself, and offers what the host
+  actually kept: the archived transcript and the resume command where there is one, and an honest
+  sentence where there is not — instead of dropping to "No session open".
+- **"Available to huginn" stops saying "Retrying" once it is not.** One network blip pinned the
+  note for the life of the app while the device polled normally throughout.
+- **A machine that cannot tell whether it is locked says that**, rather than telling you to unlock
+  a computer that has no screen to unlock. It still reports itself locked and stays read-only, and
+  the sentence now names the switch that changes it.
+- **A route's "last reached" is kept current by every request that works**, not only by the status
+  poll — which is polled only while the Status pane is open, so the row aged on the route serving
+  everything.
+
 ## 1.6.1
 
 - **A route that answers is offered by name** instead of passed over in silence, and the desktop

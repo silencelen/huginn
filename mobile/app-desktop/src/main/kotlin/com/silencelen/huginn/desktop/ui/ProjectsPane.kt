@@ -44,6 +44,7 @@ import com.silencelen.huginn.data.ProjectRow
 import com.silencelen.huginn.data.SpawnOutcome
 import com.silencelen.huginn.desktop.AppStore
 import com.silencelen.huginn.desktop.ui.common.Frame
+import com.silencelen.huginn.desktop.ui.common.MenuButton
 import com.silencelen.huginn.desktop.ui.common.NothingOpen
 import com.silencelen.huginn.desktop.ui.common.ProjectVerbs
 import com.silencelen.huginn.desktop.ui.common.RowMenu
@@ -80,6 +81,16 @@ import kotlinx.coroutines.launch
  * should not grow one for a pointer the phone does not have — the same reason the
  * pages list has no row menu here either. The crumb names exactly the thing whose
  * verbs it offers, which is the property a menu actually needs.
+ *
+ * ⚠⚠ AND A RIGHT-CLICK IS NOT AN AFFORDANCE, which is the half that was missing.
+ * The verbs were reachable ONLY by guessing that the project's title would
+ * answer a secondary click — no chevron, no ⋮, no hover mark — so the best
+ * destructive dialog in the product ("Leave them running" / "Wind them down" /
+ * "End them now", with the session count in the sentence) could not be got to at
+ * all. The crumb now carries a visible [MenuButton] for each half it names,
+ * built from the SAME `projectMenu(…)` list the right-click uses so the two can
+ * never offer different verbs. The tree row still has neither menu: that slot is
+ * `ProjectsListView`'s, in `:ui`, and belongs to whoever changes the shared view.
  */
 
 /**
@@ -394,6 +405,22 @@ private fun ProjectCrumb(
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
             )
+            // ⚠⚠ THE VERBS NEED A DOOR. Right-clicking the title was the ONLY way
+            // to reach Rename / Pause / Archive / Delete: no chevron, no ⋮, no
+            // hover mark, and the row in the tree offered nothing on either
+            // button. The menus themselves are right — this is the same
+            // `projectMenu(…)` the secondary click builds, so the two cannot
+            // offer different verbs — they simply could not be found.
+            //
+            // ⚠ TWO BUTTONS WHEN A MEMBER IS OPEN, in the crumb's own order:
+            // the project's verbs and then the member's, each beside the half of
+            // the crumb it addresses. One combined menu would be a list in which
+            // "Delete…" means the project and "Kill session" means the member,
+            // with nothing on screen saying so.
+            MenuButton({ projectMenu(project, verbs) }, "Project actions")
+            if (member != null) {
+                MenuButton({ projectMenu(project, member, verbs) }, "Member actions")
+            }
         }
     }
 }

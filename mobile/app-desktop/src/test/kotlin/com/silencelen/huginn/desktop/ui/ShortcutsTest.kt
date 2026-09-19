@@ -124,7 +124,11 @@ class ShortcutsTest {
         // items on the same probe, and a cheat sheet that promised the chords
         // unconditionally would be the one place the app still claimed a feature
         // this daemon does not have.
-        assertEquals(18, SHORTCUT_HELP.size)
+        // 20: Tab / Shift+Tab and Ctrl+Tab. Tab used to type a tab character and
+        // the focus ring never left the composer, so there was no keyboard route
+        // to Send at all; the new binding is exactly the kind a reader goes
+        // looking for a note about, and the placeholder is one ellipsised line.
+        assertEquals(20, SHORTCUT_HELP.size)
         assertTrue(SHORTCUT_HELP.all { it.first.isNotBlank() && it.second.isNotBlank() })
         // The pointer half of the model. It is listed beside the keys because the
         // verb surface, the state legend and multi-select all live on the mouse,
