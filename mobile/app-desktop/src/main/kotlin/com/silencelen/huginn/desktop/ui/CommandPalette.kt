@@ -65,7 +65,7 @@ fun CommandPalette(
     pads: List<com.silencelen.huginn.data.Scratchpad> = emptyList(),
     settings: List<com.silencelen.huginn.settings.SettingsCategory> = emptyList(),
     projects: List<com.silencelen.huginn.data.ProjectRow> = emptyList(),
-    consoles: List<com.silencelen.huginn.data.Console> = emptyList(),
+    apps: List<com.silencelen.huginn.data.App> = emptyList(),
     /** What this host offers — `railViews`, so the box and the rail agree. */
     offered: List<com.silencelen.huginn.desktop.View> = emptyList(),
     onPick: (PaletteItem) -> Unit,
@@ -73,14 +73,14 @@ fun CommandPalette(
 ) {
     var query by remember { mutableStateOf("") }
     var selected by remember { mutableStateOf(0) }
-    val all = remember(chats, sessions, pads, settings, projects, consoles, offered) {
+    val all = remember(chats, sessions, pads, settings, projects, apps, offered) {
         paletteItems(
             chats = chats,
             sessions = sessions,
             pads = pads,
             settings = settings,
             projects = projects,
-            consoles = consoles,
+            apps = apps,
             offered = offered,
         )
     }

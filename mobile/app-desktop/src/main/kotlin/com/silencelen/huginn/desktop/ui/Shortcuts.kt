@@ -2,12 +2,12 @@ package com.silencelen.huginn.desktop.ui
 
 import com.silencelen.huginn.ui.ChatRules
 import com.silencelen.huginn.data.Chat
-import com.silencelen.huginn.data.Console
+import com.silencelen.huginn.data.App
 import com.silencelen.huginn.data.ProjectRow
 import com.silencelen.huginn.data.Scratchpad
 import com.silencelen.huginn.data.Session
 import com.silencelen.huginn.desktop.View
-import com.silencelen.huginn.ui.ConsoleRules
+import com.silencelen.huginn.ui.AppRules
 import com.silencelen.huginn.ui.ProjectRules
 import com.silencelen.huginn.settings.SettingsCatalog
 import com.silencelen.huginn.settings.SettingsCategory
@@ -47,18 +47,22 @@ enum class Shortcut {
     VIEW_PROJECTS,
 
     /**
-     * The internal pages. Ctrl+Shift+K — K because it was the one free letter on
-     * the Shift row, and because it sits beside the palette's own Ctrl+K, which
-     * is where somebody hunting for a list of things reaches first.
+     * The apps. Ctrl+Shift+K — K because it was the one free letter on the Shift
+     * row, and because it sits beside the palette's own Ctrl+K, which is where
+     * somebody hunting for a list of things reaches first.
      *
-     * ⚠ IT EXISTS BECAUSE THE RAIL ITEM CAN BE MISSING. Consoles was
+     * ⚠ THE CHORD DID NOT MOVE WITH THE RENAME. It is muscle memory by now, and
+     * the letter never stood for the word — a new chord would cost every reader
+     * the one door they already know for the sake of a mnemonic nobody used.
+     *
+     * ⚠ IT EXISTS BECAUSE THE RAIL ITEM CAN BE MISSING. This page was
      * palette-only, so when the feature probe had not answered there was exactly
      * one way in and no second thing to try. The chord obeys `railViews` like
-     * [VIEW_PROJECTS] does — it navigates nowhere on a daemon without consoles —
-     * but on a daemon that HAS them it is a door that does not depend on the
-     * probe having finished before the reader looked.
+     * [VIEW_PROJECTS] does — it navigates nowhere on a daemon without apps — but
+     * on a daemon that HAS them it is a door that does not depend on the probe
+     * having finished before the reader looked.
      */
-    VIEW_CONSOLES,
+    VIEW_APPS,
 
     /**
      * The page beside the conversation. Ctrl+Shift+P, next to the view it toggles
@@ -149,7 +153,7 @@ fun match(
             "N" -> Shortcut.NEW_ACT
             "P" -> Shortcut.TOGGLE_PAD_PANEL
             "J" -> Shortcut.VIEW_PROJECTS
-            "K" -> Shortcut.VIEW_CONSOLES
+            "K" -> Shortcut.VIEW_APPS
             else -> null
         }
     }
@@ -273,7 +277,7 @@ val SHORTCUT_HELP: List<Pair<String, String>> = listOf(
     "Ctrl Shift N" to "New Act chat",
     "Ctrl P" to "Pages",
     "Ctrl Shift J" to "Projects (when this host has them)",
-    "Ctrl Shift K" to "Consoles (when this host has them)",
+    "Ctrl Shift K" to "Apps (when this host has them)",
     "Ctrl Shift P" to "Show the open page beside this conversation",
     "Alt ↑ / ↓" to "Previous / next in the list (works while typing)",
     "Ctrl B" to "Hide or show the list pane (or click the notch on the seam)",
@@ -309,13 +313,13 @@ sealed interface PaletteItem {
     data class OpenProject(val id: String, override val label: String, override val detail: String) : PaletteItem
 
     /**
-     * One internal page, by name.
+     * One app, by name.
      *
-     * ⚠ CARRIES THE URL, not just an id: opening a console is handing an address
-     * to the host's browser, and a palette row that had to go back to the list to
+     * ⚠ CARRIES THE URL, not just an id: opening an app is handing an address to
+     * the host's browser, and a palette row that had to go back to the list to
      * find it would be reading a row that may have been edited since.
      */
-    data class OpenConsole(
+    data class OpenApp(
         val id: String,
         val url: String,
         override val label: String,
@@ -347,7 +351,7 @@ sealed interface PaletteItem {
  * the Ctrl+K box is where somebody who cannot find a feature looks for it, which
  * is precisely the reader a row onto a 404 would strand.
  */
-internal fun verbsFor(hasProjects: Boolean, hasConsoles: Boolean): List<PaletteItem> =
+internal fun verbsFor(hasProjects: Boolean, hasApps: Boolean): List<PaletteItem> =
     VERBS +
         listOfNotNull(
             if (hasProjects) {
@@ -355,8 +359,8 @@ internal fun verbsFor(hasProjects: Boolean, hasConsoles: Boolean): List<PaletteI
             } else {
                 null
             },
-            if (hasConsoles) {
-                PaletteItem.Verb(Shortcut.VIEW_CONSOLES, "Consoles", "the internal pages this host serves")
+            if (hasApps) {
+                PaletteItem.Verb(Shortcut.VIEW_APPS, "Apps", "the things huginn makes and hosts itself")
             } else {
                 null
             },
@@ -389,7 +393,7 @@ fun paletteItems(
      * never so a caller can forget them.
      */
     projects: List<ProjectRow> = emptyList(),
-    consoles: List<Console> = emptyList(),
+    apps: List<App> = emptyList(),
     /**
      * What this host actually offers — [railViews], the SAME list the rail is
      * drawn from. A palette that decided for itself would be a second probe with
@@ -398,7 +402,7 @@ fun paletteItems(
      */
     offered: List<View> = emptyList(),
 ): List<PaletteItem> =
-    verbsFor(View.PROJECTS in offered, View.CONSOLES in offered) +
+    verbsFor(View.PROJECTS in offered, View.APPS in offered) +
         // Right after the verbs, which is where "Settings" itself already is: the
         // reader who typed a settings word wants the drawer, not a chat that
         // mentions it.
@@ -417,12 +421,12 @@ fun paletteItems(
                     .joinToString(" · "),
             )
         } +
-        consoles.map {
-            PaletteItem.OpenConsole(
+        apps.map {
+            PaletteItem.OpenApp(
                 it.id,
                 it.url,
-                ConsoleRules.label(it),
-                listOfNotNull("console", ConsoleRules.kindWords(it.kind), it.url).joinToString(" · "),
+                AppRules.label(it),
+                listOfNotNull("app", AppRules.kindWords(it.kind), it.url).joinToString(" · "),
             )
         } +
         // Pages before the conversations: there are a handful of them and hundreds

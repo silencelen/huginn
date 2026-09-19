@@ -140,6 +140,12 @@ fun ChatsPage(
      */
     onOpenProjects: (() -> Unit)? = null,
     projectCount: Int = 0,
+    /**
+     * The second door into Apps. Null against a daemon with neither `/v1/apps`
+     * nor `/v1/consoles` — a row whose only outcome is a 404 is worse than no row.
+     */
+    onOpenApps: (() -> Unit)? = null,
+    appCount: Int = 0,
 ) {
     if (quickActions != null) {
         // NO SUMMARY. The editor immediately below carries the one blurb
@@ -180,6 +186,22 @@ fun ChatsPage(
             trailingText = if (projectCount == 0) "none" else "$projectCount",
             onOpen = open,
             highlighted = SettingsRowStyle.isHighlighted("chats.projects", highlight),
+            modifier = Modifier.padding(top = 10.dp),
+        )
+    }
+    // HERE for the same reason Projects is: an app is a thing the HOST serves,
+    // and Devices is about machines. The card on Status is the other door; this
+    // one exists so search can find the page at all — including by the word it
+    // used to be called.
+    onOpenApps?.let { open ->
+        SettingsNavRow(
+            id = "chats.apps",
+            title = "Apps",
+            summary = "The pages huginn hosts itself — whether each one answers, and whether " +
+                "this phone can reach it.",
+            trailingText = if (appCount == 0) "none" else "$appCount",
+            onOpen = open,
+            highlighted = SettingsRowStyle.isHighlighted("chats.apps", highlight),
             modifier = Modifier.padding(top = 10.dp),
         )
     }
