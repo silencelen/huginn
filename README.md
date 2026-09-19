@@ -143,6 +143,8 @@ Electron desktop client; it was retired and deleted on 2026-08-27 — the Compos
 
 Yes — and that's the point. Huginn is `ssh` + `tmux` + `claude` with the sharp edges filed off: sensible multi-device tmux defaults (mirror, quick-detach, solo), a friendly one-word command with subcommands and tab-completion across PowerShell **and** bash/Termux, a container template, and a one-shot setup. The magic isn't new tech — it's the *packaging*.
 
+Being an `ssh` front end is also why the CLI drives **one** host: every verb that needs the daemon runs *on that host* against `127.0.0.1:8787`, reading `/etc/huginn-appd/token` there, so the bearer token never reaches your laptop and there is no client-side daemon address to point somewhere else. `HUGINN_HOST` chooses which box you ssh to, and that box's own daemon is the one you get. To drive a second host, ssh to it (`HUGINN_HOST=other huginn …`) — the phone and desktop apps are the clients that hold an address and a token of their own.
+
 ## 🗂️ What's in here
 
 | Path | What |
