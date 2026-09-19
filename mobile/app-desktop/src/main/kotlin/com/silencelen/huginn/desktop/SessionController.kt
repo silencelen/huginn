@@ -707,7 +707,13 @@ class SessionController(
         }
     }
 
-    private suspend fun screenLoop(want: PaneLease.Want?, live: Boolean = false) {
+    /**
+     * @param report the geometry to DESCRIBE — what this window can draw.
+     * @param live   whether this poll also CLAIMS the tmux window at that size.
+     *   The two are separate on purpose: the pane is captured as it is, so a
+     *   client can say how big it is without reshaping anybody's terminal.
+     */
+    private suspend fun screenLoop(report: PaneLease.Want?, live: Boolean = false) {
         var known: String? = _screen.value?.hash
         var failures = 0
         while (currentCoroutineContext().isActive) {
@@ -715,8 +721,8 @@ class SessionController(
             runCatching {
                 client.screen(
                     name = name,
-                    cols = want?.cols,
-                    rows = want?.rows,
+                    cols = report?.cols,
+                    rows = report?.rows,
                     // Reporting a size is not claiming the window; this is.
                     live = live,
                     knownHash = known,
