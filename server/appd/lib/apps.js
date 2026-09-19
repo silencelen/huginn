@@ -1204,9 +1204,17 @@ async function fetchIcon(rawUrl, opts = {}) {
   }
   const href = iconHrefFromHtml(page.bytes.toString('utf8'));
   if (!href) return { ok: false, why: 'the page names no icon' };
+  let target;
+  try { target = new URL(href, page.url); } catch { return { ok: false, why: 'the icon it names is not an address' }; }
+  // ⚠ SAME ORIGIN, exactly as [ICON_MAX_REDIRECTS] demands of a redirect, and
+  // for the identical reason: the host rule was applied to the address that was
+  // STORED. An `<link rel=icon href="https://cdn.example.com/…">` is a page
+  // telling a root-equivalent daemon which public host to fetch from, on a
+  // five-minute timer, forever. An app's icon comes off the app.
+  if (target.origin !== new URL(page.url).origin) return { ok: false, why: 'the icon it names is on another host' };
   let linked;
   try {
-    linked = await getBounded(new URL(href, page.url).href, opts);
+    linked = await getBounded(target.href, opts);
   } catch (e) {
     return { ok: false, why: reachError(e) };
   }
