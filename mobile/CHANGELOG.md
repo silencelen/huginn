@@ -19,6 +19,14 @@ A read-only walk of 3.5.0 on the Fold, and what it found.
   release for sessions it never leased.
 - **The route form suggests a placeholder** instead of pre-filling an address; the full-size image
   viewer can no longer crash a selection.
+- **Consoles and Projects scroll**, so the rebind steps and Copy at the bottom of the approval card
+  can be reached, and "Add console" / "New project" no longer sit under the navigation bar.
+- **A pinned route shows its whole address** and says when it last worked, kept current by ordinary
+  use rather than only by "Find live route". Searching Settings for "quiet hours" or the keep-awake
+  model no longer offers rows the Usage page hides while keep-awake is off; the sign-in steps keep
+  their "(now: step 1)" marker; the Notifications page says what arrived here and where huginn's
+  lifetime count comes from instead of stacking two totals; the model and ladder pickers use the
+  app's own muted surface instead of a stray violet.
 
 ## 3.5.0 — 2026-09-18
 
