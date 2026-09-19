@@ -9,6 +9,28 @@ appeared only as a side-note on the app releases it happened to ship with. Three
 undocumented, and the notes-cutting matcher could fuse two sections when an app and an appd
 version number collided. Entries below are reconstructed from the shipping commits.
 
+## 3.4.1 — 2026-09-18
+- **Only a client in live view resizes the pane.** `GET /v1/sessions/:name/screen` used to take a
+  pane-size lease — and resize the operator's real tmux pane — for every viewer, so two clients
+  watching one session flapped it between their two shapes. The lease is now taken only with
+  `?live=1`; a plain read renders the pane as it is. One holder per session, keyed on
+  `X-Huginn-Client`: a second live client is answered with `leaseHeldBy` instead of taking the
+  window, and only the holder's `DELETE …/size` releases it. Older clients stop resizing panes.
+- **Consoles probe the address the host actually answers on.** The seeded rows carried the name
+  `huginn`, which resolves to a LAN interface none of the four units listen on, so every row read
+  "not answering from the host" forever. Seeds are written with the daemon's own address (the bind,
+  or the tailnet address when the bind is a wildcard); an existing store is re-pointed on the next
+  start for rows still carrying the old literal, never for a row the owner edited. The rebind card
+  lists all four units — it used to exempt one as "already binds 0.0.0.0" while opening its port in
+  the firewall step anyway — and says where the probe runs, so `up` cannot be read as "your phone
+  can open this".
+- **A background task reports back once.** A task-notification is written to the transcript twice —
+  as the queue record that enqueues it and, when the queue drains into an idle Claude, as a `user`
+  record carrying the same element 40 ms later — and the reader drew a note for each. The note is
+  drawn from the queue record only (a notification absorbed into a running turn never gets a
+  `user` record at all: 645 of 1031 on this host) and the echo is dropped. Replayed over 955
+  transcripts: exactly the 386 echoes gone, nothing else moved.
+
 ## 3.4.0 — 2026-09-18
 
 Wave 3 — Projects and Consoles — and the daemon's share of a 99-finding edge-case hunt.
