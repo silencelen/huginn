@@ -70,7 +70,11 @@
  *                                       the paste was being swallowed. Recovery
  *                                       must not re-paste over it, so the daemon's
  *                                       'leave' branch needs a pane in this state
- *                                       to be tested against at all.
+ *                                       to be tested against at all. Since
+ *                                       2026-09-19 it is also how the DRAFT GUARD
+ *                                       is tested: a box with somebody's words in
+ *                                       it that a send must wait for, and that
+ *                                       C-u (below) gives back.
  */
 const fs = require('node:fs');
 
@@ -127,6 +131,17 @@ process.stdin.on('data', (d) => {
     return;
   }
   buf += d;
+  // ⚠ CTRL-U CLEARS THE BOX, because a test needs a way to be the PERSON who
+  // gives their draft back. The real TUI kills the line on C-u like every other
+  // readline-shaped composer; without it a draft put here with
+  // HG_FAKE_CLAUDE_TYPED can only ever be submitted or merged, and "held until
+  // the draft is gone, then delivered" — the whole point of the draft guard —
+  // has no second half to assert.
+  if (buf.includes('\u0015')) {
+    buf = buf.slice(buf.lastIndexOf('\u0015') + 1);
+    render();
+    return;
+  }
   for (;;) {
     const i = buf.search(/[\r\n]/);
     if (i < 0) break;
