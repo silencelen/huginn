@@ -48,6 +48,7 @@ import com.silencelen.huginn.data.Usage
 import com.silencelen.huginn.data.Watch
 import com.silencelen.huginn.data.WatchEvent
 import com.silencelen.huginn.desktop.update.DesktopUpdater
+import io.ktor.client.engine.okhttp.OkHttp
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.delay
@@ -159,6 +160,26 @@ class AppStore(
         tokenProvider = { settings.tokenNow() },
         clientIdProvider = { settings.clientIdNow() },
         canNotifyProvider = { settings.notifyEnabledNow() && presence.present.value && canDeliver() },
+        // ⚠⚠ THE ROUTE WITNESS IS STAMPED HERE, NOT BY THE CALLERS. See
+        // [RouteWitness] for the measurement: every ordinary poll went through
+        // this route and the row still aged, because `noteRouteReached()` was
+        // reachable only from the success branch of `/v1/status`, which nothing
+        // outside the Status pane ever asks for. The OkHttp engine is the one
+        // place every response passes, so the rule is applied once instead of at
+        // each of a dozen call sites — which is the shape that produced the bug.
+        //
+        // An APPLICATION interceptor, not a network one: it must also see the
+        // responses that came from a cached or re-used connection, and it must
+        // see a streamed body's headers the moment they land rather than when the
+        // watch stream finally ends. It reads the response and returns it
+        // untouched.
+        engine = OkHttp.create {
+            addInterceptor { chain ->
+                val response = chain.proceed(chain.request())
+                noteRouteReached(chain.request().url.toString(), response.code)
+                response
+            }
+        },
     )
 
     /**
@@ -1238,20 +1259,32 @@ class AppStore(
     val routeCandidate: StateFlow<com.silencelen.huginn.data.PinnedRoute?> = _routeCandidate.asStateFlow()
 
     /**
-     * Marks the active route as having just worked, from REAL traffic — the
-     * phone's `noteRouteReached` twin, so the desktop's route rows say "last
-     * reached" from ordinary polls and not only after "Find live route".
+     * Marks the active route as having just worked, from REAL traffic.
+     *
+     * ⚠ ITS OWN DOC COMMENT USED TO SAY THIS AND IT WAS NOT TRUE. Both callers
+     * were the success branch of `/v1/status`, which is polled only while the
+     * Status pane is open — so the row aged through 42 `/v1/chats`, 42
+     * `/v1/sessions` and an attached watch stream on the very route serving them.
+     * The client's own response path calls this now ([RouteWitness]); the two
+     * status polls still do as well, and are harmless because `touch` is
+     * idempotent within a millisecond.
      *
      * See [RouteResolver.touch]: it writes `lastSeenAt`, never `lastOkAt`, so
      * the three-failures re-probe still sweeps rather than finding the dead
      * route "fresh" seconds after its last success.
      */
-    private fun noteRouteReached() {
-        val next = RouteResolver.touch(
-            _routeHealth.value,
-            _routeBook.value.active?.id,
-            System.currentTimeMillis(),
-        )
+    private fun noteRouteReached(fromUrl: String? = null, status: Int = 200) {
+        val active = _routeBook.value.active ?: return
+        val now = System.currentTimeMillis()
+        // Called with no URL by the two status polls, which already know the call
+        // succeeded on the active route; called with one from the HTTP layer,
+        // where neither is known and both have to be asked. A probe of a CANDIDATE
+        // address goes through the same engine, so "it came back 200" is not on
+        // its own evidence about the route this client is pinned to.
+        if (fromUrl != null && !RouteWitness.stamps(status, fromUrl, active.url, _routeHealth.value[active.id], now)) {
+            return
+        }
+        val next = RouteResolver.touch(_routeHealth.value, active.id, now)
         if (next == _routeHealth.value) return
         saveHealth(next)
     }

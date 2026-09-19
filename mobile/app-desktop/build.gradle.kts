@@ -56,6 +56,15 @@ dependencies {
     implementation(compose.material3)
     implementation(compose.materialIconsExtended)
 
+    // ⚠ NOT A NEW DEPENDENCY AT RUNTIME — :core already resolves this engine
+    // through `huginnHttpEngine()`; it is `implementation` there, so it is on the
+    // runtime classpath and not on ours. Declared here because this shell BUILDS
+    // the engine itself: the route witness is an OkHttp application interceptor
+    // (see `RouteWitness`), which is the one place every response can be seen
+    // without writing the rule at each of a dozen call sites. The version comes
+    // from the same catalog entry :core uses, so the two cannot drift.
+    implementation(libs.ktor.client.okhttp)
+
     // The updater's pure parts (semver, manifest parse, sha256, feed pinning) are
     // unit-tested. kotlin.test, matching :core and :ui — and NOTE its argument
     // order is (expected, actual, message), the reverse of JUnit's. See the
@@ -143,6 +152,9 @@ val windowsRuntimeClasspath: Configuration by configurations.creating {
 dependencies {
     windowsRuntimeClasspath(project(":core"))
     windowsRuntimeClasspath(project(":ui"))
+    // Same jar the Linux classpath gets, for the same reason: the shell builds
+    // the HTTP engine itself now.
+    windowsRuntimeClasspath(libs.ktor.client.okhttp)
     windowsRuntimeClasspath(compose.desktop.windows_x64)
     windowsRuntimeClasspath(compose.material3)
     windowsRuntimeClasspath(compose.materialIconsExtended)
