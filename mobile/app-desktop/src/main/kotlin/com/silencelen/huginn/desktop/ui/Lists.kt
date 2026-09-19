@@ -47,6 +47,7 @@ import com.silencelen.huginn.ui.ChatListScroll
 import com.silencelen.huginn.ui.ChatRules
 import com.silencelen.huginn.data.Chat
 import com.silencelen.huginn.ui.HostBadge
+import com.silencelen.huginn.ui.OrderLock
 import com.silencelen.huginn.data.ArchivedSession
 import com.silencelen.huginn.data.Session
 import com.silencelen.huginn.desktop.ui.common.ChatVerbs
@@ -293,12 +294,31 @@ fun SessionsList(
             }
             return@Column
         }
-        val order = remember(sessions) { sessions.map { it.name } }
+        // ⚠⚠ P-02. THE LIST SORTS BY `activityAt` AND RE-RENDERS EVERY POLL, so a
+        // right-click menu opened on one row can fire its verb at another — the
+        // desktop walker wound down the phone walker's project lead that way, at
+        // 14:01, through a confirm dialog that named the wrong session. While any
+        // row menu is open the order the reader can see is the order they get;
+        // `OrderLock` is the rule, and it is asserted in `:core`.
+        var openMenus by remember { mutableStateOf(0) }
+        var shownOrder by remember { mutableStateOf<List<String>>(emptyList()) }
+        val ordered = OrderLock.order(shownOrder, sessions, openMenus > 0) { it.name }
+        if (openMenus == 0) {
+            val drawn = OrderLock.keysOf(ordered) { it.name }
+            if (drawn != shownOrder) shownOrder = drawn
+        }
+        val order = remember(ordered) { ordered.map { it.name } }
         val rows = rememberLazyListState()
         Box(Modifier.fillMaxSize()) {
             LazyColumn(Modifier.fillMaxSize(), state = rows) {
-                itemsIndexed(sessions, key = { _, it -> it.name }) { i, s ->
-                    RowMenu({ sessionMenu(s, selection.ids, verbs) }) {
+                itemsIndexed(ordered, key = { _, it -> it.name }) { i, s ->
+                    RowMenu(
+                        items = { sessionMenu(s, selection.ids, verbs) },
+                        // Counted rather than flagged: two rows can be mid-close
+                        // and mid-open in the same frame, and a boolean would
+                        // release the lock in the gap between them.
+                        onOpenChange = { open -> openMenus = (openMenus + if (open) 1 else -1).coerceAtLeast(0) },
+                    ) {
                         SessionRow(
                             session = s,
                             active = s.name == activeName,
@@ -308,9 +328,12 @@ fun SessionsList(
                                 // Selectable, never openable: see [sessionAddressable].
                                 if (opensOnClick(ctrl, shift) && sessionAddressable(s.name)) onOpen(s.name)
                             },
+                            // The other half of P-02: when the list DOES re-sort,
+                            // a row that teleports is a row nobody can follow.
+                            modifier = Modifier.animateItem(),
                         )
                     }
-                    if (i < sessions.lastIndex) RowRule()
+                    if (i < ordered.lastIndex) RowRule()
                 }
                 // Under the live rows, inside the same scroller — the archive is
                 // where this list ENDS, not a second pane competing with it.
@@ -327,6 +350,7 @@ private fun SessionRow(
     active: Boolean,
     selected: Boolean,
     onClick: (ctrl: Boolean, shift: Boolean) -> Unit,
+    modifier: Modifier = Modifier,
 ) {
     val scheme = MaterialTheme.colorScheme
     val now = remember(session) { System.currentTimeMillis() / 1000 }
@@ -335,7 +359,7 @@ private fun SessionRow(
         "attention" -> scheme.error
         else -> null
     }
-    RowFrame(active = active, selected = selected, onClick = onClick) {
+    RowFrame(active = active, selected = selected, onClick = onClick, modifier = modifier) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Tip(sessionStateTip(session.state, session.stateSince, now)) {
                 if (dot != null) StateDot(dot)
@@ -472,6 +496,7 @@ private fun RowFrame(
     active: Boolean,
     selected: Boolean,
     onClick: (ctrl: Boolean, shift: Boolean) -> Unit,
+    modifier: Modifier = Modifier,
     content: @Composable ColumnScope.() -> Unit,
 ) {
     val scheme = MaterialTheme.colorScheme
@@ -491,7 +516,7 @@ private fun RowFrame(
         else -> Color.Transparent
     }
     Column(
-        Modifier.fillMaxWidth()
+        modifier.fillMaxWidth()
             .background(tint)
             .hoverable(interaction)
             .pointerHoverIcon(PointerIcon(Cursor(Cursor.HAND_CURSOR)))
