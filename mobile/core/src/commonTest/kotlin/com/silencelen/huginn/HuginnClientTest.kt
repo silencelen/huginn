@@ -218,6 +218,31 @@ class HuginnClientTest {
         assertEquals(HuginnClient.READ_TIMEOUT_MS, timeouts?.socketTimeoutMillis)
     }
 
+    // ------------------------------------------------- the pane-size lease
+
+    @Test
+    fun `a screen read carries live only when the caller says it is in live view`() = runTest {
+        // OWNER DECISION 52, on the wire. `cols`/`rows` describe the viewer and are
+        // sent whenever they are known; `live=1` is the separate, explicit claim on
+        // the owner's tmux window, and it is what the daemon gates the resize on.
+        // The default had better be the safe one — every existing call site inherits
+        // it, and a default of `true` would reinstate the flap silently.
+        val c = ok("""{"hash":"h","lines":[]}""")
+        c.screen("jtyper", cols = 120, rows = 40)
+        val viewing = seen.last().url.toString()
+        assertTrue(viewing.contains("cols=120"), "the viewer still describes itself: $viewing")
+        assertFalse(viewing.contains("live="), "plain viewing must not claim the window: $viewing")
+
+        c.screen("jtyper", cols = 120, rows = 40, live = true)
+        assertTrue(seen.last().url.toString().contains("live=1"),
+            "live view is the one thing that may lease: ${seen.last().url}")
+
+        // Spelt out rather than sent as `live=0`: absent IS the no-lease spelling,
+        // and it is the one every client built before this sends.
+        c.screen("jtyper", cols = 120, rows = 40, live = false)
+        assertFalse(seen.last().url.toString().contains("live="))
+    }
+
     @Test
     fun `suggestions ride the poll tier because generation can take seconds`() = runTest {
         ok("""{"suggestions":[]}""").sessionSuggestions("jtyper")

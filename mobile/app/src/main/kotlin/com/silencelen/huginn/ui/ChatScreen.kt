@@ -32,10 +32,7 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.foundation.horizontalScroll
-import androidx.compose.foundation.rememberScrollState
 import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.SuggestionChip
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -74,6 +71,12 @@ fun ChatScreen(
     page: TranscriptPage?,
     /** Why the transcript could not be read, when it could not. */
     error: String?,
+    /**
+     * The chat ran, and the host no longer has its messages — Claude Code sweeps
+     * its own transcripts. NOT an error and nothing to retry, but it must not be
+     * drawn as the empty state of a chat that never ran. See [chatEmptyCopy].
+     */
+    messagesGone: Boolean = false,
     onRetry: () -> Unit,
     streamingText: String?,
     activeTool: String?,
@@ -187,12 +190,12 @@ fun ChatScreen(
                 CircularProgressIndicator(strokeWidth = 2.dp)
             }
         } else if (events.isEmpty() && !streaming) {
+            // ⚠ TWO DIFFERENT NOTHINGS. A chat that has never run introduces its
+            // mode; a chat whose messages the host has swept says THAT, because
+            // the list row the reader just came from still quotes its last answer.
+            val empty = chatEmptyCopy(messagesGone, mode)
             Box(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
-                EmptyState(
-                    if (mode == "act") "Act mode" else "Ask mode",
-                    if (mode == "act") "Runs on the host with tools: files, commands, the web."
-                    else "Reasoning and memory, no tools.",
-                )
+                EmptyState(empty.title, empty.body)
             }
         } else {
             // ⚠ THE WEIGHT LIVES ON THE PLAIN BOX, never on the SelectionContainer.
@@ -202,16 +205,21 @@ fun ChatScreen(
             // on the desktop at ChatView.kt:314; inherited here rather than
             // rediscovered.
             Box(Modifier.weight(1f).fillMaxWidth()) {
+              // ⚠⚠ OUTSIDE the SelectionContainer, not among its children:
+              // SelectionContainer reads `LocalTextToolbar.current` in its own
+              // composition scope, so the gate this file provided INSIDE it from
+              // 3.1.1 to 3.5.0 was never the toolbar the selection used. See
+              // GatedTextToolbar, and SessionScreen, which had the same seam.
+              androidx.compose.runtime.CompositionLocalProvider(
+                  androidx.compose.ui.platform.LocalTextToolbar provides
+                      rememberGatedTextToolbar(selection.active),
+              ) {
               androidx.compose.foundation.text.selection.SelectionContainer {
                 androidx.compose.runtime.CompositionLocalProvider(
                     // Around the transcript ONLY: the composer is not a row.
                     LocalTranscriptSelection provides TranscriptSelectionHost { text, at ->
                         selection = SelectionMode.begin(text, rowTimeWords(at))
                     },
-                    // And the platform's Copy / Select all popup stays down while
-                    // the app's bar is up. See GatedTextToolbar.
-                    androidx.compose.ui.platform.LocalTextToolbar provides
-                        rememberGatedTextToolbar(selection.active),
                 ) {
                   LazyColumn(
                       state = listState,
@@ -228,6 +236,7 @@ fun ChatScreen(
                   }
                 }
               }
+              }
             }
         }
 
@@ -237,28 +246,11 @@ fun ChatScreen(
 
         // Same contract as the session chips: a suggestion FILLS the composer,
         // yields to typing, and clears when a new turn starts.
+        // The shared row — same cap, same contract, one implementation. See
+        // SuggestionChips: a chip inside a horizontal scroll has no width to
+        // ellipsise against unless it is given one.
         if (suggestions.isNotEmpty() && !streaming && !sending && draft.isBlank()) {
-            Row(
-                Modifier
-                    .fillMaxWidth()
-                    .horizontalScroll(rememberScrollState())
-                    .padding(horizontal = 10.dp, vertical = 2.dp),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
-                suggestions.forEach { sug ->
-                    SuggestionChip(
-                        onClick = { onDraft(sug) },
-                        label = {
-                            Text(
-                                sug,
-                                style = MaterialTheme.typography.labelMedium,
-                                maxLines = 1,
-                                overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
-                            )
-                        },
-                    )
-                }
-            }
+            SuggestionChips(suggestions, onPick = onDraft)
         }
 
         // The long-press verbs, ABOVE the composer so the text stays visible while

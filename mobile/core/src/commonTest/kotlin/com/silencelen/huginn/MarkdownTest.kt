@@ -244,6 +244,72 @@ class TailRevisionTest {
         assertEquals(tailRevision(null, 0, null), tailRevision(null, 0, null))
     }
 
+    // ------------------------------------------------------------- tables
+
+    /**
+     * WHAT THE WALK SAW. The Conversation tab drew the answer's table as forty
+     * lines of raw pipes — `| # | Item | What I need |`, `|---|---|---|` and all —
+     * while the Screen tab beside it drew the same table as a box table, because
+     * that one is Claude Code's own terminal rendering. "No tables" was a
+     * deliberate line in this parser's contract, and a reader comparing the two
+     * tabs reads it as the app being worse at its own job.
+     */
+    @Test
+    fun `a pipe table with a header becomes a table block`() {
+        val b = Markdown.parse(
+            """
+            | # | Item | What I need |
+            |---|---|---|
+            | 1 | Storage cleanup | Which tiers to execute |
+            | 3 | Skybox repair | Hands-on at the box |
+            """.trimIndent()
+        )
+        val t = b.single() as MdBlock.Table
+        assertTrue(t.header, "the delimiter row is what makes the first row a header")
+        assertEquals(3, t.rows.size, "the delimiter row is not a row of data")
+        assertEquals(listOf("#", "Item", "What I need"), t.rows[0].map { it.text })
+        assertEquals(listOf("1", "Storage cleanup", "Which tiers to execute"), t.rows[1].map { it.text })
+    }
+
+    @Test
+    fun `a table with no delimiter row is a table with no header`() {
+        val t = Markdown.parse("| a | b |\n| c | d |").single() as MdBlock.Table
+        assertEquals(false, t.header, "nothing said the first row was a heading")
+        assertEquals(2, t.rows.size)
+        assertEquals(listOf("c", "d"), t.rows[1].map { it.text })
+    }
+
+    @Test
+    fun `a ragged row is padded out to the table's width`() {
+        // A grid cannot draw a hole. Padding here rather than in the renderer is
+        // what keeps the columns of the rows BELOW a short one lined up.
+        val t = Markdown.parse("| a | b | c |\n| d |\n| e | f | g |").single() as MdBlock.Table
+        assertEquals(listOf(3, 3, 3), t.rows.map { it.size })
+        assertEquals(listOf("d", "", ""), t.rows[1].map { it.text })
+    }
+
+    @Test
+    fun `an escaped pipe stays inside its cell`() {
+        val t = Markdown.parse("| cmd | what |\n|---|---|\n| a \\| b | a pipe |").single() as MdBlock.Table
+        assertEquals(2, t.rows[1].size, "the escaped pipe is not a cell boundary")
+        assertEquals("a | b", t.rows[1][0].text, "and it is rendered as the pipe it is")
+    }
+
+    @Test
+    fun `a lone pipe in prose is not a table`() {
+        // The failure that matters: one sentence mentioning a pipe must not turn
+        // a paragraph into a one-cell grid.
+        assertTrue(Markdown.parse("Pipe the output | into grep and read it.").single() is MdBlock.Paragraph)
+        // Nor does a single bar-wrapped line with nothing to make a table of.
+        assertTrue(Markdown.parse("| not a table, just a line |").single() is MdBlock.Paragraph)
+    }
+
+    @Test
+    fun `a cell keeps its inline markdown`() {
+        val t = Markdown.parse("| a | b |\n|---|---|\n| **bold** | `code` |").single() as MdBlock.Table
+        assertEquals("bold", t.rows[1][0].text, "the markers are the renderer's, not the reader's")
+    }
+
     // ------------------------------------------------- plainInline (one-line rows)
 
     @Test
@@ -303,5 +369,21 @@ class TailRevisionTest {
         // plainInline is inline() with the styling thrown away, so it cannot
         // disagree with what the transcript shows for the same text.
         assertEquals("2 ** 8 is 256", Markdown.plainInline("2 ** 8 is 256"))
+    }
+
+    /**
+     * A chats row is ONE line drawn in ONE style, so a table in a snippet cannot
+     * be a table there. Its first row is the label the rest of it hangs off.
+     */
+    @Test
+    fun `a snippet flattens a table to its first row`() {
+        assertEquals(
+            "# · Item · What I need",
+            Markdown.plainInline("| # | Item | What I need |\n|---|---|---|\n| 1 | Storage cleanup | Tier 1 |"),
+        )
+        assertEquals(
+            "Before it. a · b After it.",
+            Markdown.plainInline("Before it.\n| a | b |\n| c | d |\nAfter it."),
+        )
     }
 }
