@@ -6,6 +6,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
@@ -52,7 +53,12 @@ fun ConsolesScreen(
     var editing by remember { mutableStateOf<Console?>(null) }
     var adding by remember { mutableStateOf(false) }
 
-    Box(Modifier.fillMaxSize()) {
+    // ⚠ THE SYSTEM NAV INSET IS THIS SCREEN'S TO PAY. Consoles is a pushed
+    // destination: there is no `NavigationBar` under it to consume the inset the
+    // way there is on Chats, Sessions and Rounds, so without this the "Add
+    // console" button is drawn straight over the gesture bar. `ListFabClearanceTest`
+    // holds both halves of that rule, because the wrong one is invisible either way.
+    Box(Modifier.fillMaxSize().navigationBarsPadding()) {
         ConsolesView(
             consoles = consoles,
             nowMs = nowMs,
@@ -61,7 +67,13 @@ fun ConsolesScreen(
             onProbe = onProbe,
             onEdit = { editing = it },
             onCopyApproval = onCopyApproval,
-            modifier = Modifier.fillMaxSize(),
+            // ⚠ THIS DESTINATION IS THE SCROLL. Nothing else on it scrolls — the
+            // approval card's remaining commands, its note and its only control,
+            // Copy steps, were simply off the bottom of the phone.
+            scroll = true,
+            // The same clearance every other list under a FAB uses, derived from
+            // the button rather than written out — see [LIST_FAB_CLEARANCE].
+            modifier = Modifier.fillMaxSize().padding(bottom = LIST_FAB_CLEARANCE),
         )
         ExtendedFloatingActionButton(
             onClick = { adding = true },

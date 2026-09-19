@@ -607,30 +607,32 @@ private fun RouteRow(
     actions: RouteListActions,
 ) {
     Column(Modifier.padding(top = 8.dp)) {
+        // ⚠ THE NAME SHARES THIS ROW WITH THE CONTROLS; THE ADDRESS DOES NOT.
+        // It used to: a `weight(1f)` column beside "in use"/"Use" and three
+        // TextButtons, with the address at `maxLines = 1`, which on the owner's
+        // phone rendered `http://192.168.2.117:8…`. The PORT is the half that
+        // says whether this is the daemon's address at all, and the witness
+        // clause joined onto the same line went with it — so the row lost "last
+        // reached" at exactly the moment somebody is reading the list to find
+        // out which route still works. A name is short and an address is not;
+        // they do not belong in the same column.
         Row(verticalAlignment = Alignment.CenterVertically) {
             SettingsStateDot(dotColour(health))
-            Column(Modifier.weight(1f)) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text(
-                        route.name,
-                        style = MaterialTheme.typography.bodyMedium,
-                        fontWeight = if (active) FontWeight.SemiBold else FontWeight.Normal,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                    )
-                    Text(
-                        route.kind.label,
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.padding(start = 8.dp),
-                    )
-                }
+            Row(Modifier.weight(1f), verticalAlignment = Alignment.CenterVertically) {
                 Text(
-                    listOfNotNull(route.url, reachedWords(health, nowMs)).joinToString(" · "),
+                    route.name,
+                    style = MaterialTheme.typography.bodyMedium,
+                    fontWeight = if (active) FontWeight.SemiBold else FontWeight.Normal,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f, fill = false),
+                )
+                Text(
+                    route.kind.label,
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.padding(start = 8.dp),
                 )
             }
             // "In use" is a WORD, not a tint: the state dot already owns colour
@@ -654,6 +656,19 @@ private fun RouteRow(
             TextButton(onClick = { actions.move(route.id, 1) }, enabled = !last, contentPadding = TIGHT) { Text("↓") }
             TextButton(onClick = onEdit, contentPadding = TIGHT) { Text(if (editing) "Done" else "Edit") }
         }
+        Text(
+            routeAddressLine(route.url, health, nowMs),
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            // Two lines, because the whole width is now available and a wrapped
+            // address is readable where a cut one is not. [middleElide] is the
+            // backstop past that, and it takes the MIDDLE.
+            maxLines = 2,
+            overflow = TextOverflow.Ellipsis,
+            // Indented past the state dot (7dp + its 6dp gap) so it reads as this
+            // route's address rather than as a line of its own.
+            modifier = Modifier.padding(start = 13.dp, top = 1.dp),
+        )
         if (editing) {
             RouteForm(
                 initialName = route.name,
@@ -756,9 +771,39 @@ private fun dotColour(health: RouteHealth?): Color = when (health?.reachable) {
     null -> MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.35f)
 }
 
-/** "last reached 4m ago" — and nothing at all before the first probe. */
+/**
+ * How long an address may be before its middle is taken out.
+ *
+ * Sized for the shorter half of a phone in portrait at `labelSmall` across two
+ * lines; anything past it is a magic-DNS name or an uncompressed IPv6 literal,
+ * neither of which is read left-to-right anyway.
+ */
+internal const val ROUTE_URL_MAX: Int = 72
+
+/**
+ * An over-long address with its MIDDLE removed.
+ *
+ * ⚠ THE MIDDLE, NOT THE TAIL. Both informative halves of a route are at the
+ * ends: the scheme says whether this path is plain http (which is the whole of
+ * `RouteGuard`'s question) and the port says whether it is the daemon at all.
+ * The ellipsis Compose gives for free eats the second of those.
+ */
+internal fun middleElide(text: String, max: Int = ROUTE_URL_MAX): String {
+    if (max < 5 || text.length <= max) return text
+    val keepEnd = (max - 1) / 2
+    return text.take(max - 1 - keepEnd) + "…" + text.takeLast(keepEnd)
+}
+
+/** "http://192.168.2.117:8787 · last reached 4m ago" — the address and its witness. */
+internal fun routeAddressLine(url: String, health: RouteHealth?, nowMs: Long): String =
+    listOfNotNull(
+        middleElide(url).takeIf { it.isNotBlank() },
+        reachedWords(health, nowMs),
+    ).joinToString(" · ")
+
+/** "last reached 4m ago", from either witness — and nothing at all before both. */
 internal fun reachedWords(health: RouteHealth?, nowMs: Long): String? {
-    val at = health?.lastOkAt ?: 0
+    val at = health?.lastWorkedAt ?: 0
     if (at <= 0 || nowMs <= 0) return null
     val secs = ((nowMs - at) / 1000).coerceAtLeast(0)
     val words = when {

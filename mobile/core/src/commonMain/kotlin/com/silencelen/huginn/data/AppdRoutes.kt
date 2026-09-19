@@ -339,6 +339,30 @@ object RouteResolver {
         return next to results.filterValues { it.first }.keys
     }
 
+    /**
+     * Records that ORDINARY traffic just worked on [id].
+     *
+     * ⚠ THE ROW'S "LAST REACHED" HAD ONE WRITER AND IT WAS [resolve]. Nothing
+     * else ever touched the health map, so a route the client had been talking
+     * to since breakfast still read "never reached" until somebody pressed Find
+     * live route — the one line on that page whose whole job is to say which
+     * path is working.
+     *
+     * ⚠⚠ AND IT WRITES [RouteHealth.lastSeenAt], NEVER `lastOkAt`. See that
+     * field: `lastOkAt` feeds the hysteresis, and feeding it from traffic would
+     * silently disable the three-failures re-probe.
+     *
+     * A no-op when there is nothing to record — no active route, no clock — and
+     * when the witness on file is already newer, so a late callback cannot move
+     * the clock backwards.
+     */
+    fun touch(health: Map<String, RouteHealth>, id: String?, now: Long): Map<String, RouteHealth> {
+        if (id.isNullOrBlank() || now <= 0) return health
+        val was = health[id] ?: RouteHealth()
+        if (was.lastSeenAt >= now) return health
+        return health + (id to was.copy(lastSeenAt = now))
+    }
+
     /** Whether this client may move to [route] without being told to. */
     private fun adoptable(route: PinnedRoute): Boolean =
         route.byHand || route.url.trim().startsWith("https://", ignoreCase = true)

@@ -2,6 +2,7 @@ package com.silencelen.huginn.settings
 
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
 /**
@@ -197,6 +198,29 @@ class SettingsCatalogTest {
             assertEquals(Surface.BOTH, item.surface, "$id is drawn on both shells")
             assertEquals("usage", SettingsCatalog.categoryOf(id)?.id, "$id belongs with the other usage rows")
         }
+    }
+
+    /**
+     * ⚠ THE CATALOG'S OWN RULE: AN UNAVAILABLE ROW IS HIDDEN, AND A HIDDEN ROW
+     * MUST NOT BE FINDABLE. `availability` false means the row does not exist —
+     * "a hit that opens onto a hidden row is worse than no hit". Keep-awake's two
+     * detail rows are drawn only `if (draft.keepAwake)`, but both claimed to be
+     * available on any headroom host, so searching "quiet hours" on a phone with
+     * keep-awake OFF offered a row and then opened a page that does not contain
+     * it.
+     */
+    @Test
+    fun theKeepAwakeDetailsExistOnlyWhileKeepAwakeIsOn() {
+        val on = SettingsProbe(headroom = true, keepAwake = true)
+        val off = SettingsProbe(headroom = true, keepAwake = false)
+        for (id in listOf("usage.keep-awake-model", "usage.keep-awake-quiet")) {
+            val item = SettingsCatalog.items.first { it.id == id }
+            assertTrue(item.availability(on), "$id is drawn when keep-awake is on")
+            assertFalse(item.availability(off), "$id is NOT drawn when keep-awake is off")
+        }
+        // The toggle itself stays — it is how keep-awake gets switched on at all.
+        val toggle = SettingsCatalog.items.first { it.id == "usage.keep-awake" }
+        assertTrue(toggle.availability(off), "the switch has to be reachable to be switched")
     }
 
     /**

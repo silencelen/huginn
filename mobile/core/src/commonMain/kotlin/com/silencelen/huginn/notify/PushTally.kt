@@ -32,9 +32,6 @@ package com.silencelen.huginn.notify
  */
 object PushTally {
 
-    /** Said once, beside the counts, when the phone has just re-based them. */
-    const val REBASELINED_NOTE: String = "host counter restarted — re-baselined"
-
     /**
      * The phone's counter after reconciliation, and the epoch it now belongs to.
      *

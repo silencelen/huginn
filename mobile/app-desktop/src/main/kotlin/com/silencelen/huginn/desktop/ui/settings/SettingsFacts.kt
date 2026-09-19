@@ -90,6 +90,9 @@ fun desktopProbe(f: SettingsFacts): SettingsProbe {
         savedAccounts = f.savedAccounts.size,
         diagnostics = true,
         selfUpdate = true,
+        // The saved switch, for the same reason as the phone's: the shared form
+        // draws the model picker and quiet hours only `if (draft.keepAwake)`.
+        keepAwake = f.headroom?.settings?.keepAwake == true,
     )
 }
 

@@ -172,4 +172,60 @@ class DeliveryCopyTest {
         assertTrue("has not run yet" in line, line)
         assertFalse("ago" in line, line)
     }
+
+    // ------------------------------------------------------------ push counts
+
+    /**
+     * ⚠ TWO BARE TOTALS, STACKED, FROM TWO DIFFERENT ERAS. The page printed
+     *
+     *     1476 delivered so far
+     *     1072 of 1072 pushes arrived — nothing dropped…
+     *     host counter restarted — re-baselined
+     *
+     * and nothing said that the first is huginn's lifetime across every device
+     * while the second is this phone's tally since the counter it compares
+     * against last restarted. A reader subtracts them, gets 404, and concludes
+     * that 404 pushes were dropped by a delivery path that is in fact perfect.
+     */
+    @Test
+    fun `the lifetime total is named as one, not stacked above the tally`() {
+        val out = DeliveryCopy.pushCounts(arrived = 1072, sent = 1072, missing = 0, lifetime = 1476, rebaselined = true)
+        assertEquals(2, out.size, "one sentence pair, not three notes: $out")
+        assertTrue("1072 of 1072" in out[0], out[0])
+        assertTrue("nothing dropped" in out[0], out[0])
+        assertTrue("1476" in out[1], out[1])
+        assertFalse("1476" in out[0], "the lifetime never rides the tally sentence: ${out[0]}")
+        assertFalse("1072" in out[1], "and the tally never rides the lifetime one: ${out[1]}")
+        assertTrue("restart" in out[1], "the re-baseline is folded in, not left trailing: ${out[1]}")
+    }
+
+    @Test
+    fun `an untouched counter says the lifetime without inventing a restart`() {
+        val out = DeliveryCopy.pushCounts(arrived = 12, sent = 12, missing = 0, lifetime = 40, rebaselined = false)
+        assertEquals(2, out.size, "$out")
+        assertFalse("restart" in out[1], out[1])
+        assertTrue("40" in out[1], out[1])
+    }
+
+    @Test
+    fun `nothing arrived yet, and no lifetime to name, is one line`() {
+        val out = DeliveryCopy.pushCounts(arrived = 0, sent = 0, missing = 0, lifetime = 0, rebaselined = false)
+        assertEquals(1, out.size, "$out")
+        assertTrue("No push has arrived here yet" in out[0], out[0])
+    }
+
+    @Test
+    fun `a drop is still reported as a drop`() {
+        val out = DeliveryCopy.pushCounts(arrived = 8, sent = 11, missing = 3, lifetime = 900, rebaselined = false)
+        assertTrue("3 push" in out[0], out[0])
+        assertTrue("never arrived" in out[0], out[0])
+        assertTrue("every 10 minutes" in out[0], out[0])
+    }
+
+    @Test
+    fun `a re-baseline with no lifetime still says the count restarted`() {
+        val out = DeliveryCopy.pushCounts(arrived = 4, sent = 4, missing = 0, lifetime = 0, rebaselined = true)
+        assertEquals(2, out.size, "$out")
+        assertTrue("restart" in out[1], out[1])
+    }
 }

@@ -280,12 +280,32 @@ data class RouteHealth(
     val lastOkAt: Long = 0,
     val lastFailAt: Long = 0,
     val lastRttMs: Long = 0,
+    /**
+     * When ORDINARY traffic last succeeded on this route — not a probe.
+     *
+     * ⚠⚠ A SEPARATE FIELD FROM [lastOkAt], AND THE SEPARATION IS THE POINT.
+     * `lastOkAt` is what [RouteResolver.HYSTERESIS_MS] reads: a route that
+     * answered within the last minute is not re-interrogated. The re-probe that
+     * rescues a client whose network moved fires after three consecutive
+     * failures, which by definition is seconds after the last success — so
+     * recording everyday traffic in `lastOkAt` would make that sweep find the
+     * active route "fresh" and skip it, and a laptop that changed networks would
+     * stay broken exactly as it did before the re-probe existed.
+     *
+     * It is still evidence FOR THE READER, and better evidence than a probe: the
+     * row said "never reached" on a route the app had been talking to all day,
+     * because nothing but `RouteResolver.resolve()` ever wrote the other field.
+     */
+    val lastSeenAt: Long = 0,
 ) {
+    /** The newest proof this route works, from either witness. */
+    val lastWorkedAt: Long get() = maxOf(lastOkAt, lastSeenAt)
+
     /** Null until it has been tried at all — which is a third state, not "bad". */
     val reachable: Boolean?
         get() = when {
-            lastOkAt == 0L && lastFailAt == 0L -> null
-            else -> lastOkAt >= lastFailAt
+            lastOkAt == 0L && lastFailAt == 0L && lastSeenAt == 0L -> null
+            else -> lastWorkedAt >= lastFailAt
         }
 }
 

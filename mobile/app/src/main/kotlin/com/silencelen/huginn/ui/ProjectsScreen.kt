@@ -2,6 +2,7 @@ package com.silencelen.huginn.ui
 
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material3.ExtendedFloatingActionButton
@@ -51,7 +52,10 @@ fun ProjectsScreen(
     var expanded by rememberSaveable { mutableStateOf(setOf<String>()) }
     var sheet by rememberSaveable { mutableStateOf(false) }
 
-    Box(Modifier.fillMaxSize()) {
+    // Pushed destination, no bar beneath it: the system navigation inset is this
+    // screen's to pay or "New project" sits on the gesture bar. Same rule as
+    // Consoles, held by `ListFabClearanceTest`.
+    Box(Modifier.fillMaxSize().navigationBarsPadding()) {
         ProjectsListView(
             projects = projects,
             nowMs = nowMs,
@@ -68,6 +72,12 @@ fun ProjectsScreen(
             onOpenProject = onOpenProject,
             onOpenMember = { _, live -> onOpenMember(live) },
             onCreate = null,
+            // The same rule as Consoles: this destination owns the scroll, because
+            // nothing around the tree provides one.
+            scroll = true,
+            // …and the same clearance, so the last project is not parked behind
+            // "New project" with no scroll position that would move it.
+            modifier = Modifier.fillMaxSize().padding(bottom = LIST_FAB_CLEARANCE),
         )
 
         ExtendedFloatingActionButton(

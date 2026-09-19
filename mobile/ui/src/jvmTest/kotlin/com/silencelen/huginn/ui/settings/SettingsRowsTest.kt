@@ -20,6 +20,67 @@ class SettingsRowsTest {
 
     private val now = 1_700_000_000_000L
 
+    // ------------------------------------------------- #D13 the address line
+
+    /**
+     * ⚠ THE ADDRESS SHARED A ROW WITH FIVE CONTROLS AND LOST. "in use"/"Use",
+     * two reorder arrows and Edit all sat beside a `weight(1f)` column at
+     * `maxLines = 1`, so a perfectly ordinary pin rendered as
+     * `http://192.168.2.117:8…` — the PORT, which is the half that says whether
+     * this is even the daemon's address, was the first thing cut. And the
+     * witness clause joined onto the same line went with it, so the row lost
+     * "last reached" entirely at exactly the moment somebody was reading the
+     * list to find out which route still works.
+     */
+    @Test
+    fun `the address keeps its port, and its witness, on its own line`() {
+        val h = com.silencelen.huginn.data.RouteHealth(lastOkAt = now - 240_000)
+        assertEquals(
+            "http://192.168.2.117:8787 · last reached 4m ago",
+            routeAddressLine("http://192.168.2.117:8787", h, now),
+        )
+        assertEquals(
+            "http://192.168.2.117:8787",
+            routeAddressLine("http://192.168.2.117:8787", null, now),
+            "no probe yet says nothing rather than guessing",
+        )
+    }
+
+    @Test
+    fun `an address too long for two lines loses its MIDDLE, never its port`() {
+        val long = "http://a-very-long-magicdns-hostname-for-exactly-one-machine.tailnet-1234abcd.ts.net:8787"
+        val out = middleElide(long)
+        assertTrue(out.length <= ROUTE_URL_MAX, "still $out")
+        assertTrue(out.endsWith(":8787"), "the port is the half that identifies the daemon: $out")
+        assertTrue(out.startsWith("http://"), "and the scheme is the half that says whether it is plain: $out")
+        assertTrue("…" in out, "something has to say it was cut: $out")
+        assertEquals(long, middleElide(long, long.length), "an address that fits is left alone")
+    }
+
+    /**
+     * The layout half, asserted against the source because there is no
+     * compose-ui-test here — the same arrangement `DisclosureHeightOnlyTest`
+     * uses. What can be checked is that the address is no longer emitted INSIDE
+     * the row that carries the controls.
+     */
+    @Test
+    fun `the address is drawn after the controls, not beside them`() {
+        val f = generateSequence(java.io.File("").absoluteFile) { it.parentFile }
+            .firstOrNull { java.io.File(it, "settings.gradle.kts").isFile }
+            ?.let { java.io.File(it, "ui/src/commonMain/kotlin/com/silencelen/huginn/ui/settings/SettingsRows.kt") }
+        assertTrue(f != null && f.isFile, "SettingsRows.kt not found from ${java.io.File("").absolutePath}")
+        val body = f!!.readText().substringAfter("private fun RouteRow(").substringBefore("private fun RouteForm(")
+        assertTrue(body.length > 1_000, "RouteRow read as ${body.length} chars — wrong slice")
+        val edit = body.indexOf("actions.move(route.id, 1)")
+        val address = body.indexOf("routeAddressLine(")
+        assertTrue(edit > 0 && address > 0, "the gate lost its subject: controls=$edit address=$address")
+        assertTrue(
+            address > edit,
+            "the address is back inside the controls row, where it gets one line and an ellipsis",
+        )
+        assertTrue("maxLines = 2" in body, "the address line must be allowed a second line")
+    }
+
     private fun book(): RouteBook = RouteBook()
         .add("Tailscale", "http://100.64.0.1:8787", now, id = "r1")
         .add("Yggdrasil", "http://192.168.2.117:8787", now, id = "r2")

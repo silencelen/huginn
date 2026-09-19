@@ -173,6 +173,37 @@ class SettingsPhoneTest {
         assertEquals(9, SettingsCatalog.visibleCategories(phoneProbe(now), Surface.PHONE).size)
     }
 
+    /**
+     * ⚠ THE FACT THE CATALOG NEEDS COMES OFF THE SAVED SETTING, because that is
+     * what the form branches on: the model picker and the quiet-hours field are
+     * drawn `if (draft.keepAwake)`. Without this fact the catalog claimed both
+     * rows existed on any headroom host, and searching "quiet hours" with
+     * keep-awake off opened a page that has no such field.
+     */
+    @Test
+    fun `keep-awake's detail rows follow the saved switch`() {
+        assertFalse(
+            "a host with keep-awake off draws no model picker",
+            phoneProbe(PhoneSettingsFacts(headroomSettings = HeadroomSettings(keepAwake = false))).keepAwake,
+        )
+        assertTrue(
+            "and a host with it on draws both",
+            phoneProbe(PhoneSettingsFacts(headroomSettings = HeadroomSettings(keepAwake = true))).keepAwake,
+        )
+        assertFalse(
+            "a daemon with no headroom at all has no keep-awake either",
+            phoneProbe(PhoneSettingsFacts()).keepAwake,
+        )
+        val ids = SettingsCatalog.itemsOf(
+            "usage",
+            phoneProbe(PhoneSettingsFacts(headroomSettings = HeadroomSettings(keepAwake = false))),
+            Surface.PHONE,
+        ).map { it.id }
+        assertTrue("the switch itself stays: $ids", "usage.keep-awake" in ids)
+        assertFalse("$ids", "usage.keep-awake-quiet" in ids)
+        assertFalse("$ids", "usage.keep-awake-model" in ids)
+    }
+
     @Test
     fun `this phone never claims to serve local models`() {
         // Serving is a machine's own decision and a phone is not a candidate; the

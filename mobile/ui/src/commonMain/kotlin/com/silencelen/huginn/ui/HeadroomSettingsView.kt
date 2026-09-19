@@ -581,8 +581,15 @@ private fun PickerButton(label: String, onClick: () -> Unit) {
     TextButton(
         onClick = onClick,
         colors = ButtonDefaults.textButtonColors(
-            containerColor = MaterialTheme.colorScheme.secondaryContainer,
-            contentColor = MaterialTheme.colorScheme.onSecondaryContainer,
+            // ⚠ THE THEME'S OWN MUTED SURFACE, the same one the sliders' inactive
+            // track is pinned to and for the same reason: `Theme.kt` never
+            // defines `secondaryContainer`, so it falls back to Material's
+            // baseline violet — a colour that appears nowhere else in a warm
+            // rune-gold palette, and there are six of these pills down the Usage
+            // page. The LABEL stays at full `onSurface`: it is the picker's
+            // value, not a caption, and it is the thing being read.
+            containerColor = MaterialTheme.colorScheme.surfaceVariant,
+            contentColor = MaterialTheme.colorScheme.onSurface,
         ),
         contentPadding = PaddingValues(start = 12.dp, end = 6.dp, top = 6.dp, bottom = 6.dp),
     ) {
