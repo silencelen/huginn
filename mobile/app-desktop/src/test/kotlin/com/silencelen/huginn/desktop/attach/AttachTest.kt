@@ -4,20 +4,32 @@ import com.silencelen.huginn.data.HuginnClient
 import com.silencelen.huginn.ui.AttachBatch
 import com.silencelen.huginn.ui.AttachmentText
 import com.silencelen.huginn.ui.PANE_SEPARATOR
+import com.silencelen.huginn.ui.TakeResult
 import com.silencelen.huginn.ui.composeMessage
 import io.ktor.client.engine.mock.MockEngine
 import io.ktor.client.engine.mock.respond
 import io.ktor.http.HttpStatusCode
 import io.ktor.http.headersOf
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.asCoroutineDispatcher
+import kotlinx.coroutines.awaitCancellation
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.test.currentTime
+import kotlinx.coroutines.test.runTest
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeout
 import java.awt.datatransfer.DataFlavor
 import java.awt.datatransfer.Transferable
 import java.awt.image.BufferedImage
 import java.io.File
+import java.nio.file.Files
+import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.Executors
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNull
@@ -383,112 +395,238 @@ class AwtTransferFilesTest {
  */
 class AttachmentBatchTest {
 
-    // runBlocking, NOT runTest, for everything that calls take(): runTest's
-    // virtual clock fast-forwards the 20s settle budget the instant the test
-    // coroutine idles, which cancels uploads that are merely running on another
-    // dispatcher and makes a clean batch look like a wholly failed one.
-    private val BASE = "http://h"
+    /**
+     * ONE batch under test: a controller, its client, its files and its thread.
+     *
+     * THE FLAKE THIS REPLACES was three things, all of them properties of the
+     * test rather than of the controller:
+     *
+     * 1. THE SCOPE WAS [kotlinx.coroutines.Dispatchers.Unconfined], so every
+     *    upload resumed on whichever ktor engine thread answered it and three
+     *    `_items` read-modify-writes ran at once. A lost write is either a chip
+     *    that never reaches READY (2 markers for 3 files, the third named as
+     *    failed) or an item that drops out of the list entirely (2 markers, 0
+     *    failed) — both were reproduced, ~7% of 150 attempts. Production hands
+     *    this controller a `rememberCoroutineScope()`, which is Compose's single
+     *    UI thread; ONE thread here is that arrangement, so a failure here means
+     *    something the shipped client can actually do.
+     *
+     * 2. THE FILES WERE A FIXED NAME IN THE SHARED TMPDIR (`$TMPDIR/w2attach-a.txt`),
+     *    so a second checkout running this same suite truncated the file this one
+     *    was streaming. A private directory per batch, deleted with it.
+     *
+     * 3. UPLOADS FINISHED WHENEVER THE ENGINE GOT TO THEM. Each response now
+     *    waits on a [CompletableDeferred] that [settle] completes, so "they came
+     *    back out of order" is an order the test CHOOSES and can name in the
+     *    assertion, with no sleeps and no clock.
+     */
+    private class Batch(private val failing: Set<String> = emptySet()) : AutoCloseable {
 
-    /** A file with a known name, so the marker can be read back by it. */
-    private fun tempFile(name: String, size: Int = 32): File =
-        File(System.getProperty("java.io.tmpdir"), "w2attach-$name").apply {
-            writeBytes(ByteArray(size) { 'x'.code.toByte() })
-            deleteOnExit()
+        private val dir: File = Files.createTempDirectory("huginn-attach-batch").toFile()
+        private val pool = Executors.newSingleThreadExecutor { r ->
+            Thread(r, "attach-test-ui").apply { isDaemon = true }
+        }
+        private val dispatcher = pool.asCoroutineDispatcher()
+        private val scope = CoroutineScope(SupervisorJob() + dispatcher)
+
+        /** One per upload name; the engine answers only once the test completes it. */
+        private val gates = ConcurrentHashMap<String, CompletableDeferred<Unit>>()
+
+        private fun gate(name: String) = gates.getOrPut(name) { CompletableDeferred() }
+
+        /** Uploads echo the name back as a path, except [failing], which the daemon refuses. */
+        val controller = AttachmentController(
+            HuginnClient(
+                baseUrlProvider = { "http://h" },
+                tokenProvider = { "t" },
+                engine = MockEngine { request ->
+                    val name = request.url.parameters["name"].orEmpty()
+                    gate(name).await()
+                    if (name in failing) {
+                        respond(
+                            """{"error":"that type is not allowed"}""",
+                            HttpStatusCode.UnsupportedMediaType,
+                            headersOf("Content-Type", listOf("application/json")),
+                        )
+                    } else {
+                        respond(
+                            """{"ok":true,"path":"/up/$name","bytes":32,"readable":true}""",
+                            HttpStatusCode.OK,
+                            headersOf("Content-Type", listOf("application/json")),
+                        )
+                    }
+                },
+            ),
+            scope,
+        )
+
+        val items get() = controller.items.value
+        val failure get() = controller.failure.value
+
+        private fun file(name: String, size: Int = 32): File =
+            File(dir, name).apply { writeBytes(ByteArray(size) { 'x'.code.toByte() }) }
+
+        /** Intake ON the controller's thread — a composer attaches from the UI thread. */
+        suspend fun attach(vararg names: String) = withContext(dispatcher) {
+            controller.attachFiles(names.map { file(it) })
         }
 
-    /** Uploads succeed and echo the name back as a path, except [failing]. */
-    private fun client(failing: Set<String> = emptySet()) = HuginnClient(
-        baseUrlProvider = { BASE },
-        tokenProvider = { "t" },
-        engine = MockEngine { request ->
-            val name = request.url.parameters["name"].orEmpty()
-            if (name in failing) {
-                respond("""{"error":"that type is not allowed"}""", HttpStatusCode.UnsupportedMediaType,
-                    headersOf("Content-Type", listOf("application/json")))
-            } else {
-                respond("""{"ok":true,"path":"/up/$name","bytes":32,"readable":true}""",
-                    HttpStatusCode.OK, headersOf("Content-Type", listOf("application/json")))
+        suspend fun remove(id: String) = withContext(dispatcher) { controller.remove(id) }
+
+        suspend fun take(): TakeResult = withContext(dispatcher) { controller.take() }
+
+        /**
+         * Lets ONE upload answer and does not return until its chip has reached a
+         * terminal state, so the caller knows exactly what order the batch
+         * settled in. Uploads past [AttachmentController.MAX_IN_FLIGHT] have not
+         * reached the engine yet, so settle a batch of at most four this way.
+         *
+         * The timeout is a watchdog, not a schedule: nothing here asserts on it,
+         * it only turns "this test hangs the build" into a named failure.
+         */
+        suspend fun settle(name: String) {
+            gate(name).complete(Unit)
+            withTimeout(30_000) {
+                controller.items.first { list ->
+                    list.none { it.label == name } ||
+                        list.any {
+                            it.label == name &&
+                                (it.status == AttachStatus.READY || it.status == AttachStatus.FAILED)
+                        }
+                }
             }
-        },
-    )
+        }
+
+        override fun close() {
+            gates.values.forEach { it.cancel() }
+            scope.cancel()
+            pool.shutdownNow()
+            dir.deleteRecursively()
+        }
+    }
+
+    // runBlocking, NOT runTest, for everything that drives a controller: runTest's
+    // virtual clock fast-forwards the 20s settle budget the instant the test
+    // coroutine idles, which cancels uploads that are merely running on the ktor
+    // engine's own dispatcher and makes a clean batch look like a wholly failed
+    // one. The one test below that owns its own jobs DOES use the virtual clock,
+    // because there it is the point.
 
     @Test
     fun `markers come back in attach order, one per file`() = runBlocking {
-        val scope = CoroutineScope(SupervisorJob() + Dispatchers.Unconfined)
-        val c = AttachmentController(client(), scope)
-        val files = listOf(tempFile("a.txt"), tempFile("b.txt"), tempFile("c.txt"))
+        Batch().use { b ->
+            b.attach("a.txt", "b.txt", "c.txt")
+            // SETTLED BACKWARDS, deliberately. Surviving out-of-order completion
+            // is the promise; leaving the order to the engine tests nothing.
+            b.settle("c.txt")
+            b.settle("b.txt")
+            b.settle("a.txt")
 
-        c.attachFiles(files)
-        val taken = c.take()
+            val taken = b.take()
 
-        // THE SIZE IS THE ASSERTION. The slot this replaced returned one marker
-        // for a three-file drop and read as working.
-        assertEquals(3, taken.markers.size, "three files, three markers")
-        assertEquals(
-            listOf("w2attach-a.txt", "w2attach-b.txt", "w2attach-c.txt"),
-            taken.markers.map { it.substringAfter("/up/").substringBefore(" ") },
-            "intake order is marker order",
-        )
-        assertTrue(taken.failed.isEmpty())
-        assertTrue(c.items.value.isEmpty(), "taking clears the composer")
+            // THE SIZE IS THE ASSERTION. The slot this replaced returned one marker
+            // for a three-file drop and read as working.
+            assertEquals(3, taken.markers.size, "three files, three markers")
+            assertEquals(
+                listOf("a.txt", "b.txt", "c.txt"),
+                taken.markers.map { it.substringAfter("/up/").substringBefore(" ") },
+                "intake order is marker order — NOT completion order",
+            )
+            assertTrue(taken.failed.isEmpty())
+            assertTrue(b.items.isEmpty(), "taking clears the composer")
+        }
     }
 
     @Test
     fun `a failed upload is named in the composer line and the rest still send`() = runBlocking {
-        val scope = CoroutineScope(SupervisorJob() + Dispatchers.Unconfined)
-        val c = AttachmentController(client(failing = setOf("w2attach-bad.txt")), scope)
-        c.attachFiles(listOf(tempFile("ok1.txt"), tempFile("bad.txt"), tempFile("ok2.txt")))
+        Batch(failing = setOf("bad.txt")).use { b ->
+            b.attach("ok1.txt", "bad.txt", "ok2.txt")
+            // The refusal comes back FIRST and the two good ones after it.
+            b.settle("bad.txt")
+            b.settle("ok2.txt")
+            b.settle("ok1.txt")
 
-        val taken = c.take()
+            val taken = b.take()
 
-        assertEquals(2, taken.markers.size, "the two that landed still go")
-        assertEquals(listOf("w2attach-bad.txt"), taken.failed, "and the one that did not is named")
-        val line = c.failure.value
-        assertTrue(line != null && "w2attach-bad.txt" in line, "the composer says which: $line")
-        assertEquals(AttachBatch.failureLine(taken.failed, 3), line, "one wording, from :core")
+            assertEquals(2, taken.markers.size, "the two that landed still go")
+            assertEquals(
+                listOf("ok1.txt", "ok2.txt"),
+                taken.markers.map { it.substringAfter("/up/").substringBefore(" ") },
+                "and they keep their intake order with a hole punched in the middle",
+            )
+            assertEquals(listOf("bad.txt"), taken.failed, "and the one that did not is named")
+            val line = b.failure
+            assertTrue(line != null && "bad.txt" in line, "the composer says which: $line")
+            assertEquals(AttachBatch.failureLine(taken.failed, 3), line, "one wording, from :core")
+        }
+    }
+
+    @Test
+    fun `two failures are named in attach order, not in the order they gave up`() = runBlocking {
+        Batch(failing = setOf("bad1.txt", "bad2.txt")).use { b ->
+            b.attach("bad1.txt", "ok.txt", "bad2.txt")
+            // The LAST one fails first. The line the composer prints is a list of
+            // attachments, so it has to read in the order they were attached —
+            // otherwise the same failed batch is named two different ways on two
+            // runs and neither matches the chips still on screen.
+            b.settle("bad2.txt")
+            b.settle("ok.txt")
+            b.settle("bad1.txt")
+
+            val taken = b.take()
+
+            assertEquals(listOf("bad1.txt", "bad2.txt"), taken.failed, "attach order, always")
+            assertEquals(1, taken.markers.size, "the one that landed still goes")
+            assertEquals(AttachBatch.failureLine(listOf("bad1.txt", "bad2.txt"), 3), b.failure)
+        }
     }
 
     @Test
     fun `the cap is ten, and the eleventh is refused out loud`() = runBlocking {
-        val scope = CoroutineScope(SupervisorJob() + Dispatchers.Unconfined)
-        val c = AttachmentController(client(), scope)
-        c.attachFiles((1..12).map { tempFile("f$it.txt") })
+        Batch().use { b ->
+            b.attach(*(1..12).map { "f$it.txt" }.toTypedArray())
 
-        assertEquals(10, c.items.value.size, "ten is the cap on both shells")
-        assertTrue(c.failure.value!!.contains("2 left off"))
+            assertEquals(10, b.items.size, "ten is the cap on both shells")
+            assertTrue(b.failure!!.contains("2 left off"))
+        }
     }
 
     @Test
-    fun `the settle budget is whole-batch, not per item`() = runBlocking {
+    fun `the settle budget is whole-batch, not per item`() = runTest {
         // Three uploads that are never coming back, and a 300ms budget. Per item
         // this waits 900ms; as a batch it waits 300. At ten files that is the
         // difference between 20 seconds and three minutes of held composer, which
         // is exactly the wedged-socket case the timeout exists to prevent.
-        val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
-        val jobs = (1..3).map { scope.launch { kotlinx.coroutines.delay(60_000) } }
-        val started = System.currentTimeMillis()
+        //
+        // ON THE VIRTUAL CLOCK, and this one belongs on it: the old version timed
+        // a real 300ms wait and asserted it came in under 700, which is a coin
+        // toss on a build host running three other test JVMs. These jobs are the
+        // test's own — no engine, no other dispatcher — so there is nothing for
+        // the clock to fast-forward out from under.
+        val jobs = (1..3).map { backgroundScope.launch { awaitCancellation() } }
+        val before = currentTime
         val settled = settleAll(jobs, 300)
-        val took = System.currentTimeMillis() - started
+        val waited = currentTime - before
         jobs.forEach { it.cancel() }
 
         assertTrue(!settled, "nothing settled")
-        assertTrue(took < 700, "one budget for the batch, not one each — waited ${took}ms")
+        assertEquals(300L, waited, "one budget for the batch, not one each")
     }
 
     @Test
     fun `removing one chip leaves the others, by id`() = runBlocking {
-        val scope = CoroutineScope(SupervisorJob() + Dispatchers.Unconfined)
-        val c = AttachmentController(client(), scope)
-        c.attachFiles(listOf(tempFile("x.txt"), tempFile("y.txt"), tempFile("z.txt")))
+        Batch().use { b ->
+            b.attach("x.txt", "y.txt", "z.txt")
 
-        val second = c.items.value[1].id
-        c.remove(second)
+            val second = b.items[1].id
+            b.remove(second)
 
-        assertEquals(
-            listOf("w2attach-x.txt", "w2attach-z.txt"),
-            c.items.value.map { it.label },
-            "identity is the id, never the index",
-        )
-        assertNull(c.items.value.firstOrNull { it.id == second })
+            assertEquals(
+                listOf("x.txt", "z.txt"),
+                b.items.map { it.label },
+                "identity is the id, never the index",
+            )
+            assertNull(b.items.firstOrNull { it.id == second })
+        }
     }
 }
