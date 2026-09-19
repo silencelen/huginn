@@ -239,6 +239,12 @@ class ModelsTest {
         assertTrue(old.ok)
         assertEquals(0, old.queued)
         assertTrue(old.landed, "a daemon with no queue delivered it outright")
+        assertFalse(old.duplicate, "and nothing about it was a duplicate")
+
+        // appd 3.5.1: the send the daemon recognised as one it already has.
+        val dup = json.decodeFromString<SendKeysResult>("""{"ok":true,"duplicate":true}""")
+        assertTrue(dup.duplicate)
+        assertTrue(dup.landed, "nothing of it is queued — which is why the seed cannot read `landed`")
     }
 
     /**

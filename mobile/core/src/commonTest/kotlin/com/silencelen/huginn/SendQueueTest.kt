@@ -5,6 +5,7 @@ import com.silencelen.huginn.data.TypingState
 import com.silencelen.huginn.ui.SendQueue
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
@@ -151,5 +152,65 @@ class SendQueueTest {
     fun `the list row says only that there is a wait`() {
         assertEquals("3 queued", SendQueue.rowMark(3))
         assertNull(SendQueue.rowMark(0), "an empty queue is not a fact about a row")
+    }
+
+    // -------------------------------------------- the send the daemon already had
+
+    /**
+     * ⚠ THE SEND WHOSE FATE A READER MOST WANTS EXPLAINED. appd 3.5.1 drops an
+     * identical human text that is already pending, or that it delivered within
+     * the last 30 seconds, and answers `duplicate: true` — the fix for the P1
+     * where three `/keys` POSTs from one tap put the owner's message on the pane
+     * three times. Nothing is queued for THIS press, so `landed` is true and the
+     * old rule seeded nothing: the composer emptied and said absolutely nothing,
+     * which is the same screen as a message that vanished.
+     */
+    @Test
+    fun `a duplicate says the message is already on its way`() {
+        val dup = SendKeysResult(ok = true, queued = 0, position = 0, delivered = false, duplicate = true)
+        assertTrue(dup.landed, "a duplicate is 'landed' — nothing of it is waiting")
+        val seeded = SendQueue.seed(dup)
+        assertNotNull(seeded, "and it must still seed a line, which landed alone would not")
+        assertEquals("That message is already on its way", SendQueue.note(seeded))
+    }
+
+    /** It says the message is FINE. "Rejected" or "not sent" would mean retype it. */
+    @Test
+    fun `the duplicate sentence never invites a retype`() {
+        val words = SendQueue.DUPLICATE.lowercase()
+        assertTrue("already" in words, SendQueue.DUPLICATE)
+        assertFalse("duplicate" in words, "the word is for the wire, not for the reader")
+        assertFalse("not sent" in words, SendQueue.DUPLICATE)
+        assertFalse("rejected" in words, SendQueue.DUPLICATE)
+    }
+
+    /**
+     * A duplicate BEHIND a queue says the same thing — the count belongs to other
+     * people's sends, not to this press, so leading with it would be a lie about
+     * where this message is.
+     */
+    @Test
+    fun `a duplicate with a queue behind it still leads with the duplicate`() {
+        val seeded = SendQueue.seed(SendKeysResult(ok = true, queued = 3, duplicate = true))
+        assertEquals("That message is already on its way", SendQueue.note(seeded))
+    }
+
+    /** An older daemon never sets it, and nothing about the old path moves. */
+    @Test
+    fun `without the field the old answers behave exactly as before`() {
+        assertNull(SendQueue.seed(SendKeysResult(ok = true)), "a pre-queue daemon's bare ok")
+        val queued = SendQueue.seed(SendKeysResult(ok = true, queued = 2, position = 2))
+        assertEquals("Queued · will send when Claude finishes its turn (2 waiting)", SendQueue.note(queued))
+    }
+
+    /**
+     * ⚠ AND IT CLEARS ITSELF. The seed is this client's guess; the next /typing
+     * answer is the daemon's own account of what is pending and replaces it. A
+     * line that claimed forever that a message was on its way would be worse than
+     * the silence it replaced.
+     */
+    @Test
+    fun `the next poll clears the duplicate line`() {
+        assertNull(SendQueue.note(TypingState(queued = 0)))
     }
 }

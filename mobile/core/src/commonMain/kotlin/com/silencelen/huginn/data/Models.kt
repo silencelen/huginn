@@ -539,6 +539,24 @@ data class TranscriptPage(
     val agentId: String? = null,
     /** The workflow run the agent belongs to, when it is a run's member. */
     val workflowId: String? = null,
+    /**
+     * This page came from an ARCHIVE's kept copy, not from a live session
+     * (`GET /v1/archive/:id/transcript`).
+     *
+     * ⚠ IT IS NOT A STYLE FLAG. There is no pane behind it, no state to poll and
+     * nothing to send to: a view that offered a composer here would be offering
+     * to type at a session that no longer exists. The daemon says so on every
+     * window rather than leaving it to the caller to remember which route it
+     * asked.
+     */
+    val archived: Boolean = false,
+    /**
+     * The kept copy is a TAIL of an over-cap conversation. Said on every window,
+     * because an archive of a truncated transcript starts mid-conversation and a
+     * reader who scrolled to the top would otherwise conclude that is where it
+     * began.
+     */
+    val transcriptTruncated: Boolean = false,
 )
 
 /** Automatic account rotation state, held by the host. */
@@ -1382,6 +1400,21 @@ data class SendKeysResult(
      * daemon, which is the old behaviour exactly.
      */
     val blockedBy: String? = null,
+    /**
+     * The daemon RECOGNISED this send as one it already has, and did not take it
+     * a second time (appd 3.5.1).
+     *
+     * ⚠ AN ANSWER, NOT A FAILURE. The P1 behind it: three `/keys` POSTs from one
+     * tap put the owner's message on the pane three times. The daemon now drops
+     * an identical human text that is already pending — or that it delivered
+     * within the last 30 seconds — and says so, and a client that read the drop
+     * as nothing having happened would leave the composer looking as though the
+     * message had vanished, which is the exact complaint the send queue exists
+     * for. The text IS going to arrive; this says it is already on its way.
+     *
+     * False from every older daemon, which is the old behaviour exactly.
+     */
+    val duplicate: Boolean = false,
 ) {
     /** Nothing is waiting on this send — it landed, or there is no queue to wait in. */
     val landed: Boolean get() = delivered || queued <= 0
@@ -2695,6 +2728,66 @@ data class ProjectMessageResult(
     val dropped: String? = null,
 )
 
+// ---------------------------------------------------- membership, by hand
+//
+// A cluster is not always born as one. The ordinary case is a session the owner
+// already has open — a scratch shell that turned into the firmware work — which
+// belongs in the project beside the ones that were spawned: on the dashboard, in
+// the peer relay, and in the graceful end.
+//
+// ⚠⚠ ADOPT LAUNCHES NOTHING AND DROP ENDS NOTHING. Both are edits to a RECORD.
+// `POST …/spawn` is the route that creates sessions and `DELETE /v1/projects/:id`
+// is the one that ends them; a membership verb that quietly did either would be
+// the surprise the daemon's own comment says this block exists to avoid. A
+// dropped member keeps running, unadopted, exactly where it was — which is why
+// the answer carries [ProjectMemberDropped.ended] rather than leaving a client
+// to assume.
+
+/** `POST /v1/projects/:id/members` — 201. */
+@Serializable
+data class ProjectMemberAdded(
+    val ok: Boolean = false,
+    val member: ProjectMember? = null,
+    val project: Project? = null,
+)
+
+/** `DELETE /v1/projects/:id/members/:role` — 200. */
+@Serializable
+data class ProjectMemberDropped(
+    val ok: Boolean = false,
+    val dropped: ProjectMember? = null,
+    /**
+     * ⚠ ALWAYS FALSE, AND SAID OUT LOUD BECAUSE OF IT. "Drop" and "end" are one
+     * keystroke apart in every client and this route does exactly one of them;
+     * the daemon states which in the body rather than leaving a reader of the
+     * code to infer it.
+     */
+    val ended: Boolean = false,
+    val project: Project? = null,
+)
+
+/**
+ * What a membership edit did, or the daemon's refusal — never both.
+ *
+ * ⚠ A 409 IS AN ANSWER, NOT A THROW — the [ProjectCreated] and [SpawnOutcome]
+ * precedent. The two that arrive this way are "that session is already the X of
+ * project Y" (which NAMES the other project, and knowing which one is the whole
+ * fix) and the twelve-member cap. Thrown, both would land on a failure path as a
+ * red line with no project attached; answered, the menu can say what happened
+ * and leave the tree exactly as it was.
+ *
+ * The other refusals still throw, and their sentences are shown verbatim: 400
+ * for a role that is taken, is `lead`, or is not a name; 404 for no such project
+ * or no such session to adopt; 503 when tmux is not answering.
+ */
+data class MemberOutcome(
+    /** The member adopted, or the member dropped. Null on a refusal. */
+    val member: ProjectMember?,
+    /** The project as it stands AFTER the edit, so a tree can redraw from it. */
+    val project: Project?,
+    val refusal: String?,
+)
+
 /**
  * `DELETE /v1/projects/:id` — the record is always removed; the sessions are
  * only ended if that was asked for.
@@ -2710,6 +2803,30 @@ data class ProjectDeleted(
     val ended: List<String> = emptyList(),
     /** `graceful` | `now` | `none`. */
     val mode: String = "none",
+    /**
+     * Members the wind-down could NOT be delivered to, with the daemon's reason
+     * for each (appd 3.5.2). Always present on a current daemon; empty on an
+     * older one, which is also what "nothing was refused" looks like.
+     *
+     * ⚠⚠ THESE SESSIONS ARE STILL RUNNING AND NO LONGER HAVE A PROJECT. A member
+     * sitting on a permission or folder-trust dialog cannot be typed at — the
+     * daemon refuses rather than pasting the wrap-up phrase at a selector that
+     * swallows it without trace — and the record is deleted either way. The
+     * client that ASKED for the delete is the only one in a position to say so,
+     * and a reader who is told "project removed" and nothing else will not go
+     * looking for two `claude` processes with no project behind them.
+     */
+    val refused: List<ProjectEndRefusal> = emptyList(),
+)
+
+/** One member a graceful delete could not wind down, and why. */
+@Serializable
+data class ProjectEndRefusal(
+    /** The tmux name — what a reader has to type to go and look. */
+    val name: String = "",
+    val claudeName: String = "",
+    /** The daemon's own sentence. Shown verbatim; a summary would lose the fix. */
+    val why: String = "",
 )
 
 /**
@@ -2898,8 +3015,40 @@ data class App(
     val httpStatus: Int? = null,
     /** Whether the daemon holds a favicon for this row. See the KDoc. */
     val icon: Boolean = false,
+    /**
+     * When the cached favicon BYTES last CHANGED, in epoch SECONDS (appd 3.5.2).
+     * `0` when there is no icon.
+     *
+     * ⚠ THIS IS THE CACHE KEY, AND [version] WAS THE WRONG ONE. A client caches
+     * the decoded picture per row — it has to; rows are drawn in a list that
+     * recycles — and keyed the cache on `version`, which is the ROW's edit
+     * history and never moves for a refetch. The daemon re-fetches a favicon on
+     * its own schedule (hourly, on probe), so a site that changed its icon
+     * served the old picture for the life of the process, with nothing in the
+     * logs and no way to make it let go short of a reinstall. This moves ONLY
+     * when the picture does — not even on a refetch that came back identical,
+     * which the file's mtime cannot say.
+     *
+     * ⚠ NULLABLE BECAUSE OF THE ALIAS, NOT BECAUSE OF THE VALUE. `/v1/apps` rows
+     * always carry it (POST 201, PATCH 200, probe 200, and inside a 409 body
+     * under `app`); the `/v1/consoles` alias kept for one release answers the
+     * 3.4 shape and OMITS it entirely. Absent and 0 mean the same thing to a
+     * reader — see [iconStamp] — and they should, because a client talking to
+     * the alias is a client whose pictures simply do not refresh.
+     */
+    val iconAt: Long? = null,
     val reachable: AppReachability = AppReachability(),
-)
+) {
+    /**
+     * [iconAt] with the daemon's own "no stamp" answer folded in.
+     *
+     * ⚠ 0, NOT NULL, AND IT IS A CACHE KEY LIKE ANY OTHER. Against a daemon that
+     * does not send the field every row keys on 0 and behaves exactly as an
+     * id-only key did — one fetch per row per process — which is the old
+     * behaviour, not a new bug. What it must never become is a date in 1970.
+     */
+    val iconStamp: Long get() = iconAt ?: 0
+}
 
 /**
  * `GET /v1/apps` — the registry, its caps, and how far the retrofit has got.

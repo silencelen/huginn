@@ -74,6 +74,27 @@ interface HuginnSettings {
         get() = routeBook.map { it.autoSwitch }
 
     /**
+     * What the last resolution learned about each pin — the state dots, the
+     * "last reached" words, and the hysteresis input.
+     *
+     * ⚠⚠ AN EMPTY MAP IS NOT A NEUTRAL STARTING POINT, IT IS A SECURITY HOLE.
+     * [RouteResolver.HYSTERESIS_MS] is what keeps a working connection where it
+     * is; with nothing remembered, EVERY COLD START skips it, probes the whole
+     * book and takes the first address that answers in the owner's order — so a
+     * stranger occupying a route pinned above the real daemon wins on every
+     * launch, even while huginn is up. `RouteHealthSnapshot` exists for exactly
+     * this and nothing persisted it; the cache lived and died with the process.
+     *
+     * DEFAULT members, like [sentHistory], so a fake in a test compiles
+     * unchanged and simply forgets — which is the behaviour every client had
+     * until both stores overrode them.
+     */
+    val routeHealth: Flow<Map<String, RouteHealth>> get() = kotlinx.coroutines.flow.flowOf(emptyMap())
+
+    /** @param atMs stamped into the snapshot, for a reader that wants to age it out. */
+    suspend fun setRouteHealth(value: Map<String, RouteHealth>, atMs: Long = 0) {}
+
+    /**
      * Stable id for this installation, minted once. Sent to the host so it can
      * record that this client is still checking in.
      */

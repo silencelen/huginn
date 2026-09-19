@@ -3,6 +3,8 @@ package com.silencelen.huginn
 import com.silencelen.huginn.data.ManifestSession
 import com.silencelen.huginn.data.Project
 import com.silencelen.huginn.data.ProjectLead
+import com.silencelen.huginn.data.ProjectDeleted
+import com.silencelen.huginn.data.ProjectEndRefusal
 import com.silencelen.huginn.data.ProjectLive
 import com.silencelen.huginn.data.ProjectManifest
 import com.silencelen.huginn.data.ProjectMember
@@ -613,5 +615,151 @@ class ProjectRulesTest {
         assertEquals("led by statusflap/lead", ProjectRules.leadWords(row()))
         assertNull(ProjectRules.leadWords(row().copy(lead = null)))
         assertNull(ProjectRules.leadWords(row().copy(lead = ProjectLead())))
+    }
+
+    // ------------------------------------------- membership, edited by hand
+
+    /**
+     * ⚠ THE LEAD CANNOT BE DROPPED. The daemon answers 409 — *"the lead is the
+     * project — delete the project instead"* — and this is what stops the verb
+     * being OFFERED, which is the difference between a control and a trap. A
+     * project whose lead had been dropped would keep a brief, a manifest and a
+     * peer namespace all belonging to a session no longer in it.
+     */
+    @Test
+    fun `the lead is not droppable, and everyone else is`() {
+        assertFalse(ProjectRules.canDrop(live("lead", lead = true)))
+        assertTrue(ProjectRules.canDrop(live("firmware")))
+        // Belt and braces: the role word alone disqualifies it, in case a daemon
+        // ever sends the lead's row without the flag.
+        assertFalse(ProjectRules.canDrop(live("lead", lead = false)))
+    }
+
+    /**
+     * What "Add member" may offer: everything running that this project does not
+     * already hold.
+     *
+     * ⚠ IT CANNOT KNOW ABOUT OTHER PROJECTS AND MUST NOT PRETEND TO. A session in
+     * a different cluster looks free from here; the daemon holds that join and
+     * answers 409 NAMING the other project, which is the entire fix — and far
+     * better than a row quietly missing from a picker with no explanation.
+     */
+    @Test
+    fun `adoptable is every live session this project does not already hold`() {
+        val members = listOf(live("lead", lead = true), live("firmware"))
+        val running = listOf("statusflap-lead", "statusflap-firmware", "scratch", "jtyper")
+        assertEquals(listOf("scratch", "jtyper"), ProjectRules.adoptable(running, members))
+    }
+
+    @Test
+    fun `a session in another project is still offered, because only the daemon knows`() {
+        val members = listOf(live("lead", lead = true))
+        assertEquals(
+            listOf("someone-elses-firmware"),
+            ProjectRules.adoptable(listOf("statusflap-lead", "someone-elses-firmware"), members),
+        )
+    }
+
+    @Test
+    fun `a blank session name is never offered`() {
+        assertEquals(listOf("scratch"), ProjectRules.adoptable(listOf("", "   ", "scratch"), emptyList()))
+    }
+
+    /**
+     * The role grammar the adopt form pre-checks with is the daemon's, spelled
+     * out as a literal — `lib/projects.js roleProblem`, in another language.
+     */
+    @Test
+    fun `the adopt form refuses what the daemon would refuse`() {
+        val taken = listOf("firmware")
+        assertNull(ProjectRules.roleProblem("pcb", taken))
+        assertEquals("a member needs a role", ProjectRules.roleProblem("  ", taken))
+        assertEquals("\"lead\" is the lead session's own role", ProjectRules.roleProblem("lead", taken))
+        assertEquals("there is already a member with that role", ProjectRules.roleProblem("firmware", taken))
+        // The grammar is `^[a-z0-9][a-z0-9-]{0,15}$` — a dot is the interesting
+        // one: tmux rewrites it to '_' AND STILL EXITS 0, so the session that
+        // comes back is not the one that was asked for.
+        assertTrue(ProjectRules.roleProblem("fw.old", taken)!!.isNotBlank())
+        assertTrue(ProjectRules.roleProblem("Firmware", taken)!!.isNotBlank())
+        assertTrue(ProjectRules.roleProblem("a".repeat(17), taken)!!.isNotBlank())
+    }
+
+    /** The twelve-member cap, checked before the trip rather than after it. */
+    @Test
+    fun `the cap is checked before the request`() {
+        assertNull(ProjectRules.capProblem(11, 1))
+        assertEquals("a project holds at most 12 members", ProjectRules.capProblem(12, 1))
+    }
+
+    /**
+     * ⚠⚠ "PROJECT REMOVED" ALONE IS A LIE BY OMISSION when a graceful delete
+     * could not reach every member. Those sessions are ALIVE, with no project
+     * behind them, and nothing else on the host will ever mention them again —
+     * the record they belonged to has gone.
+     */
+    @Test
+    fun `a delete says what it could not wind down, by name`() {
+        val done = ProjectDeleted(
+            ok = true,
+            ended = listOf("lora-pcb", "lora-lead"),
+            mode = "graceful",
+            refused = listOf(
+                ProjectEndRefusal("lora-firmware", "lora/firmware", "a dialog is open on the screen"),
+                ProjectEndRefusal("lora-test", "lora/test", "a question is waiting on the screen"),
+            ),
+        )
+        assertEquals(
+            "Project removed · ended 2 · 2 sessions were not wound down: lora-firmware, lora-test",
+            ProjectRules.deletedWords(done),
+        )
+    }
+
+    /** One is singular, and the word has to agree or the line reads as a bug. */
+    @Test
+    fun `one refusal is one session`() {
+        val done = ProjectDeleted(
+            ok = true,
+            ended = emptyList(),
+            mode = "graceful",
+            refused = listOf(ProjectEndRefusal("lora-firmware", "lora/firmware", "a dialog is open")),
+        )
+        assertEquals(
+            "Project removed · 1 session was not wound down: lora-firmware",
+            ProjectRules.deletedWords(done),
+        )
+    }
+
+    /**
+     * ⚠ "NOT WOUND DOWN", NEVER "FAILED". Nothing broke — those sessions are
+     * working — and the word has to leave a reader expecting to find them rather
+     * than expecting wreckage.
+     */
+    @Test
+    fun `the words do not read as a breakage`() {
+        val line = ProjectRules.deletedWords(
+            ProjectDeleted(refused = listOf(ProjectEndRefusal("a", "p/a", "busy"))),
+        ).lowercase()
+        for (word in listOf("failed", "error", "crashed", "lost")) {
+            assertFalse(word in line, "'$word' would send somebody looking for wreckage: $line")
+        }
+    }
+
+    /** The ordinary delete is unchanged: no refusals, no clause. */
+    @Test
+    fun `a clean delete says only what it did`() {
+        assertEquals("Project removed", ProjectRules.deletedWords(ProjectDeleted(ok = true)))
+        assertEquals(
+            "Project removed · ended 3",
+            ProjectRules.deletedWords(ProjectDeleted(ok = true, ended = listOf("a", "b", "c"))),
+        )
+    }
+
+    /** A daemon too old to send the key looks exactly like nothing refused. */
+    @Test
+    fun `an older daemon's answer reads as a clean delete`() {
+        assertEquals(
+            "Project removed · ended 1",
+            ProjectRules.deletedWords(ProjectDeleted(ok = true, ended = listOf("a"), mode = "now")),
+        )
     }
 }

@@ -246,6 +246,11 @@ fun SessionsList(
     onRevive: (ArchivedSession) -> Unit = {},
     onCopyResume: (ArchivedSession) -> Unit = {},
     onForgetArchive: (ArchivedSession) -> Unit = {},
+    /**
+     * READ an archived conversation in the detail pane, without reviving it.
+     * Null hides the verb — the shape every optional action here takes.
+     */
+    onViewArchive: ((ArchivedSession) -> Unit)? = null,
 ) {
     // Collapsed by default, and remembered only as long as the pane is: the
     // archive is a footnote to this list. A section that came back open would
@@ -263,6 +268,7 @@ fun SessionsList(
                 onCopyResume = onCopyResume,
                 onDelete = onForgetArchive,
                 onOpenLive = onOpen,
+                onView = onViewArchive,
             )
         }
     }

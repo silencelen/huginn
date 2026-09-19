@@ -2,6 +2,7 @@ package com.silencelen.huginn.ui
 
 import com.silencelen.huginn.data.ManifestSession
 import com.silencelen.huginn.data.Project
+import com.silencelen.huginn.data.ProjectDeleted
 import com.silencelen.huginn.data.ProjectManifest
 import com.silencelen.huginn.data.ProjectMemberState
 import com.silencelen.huginn.data.ProjectRow
@@ -231,6 +232,60 @@ object ProjectRules {
         } else {
             null
         }
+
+    /**
+     * Whether this member may be dropped from the project.
+     *
+     * ⚠ NEVER THE LEAD, and the daemon says why in one line: *"the lead is the
+     * project — delete the project instead"*. Dropping it would leave a record
+     * whose brief, manifest and peer namespace all belong to a session that is
+     * no longer in it. The daemon answers 409; this is what stops the verb being
+     * offered, which is the difference between a control and a trap.
+     */
+    fun canDrop(member: ProjectMemberState): Boolean = !member.lead && member.role != LEAD_ROLE
+
+    /**
+     * The live sessions a project could ADOPT: everything running that is not
+     * already one of its members.
+     *
+     * ⚠ IT CANNOT KNOW ABOUT OTHER PROJECTS, and must not pretend to. A session
+     * belonging to a different cluster looks exactly like a free one from here —
+     * the daemon holds that join and answers 409 NAMING the other project, which
+     * is the whole fix and is worth far more than a row quietly missing from a
+     * picker. So this filters only what this client can actually see.
+     */
+    fun adoptable(sessions: List<String>, members: List<ProjectMemberState>): List<String> {
+        val taken = members.map { it.name }.toSet()
+        return sessions.filter { it.isNotBlank() && it !in taken }
+    }
+
+    /**
+     * What a completed delete SAYS, in one line.
+     *
+     * ⚠ THE REFUSALS ARE THE HALF THAT MATTERS, and they were not said at all.
+     * A graceful delete types a wrap-up phrase into each member and lets the
+     * settle timer close it — but a member sitting on a permission or
+     * folder-trust dialog cannot be typed at, so the daemon skips it and removes
+     * the record anyway. Those sessions are then RUNNING WITH NO PROJECT BEHIND
+     * THEM, and a reader told only "project removed" has no reason to go looking
+     * for them. The daemon names each one; this puts the names on the screen.
+     *
+     * Pure, in `:core`, because both shells report the same delete and a sentence
+     * kept in two apps is a sentence fixed in one.
+     */
+    fun deletedWords(done: ProjectDeleted): String {
+        val bits = mutableListOf("Project removed")
+        if (done.ended.isNotEmpty()) bits += "ended ${done.ended.size}"
+        if (done.refused.isNotEmpty()) {
+            val names = done.refused.joinToString(", ") { it.name.ifBlank { it.claudeName } }
+            val what = if (done.refused.size == 1) "1 session was" else "${done.refused.size} sessions were"
+            // ⚠ "NOT WOUND DOWN", not "failed". Nothing broke: those sessions are
+            // alive and working, and the word has to leave a reader expecting to
+            // find them rather than expecting wreckage.
+            bits += "$what not wound down: $names"
+        }
+        return bits.joinToString(" · ")
+    }
 
     /** The two composers, mirrored — the only two forms a project session's name takes. */
     fun tmuxNameFor(slug: String, role: String): String = "$slug-$role"

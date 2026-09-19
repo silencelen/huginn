@@ -302,4 +302,65 @@ class ProjectsViewsTest {
         val d = ProjectDashboard(project = row(), generatedAt = nowSec, totals = t)
         assertEquals(31, d.totals?.turns)
     }
+
+    // ----------------------------------------- membership, edited by hand
+
+    /**
+     * ⚠⚠ "DROP" AND "END" ARE ONE KEYSTROKE APART, and one of them stops a
+     * session somebody is working in. The daemon says `ended: false` in the body
+     * rather than leaving a client to assume; the screen has to be at least as
+     * clear, so the consequence is printed beside the verb rather than left to
+     * the word "drop" to carry.
+     */
+    @Test
+    fun `the drop verb says what it does not do`() {
+        assertEquals("Drop from project", PROJECT_DROP_VERB)
+        assertTrue("keeps running" in PROJECT_DROP_NOTE, PROJECT_DROP_NOTE)
+        // And it must not read as an ending, which is the whole risk.
+        for (word in listOf("end", "kill", "stop", "close")) {
+            assertFalse(word in PROJECT_DROP_VERB.lowercase(), "'$word' would read as ending the session")
+        }
+    }
+
+    /**
+     * The adopt form's two empty states are different questions and must read
+     * that way: nothing picked yet is a prompt, nothing FREE is a fact about the
+     * host.
+     */
+    @Test
+    fun `the adopt form asks for a session rather than going quiet`() {
+        assertTrue(PROJECT_ADOPT_NEEDS_SESSION.isNotBlank())
+        assertTrue("session" in PROJECT_ADOPT_NEEDS_SESSION.lowercase(), PROJECT_ADOPT_NEEDS_SESSION)
+        assertTrue("No other session" in PROJECT_ADOPT_NOTHING_FREE, PROJECT_ADOPT_NOTHING_FREE)
+    }
+
+    /**
+     * ⚠ A SHELL THAT HAS NOT WIRED MEMBERSHIP OFFERS NOTHING. `membership = null`
+     * is the state against a daemon without the routes, and it must draw no verb
+     * at all rather than one that can only 404 — the same rule `archiveAvailable`
+     * and `projectsAvailable` already follow.
+     */
+    @Test
+    fun `an unwired shell adopts and drops nothing`() {
+        val actions = ProjectMemberActions()
+        // The defaults must be inert rather than absent: the composable calls
+        // them unconditionally, so a missing one would be a crash on a daemon
+        // that has no membership routes.
+        actions.onAdopt("firmware", "scratch")
+        actions.onDrop(dashMember("firmware", "idle"))
+        actions.clearRefusal()
+        // And with no live sessions the picker has nothing to offer, which is
+        // what `PROJECT_ADOPT_NOTHING_FREE` is drawn for.
+        assertEquals(emptyList(), ProjectRules.adoptable(actions.liveSessions, emptyList()))
+        assertNull(actions.refusal)
+        assertFalse(actions.busy)
+    }
+
+    @Test
+    fun `a wired shell gets the role and the name it picked`() {
+        var seen: Pair<String, String>? = null
+        val actions = ProjectMemberActions(onAdopt = { role, name -> seen = role to name })
+        actions.onAdopt("firmware", "scratch")
+        assertEquals("firmware" to "scratch", seen)
+    }
 }

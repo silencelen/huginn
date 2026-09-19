@@ -49,6 +49,8 @@ fun HostPage(
     routeBook: RouteBook,
     routeHealth: Map<String, RouteHealth>,
     routeNote: String?,
+    /** The route the resolver found and will not adopt on its own. See [SettingsRouteListRow]. */
+    routeCandidate: com.silencelen.huginn.data.PinnedRoute?,
     nowMs: Long,
     token: String,
     connected: Boolean?,
@@ -80,6 +82,7 @@ fun HostPage(
         // A placeholder, never a pre-filled value (D24): the old default was a real
         // tailnet address compiled into a public repo.
         suggestedUrl = HuginnSettings.ROUTE_URL_PLACEHOLDER,
+        candidate = routeCandidate,
     )
 
     SettingsFieldRow(

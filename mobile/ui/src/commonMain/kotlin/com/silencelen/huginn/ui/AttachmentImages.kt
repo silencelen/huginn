@@ -113,17 +113,25 @@ class AttachmentImageLoader(
      * The favicon for one app row, through the daemon's `/v1/apps/:id/icon`
      * route, or null (no such route, no icon, undecodable — draw the tile).
      *
-     * ⚠ KEYED ON THE ID **AND** THE VERSION. The daemon re-fetches an app's
-     * favicon when the row is edited and bumps `version` with the edit, so an
-     * id-only key would serve the old picture for the life of the process — the
-     * wrong picture, cached, with nothing in the logs. Rows are drawn in a list
-     * that recycles, so the cache is what makes this one request rather than one
-     * per scroll.
+     * ⚠ KEYED ON THE ID **AND** `iconAt`, WHICH IS NOT THE ROW'S `version`. This
+     * used to key on `version`, on the theory that the daemon re-fetches a row's
+     * favicon when the row is edited — true, and not the only time it does. It
+     * also re-fetches on probe, hourly, with nobody touching the row: a site
+     * that changed its icon therefore served the OLD picture for the life of the
+     * process, cached, with nothing in the logs and no way to let go of it short
+     * of restarting the app. `iconAt` is the stamp on the BYTES, which is the
+     * question this cache is actually asking.
+     *
+     * Rows are drawn in a list that recycles, so the cache is still what makes
+     * this one request rather than one per scroll.
+     *
+     * @param iconAt epoch SECONDS; 0 from a daemon that does not report it, which
+     *   keys every row the way an id-only key did — one fetch per process.
      */
-    suspend fun loadIcon(id: String, version: Int): ImageBitmap? {
+    suspend fun loadIcon(id: String, iconAt: Long): ImageBitmap? {
         val fetcher = fetchIcon ?: return null
         if (id.isBlank()) return null
-        return cached("$ICON_KEY$id@$version") { fetcher(id) }
+        return cached("$ICON_KEY$id@$iconAt") { fetcher(id) }
     }
 
     private suspend fun cached(key: String, fetchBytes: suspend () -> ByteArray): ImageBitmap? {

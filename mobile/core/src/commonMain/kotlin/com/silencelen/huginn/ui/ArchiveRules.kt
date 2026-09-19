@@ -54,6 +54,18 @@ object ArchiveRules {
      */
     fun startsFresh(row: ArchivedSession): Boolean = !row.transcriptPresent
 
+    /**
+     * Whether this row's conversation can be READ without bringing it back.
+     *
+     * ⚠ THE SAME FACT [startsFresh] WARNS ABOUT, READ THE OTHER WAY ROUND. When
+     * neither copy survives there is nothing to open, and a View that led to an
+     * apology would be the trap [canRevive] exists to avoid. It is a race — the
+     * host recomputes `transcriptPresent` on every list and the sweep happens
+     * while nobody is watching — so the read itself still has to cope with the
+     * answer changing underneath it.
+     */
+    fun canView(row: ArchivedSession): Boolean = row.transcriptPresent
+
     /** The name this row is running under now, for a row that is back. */
     fun liveName(row: ArchivedSession): String? =
         if (!row.live) null else (row.revivedAs ?: row.tmuxName)

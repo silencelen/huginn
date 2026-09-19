@@ -844,6 +844,56 @@ class HuginnClient(
     }
 
     /**
+     * The CONVERSATION of an archived session, read from the kept copy — or NULL
+     * when there is no such thing to read.
+     *
+     * ⚠ NULL IS TWO ANSWERS AT ONCE AND THAT IS DELIBERATE. A daemon older than
+     * this route 404s, and so does an archive the daemon does not have; both mean
+     * "there is nothing here to open", and both must leave a row that simply does
+     * not offer the door rather than one that offers an error. The feature probe
+     * pattern this client already uses twice over — see [projects] and the block
+     * comment above it.
+     *
+     * ⚠ A 409 IS A DIFFERENT ANSWER AND IT THROWS, so its sentence can be shown
+     * verbatim: *"no transcript was kept for this archive, and Claude Code no
+     * longer has one"* is the one state this whole feature exists to be honest
+     * about, and a summary of our own would lose which of the two copies went.
+     *
+     * ⚠ NO SESSION GATE, AND THAT IS THE POINT OF THE ROUTE. Every other
+     * transcript route begins by checking the tmux session is live and reads
+     * state keyed on its NAME; both are gone by the time a session is archived.
+     * The daemon reads the archive's own file instead — so [id] here is the
+     * Claude session uuid, never a tmux name.
+     *
+     * Paged exactly like [sessionTranscript]: [until] reads BACKWARDS, returning
+     * the page that ends where the given one began.
+     */
+    suspend fun archiveTranscript(
+        id: String,
+        offset: Long? = null,
+        limit: Int = 400,
+        until: Long? = null,
+    ): TranscriptPage? = probeGet(
+        "/v1/archive/$id/transcript?limit=$limit" +
+            (offset?.let { "&offset=$it" } ?: "") + (until?.let { "&until=$it" } ?: ""),
+    )?.let { decode<TranscriptPage>(it) }
+
+    /**
+     * ⚠⚠ A PROJECT MEMBER'S NAME IS NOT ITS OWN, and the daemon says so with a
+     * 409 (appd 3.5.2). A project stores its members BY TMUX NAME, their
+     * `claudeName` was minted from the slug and the role when `claude --name`
+     * launched them, and the native peer registry is joined back through that
+     * pair — so renaming one here orphans the session from its cluster silently:
+     * the record goes on naming a session that is gone, the dashboard row reads
+     * "not present" forever, and `/message` answers 409 about a session sitting
+     * right there.
+     *
+     * The refusal NAMES the project and says to drop the member first, so it is
+     * shown VERBATIM — [errorFrom] lifts the daemon's `error` string, both shells
+     * print a HuginnException's message unchanged, and a summary of our own would
+     * lose the half that is the instruction. A no-op rename (the desktop's field
+     * answering with what is already in it) is left alone by the daemon.
+     *
      * @return the name the daemon ACTUALLY gave the session, which is not always
      *   the one asked for: tmux silently rewrites '.' to '_' and still exits 0,
      *   so the daemon reads the name back off tmux and answers with that. A
@@ -1742,6 +1792,69 @@ class HuginnClient(
      * so it does not wait forever for an approval that is not coming.
      */
     suspend fun discardProposal(id: String): Project = decode(post("/v1/projects/$id/discard"))
+
+    /**
+     * ADOPT a session the owner already has open into this project.
+     *
+     * ⚠ IT LAUNCHES NOTHING. This is an edit to a RECORD — [spawnProject] is the
+     * route that creates sessions — so the session named keeps running exactly as
+     * it was and simply joins the cluster: the dashboard, the peer relay, and the
+     * graceful end.
+     *
+     * @param role the project-side name for the job, and the key everything else
+     *   addresses it by. 400 when it is taken, when it is `lead`, or when it is
+     *   not a name.
+     * @param name the TMUX session to adopt. Null means the name this project
+     *   WOULD have given the role — so re-adopting a member that was spawned here
+     *   and then dropped needs nothing but the role.
+     *
+     * ⚠ A 409 IS AN ANSWER (see [MemberOutcome]): the session already belongs to
+     * another project, and the daemon NAMES it — knowing which one is the entire
+     * fix — or the twelve-member cap has been reached. Everything else throws
+     * with the daemon's sentence: 404 for no such project or no such session,
+     * 503 when tmux is not answering.
+     */
+    suspend fun adoptMember(id: String, role: String, name: String? = null): MemberOutcome {
+        val body = buildJsonObject {
+            put("role", JsonPrimitive(role))
+            // ⚠ OMITTED, NOT SENT EMPTY. The daemon reads an absent `name` as
+            // "the name this project would have given the role"; `""` would be
+            // read the same way today, but the difference is the contract and a
+            // client that sends a blank is asserting something it does not mean.
+            name?.takeIf { it.isNotBlank() }?.let { put("name", JsonPrimitive(it)) }
+        }
+        val resp = http.request { build("/v1/projects/$id/members", HttpMethod.Post, Tier.NORMAL, body) }
+        val text = resp.bodyAsText()
+        if (resp.status.value == 409) return MemberOutcome(null, null, refusalOf(text))
+        if (!resp.status.isSuccess()) throw errorFrom(resp.status.value, text)
+        val added = decode<ProjectMemberAdded>(text)
+        return MemberOutcome(added.member, added.project, null)
+    }
+
+    /**
+     * DROP a member from the project. ⚠ THE SESSION KEEPS RUNNING.
+     *
+     * The record loses the row and the member loses its rendered persona — a
+     * readable copy of a project's instructions for a session no longer in it is
+     * the same "orders from a ghost" the delete route unlinks for — and nothing
+     * else happens. `DELETE /v1/projects/:id` is the route that ends sessions.
+     *
+     * ⚠ 409 FOR THE LEAD, and it is an answer rather than a fault: *"the lead is
+     * the project — delete the project instead"* says what to do. 404 for a role
+     * this project does not have.
+     */
+    suspend fun dropMember(id: String, role: String): MemberOutcome {
+        val resp = http.request { build("/v1/projects/$id/members/$role", HttpMethod.Delete, Tier.NORMAL, null) }
+        val text = resp.bodyAsText()
+        if (resp.status.value == 409) return MemberOutcome(null, null, refusalOf(text))
+        if (!resp.status.isSuccess()) throw errorFrom(resp.status.value, text)
+        val body = decode<ProjectMemberDropped>(text)
+        return MemberOutcome(body.dropped, body.project, null)
+    }
+
+    /** The daemon's own sentence out of an error body, or a plain fallback. */
+    private fun refusalOf(text: String, fallback: String = "that change was refused"): String =
+        runCatching { decode<ApiError>(text).error }.getOrNull()?.takeIf { it.isNotBlank() } ?: fallback
 
     /**
      * Type a line into one member, from another.

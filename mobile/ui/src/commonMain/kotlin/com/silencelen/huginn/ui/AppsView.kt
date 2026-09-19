@@ -313,10 +313,14 @@ private fun AppFixPanel(app: App, onCopy: ((String) -> Unit)?) {
 @Composable
 private fun AppIcon(app: App) {
     val loader = LocalAttachmentImages.current
-    var bitmap by remember(app.id, app.version) { mutableStateOf<ImageBitmap?>(null) }
+    // ⚠ `iconStamp`, NOT `version`. The row's revision only moves when somebody
+    // EDITS the row; the daemon re-fetches the favicon on probe, hourly, with
+    // nobody touching it — so a site that changed its icon kept serving the old
+    // picture until the app was restarted. See AttachmentImageLoader.loadIcon.
+    var bitmap by remember(app.id, app.iconStamp) { mutableStateOf<ImageBitmap?>(null) }
     val wanted = AppRules.hasIcon(app) && loader != null
-    LaunchedEffect(app.id, app.version, wanted) {
-        bitmap = if (wanted) loader?.loadIcon(app.id, app.version) else null
+    LaunchedEffect(app.id, app.iconStamp, wanted) {
+        bitmap = if (wanted) loader.loadIcon(app.id, app.iconStamp) else null
     }
     val shape = RoundedCornerShape(6.dp)
     val shot = bitmap

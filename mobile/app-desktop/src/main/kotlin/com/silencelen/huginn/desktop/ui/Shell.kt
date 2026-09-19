@@ -83,6 +83,7 @@ import com.silencelen.huginn.data.ArchivedSession
 import com.silencelen.huginn.data.Session
 import com.silencelen.huginn.desktop.AppStore
 import com.silencelen.huginn.ui.ArchiveRules
+import com.silencelen.huginn.ui.ArchivedTranscriptView
 import com.silencelen.huginn.ui.ChatListScroll
 import com.silencelen.huginn.ui.EndVerbs
 import com.silencelen.huginn.desktop.Responsive
@@ -188,6 +189,8 @@ fun Shell(store: AppStore) {
     val sessionsLoaded by store.sessionsLoaded.collectAsState()
     val chatId by store.chatId.collectAsState()
     val sessionName by store.sessionName.collectAsState()
+    // The detail half's other occupant: one archived conversation, read only.
+    val archiveRead by store.archiveRead.collectAsState()
     val watchConnected by store.watchConnected.collectAsState()
     val error by store.error.collectAsState()
     val route by store.route.collectAsState()
@@ -520,6 +523,9 @@ fun Shell(store: AppStore) {
                                         onRevive = { row -> act { store.reviveArchive(row) } },
                                         onCopyResume = { row -> row.resumeCommand?.let { copy(it) } },
                                         onForgetArchive = { confirming = ConfirmTarget.ForgetArchive(it) },
+                                        // READ it without bringing it back: the
+                                        // detail pane, read only, no decision made.
+                                        onViewArchive = { store.openArchive(it) },
                                     )
                                     else -> Unit
                                 }
@@ -563,8 +569,27 @@ fun Shell(store: AppStore) {
                                 // value is not smart-cast across the read, and `!!` on
                                 // the owner's daily driver is a crash waiting for a race.
                                 val open = sessionName
+                                val archive = archiveRead
                                 if (open != null) {
                                     SessionView(store, open)
+                                } else if (archive != null) {
+                                    // ⚠⚠ NO COMPOSER, AND THE SHELL IS WHERE THAT IS
+                                    // DECIDED. `SessionView` above builds a composer,
+                                    // a send queue, a Screen tab and a menu of verbs,
+                                    // every one of which addresses a tmux session BY
+                                    // NAME — and an archive's session is gone, its name
+                                    // reused on this host within hours. So this branch
+                                    // draws the shared read-only view and nothing else.
+                                    // `ArchivedTranscriptViewTest` greps it for exactly
+                                    // that. Reviving stays on the archived row, beside
+                                    // the warning about a swept transcript.
+                                    ArchivedTranscriptView(
+                                        events = archive.page?.events.orEmpty(),
+                                        title = archive.title,
+                                        truncated = archive.page?.transcriptTruncated == true,
+                                        onCopy = { copy(it) },
+                                        note = archive.note,
+                                    )
                                 } else {
                                     val copy = noSessionOpenCopy(listShut)
                                     NothingOpen("No session open", copy.sentence, copy.routes)

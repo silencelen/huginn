@@ -35,6 +35,7 @@ class DestSaverTest {
             Dest.RoundEdit(null),
             Dest.RoundEdit("r-7"),
             Dest.SettingsSection("usage"),
+            Dest.ArchiveTranscript("9f1c8b52-5d2a-4a21-9f65-1a2b3c4d5e6f"),
         )
         for (d in cases) {
             assertEquals("lost $d across a rebuild", d, keyToDest(destToKey(d)))
@@ -91,5 +92,33 @@ class DestSaverTest {
         // Saved state can outlive an app version that knew that destination.
         assertEquals(Dest.Sessions, keyToDest("nonsense-from-an-older-build"))
         assertEquals(Dest.Sessions, keyToDest(""))
+    }
+
+    /**
+     * ⚠ THE ARCHIVE'S KEY IS THE CLAUDE SESSION UUID, never a tmux name. A
+     * restored destination that came back with the name would address a session
+     * that is gone — or, on this host, a stranger that has since reused it.
+     */
+    @Test
+    fun `an archived conversation comes back as THAT conversation`() {
+        val id = "9f1c8b52-5d2a-4a21-9f65-1a2b3c4d5e6f"
+        val d = keyToDest(destToKey(Dest.ArchiveTranscript(id))) as Dest.ArchiveTranscript
+        assertEquals(id, d.id)
+        assertEquals(Dest.ArchiveTranscript(id), keyToDest(destToKey(Dest.ArchiveTranscript(id))))
+    }
+
+    /** An empty id is the LIST, the same rule Projects and Settings already follow. */
+    @Test
+    fun `an archive key with no id lands on the sessions list`() {
+        assertEquals(Dest.Sessions, keyToDest("archive:"))
+    }
+
+    /** Up from a read-only archive is the list its section lives at the bottom of. */
+    @Test
+    fun `back from an archived conversation is the sessions list`() {
+        assertEquals(Dest.Sessions, backFrom(Dest.ArchiveTranscript("a"), tab = 1))
+        // And it is a CHILD, so the system back gesture is handled rather than
+        // closing the app — the same class as a session, a page or a drawer.
+        assertEquals(Dest.Sessions, backFrom(Dest.ArchiveTranscript("a"), tab = 0))
     }
 }

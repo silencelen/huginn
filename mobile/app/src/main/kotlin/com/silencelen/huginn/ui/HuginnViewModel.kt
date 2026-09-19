@@ -56,6 +56,7 @@ import com.silencelen.huginn.data.LoginState
 import com.silencelen.huginn.data.RouteBook
 import com.silencelen.huginn.data.RouteFailures
 import com.silencelen.huginn.data.RouteGuard
+import com.silencelen.huginn.data.PinnedRoute
 import com.silencelen.huginn.data.RouteHealth
 import com.silencelen.huginn.data.RouteResolver
 import com.silencelen.huginn.data.UriByteStream
@@ -1030,6 +1031,11 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
             _health.value = readHealth()
             _appLock.value = settings.appLock.first()
             _routeBook.value = settings.routeBook.first()
+            // ⚠ BEFORE THE FIRST resolveRoute BELOW. With an empty map every cold
+            // start skips the hysteresis and takes the first address that answers
+            // in the owner's order — which is how a stranger on a route pinned
+            // above the real daemon wins on every launch. See HuginnSettings.routeHealth.
+            _routeHealth.value = settings.routeHealth.first()
             AppLock.enabledCache = _appLock.value
             // Opened even when no token is configured: a caller must unblock and
             // get a real "not configured" failure rather than hang forever.
@@ -1078,6 +1084,14 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
     val routeNote: StateFlow<String?> = _routeNote.asStateFlow()
 
     /**
+     * A route that answered and that this client WILL NOT ADOPT BY ITSELF — see
+     * [RouteResolver.Choice.Stay.Candidate]. Offered under the list; null the
+     * rest of the time, which is almost always.
+     */
+    private val _routeCandidate = MutableStateFlow<PinnedRoute?>(null)
+    val routeCandidate: StateFlow<PinnedRoute?> = _routeCandidate.asStateFlow()
+
+    /**
      * Consecutive network failures on the active route. ⚠ A 401 does not count:
      * an answering daemon that rejects the token proves the ROUTE is fine, and
      * re-resolving on it would go looking for a network problem that is not
@@ -1100,7 +1114,12 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
                 force = force,
             ) { client.probe(it.url) }
             _resolvingRoute.value = false
-            _routeHealth.value = outcome.health
+            saveHealth(outcome.health)
+            // Cleared on EVERY resolution before it is set again: an offer is a
+            // fact about the sweep that just ran, and one left standing from five
+            // minutes ago invites a person to hand the bearer to a host that has
+            // since gone quiet.
+            _routeCandidate.value = (outcome.choice as? RouteResolver.Choice.Stay.Candidate)?.candidate
             when (val choice = outcome.choice) {
                 is RouteResolver.Choice.Empty ->
                     if (!silent) _toast.value = "No routes yet — add the address huginn answers on"
@@ -1119,6 +1138,23 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     /**
+     * Adopt the offered route: the person saying so that [RouteResolver] waits
+     * for. Pinned, exactly as a Use on any other row is — the reader has just
+     * chosen an address, and auto-switching away from it on the next sweep would
+     * make the choice look like it did not take.
+     */
+    fun useRouteCandidate(id: String) {
+        _routeCandidate.value = null
+        activateRoute(id)
+    }
+
+    /** The health cache and its persisted copy, together. */
+    private suspend fun saveHealth(health: Map<String, RouteHealth>) {
+        _routeHealth.value = health
+        runCatching { settings.setRouteHealth(health, System.currentTimeMillis()) }
+    }
+
+    /**
      * Marks the active route as having just worked, from REAL traffic.
      *
      * See [RouteResolver.touch]: it writes `lastSeenAt`, never `lastOkAt`, so the
@@ -1126,11 +1162,17 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
      * "fresh" seconds after its last success.
      */
     private fun noteRouteReached() {
-        _routeHealth.value = RouteResolver.touch(
+        val next = RouteResolver.touch(
             _routeHealth.value,
             _routeBook.value.active?.id,
             System.currentTimeMillis(),
         )
+        if (next == _routeHealth.value) return
+        _routeHealth.value = next
+        // Persisted too, and this is the witness that matters most on a phone:
+        // ordinary traffic proves the route far more often than a probe does, and
+        // a restart that forgot it would sweep the whole book on next launch.
+        viewModelScope.launch { runCatching { settings.setRouteHealth(next, System.currentTimeMillis()) } }
     }
 
     /**
@@ -2457,11 +2499,64 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
                 .onSuccess { done ->
                     if (_projectDetail.value?.project?.id == id) _projectDetail.value = null
                     _projectMembers.value = _projectMembers.value - id
-                    _toast.value = if (done.ended.isEmpty()) "Project removed"
-                    else "Project removed · ended ${done.ended.size}"
+                    // ⚠ INCLUDING WHAT WAS NOT WOUND DOWN. A member sitting on a
+                    // dialog cannot be typed at, so the daemon skips it and
+                    // deletes the record anyway — those sessions are alive with
+                    // no project behind them, and "Project removed" alone gives a
+                    // reader no reason to go and find them.
+                    _toast.value = ProjectRules.deletedWords(done)
                     refreshProjects()
                 }
                 .onFailure { _toast.value = errText(it) }
+        }
+    }
+
+    // ------------------------------------------ membership, edited by hand
+
+    /**
+     * ADOPT a session that is already running into this project.
+     *
+     * ⚠ IT LAUNCHES NOTHING — the record gains a row and the session carries on
+     * exactly as it was. The 409 is an ANSWER and it is the interesting one: the
+     * session already belongs to another cluster, and the daemon NAMES it.
+     */
+    fun adoptMember(id: String, role: String, name: String) {
+        viewModelScope.launch {
+            awaitReady()
+            _projectBusy.value = true
+            _projectRefusal.value = null
+            runCatching { client.adoptMember(id, role, name) }
+                .onSuccess { outcome ->
+                    if (outcome.refusal != null) _projectRefusal.value = outcome.refusal
+                    else _toast.value = "$name joined as $role"
+                    openProject(id)
+                    refreshProjects()
+                }
+                // 400 (a role that is taken, is "lead", or is not a name), 404
+                // (no such session), 503 (tmux not answering) — every one of
+                // them arrives as the daemon's own sentence, which is also the fix.
+                .onFailure { _projectRefusal.value = errText(it) }
+            _projectBusy.value = false
+        }
+    }
+
+    /** DROP a member. ⚠ THE SESSION KEEPS RUNNING — see the client. */
+    fun dropMember(id: String, role: String) {
+        viewModelScope.launch {
+            awaitReady()
+            _projectBusy.value = true
+            _projectRefusal.value = null
+            runCatching { client.dropMember(id, role) }
+                .onSuccess { outcome ->
+                    if (outcome.refusal != null) _projectRefusal.value = outcome.refusal
+                    // Said out loud, because "drop" and "end" are one keystroke
+                    // apart and the reader has just pressed one of them.
+                    else _toast.value = "Dropped $role — the session is still running"
+                    openProject(id)
+                    refreshProjects()
+                }
+                .onFailure { _projectRefusal.value = errText(it) }
+            _projectBusy.value = false
         }
     }
 
@@ -2902,6 +2997,63 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
                 .onFailure { _toast.value = errText(it) }
         }
     }
+
+    // ------------------------------------------- one archive, read only
+
+    /**
+     * The conversation of ONE archived session, as the read-only view draws it.
+     *
+     * ⚠ A SEPARATE PAGE FROM EVERY OTHER TRANSCRIPT IN THIS CLASS, on purpose.
+     * The live ones are keyed on a tmux NAME, polled, followed, and sent to; this
+     * one is keyed on the Claude session uuid, read once from a copy on disk, and
+     * has nothing behind it to poll or type at.
+     */
+    data class ArchiveRead(
+        val id: String,
+        val title: String?,
+        val page: TranscriptPage? = null,
+        val loading: Boolean = true,
+        /** Why there is nothing to show: the copy is gone, or the read failed. */
+        val note: String? = null,
+    )
+
+    private val _archiveRead = MutableStateFlow<ArchiveRead?>(null)
+    val archiveRead: StateFlow<ArchiveRead?> = _archiveRead.asStateFlow()
+
+    /**
+     * Reads one archive's conversation. Idempotent for the id already shown, so
+     * a recomposition of the destination does not re-fetch.
+     */
+    fun openArchiveTranscript(row: ArchivedSession) {
+        if (_archiveRead.value?.id == row.id && _archiveRead.value?.loading == false) return
+        val label = ArchiveRules.label(row)
+        _archiveRead.value = ArchiveRead(id = row.id, title = label, loading = true)
+        viewModelScope.launch {
+            val outcome = runCatching { client.archiveTranscript(row.id) }
+            val current = _archiveRead.value
+            // The reader may have left while this was in flight; a late answer
+            // must not paint itself over the archive they opened instead.
+            if (current?.id != row.id) return@launch
+            _archiveRead.value = outcome.fold(
+                onSuccess = { page ->
+                    // ⚠ NULL IS THE 404, WHICH IS BOTH "no such archive" AND "this
+                    // daemon has no such route". Either way there is nothing to
+                    // read, and the view says so rather than showing an error.
+                    current.copy(
+                        page = page,
+                        loading = false,
+                        note = if (page == null) ARCHIVE_TRANSCRIPT_GONE else null,
+                    )
+                },
+                // The 409 carries the daemon's own sentence about which copies
+                // went, and it is better than any summary of ours.
+                onFailure = { current.copy(loading = false, note = errText(it)) },
+            )
+        }
+    }
+
+    /** Leaving the view. Keeps nothing: the next open is a fresh read. */
+    fun closeArchiveTranscript() { _archiveRead.value = null }
 
     /** The one place the list and its feature flag are written. */
     private suspend fun landArchives() {

@@ -91,6 +91,7 @@ fun SettingsPhoneScreen(
     val routeBook by vm.routeBook.collectAsStateWithLifecycle()
     val routeHealth by vm.routeHealth.collectAsStateWithLifecycle()
     val routeNote by vm.routeNote.collectAsStateWithLifecycle()
+    val routeCandidate by vm.routeCandidate.collectAsStateWithLifecycle()
     val resolvingRoute by vm.resolvingRoute.collectAsStateWithLifecycle()
     val account by vm.account.collectAsStateWithLifecycle()
     val savedAccounts by vm.savedAccounts.collectAsStateWithLifecycle()
@@ -173,6 +174,7 @@ fun SettingsPhoneScreen(
             // One Save, one book operation, and a refusal that stays on the form (edge #64/#81).
             editBoth = { id, name, url -> vm.editRoute(id, name, url) },
             clearNote = { vm.clearRouteNote() },
+            useCandidate = { vm.useRouteCandidate(it) },
         )
     }
 
@@ -197,6 +199,7 @@ fun SettingsPhoneScreen(
                         routeBook = routeBook,
                         routeHealth = routeHealth,
                         routeNote = routeNote,
+                        routeCandidate = routeCandidate,
                         nowMs = nowMs,
                         token = token,
                         connected = connected,
