@@ -999,8 +999,14 @@ class AppStore(
      */
     suspend fun deleteProject(id: String, end: String? = null) {
         runCatching { client.deleteProject(id, end) }
-            .onSuccess {
+            .onSuccess { done ->
                 if (_projectId.value == id) openProject(null)
+                // ⚠ SAID WHEN SOMETHING WAS NOT WOUND DOWN, and only then. A
+                // member on a permission or folder-trust dialog cannot be typed
+                // at, so the daemon skips it and removes the record anyway —
+                // those sessions are alive with no project behind them. This pane
+                // is the only one that knows, so it is the only one that can say.
+                if (done.refused.isNotEmpty()) _projectRefusal.value = ProjectRules.deletedWords(done)
                 refreshProjects()
                 refreshSessions()
             }

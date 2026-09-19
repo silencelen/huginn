@@ -2803,6 +2803,30 @@ data class ProjectDeleted(
     val ended: List<String> = emptyList(),
     /** `graceful` | `now` | `none`. */
     val mode: String = "none",
+    /**
+     * Members the wind-down could NOT be delivered to, with the daemon's reason
+     * for each (appd 3.5.2). Always present on a current daemon; empty on an
+     * older one, which is also what "nothing was refused" looks like.
+     *
+     * ⚠⚠ THESE SESSIONS ARE STILL RUNNING AND NO LONGER HAVE A PROJECT. A member
+     * sitting on a permission or folder-trust dialog cannot be typed at — the
+     * daemon refuses rather than pasting the wrap-up phrase at a selector that
+     * swallows it without trace — and the record is deleted either way. The
+     * client that ASKED for the delete is the only one in a position to say so,
+     * and a reader who is told "project removed" and nothing else will not go
+     * looking for two `claude` processes with no project behind them.
+     */
+    val refused: List<ProjectEndRefusal> = emptyList(),
+)
+
+/** One member a graceful delete could not wind down, and why. */
+@Serializable
+data class ProjectEndRefusal(
+    /** The tmux name — what a reader has to type to go and look. */
+    val name: String = "",
+    val claudeName: String = "",
+    /** The daemon's own sentence. Shown verbatim; a summary would lose the fix. */
+    val why: String = "",
 )
 
 /**
