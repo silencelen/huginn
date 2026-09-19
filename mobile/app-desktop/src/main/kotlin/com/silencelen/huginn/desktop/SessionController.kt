@@ -62,14 +62,16 @@ val SessionTab.face: SessionFace
  * Created per open session and closed when it goes away, like [ChatController] —
  * a view onto a session has a lifecycle and [AppStore] does not.
  *
- * THE LEASE IS THE REASON THIS IS CAREFUL. Reporting `?cols=&rows=` makes the
- * daemon hold that tmux window at this window's shape for 90 seconds, renewed by
- * the polling itself, and the owner works in these sessions from a terminal at the
- * same time. So geometry is reported only while the window is VISIBLE and the
- * SCREEN tab is selected, [PaneLeaseHolder] is reconciled release-first before
- * every geometry-bearing request, and the conversation view — which wants the
- * pane's question, not its shape — polls with no geometry at all and therefore
- * never leases.
+ * THE LEASE IS THE REASON THIS IS CAREFUL. `?live=1` makes the daemon hold that
+ * tmux window at this window's shape for 90 seconds, renewed by the polling
+ * itself, and the owner works in these sessions from a terminal at the same time.
+ * So geometry is reported only while the window is VISIBLE and the SCREEN tab is
+ * selected — and it is CLAIMED only while the live keyboard mode is on top of
+ * that (owner decision 52: watching a pane is not a reason to reshape somebody's
+ * terminal, and two clients watching one session flapped it 152x44 <-> 107x44
+ * three times in ninety seconds). [PaneLeaseHolder] is reconciled release-first
+ * before every request, and the conversation view — which wants the pane's
+ * question, not its shape — polls with no geometry at all.
  */
 class SessionController(
     private val client: HuginnClient,
@@ -238,8 +240,21 @@ class SessionController(
     private val _answering = MutableStateFlow(false)
     val answering: StateFlow<Boolean> = _answering.asStateFlow()
 
-    /** True while this client holds the window at its own size, for the header to say. */
-    val leasedHere: Boolean get() = lease.heldSession == name
+    /**
+     * True while this client holds the window at its own size, for the header to say.
+     *
+     * ⚠ THE DAEMON GETS THE LAST WORD. Asking for the lease is not having it: one
+     * holder per session now, so a second live client is answered with the
+     * holder's name and its own geometry is not applied. Reading only the local
+     * flag would draw "leased here" over somebody else's claim — a diagnostics
+     * line that lies is worse than no diagnostics line.
+     */
+    val leasedHere: Boolean
+        get() {
+            if (lease.heldSession != name) return false
+            val holder = _screen.value?.leaseHeldBy ?: return true
+            return holder == client.clientId
+        }
 
     // ------------------------------------------------------------- poll inputs
 
@@ -254,6 +269,12 @@ class SessionController(
     private data class PollKey(
         val visible: Boolean,
         val grid: Boolean,
+        /**
+         * The live keyboard mode — the surface that sends keys. Here because it
+         * decides whether this poll claims the tmux window, and a parked long poll
+         * cannot notice a change of mind: the restart IS the delivery mechanism.
+         */
+        val live: Boolean,
         val cols: Int?,
         val rows: Int?,
         val tick: Int,
@@ -668,20 +689,25 @@ class SessionController(
      * failure this whole design is shaped around.
      */
     private suspend fun screenSupervisor() {
-        combine(presence.visible, _tab, geometry, restartTick) { visible, tab, geom, tick ->
-            PollKey(visible, tab == SessionTab.SCREEN, geom?.first, geom?.second, tick)
+        combine(presence.visible, _tab, geometry, restartTick, _live) { visible, tab, geom, tick, live ->
+            PollKey(visible, tab == SessionTab.SCREEN, live, geom?.first, geom?.second, tick)
         }.collectLatest { key ->
-            val want = PaneLease.wanted(name, key.visible, key.grid, key.cols, key.rows)
+            // TWO DIFFERENT QUESTIONS, and conflating them is what flapped the
+            // owner's pane. `report` is what this window can draw and travels on
+            // every poll; `want` is a CLAIM over their tmux window, and only the
+            // live keyboard mode makes one (owner decision 52).
+            val report = PaneLease.reported(name, key.visible, key.grid, key.cols, key.rows)
+            val want = PaneLease.wanted(name, key.visible, key.grid, key.live, key.cols, key.rows)
             // Release-first, before a single byte of the new geometry goes out.
             lease.reconcile(want)
             // Not visible: no poll at all. The poll is what renews the lease, so
             // this line and the release above are the same safety property twice.
             if (!key.visible) return@collectLatest
-            screenLoop(want)
+            screenLoop(report, live = want != null)
         }
     }
 
-    private suspend fun screenLoop(want: PaneLease.Want?) {
+    private suspend fun screenLoop(want: PaneLease.Want?, live: Boolean = false) {
         var known: String? = _screen.value?.hash
         var failures = 0
         while (currentCoroutineContext().isActive) {
@@ -691,6 +717,8 @@ class SessionController(
                     name = name,
                     cols = want?.cols,
                     rows = want?.rows,
+                    // Reporting a size is not claiming the window; this is.
+                    live = live,
                     knownHash = known,
                     // The first request of a loop asks for the frame outright; a
                     // parked poll on a screen we have never seen is a blank pane
@@ -713,6 +741,7 @@ class SessionController(
                     _screen.value = _screen.value?.copy(
                         attachedClients = s.attachedClients,
                         sizeLeased = s.sizeLeased,
+                        leaseHeldBy = s.leaseHeldBy,
                         resizeBlocked = s.resizeBlocked,
                     )
                 } else {
