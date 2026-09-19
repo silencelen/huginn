@@ -12,9 +12,10 @@
 // the stores to touch.
 //
 // ⚠ THE PRODUCT NEVER OPENS A PORT AND NEVER TOUCHES A FIREWALL (decision 47).
-// Three of the four seeded units are bound to this host's tailnet address only,
-// so a phone cannot load them; making them loadable means editing a systemd unit
-// here and four rules in heimdall's /etc/pve/firewall/117.fw. Those are the
+// ALL FOUR seeded units are bound to this host's tailnet address only, so the
+// daemon can probe them and a phone cannot load them; making them loadable means
+// editing four unit binds here and four rules in heimdall's
+// /etc/pve/firewall/117.fw. Those are the
 // OWNER's commands, run in a netplan session. This module's contribution is
 // [approvalCard] — the exact text, marked `applied:false`, which the app shows
 // and NOTHING executes. The daemon learns that the owner did it by finding a
@@ -655,16 +656,29 @@ function migrateSeedUrls(list, addr) {
 // ---------------------------------------------------------------- the card
 
 /**
- * The rebind, verbatim: three units on THIS host whose ExecStart binds the
- * tailnet address only. btc15m-sim already falls back to 0.0.0.0, which is why
- * it is named in the note and absent from the commands.
+ * The rebind, verbatim: the four units on THIS host that bind the tailnet
+ * address only.
+ *
+ * ⚠ ALL FOUR, AND NO EXEMPTIONS (D11). This list used to leave btc15m-sim out,
+ * on the strength of a note saying it "already falls back to 0.0.0.0" — while
+ * the firewall step below opened 8093 anyway, so one card disagreed with itself
+ * about one service. `ss -ltn` says `100.97.198.90:8093`: the 0.0.0.0 in
+ * sim/app.py is what it does when the host has NO tailscale address, not what
+ * it does here.
+ *
+ * The deeper reason the exemption had to go is that nothing could check it.
+ * This daemon does not run commands and would not be allowed to run them on
+ * another machine anyway, so a per-unit claim about what is already bound is a
+ * hard-coded belief that silently rots. A list of everything, which the
+ * firewall block already matched, is both simpler and the only honest shape.
  */
 const REBIND_COMMANDS = [
   'systemctl edit armap.service            # ExecStart: bind 0.0.0.0 instead of the tailnet address',
   'systemctl edit jtyper-trainer.service   # same',
   'systemctl edit boardserver.service      # same',
-  'systemctl restart armap jtyper-trainer boardserver',
-  "ss -ltnp | grep -E '8088|8091|8092'",
+  'systemctl edit btc15m-sim.service       # same, but its bind is in sim/app.py, not the unit',
+  'systemctl restart armap jtyper-trainer boardserver btc15m-sim',
+  "ss -ltnp | grep -E '8088|8091|8092|8093'",
 ];
 
 /**
@@ -696,13 +710,21 @@ function approvalCard(applied = false, markerPath = `<DATA_DIR>/${REBIND_MARKER_
     runBy: 'owner',
     markerPath,
     title: 'Open these from your phone or laptop',
-    why: 'Three of these pages are bound to this host only, so the probe below can reach them and '
-      + 'your devices cannot. Applying this changes that. Huginn does not run these commands.',
+    // ⚠ WHAT IS ACTUALLY TRUE, which the old copy was not. It said the probe
+    // "can reach them" while your devices cannot; in fact the seeded addresses
+    // named an interface nothing listened on, so nothing reached them from
+    // anywhere (D10). The durable fact is WHERE the probe runs: on this host,
+    // at this host's own address. `up` therefore never means "your phone can
+    // open this", and this is the only place that says so in words.
+    why: 'All four of these pages are bound to this host alone, and huginn probes them there, '
+      + 'from the host. That is why a row can say it is up while your phone still cannot open it. '
+      + 'Applying this is what makes them openable from your devices. '
+      + 'Huginn does not run these commands.',
     steps: [
       {
         id: 'rebind',
         where: 'huginn (this host)',
-        summary: 'Bind the three units to 0.0.0.0. btc15m-sim already does.',
+        summary: 'Bind all four units to 0.0.0.0 instead of the tailnet address.',
         file: null,
         commands: [...REBIND_COMMANDS],
       },
