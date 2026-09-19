@@ -2,7 +2,6 @@ package com.silencelen.huginn.ui
 
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
@@ -83,8 +82,9 @@ fun AppsScreen(
     // destination: there is no `NavigationBar` under it to consume the inset the
     // way there is on Chats, Sessions and Rounds, so without this the "Add app"
     // button is drawn straight over the gesture bar. `ListFabClearanceTest`
-    // holds both halves of that rule, because the wrong one is invisible either way.
-    Box(Modifier.fillMaxSize().navigationBarsPadding()) {
+    // holds both halves of that rule, because the wrong one is invisible either
+    // way. One spelling for it, in Insets.kt.
+    Box(Modifier.fillMaxSize().systemNavPadding()) {
         AppsView(
             apps = apps,
             nowMs = nowMs,
