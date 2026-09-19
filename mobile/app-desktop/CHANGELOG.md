@@ -1,5 +1,35 @@
 # Huginn Desktop changelog
 
+## 1.5.1
+
+A read-only walk of 1.5.0 on a virtual display against the live daemon, and what it found.
+
+- **Selecting text in a session no longer crashes the client.** A drag started while a timestamp,
+  a link's URL, a right-click menu or a full-size picture was on screen killed the window with
+  "layouts are not part of the same hierarchy". Everything a tooltip, menu or viewer draws is now
+  held out of the transcript's selection.
+- **Consoles no longer vanish for the whole first session after a fresh install.** The very first
+  probe fired before a token existed and its 401 was read as "never asked"; it is now asked again
+  until the daemon answers, and `Ctrl+Shift+K` opens Consoles.
+- **The setup flow's first step passes in its own order.** It pinged a token-gated route and printed
+  "unauthorized" with a correct address; the daemon's own 401 with its version header is the proof
+  now. "Try the token" tries the token you pasted; the notification step no longer asks whether you
+  saw a notification it could not post; the flow ends on a finish card with its tally; one spelling
+  for "huginn" and "this computer"; toggles in one place.
+- **Wide windows.** The Screen tab's "Copy screen" and "Pages" buttons no longer stack; the palette
+  keeps every row's label; the link URL peek no longer hides under the timestamp tip; tooltips wrap
+  instead of clipping.
+- **Stream picker.** Chips keep a stable order instead of moving under the pointer, and the "…"
+  overflow opens an overlay with a filter instead of unfolding two hundred rows into the transcript.
+- **Truth in the UI.** The rail's device count and the Devices card agree; Notifications says which
+  path this computer uses, or that it has none; "Close to tray" says "closing quits" where there is
+  no tray; a stale watch error clears on connect; a chat title cut at sixty characters shows an
+  ellipsis; chats that never ran say "Empty chat"; the Consoles pane has a header and "+ New" at the
+  top; the route form suggests a placeholder instead of a pre-filled address; the page-delete verb
+  is red; the log path can be copied; the headroom sliders lose their phantom second thumb.
+- **The pane lease is taken only in live keyboard mode**, so two clients watching one session cannot
+  flap it; an old chat whose messages the host has swept says so.
+
 ## 1.5.0
 
 - **Projects.** A rail item with the cluster tree in the list pane and a project dashboard beside
