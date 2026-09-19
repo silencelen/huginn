@@ -67,6 +67,7 @@ class AttachmentImageLoader(
     private val decoder: ImageBytesDecoder,
     private val budgetBytes: Long = DEFAULT_BUDGET_BYTES,
     private val fetchPath: (suspend (path: String, session: String?) -> ByteArray)? = null,
+    private val fetchIcon: (suspend (id: String) -> ByteArray)? = null,
 ) {
 
     private class Entry(val bitmap: ImageBitmap?) {
@@ -106,6 +107,23 @@ class AttachmentImageLoader(
         val fetcher = fetchPath ?: return null
         if (path.isBlank()) return null
         return cached(PATH_KEY + path) { fetcher(path, session) }
+    }
+
+    /**
+     * The favicon for one app row, through the daemon's `/v1/apps/:id/icon`
+     * route, or null (no such route, no icon, undecodable — draw the tile).
+     *
+     * ⚠ KEYED ON THE ID **AND** THE VERSION. The daemon re-fetches an app's
+     * favicon when the row is edited and bumps `version` with the edit, so an
+     * id-only key would serve the old picture for the life of the process — the
+     * wrong picture, cached, with nothing in the logs. Rows are drawn in a list
+     * that recycles, so the cache is what makes this one request rather than one
+     * per scroll.
+     */
+    suspend fun loadIcon(id: String, version: Int): ImageBitmap? {
+        val fetcher = fetchIcon ?: return null
+        if (id.isBlank()) return null
+        return cached("$ICON_KEY$id@$version") { fetcher(id) }
     }
 
     private suspend fun cached(key: String, fetchBytes: suspend () -> ByteArray): ImageBitmap? {
@@ -163,6 +181,13 @@ class AttachmentImageLoader(
          * fetches from two different routes.
          */
         private const val PATH_KEY = "path\u0000"
+
+        /**
+         * And the third space. An upload called `armap`, a host path `/armap`
+         * and an app id `armap` are three different fetches from three different
+         * routes sharing one LRU; nothing may collide across them.
+         */
+        private const val ICON_KEY = "icon\u0000"
     }
 }
 

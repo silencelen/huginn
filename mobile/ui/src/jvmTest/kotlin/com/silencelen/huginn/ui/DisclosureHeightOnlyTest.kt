@@ -29,7 +29,7 @@ class DisclosureHeightOnlyTest {
         "ProjectDashboardView.kt",
         "ManifestCard.kt",
         "CreateProjectSheet.kt",
-        "ConsolesView.kt",
+        "AppsView.kt",
     )
 
     private fun uiSources(): List<File> {
