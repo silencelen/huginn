@@ -554,7 +554,7 @@ test('a dialog OUTRANKS startup: the trust pane is never released by the new gat
   // one ordering that must not slip is this one: a pane that is both starting
   // and showing a dialog reports the dialog and stays shut.
   assert.deepEqual(t.releaseDecision({ idle: true, paneWhy: 'trust', starting: true }),
-    { release: false, blockedBy: 'modal' });
+    { release: false, blockedBy: 'trust' });
   assert.deepEqual(t.releaseDecision({ idle: true, paneWhy: 'modal', starting: true }),
     { release: false, blockedBy: 'modal' });
 });
@@ -588,7 +588,16 @@ test('releaseDecision opens only when BOTH gates are open', () => {
   assert.deepEqual(t.releaseDecision({ idle: true, paneWhy: null }), { release: true, blockedBy: null });
   assert.deepEqual(t.releaseDecision({ idle: false, paneWhy: null }), { release: false, blockedBy: 'turn' });
   assert.deepEqual(t.releaseDecision({ idle: true, paneWhy: 'modal' }), { release: false, blockedBy: 'modal' });
-  assert.deepEqual(t.releaseDecision({ idle: true, paneWhy: 'trust' }), { release: false, blockedBy: 'modal' });
+  // ⚠ M2: `trust` REACHES THE WIRE, and this line used to pin the opposite. The
+  // 3.5.1 changelog advertises blockedBy as modal/trust/starting/attention/draft;
+  // `dialogWhy` has told the two apart since 3.5.0, and flattening them here was
+  // the only reason no client could ever see the word. It matters because the
+  // trust dialog is the one whose pre-selected answer is "No, exit" and whose
+  // options `/screen` cannot see — "a dialog is open on the screen" sends a
+  // reader looking for buttons that are not there.
+  assert.deepEqual(t.releaseDecision({ idle: true, paneWhy: 'trust' }), { release: false, blockedBy: 'trust' });
+  assert.deepEqual(t.releaseDecision({ idle: false, paneWhy: 'trust', draft: true, starting: true }),
+    { release: false, blockedBy: 'trust' }, 'and it still outranks every other hold');
 });
 
 test('releaseDecision names the DIALOG when both gates are shut', () => {

@@ -332,7 +332,7 @@ test('a TRUST dialog is never released, however long the startup gate waits', as
   await wait(1500);
   const st = await typingOf(name);
   assert.equal(st.queued, 1, 'still held');
-  assert.equal(st.blockedBy, 'modal', 'and held by the DIALOG, which outranks startup');
+  assert.equal(st.blockedBy, 'trust', 'and held by the DIALOG — named, since 3.6.0 — which outranks startup');
   assert.equal(readOr(outFor(name)), '', 'nothing submitted');
   assert.equal(readOr(lostFor(name)), '', 'and not one byte sent at the dialog');
 });

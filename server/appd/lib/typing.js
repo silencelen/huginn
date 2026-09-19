@@ -1165,6 +1165,15 @@ function submitRefusal({ submit = true, composer = false, shell = false } = {}) 
  * Order is the order of harm:
  *   modal      a dialog SWALLOWS a message with no trace anywhere, and nothing
  *              overrides that.
+ *   trust      the SAME hold, named. It is the one dialog whose pre-selected
+ *              answer is destructive ("No, exit"), and `/screen` reports no
+ *              prompt and no options for it either, so "a dialog is open on the
+ *              screen" sends a reader looking for buttons that are not there.
+ *              ⚠ M2 (round-2 review): `dialogWhy` has told the two apart since
+ *              3.5.0 and its comment said "a caller that logs `why` should be
+ *              able to say so" — and then this line flattened both to 'modal',
+ *              so the word the 3.5.1 changelog advertises could never reach a
+ *              client. It is the pane's own verdict, passed through.
  *   starting   there is no application in the pane yet, so the paste and its
  *              Enter go nowhere at all. Outranks everything below, and unlike
  *              the turn gate it holds a PERSON's message too — 3.0.3's rule is
@@ -1181,7 +1190,7 @@ function submitRefusal({ submit = true, composer = false, shell = false } = {}) 
  *   then either boundary — the transcript's or the hook's — lets it go.
  */
 function releaseDecision({ idle, paneWhy, state = null, starting = false, draft = false }) {
-  if (paneBlocks(paneWhy)) return { release: false, blockedBy: 'modal' };
+  if (paneBlocks(paneWhy)) return { release: false, blockedBy: paneWhy === 'trust' ? 'trust' : 'modal' };
   if (starting) return { release: false, blockedBy: 'starting' };
   if (state === 'hold') return { release: false, blockedBy: 'attention' };
   if (draft) return { release: false, blockedBy: 'draft' };
