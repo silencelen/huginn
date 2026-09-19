@@ -9,6 +9,34 @@ appeared only as a side-note on the app releases it happened to ship with. Three
 undocumented, and the notes-cutting matcher could fuse two sections when an app and an appd
 version number collided. Entries below are reconstructed from the shipping commits.
 
+## 3.5.0 — 2026-09-18
+- **Consoles are now Apps** — the things huginn makes and hosts itself. `/v1/apps`, `/v1/apps/:id`,
+  `/v1/apps/:id/probe` and the new `/v1/apps/:id/icon`; `/v1/consoles*` stays for one release and
+  answers the 3.4 body, so an un-updated app 3.5.x or desktop 1.5.x still draws its Consoles page.
+  The store file and the retrofit marker keep their names.
+- **Every app gets its favicon.** Fetched on probe from `/favicon.ico` or the page's own
+  `<link rel="icon">`, same origin only, one redirect, 2 s and 256 KB per request, `image/*` only,
+  cached and re-fetched at most hourly; served with ETag/304 and `nosniff`.
+- **Reachability is a prerequisite.** If a device can reach huginn to see the Apps page, it must be
+  able to reach the app: adding one probes it at every address a client of this daemon has arrived
+  on plus huginn's own, and refuses with 422 and the exact lines that would fix it when any fails.
+  Existing rows that fail are marked "needs retrofit" and never deleted; the rebind and firewall
+  lines moved onto the row that needs them, computed from what the probe saw (this app's unit, this
+  app's port, one firewall line per failing address). The list-wide approval card is gone. Apps can
+  name the systemd unit behind them; the four this host ships with do.
+- **A message is never pasted into somebody's unsent draft.** The gate reads the composer before
+  every paste and holds the send with `blockedBy: "draft"` when what is in the box is not ours,
+  releasing when the person sends or clears it (10-minute bound like the other holds); live-view
+  keystrokes keep the box theirs for five seconds after the last one. The same message pressed
+  again while the first copy is still queued no longer queues twice — `/keys` answers
+  `duplicate: true` with the first copy's place. Fixes the 2026-09-19 incident where one message
+  arrived three times and one arrival was submitted welded to the owner's half-typed draft.
+- **A device may keep acting while its screen is locked** (`actWhileLocked`, on registration and on
+  the beat): `effectiveScope` and the can-run check honour it, and the "is locked" refusal is only
+  said when unlocking would help. Absent stays absent.
+- Fixed: the client-address set was overwritten on the first request after a restart instead of
+  being read first; a duplicate app id is 409 with the row it collided with.
+
 ## 3.4.1 — 2026-09-18
 - **Only a client in live view resizes the pane.** `GET /v1/sessions/:name/screen` used to take a
   pane-size lease — and resize the operator's real tmux pane — for every viewer, so two clients

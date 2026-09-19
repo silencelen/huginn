@@ -31,7 +31,7 @@ const https = require('https');
 const readline = require('readline');
 const { spawn } = require('child_process');
 
-const VERSION = '1.3.0';
+const VERSION = '1.4.0';
 
 // ---8<--- GENERATED POLICY — scripts/gen-device-policy.js — DO NOT EDIT ---8<---
 const POLICY = {
