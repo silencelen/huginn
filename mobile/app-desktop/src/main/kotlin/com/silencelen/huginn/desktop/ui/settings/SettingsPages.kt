@@ -137,7 +137,7 @@ fun ColumnScope.HostPage(store: AppStore, mark: String?) {
         highlighted = SettingsRowStyle.isHighlighted("host.route", mark),
         finding = resolving,
         note = routeNote,
-        suggestedUrl = HuginnSettings.DEFAULT_BASE_URL,
+        suggestedUrl = HuginnSettings.ROUTE_URL_PLACEHOLDER,
     )
     SettingsFieldRow(
         id = "host.token",
