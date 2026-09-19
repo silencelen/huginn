@@ -110,6 +110,7 @@ fun ColumnScope.HostPage(store: AppStore, mark: String?) {
     val health by store.routeHealth.collectAsState()
     val resolving by store.resolvingRoute.collectAsState()
     val routeNote by store.routeNote.collectAsState()
+    val routeCandidate by store.routeCandidate.collectAsState()
 
     var token by remember { mutableStateOf(settings.tokenNow()) }
     var message by remember { mutableStateOf<String?>(null) }
@@ -129,6 +130,7 @@ fun ColumnScope.HostPage(store: AppStore, mark: String?) {
                 // One Save, one book operation, and a refusal that stays on the form (edge #64/#81).
                 editBoth = { id, name, url -> store.editRoute(id, name, url) },
                 clearNote = { store.clearRouteNote() },
+                useCandidate = { store.useRouteCandidate(it) },
             )
         },
         health = health,
@@ -138,6 +140,7 @@ fun ColumnScope.HostPage(store: AppStore, mark: String?) {
         finding = resolving,
         note = routeNote,
         suggestedUrl = HuginnSettings.ROUTE_URL_PLACEHOLDER,
+        candidate = routeCandidate,
     )
     SettingsFieldRow(
         id = "host.token",

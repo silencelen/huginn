@@ -1157,9 +1157,22 @@ class AppStore(
     private val _routeBook = MutableStateFlow(settings.routeBookNow())
     val routeBook: StateFlow<RouteBook> = _routeBook.asStateFlow()
 
-    /** The state dots and "last reached" words. Never an input to selection. */
-    private val _routeHealth = MutableStateFlow<Map<String, RouteHealth>>(emptyMap())
+    /**
+     * The state dots and "last reached" words. Never an input to selection.
+     *
+     * ⚠ SEEDED FROM THE STORE, not empty. An empty map makes every launch skip
+     * the hysteresis and take the first address that answers in the owner's
+     * order — see [com.silencelen.huginn.data.HuginnSettings.routeHealth].
+     */
+    private val _routeHealth = MutableStateFlow(settings.routeHealthNow())
     val routeHealth: StateFlow<Map<String, RouteHealth>> = _routeHealth.asStateFlow()
+
+    /**
+     * A route that answered and that this client WILL NOT ADOPT BY ITSELF — see
+     * [RouteResolver.Choice.Stay.Candidate]. Offered under the list, null otherwise.
+     */
+    private val _routeCandidate = MutableStateFlow<com.silencelen.huginn.data.PinnedRoute?>(null)
+    val routeCandidate: StateFlow<com.silencelen.huginn.data.PinnedRoute?> = _routeCandidate.asStateFlow()
 
     /**
      * Marks the active route as having just worked, from REAL traffic — the
@@ -1171,11 +1184,19 @@ class AppStore(
      * route "fresh" seconds after its last success.
      */
     private fun noteRouteReached() {
-        _routeHealth.value = RouteResolver.touch(
+        val next = RouteResolver.touch(
             _routeHealth.value,
             _routeBook.value.active?.id,
             System.currentTimeMillis(),
         )
+        if (next == _routeHealth.value) return
+        saveHealth(next)
+    }
+
+    /** The health cache and its persisted copy, together. */
+    private fun saveHealth(health: Map<String, RouteHealth>) {
+        _routeHealth.value = health
+        scope.launch { runCatching { settings.setRouteHealth(health, System.currentTimeMillis()) } }
     }
 
     private val _resolvingRoute = MutableStateFlow(false)
@@ -1199,6 +1220,15 @@ class AppStore(
     fun clearRouteNote() { _routeNote.value = null }
 
     fun activateRoute(id: String) = editRoutes { it.activate(id).withAutoSwitch(false) }
+
+    /**
+     * Adopt the offered route — the person saying so that [RouteResolver] waits
+     * for before it will send a bearer over a plain-http address nobody typed.
+     */
+    fun useRouteCandidate(id: String) {
+        _routeCandidate.value = null
+        activateRoute(id)
+    }
 
     fun addRoute(name: String, url: String) = editRoutes { it.add(name, url, System.currentTimeMillis()) }
 
@@ -1738,7 +1768,11 @@ class AppStore(
             force = force,
         ) { client.probe(it.url) }
         _resolvingRoute.value = false
-        _routeHealth.value = outcome.health
+        saveHealth(outcome.health)
+        // Cleared on EVERY resolution before it is set again: an offer describes
+        // the sweep that just ran, and a stale one invites a person to hand the
+        // bearer to a host that has since gone quiet.
+        _routeCandidate.value = (outcome.choice as? RouteResolver.Choice.Stay.Candidate)?.candidate
         _routeNote.value = when (val choice = outcome.choice) {
             is RouteResolver.Choice.Empty -> null
             is RouteResolver.Choice.Pinned -> "pinned to ${choice.route.name} — switch automatically to move"
