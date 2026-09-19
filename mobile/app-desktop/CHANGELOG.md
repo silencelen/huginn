@@ -1,5 +1,23 @@
 # Huginn Desktop changelog
 
+## 1.6.0
+
+- **Consoles are now Apps** — the things huginn makes and hosts itself. Every app shows its own
+  icon and whether your devices can reach it; clicking a row opens the app in your browser; an app
+  that needs a retrofit opens to the exact fix lines with Copy; adding an app checks reachability
+  first and keeps the form open with the fix when it fails. `Ctrl+Shift+K` is unchanged, and the
+  rail marks an app you cannot reach.
+- **Settings › Devices › "Keep act mode while locked".** Off by default, and with it off nothing
+  changes. Turn it on and the scope you enrolled at stays in force with nobody at the keyboard;
+  set on the machine only. And a Windows machine reached over remote desktop no longer reports
+  itself locked: a connected RDP session counts as someone being there, a disconnected one as
+  nobody, and a locked remote session as locked.
+- **The session menu reads "Wrap up" and "Kill session"**, both in the destructive red with the
+  gentler one lighter. **Opening Chats from another rail item jumps to the latest conversation.**
+- **A send held because there is unsent text in the live view says so** (appd 3.5.0).
+- **Attachments:** a batch of uploads could lose one another's state in a race — the state is
+  updated atomically now. A pinned route's "last reached" is kept current by ordinary polls.
+
 ## 1.5.1
 
 A read-only walk of 1.5.0 on a virtual display against the live daemon, and what it found.

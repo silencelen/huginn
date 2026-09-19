@@ -1,5 +1,25 @@
 # Huginn changelog
 
+## 3.6.0 — 2026-09-18
+
+Apps, and the notes from the review walk.
+
+- **Consoles are now Apps** — the things huginn makes and hosts itself. Every app shows its own
+  icon and whether **your devices** can reach it, not only whether the host can; tapping a row
+  opens the app in your browser. An app that answers on the host but not where you are says
+  "needs retrofit" and opens to show which address failed, why, and the exact lines that fix it,
+  with a Copy button — huginn never runs them. Adding an app checks it is reachable from your
+  devices first; if it is not, the form stays open with what you typed and the fix underneath.
+  A saved place from the old name still opens the right page; Settings gains an Apps row.
+- **The text-selection bar has an X** to cancel the selection, always visible at its right edge.
+- **The session menu reads "Wrap up" and "Kill session"**, both in the destructive red with the
+  gentler one lighter.
+- **Opening Chats from another tab jumps to the latest conversation**, while coming back out of a
+  chat keeps your place — the place was being lost on every drill-in before.
+- **Devices:** a machine set to keep acting while its screen is locked says so in the fleet list.
+- **A send held because you have unsent text in the live view says so** (appd 3.5.0), and the same
+  message pressed twice no longer goes twice.
+
 ## 3.5.2 — 2026-09-18
 
 - The route form's placeholder is `huginn.example.net` instead of an `example.ts.net` name: the

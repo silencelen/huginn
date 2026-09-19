@@ -10,6 +10,13 @@ Format loosely follows [Keep a Changelog](https://keepachangelog.com/); versions
 
 ## [Unreleased]
 
+## [1.4.0] - 2026-09-18
+
+### Added
+- `huginn-device --act-while-locked` / `--no-act-while-locked`, stored as `actWhileLocked` in
+  `device.json` and reported on enrolment and on the beat. Off by default; inert on a headless box,
+  which has no screen to lock, and `status` says so.
+
 ## [1.3.0] - 2026-09-18
 
 Projects on the command line, and nine edge-case fixes.
