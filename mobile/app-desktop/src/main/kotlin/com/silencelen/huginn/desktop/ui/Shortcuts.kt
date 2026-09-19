@@ -1,5 +1,6 @@
 package com.silencelen.huginn.desktop.ui
 
+import com.silencelen.huginn.ui.ChatRules
 import com.silencelen.huginn.data.Chat
 import com.silencelen.huginn.data.Console
 import com.silencelen.huginn.data.ProjectRow
@@ -446,7 +447,7 @@ fun paletteItems(
         chats.map {
             PaletteItem.OpenChat(
                 it.id,
-                it.title ?: "Untitled",
+                ChatRules.title(it.title) ?: "Untitled",
                 listOfNotNull("chat", it.mode, it.lastSnippet?.take(60)).joinToString(" · "),
             )
         }
