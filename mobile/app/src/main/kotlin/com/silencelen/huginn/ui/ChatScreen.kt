@@ -74,6 +74,12 @@ fun ChatScreen(
     page: TranscriptPage?,
     /** Why the transcript could not be read, when it could not. */
     error: String?,
+    /**
+     * The chat ran, and the host no longer has its messages — Claude Code sweeps
+     * its own transcripts. NOT an error and nothing to retry, but it must not be
+     * drawn as the empty state of a chat that never ran. See [chatEmptyCopy].
+     */
+    messagesGone: Boolean = false,
     onRetry: () -> Unit,
     streamingText: String?,
     activeTool: String?,
@@ -187,12 +193,12 @@ fun ChatScreen(
                 CircularProgressIndicator(strokeWidth = 2.dp)
             }
         } else if (events.isEmpty() && !streaming) {
+            // ⚠ TWO DIFFERENT NOTHINGS. A chat that has never run introduces its
+            // mode; a chat whose messages the host has swept says THAT, because
+            // the list row the reader just came from still quotes its last answer.
+            val empty = chatEmptyCopy(messagesGone, mode)
             Box(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
-                EmptyState(
-                    if (mode == "act") "Act mode" else "Ask mode",
-                    if (mode == "act") "Runs on the host with tools: files, commands, the web."
-                    else "Reasoning and memory, no tools.",
-                )
+                EmptyState(empty.title, empty.body)
             }
         } else {
             // ⚠ THE WEIGHT LIVES ON THE PLAIN BOX, never on the SelectionContainer.
