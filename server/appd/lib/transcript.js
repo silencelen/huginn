@@ -169,6 +169,30 @@ function typedByHuman(d) {
   return !!(d && d.origin && d.origin.kind === 'human');
 }
 
+/**
+ * Whether a `user` record is Claude Code's ECHO of a background-task
+ * notification it has ALREADY written as a queue record.
+ *
+ * A task-notification is written twice. First as a `queue-operation` enqueue
+ * carrying the `<task-notification>` element; then — only when the queue drains
+ * into a Claude that has gone idle — as an ordinary `user` record carrying the
+ * same element about 40 ms later. Both drew a note, which is the pairs of
+ * identical `system` events the phone review found: same `ts`, same text,
+ * adjacent `seq`, twice per finished agent and twice per background command.
+ *
+ * Keyed on `origin.kind`, the structural tell `peerNote` and `injectedByTool`
+ * are keyed on, because the echo has to be told apart from machine text that
+ * never went through the queue at all — a slash command, an image caption, a
+ * harness nudge — which is the ONLY copy there is and must keep rendering.
+ * Exact on this host: of 955 transcripts, 386 `user` records carry
+ * `origin.kind === 'task-notification'`, every one of them has an identical
+ * enqueue above it, and they are exactly the 386 records whose text opens
+ * `<task-notification` — the field and the shape never disagree.
+ */
+function notificationEcho(d) {
+  return !!(d && d.origin && d.origin.kind === 'task-notification');
+}
+
 // ------------------------------------------------- another Claude session
 //
 // Claude Code 2.1.258 lets one session message another: `SendMessage` travels
@@ -583,6 +607,14 @@ function readTranscript(path, { offset = null, limit = 400, until = null, peerId
    * later IS a second message.
    */
   const peerSeen = [];
+  /**
+   * The machine-text notes already drawn from their QUEUE record, by content, so
+   * the `user` record repeating the same notification ~40 ms later does not draw
+   * a second one. A list rather than a set, and consumed one entry per match,
+   * because the guard is ONE-SHOT: the same background command finishing twice
+   * writes the same text twice and both times it is news.
+   */
+  const notifySeen = [];
   let lineOffset = windowStart;
 
   for (const line of lines) {
@@ -607,11 +639,19 @@ function readTranscript(path, { offset = null, limit = 400, until = null, peerId
 
     switch (d.type) {
       case 'queue-operation': {
-        // A message typed while Claude is mid-turn is QUEUED, and a queued
-        // message is written ONLY as these records — it never becomes a `user`
-        // record, even after it is delivered. Dropping them (as v2.2.0 did) made
-        // every follow-up message invisible in the conversation while still
+        // A message typed while Claude is mid-turn is QUEUED, and while it waits
+        // these records are the ONLY trace of it. Dropping them (as v2.2.0 did)
+        // made every follow-up message invisible in the conversation while still
         // being visible in the pane, which is exactly what a user notices.
+        //
+        // Whether a `user` record ever follows depends on HOW the queue let it
+        // go, and this comment used to say flatly that none ever does. That is
+        // true of a `remove` — absorbed into a turn already running — and false
+        // of a `dequeue`, which drains into an idle Claude and is written out
+        // again as an ordinary `user` record a moment later. Both branches below
+        // are built on the distinction (see `drained`), and the one place that
+        // still believed the flat version drew every background-task
+        // notification twice. See [notificationEcho].
         const content = typeof d.content === 'string' ? d.content : '';
         if (d.operation === 'enqueue') {
           if (!content.trim()) continue;
@@ -631,6 +671,9 @@ function readTranscript(path, { offset = null, limit = 400, until = null, peerId
             const d2 = describeMachineText(content);
             if (!d2) continue;
             ev = { seq: ++seq, kind: d2.kind, ts, sidechain, text: d2.text };
+            // ...and the `user` record that repeats this notification verbatim a
+            // moment later must not draw it again. See [notificationEcho].
+            notifySeen.push(content);
           } else {
             ev = { seq: ++seq, kind: 'user', ts, sidechain, text: content, queued: true };
           }
@@ -795,6 +838,32 @@ function readTranscript(path, { offset = null, limit = 400, until = null, peerId
           drainedCopies.shift();
           if (!drainedCopies.length) drained.delete(t);
           continue;
+        }
+        // Claude Code's ECHO of a background-task notification — the element it
+        // already wrote as a queue record a few records above, which is where
+        // the note was drawn. See [notificationEcho].
+        //
+        // Drawn from the QUEUE record and suppressed HERE, rather than the other
+        // way round, because the queue record is the copy that ALWAYS exists: a
+        // notification landing while Claude is still working is absorbed into
+        // the running turn (`remove`, `reason: "absorbed_mid_turn"`) and no
+        // `user` record ever follows it. Measured across 955 transcripts on this
+        // host, 645 of 1031 notification enqueues have no echo at all, so
+        // drawing from the echo instead would lose two notifications in three.
+        // It also leaves the note where the agent actually reported back — above
+        // the turn the notification started, not inside it.
+        //
+        // One-shot per copy, like every other dedupe in this file.
+        if (notificationEcho(d)) {
+          const at = notifySeen.indexOf(t);
+          if (at >= 0) { notifySeen.splice(at, 1); continue; }
+          // The queue record is ABOVE this window. A reader RESUMING a tail
+          // holds the note already, from the page that record landed in, and the
+          // client merge is a plain concat with no reconciliation — so emitting
+          // it here appends a second identical note, the same failure as #34/#37
+          // one record class over. A COLD open has no such page, and then this
+          // record is the only copy of the notification it will ever get.
+          if (resuming) continue;
         }
         // Recorded as typed: no heuristic gets to overrule that. Without it a
         // person asking about "<command-name>" had their question collapsed
@@ -1005,6 +1074,6 @@ function liveActivity(events, nowSec) {
 }
 
 module.exports = { readTranscript, digestToolInput, workflowName, textOf, liveActivity, machineText, describeMachineText, humanRemainder, parseAsk, startsAtBoundary,
-  injectedByTool, typedByHuman, skillNameFromBody,
+  injectedByTool, typedByHuman, notificationEcho, skillNameFromBody,
   peerBody, peerNote, peerNoteFromQueue,
 };
