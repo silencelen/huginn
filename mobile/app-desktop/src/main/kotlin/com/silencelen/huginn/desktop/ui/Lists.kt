@@ -42,6 +42,7 @@ import androidx.compose.ui.input.pointer.pointerHoverIcon
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import com.silencelen.huginn.ui.ChatRules
 import com.silencelen.huginn.data.Chat
 import com.silencelen.huginn.ui.HostBadge
 import com.silencelen.huginn.data.ArchivedSession
@@ -180,7 +181,7 @@ private fun ChatRow(
                 else Spacer(Modifier.width(TEXT_INDENT))
             }
             Text(
-                chat.title ?: "Untitled",
+                ChatRules.title(chat.title) ?: "Untitled",
                 style = DeskType.rowTitle,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
