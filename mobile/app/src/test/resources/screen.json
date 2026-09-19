@@ -8,6 +8,7 @@
  "historySize": 0,
  "windowSize": "smallest",
  "sizeLeased": false,
+ "leaseHeldBy": null,
  "resizeBlocked": false,
  "lines": [
   "<lines scrubbed, 51 chars>",
@@ -69,7 +70,7 @@
   "<lines scrubbed, 52 chars>",
   "",
   "<lines scrubbed, 99 chars>",
-  "\u001b[39m\u276f\u00a0",
+  "\u001b[39m❯ ",
   "<lines scrubbed, 67 chars>",
   "<lines scrubbed, 45 chars>",
   "<lines scrubbed, 65 chars>",
@@ -77,5 +78,17 @@
  ],
  "scrollback": [],
  "hash": "e509b8fa",
- "prompt": null
+ "prompt": null,
+ "ask": null,
+ "planPending": null,
+ "spinner": "Gallivanting… · 3m 15s",
+ "compacting": false,
+ "statusLines": [
+  "<statusLine scrubbed, 28 chars>"
+ ],
+ "transientLine": "Running 2 shell commands…",
+ "liveModel": "Opus 5",
+ "liveMode": "accept edits",
+ "liveBranch": "main",
+ "contextPercent": 47
 }

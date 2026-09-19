@@ -103,8 +103,26 @@ data class QuickActions(
 @Serializable
 data class Session(
     val name: String,
+    /**
+     * LISTED BUT NOT OPENABLE. A session tmux made outside the daemon's name
+     * rule is still a real session — hiding it would let a reader conclude it
+     * had gone — but every per-session route 404s on it. The row says so, so a
+     * client can grey it out rather than letting somebody find out by tapping.
+     *
+     * Defaults TRUE: a daemon older than this field listed only addressable
+     * sessions, and reading absence as `false` would grey out every row on it.
+     */
+    val addressable: Boolean = true,
     val createdAt: Long = 0,
     val activityAt: Long = 0,
+    /**
+     * tmux's own `session_activity`, which tracks CLIENT INTERACTION rather than
+     * output. Carried for reference beside [activityAt]; nothing sorts on it,
+     * because an unattached session that is working hard never moves it.
+     */
+    val sessionActivityAt: Long = 0,
+    /** The pane's process id, which is what the host scans background work under. */
+    val panePid: Long? = null,
     val attachedClients: Int = 0,
     val windows: Int = 0,
     /** running | attention | idle | null (no state recorded yet) */
@@ -668,6 +686,14 @@ data class Chat(
     val lastSnippet: String? = null,
     val turns: Int = 0,
     val running: Boolean = false,
+    /**
+     * Completed runs, counted rather than flagged — the same counter
+     * [WatchChat.finishedRuns] carries, for the same reason: `running` going
+     * false is an edge, and anything looking on a schedule can miss one.
+     */
+    val finishedRuns: Long = 0,
+    /** When the last run finished. Epoch SECONDS, like [createdAt]. */
+    val finishedAt: Long? = null,
     /** Messages waiting for the current run to finish. */
     val pending: Int = 0,
     /** A device id, or "local"/null for the huginn host itself. */
@@ -848,6 +874,15 @@ data class ExtraUsage(
     /** Why they are off — e.g. `org_level_disabled_until`. */
     val disabledReason: String? = null,
     val userDisabled: Boolean? = null,
+    /**
+     * Passed through VERBATIM AND UNREAD, exactly as `lib/plan.js` does: both
+     * have been null on every capture, so their shape is a guess. Held as raw
+     * JSON rather than pinned to an invented shape — the field NAMES are the
+     * contract worth keeping, and a wrong shape here would fail the whole
+     * plan decode the first time the API filled them in.
+     */
+    val daily: JsonElement? = null,
+    val weekly: JsonElement? = null,
 )
 
 /**
@@ -903,15 +938,50 @@ data class PlanAccount(
 /** A saved login this host can switch to. */
 @Serializable
 data class SavedAccount(
+    /**
+     * The profile's directory name. On a store the daemon has been able to
+     * identify this is the account UUID itself, not a hand-made word like
+     * `owner-max` — a login is filed under the uuid its own token reports, so a
+     * token rotation cannot produce a second profile for the same account.
+     */
     val slug: String,
     val email: String? = null,
     val orgName: String? = null,
+    /**
+     * The account this profile IS, as its own token reports it. Null for a
+     * profile saved while this host could not reach the API — which is also
+     * exactly when [duplicateOf] can be true.
+     */
+    val accountUuid: String? = null,
+    /** The API's `tagged_id` for the same account (`user_…`). Display/support only. */
+    val taggedId: String? = null,
     val savedAt: Long? = null,
+    /** When this login was first seen on this host. Epoch SECONDS, like [savedAt]. */
+    val firstSeen: Long? = null,
+    /** When a plan reading was last taken for it. Epoch SECONDS. */
+    val planSeenAt: Long? = null,
+    /** The OAuth scope count the stored credentials carry. Diagnostic only. */
+    val scopes: Int? = null,
     val isActive: Boolean = false,
     val subscriptionType: String? = null,
     /** Weekly all-models utilization, when it could be read for this account. */
     val weeklyPercent: Double? = null,
     val sessionPercent: Double? = null,
+    /**
+     * The percentages above came from THIS account's own token just now, rather
+     * than from the last reading taken while it was active and aged forward.
+     *
+     * Only the signed-in profile holds a token fresh enough to answer, so on any
+     * multi-account host this is true for exactly one row — and a client that
+     * drew the other rows' bars as live would be reporting a figure that could
+     * be days old with no caveat at all. See [planAgeSec] for how old.
+     */
+    val planLive: Boolean = false,
+    /**
+     * How stale the fallback reading is, in SECONDS — 0 when [planLive], and
+     * null when there has never been one to age.
+     */
+    val planAgeSec: Long? = null,
     /** The email was confirmed from this profile's own token, not inferred. */
     val verified: Boolean = false,
     /** Another saved profile is the same account, so switching changes nothing. */
@@ -1167,6 +1237,15 @@ data class HeadroomSession(
     val stall: HeadroomStall? = null,
     /** Always present on 3.0.0, with both halves null when nothing was seen. */
     val nativeSwitch: HeadroomNativeSwitch? = null,
+    /**
+     * When a PERSON last set this session's model by hand. Epoch MILLISECONDS,
+     * null when nobody has.
+     *
+     * It is the arbiter's hands-off mark: a session a human has steered is not
+     * one the ladder may quietly move, and a client that showed a laddered mark
+     * here would be captioning the owner's own choice as the daemon's.
+     */
+    val humanSetModelAt: Long? = null,
 )
 
 /** A subagent spawn the hook gate is holding because a sentinel is armed. */
@@ -1275,6 +1354,24 @@ data class KeepAwakeStatus(
      * has nothing to say about a feature that is deliberately idle.
      */
     val why: String? = null,
+    /**
+     * When the daemon last WEIGHED whether to ping, as opposed to [lastAt],
+     * when it last did. Epoch MILLISECONDS, 0 for never.
+     *
+     * The pair is what makes [why] readable: "keep-awake is off" from an hour
+     * ago is a stale reason, and without this there is no way to tell that from
+     * a decision taken on the current pass.
+     */
+    val evaluatedAt: Long = 0,
+    /**
+     * The earliest instant a ping is allowed again — `lastAt` plus the five-hour
+     * window — or 0 when nothing has pinged yet. Epoch MILLISECONDS.
+     *
+     * ⚠ `/v1/headroom` ONLY. `/v1/status` carries the same block WITHOUT this
+     * field, so it reads 0 there; the daemon derives it rather than storing it,
+     * and the status summary does not re-derive it.
+     */
+    val nextEligibleAt: Long = 0,
 )
 
 /** Everything `/v1/headroom` reports. */
@@ -1481,6 +1578,14 @@ data class WatchChat(
     val finishedRuns: Long = 0,
     /** The last thing Claude said, so a finish notification can carry the answer. */
     val snippet: String? = null,
+    /**
+     * When the chat was created. Epoch SECONDS.
+     *
+     * The digest's own "is this new since I last looked" answer: a client that
+     * inferred it from the key first appearing would announce every chat on a
+     * cold start as if it had just been made.
+     */
+    val createdAt: Long = 0,
 )
 
 /** The change signal a watching client parks on. */

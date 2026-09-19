@@ -38,9 +38,16 @@
  "windowStart": 487424,
  "truncated": false,
  "title": "<title scrubbed, 41 chars>",
+ "permissionMode": "auto",
  "model": "claude-fable-5-1",
+ "gitBranch": "main",
+ "cwd": "/root/netplan/pmanage",
+ "effort": "xhigh",
+ "lastActivityTs": 1789459800,
  "modelDisplay": "Fable 5.1",
  "state": "idle",
  "claudeSessionId": "<claudeSessionId scrubbed, 36 chars>",
- "running": false
+ "activity": null,
+ "tasks": [],
+ "bgAgents": 0
 }

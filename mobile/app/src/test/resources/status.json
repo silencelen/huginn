@@ -28,6 +28,27 @@
   "sentinels": [
    "STOP-FABLE"
   ],
-  "paused": 2
+  "paused": 2,
+  "windowRunning": true,
+  "windowResetsAt": "2026-09-15T10:30:00+00:00",
+  "keepAwake": {
+   "enabled": true,
+   "model": "claude-haiku-4-5-20251001",
+   "quietHours": "23:00-07:00",
+   "lastAt": 1789441000000,
+   "lastAtClock": "09:16pm",
+   "keptAwakeToday": 2,
+   "keptAwakeTotal": 41,
+   "lastOutcome": "ok",
+   "why": "a 5-hour window is already running",
+   "evaluatedAt": 1789459990000
+  }
+ },
+ "quickActions": {
+  "rev": 0,
+  "explain": "Explain this, briefly:\n\n{selection}",
+  "execute": "Run this and show me the output:\n\n{selection}",
+  "askInNewChat": "{selection}\n\nWhat is going on here?",
+  "quote": ""
  }
 }

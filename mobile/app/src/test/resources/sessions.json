@@ -2,109 +2,153 @@
  "sessions": [
   {
    "name": "andrev",
+   "addressable": true,
    "createdAt": 1785136601,
    "activityAt": 1785166755,
+   "sessionActivityAt": 1785166702,
    "attachedClients": 1,
    "windows": 1,
    "cols": 56,
    "rows": 64,
    "windowSize": "smallest",
    "sizeLeased": false,
+   "softEnding": false,
+   "pendingSends": 0,
+   "contextPercent": 38,
+   "compacting": false,
    "state": "idle",
    "stateSince": 1785167453,
    "claudeSessionId": "<claudeSessionId scrubbed, 36 chars>",
-   "hasTranscript": true,
-   "title": "<title scrubbed, 58 chars>",
-   "preview": [
-    "<preview scrubbed, 56 chars>",
-    "⧉  audit-board"
-   ],
-   "permissionMode": "auto",
    "headroom": {
     "family": "opus",
     "ladder": "opus",
     "autoResume": true,
     "stalled": false
    },
-   "pendingSends": 0
+   "hasTranscript": true,
+   "title": "<title scrubbed, 58 chars>",
+   "preview": [
+    "<preview scrubbed, 56 chars>",
+    "⧉  audit-board"
+   ],
+   "panePid": 412330,
+   "bgShells": 0,
+   "bgAgents": 0,
+   "bgTask": null,
+   "permissionMode": "auto",
+   "liveModel": "Opus 5",
+   "liveMode": "accept edits"
   },
   {
    "name": "huginnapp",
+   "addressable": true,
    "createdAt": 1785137048,
    "activityAt": 1785166751,
+   "sessionActivityAt": 1785166740,
    "attachedClients": 2,
    "windows": 1,
    "cols": 56,
    "rows": 64,
    "windowSize": "smallest",
    "sizeLeased": false,
+   "softEnding": true,
+   "pendingSends": 1,
+   "contextPercent": 71,
+   "compacting": true,
    "state": "running",
    "stateSince": 1785167503,
    "claudeSessionId": "<claudeSessionId scrubbed, 36 chars>",
-   "hasTranscript": true,
-   "title": "<title scrubbed, 35 chars>",
-   "preview": [
-    "<preview scrubbed, 43 chars>",
-    "… +2 completed"
-   ],
-   "permissionMode": "auto",
    "headroom": {
     "family": "fable",
     "ladder": null,
     "autoResume": true,
     "stalled": false
    },
-   "pendingSends": 1
+   "hasTranscript": true,
+   "title": "<title scrubbed, 35 chars>",
+   "preview": [
+    "<preview scrubbed, 43 chars>",
+    "… +2 completed"
+   ],
+   "panePid": 412884,
+   "bgShells": 2,
+   "bgAgents": 1,
+   "bgTask": "<bgTask scrubbed, 34 chars>",
+   "permissionMode": "auto",
+   "liveModel": "Fable 5.1",
+   "liveMode": "accept edits"
   },
   {
    "name": "uusage",
+   "addressable": true,
    "createdAt": 1785136604,
    "activityAt": 1785166578,
+   "sessionActivityAt": 1785166570,
    "attachedClients": 0,
    "windows": 1,
    "cols": 56,
    "rows": 33,
    "windowSize": "smallest",
    "sizeLeased": false,
+   "softEnding": false,
+   "pendingSends": 0,
+   "contextPercent": null,
+   "compacting": false,
    "state": null,
    "stateSince": null,
    "claudeSessionId": null,
+   "headroom": null,
    "hasTranscript": false,
    "title": null,
    "preview": [
     "❯ /login",
     "⎿  Login successful"
    ],
-   "pendingSends": 0,
-   "headroom": null
+   "panePid": 409112,
+   "bgShells": 0,
+   "bgAgents": 0,
+   "bgTask": null,
+   "liveModel": null,
+   "liveMode": null
   },
   {
    "name": "promptprobe",
+   "addressable": true,
    "createdAt": 1785141419,
    "activityAt": 1785141419,
+   "sessionActivityAt": 1785141400,
    "attachedClients": 0,
    "windows": 1,
    "cols": 76,
    "rows": 30,
    "windowSize": "smallest",
    "sizeLeased": false,
+   "softEnding": false,
+   "pendingSends": 0,
+   "contextPercent": 12,
+   "compacting": false,
    "state": "idle",
    "stateSince": 1785141544,
    "claudeSessionId": "<claudeSessionId scrubbed, 36 chars>",
-   "hasTranscript": true,
-   "title": "<title scrubbed, 33 chars>",
-   "preview": [
-    "<preview scrubbed, 41 chars>",
-    "<preview scrubbed, 31 chars>"
-   ],
-   "permissionMode": "auto",
    "headroom": {
     "family": "fable",
     "ladder": null,
     "autoResume": false,
     "stalled": true
    },
-   "pendingSends": 0
+   "hasTranscript": true,
+   "title": "<title scrubbed, 33 chars>",
+   "preview": [
+    "<preview scrubbed, 41 chars>",
+    "<preview scrubbed, 31 chars>"
+   ],
+   "panePid": 418990,
+   "bgShells": 1,
+   "bgAgents": 0,
+   "bgTask": "<bgTask scrubbed, 21 chars>",
+   "permissionMode": "auto",
+   "liveModel": "Fable 5.1",
+   "liveMode": "plan"
   }
  ]
 }
