@@ -286,10 +286,15 @@ fun describeDevice(device: Device, includePlatform: Boolean = true, nowMs: Long?
     }
     val parts = mutableListOf<String>()
     parts += device.platform
-    parts += if (device.scope == device.effectiveScope) {
-        device.scope
-    } else {
-        "${device.scope}, ${device.effectiveScope} while locked"
+    parts += when {
+        device.scope != device.effectiveScope -> "${device.scope}, ${device.effectiveScope} while locked"
+        // ⚠ THE SCOPES MATCHING IS NOT THE SAME FACT TWICE. On a machine whose
+        // owner turned "Keep act mode while locked" on they match BECAUSE the
+        // lock withdraws nothing — so without this clause a locked box running
+        // unattended would read exactly like one somebody is sitting at, and the
+        // one question this line exists to answer would be the one it dropped.
+        device.locked && device.actWhileLocked == true -> "${device.scope}, acting while locked"
+        else -> device.scope
     }
     parts += when {
         device.running -> "running something"
