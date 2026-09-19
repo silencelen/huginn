@@ -1,7 +1,7 @@
 package com.silencelen.huginn
 
-import com.silencelen.huginn.data.Console
-import com.silencelen.huginn.data.ConsoleList
+import com.silencelen.huginn.data.App
+import com.silencelen.huginn.data.AppList
 import com.silencelen.huginn.data.HuginnClient
 import com.silencelen.huginn.data.ProjectDashboard
 import com.silencelen.huginn.data.ProjectLead
@@ -12,7 +12,7 @@ import com.silencelen.huginn.data.Session
 import com.silencelen.huginn.data.SpawnResult
 import com.silencelen.huginn.ui.DashboardCursor
 import com.silencelen.huginn.ui.ProjectRules
-import com.silencelen.huginn.ui.consoleEntries
+import com.silencelen.huginn.ui.appEntries
 import com.silencelen.huginn.ui.groupSessions
 import com.silencelen.huginn.ui.projectEntries
 import io.ktor.client.engine.mock.MockEngine
@@ -119,14 +119,14 @@ class ProjectsPhoneTest {
     /**
      * FEATURE ABSENT HIDES EVERY WAY IN AT ONCE.
      *
-     * Three doors lead to Projects and two to Consoles, and each of them ends in
+     * Three doors lead to Projects and three to Apps, and each of them ends in
      * a route an older daemon answers 404 to. Three `== true` checks written
      * beside three call sites is exactly how one gets left behind, so the answer
      * is computed once. `null` — the probe has not spoken — shows nothing either:
      * a door that may not exist is not a door to offer.
      */
     @Test
-    fun `a daemon without projects or consoles offers no entry anywhere`() {
+    fun `a daemon without projects or apps offers no entry anywhere`() {
         val off = projectEntries(false)
         assertFalse(off.sessionsIcon); assertFalse(off.settingsRow); assertFalse(off.grouping)
         assertFalse("nothing at all", off.any)
@@ -137,9 +137,13 @@ class ProjectsPhoneTest {
         val on = projectEntries(true)
         assertTrue(on.sessionsIcon && on.settingsRow && on.grouping)
 
-        assertEquals(consoleEntries(false), consoleEntries(null))
-        assertFalse(consoleEntries(false).statusCard || consoleEntries(false).fullPage)
-        assertTrue(consoleEntries(true).statusCard && consoleEntries(true).fullPage)
+        assertEquals(appEntries(false), appEntries(null))
+        assertFalse(
+            appEntries(false).statusCard || appEntries(false).fullPage || appEntries(false).settingsRow,
+        )
+        assertTrue(
+            appEntries(true).statusCard && appEntries(true).fullPage && appEntries(true).settingsRow,
+        )
     }
 
     /** The client turns the 404 into a null, which is what the probe reads. */
@@ -151,7 +155,7 @@ class ProjectsPhoneTest {
             engine = MockEngine { respond("not found", HttpStatusCode.NotFound) },
         )
         assertNull("absent is null, never an empty list", client.projects())
-        assertNull(client.consoles())
+        assertNull("and only after BOTH names have 404ed", client.apps())
     }
 
     // -------------------------------------------------------- the poll gate
@@ -309,7 +313,7 @@ class ProjectsPhoneTest {
 
     /** The shell's own reading of the two list routes, from the daemon's fixtures. */
     @Test
-    fun `the tree and the consoles card decode from the daemon's own fixtures`() {
+    fun `the tree and the apps card decode from the daemon's own fixtures`() {
         val list = json.decodeFromString(ProjectList.serializer(), fixture("projects.json"))
         assertEquals(3, list.projects.size)
         // LIVE FIRST, THEN BY NAME, and archived last — a place rather than a
@@ -322,14 +326,23 @@ class ProjectsPhoneTest {
         assertEquals(listOf("LoRa sensor stick", "Status page flap", "Auvik lab"), ordered.map { it.name })
         assertEquals("archived", ordered.last().status)
 
-        val consoles = json.decodeFromString(ConsoleList.serializer(), fixture("consoles.json"))
-        assertEquals(4, consoles.consoles.size)
+        val apps = json.decodeFromString(AppList.serializer(), fixture("apps.json"))
+        assertEquals(4, apps.apps.size)
         // ⚠ THE THIRD STATE. `up:null` is "no verdict yet" and the daemon keeps
         // probe state in memory only, so every restart puts every row back to it.
         // Folding it to false would draw an outage on a host where nothing is wrong.
-        val unknown: Console = consoles.consoles.single { it.id == "btc15m" }
+        val unknown: App = apps.apps.single { it.id == "btc15m" }
         assertNull(unknown.up)
-        assertNotNull("and the approval card has steps to copy", consoles.approval)
-        assertFalse("which nothing in this product applies", consoles.approval!!.applied)
+        assertNull("and the same for the device verdict", unknown.reachable.ok)
+        // ⚠ AND THE FIX IS PER ROW NOW (decision 55). One row carries lines; the
+        // others carry none, which is what makes the disclosure worth opening.
+        val needsRetrofit = apps.apps.single { it.reachable.ok == false }
+        assertEquals("jtyper", needsRetrofit.id)
+        assertEquals(6, needsRetrofit.reachable.fix.size)
+        assertTrue(
+            "the `#` lines say which machine the next ones run on",
+            needsRetrofit.reachable.fix.first().startsWith("# on huginn"),
+        )
+        assertFalse("the transition is still outstanding on this host", apps.retrofitApplied)
     }
 }
