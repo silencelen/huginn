@@ -109,12 +109,12 @@ function clearComposer(name) {
 }
 
 /** Start a fake `claude` and wait until its composer is actually painted. */
-async function startPane(suffix, { typed = '', trust = false } = {}) {
+async function startPane(suffix, { typed = '', trust = false, ghost = '' } = {}) {
   const name = `${PFX}-${suffix}`;
   madeSessions.add(name);
   sh('tmux', ['new-session', '-d', '-s', name, '-c', tmp, '-x', '100', '-y', '30',
     `env HG_FAKE_CLAUDE_OUT=${outFor(name)} HG_FAKE_CLAUDE_TYPED='${typed}' `
-    + `HG_FAKE_CLAUDE_TRUST=${trust ? '1' : '0'} `
+    + `HG_FAKE_CLAUDE_TRUST=${trust ? '1' : '0'} HG_FAKE_CLAUDE_GHOST='${ghost}' `
     + `HG_FAKE_CLAUDE_BOOT_MS=${BOOT_MS} HG_FAKE_CLAUDE_BANNER_MS=${BANNER_MS} `
     + `${process.execPath} ${FAKE}`]);
   // A trust pane never draws a composer at all — wait for the dialog instead.
@@ -313,6 +313,87 @@ test("the Screen tab's own typing is never held by its own draft", async () => {
   await wait(300);
   assert.equal(composerOf(name), 'abc', 'all three characters are in the box, in order');
   assert.equal(readOr(outFor(name)), '', 'and nothing was submitted, because nothing pressed Enter');
+});
+
+test('a draft the LIVE VIEW relayed is theirs for the whole window, not five seconds', async () => {
+  // ⚠ THE FAIL-FIRST FOR H1 (round-2 review, 2026-09-19). The test above types
+  // the draft one character at a time, which is the only shape that survived
+  // `pasteOnce` remembering every paste as appd's own. The clients do NOT type
+  // that way: `LiveInput.merge()` coalesces a burst into ONE `{text}` op, an IME
+  // commit arrives whole, and a paste into the live-view field arrives whole. So
+  // the ENTIRE draft was written into `lastPasted`, `composerHoldsDraft` read it
+  // back as our own leftovers, and `draftHold` fell through to the 5-second
+  // empty-box quiet instead of the 60-second keystroke window.
+  //
+  // Against 3.5.2 this send is released ~5 s after the last keystroke, pasted in
+  // front of their sentence and submitted with it — `submitCount` of the welded
+  // line reads 1 and `blockedBy` has gone null by the first assertion below.
+  const draft = 'a whole sentence the owner relayed in one op and is still writing';
+  const text = 'MARKER-KAPPA the message that must not join it';
+  const name = await startPane('relayed');
+
+  await liveType(name, draft);          // ONE op, the way the clients send it
+  const { body } = await send(name, text);
+  assert.equal(body.delivered, false, 'a relayed draft is a draft');
+  assert.equal(body.blockedBy, 'draft');
+
+  // Past LIVE_KEYS_QUIET_MS (5 s) — the window a draft recorded as "ours" falls
+  // back to — and well inside LIVE_KEYS_WINDOW_MS (60 s), which is what a draft
+  // the daemon can SEE is actually worth.
+  assert.ok(typing.LIVE_KEYS_QUIET_MS < 8_000 && typing.LIVE_KEYS_WINDOW_MS > 8_000,
+    'precondition: 8 s is past the quiet and inside the window');
+  await wait(8_000);
+
+  const st = await typingOf(name);
+  assert.equal(st.blockedBy, 'draft', 'still theirs eight seconds after the last keystroke');
+  assert.equal(st.queued, 1, 'and the message is waiting, not welded');
+  assert.equal(composerOf(name), draft, 'their sentence is exactly as they left it');
+  assert.equal(readOr(outFor(name)), '', 'nothing submitted');
+
+  // They clear it; the message goes, alone.
+  clearComposer(name);
+  for (let i = 0; i < 80 && submitCount(name, text) === 0; i++) await wait(100);
+  assert.equal(submitCount(name, text), 1, 'delivered once, the moment the box was free');
+  assert.doesNotMatch(readOr(outFor(name)), /still writing/,
+    'and their draft was never part of the sentence that went');
+});
+
+test("Claude Code's dim ghost suggestion is not a draft and holds nothing", async () => {
+  // ⚠ P-14. A suggestion is drawn IN the composer, in dim text, while the box is
+  // empty — `❯ <SGR-2>run sleep 10 in the background then say doneB<reset>` with
+  // the cursor at column 2. Strip the escapes and it reads as somebody's
+  // sentence, which is what `composerHoldsDraft` said about it. Belt-and-braces
+  // saved it only for somebody who had not just used the Screen tab; this test
+  // puts them inside that window, which is exactly the person the guard is for.
+  //
+  // Against 3.5.2 the send below comes back `blockedBy:"draft"` and sits there.
+  const suggestion = 'run sleep 10 in the background then say doneB';
+  const name = await startPane('ghost', { ghost: suggestion });
+  // A person at the Screen tab, so the keystroke half of the guard is live and
+  // only the CAPTURE is left to decide. C-u rather than BTab: it leaves the box
+  // empty, which is the only state a suggestion is ever drawn in.
+  await liveKey(name, 'C-u');
+  await wait(400);
+  assert.equal(composerOf(name), suggestion,
+    'precondition: a capture WITHOUT -e cannot tell the ghost from a draft');
+
+  const msg = 'a message that must not wait on a suggestion';
+  await send(name, msg);
+  // The in-flight-keys quiet (5 s) may hold it, as it does on any pane a
+  // keypress just reached — that is the half a capture cannot see and it is
+  // correct. What must NOT happen is the 60-second window, which is what a
+  // ghost read as a draft buys it.
+  assert.ok(typing.LIVE_KEYS_QUIET_MS < 7_000 && typing.LIVE_KEYS_WINDOW_MS > 7_000,
+    'precondition: 7 s is past the quiet and inside the window');
+  await wait(7_000);
+
+  assert.equal(submitCount(name, msg), 1,
+    'delivered: a suggestion nobody typed never held it for the keystroke window');
+  const st = await typingOf(name);
+  assert.equal(st.queued, 0, 'nothing left waiting');
+  assert.equal(st.blockedBy, null, 'and nothing claiming the box');
+  assert.doesNotMatch(readOr(outFor(name)), /run sleep 10/,
+    "and Claude Code's own suggestion was never submitted as part of it");
 });
 
 // ----------------------------------------------------- B. the double delivery

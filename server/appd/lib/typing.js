@@ -475,10 +475,72 @@ const SUBMIT_CONFIRM_POLL_MS = 100;
  * booting — which is a different answer from "the composer is empty" and the
  * callers below rely on the difference.
  */
+/**
+ * ─── THE GHOST IS NOT A DRAFT ──────────────────────────────────────────────
+ *
+ * ⚠ P-14 (2026-09-19). Claude Code draws an inline SUGGESTION in an empty
+ * composer — the last thing you typed here, offered back in dim text, taken
+ * with →. The raw row is
+ *
+ *   '\x1b[39m❯\xa0\x1b[2mrun sleep 10 in the background then say doneB\x1b[0m'
+ *
+ * with the cursor still at column 2: the box is EMPTY and Claude Code is
+ * proposing something. Strip the escapes and it is indistinguishable from
+ * somebody's half-typed sentence, which is exactly what `composerHoldsDraft`
+ * said about it (verified against a live pane: `composerText` = the suggestion,
+ * `composerEmpty` = false, `composerHoldsDraft` = true). The 3.5.1 belt-and-
+ * braces — text AND a live-view keypress inside 60 s — saves it only for
+ * somebody who has NOT just used the Screen tab, which is the one person the
+ * guard is for. A phantom `blockedBy:"draft"` holds their next message for a
+ * minute over a suggestion nobody typed.
+ *
+ * The tell is the dim attribute itself (SGR 2), so the pane has to be captured
+ * WITH its escapes (`tmux capture-pane -e`) and the dim runs dropped before the
+ * text is read. `\x1b[0m` and `\x1b[22m` end a run; a multi-parameter SGR is
+ * read parameter by parameter, because `\x1b[2;37m` is one sequence saying two
+ * things.
+ *
+ * ⚠ THE CARET AND THE WHITESPACE ARE NEVER DROPPED, whatever they are drawn in.
+ * `composerText` finds the box by its `❯`, and a build that dimmed the caret
+ * would make this function delete the composer — turning the draft guard off
+ * silently, which is worse than the bug it fixes. Whitespace is kept for the
+ * same structural reason; `squashPane` removes it from the comparison anyway.
+ *
+ * A capture taken WITHOUT `-e` carries no escapes at all, so this is a no-op on
+ * one — every existing caller and fixture reads exactly as it did.
+ */
+const ESC = '\u001B';
+function stripGhost(line) {
+  const s = String(line || '');
+  if (!s.includes(ESC)) return s;
+  let out = '';
+  let dim = false;
+  let i = 0;
+  while (i < s.length) {
+    if (s[i] === ESC && s[i + 1] === '[') {
+      let j = i + 2;
+      while (j < s.length && !(s[j] >= '@' && s[j] <= '~')) j++;
+      if (j < s.length && s[j] === 'm') {
+        for (const part of s.slice(i + 2, j).split(';')) {
+          const n = Number(part === '' ? '0' : part);
+          if (n === 2) dim = true;
+          else if (n === 0 || n === 22) dim = false;
+        }
+      }
+      i = j < s.length ? j + 1 : s.length;
+      continue;
+    }
+    const ch = s[i];
+    if (!dim || ch === '❯' || /\s/.test(ch)) out += ch;
+    i++;
+  }
+  return out;
+}
+
 const RULE_RE = /^[─━—–_=-]{3,}$/;
-function composerText(lines) {
+function composerText(lines, { dropGhost = false } = {}) {
   const arr = Array.isArray(lines) ? lines : String(lines || '').split('\n');
-  const plain = arr.map((l) => stripAnsi(String(l)).replace(/\s+$/, ''));
+  const plain = arr.map((l) => stripAnsi(dropGhost ? stripGhost(l) : String(l)).replace(/\s+$/, ''));
   let last = -1;
   for (let i = plain.length - 1; i >= 0; i--) { if (plain[i].trim()) { last = i; break; } }
   if (last < 0) return null;
@@ -1214,7 +1276,7 @@ module.exports = {
   QUEUE_MAX_WAIT_MS, STARTUP_GRACE_MS,
   PASTE_SETTLE_MS, PASTE_SETTLE_POLL_MS, SUBMIT_CONFIRM_MS, SUBMIT_CONFIRM_POLL_MS,
   composerText, pasteProbe, pasteLanded, pasteIndistinguishable, composerCleared,
-  composerEmpty, recoveryDecision,
+  composerEmpty, recoveryDecision, stripGhost,
   composerHoldsDraft, draftHold, DRAFT_HOLD_MAX_MS, LIVE_KEYS_WINDOW_MS,
   duplicatePending, DUPLICATE_WINDOW_MS, DUPLICATE_MIN_CHARS, LIVE_KEYS_QUIET_MS,
   paneTail, pasteLostLogLine, submitStalledLogLine, pasteResentLogLine, pasteLeftAloneLogLine,

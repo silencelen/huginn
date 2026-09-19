@@ -830,6 +830,70 @@ test('composerEmpty tells a composer with nothing in it from no composer at all'
   assert.equal(t.composerEmpty(STUCK_PANE), false, 'the box is holding one');
 });
 
+// ─── the ghost suggestion (P-14) ───────────────────────────────────────────
+// Captured off a live pane with `tmux capture-pane -p -e` (2026-09-19): the
+// caret, then the WHOLE suggestion in SGR-2, with the cursor still sitting at
+// column 2. Without the escapes it is byte-identical to somebody's half-typed
+// sentence, which is how `composerHoldsDraft` came to hold sends over one.
+const E = '';
+const GHOST_ROW = `${E}[39m❯ ${E}[2mrun sleep 10 in the background then say doneB${E}[0m`;
+const TYPED_ROW = `${E}[39m❯ half a thought I was still having${E}[0m`;
+const ghostPane = (row) => [
+  '● done',
+  '─'.repeat(70),
+  row,
+  '─'.repeat(70),
+  '  [rv] Fable 5.1 · ctx 4%',
+];
+const GHOST_PANE = ghostPane(GHOST_ROW);
+const TYPED_PANE = ghostPane(TYPED_ROW);
+
+test('stripGhost drops a DIM run and keeps everything else', () => {
+  assert.equal(t.stripGhost(GHOST_ROW).replace(/\[[0-9;]*m/g, '').trim(), '❯',
+    'the suggestion goes and the caret stays');
+  assert.equal(t.stripGhost(TYPED_ROW).includes('half a thought'), true,
+    'ordinary-weight text is untouched');
+  assert.equal(t.stripGhost('❯ a plain capture has no escapes at all'),
+    '❯ a plain capture has no escapes at all',
+    'and a capture taken without -e is passed through unchanged');
+  // ⚠ THE CARET IS NEVER DROPPED, whatever it is drawn in. composerText finds
+  // the box by its ❯, so a build that dimmed the caret would make this function
+  // delete the composer — turning the draft guard off silently, which is worse
+  // than the bug it fixes.
+  assert.match(t.stripGhost(`${E}[2m❯ everything dim${E}[0m`), /❯/,
+    'a dimmed caret still marks the box');
+  // A multi-parameter SGR is one sequence saying two things.
+  assert.equal(t.stripGhost(`${E}[2;37mghost${E}[22m kept`).includes('ghost'), false);
+  assert.equal(t.stripGhost(`${E}[2;37mghost${E}[22m kept`).includes('kept'), true,
+    '22 ends the run as surely as 0 does');
+});
+
+test('the dim ghost suggestion is not a draft, and a real draft still is', () => {
+  // ⚠ P-14, and the belt-and-braces is no excuse: somebody who has just used the
+  // Screen tab is INSIDE the 60-second keystroke window, which is exactly when a
+  // suggestion becomes a phantom blockedBy:"draft".
+  assert.equal(t.composerText(GHOST_PANE), 'run sleep 10 in the background then say doneB',
+    'a plain read cannot tell it from a draft — which is the bug');
+  assert.equal(t.composerText(GHOST_PANE, { dropGhost: true }), '',
+    'and reading the attributes can');
+  assert.equal(t.composerHoldsDraft(t.composerText(GHOST_PANE, { dropGhost: true }), 'a message'), false,
+    'so nothing claims the box');
+  assert.equal(t.composerHoldsDraft(t.composerText(TYPED_PANE, { dropGhost: true }), 'a message'), true,
+    'while a real draft is still a draft');
+});
+
+test("appd's own leftovers are exempt only when they were a MESSAGE", () => {
+  // ⚠ H1. The exemption is for the recovery's 'leave' branch — a frame appd
+  // pasted and did not submit — and the daemon now writes down only SUBMITTING
+  // deliveries. This is the rule that rests on it: what is in the box is the
+  // last thing we pasted, so it is ours to join.
+  const leftover = ['❯ [End brief. Size this project…]'];
+  assert.equal(t.composerHoldsDraft(t.composerText(leftover), 'next', '[End brief. Size this project…]'),
+    false, 'our own stranded frame is not somebody mid-sentence');
+  assert.equal(t.composerHoldsDraft(t.composerText(leftover), 'next', null),
+    true, 'and with nothing remembered it is a draft, which is the safe answer');
+});
+
 test('the composer PLACEHOLDER is an empty composer, not somebody typing', () => {
   // ⚠ MEASURED, AND IT DECIDES THE WHOLE RECOVERY. For its first ~500 ms the box
   // holds a dim hint. Read as text, the recovery refuses to re-paste for exactly

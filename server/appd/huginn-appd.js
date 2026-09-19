@@ -1743,13 +1743,29 @@ async function confirmSubmitted(name, text) {
 }
 
 /**
- * The last text appd pasted into a pane, and when.
+ * The last text appd pasted into a pane AS A MESSAGE, and when.
  *
  * ⚠ SO THE DRAFT GUARD CANNOT DEADLOCK ON THE DAEMON'S OWN LEFTOVERS. A pane
  * can keep a piece of what we last pasted — the recovery's 'leave' branch
  * presses no Enter by design, and a frame whose final line carries no newline
  * stays in the box. Without this the guard reads that as somebody mid-sentence
  * and holds every later message to that session for ten minutes each.
+ *
+ * ⚠⚠ AND SUBMITTING DELIVERIES ONLY (H1, round-2 review, 2026-09-19). This used
+ * to record EVERY paste, and the Screen tab's typing rides the same paste path:
+ * `LiveInput.merge()` coalesces a burst of keypresses into ONE `{text}` op with
+ * no Enter, an IME commit arrives as one op of the whole word, and a paste into
+ * the live-view field arrives as one op of the whole clipboard. So the person's
+ * draft was written down here as appd's own, `composerHoldsDraft(…, ours)` read
+ * it as our leftovers (`mine.includes(squashed)`), the 60-second hold collapsed
+ * to the 5-second empty-box quiet, and the next message was pasted in front of
+ * their sentence and submitted with it. Reproduced on 3.5.2 and caught happening
+ * on the live daemon the same day.
+ *
+ * The leftovers this exemption was written for are all `submit:true` — the
+ * 'leave' branch's stranded frame is a MESSAGE that was typed and not sent. A
+ * `submit:false` paste is by definition the person's own keystrokes, and those
+ * bytes are never ours to join.
  *
  * In memory, pruned on write, and it never holds more than the sessions pasted
  * into within the last hold window.
@@ -1770,8 +1786,14 @@ function lastPastedText(name) {
   return v ? v.text : null;
 }
 
-/** One bracketed paste of `text` into a pane. The half of delivery that repeats. */
-async function pasteOnce(name, text) {
+/**
+ * One bracketed paste of `text` into a pane. The half of delivery that repeats.
+ *
+ * `remember` is the draft guard's "these bytes are ours" note and defaults to
+ * FALSE: a paste has to say it is a message before it may claim the box. See
+ * `lastPasted` — the default used to be the other way round and that is H1.
+ */
+async function pasteOnce(name, text, { remember = false } = {}) {
   const target = `=${name}:`;
   const buf = typing.bufferName();
   const lb = await runStdin('tmux', ['load-buffer', '-b', buf, '-'], text);
@@ -1784,7 +1806,7 @@ async function pasteOnce(name, text) {
     await run('tmux', ['delete-buffer', '-b', buf]);     // -d never ran
     return { ok: false, fallback: false, stderr: pb.stderr };
   }
-  rememberPaste(name, text);
+  if (remember) rememberPaste(name, text);
   return { ok: true };
 }
 
@@ -1827,7 +1849,7 @@ async function recoverLostPaste(name, text, settle, before) {
     return { landed: false, enter: false, recovered: false };
   }
   log(typing.pasteResentLogLine(name, settle.waitedMs, fresh));
-  const again = await pasteOnce(name, text);
+  const again = await pasteOnce(name, text, { remember: true });
   if (!again.ok) {
     // The re-paste could not even be loaded. Nothing was typed, so there is
     // nothing to submit and an Enter would only fire at an empty box.
@@ -1845,7 +1867,9 @@ async function sendTextToPane(name, text, { submit = true } = {}) {
   // pane that already showed this text from one that has just received it, and
   // after the paste there is no telling.
   const before = submit ? await capturePaneLines(name) : null;
-  const first = await pasteOnce(name, text);
+  // `remember` rides the SUBMIT flag: a live-view text op is the person typing,
+  // and writing it down as ours is what welded a draft to the next message (H1).
+  const first = await pasteOnce(name, text, { remember: submit });
   if (!first.ok && !first.fallback) {
     return { ok: false, code: 503, message: 'could not reach the pane buffer', stderr: first.stderr };
   }
@@ -2178,7 +2202,12 @@ async function checkGates(name) {
       break;
     }
   }
-  const cap = await run('tmux', ['capture-pane', '-p', '-t', `=${name}:`]);
+  // ⚠ `-e`, SO THE DIM RUNS SURVIVE THE CAPTURE (P-14). Every rule below strips
+  // ANSI for itself and reads exactly as it did without it — except the draft
+  // guard, which is the one question whose answer is IN the attributes: Claude
+  // Code's inline suggestion is ordinary text drawn dim in an EMPTY box, and a
+  // plain capture cannot tell it from somebody's half-typed sentence.
+  const cap = await run('tmux', ['capture-pane', '-p', '-e', '-t', `=${name}:`]);
   const lines = cap.err ? null : cap.stdout.replace(/\n$/, '').split('\n');
   const paneWhy = lines ? typing.paneReadyForInput(lines).why : null;
   // The corroborating witness for the hook's `attention`: a composer drawn and
@@ -2187,7 +2216,14 @@ async function checkGates(name) {
   const composerEmpty = lines ? typing.composerEmpty(lines) : null;
   // And the composer's CONTENT, because the draft guard's question is per-entry
   // ("is what is in there ours?") and only the pump knows whose text is next.
-  const composerHolds = lines ? typing.composerText(lines) : null;
+  //
+  // ⚠ `dropGhost` HERE AND NOWHERE ELSE. This is the one read whose verdict is
+  // "somebody is mid-sentence, hold everything", so it is the one read that must
+  // not count Claude Code's own dim suggestion as a sentence. `composerEmpty`
+  // above keeps its plain reading on purpose: it is the corroborating witness for
+  // the ATTENTION hold, and "the box looks empty" releasing a person's message
+  // into a live question is a worse trade than one cautious hold.
+  const composerHolds = lines ? typing.composerText(lines, { dropGhost: true }) : null;
   // And the two facts the SUBMIT refusal turns on (#15): is Claude up at all,
   // and is what is down there a shell prompt waiting to run whatever it is given.
   const composer = lines ? typing.composerDrawn(lines) : false;
