@@ -506,6 +506,19 @@ test('btc15m keeps the one true half of the D11 claim: where its bind actually l
     'no unit is claimed to be done already — this daemon cannot see any host but its own, and was wrong about this one');
 });
 
+test('a row whose address is nonsense still produces lines rather than an exception', () => {
+  // fixLines is exported and the store is not its only caller. A row whose url
+  // does not parse can only exist by hand-editing the store file — which is
+  // exactly when somebody is looking at this list to work out what is wrong, and
+  // the worst possible moment for the list route to throw.
+  const rec = { id: 'broken', url: 'not a url', unit: '' };
+  const fix = appsLib.fixLines(rec, [{ addr: '192.168.2.117', ok: false }]);
+  assert.ok(fix.length, 'it still says something');
+  assert.ok(fix.some((l) => l.includes('the one address it answers on')), fix.join(' | '));
+  assert.equal('', appsLib.hostnameOf('not a url'));
+  assert.equal('', appsLib.portOf('not a url'));
+});
+
 test('nothing in the fix lines is a verb this daemon could run', () => {
   // Decision 47 as a property: the payload is data. If a future edit added an
   // endpoint or a shell string the daemon executes, it would have to add a way
