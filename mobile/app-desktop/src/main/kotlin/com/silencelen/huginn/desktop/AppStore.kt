@@ -1877,11 +1877,21 @@ class AppStore(
             while (scope.isActive) {
                 var sawAnything = false
                 var rotated = false
+                // ⚠ CLEARED ON A CONNECT, because the reason is PERSISTED and
+                // nothing else ever untrue-d it: a client reconnected hours ago
+                // still reported `last watch err unauthorized at …` beside `watch
+                // stream connected`, which is the pair that makes a healthy
+                // client look broken in a bug report.
+                var cleared = false
+                suspend fun connected() {
+                    _watchConnected.value = true
+                    if (!cleared) { cleared = true; settings.clearWatchError() }
+                }
                 client.watchStream(hash).collect { ev ->
                     when (ev) {
                         is WatchEvent.State -> {
                             sawAnything = true
-                            _watchConnected.value = true
+                            connected()
                             hash = ev.watch.hash
                             _watchTick.value = _watchTick.value + 1
                             // The digest says only THAT something changed; the
@@ -1890,10 +1900,11 @@ class AppStore(
                             refreshSessions()
                             onDigest?.invoke(ev.watch)
                         }
-                        WatchEvent.Alive -> { sawAnything = true; _watchConnected.value = true }
+                        WatchEvent.Alive -> { sawAnything = true; connected() }
                         WatchEvent.Rotated -> { sawAnything = true; rotated = true }
                         is WatchEvent.Failure -> {
                             _watchConnected.value = false
+                            cleared = false
                             settings.noteWatchError(ev.message, System.currentTimeMillis())
                         }
                     }
