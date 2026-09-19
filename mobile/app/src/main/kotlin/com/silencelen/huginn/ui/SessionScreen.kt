@@ -5,7 +5,6 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.imePadding
@@ -29,7 +28,6 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.SuggestionChip
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Tab
 import androidx.compose.material3.TabRow
@@ -41,7 +39,6 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.foundation.rememberScrollState
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
@@ -579,28 +576,13 @@ private fun SessionConversation(
         // Suggested next messages, at the turn boundary only. A live prompt's
         // buttons outrank them, typing dismisses them, and tapping one FILLS the
         // composer rather than sending — a suggestion is a draft, not a decision.
+        // ⚠ THE SHARED ROW, not a fourth hand-written copy of it. This one was
+        // its own Row with no width cap, which inside a horizontal scroll means
+        // no cap at all: the second suggestion started 102 px from the right edge
+        // of the owner's 1080 px screen. SuggestionChips is what both desktop
+        // surfaces already draw, and the cap lives there once.
         if (suggestions.isNotEmpty() && questionText == null && !working && draft.isBlank()) {
-            Row(
-                Modifier
-                    .fillMaxWidth()
-                    .horizontalScroll(rememberScrollState())
-                    .padding(horizontal = 10.dp, vertical = 2.dp),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
-                suggestions.forEach { sug ->
-                    SuggestionChip(
-                        onClick = { onDraft(sug) },
-                        label = {
-                            Text(
-                                sug,
-                                style = MaterialTheme.typography.labelMedium,
-                                maxLines = 1,
-                                overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
-                            )
-                        },
-                    )
-                }
-            }
+            SuggestionChips(suggestions, onPick = onDraft)
         }
 
         // THE QUESTION IS A LINE NOW (owner decision 23, 2026-09-15), where three
