@@ -1,5 +1,6 @@
 package com.silencelen.huginn.desktop
 
+import com.silencelen.huginn.ui.chatMessagesGone
 import com.silencelen.huginn.data.ChatDetail
 import com.silencelen.huginn.data.ChatEvent
 import com.silencelen.huginn.data.HuginnClient
@@ -150,11 +151,26 @@ class ChatController(
     }
 
     /**
+     * Whether this chat's messages are GONE rather than absent.
+     *
+     * ⚠⚠ THE 409 IS TWO FACTS. The transcript route answers it both for "this
+     * chat has not run yet" and for "transcript not found for this chat" — the
+     * second being Claude Code sweeping its own JSONL on its own schedule — and
+     * this controller read both as the first, seeding an empty page. A chat whose
+     * list row still quotes its last answer therefore opened under the
+     * brand-new-chat placeholder, telling the reader a conversation they can see
+     * quoted two panes away never happened. See [chatMessagesGone], which is in
+     * `:core` because the phone had the identical bug for the identical reason.
+     */
+    private val _messagesGone = MutableStateFlow(false)
+    val messagesGone: StateFlow<Boolean> = _messagesGone.asStateFlow()
+
+    /**
      * Reads the conversation.
      *
-     * A 409 is the ONLY failure that means "nothing here yet" — the chat exists
-     * and has never run. Everything else is a failure to read history that does
-     * exist, and must not be drawn as its absence.
+     * A 409 is the ONLY failure that means "there is nothing to draw" — and WHICH
+     * nothing is [_messagesGone]'s question. Everything else is a failure to read
+     * history that does exist, and must not be drawn as its absence.
      */
     fun loadTranscript() {
         loadJob?.cancel()
@@ -163,6 +179,7 @@ class ChatController(
                 .onSuccess {
                     _page.value = it
                     _error.value = null
+                    _messagesGone.value = false
                     val pending = _pendingSend.value
                     if (pending != null && it.events.any { e -> e.kind == "user" && e.text?.trim() == pending }) {
                         _pendingSend.value = null
@@ -170,10 +187,19 @@ class ChatController(
                     cue.onTurnBoundary(it.nextOffset, busy())
                 }
                 .onFailure { e ->
-                    val neverRan = e is HuginnClient.HuginnException && e.code == 409
+                    val refused = e is HuginnClient.HuginnException && e.code == 409
                     if (_page.value == null) {
-                        if (neverRan) _page.value = TranscriptPage()
-                        else _error.value = e.message ?: "could not load this conversation"
+                        if (refused) {
+                            _page.value = TranscriptPage()
+                            // The chat's own record is what tells the two 409s
+                            // apart: turns, or a Claude session id, is the
+                            // daemon's own evidence that this chat ran.
+                            val d = _detail.value
+                            val hasRun = (d?.turns ?: 0) > 0 || !d?.claudeSessionId.isNullOrBlank()
+                            _messagesGone.value = chatMessagesGone(hasRun, true)
+                        } else {
+                            _error.value = e.message ?: "could not load this conversation"
+                        }
                     }
                 }
         }
@@ -183,6 +209,7 @@ class ChatController(
     fun retry() {
         _error.value = null
         _page.value = null
+        _messagesGone.value = false
         loadTranscript()
     }
 
