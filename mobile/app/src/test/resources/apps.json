@@ -1,0 +1,118 @@
+{
+  "apps": [
+    {
+      "id": "armap",
+      "name": "Architecture map",
+      "url": "http://huginn:8088/",
+      "kind": "docs",
+      "notes": "Static armap dashboard (docs/current/armap).",
+      "unit": "armap.service",
+      "addedAt": 1789000000,
+      "version": 3,
+      "up": true,
+      "lastProbeAt": 1789459940,
+      "latencyMs": 12,
+      "httpStatus": 200,
+      "icon": true,
+      "reachable": {
+        "ok": true,
+        "checkedAt": 1789459940,
+        "addresses": [
+          { "addr": "192.168.7.31:8088", "ok": true, "error": null },
+          { "addr": "100.97.198.90:8088", "ok": true, "error": null }
+        ],
+        "fix": [],
+        "note": ""
+      }
+    },
+    {
+      "id": "jtyper",
+      "name": "jtyper trainer",
+      "url": "http://huginn:8091/",
+      "kind": "lab",
+      "notes": "Blind test + chat + hole-fill flywheel.",
+      "unit": "jtyper-trainer.service",
+      "addedAt": 1789000000,
+      "version": 1,
+      "up": true,
+      "lastProbeAt": 1789459940,
+      "latencyMs": 48,
+      "httpStatus": 403,
+      "icon": false,
+      "reachable": {
+        "ok": false,
+        "checkedAt": 1789459940,
+        "addresses": [
+          { "addr": "192.168.7.31:8091", "ok": false, "error": "connection refused" },
+          { "addr": "100.97.198.90:8091", "ok": true, "error": null }
+        ],
+        "fix": [
+          "# on huginn — bind the unit to 0.0.0.0",
+          "systemctl edit jtyper-trainer.service   # ExecStart: bind 0.0.0.0 instead of the tailnet address",
+          "systemctl restart jtyper-trainer",
+          "ss -ltnp | grep 8091",
+          "# on heimdall — allow the port in /etc/pve/firewall/117.fw",
+          "IN ACCEPT -source 192.168.2.131 -p tcp -dport 8091 -log nolog"
+        ],
+        "note": ""
+      }
+    },
+    {
+      "id": "board",
+      "name": "PCB board view",
+      "url": "http://huginn:8092/",
+      "kind": "tool",
+      "notes": "Live KiCad board review (brokkr renders).",
+      "unit": "boardserver.service",
+      "addedAt": 1789000000,
+      "version": 1,
+      "up": false,
+      "lastProbeAt": 1789459940,
+      "latencyMs": 2000,
+      "httpStatus": null,
+      "icon": true,
+      "reachable": {
+        "ok": null,
+        "checkedAt": 0,
+        "addresses": [],
+        "fix": [],
+        "note": "no address to probe yet"
+      }
+    },
+    {
+      "id": "btc15m",
+      "name": "BTC 15m simulator",
+      "url": "http://huginn:8093/",
+      "kind": "lab",
+      "notes": "Paper-trading sim for the 15-minute lab.",
+      "unit": "",
+      "addedAt": 1789000000,
+      "version": 1,
+      "up": null,
+      "lastProbeAt": 0,
+      "latencyMs": null,
+      "httpStatus": null,
+      "icon": false,
+      "reachable": {
+        "ok": null,
+        "checkedAt": 0,
+        "addresses": [],
+        "fix": [],
+        "note": ""
+      }
+    }
+  ],
+  "max": 32,
+  "kinds": [
+    "dashboard",
+    "tool",
+    "docs",
+    "lab",
+    "other"
+  ],
+  "retrofitApplied": false,
+  "clientAddresses": [
+    "192.168.7.31",
+    "100.97.198.90"
+  ]
+}
