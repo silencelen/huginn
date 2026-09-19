@@ -1,6 +1,7 @@
 package com.silencelen.huginn.desktop
 
 import com.silencelen.huginn.data.HuginnClient
+import com.silencelen.huginn.data.IntoDraft
 import com.silencelen.huginn.data.SendKeysResult
 import com.silencelen.huginn.data.TypingState
 import io.ktor.client.engine.mock.MockEngine
@@ -278,5 +279,86 @@ class SendQueueTest {
             com.silencelen.huginn.ui.SendQueue.DUPLICATE,
             SendQueue.line(TypingState(queued = 0, blockedBy = com.silencelen.huginn.ui.SendQueue.DUPLICATE_REASON)),
         )
+    }
+
+    // ------------------------- the message that went into somebody's draft (D-7)
+
+    /**
+     * ⚠⚠ THE SILENCE THIS ENDS. The walker typed `draft in progress` into the
+     * live view without sending it, then sent `say OK2` from this composer. The
+     * hold worked — `delivered:false, blockedBy:"draft"`, the right line under
+     * the composer — and 28 seconds later the daemon sent it in anyway and the
+     * model answered `draft in progresssay OK2`. The desktop said NOTHING: the
+     * queued note simply disappeared and a merged user bubble arrived. Decision
+     * 59 keeps the ceiling and ends the silence.
+     */
+    @Test
+    fun `a delivery that went into a draft gets a line, once the queue is empty`() {
+        val into = IntoDraft(at = 1_700_000_000, waitedMs = 28_000, composer = "draft in progress")
+        val note = SendQueue.draftLine(TypingState(queued = 0, intoDraft = into))
+        assertNotNull(note)
+        assertTrue(note!!.contains("draft in progress"), note)
+        assertTrue(note.contains("still typing"), note)
+    }
+
+    @Test
+    fun `nothing went into a draft, so nothing is said`() {
+        assertNull(SendQueue.draftLine(TypingState(queued = 0)))
+        assertNull(SendQueue.draftLine(TypingState(queued = 2, blockedBy = "turn")))
+    }
+
+    /**
+     * `intoDraft` outlives the queue by design — the daemon keeps it an hour so a
+     * laptop that was shut still sees it — which means it is present while a
+     * LATER message is waiting. A notice raised then describes a delivery whose
+     * result the reader has not seen.
+     */
+    @Test
+    fun `the line waits for the queue to drain`() {
+        val into = IntoDraft(at = 1_700_000_000, composer = "half a sentence")
+        assertNull(SendQueue.draftLine(TypingState(queued = 1, blockedBy = "turn", intoDraft = into)))
+        assertNull(SendQueue.draftLine(TypingState(queued = 0, delivering = true, intoDraft = into)))
+        assertNotNull(SendQueue.draftLine(TypingState(queued = 0, intoDraft = into)))
+    }
+
+    /**
+     * The controller half: a SYNCHRONOUS delivery reports the merge on the send's
+     * own answer, the notice stands until dismissed, and the next send clears it.
+     */
+    @Test
+    fun `the controller raises the notice from the send's own answer, and a new send clears it`() = runTest {
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.Unconfined)
+        try {
+            val c = controller(scope) { """{"queued":0}""" }
+            assertNull(c.draftNotice.value)
+            c.noteSend(
+                SendKeysResult(
+                    ok = true, delivered = true, queued = 0,
+                    intoDraft = IntoDraft(at = 1_700_000_000, composer = "mid sentence"),
+                ),
+            )
+            val raised = c.draftNotice.value
+            assertNotNull(raised, "a delivery that landed on somebody's draft must say so")
+            assertTrue(raised!!.contains("mid sentence"), raised)
+
+            // ⚠ THE SAME MERGE IS NOT RAISED TWICE. The daemon keeps reporting it
+            // for an hour; a second poll must not re-raise a notice the reader
+            // has dismissed.
+            c.dismissDraftNotice()
+            c.noteSend(SendKeysResult(ok = true, delivered = true, queued = 0,
+                intoDraft = IntoDraft(at = 1_700_000_000, composer = "mid sentence")))
+            assertNull(c.draftNotice.value, "the same instant, already reported")
+
+            // A NEW merge is a new fact.
+            c.noteSend(SendKeysResult(ok = true, delivered = true, queued = 0,
+                intoDraft = IntoDraft(at = 1_700_000_099, composer = "later text")))
+            assertTrue(c.draftNotice.value?.contains("later text") == true, "${c.draftNotice.value}")
+
+            // And an ordinary send supersedes it.
+            c.noteSend(SendKeysResult(ok = true, delivered = true, queued = 0))
+            assertNull(c.draftNotice.value)
+        } finally {
+            scope.cancel()
+        }
     }
 }

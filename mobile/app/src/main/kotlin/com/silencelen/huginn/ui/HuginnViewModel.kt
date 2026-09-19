@@ -3629,6 +3629,46 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
     /** The composer's one-line status for a session, or null. */
     fun queueNote(name: String): String? = SendQueue.note(_typing.value[name])
 
+    private val _draftNotices = MutableStateFlow<Map<String, String>>(emptyMap())
+
+    /**
+     * ⚠⚠ D-7 / DECISION 59, per session. "Your message was sent into text someone
+     * was still typing" — absent almost always.
+     *
+     * The draft hold has a ceiling (60 s after the last live-view keystroke) and
+     * when it is reached the queued message is pasted in front of the draft and
+     * both are submitted as one prompt. Every client's account of that used to be
+     * the queued line quietly disappearing. The daemon reports it now — on the
+     * send's own answer when the delivery was synchronous, on `/typing`
+     * otherwise — and this is where the reader is told.
+     *
+     * Cleared by [dismissDraftNotice] or by the next send into that session.
+     */
+    val draftNotices: StateFlow<Map<String, String>> = _draftNotices.asStateFlow()
+
+    fun draftNotice(name: String): String? = _draftNotices.value[name]
+
+    fun dismissDraftNotice(name: String) {
+        if (name !in _draftNotices.value) return
+        _draftNotices.value = _draftNotices.value - name
+    }
+
+    /**
+     * The merge instants already reported, so the SAME one is not raised again on
+     * every poll — the daemon keeps `intoDraft` for an hour on purpose, so that a
+     * phone which was asleep still sees it, which means it is read repeatedly by
+     * design.
+     */
+    private val draftNoticeAt = mutableMapOf<String, Long>()
+
+    private fun noteIntoDraft(name: String, into: com.silencelen.huginn.data.IntoDraft?) {
+        val at = into?.at ?: return
+        if (at <= 0 || draftNoticeAt[name] == at) return
+        val words = SendQueue.draftNotice(into) ?: return
+        draftNoticeAt[name] = at
+        _draftNotices.value = _draftNotices.value + (name to words)
+    }
+
     private fun setTyping(name: String, state: com.silencelen.huginn.data.TypingState?) {
         _typing.value = _typing.value.toMutableMap().apply {
             if (state == null) remove(name) else put(name, state)
@@ -3636,7 +3676,14 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     private fun noteSend(name: String, result: com.silencelen.huginn.data.SendKeysResult) {
+        // A new send supersedes the last notice: what the reader needs is where
+        // THIS message went, not a standing strip about the previous one.
+        dismissDraftNotice(name)
         setTyping(name, SendQueue.seed(result))
+        // ⚠ NOT GATED ON `landed`. A delivery that went into somebody's draft IS
+        // delivered — on top of something — so the synchronous case, which is the
+        // one the sender is standing there watching, has nothing queued at all.
+        noteIntoDraft(name, result.intoDraft)
     }
 
     private var typingJob: Job? = null
@@ -3661,6 +3708,10 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
                             // error is the absence of a queue, not a queue of zero,
                             // and keeping the row would leave "(0 waiting)" under a
                             // composer that is working perfectly.
+                            // ⚠ BEFORE THE STATE IS DROPPED. A drained queue is
+                            // cleared below, and `intoDraft` rides on exactly that
+                            // answer — reading it after would read it off nothing.
+                            if (SendQueue.draftNoticeReady(st)) noteIntoDraft(name, st.intoDraft)
                             setTyping(name, st.takeIf { SendQueue.note(it) != null })
                         }
                 }
