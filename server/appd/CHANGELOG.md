@@ -9,6 +9,78 @@ appeared only as a side-note on the app releases it happened to ship with. Three
 undocumented, and the notes-cutting matcher could fuse two sections when an app and an appd
 version number collided. Entries below are reconstructed from the shipping commits.
 
+## 3.6.0 — 2026-09-19
+- **A message is never welded to a person's draft again.** 3.5.0's guard held a send while somebody
+  had unsent text in the live view, and 3.5.1 keyed it on keystrokes the daemon itself had relayed —
+  but every paste was written down as the daemon's OWN, and the Screen tab types by pasting. The
+  clients coalesce a burst of keypresses into one text op (`LiveInput.merge()`), an IME commit and a
+  clipboard paste each arrive whole, so the daemon recorded the person's entire draft as its
+  leftovers, decided the box was already its own, and released the next message into their sentence
+  after five seconds instead of holding it for a minute. It happened to a walker's session on the
+  live daemon the day it was found. A paste is now remembered only when it was a SEND.
+- **Claude Code's dim ghost suggestion is no longer read as a draft.** The inline suggestion it
+  offers in an EMPTY composer is ordinary text drawn in SGR-2, indistinguishable from a half-typed
+  sentence once the escapes are stripped — so a phone user who had just used the Screen tab (i.e.
+  inside the keystroke window the guard turns on) got a phantom `blockedBy:"draft"` over words
+  nobody typed. The pane is captured with its attributes now and dim runs are dropped from the
+  draft read alone; the caret is never dropped, whatever it is drawn in.
+- **The daemon says when a message went into a draft anyway.** The hold is still bounded — sixty
+  seconds after the last live-view keystroke — and until now the only trace was a journal line.
+  `GET /v1/sessions/:name/typing` carries `intoDraft`: `{at, waitedMs, composer}` for the last
+  delivery to that session that landed in somebody's unsent text, or null, cleared by the next
+  ordinary delivery. `POST …/keys` carries the same object when the delivery happened
+  synchronously, so whoever pressed Send is told in the answer to their own request.
+- **A client can prove it is talking to this daemon before it hands over the token.** New
+  UNAUTHENTICATED `GET /v1/challenge?nonce=<16-64 hex>` answers `{proof, version}`, where `proof` is
+  HMAC-SHA256 with the bearer token as key over the nonce. Auto-switch used to adopt any address
+  that answered with a non-blank `X-Huginn-Appd` header and then authenticate against it — 129
+  authenticated requests to a fake in two minutes on the review bench. A header anybody can print is
+  a fingerprint, not proof. Safe to answer in the clear: HMAC is a pseudo-random function of its
+  key, the key is 256 bits, and the nonce is the caller's own. 20/s per client address.
+- **`blockedBy: "trust"` reaches a client.** The folder-trust dialog — the one whose pre-selected
+  answer is "No, exit", and whose options `/screen` cannot see — was reported as a generic `modal`,
+  so the app said "a dialog is open on the screen" about the one dialog where the default keystroke
+  kills the session. The pane's own verdict is passed through; every other selector is still
+  `modal`.
+- **A project message relayed by huginn arrives as a system note.** `POST /v1/projects/:id/message`
+  pastes a frame rather than using Claude Code's native peer channel, so the member's transcript
+  drew the OWNER'S relay as the member's own bubble, safety paragraph and all. The frame now names
+  the project and the reader recognises it: `kind:"system"` with `project:{id, name, from}`. Frames
+  written by 3.5.x still render as notes, with a null id.
+- **A brand-new session stops saying its transcript "is gone".** The state file carries a transcript
+  path before the hook has written to it, so every session created in the last few seconds — on
+  both clients, on three routes that disagreed with each other — reported a loss that had not
+  happened. A path this daemon has read once can be gone; everything else has simply not been
+  written yet.
+- **`/v1/account` cannot reach past `HUGINN_APPD_CLAUDE_DIR`.** It shelled out to `claude auth
+  status`, which resolves its own home and cannot be redirected, so a daemon pointed at a scratch
+  directory reported the host's real login while `/v1/plan` reported the stub. With the knob set the
+  credentials are the only identity the route will have — the same source `/v1/plan` reads, so the
+  two can no longer disagree about who is signed in.
+- **Timestamps say which unit they are in.** Three fields sit outside this daemon's epoch-seconds
+  convention with nothing on the wire to say so: `lastSeen`/`registeredAt` on `/v1/devices`,
+  `Round.nextRunAt` (beside `createdAt`/`updatedAt` in seconds), and `serverTime`, which means
+  seconds on `/typing`, `/clients`, `/watch` and `/agents` and milliseconds on `/headroom`. The
+  units are unchanged — the shipped clients read them — and each now has a correctly-named seconds
+  sibling: `lastSeenSec`, `registeredAtSec`, `nextRunAtSec`, `serverTimeSec`. ⚠ The old spellings
+  are DEPRECATED for one release.
+- **The daemon's journal is readable again.** `journalctl -u huginn-appd` was mostly PowerShell
+  ScriptBlock bodies — whole scripts, hundreds of lines a run. Not this daemon's output: pwsh logs
+  to syslog, journald files a syslog message under the sender's cgroup, and a tmux server first
+  started by this daemon daemonises into this daemon's cgroup, so every Claude Code session and
+  everything it runs lands in this unit. The unit sets `SyslogIdentifier=huginn-appd`, so
+  `journalctl -u huginn-appd -t huginn-appd` is the daemon's own log while a child's real errors
+  stay in the unit's journal under their own identifier; and the daemon now says once, with the
+  remedy, when the running tmux server is in its cgroup.
+- Docs: the README API table gains Projects, Apps, the Consoles alias, Archive, soft-end/compact,
+  quick-actions, `/v1/models?local=1` and `/v1/challenge`; `/v1/ping` is documented as REQUIRING the
+  token (it always did, and four comments said otherwise); `/keys` says that `keys:["Enter"]` is
+  what makes a text send a send and that `{text}` alone types into the composer without submitting;
+  the timestamp-unit rule is written down. Five overstated claims in this file are corrected in
+  place — the draft hold's "10-minute bound", the project relay's transcript rendering, the app
+  icons "rows show the app's own mark", the member-adopt body shape, and `blockedBy: "trust"`, which
+  is advertised in 3.5.1 and only became emittable here.
+
 ## 3.5.2 — 2026-09-19
 - **Two of huginn's own messages waiting on one session no longer arrive as one prompt** — each
   automated relay waits for its own turn to end (a person's messages still go at once, 3.5.1).
@@ -16,17 +88,21 @@ version number collided. Entries below are reconstructed from the shipping commi
   queue like `/soft-end`, and tells you which members it could not wind down (`refused[]`).
 - **Switching accounts keeps a `~/.claude.json` that is a symlink a symlink**, permissions unchanged.
 - **App icons prefer a real PNG over a `.ico`** (a typed `<link rel="icon">`, then `apple-touch-icon`,
-  then `/favicon.ico` last), so rows show the app's own mark on the phone; `iconAt` on the row moves
-  only when the cached bytes change, and the icon route's ETag is keyed on it.
+  then `/favicon.ico` last); `iconAt` on the row moves only when the cached bytes change, and the
+  icon route's ETag is keyed on it. (Corrected in 3.6.0: this said "so rows show the app's own mark
+  on the phone". None of the four apps this host ships with serves a favicon at all, so every live
+  row reads `icon:false` — the mechanism works, there is nothing yet for it to fetch.)
 - **Apps — the fix lines name the client, not the address it arrived on.** A row that could not be
   reached printed `IN ACCEPT -source <huginn's own address>`, a rule that can never match an inbound
   packet. huginn now records which clients arrive on each of its addresses and names those instead,
   collapsing three or more in one /24; a loopback address asks for no rule at all (it passes on its
   own once the unit binds 0.0.0.0), and an address nobody has arrived on gets a comment rather than
   a guess. `clientRemotes` is additive on `GET /v1/apps`.
-- **A session you already have open can be added to a project** (`POST /v1/projects/:id/members`)
-  and dropped again without ending it (`DELETE …/members/:role`); renaming a project member answers
-  409 naming the project.
+- **A session you already have open can be added to a project** — `POST /v1/projects/:id/members`
+  with `{"name":"<tmux session>","role":"…"}`; omit `name` and the route derives `<slug>-<role>`
+  instead, which is a DIFFERENT session and 404s if it does not exist. (Clarified in 3.6.0: the
+  body shape was not written down and `{"session":…}` is not it.) Dropped again without ending it
+  (`DELETE …/members/:role`); renaming a project member answers 409 naming the project.
 
 ## 3.5.1 — 2026-09-18
 - **Sends stopped stalling.** 3.5.0's draft guard trusted a screen capture, and Claude Code draws its
@@ -109,8 +185,10 @@ Wave 3 — Projects and Consoles — and the daemon's share of a 99-finding edge
   tokens and cost per member with a cursor that does not re-walk twelve spines on every poll,
   `…/spawn {approve, manifestRev}` answers per role with HTTP 200 even when part of it failed,
   `…/message` relays one member's words to another THROUGH the send queue (turn, modal and
-  startup holds all apply) and the transcript reader draws the arrival as a system note with the
-  sender's name, never as your own bubble. An untrusted project folder is refused rather than
+  startup holds all apply). (Corrected in 3.6.0: this also claimed "the transcript reader draws the
+  arrival as a system note with the sender's name, never as your own bubble" — true of Claude
+  Code's NATIVE peer channel, and not of this route, whose pasted frame was drawn as the reader's
+  own bubble until 3.6.0 taught the reader to recognise it.) An untrusted project folder is refused rather than
   pre-trusted behind Claude Code's back; spawning is refused with the arbiter's reason while STOP
   is armed; `MAX_MEMBERS` is 12. The manifest's tag — the anti-injection secret a proposal is
   checked against — never leaves the daemon: seven send sites strip it.

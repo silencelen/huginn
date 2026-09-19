@@ -9452,9 +9452,14 @@ const server = http.createServer(async (req, res) => {
   // daemon, and an address only learned by visiting the page would let the first
   // add from a new network pass and every later one fail.
   //
-  // AFTER the auth check, deliberately: /v1/ping is unauthenticated, and a port
-  // scanner must not be able to teach this daemon a new address that every app
-  // then has to answer on. In memory, flushed lazily — see noteClientAddress.
+  // AFTER the auth check, deliberately: a port scanner must not be able to teach
+  // this daemon a new address that every app then has to answer on. (⚠ The
+  // comment here used to say "/v1/ping is unauthenticated", which it is not and
+  // never was — `authorized()` runs above with no exemption, and the 401 it
+  // answers, carrying `X-Huginn-Appd`, IS the fingerprint the client probe wants.
+  // The one genuinely unauthenticated route is `/v1/challenge`, and it returns
+  // before this line for exactly the reason this line exists.) In memory,
+  // flushed lazily — see noteClientAddress.
   try {
     appsLib.store(DATA_DIR, { log, hostAddr: SELF_ADDR })
       .noteClientAddress(req.socket.localAddress, req.socket.remoteAddress);
