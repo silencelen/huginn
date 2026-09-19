@@ -25,6 +25,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.Chat
+import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.MonitorHeart
 import androidx.compose.material.icons.filled.MoreVert
@@ -896,6 +897,8 @@ fun HuginnApp(
     var killTarget by remember { mutableStateOf<String?>(null) }
     var softEndTarget by remember { mutableStateOf<String?>(null) }
     var deleteChatTarget by remember { mutableStateOf<String?>(null) }
+    // The project to wind down, by id. See the End project dialog below.
+    var endProjectTarget by remember { mutableStateOf<String?>(null) }
 
     val snackbar = remember { SnackbarHostState() }
     LaunchedEffect(toast) { toast?.let { snackbar.showSnackbar(it); vm.toastShown() } }
@@ -1131,6 +1134,19 @@ fun HuginnApp(
                 }) { Text("Delete") }
             },
             dismissButton = { TextButton(onClick = { deleteChatTarget = null }) { Text("Cancel") } },
+        )
+    }
+    endProjectTarget?.let { id ->
+        val row = projects.firstOrNull { it.id == id }
+        com.silencelen.huginn.ui.EndProjectDialog(
+            label = row?.let { com.silencelen.huginn.ui.ProjectRules.label(it) } ?: "this project",
+            sessions = (row?.memberCount ?: 0) + 1,
+            onDismiss = { endProjectTarget = null },
+            onEnd = { choice ->
+                endProjectTarget = null
+                vm.deleteProject(id, choice.wire)
+                if ((dest as? Dest.Project)?.id == id) dest = Dest.Projects
+            },
         )
     }
 
@@ -1891,7 +1907,8 @@ fun HuginnApp(
                             }
                         }
                         if (dest !is Dest.Settings && dest !is Dest.SettingsSection &&
-                            dest !is Dest.Chat && dest !is Dest.SessionView
+                            dest !is Dest.Chat && dest !is Dest.SessionView &&
+                            dest !is Dest.Project
                         ) {
                             IconButton(onClick = { dest = Dest.Settings }) {
                                 Icon(Icons.Filled.Settings, contentDescription = "Settings")
@@ -1911,7 +1928,15 @@ fun HuginnApp(
                         }
                         // The slot the settings gear vacated: controls for the thing
                         // being looked at, not for the app.
-                        if (dest is Dest.SessionView || dest is Dest.Chat) {
+                        // ⚠ AND ON A PROJECT. The project page offered "Add
+                        // member" and nothing else — no overflow menu, no row
+                        // menu on the list, no per-member action — so a project
+                        // started on the phone stranded its sessions: they had to
+                        // be found one at a time in the Sessions list and ended
+                        // there. The verbs the desktop keeps on its row menu
+                        // belong in the slot this phone already has for
+                        // "controls for the thing being looked at".
+                        if (dest is Dest.SessionView || dest is Dest.Chat || dest is Dest.Project) {
                             Box {
                                 IconButton(onClick = { surfaceMenu = true }) {
                                     Icon(Icons.Filled.MoreVert, contentDescription = "Actions")
@@ -1970,6 +1995,29 @@ fun HuginnApp(
                                                     )
                                                 },
                                                 onClick = { surfaceMenu = false; killTarget = d.name },
+                                            )
+                                        }
+                                        is Dest.Project -> {
+                                            // ONE VERB, and it is the one with no
+                                            // other door. Open-a-member is the row
+                                            // itself and drop-a-member is inside
+                                            // the member's own disclosure; ending
+                                            // the cluster had nowhere at all.
+                                            DropdownMenuItem(
+                                                text = {
+                                                    Text(
+                                                        "End project…",
+                                                        color = verbInk(VerbTone.DESTRUCTIVE, MaterialTheme.colorScheme),
+                                                    )
+                                                },
+                                                leadingIcon = {
+                                                    Icon(
+                                                        Icons.Filled.Delete,
+                                                        contentDescription = null,
+                                                        tint = verbInk(VerbTone.DESTRUCTIVE, MaterialTheme.colorScheme),
+                                                    )
+                                                },
+                                                onClick = { surfaceMenu = false; endProjectTarget = d.id },
                                             )
                                         }
                                         is Dest.Chat -> {
