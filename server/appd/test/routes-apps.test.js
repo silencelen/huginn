@@ -239,7 +239,7 @@ test('/v1/consoles answers the 3.4 BODY, key for key against a capture of the ol
   // ⚠ THE NEW FIELDS ARE DROPPED, not merely ignored. The old clients are
   // `ignoreUnknownKeys = true` and would tolerate them; "the alias answers the
   // 3.4 body" is only checkable if it is exactly true.
-  for (const gone of ['unit', 'icon', 'reachable']) {
+  for (const gone of ['unit', 'icon', 'iconAt', 'reachable']) {
     assert.ok(!(gone in alias.body.consoles[0]), `${gone} is not a field the 3.4 contract has`);
   }
   assert.ok(!('apps' in alias.body) && !('retrofitApplied' in alias.body) && !('clientAddresses' in alias.body));
@@ -302,11 +302,15 @@ test('every row carries the probe fields, with null where there has been no obse
   const row = rowOf(body, 'alive');
   assert.ok(row, 'the store written before startup is the store the daemon read');
   for (const field of ['id', 'name', 'url', 'kind', 'notes', 'unit', 'addedAt', 'version',
-    'up', 'lastProbeAt', 'latencyMs', 'httpStatus', 'icon', 'reachable']) {
+    'up', 'lastProbeAt', 'latencyMs', 'httpStatus', 'icon', 'iconAt', 'reachable']) {
     assert.ok(field in row, `${field} must be present on every row`);
   }
   assert.ok(!('reachableFrom' in row), 'superseded by reachable.addresses, which says strictly more');
   assert.equal('boolean', typeof row.icon);
+  // A definite value, always — a row with no icon says 0 rather than omitting
+  // the key, so a client never has to tell "missing" from "never".
+  assert.equal('number', typeof row.iconAt);
+  assert.equal(0, row.iconAt, 'nothing has been fetched for this row');
   for (const field of ['ok', 'checkedAt', 'addresses', 'fix']) {
     assert.ok(field in row.reachable, `reachable.${field} must be present on every row`);
   }
@@ -521,6 +525,35 @@ test('a rename persists, and takes the version with it', async () => {
   const after = rowOf(await list(), 'alive');
   assert.equal('The page that answers', after.name, 'and it survived the trip through the file');
   assert.equal(before.url, after.url, 'a rename does not touch the address');
+});
+
+test('PATCH {unit: ""} CLEARS the unit, and the row says so', async () => {
+  // The client backlog asked whether this was even possible: `unit` is the one
+  // field whose value ends up in a command line a person runs as root, so it is
+  // REFUSED when malformed rather than coerced — and "" had to be proved to be
+  // the empty case rather than a malformed one. It is: absent and empty both
+  // mean "huginn does not know which unit serves this", and [fixLines] says so
+  // in words instead of naming a unit that has moved.
+  const start = rowOf(await list(), 'board-view');
+  assert.equal('boardview.service', start.unit, 'it has one to clear');
+
+  const r = await api('/v1/apps/board-view', {
+    method: 'PATCH', body: JSON.stringify({ version: start.version, unit: '' }),
+  });
+  assert.equal(200, r.status, JSON.stringify(r.body));
+  assert.equal('', r.body.unit, 'cleared, not left alone and not refused');
+  assert.equal(start.version + 1, r.body.version);
+
+  const after = rowOf(await list(), 'board-view');
+  assert.equal('', after.unit, 'and it survived the trip through the file');
+  assert.equal(start.name, after.name, 'clearing one field touches nothing else');
+
+  // Putting one back is the same call with a name in it.
+  const back = await api('/v1/apps/board-view', {
+    method: 'PATCH', body: JSON.stringify({ version: after.version, unit: 'boardview.service' }),
+  });
+  assert.equal(200, back.status, JSON.stringify(back.body));
+  assert.equal('boardview.service', back.body.unit);
 });
 
 test('an edit against a stale version is 409 and carries the row it collided with', async () => {
