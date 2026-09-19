@@ -1,5 +1,6 @@
 package com.silencelen.huginn.ui
 
+import com.silencelen.huginn.data.App
 import kotlinx.coroutines.async
 import kotlinx.coroutines.runBlocking
 import org.jetbrains.skia.Bitmap
@@ -203,13 +204,13 @@ class AttachmentImagesTest {
     // ------------------------------------------------------------ app icons
 
     /**
-     * ⚠ AN APP ICON IS KEYED ON ID **AND** VERSION. The daemon re-fetches an
-     * app's favicon when the row is edited and bumps `version` with the edit, so
-     * the id alone would serve the old picture forever — and there is nothing in
-     * the logs when a cache serves the right answer to the wrong question.
+     * ⚠ AN APP ICON IS KEYED ON ID **AND** `iconAt` — the stamp on the BYTES, not
+     * the row's `version`. Rows recycle, so the cache is what makes this one
+     * request rather than one per scroll; the key is what decides which question
+     * that cached answer is an answer to.
      */
     @Test
-    fun `an app icon is cached per id and refetched when the row is edited`() = runBlocking {
+    fun `an app icon is cached per id and refetched when the bytes change`() = runBlocking {
         val asked = mutableListOf<String>()
         val png = pngBytes(16, 16)
         val loader = AttachmentImageLoader(
@@ -217,17 +218,64 @@ class AttachmentImagesTest {
             decoder = SkiaImageBytesDecoder(),
             fetchIcon = { id -> asked += id; png },
         )
-        val a = loader.loadIcon("armap", version = 3)
-        val b = loader.loadIcon("armap", version = 3)
+        val a = loader.loadIcon("armap", iconAt = 1_789_000_000)
+        val b = loader.loadIcon("armap", iconAt = 1_789_000_000)
         assertNotNull(a)
         assertTrue(a === b, "the second draw of the same row returns the cached bitmap")
         assertEquals(listOf("armap"), asked)
 
-        assertNotNull(loader.loadIcon("armap", version = 4))
-        assertEquals(listOf("armap", "armap"), asked, "a new version is a new picture")
+        assertNotNull(loader.loadIcon("armap", iconAt = 1_789_003_600))
+        assertEquals(listOf("armap", "armap"), asked, "new bytes are a new picture")
 
-        assertNotNull(loader.loadIcon("jtyper", version = 3))
+        assertNotNull(loader.loadIcon("jtyper", iconAt = 1_789_000_000))
         assertEquals(listOf("armap", "armap", "jtyper"), asked, "and another row is another key")
+    }
+
+    /**
+     * ⚠⚠ THE DEFECT, STATED AS THE ROW ITSELF WOULD PRODUCE IT. The daemon
+     * re-fetches a row's favicon ON PROBE — hourly, with nobody touching the row
+     * — so `App.version` does not move when the picture does. Keyed on `version`
+     * the app served the OLD icon for the life of the process: cached, silent,
+     * and unfixable short of a restart. The refetched row is otherwise identical.
+     */
+    @Test
+    fun `a favicon refetched by the daemon reaches the screen without a restart`() = runBlocking {
+        val asked = mutableListOf<String>()
+        val loader = AttachmentImageLoader(
+            fetch = { error("not the uploads route") },
+            decoder = SkiaImageBytesDecoder(),
+            fetchIcon = { id -> asked += id; pngBytes(16, 16) },
+        )
+        // The row as the list first drew it, and the SAME row an hour later: the
+        // site changed its icon, the daemon re-fetched on probe, `version` is
+        // untouched because nobody edited anything.
+        val before = App(id = "armap", name = "armap", version = 4, icon = true, iconAt = 1_789_000_000)
+        val after = before.copy(iconAt = 1_789_003_600)
+        assertEquals(before.version, after.version, "the row's revision does NOT move with the bytes")
+
+        loader.loadIcon(before.id, before.iconStamp)
+        loader.loadIcon(after.id, after.iconStamp)
+        assertEquals(listOf("armap", "armap"), asked, "the new picture must be fetched, not the old one served")
+    }
+
+    /**
+     * A daemon that does not report the stamp keys every row on 0 — one fetch per
+     * row per process, which is exactly what an id-only key did. Absence is the
+     * old behaviour, not a new bug.
+     */
+    @Test
+    fun `a daemon with no iconAt behaves as an id-only key did`() = runBlocking {
+        var fetches = 0
+        val loader = AttachmentImageLoader(
+            fetch = { error("not the uploads route") },
+            decoder = SkiaImageBytesDecoder(),
+            fetchIcon = { fetches++; pngBytes(8, 8) },
+        )
+        val row = App(id = "jtyper", name = "jtyper", icon = true)
+        assertEquals(0L, row.iconStamp, "no stamp reads as 0, never as a date in 1970")
+        loader.loadIcon(row.id, row.iconStamp)
+        loader.loadIcon(row.id, row.iconStamp)
+        assertEquals(1, fetches)
     }
 
     /**
@@ -242,9 +290,9 @@ class AttachmentImagesTest {
             decoder = SkiaImageBytesDecoder(),
             fetchIcon = { fetches++; throw RuntimeException("404") },
         )
-        assertNull(loader.loadIcon("btc15m", version = 1))
-        assertNull(loader.loadIcon("btc15m", version = 1))
-        assertEquals(1, fetches, "a 404 on an icon is permanent for that version")
+        assertNull(loader.loadIcon("btc15m", iconAt = 1))
+        assertNull(loader.loadIcon("btc15m", iconAt = 1))
+        assertEquals(1, fetches, "a 404 on an icon is permanent for those bytes")
     }
 
     /** The graceful story against a daemon with no icon route at all. */
@@ -252,7 +300,7 @@ class AttachmentImagesTest {
     fun `without an icon fetcher loadIcon is a quiet miss, not a crash`() = runBlocking {
         var fetches = 0
         val loader = AttachmentImageLoader({ fetches++; ByteArray(0) }, SkiaImageBytesDecoder())
-        assertNull(loader.loadIcon("armap", version = 1))
+        assertNull(loader.loadIcon("armap", iconAt = 1))
         assertEquals(0, fetches, "and it does not fall back to the uploads route")
     }
 
@@ -273,7 +321,7 @@ class AttachmentImagesTest {
         )
         loader.load("/uploads/armap")
         loader.loadPath("/armap")
-        loader.loadIcon("armap", version = 1)
+        loader.loadIcon("armap", iconAt = 1)
         assertEquals(listOf("upload:armap", "path:/armap", "icon:armap"), hits)
     }
 }
