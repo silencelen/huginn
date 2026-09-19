@@ -11658,7 +11658,11 @@ const server = http.createServer(async (req, res) => {
     // called. Everything else about consoles lives in the lib, which is what
     // keeps this branch's footprint in this file to one require and one block.
     if (p === '/v1/consoles' || p.startsWith('/v1/consoles/')) {
-      const consoles = consolesLib.store(DATA_DIR, { log });
+      // `hostAddr` is [SELF_ADDR] — the address the HOST answers on, resolved
+      // once at startup. The seeded rows are written with it because the four
+      // units they name bind it and nothing else; a seed pinned to the name
+      // `huginn` addressed an interface none of them listen on (D10).
+      const consoles = consolesLib.store(DATA_DIR, { log, hostAddr: SELF_ADDR });
       const CONSOLE_ID = '([a-z0-9][a-z0-9-]{0,23})';
 
       // The list, and the FEATURE PROBE both clients use — a 404 from an older
@@ -12289,10 +12293,11 @@ setInterval(() => {
   }
 }, 15_000).unref();
 
-// Bind the tailscale address only. Resolved at startup; systemd orders us after
-// tailscaled and restarts us if the address is not yet available.
-function resolveBind() {
-  if (process.env.HUGINN_APPD_BIND) return Promise.resolve(process.env.HUGINN_APPD_BIND);
+// This host's tailnet address, asked for the way it has always been asked for.
+// Lifted out of resolveBind() because a SECOND caller needs it: the consoles
+// seed has to write an address the host can actually be reached at, and the
+// bind cannot answer that on a daemon started with HUGINN_APPD_BIND=0.0.0.0.
+function tailnetAddr() {
   return new Promise((resolve, reject) => {
     execFile('tailscale', ['ip', '-4'], { timeout: 5000 }, (err, stdout) => {
       if (err || !stdout.trim()) return reject(new Error('tailscale ip -4 failed — is tailscaled up?'));
@@ -12300,6 +12305,24 @@ function resolveBind() {
     });
   });
 }
+
+// Bind the tailscale address only. Resolved at startup; systemd orders us after
+// tailscaled and restarts us if the address is not yet available.
+function resolveBind() {
+  if (process.env.HUGINN_APPD_BIND) return Promise.resolve(process.env.HUGINN_APPD_BIND);
+  return tailnetAddr();
+}
+
+/**
+ * The address the HOST itself is reachable at, for the consoles seed (D10).
+ *
+ * ⚠ NOT THE BIND. This daemon's unit sets `HUGINN_APPD_BIND=0.0.0.0` so the
+ * tailnet, mesh and loopback routes a client pins all reach one listener —
+ * `0.0.0.0` is not something a probe or a phone can open. Empty is allowed and
+ * not fatal: lib/consoles.js then seeds the host name, which is what it always
+ * did.
+ */
+let SELF_ADDR = '';
 
 /**
  * `node huginn-appd.js --seed-headroom-defaults`
@@ -12322,6 +12345,10 @@ if (process.argv.includes('--seed-headroom-defaults')) {
 }
 
 resolveBind().then(async (bind) => {
+  // Where the consoles seed points. The bind first, because a daemon bound to a
+  // real address is already answering the question; `tailscale ip -4` only when
+  // it is a wildcard, and never fatally.
+  SELF_ADDR = consolesLib.pickHostAddr(bind) || consolesLib.pickHostAddr(await tailnetAddr().catch(() => ''));
   // Recover from a previous crash BEFORE serving: a session left at `window-size
   // manual` by a killed daemon would otherwise keep a laptop's window shrunken
   // with nothing left to release it.
