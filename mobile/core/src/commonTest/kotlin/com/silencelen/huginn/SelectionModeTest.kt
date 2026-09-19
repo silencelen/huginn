@@ -2,6 +2,7 @@ package com.silencelen.huginn
 
 import com.silencelen.huginn.data.QuickActions
 import com.silencelen.huginn.ui.SelectionAction
+import com.silencelen.huginn.ui.SelectionBarItem
 import com.silencelen.huginn.ui.SelectionMode
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -68,6 +69,64 @@ class SelectionModeTest {
         assertTrue(widened.active)
         assertEquals(SelectionMode.NONE, widened.dismiss())
         assertEquals(emptyList(), widened.dismiss().actions(hostActions))
+    }
+
+    /**
+     * THE BAR ALWAYS ENDS WITH A WAY OUT.
+     *
+     * The verbs sit in a horizontal scroll, so on a narrow phone the last of them
+     * is already off the right edge — which is where the dismiss used to be. It
+     * is an X pinned outside that scroll now, and it is part of the LIST rather
+     * than a fixture of the composable precisely so this can assert it: a bar
+     * that can be raised and not put down is the version that gets turned off.
+     */
+    @Test
+    fun `the bar offers the verbs, then Copy, then a way out`() {
+        val items = SelectionMode.begin("ls -la").barItems(hostActions)
+        assertEquals(
+            listOf(
+                SelectionBarItem.Verb(SelectionAction.EXPLAIN),
+                SelectionBarItem.Verb(SelectionAction.EXECUTE),
+                SelectionBarItem.Verb(SelectionAction.QUOTE),
+                SelectionBarItem.Verb(SelectionAction.ASK_IN_NEW_CHAT),
+                SelectionBarItem.Copy,
+                SelectionBarItem.Cancel,
+            ),
+            items,
+        )
+        assertEquals(SelectionBarItem.Cancel, items.last(), "the way out is last, at the trailing end")
+    }
+
+    @Test
+    fun `an older daemon still gets a way out`() {
+        // One verb offered, not four — and the cancel is not attached to the
+        // count. A bar with a single Quote in it is still a bar to get out of.
+        val items = SelectionMode.begin("ls -la").barItems(null)
+        assertEquals(
+            listOf(SelectionBarItem.Verb(SelectionAction.QUOTE), SelectionBarItem.Copy, SelectionBarItem.Cancel),
+            items,
+        )
+    }
+
+    @Test
+    fun `no bar means no way out to draw`() {
+        // The strip is not drawn at all over a blank or run-away selection, so a
+        // lone X floating over nothing would be a control with no subject.
+        assertEquals(emptyList(), SelectionMode.begin("   ").barItems(hostActions))
+        assertEquals(emptyList(), SelectionMode.NONE.barItems(hostActions))
+        assertTrue(SelectionMode.begin("ls").barItems(hostActions).isNotEmpty())
+    }
+
+    @Test
+    fun `the way out is the dismiss path, not a fifth verb`() {
+        // What the X maps to, stated where it can be checked: it ends the
+        // selection outright — the same NONE that Back produces — rather than
+        // staging text like every other item in the bar.
+        val mode = SelectionMode.begin("ls -la", "Yesterday 21:40")
+        val cancel = mode.barItems(hostActions).last()
+        assertTrue(cancel is SelectionBarItem.Cancel)
+        assertEquals(SelectionMode.NONE, mode.dismiss())
+        assertEquals(emptyList(), mode.dismiss().barItems(hostActions), "and the bar is gone with it")
     }
 
     /**
