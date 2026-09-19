@@ -440,6 +440,20 @@ private fun SessionConversation(
             // desktop learned this at ChatView.kt:314 and SessionView.kt:278; the
             // phone's first SelectionContainer inherits it rather than rediscovers.
             else -> Box(Modifier.weight(1f).fillMaxWidth()) {
+              // ⚠⚠ THE GATED TOOLBAR IS PROVIDED **OUTSIDE** THE SelectionContainer.
+              // It was inside for 3.1.1 through 3.5.0 and did nothing at all:
+              // SelectionContainer reads `LocalTextToolbar.current` in its OWN
+              // composition scope — `manager.textToolbar = LocalTextToolbar.current`,
+              // before it ever invokes its content lambda — so a value provided
+              // among its children is provided to nobody. The walk on the owner's
+              // Fold caught the result: one long press, Android's Copy / Select all
+              // floating over the conversation AND the app's five verbs below it.
+              // Transcript only: the composer below is a text field and keeps its
+              // own toolbar, which is the only one it has.
+              androidx.compose.runtime.CompositionLocalProvider(
+                  androidx.compose.ui.platform.LocalTextToolbar provides
+                      rememberGatedTextToolbar(selection.active),
+              ) {
               androidx.compose.foundation.text.selection.SelectionContainer {
                 androidx.compose.runtime.CompositionLocalProvider(
                     // Which session's folder the host may search when an answer
@@ -451,13 +465,6 @@ private fun SessionConversation(
                     LocalTranscriptSelection provides TranscriptSelectionHost { text, at ->
                         selection = SelectionMode.begin(text, rowTimeWords(at))
                     },
-                    // ⚠ And the platform's own Copy / Select all popup is held
-                    // back while that bar is up — one press raised BOTH, with
-                    // Android's floating over the conversation on top of the
-                    // app's. See GatedTextToolbar. Transcript only: the composer
-                    // below is a text field and keeps its own toolbar.
-                    androidx.compose.ui.platform.LocalTextToolbar provides
-                        rememberGatedTextToolbar(selection.active),
                 ) {
               LazyColumn(
                 state = listState,
@@ -504,6 +511,7 @@ private fun SessionConversation(
                 }
               }
                 }
+              }
               }
             }
         }
