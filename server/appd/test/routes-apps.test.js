@@ -204,26 +204,97 @@ test('the list route exists, which is how a client knows the feature is here', a
     `this suite reached the daemon on 127.0.0.1, so it is in the set: ${JSON.stringify(body.clientAddresses)}`);
 });
 
-test('the same bodies answer on /v1/consoles, which is an alias for one release', async () => {
-  // ⚠ DECISION 56. An un-updated client must not meet a 404 where a whole
-  // surface used to be — but there is exactly ONE body, not an old shape kept
-  // alive on an old path, because two shapes on two paths is how a rename
-  // becomes permanent.
-  const fresh = await api('/v1/apps');
+test('/v1/consoles answers the 3.4 BODY, key for key against a capture of the old contract', async () => {
+  // ⚠⚠ DECISION 56, AND THE WHOLE POINT OF KEEPING THE PATH. An un-updated app
+  // 3.5.x or desktop 1.5.x still draws its Consoles page off this route. If the
+  // alias answered the NEW body, `consoles` would have become `apps` underneath
+  // those clients and every one of them would decode an EMPTY list — a feature
+  // that had silently lost its contents, which is worse than the 404 the alias
+  // exists to avoid, because a 404 at least hides the surface.
+  //
+  // The reference is the body CAPTURED FROM THE OLD CONTRACT — the same fixture
+  // the Kotlin side decodes in its own tests. Nothing in this daemon can run the
+  // 3.4 code any more, so a shape assertion against the module's own constants
+  // would only prove the module agrees with itself.
+  const captured = JSON.parse(fs.readFileSync(
+    path.join(__dirname, '..', '..', '..', 'mobile', 'app', 'src', 'test', 'resources', 'consoles.json'), 'utf8'));
+
   const alias = await api('/v1/consoles');
   assert.equal(200, alias.status);
-  assert.deepEqual(Object.keys(fresh.body).sort(), Object.keys(alias.body).sort());
-  assert.deepEqual(fresh.body.apps.map((a) => a.id), alias.body.apps.map((a) => a.id));
-  assert.equal(fresh.body.max, alias.body.max);
-  assert.ok(!('consoles' in alias.body), 'the alias is the ROUTE, not the 3.4 body');
+  assert.deepEqual(Object.keys(captured), Object.keys(alias.body),
+    'the list body, key for key and in order — a set comparison would pass a body that had grown a field');
+  assert.ok(Array.isArray(alias.body.consoles) && alias.body.consoles.length, 'and the rows are under `consoles`');
+  assert.deepEqual(Object.keys(captured.consoles[0]), Object.keys(alias.body.consoles[0]),
+    'and every row, key for key');
 
-  // And every id-bearing route under it, not just the list.
+  // The list-level words the old copy hangs on, and the card that is gone.
+  assert.equal('host', alias.body.reachableFrom);
+  assert.equal(appsLib.PROBE_INTERVAL_MS, alias.body.probeIntervalMs);
+  // ⚠ NULL, NOT A SYNTHESISED CARD. Decision 55 deleted it; a daemon that kept
+  // inventing one would hand an old client four root commands computed from a
+  // belief this version no longer holds. `ConsoleApproval?` is nullable at
+  // desktop-v1.5.1, so the card simply does not draw.
+  assert.equal(null, alias.body.approval);
+
+  // ⚠ THE NEW FIELDS ARE DROPPED, not merely ignored. The old clients are
+  // `ignoreUnknownKeys = true` and would tolerate them; "the alias answers the
+  // 3.4 body" is only checkable if it is exactly true.
+  for (const gone of ['unit', 'icon', 'reachable']) {
+    assert.ok(!(gone in alias.body.consoles[0]), `${gone} is not a field the 3.4 contract has`);
+  }
+  assert.ok(!('apps' in alias.body) && !('retrofitApplied' in alias.body) && !('clientAddresses' in alias.body));
+
+  // The same rows, the same order, under the other name.
+  const fresh = await api('/v1/apps');
+  assert.deepEqual(fresh.body.apps.map((a) => a.id), alias.body.consoles.map((c) => c.id));
+});
+
+test('every id-bearing route under the alias answers, in the 3.4 shape', async () => {
   const probe = await api('/v1/consoles/armap/probe', { method: 'POST' });
   assert.equal(200, probe.status, JSON.stringify(probe.body));
   assert.equal('armap', probe.body.id);
-  assert.equal(404, (await api('/v1/consoles/armap/icon')).status, 'the icon route too — 404 because nothing cached one');
+  assert.deepEqual(appsLib.LEGACY_ROW_FIELDS.concat('reachableFrom'), Object.keys(probe.body),
+    'a single-row answer is the old row too, or an editor decodes one shape and a list another');
   assert.equal(404, (await api('/v1/consoles/nope')).status, 'and an unknown route under the alias is still 404');
   assert.equal(404, (await api('/v1/apps/nope')).status);
+});
+
+test('a 409 under the alias carries the row as `console`, not `app`', async () => {
+  // ConsoleConflict at desktop-v1.5.1 is `{error, console}`. An editor that
+  // collided has to show what it collided WITH, and a key it cannot read is a
+  // refusal with nothing in it.
+  const current = rowOf(await list(), 'alive');
+  const r = await api('/v1/consoles/alive', {
+    method: 'PATCH',
+    body: JSON.stringify({ version: current.version - 1, name: 'Stale' }),
+  });
+  assert.equal(409, r.status);
+  assert.ok(r.body.console, 'the old key');
+  assert.ok(!('app' in r.body), 'and only the old key');
+  assert.equal(current.name, r.body.console.name);
+  assert.deepEqual(appsLib.LEGACY_ROW_FIELDS.concat('reachableFrom'), Object.keys(r.body.console));
+
+  // And the new path still uses the new one.
+  const fresh = await api('/v1/apps/alive', {
+    method: 'PATCH',
+    body: JSON.stringify({ version: current.version - 1, name: 'Stale' }),
+  });
+  assert.equal(409, fresh.status);
+  assert.ok(fresh.body.app && !('console' in fresh.body));
+});
+
+test('a 422 under the alias is the same 422, because an old client shows the error string', async () => {
+  // It has no field for `reachable` and ignores it — but the sentence names the
+  // addresses that failed, so the refusal still explains itself on a client that
+  // predates the reason for it.
+  const r = await api('/v1/consoles', {
+    method: 'POST',
+    timeoutMs: 20_000,
+    body: JSON.stringify({ name: 'Old client add', url: `http://127.0.0.1:${hangPort}/` }),
+  });
+  assert.equal(422, r.status, JSON.stringify(r.body));
+  assert.ok(/does not answer/.test(r.body.error), r.body.error);
+  assert.equal(null, rowOf(await list(), 'old-client-add'), 'and nothing was stored');
 });
 
 test('every row carries the probe fields, with null where there has been no observation', async () => {

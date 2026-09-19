@@ -11664,10 +11664,16 @@ const server = http.createServer(async (req, res) => {
     // machine that enrols under a scope lattice, an app is an address
     // (lib/apps.js opens with the whole argument).
     //
-    // ⚠ `/v1/consoles*` IS AN ALIAS FOR ONE RELEASE (decision 56) and answers
-    // THE SAME BODIES, not the old ones. It keeps a client that has not been
-    // updated off a 404 while it is updated; it does not keep the 3.4 shape
-    // alive, because two shapes on two paths is how a rename becomes permanent.
+    // ⚠⚠ `/v1/consoles*` IS AN ALIAS FOR ONE RELEASE (decision 56) AND IT
+    // ANSWERS THE 3.4 BODY. That is the whole point of keeping it: an
+    // un-updated app 3.5.x or desktop 1.5.x still draws its Consoles page.
+    // Answering the NEW body under the old path would rename `consoles` to
+    // `apps` underneath those clients, and every one of them would decode an
+    // empty list and show a feature that had silently lost its contents — worse
+    // than the 404 the alias exists to avoid, because a 404 at least hides the
+    // surface. One handler, one set of rules, two renderings at the very edge:
+    // [appsLib.legacyConsoleList] and [appsLib.legacyConsoleRow], and the 409
+    // key. Nothing else forks.
     //
     // ⚠ NOTHING IN HERE RUNS ANYTHING. The rebind and the heimdall firewall
     // lines are the OWNER's to run in a netplan session (decision 47); since
@@ -11681,7 +11687,13 @@ const server = http.createServer(async (req, res) => {
       || p === '/v1/consoles' || p.startsWith('/v1/consoles/')) {
       // The alias, folded into one path before anything matches on it — so there
       // is exactly one handler per route and no way for the two to drift.
-      const ap = p.startsWith('/v1/consoles') ? `/v1/apps${p.slice('/v1/consoles'.length)}` : p;
+      const alias = p.startsWith('/v1/consoles');
+      const ap = alias ? `/v1/apps${p.slice('/v1/consoles'.length)}` : p;
+      // The two renderings. `row` is what a single-app answer carries; `conflict`
+      // is the key a 409 puts the current row under, which the old client reads
+      // as `console` (ConsoleConflict at desktop-v1.5.1) and the new one as `app`.
+      const wire = (row) => (alias ? appsLib.legacyConsoleRow(row) : row);
+      const conflictKey = alias ? 'console' : 'app';
       // `hostAddr` is [SELF_ADDR] — the address the HOST answers on, resolved
       // once at startup. The seeded rows are written with it because the four
       // units they name bind it and nothing else; a seed pinned to the name
@@ -11700,6 +11712,12 @@ const server = http.createServer(async (req, res) => {
       // `up:null` / `reachable.ok:null` where there has never been one.
       if (req.method === 'GET' && ap === '/v1/apps') {
         apps.refreshSoon();
+        // ⚠ `approval: null`, not a synthesised card. Decision 55 deleted it,
+        // and a daemon that kept inventing one would be handing an old client
+        // four root commands computed from a belief this version no longer holds
+        // (the D11 exemption, the hard-coded source address). The field is
+        // nullable in the client that reads it, so the card simply does not draw.
+        if (alias) return sendJson(res, 200, appsLib.legacyConsoleList(apps.rows()));
         return sendJson(res, 200, {
           apps: apps.rows(),
           max: appsLib.MAX_APPS,
@@ -11720,11 +11738,15 @@ const server = http.createServer(async (req, res) => {
       if (req.method === 'POST' && ap === '/v1/apps') {
         const body = await readJsonBody(req, 16 * 1024);
         const r = await apps.add(body);
+        // The 422 body is the same on both paths. An old client has no field for
+        // `reachable` and ignores it, but it DOES show the daemon's `error`
+        // string, which is the sentence naming the addresses that failed — so
+        // the refusal still explains itself on a client that predates it.
         if (!r.ok && r.status === 422) return sendJson(res, 422, { error: r.error, reachable: r.reachable });
-        if (!r.ok && r.status === 409) return sendJson(res, 409, { error: r.error, app: r.app });
+        if (!r.ok && r.status === 409) return sendJson(res, 409, { error: r.error, [conflictKey]: wire(apps.row(r.app.id)) });
         if (!r.ok) return sendErr(res, r.status || 400, r.error);
         log(`apps: added ${r.app.id} (${r.app.url})`);
-        return sendJson(res, 201, apps.row(r.app.id));
+        return sendJson(res, 201, wire(apps.row(r.app.id)));
       }
 
       const probeMatch = ap.match(new RegExp(`^/v1/apps/${APP_ID}/probe$`));
@@ -11735,7 +11757,7 @@ const server = http.createServer(async (req, res) => {
         // and the favicon is re-fetched if it is due one.
         const row = await apps.probeNow(probeMatch[1]);
         if (!row) return sendErr(res, 404, 'no such app');
-        return sendJson(res, 200, row);
+        return sendJson(res, 200, wire(row));
       }
 
       // The cached favicon (decision 53). Served from DATA_DIR, never proxied:
@@ -11778,9 +11800,12 @@ const server = http.createServer(async (req, res) => {
           // 409 CARRIES THE CURRENT ROW, not just a sentence: the editor that
           // collided needs to show what it collided WITH, which is the contract
           // saveScratchpad already knows how to adopt as an answer.
-          if (!r.ok && r.status === 409) return sendJson(res, 409, { error: r.error, app: r.app });
+          // A FULL ROW, not the bare stored record: the editor that collided has
+          // to render what it collided with, and a row missing its probe fields is
+          // a row that draws as never-observed on a console that is up.
+          if (!r.ok && r.status === 409) return sendJson(res, 409, { error: r.error, [conflictKey]: wire(apps.row(id)) });
           if (!r.ok) return sendErr(res, r.status || 400, r.error);
-          return sendJson(res, 200, apps.row(id));
+          return sendJson(res, 200, wire(apps.row(id)));
         }
         if (req.method === 'DELETE') {
           const r = apps.remove(id);
@@ -11789,7 +11814,7 @@ const server = http.createServer(async (req, res) => {
           return sendJson(res, 200, { ok: true });
         }
       }
-      return sendErr(res, 404, 'no such apps route');
+      return sendErr(res, 404, alias ? 'no such consoles route' : 'no such apps route');
     }
 
 
