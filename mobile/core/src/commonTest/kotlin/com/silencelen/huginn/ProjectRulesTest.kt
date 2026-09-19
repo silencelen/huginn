@@ -614,4 +614,78 @@ class ProjectRulesTest {
         assertNull(ProjectRules.leadWords(row().copy(lead = null)))
         assertNull(ProjectRules.leadWords(row().copy(lead = ProjectLead())))
     }
+
+    // ------------------------------------------- membership, edited by hand
+
+    /**
+     * ⚠ THE LEAD CANNOT BE DROPPED. The daemon answers 409 — *"the lead is the
+     * project — delete the project instead"* — and this is what stops the verb
+     * being OFFERED, which is the difference between a control and a trap. A
+     * project whose lead had been dropped would keep a brief, a manifest and a
+     * peer namespace all belonging to a session no longer in it.
+     */
+    @Test
+    fun `the lead is not droppable, and everyone else is`() {
+        assertFalse(ProjectRules.canDrop(live("lead", lead = true)))
+        assertTrue(ProjectRules.canDrop(live("firmware")))
+        // Belt and braces: the role word alone disqualifies it, in case a daemon
+        // ever sends the lead's row without the flag.
+        assertFalse(ProjectRules.canDrop(live("lead", lead = false)))
+    }
+
+    /**
+     * What "Add member" may offer: everything running that this project does not
+     * already hold.
+     *
+     * ⚠ IT CANNOT KNOW ABOUT OTHER PROJECTS AND MUST NOT PRETEND TO. A session in
+     * a different cluster looks free from here; the daemon holds that join and
+     * answers 409 NAMING the other project, which is the entire fix — and far
+     * better than a row quietly missing from a picker with no explanation.
+     */
+    @Test
+    fun `adoptable is every live session this project does not already hold`() {
+        val members = listOf(live("lead", lead = true), live("firmware"))
+        val running = listOf("statusflap-lead", "statusflap-firmware", "scratch", "jtyper")
+        assertEquals(listOf("scratch", "jtyper"), ProjectRules.adoptable(running, members))
+    }
+
+    @Test
+    fun `a session in another project is still offered, because only the daemon knows`() {
+        val members = listOf(live("lead", lead = true))
+        assertEquals(
+            listOf("someone-elses-firmware"),
+            ProjectRules.adoptable(listOf("statusflap-lead", "someone-elses-firmware"), members),
+        )
+    }
+
+    @Test
+    fun `a blank session name is never offered`() {
+        assertEquals(listOf("scratch"), ProjectRules.adoptable(listOf("", "   ", "scratch"), emptyList()))
+    }
+
+    /**
+     * The role grammar the adopt form pre-checks with is the daemon's, spelled
+     * out as a literal — `lib/projects.js roleProblem`, in another language.
+     */
+    @Test
+    fun `the adopt form refuses what the daemon would refuse`() {
+        val taken = listOf("firmware")
+        assertNull(ProjectRules.roleProblem("pcb", taken))
+        assertEquals("a member needs a role", ProjectRules.roleProblem("  ", taken))
+        assertEquals("\"lead\" is the lead session's own role", ProjectRules.roleProblem("lead", taken))
+        assertEquals("there is already a member with that role", ProjectRules.roleProblem("firmware", taken))
+        // The grammar is `^[a-z0-9][a-z0-9-]{0,15}$` — a dot is the interesting
+        // one: tmux rewrites it to '_' AND STILL EXITS 0, so the session that
+        // comes back is not the one that was asked for.
+        assertTrue(ProjectRules.roleProblem("fw.old", taken)!!.isNotBlank())
+        assertTrue(ProjectRules.roleProblem("Firmware", taken)!!.isNotBlank())
+        assertTrue(ProjectRules.roleProblem("a".repeat(17), taken)!!.isNotBlank())
+    }
+
+    /** The twelve-member cap, checked before the trip rather than after it. */
+    @Test
+    fun `the cap is checked before the request`() {
+        assertNull(ProjectRules.capProblem(11, 1))
+        assertEquals("a project holds at most 12 members", ProjectRules.capProblem(12, 1))
+    }
 }
