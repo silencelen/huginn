@@ -194,6 +194,10 @@ fun SessionView(store: AppStore, name: String) {
     val screen by controller.screen.collectAsState()
     val gone by controller.gone.collectAsState()
     val sessions by store.sessions.collectAsState()
+    // ⚠ READ BEFORE THE `gone` EFFECT, which needs the title this row carries: by
+    // the time that effect runs the row is on its way out of the list, and the
+    // snapshot the composition already has is the last honest copy of it.
+    val row = sessions.firstOrNull { it.name == name }
 
     // The session ended under the viewer. Nothing here can be true any more, so
     // leave rather than showing a pane that no longer exists. Its draft goes with
@@ -202,11 +206,16 @@ fun SessionView(store: AppStore, name: String) {
     LaunchedEffect(gone) {
         if (gone) {
             store.drafts.clear(draftKey)
-            store.openSession(null)
+            // ⚠ SAID, NOT JUST CLOSED. `openSession(null)` alone dropped the pane
+            // to the generic "No session open" state on top of a transcript
+            // somebody was reading, with nothing to say what had happened — and a
+            // wrapped-up session is not archived, so the conversation was then
+            // unreachable from the UI. The title goes with it because the name is
+            // a tmux handle and the title is what the reader was reading.
+            store.noteSessionEnded(name, page?.title ?: row?.title)
         }
     }
 
-    val row = sessions.firstOrNull { it.name == name }
     val hostHeadroom by store.headroom.collectAsState()
 
     // The state mark counts down to a reset, and this header can sit open all
