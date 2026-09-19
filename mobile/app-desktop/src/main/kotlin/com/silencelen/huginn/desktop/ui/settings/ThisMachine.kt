@@ -54,7 +54,7 @@ internal fun DeviceSection(store: AppStore) {
     val root by settings.deviceRoot.collectAsState()
     val status by store.deviceRunner.status.collectAsState()
 
-    FormHeader("Give Huginn access to this PC")
+    FormHeader("Let huginn run work on this computer")
 
     Muted(
         "Lets huginn run work here, in this machine's own context. Nothing listens " +
@@ -238,7 +238,7 @@ internal fun LocalServeSection(store: AppStore) {
     // the truth changed; re-ask the manager rather than trusting the last log line.
     LaunchedEffect(busy) { if (!busy) refresh() }
 
-    FormHeader("Serve local AI from this PC")
+    FormHeader("Serve local AI from this computer")
     Muted(
         "Runs small AI models here and offers them in huginn's chat model menus. " +
             "Everything serves on this machine only (127.0.0.1), key-gated, and can " +

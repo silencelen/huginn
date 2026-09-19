@@ -435,7 +435,7 @@ private fun DeleteProjectDialog(
         title = { Text("Delete ${ProjectRules.label(project)}?", style = MaterialTheme.typography.titleSmall) },
         text = {
             Text(
-                "Huginn forgets the project: its members, the brief and the lead's proposal. " +
+                "huginn forgets the project: its members, the brief and the lead's proposal. " +
                     "What happens to the ${project.memberCount + 1} sessions is up to you — " +
                     "leaving them running keeps every transcript exactly where it is, in the " +
                     "Sessions list.",
