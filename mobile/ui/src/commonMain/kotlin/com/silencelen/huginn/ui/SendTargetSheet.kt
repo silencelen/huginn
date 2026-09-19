@@ -116,7 +116,7 @@ fun SendTargetList(
                             modifier = Modifier.size(20.dp),
                         )
                     },
-                    title = c.title ?: "Untitled chat",
+                    title = ChatRules.title(c.title) ?: "Untitled chat",
                     subtitle = c.lastSnippet ?: "",
                     onClick = { onChat(c.id) },
                 )

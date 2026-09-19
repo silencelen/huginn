@@ -58,6 +58,7 @@ import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import com.silencelen.huginn.ui.ChatRules
 import com.silencelen.huginn.data.DraftBook
 import com.silencelen.huginn.data.HuginnClient
 import com.silencelen.huginn.data.Status
@@ -276,7 +277,7 @@ fun ChatView(
     Row(Modifier.fillMaxSize()) {
     Column(Modifier.weight(1f).fillMaxHeight()) {
         ChatTopBar(
-            title = detail?.title ?: "Untitled",
+            title = ChatRules.title(detail?.title) ?: "Untitled",
             running = running,
             activity = activity,
             mode = detail?.mode,
