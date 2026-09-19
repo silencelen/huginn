@@ -573,9 +573,32 @@ function diskGate(needBytes, freeBytes) {
   };
 }
 
+/**
+ * Free space where the tier WOULD live.
+ *
+ * ⚠ IT WALKS UP UNTIL SOMETHING EXISTS, and "unknown" is never read as "zero".
+ * This used to statfs the local dir, fall back to its PARENT, and return 0 if
+ * neither was there — and 0 fails the gate, so `huginn local plan` on a machine
+ * that has installed nothing (which is the entire audience for `plan`: it is
+ * documented as "what `on` would install here, without installing anything")
+ * answered `have 0.0 GiB free … refused: not enough disk` and exited 1. On Linux
+ * ~/.config usually exists and the one-step fallback hid it; on WINDOWS
+ * %USERPROFILE%\.config typically does NOT exist until something creates it, and
+ * Windows is a supported serving platform. Every ancestor is tried now, up to
+ * the root, because the first one that exists is on the same filesystem the
+ * install would land on.
+ */
 function freeBytes() {
-  try { const s = fs.statfsSync(localDir()); return s.bavail * s.bsize; }
-  catch { try { const s = fs.statfsSync(path.dirname(localDir())); return s.bavail * s.bsize; } catch { return 0; } }
+  let dir = path.resolve(localDir());
+  for (;;) {
+    try { const s = fs.statfsSync(dir); return s.bavail * s.bsize; } catch { /* not there yet */ }
+    const up = path.dirname(dir);
+    // dirname() of a root is the root itself: that is the end of the walk, and
+    // a filesystem whose root cannot be statfs'd is a machine with nothing to
+    // report rather than a machine with no space.
+    if (up === dir) return 0;
+    dir = up;
+  }
 }
 
 // ------------------------------------------------------------- downloads
