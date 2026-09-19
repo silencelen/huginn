@@ -1,5 +1,25 @@
 # Huginn changelog
 
+## 3.5.1 — 2026-09-18
+
+A read-only walk of 3.5.0 on the Fold, and what it found.
+
+- **A table in an answer draws as a table**, scrolling sideways on its own instead of spilling raw
+  pipes down the conversation.
+- **A long press raises the app's own verbs and nothing else.** Android's Copy / Select all popup no
+  longer sits on top of them — the gate that was meant to hold it back since 3.1.1 was provided
+  inside the selection container, which reads its toolbar before its content, so it never applied.
+- **An old chat whose messages the host has swept says so**, instead of opening as if it had never
+  run. An archived session's summary reads as a sentence instead of showing its markdown markers.
+- **A long suggested reply trims** and the next suggestion shows beside it; the extra-usage card says
+  "turned on" instead of trailing a stray "on"; a round that needs you says so in the colour of its
+  mark; a system line for a finished task appears once (appd 3.4.1).
+- **The Screen tab no longer reshapes the pane just by being open.** The phone claims the tmux
+  window only while live typing is on, releases it the moment you leave, and no longer sends a
+  release for sessions it never leased.
+- **The route form suggests a placeholder** instead of pre-filling an address; the full-size image
+  viewer can no longer crash a selection.
+
 ## 3.5.0 — 2026-09-18
 
 Wave 3: Projects and Consoles, and the phone half of a 99-finding edge-case hunt.
