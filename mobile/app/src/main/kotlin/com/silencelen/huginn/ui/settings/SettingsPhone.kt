@@ -129,6 +129,11 @@ fun phoneProbe(f: PhoneSettingsFacts): SettingsProbe = SettingsProbe(
     savedAccounts = f.savedAccounts,
     diagnostics = true,
     selfUpdate = true,
+    // ⚠ THE SAVED SWITCH, NOT THE LIVE RUN STATE. The form draws the model
+    // picker and the quiet-hours field `if (draft.keepAwake)`, and the draft is
+    // seeded from exactly this field — so this is the fact that decides whether
+    // those two catalog rows exist at all.
+    keepAwake = f.headroomSettings?.keepAwake == true,
 )
 
 /**
