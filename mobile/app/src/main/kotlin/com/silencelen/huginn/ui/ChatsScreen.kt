@@ -2,6 +2,8 @@ package com.silencelen.huginn.ui
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -147,7 +149,15 @@ fun ChatsScreen(
             onDismissRequest = { showNew = false },
             title = { Text("New chat") },
             text = {
-                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                // ⚠⚠ P-03. IT DID NOT SCROLL. Eleven radios, ten labels, and the
+                // eleventh option sat under the Ask / Act row where no gesture
+                // reached it — so RAGNAR's three local models, including the only
+                // 30B in the fleet, could not be chosen at all. An AlertDialog
+                // caps its own height and does NOT scroll its text slot for you.
+                Column(
+                    Modifier.verticalScroll(rememberScrollState()),
+                    verticalArrangement = Arrangement.spacedBy(4.dp),
+                ) {
                     Text(
                         "Ask: reasoning and memory, no tools. Act: also reads and edits files, runs commands, fetches the web.",
                         style = MaterialTheme.typography.bodyMedium,
@@ -175,26 +185,40 @@ fun ChatsScreen(
                         // Absent, not disabled: a selectable host the daemon
                         // always refuses is a trap, and its "-llm" credential
                         // name is shown nowhere else.
-                        devices.filter { it.scope != "generate" }.forEach { d ->
+                        //
+                        // ⚠ REACHABLE FIRST (P-03). The picker scrolls now, but a
+                        // list that puts three dead machines above the live one is
+                        // still hiding the answer. `ModelLabels.chatHosts` owns
+                        // the rule and the order is asserted in :core.
+                        ModelLabels.chatHosts(devices).forEach { (d, reachable) ->
                             HostChoice(
                                 label = d.name,
                                 // The reason it cannot be picked, not just that it
                                 // cannot: "asleep" and "read-only" need different
                                 // actions from whoever is reading.
                                 detail = when {
-                                    !d.online -> "not reachable"
+                                    !reachable -> "not reachable"
                                     d.locked -> "locked \u2014 Ask only"
                                     else -> "${d.platform} \u00b7 ${d.effectiveScope}"
                                 },
                                 selected = newHost == d.id,
-                                enabled = d.online,
+                                enabled = reachable,
                                 onClick = { newHost = d.id },
                             )
                         }
                         // One tap makes the chat: a local row IS the machine
                         // choice and ask is forced, so there is no second
-                        // question to ask. Only what is serving RIGHT NOW.
-                        val localRows = models.filter { it.family == "local" && it.available }
+                        // question to ask.
+                        //
+                        // ⚠⚠ P-21. THE MACHINE AND ITS MODELS MUST AGREE. This
+                        // used to filter on the model row's own `available`,
+                        // which reflects the SERVING credential alone — so
+                        // DATATREEX was greyed as "not reachable" four
+                        // millimetres above its own models drawn live and
+                        // pickable. And an EMBEDDING model was offered as
+                        // something to have a conversation with. Both rules are
+                        // `ModelLabels.localChatRows`, tested in :core.
+                        val localRows = ModelLabels.localChatRows(models, devices)
                         if (localRows.isNotEmpty()) {
                             Text(
                                 "LOCAL AI",
@@ -202,12 +226,13 @@ fun ChatsScreen(
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 modifier = Modifier.padding(top = 10.dp),
                             )
-                            localRows.forEach { m ->
+                            localRows.forEach { (m, reachable) ->
                                 HostChoice(
                                     label = m.display,
-                                    detail = "local model · Ask-only · answers on its machine",
+                                    detail = if (reachable) "local model · Ask-only · answers on its machine"
+                                    else "not reachable",
                                     selected = false,
-                                    enabled = true,
+                                    enabled = reachable,
                                     onClick = { showNew = false; onNewLocal(m.id) },
                                 )
                             }
