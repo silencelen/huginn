@@ -1,5 +1,6 @@
 package com.silencelen.huginn.ui.settings
 
+import com.silencelen.huginn.data.PinnedRoute
 import com.silencelen.huginn.data.RouteBook
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -219,4 +220,53 @@ class SettingsRowsTest {
 
     private fun refuses(s: String?) =
         assertTrue(!s.isNullOrBlank(), "a refused address must come back with a sentence")
+
+    // ------------------------------------------- the candidate that is OFFERED
+
+    /**
+     * ⚠ OFFERED, NEVER TAKEN. `RouteResolver.Choice.Stay.Candidate` exists
+     * because moving to a plain-http address NOBODY TYPED hands that host the
+     * daemon's bearer in cleartext — and the two addresses an upgrade seeds are
+     * hard-coded literals in a public repo. The resolver has always refused the
+     * move; until now no shell said so, which made the refusal indistinguishable
+     * from nothing having answered at all.
+     *
+     * The sentence says "answered", not "is better": the only fact there is
+     * about this address is that huginn replied on it.
+     */
+    @Test
+    fun `the offer names the route and asks`() {
+        val candidate = PinnedRoute(id = "yggdrasil", name = "Yggdrasil", url = "http://192.168.2.117:8787")
+        assertEquals("Yggdrasil answered — use it?", routeCandidateOffer(candidate))
+    }
+
+    /** A seeded pin with no name falls back to its address, never to a blank. */
+    @Test
+    fun `an unnamed candidate is named by its address`() {
+        val candidate = PinnedRoute(id = "x", name = "", url = "http://192.168.2.117:8787")
+        assertEquals("http://192.168.2.117:8787 answered — use it?", routeCandidateOffer(candidate))
+    }
+
+    /**
+     * ⚠ ITS OWN VERB. Adopting an offer is not the same gesture as choosing
+     * between addresses the owner already trusts: [RouteListActions.activate]
+     * moves between known pins, and this one GRANTS TRUST. A shell that has not
+     * wired it offers nothing and adopts nothing, which is the behaviour every
+     * client had before the case existed.
+     */
+    @Test
+    fun `a shell that has not wired the offer adopts nothing`() {
+        var activated: String? = null
+        val actions = RouteListActions(activate = { activated = it })
+        actions.useCandidate("yggdrasil")
+        assertNull(activated, "the default must not quietly fall through to activate")
+    }
+
+    @Test
+    fun `a wired shell adopts exactly the offered route`() {
+        var used: String? = null
+        val actions = RouteListActions(useCandidate = { used = it })
+        actions.useCandidate("yggdrasil")
+        assertEquals("yggdrasil", used)
+    }
 }
