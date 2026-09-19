@@ -2,7 +2,6 @@ package com.silencelen.huginn.ui
 
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material3.ExtendedFloatingActionButton
@@ -54,8 +53,8 @@ fun ProjectsScreen(
 
     // Pushed destination, no bar beneath it: the system navigation inset is this
     // screen's to pay or "New project" sits on the gesture bar. Same rule as
-    // Apps, held by `ListFabClearanceTest`.
-    Box(Modifier.fillMaxSize().navigationBarsPadding()) {
+    // Apps, one spelling in Insets.kt, held by `ListFabClearanceTest`.
+    Box(Modifier.fillMaxSize().systemNavPadding()) {
         ProjectsListView(
             projects = projects,
             nowMs = nowMs,

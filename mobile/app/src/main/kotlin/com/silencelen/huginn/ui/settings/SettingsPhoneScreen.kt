@@ -4,7 +4,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.navigationBarsPadding
+import com.silencelen.huginn.ui.imeAndSystemNavPadding
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -178,7 +178,15 @@ fun SettingsPhoneScreen(
         )
     }
 
-    Column(Modifier.fillMaxSize().navigationBarsPadding()) {
+    // ⚠⚠ THE KEYBOARD AS WELL AS THE BAR, and the keyboard half is a fix. The
+    // add-route form put Name last above the IME and the Address field and the
+    // Add button behind it, and the page would not scroll because the scroll
+    // container's viewport still included the covered strip — so the
+    // bring-into-view a focused field asks for had nothing to do. Two taps aimed
+    // at Address landed back in Name and concatenated the URL onto the name
+    // (`rv-route-testhttp://127.0.0.1:8787`). With the viewport ending where the
+    // keyboard begins, focus scrolls the field into it. See Insets.kt.
+    Column(Modifier.fillMaxSize().imeAndSystemNavPadding()) {
         SettingsScaffold(
             probe = probe,
             surface = SettingsSurface.PHONE,
