@@ -1252,14 +1252,46 @@ function dropMessage(reason, entry = {}) {
 }
 
 /**
+ * What a client is owed when a message went into somebody's draft anyway.
+ *
+ * ⚠ DECISION 59 (2026-09-19). The ceiling stays where `draftHold` puts it — 60 s
+ * after the last live-view keystroke — because a hold a person cannot see the end
+ * of is the same bug as a message that vanishes. But the daemon KNOWS when it
+ * pasted in front of somebody's sentence (`draftOverdueLogLine` is written from
+ * exactly that verdict) and until now the only place it said so was the journal.
+ * A person who was typing deserves to be told that their next message went in on
+ * top of it, in the app, where they are.
+ *
+ *   at        epoch SECONDS, like every other timestamp outside /v1/headroom
+ *   waitedMs  how long the message had been held when it went
+ *   composer  the first 120 characters of the draft it went into, so the notice
+ *             can show what it landed on rather than asserting it abstractly
+ *
+ * Stored in ms and rendered here, so the caller keeps one clock.
+ */
+function intoDraftView(rec, max = 120) {
+  if (!rec || !rec.at) return null;
+  return {
+    at: Math.floor(rec.at / 1000),
+    waitedMs: Math.max(0, Math.round(Number(rec.waitedMs) || 0)),
+    composer: String(rec.composer || '').replace(/\s+/g, ' ').trim().slice(0, max),
+  };
+}
+
+/**
  * The `GET /v1/sessions/:name/typing` body, from in-memory state only.
  *
  * `waitedMs` is how long the HEAD of the queue has been waiting — the client's
  * half of "late beats lost": a message held ninety seconds behind a turn can say
  * so, instead of looking to its sender like nothing happened. Zero when nothing
  * is queued, and never negative however the clock moves.
+ *
+ * `intoDraft` is the LAST delivery to this session that landed in somebody's
+ * draft, or null. It deliberately outlives the queue struct — that is reaped the
+ * moment the queue empties, which is the same moment the notice becomes worth
+ * reading — so the caller passes it in separately.
  */
-function typingSnapshot(q, nowMs = Date.now()) {
+function typingSnapshot(q, nowMs = Date.now(), intoDraft = null) {
   const head = q && Array.isArray(q.entries) && q.entries.length ? q.entries[0] : null;
   return {
     queued: q && Array.isArray(q.entries) ? q.entries.length : 0,
@@ -1267,7 +1299,12 @@ function typingSnapshot(q, nowMs = Date.now()) {
     lastError: (q && q.lastError) || null,
     blockedBy: q && q.entries && q.entries.length ? (q.blockedBy || null) : null,
     waitedMs: head && head.at ? Math.max(0, nowMs - head.at) : 0,
+    intoDraft: intoDraftView(intoDraft),
     serverTime: Math.floor(nowMs / 1000),
+    // 3.6.0: the same instant in SECONDS under a name that says so. `serverTime`
+    // above is already seconds HERE and milliseconds on /v1/headroom, which is
+    // the trap M3 is about; this field means the same thing on every route.
+    serverTimeSec: Math.floor(nowMs / 1000),
   };
 }
 
@@ -1287,5 +1324,5 @@ module.exports = {
   hasHumanUserRecord, kindOf,
   paneReadyForInput, paneBlocks, composerDrawn, shellPrompt, startsClaude,
   startingUp, startingUnmarked, bufferName,
-  releaseDecision, dropReason, dropMessage, dropLogLine, typingSnapshot,
+  releaseDecision, dropReason, dropMessage, dropLogLine, typingSnapshot, intoDraftView,
 };
