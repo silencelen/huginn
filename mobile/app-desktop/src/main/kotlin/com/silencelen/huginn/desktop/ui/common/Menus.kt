@@ -62,6 +62,8 @@ import com.silencelen.huginn.data.QuickActions
 import com.silencelen.huginn.data.Session
 import com.silencelen.huginn.ui.EndVerbs
 import com.silencelen.huginn.ui.ProjectRules
+import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.text.AnnotatedString
 import com.silencelen.huginn.ui.QuickActionRules
 import com.silencelen.huginn.ui.SelectionAction
 import com.silencelen.huginn.ui.VerbTone
@@ -635,7 +637,8 @@ fun WithTranscriptSelectionMenu(
     content: @Composable () -> Unit,
 ) {
     val localization = LocalLocalization.current
-    val menu = remember(verbs, actions, localization) {
+    val clipboard = LocalClipboardManager.current
+    val menu = remember(verbs, actions, localization, clipboard) {
         object : TextContextMenu {
             @Composable
             override fun Area(
@@ -648,12 +651,27 @@ fun WithTranscriptSelectionMenu(
                 // identity is what makes the toolkit throw away its cached list.
                 // See the header. `verbs`, `actions` and `localization` are fixed
                 // for the life of this object, so they cannot be keys.
-                val items = remember(state.status, textManager) {
+                val items = remember(state.status, textManager, clipboard) {
                     {
                         selectionMenu({ textManager.selectedText.text }, actions, verbs) +
                             listOfNotNull(
                                 textManager.cut?.let { ContextMenuItem(localization.cut, it) },
-                                textManager.copy?.let { ContextMenuItem(localization.copy, it) },
+                                // ⚠⚠ OUR COPY, NOT THE TOOLKIT'S (D-5). A table is
+                                // drawn cell by cell inside the SelectionContainer,
+                                // so the platform hands back every cell run
+                                // together: `PlanetMoonsEarthThe Moon…`. `TableGrid`
+                                // draws invisible row/cell marks and
+                                // `QuickActionRules.copyText` turns them back into
+                                // markdown rows — which the toolkit's own Copy
+                                // cannot do, and which would otherwise put the
+                                // zero-width marks on the clipboard verbatim.
+                                textManager.copy?.let {
+                                    ContextMenuItem(localization.copy) {
+                                        val text = QuickActionRules.copyText(textManager.selectedText.text)
+                                        if (text.isNotEmpty()) clipboard.setText(AnnotatedString(text))
+                                        state.status = ContextMenuState.Status.Closed
+                                    }
+                                },
                                 textManager.paste?.let { ContextMenuItem(localization.paste, it) },
                                 textManager.selectAll?.let { ContextMenuItem(localization.selectAll, it) },
                             )

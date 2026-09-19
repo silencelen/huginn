@@ -384,6 +384,18 @@ private fun SessionConversation(
         selection = SelectionMode.NONE
     }
 
+    // ⚠ P-06 / P-07. What the PLATFORM has selected, recorded by the gated
+    // toolbar as it changes — the only handle an Android client has on a
+    // `SelectionContainer`'s text, since the registrar and manager are internal.
+    // See `NativeSelection`, which also explains why reading it costs a clipboard
+    // round trip.
+    val nativeSelection = remember { NativeSelection() }
+    val selectionReset = rememberSelectionReset()
+    val textToolbarGate = rememberGatedTextToolbar(selection.active, nativeSelection)
+    val clipboard = androidx.compose.ui.platform.LocalClipboardManager.current
+    val clipRead: () -> String? = { clipboard.getText()?.text }
+    val clipWrite: (String) -> Unit = { clipboard.setText(androidx.compose.ui.text.AnnotatedString(it)) }
+
     // WHICH STREAM this body is showing. The main page goes on ticking
     // underneath either way: reading an agent is looking more closely at a
     // session that is still going, not leaving it.
@@ -466,9 +478,17 @@ private fun SessionConversation(
               // Transcript only: the composer below is a text field and keeps its
               // own toolbar, which is the only one it has.
               androidx.compose.runtime.CompositionLocalProvider(
-                  androidx.compose.ui.platform.LocalTextToolbar provides
-                      rememberGatedTextToolbar(selection.active),
+                  androidx.compose.ui.platform.LocalTextToolbar provides textToolbarGate,
               ) {
+              // ⚠⚠ THE ONLY WAY TO DROP A SELECTION (P-06). `SelectionContainer`'s
+              // public overload takes a modifier and its content and nothing
+              // else; the one that carries the selection and an
+              // `onSelectionChange` is internal, and so is the registrar. Keying
+              // the container disposes its manager and composes a fresh one,
+              // which is a selection that no longer exists. The list state is
+              // hoisted outside, so the scroll survives, and this only fires on a
+              // deliberate dismissal.
+              androidx.compose.runtime.key(selectionReset.value) {
               androidx.compose.foundation.text.selection.SelectionContainer {
                 androidx.compose.runtime.CompositionLocalProvider(
                     // Which session's folder the host may search when an answer
@@ -526,6 +546,7 @@ private fun SessionConversation(
                 }
               }
                 }
+              }
               }
               }
             }
@@ -624,12 +645,33 @@ private fun SessionConversation(
         SelectionActionBar(
             mode = selection,
             actions = quickActions,
+            // ⚠⚠ P-07. THE VERB ACTS ON WHAT IS HIGHLIGHTED. A long press lights
+            // one word and handed the bar the WHOLE row, so `pong-` lit and
+            // `> pong-one` staged; on a paragraph, one word lit and the whole
+            // block quoted. When the platform is holding a selection its text
+            // wins; with none — the plain long-press — the row is still the scope.
             onAct = { action, text ->
-                onSelectionAction(action, text)
+                onSelectionAction(action, nativeSelection.read(clipRead, clipWrite, keepOnClipboard = false) ?: text)
                 selection = SelectionMode.NONE
+                selectionReset.bump()
             },
-            onCopy = { onCopy(it); selection = SelectionMode.NONE },
-            onDismiss = { selection = SelectionMode.NONE },
+            onCopy = {
+                onCopy(nativeSelection.read(clipRead, clipWrite, keepOnClipboard = true) ?: it)
+                selection = SelectionMode.NONE
+                selectionReset.bump()
+            },
+            // ⚠⚠ P-06. THE X NOW CANCELS EVERYTHING THE PRESS STARTED. It used to
+            // take the app's bar down and leave the word highlighted, both amber
+            // handles on screen and Android's own Copy / Select all popup floating
+            // over the conversation; only tapping empty space cleared it.
+            // `cancelled()` takes down the popup, and the bump re-keys the
+            // SelectionContainer, which is the only way a caller can drop a
+            // selection Compose keeps in an internal manager.
+            onDismiss = {
+                selection = SelectionMode.NONE
+                textToolbarGate.cancelled()
+                selectionReset.bump()
+            },
         )
 
         Surface(color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f)) {
