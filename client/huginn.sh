@@ -477,21 +477,92 @@ _huginn_canon_name() { printf '%s' "${1,,}"; }
 # Exit: 0 = 2xx  ·  1 = an HTTP error, body holds the daemon's own `error`
 #       7 = curl never CONNECTED (code 000) or ssh itself failed - and that is
 #           the ONLY case in which a caller may fall back to raw tmux.
+#
+# ⚠ AND RC 7 IS TWO DIFFERENT FACTS, so the caller is told WHICH. "the host
+# refused the connection" and "the host is fine, the daemon is not" are a network
+# problem and a systemctl problem, and `huginn end` answered the first with "could
+# not reach huginn-appd on <host>" - blaming a daemon that was never asked, on a
+# box that was never reached, and throwing ssh's own sentence away with
+# 2>/dev/null. ssh's OWN failures exit 255 (ssh(1) "exit status"); anything else
+# non-zero is the REMOTE command's code, i.e. the connection WAS made and curl (or
+# a missing curl) is what failed.
+#
+# ⚠⚠ AND THE DIAGNOSIS RIDES THE STDOUT, NOT A VARIABLE. Every caller reads this
+# function through `$( )`, which is a SUBSHELL: a global set in here is gone by
+# the time the caller reads it (that is also why `${_HUGINN_APPD_CODE}` in the
+# `end` and `kill` fallbacks has always printed empty). So on the rc-7 path -
+# where there is no body to collide with - the first line is a marker naming
+# which half failed and the rest is whatever ssh or curl said, verbatim, for
+# _huginn_appd_why to render. The stderr is captured through a temp file for the
+# same subshell reason; with no mktemp (a stripped Termux, a busybox) the marker
+# still travels and only the quoted sentence is lost.
 _HUGINN_APPD_CODE=
 _huginn_appd() {
-  local H="${HUGINN_HOST:-huginn}" raw body data=''
+  local H="${HUGINN_HOST:-huginn}" raw body data='' rc=0 ef= cmd err=
   _HUGINN_APPD_CODE=
   [ -z "${3:-}" ] || data=" -H 'Content-Type: application/json' --data '$3'"
-  raw="$(ssh -T "$H" "curl -s -w '\n%{http_code}' -X $1$data -H \"Authorization: Bearer \$(cat /etc/huginn-appd/token 2>/dev/null)\" \"http://127.0.0.1:8787$2\"" 2>/dev/null)" || return 7
+  cmd="curl -s -w '\n%{http_code}' -X $1$data -H \"Authorization: Bearer \$(cat /etc/huginn-appd/token 2>/dev/null)\" \"http://127.0.0.1:8787$2\""
+  ef="$(mktemp "${TMPDIR:-/tmp}/huginn-ssh.XXXXXX" 2>/dev/null)" || ef=
+  if [ -n "$ef" ]; then
+    raw="$(ssh -T "$H" "$cmd" 2>"$ef")" || rc=$?
+    err="$(cat "$ef" 2>/dev/null)"
+    rm -f "$ef"
+  else
+    raw="$(ssh -T "$H" "$cmd" 2>/dev/null)" || rc=$?
+  fi
+  if [ "$rc" -ne 0 ]; then
+    if [ "$rc" -eq 255 ]; then printf '%s\n' "$_HUGINN_TRANSPORT ssh"
+    else printf '%s\n' "$_HUGINN_TRANSPORT remote"; fi
+    [ -z "$err" ] || printf '%s\n' "$err"
+    return 7
+  fi
   _HUGINN_APPD_CODE="${raw##*$'\n'}"
   body="${raw%$'\n'*}"
   # No newline at all means curl printed nothing but the status line.
   [ "$body" != "$raw" ] || body=''
   printf '%s' "$body"
+  # ⚠ AND THE STATUS RIDES HOME THE SAME WAY, for the same subshell reason: the
+  # `huginn-appd answered HTTP $_HUGINN_APPD_CODE` fallback in `end` and `kill`
+  # reads a global this function set inside a `$( )`, so it has always printed
+  # the sentence with no number in it - on exactly the refusals where the daemon
+  # sent no sentence of its own, i.e. the ones with nothing else to go on.
+  # Appended, never substituted: the body is still the body, and the marker is on
+  # its own last line where `_huginn_appd_error`'s regex cannot see it.
   case "$_HUGINN_APPD_CODE" in
-    2*)  return 0 ;;
-    000) return 7 ;;
-    *)   return 1 ;;
+    2*) return 0 ;;
+    *)  printf '\n%s http %s\n' "$_HUGINN_TRANSPORT" "$_HUGINN_APPD_CODE" ;;
+  esac
+  [ "$_HUGINN_APPD_CODE" != 000 ] || return 7
+  return 1
+}
+# The HTTP status out of what _huginn_appd printed, or empty.
+_huginn_appd_http() {
+  printf '%s' "$1" | sed -n "s/^$_HUGINN_TRANSPORT http \([0-9][0-9]*\)$/\1/p" | tail -1
+}
+# The marker _huginn_appd prints on its rc-7 path. Unlikely enough in a JSON body
+# that a caller cannot confuse the two, and defined once so the writer and the
+# reader cannot drift.
+_HUGINN_TRANSPORT='huginn-transport:'
+# Why the last _huginn_appd call could not be made, on stderr, indented under the
+# caller's own line. Nothing is invented: if ssh said something that is what
+# appears, and when nothing but curl failed, the fact that the connection WAS
+# made is itself the answer - the daemon is the suspect and systemctl is the
+# next command.
+_huginn_appd_why() {   # $1 = the host, $2 = what _huginn_appd printed
+  local first rest
+  first="${2%%$'\n'*}"
+  rest="${2#"$first"}"; rest="${rest#$'\n'}"
+  case "$first" in
+    "$_HUGINN_TRANSPORT ssh")
+      echo "huginn: could not reach the host '$1' over ssh - huginn-appd was never asked" >&2 ;;
+    *)
+      echo "huginn: $1 answered, but huginn-appd did not" >&2 ;;
+  esac
+  case "$first" in "$_HUGINN_TRANSPORT"*) ;; *) rest='' ;; esac
+  [ -z "$rest" ] || printf '%s\n' "$rest" | sed 's/^/        /' >&2
+  case "$first" in
+    "$_HUGINN_TRANSPORT ssh") ;;
+    *) echo "        (ssh $1 systemctl status huginn-appd)" >&2 ;;
   esac
 }
 # The daemon's own sentence out of an error body ({"error":"..."}), or empty.
@@ -664,10 +735,13 @@ EOF
   huginn devices              machines that can run a chat in their own context
   huginn projects             clusters of sessions with roles, and who is waiting
   huginn projects show <name> a project's members, one line each
-  huginn projects new <name>  start one (launches its lead session)  [--cwd DIR]
-  huginn projects spawn <project> <member>:<role> [--prompt "<first task>"|-]
+  huginn projects new <name>  start one (launches its lead session)
+                              --brief "<the lead's whole first message>"|-
+                              [--kind software|infra|hardware|docs|research|other] [--cwd DIR]
+  huginn projects spawn <project>         approve the lead's proposal: create its members
   huginn projects msg <project> <from> <to> <text>
-  huginn projects end <project> [--now]   (--now also ends its sessions)
+  huginn projects end <project>           end it AND wind its sessions down
+                              [--now: end them outright | --keep-sessions: leave them running]
   huginn device [status]      what THIS machine offers huginn, and what huginn sees
   huginn device on            offer this machine  [--scope look|work|own] [--root DIR]
   huginn device off           stop offering it
@@ -683,7 +757,8 @@ EOF
                               'claude --resume' command   [--now to skip wrap-up]
   huginn archive              what has been archived, and how to bring it back
   huginn revive <id|name>     bring an archived session back to life
-  huginn -p "question"        one-shot headless query (reasoning + memory; does not auto-approve tools)
+  huginn -p "question"        one-shot headless query: reasoning + memory + web, and
+                              nothing that can change anything (Bash/Edit/Write are DENIED)
   huginn -y "task"            one-shot that may use tools (bash/files/web + memory)
   huginn usage [args]         Claude Code token/cost report (ccusage; default: daily)
                                 e.g. huginn usage monthly | session | blocks | blocks --live
@@ -692,16 +767,17 @@ EOF
   huginn desktop              download links for the latest Huginn Desktop build
   huginn desktop win|linux    just that platform's url, bare, for scripting
   huginn update               self-update this client from the repo ($HUGINN_REPO);
-                              without gh, from the PINNED $HUGINN_UPDATE_HOST mirror
-                              (never $HUGINN_HOST - that would make whichever box you
-                              point at a source of code this shell then runs)
+                              without gh, from the PINNED ${HUGINN_UPDATE_HOST:-$HUGINN_UPDATE_HOST_DEFAULT} mirror
+                              (never \$HUGINN_HOST${HUGINN_HOST:+, which is $HUGINN_HOST here} - the box
+                              you point at must not become a source of code this shell runs)
   huginn uninstall            unenrol this machine, then remove the client, the
                               tokens, the local-AI tier and the profile line
                               [--all also takes the SSH stanza + huginn's own key]
   huginn version              show client version
   huginn help | ? | /help     this help
 
-  Session names are letters/digits/underscore only (no - or *) and case-insensitive
+  Session names are lowercase letters, digits, '_' and '-' (no dots, spaces or *),
+  up to 50 characters, and must start with a letter, digit or '_'. Case-insensitive
   ('Test' and 'test' are the same session).
   In a session: run claude / claude --resume.  Detach: Alt-d (or Ctrl-b d).
   Alt-o = detach all OTHER clients (full screen).  Ctrl-b [ = scroll.  Reattach from any device.
@@ -719,22 +795,29 @@ EOF
     update)
       local dest="${BASH_SOURCE[0]:-$HOME/.huginn/huginn.sh}" tmp got=
       tmp="$dest.tmp"
+      # ⚠ NAMED BEFORE THE FIRST MESSAGE THAT MENTIONS IT. The mirror host is
+      # PINNED and is never $HUGINN_HOST - this path downloads a shell script the
+      # block below SOURCES, so the host it comes from is a trust root and not a
+      # convenience - and the fallback line said "falling back to the $H mirror",
+      # i.e. it named the one host this deliberately does not use, in the one
+      # message whose job is naming the one it does. A run could print "falling
+      # back to the rvhost mirror" and then "pulled from huginn mirror" in the
+      # same four lines.
+      local uh="${HUGINN_UPDATE_HOST:-$HUGINN_UPDATE_HOST_DEFAULT}"
       echo "huginn: updating client -> $dest"
       if command -v gh >/dev/null 2>&1; then
         # Leave it at $tmp - the syntax check + backup below is the only install path.
         if gh api "repos/$HUGINN_REPO/contents/client/huginn.sh" -H "Accept: application/vnd.github.raw" >"$tmp" 2>/dev/null && [ -s "$tmp" ]; then
           got=1; echo "  pulled from GitHub ($HUGINN_REPO) via gh"
         else
-          echo "  (gh fetch failed - falling back to the $H mirror)"
+          echo "  (gh fetch failed - falling back to the pinned $uh mirror)"
         fi
       fi
       if [ -z "$got" ]; then
         command -v gh >/dev/null 2>&1 || echo "  (gh not installed - using the scp fallback)"
-        # The mirror host is PINNED, not $H. This path downloads a shell script
-        # and the block below sources it, so the host it comes from is a trust
-        # root, not a convenience - and $HUGINN_HOST is routinely repointed at a
-        # test box or mistyped. Say which host is being trusted, every time.
-        local uh="${HUGINN_UPDATE_HOST:-$HUGINN_UPDATE_HOST_DEFAULT}"
+        # $HUGINN_HOST is routinely repointed at a test box or mistyped, which is
+        # why it answers "which box do I drive" and never "whose code do I run".
+        # Say which host is being trusted, every time.
         [ "$uh" = "$HUGINN_UPDATE_HOST_DEFAULT" ] \
           || echo "  (HUGINN_UPDATE_HOST is set - trusting $uh for this client's code)"
         # BatchMode: never drop into an interactive password prompt in the middle
@@ -917,7 +1000,7 @@ EOF
         ssh -T "$H" "tmux kill-session -t '$(_huginn_tmux_target "$kn")' && echo 'killed: $kn'"
       else
         local kmsg; kmsg="$(_huginn_appd_error "$kr")"
-        echo "huginn: could not kill '$kn': ${kmsg:-huginn-appd answered HTTP $_HUGINN_APPD_CODE}" >&2
+        echo "huginn: could not kill '$kn': ${kmsg:-huginn-appd answered HTTP $(_huginn_appd_http "$kr")}" >&2
         return 1
       fi ;;
     end)
@@ -939,10 +1022,16 @@ EOF
       local r rc; r="$(_huginn_appd POST "/v1/sessions/$en/soft-end" "$force")"; rc=$?
       if [ "$rc" -ne 0 ]; then
         if [ "$rc" -eq 7 ]; then
-          echo "huginn: could not reach huginn-appd on $H - a soft-end is a daemon feature, so there is no tmux fallback" >&2
+          # ⚠ WHICH HALF FAILED. An unreachable HOST is not a stopped daemon, and
+          # this line used to say the second about the first - on a box ssh had
+          # just refused - while 2>/dev/null threw away the "Connection refused"
+          # that named the real fault. _huginn_appd_why tells them apart and
+          # prints ssh's own sentence.
+          _huginn_appd_why "$H" "$r"
+          echo "        a soft-end is a daemon feature, so there is no tmux fallback" >&2
         else
           local msg; msg="$(_huginn_appd_error "$r")"
-          echo "huginn: could not end '$en': ${msg:-huginn-appd answered HTTP $_HUGINN_APPD_CODE}" >&2
+          echo "huginn: could not end '$en': ${msg:-huginn-appd answered HTTP $(_huginn_appd_http "$r")}" >&2
           case "$msg" in *force*) echo "        send it anyway with: huginn end $en --force" >&2 ;; esac
         fi
         return 1
