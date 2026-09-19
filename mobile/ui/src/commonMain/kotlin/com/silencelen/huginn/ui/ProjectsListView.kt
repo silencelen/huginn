@@ -75,7 +75,7 @@ fun ProjectsListView(
     onCreate: (() -> Unit)? = null,
     /**
      * Whether THIS view owns the scroll. Same rule and same reason as
-     * [ConsolesView]: the phone hosts this column in a `Box(fillMaxSize())` and
+     * [AppsView]: the phone hosts this column in a `Box(fillMaxSize())` and
      * nothing else there scrolls, so every project past the fold is unreachable;
      * the desktop's pane already scrolls around it and a second one nested inside
      * swallows the gesture instead of throwing.
