@@ -917,7 +917,11 @@ test('draftHold holds for a draft, and for keys still in flight, and not forever
   // ⚠ THE SECOND CLAUSE IS THE ONE A CAPTURE CANNOT ANSWER. A keypress accepted
   // by the route but not yet painted is in no capture at all, so an empty-LOOKING
   // box during live-view typing is not an empty box.
-  assert.equal(t.draftHold({ draft: true }), true);
+  // 3.5.1: a capture ALONE never holds — Claude Code draws its own queued
+  // messages and its "Press up to edit queued messages" hint where the composer
+  // is, and 3.5.0 held every send on the owner's session for minutes on them.
+  assert.equal(t.draftHold({ draft: true }), false, 'text in the box with nobody typing is not a draft');
+  assert.equal(t.draftHold({ draft: true, keysAgoMs: 100 }), true, 'text in the box AND keys in flight is');
   assert.equal(t.draftHold({ draft: false }), false, 'an empty box releases at once');
   assert.equal(t.draftHold({ draft: null, keysAgoMs: 0 }), false,
     'a pane with no composer is never held by this rule, whatever was typed at it');

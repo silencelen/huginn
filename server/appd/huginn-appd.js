@@ -91,7 +91,7 @@ const resumeLib = require('./lib/resume');
 // disagree about them; the file and the route live here.
 const quickLib = require('./lib/quickactions');
 
-const VERSION = '3.5.0';
+const VERSION = '3.5.1';
 const PORT = Number(process.env.HUGINN_APPD_PORT || 8787);
 const DATA_DIR = process.env.HUGINN_APPD_DATA || '/var/lib/huginn-appd';
 const UPLOADS_DIR = path.join(DATA_DIR, 'uploads');
@@ -2365,8 +2365,12 @@ async function pumpQueue(name) {
           // QUEUED behind a gate is not an interjection, and flushing it into
           // the turn the previous message just started is how the first
           // instruction gets absorbed and never carried out.
-          idle: entry.queuedBehindHuman ? (gate.idle || overdue) : true,
-          state: holdForQuestion ? 'hold' : (entry.queuedBehindHuman ? stateSays : null),
+          // 3.5.1: RESTORED. #10's one-per-boundary rule made a person's
+          // follow-up messages wait out whole turns — 55 deep on the owner's
+          // session behind a turn that ran for minutes. A person's message is
+          // delivered at once (3.0.3); Claude Code absorbs it, as it always did.
+          idle: true,
+          state: holdForQuestion ? 'hold' : null,
         }
         : { ...gate, state: stateSays, draft: holdForDraft });
       // ⚠ LOGGED OFF `d`, NOT OFF THE HOLD. A trust dialog has a caret of its own
@@ -10393,6 +10397,18 @@ const server = http.createServer(async (req, res) => {
         const dup = wantsEnter
           ? typing.duplicatePending(pendingEntries(name), typedKeys, Date.now())
           : null;
+        // 3.5.1: AND A COPY JUST DELIVERED. On 3.5.0 the first press went straight in
+        // (a person's message never waits for Claude) and the second and third —
+        // 12 s and 4 s later, the app re-sending a composer that had emptied and
+        // said nothing — went in too. A `yes` twice is an ordinary thing to mean,
+        // so only a message long enough to be one specific message counts.
+        const recent = wantsEnter && !dup ? lastPasted.get(name) : null;
+        if (recent && recent.text === typedKeys && typedKeys.length >= typing.DUPLICATE_MIN_CHARS
+            && Date.now() - recent.at <= typing.DUPLICATE_WINDOW_MS) {
+          log(`typing: ${name}: the same message was delivered ${Math.round((Date.now() - recent.at) / 1000)}s ago; `
+            + 'not sending it a second time');
+          return sendJson(res, 200, { ok: true, queued: 0, position: 0, delivered: true, blockedBy: null, duplicate: true });
+        }
         if (dup) {
           const q = sendQueues.get(name);
           const at = q ? q.entries.indexOf(dup) : -1;

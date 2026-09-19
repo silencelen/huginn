@@ -227,8 +227,13 @@ test('a send is HELD while the composer holds a draft, and never merges with it'
   // arrives — the gate never asked what was in the box — the paste joins the
   // draft, Enter goes, and `.submitted` holds one line with both sentences in
   // it. `delivered` comes back true and `blockedBy` is null.
+  // 3.5.1: the guard keys on KEYSTROKES the daemon saw, not on a capture — a
+  // capture cannot tell a person's draft from Claude Code's own queued lines,
+  // and reading it that way held every send for minutes. So the draft is typed
+  // here the way the owner typed theirs: through the live view.
   const draft = 'half a thought I was still having';
-  const name = await startPane('held', { typed: draft });
+  const name = await startPane('held');
+  await liveType(name, draft);
   const text = 'the message the app sent';
 
   const { status, body } = await send(name, text);
@@ -317,30 +322,26 @@ test('the same message POSTed twice while the first is still queued delivers ONC
   // miniature: a held queue, the identical text pressed again because nothing
   // visible happened. Against 3.4.1 both copies are queued and both are
   // delivered — `queued` reads 2 here and `submitCount` reads 2 at the end.
-  const draft = 'still typing this bit';
-  const name = await startPane('dupe', { typed: draft });
+  // 3.5.1: a person's message goes at once (3.0.3), so the re-presses arrive
+  // AFTER delivery — and are still the same press. `yes` twice is two answers;
+  // a message this long twice in 30 s is one message pressed again.
+  const name = await startPane('dupe');
   const text = 'ask questions again, side note: the one that arrived three times';
 
   const first = await send(name, text);
-  assert.equal(first.body.blockedBy, 'draft', 'precondition: the queue is held, as it was that night');
-  assert.equal(first.body.queued, 1);
+  assert.equal(first.status, 200);
+  for (let i = 0; i < 80 && submitCount(name, text) === 0; i++) await wait(100);
+  assert.equal(submitCount(name, text), 1, 'the first press is delivered');
 
   const second = await send(name, text);
   assert.equal(second.status, 200, 'the second press is not an error — it is the same message');
   assert.equal(second.body.duplicate, true, 'and the route says it recognised it');
-  assert.equal(second.body.queued, 1, 'one copy waiting, not two');
-  assert.equal(second.body.position, 1, "and it reports the FIRST copy's place, so the client's line stays true");
-  assert.equal(second.body.blockedBy, 'draft', 'with the same reason the first was given');
-
   const third = await send(name, text);
   assert.equal(third.body.duplicate, true, 'a third press is the same answer again');
-  assert.equal((await typingOf(name)).queued, 1);
 
-  clearComposer(name);
-  for (let i = 0; i < 80 && submitCount(name, text) === 0; i++) await wait(100);
-  await wait(800);          // long enough for a second copy to have followed
+  await wait(1_500);          // long enough for a second copy to have followed
   assert.equal(submitCount(name, text), 1, 'three presses, one message');
-  assert.match(readOr(daemonLog), new RegExp(`${name}: the same message is already queued`),
+  assert.match(readOr(daemonLog), new RegExp(`${name}: the same message was delivered`),
     'and the daemon says it swallowed one, because a silent swallow is the other bug');
 });
 
@@ -366,13 +367,15 @@ test('a DIFFERENT message is never mistaken for a second press', async () => {
   // The guard is narrow on purpose: it is about one message pressed twice, not
   // about two messages that arrive close together. Getting this wrong loses a
   // message, which is worse than the bug being fixed.
-  const name = await startPane('distinct', { typed: 'mid-sentence' });
+  const name = await startPane('distinct');
 
-  const a = await send(name, 'the first thing');
-  const b = await send(name, 'the second thing');
-  assert.equal(a.body.blockedBy, 'draft');
+  const a = await send(name, 'the first thing, long enough to count');
+  const b = await send(name, 'the second thing, long enough to count');
+  assert.notEqual(a.body.duplicate, true);
   assert.notEqual(b.body.duplicate, true, 'different words are a different message');
-  assert.equal(b.body.queued, 2, 'both are waiting');
+  for (let i = 0; i < 80 && submitCount(name, 'the second thing, long enough to count') === 0; i++) await wait(100);
+  assert.equal(submitCount(name, 'the first thing, long enough to count'), 1);
+  assert.equal(submitCount(name, 'the second thing, long enough to count'), 1, 'both went');
 });
 
 test('an identical message sent again AFTER the first was delivered still goes', async () => {
