@@ -69,6 +69,8 @@ const { createPending, stepSoftEnd } = require('./lib/softend');
 // modal readers, and the queue's decisions. Pure, so they are asserted in
 // test/typing.test.js rather than discovered on a live pane.
 const typing = require('./lib/typing');
+// Whose journal this unit's really is — see lib/cgroup.js (M5).
+const cgroupLib = require('./lib/cgroup');
 // The usage model and the arbiter: percentages and settings in, a list of
 // actions out. Pure, so every judgment call it makes is asserted in
 // test/headroom.test.js rather than discovered on a live account.
@@ -1304,7 +1306,14 @@ async function ensureTmuxServerScope() {
   // Only "no server running" means there is nothing there. Any other failure is a
   // failure to OBSERVE, and starting a second server on a bad read is worse than
   // doing nothing.
-  if (!probe.err || !/no server running/i.test(probe.stderr || '')) return;
+  if (!probe.err || !/no server running/i.test(probe.stderr || '')) {
+    // A server that is already up is LEFT WHERE IT IS, which is right and is also
+    // why one inherited before this function existed stays in our cgroup for the
+    // life of the host — with every session's syslog filed under this unit and
+    // nothing saying so. See lib/cgroup.js (M5).
+    await noteTmuxServerCgroup();
+    return;
+  }
 
   // An isolated test socket wants a plain private server, NOT the shared
   // huginn-tmux.scope: that unit name is global, so wrapping a per-pid test
@@ -1318,6 +1327,31 @@ async function ensureTmuxServerScope() {
     return;
   }
   log(`tmux: server started in ${TMUX_SCOPE}.scope, independent of this daemon`);
+}
+
+/**
+ * Say ONCE, if it is true, that this unit's journal is not only this daemon's.
+ *
+ * ⚠ M5. Nothing here changes behaviour — a running server cannot be moved
+ * without stranding its panes — but an operator reading `journalctl -u
+ * huginn-appd` and finding thousands of PowerShell ScriptBlock bodies deserves
+ * to be told where they come from and what reads cleanly instead. Once per
+ * process, and silent when the answer is "they are in different cgroups" or
+ * "I could not tell": a diagnostic that fires on a guess is worse than none.
+ */
+let cgroupNoted = false;
+async function noteTmuxServerCgroup() {
+  if (cgroupNoted) return;
+  cgroupNoted = true;
+  const pid = await run('tmux', ['display-message', '-p', '#{pid}']);
+  const theirs = Number(String(pid.stdout || '').trim());
+  if (pid.err || !Number.isInteger(theirs) || theirs <= 0) return;
+  let ours = null;
+  let them = null;
+  try { ours = fs.readFileSync('/proc/self/cgroup', 'utf8'); } catch { return; }
+  try { them = fs.readFileSync(`/proc/${theirs}/cgroup`, 'utf8'); } catch { return; }
+  if (!cgroupLib.sameCgroup(ours, them)) return;
+  log(cgroupLib.foreignJournalLogLine(cgroupLib.unitOf(ours), TMUX_SCOPE));
 }
 
 /**
@@ -9316,6 +9350,45 @@ function startAlertWatcher() {
   startStateWatch();
 }
 
+/**
+ * ─── "GONE" MEANS SOMETHING WAS LOST ───────────────────────────────────────
+ *
+ * ⚠ P-04 / D-10 (round-2 review, 2026-09-19). A session created four seconds ago
+ * showed, as its entire conversation, "recorded transcript file is gone". Both
+ * clients render the daemon's 409 string verbatim, and both walkers reported it
+ * independently; on the phone the first frame said the right thing ("no
+ * transcript recorded for this session yet") and then settled on the wrong one a
+ * second later, because the state file ALREADY carries a transcript path that
+ * Claude Code has not written to yet — so `fs.existsSync` loses and the "gone"
+ * branch wins for every brand-new session there is.
+ *
+ * The two cases read identically on disk, so the daemon remembers instead: a
+ * path it has successfully read once has EXISTED, and only that path can be
+ * gone. Everything else has simply not been written yet, which is the sentence a
+ * person opening a new session should see.
+ *
+ * ⚠ AND AFTER A RESTART THE MEMO IS EMPTY, deliberately. A genuinely deleted
+ * transcript then reads as "nothing yet" for one daemon lifetime — the softer
+ * error, on an EMPTY STATE somebody is looking at rather than a diagnostic. The
+ * opposite mistake tells a person something broke when nothing did, which is the
+ * bug being fixed.
+ */
+const seenTranscripts = new Set();
+/** Bounded: one entry per session that has ever been read in this daemon's life. */
+const SEEN_TRANSCRIPTS_MAX = 5_000;
+function rememberTranscript(file) {
+  if (!file) return;
+  if (seenTranscripts.size >= SEEN_TRANSCRIPTS_MAX) seenTranscripts.clear();
+  seenTranscripts.add(file);
+}
+function transcriptEverExisted(file) { return !!file && seenTranscripts.has(file); }
+/** The right sentence for a transcript path that is not on disk. */
+function noTranscriptMessage(file) {
+  return transcriptEverExisted(file)
+    ? 'recorded transcript file is gone'
+    : 'no transcript recorded for this session yet — the Claude hook fires on the first prompt';
+}
+
 // ---------------------------------------------------------------- routing
 
 const server = http.createServer(async (req, res) => {
@@ -10137,7 +10210,8 @@ const server = http.createServer(async (req, res) => {
       if (!st || !st.transcript) {
         return sendErr(res, 409, 'no transcript recorded for this session yet — the Claude hook fires on the first prompt');
       }
-      if (!fs.existsSync(st.transcript)) return sendErr(res, 409, 'recorded transcript file is gone');
+      if (!fs.existsSync(st.transcript)) return sendErr(res, 409, noTranscriptMessage(st.transcript));
+      rememberTranscript(st.transcript);
       const offsetParam = u.searchParams.get('offset');
       const offsetNum = offsetParam == null ? null : Number(offsetParam);
       if (offsetNum !== null && !Number.isFinite(offsetNum)) return sendErr(res, 400, 'offset must be a number');
@@ -10198,7 +10272,8 @@ const server = http.createServer(async (req, res) => {
         return sendErr(res, 409, 'no transcript recorded for this session yet — the Claude hook fires on the first prompt');
       }
       const o = sessionOverview(st.transcript, st.sessionId);
-      if (!o) return sendErr(res, 409, 'recorded transcript file is gone');
+      if (!o) return sendErr(res, 409, noTranscriptMessage(st.transcript));
+      rememberTranscript(st.transcript);
       return sendJson(res, 200, {
         name,
         claudeSessionId: st.sessionId,
@@ -10219,7 +10294,8 @@ const server = http.createServer(async (req, res) => {
       // cursor reports "unchanged" for as long as the fan-out lasts — which is
       // exactly the stretch the map is worth watching.
       const g = sessionGraph(st.transcript, st.sessionId);
-      if (!g) return sendErr(res, 409, 'recorded transcript file is gone');
+      if (!g) return sendErr(res, 409, noTranscriptMessage(st.transcript));
+      rememberTranscript(st.transcript);
       // ⚠ has() BEFORE Number(), because `Number(null)` is 0 and an EMPTY
       // transcript's cursor is also 0 — so a cursor-less first fetch of a
       // session that has not written a byte yet was answered `unchanged`, and
