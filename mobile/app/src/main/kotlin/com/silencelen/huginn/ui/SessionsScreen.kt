@@ -21,10 +21,12 @@ import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.DriveFileRenameOutline
 import androidx.compose.material.icons.filled.Inventory2
 import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material.icons.filled.TaskAlt
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExtendedFloatingActionButton
+import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -59,6 +61,16 @@ import com.silencelen.huginn.ui.theme.verbInk
 fun SessionsScreen(
     sessions: List<Session>,
     selectedName: String? = null,
+    /**
+     * The list is one COLUMN of a two-pane layout rather than the whole screen.
+     *
+     * ⚠ AN EXTENDED FAB OVER A 292dp COLUMN IS NOT A CORNER, IT IS A BILLBOARD.
+     * Held sideways, "＋ New session" floated 200dp wide in the middle of a
+     * 2520px screen, over the list it belongs to and over a row of it. The verb
+     * still belongs to this pane — it cannot move to the screen's corner, which
+     * is the conversation's — so it shrinks to the plain 56dp button instead.
+     */
+    twoPane: Boolean = false,
     onOpen: (String) -> Unit,
     onCreate: (String) -> Unit,
     onKill: (String) -> Unit,
@@ -192,12 +204,19 @@ fun SessionsScreen(
             }
         }
 
-        ExtendedFloatingActionButton(
-            onClick = { newName = ""; showNew = true },
-            modifier = Modifier.align(Alignment.BottomEnd).padding(16.dp),
-            icon = { Icon(Icons.Filled.Add, contentDescription = null) },
-            text = { Text("New session") },
-        )
+        if (twoPane) {
+            FloatingActionButton(
+                onClick = { newName = ""; showNew = true },
+                modifier = Modifier.align(Alignment.BottomEnd).padding(FAB_INSET),
+            ) { Icon(Icons.Filled.Add, contentDescription = "New session") }
+        } else {
+            ExtendedFloatingActionButton(
+                onClick = { newName = ""; showNew = true },
+                modifier = Modifier.align(Alignment.BottomEnd).padding(FAB_INSET),
+                icon = { Icon(Icons.Filled.Add, contentDescription = null) },
+                text = { Text("New session") },
+            )
+        }
     }
 
     if (showNew) {
@@ -463,6 +482,19 @@ private fun SessionRow(
                 // different product.
                 DropdownMenuItem(
                     text = { Text(EndVerbs.soft(1), color = verbInk(VerbTone.SOFT, MaterialTheme.colorScheme)) },
+                    // ⚠ AN ICON, BECAUSE THE OTHER THREE HAVE ONE. Without it the
+                    // label started in the icon COLUMN (x=754) while Rename,
+                    // Archive and Kill started at x=849, and a menu item that
+                    // hangs off the left of the others reads as a different class
+                    // of thing than it is. Tinted like its label, the way the kill
+                    // below is.
+                    leadingIcon = {
+                        Icon(
+                            Icons.Filled.TaskAlt,
+                            contentDescription = null,
+                            tint = verbInk(VerbTone.SOFT, MaterialTheme.colorScheme),
+                        )
+                    },
                     onClick = { menu = false; onSoftEnd() },
                 )
                 // Between the wrap-up and the kill, where it belongs: it is a
