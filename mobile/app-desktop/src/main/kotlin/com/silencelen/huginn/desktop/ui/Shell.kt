@@ -916,7 +916,10 @@ private fun NavRail(
                 label = "Pages",
                 count = list.size,
                 active = current == View.SCRATCHPADS,
-                tip = "Pages · notes you keep, and the one you hand to a message",
+                // Short enough to land on one line of a 320dp card. The long
+                // version read as a dangling half-sentence for as long as a
+                // tooltip's text was being clipped rather than wrapped.
+                tip = "Pages · your notes, and the one a message carries",
                 // No mark. A page is only ever changed by the person reading this
                 // rail, so there is nothing here that could need them — and a dot
                 // that never means anything is a dot nobody reads.
