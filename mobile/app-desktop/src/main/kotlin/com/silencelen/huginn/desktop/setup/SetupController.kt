@@ -165,6 +165,9 @@ class SetupController(
     fun close() {
         _visible.value = false
         _awaitingAnswer.value = false
+        // A half-typed bearer is not something to keep in memory once the screen
+        // holding it is gone. See [SetupDrafts].
+        SetupDrafts.clear()
     }
 
     /** Pre-answers arriving from the installer, once, at startup. */
