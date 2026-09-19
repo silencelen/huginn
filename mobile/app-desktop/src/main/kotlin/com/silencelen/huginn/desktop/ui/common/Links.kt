@@ -14,7 +14,6 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.UriHandler
-import androidx.compose.ui.unit.DpOffset
 import androidx.compose.ui.unit.dp
 import com.silencelen.huginn.desktop.diag.AppLog
 import com.silencelen.huginn.ui.LinkPeek
@@ -91,7 +90,12 @@ val DesktopLinkPeek = LinkPeek { url, content ->
         // Shorter than the 400ms of an explanatory Tip: this is not an
         // explanation, it is the thing the click is about to do.
         delayMillis = 220,
-        tooltipPlacement = TooltipPlacement.CursorPoint(offset = DpOffset(12.dp, 16.dp)),
+        // ⚠ ABOVE THE POINTER, because the row's timestamp tooltip is below it.
+        // Both were `CursorPoint(DpOffset(12, 16))`, decided independently in two
+        // files, and both are up at once whenever a link sits in a message that
+        // has a stamp: the tip's 400ms lands on top of this card and the reader
+        // loses the one fact the click is about to act on. See [CursorOverlays].
+        tooltipPlacement = TooltipPlacement.CursorPoint(offset = CursorOverlays.LINK_PEEK),
         content = content,
     )
 }
