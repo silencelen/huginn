@@ -726,6 +726,7 @@ fun HuginnApp(
     val chatModel by vm.chatModel.collectAsState()
     val chatEffort by vm.chatEffort.collectAsState()
     val chatStarted by vm.chatStarted.collectAsState()
+    val chatGone by vm.chatGone.collectAsState()
     val chatWaking by vm.chatWaking.collectAsState()
     val models by vm.models.collectAsState()
     val transcript by vm.transcript.collectAsState()
@@ -1183,6 +1184,7 @@ fun HuginnApp(
                 sealedRun = chatSealed,
                 page = chatPage,
                 error = chatError,
+                messagesGone = chatGone,
                 onRetry = { vm.retryChatTranscript(id) },
                 streamingText = streamingText,
                 activeTool = activeTool,

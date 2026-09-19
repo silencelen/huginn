@@ -11,12 +11,14 @@ import com.silencelen.huginn.ui.canAcknowledge
 import com.silencelen.huginn.ui.itemCountWords
 import com.silencelen.huginn.ui.isAcknowledged
 import com.silencelen.huginn.ui.roundLastLine
+import com.silencelen.huginn.ui.roundStatusColorKey
 import com.silencelen.huginn.ui.roundStatusLabel
 import com.silencelen.huginn.ui.roundStatusOf
 import com.silencelen.huginn.ui.roundSubtitle
 import com.silencelen.huginn.ui.untilWords
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertNotEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
@@ -231,6 +233,27 @@ class RoundsTest {
         // The verdict is NOT rewritten anywhere -- it was true when written and
         // still is. What changes is that somebody has answered it.
         assertEquals("read", roundStatusLabel(RoundStatus.UNKNOWN, acknowledged = true))
+    }
+
+    /**
+     * A NEEDS-YOU WORD IS A STATE MARK, NOT METADATA.
+     *
+     * The walk found "Needs you" drawn in the muted grey of "4 days ago · 8
+     * items" while Pause / Run now / Edit took the accent — the controls louder
+     * than the verdict they are controls for. The dot and the word are the same
+     * fact, so they come from one vocabulary and cannot disagree.
+     */
+    @Test
+    fun `the state word is coloured like the mark beside it`() {
+        assertEquals("error", roundStatusColorKey(RoundStatus.ACTION))
+        assertNotEquals("muted", roundStatusColorKey(RoundStatus.ACTION),
+            "a needs-you word read as metadata is the defect")
+        assertEquals("primary", roundStatusColorKey(RoundStatus.ATTENTION))
+        // The quiet ones stay quiet: a screen of healthy Rounds has to recede.
+        assertEquals("muted", roundStatusColorKey(RoundStatus.OK))
+        assertEquals("outlineVariant", roundStatusColorKey(RoundStatus.NEVER_RUN))
+        // Answered, so it draws like a clean one — the same rule the dot follows.
+        assertEquals("muted", roundStatusColorKey(RoundStatus.ACTION, acknowledged = true))
     }
 
     @Test
