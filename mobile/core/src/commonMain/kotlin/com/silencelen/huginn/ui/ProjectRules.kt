@@ -232,6 +232,32 @@ object ProjectRules {
             null
         }
 
+    /**
+     * Whether this member may be dropped from the project.
+     *
+     * ⚠ NEVER THE LEAD, and the daemon says why in one line: *"the lead is the
+     * project — delete the project instead"*. Dropping it would leave a record
+     * whose brief, manifest and peer namespace all belong to a session that is
+     * no longer in it. The daemon answers 409; this is what stops the verb being
+     * offered, which is the difference between a control and a trap.
+     */
+    fun canDrop(member: ProjectMemberState): Boolean = !member.lead && member.role != LEAD_ROLE
+
+    /**
+     * The live sessions a project could ADOPT: everything running that is not
+     * already one of its members.
+     *
+     * ⚠ IT CANNOT KNOW ABOUT OTHER PROJECTS, and must not pretend to. A session
+     * belonging to a different cluster looks exactly like a free one from here —
+     * the daemon holds that join and answers 409 NAMING the other project, which
+     * is the whole fix and is worth far more than a row quietly missing from a
+     * picker. So this filters only what this client can actually see.
+     */
+    fun adoptable(sessions: List<String>, members: List<ProjectMemberState>): List<String> {
+        val taken = members.map { it.name }.toSet()
+        return sessions.filter { it.isNotBlank() && it !in taken }
+    }
+
     /** The two composers, mirrored — the only two forms a project session's name takes. */
     fun tmuxNameFor(slug: String, role: String): String = "$slug-$role"
 

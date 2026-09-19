@@ -913,6 +913,54 @@ class AppStore(
         return outcome
     }
 
+    /**
+     * ADOPT a session that is already running into this project.
+     *
+     * ⚠ IT LAUNCHES NOTHING. The record gains a row and the session carries on
+     * exactly as it was. A 409 is an ANSWER — the session already belongs to
+     * another cluster and the daemon NAMES it, which is the whole fix — and it
+     * goes to [projectRefusal] verbatim, like a create's and a spawn's. The other
+     * refusals (400 a role taken / "lead" / not a name, 404 no such session, 503
+     * tmux not answering) are the daemon's sentences too, so they land in the
+     * same place rather than in the fault bar where the form cannot see them.
+     */
+    suspend fun adoptMember(id: String, role: String, name: String) {
+        _projectRefusal.value = null
+        runCatching { client.adoptMember(id, role, name) }
+            .onSuccess { outcome ->
+                if (outcome.refusal != null) _projectRefusal.value = outcome.refusal
+                refreshProjects()
+                refreshProjectMembers()
+                refreshProjectDashboard()
+            }
+            .onFailure { _projectRefusal.value = refusalTextFor(it) }
+    }
+
+    /** DROP a member. ⚠ THE SESSION KEEPS RUNNING — nothing is ended. */
+    suspend fun dropMember(id: String, role: String) {
+        _projectRefusal.value = null
+        runCatching { client.dropMember(id, role) }
+            .onSuccess { outcome ->
+                if (outcome.refusal != null) _projectRefusal.value = outcome.refusal
+                refreshProjects()
+                refreshProjectMembers()
+                refreshProjectDashboard()
+            }
+            .onFailure { _projectRefusal.value = refusalTextFor(it) }
+    }
+
+    /**
+     * A thrown refusal as a SENTENCE, for a form to print under itself.
+     *
+     * The daemon's own words where there are any: every membership refusal is
+     * also the instruction ("drop it from the project first, then rename it"),
+     * and a summary of ours would lose the half that says what to do.
+     */
+    private fun refusalTextFor(t: Throwable): String =
+        (t as? HuginnClient.HuginnException)?.message?.takeIf { it.isNotBlank() }
+            ?: t.message?.takeIf { it.isNotBlank() }
+            ?: "that change was refused"
+
     /** Turn the proposal down. The manifest is kept at its rev; only the status moves. */
     suspend fun discardProposal(id: String) {
         runCatching { client.discardProposal(id) }

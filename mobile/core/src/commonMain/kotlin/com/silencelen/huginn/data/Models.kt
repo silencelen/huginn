@@ -2728,6 +2728,66 @@ data class ProjectMessageResult(
     val dropped: String? = null,
 )
 
+// ---------------------------------------------------- membership, by hand
+//
+// A cluster is not always born as one. The ordinary case is a session the owner
+// already has open — a scratch shell that turned into the firmware work — which
+// belongs in the project beside the ones that were spawned: on the dashboard, in
+// the peer relay, and in the graceful end.
+//
+// ⚠⚠ ADOPT LAUNCHES NOTHING AND DROP ENDS NOTHING. Both are edits to a RECORD.
+// `POST …/spawn` is the route that creates sessions and `DELETE /v1/projects/:id`
+// is the one that ends them; a membership verb that quietly did either would be
+// the surprise the daemon's own comment says this block exists to avoid. A
+// dropped member keeps running, unadopted, exactly where it was — which is why
+// the answer carries [ProjectMemberDropped.ended] rather than leaving a client
+// to assume.
+
+/** `POST /v1/projects/:id/members` — 201. */
+@Serializable
+data class ProjectMemberAdded(
+    val ok: Boolean = false,
+    val member: ProjectMember? = null,
+    val project: Project? = null,
+)
+
+/** `DELETE /v1/projects/:id/members/:role` — 200. */
+@Serializable
+data class ProjectMemberDropped(
+    val ok: Boolean = false,
+    val dropped: ProjectMember? = null,
+    /**
+     * ⚠ ALWAYS FALSE, AND SAID OUT LOUD BECAUSE OF IT. "Drop" and "end" are one
+     * keystroke apart in every client and this route does exactly one of them;
+     * the daemon states which in the body rather than leaving a reader of the
+     * code to infer it.
+     */
+    val ended: Boolean = false,
+    val project: Project? = null,
+)
+
+/**
+ * What a membership edit did, or the daemon's refusal — never both.
+ *
+ * ⚠ A 409 IS AN ANSWER, NOT A THROW — the [ProjectCreated] and [SpawnOutcome]
+ * precedent. The two that arrive this way are "that session is already the X of
+ * project Y" (which NAMES the other project, and knowing which one is the whole
+ * fix) and the twelve-member cap. Thrown, both would land on a failure path as a
+ * red line with no project attached; answered, the menu can say what happened
+ * and leave the tree exactly as it was.
+ *
+ * The other refusals still throw, and their sentences are shown verbatim: 400
+ * for a role that is taken, is `lead`, or is not a name; 404 for no such project
+ * or no such session to adopt; 503 when tmux is not answering.
+ */
+data class MemberOutcome(
+    /** The member adopted, or the member dropped. Null on a refusal. */
+    val member: ProjectMember?,
+    /** The project as it stands AFTER the edit, so a tree can redraw from it. */
+    val project: Project?,
+    val refusal: String?,
+)
+
 /**
  * `DELETE /v1/projects/:id` — the record is always removed; the sessions are
  * only ended if that was asked for.

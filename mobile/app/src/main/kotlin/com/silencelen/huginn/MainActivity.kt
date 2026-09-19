@@ -1579,6 +1579,18 @@ fun HuginnApp(
                 busy = projectBusy,
                 refusal = projectRefusal,
                 onOpenMember = { m -> dest = Dest.SessionView(m.name) },
+                // Adopt and drop. Both are edits to the RECORD: nothing is
+                // launched and nothing is ended — see ProjectMemberActions.
+                membership = remember(id, sessions) {
+                    com.silencelen.huginn.ui.ProjectMemberActions(
+                        liveSessions = sessions.map { it.name },
+                        onAdopt = { role, name -> vm.adoptMember(id, role, name) },
+                        onDrop = { m -> vm.dropMember(id, m.role) },
+                        busy = projectBusy,
+                        refusal = projectRefusal,
+                        clearRefusal = { vm.clearProjectRefusal() },
+                    )
+                },
                 onSpawn = { rev -> vm.spawnProject(id, rev) },
                 onDiscard = { vm.discardProposal(id) },
                 onSaveManifest = { m ->
